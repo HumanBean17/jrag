@@ -1,0 +1,11 @@
+# Optional: Python environment dedicated to CocoIndex indexing (flows + cocoindex CLI).
+# The MCP bundles (mcp_lancedb_bundle, mcp_pgvector_bundle, mcp_chromadb_bundle) intentionally omit cocoindex.
+#
+#   python3 -m venv .venv-indexer
+#   .venv-indexer/bin/pip install -r requirements-indexer.txt
+#   export PATH="$(pwd)/.venv-indexer/bin:$PATH"
+#
+# Pin to the CocoIndex version you use in development.
+
+cocoindex>=0.3.0
+# Chroma flows: pip install "cocoindex[chromadb]" (or replace the line above).

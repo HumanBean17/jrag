@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "pgvector-code": {
+      "type": "stdio",
+      "command": "/ABSOLUTE/PATH/TO/mcp_pgvector_bundle/.venv/bin/python",
+      "args": ["/ABSOLUTE/PATH/TO/mcp_pgvector_bundle/server.py"],
+      "env": {
+        "PGVECTOR_MCP_DATABASE_URL": "postgresql://user:pass@localhost:5432/dbname",
+        "SBERT_MODEL": "sentence-transformers/all-MiniLM-L6-v2",
+        "PGVECTOR_MCP_PROJECT_ROOT": "/ABSOLUTE/PATH/TO/java-enterprise-codebase-rag"
+      }
+    }
+  }
+}

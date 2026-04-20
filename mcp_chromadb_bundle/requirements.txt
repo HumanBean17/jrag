@@ -1,0 +1,5 @@
+chromadb>=0.5.0
+mcp>=1.0.0
+numpy>=1.26.0
+pydantic>=2.0
+sentence-transformers>=3.0.0

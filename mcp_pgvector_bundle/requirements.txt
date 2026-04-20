@@ -1,0 +1,6 @@
+mcp>=1.0.0
+numpy>=1.26.0
+pgvector>=0.3.0
+psycopg[binary]>=3.1.0
+pydantic>=2.0
+sentence-transformers>=3.0.0
