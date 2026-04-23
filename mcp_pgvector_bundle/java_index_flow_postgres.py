@@ -18,8 +18,6 @@ Tables created match :mod:`mcp_pgvector_bundle.search_postgres` defaults:
 - ``yamlconfigindex_yaml_config``
 """
 
-from __future__ import annotations
-
 import os
 from pathlib import Path
 
