@@ -33,6 +33,7 @@ from cocoindex.ops.text import RecursiveSplitter, detect_code_language
 from cocoindex.resources.file import PatternFilePathMatcher
 
 from index_flow_common import (
+    COMMON_EXCLUDED_PATH_PATTERNS,
     JAVA_CHUNK,
     SQL_CHUNK,
     YAML_CHUNK,
@@ -280,13 +281,17 @@ async def app_main() -> None:
     java_files = localfs.walk_dir(
         PROJECT_ROOT,
         recursive=True,
-        path_matcher=PatternFilePathMatcher(included_patterns=["**/*.java"]),
+        path_matcher=PatternFilePathMatcher(
+            included_patterns=["**/*.java"],
+            excluded_patterns=COMMON_EXCLUDED_PATH_PATTERNS,
+        ),
     )
     sql_files = localfs.walk_dir(
         PROJECT_ROOT,
         recursive=True,
         path_matcher=PatternFilePathMatcher(
             included_patterns=["**/src/main/resources/db/migration/*.sql"],
+            excluded_patterns=COMMON_EXCLUDED_PATH_PATTERNS,
         ),
     )
     yaml_files = localfs.walk_dir(
@@ -297,6 +302,7 @@ async def app_main() -> None:
                 "**/src/main/resources/application*.yml",
                 "**/src/main/resources/application*.yaml",
             ],
+            excluded_patterns=COMMON_EXCLUDED_PATH_PATTERNS,
         ),
     )
 

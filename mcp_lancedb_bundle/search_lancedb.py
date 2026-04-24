@@ -101,6 +101,21 @@ def _build_path_predicate(path_substring: str) -> str:
     return f"filename LIKE '%{pat}%' ESCAPE '\\'"
 
 
+def _is_duplicate_fts_index_error(e: Exception) -> bool:
+    """True when create_fts_index failed because the FTS index is already present."""
+    low = str(e).lower()
+    # Do not use a bare "exist" token — it matches "does not exist" and hides real errors.
+    return any(
+        p in low
+        for p in (
+            "already exists",
+            "already exist",
+            "duplicate",
+            "same name",
+        )
+    )
+
+
 def ensure_text_fts_index(uri: str, lance_table_name: str) -> None:
     key = (uri, lance_table_name)
     with _FTS_LOCK:
@@ -111,11 +126,7 @@ def ensure_text_fts_index(uri: str, lance_table_name: str) -> None:
         try:
             tbl.create_fts_index("text", replace=False)
         except Exception as e:
-            low = str(e).lower()
-            if any(
-                w in low
-                for w in ("exist", "duplicate", "already", "same name")
-            ):
+            if _is_duplicate_fts_index_error(e):
                 pass
             else:
                 raise
@@ -143,18 +154,41 @@ def _search_one_table(
     kind: str,
     hybrid: bool,
     fts_text: str | None,
-) -> list[dict]:
+) -> tuple[list[dict], str | None]:
     tbl = db.open_table(table_name)
     has_lang = kind == "java"
     base_cols = ["filename", "text", "start", "end"]
-    if hybrid:
+    columns = (
+        [*base_cols, "language", "_distance"]
+        if has_lang
+        else [*base_cols, "_distance"]
+    )
+    q_vec = (
+        tbl.search(query_vec, vector_column_name=VECTOR_COLUMN)
+        .select(columns)
+        .limit(limit)
+    )
+    if path_predicate:
+        q_vec = q_vec.where(path_predicate, prefilter=True)
+
+    def _vector_rows() -> list[dict]:
+        rows = q_vec.to_list()
+        for r in rows:
+            r["_kind"] = kind
+            r["_hybrid"] = False
+            r["start"] = coerce_position_field(r.get("start"))
+            r["end"] = coerce_position_field(r.get("end"))
+        return rows
+
+    if not hybrid:
+        return _vector_rows(), None
+
+    text_for_fts = fts_text if fts_text is not None else ""
+    hcols = (
+        [*base_cols, "language"] if has_lang else [*base_cols]
+    )
+    try:
         ensure_text_fts_index(uri, table_name)
-        text_for_fts = fts_text if fts_text is not None else ""
-        columns = (
-            [*base_cols, "language"]
-            if has_lang
-            else [*base_cols]
-        )
         q = (
             tbl.search(
                 query_type="hybrid",
@@ -162,7 +196,7 @@ def _search_one_table(
             )
             .vector(query_vec)
             .text(text_for_fts)
-            .select(columns)
+            .select(hcols)
             .limit(limit)
         )
         if path_predicate:
@@ -176,25 +210,15 @@ def _search_one_table(
                 r["_score"] = float(rs)
             r["start"] = coerce_position_field(r.get("start"))
             r["end"] = coerce_position_field(r.get("end"))
-        return rows
-
-    columns = (
-        [*base_cols, "language", "_distance"]
-        if has_lang
-        else [*base_cols, "_distance"]
-    )
-    q = tbl.search(query_vec, vector_column_name=VECTOR_COLUMN).select(
-        columns
-    ).limit(limit)
-    if path_predicate:
-        q = q.where(path_predicate, prefilter=True)
-    rows = q.to_list()
-    for r in rows:
-        r["_kind"] = kind
-        r["_hybrid"] = False
-        r["start"] = coerce_position_field(r.get("start"))
-        r["end"] = coerce_position_field(r.get("end"))
-    return rows
+        return rows, None
+    except Exception as e:
+        err = str(e).strip()
+        if len(err) > 400:
+            err = err[:397] + "..."
+        return _vector_rows(), (
+            f"FTS index or hybrid search unavailable ({err}). "
+            "Returned vector-only results."
+        )
 
 
 def run_search(
@@ -211,7 +235,13 @@ def run_search(
     hybrid: bool = False,
     fts_text: str | None = None,
     auto_hybrid: bool = False,
-) -> list[dict]:
+) -> tuple[list[dict], str | None, dict[str, bool] | None]:
+    """Run semantic search.
+
+    Returns (rows, fts_notice, hybrid_meta) where ``hybrid_meta`` is set only for a single-table
+    query: ``hybrid_attempted`` and ``hybrid_used`` (True when results are vector+FTS RRF, not
+    vector-only).
+    """
     effective_hybrid = hybrid
     effective_fts = fts_text
     if (
@@ -248,7 +278,7 @@ def run_search(
 
     if len(table_keys) == 1:
         key = table_keys[0]
-        rows = _search_one_table(
+        rows, fts_notice = _search_one_table(
             TABLES[key],
             uri=uri,
             db=db,
@@ -260,31 +290,35 @@ def run_search(
             fts_text=fts_for_hybrid,
         )
         _apply_chunk_hints(rows)
-        if effective_hybrid:
+        actually_hybrid = bool(rows) and all(r.get("_hybrid") for r in rows)
+        if effective_hybrid and actually_hybrid:
             rows.sort(key=_hybrid_sort_key)
         else:
             rows.sort(key=_vector_sort_key)
-        return rows[offset : offset + limit]
+        hybrid_meta: dict[str, bool] = {
+            "hybrid_attempted": bool(effective_hybrid),
+            "hybrid_used": bool(effective_hybrid) and bool(rows) and actually_hybrid,
+        }
+        return rows[offset : offset + limit], fts_notice, hybrid_meta
 
     merged: list[dict] = []
     per_table = max(need * 3, need)
     for key in table_keys:
-        merged.extend(
-            _search_one_table(
-                TABLES[key],
-                uri=uri,
-                db=db,
-                query_vec=query_vec,
-                limit=per_table,
-                path_predicate=path_predicate,
-                kind=key,
-                hybrid=False,
-                fts_text=None,
-            )
+        part, _ = _search_one_table(
+            TABLES[key],
+            uri=uri,
+            db=db,
+            query_vec=query_vec,
+            limit=per_table,
+            path_predicate=path_predicate,
+            kind=key,
+            hybrid=False,
+            fts_text=None,
         )
+        merged.extend(part)
     _apply_chunk_hints(merged)
     merged.sort(key=_vector_sort_key)
-    return merged[offset : offset + limit]
+    return merged[offset : offset + limit], None, None
 
 
 def main() -> None:
@@ -325,7 +359,7 @@ def main() -> None:
         sys.exit(2)
 
     try:
-        results = run_search(
+        results, fts_notice, _ = run_search(
             args.query,
             uri=str(uri_path),
             table_keys=keys,
@@ -340,6 +374,9 @@ def main() -> None:
     except Exception as e:
         print(f"Search failed: {e}", file=sys.stderr)
         sys.exit(1)
+
+    if fts_notice:
+        print(fts_notice, file=sys.stderr)
 
     if not results:
         print("No results.")
