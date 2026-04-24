@@ -23,9 +23,64 @@ TABLES: dict[str, str] = {
     "yaml": "yamlconfigindex_yaml_config",
 }
 
+# Optional enrichment columns on the java chunk table (absent on older indexes).
+JAVA_ENRICHED_COLUMNS: tuple[str, ...] = (
+    "package",
+    "service",
+    "primary_type_fqn",
+    "primary_type_kind",
+    "role",
+    "annotations_on_type",
+    "symbols",
+    "ontology_version",
+)
+
 VECTOR_COLUMN = "embedding"
 _FTS_READY: set[tuple[str, str]] = set()
 _FTS_LOCK = threading.Lock()
+_SCHEMA_CACHE: dict[tuple[str, str], set[str]] = {}
+_SCHEMA_LOCK = threading.Lock()
+
+
+def _table_columns(uri: str, lance_table_name: str, db_obj: object | None = None) -> set[str]:
+    key = (uri, lance_table_name)
+    with _SCHEMA_LOCK:
+        cached = _SCHEMA_CACHE.get(key)
+        if cached is not None:
+            return cached
+    db = db_obj if db_obj is not None else lancedb.connect(uri)
+    tbl = db.open_table(lance_table_name)
+    cols = {f.name for f in tbl.schema}
+    with _SCHEMA_LOCK:
+        _SCHEMA_CACHE[key] = cols
+    return cols
+
+
+def _escape_sql_str(s: str) -> str:
+    return s.replace("'", "''")
+
+
+def _build_extra_predicates(
+    *,
+    columns: set[str],
+    role: str | None,
+    service: str | None,
+    package_prefix: str | None,
+    fqn_in: list[str] | None,
+) -> list[str]:
+    preds: list[str] = []
+    if role and "role" in columns:
+        preds.append(f"role = '{_escape_sql_str(role)}'")
+    if service and "service" in columns:
+        preds.append(f"service = '{_escape_sql_str(service)}'")
+    if package_prefix and "package" in columns:
+        esc = _escape_sql_str(package_prefix)
+        preds.append(f"(package = '{esc}' OR package LIKE '{esc}.%')")
+    if fqn_in and "primary_type_fqn" in columns:
+        # LanceDB/Arrow SQL supports IN; quote each.
+        vals = ", ".join(f"'{_escape_sql_str(v)}'" for v in fqn_in)
+        preds.append(f"primary_type_fqn IN ({vals})")
+    return preds
 
 
 def coerce_position_field(val: object) -> dict[str, object]:
@@ -46,6 +101,149 @@ def coerce_position_field(val: object) -> dict[str, object]:
 _IMPORT_DISTANCE_PENALTY = 0.08
 _IMPORT_HYBRID_SCORE_FACTOR = 0.88
 
+# Bonus for chunks whose declared symbols (method / field names) share tokens with
+# the query. Behavioural queries like "what happens when a client message arrives"
+# should float chunks containing `processClientMessage` above ones that only
+# enqueue; this is a cheap, query-dependent signal computed at rank time.
+_SYMBOL_MATCH_BONUS_PER_HIT = 0.03
+_SYMBOL_MATCH_BONUS_CAP = 0.06
+
+# Action verbs that typically mark behavioural entry points in this codebase.
+# A chunk whose symbols begin with one of these verbs earns a small flat bump
+# — again only for java chunks and only when role-filtering is off.
+_ACTION_VERB_PREFIXES: tuple[str, ...] = (
+    "process", "handle", "on", "pick", "select", "assign",
+    "notify", "dispatch", "publish", "consume", "route",
+    "trigger", "enqueue", "distribute", "update", "create",
+    "apply", "resolve", "reassign", "close", "open",
+)
+_ACTION_VERB_BONUS = 0.02
+
+# Type-name overlap bonus. The class name is a much stronger discovery signal
+# than any individual method, because class naming in this codebase encodes
+# the domain concept (`DistributionChunkService`, `OperatorSessionService`,
+# `JoinOperatorController`). So we reward overlap between query tokens and the
+# simple name of `primary_type_fqn` more heavily than per-method overlap, and
+# we stack it on top of the existing `_symbol_bonus`.
+_TYPE_MATCH_BONUS_PER_HIT = 0.05
+_TYPE_MATCH_BONUS_CAP = 0.10
+
+_STOPWORDS: frozenset[str] = frozenset({
+    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+    "to", "of", "in", "on", "at", "by", "for", "with", "from", "as", "or",
+    "and", "but", "if", "then", "else", "when", "what", "how", "why", "does",
+    "do", "did", "has", "have", "had", "this", "that", "these", "those", "it",
+    "its", "new", "no", "not", "will", "would", "should", "can", "could",
+    "may", "might", "happens", "happen", "happened", "get", "gets", "got",
+})
+
+# Role-aware reweighting for Java chunks. Positive values favour actionable
+# behavioural code (entrypoints, orchestrators, integrations) over configuration,
+# schema, and persistence stubs for "what happens when..."-style queries.
+# Applied to the similarity score (higher = better); distance-based sort subtracts
+# the weight. Skipped when caller filters explicitly by role.
+_ROLE_SCORE_WEIGHTS: dict[str, float] = {
+    "CONTROLLER": 0.10,
+    "SERVICE": 0.08,
+    "FEIGN_CLIENT": 0.06,
+    "COMPONENT": 0.03,
+    "REPOSITORY": 0.02,
+    "MAPPER": 0.00,
+    "OTHER": 0.00,
+    "ENTITY": -0.06,
+    "CONFIG": -0.10,
+}
+
+
+def _query_tokens(query: str) -> set[str]:
+    """Lowercased alpha-only tokens from the query, minus stopwords, len >= 3.
+
+    Used to score symbol-name overlap; we keep it simple and locale-free.
+    """
+    out: set[str] = set()
+    cur: list[str] = []
+
+    def _flush() -> None:
+        if cur:
+            tok = "".join(cur).lower()
+            cur.clear()
+            if len(tok) >= 3 and tok not in _STOPWORDS:
+                out.add(tok)
+
+    for c in query:
+        if c.isalpha():
+            cur.append(c)
+        else:
+            _flush()
+    _flush()
+    return out
+
+
+def _split_identifier(name: str) -> list[str]:
+    """camelCase / snake_case -> lowercase token list."""
+    parts: list[str] = []
+    cur: list[str] = []
+    for c in name:
+        if c == "_":
+            if cur:
+                parts.append("".join(cur).lower())
+                cur = []
+        elif c.isupper() and cur:
+            parts.append("".join(cur).lower())
+            cur = [c]
+        else:
+            cur.append(c)
+    if cur:
+        parts.append("".join(cur).lower())
+    return [p for p in parts if p]
+
+
+def _symbol_bonus(r: dict, query_toks: set[str]) -> float:
+    """Symbol-name overlap + action-verb bump for java chunks.
+
+    Caps at `_SYMBOL_MATCH_BONUS_CAP + _ACTION_VERB_BONUS` to avoid runaway
+    ranks on chunks declaring many symbols.
+    """
+    if str(r.get("_kind", "")) != "java":
+        return 0.0
+    raw = r.get("symbols") or []
+    if isinstance(raw, str):
+        # Legacy JSON-encoded list column; parse defensively.
+        try:
+            parsed = json.loads(raw)
+            raw = parsed if isinstance(parsed, list) else []
+        except Exception:
+            raw = []
+    symbols = [str(s) for s in raw if s]
+
+    overlap_hits = 0
+    has_action = False
+    for s in symbols:
+        bare = s.split("(", 1)[0].strip()
+        if not bare:
+            continue
+        toks = _split_identifier(bare)
+        if toks:
+            if toks[0] in _ACTION_VERB_PREFIXES:
+                has_action = True
+            if query_toks & set(toks):
+                overlap_hits += 1
+
+    bonus = min(overlap_hits * _SYMBOL_MATCH_BONUS_PER_HIT, _SYMBOL_MATCH_BONUS_CAP)
+    if has_action:
+        bonus += _ACTION_VERB_BONUS
+
+    # Type-name overlap: strongest single lexical signal for "which class is
+    # the answer?" queries. Uses the simple name of primary_type_fqn.
+    fqn = str(r.get("primary_type_fqn") or "")
+    if fqn:
+        simple = fqn.rsplit(".", 1)[-1]
+        type_toks = set(_split_identifier(simple))
+        type_hits = len(query_toks & type_toks)
+        if type_hits:
+            bonus += min(type_hits * _TYPE_MATCH_BONUS_PER_HIT, _TYPE_MATCH_BONUS_CAP)
+    return bonus
+
 
 def _apply_chunk_hints(rows: list[dict]) -> None:
     for r in rows:
@@ -62,17 +260,55 @@ def _apply_chunk_hints(rows: list[dict]) -> None:
         }
 
 
+def _role_weight(r: dict) -> float:
+    """Effective role weight for a row, captured into `_score_components.role_weight`."""
+    comps = r.setdefault("_score_components", {})
+    cached = comps.get("role_weight")
+    if cached is not None:
+        return float(cached)
+    if r.get("_skip_role_weight") or str(r.get("_kind", "")) != "java":
+        comps["role_weight"] = 0.0
+        return 0.0
+    role = (r.get("role") or "").upper()
+    w = _ROLE_SCORE_WEIGHTS.get(role, 0.0)
+    comps["role_weight"] = w
+    return w
+
+
+def _apply_symbol_bonus(rows: list[dict], query_toks: set[str]) -> None:
+    """Pre-compute symbol-match bonus into `_score_components.symbol_bonus`."""
+    if not query_toks:
+        return
+    for r in rows:
+        if r.get("_skip_role_weight"):
+            # When the caller locked role, respect their intent everywhere.
+            continue
+        b = _symbol_bonus(r, query_toks)
+        if b:
+            r.setdefault("_score_components", {})["symbol_bonus"] = b
+
+
 def _vector_sort_key(r: dict) -> float:
     d = float(r["_distance"])
+    comps = r.setdefault("_score_components", {})
+    comps["distance"] = d
     if r.get("_hints", {}).get("import_heavy"):
         d += _IMPORT_DISTANCE_PENALTY
+        comps["import_penalty"] = _IMPORT_DISTANCE_PENALTY
+    d -= _role_weight(r)
+    d -= float(comps.get("symbol_bonus", 0.0))
     return d
 
 
 def _hybrid_sort_key(r: dict) -> float:
     s = float(r.get("_score", 0.0))
+    comps = r.setdefault("_score_components", {})
+    comps["hybrid_rrf"] = s
     if r.get("_hints", {}).get("import_heavy"):
         s *= _IMPORT_HYBRID_SCORE_FACTOR
+        comps["import_penalty"] = _IMPORT_HYBRID_SCORE_FACTOR
+    s += _role_weight(r)
+    s += float(comps.get("symbol_bonus", 0.0))
     return -s
 
 
@@ -132,6 +368,15 @@ def _query_vector(model: SentenceTransformer, text: str) -> np.ndarray:
     return np.asarray(v, dtype=np.float32)
 
 
+def _combine_predicates(parts: list[str | None]) -> str | None:
+    clean = [p for p in parts if p]
+    if not clean:
+        return None
+    if len(clean) == 1:
+        return clean[0]
+    return " AND ".join(f"({p})" for p in clean)
+
+
 def _search_one_table(
     table_name: str,
     *,
@@ -143,15 +388,26 @@ def _search_one_table(
     kind: str,
     hybrid: bool,
     fts_text: str | None,
+    extra_predicates: list[str] | None = None,
 ) -> list[dict]:
     tbl = db.open_table(table_name)
     has_lang = kind == "java"
+    table_cols = _table_columns(uri, table_name, db)
+    enriched_cols = table_cols if has_lang else set()
+    # `range_start` / `range_end` are needed downstream by `_attach_neighbor_context`
+    # to locate the chunk inside its file; select them whenever the schema has them.
     base_cols = ["filename", "text", "start", "end"]
+    for col in ("range_start", "range_end"):
+        if col in table_cols:
+            base_cols.append(col)
+    java_extra = [c for c in JAVA_ENRICHED_COLUMNS if c in enriched_cols] if has_lang else []
+    combined_pred = _combine_predicates([path_predicate, *(extra_predicates or [])])
+
     if hybrid:
         ensure_text_fts_index(uri, table_name)
         text_for_fts = fts_text if fts_text is not None else ""
         columns = (
-            [*base_cols, "language"]
+            [*base_cols, "language", *java_extra]
             if has_lang
             else [*base_cols]
         )
@@ -165,8 +421,8 @@ def _search_one_table(
             .select(columns)
             .limit(limit)
         )
-        if path_predicate:
-            q = q.where(path_predicate, prefilter=True)
+        if combined_pred:
+            q = q.where(combined_pred, prefilter=True)
         rows = q.to_list()
         for r in rows:
             r["_kind"] = kind
@@ -179,15 +435,15 @@ def _search_one_table(
         return rows
 
     columns = (
-        [*base_cols, "language", "_distance"]
+        [*base_cols, "language", *java_extra, "_distance"]
         if has_lang
         else [*base_cols, "_distance"]
     )
     q = tbl.search(query_vec, vector_column_name=VECTOR_COLUMN).select(
         columns
     ).limit(limit)
-    if path_predicate:
-        q = q.where(path_predicate, prefilter=True)
+    if combined_pred:
+        q = q.where(combined_pred, prefilter=True)
     rows = q.to_list()
     for r in rows:
         r["_kind"] = kind
@@ -195,6 +451,215 @@ def _search_one_table(
         r["start"] = coerce_position_field(r.get("start"))
         r["end"] = coerce_position_field(r.get("end"))
     return rows
+
+
+def _debug_ctx(msg: str) -> None:
+    """Emit context-expansion diagnostics when LANCEDB_MCP_DEBUG_CONTEXT is set.
+
+    Writes to stderr so it doesn't pollute MCP stdout. Cheap no-op otherwise.
+    """
+    if os.environ.get("LANCEDB_MCP_DEBUG_CONTEXT"):
+        print(f"[context_neighbors] {msg}", file=sys.stderr)
+
+
+def _attach_neighbor_context(
+    rows: list[dict], *, db: object, neighbors: int, uri: str | None = None,
+) -> None:
+    """Populate `_context_before` / `_context_after` with adjacent Java chunk text.
+
+    Strategy (in order):
+    1. Schema-aware scan of the java table, selecting only columns that exist
+       (`filename` + `text` always; `range_start`/`range_end` when present).
+    2. Sort the per-file bucket by `range_start` if available; otherwise keep
+       the table's natural order (good enough because chunks are produced in
+       file order by CocoIndex).
+    3. Locate each row's index via (a) range tuple match, (b) exact text match
+       as fallback. Missing both -> log and skip.
+    4. Any exception is logged (behind env flag) and the field stays empty; we
+       never break search because of context expansion.
+    """
+    if neighbors <= 0:
+        return
+    java_rows = [r for r in rows if str(r.get("_kind", "")) == "java"]
+    if not java_rows:
+        _debug_ctx("no java rows in window; nothing to expand")
+        return
+    filenames = {str(r.get("filename", "")) for r in java_rows if r.get("filename")}
+    if not filenames:
+        _debug_ctx("java rows had no filename field; skipping")
+        return
+
+    java_table = TABLES["java"]
+    try:
+        tbl = db.open_table(java_table)
+    except Exception as exc:
+        _debug_ctx(f"open_table({java_table}) failed: {exc!r}")
+        return
+
+    # Discover which positional columns the index actually carries. Older
+    # indexes may predate `range_start`/`range_end`; newer ones always have
+    # them. Asking for a missing column makes the whole scan fail.
+    try:
+        schema_cols = _table_columns(uri, java_table, db) if uri else {f.name for f in tbl.schema}
+    except Exception as exc:
+        _debug_ctx(f"schema lookup failed: {exc!r}")
+        schema_cols = set()
+
+    has_range = {"range_start", "range_end"}.issubset(schema_cols)
+    scan_cols = ["filename", "text"]
+    if has_range:
+        scan_cols.extend(("range_start", "range_end"))
+
+    try:
+        in_list = ", ".join(f"'{_escape_sql_str(f)}'" for f in filenames)
+        scanner = tbl.to_lance().scanner(
+            filter=f"filename IN ({in_list})",
+            columns=scan_cols,
+        )
+        all_chunks = scanner.to_table().to_pylist()
+    except Exception as exc:
+        _debug_ctx(f"bucket scan failed (cols={scan_cols}): {exc!r}")
+        return
+
+    if not all_chunks:
+        _debug_ctx(f"bucket scan returned 0 chunks for {len(filenames)} filenames")
+        return
+
+    by_file: dict[str, list[dict]] = {}
+    for ch in all_chunks:
+        by_file.setdefault(str(ch.get("filename", "")), []).append(ch)
+    if has_range:
+        for lst in by_file.values():
+            lst.sort(
+                key=lambda c: (int(c.get("range_start") or 0), int(c.get("range_end") or 0))
+            )
+
+    attached = 0
+    for r in java_rows:
+        fn = str(r.get("filename", ""))
+        bucket = by_file.get(fn, [])
+        if not bucket:
+            _debug_ctx(f"no bucket for filename={fn!r}")
+            continue
+
+        idx: int | None = None
+        if has_range:
+            start = int(r.get("range_start") or 0)
+            end = int(r.get("range_end") or 0)
+            if start or end:
+                idx = next(
+                    (
+                        i for i, c in enumerate(bucket)
+                        if int(c.get("range_start") or -1) == start
+                        and int(c.get("range_end") or -1) == end
+                    ),
+                    None,
+                )
+
+        if idx is None:
+            r_text = str(r.get("text") or "")
+            if r_text:
+                idx = next(
+                    (i for i, c in enumerate(bucket) if str(c.get("text") or "") == r_text),
+                    None,
+                )
+
+        if idx is None:
+            _debug_ctx(
+                f"could not locate chunk in bucket (file={fn!r}, "
+                f"has_range={has_range}, bucket_size={len(bucket)})"
+            )
+            continue
+
+        before_parts = [str(c.get("text") or "") for c in bucket[max(0, idx - neighbors):idx]]
+        after_parts = [str(c.get("text") or "") for c in bucket[idx + 1 : idx + 1 + neighbors]]
+        r["_context_before"] = "\n".join(before_parts)
+        r["_context_after"] = "\n".join(after_parts)
+        attached += 1
+
+    _debug_ctx(f"attached context to {attached}/{len(java_rows)} java rows")
+
+
+def _graph_expand_merge(
+    vector_rows: list[dict],
+    *,
+    query_vec: np.ndarray,
+    db: object,
+    uri: str,
+    limit: int,
+    extra_predicates: list[str],
+    expand_depth: int,
+    kuzu_path: str | None,
+) -> list[dict]:
+    """Expand vector top-k through the Kuzu graph and fuse (RRF) with the original list."""
+    # Lazy import so the module works without kuzu installed when graph_expand=False.
+    try:
+        from kuzu_queries import KuzuGraph
+    except Exception:
+        return vector_rows
+
+    if not KuzuGraph.exists(kuzu_path):
+        return vector_rows
+
+    seed_fqns = sorted({r.get("primary_type_fqn") for r in vector_rows if r.get("primary_type_fqn")})
+    if not seed_fqns:
+        return vector_rows
+
+    try:
+        graph = KuzuGraph.get(kuzu_path)
+        neighbor_fqns = graph.expand_fqns(seed_fqns, depth=expand_depth)
+    except Exception:
+        return vector_rows
+
+    novel = [fqn for fqn in neighbor_fqns if fqn and fqn not in set(seed_fqns)]
+    if not novel:
+        return vector_rows
+
+    extra = list(extra_predicates)
+    extra.extend(_build_extra_predicates(
+        columns=_table_columns(uri, TABLES["java"], db),
+        role=None, service=None, package_prefix=None, fqn_in=novel,
+    ))
+
+    try:
+        graph_rows = _search_one_table(
+            TABLES["java"],
+            uri=uri, db=db, query_vec=query_vec,
+            limit=max(limit, 20),
+            path_predicate=None, kind="java",
+            hybrid=False, fts_text=None,
+            extra_predicates=extra,
+        )
+    except Exception:
+        return vector_rows
+    _apply_chunk_hints(graph_rows)
+    graph_rows.sort(key=_vector_sort_key)
+    for r in graph_rows:
+        r["_graph_expanded"] = True
+    fused = _rrf_merge([vector_rows, graph_rows])
+    return fused
+
+
+def _rrf_merge(lists: list[list[dict]], *, k: int = 60) -> list[dict]:
+    """Reciprocal-rank-fuse several ranked lists of chunk rows.
+
+    Rows are deduplicated by (filename, range_start, range_end). The merged
+    rows get a `_rrf_score` field so callers can inspect or re-sort.
+    """
+    pool: dict[tuple, dict] = {}
+    for ranked in lists:
+        for rank, row in enumerate(ranked):
+            key = (row.get("filename"), row.get("range_start"), row.get("range_end"))
+            existing = pool.get(key)
+            contribution = 1.0 / (k + rank + 1)
+            if existing is None:
+                row["_rrf_score"] = contribution
+                pool[key] = row
+            else:
+                existing["_rrf_score"] = float(existing.get("_rrf_score", 0.0)) + contribution
+    merged = list(pool.values())
+    merged.sort(key=lambda r: -float(r.get("_rrf_score", 0.0)))
+    return merged
 
 
 def run_search(
@@ -211,6 +676,13 @@ def run_search(
     hybrid: bool = False,
     fts_text: str | None = None,
     auto_hybrid: bool = False,
+    role: str | None = None,
+    service: str | None = None,
+    package_prefix: str | None = None,
+    graph_expand: bool = False,
+    expand_depth: int = 1,
+    kuzu_path: str | None = None,
+    context_neighbors: int = 0,
 ) -> list[dict]:
     effective_hybrid = hybrid
     effective_fts = fts_text
@@ -246,8 +718,17 @@ def run_search(
     db = lancedb.connect(uri)
     need = max(limit + offset, 1)
 
+    extra_java = _build_extra_predicates(
+        columns=_table_columns(uri, TABLES["java"], db),
+        role=role, service=service, package_prefix=package_prefix, fqn_in=None,
+    ) if "java" in table_keys else []
+
+    skip_role_weight = bool(role)
+    query_toks = _query_tokens(query)
+
     if len(table_keys) == 1:
         key = table_keys[0]
+        preds = extra_java if key == "java" else []
         rows = _search_one_table(
             TABLES[key],
             uri=uri,
@@ -258,17 +739,39 @@ def run_search(
             kind=key,
             hybrid=effective_hybrid,
             fts_text=fts_for_hybrid,
+            extra_predicates=preds,
         )
         _apply_chunk_hints(rows)
+        if skip_role_weight:
+            for r in rows:
+                r["_skip_role_weight"] = True
+        _apply_symbol_bonus(rows, query_toks)
         if effective_hybrid:
             rows.sort(key=_hybrid_sort_key)
         else:
             rows.sort(key=_vector_sort_key)
-        return rows[offset : offset + limit]
+
+        if graph_expand and key == "java" and expand_depth > 0:
+            rows = _graph_expand_merge(
+                rows,
+                query_vec=query_vec,
+                db=db,
+                uri=uri,
+                limit=need,
+                extra_predicates=extra_java,
+                expand_depth=expand_depth,
+                kuzu_path=kuzu_path,
+            )
+
+        window = rows[offset : offset + limit]
+        if context_neighbors > 0 and key == "java":
+            _attach_neighbor_context(window, db=db, neighbors=context_neighbors, uri=uri)
+        return window
 
     merged: list[dict] = []
     per_table = max(need * 3, need)
     for key in table_keys:
+        preds = extra_java if key == "java" else []
         merged.extend(
             _search_one_table(
                 TABLES[key],
@@ -280,11 +783,19 @@ def run_search(
                 kind=key,
                 hybrid=False,
                 fts_text=None,
+                extra_predicates=preds,
             )
         )
     _apply_chunk_hints(merged)
+    if skip_role_weight:
+        for r in merged:
+            r["_skip_role_weight"] = True
+    _apply_symbol_bonus(merged, query_toks)
     merged.sort(key=_vector_sort_key)
-    return merged[offset : offset + limit]
+    window = merged[offset : offset + limit]
+    if context_neighbors > 0:
+        _attach_neighbor_context(window, db=db, neighbors=context_neighbors, uri=uri)
+    return window
 
 
 def main() -> None:
@@ -309,6 +820,16 @@ def main() -> None:
     parser.add_argument("--hybrid", action="store_true")
     parser.add_argument("--fts-text", metavar="TEXT", default=None)
     parser.add_argument("--auto-hybrid", action="store_true")
+    parser.add_argument("--role", default=None)
+    parser.add_argument("--service", default=None)
+    parser.add_argument("--package-prefix", default=None)
+    parser.add_argument("--graph-expand", action="store_true")
+    parser.add_argument("--expand-depth", type=int, default=1)
+    parser.add_argument("--kuzu-path", default=None)
+    parser.add_argument(
+        "--context-neighbors", type=int, default=0,
+        help="Attach N adjacent chunks per hit as surrounding context (Java only).",
+    )
     args = parser.parse_args()
 
     uri_path = Path(args.lancedb_uri)
@@ -336,6 +857,13 @@ def main() -> None:
             hybrid=args.hybrid,
             fts_text=args.fts_text,
             auto_hybrid=args.auto_hybrid,
+            role=args.role,
+            service=args.service,
+            package_prefix=args.package_prefix,
+            graph_expand=args.graph_expand,
+            expand_depth=args.expand_depth,
+            kuzu_path=args.kuzu_path,
+            context_neighbors=args.context_neighbors,
         )
     except Exception as e:
         print(f"Search failed: {e}", file=sys.stderr)
@@ -372,6 +900,21 @@ def main() -> None:
             hint_s += f" | type:{hints['primary_type_hint']}"
         if hints.get("import_heavy"):
             hint_s += " | mostly-imports"
+        role = row.get("role") or ""
+        if role:
+            hint_s += f" | role:{role}"
+        svc = row.get("service") or ""
+        if svc:
+            hint_s += f" | svc:{svc}"
+        comps = row.get("_score_components") or {}
+        rw = comps.get("role_weight")
+        if rw:
+            hint_s += f" | role_weight:{rw:+.2f}"
+        sb = comps.get("symbol_bonus")
+        if sb:
+            hint_s += f" | symbol_bonus:{sb:+.2f}"
+        if row.get("_graph_expanded"):
+            hint_s += " | graph"
         print(f"--- {i}. [{kind}] {rank_s} | {fn}{line_hint} | lang={lang}{hint_s}")
         print(preview)
         print()

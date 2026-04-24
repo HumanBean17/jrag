@@ -26,7 +26,9 @@ from typing import Annotated, Any
 import cocoindex as coco
 import numpy as np
 import numpy.typing as npt
+import pyarrow as pa
 from cocoindex.connectors import lancedb, localfs
+from cocoindex.connectors.lancedb import LanceType
 from cocoindex.ops.sentence_transformers import SentenceTransformerEmbedder
 from cocoindex.ops.text import RecursiveSplitter, detect_code_language
 from cocoindex.resources.file import PatternFilePathMatcher
@@ -40,6 +42,8 @@ from java_index_v1_common import (
     chunk_key_range,
     position_to_json,
 )
+from ast_java import ONTOLOGY_VERSION, parse_java
+from graph_enrich import enrich_chunk
 
 PROJECT_ROOT = coco.ContextKey[Path]("java_lance_project_root", tracked=False)
 LANCE_DB = coco.ContextKey("java_lance_async_conn", tracked=False)
@@ -61,6 +65,16 @@ class JavaLanceChunk:
     start: dict[str, Any]
     end: dict[str, Any]
     embedding: Annotated[npt.NDArray[np.float32], EMBEDDER]
+    package: str
+    service: str
+    primary_type_fqn: str
+    primary_type_kind: str
+    role: str
+    # Native PyArrow lists: without the LanceType override CocoIndex would JSON-encode
+    # `list[str]` into a STRING column, which caller code then iterates character-by-character.
+    annotations_on_type: Annotated[list[str], LanceType(pa.list_(pa.string()))]
+    symbols: Annotated[list[str], LanceType(pa.list_(pa.string()))]
+    ontology_version: int
 
 
 @dataclass
@@ -121,6 +135,7 @@ async def process_java_file(
     table: lancedb.TableTarget[JavaLanceChunk],
 ) -> None:
     embedder = coco.use_context(EMBEDDER)
+    project_root = coco.use_context(PROJECT_ROOT)
     try:
         content = await file.read_text()
     except UnicodeDecodeError:
@@ -138,9 +153,18 @@ async def process_java_file(
         language=language,
     )
     rel = file.file_path.path.as_posix()
+    content_bytes = content.encode("utf-8", errors="replace")
+    ast = parse_java(content_bytes)
 
     for ch in chunks:
         rs, re = chunk_key_range(ch)
+        enrich = enrich_chunk(
+            ast,
+            chunk_start_byte=ch.start.byte_offset,
+            chunk_end_byte=ch.end.byte_offset,
+            file_path=rel,
+            project_root=project_root,
+        )
         emb = await embedder.embed(ch.text)
         table.declare_row(
             row=JavaLanceChunk(
@@ -153,6 +177,14 @@ async def process_java_file(
                 start=position_to_json(ch.start),
                 end=position_to_json(ch.end),
                 embedding=emb,
+                package=enrich.package,
+                service=enrich.service,
+                primary_type_fqn=enrich.primary_type_fqn,
+                primary_type_kind=enrich.primary_type_kind,
+                role=enrich.role,
+                annotations_on_type=enrich.annotations_on_type,
+                symbols=enrich.symbols,
+                ontology_version=ONTOLOGY_VERSION,
             )
         )
 
