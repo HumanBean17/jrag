@@ -26,9 +26,33 @@ __all__ = [
     "JavaFileAst",
     "parse_java",
     "infer_role",
+    "infer_role_for_type",
     "ROLE_ANNOTATIONS",
     "ONTOLOGY_VERSION",
 ]
+
+# Name suffixes that strongly indicate a passive data-carrier type when the
+# type is not annotated as a Spring/JPA component. Kept conservative on
+# purpose: a single clear suffix match is enough, but only when role
+# inference would otherwise return OTHER (so @Service FooRequest stays a
+# SERVICE). Checked case-sensitively against the simple type name.
+_DTO_NAME_SUFFIXES: tuple[str, ...] = (
+    "Dto", "DTO",
+    "Request", "Response",
+    "Payload", "Model",
+    "Event", "Message",
+    "Body", "Form",
+    "Command", "Query",
+    "Record", "View",
+)
+
+# Lombok value / builder annotations typical of DTO-style types. Presence of
+# any one of these promotes an otherwise role-less type to DTO.
+_DTO_LOMBOK_ANNOTATIONS: frozenset[str] = frozenset({
+    "Data", "Value", "Builder",
+    "Getter", "Setter",
+    "EqualsAndHashCode", "ToString",
+})
 
 ONTOLOGY_VERSION = 1
 
@@ -520,6 +544,40 @@ def infer_role(annotation_names: Iterable[str]) -> str:
         role = ROLE_ANNOTATIONS.get(ann)
         if role:
             return role
+    return "OTHER"
+
+
+def infer_role_for_type(type_decl: "TypeDecl") -> str:
+    """Role inference that also detects DTO-like passive data carriers.
+
+    Applied only when annotation-based inference yields OTHER, so an
+    explicitly-stereotyped class (e.g. @Service FooRequest) keeps its role.
+    A type is considered DTO when *any* of the following hold:
+
+      * kind is `record` (Java records are value carriers by definition);
+      * a Lombok value/getter/setter annotation is present (`@Data`, etc.);
+      * the simple name ends with a known DTO suffix (`Dto`, `Request`, ...).
+
+    Used to down-rank DTOs in behavioural search; schema-focused queries can
+    still fetch them via explicit `role=DTO` or by turning the weight off.
+    """
+    ann_names = [a.name for a in type_decl.annotations]
+    base = infer_role(ann_names)
+    if base != "OTHER":
+        return base
+
+    if type_decl.kind == "record":
+        return "DTO"
+
+    ann_set = set(ann_names)
+    if ann_set & _DTO_LOMBOK_ANNOTATIONS:
+        return "DTO"
+
+    name = type_decl.name or ""
+    for suffix in _DTO_NAME_SUFFIXES:
+        if name.endswith(suffix) and name != suffix:
+            return "DTO"
+
     return "OTHER"
 
 

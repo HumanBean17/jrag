@@ -22,7 +22,12 @@ from sentence_transformers import SentenceTransformer
 
 from index_common import SBERT_MODEL
 from kuzu_queries import KuzuGraph, resolve_kuzu_path
-from search_lancedb import TABLES, l2_distance_to_score, run_search
+from search_lancedb import (
+    TABLES,
+    explain_score_components,
+    l2_distance_to_score,
+    run_search,
+)
 
 _COCOINDEX_TARGET = "java_index_flow_lancedb.py:JavaCodeIndexLance"
 
@@ -33,11 +38,18 @@ _INSTRUCTIONS = (
     "Use codebase_search for meaning-based discovery — prefer limit 5; use offset to page. "
     "Use find_implementors / find_subclasses / find_injectors / impact_analysis / neighbors / "
     "list_by_role / list_by_annotation for exact structural traversal. "
-    "Use trace_flow for CONTROLLER -> SERVICE -> REPOSITORY/FEIGN end-to-end chains. "
-    "Java hits include role/service/FQN + score_components (role_weight bumps "
-    "orchestrators, penalises CONFIG/ENTITY). Pass context_neighbors=1 to attach "
-    "adjacent chunks via `context_before` / `context_after`. "
-    "Hybrid mode (single table only) mixes vector + full-text (RRF). "
+    "Use trace_flow for CONTROLLER -> SERVICE -> REPOSITORY/FEIGN end-to-end chains; "
+    "its seeds are auto-filtered to entrypoint-like roles (CONTROLLER / COMPONENT / "
+    "SERVICE / FEIGN_CLIENT), so it's the right tool for 'how / what happens when' queries. "
+    "For behavioural queries prefer exclude_roles=['DTO','ENTITY','CONFIG','OTHER'] on "
+    "codebase_search; for schema/domain questions pass role='DTO' or role='ENTITY' instead. "
+    "Set auto_hybrid=true when the query contains identifiers / CamelCase / snake_case "
+    "tokens (class names, method names) — it mixes vector + FTS via RRF. "
+    "Java hits include role/service/FQN + score_components + a compact `why` string "
+    "explaining the rank (dist / role / symbol / import_penalty). Pass context_neighbors=1 "
+    "to attach adjacent chunks via `context_before` / `context_after`. "
+    "list_code_index_tables surfaces per-service symbol counts from the graph — use it to "
+    "confirm service inference when a service-scoped search returns zero hits. "
     "refresh_code_index runs cocoindex and then rebuilds the Kuzu graph; needs "
     "LANCEDB_MCP_ALLOW_REFRESH=1 and cocoindex beside the venv Python."
 )
@@ -94,6 +106,14 @@ class CodeChunkHit(BaseModel):
         default="",
         description="Neighboring chunk text following this one (set when context_neighbors > 0).",
     )
+    why: str = Field(
+        default="",
+        description=(
+            "Compact human-readable rank rationale derived from score_components "
+            "(e.g. 'dist=0.42 role:SERVICE:+0.08 symbol:+0.05'). Empty when there "
+            "is nothing notable to explain."
+        ),
+    )
 
 
 class SymbolDto(BaseModel):
@@ -146,6 +166,15 @@ class GraphMetaOutput(BaseModel):
     source_root: str = ""
     parse_errors: int = 0
     counts: dict[str, int] = Field(default_factory=dict)
+    service_counts: dict[str, int] = Field(
+        default_factory=dict,
+        description=(
+            "Map of inferred-service -> type-symbol count. Empty-string key "
+            "means the builder could not infer a service (no build-marker "
+            "ancestor); a large count there indicates a service-scoped search "
+            "is likely to miss real code."
+        ),
+    )
     message: str | None = None
 
 
@@ -165,10 +194,27 @@ class IndexInfoOutput(BaseModel):
     graph: GraphMetaOutput
 
 
+class ViaEdgeDto(BaseModel):
+    edge_type: str = Field(description="INJECTS | EXTENDS | IMPLEMENTS")
+    from_fqn: str = Field(description="FQN of the parent-stage symbol that introduced this node")
+    hop: int = Field(description="1 = direct neighbour of the previous-stage frontier")
+
+
+class StageSymbolDto(BaseModel):
+    symbol: SymbolDto
+    via: list[ViaEdgeDto] = Field(
+        default_factory=list,
+        description=(
+            "Edges from the previous stage that pulled this symbol in. "
+            "Empty for stage 0 (seeds)."
+        ),
+    )
+
+
 class FlowStageDto(BaseModel):
     stage_index: int
     stage_name: str
-    symbols: list[SymbolDto] = Field(default_factory=list)
+    symbols: list[StageSymbolDto] = Field(default_factory=list)
 
 
 class TraceFlowOutput(BaseModel):
@@ -259,6 +305,10 @@ def _graph_meta_output() -> GraphMetaOutput:
             db_path=meta.get("db_path", resolve_kuzu_path()),
             message=str(meta["error"]),
         )
+    try:
+        svc_counts = graph.service_counts()
+    except Exception:
+        svc_counts = {}
     return GraphMetaOutput(
         success=True,
         enabled=_graph_enabled(),
@@ -268,6 +318,7 @@ def _graph_meta_output() -> GraphMetaOutput:
         source_root=str(meta.get("source_root") or ""),
         parse_errors=int(meta.get("parse_errors") or 0),
         counts={k: int(v) for k, v in (meta.get("counts") or {}).items()},
+        service_counts=svc_counts,
     )
 
 
@@ -335,6 +386,16 @@ def _rows_to_hits(rows: list[dict[str, Any]]) -> list[CodeChunkHit]:
         else:
             score = l2_distance_to_score(float(r.get("_distance", 1.0)))
         hints = r.get("_hints") or {}
+        comps = {
+            k: float(v) for k, v in (r.get("_score_components") or {}).items()
+            if isinstance(v, (int, float))
+        }
+        why = explain_score_components(
+            comps,
+            role=r.get("role") or None,
+            hybrid=bool(r.get("_hybrid") or "_rrf_score" in r),
+            graph_expanded=bool(r.get("_graph_expanded", False)),
+        )
         hits.append(
             CodeChunkHit(
                 file_path=str(r["filename"]),
@@ -356,12 +417,10 @@ def _rows_to_hits(rows: list[dict[str, Any]]) -> list[CodeChunkHit]:
                 annotations_on_type=_clean_str_list(r.get("annotations_on_type")),
                 symbols=_clean_str_list(r.get("symbols")),
                 graph_expanded=bool(r.get("_graph_expanded", False)),
-                score_components={
-                    k: float(v) for k, v in (r.get("_score_components") or {}).items()
-                    if isinstance(v, (int, float))
-                },
+                score_components=comps,
                 context_before=str(r.get("_context_before") or ""),
                 context_after=str(r.get("_context_after") or ""),
+                why=why,
             )
         )
     return hits
@@ -374,7 +433,16 @@ def create_mcp_server() -> FastMCP:
         name="codebase_search",
         description=(
             "Vector / hybrid search over a LanceDB codebase index. "
-            "Natural language or code snippet; optional hybrid for identifiers."
+            "Natural language or code snippet; optional hybrid for identifiers.\n"
+            "Examples:\n"
+            '  minimal:         {\"query\": \"how chat assigns on operator\"}\n'
+            '  behavioural:     {\"query\": \"how chat assigns on operator\", '
+            '\"exclude_roles\": [\"DTO\",\"ENTITY\",\"CONFIG\",\"OTHER\"]}\n'
+            '  identifier-ish:  {\"query\": \"DistributionChunkService\", \"auto_hybrid\": true}\n'
+            '  scoped:          {\"query\": \"...\", \"service\": \"chat-assign\", '
+            '\"role\": \"SERVICE\", \"limit\": 10}\n'
+            "Limits: omit any optional field rather than passing null is fine; lists must "
+            "be JSON arrays of strings; `role` is a single value (use `exclude_roles` for sets)."
         ),
     )
     async def codebase_search(
@@ -388,7 +456,14 @@ def create_mcp_server() -> FastMCP:
         auto_hybrid: bool = Field(default=False),
         role: str | None = Field(
             default=None,
-            description="Java only: CONTROLLER|SERVICE|REPOSITORY|COMPONENT|CONFIG|ENTITY|FEIGN_CLIENT|MAPPER",
+            description="Java only: CONTROLLER|SERVICE|REPOSITORY|COMPONENT|CONFIG|ENTITY|FEIGN_CLIENT|MAPPER|DTO",
+        ),
+        exclude_roles: list[str] | None = Field(
+            default=None,
+            description=(
+                "Java only: drop chunks whose role is in this list. Useful "
+                "for behavioural queries; try ['DTO','ENTITY','CONFIG','OTHER']."
+            ),
         ),
         service: str | None = Field(
             default=None, description="Inferred microservice name (build-marker ancestor).",
@@ -413,18 +488,31 @@ def create_mcp_server() -> FastMCP:
         if table not in ("java", "sql", "yaml", "all"):
             return CodeSearchOutput(
                 success=False,
-                message=f"Invalid table={table!r}; use java, sql, yaml, or all.",
+                message=(
+                    f"Invalid `table` value {table!r}: must be one of "
+                    "'java', 'sql', 'yaml', 'all' (string)."
+                ),
             )
         if hybrid and table == "all":
             return CodeSearchOutput(
                 success=False,
-                message="hybrid=true requires a single table, not all.",
+                message=(
+                    "`hybrid=true` requires a single table; got table='all'. "
+                    "Set table to 'java', 'sql', or 'yaml'."
+                ),
             )
         if auto_hybrid and table == "all":
             return CodeSearchOutput(
                 success=False,
-                message="auto_hybrid=true requires a single table, not all.",
+                message=(
+                    "`auto_hybrid=true` requires a single table; got table='all'. "
+                    "Set table to 'java', 'sql', or 'yaml'."
+                ),
             )
+        # Note: type-level validation (string/list/int) is enforced by
+        # FastMCP/Pydantic before this handler runs. We only catch
+        # *value*-level problems here (bad enum values, incompatible flag
+        # combinations) so the error text names the field and the fix.
 
         uri = _resolve_lancedb_uri()
         is_remote = uri.startswith(("s3://", "gs://", "az://"))
@@ -462,6 +550,7 @@ def create_mcp_server() -> FastMCP:
                 graph_expand=graph_expand and _graph_enabled(),
                 expand_depth=expand_depth,
                 context_neighbors=context_neighbors,
+                exclude_roles=exclude_roles,
             )
 
         try:
@@ -630,9 +719,23 @@ def create_mcp_server() -> FastMCP:
         name="trace_flow",
         description=(
             "End-to-end behavioural trace for a natural-language query. "
-            "Picks seed entrypoints via vector search, then walks the Kuzu graph "
-            "in role-ordered stages (CONTROLLER -> SERVICE/COMPONENT -> "
-            "FEIGN_CLIENT/REPOSITORY/MAPPER) and returns the likely chain."
+            "Picks seed entrypoints via vector search (restricted to CONTROLLER / "
+            "COMPONENT / SERVICE / FEIGN_CLIENT roles, with a fallback pass when "
+            "nothing matches), then walks the Kuzu graph in role-ordered stages "
+            "(CONTROLLER/COMPONENT/SERVICE -> SERVICE/COMPONENT -> "
+            "FEIGN_CLIENT/REPOSITORY/MAPPER) and returns the likely chain.\n"
+            "Each stage symbol carries `via: [{edge_type, from_fqn, hop}]` so "
+            "callers can see *why* it was pulled in (INJECTS / EXTENDS / "
+            "IMPLEMENTS). Stage 0 is seeds and has `via=[]`.\n"
+            "Examples:\n"
+            '  minimal:  {\"query\": \"what happens on new client message\"}\n'
+            '  scoped:   {\"query\": \"...\", \"service\": \"chat-assign\", '
+            '\"seed_limit\": 5, \"stage_limit\": 8, \"depth\": 2}\n'
+            "Limits: exactly 3 stages (entrypoints / services / integrations); "
+            "`seed_limit` caps the vector-search seeds feeding stage 0; `stage_limit` "
+            "caps per-stage size; `depth` is hops-per-stage, not total depth. This is "
+            "not a full call graph — method-level CALLS / PUBLISHES edges are not yet "
+            "indexed."
         ),
     )
     async def trace_flow(
@@ -643,6 +746,14 @@ def create_mcp_server() -> FastMCP:
         seed_limit: int = Field(default=5, ge=1, le=20),
         stage_limit: int = Field(default=8, ge=1, le=50),
         depth: int = Field(default=2, ge=1, le=3),
+        exclude_roles: list[str] | None = Field(
+            default=None,
+            description=(
+                "Additional roles to exclude when producing `seed_hits` "
+                "(on top of the DTO/ENTITY/CONFIG baseline). The graph "
+                "traversal stages are always role-ordered regardless."
+            ),
+        ),
     ) -> TraceFlowOutput:
         ok, graph, msg = _require_graph()
         if not ok or graph is None:
@@ -659,7 +770,16 @@ def create_mcp_server() -> FastMCP:
         model_name = os.environ.get("SBERT_MODEL", SBERT_MODEL)
         device = os.environ.get("SBERT_DEVICE") or None
 
-        def _seed() -> list[dict[str, Any]]:
+        # Baseline excludes passive/infra roles so DTOs/entities never
+        # become stage-0 entrypoints for behavioural queries. Callers can
+        # extend this via `exclude_roles`.
+        baseline_excludes = {"DTO", "ENTITY", "CONFIG", "OTHER"}
+        if exclude_roles:
+            baseline_excludes.update(r.upper() for r in exclude_roles if r)
+
+        entry_roles = ["CONTROLLER", "COMPONENT", "SERVICE", "FEIGN_CLIENT"]
+
+        def _seed(role_allowlist: list[str] | None) -> list[dict[str, Any]]:
             model = _get_sentence_transformer(model_name, device)
             return run_search(
                 query,
@@ -680,10 +800,18 @@ def create_mcp_server() -> FastMCP:
                 graph_expand=False,
                 expand_depth=1,
                 context_neighbors=0,
+                role_in=role_allowlist,
+                exclude_roles=None if role_allowlist else sorted(baseline_excludes),
             )
 
+        # First pass: restrict seeds to entrypoint-like roles. If that
+        # comes back empty (e.g. a codebase without @Controller), fall
+        # back to the baseline-excluded search so we still surface
+        # *something* rather than nothing.
         try:
-            seed_rows = await asyncio.to_thread(_seed)
+            seed_rows = await asyncio.to_thread(_seed, entry_roles)
+            if not seed_rows:
+                seed_rows = await asyncio.to_thread(_seed, None)
         except Exception as e:
             return TraceFlowOutput(success=False, message=f"seed search failed: {e!s}")
 
@@ -711,9 +839,17 @@ def create_mcp_server() -> FastMCP:
         stages: list[FlowStageDto] = []
         for i, stage in enumerate(stages_raw):
             name = stage_names[i] if i < len(stage_names) else f"stage_{i}"
+            entries: list[StageSymbolDto] = []
+            for entry in stage:
+                entries.append(StageSymbolDto(
+                    symbol=_symbol_to_dto(entry.symbol),
+                    via=[
+                        ViaEdgeDto(edge_type=v.edge_type, from_fqn=v.from_fqn, hop=v.hop)
+                        for v in entry.via
+                    ],
+                ))
             stages.append(FlowStageDto(
-                stage_index=i, stage_name=name,
-                symbols=[_symbol_to_dto(s) for s in stage],
+                stage_index=i, stage_name=name, symbols=entries,
             ))
 
         return TraceFlowOutput(

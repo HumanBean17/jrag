@@ -40,7 +40,7 @@ from ast_java import (
     JavaFileAst,
     MethodDecl,
     TypeDecl,
-    infer_role,
+    infer_role_for_type,
     injection_annotation_names,
     lombok_required_args_annotations,
     parse_java,
@@ -587,7 +587,7 @@ def _write_nodes(conn: kuzu.Connection, tables: GraphTables) -> None:
             start_byte=d.start_byte, end_byte=d.end_byte,
             modifiers=list(d.modifiers),
             annotations=[a.name for a in d.annotations],
-            role=infer_role([a.name for a in d.annotations]),
+            role=infer_role_for_type(d),
             signature="",
             parent_id=tables.types[entry.outer_fqn].node_id if entry.outer_fqn and entry.outer_fqn in tables.types else "",
         ))

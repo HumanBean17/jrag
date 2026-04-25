@@ -67,10 +67,18 @@ def _build_extra_predicates(
     service: str | None,
     package_prefix: str | None,
     fqn_in: list[str] | None,
+    role_in: list[str] | None = None,
+    exclude_roles: list[str] | None = None,
 ) -> list[str]:
     preds: list[str] = []
     if role and "role" in columns:
         preds.append(f"role = '{_escape_sql_str(role)}'")
+    if role_in and "role" in columns:
+        vals = ", ".join(f"'{_escape_sql_str(v)}'" for v in role_in)
+        preds.append(f"role IN ({vals})")
+    if exclude_roles and "role" in columns:
+        vals = ", ".join(f"'{_escape_sql_str(v)}'" for v in exclude_roles)
+        preds.append(f"(role IS NULL OR role NOT IN ({vals}))")
     if service and "service" in columns:
         preds.append(f"service = '{_escape_sql_str(service)}'")
     if package_prefix and "package" in columns:
@@ -152,6 +160,10 @@ _ROLE_SCORE_WEIGHTS: dict[str, float] = {
     "OTHER": 0.00,
     "ENTITY": -0.06,
     "CONFIG": -0.10,
+    # DTOs are passive data carriers; they almost never answer "how/what
+    # happens" queries. Penalty is slightly stronger than ENTITY so a DTO
+    # with a great embedding match still loses to a mediocre SERVICE hit.
+    "DTO": -0.08,
 }
 
 
@@ -310,6 +322,45 @@ def _hybrid_sort_key(r: dict) -> float:
     s += _role_weight(r)
     s += float(comps.get("symbol_bonus", 0.0))
     return -s
+
+
+def explain_score_components(
+    comps: dict[str, float] | None,
+    *,
+    role: str | None = None,
+    hybrid: bool = False,
+    graph_expanded: bool = False,
+) -> str:
+    """Compact human-readable 'why' string for a ranked hit.
+
+    Joins the interesting components of `_score_components` in a stable order
+    so agents can reason about rankings without chasing raw floats. Returns
+    "" if there's nothing worth mentioning.
+    """
+    if not comps:
+        comps = {}
+    parts: list[str] = []
+    if hybrid:
+        rrf = comps.get("hybrid_rrf")
+        if rrf is not None:
+            parts.append(f"rrf={float(rrf):.3f}")
+    else:
+        d = comps.get("distance")
+        if d is not None:
+            parts.append(f"dist={float(d):.2f}")
+    rw = comps.get("role_weight")
+    if rw:
+        label = f"role:{role}" if role else "role"
+        parts.append(f"{label}:{float(rw):+.02f}")
+    sb = comps.get("symbol_bonus")
+    if sb:
+        parts.append(f"symbol:{float(sb):+.02f}")
+    ip = comps.get("import_penalty")
+    if ip:
+        parts.append(f"import_penalty:{float(ip):+.02f}")
+    if graph_expanded:
+        parts.append("graph")
+    return " ".join(parts)
 
 
 def l2_distance_to_score(distance: float) -> float:
@@ -683,6 +734,8 @@ def run_search(
     expand_depth: int = 1,
     kuzu_path: str | None = None,
     context_neighbors: int = 0,
+    role_in: list[str] | None = None,
+    exclude_roles: list[str] | None = None,
 ) -> list[dict]:
     effective_hybrid = hybrid
     effective_fts = fts_text
@@ -721,9 +774,10 @@ def run_search(
     extra_java = _build_extra_predicates(
         columns=_table_columns(uri, TABLES["java"], db),
         role=role, service=service, package_prefix=package_prefix, fqn_in=None,
+        role_in=role_in, exclude_roles=exclude_roles,
     ) if "java" in table_keys else []
 
-    skip_role_weight = bool(role)
+    skip_role_weight = bool(role or role_in)
     query_toks = _query_tokens(query)
 
     if len(table_keys) == 1:

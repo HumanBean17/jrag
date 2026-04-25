@@ -9,7 +9,7 @@ import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
-from ast_java import JavaFileAst, TypeDecl, infer_role
+from ast_java import JavaFileAst, TypeDecl, infer_role_for_type
 
 __all__ = [
     "ChunkEnrichment",
@@ -152,7 +152,7 @@ def enrich_chunk(
             service=service_for_path(file_path, project_root),
             primary_type_fqn=encl.fqn,
             primary_type_kind=encl.kind,
-            role=infer_role(ann_names),
+            role=infer_role_for_type(encl),
             annotations_on_type=ann_names,
             symbols=_symbols_in_range(ast, chunk_start_byte, chunk_end_byte),
         )

@@ -22,6 +22,8 @@ __all__ = [
     "resolve_kuzu_path",
     "SymbolHit",
     "EdgeHit",
+    "ViaEdge",
+    "StageSymbol",
 ]
 
 
@@ -68,6 +70,30 @@ class EdgeHit:
     annotation: str = ""
     field_or_param: str = ""
     resolved: bool = True
+
+
+@dataclass
+class ViaEdge:
+    """Labelled edge from a previous-stage node to a stage symbol.
+
+    Populated by `trace_flow` so callers can see *why* two types ended up
+    in the same chain (e.g. `INJECTS` vs `IMPLEMENTS`) and at what hop
+    from the frontier they were reached.
+    """
+    edge_type: str  # INJECTS | EXTENDS | IMPLEMENTS
+    from_fqn: str
+    hop: int  # 1 = direct neighbour of previous-stage frontier
+
+
+@dataclass
+class StageSymbol:
+    """A trace_flow stage entry: the symbol plus the edges that pulled it in.
+
+    Stage 0 (seeds) has `via=[]`. Later stages list every first-time path
+    from the previous frontier to `symbol`.
+    """
+    symbol: SymbolHit
+    via: list[ViaEdge]
 
 
 def _symbol_return_for(alias: str) -> str:
@@ -186,6 +212,27 @@ class KuzuGraph:
             "counts": counts,
             "db_path": self.db_path,
         }
+
+    def service_counts(self) -> dict[str, int]:
+        """Map of service name -> number of resolved type/member symbols.
+
+        Empty-string service is reported under the key "" so callers can
+        see how many symbols failed build-marker inference (useful when a
+        service-scoped search unexpectedly returns no hits).
+        """
+        try:
+            rows = self._rows(
+                "MATCH (s:Symbol) WHERE s.resolved "
+                "AND s.kind IN ['class','interface','enum','record','annotation'] "
+                "RETURN s.service AS service, count(*) AS n"
+            )
+        except Exception:
+            return {}
+        out: dict[str, int] = {}
+        for r in rows:
+            svc = r.get("service") or ""
+            out[str(svc)] = int(r.get("n") or 0)
+        return out
 
     # ---- symbol-level lookups ----
 
@@ -364,12 +411,24 @@ class KuzuGraph:
         ("FEIGN_CLIENT", "REPOSITORY", "MAPPER"),
     )
 
+    # Stage-0 accepts any entrypoint-like role. COMPONENT is included because
+    # Kafka listeners / @Scheduled orchestrators are frequently plain
+    # @Component, not @Controller; SERVICE is included so we don't drop
+    # orchestrator seeds when the caller already narrowed the vector search
+    # to services.
+    _ENTRYPOINT_ROLES: tuple[str, ...] = (
+        "CONTROLLER", "COMPONENT", "SERVICE", "FEIGN_CLIENT",
+    )
+
     def trace_flow(self, seed_fqns: list[str], *, service: str | None = None,
-                   depth: int = 2, stage_limit: int = 20) -> list[list[SymbolHit]]:
+                   depth: int = 2, stage_limit: int = 20) -> list[list[StageSymbol]]:
         """Walk stages `CONTROLLER -> SERVICE/COMPONENT -> FEIGN_CLIENT/REPOSITORY/MAPPER`.
 
         Returns a list of stages; each stage is a list of SymbolHit. The first
-        stage is the seed set (entrypoints matched by FQN, filtered by role).
+        stage is the seed set (entrypoints matched by FQN, filtered to
+        orchestrator-like roles — see `_ENTRYPOINT_ROLES`). If role-filtered
+        seeds come back empty we fall back to unfiltered seeds so a caller
+        with no CONTROLLER coverage still gets *something* back.
         Each subsequent stage is the neighbor-set (INJECTS+EXTENDS+IMPLEMENTS)
         of the previous stage, restricted to the stage's role allow-list.
 
@@ -379,51 +438,99 @@ class KuzuGraph:
             return []
         depth = max(1, min(3, int(depth)))
 
-        stages: list[list[SymbolHit]] = []
+        stages: list[list[StageSymbol]] = []
         visited_fqns: set[str] = set()
 
-        # Stage 0: resolve seeds.
-        filters = ["s.fqn IN $fqns"]
-        params: dict[str, Any] = {"fqns": list(seed_fqns)}
-        if service:
-            params["service"] = service
-            filters.append("s.service = $service")
-        where = " AND ".join(filters)
-        q0 = f"MATCH (s:Symbol) WHERE {where} RETURN {_SYMBOL_RETURN} LIMIT {int(stage_limit)}"
-        seed_rows = [_row_to_symbol(r) for r in self._rows(q0, params)]
+        def _run_seed_query(entry_roles: tuple[str, ...] | None) -> list[SymbolHit]:
+            filters = ["s.fqn IN $fqns"]
+            params: dict[str, Any] = {"fqns": list(seed_fqns)}
+            if service:
+                params["service"] = service
+                filters.append("s.service = $service")
+            if entry_roles:
+                params["entry_roles"] = list(entry_roles)
+                filters.append("s.role IN $entry_roles")
+            where = " AND ".join(filters)
+            q0 = (
+                f"MATCH (s:Symbol) WHERE {where} "
+                f"RETURN {_SYMBOL_RETURN} LIMIT {int(stage_limit)}"
+            )
+            return [_row_to_symbol(r) for r in self._rows(q0, params)]
+
+        seed_rows = _run_seed_query(self._ENTRYPOINT_ROLES)
+        if not seed_rows:
+            seed_rows = _run_seed_query(None)
         if not seed_rows:
             return []
-        stages.append(seed_rows)
+        stages.append([StageSymbol(symbol=r, via=[]) for r in seed_rows])
         for h in seed_rows:
             if h.fqn:
                 visited_fqns.add(h.fqn)
 
-        frontier_fqns = [h.fqn for h in seed_rows if h.fqn]
+        frontier_fqns: list[str] = [h.fqn for h in seed_rows if h.fqn]
         for stage_roles in self._FLOW_STAGES[1:]:
             if not frontier_fqns:
                 break
-            params = {
-                "fqns": frontier_fqns,
-                "roles": list(stage_roles),
-            }
-            svc_filter = ""
-            if service:
-                params["service"] = service
-                svc_filter = " AND n.service = $service"
-            q = (
-                f"MATCH (root:Symbol) WHERE root.fqn IN $fqns "
-                f"MATCH (root)-[:INJECTS|EXTENDS|IMPLEMENTS*1..{depth}]-(n:Symbol) "
-                f"WHERE n.role IN $roles AND n.resolved{svc_filter} "
-                f"RETURN DISTINCT {_symbol_return_for('n')} LIMIT {int(stage_limit)}"
-            )
-            rows = [_row_to_symbol(r) for r in self._rows(q, params)]
-            rows = [r for r in rows if r.fqn and r.fqn not in visited_fqns]
-            if not rows:
+
+            # Single-hop BFS repeated up to `depth` times. Each iteration
+            # knows which edge type and parent node produced a newly-
+            # discovered symbol, so we can label every stage entry.
+            stage_results: dict[str, StageSymbol] = {}
+            current_frontier = list(frontier_fqns)
+
+            for hop in range(1, depth + 1):
+                if not current_frontier:
+                    break
+                params: dict[str, Any] = {
+                    "fqns": current_frontier,
+                    "roles": list(stage_roles),
+                }
+                svc_filter = ""
+                if service:
+                    params["service"] = service
+                    svc_filter = " AND n.service = $service"
+                q = (
+                    f"MATCH (root:Symbol)-[e:INJECTS|EXTENDS|IMPLEMENTS]-(n:Symbol) "
+                    f"WHERE root.fqn IN $fqns AND n.role IN $roles AND n.resolved{svc_filter} "
+                    f"RETURN {_symbol_return_for('n')}, "
+                    f"label(e) AS edge_type, root.fqn AS from_fqn "
+                    f"LIMIT {int(stage_limit) * 4}"
+                )
+                next_frontier: list[str] = []
+                for row in self._rows(q, params):
+                    sym = _row_to_symbol(row)
+                    if not sym.fqn or sym.fqn in visited_fqns:
+                        continue
+                    edge = ViaEdge(
+                        edge_type=str(row.get("edge_type") or ""),
+                        from_fqn=str(row.get("from_fqn") or ""),
+                        hop=hop,
+                    )
+                    existing = stage_results.get(sym.fqn)
+                    if existing is None:
+                        stage_results[sym.fqn] = StageSymbol(symbol=sym, via=[edge])
+                        next_frontier.append(sym.fqn)
+                        if len(stage_results) >= stage_limit:
+                            break
+                    else:
+                        # Same symbol can be reached via multiple edges (e.g.
+                        # both INJECTS and IMPLEMENTS); record up to a few.
+                        if len(existing.via) < 4 and not any(
+                            v.edge_type == edge.edge_type and v.from_fqn == edge.from_fqn
+                            for v in existing.via
+                        ):
+                            existing.via.append(edge)
+                current_frontier = next_frontier
+                if len(stage_results) >= stage_limit:
+                    break
+
+            if not stage_results:
                 break
-            stages.append(rows)
-            for r in rows:
-                visited_fqns.add(r.fqn)
-            frontier_fqns = [r.fqn for r in rows if r.fqn]
+            stage_list = list(stage_results.values())
+            stages.append(stage_list)
+            for entry in stage_list:
+                visited_fqns.add(entry.symbol.fqn)
+            frontier_fqns = [entry.symbol.fqn for entry in stage_list]
         return stages
 
     # ---- used by search_lancedb.graph_expand ----
