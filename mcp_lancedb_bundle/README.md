@@ -4,6 +4,11 @@ Self-contained **stdio MCP server** for semantic search over a LanceDB index (Ja
 
 **No `cocoindex` Python package is required to run search or MCP** — only `sentence-transformers`, `lancedb`, `kuzu`, `tree_sitter` + `tree_sitter_java`, and `mcp`. CocoIndex is optional and only needed if you use the `refresh_code_index` tool.
 
+> **Tuning for your codebase:** see [`CODEBASE_REQUIREMENTS.md`](./CODEBASE_REQUIREMENTS.md)
+> for the assumptions this MCP makes about a Java repo (annotations, DI patterns,
+> service layout, naming) and a per-file map of where to edit the bundle if you
+> can't or don't want to refactor your codebase to match.
+
 ## 1. Install
 
 ```bash

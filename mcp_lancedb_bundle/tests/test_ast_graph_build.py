@@ -1,0 +1,162 @@
+"""Tests for `build_ast_graph.py` against the bank-chat-system corpus.
+
+These tests pin *structural* invariants of the build (schema present, every
+edge type populated, service inference works for both single-module and
+multi-module Maven projects). They intentionally avoid asserting on exact
+node / edge counts — those will drift as the fixture grows. See
+`tests/README.md` for the anti-overfitting rules.
+"""
+from __future__ import annotations
+
+import subprocess
+import sys
+from pathlib import Path
+
+import kuzu
+import pytest
+
+from ast_java import ONTOLOGY_VERSION
+
+
+def _connect(db_path: Path) -> kuzu.Connection:
+    db = kuzu.Database(str(db_path), read_only=True)
+    return kuzu.Connection(db)
+
+
+def _scalar(conn: kuzu.Connection, query: str) -> int:
+    r = conn.execute(query)
+    if not r.has_next():
+        return 0
+    return int(r.get_next()[0] or 0)
+
+
+def _column(conn: kuzu.Connection, query: str, idx: int = 0) -> list:
+    r = conn.execute(query)
+    out: list = []
+    while r.has_next():
+        out.append(r.get_next()[idx])
+    return out
+
+
+def test_kuzu_db_directory_exists(kuzu_db_path: Path) -> None:
+    assert kuzu_db_path.exists()
+
+
+def test_schema_has_all_expected_tables(kuzu_db_path: Path) -> None:
+    conn = _connect(kuzu_db_path)
+    # `CALL show_tables() RETURN *;` returns rows (id, name, type, ...) — name is at index 1.
+    tables = set(_column(conn, "CALL show_tables() RETURN *;", idx=1))
+    # We only assert the tables we depend on are present. The builder is
+    # free to add more (e.g. CALLS later) without breaking this test.
+    expected = {"Symbol", "GraphMeta", "EXTENDS", "IMPLEMENTS", "INJECTS"}
+    missing = expected - tables
+    assert not missing, f"missing schema tables: {missing}; saw {tables}"
+
+
+def test_graph_meta_present_and_versioned(kuzu_db_path: Path) -> None:
+    conn = _connect(kuzu_db_path)
+    r = conn.execute(
+        "MATCH (m:GraphMeta) RETURN m.ontology_version, m.built_at, "
+        "m.source_root, m.parse_errors, m.counts_json"
+    )
+    rows: list = []
+    while r.has_next():
+        rows.append(r.get_next())
+    assert len(rows) == 1, "expected exactly one GraphMeta row"
+    ov, built_at, source_root, parse_errors, counts_json = rows[0]
+    assert int(ov) == ONTOLOGY_VERSION
+    assert int(built_at) > 0
+    assert source_root  # absolute path string
+    # Parse errors should be tolerable on a clean fixture; this catches
+    # accidental tree-sitter regressions that break every file at once.
+    assert int(parse_errors) <= 0  # bank-chat-system is hand-written, no errors expected
+    assert counts_json and counts_json.startswith("{")
+
+
+def test_each_node_kind_present(kuzu_db_path: Path) -> None:
+    """Builder must emit at least one node of every Phase-1 kind we care about.
+
+    Exact counts are a moving target; non-zero is the meaningful invariant.
+    """
+    conn = _connect(kuzu_db_path)
+    kinds = set(_column(conn, "MATCH (s:Symbol) RETURN DISTINCT s.kind"))
+    for required in ("package", "file", "class", "interface", "method", "constructor"):
+        assert required in kinds, f"missing node kind: {required}; saw {kinds}"
+
+
+def test_each_edge_type_populated(kuzu_db_path: Path) -> None:
+    conn = _connect(kuzu_db_path)
+    assert _scalar(conn, "MATCH ()-[e:EXTENDS]->() RETURN count(e)") > 0
+    assert _scalar(conn, "MATCH ()-[e:IMPLEMENTS]->() RETURN count(e)") > 0
+    assert _scalar(conn, "MATCH ()-[e:INJECTS]->() RETURN count(e)") > 0
+
+
+def test_service_inference_recognises_both_layouts(kuzu_graph) -> None:
+    """`service_for_path` must find each Maven module's name.
+
+    The corpus exercises both a single-module project (chat-assign) and a
+    multi-module reactor (chat-core/{chat-app,chat-engine,chat-domain,
+    chat-contracts}). The MCP must handle both shapes.
+    """
+    counts = kuzu_graph.service_counts()
+    # Defensive: don't pin every service to >0 in case the corpus is
+    # trimmed; instead require both styles to be represented.
+    assert counts.get("chat-assign", 0) > 0, counts
+    multi_module_services = {"chat-app", "chat-engine", "chat-domain", "chat-contracts"}
+    seen = multi_module_services & set(counts)
+    assert len(seen) >= 2, (
+        "expected service inference to surface multiple chat-core child "
+        f"modules, got: {sorted(set(counts))}"
+    )
+
+
+def test_phantom_nodes_for_external_types(kuzu_db_path: Path) -> None:
+    """Spring Data repositories extend `JpaRepository` (an external type).
+
+    The builder must materialise that as a *phantom* (unresolved) Symbol so
+    EXTENDS/IMPLEMENTS edges are never dangling.
+    """
+    conn = _connect(kuzu_db_path)
+    n_phantoms = _scalar(
+        conn, "MATCH (s:Symbol) WHERE s.resolved = false RETURN count(s)"
+    )
+    assert n_phantoms > 0, "no phantom nodes — external type resolution may be silently dropping edges"
+
+
+def test_injects_edges_have_mechanism(kuzu_db_path: Path) -> None:
+    """Every INJECTS edge should record *how* the injection happens.
+
+    The bank-chat-system uses constructor injection throughout
+    (`ChatManagementService(...)`, `ChatCoreJoinClient(...)`), so we expect
+    to see at least one `constructor` mechanism. We don't assert that *all*
+    edges are constructor-injected to leave room for future Lombok / setter
+    samples.
+    """
+    conn = _connect(kuzu_db_path)
+    mechanisms = set(_column(conn, "MATCH ()-[e:INJECTS]->() RETURN DISTINCT e.mechanism"))
+    assert "constructor" in mechanisms, mechanisms
+
+
+def test_cli_entrypoint_runs(tmp_path: Path, corpus_root: Path) -> None:
+    """`build_ast_graph.py --source-root <root>` must succeed end-to-end.
+
+    This is an integration smoke test — it calls the script as a user would
+    (via the venv Python) and asserts a non-empty Kuzu DB is written.
+    """
+    target = tmp_path / "graph.kuzu"
+    script = Path(__file__).resolve().parent.parent / "build_ast_graph.py"
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--source-root", str(corpus_root),
+            "--kuzu-path", str(target),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert proc.returncode == 0, f"stderr:\n{proc.stderr}\nstdout:\n{proc.stdout}"
+    assert target.exists()
+    conn = _connect(target)
+    assert _scalar(conn, "MATCH (s:Symbol) RETURN count(s)") > 0

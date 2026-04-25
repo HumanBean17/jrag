@@ -1,0 +1,14 @@
+com/bank/chat/domain/ChatSessionRepository.class
+com/bank/chat/domain/ClosedReason.class
+com/bank/chat/domain/SessionStatus.class
+com/bank/chat/domain/ChatEvent.class
+com/bank/chat/domain/ClientSegment.class
+com/bank/chat/domain/SlaCheckpointType.class
+com/bank/chat/domain/ProcessedEventKeyRepository.class
+com/bank/chat/domain/SessionSlaCheckpoint.class
+com/bank/chat/domain/Client.class
+com/bank/chat/domain/ChatSession.class
+com/bank/chat/domain/ProcessedEventKey.class
+com/bank/chat/domain/SessionSlaCheckpointRepository.class
+com/bank/chat/domain/ChatEventRepository.class
+com/bank/chat/domain/ClientRepository.class
