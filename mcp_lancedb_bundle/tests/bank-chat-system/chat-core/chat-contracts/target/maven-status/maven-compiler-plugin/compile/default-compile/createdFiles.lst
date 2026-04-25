@@ -1,6 +1,0 @@
-com/bank/chat/contracts/EventType.class
-com/bank/chat/contracts/InboundChatEventRequest.class
-com/bank/chat/contracts/InternalEvent.class
-com/bank/chat/contracts/ChatTopics.class
-com/bank/chat/contracts/AssignmentRequest.class
-com/bank/chat/contracts/InboundAcceptedResponse.class
