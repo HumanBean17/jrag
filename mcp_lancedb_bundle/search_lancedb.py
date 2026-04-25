@@ -392,6 +392,21 @@ def _build_path_predicate(path_substring: str) -> str:
     return f"filename LIKE '%{pat}%' ESCAPE '\\'"
 
 
+def _is_duplicate_fts_index_error(e: Exception) -> bool:
+    """True when create_fts_index failed because the FTS index is already present."""
+    low = str(e).lower()
+    # Do not use a bare "exist" token — it matches "does not exist" and hides real errors.
+    return any(
+        p in low
+        for p in (
+            "already exists",
+            "already exist",
+            "duplicate",
+            "same name",
+        )
+    )
+
+
 def ensure_text_fts_index(uri: str, lance_table_name: str) -> None:
     key = (uri, lance_table_name)
     with _FTS_LOCK:
@@ -402,11 +417,7 @@ def ensure_text_fts_index(uri: str, lance_table_name: str) -> None:
         try:
             tbl.create_fts_index("text", replace=False)
         except Exception as e:
-            low = str(e).lower()
-            if any(
-                w in low
-                for w in ("exist", "duplicate", "already", "same name")
-            ):
+            if _is_duplicate_fts_index_error(e):
                 pass
             else:
                 raise
@@ -473,7 +484,7 @@ def _search_one_table(
             )
             .vector(query_vec)
             .text(text_for_fts)
-            .select(columns)
+            .select(hcols)
             .limit(limit)
         )
         if combined_pred:
@@ -847,6 +858,7 @@ def run_search(
                 extra_predicates=preds,
             )
         )
+        merged.extend(part)
     _apply_chunk_hints(merged)
     if skip_role_weight:
         for r in merged:
@@ -910,7 +922,7 @@ def main() -> None:
         sys.exit(2)
 
     try:
-        results = run_search(
+        results, fts_notice, _ = run_search(
             args.query,
             uri=str(uri_path),
             table_keys=keys,
@@ -933,6 +945,9 @@ def main() -> None:
     except Exception as e:
         print(f"Search failed: {e}", file=sys.stderr)
         sys.exit(1)
+
+    if fts_notice:
+        print(fts_notice, file=sys.stderr)
 
     if not results:
         print("No results.")
