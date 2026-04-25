@@ -91,23 +91,41 @@ def test_each_edge_type_populated(kuzu_db_path: Path) -> None:
     assert _scalar(conn, "MATCH ()-[e:INJECTS]->() RETURN count(e)") > 0
 
 
-def test_service_inference_recognises_both_layouts(kuzu_graph) -> None:
-    """`service_for_path` must find each Maven module's name.
+def test_module_inference_recognises_both_layouts(kuzu_graph) -> None:
+    """`module_for_path` must find each Maven module's name.
 
     The corpus exercises both a single-module project (chat-assign) and a
     multi-module reactor (chat-core/{chat-app,chat-engine,chat-domain,
     chat-contracts}). The MCP must handle both shapes.
     """
-    counts = kuzu_graph.service_counts()
-    # Defensive: don't pin every service to >0 in case the corpus is
+    counts = kuzu_graph.module_counts()
+    # Defensive: don't pin every module to >0 in case the corpus is
     # trimmed; instead require both styles to be represented.
     assert counts.get("chat-assign", 0) > 0, counts
-    multi_module_services = {"chat-app", "chat-engine", "chat-domain", "chat-contracts"}
-    seen = multi_module_services & set(counts)
+    multi_module = {"chat-app", "chat-engine", "chat-domain", "chat-contracts"}
+    seen = multi_module & set(counts)
     assert len(seen) >= 2, (
-        "expected service inference to surface multiple chat-core child "
+        "expected module inference to surface multiple chat-core child "
         f"modules, got: {sorted(set(counts))}"
     )
+
+
+def test_microservice_inference_groups_multi_module_reactor(kuzu_graph) -> None:
+    """Multi-module reactor child modules must collapse to one microservice key.
+
+    `chat-core` is the outermost build-marker ancestor for every
+    `chat-core/<module>/...` file; it must surface as the microservice
+    name regardless of which inner module the file belongs to.
+    `chat-assign` is single-module so its module and microservice names
+    coincide.
+    """
+    counts = kuzu_graph.microservice_counts()
+    assert counts.get("chat-assign", 0) > 0, counts
+    assert counts.get("chat-core", 0) > 0, counts
+    # Inner module names must NOT appear at the microservice level — that
+    # was exactly the misclassification the rename was meant to fix.
+    inner = {"chat-app", "chat-engine", "chat-domain", "chat-contracts"}
+    assert not (inner & set(counts)), counts
 
 
 def test_phantom_nodes_for_external_types(kuzu_db_path: Path) -> None:

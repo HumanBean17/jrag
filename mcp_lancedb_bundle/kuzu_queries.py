@@ -47,7 +47,8 @@ class SymbolHit:
     name: str
     fqn: str
     package: str
-    service: str
+    module: str
+    microservice: str
     filename: str
     start_line: int
     end_line: int
@@ -105,7 +106,8 @@ def _symbol_return_for(alias: str) -> str:
     """
     return (
         f"{alias}.id AS id, {alias}.kind AS kind, {alias}.name AS name, {alias}.fqn AS fqn, "
-        f"{alias}.package AS package, {alias}.service AS service, {alias}.filename AS filename, "
+        f"{alias}.package AS package, {alias}.module AS module, "
+        f"{alias}.microservice AS microservice, {alias}.filename AS filename, "
         f"{alias}.start_line AS start_line, {alias}.end_line AS end_line, "
         f"{alias}.start_byte AS start_byte, {alias}.end_byte AS end_byte, "
         f"{alias}.modifiers AS modifiers, {alias}.annotations AS annotations, "
@@ -117,6 +119,29 @@ def _symbol_return_for(alias: str) -> str:
 _SYMBOL_RETURN = _symbol_return_for("s")
 
 
+def _scope_filters(
+    alias: str,
+    *,
+    module: str | None,
+    microservice: str | None,
+    params: dict[str, Any],
+) -> list[str]:
+    """Build module/microservice scoping predicates against a node alias.
+
+    Mutates `params` to bind `$module` / `$microservice` only when the
+    corresponding filter is set, so unused names don't leak into the
+    Kuzu plan.
+    """
+    out: list[str] = []
+    if module:
+        params["module"] = module
+        out.append(f"{alias}.module = $module")
+    if microservice:
+        params["microservice"] = microservice
+        out.append(f"{alias}.microservice = $microservice")
+    return out
+
+
 def _row_to_symbol(row: dict[str, Any]) -> SymbolHit:
     return SymbolHit(
         id=row.get("id", "") or "",
@@ -124,7 +149,8 @@ def _row_to_symbol(row: dict[str, Any]) -> SymbolHit:
         name=row.get("name", "") or "",
         fqn=row.get("fqn", "") or "",
         package=row.get("package", "") or "",
-        service=row.get("service", "") or "",
+        module=row.get("module", "") or "",
+        microservice=row.get("microservice", "") or "",
         filename=row.get("filename", "") or "",
         start_line=int(row.get("start_line") or 0),
         end_line=int(row.get("end_line") or 0),
@@ -213,131 +239,131 @@ class KuzuGraph:
             "db_path": self.db_path,
         }
 
-    def service_counts(self) -> dict[str, int]:
-        """Map of service name -> number of resolved type/member symbols.
+    def _scope_counts(self, column: str) -> dict[str, int]:
+        """Generic helper: count resolved type symbols grouped by `column`.
 
-        Empty-string service is reported under the key "" so callers can
-        see how many symbols failed build-marker inference (useful when a
-        service-scoped search unexpectedly returns no hits).
+        Empty-string keys mean the builder could not infer a value
+        (no build-marker ancestor / no path segment under project_root).
         """
         try:
             rows = self._rows(
-                "MATCH (s:Symbol) WHERE s.resolved "
-                "AND s.kind IN ['class','interface','enum','record','annotation'] "
-                "RETURN s.service AS service, count(*) AS n"
+                f"MATCH (s:Symbol) WHERE s.resolved "
+                f"AND s.kind IN ['class','interface','enum','record','annotation'] "
+                f"RETURN s.{column} AS bucket, count(*) AS n"
             )
         except Exception:
             return {}
         out: dict[str, int] = {}
         for r in rows:
-            svc = r.get("service") or ""
-            out[str(svc)] = int(r.get("n") or 0)
+            key = r.get("bucket") or ""
+            out[str(key)] = int(r.get("n") or 0)
         return out
+
+    def module_counts(self) -> dict[str, int]:
+        """Map of module name -> resolved type-symbol count."""
+        return self._scope_counts("module")
+
+    def microservice_counts(self) -> dict[str, int]:
+        """Map of microservice name -> resolved type-symbol count."""
+        return self._scope_counts("microservice")
 
     # ---- symbol-level lookups ----
 
     def find_by_name_or_fqn(self, name_or_fqn: str, *, kinds: list[str] | None = None,
-                            service: str | None = None, limit: int = 50) -> list[SymbolHit]:
+                            module: str | None = None,
+                            microservice: str | None = None,
+                            limit: int = 50) -> list[SymbolHit]:
         filters = ["(s.name = $needle OR s.fqn = $needle)"]
         params: dict[str, Any] = {"needle": name_or_fqn}
         if kinds:
             params["kinds"] = kinds
             filters.append("s.kind IN $kinds")
-        if service:
-            params["service"] = service
-            filters.append("s.service = $service")
+        filters.extend(_scope_filters("s", module=module, microservice=microservice, params=params))
         where = " AND ".join(filters)
         q = f"MATCH (s:Symbol) WHERE {where} RETURN {_SYMBOL_RETURN} LIMIT {int(limit)}"
         return [_row_to_symbol(r) for r in self._rows(q, params)]
 
-    def list_by_role(self, role: str, *, service: str | None = None, limit: int = 100) -> list[SymbolHit]:
+    def list_by_role(self, role: str, *, module: str | None = None,
+                     microservice: str | None = None,
+                     limit: int = 100) -> list[SymbolHit]:
         filters = ["s.role = $role"]
         params: dict[str, Any] = {"role": role}
-        if service:
-            params["service"] = service
-            filters.append("s.service = $service")
+        filters.extend(_scope_filters("s", module=module, microservice=microservice, params=params))
         where = " AND ".join(filters)
         q = f"MATCH (s:Symbol) WHERE {where} RETURN {_SYMBOL_RETURN} LIMIT {int(limit)}"
         return [_row_to_symbol(r) for r in self._rows(q, params)]
 
-    def list_by_annotation(self, annotation: str, *, service: str | None = None, limit: int = 100) -> list[SymbolHit]:
+    def list_by_annotation(self, annotation: str, *, module: str | None = None,
+                           microservice: str | None = None,
+                           limit: int = 100) -> list[SymbolHit]:
         # Kuzu supports `list_contains` for STRING[].
         filters = ["list_contains(s.annotations, $ann)"]
         params: dict[str, Any] = {"ann": annotation}
-        if service:
-            params["service"] = service
-            filters.append("s.service = $service")
+        filters.extend(_scope_filters("s", module=module, microservice=microservice, params=params))
         where = " AND ".join(filters)
         q = f"MATCH (s:Symbol) WHERE {where} RETURN {_SYMBOL_RETURN} LIMIT {int(limit)}"
         return [_row_to_symbol(r) for r in self._rows(q, params)]
 
     # ---- edge traversals ----
 
-    def find_implementors(self, interface_name_or_fqn: str, *, service: str | None = None,
+    def find_implementors(self, interface_name_or_fqn: str, *,
+                          module: str | None = None,
+                          microservice: str | None = None,
                           limit: int = 100) -> list[SymbolHit]:
         filters = ["(i.name = $needle OR i.fqn = $needle)"]
         params: dict[str, Any] = {"needle": interface_name_or_fqn}
-        if service:
-            params["service"] = service
-            filters.append("c.service = $service")
+        filters.extend(_scope_filters("c", module=module, microservice=microservice, params=params))
         where = " AND ".join(filters)
         q = (
             f"MATCH (c:Symbol)-[:IMPLEMENTS]->(i:Symbol) WHERE {where} "
-            f"RETURN DISTINCT c.id AS id, c.kind AS kind, c.name AS name, c.fqn AS fqn, "
-            f"c.package AS package, c.service AS service, c.filename AS filename, "
-            f"c.start_line AS start_line, c.end_line AS end_line, "
-            f"c.start_byte AS start_byte, c.end_byte AS end_byte, "
-            f"c.modifiers AS modifiers, c.annotations AS annotations, "
-            f"c.role AS role, c.signature AS signature, c.parent_id AS parent_id, c.resolved AS resolved "
+            f"RETURN DISTINCT {_symbol_return_for('c')} "
             f"LIMIT {int(limit)}"
         )
         return [_row_to_symbol(r) for r in self._rows(q, params)]
 
-    def find_subclasses(self, class_name_or_fqn: str, *, service: str | None = None,
+    def find_subclasses(self, class_name_or_fqn: str, *,
+                        module: str | None = None,
+                        microservice: str | None = None,
                         limit: int = 100) -> list[SymbolHit]:
         filters = ["(b.name = $needle OR b.fqn = $needle)"]
         params: dict[str, Any] = {"needle": class_name_or_fqn}
-        if service:
-            params["service"] = service
-            filters.append("s.service = $service")
+        filters.extend(_scope_filters("s", module=module, microservice=microservice, params=params))
         where = " AND ".join(filters)
         q = (
             f"MATCH (s:Symbol)-[:EXTENDS]->(b:Symbol) WHERE {where} "
-            f"RETURN DISTINCT s.id AS id, s.kind AS kind, s.name AS name, s.fqn AS fqn, "
-            f"s.package AS package, s.service AS service, s.filename AS filename, "
-            f"s.start_line AS start_line, s.end_line AS end_line, "
-            f"s.start_byte AS start_byte, s.end_byte AS end_byte, "
-            f"s.modifiers AS modifiers, s.annotations AS annotations, "
-            f"s.role AS role, s.signature AS signature, s.parent_id AS parent_id, s.resolved AS resolved "
+            f"RETURN DISTINCT {_SYMBOL_RETURN} "
             f"LIMIT {int(limit)}"
         )
         return [_row_to_symbol(r) for r in self._rows(q, params)]
 
-    def find_injectors(self, target_name_or_fqn: str, *, service: str | None = None,
+    def find_injectors(self, target_name_or_fqn: str, *,
+                       module: str | None = None,
+                       microservice: str | None = None,
                        limit: int = 100) -> list[EdgeHit]:
         filters = ["(t.name = $needle OR t.fqn = $needle)"]
         params: dict[str, Any] = {"needle": target_name_or_fqn}
-        if service:
-            params["service"] = service
-            filters.append("s.service = $service")
+        filters.extend(_scope_filters("s", module=module, microservice=microservice, params=params))
         where = " AND ".join(filters)
+        # Project both sides of the edge with prefixed aliases (`s_*` / `t_*`)
+        # so we can split rows back into source / target SymbolHits without
+        # column-name collisions.
+        s_proj = ", ".join(
+            f"s.{c} AS s_{c}" for c in (
+                "id", "kind", "name", "fqn", "package", "module", "microservice",
+                "filename", "start_line", "end_line", "start_byte", "end_byte",
+                "modifiers", "annotations", "role", "signature", "parent_id", "resolved",
+            )
+        )
+        t_proj = ", ".join(
+            f"t.{c} AS t_{c}" for c in (
+                "id", "kind", "name", "fqn", "package", "module", "microservice",
+                "filename", "start_line", "end_line", "start_byte", "end_byte",
+                "modifiers", "annotations", "role", "signature", "parent_id", "resolved",
+            )
+        )
         q = (
             f"MATCH (s:Symbol)-[e:INJECTS]->(t:Symbol) WHERE {where} "
-            f"RETURN "
-            f"s.id AS s_id, s.kind AS s_kind, s.name AS s_name, s.fqn AS s_fqn, "
-            f"s.package AS s_package, s.service AS s_service, s.filename AS s_filename, "
-            f"s.start_line AS s_start_line, s.end_line AS s_end_line, "
-            f"s.start_byte AS s_start_byte, s.end_byte AS s_end_byte, "
-            f"s.modifiers AS s_modifiers, s.annotations AS s_annotations, "
-            f"s.role AS s_role, s.signature AS s_signature, s.parent_id AS s_parent_id, "
-            f"s.resolved AS s_resolved, "
-            f"t.id AS t_id, t.kind AS t_kind, t.name AS t_name, t.fqn AS t_fqn, "
-            f"t.package AS t_package, t.service AS t_service, t.filename AS t_filename, "
-            f"t.start_line AS t_start_line, t.end_line AS t_end_line, "
-            f"t.start_byte AS t_start_byte, t.end_byte AS t_end_byte, "
-            f"t.modifiers AS t_modifiers, t.annotations AS t_annotations, "
-            f"t.role AS t_role, t.signature AS t_signature, t.parent_id AS t_parent_id, "
-            f"t.resolved AS t_resolved, "
+            f"RETURN {s_proj}, {t_proj}, "
             f"e.mechanism AS mechanism, e.annotation AS annotation, "
             f"e.field_or_param AS field_or_param, e.resolved AS resolved "
             f"LIMIT {int(limit)}"
@@ -372,13 +398,7 @@ class KuzuGraph:
         q = (
             f"MATCH (root:Symbol) WHERE root.name = $needle OR root.fqn = $needle "
             f"MATCH path = (root){arrow_l}[:{edge_pattern}*1..{int(depth)}]{arrow_r}(n:Symbol) "
-            f"RETURN DISTINCT n.id AS id, n.kind AS kind, n.name AS name, n.fqn AS fqn, "
-            f"n.package AS package, n.service AS service, n.filename AS filename, "
-            f"n.start_line AS start_line, n.end_line AS end_line, "
-            f"n.start_byte AS start_byte, n.end_byte AS end_byte, "
-            f"n.modifiers AS modifiers, n.annotations AS annotations, "
-            f"n.role AS role, n.signature AS signature, "
-            f"n.parent_id AS parent_id, n.resolved AS resolved "
+            f"RETURN DISTINCT {_symbol_return_for('n')} "
             f"LIMIT {int(limit)}"
         )
         return [_row_to_symbol(r) for r in self._rows(q, {"needle": fqn_or_name})]
@@ -389,13 +409,7 @@ class KuzuGraph:
         q = (
             f"MATCH (target:Symbol) WHERE target.name = $needle OR target.fqn = $needle "
             f"MATCH (n:Symbol)-[:INJECTS|IMPLEMENTS|EXTENDS*1..{int(depth)}]->(target) "
-            f"RETURN DISTINCT n.id AS id, n.kind AS kind, n.name AS name, n.fqn AS fqn, "
-            f"n.package AS package, n.service AS service, n.filename AS filename, "
-            f"n.start_line AS start_line, n.end_line AS end_line, "
-            f"n.start_byte AS start_byte, n.end_byte AS end_byte, "
-            f"n.modifiers AS modifiers, n.annotations AS annotations, "
-            f"n.role AS role, n.signature AS signature, "
-            f"n.parent_id AS parent_id, n.resolved AS resolved "
+            f"RETURN DISTINCT {_symbol_return_for('n')} "
             f"LIMIT {int(limit)}"
         )
         return [_row_to_symbol(r) for r in self._rows(q, {"needle": fqn_or_name})]
@@ -420,7 +434,9 @@ class KuzuGraph:
         "CONTROLLER", "COMPONENT", "SERVICE", "FEIGN_CLIENT",
     )
 
-    def trace_flow(self, seed_fqns: list[str], *, service: str | None = None,
+    def trace_flow(self, seed_fqns: list[str], *,
+                   module: str | None = None,
+                   microservice: str | None = None,
                    depth: int = 2, stage_limit: int = 20) -> list[list[StageSymbol]]:
         """Walk stages `CONTROLLER -> SERVICE/COMPONENT -> FEIGN_CLIENT/REPOSITORY/MAPPER`.
 
@@ -444,9 +460,9 @@ class KuzuGraph:
         def _run_seed_query(entry_roles: tuple[str, ...] | None) -> list[SymbolHit]:
             filters = ["s.fqn IN $fqns"]
             params: dict[str, Any] = {"fqns": list(seed_fqns)}
-            if service:
-                params["service"] = service
-                filters.append("s.service = $service")
+            filters.extend(_scope_filters(
+                "s", module=module, microservice=microservice, params=params,
+            ))
             if entry_roles:
                 params["entry_roles"] = list(entry_roles)
                 filters.append("s.role IN $entry_roles")
@@ -485,13 +501,13 @@ class KuzuGraph:
                     "fqns": current_frontier,
                     "roles": list(stage_roles),
                 }
-                svc_filter = ""
-                if service:
-                    params["service"] = service
-                    svc_filter = " AND n.service = $service"
+                scope = _scope_filters(
+                    "n", module=module, microservice=microservice, params=params,
+                )
+                scope_clause = (" AND " + " AND ".join(scope)) if scope else ""
                 q = (
                     f"MATCH (root:Symbol)-[e:INJECTS|EXTENDS|IMPLEMENTS]-(n:Symbol) "
-                    f"WHERE root.fqn IN $fqns AND n.role IN $roles AND n.resolved{svc_filter} "
+                    f"WHERE root.fqn IN $fqns AND n.role IN $roles AND n.resolved{scope_clause} "
                     f"RETURN {_symbol_return_for('n')}, "
                     f"label(e) AS edge_type, root.fqn AS from_fqn "
                     f"LIMIT {int(stage_limit) * 4}"

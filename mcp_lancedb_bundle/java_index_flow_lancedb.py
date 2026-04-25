@@ -66,7 +66,8 @@ class JavaLanceChunk:
     end: dict[str, Any]
     embedding: Annotated[npt.NDArray[np.float32], EMBEDDER]
     package: str
-    service: str
+    module: str
+    microservice: str
     primary_type_fqn: str
     primary_type_kind: str
     role: str
@@ -178,7 +179,8 @@ async def process_java_file(
                 end=position_to_json(ch.end),
                 embedding=emb,
                 package=enrich.package,
-                service=enrich.service,
+                module=enrich.module,
+                microservice=enrich.microservice,
                 primary_type_fqn=enrich.primary_type_fqn,
                 primary_type_kind=enrich.primary_type_kind,
                 role=enrich.role,

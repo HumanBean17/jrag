@@ -45,7 +45,12 @@ from ast_java import (
     lombok_required_args_annotations,
     parse_java,
 )
-from graph_enrich import phantom_id, service_for_path, symbol_id
+from graph_enrich import (
+    microservice_for_path,
+    module_for_path,
+    phantom_id,
+    symbol_id,
+)
 from java_index_v1_common import COMMON_EXCLUDED_PATH_PATTERNS
 
 _JAVA_LANG_SIMPLE = frozenset({
@@ -65,7 +70,8 @@ class TypeIndexEntry:
     """Pass-1 record for a type declaration + any methods/constructors inside it."""
     decl: TypeDecl
     file_path: str
-    service: str
+    module: str
+    microservice: str
     package: str
     outer_fqn: str | None
     node_id: str
@@ -78,7 +84,8 @@ class MemberEntry:
     parent_id: str
     parent_fqn: str
     file_path: str
-    service: str
+    module: str
+    microservice: str
     node_id: str
 
 
@@ -150,7 +157,8 @@ def _register_type(
     decl: TypeDecl,
     *,
     file_path: str,
-    service: str,
+    module: str,
+    microservice: str,
     outer_fqn: str | None,
 ) -> TypeIndexEntry:
     package = decl.fqn.rsplit(".", 1)[0] if "." in decl.fqn and outer_fqn is None else (
@@ -170,7 +178,8 @@ def _register_type(
     entry = TypeIndexEntry(
         decl=decl,
         file_path=file_path,
-        service=service,
+        module=module,
+        microservice=microservice,
         package=package,
         outer_fqn=outer_fqn,
         node_id=node_id,
@@ -184,11 +193,15 @@ def _register_type(
         mid = symbol_id(kind, f"{decl.fqn}#{m.signature}", file_path, m.start_byte)
         tables.members.append(MemberEntry(
             kind=kind, decl=m, parent_id=node_id, parent_fqn=decl.fqn,
-            file_path=file_path, service=service, node_id=mid,
+            file_path=file_path, module=module, microservice=microservice,
+            node_id=mid,
         ))
 
     for nested in decl.nested:
-        _register_type(tables, nested, file_path=file_path, service=service, outer_fqn=decl.fqn)
+        _register_type(
+            tables, nested, file_path=file_path,
+            module=module, microservice=microservice, outer_fqn=decl.fqn,
+        )
 
     return entry
 
@@ -220,7 +233,8 @@ def pass1_parse(root: Path, tables: GraphTables, *, verbose: bool) -> dict[str, 
             rel = p.resolve().relative_to(root.resolve()).as_posix()
         except ValueError:
             rel = p.as_posix()
-        service = service_for_path(str(p), root)
+        module = module_for_path(str(p), root)
+        microservice = microservice_for_path(str(p), root)
         asts[rel] = ast
 
         # file node
@@ -232,7 +246,10 @@ def pass1_parse(root: Path, tables: GraphTables, *, verbose: bool) -> dict[str, 
             tables.packages[ast.package] = symbol_id("package", ast.package, "", 0)
 
         for t in ast.top_level_types:
-            _register_type(tables, t, file_path=rel, service=service, outer_fqn=None)
+            _register_type(
+                tables, t, file_path=rel,
+                module=module, microservice=microservice, outer_fqn=None,
+            )
 
     if verbose:
         elapsed = time.time() - t0
@@ -329,7 +346,8 @@ def _phantom_target(
             "name": bare,
             "fqn": guess_fqn,
             "package": guess_fqn.rsplit(".", 1)[0] if "." in guess_fqn else "",
-            "service": "",
+            "module": "",
+            "microservice": "",
             "filename": "",
             "start_line": 0,
             "end_line": 0,
@@ -493,7 +511,8 @@ def pass2_edges(tables: GraphTables, asts: dict[str, JavaFileAst], *, verbose: b
 _SCHEMA_NODE = (
     "CREATE NODE TABLE Symbol("
     "id STRING PRIMARY KEY, "
-    "kind STRING, name STRING, fqn STRING, package STRING, service STRING, "
+    "kind STRING, name STRING, fqn STRING, package STRING, "
+    "module STRING, microservice STRING, "
     "filename STRING, start_line INT64, end_line INT64, "
     "start_byte INT64, end_byte INT64, "
     "modifiers STRING[], annotations STRING[], "
@@ -545,7 +564,8 @@ def _create_schema(conn: kuzu.Connection) -> None:
 
 def _node_row(**kwargs) -> dict:
     base = {
-        "kind": "", "name": "", "fqn": "", "package": "", "service": "",
+        "kind": "", "name": "", "fqn": "", "package": "",
+        "module": "", "microservice": "",
         "filename": "", "start_line": 0, "end_line": 0,
         "start_byte": 0, "end_byte": 0,
         "modifiers": [], "annotations": [],
@@ -557,7 +577,8 @@ def _node_row(**kwargs) -> dict:
 
 _CREATE_SYMBOL = (
     "CREATE (:Symbol {id: $id, kind: $kind, name: $name, fqn: $fqn, "
-    "package: $package, service: $service, filename: $filename, "
+    "package: $package, module: $module, microservice: $microservice, "
+    "filename: $filename, "
     "start_line: $start_line, end_line: $end_line, "
     "start_byte: $start_byte, end_byte: $end_byte, "
     "modifiers: $modifiers, annotations: $annotations, "
@@ -581,7 +602,8 @@ def _write_nodes(conn: kuzu.Connection, tables: GraphTables) -> None:
         d = entry.decl
         conn.execute(_CREATE_SYMBOL, _node_row(
             id=entry.node_id, kind=d.kind, name=d.name, fqn=d.fqn,
-            package=entry.package, service=entry.service,
+            package=entry.package,
+            module=entry.module, microservice=entry.microservice,
             filename=entry.file_path,
             start_line=d.start_line, end_line=d.end_line,
             start_byte=d.start_byte, end_byte=d.end_byte,
@@ -597,7 +619,8 @@ def _write_nodes(conn: kuzu.Connection, tables: GraphTables) -> None:
             id=m.node_id, kind=m.kind, name=m.decl.name,
             fqn=f"{m.parent_fqn}#{m.decl.signature}",
             package=tables.types[m.parent_fqn].package if m.parent_fqn in tables.types else "",
-            service=m.service, filename=m.file_path,
+            module=m.module, microservice=m.microservice,
+            filename=m.file_path,
             start_line=m.decl.start_line, end_line=m.decl.end_line,
             start_byte=m.decl.start_byte, end_byte=m.decl.end_byte,
             modifiers=list(m.decl.modifiers),

@@ -25,8 +25,12 @@ def _names(symbols) -> set[str]:
     return {s.name for s in symbols}
 
 
-def _services(symbols) -> set[str]:
-    return {s.service for s in symbols if s.service}
+def _modules(symbols) -> set[str]:
+    return {s.module for s in symbols if s.module}
+
+
+def _microservices(symbols) -> set[str]:
+    return {s.microservice for s in symbols if s.microservice}
 
 
 # ---------------- meta ----------------
@@ -41,11 +45,21 @@ def test_meta(kuzu_graph) -> None:
     assert meta["counts"]["injects"] > 0
 
 
-def test_service_counts_keys(kuzu_graph) -> None:
-    counts = kuzu_graph.service_counts()
+def test_module_counts_keys(kuzu_graph) -> None:
+    counts = kuzu_graph.module_counts()
     assert counts.get("chat-assign", 0) > 0
-    # Multi-module reactor names should appear
+    # Multi-module reactor child modules should appear by their build-marker
+    # directory name.
     assert any(k in counts for k in ("chat-app", "chat-engine", "chat-domain"))
+
+
+def test_microservice_counts_keys(kuzu_graph) -> None:
+    counts = kuzu_graph.microservice_counts()
+    # Both microservice roots should be represented; the multi-module
+    # reactor (`chat-core`) groups chat-app/chat-engine/chat-domain/
+    # chat-contracts under one microservice key.
+    assert counts.get("chat-assign", 0) > 0
+    assert counts.get("chat-core", 0) > 0
 
 
 # ---------------- find_by_name_or_fqn ----------------
@@ -61,7 +75,9 @@ def test_find_by_name_or_fqn_fqn(kuzu_graph) -> None:
         "com.bank.chat.assign.service.ChatManagementService"
     )
     assert len(rows) == 1
-    assert rows[0].service == "chat-assign"
+    # Single-module microservice → module and microservice collapse to the same name.
+    assert rows[0].module == "chat-assign"
+    assert rows[0].microservice == "chat-assign"
     assert rows[0].role == "SERVICE"
 
 
@@ -78,8 +94,9 @@ def test_find_implementors_event_processor(kuzu_graph) -> None:
     # These two are stable, simple cases.
     for required in ("ClientMessageProcessor", "FallbackEventProcessor"):
         assert required in names, names
-    # All implementors must live in the chat-engine module.
-    assert _services(rows) == {"chat-engine"}
+    # All implementors must live in the chat-engine module of the chat-core microservice.
+    assert _modules(rows) == {"chat-engine"}
+    assert _microservices(rows) == {"chat-core"}
 
 
 def test_find_subclasses_via_jpa_repository_phantom(kuzu_graph) -> None:
@@ -110,15 +127,27 @@ def test_find_injectors_for_repository(kuzu_graph) -> None:
         assert e.mechanism in {"constructor", "field", "setter", "lombok_required_args"}
 
 
-def test_find_injectors_service_filter(kuzu_graph) -> None:
+def test_find_injectors_module_filter(kuzu_graph) -> None:
     edges_in_assign = kuzu_graph.find_injectors(
-        "AssignChatRepository", service="chat-assign"
+        "AssignChatRepository", module="chat-assign"
     )
     edges_in_other = kuzu_graph.find_injectors(
-        "AssignChatRepository", service="chat-engine"
+        "AssignChatRepository", module="chat-engine"
     )
     assert edges_in_assign, edges_in_assign
     assert edges_in_other == []
+
+
+def test_find_injectors_microservice_filter(kuzu_graph) -> None:
+    """Microservice scoping must isolate chat-assign from chat-core."""
+    edges_in_assign = kuzu_graph.find_injectors(
+        "AssignChatRepository", microservice="chat-assign"
+    )
+    edges_in_core = kuzu_graph.find_injectors(
+        "AssignChatRepository", microservice="chat-core"
+    )
+    assert edges_in_assign, edges_in_assign
+    assert edges_in_core == []
 
 
 # ---------------- list_by_role / list_by_annotation ----------------

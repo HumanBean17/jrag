@@ -54,7 +54,7 @@ _DTO_LOMBOK_ANNOTATIONS: frozenset[str] = frozenset({
     "EqualsAndHashCode", "ToString",
 })
 
-ONTOLOGY_VERSION = 1
+ONTOLOGY_VERSION = 2
 
 ROLE_ANNOTATIONS: dict[str, str] = {
     # Spring Web

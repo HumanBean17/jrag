@@ -64,7 +64,9 @@ async def test_graph_meta(mcp_server) -> None:
     # Builder writes counts inside the GraphMeta row, then service_counts is
     # derived from the live Kuzu DB. Both should be populated.
     assert out["counts"]["types"] > 0
-    assert out["service_counts"]["chat-assign"] > 0
+    assert out["module_counts"]["chat-assign"] > 0
+    assert out["microservice_counts"]["chat-assign"] > 0
+    assert out["microservice_counts"]["chat-core"] > 0
 
 
 # ---------------- find_implementors ----------------
@@ -117,17 +119,29 @@ async def test_list_by_role_controller(mcp_server) -> None:
     assert len(out["results"]) >= 2
 
 
-async def test_list_by_role_service_filter(mcp_server) -> None:
+async def test_list_by_role_module_filter(mcp_server) -> None:
     out = _structured(
         await mcp_server.call_tool(
-            "list_by_role", {"role": "SERVICE", "service": "chat-assign"}
+            "list_by_role", {"role": "SERVICE", "module": "chat-assign"}
         )
     )
     assert out["success"] is True
-    services = {r["service"] for r in out["results"]}
-    # Service filter must narrow to exactly the requested service (or
-    # be empty, never bleed in other modules).
-    assert services <= {"chat-assign"}, services
+    modules = {r["module"] for r in out["results"]}
+    # Module filter must narrow to exactly the requested module (or be
+    # empty, never bleed in other modules).
+    assert modules <= {"chat-assign"}, modules
+
+
+async def test_list_by_role_microservice_filter(mcp_server) -> None:
+    out = _structured(
+        await mcp_server.call_tool(
+            "list_by_role", {"role": "SERVICE", "microservice": "chat-core"}
+        )
+    )
+    assert out["success"] is True
+    microservices = {r["microservice"] for r in out["results"]}
+    # Microservice scoping must isolate chat-core's services from chat-assign's.
+    assert microservices <= {"chat-core"}, microservices
 
 
 # ---------------- list_by_annotation ----------------

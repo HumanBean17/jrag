@@ -36,18 +36,31 @@ inside the MCP.
   from the LanceDB vector index (graph build still walks them — see B.4
   if you want to exclude them from the graph too).
   - See: `java_index_v1_common.py::COMMON_EXCLUDED_PATH_PATTERNS`.
-- **One build marker per microservice.** The MCP infers the `service`
-  field by walking up from each `.java` file until it finds one of:
-  `pom.xml`, `build.gradle`, `build.gradle.kts`, or `build.sbt`. The
-  containing directory's *name* becomes the service name.
-  - **Recommendation:** name your service directories meaningfully
-    (`order-service/pom.xml`, not `app/pom.xml` — every service named
-    `app` would collapse into one bucket).
-  - **Monorepo layout:** if you don't have build markers per service,
-    fall back to the `services/<name>/...` convention; the MCP picks up
-    `<name>` from the path. Anything else returns an empty `service`
-    string and `service=` filters become useless.
-  - See: `graph_enrich.py::service_for_path`, constant `SERVICE_MARKERS`.
+- **Two location concepts: `module` and `microservice`.** The MCP
+  infers both by walking up from each `.java` file until it finds a
+  build marker (`pom.xml`, `build.gradle`, `build.gradle.kts`,
+  `build.sbt`).
+  - **`module`** — the *innermost* build-marker ancestor's directory
+    name. For a single-module project this equals the microservice
+    name; for a multi-module Maven/Gradle reactor it's the *child*
+    module name (e.g. `chat-app`).
+  - **`microservice`** — the *outermost* build-marker ancestor under
+    `LANCEDB_MCP_PROJECT_ROOT` (e.g. `chat-core` for a reactor whose
+    children all live under `chat-core/`). Resolution falls back to:
+    explicit override (env `LANCEDB_MCP_MICROSERVICE_ROOTS=foo,bar` or
+    `microservice_roots: [foo, bar]` in `.lancedb-mcp.yml` at the
+    project root) → outermost build marker → first path segment under
+    `project_root` → empty string.
+  - **Recommendation:** name your microservice directories meaningfully
+    (`order-service/pom.xml`, not `app/pom.xml` — every microservice
+    named `app` would collapse into one bucket).
+  - **Monorepo layout without build markers:** add the per-microservice
+    directory names to `microservice_roots` in `.lancedb-mcp.yml` (or
+    the env var) and the MCP will accept them as the `microservice=...`
+    filter values. Anything else returns an empty `microservice` and
+    `microservice=` filters become useless.
+  - See: `graph_enrich.py::module_for_path`,
+    `graph_enrich.py::microservice_for_path`, constant `BUILD_MARKERS`.
 - **Build outputs out of the way.** `target/`, `build/`, `node_modules/`,
   `.idea/`, `.venv/` are pruned during the graph walk. Don't keep
   generated `.java` (e.g., MapStruct, Lombok delombok output, OpenAPI
@@ -286,29 +299,46 @@ where field/constructor/setter scanning happens.
 
 Rebuild the Kuzu graph after editing.
 
-### B.4 Change service-name inference / pruning
+### B.4 Change module / microservice inference / pruning
 
 You'd do this if:
 
-- your monorepo doesn't use per-service `pom.xml` and the MCP collapses
-  everything into one service;
-- your services live under a different directory than `services/`
-  (e.g. `apps/`, `modules/`, `microservices/`);
+- your monorepo doesn't use per-microservice `pom.xml` (or the
+  microservice root isn't itself a build module) and the MCP can't
+  group symbols correctly;
+- you use a build system the MCP doesn't recognise (`package.json`,
+  `Cargo.toml`, `BUILD.bazel`, custom marker file);
 - you want to exclude additional directories (generated code, vendored
   forks).
 
-**Files:**
+**No-code option (recommended first):** drop a `.lancedb-mcp.yml` at
+the project root listing the directory names that should be treated as
+microservice roots, or set `LANCEDB_MCP_MICROSERVICE_ROOTS=foo,bar` in
+the env. The override list wins over structural inference.
 
-- `graph_enrich.py::service_for_path` — change `SERVICE_MARKERS` (add
-  `package.json`, `Cargo.toml`, custom marker file) and/or change the
-  fallback path-segment match (`if seg == "services"` line).
+```yaml
+# .lancedb-mcp.yml
+microservice_roots:
+  - order-service
+  - billing-service
+  - notifications
+```
+
+**Code-level changes:**
+
+- `graph_enrich.py::BUILD_MARKERS` — add new marker filenames so both
+  `module_for_path` and `microservice_for_path` discover them.
+- `graph_enrich.py::microservice_for_path` — adjust the fallback rules
+  (e.g. promote `services/<name>/...` segments).
 - `java_index_v1_common.py::COMMON_EXCLUDED_PATH_PATTERNS` — append
   globs like `**/generated/**`, `**/openapi/**`, `**/legacy/**`.
 - `build_ast_graph.py::_iter_java_files` — extra hard-coded directory
-  names to prune (`target`, `build`, `node_modules`, ...). Add yours.
+  names to prune (`target`, `build`, `node_modules`, ...).
 
 A **chunk-index re-build** is required if you change exclusion patterns;
-a **graph re-build** is required if you change service inference.
+a **graph re-build** is required if you change module / microservice
+inference (and the `ONTOLOGY_VERSION` bump triggers it automatically
+when the schema changes).
 
 ### B.5 Index more file types (properties, Liquibase, Kotlin DSL configs)
 
@@ -412,7 +442,8 @@ conventions so a future merge is painless.
 
 | Symptom | First thing to check |
 |---------|---------------------|
-| `service` is empty on most chunks | A.1 (build markers) → B.4 |
+| `module` / `microservice` is empty on most chunks | A.1 (build markers + `.lancedb-mcp.yml`) → B.4 |
+| `microservice=...` filter returns 0 hits | check `graph_meta.microservice_counts` for canonical names; → A.1 / B.4 |
 | Everything ranks as `OTHER` | A.2 (stereotypes) → B.1 |
 | Sparse `INJECTS` graph | A.3 (DI patterns) → B.3 |
 | Wrong class wins for "what does X do?" | A.4 (naming) → B.2 (verbs / caps) |
@@ -428,6 +459,6 @@ conventions so a future merge is painless.
 | Change you made | Re-run |
 |-----------------|--------|
 | Role table, DI annotations, DTO heuristics, exclusion patterns, file-type patterns, chunk sizes, embedding model | **Both** the LanceDB indexer (`cocoindex update ... --full-reprocess` or `refresh_code_index`) **and** `build_ast_graph.py` |
-| Graph-only logic (new edge type, service inference, phantom resolution) | `build_ast_graph.py` only |
+| Graph-only logic (new edge type, module/microservice inference, phantom resolution) | `build_ast_graph.py` + `graph_enrich.py` |
 | Ranking weights, action-verb list, search-time caps, hybrid/RRF behaviour | Nothing — restart the MCP server |
 | Server tool surface (new tools, parameter changes) | Restart the MCP server (and re-register in the client if the tool list changed) |

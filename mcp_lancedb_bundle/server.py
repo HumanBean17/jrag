@@ -45,11 +45,15 @@ _INSTRUCTIONS = (
     "codebase_search; for schema/domain questions pass role='DTO' or role='ENTITY' instead. "
     "Set auto_hybrid=true when the query contains identifiers / CamelCase / snake_case "
     "tokens (class names, method names) — it mixes vector + FTS via RRF. "
-    "Java hits include role/service/FQN + score_components + a compact `why` string "
-    "explaining the rank (dist / role / symbol / import_penalty). Pass context_neighbors=1 "
-    "to attach adjacent chunks via `context_before` / `context_after`. "
-    "list_code_index_tables surfaces per-service symbol counts from the graph — use it to "
-    "confirm service inference when a service-scoped search returns zero hits. "
+    "SCOPING (the *previous* `service` field is gone): pass `microservice` to filter to "
+    "one deployable repo / top-level dir under project root (e.g. 'java-microservice-A'); "
+    "pass `module` to filter to a single Maven/Gradle build module (innermost build-marker "
+    "ancestor; equal to `microservice` for single-module projects). Both are AND-combined "
+    "when set together. Use list_code_index_tables to discover what microservice and module "
+    "names actually got inferred. "
+    "Java hits include role / module / microservice / FQN + score_components + a compact "
+    "`why` string explaining the rank (dist / role / symbol / import_penalty). Pass "
+    "context_neighbors=1 to attach adjacent chunks via `context_before` / `context_after`. "
     "refresh_code_index runs cocoindex and then rebuilds the Kuzu graph; needs "
     "LANCEDB_MCP_ALLOW_REFRESH=1 and cocoindex beside the venv Python."
 )
@@ -85,7 +89,20 @@ class CodeChunkHit(BaseModel):
         description="Heuristic: mostly import lines (downranked).",
     )
     package: str | None = Field(default=None, description="Java package (enriched)")
-    service: str | None = Field(default=None, description="Inferred microservice (enriched)")
+    module: str | None = Field(
+        default=None,
+        description=(
+            "Inferred Maven/Gradle build module (innermost build-marker ancestor). "
+            "Equals `microservice` for single-module projects."
+        ),
+    )
+    microservice: str | None = Field(
+        default=None,
+        description=(
+            "Inferred microservice (outermost build-marker ancestor under project_root, "
+            "or top-level directory)."
+        ),
+    )
     primary_type_fqn: str | None = Field(default=None, description="Enclosing type FQN")
     primary_type_kind: str | None = Field(default=None, description="class | interface | enum | record | annotation")
     role: str | None = Field(default=None, description="CONTROLLER/SERVICE/REPOSITORY/... (enriched)")
@@ -122,7 +139,8 @@ class SymbolDto(BaseModel):
     name: str
     fqn: str
     package: str = ""
-    service: str = ""
+    module: str = ""
+    microservice: str = ""
     filename: str = ""
     start_line: int = 0
     end_line: int = 0
@@ -166,13 +184,21 @@ class GraphMetaOutput(BaseModel):
     source_root: str = ""
     parse_errors: int = 0
     counts: dict[str, int] = Field(default_factory=dict)
-    service_counts: dict[str, int] = Field(
+    module_counts: dict[str, int] = Field(
         default_factory=dict,
         description=(
-            "Map of inferred-service -> type-symbol count. Empty-string key "
-            "means the builder could not infer a service (no build-marker "
-            "ancestor); a large count there indicates a service-scoped search "
-            "is likely to miss real code."
+            "Map of inferred-module -> type-symbol count. Empty-string key "
+            "means the builder could not find a build-marker ancestor; a "
+            "large count there indicates a `module=...` filter would miss "
+            "those files."
+        ),
+    )
+    microservice_counts: dict[str, int] = Field(
+        default_factory=dict,
+        description=(
+            "Map of inferred-microservice -> type-symbol count. Use this to "
+            "discover the canonical microservice names a `microservice=...` "
+            "filter expects."
         ),
     )
     message: str | None = None
@@ -306,9 +332,13 @@ def _graph_meta_output() -> GraphMetaOutput:
             message=str(meta["error"]),
         )
     try:
-        svc_counts = graph.service_counts()
+        mod_counts = graph.module_counts()
     except Exception:
-        svc_counts = {}
+        mod_counts = {}
+    try:
+        ms_counts = graph.microservice_counts()
+    except Exception:
+        ms_counts = {}
     return GraphMetaOutput(
         success=True,
         enabled=_graph_enabled(),
@@ -318,14 +348,16 @@ def _graph_meta_output() -> GraphMetaOutput:
         source_root=str(meta.get("source_root") or ""),
         parse_errors=int(meta.get("parse_errors") or 0),
         counts={k: int(v) for k, v in (meta.get("counts") or {}).items()},
-        service_counts=svc_counts,
+        module_counts=mod_counts,
+        microservice_counts=ms_counts,
     )
 
 
 def _symbol_to_dto(s) -> SymbolDto:
     return SymbolDto(
         id=s.id, kind=s.kind, name=s.name, fqn=s.fqn,
-        package=s.package, service=s.service, filename=s.filename,
+        package=s.package, module=s.module, microservice=s.microservice,
+        filename=s.filename,
         start_line=s.start_line, end_line=s.end_line,
         start_byte=s.start_byte, end_byte=s.end_byte,
         modifiers=list(s.modifiers), annotations=list(s.annotations),
@@ -410,7 +442,8 @@ def _rows_to_hits(rows: list[dict[str, Any]]) -> list[CodeChunkHit]:
                 primary_type_hint=hints.get("primary_type_hint"),
                 import_heavy=bool(hints.get("import_heavy")),
                 package=r.get("package") or None,
-                service=r.get("service") or None,
+                module=r.get("module") or None,
+                microservice=r.get("microservice") or None,
                 primary_type_fqn=r.get("primary_type_fqn") or None,
                 primary_type_kind=r.get("primary_type_kind") or None,
                 role=r.get("role") or None,
@@ -439,8 +472,10 @@ def create_mcp_server() -> FastMCP:
             '  behavioural:     {\"query\": \"how chat assigns on operator\", '
             '\"exclude_roles\": [\"DTO\",\"ENTITY\",\"CONFIG\",\"OTHER\"]}\n'
             '  identifier-ish:  {\"query\": \"DistributionChunkService\", \"auto_hybrid\": true}\n'
-            '  scoped:          {\"query\": \"...\", \"service\": \"chat-assign\", '
+            '  scoped:          {\"query\": \"...\", \"microservice\": \"chat-assign\", '
             '\"role\": \"SERVICE\", \"limit\": 10}\n'
+            '  cross-module:    {\"query\": \"...\", \"microservice\": \"chat-core\", '
+            '\"module\": \"chat-app\"}\n'
             "Limits: omit any optional field rather than passing null is fine; lists must "
             "be JSON arrays of strings; `role` is a single value (use `exclude_roles` for sets)."
         ),
@@ -465,8 +500,20 @@ def create_mcp_server() -> FastMCP:
                 "for behavioural queries; try ['DTO','ENTITY','CONFIG','OTHER']."
             ),
         ),
-        service: str | None = Field(
-            default=None, description="Inferred microservice name (build-marker ancestor).",
+        module: str | None = Field(
+            default=None,
+            description=(
+                "Filter to a single Maven/Gradle build module (innermost "
+                "build-marker ancestor)."
+            ),
+        ),
+        microservice: str | None = Field(
+            default=None,
+            description=(
+                "Filter to a single deployable microservice (outermost "
+                "build-marker ancestor under project_root, or top-level "
+                "directory). AND-combined with `module` when both are set."
+            ),
         ),
         package_prefix: str | None = Field(
             default=None, description="Java only: filter to `package = prefix` or `package LIKE prefix.%`.",
@@ -545,7 +592,8 @@ def create_mcp_server() -> FastMCP:
                 fts_text=fts_text,
                 auto_hybrid=auto_hybrid,
                 role=role,
-                service=service,
+                module=module,
+                microservice=microservice,
                 package_prefix=package_prefix,
                 graph_expand=graph_expand and _graph_enabled(),
                 expand_depth=expand_depth,
@@ -591,13 +639,17 @@ def create_mcp_server() -> FastMCP:
     )
     async def find_implementors(
         name: str = Field(description="Interface simple name or FQN"),
-        service: str | None = Field(default=None),
+        module: str | None = Field(default=None, description="Maven/Gradle module name."),
+        microservice: str | None = Field(default=None, description="Microservice name."),
         limit: int = Field(default=100, ge=1, le=500),
     ) -> SymbolListOutput:
         ok, graph, msg = _require_graph()
         if not ok or graph is None:
             return SymbolListOutput(success=False, message=msg)
-        rows = await asyncio.to_thread(graph.find_implementors, name, service=service, limit=limit)
+        rows = await asyncio.to_thread(
+            graph.find_implementors, name,
+            module=module, microservice=microservice, limit=limit,
+        )
         return SymbolListOutput(success=True, results=[_symbol_to_dto(r) for r in rows])
 
     @mcp.tool(
@@ -606,13 +658,17 @@ def create_mcp_server() -> FastMCP:
     )
     async def find_subclasses(
         name: str = Field(description="Class/interface simple name or FQN"),
-        service: str | None = Field(default=None),
+        module: str | None = Field(default=None, description="Maven/Gradle module name."),
+        microservice: str | None = Field(default=None, description="Microservice name."),
         limit: int = Field(default=100, ge=1, le=500),
     ) -> SymbolListOutput:
         ok, graph, msg = _require_graph()
         if not ok or graph is None:
             return SymbolListOutput(success=False, message=msg)
-        rows = await asyncio.to_thread(graph.find_subclasses, name, service=service, limit=limit)
+        rows = await asyncio.to_thread(
+            graph.find_subclasses, name,
+            module=module, microservice=microservice, limit=limit,
+        )
         return SymbolListOutput(success=True, results=[_symbol_to_dto(r) for r in rows])
 
     @mcp.tool(
@@ -621,13 +677,17 @@ def create_mcp_server() -> FastMCP:
     )
     async def find_injectors(
         name: str = Field(description="Injected type simple name or FQN"),
-        service: str | None = Field(default=None),
+        module: str | None = Field(default=None, description="Maven/Gradle module name."),
+        microservice: str | None = Field(default=None, description="Microservice name."),
         limit: int = Field(default=100, ge=1, le=500),
     ) -> InjectorsOutput:
         ok, graph, msg = _require_graph()
         if not ok or graph is None:
             return InjectorsOutput(success=False, message=msg)
-        edges = await asyncio.to_thread(graph.find_injectors, name, service=service, limit=limit)
+        edges = await asyncio.to_thread(
+            graph.find_injectors, name,
+            module=module, microservice=microservice, limit=limit,
+        )
         results = [
             InjectionEdgeDto(
                 consumer=_symbol_to_dto(e.src),
@@ -645,13 +705,17 @@ def create_mcp_server() -> FastMCP:
     )
     async def list_by_role(
         role: str = Field(description="CONTROLLER|SERVICE|REPOSITORY|COMPONENT|CONFIG|ENTITY|FEIGN_CLIENT|MAPPER|OTHER"),
-        service: str | None = Field(default=None),
+        module: str | None = Field(default=None, description="Maven/Gradle module name."),
+        microservice: str | None = Field(default=None, description="Microservice name."),
         limit: int = Field(default=100, ge=1, le=500),
     ) -> SymbolListOutput:
         ok, graph, msg = _require_graph()
         if not ok or graph is None:
             return SymbolListOutput(success=False, message=msg)
-        rows = await asyncio.to_thread(graph.list_by_role, role, service=service, limit=limit)
+        rows = await asyncio.to_thread(
+            graph.list_by_role, role,
+            module=module, microservice=microservice, limit=limit,
+        )
         return SymbolListOutput(success=True, results=[_symbol_to_dto(r) for r in rows])
 
     @mcp.tool(
@@ -660,13 +724,17 @@ def create_mcp_server() -> FastMCP:
     )
     async def list_by_annotation(
         annotation: str = Field(description="Annotation simple name, e.g. 'Transactional'"),
-        service: str | None = Field(default=None),
+        module: str | None = Field(default=None, description="Maven/Gradle module name."),
+        microservice: str | None = Field(default=None, description="Microservice name."),
         limit: int = Field(default=100, ge=1, le=500),
     ) -> SymbolListOutput:
         ok, graph, msg = _require_graph()
         if not ok or graph is None:
             return SymbolListOutput(success=False, message=msg)
-        rows = await asyncio.to_thread(graph.list_by_annotation, annotation, service=service, limit=limit)
+        rows = await asyncio.to_thread(
+            graph.list_by_annotation, annotation,
+            module=module, microservice=microservice, limit=limit,
+        )
         return SymbolListOutput(success=True, results=[_symbol_to_dto(r) for r in rows])
 
     @mcp.tool(
@@ -729,7 +797,7 @@ def create_mcp_server() -> FastMCP:
             "IMPLEMENTS). Stage 0 is seeds and has `via=[]`.\n"
             "Examples:\n"
             '  minimal:  {\"query\": \"what happens on new client message\"}\n'
-            '  scoped:   {\"query\": \"...\", \"service\": \"chat-assign\", '
+            '  scoped:   {\"query\": \"...\", \"microservice\": \"chat-assign\", '
             '\"seed_limit\": 5, \"stage_limit\": 8, \"depth\": 2}\n'
             "Limits: exactly 3 stages (entrypoints / services / integrations); "
             "`seed_limit` caps the vector-search seeds feeding stage 0; `stage_limit` "
@@ -740,7 +808,10 @@ def create_mcp_server() -> FastMCP:
     )
     async def trace_flow(
         query: str = Field(description="Behavioural query, e.g. 'what happens on new client message'."),
-        service: str | None = Field(
+        module: str | None = Field(
+            default=None, description="Restrict the trace to a single Maven/Gradle module.",
+        ),
+        microservice: str | None = Field(
             default=None, description="Restrict the trace to a single microservice.",
         ),
         seed_limit: int = Field(default=5, ge=1, le=20),
@@ -795,7 +866,8 @@ def create_mcp_server() -> FastMCP:
                 fts_text=None,
                 auto_hybrid=False,
                 role=None,
-                service=service,
+                module=module,
+                microservice=microservice,
                 package_prefix=None,
                 graph_expand=False,
                 expand_depth=1,
@@ -830,7 +902,8 @@ def create_mcp_server() -> FastMCP:
         try:
             stages_raw = await asyncio.to_thread(
                 graph.trace_flow, seeds,
-                service=service, depth=depth, stage_limit=stage_limit,
+                module=module, microservice=microservice,
+                depth=depth, stage_limit=stage_limit,
             )
         except Exception as e:
             return TraceFlowOutput(success=False, message=f"trace failed: {e!s}")

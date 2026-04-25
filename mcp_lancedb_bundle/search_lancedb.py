@@ -26,7 +26,8 @@ TABLES: dict[str, str] = {
 # Optional enrichment columns on the java chunk table (absent on older indexes).
 JAVA_ENRICHED_COLUMNS: tuple[str, ...] = (
     "package",
-    "service",
+    "module",
+    "microservice",
     "primary_type_fqn",
     "primary_type_kind",
     "role",
@@ -64,7 +65,8 @@ def _build_extra_predicates(
     *,
     columns: set[str],
     role: str | None,
-    service: str | None,
+    module: str | None,
+    microservice: str | None,
     package_prefix: str | None,
     fqn_in: list[str] | None,
     role_in: list[str] | None = None,
@@ -79,8 +81,10 @@ def _build_extra_predicates(
     if exclude_roles and "role" in columns:
         vals = ", ".join(f"'{_escape_sql_str(v)}'" for v in exclude_roles)
         preds.append(f"(role IS NULL OR role NOT IN ({vals}))")
-    if service and "service" in columns:
-        preds.append(f"service = '{_escape_sql_str(service)}'")
+    if module and "module" in columns:
+        preds.append(f"module = '{_escape_sql_str(module)}'")
+    if microservice and "microservice" in columns:
+        preds.append(f"microservice = '{_escape_sql_str(microservice)}'")
     if package_prefix and "package" in columns:
         esc = _escape_sql_str(package_prefix)
         preds.append(f"(package = '{esc}' OR package LIKE '{esc}.%')")
@@ -669,7 +673,8 @@ def _graph_expand_merge(
     extra = list(extra_predicates)
     extra.extend(_build_extra_predicates(
         columns=_table_columns(uri, TABLES["java"], db),
-        role=None, service=None, package_prefix=None, fqn_in=novel,
+        role=None, module=None, microservice=None,
+        package_prefix=None, fqn_in=novel,
     ))
 
     try:
@@ -728,7 +733,8 @@ def run_search(
     fts_text: str | None = None,
     auto_hybrid: bool = False,
     role: str | None = None,
-    service: str | None = None,
+    module: str | None = None,
+    microservice: str | None = None,
     package_prefix: str | None = None,
     graph_expand: bool = False,
     expand_depth: int = 1,
@@ -773,7 +779,8 @@ def run_search(
 
     extra_java = _build_extra_predicates(
         columns=_table_columns(uri, TABLES["java"], db),
-        role=role, service=service, package_prefix=package_prefix, fqn_in=None,
+        role=role, module=module, microservice=microservice,
+        package_prefix=package_prefix, fqn_in=None,
         role_in=role_in, exclude_roles=exclude_roles,
     ) if "java" in table_keys else []
 
@@ -875,7 +882,10 @@ def main() -> None:
     parser.add_argument("--fts-text", metavar="TEXT", default=None)
     parser.add_argument("--auto-hybrid", action="store_true")
     parser.add_argument("--role", default=None)
-    parser.add_argument("--service", default=None)
+    parser.add_argument("--module", default=None,
+                        help="Filter to a single Maven/Gradle module name.")
+    parser.add_argument("--microservice", default=None,
+                        help="Filter to a single deployable microservice (top-level dir under project root).")
     parser.add_argument("--package-prefix", default=None)
     parser.add_argument("--graph-expand", action="store_true")
     parser.add_argument("--expand-depth", type=int, default=1)
@@ -912,7 +922,8 @@ def main() -> None:
             fts_text=args.fts_text,
             auto_hybrid=args.auto_hybrid,
             role=args.role,
-            service=args.service,
+            module=args.module,
+            microservice=args.microservice,
             package_prefix=args.package_prefix,
             graph_expand=args.graph_expand,
             expand_depth=args.expand_depth,
@@ -957,9 +968,12 @@ def main() -> None:
         role = row.get("role") or ""
         if role:
             hint_s += f" | role:{role}"
-        svc = row.get("service") or ""
-        if svc:
-            hint_s += f" | svc:{svc}"
+        ms = row.get("microservice") or ""
+        if ms:
+            hint_s += f" | microservice:{ms}"
+        mod = row.get("module") or ""
+        if mod and mod != ms:
+            hint_s += f" | module:{mod}"
         comps = row.get("_score_components") or {}
         rw = comps.get("role_weight")
         if rw:

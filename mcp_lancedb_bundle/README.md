@@ -30,6 +30,7 @@ Use **Python 3.11+**. The embedding model must match the one used when the index
 | `LANCEDB_MCP_ALLOW_REFRESH` | Set to `1` to enable the heavy `refresh_code_index` tool. |
 | `KUZU_DB_PATH` | Absolute path to the Kuzu graph DB. Defaults to `${LANCEDB_URI}/code_graph.kuzu`. |
 | `LANCEDB_MCP_GRAPH_ENABLED` | `1`/`0` to force on/off; auto-on when the Kuzu DB exists. |
+| `LANCEDB_MCP_MICROSERVICE_ROOTS` | Optional comma-separated directory names that should be treated as microservice roots (overrides structural inference). Same effect as listing them under `microservice_roots:` in `.lancedb-mcp.yml` at the project root. |
 
 ## 3. Claude Code
 
@@ -63,9 +64,21 @@ A sidecar deterministic graph derived from Tree-sitter Java parsing lives next t
 - setter `@Autowired`
 - Lombok `@RequiredArgsConstructor` (final fields) and `@AllArgsConstructor` (all non-static)
 
-**Java chunk rows are enriched** with `package`, `service`, `primary_type_fqn`, `primary_type_kind`, `role`, `annotations_on_type`, `symbols`, `ontology_version`. `role` is inferred from stereotype annotations (`@RestController`, `@Service`, `@Repository`, `@Component`, `@Configuration`, `@Entity`, `@FeignClient`, `@Mapper`).
+**Java chunk rows are enriched** with `package`, `module`, `microservice`, `primary_type_fqn`, `primary_type_kind`, `role`, `annotations_on_type`, `symbols`, `ontology_version`. `role` is inferred from stereotype annotations (`@RestController`, `@Service`, `@Repository`, `@Component`, `@Configuration`, `@Entity`, `@FeignClient`, `@Mapper`).
 
-`service` is inferred by walking parents until a build marker (`pom.xml`, `build.gradle`, `build.gradle.kts`, `build.sbt`) is found; its containing directory name is the service.
+**Two location fields are tracked per Java symbol / chunk:**
+
+- `module` — the *innermost* build-marker (`pom.xml`, `build.gradle`, `build.gradle.kts`, `build.sbt`) ancestor's directory name. This is the legacy `service` field, renamed.
+- `microservice` — the *outermost* build-marker ancestor under `LANCEDB_MCP_PROJECT_ROOT`. For a single-module project both equal the same name; for a multi-module reactor (e.g. `chat-core/{chat-app,chat-engine,...}`) every child module collapses to `microservice='chat-core'` while keeping its own `module='chat-app'` etc.
+
+Resolution order for `microservice`:
+1. explicit override list — `LANCEDB_MCP_MICROSERVICE_ROOTS=foo,bar` env var or
+   `microservice_roots: [foo, bar]` in `.lancedb-mcp.yml` at the project root;
+2. outermost build marker between `project_root` and the file;
+3. first path segment under `project_root`;
+4. `""` if nothing matches.
+
+> **Breaking change.** This release replaces the single `service` field with `module` + `microservice` and bumps `ONTOLOGY_VERSION` to `2`. Any existing index built before this change must be rebuilt (`refresh_code_index` or `cocoindex update --full-reprocess -f`). The old `service=...` filter on `codebase_search` and the graph tools no longer exists. Use `microservice=...` (most common) or `module=...` (for multi-module reactors). Use `list_code_index_tables` / `graph_meta` to discover canonical names — both now expose `module_counts` and `microservice_counts`.
 
 > **Re-index required.** The `JavaLanceChunk` schema evolves with this bundle:
 > 1. it gained enrichment columns (first cut of the graph work); and
@@ -99,7 +112,7 @@ The DB is dropped and rebuilt from scratch on each run (Phase 1 is a full rebuil
 
 | Tool | Purpose |
 |------|---------|
-| `codebase_search` | Vector / hybrid / graph-expanded search. Supports `role`, `service`, `package_prefix` filters, `graph_expand=true` + `expand_depth=1..3` for Kuzu-BFS fusion (RRF), and `context_neighbors=1..2` to attach adjacent chunks as `context_before`/`context_after`. Java hits return `score_components` (`distance`, `hybrid_rrf`, `role_weight`, `symbol_bonus`, `import_penalty`) so callers can see why a row ranked where it did. |
+| `codebase_search` | Vector / hybrid / graph-expanded search. Supports `role`, `module`, `microservice`, `package_prefix` filters, `graph_expand=true` + `expand_depth=1..3` for Kuzu-BFS fusion (RRF), and `context_neighbors=1..2` to attach adjacent chunks as `context_before`/`context_after`. Java hits return `score_components` (`distance`, `hybrid_rrf`, `role_weight`, `symbol_bonus`, `import_penalty`) so callers can see why a row ranked where it did. |
 | `trace_flow` | Behavioural trace from a natural-language query. Seeds via vector search, then walks CONTROLLER -> SERVICE/COMPONENT -> FEIGN_CLIENT/REPOSITORY/MAPPER in the Kuzu graph and returns staged chains. |
 | `list_code_index_tables` | Lance tables + Kuzu graph metadata. |
 | `refresh_code_index` | Rebuild LanceDB + Kuzu graph. |
