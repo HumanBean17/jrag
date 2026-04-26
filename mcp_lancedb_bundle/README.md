@@ -64,7 +64,7 @@ A sidecar deterministic graph derived from Tree-sitter Java parsing lives next t
 - setter `@Autowired`
 - Lombok `@RequiredArgsConstructor` (final fields) and `@AllArgsConstructor` (all non-static)
 
-**Java chunk rows are enriched** with `package`, `module`, `microservice`, `primary_type_fqn`, `primary_type_kind`, `role`, `annotations_on_type`, `symbols`, `ontology_version`. `role` is inferred from stereotype annotations (`@RestController`, `@Service`, `@Repository`, `@Component`, `@Configuration`, `@Entity`, `@FeignClient`, `@Mapper`).
+**Java chunk rows are enriched** with `package`, `module`, `microservice`, `primary_type_fqn`, `primary_type_kind`, `role`, `capabilities`, `annotations_on_type`, `symbols`, `ontology_version`. `role` and `capabilities` are inferred in `ast_java` / `graph_enrich` (see **Brownfield overrides** below for per-project customisation).
 
 **Two location fields are tracked per Java symbol / chunk:**
 
@@ -180,6 +180,106 @@ Use `list_by_capability` to enumerate types carrying a capability, or
 pass `capability=...` to `codebase_search` / `list_by_role` /
 `list_by_annotation` / `find_*` to AND-filter results.
 
+### Brownfield overrides
+
+For Spring-centric defaults that do not match your tree (custom wrapper
+stereotypes, non-Spring stacks, vendored code), you can steer `role` and
+`capabilities` without forking the indexer.
+
+**1. Config (`.lancedb-mcp.yml` at the project root, same file as
+`microservice_roots`)** — `role_overrides` maps annotation simple names
+and/or per-type FQNs to roles and capabilities:
+
+```yaml
+microservice_roots: []
+
+role_overrides:
+  annotations:
+    AcmeService: SERVICE
+    CompanyController: CONTROLLER
+  capabilities:
+    CompanyKafkaTopic: [MESSAGE_LISTENER]
+    AcmeBatch: [SCHEDULED_TASK]
+  fqn:
+    com.legacy.OrderProcessor:
+      role: SERVICE
+      capabilities: [MESSAGE_LISTENER]
+    com.acme.payments.PaymentEventBus:
+      capabilities: [MESSAGE_PRODUCER]
+```
+
+Unknown role or capability strings are ignored with a warning on load.
+**2. Meta-annotation walk (automatic)** — `@interface` definitions in your
+source can carry meta-annotations; Layer A resolves chains to built-in
+stereotype and capability trigger names (e.g. `@Service`, `@KafkaListener`)
+via `graph_enrich.collect_annotation_meta_chain` (single index for both
+Kuzu and Lance — see below). **3. Last resort — source stubs** — copy the following
+into your project (any package) and add `@CodebaseRole("SERVICE")` /
+`@CodebaseCapability("MESSAGE_LISTENER")` on a class. Matched by **simple
+name only** (no Maven dependency on this bundle):
+
+```java
+package com.example.rag; // any package
+
+import java.lang.annotation.*;
+
+@Target(ElementType.TYPE)
+@Retention(RetentionPolicy.SOURCE)
+public @interface CodebaseRole {
+    String value();
+}
+
+@Target(ElementType.TYPE)
+@Retention(RetentionPolicy.SOURCE)
+@Repeatable(CodebaseCapabilities.class)
+public @interface CodebaseCapability {
+    String value();
+}
+
+@Target(ElementType.TYPE)
+@Retention(RetentionPolicy.SOURCE)
+public @interface CodebaseCapabilities {
+    CodebaseCapability[] value();
+}
+```
+
+Resolution order in code: built-in inference, then config annotation maps,
+then meta-annotation walk, then `@CodebaseRole` / `@CodebaseCapability`, then
+`role_overrides.fqn` (highest priority for explicit per-type config). Rebuild
+Lance + Kuzu (`refresh_code_index` or `build_ast_graph.py`) after changing
+overrides.
+
+**Kuzu vs Lance (Layer A consistency):** both the Kuzu graph writer and Lance
+chunk enrichment call **one** function, `graph_enrich.collect_annotation_meta_chain`,
+which scans the project with sorted `*.java` paths, the same exclude rules as
+`build_ast_graph` / `iter_java_source_files`, parse-error warnings on stderr, and
+deterministic “first wins” for duplicate annotation simple names. Kuzu and Lance
+**should** agree; they can still diverge if the same file is handled differently
+elsewhere in the pipeline (e.g. parse edge cases). If graph tools and
+`codebase_search` disagree on a type, run a full reindex and compare.
+
+**Limitations (Layer A / brownfield):**
+
+1. **Duplicate `@interface` simple names across packages.** Layer A keys the
+   meta map by simple name (usage sites do not always have import-resolved
+   FQNs). If two distinct types share a name (e.g. `com.team1.X` and
+   `com.team2.X`), only the first after **sorted** file order is kept; a stderr
+   message names both FQNs. Resolve by renaming, or use `role_overrides.fqn` /
+   `@CodebaseRole` on affected types.
+2. **Incremental indexing and annotation sources.** The indexer may only
+   reprocess changed files. If you edit an `@interface` declaration (e.g. remove
+   a `@Service` meta-annotation from a wrapper), every class that used that
+   annotation may need re-enrichment; the pipeline does not track that dependency
+   automatically. **When to do a full rebuild:** after changing any
+   `@interface` used as a custom stereotype, run a full
+   `refresh_code_index(confirm=true)` (or full cocoindex reprocess and rebuild
+   Kuzu) so all dependents pick up the new `meta_chain`.
+
+**Kuzu `Symbol` rows (scope):** `role` and `capabilities` on the graph are
+computed for **type** nodes (classes, interfaces, etc.). Method and constructor
+`Symbol` rows are not passed through the brownfield resolver; they use default
+`role=OTHER` and `capabilities=[]`.
+
 On top of role weights, java chunks receive a **symbol-match bonus** (exposed as
 `score_components.symbol_bonus`). It has three additive components, all capped:
 
@@ -229,6 +329,7 @@ If you develop in `chat-test`, copy these files into `mcp_lancedb_bundle/` when 
 
 - `chunk_heuristics.py`
 - `ast_java.py`
+- `java_ontology.py`
 - `graph_enrich.py`
 - `kuzu_queries.py`
 - `build_ast_graph.py`

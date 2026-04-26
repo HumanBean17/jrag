@@ -29,7 +29,7 @@ inside the MCP.
 - **Java only.** The file walker filters strictly on `*.java`; Kotlin,
   Groovy, Scala, and mixed-language source files are skipped entirely
   (not "partially parsed"). Parsing is done via `tree_sitter_java`.
-  - See: `ast_java.py` (the parser), `build_ast_graph.py::_iter_java_files`
+  - See: `ast_java.py` (the parser), `java_index_v1_common.iter_java_source_files`
     (only `*.java`).
 - **Source under `src/main/java/...`.** Test sources under
   `src/test/java/` and `src/test/resources/` are intentionally excluded
@@ -101,15 +101,44 @@ Roles are assigned **first hit wins** from the type's annotations
 - **Use Spring stereotypes consistently.** A "service" class without
   `@Service` will be classified as `OTHER` (or `DTO` if it has a value
   suffix) and will not benefit from the +0.08 SERVICE rank weight.
-- **Don't rely on meta-annotations** (e.g., a custom `@DomainService`
-  that is itself annotated with `@Service`). The parser sees only the
-  annotations *written on the type*. Either keep `@Service` on the class
-  itself or add your meta-annotation to the role table (Section B.1).
+- **Meta-annotations (Layer A).** If you define a custom
+  `@interface` in the indexed source tree, the indexer walks
+  meta-annotations transitively to built-in stereotype names (e.g. your
+  `@AcmeService` meta-annotated with `@Service` can yield `SERVICE`). You
+  can still override with **Brownfield** config (below) or explicit
+  `@CodebaseRole` (see `README.md`).
 - **Annotate Feign clients with `@FeignClient`.** This is a
   **class-level** annotation; manually-coded HTTP clients (raw
   `RestTemplate`/`WebClient` wrappers) won't get the `FEIGN_CLIENT`
   boost. Consider switching to Feign or extending the role table.
 - **JAX-RS resources** (`@Path`, `@GET`, ...) are not recognised as
+  `CONTROLLER` out of the box. Add them to the role table
+  (Section B.1) or use a brownfield / `@CodebaseRole` override if you
+  need a non-Spring web stack.
+
+### A.2.1 Brownfield overrides (config + optional source annotations)
+
+Without changing `ast_java` tables, you can adjust how types get `role`
+and `capabilities` for a given repo via `.lancedb-mcp.yml` at the
+project root (`role_overrides:`) and/or by copying the
+`@CodebaseRole` / `@CodebaseCapability` / `@CodebaseCapabilities`
+stubs from `README.md` into your sources. See **Brownfield overrides**
+in `README.md` for the full schema and execution order.
+
+**Layer A index sources:** Kuzu and Lance both use
+`graph_enrich.collect_annotation_meta_chain` (one disk walk: sorted
+`iter_java_source_files` + the same `COMMON_EXCLUDED_PATH_PATTERNS` as
+`build_ast_graph.py`, stderr on parse errors, first-seen FQN wins on duplicate
+simple names after sorted iteration). The graph’s `pass1` walk is still used to
+**build** `GraphTables`, but default Layer A is **not** taken from that graph in
+isolation. See `README.md` (Brownfield — Kuzu vs Lance, Limitations, full
+rebuild).
+
+**Graph `Symbol` row scope:** in Kuzu, only **type** `Symbol` rows (class,
+interface, record, etc.) are populated with brownfield `role` /
+`capabilities`. **Method** and **constructor** `Symbol` nodes keep
+`role=OTHER` and `capabilities=[]` (the model is type-centric; per-method
+capabilities are not materialised on graph nodes).
 
 ### A.3 Capabilities (multi-tag axis)
 
@@ -124,12 +153,10 @@ Capabilities are independent of `role` — a `@Service` can simultaneously
 be a `MESSAGE_PRODUCER` and a `MESSAGE_LISTENER`, for example. The
 capability set and their triggers are documented in `README.md` under
 **Capabilities** and in `ast_java.py::_METHOD_ANN_TO_CAPABILITY` etc.
-  controllers. Add them to the role table if your stack is Quarkus /
-  Jersey instead of Spring MVC.
 - **MapStruct mappers must be annotated `@Mapper`** (this is the
   default; just keep it).
 
-### A.3 Dependency injection patterns the MCP detects
+### A.4 Dependency injection patterns the MCP detects
 
 `INJECTS` edges are the backbone of "what calls what" reasoning. The MCP
 detects (see `ast_java.py::_INJECT_FIELD_ANNOTATIONS` /
@@ -161,7 +188,7 @@ detects (see `ast_java.py::_INJECT_FIELD_ANNOTATIONS` /
   indexing, the MCP sees the generated constructor and detects it as
   "single constructor with params" — that still works.
 
-### A.4 Class structure & naming (ranking signals)
+### A.5 Class structure & naming (ranking signals)
 
 Beyond role weights, Java hits get an additive **symbol-match bonus**
 (see `search_lancedb.py`, summarised in the README §5 "Ranking"):
@@ -192,7 +219,7 @@ Beyond role weights, Java hits get an additive **symbol-match bonus**
   - **Recommendation:** keep DTOs as records or with a Lombok value
     annotation, and *don't* mix business logic into them.
 
-### A.5 Files & resources picked up by the vector index
+### A.6 Files & resources picked up by the vector index
 
 The CocoIndex flow indexes only:
 
@@ -212,7 +239,7 @@ The CocoIndex flow indexes only:
 - **Don't keep secrets in indexed YAML.** They become embeddings and
   are searchable. Use `${ENV_VAR}` placeholders.
 
-### A.6 Repository hygiene
+### A.7 Repository hygiene
 
 - **Stable, descriptive package names.** `package` is exposed as a
   filter; `package_prefix=com.acme.orders` is much more useful than
@@ -368,7 +395,7 @@ microservice_roots:
   (e.g. promote `services/<name>/...` segments).
 - `java_index_v1_common.py::COMMON_EXCLUDED_PATH_PATTERNS` — append
   globs like `**/generated/**`, `**/openapi/**`, `**/legacy/**`.
-- `build_ast_graph.py::_iter_java_files` — extra hard-coded directory
+- `java_index_v1_common.iter_java_source_files` / `build_ast_graph.py` — extra hard-coded directory
   names to prune (`target`, `build`, `node_modules`, ...).
 
 A **chunk-index re-build** is required if you change exclusion patterns;
@@ -484,13 +511,13 @@ same conventions so a future merge is painless.
 | `module` / `microservice` is empty on most chunks | A.1 (build markers + `.lancedb-mcp.yml`) → B.4 |
 | `microservice=...` filter returns 0 hits | check `graph_meta.microservice_counts` for canonical names; → A.1 / B.4 |
 | Everything ranks as `OTHER` | A.2 (stereotypes) → B.1 |
-| Sparse `INJECTS` graph | A.3 (DI patterns) → B.3 |
-| Wrong class wins for "what does X do?" | A.4 (naming) → B.2 (verbs / caps) |
-| Important `.properties` / `.xml` configs missing | A.5 → B.5 |
+| Sparse `INJECTS` graph | A.4 (DI patterns) → B.3 |
+| Wrong class wins for "what does X do?" | A.5 (naming) → B.2 (verbs / caps) |
+| Important `.properties` / `.xml` configs missing | A.6 → B.5 |
 | Recently re-indexed but search is stale | Restart the MCP server; re-run `refresh_code_index` |
 | `context_before` / `context_after` empty | Set `LANCEDB_MCP_DEBUG_CONTEXT=1` (see README §5) |
 | Graph has lots of phantom nodes | Expected for external libs; inspect via `graph_meta` — only worry if domain types are phantoms (means resolution is failing; check imports). Structural queries like `find_implementors` only return resolved (non-phantom) symbols by default. |
-| Graph tools unavailable / silent failures | Kuzu DB missing or wrong path — verify `KUZU_DB_PATH` or `${LANCEDB_URI}/code_graph.kuzu` exists (see A.6). |
+| Graph tools unavailable / silent failures | Kuzu DB missing or wrong path — verify `KUZU_DB_PATH` or `${LANCEDB_URI}/code_graph.kuzu` exists (see README §5 "AST Graph layer"). |
 
 ---
 

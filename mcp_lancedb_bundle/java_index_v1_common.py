@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import fnmatch
 import os
+from collections.abc import Iterable, Iterator
+from pathlib import Path
 from typing import Any
 
 from cocoindex.resources.chunk import Chunk, TextPosition
@@ -22,6 +25,7 @@ COMMON_EXCLUDED_PATH_PATTERNS: list[str] = [
     "**/node_modules/**",
     "**/target/**",
     "**/build/**",
+    "**/out/**",
     "**/*.class",
     "**/src/test/java/**",
     "**/src/test/resources/**",
@@ -47,3 +51,56 @@ def position_to_json(pos: TextPosition) -> dict[str, Any]:
 def chunk_key_range(chunk: Chunk) -> tuple[int, int]:
     """Byte range for stable primary keys (start inclusive, end exclusive)."""
     return chunk.start.byte_offset, chunk.end.byte_offset
+
+
+# ---------- shared Java source tree walk (graph index + meta-annotation pass) ----------
+
+def compile_excluded_glob_patterns(
+    patterns: Iterable[str] | tuple[str, ...],
+) -> list[str]:
+    """Store exclude patterns in list form; same as ast-graph `index` compile step."""
+    return list(patterns)
+
+
+def is_relative_path_excluded(
+    rel_posix: str, exclude_globs: list[str],
+) -> bool:
+    """True if a project-relative path matches an exclude glob (incl. `**/<path>`)."""
+    for pat in exclude_globs:
+        if fnmatch.fnmatch(rel_posix, pat):
+            return True
+        if fnmatch.fnmatch(f"**/{rel_posix}", pat):
+            return True
+    return False
+
+
+def iter_java_source_files(
+    root: Path, exclude_globs: list[str],
+) -> Iterator[Path]:
+    """Walk `root` for `*.java`, honouring the same prunes and globs as `build_ast_graph`."""
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [
+            d
+            for d in dirnames
+            if d
+            not in (
+                ".git",
+                "target",
+                "build",
+                "out",
+                "node_modules",
+                ".venv",
+                ".idea",
+            )
+        ]
+        for fn in filenames:
+            if not fn.endswith(".java"):
+                continue
+            p = Path(dirpath) / fn
+            try:
+                rel = p.resolve().relative_to(root.resolve()).as_posix()
+            except ValueError:
+                rel = p.as_posix()
+            if is_relative_path_excluded(rel, exclude_globs):
+                continue
+            yield p

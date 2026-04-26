@@ -135,6 +135,9 @@ def _parser() -> Parser:
 class AnnotationRef:
     name: str  # simple (last segment); e.g. "RestController"
     qualified: str  # raw source text, e.g. "org.springframework.web.bind.annotation.RestController"
+    arguments: dict[str, str] = field(default_factory=dict)
+    # Populated for `@CodebaseCapabilities({@CodebaseCapability("a"), ...})` — inner values.
+    container_capability_values: tuple[str, ...] = field(default_factory=tuple)
 
 
 @dataclass
@@ -220,6 +223,88 @@ def _annotation_name(node: Node, src: bytes) -> tuple[str, str]:
     return simple, qualified
 
 
+def _string_literal_value(node: Node, src: bytes) -> str | None:
+    if node.type != "string_literal":
+        return None
+    for ch in node.children:
+        if ch.type == "string_fragment":
+            return _txt(ch, src)
+    return None
+
+
+def _parse_annotation_argument_list(alist: Node, src: bytes) -> dict[str, str]:
+    """Map argument names to string-literal values (e.g. value, key)."""
+    out: dict[str, str] = {}
+    for ch in alist.named_children:
+        if ch.type == "element_value_pair":
+            idents = [c for c in ch.children if c.type == "identifier"]
+            strs = [c for c in ch.children if c.type == "string_literal"]
+            if idents and strs:
+                key = _txt(idents[0], src)
+                val = _string_literal_value(strs[0], src)
+                if val is not None:
+                    out[key] = val
+        elif ch.type == "string_literal":
+            v = _string_literal_value(ch, src)
+            if v is not None and "value" not in out:
+                out["value"] = v
+        elif ch.type == "element_value" and ch.named_children:
+            inner = ch.named_children[0]
+            if inner.type == "string_literal":
+                v = _string_literal_value(inner, src)
+                if v is not None and "value" not in out:
+                    out["value"] = v
+    return out
+
+
+def _codebase_capability_values_from_array(ann_node: Node, src: bytes) -> tuple[str, ...]:
+    found: list[str] = []
+
+    def visit(n: Node) -> None:
+        if n.type == "annotation":
+            name_node = n.child_by_field_name("name")
+            n_simple = _txt(name_node, src).rsplit(".", 1)[-1] if name_node is not None else ""
+            if n_simple == "CodebaseCapability":
+                for c in n.children:
+                    if c.type == "annotation_argument_list":
+                        m = _parse_annotation_argument_list(c, src)
+                        v = m.get("value")
+                        if v is not None:
+                            found.append(v)
+        for c in n.children:
+            visit(c)
+
+    visit(ann_node)
+    return tuple(found)
+
+
+def _parse_annotation_ref_node(node: Node, src: bytes) -> AnnotationRef:
+    """Build `AnnotationRef` for a `marker_annotation` or `annotation` node."""
+    simple, qualified = _annotation_name(node, src)
+    t = node.type
+    if t == "marker_annotation":
+        return AnnotationRef(name=simple, qualified=qualified, arguments={})
+
+    args: dict[str, str] = {}
+    container: tuple[str, ...] = ()
+    alist = node.child_by_field_name("arguments")
+    if alist is None:
+        for ch in node.children:
+            if ch.type == "annotation_argument_list":
+                alist = ch
+                break
+    if alist is not None:
+        args = _parse_annotation_argument_list(alist, src)
+    if simple == "CodebaseCapabilities" and alist is not None:
+        container = _codebase_capability_values_from_array(node, src)
+    return AnnotationRef(
+        name=simple,
+        qualified=qualified,
+        arguments=args,
+        container_capability_values=container,
+    )
+
+
 _MODIFIER_KEYWORDS = frozenset({
     "public",
     "private",
@@ -258,8 +343,7 @@ def _collect_annotations_and_modifiers(
     for child in mods_node.children:
         t = child.type
         if t in ("marker_annotation", "annotation"):
-            simple, qualified = _annotation_name(child, src)
-            anns.append(AnnotationRef(name=simple, qualified=qualified))
+            anns.append(_parse_annotation_ref_node(child, src))
         elif t in _MODIFIER_KEYWORDS:
             mods.append(t)
     return mods, anns

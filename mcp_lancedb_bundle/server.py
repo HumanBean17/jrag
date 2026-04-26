@@ -54,6 +54,8 @@ _INSTRUCTIONS = (
     "ancestor; equal to `microservice` for single-module projects). Both are AND-combined "
     "when set together. Use list_code_index_tables to discover what microservice and module "
     "names actually got inferred. "
+    "Role and capability inference can be customised per project via `.lancedb-mcp.yml` "
+    "(see README 'Brownfield overrides'). "
     "Java hits include role / module / microservice / FQN + score_components + a compact "
     "`why` string explaining the rank (dist / role / symbol / import_penalty). Pass "
     "context_neighbors=1 to attach adjacent chunks via `context_before` / `context_after`. "

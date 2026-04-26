@@ -25,6 +25,13 @@ if str(BUNDLE_DIR) not in sys.path:
     sys.path.insert(0, str(BUNDLE_DIR))
 
 
+def pytest_configure(config) -> None:
+    config.addinivalue_line(
+        "markers",
+        "lance_e2e: end-to-end cocoindex + Lance (optional; also gate with LANCEDB_MCP_RUN_HEAVY).",
+    )
+
+
 @pytest.fixture(scope="session")
 def corpus_root() -> Path:
     assert CORPUS_ROOT.is_dir(), f"corpus missing: {CORPUS_ROOT}"

@@ -23,13 +23,11 @@ The Kuzu DB is dropped and rebuilt on every run (Phase 1 is a full rebuild).
 from __future__ import annotations
 
 import argparse
-import fnmatch
 import os
 import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable
 
 import kuzu
 
@@ -40,18 +38,24 @@ from ast_java import (
     JavaFileAst,
     MethodDecl,
     TypeDecl,
-    infer_role_for_type,
     injection_annotation_names,
     lombok_required_args_annotations,
     parse_java,
 )
 from graph_enrich import (
+    collect_annotation_meta_chain,
+    load_brownfield_overrides,
     microservice_for_path,
     module_for_path,
     phantom_id,
+    resolve_role_and_capabilities,
     symbol_id,
 )
-from java_index_v1_common import COMMON_EXCLUDED_PATH_PATTERNS
+from java_index_v1_common import (
+    COMMON_EXCLUDED_PATH_PATTERNS,
+    compile_excluded_glob_patterns,
+    iter_java_source_files,
+)
 
 _JAVA_LANG_SIMPLE = frozenset({
     "Object", "String", "Integer", "Long", "Short", "Byte", "Boolean", "Double",
@@ -121,32 +125,7 @@ class GraphTables:
     skipped_files: int = 0
 
 
-# ---------- file walk ----------
-
-
-def _compile_excludes(patterns: Iterable[str]) -> list[str]:
-    return list(patterns)
-
-
-def _path_excluded(rel: str, patterns: list[str]) -> bool:
-    for pat in patterns:
-        if fnmatch.fnmatch(rel, pat):
-            return True
-    return False
-
-
-def _iter_java_files(root: Path, excludes: list[str]) -> Iterable[Path]:
-    for dirpath, dirnames, filenames in os.walk(root):
-        # prune dotfiles + excluded dir names early
-        dirnames[:] = [d for d in dirnames if d not in (".git", "target", "build", "node_modules", ".venv", ".idea")]
-        for fn in filenames:
-            if not fn.endswith(".java"):
-                continue
-            p = Path(dirpath) / fn
-            rel = p.resolve().relative_to(root.resolve()).as_posix() if p.resolve().is_relative_to(root.resolve()) else p.as_posix()
-            if _path_excluded(rel, excludes) or _path_excluded(f"**/{rel}", excludes):
-                continue
-            yield p
+# ---------- file walk (see `java_index_v1_common.iter_java_source_files`) ----------
 
 
 # ---------- pass 1 ----------
@@ -209,10 +188,10 @@ def _register_type(
 def pass1_parse(root: Path, tables: GraphTables, *, verbose: bool) -> dict[str, JavaFileAst]:
     """Walk files, parse them, populate node indexes. Returns path -> AST."""
     asts: dict[str, JavaFileAst] = {}
-    excludes = _compile_excludes(COMMON_EXCLUDED_PATH_PATTERNS)
+    excludes = compile_excluded_glob_patterns(COMMON_EXCLUDED_PATH_PATTERNS)
     t0 = time.time()
     n_files = 0
-    for p in _iter_java_files(root, excludes):
+    for p in iter_java_source_files(root, excludes):
         n_files += 1
         try:
             content = p.read_bytes()
@@ -587,7 +566,15 @@ _CREATE_SYMBOL = (
 )
 
 
-def _write_nodes(conn: kuzu.Connection, tables: GraphTables) -> None:
+def _write_nodes(
+    conn: kuzu.Connection,
+    tables: GraphTables,
+    *,
+    project_root: Path,
+    meta_chain: dict[str, frozenset[str]] | None,
+) -> None:
+    overrides = load_brownfield_overrides(project_root)
+    mch = meta_chain
     # packages
     for pkg, pid in tables.packages.items():
         conn.execute(_CREATE_SYMBOL, _node_row(
@@ -601,6 +588,11 @@ def _write_nodes(conn: kuzu.Connection, tables: GraphTables) -> None:
     # types
     for entry in tables.types.values():
         d = entry.decl
+        role, capabilities = resolve_role_and_capabilities(
+            d,
+            overrides=overrides,
+            meta_chain=mch,
+        )
         conn.execute(_CREATE_SYMBOL, _node_row(
             id=entry.node_id, kind=d.kind, name=d.name, fqn=d.fqn,
             package=entry.package,
@@ -610,8 +602,8 @@ def _write_nodes(conn: kuzu.Connection, tables: GraphTables) -> None:
             start_byte=d.start_byte, end_byte=d.end_byte,
             modifiers=list(d.modifiers),
             annotations=[a.name for a in d.annotations],
-            capabilities=list(d.capabilities),
-            role=infer_role_for_type(d),
+            capabilities=capabilities,
+            role=role,
             signature="",
             parent_id=tables.types[entry.outer_fqn].node_id if entry.outer_fqn and entry.outer_fqn in tables.types else "",
         ))
@@ -695,14 +687,30 @@ def _write_meta(conn: kuzu.Connection, tables: GraphTables, source_root: Path) -
     )
 
 
-def write_kuzu(db_path: Path, tables: GraphTables, *, source_root: Path, verbose: bool) -> None:
+def write_kuzu(
+    db_path: Path,
+    tables: GraphTables,
+    *,
+    source_root: Path,
+    verbose: bool,
+    meta_chain: dict[str, frozenset[str]] | None = None,
+) -> None:
+    if meta_chain is None:
+        meta_chain = collect_annotation_meta_chain(
+            str(source_root.resolve()),
+        )
     db_path.parent.mkdir(parents=True, exist_ok=True)
     db = kuzu.Database(str(db_path))
     conn = kuzu.Connection(db)
     _drop_all(conn)
     _create_schema(conn)
     t0 = time.time()
-    _write_nodes(conn, tables)
+    _write_nodes(
+        conn,
+        tables,
+        project_root=source_root,
+        meta_chain=meta_chain,
+    )
     if verbose:
         print(f"[write] nodes written in {time.time() - t0:.2f}s", file=sys.stderr)
     t1 = time.time()

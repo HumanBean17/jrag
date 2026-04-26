@@ -73,6 +73,7 @@ class JavaLanceChunk:
     role: str
     # Native PyArrow lists: without the LanceType override CocoIndex would JSON-encode
     # `list[str]` into a STRING column, which caller code then iterates character-by-character.
+    capabilities: Annotated[list[str], LanceType(pa.list_(pa.string()))]
     annotations_on_type: Annotated[list[str], LanceType(pa.list_(pa.string()))]
     symbols: Annotated[list[str], LanceType(pa.list_(pa.string()))]
     ontology_version: int
@@ -184,6 +185,7 @@ async def process_java_file(
                 primary_type_fqn=enrich.primary_type_fqn,
                 primary_type_kind=enrich.primary_type_kind,
                 role=enrich.role,
+                capabilities=list(enrich.capabilities),
                 annotations_on_type=enrich.annotations_on_type,
                 symbols=enrich.symbols,
                 ontology_version=ONTOLOGY_VERSION,

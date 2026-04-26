@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -24,10 +23,44 @@ from pathlib import Path
 import pytest
 
 HEAVY = os.environ.get("LANCEDB_MCP_RUN_HEAVY", "").strip().lower() in ("1", "true", "yes")
-pytestmark = pytest.mark.skipif(
-    not HEAVY,
-    reason="set LANCEDB_MCP_RUN_HEAVY=1 to run the cocoindex + LanceDB end-to-end test",
-)
+pytestmark = [
+    pytest.mark.skipif(
+        not HEAVY,
+        reason="set LANCEDB_MCP_RUN_HEAVY=1 to run the cocoindex + LanceDB end-to-end test",
+    ),
+    pytest.mark.lance_e2e,
+]
+
+CAPABILITY_SMOKE_ROOT = Path(__file__).resolve().parent / "fixtures" / "capability_smoke"
+
+
+def _require_cocoindex_runtime_deps() -> None:
+    """`cocoindex` loads `java_index_flow_lancedb.py` with the same Python as the CLI (see venv)."""
+    try:
+        import tree_sitter_java  # noqa: F401
+    except ImportError as exc:
+        pytest.skip(
+            "Heavy e2e needs project deps in the current env (e.g. ``pip install -r requirements*``"
+            f" in the venv you use to run pytest): {exc}"
+        )
+
+
+def _cocoindex_flow_specifier(bundle_dir: Path, index_cwd: Path) -> str:
+    """Build ``path:JavaCodeIndexLance`` for ``cocoindex update`` with ``cwd=index_cwd``.
+
+    A bare ``java_index_flow_lancedb.py`` is resolved with `os.path.isfile` against
+    *only* the current working directory, so the flow file in ``bundle_dir/`` is not
+    found when we index from a corpus (or any other) directory. A **relative** path
+    from ``index_cwd`` to the real file fixes that. We avoid
+    ``C:\\...\\x.py:App`` on Windows (``:`` in the app specifier breaks parsing).
+    """
+    flow = (bundle_dir / "java_index_flow_lancedb.py").resolve()
+    if not flow.is_file():
+        raise FileNotFoundError(f"missing index flow: {flow}")
+    start = index_cwd.resolve()
+    relp = os.path.relpath(str(flow), start=str(start))
+    relp = Path(relp).as_posix()
+    return f"{relp}:JavaCodeIndexLance"
 
 
 def _structured(result):
@@ -50,19 +83,26 @@ def _structured(result):
 @pytest.fixture(scope="module")
 def lance_index(tmp_path_factory, corpus_root: Path) -> Path:
     """Build a real LanceDB index over the corpus via cocoindex."""
+    _require_cocoindex_runtime_deps()
     bundle_dir = Path(__file__).resolve().parent.parent
-    cocoindex_bin = Path(sys.executable).resolve().parent / "cocoindex"
+    # Do not ``Path(sys.executable).resolve()`` — on macOS the venv ``python`` is a
+    # symlink; resolving it lands in ``.../Python.framework/.../bin`` and we would
+    # pick the wrong ``cocoindex`` (system site-packages, missing ``tree_sitter_java``).
+    cocoindex_bin = Path(sys.executable).parent / "cocoindex"
     if not cocoindex_bin.is_file():
-        pytest.skip(f"cocoindex CLI not found next to Python ({cocoindex_bin})")
+        pytest.skip(
+            f"cocoindex CLI not found next to the pytest interpreter; install cocoindex in this "
+            f"venv and run: `.venv/bin/python -m pytest ...` ({cocoindex_bin})"
+        )
 
     work = tmp_path_factory.mktemp("lance_e2e")
     lance_uri = work / "lancedb_data"
     coco_db = work / "cocoindex.db"
 
     # cocoindex walks the *current working directory*, so we hand it the
-    # corpus root rather than the bundle dir.
-    flow_path = bundle_dir / "java_index_flow_lancedb.py"
-    assert flow_path.is_file(), flow_path
+    # corpus root rather than the bundle dir. The app module path must be
+    # resolvable from that cwd (see _cocoindex_flow_specifier).
+    app_spec = _cocoindex_flow_specifier(bundle_dir, Path(corpus_root))
 
     env = {
         **os.environ,
@@ -73,7 +113,7 @@ def lance_index(tmp_path_factory, corpus_root: Path) -> Path:
         [
             str(cocoindex_bin),
             "update",
-            f"{flow_path.name}:JavaCodeIndexLance",
+            app_spec,
             "--full-reprocess",
             "-f",
         ],
@@ -91,6 +131,57 @@ def lance_index(tmp_path_factory, corpus_root: Path) -> Path:
     builder = bundle_dir / "build_ast_graph.py"
     proc = subprocess.run(
         [sys.executable, str(builder), "--source-root", str(corpus_root)],
+        env={**env, "KUZU_DB_PATH": str(lance_uri / "code_graph.kuzu")},
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert proc.returncode == 0, proc.stderr
+    return lance_uri
+
+
+@pytest.fixture(scope="module")
+def lance_index_capability_smoke(tmp_path_factory) -> Path:
+    """Tiny project with @KafkaListener — indexes fast; tests `capability=` in search."""
+    _require_cocoindex_runtime_deps()
+    bundle_dir = Path(__file__).resolve().parent.parent
+    if not CAPABILITY_SMOKE_ROOT.is_dir():
+        pytest.skip(f"capability smoke fixture missing: {CAPABILITY_SMOKE_ROOT}")
+    cocoindex_bin = Path(sys.executable).parent / "cocoindex"
+    if not cocoindex_bin.is_file():
+        pytest.skip(
+            f"cocoindex CLI not found next to the pytest interpreter ({cocoindex_bin})"
+        )
+
+    work = tmp_path_factory.mktemp("lance_cap_smoke")
+    lance_uri = work / "lancedb_data"
+    coco_db = work / "cocoindex.db"
+    app_spec = _cocoindex_flow_specifier(bundle_dir, Path(CAPABILITY_SMOKE_ROOT))
+    env = {
+        **os.environ,
+        "LANCEDB_URI": str(lance_uri),
+        "COCOINDEX_DB": str(coco_db),
+    }
+    proc = subprocess.run(
+        [
+            str(cocoindex_bin),
+            "update",
+            app_spec,
+            "--full-reprocess",
+            "-f",
+        ],
+        cwd=str(CAPABILITY_SMOKE_ROOT),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=900,
+    )
+    assert proc.returncode == 0, (
+        f"cocoindex failed: stdout={proc.stdout}\nstderr={proc.stderr}"
+    )
+    builder = bundle_dir / "build_ast_graph.py"
+    proc = subprocess.run(
+        [sys.executable, str(builder), "--source-root", str(CAPABILITY_SMOKE_ROOT)],
         env={**env, "KUZU_DB_PATH": str(lance_uri / "code_graph.kuzu")},
         capture_output=True,
         text=True,
@@ -123,6 +214,42 @@ async def test_codebase_search_returns_hits(lance_index: Path, monkeypatch) -> N
     # Loose contract: every hit has a file path inside the corpus.
     for hit in out["results"]:
         assert hit["file_path"]
+
+
+async def test_codebase_search_capability_filter_e2e(
+    lance_index_capability_smoke: Path, monkeypatch,
+) -> None:
+    """MCP `codebase_search` with `capability` — full Lance + enrich path (heavy)."""
+    monkeypatch.setenv("LANCEDB_URI", str(lance_index_capability_smoke))
+    monkeypatch.setenv("KUZU_DB_PATH", str(lance_index_capability_smoke / "code_graph.kuzu"))
+
+    from kuzu_queries import KuzuGraph
+    KuzuGraph._instance = None
+    KuzuGraph._instance_path = None
+
+    from server import create_mcp_server
+    server = create_mcp_server()
+
+    out = _structured(
+        await server.call_tool(
+            "codebase_search",
+            {
+                "query": "kafka listener consumer message handler",
+                "limit": 10,
+                "capability": "MESSAGE_LISTENER",
+            },
+        )
+    )
+    assert out["success"] is True
+    assert out["results"], out
+    caps_any = any(
+        (h.get("capabilities") or []) for h in out["results"]
+    )
+    assert caps_any, "expected at least one hit with non-empty capabilities from smoke index"
+    assert any(
+        "MESSAGE_LISTENER" in (h.get("capabilities") or [])
+        for h in out["results"]
+    ), out["results"]
 
 
 async def test_trace_flow_returns_stages(lance_index: Path, monkeypatch) -> None:
