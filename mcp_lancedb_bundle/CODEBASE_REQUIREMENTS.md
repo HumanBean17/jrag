@@ -26,15 +26,14 @@ inside the MCP.
 
 ### A.1 Language & build
 
-- **Java only.** Parsing is done via `tree_sitter_java`. Kotlin, Groovy
-  (`build.gradle`), Scala, and mixed-language source files are skipped or
-  partially parsed at best.
+- **Java only.** The file walker filters strictly on `*.java`; Kotlin,
+  Groovy, Scala, and mixed-language source files are skipped entirely
+  (not "partially parsed"). Parsing is done via `tree_sitter_java`.
   - See: `ast_java.py` (the parser), `build_ast_graph.py::_iter_java_files`
     (only `*.java`).
 - **Source under `src/main/java/...`.** Test sources under
   `src/test/java/` and `src/test/resources/` are intentionally excluded
-  from the LanceDB vector index (graph build still walks them — see B.4
-  if you want to exclude them from the graph too).
+  from both the LanceDB vector index and the Kuzu graph build.
   - See: `java_index_v1_common.py::COMMON_EXCLUDED_PATH_PATTERNS`.
 - **Two location concepts: `module` and `microservice`.** The MCP
   infers both by walking up from each `.java` file until it finds a
@@ -67,6 +66,20 @@ inside the MCP.
   generated clients) in committed source trees — they balloon the graph
   with phantom edges.
 
+**Important:** `module` and `microservice` inference depends on the
+**project root** used during indexing:
+
+- For the CocoIndex flow (`java_index_flow_lancedb.py`), `project_root`
+  is the **current working directory** when you launch `cocoindex update`
+  (hardcoded as `Path(".").resolve()` in `coco_lifespan`).
+- For `build_ast_graph.py` standalone, it's `--source-root` (defaults
+  to `cwd`).
+- For MCP runtime, `LANCEDB_MCP_PROJECT_ROOT` is used only by
+  `refresh_code_index` to resolve the indexer's working directory.
+
+Consistency across builds requires running the indexer from the same
+directory (or using an absolute `--source-root`).
+
 ### A.2 Annotations the MCP knows about (role inference)
 
 Roles are assigned **first hit wins** from the type's annotations
@@ -92,10 +105,10 @@ Roles are assigned **first hit wins** from the type's annotations
   that is itself annotated with `@Service`). The parser sees only the
   annotations *written on the type*. Either keep `@Service` on the class
   itself or add your meta-annotation to the role table (Section B.1).
-- **Annotate Feign clients with `@FeignClient`.** Manually-coded HTTP
-  clients (raw `RestTemplate`/`WebClient` wrappers) won't get the
-  `FEIGN_CLIENT` boost; consider switching to Feign or extending the
-  role table.
+- **Annotate Feign clients with `@FeignClient`.** This is a
+  **class-level** annotation; manually-coded HTTP clients (raw
+  `RestTemplate`/`WebClient` wrappers) won't get the `FEIGN_CLIENT`
+  boost. Consider switching to Feign or extending the role table.
 - **JAX-RS resources** (`@Path`, `@GET`, ...) are not recognised as
   controllers. Add them to the role table if your stack is Quarkus /
   Jersey instead of Spring MVC.
@@ -148,7 +161,8 @@ Beyond role weights, Java hits get an additive **symbol-match bonus**
 - **Action-verb bonus** (+0.02): methods whose names start with
   `process`, `handle`, `on`, `pick`, `select`, `assign`, `notify`,
   `dispatch`, `publish`, `consume`, `route`, `trigger`, `enqueue`,
-  `distribute` get a flat bonus on their owning chunk.
+  `distribute`, `update`, `create`, `apply`, `resolve`, `reassign`,
+  `close`, `open` get a flat bonus on their owning chunk.
   - **Recommendation:** name event-handler / orchestration methods with
     these verbs (`onOrderPlaced`, `processPayment`). Domain-specific
     verbs (`reconcile`, `settle`) are *not* in the list — extend it
@@ -158,8 +172,9 @@ Beyond role weights, Java hits get an additive **symbol-match bonus**
   `@ToString`, and classes whose simple name ends in
   `Dto`, `DTO`, `Request`, `Response`, `Payload`, `Model`, `Event`,
   `Message`, `Body`, `Form`, `Command`, `Query`, `Record`, or `View`
-  are classified as `DTO` and pushed down (DTOs share role rank with
-  `OTHER`/`MAPPER` = 0, but compete poorly against `SERVICE`/`CONTROLLER`).
+  are classified as `DTO` and pushed down with a -0.08 penalty
+  (stronger than `ENTITY` at -0.06, but only when annotation-based
+  inference yields `OTHER` — e.g. `@Service FooRequest` keeps `SERVICE`).
   - **Recommendation:** keep DTOs as records or with a Lombok value
     annotation, and *don't* mix business logic into them.
 
@@ -191,9 +206,16 @@ The CocoIndex flow indexes only:
 - **One top-level type per file** — standard Java practice. The graph
   handles nested and multiple top-level types, but search results
   surface chunk-level hits, so a 5-class file produces noisy ranks.
-- **Avoid huge files (>2 000 lines).** Chunking still works, but a
-  single Tree-sitter parse failure invalidates the whole file's graph
-  contribution.
+- **Avoid huge files (>2 000 lines).** Tree-sitter's error-tolerant
+  parser handles syntax errors robustly (partial AST is still indexed),
+  but very large files with complex nesting may produce noisy chunk
+  boundaries.
+- **Kuzu graph sidecar location.** The graph defaults to
+  `${LANCEDB_URI}/code_graph.kuzu` (or `$KUZU_DB_PATH` if set). If
+  your index is at `/data/lancedb_data` but Kuzu ends up elsewhere, the
+  MCP will silently operate in vector-only mode (no `find_implementors`,
+  `trace_flow`, etc.). Verify both paths match, or set `KUZU_DB_PATH`
+  explicitly.
 
 ---
 
@@ -356,8 +378,8 @@ Add patterns to the existing `yaml_files` matcher, or declare a new
 `@dataclass` chunk type + new `@coco.fn process_xxx_file` + new table.
 
 For brand-new file types you'll also want to teach the MCP server what
-table to expose: see `server.py` (search for `"javacodeindex_java_code"`
-to find the table-name registry).
+table to expose: see `search_lancedb.py::TABLES` (the dict mapping
+`"java"` / `"sql"` / `"yaml"` to LanceDB table names).
 
 A **full re-index** is required.
 
@@ -389,7 +411,10 @@ You'd do this if:
 - Set env `SBERT_MODEL=<hub-id-or-local-dir>` for both the indexer and
   the MCP (they must match exactly).
 - Set env `SBERT_DEVICE=cuda` / `mps` / `cpu`.
-- The default lives in `java_index_v1_common.py::SBERT_MODEL`.
+- The default (`sentence-transformers/all-MiniLM-L6-v2`) lives in two
+  places that must stay in sync:
+  - `java_index_v1_common.py::SBERT_MODEL` — used by the indexer.
+  - `index_common.py::SBERT_MODEL` — used by the runtime (search / MCP).
 
 A **full re-index** is required.
 
@@ -432,9 +457,9 @@ This is a larger change; rough map:
 4. `server.py` — expose a new MCP tool (or extend `graph_neighbors` /
    `trace_flow` to recognise the new edge type).
 
-See `DEFERRED-CALL-GRAPH-PROPOSE.md` for the planned shape of CALLS /
-HTTP_CALLS / ASYNC_CALLS — your custom edge should follow the same
-conventions so a future merge is painless.
+See `propose/DEFERRED-CALL-GRAPH-PROPOSE.md` for the planned shape of
+CALLS / HTTP_CALLS / ASYNC_CALLS — your custom edge should follow the
+same conventions so a future merge is painless.
 
 ---
 
@@ -450,7 +475,8 @@ conventions so a future merge is painless.
 | Important `.properties` / `.xml` configs missing | A.5 → B.5 |
 | Recently re-indexed but search is stale | Restart the MCP server; re-run `refresh_code_index` |
 | `context_before` / `context_after` empty | Set `LANCEDB_MCP_DEBUG_CONTEXT=1` (see README §5) |
-| Graph has lots of phantom nodes | Expected for external libs; inspect via `graph_meta` — only worry if domain types are phantoms (means resolution is failing; check imports) |
+| Graph has lots of phantom nodes | Expected for external libs; inspect via `graph_meta` — only worry if domain types are phantoms (means resolution is failing; check imports). Structural queries like `find_implementors` only return resolved (non-phantom) symbols by default. |
+| Graph tools unavailable / silent failures | Kuzu DB missing or wrong path — verify `KUZU_DB_PATH` or `${LANCEDB_URI}/code_graph.kuzu` exists (see A.6). |
 
 ---
 

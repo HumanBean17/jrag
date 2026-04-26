@@ -78,8 +78,6 @@ Resolution order for `microservice`:
 3. first path segment under `project_root`;
 4. `""` if nothing matches.
 
-> **Breaking change.** This release replaces the single `service` field with `module` + `microservice` and bumps `ONTOLOGY_VERSION` to `2`. Any existing index built before this change must be rebuilt (`refresh_code_index` or `cocoindex update --full-reprocess -f`). The old `service=...` filter on `codebase_search` and the graph tools no longer exists. Use `microservice=...` (most common) or `module=...` (for multi-module reactors). Use `list_code_index_tables` / `graph_meta` to discover canonical names — both now expose `module_counts` and `microservice_counts`.
-
 > **Re-index required.** The `JavaLanceChunk` schema evolves with this bundle:
 > 1. it gained enrichment columns (first cut of the graph work); and
 > 2. `annotations_on_type` / `symbols` are now native PyArrow `list<string>` instead of
