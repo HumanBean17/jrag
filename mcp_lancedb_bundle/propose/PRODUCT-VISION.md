@@ -4,6 +4,8 @@
 
 Vector-only RAG, as used in most CocoIndex-based setups, excels at semantic similarity but fails systematically on multi-hop architectural reasoning — `controller → service → repository` chains, interface-driven dependency injection, and inheritance trees. AST-derived GraphRAG (DKB) is the correct addition, not a replacement: it layers a deterministic structural knowledge graph on top of the existing vector index, enabling bidirectional traversal at query time to supply context that similarity search structurally cannot find. A 2026 benchmark on Java codebases (Shopizer, ThingsBoard, OpenMRS Core) confirmed DKB achieves **15/15 (100%)** answer correctness on architecture-tracing queries, compared to 6/15 for pure vector RAG, at only ~2× the query cost and with indexing times under 15 seconds.[^1][^2][^3][^4]
 
+**This repository’s reference implementation** pairs **LanceDB** (embeddings, optional full-text + vector hybrid via RRF) with a **Kuzu** sidecar graph (default `code_graph.kuzu` colocated with the LanceDB data directory). Search and the MCP server do not require a running CocoIndex process—only the built artifacts and Python dependencies (see the bundle `README`).
+
 ***
 
 ## 1. Why AST GraphRAG Is an Addition, Not a Replacement
@@ -30,36 +32,36 @@ The two layers are orthogonal and complementary. A **hybrid retrieval** system t
 
 ***
 
-## 2. Integrating AST GraphRAG into Your CocoIndex Pipeline
+## 2. Integrating AST GraphRAG into the indexing and query path
 
-### 2.1 Architecture Overview
+### 2.1 Architecture overview
 
-The integration adds a parallel graph index alongside your existing vector store. Both indexes are built from the same source files; the graph is derived deterministically from AST parsing, not from embeddings.[^2]
+The integration adds a **parallel graph index** alongside the **vector index**. Both are built from the same source files; the graph is derived deterministically from AST parsing, not from embeddings.[^2] In this bundle, that split is **LanceDB + Kuzu**.
 
 ```
-Java Microservices (5 repos)
+Java Microservices
           │
-          ├── CocoIndex (existing)
-          │     ├── Tree-sitter chunking (.java files)
+          ├── CocoIndex flow (index time) — e.g. java_index_flow_lancedb.py
+          │     ├── Tree-sitter chunking (.java, SQL, YAML, …)
           │     ├── Embedding generation
-          │     └── pgvector store ──────────────────► Vector Retriever
+          │     └── LanceDB tables ──────────────────► Vector / hybrid retriever
           │
-          └── AST Graph Builder (new)
-                ├── Tree-sitter Java parser (tree_sitter_java)
+          └── build_ast_graph.py (index time, parallel)
+                ├── Tree-sitter Java (tree_sitter_java)
                 ├── Two-pass ontology extractor
-                │     ├── Pass 1: class/interface/enum nodes
-                │     └── Pass 2: injects/extends/implements edges
-                └── Graph DB (Neo4j / Kuzu) ──────────► Graph Retriever
+                │     ├── Pass 1: class/interface/enum nodes, …
+                │     └── Pass 2: injects/extends/implements (Phase 1 edges)
+                └── Kuzu (code_graph.kuzu) ──────────► Graph retriever (Cypher)
                                                               │
-                                                    Bidirectional traversal
-                                                    + Interface-consumer expansion
+                                                    BFS + bidirectional closure
+                                                    (MCP: expand, impact, …)
                                                               │
                                          ┌────────────────────┘
                                          ▼
-                              Context Merger (RRF fusion)
+                    Context merge (RRF: vector, FTS, graph-expanded chunks)
                                          │
                                          ▼
-                                     LLM Answer
+                                     LLM / agent
 ```
 
 ### 2.2 Building the AST Graph: DKB Approach
@@ -71,55 +73,37 @@ The DKB (Deterministic Knowledge Base) approach, as validated in the 2026 benchm
 - `Method`, `Constructor` — from `method_declaration` nodes
 - `File`, `Package` — from directory structure[^11]
 
-**Edge Types (DKB typed set):**
+**Edge types (DKB typed set):**
 - `EXTENDS` — class inheritance
 - `IMPLEMENTS` — interface implementation
 - `INJECTS` — field-type DI (Spring `@Autowired`, constructor injection)
-- `CALLS` — method-to-method call sites (requires call resolution)
-- `HTTP_CALLS` — cross-service REST calls (Feign clients, `RestTemplate`)[^11]
-- `ASYNC_CALLS` — Kafka, messaging patterns[^11]
+- `CALLS` — method-to-method call sites (requires call resolution) — *planned* (not yet in the Kuzu schema)
+- `HTTP_CALLS` — cross-service REST calls (Feign clients, `RestTemplate`)[^11] — *planned*
+- `ASYNC_CALLS` — Kafka, messaging patterns[^11] — *planned*
+
+**Shipped in the Kuzu sidecar (Phase 1):** `EXTENDS`, `IMPLEMENTS`, `INJECTS`. The bundle documents deferred `CALLS` / `HTTP_CALLS` / `ASYNC_CALLS` in its roadmap (`README` §6).
 
 The two-pass extraction strategy matters: Pass 1 builds all node records (so every class/interface in the codebase is known); Pass 2 resolves edge targets using the completed node registry, eliminating forward-reference gaps.[^2]
 
 **Why deterministic extraction beats LLM-based graph construction:**
 In the benchmark, LLM-KB skipped 377 out of 1210 files (31.2% miss rate), reducing chunk coverage to 64.1% and node coverage to 72.7% of DKB's graph. Indexing time for LLM-KB was 200 seconds vs. 2.8 seconds for DKB on the same codebase, and cost was ~20× higher. For a production codebase you maintain incrementally, stochastic extraction failures create silent blind spots.[^1][^2]
 
-### 2.3 CocoIndex Integration Points
+### 2.3 How this bundle wires CocoIndex, LanceDB, and Kuzu
 
-CocoIndex already uses Tree-sitter internally for semantic chunking, and natively supports Neo4j and Kuzu as graph export targets. The practical integration path:[^12][^13][^6][^7]
+1. **Vector / chunk index (LanceDB):** a CocoIndex flow (e.g. `java_index_flow_lancedb.py` in the repo) walks sources, applies Tree-sitter-based chunking, embeds, and writes **LanceDB** tables. At query time the MCP / CLI loads embeddings from `LANCEDB_URI` and runs vector search, optional **FTS + vector RRF** (`auto_hybrid`), and filters on enriched columns (`role`, `microservice`, `module`, …).[^6][^7]
 
-1. **Keep your existing CocoIndex vector flow unchanged** — Tree-sitter chunked embeddings in pgvector remain your vector retriever.
+2. **Graph index (Kuzu):** `build_ast_graph.py` runs **in parallel** (same repo root, same `.java` sources). It is **not** required for read-only search if the Kuzu file already exists. Output defaults to `code_graph.kuzu` next to the LanceDB directory. Query-time access is read-only Cypher from Python (`kuzu`).
 
-2. **Add a parallel CocoIndex flow for graph construction:**
-   ```python
-   @cocoindex.flow_def(name="CodeGraph")
-   def code_graph_flow(flow_builder, data_scope):
-       data_scope["files"] = flow_builder.add_source(
-           cocoindex.sources.LocalFile(path="./services",
-               included_patterns=["*.java"])
-       )
-       # Custom AST extractor: extract nodes and edges
-       graph_data = data_scope["files"].transform(
-           ASTGraphExtractor(language="java")
-       )
-       graph_data.export("code_graph",
-           cocoindex.storages.Neo4jGraph(uri=NEO4J_URI))
-   ```
+3. **Cross-service `HTTP_CALLS` / `ASYNC_CALLS` (future):** Feign / `RestTemplate` / Kafka static patterns belong in a later pass once method- and service-level edges are modeled; see §8.[^14][^15][^11]
 
-3. **For cross-service HTTP_CALLS edges**, detect Feign client interfaces (`@FeignClient`) and `RestTemplate` call sites in Pass 2 — these become `HTTP_CALLS` edges between *microservice nodes* (one node per service repo). This is where your 5-microservice setup gains a significant advantage over single-repo tools: you can model the full inter-service topology as graph edges.[^14][^15][^11]
+4. **Incremental updates:** CocoIndex can incrementally refresh LanceDB chunks. The Kuzu build in Phase 1 is a **full rebuild** when the graph is regenerated; incremental graph diffing is a future improvement (bundle `README`).
 
-4. **Incremental sync**: CocoIndex's incremental processing only re-indexes changed files. For the graph, this means re-parsing only modified `.java` files and updating affected nodes/edges — critical for a live development workflow.[^6]
+### 2.4 Why Kuzu (and what LanceDB covers)
 
-### 2.4 Graph Database Choice
+- **LanceDB** holds dense retrieval: embeddings, optional FTS, and chunk metadata (package, FQN, role, capabilities, `microservice` / `module`, …) produced with the same Tree-sitter chunks the agent reads.
+- **Kuzu** is an **embedded** property graph with **Cypher**, no separate server process, and a small on-disk footprint beside `lancedb_data`. It matches the “structural retriever + parallel to vectors” model without running Neo4j or another cluster alongside the MCP process.
 
-| Database | Best For | Notes |
-|---|---|---|
-| **Neo4j** | Rich Cypher queries, visualization, production | CocoIndex native support[^13]; great for complex multi-hop Cypher[^16] |
-| **Kuzu** | Lightweight, local dev, high performance | CocoIndex native support[^17][^12]; switch from Neo4j with one config change |
-| **Memgraph** | In-memory, real-time updates | Used by code-graph-rag[^18][^19] |
-| **SQLite (via Codebase-Memory)** | Zero-infrastructure, MCP-native | Single binary, ~0.3ms query latency[^11] |
-
-For your setup (5 microservices, banking context, OpenShift), **Neo4j** is the pragmatic choice: it integrates with CocoIndex directly, has a robust Cypher query language for complex traversals, and handles the scale of 5 Java microservices comfortably.[^20]
+Research stacks often cite pgvector or other vector stores; functionally, **LanceDB plays that role here**, paired with Kuzu for graph traversals.[^12]
 
 ***
 
@@ -130,7 +114,7 @@ For your setup (5 microservices, banking context, OpenShift), **Neo4j** is the p
 At query time, the graph augments (does not replace) the vector retrieval:[^2]
 
 ```
-1. Vector search → top-k chunks (existing CocoIndex query)
+1. Vector (or hybrid FTS+vector) search in LanceDB → top-k chunks
 2. Entity extraction from top-k chunks → identify class/method names
 3. Graph node lookup → find matching graph nodes for extracted entities
 4. Bidirectional expansion:
@@ -295,10 +279,10 @@ Query Classifier (LLM with schema context)
                  │          │
     ┌────────────▼──┐  ┌────▼──────────────┐
     │ VECTOR RAG    │  │  GRAPH RETRIEVAL   │
-    │ (CocoIndex    │  │  1. Entity lookup  │
-    │  pgvector)    │  │  2. Bidir expand   │
-    │  top-k chunks │  │  3. Interface-     │
-    │               │  │     consumer expand│
+    │ (LanceDB:     │  │  1. Entity lookup  │
+    │  embeddings + │  │  2. Bidir expand   │
+    │  optional FTS)│  │  3. Interface-     │
+    │  top-k chunks │  │     consumer expand│
     └──────┬────────┘  └────────┬───────────┘
            │                    │
            └──────────┬─────────┘
@@ -332,22 +316,24 @@ Query Classifier (LLM with schema context)
               └───────────────────┘
 ```
 
-### 6.3 Specialized Agent Tools (MCP-Compatible)
+### 6.3 Specialized agent tools (MCP — `mcp_lancedb_bundle`)
 
-Expose the graph as discrete MCP tools your AI agent can invoke:[^19][^11]
+Expose the graph and vector index as discrete MCP tools. Implemented tools today (names match the server):[^11]
 
-| Tool | Input | What It Does |
-|---|---|---|
-| `search_code_semantic` | query string | Vector RAG on CocoIndex chunks |
-| `find_implementors` | interface name | Graph: `IMPLEMENTS` edge traversal |
-| `find_callers` | class/method name | Graph: upstream `INJECTS`/`CALLS` traversal |
-| `find_callees` | class/method name | Graph: downstream `CALLS` traversal |
-| `trace_request_flow` | REST endpoint path | Combined: HTTP_CALLS → CALLS chain |
-| `impact_analysis` | class/method name | Graph: transitive forward traversal |
-| `get_service_topology` | none | Graph: full microservice dependency map |
-| `get_architecture_summary` | service name | Community detection → module summary |
+| Tool | What it does |
+|---|---|
+| `codebase_search` | Vector / hybrid (RRF) / **graph_expand** (vector top-k + Kuzu BFS + RRF) over LanceDB chunks |
+| `list_by_role` / `list_by_annotation` / `list_by_capability` | Filter symbols or search by `role`, annotations, or capability tags |
+| `find_implementors` / `find_subclasses` / `find_injectors` | Kuzu: `IMPLEMENTS`, `EXTENDS`/`IMPLEMENTS`, reverse `INJECTS` |
+| `graph_neighbors` | Configurable BFS on structural edges (`EXTENDS`, `IMPLEMENTS`, `INJECTS`) |
+| `impact_analysis` | Reverse structural closure (what is affected if this type changes) |
+| `trace_flow` | Staged **structural** trace (seeds from vector search; walks roles + injection graph — not a full `CALLS` / `HTTP_CALLS` chain until those edges exist) |
+| `graph_meta` / `list_code_index_tables` | Kuzu + LanceDB metadata, counts, ontology version |
+| `refresh_code_index` | Optional: rebuild LanceDB (CocoIndex) + Kuzu; gated by env |
 
-This tool-per-capability model lets your agentic workflow (Claude Code, or whatever you use) pick the right retrieval method per sub-question, rather than running a fixed pipeline.[^23][^24]
+**Deferred** (per roadmap, until call/inter-service graph lands): `find_callers` / `find_callees` on `CALLS`, `trace_request_flow` over `HTTP_CALLS` → `CALLS`, and a dedicated `get_service_topology` beyond current metadata and filters.
+
+This tool-per-capability model lets the agent (e.g. Claude Code) pick the right retrieval per sub-question, rather than always running a fixed pipeline.[^23][^24]
 
 ### 6.4 Self-Correction Loop
 
@@ -361,24 +347,14 @@ For complex multi-hop questions, add a self-correction loop:[^10][^23]
 
 ***
 
-## 7. Tool & Library Recommendations
+## 7. Implementation stack in this repository
 
-### 7.1 AST Graph Construction
+- **Vector store:** **LanceDB** (tables produced by the Java/SQL/Yaml CocoIndex flows the repo uses for indexing).
+- **Graph store:** **Kuzu** (`code_graph.kuzu`), populated by `build_ast_graph.py` using **tree_sitter_java** in the DKB style (two-pass ontology, phantom nodes for unresolved targets).[^2]
+- **Query / agent surface:** `server.py` (MCP) + `search_lancedb.py` (CLI); RRF in hybrid search and in `graph_expand`.[^8][^10]
+- For broader **literature and alternatives** (other parsers, third-party graph DBs, and hybrid-retrieval studies), see the DKB paper and the references list below.[^1][^16][^11]
 
-| Tool | Language | Notes |
-|---|---|---|
-| **tree_sitter_java** | Python/Rust | Core Java parser; used in DKB benchmark[^2] |
-| **stakgraph** | Rust | Tree-sitter + LSP + Neo4j; Java support, agent-focused[^16] |
-| **code-graph-rag** | Python | Tree-sitter + Memgraph; supports Java[^18] |
-| **Codebase-Memory MCP** | C (binary) | 14 MCP tools, ~0.3ms queries, SQLite[^11]; MIT license |
-| **CocoIndex custom extractor** | Python | Extend existing flow; Neo4j/Kuzu native output[^12][^13] |
-
-### 7.2 Graph Databases
-
-- **Neo4j Community**: Best for complex Cypher traversals, visual exploration; CocoIndex native[^16]
-- **Kuzu**: Embedded, zero-infrastructure alternative to Neo4j, same CocoIndex config[^17][^12]
-
-### 7.3 Reference Implementation
+### 7.1 Reference implementation
 
 The DKB benchmark paper has a public GitHub repository (`graph-based-rag-ast-vs-llm`) with working Python scripts for all three retrieval strategies on Java codebases — including the Tree-sitter extraction (`dkb_gemini_v2.py`), bidirectional traversal logic, and interface-consumer expansion. This is the closest existing reference to your exact problem (Java microservices, architectural Q&A).[^1]
 
@@ -386,12 +362,13 @@ The DKB benchmark paper has a public GitHub repository (`graph-based-rag-ast-vs-
 
 ## 8. Implementation Roadmap
 
-### Phase 1: AST Graph Index (1–2 weeks)
-- Parse all 5 microservices with `tree_sitter_java`
-- Extract Class/Interface/Method nodes + EXTENDS/IMPLEMENTS/INJECTS edges
-- Store in Neo4j or Kuzu
+### Phase 1: AST graph index (1–2 weeks) — *delivered in this bundle*
+
+- Parse all 5 microservices (or a monorepo) with `tree_sitter_java`
+- Extract Class/Interface/Method nodes + `EXTENDS` / `IMPLEMENTS` / `INJECTS` edges
+- Store in **Kuzu** (`code_graph.kuzu`); run **LanceDB** + hybrid / `graph_expand` over the same project
 - Verify graph completeness (node count, edge count per service)
-- Add graph query alongside existing CocoIndex vector query
+- *Status:* implemented via `build_ast_graph.py` + `java_index_flow_lancedb.py` + MCP; graph rebuild is currently full, not incremental.
 
 ### Phase 2: Cross-Service Edges (1 week)
 - Add Feign client detection → `HTTP_CALLS` edges between service nodes
@@ -402,11 +379,10 @@ The DKB benchmark paper has a public GitHub repository (`graph-based-rag-ast-vs-
 - Add method-level `CALLS` edges via Tree-sitter call-site extraction + 6-strategy resolution
 - Optionally ingest Micrometer/Sleuth traces for dynamic call edges
 
-### Phase 4: Agent Integration (1 week)
-- Wrap graph queries as MCP tools
-- Add query classifier (LLM-based, ~5 categories)
-- Implement RRF fusion for hybrid context assembly
-- Add relevance grading + retry loop
+### Phase 4: Agent integration (1 week) — *partially delivered*
+
+- Graph + vector access **MCP tools** and **RRF** (vector + FTS; vector + graph expand) are implemented.
+- **Still open:** LLM **query classifier**, **relevance grading + retry loop**, and deeper wiring once `CALLS` / `HTTP_CALLS` exist.
 
 ### Phase 5: Evaluation
 - Build a golden question set (15 structural + 15 semantic questions per service)
@@ -417,11 +393,11 @@ The DKB benchmark paper has a public GitHub repository (`graph-based-rag-ast-vs-
 
 ## Key Takeaways
 
-- **GraphRAG is an additive layer**: keep CocoIndex vector search; add a deterministic AST graph alongside it. The two are complementary retrieval primitives, not competitors.[^5][^1]
-- **Use AST parsing (DKB), not LLM-based graph extraction**: LLM-KB skips ~30% of files and costs 20–45× more. Tree-sitter completes in seconds and is fully deterministic.[^2]
-- **Your 5-service topology is a first-class graph asset**: model inter-service Feign/Kafka dependencies as `HTTP_CALLS` and `ASYNC_CALLS` edges — this dimension is unique to microservice systems and unlocks impact analysis.[^21][^11]
-- **Bidirectional traversal is non-negotiable**: successor-only graphs miss upstream consumers (controllers that inject services); the interface-consumer expansion fixes Spring DI wiring gaps.[^1][^2]
-- **Route queries to the right layer**: structural questions go to the graph, semantic questions go to vectors, and complex flows use both with RRF fusion.[^9][^22][^10]
+- **GraphRAG is an additive layer:** keep **LanceDB** for dense retrieval; add a deterministic AST graph in **Kuzu** alongside it. The two are complementary retrieval primitives, not competitors.[^5][^1]
+- **Use AST parsing (DKB), not LLM-based graph extraction:** LLM-KB skips ~30% of files and costs 20–45× more. Tree-sitter completes in seconds and is fully deterministic.[^2]
+- **Your 5-service topology is a first-class graph asset (roadmap):** model inter-service Feign/Kafka dependencies as `HTTP_CALLS` and `ASYNC_CALLS` edges when Phase 2 lands.[^21][^11]
+- **Bidirectional traversal is non-negotiable:** successor-only graphs miss upstream consumers (controllers that inject services); the interface-consumer expansion fixes Spring DI wiring gaps.[^1][^2]
+- **Route queries to the right tool:** structural questions → Kuzu-backed MCP tools; semantic questions → `codebase_search` on LanceDB; combined flows use **hybrid** and **graph_expand** with RRF.[^9][^22][^10]
 
 ---
 
