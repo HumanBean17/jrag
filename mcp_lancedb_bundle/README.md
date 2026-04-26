@@ -161,6 +161,25 @@ schema chunks for "what happens when..."-style queries while keeping repositorie
 and entities reachable. The weights are **skipped** when you pass an explicit
 `role=` filter, and the per-row breakdown is surfaced in `score_components`.
 
+### Capabilities
+
+In addition to the single primary `role` per Java type, the indexer
+extracts a multi-tag `capabilities: list[str]` field from method-level
+annotations, type-level annotations, injected types, and supertypes.
+A type can carry zero or many capabilities. Capabilities never
+*replace* the role; they augment it.
+
+| Capability | Trigger |
+|---|---|
+| `MESSAGE_LISTENER` | `@KafkaListener`, `@RabbitListener`, `@JmsListener`, `@SqsListener`, `@EventListener`, `@StreamListener` on any method |
+| `MESSAGE_PRODUCER` | type injects `KafkaTemplate`, `RabbitTemplate`, `JmsTemplate`, `StreamBridge`, or `ApplicationEventPublisher` |
+| `SCHEDULED_TASK`   | `@Scheduled` on any method, or class implements `org.quartz.Job` |
+| `EXCEPTION_HANDLER`| `@ControllerAdvice`, `@RestControllerAdvice`, or any method with `@ExceptionHandler` |
+
+Use `list_by_capability` to enumerate types carrying a capability, or
+pass `capability=...` to `codebase_search` / `list_by_role` /
+`list_by_annotation` / `find_*` to AND-filter results.
+
 On top of role weights, java chunks receive a **symbol-match bonus** (exposed as
 `score_components.symbol_bonus`). It has three additive components, all capped:
 

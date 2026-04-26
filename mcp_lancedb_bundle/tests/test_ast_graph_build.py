@@ -155,6 +155,21 @@ def test_injects_edges_have_mechanism(kuzu_db_path: Path) -> None:
     assert "constructor" in mechanisms, mechanisms
 
 
+def test_symbol_has_capabilities_column(kuzu_db_path: Path) -> None:
+    """Symbol nodes must have a `capabilities` STRING[] column (ontology v3)."""
+    conn = _connect(kuzu_db_path)
+    # Simply SELECT a capabilities value — if the column doesn't exist Kuzu raises.
+    try:
+        r = conn.execute(
+            "MATCH (s:Symbol) WHERE s.kind = 'class' AND s.resolved "
+            "RETURN s.capabilities LIMIT 1"
+        )
+    except Exception as exc:
+        pytest.fail(f"capabilities column missing or unreadable: {exc}")
+    # The column should exist; the value may be an empty list for most types.
+    assert r is not None
+
+
 def test_cli_entrypoint_runs(tmp_path: Path, corpus_root: Path) -> None:
     """`build_ast_graph.py --source-root <root>` must succeed end-to-end.
 

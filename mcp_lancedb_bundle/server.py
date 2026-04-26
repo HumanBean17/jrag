@@ -37,7 +37,10 @@ _INSTRUCTIONS = (
     "subclasses, injectors, impact analysis, and graph-expanded codebase_search. "
     "Use codebase_search for meaning-based discovery — prefer limit 5; use offset to page. "
     "Use find_implementors / find_subclasses / find_injectors / impact_analysis / neighbors / "
-    "list_by_role / list_by_annotation for exact structural traversal. "
+    "list_by_role / list_by_annotation / list_by_capability for exact structural traversal. "
+    "Use list_by_capability for behavioural questions about message-driven "
+    "(MESSAGE_LISTENER|MESSAGE_PRODUCER), scheduled (SCHEDULED_TASK), or "
+    "exception-handling (EXCEPTION_HANDLER) code. "
     "Use trace_flow for CONTROLLER -> SERVICE -> REPOSITORY/FEIGN end-to-end chains; "
     "its seeds are auto-filtered to entrypoint-like roles (CONTROLLER / COMPONENT / "
     "SERVICE / FEIGN_CLIENT), so it's the right tool for 'how / what happens when' queries. "
@@ -108,6 +111,14 @@ class CodeChunkHit(BaseModel):
     role: str | None = Field(default=None, description="CONTROLLER/SERVICE/REPOSITORY/... (enriched)")
     annotations_on_type: list[str] = Field(default_factory=list)
     symbols: list[str] = Field(default_factory=list, description="Fields/methods/types declared in chunk")
+    capabilities: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Multi-tag capabilities derived from method/type annotations "
+            "and injected types (MESSAGE_LISTENER, MESSAGE_PRODUCER, "
+            "SCHEDULED_TASK, EXCEPTION_HANDLER). A class can carry several."
+        ),
+    )
     graph_expanded: bool = Field(default=False, description="True if row came via Kuzu graph expansion")
     score_components: dict[str, float] = Field(
         default_factory=dict,
@@ -148,6 +159,7 @@ class SymbolDto(BaseModel):
     end_byte: int = 0
     modifiers: list[str] = Field(default_factory=list)
     annotations: list[str] = Field(default_factory=list)
+    capabilities: list[str] = Field(default_factory=list)
     role: str = ""
     signature: str = ""
     parent_id: str = ""
@@ -361,6 +373,7 @@ def _symbol_to_dto(s) -> SymbolDto:
         start_line=s.start_line, end_line=s.end_line,
         start_byte=s.start_byte, end_byte=s.end_byte,
         modifiers=list(s.modifiers), annotations=list(s.annotations),
+        capabilities=list(s.capabilities),
         role=s.role, signature=s.signature, parent_id=s.parent_id,
         resolved=bool(s.resolved),
     )
@@ -449,6 +462,7 @@ def _rows_to_hits(rows: list[dict[str, Any]]) -> list[CodeChunkHit]:
                 role=r.get("role") or None,
                 annotations_on_type=_clean_str_list(r.get("annotations_on_type")),
                 symbols=_clean_str_list(r.get("symbols")),
+                capabilities=_clean_str_list(r.get("capabilities")),
                 graph_expanded=bool(r.get("_graph_expanded", False)),
                 score_components=comps,
                 context_before=str(r.get("_context_before") or ""),
@@ -492,6 +506,15 @@ def create_mcp_server() -> FastMCP:
         role: str | None = Field(
             default=None,
             description="Java only: CONTROLLER|SERVICE|REPOSITORY|COMPONENT|CONFIG|ENTITY|FEIGN_CLIENT|MAPPER|DTO",
+        ),
+        capability: str | None = Field(
+            default=None,
+            description=(
+                "Java only: AND-filter to chunks whose enclosing type carries "
+                "this capability (MESSAGE_LISTENER|MESSAGE_PRODUCER|"
+                "SCHEDULED_TASK|EXCEPTION_HANDLER). Use `list_by_capability` "
+                "for graph-only queries."
+            ),
         ),
         exclude_roles: list[str] | None = Field(
             default=None,
@@ -599,6 +622,7 @@ def create_mcp_server() -> FastMCP:
                 expand_depth=expand_depth,
                 context_neighbors=context_neighbors,
                 exclude_roles=exclude_roles,
+                capability=capability,
             )
 
         try:
@@ -642,13 +666,18 @@ def create_mcp_server() -> FastMCP:
         module: str | None = Field(default=None, description="Maven/Gradle module name."),
         microservice: str | None = Field(default=None, description="Microservice name."),
         limit: int = Field(default=100, ge=1, le=500),
+        capability: str | None = Field(
+            default=None,
+            description="Optional: only return symbols also carrying this capability "
+                        "(MESSAGE_LISTENER|MESSAGE_PRODUCER|SCHEDULED_TASK|EXCEPTION_HANDLER).",
+        ),
     ) -> SymbolListOutput:
         ok, graph, msg = _require_graph()
         if not ok or graph is None:
             return SymbolListOutput(success=False, message=msg)
         rows = await asyncio.to_thread(
             graph.find_implementors, name,
-            module=module, microservice=microservice, limit=limit,
+            module=module, microservice=microservice, capability=capability, limit=limit,
         )
         return SymbolListOutput(success=True, results=[_symbol_to_dto(r) for r in rows])
 
@@ -661,13 +690,18 @@ def create_mcp_server() -> FastMCP:
         module: str | None = Field(default=None, description="Maven/Gradle module name."),
         microservice: str | None = Field(default=None, description="Microservice name."),
         limit: int = Field(default=100, ge=1, le=500),
+        capability: str | None = Field(
+            default=None,
+            description="Optional: only return symbols also carrying this capability "
+                        "(MESSAGE_LISTENER|MESSAGE_PRODUCER|SCHEDULED_TASK|EXCEPTION_HANDLER).",
+        ),
     ) -> SymbolListOutput:
         ok, graph, msg = _require_graph()
         if not ok or graph is None:
             return SymbolListOutput(success=False, message=msg)
         rows = await asyncio.to_thread(
             graph.find_subclasses, name,
-            module=module, microservice=microservice, limit=limit,
+            module=module, microservice=microservice, capability=capability, limit=limit,
         )
         return SymbolListOutput(success=True, results=[_symbol_to_dto(r) for r in rows])
 
@@ -680,13 +714,21 @@ def create_mcp_server() -> FastMCP:
         module: str | None = Field(default=None, description="Maven/Gradle module name."),
         microservice: str | None = Field(default=None, description="Microservice name."),
         limit: int = Field(default=100, ge=1, le=500),
+        capability: str | None = Field(
+            default=None,
+            description=(
+                "Optional: only return injecting (consumer) classes that also carry "
+                "this capability (MESSAGE_LISTENER|MESSAGE_PRODUCER|SCHEDULED_TASK|"
+                "EXCEPTION_HANDLER). Filters on the consumer side, not the injected type."
+            ),
+        ),
     ) -> InjectorsOutput:
         ok, graph, msg = _require_graph()
         if not ok or graph is None:
             return InjectorsOutput(success=False, message=msg)
         edges = await asyncio.to_thread(
             graph.find_injectors, name,
-            module=module, microservice=microservice, limit=limit,
+            module=module, microservice=microservice, capability=capability, limit=limit,
         )
         results = [
             InjectionEdgeDto(
@@ -708,13 +750,18 @@ def create_mcp_server() -> FastMCP:
         module: str | None = Field(default=None, description="Maven/Gradle module name."),
         microservice: str | None = Field(default=None, description="Microservice name."),
         limit: int = Field(default=100, ge=1, le=500),
+        capability: str | None = Field(
+            default=None,
+            description="Optional: AND-filter to symbols also carrying this capability "
+                        "(MESSAGE_LISTENER|MESSAGE_PRODUCER|SCHEDULED_TASK|EXCEPTION_HANDLER).",
+        ),
     ) -> SymbolListOutput:
         ok, graph, msg = _require_graph()
         if not ok or graph is None:
             return SymbolListOutput(success=False, message=msg)
         rows = await asyncio.to_thread(
             graph.list_by_role, role,
-            module=module, microservice=microservice, limit=limit,
+            module=module, microservice=microservice, capability=capability, limit=limit,
         )
         return SymbolListOutput(success=True, results=[_symbol_to_dto(r) for r in rows])
 
@@ -727,12 +774,44 @@ def create_mcp_server() -> FastMCP:
         module: str | None = Field(default=None, description="Maven/Gradle module name."),
         microservice: str | None = Field(default=None, description="Microservice name."),
         limit: int = Field(default=100, ge=1, le=500),
+        capability: str | None = Field(
+            default=None,
+            description="Optional: AND-filter to symbols also carrying this capability "
+                        "(MESSAGE_LISTENER|MESSAGE_PRODUCER|SCHEDULED_TASK|EXCEPTION_HANDLER).",
+        ),
     ) -> SymbolListOutput:
         ok, graph, msg = _require_graph()
         if not ok or graph is None:
             return SymbolListOutput(success=False, message=msg)
         rows = await asyncio.to_thread(
             graph.list_by_annotation, annotation,
+            module=module, microservice=microservice, capability=capability, limit=limit,
+        )
+        return SymbolListOutput(success=True, results=[_symbol_to_dto(r) for r in rows])
+
+    @mcp.tool(
+        name="list_by_capability",
+        description=(
+            "All graph symbols carrying a given capability "
+            "(MESSAGE_LISTENER|MESSAGE_PRODUCER|SCHEDULED_TASK|EXCEPTION_HANDLER). "
+            "Capabilities are derived from method/type annotations and injected "
+            "types; a class can carry several. Pair with `list_by_role` for "
+            "primary-purpose questions."
+        ),
+    )
+    async def list_by_capability(
+        capability: str = Field(
+            description="MESSAGE_LISTENER|MESSAGE_PRODUCER|SCHEDULED_TASK|EXCEPTION_HANDLER",
+        ),
+        module: str | None = Field(default=None, description="Maven/Gradle module name."),
+        microservice: str | None = Field(default=None, description="Microservice name."),
+        limit: int = Field(default=100, ge=1, le=500),
+    ) -> SymbolListOutput:
+        ok, graph, msg = _require_graph()
+        if not ok or graph is None:
+            return SymbolListOutput(success=False, message=msg)
+        rows = await asyncio.to_thread(
+            graph.list_by_capability, capability,
             module=module, microservice=microservice, limit=limit,
         )
         return SymbolListOutput(success=True, results=[_symbol_to_dto(r) for r in rows])
@@ -788,8 +867,9 @@ def create_mcp_server() -> FastMCP:
         description=(
             "End-to-end behavioural trace for a natural-language query. "
             "Picks seed entrypoints via vector search (restricted to CONTROLLER / "
-            "COMPONENT / SERVICE / FEIGN_CLIENT roles, with a fallback pass when "
-            "nothing matches), then walks the Kuzu graph in role-ordered stages "
+            "COMPONENT / SERVICE / FEIGN_CLIENT roles, plus types carrying "
+            "MESSAGE_LISTENER or SCHEDULED_TASK capabilities, with a fallback pass "
+            "when nothing matches), then walks the Kuzu graph in role-ordered stages "
             "(CONTROLLER/COMPONENT/SERVICE -> SERVICE/COMPONENT -> "
             "FEIGN_CLIENT/REPOSITORY/MAPPER) and returns the likely chain.\n"
             "Each stage symbol carries `via: [{edge_type, from_fqn, hop}]` so "
@@ -849,8 +929,10 @@ def create_mcp_server() -> FastMCP:
             baseline_excludes.update(r.upper() for r in exclude_roles if r)
 
         entry_roles = ["CONTROLLER", "COMPONENT", "SERVICE", "FEIGN_CLIENT"]
+        entry_capabilities = ["MESSAGE_LISTENER", "SCHEDULED_TASK"]
 
-        def _seed(role_allowlist: list[str] | None) -> list[dict[str, Any]]:
+        def _seed(role_allowlist: list[str] | None,
+                  capability_allowlist: list[str] | None) -> list[dict[str, Any]]:
             model = _get_sentence_transformer(model_name, device)
             return run_search(
                 query,
@@ -873,17 +955,21 @@ def create_mcp_server() -> FastMCP:
                 expand_depth=1,
                 context_neighbors=0,
                 role_in=role_allowlist,
-                exclude_roles=None if role_allowlist else sorted(baseline_excludes),
+                capability_in=capability_allowlist,
+                exclude_roles=(
+                    None if (role_allowlist or capability_allowlist)
+                    else sorted(baseline_excludes)
+                ),
             )
 
-        # First pass: restrict seeds to entrypoint-like roles. If that
-        # comes back empty (e.g. a codebase without @Controller), fall
-        # back to the baseline-excluded search so we still surface
-        # *something* rather than nothing.
+        # First pass: restrict seeds to entrypoint-like roles OR entrypoint
+        # capabilities. If that comes back empty (e.g. a codebase without
+        # @Controller), fall back to the baseline-excluded search so we still
+        # surface *something* rather than nothing.
         try:
-            seed_rows = await asyncio.to_thread(_seed, entry_roles)
+            seed_rows = await asyncio.to_thread(_seed, entry_roles, entry_capabilities)
             if not seed_rows:
-                seed_rows = await asyncio.to_thread(_seed, None)
+                seed_rows = await asyncio.to_thread(_seed, None, None)
         except Exception as e:
             return TraceFlowOutput(success=False, message=f"seed search failed: {e!s}")
 

@@ -17,6 +17,8 @@ from typing import Any
 
 import kuzu
 
+from ast_java import ONTOLOGY_VERSION as _ONTOLOGY_VERSION
+
 __all__ = [
     "KuzuGraph",
     "resolve_kuzu_path",
@@ -56,6 +58,7 @@ class SymbolHit:
     end_byte: int
     modifiers: list[str]
     annotations: list[str]
+    capabilities: list[str]
     role: str
     signature: str
     parent_id: str
@@ -111,6 +114,7 @@ def _symbol_return_for(alias: str) -> str:
         f"{alias}.start_line AS start_line, {alias}.end_line AS end_line, "
         f"{alias}.start_byte AS start_byte, {alias}.end_byte AS end_byte, "
         f"{alias}.modifiers AS modifiers, {alias}.annotations AS annotations, "
+        f"{alias}.capabilities AS capabilities, "
         f"{alias}.role AS role, {alias}.signature AS signature, "
         f"{alias}.parent_id AS parent_id, {alias}.resolved AS resolved"
     )
@@ -158,6 +162,7 @@ def _row_to_symbol(row: dict[str, Any]) -> SymbolHit:
         end_byte=int(row.get("end_byte") or 0),
         modifiers=list(row.get("modifiers") or []),
         annotations=list(row.get("annotations") or []),
+        capabilities=list(row.get("capabilities") or []),
         role=row.get("role", "") or "",
         signature=row.get("signature", "") or "",
         parent_id=row.get("parent_id", "") or "",
@@ -186,7 +191,17 @@ class KuzuGraph:
         resolved = resolve_kuzu_path(db_path)
         with cls._lock:
             if cls._instance is None or cls._instance_path != resolved:
-                cls._instance = cls(resolved)
+                instance = cls(resolved)
+                meta = instance.meta()
+                graph_version = int(meta.get("ontology_version") or 0)
+                if "error" not in meta and graph_version < _ONTOLOGY_VERSION:
+                    raise RuntimeError(
+                        f"Graph ontology version {graph_version} is older than the "
+                        f"required version {_ONTOLOGY_VERSION}. "
+                        "Run: LANCEDB_MCP_ALLOW_REFRESH=1 refresh_code_index(confirm=true) "
+                        "or: python build_ast_graph.py --source-root <repo>"
+                    )
+                cls._instance = instance
                 cls._instance_path = resolved
             return cls._instance
 
@@ -285,9 +300,13 @@ class KuzuGraph:
 
     def list_by_role(self, role: str, *, module: str | None = None,
                      microservice: str | None = None,
+                     capability: str | None = None,
                      limit: int = 100) -> list[SymbolHit]:
         filters = ["s.role = $role"]
         params: dict[str, Any] = {"role": role}
+        if capability:
+            filters.append("$capability IN s.capabilities")
+            params["capability"] = capability
         filters.extend(_scope_filters("s", module=module, microservice=microservice, params=params))
         where = " AND ".join(filters)
         q = f"MATCH (s:Symbol) WHERE {where} RETURN {_SYMBOL_RETURN} LIMIT {int(limit)}"
@@ -295,10 +314,24 @@ class KuzuGraph:
 
     def list_by_annotation(self, annotation: str, *, module: str | None = None,
                            microservice: str | None = None,
+                           capability: str | None = None,
                            limit: int = 100) -> list[SymbolHit]:
         # Kuzu supports `list_contains` for STRING[].
         filters = ["list_contains(s.annotations, $ann)"]
         params: dict[str, Any] = {"ann": annotation}
+        if capability:
+            filters.append("$capability IN s.capabilities")
+            params["capability"] = capability
+        filters.extend(_scope_filters("s", module=module, microservice=microservice, params=params))
+        where = " AND ".join(filters)
+        q = f"MATCH (s:Symbol) WHERE {where} RETURN {_SYMBOL_RETURN} LIMIT {int(limit)}"
+        return [_row_to_symbol(r) for r in self._rows(q, params)]
+
+    def list_by_capability(self, capability: str, *, module: str | None = None,
+                           microservice: str | None = None,
+                           limit: int = 100) -> list[SymbolHit]:
+        filters = ["$capability IN s.capabilities"]
+        params: dict[str, Any] = {"capability": capability}
         filters.extend(_scope_filters("s", module=module, microservice=microservice, params=params))
         where = " AND ".join(filters)
         q = f"MATCH (s:Symbol) WHERE {where} RETURN {_SYMBOL_RETURN} LIMIT {int(limit)}"
@@ -309,9 +342,13 @@ class KuzuGraph:
     def find_implementors(self, interface_name_or_fqn: str, *,
                           module: str | None = None,
                           microservice: str | None = None,
+                          capability: str | None = None,
                           limit: int = 100) -> list[SymbolHit]:
         filters = ["(i.name = $needle OR i.fqn = $needle)"]
         params: dict[str, Any] = {"needle": interface_name_or_fqn}
+        if capability:
+            filters.append("$capability IN c.capabilities")
+            params["capability"] = capability
         filters.extend(_scope_filters("c", module=module, microservice=microservice, params=params))
         where = " AND ".join(filters)
         q = (
@@ -324,9 +361,13 @@ class KuzuGraph:
     def find_subclasses(self, class_name_or_fqn: str, *,
                         module: str | None = None,
                         microservice: str | None = None,
+                        capability: str | None = None,
                         limit: int = 100) -> list[SymbolHit]:
         filters = ["(b.name = $needle OR b.fqn = $needle)"]
         params: dict[str, Any] = {"needle": class_name_or_fqn}
+        if capability:
+            filters.append("$capability IN s.capabilities")
+            params["capability"] = capability
         filters.extend(_scope_filters("s", module=module, microservice=microservice, params=params))
         where = " AND ".join(filters)
         q = (
@@ -339,9 +380,14 @@ class KuzuGraph:
     def find_injectors(self, target_name_or_fqn: str, *,
                        module: str | None = None,
                        microservice: str | None = None,
+                       capability: str | None = None,
                        limit: int = 100) -> list[EdgeHit]:
         filters = ["(t.name = $needle OR t.fqn = $needle)"]
         params: dict[str, Any] = {"needle": target_name_or_fqn}
+        if capability:
+            # Filter on the consumer (src) side: "which injectors carry this capability?"
+            filters.append("$capability IN s.capabilities")
+            params["capability"] = capability
         filters.extend(_scope_filters("s", module=module, microservice=microservice, params=params))
         where = " AND ".join(filters)
         # Project both sides of the edge with prefixed aliases (`s_*` / `t_*`)
@@ -351,14 +397,14 @@ class KuzuGraph:
             f"s.{c} AS s_{c}" for c in (
                 "id", "kind", "name", "fqn", "package", "module", "microservice",
                 "filename", "start_line", "end_line", "start_byte", "end_byte",
-                "modifiers", "annotations", "role", "signature", "parent_id", "resolved",
+                "modifiers", "annotations", "capabilities", "role", "signature", "parent_id", "resolved",
             )
         )
         t_proj = ", ".join(
             f"t.{c} AS t_{c}" for c in (
                 "id", "kind", "name", "fqn", "package", "module", "microservice",
                 "filename", "start_line", "end_line", "start_byte", "end_byte",
-                "modifiers", "annotations", "role", "signature", "parent_id", "resolved",
+                "modifiers", "annotations", "capabilities", "role", "signature", "parent_id", "resolved",
             )
         )
         q = (
@@ -465,7 +511,16 @@ class KuzuGraph:
             ))
             if entry_roles:
                 params["entry_roles"] = list(entry_roles)
-                filters.append("s.role IN $entry_roles")
+                # Kuzu 0.11.x does not support parameterized lists inside ANY
+                # comprehensions, so we expand the fixed capability set as
+                # individual list_contains predicates ORed together.
+                cap_predicates = " OR ".join(
+                    f"list_contains(s.capabilities, '{c}')"
+                    for c in ("MESSAGE_LISTENER", "SCHEDULED_TASK")
+                )
+                filters.append(
+                    f"(s.role IN $entry_roles OR {cap_predicates})"
+                )
             where = " AND ".join(filters)
             q0 = (
                 f"MATCH (s:Symbol) WHERE {where} "

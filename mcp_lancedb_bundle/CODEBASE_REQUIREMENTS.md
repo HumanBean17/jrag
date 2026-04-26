@@ -110,6 +110,20 @@ Roles are assigned **first hit wins** from the type's annotations
   `RestTemplate`/`WebClient` wrappers) won't get the `FEIGN_CLIENT`
   boost. Consider switching to Feign or extending the role table.
 - **JAX-RS resources** (`@Path`, `@GET`, ...) are not recognised as
+
+### A.3 Capabilities (multi-tag axis)
+
+Capabilities are derived at the **type level**: method-level annotation
+evidence is aggregated up to the enclosing type. Per-method capability
+storage is intentionally out of scope for the current ontology
+(version 3) — see `plans/PLAN-CAPABILITIES-MODEL.md`. The deferred
+call-graph layer (`propose/DEFERRED-CALL-GRAPH-PROPOSE.md`) is the
+designated place to revisit method-granularity if the need arises.
+
+Capabilities are independent of `role` — a `@Service` can simultaneously
+be a `MESSAGE_PRODUCER` and a `MESSAGE_LISTENER`, for example. The
+capability set and their triggers are documented in `README.md` under
+**Capabilities** and in `ast_java.py::_METHOD_ANN_TO_CAPABILITY` etc.
   controllers. Add them to the role table if your stack is Quarkus /
   Jersey instead of Spring MVC.
 - **MapStruct mappers must be annotated `@Mapper`** (this is the

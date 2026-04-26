@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 
@@ -62,6 +62,7 @@ class ChunkEnrichment:
     role: str
     annotations_on_type: list[str]
     symbols: list[str]
+    capabilities: list[str] = field(default_factory=list)
 
 
 # ---------- microservice override loading ----------
@@ -316,6 +317,7 @@ def enrich_chunk(
             role=infer_role_for_type(encl),
             annotations_on_type=ann_names,
             symbols=_symbols_in_range(ast, chunk_start_byte, chunk_end_byte),
+            capabilities=list(encl.capabilities),
         )
     return ChunkEnrichment(
         package=ast.package,

@@ -27,8 +27,13 @@ __all__ = [
     "parse_java",
     "infer_role",
     "infer_role_for_type",
+    "infer_capabilities_for_type",
     "ROLE_ANNOTATIONS",
     "ONTOLOGY_VERSION",
+    "_METHOD_ANN_TO_CAPABILITY",
+    "_TYPE_ANN_TO_CAPABILITY",
+    "_INJECTED_TYPES_TO_CAPABILITY",
+    "_SUPERTYPE_TO_CAPABILITY",
 ]
 
 # Name suffixes that strongly indicate a passive data-carrier type when the
@@ -54,7 +59,7 @@ _DTO_LOMBOK_ANNOTATIONS: frozenset[str] = frozenset({
     "EqualsAndHashCode", "ToString",
 })
 
-ONTOLOGY_VERSION = 2
+ONTOLOGY_VERSION = 3
 
 ROLE_ANNOTATIONS: dict[str, str] = {
     # Spring Web
@@ -77,6 +82,37 @@ ROLE_ANNOTATIONS: dict[str, str] = {
 
 _INJECT_FIELD_ANNOTATIONS = frozenset({"Autowired", "Inject", "Resource"})
 _LOMBOK_RAC = frozenset({"RequiredArgsConstructor", "AllArgsConstructor"})
+
+# ---------- capability detector tables ----------
+
+_METHOD_ANN_TO_CAPABILITY: dict[str, str] = {
+    "KafkaListener":    "MESSAGE_LISTENER",
+    "RabbitListener":   "MESSAGE_LISTENER",
+    "JmsListener":      "MESSAGE_LISTENER",
+    "SqsListener":      "MESSAGE_LISTENER",
+    "EventListener":    "MESSAGE_LISTENER",
+    "StreamListener":   "MESSAGE_LISTENER",
+    "Scheduled":        "SCHEDULED_TASK",
+    "ExceptionHandler": "EXCEPTION_HANDLER",
+}
+
+_TYPE_ANN_TO_CAPABILITY: dict[str, str] = {
+    "ControllerAdvice":     "EXCEPTION_HANDLER",
+    "RestControllerAdvice": "EXCEPTION_HANDLER",
+}
+
+_INJECTED_TYPES_TO_CAPABILITY: dict[str, str] = {
+    "KafkaTemplate":             "MESSAGE_PRODUCER",
+    "RabbitTemplate":            "MESSAGE_PRODUCER",
+    "JmsTemplate":               "MESSAGE_PRODUCER",
+    "StreamBridge":              "MESSAGE_PRODUCER",
+    "ApplicationEventPublisher": "MESSAGE_PRODUCER",
+}
+
+_SUPERTYPE_TO_CAPABILITY: dict[str, str] = {
+    "Job": "SCHEDULED_TASK",
+}
+
 _TYPE_KINDS = {
     "class_declaration": "class",
     "interface_declaration": "interface",
@@ -154,6 +190,7 @@ class TypeDecl:
     start_line: int = 0
     end_line: int = 0
     outer_fqn: str | None = None  # None for top-level
+    capabilities: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -432,7 +469,7 @@ def _parse_type(node: Node, src: bytes, *, package: str, outer_fqn: str | None) 
             elif ch.type in _TYPE_KINDS:
                 nested.append(_parse_type(ch, src, package=package, outer_fqn=fqn))
 
-    return TypeDecl(
+    type_decl = TypeDecl(
         name=name,
         kind=kind,
         fqn=fqn,
@@ -449,6 +486,8 @@ def _parse_type(node: Node, src: bytes, *, package: str, outer_fqn: str | None) 
         end_line=node.end_point[0] + 1,
         outer_fqn=outer_fqn,
     )
+    type_decl.capabilities = infer_capabilities_for_type(type_decl)
+    return type_decl
 
 
 def _flatten(types: list[TypeDecl]) -> list[TypeDecl]:
@@ -579,6 +618,45 @@ def infer_role_for_type(type_decl: "TypeDecl") -> str:
             return "DTO"
 
     return "OTHER"
+
+
+def infer_capabilities_for_type(type_decl: "TypeDecl") -> list[str]:
+    """Aggregate type-level capabilities. Stable, sorted, deduplicated.
+
+    Pure function: derives capabilities from the parsed AST only. Does
+    not consult external configuration; brownfield overrides are merged
+    later in `graph_enrich.py` so this stays free of I/O.
+    """
+    caps: set[str] = set()
+
+    for ann in type_decl.annotations:
+        cap = _TYPE_ANN_TO_CAPABILITY.get(ann.name)
+        if cap:
+            caps.add(cap)
+
+    for method in type_decl.methods:
+        for ann in method.annotations:
+            cap = _METHOD_ANN_TO_CAPABILITY.get(ann.name)
+            if cap:
+                caps.add(cap)
+
+    for fld in type_decl.fields:
+        cap = _INJECTED_TYPES_TO_CAPABILITY.get(fld.type_name)
+        if cap:
+            caps.add(cap)
+    for method in type_decl.methods:
+        if method.is_constructor:
+            for p in method.parameters:
+                cap = _INJECTED_TYPES_TO_CAPABILITY.get(p.type_name)
+                if cap:
+                    caps.add(cap)
+
+    for sup in (*type_decl.extends, *type_decl.implements):
+        cap = _SUPERTYPE_TO_CAPABILITY.get(sup)
+        if cap:
+            caps.add(cap)
+
+    return sorted(caps)
 
 
 def injection_annotation_names() -> frozenset[str]:

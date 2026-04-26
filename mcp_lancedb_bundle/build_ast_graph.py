@@ -355,6 +355,7 @@ def _phantom_target(
             "end_byte": 0,
             "modifiers": [],
             "annotations": [],
+            "capabilities": [],
             "role": "OTHER",
             "signature": "",
             "parent_id": "",
@@ -515,7 +516,7 @@ _SCHEMA_NODE = (
     "module STRING, microservice STRING, "
     "filename STRING, start_line INT64, end_line INT64, "
     "start_byte INT64, end_byte INT64, "
-    "modifiers STRING[], annotations STRING[], "
+    "modifiers STRING[], annotations STRING[], capabilities STRING[], "
     "role STRING, signature STRING, parent_id STRING, resolved BOOLEAN"
     ")"
 )
@@ -568,7 +569,7 @@ def _node_row(**kwargs) -> dict:
         "module": "", "microservice": "",
         "filename": "", "start_line": 0, "end_line": 0,
         "start_byte": 0, "end_byte": 0,
-        "modifiers": [], "annotations": [],
+        "modifiers": [], "annotations": [], "capabilities": [],
         "role": "OTHER", "signature": "", "parent_id": "", "resolved": True,
     }
     base.update(kwargs)
@@ -581,7 +582,7 @@ _CREATE_SYMBOL = (
     "filename: $filename, "
     "start_line: $start_line, end_line: $end_line, "
     "start_byte: $start_byte, end_byte: $end_byte, "
-    "modifiers: $modifiers, annotations: $annotations, "
+    "modifiers: $modifiers, annotations: $annotations, capabilities: $capabilities, "
     "role: $role, signature: $signature, parent_id: $parent_id, resolved: $resolved})"
 )
 
@@ -609,6 +610,7 @@ def _write_nodes(conn: kuzu.Connection, tables: GraphTables) -> None:
             start_byte=d.start_byte, end_byte=d.end_byte,
             modifiers=list(d.modifiers),
             annotations=[a.name for a in d.annotations],
+            capabilities=list(d.capabilities),
             role=infer_role_for_type(d),
             signature="",
             parent_id=tables.types[entry.outer_fqn].node_id if entry.outer_fqn and entry.outer_fqn in tables.types else "",

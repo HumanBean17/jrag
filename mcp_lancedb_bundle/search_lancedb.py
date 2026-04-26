@@ -34,6 +34,7 @@ JAVA_ENRICHED_COLUMNS: tuple[str, ...] = (
     "annotations_on_type",
     "symbols",
     "ontology_version",
+    "capabilities",
 )
 
 VECTOR_COLUMN = "embedding"
@@ -71,13 +72,37 @@ def _build_extra_predicates(
     fqn_in: list[str] | None,
     role_in: list[str] | None = None,
     exclude_roles: list[str] | None = None,
+    capability: str | None = None,
+    capability_in: list[str] | None = None,
 ) -> list[str]:
     preds: list[str] = []
     if role and "role" in columns:
         preds.append(f"role = '{_escape_sql_str(role)}'")
+
+    # When both role_in and capability_in are set, combine as OR so that
+    # capability-only entrypoints (e.g. role=OTHER with MESSAGE_LISTENER)
+    # are not silently excluded by the role filter.
+    role_pred: str | None = None
     if role_in and "role" in columns:
         vals = ", ".join(f"'{_escape_sql_str(v)}'" for v in role_in)
-        preds.append(f"role IN ({vals})")
+        role_pred = f"role IN ({vals})"
+
+    cap_in_pred: str | None = None
+    if capability_in and "capabilities" in columns:
+        # array_has is the preferred form in LanceDB >= 0.10 (verified against 0.30.2).
+        parts = [
+            f"array_has(capabilities, '{_escape_sql_str(c)}')"
+            for c in capability_in
+        ]
+        cap_in_pred = "(" + " OR ".join(parts) + ")"
+
+    if role_pred and cap_in_pred:
+        preds.append(f"({role_pred} OR {cap_in_pred})")
+    elif role_pred:
+        preds.append(role_pred)
+    elif cap_in_pred:
+        preds.append(cap_in_pred)
+
     if exclude_roles and "role" in columns:
         vals = ", ".join(f"'{_escape_sql_str(v)}'" for v in exclude_roles)
         preds.append(f"(role IS NULL OR role NOT IN ({vals}))")
@@ -92,6 +117,8 @@ def _build_extra_predicates(
         # LanceDB/Arrow SQL supports IN; quote each.
         vals = ", ".join(f"'{_escape_sql_str(v)}'" for v in fqn_in)
         preds.append(f"primary_type_fqn IN ({vals})")
+    if capability and "capabilities" in columns:
+        preds.append(f"array_has(capabilities, '{_escape_sql_str(capability)}')")
     return preds
 
 
@@ -742,6 +769,8 @@ def run_search(
     context_neighbors: int = 0,
     role_in: list[str] | None = None,
     exclude_roles: list[str] | None = None,
+    capability: str | None = None,
+    capability_in: list[str] | None = None,
 ) -> list[dict]:
     effective_hybrid = hybrid
     effective_fts = fts_text
@@ -782,6 +811,7 @@ def run_search(
         role=role, module=module, microservice=microservice,
         package_prefix=package_prefix, fqn_in=None,
         role_in=role_in, exclude_roles=exclude_roles,
+        capability=capability, capability_in=capability_in,
     ) if "java" in table_keys else []
 
     skip_role_weight = bool(role or role_in)
