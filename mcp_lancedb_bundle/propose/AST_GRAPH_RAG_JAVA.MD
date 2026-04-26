@@ -152,9 +152,109 @@ Graph expansion can produce large context. The DKB paper implements a context as
 
 ***
 
-## 4. Complete Agent Workflow After Integration
+## 4. Adding a Call Graph Layer
 
-### 4.1 Routing Architecture
+### 4.1 What a Call Graph Adds vs. AST GraphRAG
+
+The DKB graph (extends/implements/injects edges) captures *structural/architectural* relationships — the wiring of your system. A **call graph** captures *dynamic behavioral* relationships — the sequence of method invocations at runtime.[^21]
+
+| Dimension | AST Structural Graph | Call Graph |
+|---|---|---|
+| Edge meaning | "A depends on / is wired to B" | "A calls method M on B" |
+| Primary use | Architecture discovery, impact analysis | Flow tracing, dead code, performance hotspots |
+| Query example | "Which services use UserRepository?" | "What's the full execution path for `/checkout`?" |
+| Derivation | Static, deterministic, fast | Static (approximate) or dynamic (runtime traces) |
+| Java complexity | Easy (DI, inheritance) | Hard (polymorphism, reflection, Spring AOP) |
+
+For your "Ask Me Anything" agent, call graphs are extremely valuable for questions like:
+- "Trace the full request flow from the order REST endpoint to the database"
+- "What methods are called when a payment fails?"
+- "Which code paths handle Kafka message `order.created`?"
+
+### 4.2 Static Call Graph Extraction for Java
+
+**Tree-sitter + call resolution (recommended for your setup)**
+
+The `Codebase-Memory` paper describes a 6-strategy call resolution cascade that achieves ~80% resolution accuracy for well-structured Java codebases. The key strategies in order:[^11]
+1. Import-map resolution (confidence 0.95): `pkg.Method` → resolve `pkg` via import statements
+2. Same-module resolution (0.90): check enclosing file's package first
+3. Unique-name resolution (0.75): single project-wide match
+4. Suffix-match fallback (0.55)
+
+In the resulting graph, `CALLS` edges join `Method` nodes, and `HTTP_CALLS` edges join REST endpoint nodes across microservice boundaries.[^11]
+
+**Spring-specific patterns to extract statically:**
+- `@FeignClient` interfaces: each method maps to an `HTTP_CALLS` edge to the target service's endpoint[^15][^14]
+- `RestTemplate.exchange(url, ...)`: parse URL pattern → match to `@RequestMapping` in target service
+- `KafkaTemplate.send(topic, ...)`: creates an `ASYNC_CALLS` edge to the consumer `@KafkaListener` method
+- `ApplicationEventPublisher.publishEvent(...)`: creates an event-dispatch edge
+
+**Graph schema for microservice call graph:**
+
+```
+(ServiceA:Microservice)-[:EXPOSES]->(endpoint:RestEndpoint {path:"/api/orders"})
+(ControllerA:Class)-[:HANDLES]->(endpoint)
+(ControllerA)-[:CALLS]->(OrderService:Class)
+(OrderService)-[:CALLS]->(PaymentServiceClient:FeignClient)
+(PaymentServiceClient)-[:HTTP_CALLS {confidence:0.95}]->(ServiceB:Microservice)
+(ServiceB)-[:EXPOSES]->(paymentEndpoint:RestEndpoint {path:"/api/payments"})
+(OrderService)-[:ASYNC_CALLS {topic:"order.created"}]->(NotificationService:Microservice)
+```
+
+### 4.3 Dynamic Call Graph via Runtime Tracing
+
+Static analysis struggles with polymorphism and Spring AOP proxies. For critical flows, complement static call graph with runtime traces:
+
+- **Spring Cloud Sleuth / Micrometer Tracing**: instrument your services to emit distributed traces (Zipkin/Jaeger format)
+- **Codebase-Memory's `ingest_traces` tool**: imports runtime traces directly into the graph database, creating real `CALLS` edges observed during actual execution[^11]
+- This gives you a *hybrid call graph*: static edges for code coverage, dynamic edges for actual execution paths
+
+***
+
+## 5. Inter-Service Graph: The Microservices-Specific Layer
+
+Your 5-microservice architecture adds a dimension most single-repo GraphRAG tools ignore: **cross-service dependency topology**. This is where graph representation pays the highest dividends.
+
+### 5.1 Service Dependency Graph
+
+Model each microservice as a top-level node with edges representing runtime dependencies:[^21]
+
+```cypher
+// Example Cypher for cross-service topology
+(svc:Microservice {name: "order-service"})
+  -[:CALLS_HTTP {endpoint: "/api/payments", method: "POST", client: "FeignClient"}]->
+(svc2:Microservice {name: "payment-service"})
+
+(svc:Microservice {name: "order-service"})
+  -[:PUBLISHES_EVENT {topic: "order.created"}]->
+(svc3:Microservice {name: "notification-service"})
+```
+
+This can be extracted statically from Feign client annotations and `@KafkaListener`/`KafkaTemplate` usages across all 5 services.[^14][^15]
+
+### 5.2 Impact Analysis Queries
+
+With this graph, your agent can answer impact analysis queries that are impossible with pure vector RAG:
+
+```cypher
+// "What breaks if I change the UserService API?"
+MATCH (changed:Class {name: "UserService"})<-[:INJECTS|CALLS*1..3]-(affected)
+RETURN affected.name, labels(affected)
+
+// "Which other services are affected if payment-service is down?"
+MATCH (svc:Microservice {name: "payment-service"})<-[:CALLS_HTTP]-(caller)
+RETURN caller.name
+
+// "Trace the full path for /api/checkout"
+MATCH path = (ep:RestEndpoint {path: "/api/checkout"})-[:HANDLES|CALLS|HTTP_CALLS*1..5]->(terminal)
+RETURN path
+```
+
+***
+
+## 6. Complete Agent Workflow After Integration
+
+### 6.1 Routing Architecture
 
 The agent should not always invoke both retrieval layers — that wastes tokens and latency. A lightweight query classifier routes to the appropriate path:[^10][^22]
 
@@ -177,7 +277,7 @@ Query Classifier (LLM with schema context)
          work end to end", "explain the payment service"
 ```
 
-### 4.2 Full Agent Workflow 
+### 6.2 Full Agent Workflow (LangGraph / Agentic)
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -232,7 +332,7 @@ Query Classifier (LLM with schema context)
               └───────────────────┘
 ```
 
-### 4.3 Specialized Agent Tools (MCP-Compatible)
+### 6.3 Specialized Agent Tools (MCP-Compatible)
 
 Expose the graph as discrete MCP tools your AI agent can invoke:[^19][^11]
 
@@ -249,7 +349,7 @@ Expose the graph as discrete MCP tools your AI agent can invoke:[^19][^11]
 
 This tool-per-capability model lets your agentic workflow (Claude Code, or whatever you use) pick the right retrieval method per sub-question, rather than running a fixed pipeline.[^23][^24]
 
-### 4.4 Self-Correction Loop
+### 6.4 Self-Correction Loop
 
 For complex multi-hop questions, add a self-correction loop:[^10][^23]
 
@@ -261,9 +361,9 @@ For complex multi-hop questions, add a self-correction loop:[^10][^23]
 
 ***
 
-## 5. Tool & Library Recommendations
+## 7. Tool & Library Recommendations
 
-### 5.1 AST Graph Construction
+### 7.1 AST Graph Construction
 
 | Tool | Language | Notes |
 |---|---|---|
@@ -273,33 +373,42 @@ For complex multi-hop questions, add a self-correction loop:[^10][^23]
 | **Codebase-Memory MCP** | C (binary) | 14 MCP tools, ~0.3ms queries, SQLite[^11]; MIT license |
 | **CocoIndex custom extractor** | Python | Extend existing flow; Neo4j/Kuzu native output[^12][^13] |
 
-### 5.2 Graph Databases
+### 7.2 Graph Databases
 
 - **Neo4j Community**: Best for complex Cypher traversals, visual exploration; CocoIndex native[^16]
 - **Kuzu**: Embedded, zero-infrastructure alternative to Neo4j, same CocoIndex config[^17][^12]
 
-### 5.3 Reference Implementation
+### 7.3 Reference Implementation
 
 The DKB benchmark paper has a public GitHub repository (`graph-based-rag-ast-vs-llm`) with working Python scripts for all three retrieval strategies on Java codebases — including the Tree-sitter extraction (`dkb_gemini_v2.py`), bidirectional traversal logic, and interface-consumer expansion. This is the closest existing reference to your exact problem (Java microservices, architectural Q&A).[^1]
 
 ***
 
-## 6. Implementation Roadmap
+## 8. Implementation Roadmap
 
-### Phase 1: AST Graph Index
+### Phase 1: AST Graph Index (1–2 weeks)
 - Parse all 5 microservices with `tree_sitter_java`
 - Extract Class/Interface/Method nodes + EXTENDS/IMPLEMENTS/INJECTS edges
 - Store in Neo4j or Kuzu
 - Verify graph completeness (node count, edge count per service)
 - Add graph query alongside existing CocoIndex vector query
 
-### Phase 2: Agent Integration
+### Phase 2: Cross-Service Edges (1 week)
+- Add Feign client detection → `HTTP_CALLS` edges between service nodes
+- Add Kafka `@KafkaListener`/`KafkaTemplate` → `ASYNC_CALLS` edges
+- Build the 5-node microservice topology graph
+
+### Phase 3: Call Graph (1–2 weeks)
+- Add method-level `CALLS` edges via Tree-sitter call-site extraction + 6-strategy resolution
+- Optionally ingest Micrometer/Sleuth traces for dynamic call edges
+
+### Phase 4: Agent Integration (1 week)
 - Wrap graph queries as MCP tools
 - Add query classifier (LLM-based, ~5 categories)
 - Implement RRF fusion for hybrid context assembly
 - Add relevance grading + retry loop
 
-### Phase 3: Evaluation
+### Phase 5: Evaluation
 - Build a golden question set (15 structural + 15 semantic questions per service)
 - Measure correctness: vector-only vs. hybrid vs. graph-only
 - Tune expansion depth `d` and context budget per query category
