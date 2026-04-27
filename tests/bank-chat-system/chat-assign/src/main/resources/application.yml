@@ -1,0 +1,47 @@
+server:
+  port: 8081
+
+spring:
+  application:
+    name: chat-assign
+  datasource:
+    url: jdbc:postgresql://localhost:5432/banking_chat
+    username: banking_chat
+    password: banking_chat
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+  kafka:
+    bootstrap-servers: localhost:9092
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+    consumer:
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+
+assign:
+  chat-core:
+    base-url: http://localhost:8080
+    internal-token: ""
+  kafka:
+    distribution-topic: chat.assign.distribution
+    consumer-group: chat-assign-distribution
+  distribution:
+    max-chats-per-operator: 1
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+
+logging:
+  pattern:
+    level: "%5p [%X{correlationId:-}]"

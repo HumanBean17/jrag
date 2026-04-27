@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "lancedb-code": {
+      "type": "stdio",
+      "command": "/ABSOLUTE/PATH/TO/mcp_lancedb_bundle/.venv/bin/python",
+      "args": ["/ABSOLUTE/PATH/TO/mcp_lancedb_bundle/server.py"],
+      "env": {
+        "LANCEDB_URI": "/ABSOLUTE/PATH/TO/lancedb_data",
+        "SBERT_MODEL": "sentence-transformers/all-MiniLM-L6-v2",
+        "LANCEDB_MCP_PROJECT_ROOT": "/ABSOLUTE/PATH/TO/repo-with-java_index_flow_lancedb",
+        "KUZU_DB_PATH": "/ABSOLUTE/PATH/TO/lancedb_data/code_graph.kuzu",
+        "LANCEDB_MCP_GRAPH_ENABLED": "1"
+      }
+    }
+  }
+}
