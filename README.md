@@ -216,8 +216,8 @@ source can carry meta-annotations; Layer A resolves chains to built-in
 stereotype and capability trigger names (e.g. `@Service`, `@KafkaListener`)
 via `graph_enrich.collect_annotation_meta_chain` (single index for both
 Kuzu and Lance — see below). **3. Last resort — source stubs** — copy the following
-into your project (any package) and add `@CodebaseRole("SERVICE")` /
-`@CodebaseCapability("MESSAGE_LISTENER")` on a class. Matched by **simple
+into your project (any package) and add `@CodebaseRole(CodebaseRoleKind.SERVICE)` /
+`@CodebaseCapability(CodebaseCapabilityKind.MESSAGE_LISTENER)` on a class. Matched by **simple
 name only** (no Maven dependency on this bundle):
 
 ```java
@@ -227,15 +227,25 @@ import java.lang.annotation.*;
 
 @Target(ElementType.TYPE)
 @Retention(RetentionPolicy.SOURCE)
+public enum CodebaseRoleKind {
+    CONTROLLER, SERVICE, REPOSITORY, COMPONENT, CONFIG, ENTITY, FEIGN_CLIENT, MAPPER, DTO
+}
+
+public enum CodebaseCapabilityKind {
+    MESSAGE_LISTENER, MESSAGE_PRODUCER, SCHEDULED_TASK, EXCEPTION_HANDLER
+}
+
+@Target(ElementType.TYPE)
+@Retention(RetentionPolicy.SOURCE)
 public @interface CodebaseRole {
-    String value();
+    CodebaseRoleKind value();
 }
 
 @Target(ElementType.TYPE)
 @Retention(RetentionPolicy.SOURCE)
 @Repeatable(CodebaseCapabilities.class)
 public @interface CodebaseCapability {
-    String value();
+    CodebaseCapabilityKind value();
 }
 
 @Target(ElementType.TYPE)
@@ -244,6 +254,10 @@ public @interface CodebaseCapabilities {
     CodebaseCapability[] value();
 }
 ```
+
+Legacy string-literal forms (`@CodebaseRole("SERVICE")`,
+`@CodebaseCapability("MESSAGE_LISTENER")`) are a breaking change and are no
+longer applied by the resolver.
 
 Resolution order in code: built-in inference, then config annotation maps,
 then meta-annotation walk, then `@CodebaseRole` / `@CodebaseCapability`, then

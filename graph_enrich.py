@@ -539,27 +539,51 @@ def resolve_role_and_capabilities(
     for ann in type_decl.annotations:
         if ann.name == "CodebaseRole":
             v = ann.arguments.get("value")
-            if v in VALID_ROLES:
+            vk = ann.argument_kinds.get("value")
+            if vk == "string" and v is not None:
+                print(
+                    f"[lancedb-mcp] CodebaseRole: string literal value {v!r} is no longer supported; "
+                    "use CodebaseRoleKind.*",
+                    file=sys.stderr,
+                )
+            elif vk == "enum" and v in VALID_ROLES:
                 role = v
-            elif v is not None and v not in VALID_ROLES:
+            elif vk == "enum" and v is not None and v not in VALID_ROLES:
                 print(
                     f"[lancedb-mcp] CodebaseRole: invalid value {v!r} — ignored",
                     file=sys.stderr,
                 )
         elif ann.name == "CodebaseCapability":
             v = ann.arguments.get("value")
-            if v in VALID_CAPABILITIES:
+            vk = ann.argument_kinds.get("value")
+            if vk == "string" and v is not None:
+                print(
+                    f"[lancedb-mcp] CodebaseCapability: string literal value {v!r} is no longer supported; "
+                    "use CodebaseCapabilityKind.*",
+                    file=sys.stderr,
+                )
+            elif vk == "enum" and v in VALID_CAPABILITIES:
                 caps.add(v)
-            elif v is not None and v not in VALID_CAPABILITIES:
+            elif vk == "enum" and v is not None and v not in VALID_CAPABILITIES:
                 print(
                     f"[lancedb-mcp] CodebaseCapability: invalid value {v!r} — ignored",
                     file=sys.stderr,
                 )
         elif ann.name == "CodebaseCapabilities":
-            for v in ann.container_capability_values:
-                if v in VALID_CAPABILITIES:
+            for v, vk in zip(
+                ann.container_capability_values,
+                ann.container_capability_kinds,
+                strict=False,
+            ):
+                if vk == "string" and v:
+                    print(
+                        f"[lancedb-mcp] CodebaseCapabilities: string literal value {v!r} is no longer supported; "
+                        "use CodebaseCapabilityKind.*",
+                        file=sys.stderr,
+                    )
+                elif vk == "enum" and v in VALID_CAPABILITIES:
                     caps.add(v)
-                elif v:
+                elif vk == "enum" and v:
                     print(
                         f"[lancedb-mcp] CodebaseCapabilities: invalid value {v!r} — ignored",
                         file=sys.stderr,

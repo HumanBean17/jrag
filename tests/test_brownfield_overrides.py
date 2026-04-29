@@ -354,7 +354,7 @@ class TestLayerC:
         t = _tdecl(
             """
             package p;
-            @CodebaseRole("SERVICE")
+            @CodebaseRole(CodebaseRoleKind.SERVICE)
             public class C {}
         """
         )
@@ -363,7 +363,7 @@ class TestLayerC:
 
     def test_codebase_role_value_form(self) -> None:
         t = _tdecl(
-            "package p; @CodebaseRole(value = \"SERVICE\") public class C {}"
+            "package p; @CodebaseRole(value = CodebaseRoleKind.SERVICE) public class C {}"
         )
         r, _ = resolve_role_and_capabilities(t, overrides=_empty(), meta_chain=None)
         assert r == "SERVICE"
@@ -372,7 +372,7 @@ class TestLayerC:
         t = _tdecl(
             """
             package p;
-            @CodebaseRole("CONTROLLER")
+            @CodebaseRole(CodebaseRoleKind.CONTROLLER)
             @org.springframework.stereotype.Service
             public class C {}
         """
@@ -380,11 +380,29 @@ class TestLayerC:
         r, _ = resolve_role_and_capabilities(t, overrides=_empty(), meta_chain=None)
         assert r == "CONTROLLER"
 
+    def test_legacy_string_codebase_role_warns_and_is_ignored(self) -> None:
+        t = _tdecl(
+            """
+            package p;
+            @CodebaseRole("CONTROLLER")
+            @org.springframework.stereotype.Service
+            public class C {}
+        """
+        )
+        f = io.StringIO()
+        with redirect_stderr(f):
+            r, _ = resolve_role_and_capabilities(
+                t, overrides=_empty(), meta_chain=None
+            )
+        assert r == "SERVICE"
+        st = f.getvalue()
+        assert "no longer supported" in st
+
     def test_bogus_codebase_role_warns(self) -> None:
         t = _tdecl(
             """
             package p;
-            @CodebaseRole("BOGUS")
+            @CodebaseRole(CodebaseRoleKind.BOGUS)
             @org.springframework.stereotype.Service
             public class C {}
         """
@@ -402,7 +420,10 @@ class TestLayerC:
         t = _tdecl(
             r"""
             package p;
-            @CodebaseCapabilities({@CodebaseCapability("MESSAGE_LISTENER"), @CodebaseCapability("MESSAGE_PRODUCER")})
+            @CodebaseCapabilities({
+                @CodebaseCapability(CodebaseCapabilityKind.MESSAGE_LISTENER),
+                @CodebaseCapability(CodebaseCapabilityKind.MESSAGE_PRODUCER)
+            })
             public class C {}
         """
         )
@@ -415,8 +436,8 @@ class TestLayerC:
         t = _tdecl(
             r"""
             package p;
-            @CodebaseCapability("MESSAGE_LISTENER")
-            @CodebaseCapability("SCHEDULED_TASK")
+            @CodebaseCapability(CodebaseCapabilityKind.MESSAGE_LISTENER)
+            @CodebaseCapability(CodebaseCapabilityKind.SCHEDULED_TASK)
             public class C {}
         """
         )
@@ -430,7 +451,7 @@ class TestLayerC:
             """
             package p;
             @org.springframework.stereotype.Service
-            @CodebaseCapability("MESSAGE_PRODUCER")
+            @CodebaseCapability(CodebaseCapabilityKind.MESSAGE_PRODUCER)
             public class C {
                 org.springframework.kafka.core.KafkaTemplate t;
             }
@@ -440,6 +461,23 @@ class TestLayerC:
             t, overrides=_empty(), meta_chain=None,
         )
         assert "MESSAGE_PRODUCER" in c
+
+    def test_legacy_string_codebase_capability_warns_and_is_ignored(self) -> None:
+        t = _tdecl(
+            """
+            package p;
+            @CodebaseCapability("MESSAGE_LISTENER")
+            public class C {}
+        """
+        )
+        f = io.StringIO()
+        with redirect_stderr(f):
+            _, c = resolve_role_and_capabilities(
+                t, overrides=_empty(), meta_chain=None,
+            )
+        assert "MESSAGE_LISTENER" not in c
+        st = f.getvalue()
+        assert "no longer supported" in st
 
 
 def test_fqn_fires_with_enrich_chunk_lance_path(tmp_path: Path) -> None:
