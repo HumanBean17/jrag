@@ -273,3 +273,16 @@ async def test_refresh_code_index_requires_confirm(mcp_server, monkeypatch) -> N
     )
     assert out["success"] is False
     assert "confirm" in (out["message"] or "").lower()
+
+
+def test_cocoindex_subprocess_env_sets_project_root(monkeypatch, tmp_path) -> None:
+    import server
+
+    monkeypatch.setenv("LANCEDB_MCP_PROJECT_ROOT", "/should/be/overwritten")
+    monkeypatch.setenv("PRESERVE_ME_FOR_SUBPROCESS", "ok")
+    proj = tmp_path / "external-java-repo"
+    proj.mkdir()
+    resolved = proj.resolve()
+    env = server._cocoindex_subprocess_env(resolved)
+    assert env["LANCEDB_MCP_PROJECT_ROOT"] == str(resolved)
+    assert env["PRESERVE_ME_FOR_SUBPROCESS"] == "ok"

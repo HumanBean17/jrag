@@ -306,6 +306,13 @@ def _project_root() -> Path:
     return Path.cwd().resolve()
 
 
+def _cocoindex_subprocess_env(project_root: Path) -> dict[str, str]:
+    """Environment for the cocoindex subprocess (bundle cwd, Java tree via env)."""
+    sub_env = os.environ.copy()
+    sub_env["LANCEDB_MCP_PROJECT_ROOT"] = str(project_root)
+    return sub_env
+
+
 def _refresh_allowed() -> bool:
     return os.environ.get("LANCEDB_MCP_ALLOW_REFRESH", "").strip().lower() in (
         "1",
@@ -1064,6 +1071,7 @@ def create_mcp_server() -> FastMCP:
                 "--full-reprocess",
                 "-f",
                 cwd=str(flow_path.parent),
+                env=_cocoindex_subprocess_env(root),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )

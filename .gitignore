@@ -36,6 +36,7 @@ htmlcov/
 
 # Local runtime / data artifacts
 lancedb_data/
+cocoindex_java_lance.db/
 *.kuzu
 *.kuzu.wal
 

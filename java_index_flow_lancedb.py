@@ -6,6 +6,8 @@ LanceDB requires a single primary key per table; each chunk gets a UUID `id`.
 Environment:
   LANCEDB_URI — database directory or URI (default: ./lancedb_data)
   COCOINDEX_DB — CocoIndex state DB path (optional)
+  LANCEDB_MCP_PROJECT_ROOT — when set, Java/SQL/YAML files under this path are indexed
+    (otherwise the process working directory, e.g. cocoindex cwd)
 
 Dependencies:
   pip install "cocoindex[lancedb]" sentence-transformers
@@ -15,6 +17,7 @@ Usage:
 """
 from __future__ import annotations
 
+import inspect
 import os
 import uuid
 from collections.abc import AsyncIterator
@@ -45,11 +48,23 @@ from java_index_v1_common import (
 from ast_java import ONTOLOGY_VERSION, parse_java
 from graph_enrich import enrich_chunk
 
-PROJECT_ROOT = coco.ContextKey[Path]("java_lance_project_root", tracked=False)
-LANCE_DB = coco.ContextKey("java_lance_async_conn", tracked=False)
-EMBEDDER = coco.ContextKey[SentenceTransformerEmbedder](
-    "java_lance_embedder", tracked=False
-)
+# Older cocoindex (e.g. 1.0.0a43) uses ``tracked=False``; newer releases renamed
+# the flag to ``detect_change`` (default False) and reject ``tracked``.
+_ck_params = inspect.signature(coco.ContextKey.__init__).parameters
+if "detect_change" in _ck_params:
+    PROJECT_ROOT = coco.ContextKey[Path]("java_lance_project_root")
+    LANCE_DB = coco.ContextKey("java_lance_async_conn")
+    EMBEDDER = coco.ContextKey[SentenceTransformerEmbedder]("java_lance_embedder")
+elif "tracked" in _ck_params:
+    PROJECT_ROOT = coco.ContextKey[Path]("java_lance_project_root", tracked=False)
+    LANCE_DB = coco.ContextKey("java_lance_async_conn", tracked=False)
+    EMBEDDER = coco.ContextKey[SentenceTransformerEmbedder](
+        "java_lance_embedder", tracked=False
+    )
+else:
+    PROJECT_ROOT = coco.ContextKey[Path]("java_lance_project_root")
+    LANCE_DB = coco.ContextKey("java_lance_async_conn")
+    EMBEDDER = coco.ContextKey[SentenceTransformerEmbedder]("java_lance_embedder")
 
 splitter = RecursiveSplitter()
 
@@ -108,7 +123,11 @@ async def coco_lifespan(builder: coco.EnvironmentBuilder) -> AsyncIterator[None]
     builder.settings.db_path = Path(
         os.environ.get("COCOINDEX_DB", "./cocoindex_java_lance.db")
     )
-    root = Path(".").resolve()
+    env_root = os.environ.get("LANCEDB_MCP_PROJECT_ROOT", "").strip()
+    if env_root:
+        root = Path(env_root).expanduser().resolve()
+    else:
+        root = Path(".").resolve()
     builder.provide(PROJECT_ROOT, root)
 
     embedder = SentenceTransformerEmbedder(

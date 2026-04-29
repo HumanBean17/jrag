@@ -69,16 +69,19 @@ inside the MCP.
 **Important:** `module` and `microservice` inference depends on the
 **project root** used during indexing:
 
-- For the CocoIndex flow (`java_index_flow_lancedb.py`), `project_root`
-  is the **current working directory** when you launch `cocoindex update`
-  (hardcoded as `Path(".").resolve()` in `coco_lifespan`).
+- For the CocoIndex flow (`java_index_flow_lancedb.py`), indexed files
+  are rooted at **`LANCEDB_MCP_PROJECT_ROOT`** when that env var is set
+  (e.g. MCP `refresh_code_index` sets it on the cocoindex subprocess while
+  keeping `cwd` on the bundle for imports); otherwise `project_root` is
+  `Path(".").resolve()` (the cocoindex process working directory).
 - For `build_ast_graph.py` standalone, it's `--source-root` (defaults
   to `cwd`).
-- For MCP runtime, `LANCEDB_MCP_PROJECT_ROOT` is used only by
-  `refresh_code_index` to resolve the indexer's working directory.
+- For MCP runtime, `LANCEDB_MCP_PROJECT_ROOT` selects the Java project
+  tree for search metadata, graph build, and CocoIndex indexing.
 
-Consistency across builds requires running the indexer from the same
-directory (or using an absolute `--source-root`).
+Consistency across builds requires the same `LANCEDB_MCP_PROJECT_ROOT`
+(or the same cocoindex `cwd` when the env var is unset) and matching
+`--source-root` for standalone graph builds.
 
 ### A.2 Annotations the MCP knows about (role inference)
 

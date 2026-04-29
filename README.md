@@ -28,7 +28,7 @@ Use **Python 3.11+**. The embedding model must match the one used when the index
 | `LANCEDB_URI` | **Required for real use:** absolute path to the `lancedb_data` directory (or remote LanceDB URI). |
 | `SBERT_MODEL` | Hub id or local directory; must match indexer. |
 | `SBERT_DEVICE` | Optional: `cpu`, `cuda`, `mps`. |
-| `LANCEDB_MCP_PROJECT_ROOT` | Repo root containing `java_index_flow_lancedb.py` (for `refresh_code_index`). Defaults to this bundle directory. |
+| `LANCEDB_MCP_PROJECT_ROOT` | **Java project root** to index and to resolve `module` / `microservice` (search tools, `build_ast_graph.py`, and the CocoIndex flow when run via `refresh_code_index`). You do **not** need a copy of `java_index_flow_lancedb.py` in that tree—the bundled flow is used when the file is missing there. If unset, the MCP process working directory is used (see graph section below). |
 | `LANCEDB_MCP_ALLOW_REFRESH` | Set to `1` to enable the heavy `refresh_code_index` tool. |
 | `KUZU_DB_PATH` | Absolute path to the Kuzu graph DB. Defaults to `${LANCEDB_URI}/code_graph.kuzu`. |
 | `LANCEDB_MCP_GRAPH_ENABLED` | `1`/`0` to force on/off; auto-on when the Kuzu DB exists. |
@@ -105,6 +105,8 @@ Standalone:
 ```
 
 > If `--source-root` is omitted, the current working directory is used. The same convention applies to the MCP server: when `LANCEDB_MCP_PROJECT_ROOT` is unset, the process's current working directory is used as the project root.
+
+For `refresh_code_index`, the server runs `cocoindex` with `cwd` set to the bundle directory (so Python imports resolve), but sets `LANCEDB_MCP_PROJECT_ROOT` on that subprocess to the same resolved project root as above so indexing targets your Java tree—not the bundle.
 
 The DB is dropped and rebuilt from scratch on each run (Phase 1 is a full rebuild; incremental updates are future work).
 
