@@ -225,8 +225,6 @@ package com.example.rag; // any package
 
 import java.lang.annotation.*;
 
-@Target(ElementType.TYPE)
-@Retention(RetentionPolicy.SOURCE)
 public enum CodebaseRoleKind {
     CONTROLLER, SERVICE, REPOSITORY, COMPONENT, CONFIG, ENTITY, FEIGN_CLIENT, MAPPER, DTO
 }

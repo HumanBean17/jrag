@@ -573,7 +573,7 @@ def resolve_role_and_capabilities(
             for v, vk in zip(
                 ann.container_capability_values,
                 ann.container_capability_kinds,
-                strict=False,
+                strict=True,
             ):
                 if vk == "string" and v:
                     print(
