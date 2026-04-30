@@ -43,6 +43,18 @@ def _structured(result: Any) -> dict[str, Any]:
     raise AssertionError(f"could not extract structured payload from {result!r}")
 
 
+# ---------------- tool metadata contract ----------------
+
+
+async def test_all_tools_have_non_empty_description(mcp_server) -> None:
+    tools = await mcp_server.list_tools()
+    missing = [
+        tool.name for tool in tools
+        if not isinstance(tool.description, str) or not tool.description.strip()
+    ]
+    assert missing == [], f"Tools missing description: {missing}"
+
+
 # ---------------- list_code_index_tables ----------------
 
 

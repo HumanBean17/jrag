@@ -641,7 +641,13 @@ def create_mcp_server() -> FastMCP:
 
         return CodeSearchOutput(success=True, results=_rows_to_hits(rows))
 
-    @mcp.tool(name="list_code_index_tables")
+    @mcp.tool(
+        name="list_code_index_tables",
+        description=(
+            "Return LanceDB table names/paths and graph metadata, including inferred "
+            "module/microservice scope context for search filters."
+        ),
+    )
     async def list_code_index_tables() -> IndexInfoOutput:
         return IndexInfoOutput(
             lancedb_uri=_resolve_lancedb_uri(),
@@ -1026,7 +1032,13 @@ def create_mcp_server() -> FastMCP:
             seed_hits=_rows_to_hits(seed_rows),
         )
 
-    @mcp.tool(name="refresh_code_index")
+    @mcp.tool(
+        name="refresh_code_index",
+        description=(
+            "Rebuild LanceDB chunks via cocoindex and then rebuild the Kuzu graph "
+            "(slow; requires LANCEDB_MCP_ALLOW_REFRESH=1 and confirm=true)."
+        ),
+    )
     async def refresh_code_index(
         confirm: bool = Field(
             default=False,
@@ -1045,7 +1057,8 @@ def create_mcp_server() -> FastMCP:
             )
 
         root = _project_root()
-        cocoindex_bin = Path(sys.executable).resolve().parent / "cocoindex"
+        # Keep the venv symlink path so we resolve the script in the venv bin directory.
+        cocoindex_bin = Path(sys.executable).parent / "cocoindex"
         if not cocoindex_bin.is_file():
             return RefreshIndexOutput(
                 success=False,
