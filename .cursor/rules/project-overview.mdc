@@ -1,0 +1,55 @@
+---
+description: Project map and where to look for what. Always-on so agents start with the right mental model.
+alwaysApply: true
+---
+
+# Project overview
+
+This repo is a **self-contained stdio MCP server** that serves
+semantic + structural search over a Java codebase. It is a Python
+project (the indexer and server). It is **not** a Java project —
+the `tests/bank-chat-system/` tree is fixture data, not code to
+modify.
+
+Treat README and the markdown docs as the source of truth for
+behaviour, schemas, env vars, ranking, edges, tool defaults, and
+ontology. **Do not copy that content into rules** — read it directly
+when needed.
+
+## Where to look
+
+- `README.md` — feature surface, env vars, ranking, capabilities,
+  tool list, "Re-index required" callouts.
+- `CODEBASE_REQUIREMENTS.md` — Java-repo assumptions and per-file
+  map of what to edit when a target tree doesn't match defaults.
+- `tests/README.md` — testing philosophy.
+- `propose/` and `propose/completed/` — design proposes; the active
+  ones describe in-flight scope and the completed ones explain *why*
+  current code looks the way it does.
+- `plans/` and `plans/completed/` — longer-form plans (e.g.
+  capabilities model, tier completions).
+- `.cursor/rules/breaking-changes.mdc` — the no-back-compat policy.
+
+## File map (top of repo)
+
+| File | Role |
+|------|------|
+| `server.py` | MCP stdio server. Every `@mcp.tool` lives here. |
+| `search_lancedb.py` | Vector / hybrid / graph-expanded search; ranking. |
+| `build_ast_graph.py` | Tree-sitter -> Kuzu graph builder (full rebuild). |
+| `kuzu_queries.py` | Read-only Cypher helpers used by the server. |
+| `ast_java.py` | Tree-sitter Java parsing, role/capability inference. |
+| `graph_enrich.py` | `module` / `microservice` resolution, brownfield overrides, meta-annotation walk. |
+| `java_ontology.py` | Source of truth for `VALID_ROLES` / `VALID_CAPABILITIES`. |
+| `chunk_heuristics.py` | Query-time chunk hints (no AST / no re-index). |
+| `index_common.py` | Embedding config (no CocoIndex dep). |
+| `java_index_flow_lancedb.py` | CocoIndex flow (only used by `refresh_code_index`). |
+| `java_index_v1_common.py` | Shared file walker / exclude patterns. |
+| `mcp.json.example` | Template for `.mcp.json`. |
+
+## Test layout
+
+- `tests/conftest.py` — session-scoped Kuzu graph fixture.
+- `tests/bank-chat-system/` — deterministic Java corpus (fixture, not production model).
+- `tests/fixtures/call_graph_smoke/` — mini Maven tree calibrated against the call-graph resolver.
+- Heavy e2e tests gated behind `LANCEDB_MCP_RUN_HEAVY=1`.

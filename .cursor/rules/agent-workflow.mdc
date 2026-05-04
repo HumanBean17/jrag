@@ -1,0 +1,81 @@
+---
+description: How agents should investigate, edit, validate, and ship in this repo.
+alwaysApply: true
+---
+
+# Agent workflow
+
+## Investigate before editing
+
+For any non-trivial change, read the relevant doc first instead of
+inferring from code:
+
+- Behaviour / public surface → `README.md`.
+- Brownfield assumptions, role/capability tuning → `CODEBASE_REQUIREMENTS.md`.
+- Why current design exists → `propose/completed/` and `plans/completed/`.
+- Testing philosophy → `tests/README.md`.
+
+## Propose-then-implement culture
+
+The repo has a strong "propose then implement" culture
+(`propose/`, `plans/`). For non-trivial features:
+
+1. Drop a short markdown propose under `propose/` describing scope,
+   schema impact, reindex requirement, and tests touched.
+2. Reference it from the PR description.
+3. Move it into `propose/completed/` (or `plans/completed/`) once
+   landed.
+
+Skip this for clearly-bounded fixes (one-file bugs, doc edits, test
+loosening). Use judgement.
+
+## Editing rules
+
+- Respect `.cursor/rules/breaking-changes.mdc`: no compatibility
+  shims, no deprecation cycles.
+- One source of truth for roles and capabilities lives in
+  `java_ontology.py`. Don't sprinkle role / capability string
+  literals across other modules.
+- Schema changes that affect the Lance index or Kuzu graph need a
+  matching update to the README "Re-index required" callout. Bump
+  `ontology_version` when enrichment semantics change.
+- `server.py` is a stdio MCP server: anything reachable from a tool
+  handler must not write to **stdout** (that's the JSON-RPC
+  transport). Diagnostics go to stderr.
+- Tool `description=` strings and `_INSTRUCTIONS` in `server.py` are
+  read by LLM clients to choose tools — treat them as part of the
+  contract, not freeform docs.
+
+## Validate
+
+- `ruff check .` — fix or justify warnings.
+- `pytest tests -v` — must pass without `LANCEDB_MCP_RUN_HEAVY`.
+- For schema or ranking work, also run with
+  `LANCEDB_MCP_RUN_HEAVY=1` locally (slow; downloads models).
+
+## Commit and PR
+
+- Commit messages: present tense, imperative, lowercase first word,
+  matching existing style (e.g. `fixed call graph review D6`,
+  `applied fixes for call graph layer`).
+- One logical change per commit when feasible.
+- Branch names: `cursor/<topic>` for cursor-agent work, `plan/<name>`
+  for in-progress proposes (matching existing `plan/tier1-completion`).
+- PR body should reference any propose it implements, list
+  user-visible behaviour changes, and call out reindex / env-var
+  requirements explicitly.
+- Never push directly to `master`.
+
+## Don't
+
+- Don't run `gh auth status` or otherwise inspect credentials.
+- Don't widen the public surface "just in case" — every new tool,
+  env var, or schema column adds a re-index burden on users.
+- Don't special-case the `tests/bank-chat-system/` fixture in
+  production code. If a test needs it, the test is wrong (see
+  `tests/README.md`).
+- Don't tighten loose test assertions (`>= 1`, `len(...) >= N`,
+  `key in result`) into exact counts to chase a number — they are
+  intentionally loose.
+- Don't add a hard dependency on `cocoindex` outside
+  `java_index_flow_lancedb.py` / the `refresh_code_index` tool.
