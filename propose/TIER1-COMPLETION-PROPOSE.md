@@ -946,6 +946,7 @@ follow-ups, in order of leverage:
 
 ## 11. References
 
+- [`TIER1B-HTTP-ASYNC-EDGES-PROPOSE.md`](TIER1B-HTTP-ASYNC-EDGES-PROPOSE.md) - B2b + B6 propose
 - [`reports/what-to-borrow-from-cmm.md`](../reports/what-to-borrow-from-cmm.md) — original borrow guide (Tier 1 §B1–B5).
 - [`propose/completed/CALL-GRAPH-PROPOSE.md`](completed/CALL-GRAPH-PROPOSE.md) — completed call-graph proposal; same shape & style.
 - [`reports/call-graph-review.md`](../reports/call-graph-review.md) — review that surfaced the resolver / extractor invariants.
