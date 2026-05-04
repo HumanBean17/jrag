@@ -208,6 +208,7 @@ class CallSite:
     in_lambda: bool
     line: int
     byte: int
+    chained_method_reference: bool = False  # true for ``expr::name`` where expr is a call chain
 
 
 @dataclass
@@ -744,7 +745,11 @@ def _arg_list_count(arg_list: Node | None) -> int:
 
 
 def _infer_static_method_invocation(obj: Node | None, src: bytes) -> bool:
-    """Heuristic: ClassName.method() vs instance.method()."""
+    """Heuristic: ClassName.method() vs instance.method().
+
+    TODO: Uppercase ``identifier`` receivers are treated as types; the graph
+    builder may override via the per-method scope table when the name is a local.
+    """
     if obj is None:
         return False
     if obj.type in ("type_identifier", "scoped_type_identifier"):
@@ -803,6 +808,7 @@ def _collect_call_sites(
         line: int,
         byte: int,
         lam: bool,
+        chained_method_reference: bool = False,
     ) -> None:
         out.append(
             CallSite(
@@ -813,6 +819,7 @@ def _collect_call_sites(
                 is_static_call=is_static_call,
                 is_constructor=is_constructor,
                 in_lambda=lam,
+                chained_method_reference=chained_method_reference,
                 line=line,
                 byte=byte,
             )
@@ -897,7 +904,8 @@ def _collect_call_sites(
                 is_constructor=False,
                 line=n.start_point[0] + 1,
                 byte=n.start_byte,
-                lam=lam or chained,
+                lam=lam,
+                chained_method_reference=chained,
             )
             for ch in n.children:
                 visit(ch, lam)

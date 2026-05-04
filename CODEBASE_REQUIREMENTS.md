@@ -73,7 +73,9 @@ The graph builder extracts call sites with **tree-sitter-java** node types:
 - **Call sites:** `method_invocation`, `object_creation_expression`, `method_reference`,
   `explicit_constructor_invocation`
 - **Nested context:** `lambda_expression` (calls inside a lambda body stay on the enclosing
-  method’s `CallSite` list with `in_lambda=true`). **Anonymous classes** — `class_body` under
+  method’s `CallSite` list with `in_lambda=true` only for those sites). Expression-qualified
+  method references (`getX()::trim`) set `chained_method_reference=true` and `in_lambda=false`
+  when the reference appears in ordinary method code. **Anonymous classes** — `class_body` under
   `object_creation_expression` is **not** merged into the outer method’s call sites; each
   anonymous body is modeled as a synthetic nested type (`TypeDecl.name` like `<anon:byte>`,
   FQN `Outer.<anon:byte>`) with normal `MethodDecl` rows and `CALLS` from those members.

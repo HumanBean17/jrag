@@ -18,9 +18,13 @@ break when the fixture grows. See `tests/README.md`.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
+import kuzu
 import pytest
 
-from kuzu_queries import _is_external_fqn
+from ast_java import ONTOLOGY_VERSION
+from kuzu_queries import KuzuGraph, _is_external_fqn
 
 
 def _names(symbols) -> set[str]:
@@ -359,3 +363,32 @@ def test_expand_methods_exclude_external_false_can_include_more(kuzu_graph) -> N
 
 def test_trace_flow_empty_seeds_returns_empty(kuzu_graph) -> None:
     assert kuzu_graph.trace_flow([], depth=1) == []
+
+
+def test_kuzu_graph_get_raises_when_graph_ontology_too_old(tmp_path: Path) -> None:
+    """N4 / proposal §5.3: stale graphs must fail loudly on open."""
+    db_path = tmp_path / "stale_ontology.kuzu"
+    conn = kuzu.Connection(kuzu.Database(str(db_path)))
+    conn.execute(
+        "CREATE NODE TABLE GraphMeta("
+        "key STRING PRIMARY KEY, "
+        "ontology_version INT64, built_at INT64, source_root STRING, "
+        "counts_json STRING, parse_errors INT64)"
+    )
+    stale = max(0, ONTOLOGY_VERSION - 1)
+    conn.execute(
+        "CREATE (:GraphMeta {key: $k, ontology_version: $ov, built_at: 0, "
+        "source_root: '', counts_json: '{}', parse_errors: 0})",
+        {"k": "graph", "ov": stale},
+    )
+
+    prev_inst = KuzuGraph._instance
+    prev_path = KuzuGraph._instance_path
+    try:
+        KuzuGraph._instance = None
+        KuzuGraph._instance_path = None
+        with pytest.raises(RuntimeError, match="(?i)ontology"):
+            KuzuGraph.get(str(db_path))
+    finally:
+        KuzuGraph._instance = prev_inst
+        KuzuGraph._instance_path = prev_path

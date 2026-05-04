@@ -128,3 +128,47 @@ def test_receiver_disambiguation_uses_type_index_not_method_unique(tmp_path: Pat
         "expected no resolved CALLS edge Bad.m -> Service.run when `helper` "
         "is not a type and is not in scope"
     )
+
+
+def test_uppercase_local_receiver_not_treated_as_static_qualifier(tmp_path: Path) -> None:
+    """N3: a local variable whose simple name starts with uppercase must not force static-type resolution."""
+    root = tmp_path / "proj"
+    java = root / "src/main/java/n3test"
+    java.mkdir(parents=True)
+    (java / "Helper.java").write_text(
+        "package n3test;\n"
+        "public class Helper {\n"
+        "  public void bar() {}\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    (java / "Bad.java").write_text(
+        "package n3test;\n"
+        "public class Bad {\n"
+        "  void m() {\n"
+        "    Helper Foo = new Helper();\n"
+        "    Foo.bar();\n"
+        "  }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    tables = GraphTables()
+    asts = pass1_parse(root, tables, verbose=False)
+    pass2_edges(tables, asts, verbose=False)
+    pass3_calls(tables, asts, verbose=False)
+
+    db_path = tmp_path / "n3.kuzu"
+    write_kuzu(db_path, tables, source_root=root, verbose=False)
+
+    conn = _connect(db_path)
+    r = conn.execute(
+        "MATCH (src:Symbol)-[c:CALLS]->(dst:Symbol) "
+        "WHERE src.fqn STARTS WITH 'n3test.Bad#m' AND dst.name = 'bar' AND c.resolved = true "
+        "RETURN c.strategy AS s LIMIT 5"
+    )
+    rows = []
+    while r.has_next():
+        rows.append(r.get_next())
+    assert rows, "expected resolved CALLS to Helper.bar via scoped variable Foo"
+    assert all(str(row[0]) == "import_map" for row in rows), rows

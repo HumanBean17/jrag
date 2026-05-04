@@ -140,6 +140,7 @@ class CallResolutionStats:
     by_strategy: dict[str, int] = field(default_factory=lambda: defaultdict(int))
     phantom_chained: int = 0
     phantom_other: int = 0
+    callee_unresolved: int = 0
 
 
 @dataclass
@@ -649,7 +650,12 @@ def _lookup_method_candidates(
     *,
     visited: set[str] | None = None,
 ) -> tuple[list[MemberEntry], bool]:
-    """Return (candidates, used_name_only_fallback). Walks type + supertypes."""
+    """Return (candidates, used_name_only_fallback). Walks type + supertypes.
+
+    When ``used_name_only_fallback`` is true and ``len(candidates) == 1``, the
+    caller may reuse the receiver-resolution strategy (see ``_resolve_and_emit_call``)
+    instead of tagging ``overload_ambiguous``.
+    """
     if visited is None:
         visited = set()
     exact: list[MemberEntry] = []
@@ -755,6 +761,12 @@ def _resolve_receiver_type(
     expr = call.receiver_expr.strip()
     callee = call.callee_simple
 
+    effective_static = call.is_static_call
+    if call.is_static_call and expr and not _is_chained_receiver_text(expr):
+        bare_for_static = expr.split("<", 1)[0].strip()
+        if bare_for_static and "." not in bare_for_static and bare_for_static in scope:
+            effective_static = False
+
     if not expr and not call.is_static_call:
         if callee in ast.file_imports.static_methods:
             full = ast.file_imports.static_methods[callee]
@@ -765,7 +777,7 @@ def _resolve_receiver_type(
         if sw is not None:
             return sw, "static_import_wildcard", 0.85
 
-    if call.is_static_call and expr:
+    if effective_static and expr:
         if _is_chained_receiver_text(expr):
             return None, "chained_receiver", 0.0
         entry = tables.types.get(member.parent_fqn)
@@ -789,7 +801,7 @@ def _resolve_receiver_type(
             return sf, "suffix", 0.55
         return None, "phantom", 0.0
 
-    if expr in ("", "this") or (not expr and call.is_static_call is False and not call.receiver_expr):
+    if expr in ("", "this"):
         return member.parent_fqn, "this_super", 0.95
 
     if expr == "super":
@@ -914,6 +926,8 @@ def _emit_call_edge(
         # High-confidence edges with phantom callees (resolved=False, strategy!=phantom)
         # are not noise — they are known external calls with good receiver resolution.
         stats.phantom_other += 1
+    if not resolved and strategy != "chained_receiver":
+        stats.callee_unresolved += 1
 
 
 def _resolve_and_emit_call(
@@ -922,8 +936,19 @@ def _resolve_and_emit_call(
     ast: JavaFileAst,
     tables: GraphTables,
     stats: CallResolutionStats,
+    *,
+    scope: dict[str, str],
 ) -> None:
-    scope = _scope_table(member, ast, tables)
+    """Emit CALLS rows for one call site.
+
+    Candidate selection uses ``_lookup_method_candidates`` (exact arity first, then
+    name-only fallback on the type + supertype walk).
+
+    When ``used_name_only_fallback`` is true and exactly one name-only candidate
+    exists, the edge ``strategy`` reuses the receiver-resolution tier (``strat``)
+    rather than ``overload_ambiguous``: arity at the call site did not match any
+    overload, but only one method of that name exists — the callee is unambiguous.
+    """
     recv_type, strat, conf = _resolve_receiver_type(call, scope=scope, member=member, ast=ast, tables=tables)
 
     if strat == "chained_receiver":
@@ -1016,9 +1041,10 @@ def _resolve_method_calls(
     tables: GraphTables,
     stats: CallResolutionStats,
 ) -> None:
+    scope = _scope_table(member, ast, tables)
     for call in member.decl.call_sites:
         try:
-            _resolve_and_emit_call(call, member, ast, tables, stats)
+            _resolve_and_emit_call(call, member, ast, tables, stats, scope=scope)
         except Exception as e:
             log.warning("call resolution failed for %s: %s", member.decl.signature, e)
 
@@ -1046,10 +1072,14 @@ def pass3_calls(tables: GraphTables, asts: dict[str, JavaFileAst], *, verbose: b
             _process_file_calls(file_ast, rel_path, tables, stats)
         except Exception as e:
             log.error("Call extraction failed for %s: %s", rel_path, e)
-    pct = 100.0 * stats.phantom_chained / max(1, stats.total)
+    pct_chained = 100.0 * stats.phantom_chained / max(1, stats.total)
+    pct_callee_unres = 100.0 * stats.callee_unresolved / max(1, stats.total)
+    pct_phantom_recv = 100.0 * stats.phantom_other / max(1, stats.total)
     msg = (
         f"Call resolution: {stats.total} sites, {stats.phantom_chained} chained phantoms "
-        f"({pct:.1f}%), strategies: {dict(stats.by_strategy)}"
+        f"({pct_chained:.1f}%), {stats.callee_unresolved} unresolved callee "
+        f"({pct_callee_unres:.1f}%), {stats.phantom_other} phantom receiver "
+        f"({pct_phantom_recv:.1f}%), strategies: {dict(stats.by_strategy)}"
     )
     log.info(msg)
     if verbose:

@@ -122,14 +122,18 @@ class CallSite:
     arg_count: int           # fixed-arity; varargs count literal args at site
     is_static_call: bool     # ClassName.foo() — receiver is a type, not a value
     is_constructor: bool     # new Foo(...), this(...), super(...)
-    in_lambda: bool          # call nested inside a lambda body (still attributed to enclosing method)
+    in_lambda: bool          # true only when the site is nested under a `lambda_expression` body
     line: int
     byte: int
+    chained_method_reference: bool  # true for `expr::name` where `expr` is a method_invocation (chained qualifier)
 ```
 
 **Lambda bodies**: Walked during collection on the enclosing named method;
-`in_lambda=True` marks sites whose receiver/`this` semantics are those of the
-lambda’s captured scope (same as today).
+`in_lambda=True` marks sites nested under a `lambda_expression` (receiver/`this`
+semantics follow the lambda’s captured scope). **Do not** conflate this with
+expression-qualified method references (`getX()::trim`): those set
+`chained_method_reference=True` and keep `in_lambda=False` unless the reference
+text itself sits inside a lambda body.
 
 **Anonymous inner classes** (`new SuperType() { ... }` with `class_body`):
 Tree-sitter exposes the body as `class_body` under `object_creation_expression`,

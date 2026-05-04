@@ -249,7 +249,10 @@ def test_method_ref_expression_qualifier_proposal_7_1_case_18() -> None:
     sites = _method_body_sites(src, type_name="C", method_name="m")
     trim_sites = [s for s in sites if s.callee_simple == "trim"]
     assert trim_sites, "expected method_reference site for trim"
-    assert any("getX()" in s.receiver_expr and s.in_lambda for s in trim_sites)
+    assert any(
+        "getX()" in s.receiver_expr and not s.in_lambda and s.chained_method_reference
+        for s in trim_sites
+    )
 
 
 def test_wildcard_static_import_fixture_file_proposal_7_1_case_15() -> None:
@@ -339,4 +342,10 @@ def test_nested_calls_fixture_file_parse_proposal_7_1_11_16_18() -> None:
     run = next(x for x in anon.methods if x.name == "run")
     assert any(s.callee_simple == "pingFromAnon" and not s.in_lambda for s in run.call_sites)
     assert any(s.callee_simple == "pingFromLambda" and s.in_lambda for s in m.call_sites)
-    assert any(s.callee_simple == "trim" and "getX()" in s.receiver_expr and s.in_lambda for s in m.call_sites)
+    assert any(
+        s.callee_simple == "trim"
+        and "getX()" in s.receiver_expr
+        and not s.in_lambda
+        and s.chained_method_reference
+        for s in m.call_sites
+    )
