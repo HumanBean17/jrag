@@ -372,7 +372,7 @@ Both return `SymbolDto` for each hit **plus** per-edge metadata:
 | `graph_neighbors` | `CALLS` added to the edge-type whitelist. Depth / direction / limit unchanged. |
 | `impact_analysis` | **Unchanged** — stays type-level. A separate `impact_analysis_methods` may ship later if needed. |
 | `graph_meta` | `counts` gains `calls` and `declares`. |
-| `codebase_search` (via `graph_expand=true`) | `_graph_expand_merge` adds a method-aware path: type seed → `DECLARES` → `CALLS` → `DECLARES(reverse)` → type. Merged via existing RRF. No new caller-visible parameters. |
+| `codebase_search` (via `graph_expand=true`) | `_graph_expand_merge` adds a method-aware path: type seed → `DECLARES` → `CALLS` → `DECLARES(reverse)` → type. Internal helper `expand_methods` returns `(type_fqn, path_confidence)` (max over paths of the min `CALLS.confidence` along each path; structural `expand_fqns` neighbours use weight `1.0`); graph-expanded chunk rows scale their RRF contribution by that weight. Merged via existing RRF. No new caller-visible parameters. |
 
 ### 6.3 Agent instructions (`_INSTRUCTIONS`)
 

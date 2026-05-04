@@ -639,8 +639,12 @@ class KuzuGraph:
         self, fqns: list[str], *, depth: int = 1,
         min_confidence: float = 0.0, limit: int = 200,
         exclude_external: bool = True,
-    ) -> list[str]:
+    ) -> list[tuple[str, float]]:
         """Reach type FQNs from seed types via DECLARES → CALLS → DECLARES (reverse).
+
+        Each entry is ``(type_fqn, path_confidence)``. ``path_confidence`` is the
+        maximum, over call paths from seed methods, of the minimum ``CALLS.confidence``
+        along that path (seed methods anchor at ``1.0`` before the first hop).
 
         When ``exclude_external`` is true (default), types whose FQN matches the
         same JDK/Spring/Lombok prefixes as ``find_callees`` are omitted from the
@@ -664,24 +668,43 @@ class KuzuGraph:
                 {"tid": tid},
             )
             seed_mids.extend(str(x["id"]) for x in mrows if x.get("id"))
-        frontier = list(dict.fromkeys(seed_mids))
-        out_types: list[str] = []
-        seen_t: set[str] = set()
+        seed_mids = list(dict.fromkeys(seed_mids))
+        if not seed_mids:
+            return []
+        frontier_conf: dict[str, float] = {mid: 1.0 for mid in seed_mids}
+        type_best: dict[str, float] = {}
+        ordered_types: list[str] = []
+        seen_order: set[str] = set()
         for _ in range(int(depth)):
-            if not frontier:
+            if not frontier_conf:
                 break
+            ids = list(frontier_conf.keys())
             rows = self._rows(
                 "MATCH (m:Symbol)-[c:CALLS]->(n:Symbol) WHERE m.id IN $ids AND c.confidence >= $mc "
-                "RETURN n.id AS id",
-                {"ids": frontier, "mc": float(min_confidence)},
+                "RETURN m.id AS mid, n.id AS nid, c.confidence AS conf",
+                {"ids": ids, "mc": float(min_confidence)},
             )
-            next_ids: list[str] = []
+            next_conf: dict[str, float] = {}
             for r in rows:
-                nid = str(r.get("id") or "")
-                if nid:
-                    next_ids.append(nid)
-            next_ids = list(dict.fromkeys(next_ids))
-            for nid in next_ids:
+                mid = str(r.get("mid") or "")
+                nid = str(r.get("nid") or "")
+                if not mid or not nid:
+                    continue
+                raw_conf = r.get("conf")
+                try:
+                    ec = float(raw_conf) if raw_conf is not None else 0.0
+                except (TypeError, ValueError):
+                    ec = 0.0
+                parent = frontier_conf.get(mid)
+                if parent is None:
+                    continue
+                new_c = min(parent, ec)
+                next_conf[nid] = max(next_conf.get(nid, 0.0), new_c)
+
+            if not next_conf:
+                break
+
+            for nid, path_c in next_conf.items():
                 srows = self._rows(
                     "MATCH (s:Symbol {id: $id}) RETURN s.fqn AS fqn LIMIT 1",
                     {"id": nid},
@@ -692,16 +715,22 @@ class KuzuGraph:
                 if "#" not in mfqn:
                     continue
                 tpart = mfqn.split("#", 1)[0]
-                if not tpart or tpart in seen_t:
+                if not tpart:
                     continue
-                if exclude_external and _is_external_fqn(tpart):
-                    continue
-                seen_t.add(tpart)
-                out_types.append(tpart)
-                if len(out_types) >= limit:
-                    return out_types[:limit]
-            frontier = next_ids
-        return out_types[:limit]
+                is_ext = _is_external_fqn(tpart)
+                if exclude_external and is_ext:
+                    pass
+                else:
+                    type_best[tpart] = max(type_best.get(tpart, 0.0), path_c)
+                    if tpart not in seen_order:
+                        seen_order.add(tpart)
+                        ordered_types.append(tpart)
+                        if len(ordered_types) >= limit:
+                            return [(t, type_best[t]) for t in ordered_types[:limit]]
+
+            frontier_conf = next_conf
+
+        return [(t, type_best[t]) for t in ordered_types[:limit]]
 
     def neighbors(self, fqn_or_name: str, *, depth: int = 1,
                   edge_types: list[str] | None = None,

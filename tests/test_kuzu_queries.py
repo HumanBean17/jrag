@@ -308,6 +308,13 @@ def test_expand_methods_from_service_seed(kuzu_graph) -> None:
         limit=50,
     )
     assert isinstance(extra, list)
+    assert all(isinstance(t, tuple) and len(t) == 2 for t in extra), extra
+    for fqn, conf in extra:
+        assert isinstance(fqn, str) and fqn
+        assert 0.0 <= conf <= 1.0
+    if extra:
+        # CALLS edges carry positive confidence when the graph has callees from this seed.
+        assert any(conf > 0.0 for _, conf in extra), extra
 
 
 def test_expand_methods_default_excludes_external_prefixes(kuzu_graph) -> None:
@@ -316,7 +323,7 @@ def test_expand_methods_default_excludes_external_prefixes(kuzu_graph) -> None:
         depth=2,
         limit=200,
     )
-    assert not any(_is_external_fqn(t) for t in extra), extra
+    assert not any(_is_external_fqn(t[0]) for t in extra), extra
 
 
 def test_expand_methods_exclude_external_false_can_include_more(kuzu_graph) -> None:

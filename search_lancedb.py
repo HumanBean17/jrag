@@ -8,6 +8,7 @@ import json
 import os
 import sys
 import threading
+from collections.abc import Callable
 from pathlib import Path
 
 import lancedb
@@ -689,10 +690,19 @@ def _graph_expand_merge(
 
     try:
         graph = KuzuGraph.get(kuzu_path)
-        neighbor_fqns = graph.expand_fqns(seed_fqns, depth=expand_depth)
+        structural = graph.expand_fqns(seed_fqns, depth=expand_depth)
+        method_pairs = graph.expand_methods(
+            seed_fqns, depth=expand_depth, exclude_external=True,
+        )
+        expand_weight_by_fqn: dict[str, float] = {}
+        for f in structural:
+            if f:
+                expand_weight_by_fqn[f] = max(expand_weight_by_fqn.get(f, 0.0), 1.0)
+        for f, conf in method_pairs:
+            if f:
+                expand_weight_by_fqn[f] = max(expand_weight_by_fqn.get(f, 0.0), conf)
         neighbor_fqns = list(dict.fromkeys(
-            neighbor_fqns
-            + graph.expand_methods(seed_fqns, depth=expand_depth, exclude_external=True),
+            list(structural) + [f for f, _ in method_pairs],
         ))
     except Exception:
         return vector_rows
@@ -723,22 +733,44 @@ def _graph_expand_merge(
     graph_rows.sort(key=_vector_sort_key)
     for r in graph_rows:
         r["_graph_expanded"] = True
-    fused = _rrf_merge([vector_rows, graph_rows])
+        r["_graph_expand_weight"] = expand_weight_by_fqn.get(
+            r.get("primary_type_fqn"), 1.0,
+        )
+    fused = _rrf_merge(
+        [vector_rows, graph_rows],
+        row_weight_for_list_index=[
+            None,
+            lambda row: float(row.get("_graph_expand_weight", 1.0)),
+        ],
+    )
     return fused
 
 
-def _rrf_merge(lists: list[list[dict]], *, k: int = 60) -> list[dict]:
+def _rrf_merge(
+    lists: list[list[dict]],
+    *,
+    k: int = 60,
+    row_weight_for_list_index: list[Callable[[dict], float] | None] | None = None,
+) -> list[dict]:
     """Reciprocal-rank-fuse several ranked lists of chunk rows.
 
     Rows are deduplicated by (filename, range_start, range_end). The merged
     rows get a `_rrf_score` field so callers can inspect or re-sort.
+
+    When ``row_weight_for_list_index`` is set, its length must match ``lists``;
+    a non-None entry is a callable ``row -> weight`` multiplied into that list's
+    rank contribution (``None`` means weight ``1.0`` for every row).
     """
     pool: dict[tuple, dict] = {}
-    for ranked in lists:
+    for li, ranked in enumerate(lists):
+        wfn: Callable[[dict], float] | None = None
+        if row_weight_for_list_index is not None and li < len(row_weight_for_list_index):
+            wfn = row_weight_for_list_index[li]
         for rank, row in enumerate(ranked):
             key = (row.get("filename"), row.get("range_start"), row.get("range_end"))
             existing = pool.get(key)
-            contribution = 1.0 / (k + rank + 1)
+            weight = 1.0 if wfn is None else float(wfn(row))
+            contribution = weight * (1.0 / (k + rank + 1))
             if existing is None:
                 row["_rrf_score"] = contribution
                 pool[key] = row
