@@ -1,31 +1,34 @@
 ---
-description: High-level map of this repo (LanceDB MCP bundle + Kuzu AST graph for Java RAG/GraphRAG). Always-on so agents start with the right mental model.
+description: Project map and where to look for what. Always-on so agents start with the right mental model.
 alwaysApply: true
 ---
 
 # Project overview
 
-This repo is a **self-contained stdio MCP server** that serves semantic +
-structural search over a Java codebase. It is a Python project (the indexer
-and server). It is **not** a Java project — the `tests/bank-chat-system/`
-tree is fixture data, not code to modify.
+This repo is a **self-contained stdio MCP server** that serves
+semantic + structural search over a Java codebase. It is a Python
+project (the indexer and server). It is **not** a Java project —
+the `tests/bank-chat-system/` tree is fixture data, not code to
+modify.
 
-## What it does
+Treat README and the markdown docs as the source of truth for
+behaviour, schemas, env vars, ranking, edges, tool defaults, and
+ontology. **Do not copy that content into rules** — read it directly
+when needed.
 
-1. **LanceDB vector index** — chunks of Java / SQL / YAML embedded with
-   `sentence-transformers` (default `all-MiniLM-L6-v2`). Built by the
-   CocoIndex flow `java_index_flow_lancedb.py`.
-2. **Kuzu AST graph (sidecar)** — Tree-sitter Java -> Kuzu graph with
-   nodes (`package`, `file`, `class`, `interface`, `enum`, `record`,
-   `annotation`, `method`, `constructor`) and edges (`EXTENDS`,
-   `IMPLEMENTS`, `INJECTS`, `DECLARES`, `CALLS`). Built by
-   `build_ast_graph.py`.
-3. **MCP server (`server.py`)** — exposes `codebase_search`, `trace_flow`,
-   `find_implementors` / `find_subclasses` / `find_injectors` /
-   `find_callers` / `find_callees`, `impact_analysis`, `list_by_role` /
-   `list_by_annotation` / `list_by_capability`, `graph_neighbors`,
-   `list_code_index_tables`, `graph_meta`, and (gated)
-   `refresh_code_index`.
+## Where to look
+
+- `README.md` — feature surface, env vars, ranking, capabilities,
+  tool list, "Re-index required" callouts.
+- `CODEBASE_REQUIREMENTS.md` — Java-repo assumptions and per-file
+  map of what to edit when a target tree doesn't match defaults.
+- `tests/README.md` — testing philosophy.
+- `propose/` and `propose/completed/` — design proposes; the active
+  ones describe in-flight scope and the completed ones explain *why*
+  current code looks the way it does.
+- `plans/` and `plans/completed/` — longer-form plans (e.g.
+  capabilities model, tier completions).
+- `.cursor/rules/breaking-changes.mdc` — the no-back-compat policy.
 
 ## File map (top of repo)
 
@@ -44,28 +47,9 @@ tree is fixture data, not code to modify.
 | `java_index_v1_common.py` | Shared file walker / exclude patterns. |
 | `mcp.json.example` | Template for `.mcp.json`. |
 
-## Key environment variables
+## Test layout
 
-- `LANCEDB_URI` — absolute path to `lancedb_data/` (required at runtime).
-- `LANCEDB_MCP_PROJECT_ROOT` — Java project root for indexing & metadata.
-- `KUZU_DB_PATH` — Kuzu DB path (defaults to `${LANCEDB_URI}/code_graph.kuzu`).
-- `LANCEDB_MCP_GRAPH_ENABLED` — `1`/`0`; auto-on when the Kuzu DB exists.
-- `LANCEDB_MCP_ALLOW_REFRESH` — `1` to enable the heavy `refresh_code_index` tool.
-- `LANCEDB_MCP_MICROSERVICE_ROOTS` — override microservice inference.
-- `SBERT_MODEL` / `SBERT_DEVICE` — must match indexer.
-
-## Two location concepts
-
-- `module` — innermost build-marker (`pom.xml`, `build.gradle(.kts)`, `build.sbt`) ancestor's directory name.
-- `microservice` — outermost build-marker ancestor under `LANCEDB_MCP_PROJECT_ROOT`. Single-module projects collapse `module == microservice`.
-
-Resolution order for `microservice`: explicit override (env or
-`.lancedb-mcp.yml` `microservice_roots:`) → outermost build marker →
-first path segment under `project_root` → empty string.
-
-## Read these before non-trivial edits
-
-- `README.md` — full feature surface and behaviour.
-- `CODEBASE_REQUIREMENTS.md` — exact assumptions about Java repos and a
-  per-file map of what to edit if your tree doesn't match.
-- `tests/README.md` — testing philosophy (see `tests-and-fixtures.mdc`).
+- `tests/conftest.py` — session-scoped Kuzu graph fixture.
+- `tests/bank-chat-system/` — deterministic Java corpus (fixture, not production model).
+- `tests/fixtures/call_graph_smoke/` — mini Maven tree calibrated against the call-graph resolver.
+- Heavy e2e tests gated behind `LANCEDB_MCP_RUN_HEAVY=1`.
