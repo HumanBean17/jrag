@@ -94,6 +94,8 @@ Resolution order for `microservice`:
 > 1. it gained enrichment columns (first cut of the graph work); and
 > 2. `annotations_on_type` / `symbols` are now native PyArrow `list<string>` instead of
 >    JSON-encoded strings (previous builds caused char-array output — see below).
+> 3. **`ontology_version` 5** adds `Route` / `EXPOSES` and route counters on `GraphMeta` —
+>    rebuild the Kuzu graph (`build_ast_graph.py` or `refresh_code_index`).
 >
 > Any index built before these changes must be rebuilt via
 > `cocoindex update ... --full-reprocess -f` or `refresh_code_index`. Until
@@ -137,7 +139,7 @@ The DB is dropped and rebuilt from scratch on each run (Phase 1 is a full rebuil
 | `list_by_annotation` | Symbols whose annotation list contains the given simple name. |
 | `graph_neighbors` | Generic BFS over `EXTENDS|IMPLEMENTS|INJECTS|DECLARES|CALLS`, directional. |
 | `impact_analysis` | Reverse closure: what breaks if this changes. |
-| `graph_meta` | Counts, ontology version, build timestamp, parse errors. |
+| `graph_meta` | Counts, ontology version, build timestamp, parse errors; route totals / `routes_by_framework` / `routes_resolved_pct` when the graph includes `Route` nodes (ontology v5+). |
 
 ### Manual test
 

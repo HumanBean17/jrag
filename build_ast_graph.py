@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""Three-pass AST-derived Knowledge Base builder (Kuzu).
+"""Four-pass AST-derived Knowledge Base builder (Kuzu).
 
 Walks a Java source tree with `tree_sitter_java`, writes a deterministic graph of:
     Symbol nodes: package, file, class, interface, enum, record, annotation, method, constructor
-    Rel tables:   EXTENDS, IMPLEMENTS, INJECTS, DECLARES, CALLS
+    Route nodes:  declaration-site routes (Spring MVC/WebFlux, Feign, Kafka, …)
+    Rel tables:   EXTENDS, IMPLEMENTS, INJECTS, DECLARES, CALLS, EXPOSES
 
 Pass 1 builds every node and in-memory resolution indexes.
 Pass 2 resolves each extends/implements/injection target using Java's lookup order
 (same file → explicit import → same package → wildcard import → java.lang → phantom).
 Pass 3 resolves static call sites into confidence-scored CALLS edges and DECLARES.
+Pass 4 emits Route rows plus Symbol→Route EXPOSES edges from literal annotation metadata.
 
 Usage:
     build_ast_graph.py --source-root <repo> [--kuzu-path <dir>] [--verbose]
@@ -24,8 +26,10 @@ The Kuzu DB is dropped and rebuilt on every run (Phase 1 is a full rebuild).
 from __future__ import annotations
 
 import argparse
+import hashlib
 import logging
 import os
+import re
 import sys
 import time
 from collections import defaultdict
@@ -36,9 +40,7 @@ import kuzu
 
 from ast_java import (
     ONTOLOGY_VERSION,
-    AnnotationRef,
     CallSite,
-    FieldDecl,
     JavaFileAst,
     MethodDecl,
     TypeDecl,
@@ -144,6 +146,43 @@ class CallResolutionStats:
 
 
 @dataclass
+class RouteRow:
+    id: str
+    kind: str
+    framework: str
+    method: str
+    path: str
+    path_template: str
+    path_regex: str
+    topic: str
+    broker: str
+    feign_name: str
+    feign_url: str
+    microservice: str
+    module: str
+    filename: str
+    start_line: int
+    end_line: int
+    resolved: bool
+
+
+@dataclass
+class ExposesRow:
+    symbol_id: str
+    route_id: str
+    confidence: float
+    strategy: str
+
+
+@dataclass
+class RouteExtractionStats:
+    routes_skipped_unresolved: int = 0
+    by_framework: dict[str, int] = field(default_factory=lambda: defaultdict(int))
+    by_kind: dict[str, int] = field(default_factory=lambda: defaultdict(int))
+    routes_resolved_pct: float = 100.0
+
+
+@dataclass
 class GraphTables:
     types: dict[str, TypeIndexEntry] = field(default_factory=dict)  # fqn -> entry
     by_simple_name: dict[str, list[TypeIndexEntry]] = field(default_factory=dict)
@@ -157,6 +196,9 @@ class GraphTables:
     injects_rows: list[InjectsRow] = field(default_factory=list)
     calls_rows: list[CallsRow] = field(default_factory=list)
     declares_rows: list[DeclaresRow] = field(default_factory=list)
+    routes_rows: list[RouteRow] = field(default_factory=list)
+    exposes_rows: list[ExposesRow] = field(default_factory=list)
+    route_stats: RouteExtractionStats = field(default_factory=RouteExtractionStats)
     methods_by_type: dict[str, list[MemberEntry]] = field(default_factory=dict)
     parse_errors: int = 0
     skipped_files: int = 0
@@ -238,17 +280,17 @@ def pass1_parse(root: Path, tables: GraphTables, *, verbose: bool) -> dict[str, 
         if not content.strip():
             continue
         try:
-            ast = parse_java(content)
+            rel = p.resolve().relative_to(root.resolve()).as_posix()
+        except ValueError:
+            rel = p.as_posix()
+        try:
+            ast = parse_java(content, filename=rel)
         except Exception:
             tables.parse_errors += 1
             continue
         if ast.parse_error:
             tables.parse_errors += 1
             # Still index what tree-sitter gave us; robust to syntax errors.
-        try:
-            rel = p.resolve().relative_to(root.resolve()).as_posix()
-        except ValueError:
-            rel = p.as_posix()
         module = module_for_path(str(p), root)
         microservice = microservice_for_path(str(p), root)
         asts[rel] = ast
@@ -294,12 +336,10 @@ def _resolve_simple(
 
     # 0. Nested inside the same top-level hierarchy — try `Outer.Bare` fqn.
     outer = current.outer_fqn
-    top_fqn = current.decl.fqn
     while outer is not None and outer in tables.types:
         candidate = f"{outer}.{bare}"
         if candidate in tables.types:
             return tables.types[candidate]
-        top_fqn = outer
         outer = tables.types[outer].outer_fqn
 
     # 1. Same-file siblings (same outer as `current`).
@@ -1086,6 +1126,142 @@ def pass3_calls(tables: GraphTables, asts: dict[str, JavaFileAst], *, verbose: b
         print(f"[pass3] {msg}", file=sys.stderr)
 
 
+_PATH_VAR_SEG = re.compile(r"^\{([^:{}]+)(?::([^}]*))?\}$")  # whole path segment
+
+
+def _normalize_path(raw_path: str) -> tuple[str, str]:
+    """Return `(path_template, path_regex)` for a servlet-style path pattern.
+
+    `/api/users/{id}` → ``("/api/users/{}", "^/api/users/[^/]+/?$")``.
+    `{id:\\d+}` constraints strip to ``{}`` in the template while preserving the
+    regex constraint for that segment. Deterministic for shared use by B2b/B6.
+    """
+    raw_path = (raw_path or "").strip()
+    if not raw_path:
+        return "", ""
+    p = raw_path if raw_path.startswith("/") else "/" + raw_path
+    trimmed = p.rstrip("/")
+    if trimmed == "":
+        return "/", "^/?$"
+    segments = [s for s in trimmed.split("/") if s != ""]
+    tmpl_parts: list[str] = []
+    re_parts: list[str] = []
+    for seg in segments:
+        m = _PATH_VAR_SEG.fullmatch(seg)
+        if m:
+            tmpl_parts.append("{}")
+            constraint = m.group(2)
+            re_parts.append(constraint if constraint else "[^/]+")
+        else:
+            tmpl_parts.append(seg)
+            re_parts.append(re.escape(seg))
+    tmpl = "/" + "/".join(tmpl_parts)
+    body = "/".join(re_parts)
+    if not body.startswith("/"):
+        body = "/" + body
+    return tmpl, f"^{body}/?$"
+
+
+def _route_id(
+    framework: str,
+    kind: str,
+    http_method: str,
+    path_template: str,
+    topic: str,
+    broker: str,
+    microservice: str,
+) -> str:
+    key = (
+        f"{framework}|{kind}|{http_method}|{path_template}|"
+        f"{topic}|{broker}|{microservice}"
+    )
+    return f"r:{hashlib.sha1(key.encode()).hexdigest()[:16]}"
+
+
+def pass4_routes(tables: GraphTables, asts: dict[str, JavaFileAst], *, verbose: bool) -> None:
+    stats = tables.route_stats
+    for ast in asts.values():
+        stats.routes_skipped_unresolved += ast.routes_skipped_unresolved
+
+    routes_by_id: dict[str, RouteRow] = {}
+    exposes_seen: set[tuple[str, str]] = set()
+
+    http_kinds = frozenset({"http_endpoint", "http_consumer"})
+
+    for member in tables.members:
+        if member.decl.is_constructor:
+            continue
+        ast = asts.get(member.file_path)
+        if ast is None or not member.decl.routes:
+            continue
+        for decl in member.decl.routes:
+            path_template, path_regex = ("", "")
+            if decl.kind in http_kinds:
+                path_template, path_regex = _normalize_path(decl.path)
+            rid = _route_id(
+                decl.framework,
+                decl.kind,
+                decl.http_method,
+                path_template,
+                decl.topic,
+                decl.broker,
+                member.microservice,
+            )
+            if rid not in routes_by_id:
+                routes_by_id[rid] = RouteRow(
+                    id=rid,
+                    kind=decl.kind,
+                    framework=decl.framework,
+                    method=decl.http_method,
+                    path=decl.path,
+                    path_template=path_template,
+                    path_regex=path_regex,
+                    topic=decl.topic,
+                    broker=decl.broker,
+                    feign_name=decl.feign_name,
+                    feign_url=decl.feign_url,
+                    microservice=member.microservice,
+                    module=member.module,
+                    filename=decl.filename,
+                    start_line=decl.start_line,
+                    end_line=decl.end_line,
+                    resolved=decl.resolved,
+                )
+            ek = (member.node_id, rid)
+            if ek not in exposes_seen:
+                exposes_seen.add(ek)
+                tables.exposes_rows.append(
+                    ExposesRow(
+                        symbol_id=member.node_id,
+                        route_id=rid,
+                        confidence=decl.confidence,
+                        strategy=decl.resolution_strategy,
+                    ),
+                )
+
+    tables.routes_rows = sorted(routes_by_id.values(), key=lambda r: r.id)
+
+    for row in tables.routes_rows:
+        stats.by_framework[row.framework] += 1
+        stats.by_kind[row.kind] += 1
+
+    n_routes = len(tables.routes_rows)
+    if n_routes:
+        stats.routes_resolved_pct = 100.0 * sum(1 for r in tables.routes_rows if r.resolved) / n_routes
+    else:
+        stats.routes_resolved_pct = 100.0
+
+    msg = (
+        f"Route extraction: emitted={n_routes}, exposes={len(tables.exposes_rows)}, "
+        f"skipped_unresolved={stats.routes_skipped_unresolved}, "
+        f"routes_resolved_pct={stats.routes_resolved_pct:.1f}, "
+        f"by_framework={dict(stats.by_framework)}"
+    )
+    log.info(msg)
+    if verbose:
+        print(f"[pass4] {msg}", file=sys.stderr)
+
+
 # ---------- Kuzu write ----------
 
 
@@ -1105,8 +1281,24 @@ _SCHEMA_META = (
     "CREATE NODE TABLE GraphMeta("
     "key STRING PRIMARY KEY, "
     "ontology_version INT64, built_at INT64, source_root STRING, "
-    "counts_json STRING, parse_errors INT64"
+    "counts_json STRING, parse_errors INT64, "
+    "routes_total INT64, exposes_total INT64, "
+    # JSON map {framework: count}; STRING avoids Kuzu Python MAP↔STRUCT binder mismatch.
+    "routes_by_framework STRING, "
+    "routes_resolved_pct DOUBLE"
     ")"
+)
+
+_SCHEMA_ROUTE = (
+    "CREATE NODE TABLE Route("
+    "id STRING, kind STRING, framework STRING, "
+    "method STRING, path STRING, path_template STRING, path_regex STRING, "
+    "topic STRING, broker STRING, "
+    "feign_name STRING, feign_url STRING, "
+    "microservice STRING, module STRING, "
+    "filename STRING, start_line INT64, end_line INT64, "
+    "resolved BOOLEAN, "
+    "PRIMARY KEY(id))"
 )
 
 _SCHEMA_EXTENDS = (
@@ -1128,16 +1320,22 @@ _SCHEMA_CALLS = (
     "call_site_line INT64, call_site_byte INT64, arg_count INT64, "
     "confidence DOUBLE, strategy STRING, source STRING, resolved BOOLEAN)"
 )
+_SCHEMA_EXPOSES = (
+    "CREATE REL TABLE EXPOSES(FROM Symbol TO Route, "
+    "confidence DOUBLE, strategy STRING)"
+)
 
 
 def _drop_all(conn: kuzu.Connection) -> None:
     for stmt in (
+        "DROP TABLE IF EXISTS EXPOSES",
         "DROP TABLE IF EXISTS EXTENDS",
         "DROP TABLE IF EXISTS IMPLEMENTS",
         "DROP TABLE IF EXISTS INJECTS",
         "DROP TABLE IF EXISTS CALLS",
         "DROP TABLE IF EXISTS DECLARES",
         "DROP TABLE IF EXISTS Symbol",
+        "DROP TABLE IF EXISTS Route",
         "DROP TABLE IF EXISTS GraphMeta",
     ):
         try:
@@ -1149,12 +1347,14 @@ def _drop_all(conn: kuzu.Connection) -> None:
 def _create_schema(conn: kuzu.Connection) -> None:
     for stmt in (
         _SCHEMA_NODE,
+        _SCHEMA_ROUTE,
         _SCHEMA_META,
         _SCHEMA_EXTENDS,
         _SCHEMA_IMPLEMENTS,
         _SCHEMA_INJECTS,
         _SCHEMA_DECLARES,
         _SCHEMA_CALLS,
+        _SCHEMA_EXPOSES,
     ):
         conn.execute(stmt)
 
@@ -1268,6 +1468,21 @@ _CREATE_CALL = (
     "}]->(b)"
 )
 
+_CREATE_ROUTE = (
+    "CREATE (:Route {"
+    "id: $id, kind: $kind, framework: $framework, method: $method, "
+    "path: $path, path_template: $path_template, path_regex: $path_regex, "
+    "topic: $topic, broker: $broker, feign_name: $feign_name, feign_url: $feign_url, "
+    "microservice: $microservice, module: $module, filename: $filename, "
+    "start_line: $start_line, end_line: $end_line, resolved: $resolved"
+    "})"
+)
+
+_CREATE_EXPOSES = (
+    "MATCH (s:Symbol {id: $sid}), (r:Route {id: $rid}) "
+    "CREATE (s)-[:EXPOSES {confidence: $confidence, strategy: $strategy}]->(r)"
+)
+
 
 def _populate_declares_rows(tables: GraphTables) -> None:
     tables.declares_rows = [
@@ -1318,6 +1533,36 @@ def _write_edges(conn: kuzu.Connection, tables: GraphTables) -> None:
         })
 
 
+def _write_routes_and_exposes(conn: kuzu.Connection, tables: GraphTables) -> None:
+    for row in tables.routes_rows:
+        conn.execute(_CREATE_ROUTE, {
+            "id": row.id,
+            "kind": row.kind,
+            "framework": row.framework,
+            "method": row.method,
+            "path": row.path,
+            "path_template": row.path_template,
+            "path_regex": row.path_regex,
+            "topic": row.topic,
+            "broker": row.broker,
+            "feign_name": row.feign_name,
+            "feign_url": row.feign_url,
+            "microservice": row.microservice,
+            "module": row.module,
+            "filename": row.filename,
+            "start_line": row.start_line,
+            "end_line": row.end_line,
+            "resolved": row.resolved,
+        })
+    for row in tables.exposes_rows:
+        conn.execute(_CREATE_EXPOSES, {
+            "sid": row.symbol_id,
+            "rid": row.route_id,
+            "confidence": row.confidence,
+            "strategy": row.strategy,
+        })
+
+
 def _write_meta(conn: kuzu.Connection, tables: GraphTables, source_root: Path) -> None:
     import json
     seen_calls: set[tuple[str, str, int, int]] = set()
@@ -1327,6 +1572,8 @@ def _write_meta(conn: kuzu.Connection, tables: GraphTables, source_root: Path) -
         if key not in seen_calls:
             seen_calls.add(key)
             calls_unique += 1
+    st = tables.route_stats
+    routes_fw = dict(sorted(st.by_framework.items()))
     counts = {
         "packages": len(tables.packages),
         "files": len(tables.files),
@@ -1338,10 +1585,14 @@ def _write_meta(conn: kuzu.Connection, tables: GraphTables, source_root: Path) -
         "injects": len(tables.injects_rows),
         "declares": len(tables.declares_rows),
         "calls": calls_unique,
+        "routes": len(tables.routes_rows),
+        "exposes": len(tables.exposes_rows),
     }
     conn.execute(
         "CREATE (:GraphMeta {key: $k, ontology_version: $ov, built_at: $t, "
-        "source_root: $sr, counts_json: $cj, parse_errors: $pe})",
+        "source_root: $sr, counts_json: $cj, parse_errors: $pe, "
+        "routes_total: $routes_total, exposes_total: $exposes_total, "
+        "routes_by_framework: $routes_by_framework, routes_resolved_pct: $routes_resolved_pct})",
         {
             "k": "graph",
             "ov": ONTOLOGY_VERSION,
@@ -1349,6 +1600,10 @@ def _write_meta(conn: kuzu.Connection, tables: GraphTables, source_root: Path) -
             "sr": str(source_root.resolve()),
             "cj": json.dumps(counts),
             "pe": tables.parse_errors,
+            "routes_total": len(tables.routes_rows),
+            "exposes_total": len(tables.exposes_rows),
+            "routes_by_framework": json.dumps(routes_fw),
+            "routes_resolved_pct": float(st.routes_resolved_pct),
         },
     )
 
@@ -1384,6 +1639,10 @@ def write_kuzu(
     _write_edges(conn, tables)
     if verbose:
         print(f"[write] edges written in {time.time() - t1:.2f}s", file=sys.stderr)
+    t2 = time.time()
+    _write_routes_and_exposes(conn, tables)
+    if verbose:
+        print(f"[write] routes/exposes written in {time.time() - t2:.2f}s", file=sys.stderr)
     _write_meta(conn, tables, source_root)
     conn.close()
 
@@ -1419,6 +1678,7 @@ def main() -> int:
     asts = pass1_parse(root, tables, verbose=args.verbose)
     pass2_edges(tables, asts, verbose=args.verbose)
     pass3_calls(tables, asts, verbose=args.verbose)
+    pass4_routes(tables, asts, verbose=args.verbose)
     write_kuzu(kuzu_path, tables, source_root=root, verbose=args.verbose)
     if args.verbose:
         print(f"[done] kuzu at {kuzu_path}", file=sys.stderr)

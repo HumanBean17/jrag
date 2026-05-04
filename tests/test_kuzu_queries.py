@@ -51,6 +51,8 @@ def test_meta(kuzu_graph) -> None:
     assert meta["counts"]["injects"] > 0
     assert meta["counts"].get("calls", 0) > 0
     assert meta["counts"].get("declares", 0) > 0
+    assert meta.get("routes_total", 0) >= 1
+    assert isinstance(meta.get("routes_by_framework"), dict)
 
 
 def test_module_counts_keys(kuzu_graph) -> None:

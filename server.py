@@ -238,6 +238,10 @@ class GraphMetaOutput(BaseModel):
             "filter expects."
         ),
     )
+    routes_total: int = 0
+    exposes_total: int = 0
+    routes_by_framework: dict[str, int] = Field(default_factory=dict)
+    routes_resolved_pct: float = 0.0
     message: str | None = None
 
 
@@ -383,6 +387,10 @@ def _graph_meta_output() -> GraphMetaOutput:
         ms_counts = graph.microservice_counts()
     except Exception:
         ms_counts = {}
+    rfw = meta.get("routes_by_framework") or {}
+    if not isinstance(rfw, dict):
+        rfw = {}
+    routes_by_framework = {str(k): int(v) for k, v in rfw.items()}
     return GraphMetaOutput(
         success=True,
         enabled=_graph_enabled(),
@@ -394,6 +402,10 @@ def _graph_meta_output() -> GraphMetaOutput:
         counts={k: int(v) for k, v in (meta.get("counts") or {}).items()},
         module_counts=mod_counts,
         microservice_counts=ms_counts,
+        routes_total=int(meta.get("routes_total") or 0),
+        exposes_total=int(meta.get("exposes_total") or 0),
+        routes_by_framework=routes_by_framework,
+        routes_resolved_pct=float(meta.get("routes_resolved_pct") or 0.0),
     )
 
 

@@ -12,6 +12,7 @@ Python with no tree-sitter dependency.
 """
 from __future__ import annotations
 
+import posixpath
 from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Iterable
@@ -26,6 +27,7 @@ __all__ = [
     "FileImports",
     "ParamDecl",
     "MethodDecl",
+    "RouteDecl",
     "TypeDecl",
     "JavaFileAst",
     "parse_java",
@@ -63,7 +65,8 @@ _DTO_LOMBOK_ANNOTATIONS: frozenset[str] = frozenset({
     "EqualsAndHashCode", "ToString",
 })
 
-ONTOLOGY_VERSION = 4
+# Phase 4: Route + EXPOSES (B2a); bumps whenever Route extraction / enrichment semantics change.
+ONTOLOGY_VERSION = 5
 
 ROLE_ANNOTATIONS: dict[str, str] = {
     # Spring Web
@@ -116,6 +119,22 @@ _INJECTED_TYPES_TO_CAPABILITY: dict[str, str] = {
 _SUPERTYPE_TO_CAPABILITY: dict[str, str] = {
     "Job": "SCHEDULED_TASK",
 }
+
+_ROUTE_HTTP_MAPPING_NAMES = frozenset({
+    "RequestMapping",
+    "GetMapping",
+    "PostMapping",
+    "PutMapping",
+    "DeleteMapping",
+    "PatchMapping",
+})
+
+_ROUTE_ASYNC_METHOD_NAMES = frozenset({
+    "KafkaListener",
+    "RabbitListener",
+    "JmsListener",
+    "StreamListener",
+})
 
 _TYPE_KINDS = {
     "class_declaration": "class",
@@ -227,6 +246,32 @@ class MethodDecl:
     call_sites: list[CallSite] = field(default_factory=list)
     # Ordered (name, simple_type_name) from `local_variable_declaration` in body.
     local_vars: list[tuple[str, str]] = field(default_factory=list)
+    routes: list["RouteDecl"] = field(default_factory=list)
+
+
+@dataclass
+class RouteDecl:
+    """Extracted route declaration anchored on a method (B2a).
+
+    `method_fqn` matches graph Symbol.fqn (`type.pkg.Type#name(T1,T2)`).
+    """
+
+    method_fqn: str
+    method_sig: str
+    kind: str
+    framework: str
+    http_method: str
+    path: str
+    topic: str
+    broker: str
+    feign_name: str
+    feign_url: str
+    resolution_strategy: str
+    confidence: float
+    resolved: bool
+    filename: str
+    start_line: int
+    end_line: int
 
 
 @dataclass
@@ -260,6 +305,12 @@ class JavaFileAst:
     parse_error: bool = False
     source_bytes: int = 0
     file_imports: FileImports = field(default_factory=FileImports)
+    routes_skipped_unresolved: int = 0
+
+
+@dataclass
+class _ParseCtx:
+    routes_skipped_unresolved: int = 0
 
 
 # ---------- helpers ----------
@@ -587,6 +638,9 @@ def _parse_type_body_into_decl(
     start_line: int,
     end_line: int,
     outer_fqn: str | None,
+    enclosing_type_node: Node | None,
+    file_rel: str,
+    ctx: _ParseCtx,
 ) -> TypeDecl:
     """Shared member parsing for named types and synthetic anonymous classes."""
     fields: list[FieldDecl] = []
@@ -600,6 +654,11 @@ def _parse_type_body_into_decl(
             m, anons = _parse_method(
                 ch, src, is_constructor=False, type_fqn=fqn,
                 package=package, kind_by_simple=kind_by_simple,
+                ctx=ctx,
+                enclosing_type_node=enclosing_type_node,
+                type_kind=kind,
+                type_anns=annotations,
+                file_rel=file_rel,
             )
             methods.append(m)
             anon_nested.extend(anons)
@@ -607,11 +666,22 @@ def _parse_type_body_into_decl(
             m, anons = _parse_method(
                 ch, src, is_constructor=True, type_fqn=fqn,
                 package=package, kind_by_simple=kind_by_simple,
+                ctx=ctx,
+                enclosing_type_node=enclosing_type_node,
+                type_kind=kind,
+                type_anns=annotations,
+                file_rel=file_rel,
             )
             methods.append(m)
             anon_nested.extend(anons)
         elif ch.type in _TYPE_KINDS:
-            nested.append(_parse_type(ch, src, package=package, outer_fqn=fqn, kind_by_simple=kind_by_simple))
+            nested.append(
+                _parse_type(
+                    ch, src,
+                    package=package, outer_fqn=fqn, kind_by_simple=kind_by_simple,
+                    file_rel=file_rel, ctx=ctx,
+                ),
+            )
     nested.extend(anon_nested)
 
     ann_names_set = {a.name for a in annotations}
@@ -669,6 +739,8 @@ def _parse_synthetic_anonymous_type(
     package: str,
     host_type_fqn: str,
     kind_by_simple: dict[str, str],
+    file_rel: str,
+    ctx: _ParseCtx,
 ) -> TypeDecl:
     label = f"<anon:{object_creation.start_byte}>"
     fqn = f"{host_type_fqn}.{label}"
@@ -691,6 +763,9 @@ def _parse_synthetic_anonymous_type(
         start_line=object_creation.start_point[0] + 1,
         end_line=object_creation.end_point[0] + 1,
         outer_fqn=host_type_fqn,
+        enclosing_type_node=None,
+        file_rel=file_rel,
+        ctx=ctx,
     )
 
 
@@ -701,6 +776,8 @@ def _extract_anonymous_types_in_subtree(
     package: str,
     host_type_fqn: str,
     kind_by_simple: dict[str, str],
+    file_rel: str,
+    ctx: _ParseCtx,
 ) -> list[TypeDecl]:
     """Find every `new T() { }` with class_body under root; skip bodies (parsed separately)."""
     found: list[TypeDecl] = []
@@ -717,6 +794,8 @@ def _extract_anonymous_types_in_subtree(
                     _parse_synthetic_anonymous_type(
                         n, class_body, src,
                         package=package, host_type_fqn=host_type_fqn, kind_by_simple=kind_by_simple,
+                        file_rel=file_rel,
+                        ctx=ctx,
                     )
                 )
             for ch in n.named_children:
@@ -937,6 +1016,539 @@ def _collect_call_sites(
     return out
 
 
+def _unwrap_element_value(node: Node) -> Node:
+    if node.type == "element_value" and node.named_children:
+        return _unwrap_element_value(node.named_children[0])
+    return node
+
+
+def _record_route_skip(ctx: _ParseCtx) -> None:
+    ctx.routes_skipped_unresolved += 1
+
+
+def _literal_strings_from_route_arg(val: Node, src: bytes, ctx: _ParseCtx) -> list[str]:
+    val = _unwrap_element_value(val)
+    if val.type == "string_literal":
+        s = _string_literal_value(val, src)
+        if s is None:
+            _record_route_skip(ctx)
+            return []
+        if "${" in s:
+            _record_route_skip(ctx)
+            return []
+        return [s]
+    if val.type in ("array_initializer", "element_value_array_initializer"):
+        out: list[str] = []
+        for ch in val.named_children:
+            out.extend(_literal_strings_from_route_arg(ch, src, ctx))
+        return out
+    _record_route_skip(ctx)
+    return []
+
+
+def _annotation_kv_nodes(ann: Node, src: bytes) -> tuple[dict[str, Node], Node | None]:
+    pairs: dict[str, Node] = {}
+    positional: Node | None = None
+    alist = ann.child_by_field_name("arguments")
+    if alist is None:
+        for ch in ann.children:
+            if ch.type == "annotation_argument_list":
+                alist = ch
+                break
+    if alist is None:
+        return pairs, positional
+    for ch in alist.named_children:
+        if ch.type == "element_value_pair":
+            key_node = ch.child_by_field_name("key")
+            val_node = ch.child_by_field_name("value")
+            if key_node is None:
+                ids = [c for c in ch.children if c.type == "identifier"]
+                key_node = ids[0] if ids else None
+            if val_node is None:
+                for c in reversed(ch.named_children):
+                    if c is not key_node:
+                        val_node = c
+                        break
+            if key_node is None or val_node is None:
+                continue
+            pairs[_txt(key_node, src)] = val_node
+        else:
+            positional = ch
+    return pairs, positional
+
+
+def _extract_http_methods_from_arg(val: Node, src: bytes) -> list[str]:
+    val = _unwrap_element_value(val)
+    if val.type == "array_initializer":
+        out: list[str] = []
+        for ch in val.named_children:
+            out.extend(_extract_http_methods_from_arg(ch, src))
+        return out
+    raw = _txt(val, src).strip()
+    if not raw:
+        return []
+    simple = raw.rsplit(".", 1)[-1]
+    return [simple.upper()] if simple else []
+
+
+def _paths_and_methods_from_mapping_ann(
+    ann: Node,
+    src: bytes,
+    simple_name: str,
+    ctx: _ParseCtx,
+) -> tuple[list[str], list[str]]:
+    pairs, positional = _annotation_kv_nodes(ann, src)
+    paths: list[str] = []
+    had_explicit_path_arg = False
+    if "path" in pairs:
+        had_explicit_path_arg = True
+        paths.extend(_literal_strings_from_route_arg(pairs["path"], src, ctx))
+    elif "value" in pairs:
+        had_explicit_path_arg = True
+        paths.extend(_literal_strings_from_route_arg(pairs["value"], src, ctx))
+    elif positional is not None:
+        had_explicit_path_arg = True
+        paths.extend(_literal_strings_from_route_arg(positional, src, ctx))
+
+    if simple_name == "GetMapping":
+        methods = ["GET"]
+    elif simple_name == "PostMapping":
+        methods = ["POST"]
+    elif simple_name == "PutMapping":
+        methods = ["PUT"]
+    elif simple_name == "DeleteMapping":
+        methods = ["DELETE"]
+    elif simple_name == "PatchMapping":
+        methods = ["PATCH"]
+    elif simple_name == "RequestMapping":
+        methods = (
+            _extract_http_methods_from_arg(pairs["method"], src)
+            if "method" in pairs
+            else [""]
+        )
+    else:
+        methods = [""]
+
+    if not paths:
+        if had_explicit_path_arg:
+            return [], methods
+        paths = [""]
+    return paths, methods
+
+
+def _compose_http_paths(class_base: str, method_paths: list[str]) -> list[str]:
+    """Join Feign / servlet context paths; always merge when `class_base` is set."""
+    class_base = class_base.strip()
+    out: list[str] = []
+    for mp in method_paths:
+        mp = mp.strip()
+        if not class_base:
+            p = mp if mp else "/"
+        elif not mp:
+            p = class_base
+        else:
+            joined = posixpath.normpath(f"{class_base.rstrip('/')}/{mp.lstrip('/')}")
+            if not joined.startswith("/"):
+                joined = "/" + joined
+            p = joined
+        out.append(p)
+    return out
+
+
+def _type_level_request_mapping_base(enclosing_type_node: Node | None, src: bytes, ctx: _ParseCtx) -> str:
+    if enclosing_type_node is None:
+        return ""
+    mods = _find_modifiers_child(enclosing_type_node)
+    if mods is None:
+        return ""
+    for child in mods.children:
+        if child.type not in ("marker_annotation", "annotation"):
+            continue
+        simple, _ = _annotation_name(child, src)
+        if simple != "RequestMapping":
+            continue
+        ps, _ = _paths_and_methods_from_mapping_ann(child, src, simple, ctx)
+        return ps[0] if ps else ""
+    return ""
+
+
+def _kafka_topics_from_ann_node(ann: Node, src: bytes, ctx: _ParseCtx) -> list[str]:
+    pairs, positional = _annotation_kv_nodes(ann, src)
+    if "topics" in pairs:
+        return _literal_strings_from_route_arg(pairs["topics"], src, ctx)
+    if "topicPattern" in pairs:
+        _record_route_skip(ctx)
+        return []
+    if positional is not None:
+        return _literal_strings_from_route_arg(positional, src, ctx)
+    return []
+
+
+def _rabbit_queues_from_ann_node(ann: Node, src: bytes, ctx: _ParseCtx) -> list[str]:
+    pairs, positional = _annotation_kv_nodes(ann, src)
+    if "queues" in pairs:
+        return _literal_strings_from_route_arg(pairs["queues"], src, ctx)
+    if "bindings" in pairs:
+        _record_route_skip(ctx)
+        return []
+    if positional is not None:
+        return _literal_strings_from_route_arg(positional, src, ctx)
+    return []
+
+
+def _jms_destination_from_ann_node(ann: Node, src: bytes, ctx: _ParseCtx) -> list[str]:
+    pairs, positional = _annotation_kv_nodes(ann, src)
+    for key in ("destination", "value"):
+        if key in pairs:
+            return _literal_strings_from_route_arg(pairs[key], src, ctx)
+    if positional is not None:
+        return _literal_strings_from_route_arg(positional, src, ctx)
+    return []
+
+
+def _stream_listener_destinations(ann: Node, src: bytes, ctx: _ParseCtx) -> list[str]:
+    pairs, positional = _annotation_kv_nodes(ann, src)
+    for key in ("value", "name"):
+        if key in pairs:
+            return _literal_strings_from_route_arg(pairs[key], src, ctx)
+    if positional is not None:
+        return _literal_strings_from_route_arg(positional, src, ctx)
+    return []
+
+
+def _collect_type_level_kafka_topics(enclosing_type_node: Node | None, src: bytes, ctx: _ParseCtx) -> list[str]:
+    if enclosing_type_node is None:
+        return []
+    mods = _find_modifiers_child(enclosing_type_node)
+    if mods is None:
+        return []
+    topics: list[str] = []
+    for child in mods.children:
+        if child.type not in ("marker_annotation", "annotation"):
+            continue
+        simple, _ = _annotation_name(child, src)
+        if simple != "KafkaListener":
+            continue
+        topics.extend(_kafka_topics_from_ann_node(child, src, ctx))
+    return topics
+
+
+def _collect_type_level_rabbit_queues(enclosing_type_node: Node | None, src: bytes, ctx: _ParseCtx) -> list[str]:
+    if enclosing_type_node is None:
+        return []
+    mods = _find_modifiers_child(enclosing_type_node)
+    if mods is None:
+        return []
+    qs: list[str] = []
+    for child in mods.children:
+        if child.type not in ("marker_annotation", "annotation"):
+            continue
+        simple, _ = _annotation_name(child, src)
+        if simple != "RabbitListener":
+            continue
+        qs.extend(_rabbit_queues_from_ann_node(child, src, ctx))
+    return qs
+
+
+def _enclosing_class_body_reactive(body: Node | None, src: bytes) -> bool:
+    if body is None:
+        return False
+    for ch in body.named_children:
+        if ch.type != "method_declaration":
+            continue
+        ret = ch.child_by_field_name("type")
+        if ret is not None and _strip_type_to_simple(ret, src) in ("Mono", "Flux"):
+            return True
+        formal = ch.child_by_field_name("parameters")
+        if formal is None:
+            continue
+        for p in formal.named_children:
+            if p.type not in ("formal_parameter", "spread_parameter"):
+                continue
+            tnode = p.child_by_field_name("type")
+            if tnode is not None and _strip_type_to_simple(tnode, src) in ("Mono", "Flux"):
+                return True
+    return False
+
+
+def _http_framework_for_mapping(
+    *,
+    enclosing_body: Node | None,
+    src: bytes,
+    method_decl: MethodDecl,
+    type_ann_names: set[str],
+) -> str:
+    if _enclosing_class_body_reactive(enclosing_body, src):
+        return "webflux"
+    if method_decl.return_type in ("Mono", "Flux"):
+        return "webflux"
+    if any(p.type_name in ("Mono", "Flux") for p in method_decl.parameters):
+        return "webflux"
+    if "RestController" in type_ann_names and _enclosing_class_body_reactive(enclosing_body, src):
+        return "webflux"
+    return "spring_mvc"
+
+
+def _parse_feign_client_literals(enclosing_type_node: Node | None, src: bytes, ctx: _ParseCtx) -> tuple[str, str, str]:
+    """Literal-only `name`, `url`, `path` from @FeignClient on the enclosing type."""
+    if enclosing_type_node is None:
+        return "", "", ""
+    mods = _find_modifiers_child(enclosing_type_node)
+    if mods is None:
+        return "", "", ""
+    for child in mods.children:
+        if child.type not in ("marker_annotation", "annotation"):
+            continue
+        simple, _ = _annotation_name(child, src)
+        if simple != "FeignClient":
+            continue
+        pairs, positional = _annotation_kv_nodes(child, src)
+        name_vals = _literal_strings_from_route_arg(pairs["name"], src, ctx) if "name" in pairs else []
+        url_vals = _literal_strings_from_route_arg(pairs["url"], src, ctx) if "url" in pairs else []
+        path_vals: list[str] = []
+        if "path" in pairs:
+            path_vals = _literal_strings_from_route_arg(pairs["path"], src, ctx)
+        elif "value" in pairs:
+            path_vals = _literal_strings_from_route_arg(pairs["value"], src, ctx)
+        elif positional is not None:
+            path_vals = _literal_strings_from_route_arg(positional, src, ctx)
+        name = name_vals[0] if name_vals else ""
+        url = url_vals[0] if url_vals else ""
+        base_path = path_vals[0] if path_vals else ""
+        return name, url, base_path
+    return "", "", ""
+
+
+def _method_has_bean_annotation(method_node: Node, src: bytes) -> bool:
+    mods = _find_modifiers_child(method_node)
+    if mods is None:
+        return False
+    for child in mods.children:
+        if child.type not in ("marker_annotation", "annotation"):
+            continue
+        simple, _ = _annotation_name(child, src)
+        if simple == "Bean":
+            return True
+    return False
+
+
+def _method_return_simple(method_node: Node, src: bytes) -> str:
+    ret = method_node.child_by_field_name("type")
+    return _strip_type_to_simple(ret, src) if ret is not None else ""
+
+
+def _iter_method_annotation_nodes(method_node: Node, src: bytes) -> list[tuple[str, Node]]:
+    mods = _find_modifiers_child(method_node)
+    if mods is None:
+        return []
+    out: list[tuple[str, Node]] = []
+    for child in mods.children:
+        if child.type in ("marker_annotation", "annotation"):
+            simple, _ = _annotation_name(child, src)
+            out.append((simple, child))
+    return out
+
+
+def _collect_routes(
+    method_node: Node,
+    enclosing_type_node: Node | None,
+    src: bytes,
+    *,
+    type_fqn: str,
+    type_kind: str,
+    type_anns: list[AnnotationRef],
+    method_decl: MethodDecl,
+    signature: str,
+    file_rel: str,
+    ctx: _ParseCtx,
+) -> list[RouteDecl]:
+    """Extract RouteDecl literals from Spring mapping / messaging annotations.
+
+    WebFlux vs Spring MVC: same annotations; framework is ``webflux`` when the
+    enclosing type exposes reactive signatures (Mono/Flux) — otherwise
+    ``spring_mvc`` (PR-A1 plan).
+    """
+    routes: list[RouteDecl] = []
+    handler_fqn = f"{type_fqn}#{signature}"
+    type_ann_names = {a.name for a in type_anns}
+    enclosing_body = enclosing_type_node.child_by_field_name("body") if enclosing_type_node else None
+
+    ann_nodes = _iter_method_annotation_nodes(method_node, src)
+
+    # --- Spring Cloud Stream-style @Bean handler ---
+    if _method_has_bean_annotation(method_node, src):
+        ret_simple = _method_return_simple(method_node, src)
+        if ret_simple in ("Function", "Consumer", "Supplier"):
+            routes.append(
+                RouteDecl(
+                    method_fqn=handler_fqn,
+                    method_sig=signature,
+                    kind="stream_binding",
+                    framework="stream",
+                    http_method="",
+                    path="",
+                    topic="",
+                    broker="",
+                    feign_name="",
+                    feign_url="",
+                    resolution_strategy="annotation",
+                    confidence=1.0,
+                    resolved=True,
+                    filename=file_rel,
+                    start_line=method_decl.start_line,
+                    end_line=method_decl.end_line,
+                )
+            )
+
+    class_kafka_topics = _collect_type_level_kafka_topics(enclosing_type_node, src, ctx)
+    class_rabbit_queues = _collect_type_level_rabbit_queues(enclosing_type_node, src, ctx)
+
+    # --- Messaging annotations on method ---
+    for simple, node in ann_nodes:
+        if simple == "KafkaListener":
+            topics = _kafka_topics_from_ann_node(node, src, ctx)
+            if not topics and class_kafka_topics:
+                topics = list(class_kafka_topics)
+            for tp in topics:
+                routes.append(
+                    RouteDecl(
+                        method_fqn=handler_fqn,
+                        method_sig=signature,
+                        kind="kafka_topic",
+                        framework="kafka",
+                        http_method="",
+                        path="",
+                        topic=tp,
+                        broker="",
+                        feign_name="",
+                        feign_url="",
+                        resolution_strategy="annotation",
+                        confidence=1.0,
+                        resolved=True,
+                        filename=file_rel,
+                        start_line=method_decl.start_line,
+                        end_line=method_decl.end_line,
+                    )
+                )
+        elif simple == "RabbitListener":
+            queues = _rabbit_queues_from_ann_node(node, src, ctx)
+            if not queues and class_rabbit_queues:
+                queues = list(class_rabbit_queues)
+            for q in queues:
+                routes.append(
+                    RouteDecl(
+                        method_fqn=handler_fqn,
+                        method_sig=signature,
+                        kind="rabbit_queue",
+                        framework="rabbitmq",
+                        http_method="",
+                        path="",
+                        topic=q,
+                        broker="",
+                        feign_name="",
+                        feign_url="",
+                        resolution_strategy="annotation",
+                        confidence=1.0,
+                        resolved=True,
+                        filename=file_rel,
+                        start_line=method_decl.start_line,
+                        end_line=method_decl.end_line,
+                    )
+                )
+        elif simple == "JmsListener":
+            for dest in _jms_destination_from_ann_node(node, src, ctx):
+                routes.append(
+                    RouteDecl(
+                        method_fqn=handler_fqn,
+                        method_sig=signature,
+                        kind="jms_destination",
+                        framework="jms",
+                        http_method="",
+                        path="",
+                        topic=dest,
+                        broker="",
+                        feign_name="",
+                        feign_url="",
+                        resolution_strategy="annotation",
+                        confidence=1.0,
+                        resolved=True,
+                        filename=file_rel,
+                        start_line=method_decl.start_line,
+                        end_line=method_decl.end_line,
+                    )
+                )
+        elif simple == "StreamListener":
+            for dest in _stream_listener_destinations(node, src, ctx):
+                routes.append(
+                    RouteDecl(
+                        method_fqn=handler_fqn,
+                        method_sig=signature,
+                        kind="stream_binding",
+                        framework="stream",
+                        http_method="",
+                        path="",
+                        topic=dest,
+                        broker="",
+                        feign_name="",
+                        feign_url="",
+                        resolution_strategy="annotation",
+                        confidence=1.0,
+                        resolved=True,
+                        filename=file_rel,
+                        start_line=method_decl.start_line,
+                        end_line=method_decl.end_line,
+                    )
+                )
+
+    # --- HTTP mappings ---
+    feign_iface = type_kind == "interface" and _type_has_feign_client(type_anns)
+    http_base = _type_level_request_mapping_base(enclosing_type_node, src, ctx)
+    feign_name, feign_url, feign_base_path = _parse_feign_client_literals(enclosing_type_node, src, ctx)
+
+    for simple, node in ann_nodes:
+        if simple not in _ROUTE_HTTP_MAPPING_NAMES:
+            continue
+        paths, methods = _paths_and_methods_from_mapping_ann(node, src, simple, ctx)
+        if not paths:
+            continue
+        full_paths = _compose_http_paths(http_base if not feign_iface else feign_base_path, paths)
+        fw = "feign" if feign_iface else _http_framework_for_mapping(
+            enclosing_body=enclosing_body,
+            src=src,
+            method_decl=method_decl,
+            type_ann_names=type_ann_names,
+        )
+        kind = "http_consumer" if feign_iface else "http_endpoint"
+        for pth in full_paths:
+            for hm in methods:
+                routes.append(
+                    RouteDecl(
+                        method_fqn=handler_fqn,
+                        method_sig=signature,
+                        kind=kind,
+                        framework=fw,
+                        http_method=hm,
+                        path=pth,
+                        topic="",
+                        broker="",
+                        feign_name=feign_name if feign_iface else "",
+                        feign_url=feign_url if feign_iface else "",
+                        resolution_strategy="annotation",
+                        confidence=1.0,
+                        resolved=True,
+                        filename=file_rel,
+                        start_line=method_decl.start_line,
+                        end_line=method_decl.end_line,
+                    )
+                )
+
+    return routes
+
+
+def _type_has_feign_client(type_anns: list[AnnotationRef]) -> bool:
+    return any(a.name == "FeignClient" for a in type_anns)
+
+
 def _parse_params(formal: Node | None, src: bytes) -> list[ParamDecl]:
     if formal is None:
         return []
@@ -968,6 +1580,11 @@ def _parse_method(
     type_fqn: str,
     package: str,
     kind_by_simple: dict[str, str],
+    ctx: _ParseCtx,
+    enclosing_type_node: Node | None,
+    type_kind: str,
+    type_anns: list[AnnotationRef],
+    file_rel: str,
 ) -> tuple[MethodDecl, list[TypeDecl]]:
     mods, anns = _collect_annotations_and_modifiers(node, src)
     name_node = node.child_by_field_name("name")
@@ -1020,6 +1637,21 @@ def _parse_method(
         m.call_sites = sites
         anon_nested = _extract_anonymous_types_in_subtree(
             body, src, package=package, host_type_fqn=type_fqn, kind_by_simple=kind_by_simple,
+            file_rel=file_rel,
+            ctx=ctx,
+        )
+    if not is_constructor:
+        m.routes = _collect_routes(
+            node,
+            enclosing_type_node,
+            src,
+            type_fqn=type_fqn,
+            type_kind=type_kind,
+            type_anns=type_anns,
+            method_decl=m,
+            signature=signature,
+            file_rel=file_rel,
+            ctx=ctx,
         )
     return m, anon_nested
 
@@ -1056,7 +1688,14 @@ def _parse_field(node: Node, src: bytes) -> list[FieldDecl]:
 
 
 def _parse_type(
-    node: Node, src: bytes, *, package: str, outer_fqn: str | None, kind_by_simple: dict[str, str],
+    node: Node,
+    src: bytes,
+    *,
+    package: str,
+    outer_fqn: str | None,
+    kind_by_simple: dict[str, str],
+    file_rel: str,
+    ctx: _ParseCtx,
 ) -> TypeDecl:
     kind = _TYPE_KINDS[node.type]
     name_node = node.child_by_field_name("name")
@@ -1110,6 +1749,9 @@ def _parse_type(
         start_line=node.start_point[0] + 1,
         end_line=node.end_point[0] + 1,
         outer_fqn=outer_fqn,
+        enclosing_type_node=node,
+        file_rel=file_rel,
+        ctx=ctx,
     )
 
 
@@ -1126,13 +1768,14 @@ def _flatten(types: list[TypeDecl]) -> list[TypeDecl]:
 # ---------- public API ----------
 
 
-def parse_java(source: bytes | str) -> JavaFileAst:
+def parse_java(source: bytes | str, *, filename: str = "") -> JavaFileAst:
     """Parse a Java file into a JavaFileAst. Never raises on invalid source."""
     if isinstance(source, str):
         src = source.encode("utf-8", errors="replace")
     else:
         src = source
 
+    ctx = _ParseCtx()
     empty = JavaFileAst(
         package="",
         imports=[],
@@ -1143,6 +1786,7 @@ def parse_java(source: bytes | str) -> JavaFileAst:
         parse_error=False,
         source_bytes=len(src),
         file_imports=FileImports(),
+        routes_skipped_unresolved=0,
     )
 
     if not src:
@@ -1204,10 +1848,16 @@ def parse_java(source: bytes | str) -> JavaFileAst:
         static_wildcards=static_wildcards,
     )
     kind_by_simple = _pre_scan_declared_type_kinds(root, src)
+    file_rel = filename
     for child in root.named_children:
         if child.type in _TYPE_KINDS:
             top_types.append(
-                _parse_type(child, src, package=package, outer_fqn=None, kind_by_simple=kind_by_simple),
+                _parse_type(
+                    child, src,
+                    package=package, outer_fqn=None, kind_by_simple=kind_by_simple,
+                    file_rel=file_rel,
+                    ctx=ctx,
+                ),
             )
 
     all_types = _flatten(top_types)
@@ -1221,6 +1871,7 @@ def parse_java(source: bytes | str) -> JavaFileAst:
         parse_error=root.has_error,
         source_bytes=len(src),
         file_imports=file_imports,
+        routes_skipped_unresolved=ctx.routes_skipped_unresolved,
     )
 
 
