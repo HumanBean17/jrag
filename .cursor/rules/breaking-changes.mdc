@@ -1,0 +1,10 @@
+---
+description: Breaking changes allowed; no backward compatibility obligation
+alwaysApply: true
+---
+
+# Breaking changes and compatibility
+
+- **Breaking changes are always allowed.** Do not keep compatibility with prior versions, external consumers, or hypothetical “users” of this repo unless the current task explicitly asks for a compatibility layer.
+
+- Prefer straightforward removals and schema or API updates over deprecation periods, dual code paths, shims, or version branching unless there is a clear, stated need in the task at hand.
