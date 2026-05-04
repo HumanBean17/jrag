@@ -13,8 +13,6 @@ from __future__ import annotations
 import json
 from typing import Any
 
-import pytest
-
 
 def _structured(result: Any) -> dict[str, Any]:
     """Pull the structured payload out of a `FastMCP.call_tool()` return.
@@ -81,6 +79,8 @@ async def test_graph_meta(mcp_server) -> None:
     assert out["microservice_counts"]["chat-core"] > 0
     assert out["counts"].get("calls", 0) > 0
     assert out["counts"].get("declares", 0) > 0
+    assert out.get("routes_total", 0) >= 1
+    assert isinstance(out.get("routes_by_framework"), dict)
 
 
 # ---------------- find_implementors ----------------

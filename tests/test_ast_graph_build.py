@@ -8,6 +8,7 @@ node / edge counts — those will drift as the fixture grows. See
 """
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -16,6 +17,8 @@ import kuzu
 import pytest
 
 from ast_java import ONTOLOGY_VERSION
+
+_ROUTE_EXTRACTION_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "route_extraction_smoke"
 
 
 def _connect(db_path: Path) -> kuzu.Connection:
@@ -48,7 +51,10 @@ def test_schema_has_all_expected_tables(kuzu_db_path: Path) -> None:
     tables = set(_column(conn, "CALL show_tables() RETURN *;", idx=1))
     # We only assert the tables we depend on are present. The builder is
     # free to add more (e.g. CALLS later) without breaking this test.
-    expected = {"Symbol", "GraphMeta", "EXTENDS", "IMPLEMENTS", "INJECTS", "DECLARES", "CALLS"}
+    expected = {
+        "Symbol", "Route", "GraphMeta",
+        "EXTENDS", "IMPLEMENTS", "INJECTS", "DECLARES", "CALLS", "EXPOSES",
+    }
     missing = expected - tables
     assert not missing, f"missing schema tables: {missing}; saw {tables}"
 
@@ -57,13 +63,23 @@ def test_graph_meta_present_and_versioned(kuzu_db_path: Path) -> None:
     conn = _connect(kuzu_db_path)
     r = conn.execute(
         "MATCH (m:GraphMeta) RETURN m.ontology_version, m.built_at, "
-        "m.source_root, m.parse_errors, m.counts_json"
+        "m.source_root, m.parse_errors, m.counts_json, "
+        "m.routes_total, m.exposes_total, m.routes_by_framework, m.routes_resolved_pct"
     )
     rows: list = []
     while r.has_next():
         rows.append(r.get_next())
     assert len(rows) == 1, "expected exactly one GraphMeta row"
-    ov, built_at, source_root, parse_errors, counts_json = rows[0]
+    row = rows[0]
+    ov = row[0]
+    built_at = row[1]
+    source_root = row[2]
+    parse_errors = row[3]
+    counts_json = row[4]
+    routes_total = row[5]
+    exposes_total = row[6]
+    routes_by_framework_raw = row[7]
+    routes_resolved_pct = row[8]
     assert int(ov) == ONTOLOGY_VERSION
     assert int(built_at) > 0
     assert source_root  # absolute path string
@@ -71,6 +87,14 @@ def test_graph_meta_present_and_versioned(kuzu_db_path: Path) -> None:
     # accidental tree-sitter regressions that break every file at once.
     assert int(parse_errors) <= 0  # bank-chat-system is hand-written, no errors expected
     assert counts_json and counts_json.startswith("{")
+    counts = json.loads(counts_json)
+    assert counts.get("routes", 0) >= 1
+    assert int(routes_total) >= 1
+    assert int(exposes_total) >= 1
+    assert float(routes_resolved_pct) >= 0.0
+    by_fw = json.loads(routes_by_framework_raw)
+    assert isinstance(by_fw, dict)
+    assert len(by_fw) >= 1
 
 
 def test_each_node_kind_present(kuzu_db_path: Path) -> None:
@@ -159,6 +183,68 @@ def test_injects_edges_have_mechanism(kuzu_db_path: Path) -> None:
     conn = _connect(kuzu_db_path)
     mechanisms = set(_column(conn, "MATCH ()-[e:INJECTS]->() RETURN DISTINCT e.mechanism"))
     assert "constructor" in mechanisms, mechanisms
+
+
+def test_routes_and_exposes_populated(kuzu_db_path: Path) -> None:
+    conn = _connect(kuzu_db_path)
+    assert _scalar(conn, "MATCH (r:Route) RETURN count(r)") >= 1
+    assert _scalar(conn, "MATCH ()-[e:EXPOSES]->() RETURN count(e)") >= 1
+
+
+def test_route_id_includes_microservice(tmp_path: Path) -> None:
+    """Same HTTP path in two declared microservices → distinct Route primary keys."""
+    from build_ast_graph import (
+        GraphTables,
+        pass1_parse,
+        pass2_edges,
+        pass3_calls,
+        pass4_routes,
+        write_kuzu,
+    )
+
+    root = _ROUTE_EXTRACTION_FIXTURE.resolve()
+    assert root.is_dir(), root
+    db_path = tmp_path / "routes_micro.kuzu"
+    tables = GraphTables()
+    asts = pass1_parse(root, tables, verbose=False)
+    pass2_edges(tables, asts, verbose=False)
+    pass3_calls(tables, asts, verbose=False)
+    pass4_routes(tables, asts, verbose=False)
+    write_kuzu(db_path, tables, source_root=root, verbose=False)
+
+    conn = _connect(db_path)
+    ids = _column(
+        conn,
+        "MATCH (r:Route) WHERE r.path = '/api/users' AND r.kind = 'http_endpoint' "
+        "RETURN r.id",
+    )
+    assert len(set(ids)) >= 2, ids
+
+
+def test_exposes_edge_direction(tmp_path: Path) -> None:
+    from build_ast_graph import (
+        GraphTables,
+        pass1_parse,
+        pass2_edges,
+        pass3_calls,
+        pass4_routes,
+        write_kuzu,
+    )
+
+    root = _ROUTE_EXTRACTION_FIXTURE.resolve()
+    db_path = tmp_path / "routes_dir.kuzu"
+    tables = GraphTables()
+    asts = pass1_parse(root, tables, verbose=False)
+    pass2_edges(tables, asts, verbose=False)
+    pass3_calls(tables, asts, verbose=False)
+    pass4_routes(tables, asts, verbose=False)
+    write_kuzu(db_path, tables, source_root=root, verbose=False)
+
+    conn = _connect(db_path)
+    fwd = _scalar(conn, "MATCH (s:Symbol)-[:EXPOSES]->(r:Route) RETURN count(*)")
+    rev = _scalar(conn, "MATCH (r:Route)-[:EXPOSES]->(s:Symbol) RETURN count(*)")
+    assert fwd >= 1
+    assert rev == 0
 
 
 def test_symbol_has_capabilities_column(kuzu_db_path: Path) -> None:

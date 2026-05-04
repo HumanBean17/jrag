@@ -24,4 +24,23 @@ VALID_CAPABILITIES: frozenset[str] = frozenset(
     }
 )
 
-__all__ = ["VALID_ROLES", "VALID_CAPABILITIES"]
+VALID_ROUTE_FRAMEWORKS: frozenset[str] = frozenset((
+    "spring_mvc",
+    "webflux",
+    "feign",
+    "kafka",
+    "rabbitmq",
+    "jms",
+    "stream",
+))
+
+VALID_ROUTE_KINDS: frozenset[str] = frozenset((
+    "http_endpoint",
+    "http_consumer",
+    "kafka_topic",
+    "rabbit_queue",
+    "jms_destination",
+    "stream_binding",
+))
+
+__all__ = ["VALID_ROLES", "VALID_CAPABILITIES", "VALID_ROUTE_FRAMEWORKS", "VALID_ROUTE_KINDS"]
