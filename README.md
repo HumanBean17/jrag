@@ -68,6 +68,7 @@ A sidecar deterministic graph derived from Tree-sitter Java parsing lives next t
 phantom method symbols (`resolved=false`) at index time; `find_callers` / `find_callees` default to
 `exclude_external=true` so those edges can be filtered by FQN prefix without dropping them from the graph.
 Call-site receiver typing uses **one scope map per method** (locals shadow fields/parameters), but **not** full nested-block lexical scope; see **Call graph** under `CODEBASE_REQUIREMENTS.md`.
+**Anonymous classes** (`new T() { … }`) are indexed as synthetic nested types (`…<anon:startByte>`); `CALLS` from their methods use that member as the caller so `find_callers` reaches the handler body. **Lambdas** still attribute inner calls to the enclosing named method (no synthetic callable symbol). Unqualified calls from anonymous members fall through to the lexically enclosing type for callee lookup (same as the Java compiler’s access rules).
 
 Injection mechanisms detected:
 - field `@Autowired` / `@Inject` / `@Resource`

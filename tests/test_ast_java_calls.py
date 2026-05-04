@@ -187,7 +187,7 @@ def test_lambda_body_call_site_flag_proposal_7_1_case_11() -> None:
 
 
 def test_anonymous_class_body_call_site_proposal_7_1_case_16() -> None:
-    """§7.1 #16: calls inside an anonymous class body attribute to the enclosing method."""
+    """§7.1 #16: calls inside an anonymous class body attribute to that class's method (D3)."""
     src = """
     package p;
     class C {
@@ -199,8 +199,15 @@ def test_anonymous_class_body_call_site_proposal_7_1_case_16() -> None:
       void ping() {}
     }
     """
-    sites = _method_body_sites(src, type_name="C", method_name="m")
-    assert any(s.callee_simple == "ping" and s.in_lambda for s in sites)
+    ast = parse_java(src.encode())
+    c = next(x for x in ast.all_types if x.name == "C")
+    m = next(x for x in c.methods if x.name == "m")
+    assert not any(s.callee_simple == "ping" for s in m.call_sites), (
+        "ping() must not be collected on C#m — it lives in the synthetic Runnable subclass"
+    )
+    anon = next(t for t in c.nested if t.name.startswith("<anon:"))
+    run = next(x for x in anon.methods if x.name == "run")
+    assert any(s.callee_simple == "ping" and not s.in_lambda for s in run.call_sites)
 
 
 def test_method_ref_expression_qualifier_proposal_7_1_case_18() -> None:
@@ -299,7 +306,11 @@ def test_nested_calls_fixture_file_parse_proposal_7_1_11_16_18() -> None:
     )
     assert path.is_file(), path
     ast = parse_java(path.read_bytes())
-    m = next(x for t in ast.all_types for x in t.methods if t.name == "NestedCalls" and x.name == "m")
-    assert any(s.callee_simple == "pingFromAnon" and s.in_lambda for s in m.call_sites)
+    nested_calls = next(t for t in ast.all_types if t.name == "NestedCalls")
+    m = next(x for x in nested_calls.methods if x.name == "m")
+    assert not any(s.callee_simple == "pingFromAnon" for s in m.call_sites)
+    anon = next(t for t in nested_calls.nested if t.name.startswith("<anon:"))
+    run = next(x for x in anon.methods if x.name == "run")
+    assert any(s.callee_simple == "pingFromAnon" and not s.in_lambda for s in run.call_sites)
     assert any(s.callee_simple == "pingFromLambda" and s.in_lambda for s in m.call_sites)
     assert any(s.callee_simple == "trim" and "getX()" in s.receiver_expr and s.in_lambda for s in m.call_sites)

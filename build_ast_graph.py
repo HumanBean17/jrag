@@ -692,6 +692,11 @@ def _lookup_method_candidates(
         for sup in _direct_supertype_fqns(te, tables):
             if sup not in visited:
                 queue.append(sup)
+        # Synthetic anonymous classes (`….<anon:byte>`): unqualified instance calls
+        # may target the lexically enclosing type (D3), e.g. `pingFromAnon()` from
+        # `NestedCalls` inside `new Runnable() { void run() { … } }`.
+        if ".<anon:" in tfqn and te.outer_fqn and te.outer_fqn not in visited:
+            queue.append(te.outer_fqn)
 
     if exact:
         return exact, False

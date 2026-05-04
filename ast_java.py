@@ -2,7 +2,9 @@
 
 Produces a typed, stable view of a single .java compilation unit:
 package, imports, and a tree of TypeDecl (class/interface/enum/record/annotation)
-with their annotations, fields, methods, and nested types.
+with their annotations, fields, methods, and nested types. Anonymous classes
+(`new T() { … }`) become synthetic nested TypeDecl rows (`<anon:startByte>`) so
+their method bodies own call-site lists (see `propose/completed/CALL-GRAPH-PROPOSE.md` §4.1).
 
 The output is deliberately language-model friendly (simple names, no tree-sitter
 Nodes leak through) so downstream graph / chunk-enrichment code can stay pure
@@ -122,6 +124,23 @@ _TYPE_KINDS = {
     "record_declaration": "record",
     "annotation_type_declaration": "annotation",
 }
+
+# For `new Super() { }` when `Super` is not declared in the same compilation unit:
+# treat these simple names as interfaces (implements) vs classes (extends).
+_ANON_SUPER_AS_INTERFACE: frozenset[str] = frozenset({
+    "Runnable", "Callable", "Comparable", "Iterable", "Iterator", "AutoCloseable",
+    "Closeable", "Flushable", "Readable", "Appendable", "Cloneable", "Serializable",
+    "Externalizable", "InvocationHandler", "ThreadFactory", "PrivilegedAction",
+    "PrivilegedExceptionAction", "Comparator", "Consumer", "BiConsumer", "Supplier",
+    "Function", "BiFunction", "UnaryOperator", "BinaryOperator", "Predicate",
+    "BiPredicate", "IntConsumer", "LongConsumer", "DoubleConsumer", "IntFunction",
+    "LongFunction", "DoubleFunction", "IntPredicate", "LongPredicate", "DoublePredicate",
+    "IntSupplier", "LongSupplier", "DoubleSupplier", "ToIntFunction", "ToLongFunction",
+    "ToDoubleFunction", "Stream", "BaseStream", "Collector", "Observer", "Observable",
+    "List", "Set", "Map", "Queue", "Deque", "Collection", "EventListener",
+    "ActionListener", "MouseListener", "KeyListener", "WindowListener", "RowMapper",
+    "ResultSetExtractor", "PreparedStatementCreator", "CallableStatementCallback",
+})
 
 
 @lru_cache(maxsize=1)
@@ -517,6 +536,200 @@ def _iter_body_members(body: Node) -> Iterable[Node]:
     return [c for c in body.named_children]
 
 
+def _pre_scan_declared_type_kinds(root: Node, src: bytes) -> dict[str, str]:
+    """Map simple type name -> kind for declarations in this CU (for anonymous super)."""
+    out: dict[str, str] = {}
+
+    def visit(n: Node) -> None:
+        t = n.type
+        if t in _TYPE_KINDS:
+            nn = n.child_by_field_name("name")
+            if nn is not None:
+                nm = _txt(nn, src)
+                if nm and nm != "<anon>":
+                    out[nm] = _TYPE_KINDS[t]
+        for c in n.children:
+            visit(c)
+
+    visit(root)
+    return out
+
+
+def _anonymous_extends_implements(
+    super_simple: str, kind_by_simple: dict[str, str],
+) -> tuple[list[str], list[str]]:
+    """Java: anonymous extends class X, or extends Object + implements I."""
+    k = kind_by_simple.get(super_simple)
+    if k == "interface":
+        return [], [super_simple]
+    if k in ("class", "enum", "record"):
+        return [super_simple], []
+    if super_simple in _ANON_SUPER_AS_INTERFACE:
+        return [], [super_simple]
+    return [super_simple], []
+
+
+def _parse_type_body_into_decl(
+    body: Node,
+    src: bytes,
+    *,
+    package: str,
+    fqn: str,
+    kind: str,
+    extends: list[str],
+    implements: list[str],
+    modifiers: list[str],
+    annotations: list[AnnotationRef],
+    kind_by_simple: dict[str, str],
+    start_byte: int,
+    end_byte: int,
+    start_line: int,
+    end_line: int,
+    outer_fqn: str | None,
+) -> TypeDecl:
+    """Shared member parsing for named types and synthetic anonymous classes."""
+    fields: list[FieldDecl] = []
+    methods: list[MethodDecl] = []
+    nested: list[TypeDecl] = []
+    anon_nested: list[TypeDecl] = []
+    for ch in _iter_body_members(body):
+        if ch.type == "field_declaration":
+            fields.extend(_parse_field(ch, src))
+        elif ch.type == "method_declaration":
+            m, anons = _parse_method(
+                ch, src, is_constructor=False, type_fqn=fqn,
+                package=package, kind_by_simple=kind_by_simple,
+            )
+            methods.append(m)
+            anon_nested.extend(anons)
+        elif ch.type == "constructor_declaration":
+            m, anons = _parse_method(
+                ch, src, is_constructor=True, type_fqn=fqn,
+                package=package, kind_by_simple=kind_by_simple,
+            )
+            methods.append(m)
+            anon_nested.extend(anons)
+        elif ch.type in _TYPE_KINDS:
+            nested.append(_parse_type(ch, src, package=package, outer_fqn=fqn, kind_by_simple=kind_by_simple))
+    nested.extend(anon_nested)
+
+    ann_names_set = {a.name for a in annotations}
+    if (
+        kind in ("class", "enum")
+        and not any(m.is_constructor for m in methods)
+        and not (_LOMBOK_RAC & ann_names_set)
+    ):
+        default_ctor_sig = "<init>()"
+        methods.append(
+            MethodDecl(
+                name="<init>",
+                return_type="",
+                is_constructor=True,
+                parameters=[],
+                modifiers=[],
+                annotations=[],
+                signature=default_ctor_sig,
+                start_byte=start_byte,
+                end_byte=start_byte,
+                start_line=start_line,
+                end_line=start_line,
+                call_sites=[],
+                local_vars=[],
+            )
+        )
+
+    name = fqn.rsplit(".", 1)[-1]
+    type_decl = TypeDecl(
+        name=name,
+        kind=kind,
+        fqn=fqn,
+        modifiers=modifiers,
+        annotations=annotations,
+        extends=extends,
+        implements=implements,
+        fields=fields,
+        methods=methods,
+        nested=nested,
+        start_byte=start_byte,
+        end_byte=end_byte,
+        start_line=start_line,
+        end_line=end_line,
+        outer_fqn=outer_fqn,
+    )
+    type_decl.capabilities = infer_capabilities_for_type(type_decl)
+    return type_decl
+
+
+def _parse_synthetic_anonymous_type(
+    object_creation: Node,
+    class_body: Node,
+    src: bytes,
+    *,
+    package: str,
+    host_type_fqn: str,
+    kind_by_simple: dict[str, str],
+) -> TypeDecl:
+    label = f"<anon:{object_creation.start_byte}>"
+    fqn = f"{host_type_fqn}.{label}"
+    type_node = object_creation.child_by_field_name("type")
+    super_simple = _strip_type_to_simple(type_node, src) if type_node is not None else "Object"
+    extends, implements = _anonymous_extends_implements(super_simple, kind_by_simple)
+    return _parse_type_body_into_decl(
+        class_body,
+        src,
+        package=package,
+        fqn=fqn,
+        kind="class",
+        extends=extends,
+        implements=implements,
+        modifiers=[],
+        annotations=[],
+        kind_by_simple=kind_by_simple,
+        start_byte=object_creation.start_byte,
+        end_byte=object_creation.end_byte,
+        start_line=object_creation.start_point[0] + 1,
+        end_line=object_creation.end_point[0] + 1,
+        outer_fqn=host_type_fqn,
+    )
+
+
+def _extract_anonymous_types_in_subtree(
+    root: Node,
+    src: bytes,
+    *,
+    package: str,
+    host_type_fqn: str,
+    kind_by_simple: dict[str, str],
+) -> list[TypeDecl]:
+    """Find every `new T() { }` with class_body under root; skip bodies (parsed separately)."""
+    found: list[TypeDecl] = []
+
+    def visit(n: Node) -> None:
+        if n.type == "object_creation_expression":
+            class_body: Node | None = None
+            for ch in n.named_children:
+                if ch.type == "class_body":
+                    class_body = ch
+                    break
+            if class_body is not None:
+                found.append(
+                    _parse_synthetic_anonymous_type(
+                        n, class_body, src,
+                        package=package, host_type_fqn=host_type_fqn, kind_by_simple=kind_by_simple,
+                    )
+                )
+            for ch in n.named_children:
+                if ch.type == "class_body":
+                    continue
+                visit(ch)
+            return
+        for ch in n.children:
+            visit(ch)
+
+    visit(root)
+    return found
+
+
 def _import_declaration_is_static(node: Node, src: bytes) -> bool:
     for c in node.children:
         if c.type == "static" and _txt(c, src) == "static":
@@ -628,11 +841,12 @@ def _collect_call_sites(
                     byte=n.start_byte,
                     lam=lam,
                 )
+            # Anonymous `new T() { }` bodies are indexed as synthetic nested types;
+            # do not attribute their call sites to this caller_fqn (D3).
             for ch in n.named_children:
                 if ch.type == "class_body":
-                    visit(ch, True)
-                else:
-                    visit(ch, lam)
+                    continue
+                visit(ch, lam)
             return
         if t == "method_invocation":
             obj = n.child_by_field_name("object")
@@ -738,7 +952,15 @@ def _parse_params(formal: Node | None, src: bytes) -> list[ParamDecl]:
     return params
 
 
-def _parse_method(node: Node, src: bytes, *, is_constructor: bool, type_fqn: str) -> MethodDecl:
+def _parse_method(
+    node: Node,
+    src: bytes,
+    *,
+    is_constructor: bool,
+    type_fqn: str,
+    package: str,
+    kind_by_simple: dict[str, str],
+) -> tuple[MethodDecl, list[TypeDecl]]:
     mods, anns = _collect_annotations_and_modifiers(node, src)
     name_node = node.child_by_field_name("name")
     name = _txt(name_node, src) if name_node is not None else ("<init>" if is_constructor else "<method>")
@@ -764,6 +986,7 @@ def _parse_method(node: Node, src: bytes, *, is_constructor: bool, type_fqn: str
         end_line=node.end_point[0] + 1,
     )
     caller_fqn = f"{type_fqn}#{signature}"
+    anon_nested: list[TypeDecl] = []
     body = node.child_by_field_name("body")
     if body is not None:
         m.local_vars = _collect_local_vars(body, src)
@@ -787,7 +1010,10 @@ def _parse_method(node: Node, src: bytes, *, is_constructor: bool, type_fqn: str
                     )
                 )
         m.call_sites = sites
-    return m
+        anon_nested = _extract_anonymous_types_in_subtree(
+            body, src, package=package, host_type_fqn=type_fqn, kind_by_simple=kind_by_simple,
+        )
+    return m, anon_nested
 
 
 def _parse_field(node: Node, src: bytes) -> list[FieldDecl]:
@@ -821,7 +1047,9 @@ def _parse_field(node: Node, src: bytes) -> list[FieldDecl]:
     return out
 
 
-def _parse_type(node: Node, src: bytes, *, package: str, outer_fqn: str | None) -> TypeDecl:
+def _parse_type(
+    node: Node, src: bytes, *, package: str, outer_fqn: str | None, kind_by_simple: dict[str, str],
+) -> TypeDecl:
     kind = _TYPE_KINDS[node.type]
     name_node = node.child_by_field_name("name")
     name = _txt(name_node, src) if name_node is not None else "<anon>"
@@ -838,69 +1066,43 @@ def _parse_type(node: Node, src: bytes, *, package: str, outer_fqn: str | None) 
     implements = _implements_of(node, src)
 
     body = node.child_by_field_name("body")
-    fields: list[FieldDecl] = []
-    methods: list[MethodDecl] = []
-    nested: list[TypeDecl] = []
-    if body is not None:
-        for ch in _iter_body_members(body):
-            if ch.type == "field_declaration":
-                fields.extend(_parse_field(ch, src))
-            elif ch.type == "method_declaration":
-                methods.append(_parse_method(ch, src, is_constructor=False, type_fqn=fqn))
-            elif ch.type == "constructor_declaration":
-                methods.append(_parse_method(ch, src, is_constructor=True, type_fqn=fqn))
-            elif ch.type in _TYPE_KINDS:
-                nested.append(_parse_type(ch, src, package=package, outer_fqn=fqn))
-
-    # Synthesize a default no-arg constructor when:
-    #   - the type is a class or enum (not interface/annotation/record),
-    #   - no explicit constructor was parsed, AND
-    #   - no Lombok annotation that generates a constructor is present
-    #     (@RequiredArgsConstructor / @AllArgsConstructor would synthesize an
-    #     args-bearing ctor; adding a no-arg one here would mis-resolve callers).
-    ann_names_set = {a.name for a in anns}
-    if (
-        kind in ("class", "enum")
-        and not any(m.is_constructor for m in methods)
-        and not (_LOMBOK_RAC & ann_names_set)
-    ):
-        default_ctor_sig = "<init>()"
-        default_ctor = MethodDecl(
-            name="<init>",
-            return_type="",
-            is_constructor=True,
-            parameters=[],
-            modifiers=[],
-            annotations=[],
-            signature=default_ctor_sig,
+    if body is None:
+        td = TypeDecl(
+            name=name,
+            kind=kind,
+            fqn=fqn,
+            modifiers=mods,
+            annotations=anns,
+            extends=extends,
+            implements=implements,
+            fields=[],
+            methods=[],
+            nested=[],
             start_byte=node.start_byte,
-            end_byte=node.start_byte,
+            end_byte=node.end_byte,
             start_line=node.start_point[0] + 1,
-            end_line=node.start_point[0] + 1,
-            call_sites=[],
-            local_vars=[],
+            end_line=node.end_point[0] + 1,
+            outer_fqn=outer_fqn,
         )
-        methods.append(default_ctor)
-
-    type_decl = TypeDecl(
-        name=name,
-        kind=kind,
+        td.capabilities = infer_capabilities_for_type(td)
+        return td
+    return _parse_type_body_into_decl(
+        body,
+        src,
+        package=package,
         fqn=fqn,
-        modifiers=mods,
-        annotations=anns,
+        kind=kind,
         extends=extends,
         implements=implements,
-        fields=fields,
-        methods=methods,
-        nested=nested,
+        modifiers=mods,
+        annotations=anns,
+        kind_by_simple=kind_by_simple,
         start_byte=node.start_byte,
         end_byte=node.end_byte,
         start_line=node.start_point[0] + 1,
         end_line=node.end_point[0] + 1,
         outer_fqn=outer_fqn,
     )
-    type_decl.capabilities = infer_capabilities_for_type(type_decl)
-    return type_decl
 
 
 def _flatten(types: list[TypeDecl]) -> list[TypeDecl]:
@@ -993,9 +1195,12 @@ def parse_java(source: bytes | str) -> JavaFileAst:
         static_methods=static_methods,
         static_wildcards=static_wildcards,
     )
+    kind_by_simple = _pre_scan_declared_type_kinds(root, src)
     for child in root.named_children:
         if child.type in _TYPE_KINDS:
-            top_types.append(_parse_type(child, src, package=package, outer_fqn=None))
+            top_types.append(
+                _parse_type(child, src, package=package, outer_fqn=None, kind_by_simple=kind_by_simple),
+            )
 
     all_types = _flatten(top_types)
     return JavaFileAst(

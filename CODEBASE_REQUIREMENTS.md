@@ -72,8 +72,14 @@ The graph builder extracts call sites with **tree-sitter-java** node types:
 
 - **Call sites:** `method_invocation`, `object_creation_expression`, `method_reference`,
   `explicit_constructor_invocation`
-- **Nested context:** `lambda_expression`, `class_body` under `object_creation_expression`
-  (anonymous classes), `local_variable_declaration`, `formal_parameter` (scope / locals)
+- **Nested context:** `lambda_expression` (calls inside a lambda body stay on the enclosing
+  method’s `CallSite` list with `in_lambda=true`). **Anonymous classes** — `class_body` under
+  `object_creation_expression` is **not** merged into the outer method’s call sites; each
+  anonymous body is modeled as a synthetic nested type (`TypeDecl.name` like `<anon:byte>`,
+  FQN `Outer.<anon:byte>`) with normal `MethodDecl` rows and `CALLS` from those members.
+  Callee lookup for bare calls from such members also walks the lexically enclosing type
+  (`build_ast_graph._lookup_method_candidates`) so outer private helpers resolve like `javac`.
+- **Scope AST:** `local_variable_declaration`, `formal_parameter` (scope / locals)
 - **Imports:** `import_declaration` with a `static` child for `import static ...`
 
 Call resolution is heuristic (confidence + `strategy` on each `CALLS` edge). Chained receivers

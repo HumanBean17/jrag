@@ -47,7 +47,7 @@ the schema and algorithms that depend on them.
 | **`source STRING` property on every edge, frozen to `'static'` this phase.** | Adding trace-derived (`'trace'`) or DI-proxy (`'di_proxy'`) edges later becomes a data-only change, no schema migration. |
 | **Receiver-type resolution is an explicit algorithm, not "best effort".** Scope-resolved variable table → type FQN → method lookup up the inheritance chain. | Written out in §4.3. The dominant Spring-style pattern (field-injected services calling interface methods) must resolve with high precision; ambiguous cases become phantoms rather than wrong edges. |
 | **Every call-site kind has an explicit rule.** `this.m()` / bare `m()` / `super.m()` / `ClassName.staticM()` / `new Foo(...)` / `Foo::bar` / `this(...)` / `super(...)`. | Prevents silent misses. Constructor calls emit `CALLS` to an `<init>` node so "who instantiates X?" is answerable. |
-| **Lambdas and method references are visited.** Calls inside a lambda body attribute to the enclosing method; `Foo::bar` resolves to the method target when the receiver type is known, otherwise phantom. | Good enough for static flow tracing without paying for a full lambda-dispatch analysis. |
+| **Lambdas vs anonymous classes.** Calls inside a **lambda** body attribute to the enclosing named method (no synthetic callable symbol exists at index time). Calls inside an **anonymous class** `new T() { ... }` attribute to that class’s own methods (synthetic nested `TypeDecl` + `MethodDecl` entries, stable FQN per site — see §4.1). `Foo::bar` resolves to the method target when the receiver type is known, otherwise phantom. | Aligns structural symbols with `CALLS` edges so `find_callers` reaches the handler method that contains the call; lambdas keep the pragmatic enclosing-method rule. |
 | **Overload policy: exact `arg_count` first; if ambiguous, emit one edge per match** with `strategy='overload_ambiguous'`. | Multigraph is fine — BFS dedupes by FQN. The strategy tag preserves diagnosability. |
 | **Phantom nodes for JDK / Spring / external callees are kept, not dropped at index time.** Dropping them loses JDK-adjacent impact signals entirely. | Default-on `exclude_external=True` filter at query time (FQN prefix match on `java.` / `javax.` / `jakarta.` / `org.springframework.` / `lombok.`) keeps results clean when the caller doesn't want them. |
 | **`DECLARES` thin edge from each type to its own methods / constructors.** Cheap (one per method), written at index time. | Enables single-Cypher hops *type → methods → callees → parent-types*. Without it, every such traversal becomes a two-query join through the `parent_id` scalar. |
@@ -122,15 +122,32 @@ class CallSite:
     arg_count: int           # fixed-arity; varargs count literal args at site
     is_static_call: bool     # ClassName.foo() — receiver is a type, not a value
     is_constructor: bool     # new Foo(...), this(...), super(...)
-    in_lambda: bool          # call nested inside a lambda body
+    in_lambda: bool          # call nested inside a lambda body (still attributed to enclosing method)
     line: int
     byte: int
 ```
 
-**Lambda and anonymous class handling**: Lambda bodies and anonymous inner
-class bodies are walked so calls inside them attribute to the enclosing
-*named* method (good enough for static flow tracing; exact lambda/anonymous
-class semantics is out of scope).
+**Lambda bodies**: Walked during collection on the enclosing named method;
+`in_lambda=True` marks sites whose receiver/`this` semantics are those of the
+lambda’s captured scope (same as today).
+
+**Anonymous inner classes** (`new SuperType() { ... }` with `class_body`):
+Tree-sitter exposes the body as `class_body` under `object_creation_expression`,
+not as a normal nested `class_declaration`. The indexer **materialises** a
+synthetic nested `TypeDecl` per anonymous creation site (deterministic id,
+e.g. `Outer.<anon>:byte` or `Outer$N` keyed by `start_byte` within the file),
+parses its methods/ctors/fields with the same rules as named nested types, and
+collects call sites on **those** `MethodDecl` rows (`caller_fqn` =
+`synthetic.Fqn#methodSig`). The outer method’s `_collect_call_sites` walk
+**does not** recurse into anonymous `class_body` for call-site emission (avoids
+duplicate/contradictory edges vs the synthetic type). Constructor `new T() { }`
+still records the `new` / `<init>` site on the enclosing method as today.
+
+Rationale (D3): attributing anonymous-class calls to the outer method produced
+`CALLS` from `Outer#m` while the graph had no method node for the code that
+actually runs inside `run()` — poor `find_callers` behaviour for listener-style
+handlers. Lambdas keep outer-method attribution because there is no method
+symbol for the lambda body unless we add a future synthetic “lambda$” model.
 
 **Implicit super constructor**: If a constructor body has no explicit
 `this(...)` or `super(...)` invocation, Java inserts an implicit `super()`.
@@ -395,7 +412,10 @@ New `tests/test_ast_java_calls.py`:
     → resolves to `Utils.helper`, `strategy='static_import'`.
 15. Wildcard static import `import static com.example.Utils.*; ... helper();`
     → resolves to `Utils.helper`, `strategy='static_import_wildcard'`.
-16. Anonymous inner class call attributed to enclosing named method.
+16. Anonymous inner class: calls inside the class body are collected on the
+    synthetic nested type’s methods (`caller_fqn` = that member), not on the
+    enclosing named method; the outer method still has the `new` / `<init>`
+    call site for the anonymous instance.
 17. Constructor with no explicit `this()`/`super()` → synthesized edge to
     supertype `<init>(0)` with `strategy='implicit_super'`.
 18. Method reference with expression qualifier `getX()::bar` → phantom with

@@ -137,6 +137,27 @@ def test_expr_qualified_method_ref_chained_receiver(tmp_path: Path) -> None:
     assert any(str(r[0]) == "chained_receiver" and r[1] is False for r in rows), rows
 
 
+def test_anonymous_class_calls_attributed_to_synthetic_member(tmp_path: Path) -> None:
+    """D3: `pingFromAnon()` inside `new Runnable(){ run(){...}}` → CALLS from synthetic `run()`, not NestedCalls#m."""
+    db = _build_smoke_db(tmp_path)
+    conn = _connect(db)
+    outer = _rows(
+        conn,
+        "MATCH (src:Symbol)-[c:CALLS]->(dst:Symbol) "
+        "WHERE src.fqn STARTS WITH 'smoke.NestedCalls#m' AND dst.name = 'pingFromAnon' "
+        "RETURN count(*) AS n",
+    )
+    assert int(outer[0][0]) == 0, "pingFromAnon must not be called from NestedCalls#m"
+    inner = _rows(
+        conn,
+        "MATCH (src:Symbol)-[c:CALLS]->(dst:Symbol) "
+        "WHERE src.fqn STARTS WITH 'smoke.NestedCalls.<anon:' AND src.name = 'run' "
+        "AND dst.fqn STARTS WITH 'smoke.NestedCalls#pingFromAnon' "
+        "RETURN count(*) AS n",
+    )
+    assert int(inner[0][0]) >= 1, "expected CALLS from synthetic anonymous run() to pingFromAnon"
+
+
 def test_find_callers_external_java_util_needle_lists_internal_callers(tmp_path: Path) -> None:
     """exclude_external filters callers (src) only: JDK needle still returns in-repo callers."""
     db = _build_smoke_db(tmp_path)
