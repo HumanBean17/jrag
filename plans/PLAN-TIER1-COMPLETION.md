@@ -41,6 +41,16 @@ Three sub-features ship in **three independent PRs** (see §Rollout).
 - **Microservice-aware identity.** `Route.id` includes `microservice`
   so the same path in two services is two routes — required by
   the deferred B2b/B6 join.
+- **Kuzu MAP columns are STRING JSON blobs.** Kuzu's Python binder
+  (0.11.x) rejects native `dict` for `MAP(STRING, INT64)` parameters
+  (`STRUCT()` vs `MAP` mismatch). PR-A1 shipped `routes_by_framework`
+  as a `STRING` column carrying a JSON document, with the schema
+  comment `# JSON map {framework: count}; STRING avoids Kuzu Python
+  MAP↔STRUCT binder mismatch.` and a decoder in `kuzu_queries.meta()`.
+  **Every later PR that wants a MAP-shaped graph_meta field must
+  follow this pattern** — STRING column + JSON encode on write +
+  decode in `meta()`. Mentioned again in PR-A2 §2 and PR-A3 §3 so
+  the implementer doesn't re-discover it.
 
 ## PR breakdown — overview
 
@@ -262,10 +272,16 @@ Add to the `graph_meta` MERGE call (around line 1343):
 ```python
 "routes_total INT64, "
 "exposes_total INT64, "
-"routes_by_framework MAP(STRING, INT64), "
+"routes_by_framework STRING, "   # JSON blob: {framework: count}; see note below
 "routes_resolved_pct DOUBLE, "
 ```
-Populate from `tables.route_stats`.
+Populate from `tables.route_stats`. **`routes_by_framework` is a
+`STRING` column, not `MAP(STRING, INT64)`** — Kuzu's Python binder
+(0.11.x) rejects `dict` for MAP parameters with a `STRUCT()` vs
+`MAP` error. Encode with `json.dumps(...)` on write; decode with
+`json.loads(...)` in `kuzu_queries.meta()` so consumers still see a
+`dict`. Add an inline schema comment recording the reason. PR-A2
+and PR-A3 follow the same pattern for any new MAP-shaped field.
 
 #### 3.7 CLI wire-up
 
@@ -606,7 +622,13 @@ Update `RouteExtractionStats` with:
 - `routes_from_brownfield_pct: float`
 - `routes_by_layer: dict[str, int]` (counts of `'builtin' | 'layer_b_ann' | 'layer_a_meta' | 'layer_c_source' | 'layer_b_fqn'`)
 
-Surface both via `graph_meta`.
+Surface both via `graph_meta`. **`routes_by_layer` is a MAP-shaped
+field — use the same `STRING` JSON-blob pattern PR-A1 used for
+`routes_by_framework`** (Kuzu Python binder rejects `dict` for
+`MAP(STRING, INT64)`). Encode with `json.dumps` on write, decode in
+`kuzu_queries.meta()`. Re-use the legacy-row read path PR-A1 added
+(`_META_LEGACY`) when extending the meta query so v5 graphs without
+`routes_by_layer` still load.
 
 ### 4. Source stubs in `tests/fixtures/`
 
