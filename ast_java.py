@@ -1026,7 +1026,13 @@ def _record_route_skip(ctx: _ParseCtx) -> None:
     ctx.routes_skipped_unresolved += 1
 
 
-def _literal_strings_from_route_arg(val: Node, src: bytes, ctx: _ParseCtx) -> list[str]:
+def _route_value_atoms(val: Node, src: bytes, ctx: _ParseCtx) -> list[tuple[str, str, float, bool]]:
+    """Annotation route-ish values: (raw_text, resolution_strategy, confidence, resolved).
+
+    Ladder (PR-A2): literal string without ``${`` → ``annotation`` / 1.0 / resolved;
+    string containing ``${`` → ``spel`` / 0.85 / unresolved; anything else
+    (identifier, binary expr, …) → ``constant_ref`` / 0.7 / unresolved.
+    """
     val = _unwrap_element_value(val)
     if val.type == "string_literal":
         s = _string_literal_value(val, src)
@@ -1034,16 +1040,22 @@ def _literal_strings_from_route_arg(val: Node, src: bytes, ctx: _ParseCtx) -> li
             _record_route_skip(ctx)
             return []
         if "${" in s:
-            _record_route_skip(ctx)
-            return []
-        return [s]
+            return [(s, "spel", 0.85, False)]
+        return [(s, "annotation", 1.0, True)]
     if val.type in ("array_initializer", "element_value_array_initializer"):
-        out: list[str] = []
+        out: list[tuple[str, str, float, bool]] = []
         for ch in val.named_children:
-            out.extend(_literal_strings_from_route_arg(ch, src, ctx))
+            out.extend(_route_value_atoms(ch, src, ctx))
         return out
-    _record_route_skip(ctx)
-    return []
+    raw = _txt(val, src).strip()
+    if not raw:
+        return []
+    return [(raw, "constant_ref", 0.7, False)]
+
+
+def _literal_strings_from_route_arg(val: Node, src: bytes, ctx: _ParseCtx) -> list[str]:
+    """Literal-only slice (for @FeignClient name/url/path where SpEL is not modelled)."""
+    return [a[0] for a in _route_value_atoms(val, src, ctx) if a[3]]
 
 
 def _annotation_kv_nodes(ann: Node, src: bytes) -> tuple[dict[str, Node], Node | None]:
@@ -1096,19 +1108,19 @@ def _paths_and_methods_from_mapping_ann(
     src: bytes,
     simple_name: str,
     ctx: _ParseCtx,
-) -> tuple[list[str], list[str]]:
+) -> tuple[list[tuple[str, str, float, bool]], list[str]]:
     pairs, positional = _annotation_kv_nodes(ann, src)
-    paths: list[str] = []
+    path_atoms: list[tuple[str, str, float, bool]] = []
     had_explicit_path_arg = False
     if "path" in pairs:
         had_explicit_path_arg = True
-        paths.extend(_literal_strings_from_route_arg(pairs["path"], src, ctx))
+        path_atoms.extend(_route_value_atoms(pairs["path"], src, ctx))
     elif "value" in pairs:
         had_explicit_path_arg = True
-        paths.extend(_literal_strings_from_route_arg(pairs["value"], src, ctx))
+        path_atoms.extend(_route_value_atoms(pairs["value"], src, ctx))
     elif positional is not None:
         had_explicit_path_arg = True
-        paths.extend(_literal_strings_from_route_arg(positional, src, ctx))
+        path_atoms.extend(_route_value_atoms(positional, src, ctx))
 
     if simple_name == "GetMapping":
         methods = ["GET"]
@@ -1129,11 +1141,11 @@ def _paths_and_methods_from_mapping_ann(
     else:
         methods = [""]
 
-    if not paths:
+    if not path_atoms:
         if had_explicit_path_arg:
             return [], methods
-        paths = [""]
-    return paths, methods
+        path_atoms = [("", "annotation", 1.0, True)]
+    return path_atoms, methods
 
 
 def _compose_http_paths(class_base: str, method_paths: list[str]) -> list[str]:
@@ -1155,6 +1167,28 @@ def _compose_http_paths(class_base: str, method_paths: list[str]) -> list[str]:
     return out
 
 
+def _merge_http_route_with_class_base(
+    class_base: str,
+    method_path: str,
+    method_strategy: str,
+    method_confidence: float,
+    method_resolved: bool,
+) -> tuple[str, str, float, bool]:
+    """Compose class-level + method path and derive final strategy/confidence."""
+    full = _compose_http_paths(class_base, [method_path])[0]
+    # Non-string annotation args stay ``constant_ref`` even if the expression text
+    # contains ``${…}`` (e.g. string concat); SpEL applies only to string_literal.
+    if method_strategy == "constant_ref":
+        return full, "constant_ref", 0.7, False
+    if method_strategy == "spel":
+        return full, "spel", 0.85, False
+    if "${" in full:
+        return full, "spel", 0.85, False
+    if class_base and "${" in class_base:
+        return full, "spel", 0.85, False
+    return full, method_strategy, method_confidence, method_resolved
+
+
 def _type_level_request_mapping_base(enclosing_type_node: Node | None, src: bytes, ctx: _ParseCtx) -> str:
     if enclosing_type_node is None:
         return ""
@@ -1167,52 +1201,60 @@ def _type_level_request_mapping_base(enclosing_type_node: Node | None, src: byte
         simple, _ = _annotation_name(child, src)
         if simple != "RequestMapping":
             continue
-        ps, _ = _paths_and_methods_from_mapping_ann(child, src, simple, ctx)
-        return ps[0] if ps else ""
+        atoms, _ = _paths_and_methods_from_mapping_ann(child, src, simple, ctx)
+        return atoms[0][0] if atoms else ""
     return ""
 
 
-def _kafka_topics_from_ann_node(ann: Node, src: bytes, ctx: _ParseCtx) -> list[str]:
+def _kafka_topics_from_ann_node(
+    ann: Node, src: bytes, ctx: _ParseCtx,
+) -> list[tuple[str, str, float, bool]]:
     pairs, positional = _annotation_kv_nodes(ann, src)
     if "topics" in pairs:
-        return _literal_strings_from_route_arg(pairs["topics"], src, ctx)
+        return _route_value_atoms(pairs["topics"], src, ctx)
     if "topicPattern" in pairs:
         _record_route_skip(ctx)
         return []
     if positional is not None:
-        return _literal_strings_from_route_arg(positional, src, ctx)
+        return _route_value_atoms(positional, src, ctx)
     return []
 
 
-def _rabbit_queues_from_ann_node(ann: Node, src: bytes, ctx: _ParseCtx) -> list[str]:
+def _rabbit_queues_from_ann_node(
+    ann: Node, src: bytes, ctx: _ParseCtx,
+) -> list[tuple[str, str, float, bool]]:
     pairs, positional = _annotation_kv_nodes(ann, src)
     if "queues" in pairs:
-        return _literal_strings_from_route_arg(pairs["queues"], src, ctx)
+        return _route_value_atoms(pairs["queues"], src, ctx)
     if "bindings" in pairs:
         _record_route_skip(ctx)
         return []
     if positional is not None:
-        return _literal_strings_from_route_arg(positional, src, ctx)
+        return _route_value_atoms(positional, src, ctx)
     return []
 
 
-def _jms_destination_from_ann_node(ann: Node, src: bytes, ctx: _ParseCtx) -> list[str]:
+def _jms_destination_from_ann_node(
+    ann: Node, src: bytes, ctx: _ParseCtx,
+) -> list[tuple[str, str, float, bool]]:
     pairs, positional = _annotation_kv_nodes(ann, src)
     for key in ("destination", "value"):
         if key in pairs:
-            return _literal_strings_from_route_arg(pairs[key], src, ctx)
+            return _route_value_atoms(pairs[key], src, ctx)
     if positional is not None:
-        return _literal_strings_from_route_arg(positional, src, ctx)
+        return _route_value_atoms(positional, src, ctx)
     return []
 
 
-def _stream_listener_destinations(ann: Node, src: bytes, ctx: _ParseCtx) -> list[str]:
+def _stream_listener_destinations(
+    ann: Node, src: bytes, ctx: _ParseCtx,
+) -> list[tuple[str, str, float, bool]]:
     pairs, positional = _annotation_kv_nodes(ann, src)
     for key in ("value", "name"):
         if key in pairs:
-            return _literal_strings_from_route_arg(pairs[key], src, ctx)
+            return _route_value_atoms(pairs[key], src, ctx)
     if positional is not None:
-        return _literal_strings_from_route_arg(positional, src, ctx)
+        return _route_value_atoms(positional, src, ctx)
     return []
 
 
@@ -1229,7 +1271,7 @@ def _collect_type_level_kafka_topics(enclosing_type_node: Node | None, src: byte
         simple, _ = _annotation_name(child, src)
         if simple != "KafkaListener":
             continue
-        topics.extend(_kafka_topics_from_ann_node(child, src, ctx))
+        topics.extend(a[0] for a in _kafka_topics_from_ann_node(child, src, ctx) if a[3])
     return topics
 
 
@@ -1246,7 +1288,7 @@ def _collect_type_level_rabbit_queues(enclosing_type_node: Node | None, src: byt
         simple, _ = _annotation_name(child, src)
         if simple != "RabbitListener":
             continue
-        qs.extend(_rabbit_queues_from_ann_node(child, src, ctx))
+        qs.extend(a[0] for a in _rabbit_queues_from_ann_node(child, src, ctx) if a[3])
     return qs
 
 
@@ -1406,10 +1448,10 @@ def _collect_routes(
     # --- Messaging annotations on method ---
     for simple, node in ann_nodes:
         if simple == "KafkaListener":
-            topics = _kafka_topics_from_ann_node(node, src, ctx)
-            if not topics and class_kafka_topics:
-                topics = list(class_kafka_topics)
-            for tp in topics:
+            topic_atoms = _kafka_topics_from_ann_node(node, src, ctx)
+            if not topic_atoms and class_kafka_topics:
+                topic_atoms = [(t, "annotation", 1.0, True) for t in class_kafka_topics]
+            for tp, strat, conf, res in topic_atoms:
                 routes.append(
                     RouteDecl(
                         method_fqn=handler_fqn,
@@ -1422,19 +1464,19 @@ def _collect_routes(
                         broker="",
                         feign_name="",
                         feign_url="",
-                        resolution_strategy="annotation",
-                        confidence=1.0,
-                        resolved=True,
+                        resolution_strategy=strat,
+                        confidence=conf,
+                        resolved=res,
                         filename=file_rel,
                         start_line=method_decl.start_line,
                         end_line=method_decl.end_line,
                     )
                 )
         elif simple == "RabbitListener":
-            queues = _rabbit_queues_from_ann_node(node, src, ctx)
-            if not queues and class_rabbit_queues:
-                queues = list(class_rabbit_queues)
-            for q in queues:
+            queue_atoms = _rabbit_queues_from_ann_node(node, src, ctx)
+            if not queue_atoms and class_rabbit_queues:
+                queue_atoms = [(q, "annotation", 1.0, True) for q in class_rabbit_queues]
+            for q, strat, conf, res in queue_atoms:
                 routes.append(
                     RouteDecl(
                         method_fqn=handler_fqn,
@@ -1447,16 +1489,16 @@ def _collect_routes(
                         broker="",
                         feign_name="",
                         feign_url="",
-                        resolution_strategy="annotation",
-                        confidence=1.0,
-                        resolved=True,
+                        resolution_strategy=strat,
+                        confidence=conf,
+                        resolved=res,
                         filename=file_rel,
                         start_line=method_decl.start_line,
                         end_line=method_decl.end_line,
                     )
                 )
         elif simple == "JmsListener":
-            for dest in _jms_destination_from_ann_node(node, src, ctx):
+            for dest, strat, conf, res in _jms_destination_from_ann_node(node, src, ctx):
                 routes.append(
                     RouteDecl(
                         method_fqn=handler_fqn,
@@ -1469,16 +1511,16 @@ def _collect_routes(
                         broker="",
                         feign_name="",
                         feign_url="",
-                        resolution_strategy="annotation",
-                        confidence=1.0,
-                        resolved=True,
+                        resolution_strategy=strat,
+                        confidence=conf,
+                        resolved=res,
                         filename=file_rel,
                         start_line=method_decl.start_line,
                         end_line=method_decl.end_line,
                     )
                 )
         elif simple == "StreamListener":
-            for dest in _stream_listener_destinations(node, src, ctx):
+            for dest, strat, conf, res in _stream_listener_destinations(node, src, ctx):
                 routes.append(
                     RouteDecl(
                         method_fqn=handler_fqn,
@@ -1491,9 +1533,9 @@ def _collect_routes(
                         broker="",
                         feign_name="",
                         feign_url="",
-                        resolution_strategy="annotation",
-                        confidence=1.0,
-                        resolved=True,
+                        resolution_strategy=strat,
+                        confidence=conf,
+                        resolved=res,
                         filename=file_rel,
                         start_line=method_decl.start_line,
                         end_line=method_decl.end_line,
@@ -1508,10 +1550,10 @@ def _collect_routes(
     for simple, node in ann_nodes:
         if simple not in _ROUTE_HTTP_MAPPING_NAMES:
             continue
-        paths, methods = _paths_and_methods_from_mapping_ann(node, src, simple, ctx)
-        if not paths:
+        path_atoms, methods = _paths_and_methods_from_mapping_ann(node, src, simple, ctx)
+        if not path_atoms:
             continue
-        full_paths = _compose_http_paths(http_base if not feign_iface else feign_base_path, paths)
+        class_path_prefix = http_base if not feign_iface else feign_base_path
         fw = "feign" if feign_iface else _http_framework_for_mapping(
             enclosing_body=enclosing_body,
             src=src,
@@ -1519,7 +1561,10 @@ def _collect_routes(
             type_ann_names=type_ann_names,
         )
         kind = "http_consumer" if feign_iface else "http_endpoint"
-        for pth in full_paths:
+        for raw_path, m_strat, m_conf, m_res in path_atoms:
+            full_path, f_strat, f_conf, f_res = _merge_http_route_with_class_base(
+                class_path_prefix, raw_path, m_strat, m_conf, m_res,
+            )
             for hm in methods:
                 routes.append(
                     RouteDecl(
@@ -1528,14 +1573,14 @@ def _collect_routes(
                         kind=kind,
                         framework=fw,
                         http_method=hm,
-                        path=pth,
+                        path=full_path,
                         topic="",
                         broker="",
                         feign_name=feign_name if feign_iface else "",
                         feign_url=feign_url if feign_iface else "",
-                        resolution_strategy="annotation",
-                        confidence=1.0,
-                        resolved=True,
+                        resolution_strategy=f_strat,
+                        confidence=f_conf,
+                        resolved=f_res,
                         filename=file_rel,
                         start_line=method_decl.start_line,
                         end_line=method_decl.end_line,

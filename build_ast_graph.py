@@ -1167,12 +1167,15 @@ def _route_id(
     kind: str,
     http_method: str,
     path_template: str,
+    path_raw: str,
     topic: str,
     broker: str,
     microservice: str,
 ) -> str:
+    """Stable id; `path_raw` disambiguates HTTP routes when `path_template` is empty (SpEL / const)."""
+    path_key = path_template if path_template else path_raw
     key = (
-        f"{framework}|{kind}|{http_method}|{path_template}|"
+        f"{framework}|{kind}|{http_method}|{path_key}|"
         f"{topic}|{broker}|{microservice}"
     )
     return f"r:{hashlib.sha1(key.encode()).hexdigest()[:16]}"
@@ -1197,12 +1200,16 @@ def pass4_routes(tables: GraphTables, asts: dict[str, JavaFileAst], *, verbose: 
         for decl in member.decl.routes:
             path_template, path_regex = ("", "")
             if decl.kind in http_kinds:
-                path_template, path_regex = _normalize_path(decl.path)
+                if decl.resolved and decl.resolution_strategy == "annotation":
+                    path_template, path_regex = _normalize_path(decl.path)
+                else:
+                    path_template, path_regex = "", ""
             rid = _route_id(
                 decl.framework,
                 decl.kind,
                 decl.http_method,
                 path_template,
+                decl.path,
                 decl.topic,
                 decl.broker,
                 member.microservice,

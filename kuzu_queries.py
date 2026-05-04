@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import os
 import threading
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -990,6 +990,107 @@ class KuzuGraph:
                 visited_fqns.add(entry.symbol.fqn)
             frontier_fqns = [entry.symbol.fqn for entry in stage_list]
         return stages
+
+    # ---- routes (B2a) ----
+
+    _ROUTE_RETURN = (
+        "r.id AS id, r.kind AS kind, r.framework AS framework, r.method AS method, "
+        "r.path AS path, r.path_template AS path_template, r.path_regex AS path_regex, "
+        "r.topic AS topic, r.broker AS broker, r.feign_name AS feign_name, r.feign_url AS feign_url, "
+        "r.microservice AS microservice, r.module AS module, r.filename AS filename, "
+        "r.start_line AS start_line, r.end_line AS end_line, r.resolved AS resolved"
+    )
+
+    @staticmethod
+    def _row_to_route_dict(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "id": str(row.get("id") or ""),
+            "kind": str(row.get("kind") or ""),
+            "framework": str(row.get("framework") or ""),
+            "method": str(row.get("method") or ""),
+            "path": str(row.get("path") or ""),
+            "path_template": str(row.get("path_template") or ""),
+            "path_regex": str(row.get("path_regex") or ""),
+            "topic": str(row.get("topic") or ""),
+            "broker": str(row.get("broker") or ""),
+            "feign_name": str(row.get("feign_name") or ""),
+            "feign_url": str(row.get("feign_url") or ""),
+            "microservice": str(row.get("microservice") or ""),
+            "module": str(row.get("module") or ""),
+            "filename": str(row.get("filename") or ""),
+            "start_line": int(row.get("start_line") or 0),
+            "end_line": int(row.get("end_line") or 0),
+            "resolved": bool(row.get("resolved", True)),
+        }
+
+    def list_routes(
+        self,
+        *,
+        microservice: str | None = None,
+        framework: str | None = None,
+        path_prefix: str | None = None,
+        method: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        lim = max(1, min(int(limit), 500))
+        params: dict[str, Any] = {"lim": lim}
+        preds: list[str] = []
+        if microservice:
+            params["microservice"] = microservice
+            preds.append("r.microservice = $microservice")
+        if framework:
+            params["framework"] = framework
+            preds.append("r.framework = $framework")
+        if path_prefix:
+            params["path_prefix"] = path_prefix
+            preds.append("r.path STARTS WITH $path_prefix")
+        if method is not None and method != "":
+            params["method"] = method
+            preds.append("r.method = $method")
+        where = (" WHERE " + " AND ".join(preds)) if preds else ""
+        q = (
+            f"MATCH (r:Route){where} RETURN {self._ROUTE_RETURN} "
+            f"ORDER BY r.framework, r.path, r.id LIMIT $lim"
+        )
+        return [self._row_to_route_dict(r) for r in self._rows(q, params)]
+
+    def find_route_handlers(self, *, route_id: str) -> list[dict[str, Any]]:
+        s_proj = ", ".join(f"s.{c} AS s_{c}" for c in _SYM_COLS)
+        q = (
+            f"MATCH (s:Symbol)-[e:EXPOSES]->(r:Route) WHERE r.id = $rid "
+            f"RETURN {s_proj}, e.confidence AS confidence, e.strategy AS strategy "
+            f"ORDER BY s.fqn"
+        )
+        out: list[dict[str, Any]] = []
+        for r in self._rows(q, {"rid": route_id}):
+            sym = _row_to_symbol({k[2:]: v for k, v in r.items() if k.startswith("s_")})
+            out.append({
+                "symbol": asdict(sym),
+                "confidence": float(r.get("confidence") or 0.0),
+                "strategy": str(r.get("strategy") or ""),
+            })
+        return out
+
+    def get_route_by_path(
+        self,
+        *,
+        microservice: str,
+        path_template: str,
+        method: str = "",
+    ) -> dict[str, Any] | None:
+        params: dict[str, Any] = {"ms": microservice, "pt": path_template}
+        meth_filter = ""
+        if method != "":
+            params["meth"] = method
+            meth_filter = "AND r.method = $meth"
+        q = (
+            f"MATCH (r:Route) WHERE r.microservice = $ms AND r.path_template = $pt {meth_filter} "
+            f"RETURN {self._ROUTE_RETURN} ORDER BY r.id LIMIT 1"
+        )
+        rows = self._rows(q, params)
+        if not rows:
+            return None
+        return self._row_to_route_dict(rows[0])
 
     # ---- used by search_lancedb.graph_expand ----
 

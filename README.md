@@ -140,6 +140,11 @@ The DB is dropped and rebuilt from scratch on each run (Phase 1 is a full rebuil
 | `graph_neighbors` | Generic BFS over `EXTENDS|IMPLEMENTS|INJECTS|DECLARES|CALLS`, directional. |
 | `impact_analysis` | Reverse closure: what breaks if this changes. |
 | `graph_meta` | Counts, ontology version, build timestamp, parse errors; route totals / `routes_by_framework` / `routes_resolved_pct` when the graph includes `Route` nodes (ontology v5+). |
+| `list_routes` | Filterable listing of `Route` nodes (`microservice`, `framework`, `path_prefix`, `method`). |
+| `find_route_handlers` | Symbols that `EXPOSES` a route id (confidence + resolution strategy on the edge). |
+| `get_route_by_path` | Lookup one `Route` by `microservice` + normalised `path_template` + optional HTTP method. |
+
+HTTP mappings from literals are fully resolved (non-empty `path_template` / `path_regex`). Values containing Spring ``${…}`` SpEL, or non-string annotation arguments (constant references), are still stored as routes with lower confidence and empty template fields. Caller-side edges (`find_route_callers`) are planned under B2b, not shipped here.
 
 ### Manual test
 

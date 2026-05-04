@@ -394,3 +394,58 @@ def test_kuzu_graph_get_raises_when_graph_ontology_too_old(tmp_path: Path) -> No
     finally:
         KuzuGraph._instance = prev_inst
         KuzuGraph._instance_path = prev_path
+
+
+_ROUTE_EXTRACTION_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "route_extraction_smoke"
+
+
+def _kuzu_graph_from_route_fixture(tmp_path: Path) -> KuzuGraph:
+    from build_ast_graph import (
+        GraphTables,
+        pass1_parse,
+        pass2_edges,
+        pass3_calls,
+        pass4_routes,
+        write_kuzu,
+    )
+
+    db_path = tmp_path / "route_fixture.kuzu"
+    tables = GraphTables()
+    asts = pass1_parse(_ROUTE_EXTRACTION_FIXTURE, tables, verbose=False)
+    pass2_edges(tables, asts, verbose=False)
+    pass3_calls(tables, asts, verbose=False)
+    pass4_routes(tables, asts, verbose=False)
+    write_kuzu(db_path, tables, source_root=_ROUTE_EXTRACTION_FIXTURE, verbose=False)
+    return KuzuGraph(str(db_path))
+
+
+def test_list_routes_filter_by_framework(tmp_path: Path) -> None:
+    g = _kuzu_graph_from_route_fixture(tmp_path)
+    feign = g.list_routes(framework="feign", limit=200)
+    assert feign
+    assert all(r["framework"] == "feign" for r in feign)
+    mvc = g.list_routes(framework="spring_mvc", limit=50)
+    assert mvc
+    assert all(r["framework"] == "spring_mvc" for r in mvc)
+
+
+def test_find_route_handlers_feign_array(tmp_path: Path) -> None:
+    g = _kuzu_graph_from_route_fixture(tmp_path)
+    rows = g.list_routes(framework="feign", path_prefix="/dupbase/same", limit=10)
+    assert rows, "expected FeignTripleDup routes"
+    rid = rows[0]["id"]
+    handlers = g.find_route_handlers(route_id=rid)
+    assert len(handlers) == 3
+    fqns = {h["symbol"]["fqn"] for h in handlers}
+    assert len(fqns) == 3
+
+
+def test_get_route_by_path_microservice_isolated(tmp_path: Path) -> None:
+    g = _kuzu_graph_from_route_fixture(tmp_path)
+    tpl = "/api/users"
+    ra = g.get_route_by_path(microservice="service-a", path_template=tpl, method="GET")
+    rb = g.get_route_by_path(microservice="service-b", path_template=tpl, method="GET")
+    assert ra is not None and rb is not None
+    assert ra["microservice"] == "service-a"
+    assert rb["microservice"] == "service-b"
+    assert ra["id"] != rb["id"]
