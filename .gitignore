@@ -43,3 +43,4 @@ cocoindex_java_lance.db/
 # Local env files
 .env
 .env.*
+tmp/
