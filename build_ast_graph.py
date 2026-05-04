@@ -839,11 +839,17 @@ def _phantom_method_id(
     callee: str,
     arg_count: int,
 ) -> str:
+    # Phantom node identity for a resolved receiver omits call-site arity so
+    # method references (arg_count=-1) and normal invocations share one Symbol
+    # per (receiver_fqn, callee) when the callee is not indexed (D1).
     if receiver_fqn:
-        fqn = f"{receiver_fqn}#{callee}({arg_count})"
+        fqn = f"{receiver_fqn}#{callee}(?)"
+        sig = f"{callee}(?)"
     else:
         expr_short = (receiver_expr[:50] if receiver_expr else "?")
-        fqn = f"?{expr_short}#{callee}({arg_count})"
+        arity = "(?)" if arg_count < 0 else f"({arg_count})"
+        fqn = f"?{expr_short}#{callee}{arity}"
+        sig = f"{callee}{arity}"
     pid = phantom_id(fqn)
     if pid not in tables.phantoms:
         tables.phantoms[pid] = {
@@ -863,7 +869,7 @@ def _phantom_method_id(
             "annotations": [],
             "capabilities": [],
             "role": "OTHER",
-            "signature": f"{callee}({arg_count})",
+            "signature": sig,
             "parent_id": "",
             "resolved": False,
         }

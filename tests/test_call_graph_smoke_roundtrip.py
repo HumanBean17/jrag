@@ -250,6 +250,30 @@ def test_min_confidence_filter_keeps_high_confidence_static_import_callers(
             "B3 fix not applied"
         )
         assert any("StaticImportTest" in e.src.fqn for e in edges), [e.src.fqn for e in edges]
+        assert all(e.dst.fqn == "java.util.Objects#requireNonNull(?)" for e in edges), [
+            e.dst.fqn for e in edges
+        ]
     finally:
         KuzuGraph._instance = None
         KuzuGraph._instance_path = None
+
+
+def test_d1_phantom_method_ref_and_invocation_share_symbol(tmp_path: Path) -> None:
+    """D1: method ref (arg_count=-1) and normal call to same unindexed callee share one dst Symbol."""
+    db = _build_smoke_db(tmp_path)
+    conn = _connect(db)
+    rows = _rows(
+        conn,
+        "MATCH (src:Symbol)-[c:CALLS]->(dst:Symbol) "
+        "WHERE src.fqn STARTS WITH 'smoke.PhantomMergeD1#m' AND dst.name = 'toString' "
+        "RETURN count(DISTINCT dst.id) AS nids, "
+        "collect(DISTINCT dst.fqn) AS fqns, "
+        "collect(c.arg_count) AS arities",
+    )
+    assert rows, "expected CALLS edges to toString from PhantomMergeD1#m"
+    nids = int(rows[0][0])
+    fqns = rows[0][1]
+    arities = rows[0][2]
+    assert nids == 1, f"expected one phantom Symbol for toString, got nids={nids} fqns={fqns}"
+    assert set(fqns) == {"smoke.Svc#toString(?)"}, fqns
+    assert set(arities) == {-1, 0}, f"edges should keep site arities on CALLS; got {arities}"

@@ -228,6 +228,19 @@ def _row_to_call_edge(row: dict[str, Any]) -> CallEdge:
     )
 
 
+def _call_graph_needle_phantom_arity_alt(needle: str) -> str | None:
+    """Map ``Type#method(123)`` → ``Type#method(?)`` for phantom callee FQNs (D1)."""
+    if "#" not in needle:
+        return None
+    i = needle.rfind("(")
+    if i <= 0 or not needle.endswith(")"):
+        return None
+    inner = needle[i + 1 : -1]
+    if not inner.isdigit():
+        return None
+    return needle[:i] + "(?)"
+
+
 class KuzuGraph:
     """Thin wrapper around a read-only Kuzu connection.
 
@@ -490,6 +503,13 @@ class KuzuGraph:
             "MATCH (s:Symbol) WHERE s.fqn = $n RETURN s.id AS id, s.kind AS kind LIMIT 1",
             {"n": needle},
         )
+        if not rows:
+            alt = _call_graph_needle_phantom_arity_alt(needle)
+            if alt:
+                rows = self._rows(
+                    "MATCH (s:Symbol) WHERE s.fqn = $n RETURN s.id AS id, s.kind AS kind LIMIT 1",
+                    {"n": alt},
+                )
         if rows:
             kind = str(rows[0].get("kind") or "")
             sid = str(rows[0].get("id") or "")
