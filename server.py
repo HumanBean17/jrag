@@ -37,6 +37,7 @@ _INSTRUCTIONS = (
     "subclasses, injectors, impact analysis, and graph-expanded codebase_search. "
     "Use codebase_search for meaning-based discovery — prefer limit 5; use offset to page. "
     "Use find_implementors / find_subclasses / find_injectors / find_callers / find_callees / "
+    "list_routes / find_route_handlers / get_route_by_path / "
     "impact_analysis / neighbors / list_by_role / list_by_annotation / list_by_capability for "
     "exact structural traversal. "
     "Use list_by_capability for behavioural questions about message-driven "
@@ -49,6 +50,9 @@ _INSTRUCTIONS = (
     "IMPLEMENTS) and exclude_external=true on that CALLS hop (drops discovered types under "
     "java/javax/jakarta/org.springframework/lombok prefixes); "
     "pass follow_calls=false for type-only wiring. "
+    "HTTP routes extracted from Spring mappings may use SpEL (${…}) or constant references — "
+    "those rows are unresolved (empty path_template / path_regex) with lower confidence; "
+    "caller-side route edges are not modelled yet (find_route_callers will ship with B2b). "
     "For behavioural queries prefer exclude_roles=['DTO','ENTITY','CONFIG','OTHER'] on "
     "codebase_search; for schema/domain questions pass role='DTO' or role='ENTITY' instead. "
     "Set auto_hybrid=true when the query contains identifiers / CamelCase / snake_case "
@@ -209,6 +213,50 @@ class CallEdgeDto(BaseModel):
 class CallEdgesOutput(BaseModel):
     success: bool
     results: list[CallEdgeDto] = Field(default_factory=list)
+    message: str | None = None
+
+
+class RouteRowDto(BaseModel):
+    id: str = ""
+    kind: str = ""
+    framework: str = ""
+    method: str = ""
+    path: str = ""
+    path_template: str = ""
+    path_regex: str = ""
+    topic: str = ""
+    broker: str = ""
+    feign_name: str = ""
+    feign_url: str = ""
+    microservice: str = ""
+    module: str = ""
+    filename: str = ""
+    start_line: int = 0
+    end_line: int = 0
+    resolved: bool = True
+
+
+class RoutesListOutput(BaseModel):
+    success: bool
+    routes: list[RouteRowDto] = Field(default_factory=list)
+    message: str | None = None
+
+
+class RouteHandlerEntryDto(BaseModel):
+    symbol: SymbolDto
+    confidence: float = 0.0
+    strategy: str = ""
+
+
+class RouteHandlersOutput(BaseModel):
+    success: bool
+    results: list[RouteHandlerEntryDto] = Field(default_factory=list)
+    message: str | None = None
+
+
+class SingleRouteOutput(BaseModel):
+    success: bool
+    route: RouteRowDto | None = None
     message: str | None = None
 
 
@@ -435,6 +483,10 @@ def _symbol_to_dto(s) -> SymbolDto:
         role=s.role, signature=s.signature, parent_id=s.parent_id,
         resolved=bool(s.resolved),
     )
+
+
+def _route_dict_to_dto(d: dict[str, Any]) -> RouteRowDto:
+    return RouteRowDto.model_validate(d)
 
 
 def _clean_str_list(val: Any) -> list[str]:
@@ -877,6 +929,84 @@ def create_mcp_server() -> FastMCP:
             microservice=microservice,
         )
         return CallEdgesOutput(success=True, results=[_call_edge_to_dto(e) for e in edges])
+
+    @mcp.tool(
+        name="list_routes",
+        description=(
+            "List Route nodes from the Kuzu graph (HTTP, Feign, Kafka, …). "
+            "Optional filters: microservice, framework, path_prefix (raw `path` prefix), "
+            "HTTP method. Unresolved SpEL/constant-ref routes have empty path_template."
+        ),
+    )
+    async def list_routes(
+        microservice: str | None = Field(default=None, description="Filter to one microservice key."),
+        framework: str | None = Field(default=None, description="Exact Route.framework match (e.g. spring_mvc, feign)."),
+        path_prefix: str | None = Field(default=None, description="Route.path STARTS WITH this string."),
+        method: str | None = Field(default=None, description="HTTP verb on Route.method (GET, POST, …); omit for any."),
+        limit: int = Field(default=100, ge=1, le=500),
+    ) -> RoutesListOutput:
+        ok, graph, msg = _require_graph()
+        if not ok or graph is None:
+            return RoutesListOutput(success=False, message=msg)
+        rows = await asyncio.to_thread(
+            graph.list_routes,
+            microservice=microservice,
+            framework=framework,
+            path_prefix=path_prefix,
+            method=method,
+            limit=limit,
+        )
+        return RoutesListOutput(success=True, routes=[_route_dict_to_dto(r) for r in rows])
+
+    @mcp.tool(
+        name="find_route_handlers",
+        description=(
+            "All Symbol nodes that EXPOSES a Route (by route id). Multiple methods can "
+            "share one Route id when they map to the same normalized HTTP template."
+        ),
+    )
+    async def find_route_handlers(
+        route_id: str = Field(description="Route.id from list_routes or graph inspection."),
+    ) -> RouteHandlersOutput:
+        ok, graph, msg = _require_graph()
+        if not ok or graph is None:
+            return RouteHandlersOutput(success=False, message=msg)
+        rows = await asyncio.to_thread(graph.find_route_handlers, route_id=route_id)
+        results = [
+            RouteHandlerEntryDto(
+                symbol=SymbolDto.model_validate(r["symbol"]),
+                confidence=float(r.get("confidence") or 0.0),
+                strategy=str(r.get("strategy") or ""),
+            )
+            for r in rows
+        ]
+        return RouteHandlersOutput(success=True, results=results)
+
+    @mcp.tool(
+        name="get_route_by_path",
+        description=(
+            "Resolve a single Route by microservice + path_template + optional HTTP method. "
+            "Uses the normalised servlet-style template from the graph (e.g. `/api/users/{}`); "
+            "for SpEL-only routes path_template is empty — prefer list_routes with path_prefix."
+        ),
+    )
+    async def get_route_by_path(
+        microservice: str = Field(description="Microservice key on Route.microservice."),
+        path_template: str = Field(description="Route.path_template value (normalised `{}` segments)."),
+        method: str = Field(default="", description="HTTP method; empty string matches routes with no verb."),
+    ) -> SingleRouteOutput:
+        ok, graph, msg = _require_graph()
+        if not ok or graph is None:
+            return SingleRouteOutput(success=False, message=msg)
+        row = await asyncio.to_thread(
+            graph.get_route_by_path,
+            microservice=microservice,
+            path_template=path_template,
+            method=method,
+        )
+        if row is None:
+            return SingleRouteOutput(success=True, route=None)
+        return SingleRouteOutput(success=True, route=_route_dict_to_dto(row))
 
     @mcp.tool(
         name="list_by_role",

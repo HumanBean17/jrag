@@ -121,6 +121,33 @@ async def test_find_injectors(mcp_server) -> None:
     assert "ChatManagementService" in consumers
 
 
+# ---------------- route graph tools (B2a) ----------------
+
+
+async def test_route_graph_mcp_tools_smoke(mcp_server) -> None:
+    listed = _structured(await mcp_server.call_tool("list_routes", {"limit": 20}))
+    assert listed["success"] is True
+    assert listed.get("routes")
+    rid = listed["routes"][0]["id"]
+    handlers = _structured(await mcp_server.call_tool("find_route_handlers", {"route_id": rid}))
+    assert handlers["success"] is True
+    assert handlers.get("results") is not None
+    assert len(handlers["results"]) >= 1
+    r0 = next((r for r in listed["routes"] if r.get("path_template")), listed["routes"][0])
+    byp = _structured(
+        await mcp_server.call_tool(
+            "get_route_by_path",
+            {
+                "microservice": r0["microservice"],
+                "path_template": r0["path_template"],
+                "method": r0.get("method") or "",
+            },
+        )
+    )
+    assert byp["success"] is True
+    assert byp.get("route") is not None
+
+
 # ---------------- find_callers / find_callees ----------------
 
 

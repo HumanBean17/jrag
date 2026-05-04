@@ -134,7 +134,7 @@ class L {
     assert routes[0].http_method == ""
 
 
-def test_case8_kafka_spel_skipped_counts() -> None:
+def test_case8_kafka_spel_emits_unresolved_route() -> None:
     src = '''
 package x;
 import org.springframework.kafka.annotation.KafkaListener;
@@ -144,11 +144,15 @@ class L {
 }
 '''
     ast = parse_java(src.encode())
-    assert ast.all_types[0].methods[0].routes == []
-    assert ast.routes_skipped_unresolved >= 1
+    routes = ast.all_types[0].methods[0].routes
+    assert len(routes) == 1
+    assert routes[0].topic == "${app.topic}"
+    assert routes[0].resolution_strategy == "spel"
+    assert routes[0].confidence == 0.85
+    assert routes[0].resolved is False
 
 
-def test_case9_constant_ref_get_mapping_skipped_counts() -> None:
+def test_case9_constant_ref_get_mapping_emits_route() -> None:
     src = '''
 package x;
 import org.springframework.web.bind.annotation.*;
@@ -161,8 +165,13 @@ interface Endpoints { String USERS = "/x"; }
 '''
     ast = parse_java(src.encode())
     c_type = next(t for t in ast.all_types if t.name == "C")
-    assert c_type.methods[0].routes == []
-    assert ast.routes_skipped_unresolved >= 1
+    routes = c_type.methods[0].routes
+    assert len(routes) == 1
+    r = routes[0]
+    assert r.resolution_strategy == "constant_ref"
+    assert r.confidence == 0.7
+    assert r.resolved is False
+    assert "Endpoints.USERS" in r.path
 
 
 def test_case10_normalize_path_two_vars() -> None:
@@ -178,8 +187,70 @@ def test_case11_normalize_path_regex_constraint() -> None:
 
 
 def test_route_id_stable() -> None:
-    a = _route_id("spring_mvc", "http_endpoint", "GET", "/x", "", "", "svc-a")
-    b = _route_id("spring_mvc", "http_endpoint", "GET", "/x", "", "", "svc-a")
-    c = _route_id("spring_mvc", "http_endpoint", "GET", "/x", "", "", "svc-b")
+    a = _route_id("spring_mvc", "http_endpoint", "GET", "/x", "", "", "", "svc-a")
+    b = _route_id("spring_mvc", "http_endpoint", "GET", "/x", "", "", "", "svc-a")
+    c = _route_id("spring_mvc", "http_endpoint", "GET", "/x", "", "", "", "svc-b")
     assert a == b
     assert a != c
+
+
+def test_case12_get_mapping_spel_path() -> None:
+    src = '''
+package x;
+import org.springframework.web.bind.annotation.*;
+@RestController
+class C {
+  @GetMapping("${app.api.base}/users")
+  void m() {}
+}
+'''
+    routes = _routes(src)
+    assert len(routes) == 1
+    r = routes[0]
+    assert r.resolution_strategy == "spel"
+    assert r.confidence == 0.85
+    assert r.resolved is False
+    assert "${app.api.base}/users" in r.path
+
+
+def test_case13_get_mapping_constant_ref() -> None:
+    src = '''
+package x;
+import org.springframework.web.bind.annotation.*;
+@RestController
+class C {
+  @GetMapping(Endpoints.USERS)
+  void m() {}
+}
+interface Endpoints { String USERS = "/users"; }
+'''
+    ast = parse_java(src.encode())
+    c_type = next(t for t in ast.all_types if t.name == "C")
+    routes = c_type.methods[0].routes
+    assert len(routes) == 1
+    r = routes[0]
+    assert r.resolution_strategy == "constant_ref"
+    assert r.confidence == 0.7
+    assert r.resolved is False
+
+
+def test_case14_request_mapping_string_concat_is_constant_ref() -> None:
+    src = '''
+package x;
+import org.springframework.web.bind.annotation.*;
+@RestController
+class C {
+  @RequestMapping("${prefix}" + Endpoints.USERS)
+  void m() {}
+}
+interface Endpoints { String USERS = "/u"; }
+'''
+    ast = parse_java(src.encode())
+    c_type = next(t for t in ast.all_types if t.name == "C")
+    routes = c_type.methods[0].routes
+    assert len(routes) == 1
+    r = routes[0]
+    assert r.resolution_strategy == "constant_ref"
+    assert r.confidence == 0.7
+    assert r.resolved is False
+    assert "+" in r.path or "Endpoints.USERS" in r.path
