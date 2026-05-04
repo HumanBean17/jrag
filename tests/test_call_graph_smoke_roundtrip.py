@@ -156,3 +156,100 @@ def test_find_callers_external_java_util_needle_lists_internal_callers(tmp_path:
     finally:
         KuzuGraph._instance = None
         KuzuGraph._instance_path = None
+
+
+# ---- B1: implicit default constructor resolution ----
+
+def test_implicit_default_ctor_is_resolved(tmp_path: Path) -> None:
+    """B1: `new Svc()` (Svc has no explicit ctor) resolves to Svc#<init>() with
+    strategy='constructor' and resolved=true, not a phantom."""
+    db = _build_smoke_db(tmp_path)
+    conn = _connect(db)
+    for caller_method in ("byLocal", "shadowLocalOverField"):
+        rows = _rows(
+            conn,
+            "MATCH (src:Symbol)-[c:CALLS]->(dst:Symbol) "
+            f"WHERE src.fqn STARTS WITH 'smoke.ScopeReceivers#{caller_method}' "
+            "AND dst.fqn STARTS WITH 'smoke.Svc#<init>' "
+            "AND c.resolved = true AND c.strategy = 'constructor' "
+            "RETURN c.confidence AS conf LIMIT 5",
+        )
+        assert rows, (
+            f"expected resolved constructor CALLS edge from ScopeReceivers#{caller_method} "
+            f"to Svc#<init>; got none (B1 bug)"
+        )
+        assert all(float(r[0]) >= 0.90 for r in rows), rows
+
+
+# ---- B2: implicit super to java.lang.Object ----
+
+def test_implicit_super_to_object_uses_implicit_super_strategy(tmp_path: Path) -> None:
+    """B2: WildUtils() has no extends clause; its synthesized implicit-super call must
+    use strategy='implicit_super' and confidence=0.90, not phantom/0.0."""
+    db = _build_smoke_db(tmp_path)
+    conn = _connect(db)
+    rows = _rows(
+        conn,
+        "MATCH (src:Symbol)-[c:CALLS]->(dst:Symbol) "
+        "WHERE src.fqn STARTS WITH 'smoke.WildUtils#WildUtils' "
+        "AND dst.name = '<init>' "
+        "RETURN c.strategy AS s, c.confidence AS conf, c.resolved AS r LIMIT 10",
+    )
+    assert rows, "expected an <init> call edge from WildUtils constructor (B2 bug)"
+    phantom_rows = [r for r in rows if str(r[0]) == "phantom"]
+    assert not phantom_rows, (
+        f"WildUtils implicit-super should not be strategy='phantom'; got {rows}"
+    )
+    implicit_rows = [r for r in rows if str(r[0]) == "implicit_super"]
+    assert implicit_rows, f"expected strategy='implicit_super', got {rows}"
+    assert all(abs(float(r[1]) - 0.90) < 1e-9 for r in implicit_rows), implicit_rows
+    assert all(r[2] is False for r in implicit_rows), implicit_rows
+
+
+# ---- B3: static-import to JDK keeps high confidence ----
+
+def test_static_import_to_jdk_keeps_high_confidence(tmp_path: Path) -> None:
+    """B3: StaticImportTest.m calls requireNonNull via explicit static import.
+    The edge must carry strategy='static_import', confidence>=0.95, resolved=false
+    (callee is JDK phantom), not phantom/0.0."""
+    db = _build_smoke_db(tmp_path)
+    conn = _connect(db)
+    rows = _rows(
+        conn,
+        "MATCH (src:Symbol)-[c:CALLS]->(dst:Symbol) "
+        "WHERE src.fqn STARTS WITH 'smoke.StaticImportTest#m' "
+        "AND dst.name = 'requireNonNull' "
+        "RETURN c.strategy AS s, c.confidence AS conf, c.resolved AS r LIMIT 10",
+    )
+    assert rows, "expected a requireNonNull call edge from StaticImportTest#m (B3 bug)"
+    assert any(
+        str(r[0]) == "static_import" and float(r[1]) >= 0.95 and r[2] is False
+        for r in rows
+    ), f"expected static_import edge with conf>=0.95 and resolved=false; got {rows}"
+
+
+def test_min_confidence_filter_keeps_high_confidence_static_import_callers(
+    tmp_path: Path,
+) -> None:
+    """B3: find_callers with min_confidence=0.9 must still return StaticImportTest
+    for the JDK requireNonNull needle (previously returned empty because edge was 0.0)."""
+    db = _build_smoke_db(tmp_path)
+    try:
+        KuzuGraph._instance = None
+        KuzuGraph._instance_path = None
+        g = KuzuGraph.get(str(db))
+        edges = g.find_callers(
+            "java.util.Objects#requireNonNull(1)",
+            depth=1,
+            limit=20,
+            min_confidence=0.9,
+            exclude_external=True,
+        )
+        assert edges, (
+            "find_callers with min_confidence=0.9 returned no edges for requireNonNull; "
+            "B3 fix not applied"
+        )
+        assert any("StaticImportTest" in e.src.fqn for e in edges), [e.src.fqn for e in edges]
+    finally:
+        KuzuGraph._instance = None
+        KuzuGraph._instance_path = None

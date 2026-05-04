@@ -766,9 +766,16 @@ def _resolve_receiver_type(
         entry = tables.types.get(member.parent_fqn)
         if entry is None:
             return None, "chained_receiver", 0.0
-        resolved = _resolve_simple(expr.split("<", 1)[0].strip(), current=entry, ast=ast, tables=tables)
+        bare_static = expr.split("<", 1)[0].strip()
+        resolved = _resolve_simple(bare_static, current=entry, ast=ast, tables=tables)
         if resolved is not None:
             return resolved.decl.fqn, "import_map", 0.95
+        # External type not in the index but FQN is deterministic via an explicit import.
+        # e.g. `import java.util.Objects; Objects.requireNonNull(x)` — we know the FQN
+        # is "java.util.Objects" even though the type isn't indexed; return it so the
+        # edge carries the correct receiver-tier confidence rather than collapsing to phantom.
+        if bare_static in ast.explicit_imports:
+            return ast.explicit_imports[bare_static], "import_map", 0.95
         uq = _unique_type_simple_resolve(expr, tables)
         if uq is not None:
             return uq, "unique_type_name", 0.75
@@ -784,7 +791,10 @@ def _resolve_receiver_type(
         sup = _first_supertype_fqn(tables, member.parent_fqn)
         if sup is not None:
             return sup, "this_super", 0.95
-        return None, "phantom", 0.0
+        # No indexed supertype — implicit super to java.lang.Object.
+        # Keep strategy='implicit_super' and confidence=0.90 so this path is
+        # distinguishable from a genuinely unresolvable receiver.
+        return "java.lang.Object", "implicit_super", 0.90
 
     if _is_chained_receiver_text(expr):
         return None, "chained_receiver", 0.0
@@ -886,7 +896,10 @@ def _emit_call_edge(
     stats.by_strategy[strategy] += 1
     if strategy == "chained_receiver":
         stats.phantom_chained += 1
-    elif not resolved or strategy == "phantom":
+    elif strategy == "phantom":
+        # Only count as phantom_other when the receiver itself was unresolvable.
+        # High-confidence edges with phantom callees (resolved=False, strategy!=phantom)
+        # are not noise — they are known external calls with good receiver resolution.
         stats.phantom_other += 1
 
 
@@ -925,32 +938,42 @@ def _resolve_and_emit_call(
     candidates, name_only_fb = _lookup_method_candidates(
         recv_type, call.callee_simple, call.arg_count, tables, ast,
     )
+
+    # Compute the call-shape strategy / confidence override BEFORE the
+    # empty-candidates check so they are preserved even when the callee cannot
+    # be located on the resolved receiver type (B3 fix).
     edge_conf = conf
     if call.arg_count < 0:
         edge_strat = "method_reference"
     elif call.callee_simple == "<init>" and call.receiver_expr == "super" and (
         call.byte == member.decl.start_byte and call.line == member.decl.start_line
     ):
+        # Synthesized implicit-super site from _parse_method.
         edge_strat = "implicit_super"
         edge_conf = 0.90
-    elif call.callee_simple == "<init>" and call.receiver_expr in ("this", "super"):
+    elif call.callee_simple == "<init>":
+        # new Foo(…), this(…), super(…) — confidence inherited from receiver tier.
         edge_strat = "constructor"
     elif name_only_fb and len(candidates) > 1:
         edge_strat = "overload_ambiguous"
     elif name_only_fb and len(candidates) == 1:
-        # Name-only fallback plus arity left a single candidate — not ambiguous.
+        # Name-only fallback with a single candidate — not ambiguous.
         edge_strat = strat
     else:
         edge_strat = strat
 
     if not candidates:
+        # Receiver was resolved but the callee method isn't indexed on that type
+        # (e.g. JDK / Spring / external library).  Preserve the receiver-tier
+        # strategy and confidence — only resolved=False signals the phantom callee
+        # (B3 fix: do NOT downgrade to confidence=0.0 / strategy='phantom' here).
         pid = _phantom_method_id(
             tables, receiver_fqn=recv_type, receiver_expr=call.receiver_expr,
             callee=call.callee_simple, arg_count=call.arg_count,
         )
         _emit_call_edge(
             tables, stats, src_id=member.node_id, dst_id=pid, call=call,
-            confidence=0.0, strategy="phantom", resolved=False,
+            confidence=edge_conf, strategy=edge_strat, resolved=False,
         )
         return
 

@@ -239,6 +239,52 @@ def test_wildcard_static_import_fixture_file_proposal_7_1_case_15() -> None:
     assert any(s.callee_simple == "wildHelper" and s.receiver_expr == "" for s in m.call_sites)
 
 
+def test_default_ctor_synthesized_when_no_explicit_ctor() -> None:
+    """B1: a class with no declared constructor must get a synthetic <init>() entry."""
+    src = """
+    package p;
+    public class HasNoCtor {}
+    """
+    ast = parse_java(src.encode())
+    t = next(x for x in ast.all_types if x.name == "HasNoCtor")
+    ctors = [m for m in t.methods if m.is_constructor]
+    assert len(ctors) == 1, f"expected exactly 1 synthetic ctor, got {ctors}"
+    assert ctors[0].name == "<init>"
+    assert ctors[0].signature == "<init>()"
+    assert ctors[0].parameters == []
+
+
+def test_default_ctor_not_synthesized_when_explicit_ctor_present() -> None:
+    """B1 guard: a class with an explicit ctor must NOT get a second synthetic one."""
+    src = """
+    package p;
+    public class HasCtor {
+        HasCtor(int x) {}
+    }
+    """
+    ast = parse_java(src.encode())
+    t = next(x for x in ast.all_types if x.name == "HasCtor")
+    ctors = [m for m in t.methods if m.is_constructor]
+    assert len(ctors) == 1
+    assert ctors[0].parameters[0].type_name == "int"
+
+
+def test_default_ctor_not_synthesized_for_lombok_required_args() -> None:
+    """B1 guard: @RequiredArgsConstructor / @AllArgsConstructor suppress synthesis."""
+    for ann in ("RequiredArgsConstructor", "AllArgsConstructor"):
+        src = f"""
+        package p;
+        @{ann}
+        public class Foo {{
+            private final String x;
+        }}
+        """
+        ast = parse_java(src.encode())
+        t = next(x for x in ast.all_types if x.name == "Foo")
+        ctors = [m for m in t.methods if m.is_constructor]
+        assert ctors == [], f"@{ann} should suppress default-ctor synthesis, got {ctors}"
+
+
 def test_nested_calls_fixture_file_parse_proposal_7_1_11_16_18() -> None:
     """Parse on-disk NestedCalls.java (smoke fixture) for combined #11 / #16 / #18 shapes."""
     path = (

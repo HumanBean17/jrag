@@ -852,6 +852,36 @@ def _parse_type(node: Node, src: bytes, *, package: str, outer_fqn: str | None) 
             elif ch.type in _TYPE_KINDS:
                 nested.append(_parse_type(ch, src, package=package, outer_fqn=fqn))
 
+    # Synthesize a default no-arg constructor when:
+    #   - the type is a class or enum (not interface/annotation/record),
+    #   - no explicit constructor was parsed, AND
+    #   - no Lombok annotation that generates a constructor is present
+    #     (@RequiredArgsConstructor / @AllArgsConstructor would synthesize an
+    #     args-bearing ctor; adding a no-arg one here would mis-resolve callers).
+    ann_names_set = {a.name for a in anns}
+    if (
+        kind in ("class", "enum")
+        and not any(m.is_constructor for m in methods)
+        and not (_LOMBOK_RAC & ann_names_set)
+    ):
+        default_ctor_sig = "<init>()"
+        default_ctor = MethodDecl(
+            name="<init>",
+            return_type="",
+            is_constructor=True,
+            parameters=[],
+            modifiers=[],
+            annotations=[],
+            signature=default_ctor_sig,
+            start_byte=node.start_byte,
+            end_byte=node.start_byte,
+            start_line=node.start_point[0] + 1,
+            end_line=node.start_point[0] + 1,
+            call_sites=[],
+            local_vars=[],
+        )
+        methods.append(default_ctor)
+
     type_decl = TypeDecl(
         name=name,
         kind=kind,
