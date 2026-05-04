@@ -84,7 +84,10 @@ The graph builder extracts call sites with **tree-sitter-java** node types:
 
 Call resolution is heuristic (confidence + `strategy` on each `CALLS` edge). Chained receivers
 (`foo().bar()`) and expression-qualified method references (`getX()::trim`) intentionally
-produce low-confidence or phantom edges rather than guessing.
+produce low-confidence or phantom edges rather than guessing. By contrast, **`this` / `super`
+field chains** with no calls in the receiver text (`this.f1.f2.m()`, `super.f1.f2.m()` — no
+`(` in the receiver) are resolved by walking declared fields to the final field type; the
+`call_graph_smoke` fixture and `test_call_graph_smoke_roundtrip` cover this path (D6).
 
 **Receiver scope (locals):** The resolver keeps **one** name→type map per method: fields (plus
 visible inherited fields), then parameters, then locals declared anywhere in the method body.

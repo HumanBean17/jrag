@@ -262,6 +262,12 @@ Core algorithm, per enclosing method:
      - If it's a chained expression (`a.b().c()`) we *do not* attempt
        return-type inference this phase — phantom with `confidence=0.0`
        and `strategy='chained_receiver'`.
+     - If `ReceiverExpr` is a **`this` / `super` field chain** (only `.`
+       segments, no `(` / `)` — e.g. `this.fieldA.fieldB.method()` or
+       `super.fieldA.fieldB.method()`): walk successive `TypeDecl` fields from
+       the enclosing type (or first resolved supertype for `super`) to the
+       final field’s declared type, then callee lookup on that type. Same
+       `import_map` tier as a single-field receiver when the walk succeeds.
    - **`new Foo(args)`**: receiver type = resolved `Foo`; callee = `<init>`;
      `arg_count` must match (if a constructor with that arity exists).
    - **`Foo::bar`** method reference: the extractor sets `CallSite.arg_count=-1`
@@ -465,7 +471,9 @@ New `tests/fixtures/call_graph_smoke/` (small Maven project) covering:
 - a constructor-invocation chain (explicit and implicit super),
 - a method reference (type qualifier and expression qualifier),
 - an anonymous inner class with internal calls,
-- a lambda with internal calls.
+- a lambda with internal calls,
+- **`this` / `super` field-chain receivers** (`this.root.mid.inner.target()`,
+  `super.root.mid.inner.target()`) exercising `_resolve_this_super_field_chain`.
 
 Used by `test_ast_java_calls.py` (parse-only) and a lightweight Kuzu
 round-trip test.

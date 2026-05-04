@@ -158,6 +158,32 @@ def test_field_param_local_receiver_shapes_proposal_7_1_cases_4_to_6() -> None:
     assert ("local", "Svc") in by_local.local_vars
 
 
+def test_this_super_field_chain_receiver_expr_d6() -> None:
+    """D6: extractor preserves full `this.a.b.c` / `super.a.b.c` receiver text (resolved in pass3)."""
+    src = """
+    package p;
+    class Leaf { void target() {} }
+    class Mid { Leaf inner; }
+    class Outer { Mid mid; }
+    class Base { protected Outer root; }
+    class Sub extends Base {
+      void bySuper() { super.root.mid.inner.target(); }
+    }
+    class R {
+      private Outer root;
+      void byThis() { this.root.mid.inner.target(); }
+    }
+    """
+    this_sites = _method_body_sites(src, type_name="R", method_name="byThis")
+    assert any(
+        s.receiver_expr == "this.root.mid.inner" and s.callee_simple == "target" for s in this_sites
+    )
+    super_sites = _method_body_sites(src, type_name="Sub", method_name="bySuper")
+    assert any(
+        s.receiver_expr == "super.root.mid.inner" and s.callee_simple == "target" for s in super_sites
+    )
+
+
 def test_overload_distinct_arities_arg_counts_proposal_7_1_case_12() -> None:
     """§7.1 #12: distinct arities at the call site."""
     src = """

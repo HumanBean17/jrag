@@ -37,6 +37,28 @@ def test_smoke_fixture_root_exists() -> None:
     assert _FIXTURE_ROOT.is_dir(), _FIXTURE_ROOT
 
 
+def test_this_super_field_chain_resolves_receiver_d6(tmp_path: Path) -> None:
+    """D6: `this.root.mid.inner.target()` / `super.root.mid.inner.target()` — field chain, no calls in receiver."""
+    db = _build_smoke_db(tmp_path)
+    conn = _connect(db)
+    for type_prefix, method_name in (
+        ("smoke.FieldChainReceivers#", "byThisChain"),
+        ("smoke.FieldChainSub#", "bySuperChain"),
+    ):
+        rows = _rows(
+            conn,
+            "MATCH (src:Symbol)-[c:CALLS]->(dst:Symbol) "
+            f"WHERE src.fqn STARTS WITH '{type_prefix}' AND src.name = '{method_name}' "
+            "AND dst.fqn STARTS WITH 'smoke.FieldChainLeaf#' AND dst.name = 'target' "
+            "AND c.resolved = true AND c.strategy = 'import_map' "
+            "RETURN c.confidence AS conf LIMIT 5",
+        )
+        assert rows, (
+            f"expected import_map CALLS to FieldChainLeaf#target from {type_prefix}{method_name}"
+        )
+        assert all(float(r[0]) >= 0.94 for r in rows), rows
+
+
 def test_scope_receivers_calls_resolved_import_map(tmp_path: Path) -> None:
     """§7.1 #4–6: field / param / local `Svc` receiver → `Svc.work` via scope + import_map."""
     db = _build_smoke_db(tmp_path)
