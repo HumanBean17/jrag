@@ -133,6 +133,12 @@ Scope:
 - In `kuzu_queries.py`, add `list_routes`, `find_route_handlers`,
   `get_route_by_path` (signatures and Cypher in PR-A2 §2). Do **not**
   add `find_route_callers` — that's B2b.
+- **Kuzu MAP-as-STRING reminder:** PR-A1 shipped `routes_by_framework`
+  as a `STRING` JSON blob (Kuzu's Python binder rejects `dict` for
+  `MAP(STRING, INT64)`). If you add any new graph_meta field that is
+  conceptually a map, follow the same pattern (STRING column +
+  `json.dumps` on write + decode in `meta()`). PR-A2 likely doesn't
+  add new map-shaped fields, but if it does — same rule.
 - In `server.py`, expose all three as MCP tools and update
   `_INSTRUCTIONS`.
 - Add the new tests numbered 12–18 in PR-A2 §4.
@@ -208,7 +214,13 @@ Scope:
 - Wire `resolve_routes_for_method` into `pass4_routes` so brownfield
   overrides actually flow into the graph.
 - Add `routes_from_brownfield_pct` and `routes_by_layer` to
-  `RouteExtractionStats` and `graph_meta`.
+  `RouteExtractionStats` and `graph_meta`. **`routes_by_layer` is
+  map-shaped — store it as a `STRING` JSON blob, exactly like
+  `routes_by_framework` from PR-A1.** Kuzu's Python binder (0.11.x)
+  rejects native `dict` for `MAP(STRING, INT64)`. Encode with
+  `json.dumps`, decode in `kuzu_queries.meta()`, and extend the
+  `_META_LEGACY` query path PR-A1 added so older v5 graphs without
+  this column still load.
 - Add the 12 brownfield fixtures (tests 19–30) in
   `tests/test_brownfield_routes.py`.
 - Update the README's brownfield section to document
