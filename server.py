@@ -290,6 +290,8 @@ class GraphMetaOutput(BaseModel):
     exposes_total: int = 0
     routes_by_framework: dict[str, int] = Field(default_factory=dict)
     routes_resolved_pct: float = 0.0
+    routes_from_brownfield_pct: float = 0.0
+    routes_by_layer: dict[str, int] = Field(default_factory=dict)
     message: str | None = None
 
 
@@ -439,6 +441,10 @@ def _graph_meta_output() -> GraphMetaOutput:
     if not isinstance(rfw, dict):
         rfw = {}
     routes_by_framework = {str(k): int(v) for k, v in rfw.items()}
+    rbl = meta.get("routes_by_layer") or {}
+    if not isinstance(rbl, dict):
+        rbl = {}
+    routes_by_layer = {str(k): int(v) for k, v in rbl.items()}
     return GraphMetaOutput(
         success=True,
         enabled=_graph_enabled(),
@@ -454,6 +460,8 @@ def _graph_meta_output() -> GraphMetaOutput:
         exposes_total=int(meta.get("exposes_total") or 0),
         routes_by_framework=routes_by_framework,
         routes_resolved_pct=float(meta.get("routes_resolved_pct") or 0.0),
+        routes_from_brownfield_pct=float(meta.get("routes_from_brownfield_pct") or 0.0),
+        routes_by_layer=routes_by_layer,
     )
 
 

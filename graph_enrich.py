@@ -21,13 +21,18 @@ from __future__ import annotations
 import hashlib
 import os
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 from ast_java import (
+    AnnotationRef,
     JavaFileAst,
+    MethodDecl,
+    RouteDecl,
+    ROUTE_META_ANNOTATION_NAMES,
     TypeDecl,
+    _ROUTE_HTTP_MAPPING_NAMES,
     infer_capabilities_for_type,
     infer_role_for_type,
     parse_java,
@@ -35,7 +40,12 @@ from ast_java import (
     _METHOD_ANN_TO_CAPABILITY,
     _TYPE_ANN_TO_CAPABILITY,
 )
-from java_ontology import VALID_CAPABILITIES, VALID_ROLES
+from java_ontology import (
+    VALID_CAPABILITIES,
+    VALID_ROLES,
+    VALID_ROUTE_FRAMEWORKS,
+    VALID_ROUTE_KINDS,
+)
 from java_index_v1_common import (
     COMMON_EXCLUDED_PATH_PATTERNS,
     compile_excluded_glob_patterns,
@@ -55,6 +65,8 @@ __all__ = [
     "module_for_path",
     "microservice_for_path",
     "resolve_role_and_capabilities",
+    "resolve_routes_for_method",
+    "RouteHint",
     "symbol_id",
     "phantom_id",
     "BUILD_MARKERS",
@@ -159,17 +171,34 @@ def load_microservice_overrides(project_root: str | Path | None) -> tuple[str, .
 
 
 @dataclass(frozen=True)
+class RouteHint:
+    """YAML `route_overrides` entry: maps to `RouteDecl` fields (B2a brownfield)."""
+
+    framework: str
+    kind: str
+    path: str = ""
+    method: str = ""
+    topic: str = ""
+    broker: str = ""
+
+
+@dataclass(frozen=True)
 class BrownfieldOverrides:
     annotation_to_role: dict[str, str]
     annotation_to_capabilities: dict[str, tuple[str, ...]]
     fqn_role: dict[str, str]
     fqn_capabilities: dict[str, tuple[str, ...]]
+    annotation_to_route_hint: dict[str, RouteHint]
+    fqn_to_route_hint: dict[str, RouteHint]
 
 
 def _meta_builtins() -> frozenset[str]:
-    return frozenset(ROLE_ANNOTATIONS) | frozenset(
-        _METHOD_ANN_TO_CAPABILITY
-    ) | frozenset(_TYPE_ANN_TO_CAPABILITY)
+    return (
+        frozenset(ROLE_ANNOTATIONS)
+        | frozenset(_METHOD_ANN_TO_CAPABILITY)
+        | frozenset(_TYPE_ANN_TO_CAPABILITY)
+        | ROUTE_META_ANNOTATION_NAMES
+    )
 
 
 # Rounds in the iterative closure; `max_depth` of 4 = at most four hops
@@ -327,36 +356,16 @@ def _load_brownfield_overrides(project_root_str: str) -> BrownfieldOverrides:
         try:
             import yaml  # PyYAML; already a transitive dep of cocoindex
         except ImportError:
-            return BrownfieldOverrides(
-                {},
-                {},
-                {},
-                {},
-            )
+            return BrownfieldOverrides({}, {}, {}, {}, {}, {})
         try:
             data = yaml.safe_load(candidate.read_text(encoding="utf-8"))
         except Exception:
-            return BrownfieldOverrides(
-                {},
-                {},
-                {},
-                {},
-            )
+            return BrownfieldOverrides({}, {}, {}, {}, {}, {})
         if not isinstance(data, dict):
-            return BrownfieldOverrides(
-                {},
-                {},
-                {},
-                {},
-            )
+            return BrownfieldOverrides({}, {}, {}, {}, {}, {})
         ro = data.get("role_overrides")
         if not isinstance(ro, dict):
-            return BrownfieldOverrides(
-                {},
-                {},
-                {},
-                {},
-            )
+            ro = {}
         a_to_r: dict[str, str] = {}
         a_to_c: dict[str, tuple[str, ...]] = {}
         fqn_r: dict[str, str] = {}
@@ -432,30 +441,88 @@ def _load_brownfield_overrides(project_root_str: str) -> BrownfieldOverrides:
                         out_c.append(cap)
                     if out_c:
                         fqn_c[fk] = tuple(out_c)
+
+        a_route: dict[str, RouteHint] = {}
+        f_route: dict[str, RouteHint] = {}
+        r_ov = data.get("route_overrides")
+        if isinstance(r_ov, dict):
+            ann_rt = r_ov.get("annotations")
+            if isinstance(ann_rt, dict):
+                for key, val in ann_rt.items():
+                    ks = str(key).strip()
+                    if not ks or not isinstance(val, dict):
+                        continue
+                    fw = str(val.get("framework", "") or "").strip()
+                    kd = str(val.get("kind", "") or "").strip()
+                    if fw not in VALID_ROUTE_FRAMEWORKS:
+                        print(
+                            f"[lancedb-mcp] route_overrides.annotations: unknown framework {fw!r} "
+                            f"for key {ks!r} — entry dropped",
+                            file=sys.stderr,
+                        )
+                        continue
+                    if kd not in VALID_ROUTE_KINDS:
+                        print(
+                            f"[lancedb-mcp] route_overrides.annotations: unknown kind {kd!r} "
+                            f"for key {ks!r} — entry dropped",
+                            file=sys.stderr,
+                        )
+                        continue
+                    a_route[ks] = RouteHint(
+                        framework=fw,
+                        kind=kd,
+                        path=str(val.get("path", "") or "").strip(),
+                        method=str(val.get("method", "") or "").strip().upper(),
+                        topic=str(val.get("topic", "") or "").strip(),
+                        broker=str(val.get("broker", "") or "").strip(),
+                    )
+            fqn_rt = r_ov.get("fqn")
+            if isinstance(fqn_rt, dict):
+                for fqn_key, val in fqn_rt.items():
+                    fk = str(fqn_key).strip()
+                    if not fk or not isinstance(val, dict):
+                        continue
+                    fw = str(val.get("framework", "") or "").strip()
+                    kd = str(val.get("kind", "") or "").strip()
+                    if fw not in VALID_ROUTE_FRAMEWORKS:
+                        print(
+                            f"[lancedb-mcp] route_overrides.fqn: unknown framework {fw!r} "
+                            f"for key {fk!r} — entry dropped",
+                            file=sys.stderr,
+                        )
+                        continue
+                    if kd not in VALID_ROUTE_KINDS:
+                        print(
+                            f"[lancedb-mcp] route_overrides.fqn: unknown kind {kd!r} "
+                            f"for key {fk!r} — entry dropped",
+                            file=sys.stderr,
+                        )
+                        continue
+                    f_route[fk] = RouteHint(
+                        framework=fw,
+                        kind=kd,
+                        path=str(val.get("path", "") or "").strip(),
+                        method=str(val.get("method", "") or "").strip().upper(),
+                        topic=str(val.get("topic", "") or "").strip(),
+                        broker=str(val.get("broker", "") or "").strip(),
+                    )
+
         return BrownfieldOverrides(
             a_to_r,
             a_to_c,
             fqn_r,
             fqn_c,
+            a_route,
+            f_route,
         )
-    return BrownfieldOverrides(
-        {},
-        {},
-        {},
-        {},
-    )
+    return BrownfieldOverrides({}, {}, {}, {}, {}, {})
 
 
 def load_brownfield_overrides(
     project_root: str | Path | None,
 ) -> BrownfieldOverrides:
     if project_root is None:
-        return BrownfieldOverrides(
-            {},
-            {},
-            {},
-            {},
-        )
+        return BrownfieldOverrides({}, {}, {}, {}, {}, {})
     try:
         r = str(Path(project_root).resolve())
     except OSError:
@@ -596,6 +663,312 @@ def resolve_role_and_capabilities(
         caps.add(c)
 
     return role, sorted(caps)
+
+
+_HTTP_ROUTE_KINDS = frozenset({"http_endpoint", "http_consumer"})
+
+
+def _route_hint_lookup(ann: AnnotationRef, hints: dict[str, RouteHint]) -> RouteHint | None:
+    q = ann.qualified.strip()
+    if q in hints:
+        return hints[q]
+    if ann.name in hints:
+        return hints[ann.name]
+    for k, h in sorted(hints.items(), key=lambda kv: kv[0]):
+        if k.endswith("." + ann.name):
+            return h
+    return None
+
+
+def _route_decl_from_route_hint(
+    hint: RouteHint,
+    *,
+    method_fqn: str,
+    method_sig: str,
+    filename: str,
+    start_line: int,
+    end_line: int,
+    source_layer: str,
+) -> RouteDecl:
+    return RouteDecl(
+        method_fqn=method_fqn,
+        method_sig=method_sig,
+        kind=hint.kind,
+        framework=hint.framework,
+        http_method=hint.method,
+        path=hint.path,
+        topic=hint.topic,
+        broker=hint.broker,
+        feign_name="",
+        feign_url="",
+        resolution_strategy="annotation",
+        confidence=1.0,
+        resolved=True,
+        filename=filename,
+        start_line=start_line,
+        end_line=end_line,
+        route_source_layer=source_layer,
+    )
+
+
+def _http_paths_from_ann_ref(ann: AnnotationRef) -> list[tuple[str, str, float, bool]]:
+    """Path atoms for a custom mapping annotation (AnnotationRef only; Layer A)."""
+    out: list[tuple[str, str, float, bool]] = []
+    for key in ("path", "value"):
+        if key not in ann.arguments:
+            continue
+        v = ann.arguments[key]
+        vk = ann.argument_kinds.get(key)
+        if vk == "string" and v is not None:
+            if "${" in v:
+                out.append(("", "spel", 0.85, False))
+            else:
+                out.append((v, "annotation", 1.0, True))
+        elif v:
+            out.append(("", "constant_ref", 0.7, False))
+    if not out:
+        out.append(("", "annotation", 1.0, True))
+    return out
+
+
+def _http_methods_for_ann_ref(ann: AnnotationRef, template: str) -> list[str]:
+    if template == "GetMapping":
+        return ["GET"]
+    if template == "PostMapping":
+        return ["POST"]
+    if template == "PutMapping":
+        return ["PUT"]
+    if template == "DeleteMapping":
+        return ["DELETE"]
+    if template == "PatchMapping":
+        return ["PATCH"]
+    if template == "RequestMapping":
+        raw = ann.arguments.get("method")
+        mk = ann.argument_kinds.get("method")
+        if raw and mk == "enum":
+            return [raw.rsplit(".", 1)[-1].upper()]
+        return [""]
+    return [""]
+
+
+def _layer_a_route_decls_from_ann(
+    ann: AnnotationRef,
+    meta_chain: dict[str, frozenset[str]],
+    *,
+    method_fqn: str,
+    method_sig: str,
+    filename: str,
+    start_line: int,
+    end_line: int,
+) -> list[RouteDecl]:
+    """Synthetic HTTP routes from custom annotations whose meta-chain hits Spring mappings."""
+    if ann.name in _ROUTE_HTTP_MAPPING_NAMES:
+        return []
+    chain = meta_chain.get(ann.name, frozenset())
+    http_hits = sorted(chain & _ROUTE_HTTP_MAPPING_NAMES)
+    if not http_hits:
+        return []
+    template = http_hits[0]
+    path_atoms = _http_paths_from_ann_ref(ann)
+    methods = _http_methods_for_ann_ref(ann, template)
+    out: list[RouteDecl] = []
+    for raw_path, strat, conf, res in path_atoms:
+        for hm in methods:
+            out.append(
+                RouteDecl(
+                    method_fqn=method_fqn,
+                    method_sig=method_sig,
+                    kind="http_endpoint",
+                    framework="spring_mvc",
+                    http_method=hm,
+                    path=raw_path,
+                    topic="",
+                    broker="",
+                    feign_name="",
+                    feign_url="",
+                    resolution_strategy=strat,
+                    confidence=conf,
+                    resolved=res,
+                    filename=filename,
+                    start_line=start_line,
+                    end_line=end_line,
+                    route_source_layer="layer_a_meta",
+                ),
+            )
+    return out
+
+
+def _merge_layer_c_codebase_routes(
+    working: list[RouteDecl],
+    layer_c: list[RouteDecl],
+) -> list[RouteDecl]:
+    """Layer C — `@CodebaseRoute` / `@CodebaseRoutes` wins over same-method HTTP builtins."""
+    if not layer_c:
+        return working
+    merged = [replace(r) for r in working]
+    for cr in sorted(layer_c, key=lambda x: (x.path, x.http_method, x.topic)):
+        placed = False
+        for i, r in enumerate(merged):
+            if (
+                r.kind in _HTTP_ROUTE_KINDS
+                and cr.kind in _HTTP_ROUTE_KINDS
+                and r.method_fqn == cr.method_fqn
+            ):
+                merged[i] = replace(
+                    r,
+                    path=cr.path if cr.path else r.path,
+                    http_method=cr.http_method if cr.http_method else r.http_method,
+                    framework=cr.framework if cr.framework else r.framework,
+                    kind=cr.kind if cr.kind else r.kind,
+                    topic=cr.topic if cr.topic else r.topic,
+                    broker=cr.broker if cr.broker else r.broker,
+                    resolution_strategy="codebase_route",
+                    confidence=cr.confidence,
+                    resolved=cr.resolved,
+                    route_source_layer="layer_c_source",
+                )
+                placed = True
+                break
+        if not placed:
+            merged.append(replace(cr))
+    return merged
+
+
+def _apply_layer_b_fqn(
+    working: list[RouteDecl],
+    hint: RouteHint,
+    *,
+    method_fqn: str,
+    method_sig: str,
+    filename: str,
+    start_line: int,
+    end_line: int,
+) -> list[RouteDecl]:
+    """Layer B fqn — last writer; merges onto existing routes or seeds one."""
+    if not working:
+        return [
+            _route_decl_from_route_hint(
+                hint,
+                method_fqn=method_fqn,
+                method_sig=method_sig,
+                filename=filename,
+                start_line=start_line,
+                end_line=end_line,
+                source_layer="layer_b_fqn",
+            ),
+        ]
+    out: list[RouteDecl] = []
+    for r in working:
+        out.append(
+            replace(
+                r,
+                framework=hint.framework or r.framework,
+                kind=hint.kind or r.kind,
+                path=hint.path or r.path,
+                http_method=hint.method or r.http_method,
+                topic=hint.topic or r.topic,
+                broker=hint.broker or r.broker,
+                route_source_layer="layer_b_fqn",
+            ),
+        )
+    return out
+
+
+def resolve_routes_for_method(
+    *,
+    method_decl: MethodDecl,
+    enclosing_type: TypeDecl,
+    overrides: BrownfieldOverrides,
+    meta_chain: dict[str, frozenset[str]] | None,
+    builtin_routes: list[RouteDecl],
+) -> list[RouteDecl]:
+    """Compose built-in route extraction with brownfield overrides (single execution order).
+
+    Mirrors ``resolve_role_and_capabilities`` layering; see ``PLAN-TIER1-COMPLETION``
+    § PR-A3. Steps run **in order**; later steps override per field on the same
+    route where applicable.
+
+    1. Built-in routes from ``_collect_routes`` (excluding ``@CodebaseRoute`` stubs)
+    2. Layer B — ``route_overrides.annotations`` (annotation FQN or simple name)
+    3. Layer A — meta-annotation walk via ``collect_annotation_meta_chain``
+    4. Layer C — ``@CodebaseRoute`` / ``@CodebaseRoutes`` from parse
+    5. Layer B — ``route_overrides.fqn`` (outermost; merges onto every route)
+    """
+    method_fqn = f"{enclosing_type.fqn}#{method_decl.signature}"
+    filename = builtin_routes[0].filename if builtin_routes else ""
+    sl, el = method_decl.start_line, method_decl.end_line
+
+    builtins_only = [
+        r for r in builtin_routes if r.resolution_strategy != "codebase_route"
+    ]
+    layer_c_src = [
+        r for r in builtin_routes if r.resolution_strategy == "codebase_route"
+    ]
+
+    working: list[RouteDecl] = [
+        replace(r, route_source_layer="builtin") for r in builtins_only
+    ]
+
+    combined_anns: list[tuple[bool, AnnotationRef]] = sorted(
+        [(False, a) for a in enclosing_type.annotations]
+        + [(True, a) for a in method_decl.annotations],
+        key=lambda t: (t[1].name, t[1].qualified, t[0]),
+    )
+
+    # ----- Step 2: Layer B — annotation route hints -----
+    for _is_m, ann in combined_anns:
+        hint = _route_hint_lookup(ann, overrides.annotation_to_route_hint)
+        if hint is None:
+            continue
+        working.append(
+            _route_decl_from_route_hint(
+                hint,
+                method_fqn=method_fqn,
+                method_sig=method_decl.signature,
+                filename=filename,
+                start_line=sl,
+                end_line=el,
+                source_layer="layer_b_ann",
+            ),
+        )
+
+    # ----- Step 3: Layer A — meta-linked custom mapping annotations -----
+    if meta_chain is not None:
+        seen_a: set[tuple[str, str]] = set()
+        for _is_m, ann in combined_anns:
+            key = (ann.name, ann.qualified)
+            if key in seen_a:
+                continue
+            extra = _layer_a_route_decls_from_ann(
+                ann,
+                meta_chain,
+                method_fqn=method_fqn,
+                method_sig=method_decl.signature,
+                filename=filename,
+                start_line=sl,
+                end_line=el,
+            )
+            if extra:
+                seen_a.add(key)
+                working.extend(extra)
+
+    # ----- Step 4: Layer C — in-source @CodebaseRoute -----
+    working = _merge_layer_c_codebase_routes(working, layer_c_src)
+
+    # ----- Step 5: Layer B — per-type FQN route hint -----
+    fh = overrides.fqn_to_route_hint.get(enclosing_type.fqn)
+    if fh is not None:
+        working = _apply_layer_b_fqn(
+            working,
+            fh,
+            method_fqn=method_fqn,
+            method_sig=method_decl.signature,
+            filename=filename,
+            start_line=sl,
+            end_line=el,
+        )
+
+    return working
 
 
 def _resolve_with_root(

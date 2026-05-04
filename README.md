@@ -95,6 +95,8 @@ Resolution order for `microservice`:
 > 2. `annotations_on_type` / `symbols` are now native PyArrow `list<string>` instead of
 >    JSON-encoded strings (previous builds caused char-array output — see below).
 > 3. **`ontology_version` 5** adds `Route` / `EXPOSES` and route counters on `GraphMeta` —
+> 4. **`ontology_version` 6** adds brownfield route composition (`route_overrides`, `@CodebaseRoute`),
+>    `routes_from_brownfield_pct`, and `routes_by_layer` on `GraphMeta` — rebuild Kuzu after upgrading.
 >    rebuild the Kuzu graph (`build_ast_graph.py` or `refresh_code_index`).
 >
 > Any index built before these changes must be rebuilt via
@@ -139,7 +141,7 @@ The DB is dropped and rebuilt from scratch on each run (Phase 1 is a full rebuil
 | `list_by_annotation` | Symbols whose annotation list contains the given simple name. |
 | `graph_neighbors` | Generic BFS over `EXTENDS|IMPLEMENTS|INJECTS|DECLARES|CALLS`, directional. |
 | `impact_analysis` | Reverse closure: what breaks if this changes. |
-| `graph_meta` | Counts, ontology version, build timestamp, parse errors; route totals / `routes_by_framework` / `routes_resolved_pct` when the graph includes `Route` nodes (ontology v5+). |
+| `graph_meta` | Counts, ontology version, build timestamp, parse errors; route totals / `routes_by_framework` / `routes_resolved_pct` (v5+); `routes_from_brownfield_pct` / `routes_by_layer` (v6+). |
 | `list_routes` | Filterable listing of `Route` nodes (`microservice`, `framework`, `path_prefix`, `method`). |
 | `find_route_handlers` | Symbols that `EXPOSES` a route id (confidence + resolution strategy on the edge). |
 | `get_route_by_path` | Lookup one `Route` by `microservice` + normalised `path_template` + optional HTTP method. |
@@ -232,6 +234,37 @@ role_overrides:
 ```
 
 Unknown role or capability strings are ignored with a warning on load.
+
+**Route overrides (`route_overrides`)** — same `.lancedb-mcp.yml` file; maps
+custom annotation names or qualified names (or suffixes such as `com.acme.Foo`
+when usage sites show only `Foo`) and per-type FQNs to `Route` fields for
+methods that do not otherwise resolve from Spring / Feign / messaging
+built-ins. Shape:
+
+```yaml
+route_overrides:
+  annotations:
+    ann.AcmeRoute:          # or simple name `AcmeRoute` when that matches usage
+      framework: spring_mvc
+      kind: http_endpoint
+      method: GET
+      path: /acme
+  fqn:
+    com.legacy.UserApi:
+      framework: spring_mvc
+      kind: http_endpoint
+      path: /legacy/users
+```
+
+Unknown `framework` / `kind` strings are dropped with a stderr warning.
+Resolution order for each method mirrors role brownfield: built-in extraction,
+then annotation map, then meta-annotation closure (same `collect_annotation_meta_chain`
+index as roles — see `plans/completed/PLAN-BROWNFIELD-ROLE-OVERRIDES-design-fixes.md`),
+then in-source `@CodebaseRoute` / `@CodebaseRoutes`, then per-type FQN map
+(last writer wins on overlapping fields). Copy the `com.example.rag` stubs
+from `tests/fixtures/brownfield_route_stubs/` if you want `@CodebaseRoute`
+without adding a dependency.
+
 **2. Meta-annotation walk (automatic)** — `@interface` definitions in your
 source can carry meta-annotations; Layer A resolves chains to built-in
 stereotype and capability trigger names (e.g. `@Service`, `@KafkaListener`)
@@ -280,9 +313,10 @@ longer applied by the resolver.
 
 Resolution order in code: built-in inference, then config annotation maps,
 then meta-annotation walk, then `@CodebaseRole` / `@CodebaseCapability`, then
-`role_overrides.fqn` (highest priority for explicit per-type config). Rebuild
-Lance + Kuzu (`refresh_code_index` or `build_ast_graph.py`) after changing
-overrides.
+`role_overrides.fqn` (highest priority for explicit per-type config). Route
+composition uses the same Layer A index, then `@CodebaseRoute` / `@CodebaseRoutes`,
+then `route_overrides.fqn`. Rebuild Lance + Kuzu (`refresh_code_index` or
+`build_ast_graph.py`) after changing overrides.
 
 **Kuzu vs Lance (Layer A consistency):** both the Kuzu graph writer and Lance
 chunk enrichment call **one** function, `graph_enrich.collect_annotation_meta_chain`,

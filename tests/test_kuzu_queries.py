@@ -414,7 +414,7 @@ def _kuzu_graph_from_route_fixture(tmp_path: Path) -> KuzuGraph:
     asts = pass1_parse(_ROUTE_EXTRACTION_FIXTURE, tables, verbose=False)
     pass2_edges(tables, asts, verbose=False)
     pass3_calls(tables, asts, verbose=False)
-    pass4_routes(tables, asts, verbose=False)
+    pass4_routes(tables, asts, source_root=_ROUTE_EXTRACTION_FIXTURE, verbose=False)
     write_kuzu(db_path, tables, source_root=_ROUTE_EXTRACTION_FIXTURE, verbose=False)
     return KuzuGraph(str(db_path))
 

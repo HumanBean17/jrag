@@ -306,6 +306,16 @@ class KuzuGraph:
             "m.counts_json AS counts_json, m.parse_errors AS parse_errors, "
             "m.routes_total AS routes_total, m.exposes_total AS exposes_total, "
             "m.routes_by_framework AS routes_by_framework, "
+            "m.routes_resolved_pct AS routes_resolved_pct, "
+            "m.routes_from_brownfield_pct AS routes_from_brownfield_pct, "
+            "m.routes_by_layer AS routes_by_layer"
+        )
+        _META_PR_A2 = (
+            "MATCH (m:GraphMeta) RETURN m.key AS key, m.ontology_version AS ontology_version, "
+            "m.built_at AS built_at, m.source_root AS source_root, "
+            "m.counts_json AS counts_json, m.parse_errors AS parse_errors, "
+            "m.routes_total AS routes_total, m.exposes_total AS exposes_total, "
+            "m.routes_by_framework AS routes_by_framework, "
             "m.routes_resolved_pct AS routes_resolved_pct"
         )
         _META_LEGACY = (
@@ -314,15 +324,19 @@ class KuzuGraph:
             "m.counts_json AS counts_json, m.parse_errors AS parse_errors"
         )
         rows: list[dict[str, Any]]
+        meta_mode = "full"
         try:
             rows = self._rows(_META_FULL)
-            meta_legacy = False
         except Exception:
+            meta_mode = "pr_a2"
             try:
-                rows = self._rows(_META_LEGACY)
-                meta_legacy = True
-            except Exception as e:
-                return {"error": f"{e}"}
+                rows = self._rows(_META_PR_A2)
+            except Exception:
+                meta_mode = "legacy"
+                try:
+                    rows = self._rows(_META_LEGACY)
+                except Exception as e:
+                    return {"error": f"{e}"}
         if not rows:
             return {"error": "no GraphMeta node"}
         row = rows[0]
@@ -334,7 +348,9 @@ class KuzuGraph:
         routes_total = exposes_total = 0
         routes_resolved_pct = 0.0
         routes_by_framework: dict[str, Any] = {}
-        if not meta_legacy:
+        routes_from_brownfield_pct = 0.0
+        routes_by_layer: dict[str, Any] = {}
+        if meta_mode != "legacy":
             rfw_raw = row.get("routes_by_framework") or "{}"
             try:
                 routes_by_framework = json.loads(rfw_raw) if isinstance(rfw_raw, str) else (rfw_raw or {})
@@ -345,6 +361,15 @@ class KuzuGraph:
             routes_total = int(row.get("routes_total") or 0)
             exposes_total = int(row.get("exposes_total") or 0)
             routes_resolved_pct = float(row.get("routes_resolved_pct") or 0.0)
+        if meta_mode == "full":
+            routes_from_brownfield_pct = float(row.get("routes_from_brownfield_pct") or 0.0)
+            rbl_raw = row.get("routes_by_layer") or "{}"
+            try:
+                routes_by_layer = json.loads(rbl_raw) if isinstance(rbl_raw, str) else (rbl_raw or {})
+            except Exception:
+                routes_by_layer = {}
+            if not isinstance(routes_by_layer, dict):
+                routes_by_layer = {}
         return {
             "ontology_version": int(row.get("ontology_version") or 0),
             "built_at": int(row.get("built_at") or 0),
@@ -355,6 +380,8 @@ class KuzuGraph:
             "exposes_total": exposes_total,
             "routes_by_framework": routes_by_framework,
             "routes_resolved_pct": routes_resolved_pct,
+            "routes_from_brownfield_pct": routes_from_brownfield_pct,
+            "routes_by_layer": routes_by_layer,
             "db_path": self.db_path,
         }
 
