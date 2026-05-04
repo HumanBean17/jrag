@@ -886,13 +886,15 @@ def _emit_call_edge(
     confidence: float,
     strategy: str,
     resolved: bool,
+    edge_arg_count: int | None = None,
 ) -> None:
+    arity = call.arg_count if edge_arg_count is None else edge_arg_count
     tables.calls_rows.append(CallsRow(
         src_id=src_id,
         dst_id=dst_id,
         call_site_line=call.line,
         call_site_byte=call.byte,
-        arg_count=call.arg_count,
+        arg_count=arity,
         confidence=confidence,
         strategy=strategy,
         source="static",
@@ -984,16 +986,22 @@ def _resolve_and_emit_call(
         return
 
     if len(candidates) == 1:
+        ref_arity: int | None = None
+        if call.arg_count < 0:
+            ref_arity = len(candidates[0].decl.parameters)
         _emit_call_edge(
             tables, stats, src_id=member.node_id, dst_id=candidates[0].node_id, call=call,
             confidence=edge_conf, strategy=edge_strat, resolved=True,
+            edge_arg_count=ref_arity,
         )
         return
 
     for c in candidates:
+        ref_arity_multi: int | None = len(c.decl.parameters) if call.arg_count < 0 else None
         _emit_call_edge(
             tables, stats, src_id=member.node_id, dst_id=c.node_id, call=call,
             confidence=edge_conf, strategy="overload_ambiguous", resolved=True,
+            edge_arg_count=ref_arity_multi,
         )
 
 

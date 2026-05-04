@@ -184,7 +184,8 @@ confidence and a strategy label on the edge.
 - **`constructor` (inherits receiver confidence)** — `new Foo(...)` or
   explicit `this(...)`/`super(...)`.
 - **`method_reference` (inherits receiver confidence)** — `Foo::bar` or
-  `var::bar` where receiver is resolvable.
+  `var::bar` where receiver is resolvable; when callee lookup yields a unique
+  match, the CALLS row stores that method’s arity (see §4.3).
 - **`overload_ambiguous` (inherits receiver confidence)** — multiple
   method candidates match by name but not by arity; one edge per candidate.
 - **`chained_receiver` (0.0)** — receiver is a chained expression
@@ -197,13 +198,29 @@ confidence and a strategy label on the edge.
 
 | Case | Format | Example |
 |------|--------|---------|
-| Receiver resolved, method not found | `{receiver_fqn}#{callee}({arg_count})` | `com.example.Svc#unknown(2)` |
-| Receiver unresolved (chained/unknown) | `?{receiver_expr_short}#{callee}({arg_count})` | `?a.b()#doThing(1)` |
+| Receiver resolved, method not found | `{receiver_fqn}#{callee}(?)` | `com.example.Svc#unknown(?)` |
+| Receiver unresolved (chained/unknown) | `?{receiver_expr_short}#{callee}({arg_count})` or `…(?)` if `arg_count < 0` | `?a.b()#doThing(1)`, `?s#length(?)` |
 
 The `?` prefix makes phantoms visually distinct and grep-able. The receiver
 expression is truncated to 50 characters. Phantom nodes are reused
 (deterministic id via `phantom_id(fqn)`) — same pattern as existing phantom
 type handling.
+
+When the receiver type FQN is known but the callee is not indexed, the phantom
+**node** identity is arity-agnostic (`(?)`) so method references (extractor
+`arg_count = -1` at the site) and ordinary invocations with a concrete arity share one
+`Symbol` per `(receiver_fqn, callee)` (D1). The **`CALLS` edge** carries the
+call-site arity when only the extractor knows it; unresolved method references and
+phantom callees keep `-1` on the edge where arity is unknown. When a method reference
+resolves to indexed callees, each emitted edge stores that candidate’s parameter
+count on `CALLS.arg_count` (unique match: one edge with `strategy='method_reference'`;
+overload-ambiguous: one edge per candidate with `strategy='overload_ambiguous'`) so
+needles and `min_confidence` filters stay precise (D2).
+
+`find_callers` / `find_callees` accept needles with a numeric arity suffix
+(e.g. `java.util.Objects#requireNonNull(1)`); if no symbol matches exactly, the
+query layer retries with that suffix replaced by `(?)` so it resolves to the
+same phantom node.
 
 ### 4.3 Receiver-type resolution
 
@@ -230,10 +247,15 @@ Core algorithm, per enclosing method:
        and `strategy='chained_receiver'`.
    - **`new Foo(args)`**: receiver type = resolved `Foo`; callee = `<init>`;
      `arg_count` must match (if a constructor with that arity exists).
-   - **`Foo::bar`** method reference: receiver type = resolved `Foo`;
-     `arg_count` is indeterminate — emit an edge with
-     `strategy='method_reference'`, `arg_count=-1`, confidence from the
-     receiver resolution.
+   - **`Foo::bar`** method reference: the extractor sets `CallSite.arg_count=-1`
+     (indeterminate at parse time). Receiver type = resolved `Foo` (same rules as
+     invocations). After callee lookup on the type + supertype walk: if exactly one
+     method named `bar` is found, emit one edge with `strategy='method_reference'`,
+     `resolved=true`, and `CALLS.arg_count` equal to that method’s parameter count;
+     if several overloads match by name only, emit one `overload_ambiguous` edge per
+     candidate, each with that candidate’s arity on `CALLS.arg_count`; if none match,
+     phantom callee as usual, with `CALLS.arg_count=-1`. Confidence follows receiver
+     resolution in all resolved cases.
    - **`expr::bar`** method reference with expression qualifier (e.g.,
      `getX()::bar`): treat as chained receiver — emit phantom with
      `strategy='chained_receiver'`, `confidence=0.0`.
@@ -242,7 +264,8 @@ Core algorithm, per enclosing method:
    `name` (`strategy='overload_ambiguous'`); if not found locally, walk
    `EXTENDS`/`IMPLEMENTS` closure up (bounded to phantom or resolved
    supertypes the graph already knows). Emit one edge per match; if zero
-   matches, emit a phantom callee under the known receiver type FQN.
+   matches, emit a phantom callee under the known receiver type FQN using the
+   arity-agnostic phantom format above (site arity remains on the `CALLS` row).
 
 This is intentionally conservative: it recovers the dominant Spring-style
 pattern (field-injected services calling interface methods) with high
@@ -318,11 +341,11 @@ this is a graph-only migration.
 
 | Tool | What it does |
 |---|---|
-| `find_callers(fqn_or_signature, depth=1, limit=100, min_confidence=0.0, exclude_external=true)` | Inbound `CALLS` closure. Accepts a type FQN (fan-out through `DECLARES`), a method simple name (+ optional `arg_count`), or a full `type#sig`. |
-| `find_callees(fqn_or_signature, depth=1, limit=100, min_confidence=0.0, exclude_external=true)` | Outbound `CALLS` closure. Same input shapes. |
+| `find_callers(fqn_or_signature, depth=1, limit=100, min_confidence=0.0, exclude_external=true)` | Inbound `CALLS` closure. Accepts a type FQN (fan-out through `DECLARES`), a method simple name (+ optional `arg_count`), or a full `type#sig`. For phantom callees with arity-agnostic FQNs (`…#name(?)`), a needle ending in `(N)` with digits-only `N` resolves to the same symbol after an exact-match miss (§4.2). |
+| `find_callees(fqn_or_signature, depth=1, limit=100, min_confidence=0.0, exclude_external=true)` | Outbound `CALLS` closure. Same input shapes and needle fallback as `find_callers`. |
 
 Both return `SymbolDto` for each hit **plus** per-edge metadata:
-`confidence`, `strategy`, `call_site_line`, `resolved`.
+`confidence`, `strategy`, `call_site_line`, `call_site_byte`, `arg_count`, `resolved`.
 
 ### 6.2 Extended tools
 
@@ -359,8 +382,9 @@ New `tests/test_ast_java_calls.py`:
 6. `svc.m()` where `svc` is a local variable → same result.
 7. `Utils.helper()` (static) → receiver type = `Utils`, `is_static=True`.
 8. `new Foo(x)` → callee `<init>`, `arg_count=1`, `is_constructor=True`.
-9. `Foo::bar` method reference → edge with `strategy='method_reference'`,
-   `arg_count=-1`.
+9. `Foo::bar` method reference → `CallSite.arg_count=-1`; graph edge
+   `strategy='method_reference'` and, when callee lookup finds a unique match,
+   `CALLS.arg_count` equals that method’s arity (see §4.3).
 10. Chained `a.b().c()` → first call resolved, second emits phantom with
     `strategy='chained_receiver'`.
 11. Lambda body call attributed to enclosing method (not the lambda).

@@ -277,3 +277,19 @@ def test_d1_phantom_method_ref_and_invocation_share_symbol(tmp_path: Path) -> No
     assert nids == 1, f"expected one phantom Symbol for toString, got nids={nids} fqns={fqns}"
     assert set(fqns) == {"smoke.Svc#toString(?)"}, fqns
     assert set(arities) == {-1, 0}, f"edges should keep site arities on CALLS; got {arities}"
+
+
+def test_d2_method_ref_unambiguous_emits_resolved_arity_on_calls_edge(tmp_path: Path) -> None:
+    """D2: single matching method for a :: ref — CALLS.arg_count is the method arity, not -1."""
+    db = _build_smoke_db(tmp_path)
+    conn = _connect(db)
+    rows = _rows(
+        conn,
+        "MATCH (src:Symbol)-[c:CALLS]->(dst:Symbol) "
+        "WHERE src.fqn STARTS WITH 'smoke.MethodRefArity#caller' "
+        "AND dst.name = 'onlyMethod' AND c.resolved = true "
+        "RETURN c.arg_count AS ac, c.strategy AS s",
+    )
+    assert rows, "expected resolved CALLS from MethodRefArity#caller to onlyMethod"
+    assert int(rows[0][0]) == 0, rows
+    assert str(rows[0][1]) == "method_reference", rows
