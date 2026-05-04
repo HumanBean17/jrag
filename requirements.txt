@@ -135,6 +135,7 @@ typer==0.24.1
 typing-inspection==0.4.2
 typing_extensions==4.15.0
 uncalled-for==0.3.1
+unidiff==0.7.5
 urllib3==2.6.3
 uvicorn==0.44.0
 watchfiles==1.1.1

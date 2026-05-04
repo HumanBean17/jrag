@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 from sentence_transformers import SentenceTransformer
 
 from index_common import SBERT_MODEL
+import pr_analysis
 from kuzu_queries import CallEdge, KuzuGraph, resolve_kuzu_path
 from search_lancedb import (
     TABLES,
@@ -37,7 +38,7 @@ _INSTRUCTIONS = (
     "subclasses, injectors, impact analysis, and graph-expanded codebase_search. "
     "Use codebase_search for meaning-based discovery — prefer limit 5; use offset to page. "
     "Use find_implementors / find_subclasses / find_injectors / find_callers / find_callees / "
-    "list_routes / find_route_handlers / get_route_by_path / "
+    "list_routes / find_route_handlers / get_route_by_path / analyze_pr / "
     "impact_analysis / neighbors / list_by_role / list_by_annotation / list_by_capability for "
     "exact structural traversal. "
     "Use list_by_capability for behavioural questions about message-driven "
@@ -69,7 +70,10 @@ _INSTRUCTIONS = (
     "`why` string explaining the rank (dist / role / symbol / import_penalty). Pass "
     "context_neighbors=1 to attach adjacent chunks via `context_before` / `context_after`. "
     "refresh_code_index runs cocoindex and then rebuilds the Kuzu graph; needs "
-    "LANCEDB_MCP_ALLOW_REFRESH=1 and cocoindex beside the venv Python."
+    "LANCEDB_MCP_ALLOW_REFRESH=1 and cocoindex beside the venv Python. "
+    "analyze_pr maps a unified diff to indexed symbols, estimates blast radius "
+    "(DI/extends/implements via impact_analysis on enclosing types for methods), "
+    "optional cross-service CALLS edges, touched Spring routes (EXPOSES), and a v1 risk score."
 )
 
 
@@ -258,6 +262,19 @@ class SingleRouteOutput(BaseModel):
     success: bool
     route: RouteRowDto | None = None
     message: str | None = None
+
+
+class PrAnalyzeOutput(BaseModel):
+    success: bool
+    message: str | None = None
+    changed_symbols: list[dict[str, Any]] = Field(default_factory=list)
+    blast_radius_total: int = 0
+    blast_radius_by_symbol: dict[str, int] = Field(default_factory=dict)
+    cross_service_callers: int = 0
+    routes_touched: list[str] = Field(default_factory=list)
+    risk_score: float = 0.0
+    risk_band: str = ""
+    notes: list[str] = Field(default_factory=list)
 
 
 class GraphMetaOutput(BaseModel):
@@ -1129,6 +1146,26 @@ def create_mcp_server() -> FastMCP:
             return SymbolListOutput(success=False, message=msg)
         rows = await asyncio.to_thread(graph.impact_analysis, name, depth=depth, limit=limit)
         return SymbolListOutput(success=True, results=[_symbol_to_dto(r) for r in rows])
+
+    @mcp.tool(
+        name="analyze_pr",
+        description=(
+            "Map a unified diff to changed indexed symbols and estimate blast radius / risk. "
+            "Pass full unified-diff text (e.g. `git diff` output). Returns JSON-serializable "
+            "risk report: changed_symbols, blast_radius_total, cross_service_callers, "
+            "routes_touched (Route ids via EXPOSES), risk_score (0–1), risk_band, notes. "
+            "Binary hunks and file renames are skipped for symbol mapping and surfaced in notes."
+        ),
+    )
+    async def analyze_pr(
+        diff_unified: str = Field(description="Unified diff text (git-style)"),
+    ) -> PrAnalyzeOutput:
+        ok, graph, msg = _require_graph()
+        if not ok or graph is None:
+            return PrAnalyzeOutput(success=False, message=msg)
+        rep = await asyncio.to_thread(pr_analysis.analyze_pr_pipeline, graph, diff_unified)
+        payload = pr_analysis.pr_report_to_dict(rep)
+        return PrAnalyzeOutput(success=True, **payload)
 
     @mcp.tool(
         name="graph_meta",

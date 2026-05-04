@@ -27,6 +27,7 @@ __all__ = [
     "CallEdge",
     "ViaEdge",
     "StageSymbol",
+    "find_symbols_in_file_range",
 ]
 
 
@@ -207,6 +208,25 @@ _SYM_COLS = (
     "filename", "start_line", "end_line", "start_byte", "end_byte",
     "modifiers", "annotations", "capabilities", "role", "signature", "parent_id", "resolved",
 )
+
+
+def find_symbols_in_file_range(
+    graph: "KuzuGraph",
+    *,
+    filename: str,
+    start_line: int,
+    end_line: int,
+) -> list[SymbolHit]:
+    """Return `Symbol` rows overlapping `[start_line, end_line]` in `filename` (1-based, inclusive)."""
+    if start_line < 1 or end_line < start_line:
+        return []
+    q = (
+        f"MATCH (s:Symbol) WHERE s.filename = $fn "
+        f"AND s.start_line <= $hmax AND s.end_line >= $hmin "
+        f"RETURN {_SYMBOL_RETURN} ORDER BY s.start_line, s.end_line"
+    )
+    params = {"fn": filename, "hmax": int(end_line), "hmin": int(start_line)}
+    return [_row_to_symbol(r) for r in graph._rows(q, params)]
 
 
 def _prefixed_symbol_row(prefix: str, row: dict[str, Any]) -> dict[str, Any]:
