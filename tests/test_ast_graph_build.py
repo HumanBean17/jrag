@@ -64,7 +64,8 @@ def test_graph_meta_present_and_versioned(kuzu_db_path: Path) -> None:
     r = conn.execute(
         "MATCH (m:GraphMeta) RETURN m.ontology_version, m.built_at, "
         "m.source_root, m.parse_errors, m.counts_json, "
-        "m.routes_total, m.exposes_total, m.routes_by_framework, m.routes_resolved_pct"
+        "m.routes_total, m.exposes_total, m.routes_by_framework, m.routes_resolved_pct, "
+        "m.routes_from_brownfield_pct, m.routes_by_layer"
     )
     rows: list = []
     while r.has_next():
@@ -80,6 +81,8 @@ def test_graph_meta_present_and_versioned(kuzu_db_path: Path) -> None:
     exposes_total = row[6]
     routes_by_framework_raw = row[7]
     routes_resolved_pct = row[8]
+    routes_from_brownfield_pct = row[9]
+    routes_by_layer_raw = row[10]
     assert int(ov) == ONTOLOGY_VERSION
     assert int(built_at) > 0
     assert source_root  # absolute path string
@@ -95,6 +98,9 @@ def test_graph_meta_present_and_versioned(kuzu_db_path: Path) -> None:
     by_fw = json.loads(routes_by_framework_raw)
     assert isinstance(by_fw, dict)
     assert len(by_fw) >= 1
+    assert float(routes_from_brownfield_pct) >= 0.0
+    by_layer = json.loads(routes_by_layer_raw)
+    assert isinstance(by_layer, dict)
 
 
 def test_each_node_kind_present(kuzu_db_path: Path) -> None:
@@ -209,7 +215,7 @@ def test_route_id_includes_microservice(tmp_path: Path) -> None:
     asts = pass1_parse(root, tables, verbose=False)
     pass2_edges(tables, asts, verbose=False)
     pass3_calls(tables, asts, verbose=False)
-    pass4_routes(tables, asts, verbose=False)
+    pass4_routes(tables, asts, source_root=root, verbose=False)
     write_kuzu(db_path, tables, source_root=root, verbose=False)
 
     conn = _connect(db_path)
@@ -237,7 +243,7 @@ def test_exposes_edge_direction(tmp_path: Path) -> None:
     asts = pass1_parse(root, tables, verbose=False)
     pass2_edges(tables, asts, verbose=False)
     pass3_calls(tables, asts, verbose=False)
-    pass4_routes(tables, asts, verbose=False)
+    pass4_routes(tables, asts, source_root=root, verbose=False)
     write_kuzu(db_path, tables, source_root=root, verbose=False)
 
     conn = _connect(db_path)

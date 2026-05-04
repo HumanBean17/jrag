@@ -28,6 +28,7 @@ __all__ = [
     "ParamDecl",
     "MethodDecl",
     "RouteDecl",
+    "ROUTE_META_ANNOTATION_NAMES",
     "TypeDecl",
     "JavaFileAst",
     "parse_java",
@@ -66,7 +67,7 @@ _DTO_LOMBOK_ANNOTATIONS: frozenset[str] = frozenset({
 })
 
 # Phase 4: Route + EXPOSES (B2a); bumps whenever Route extraction / enrichment semantics change.
-ONTOLOGY_VERSION = 5
+ONTOLOGY_VERSION = 6
 
 ROLE_ANNOTATIONS: dict[str, str] = {
     # Spring Web
@@ -127,6 +128,15 @@ _ROUTE_HTTP_MAPPING_NAMES = frozenset({
     "PutMapping",
     "DeleteMapping",
     "PatchMapping",
+})
+
+# Seeds for `collect_annotation_meta_chain` so custom @interface meta-annotations
+# (e.g. @AcmeGet meta-@GetMapping) resolve in Layer A (see graph_enrich._meta_builtins).
+ROUTE_META_ANNOTATION_NAMES: frozenset[str] = _ROUTE_HTTP_MAPPING_NAMES | frozenset({
+    "KafkaListener",
+    "RabbitListener",
+    "JmsListener",
+    "StreamListener",
 })
 
 _ROUTE_ASYNC_METHOD_NAMES = frozenset({
@@ -272,6 +282,8 @@ class RouteDecl:
     filename: str
     start_line: int
     end_line: int
+    # brownfield / B2a composition (graph_enrich.resolve_routes_for_method); not a Kuzu column.
+    route_source_layer: str = "builtin"
 
 
 @dataclass
@@ -1391,6 +1403,109 @@ def _iter_method_annotation_nodes(method_node: Node, src: bytes) -> list[tuple[s
     return out
 
 
+def _parse_codebase_route_inner_annotation(
+    ann: Node,
+    src: bytes,
+    ctx: _ParseCtx,
+    *,
+    handler_fqn: str,
+    method_sig: str,
+    file_rel: str,
+    start_line: int,
+    end_line: int,
+) -> list[RouteDecl]:
+    """One `@CodebaseRoute(...)` element → `RouteDecl`(s) with `resolution_strategy='codebase_route'`."""
+    from java_ontology import VALID_ROUTE_FRAMEWORKS, VALID_ROUTE_KINDS
+
+    pairs, _ = _annotation_kv_nodes(ann, src)
+    fw_node = pairs.get("framework")
+    kind_node = pairs.get("kind")
+    fw = ""
+    kind = ""
+    if fw_node is not None:
+        v, k = _annotation_value(fw_node, src)
+        if k == "enum" and v:
+            fw = str(v).lower()
+    if kind_node is not None:
+        v, k = _annotation_value(kind_node, src)
+        if k == "enum" and v:
+            kind = str(v).lower()
+    if fw not in VALID_ROUTE_FRAMEWORKS or kind not in VALID_ROUTE_KINDS:
+        return []
+
+    path_node = pairs.get("path")
+    meth_arg = pairs.get("method")
+    topic_node = pairs.get("topic")
+    broker_node = pairs.get("broker")
+
+    http_method = ""
+    if meth_arg is not None:
+        mv, mk = _annotation_value(meth_arg, src)
+        if mv is not None:
+            http_method = str(mv).upper() if mk == "enum" else str(mv).strip().upper()
+
+    topic = ""
+    if topic_node is not None:
+        tv, tk = _annotation_value(topic_node, src)
+        if tv is not None and tk == "string":
+            topic = str(tv)
+        elif tv is not None and tk == "enum":
+            topic = str(tv)
+
+    broker = ""
+    if broker_node is not None:
+        bv, bk = _annotation_value(broker_node, src)
+        if bv is not None and bk == "string":
+            broker = str(bv)
+
+    path_atoms: list[tuple[str, str, float, bool]] = []
+    if path_node is not None:
+        path_atoms = _route_value_atoms(path_node, src, ctx)
+    if not path_atoms:
+        path_atoms = [("", "annotation", 1.0, True)]
+
+    out: list[RouteDecl] = []
+    for raw_path, _strat, conf, res in path_atoms:
+        out.append(
+            RouteDecl(
+                method_fqn=handler_fqn,
+                method_sig=method_sig,
+                kind=kind,
+                framework=fw,
+                http_method=http_method,
+                path=raw_path,
+                topic=topic,
+                broker=broker,
+                feign_name="",
+                feign_url="",
+                resolution_strategy="codebase_route",
+                confidence=conf,
+                resolved=res,
+                filename=file_rel,
+                start_line=start_line,
+                end_line=end_line,
+                route_source_layer="layer_c_source",
+            ),
+        )
+    return out
+
+
+def _codebase_route_inner_annotation_nodes(container_ann: Node, src: bytes) -> list[Node]:
+    found: list[Node] = []
+
+    def visit(n: Node) -> None:
+        if n.type == "annotation":
+            name_node = n.child_by_field_name("name")
+            n_simple = _txt(name_node, src).rsplit(".", 1)[-1] if name_node is not None else ""
+            if n_simple == "CodebaseRoute":
+                found.append(n)
+        for c in n.children:
+            visit(c)
+
+    visit(container_ann)
+    return found
+
+
 def _collect_routes(
     method_node: Node,
     enclosing_type_node: Node | None,
@@ -1585,6 +1700,36 @@ def _collect_routes(
                         start_line=method_decl.start_line,
                         end_line=method_decl.end_line,
                     )
+                )
+
+    # --- @CodebaseRoute / @CodebaseRoutes (PR-A3 source stubs; Layer C in resolver) ---
+    for simple, node in ann_nodes:
+        if simple == "CodebaseRoute":
+            routes.extend(
+                _parse_codebase_route_inner_annotation(
+                    node,
+                    src,
+                    ctx,
+                    handler_fqn=handler_fqn,
+                    method_sig=signature,
+                    file_rel=file_rel,
+                    start_line=method_decl.start_line,
+                    end_line=method_decl.end_line,
+                ),
+            )
+        elif simple == "CodebaseRoutes":
+            for inner in _codebase_route_inner_annotation_nodes(node, src):
+                routes.extend(
+                    _parse_codebase_route_inner_annotation(
+                        inner,
+                        src,
+                        ctx,
+                        handler_fqn=handler_fqn,
+                        method_sig=signature,
+                        file_rel=file_rel,
+                        start_line=method_decl.start_line,
+                        end_line=method_decl.end_line,
+                    ),
                 )
 
     return routes

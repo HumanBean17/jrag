@@ -27,13 +27,14 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import logging
 import os
 import re
 import sys
 import time
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import kuzu
@@ -55,6 +56,7 @@ from graph_enrich import (
     module_for_path,
     phantom_id,
     resolve_role_and_capabilities,
+    resolve_routes_for_method,
     symbol_id,
 )
 from java_index_v1_common import (
@@ -164,6 +166,8 @@ class RouteRow:
     start_line: int
     end_line: int
     resolved: bool
+    # B2a brownfield composition (PR-A3); not persisted on Kuzu `Route` nodes.
+    source_layer: str = "builtin"
 
 
 @dataclass
@@ -180,6 +184,10 @@ class RouteExtractionStats:
     by_framework: dict[str, int] = field(default_factory=lambda: defaultdict(int))
     by_kind: dict[str, int] = field(default_factory=lambda: defaultdict(int))
     routes_resolved_pct: float = 100.0
+    # Percentage of emitted `Route` rows whose `source_layer` is not `builtin`.
+    # Brownfield layers: `layer_b_ann`, `layer_a_meta`, `layer_c_source`, `layer_b_fqn`.
+    routes_from_brownfield_pct: float = 0.0
+    routes_by_layer: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass
@@ -1181,8 +1189,30 @@ def _route_id(
     return f"r:{hashlib.sha1(key.encode()).hexdigest()[:16]}"
 
 
-def pass4_routes(tables: GraphTables, asts: dict[str, JavaFileAst], *, verbose: bool) -> None:
+_ROUTE_LAYER_RANK: dict[str, int] = {
+    "builtin": 0,
+    "layer_b_ann": 1,
+    "layer_a_meta": 2,
+    "layer_c_source": 3,
+    "layer_b_fqn": 4,
+}
+
+
+def pass4_routes(
+    tables: GraphTables,
+    asts: dict[str, JavaFileAst],
+    *,
+    source_root: Path,
+    verbose: bool,
+) -> None:
     stats = tables.route_stats
+    overrides = load_brownfield_overrides(source_root)
+    try:
+        prs = str(source_root.resolve())
+    except OSError:
+        prs = str(source_root)
+    meta_chain = collect_annotation_meta_chain(prs)
+
     for ast in asts.values():
         stats.routes_skipped_unresolved += ast.routes_skipped_unresolved
 
@@ -1191,16 +1221,29 @@ def pass4_routes(tables: GraphTables, asts: dict[str, JavaFileAst], *, verbose: 
 
     http_kinds = frozenset({"http_endpoint", "http_consumer"})
 
-    for member in tables.members:
+    for member in sorted(tables.members, key=lambda m: m.node_id):
         if member.decl.is_constructor:
             continue
         ast = asts.get(member.file_path)
-        if ast is None or not member.decl.routes:
+        if ast is None:
             continue
-        for decl in member.decl.routes:
+        type_decl = tables.types[member.parent_fqn].decl
+        final_routes = resolve_routes_for_method(
+            method_decl=member.decl,
+            enclosing_type=type_decl,
+            overrides=overrides,
+            meta_chain=meta_chain,
+            builtin_routes=member.decl.routes,
+        )
+        if not final_routes:
+            continue
+        for decl in final_routes:
             path_template, path_regex = ("", "")
             if decl.kind in http_kinds:
-                if decl.resolved and decl.resolution_strategy == "annotation":
+                if decl.resolved and decl.resolution_strategy in (
+                    "annotation",
+                    "codebase_route",
+                ):
                     path_template, path_regex = _normalize_path(decl.path)
                 else:
                     path_template, path_regex = "", ""
@@ -1214,6 +1257,7 @@ def pass4_routes(tables: GraphTables, asts: dict[str, JavaFileAst], *, verbose: 
                 decl.broker,
                 member.microservice,
             )
+            layer = decl.route_source_layer
             if rid not in routes_by_id:
                 routes_by_id[rid] = RouteRow(
                     id=rid,
@@ -1233,7 +1277,15 @@ def pass4_routes(tables: GraphTables, asts: dict[str, JavaFileAst], *, verbose: 
                     start_line=decl.start_line,
                     end_line=decl.end_line,
                     resolved=decl.resolved,
+                    source_layer=layer,
                 )
+            else:
+                prev = routes_by_id[rid]
+                if _ROUTE_LAYER_RANK.get(layer, 0) > _ROUTE_LAYER_RANK.get(
+                    prev.source_layer,
+                    0,
+                ):
+                    routes_by_id[rid] = replace(prev, source_layer=layer)
             ek = (member.node_id, rid)
             if ek not in exposes_seen:
                 exposes_seen.add(ek)
@@ -1254,14 +1306,26 @@ def pass4_routes(tables: GraphTables, asts: dict[str, JavaFileAst], *, verbose: 
 
     n_routes = len(tables.routes_rows)
     if n_routes:
-        stats.routes_resolved_pct = 100.0 * sum(1 for r in tables.routes_rows if r.resolved) / n_routes
+        stats.routes_resolved_pct = 100.0 * sum(
+            1 for r in tables.routes_rows if r.resolved
+        ) / n_routes
+        stats.routes_from_brownfield_pct = 100.0 * sum(
+            1 for r in tables.routes_rows if r.source_layer != "builtin"
+        ) / n_routes
     else:
         stats.routes_resolved_pct = 100.0
+        stats.routes_from_brownfield_pct = 0.0
+
+    by_layer: dict[str, int] = defaultdict(int)
+    for row in tables.routes_rows:
+        by_layer[row.source_layer] += 1
+    stats.routes_by_layer = dict(sorted(by_layer.items()))
 
     msg = (
         f"Route extraction: emitted={n_routes}, exposes={len(tables.exposes_rows)}, "
         f"skipped_unresolved={stats.routes_skipped_unresolved}, "
         f"routes_resolved_pct={stats.routes_resolved_pct:.1f}, "
+        f"routes_from_brownfield_pct={stats.routes_from_brownfield_pct:.1f}, "
         f"by_framework={dict(stats.by_framework)}"
     )
     log.info(msg)
@@ -1292,7 +1356,9 @@ _SCHEMA_META = (
     "routes_total INT64, exposes_total INT64, "
     # JSON map {framework: count}; STRING avoids Kuzu Python MAP↔STRUCT binder mismatch.
     "routes_by_framework STRING, "
-    "routes_resolved_pct DOUBLE"
+    "routes_resolved_pct DOUBLE, "
+    "routes_from_brownfield_pct DOUBLE, "
+    "routes_by_layer STRING"
     ")"
 )
 
@@ -1571,7 +1637,6 @@ def _write_routes_and_exposes(conn: kuzu.Connection, tables: GraphTables) -> Non
 
 
 def _write_meta(conn: kuzu.Connection, tables: GraphTables, source_root: Path) -> None:
-    import json
     seen_calls: set[tuple[str, str, int, int]] = set()
     calls_unique = 0
     for row in tables.calls_rows:
@@ -1595,11 +1660,13 @@ def _write_meta(conn: kuzu.Connection, tables: GraphTables, source_root: Path) -
         "routes": len(tables.routes_rows),
         "exposes": len(tables.exposes_rows),
     }
+    routes_layer = dict(sorted(st.routes_by_layer.items()))
     conn.execute(
         "CREATE (:GraphMeta {key: $k, ontology_version: $ov, built_at: $t, "
         "source_root: $sr, counts_json: $cj, parse_errors: $pe, "
         "routes_total: $routes_total, exposes_total: $exposes_total, "
-        "routes_by_framework: $routes_by_framework, routes_resolved_pct: $routes_resolved_pct})",
+        "routes_by_framework: $routes_by_framework, routes_resolved_pct: $routes_resolved_pct, "
+        "routes_from_brownfield_pct: $routes_from_brownfield_pct, routes_by_layer: $routes_by_layer})",
         {
             "k": "graph",
             "ov": ONTOLOGY_VERSION,
@@ -1611,6 +1678,8 @@ def _write_meta(conn: kuzu.Connection, tables: GraphTables, source_root: Path) -
             "exposes_total": len(tables.exposes_rows),
             "routes_by_framework": json.dumps(routes_fw),
             "routes_resolved_pct": float(st.routes_resolved_pct),
+            "routes_from_brownfield_pct": float(st.routes_from_brownfield_pct),
+            "routes_by_layer": json.dumps(routes_layer),
         },
     )
 
@@ -1685,7 +1754,7 @@ def main() -> int:
     asts = pass1_parse(root, tables, verbose=args.verbose)
     pass2_edges(tables, asts, verbose=args.verbose)
     pass3_calls(tables, asts, verbose=args.verbose)
-    pass4_routes(tables, asts, verbose=args.verbose)
+    pass4_routes(tables, asts, source_root=root, verbose=args.verbose)
     write_kuzu(kuzu_path, tables, source_root=root, verbose=args.verbose)
     if args.verbose:
         print(f"[done] kuzu at {kuzu_path}", file=sys.stderr)

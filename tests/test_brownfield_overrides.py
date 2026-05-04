@@ -23,12 +23,7 @@ def _tdecl(src: str):
 
 
 def _empty() -> BrownfieldOverrides:
-    return BrownfieldOverrides(
-        {},
-        {},
-        {},
-        {},
-    )
+    return BrownfieldOverrides({}, {}, {}, {}, {}, {})
 
 
 @pytest.fixture(autouse=True)
@@ -63,12 +58,7 @@ class TestResolveBasics:
         )
         r0, _ = resolve_role_and_capabilities(t, overrides=_empty(), meta_chain=None)
         assert r0 == "OTHER"
-        ov = BrownfieldOverrides(
-            {"AcmeService": "SERVICE"},
-            {},
-            {},
-            {},
-        )
+        ov = BrownfieldOverrides({"AcmeService": "SERVICE"}, {}, {}, {}, {}, {})
         r, _ = resolve_role_and_capabilities(t, overrides=ov, meta_chain=None)
         assert r == "SERVICE"
 
@@ -81,12 +71,7 @@ class TestResolveBasics:
             public class C {}
         """
         )
-        ov = BrownfieldOverrides(
-            {"AcmeService": "SERVICE"},
-            {},
-            {},
-            {},
-        )
+        ov = BrownfieldOverrides({"AcmeService": "SERVICE"}, {}, {}, {}, {}, {})
         r, _ = resolve_role_and_capabilities(t, overrides=ov, meta_chain=None)
         assert r == "CONTROLLER"
 
@@ -105,6 +90,8 @@ class TestResolveBasics:
             {"CompanyKafkaTopic": ("MESSAGE_LISTENER",)},
             {},
             {},
+            {},
+            {},
         )
         _, c = resolve_role_and_capabilities(t, overrides=ov, meta_chain=None)
         assert "MESSAGE_LISTENER" in c
@@ -121,6 +108,8 @@ class TestResolveBasics:
             {},
             {"com.legacy.X": "SERVICE"},
             {"com.legacy.X": ("MESSAGE_LISTENER",)},
+            {},
+            {},
         )
         r, c = resolve_role_and_capabilities(t, overrides=ov, meta_chain=None)
         assert r == "SERVICE"
@@ -134,12 +123,7 @@ class TestResolveBasics:
             public class X {}
         """
         )
-        ov = BrownfieldOverrides(
-            {},
-            {},
-            {"p.X": "SERVICE"},
-            {},
-        )
+        ov = BrownfieldOverrides({}, {}, {"p.X": "SERVICE"}, {}, {}, {})
         r, _ = resolve_role_and_capabilities(t, overrides=ov, meta_chain=None)
         assert r == "SERVICE"
 
@@ -168,7 +152,7 @@ class TestConfigWarnings:
             encoding="utf-8",
         )
         b = _load_brownfield_overrides(str(tmp_path))
-        assert b == BrownfieldOverrides({}, {}, {}, {})
+        assert b == BrownfieldOverrides({}, {}, {}, {}, {}, {})
 
 
 def _acme_with_meta(tmp_path: Path) -> None:
@@ -261,12 +245,7 @@ class TestLayerAMeta:
         )
         m = collect_annotation_meta_chain(str(tmp_path.resolve()))
         tdecl = _tdecl(cj.read_text(encoding="utf-8"))
-        ov = BrownfieldOverrides(
-            {"AcmeProcessor": "COMPONENT"},
-            {},
-            {},
-            {},
-        )
+        ov = BrownfieldOverrides({"AcmeProcessor": "COMPONENT"}, {}, {}, {}, {}, {})
         r, _ = resolve_role_and_capabilities(
             tdecl, overrides=ov, meta_chain=m
         )
@@ -341,6 +320,8 @@ class TestLayerAMeta:
             {"Z": "COMPONENT"},
             {},
             {"p.C": "REPOSITORY"},
+            {},
+            {},
             {},
         )
         r, _ = resolve_role_and_capabilities(
