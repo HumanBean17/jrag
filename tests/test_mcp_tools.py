@@ -279,6 +279,30 @@ async def test_impact_analysis(mcp_server) -> None:
     assert "ChatManagementService" in names
 
 
+# ---------------- analyze_pr (B4) ----------------
+
+
+async def test_analyze_pr_smoke(mcp_server) -> None:
+    diff = """diff --git a/chat-assign/src/main/java/com/bank/chat/assign/service/ChatManagementService.java b/chat-assign/src/main/java/com/bank/chat/assign/service/ChatManagementService.java
+--- a/chat-assign/src/main/java/com/bank/chat/assign/service/ChatManagementService.java
++++ b/chat-assign/src/main/java/com/bank/chat/assign/service/ChatManagementService.java
+@@ -48,5 +48,5 @@
+     @Transactional
+     public void assign(AssignmentRequest request) {
+-        if (request.getConversationId() == null || request.getConversationId().isBlank()) {
++        if (request.getConversationId() == null || request.getConversationId().isBlank() ) {
+             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "conversationId required");
+         }
+"""
+    out = _structured(await mcp_server.call_tool("analyze_pr", {"diff_unified": diff}))
+    assert out["success"] is True
+    assert "risk_score" in out and "risk_band" in out
+    assert isinstance(out["changed_symbols"], list)
+    assert any(
+        "assign(AssignmentRequest)" in str(s.get("fqn", "")) for s in out["changed_symbols"]
+    ), out
+
+
 # ---------------- codebase_search (validation paths only) ----------------
 
 

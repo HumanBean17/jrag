@@ -141,12 +141,38 @@ The DB is dropped and rebuilt from scratch on each run (Phase 1 is a full rebuil
 | `list_by_annotation` | Symbols whose annotation list contains the given simple name. |
 | `graph_neighbors` | Generic BFS over `EXTENDS|IMPLEMENTS|INJECTS|DECLARES|CALLS`, directional. |
 | `impact_analysis` | Reverse closure: what breaks if this changes. |
+| `analyze_pr` | Map a unified diff (`diff_unified`) to overlapping indexed symbols, sum type-level `impact_analysis` blast, count cross-microservice `CALLS`, list touched `Route` ids (`EXPOSES`), and return a v1 `risk_score` / `risk_band` plus `notes` (binary hunks and renames are skipped for symbol mapping). |
 | `graph_meta` | Counts, ontology version, build timestamp, parse errors; route totals / `routes_by_framework` / `routes_resolved_pct` (v5+); `routes_from_brownfield_pct` / `routes_by_layer` (v6+). |
 | `list_routes` | Filterable listing of `Route` nodes (`microservice`, `framework`, `path_prefix`, `method`). |
 | `find_route_handlers` | Symbols that `EXPOSES` a route id (confidence + resolution strategy on the edge). |
 | `get_route_by_path` | Lookup one `Route` by `microservice` + normalised `path_template` + optional HTTP method. |
 
 HTTP mappings from literals are fully resolved (non-empty `path_template` / `path_regex`). Values containing Spring ``${…}`` SpEL, or non-string annotation arguments (constant references), are still stored as routes with lower confidence and empty template fields. Caller-side edges (`find_route_callers`) are planned under B2b, not shipped here.
+
+**Example — `analyze_pr`:** pass the same unified diff text you would feed to `patch` (e.g. `git diff` output). Paths in the diff should match project-relative `Symbol.filename` values in the graph (e.g. `chat-assign/src/main/java/.../ChatManagementService.java`). A one-line edit inside `assign` returns JSON shaped like:
+
+```json
+{
+  "success": true,
+  "changed_symbols": [
+    {
+      "symbol_id": "<opaque>",
+      "fqn": "com.bank.chat.assign.service.ChatManagementService#assign(AssignmentRequest)",
+      "kind": "method",
+      "change_type": "modified",
+      "file": "chat-assign/src/main/java/com/bank/chat/assign/service/ChatManagementService.java",
+      "hunk_lines": [48, 49, 50, 51, 52]
+    }
+  ],
+  "blast_radius_total": 2,
+  "blast_radius_by_symbol": { "<opaque>": 1 },
+  "cross_service_callers": 0,
+  "routes_touched": [],
+  "risk_score": 0.008,
+  "risk_band": "low",
+  "notes": []
+}
+```
 
 ### Manual test
 
