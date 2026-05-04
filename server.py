@@ -1009,6 +1009,8 @@ def create_mcp_server() -> FastMCP:
             "caps per-stage size; `depth` is hops-per-stage, not total depth. "
             "`follow_calls` (default true) merges DECLARES+CALLS paths with type wiring; "
             "set `follow_calls=false` for type-only INJECTS/EXTENDS/IMPLEMENTS expansion. "
+            "`stage_limit` is shared structural-first: per hop, INJECTS/EXTENDS/IMPLEMENTS "
+            "fill the budget first and CALLS only tops up the remaining slots. "
             "`exclude_external` (default true) drops types reached only via that CALLS hop "
             "when their type FQN matches JDK/Spring/Lombok-style external prefixes "
             "(discovered callee types, not seeds)."

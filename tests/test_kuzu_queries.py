@@ -264,6 +264,30 @@ def test_trace_flow_follow_calls_false_type_only_edges(kuzu_graph) -> None:
                 assert v.edge_type in {"INJECTS", "EXTENDS", "IMPLEMENTS"}
 
 
+def test_trace_flow_structural_edges_not_starved_by_calls(kuzu_graph) -> None:
+    """Structural-first budget contract: per hop INJECTS/EXTENDS/IMPLEMENTS fill
+    `stage_limit` first, and the CALLS branch only tops up the remaining slots.
+
+    Even with a tight cap and `follow_calls=True` (which adds a wide DECLARES+CALLS
+    fan-out underneath the controller), at least one stage-1 entry must carry a
+    structural via-edge — i.e. CALLS does not squeeze INJECTS out of the bucket.
+    """
+    seeds = ["com.bank.chat.assign.web.ChatManagementController"]
+    stages = kuzu_graph.trace_flow(seeds, depth=2, stage_limit=4, follow_calls=True)
+    assert len(stages) >= 2, stages
+    stage1 = stages[1]
+    assert stage1, "stage-1 should be non-empty for a known controller seed"
+    assert len(stage1) <= 4, [s.symbol.fqn for s in stage1]
+    structural_edges = {"INJECTS", "EXTENDS", "IMPLEMENTS"}
+    has_structural = any(
+        any(v.edge_type in structural_edges for v in entry.via)
+        for entry in stage1
+    )
+    assert has_structural, [
+        (e.symbol.fqn, [v.edge_type for v in e.via]) for e in stage1
+    ]
+
+
 def test_find_callers_assign_method(kuzu_graph) -> None:
     needle = "com.bank.chat.assign.service.ChatManagementService#assign(AssignmentRequest)"
     edges = kuzu_graph.find_callers(needle, depth=1, limit=50)

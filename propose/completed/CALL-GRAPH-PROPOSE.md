@@ -368,7 +368,7 @@ Both return `SymbolDto` for each hit **plus** per-edge metadata:
 
 | Tool | Change |
 |---|---|
-| `trace_flow` | New optional `follow_calls: bool = True`. When set, each stage's BFS adds `CALLS` alongside `INJECTS | EXTENDS | IMPLEMENTS` on method nodes reachable from the stage's types (via `DECLARES`). Defaults to `True` — breaking change from previous behaviour, but the call-graph-aware trace is the intended primary mode. |
+| `trace_flow` | New optional `follow_calls: bool = True`. When set, each stage's BFS adds `CALLS` alongside `INJECTS | EXTENDS | IMPLEMENTS` on method nodes reachable from the stage's types (via `DECLARES`). Defaults to `True` — breaking change from previous behaviour, but the call-graph-aware trace is the intended primary mode. `stage_limit` is shared with structural-first priority: per hop, `INJECTS` / `EXTENDS` / `IMPLEMENTS` results fill the budget first, and the `CALLS` branch only tops up the remaining slots (no separate `stage_limit_calls` knob). |
 | `graph_neighbors` | `CALLS` added to the edge-type whitelist. Depth / direction / limit unchanged. |
 | `impact_analysis` | **Unchanged** — stays type-level. A separate `impact_analysis_methods` may ship later if needed. |
 | `graph_meta` | `counts` gains `calls` and `declares`. |

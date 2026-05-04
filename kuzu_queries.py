@@ -918,7 +918,11 @@ class KuzuGraph:
                     if len(stage_results) >= stage_limit:
                         break
 
-                if follow_calls:
+                # Structural-first budget: CALLS only tops up the slots
+                # structural didn't already claim. Skip the round-trip when
+                # the bucket is already full at this hop.
+                if follow_calls and len(stage_results) < stage_limit:
+                    remaining = stage_limit - len(stage_results)
                     params_cf: dict[str, Any] = {
                         "fqns": current_frontier,
                         "roles": list(stage_roles),
@@ -934,7 +938,7 @@ class KuzuGraph:
                         "AND n.resolved AND n.kind IN ['class','interface','enum','record','annotation'] "
                         f"AND c.confidence >= $mc{sccf} "
                         f"RETURN {_symbol_return_for('n')}, 'CALLS' AS edge_type, root.fqn AS from_fqn "
-                        f"LIMIT {int(stage_limit) * 4}"
+                        f"LIMIT {max(1, remaining * 4)}"
                     )
                     for row in self._rows(qcf, params_cf):
                         _ingest_flow_row(row, filter_external_fqn=True)
