@@ -1,0 +1,71 @@
+---
+description: High-level map of this repo (LanceDB MCP bundle + Kuzu AST graph for Java RAG/GraphRAG). Always-on so agents start with the right mental model.
+alwaysApply: true
+---
+
+# Project overview
+
+This repo is a **self-contained stdio MCP server** that serves semantic +
+structural search over a Java codebase. It is a Python project (the indexer
+and server). It is **not** a Java project — the `tests/bank-chat-system/`
+tree is fixture data, not code to modify.
+
+## What it does
+
+1. **LanceDB vector index** — chunks of Java / SQL / YAML embedded with
+   `sentence-transformers` (default `all-MiniLM-L6-v2`). Built by the
+   CocoIndex flow `java_index_flow_lancedb.py`.
+2. **Kuzu AST graph (sidecar)** — Tree-sitter Java -> Kuzu graph with
+   nodes (`package`, `file`, `class`, `interface`, `enum`, `record`,
+   `annotation`, `method`, `constructor`) and edges (`EXTENDS`,
+   `IMPLEMENTS`, `INJECTS`, `DECLARES`, `CALLS`). Built by
+   `build_ast_graph.py`.
+3. **MCP server (`server.py`)** — exposes `codebase_search`, `trace_flow`,
+   `find_implementors` / `find_subclasses` / `find_injectors` /
+   `find_callers` / `find_callees`, `impact_analysis`, `list_by_role` /
+   `list_by_annotation` / `list_by_capability`, `graph_neighbors`,
+   `list_code_index_tables`, `graph_meta`, and (gated)
+   `refresh_code_index`.
+
+## File map (top of repo)
+
+| File | Role |
+|------|------|
+| `server.py` | MCP stdio server. Every `@mcp.tool` lives here. |
+| `search_lancedb.py` | Vector / hybrid / graph-expanded search; ranking. |
+| `build_ast_graph.py` | Tree-sitter -> Kuzu graph builder (full rebuild). |
+| `kuzu_queries.py` | Read-only Cypher helpers used by the server. |
+| `ast_java.py` | Tree-sitter Java parsing, role/capability inference. |
+| `graph_enrich.py` | `module` / `microservice` resolution, brownfield overrides, meta-annotation walk. |
+| `java_ontology.py` | Source of truth for `VALID_ROLES` / `VALID_CAPABILITIES`. |
+| `chunk_heuristics.py` | Query-time chunk hints (no AST / no re-index). |
+| `index_common.py` | Embedding config (no CocoIndex dep). |
+| `java_index_flow_lancedb.py` | CocoIndex flow (only used by `refresh_code_index`). |
+| `java_index_v1_common.py` | Shared file walker / exclude patterns. |
+| `mcp.json.example` | Template for `.mcp.json`. |
+
+## Key environment variables
+
+- `LANCEDB_URI` — absolute path to `lancedb_data/` (required at runtime).
+- `LANCEDB_MCP_PROJECT_ROOT` — Java project root for indexing & metadata.
+- `KUZU_DB_PATH` — Kuzu DB path (defaults to `${LANCEDB_URI}/code_graph.kuzu`).
+- `LANCEDB_MCP_GRAPH_ENABLED` — `1`/`0`; auto-on when the Kuzu DB exists.
+- `LANCEDB_MCP_ALLOW_REFRESH` — `1` to enable the heavy `refresh_code_index` tool.
+- `LANCEDB_MCP_MICROSERVICE_ROOTS` — override microservice inference.
+- `SBERT_MODEL` / `SBERT_DEVICE` — must match indexer.
+
+## Two location concepts
+
+- `module` — innermost build-marker (`pom.xml`, `build.gradle(.kts)`, `build.sbt`) ancestor's directory name.
+- `microservice` — outermost build-marker ancestor under `LANCEDB_MCP_PROJECT_ROOT`. Single-module projects collapse `module == microservice`.
+
+Resolution order for `microservice`: explicit override (env or
+`.lancedb-mcp.yml` `microservice_roots:`) → outermost build marker →
+first path segment under `project_root` → empty string.
+
+## Read these before non-trivial edits
+
+- `README.md` — full feature surface and behaviour.
+- `CODEBASE_REQUIREMENTS.md` — exact assumptions about Java repos and a
+  per-file map of what to edit if your tree doesn't match.
+- `tests/README.md` — testing philosophy (see `tests-and-fixtures.mdc`).

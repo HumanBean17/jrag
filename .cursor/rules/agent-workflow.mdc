@@ -1,0 +1,86 @@
+---
+description: How agents should investigate, plan, edit, validate, and ship changes in this repo.
+alwaysApply: true
+---
+
+# Agent workflow
+
+Cursor CLI agents operate this repo with no human in the loop most of
+the time. Follow this loop.
+
+## 1. Investigate before editing
+
+- Start from `README.md` and `CODEBASE_REQUIREMENTS.md` — they encode
+  the public contract and the brownfield/tuning surface.
+- For graph/AST work: read `propose/completed/CALL-GRAPH-PROPOSE.md`
+  and the matching tests under `tests/test_call_graph_*` /
+  `tests/test_ast_*`.
+- For ranking/search work: read the "Ranking behaviour" and
+  "Capabilities" sections of `README.md` and the symbol-bonus block
+  near the bottom of §5.
+- For brownfield/role overrides: `README.md` "Brownfield overrides"
+  and `CODEBASE_REQUIREMENTS.md` §A.2.1 + §B.
+
+When in doubt, run a structural search (`find_implementors`,
+`find_callers`, etc.) over **this** repo's source — it is itself a
+medium-sized Python project and the same investigation patterns apply.
+
+## 2. Plan with proposes (for non-trivial work)
+
+The repo has a strong "propose then implement" culture
+(`propose/`, `plans/`). For non-trivial features:
+
+1. Drop a short markdown propose under `propose/` describing scope,
+   schema impact, reindex requirement, and tests touched.
+2. Reference it from the PR description.
+3. Move it into `propose/completed/` (or `plans/completed/`) once
+   landed.
+
+Skip this for clearly-bounded fixes (one-file bugs, doc edits, test
+loosening). Use judgement.
+
+## 3. Make the change
+
+- Respect `breaking-changes.mdc`: no compatibility shims, no
+  deprecation cycles.
+- Keep schema changes paired with a "Re-index required" doc update
+  and (when semantics shift) an `ontology_version` bump.
+- If you add a new env var, document it in the README env table and
+  thread it through `mcp.json.example` if it affects deployment.
+- If you add a new role / capability, do it in `java_ontology.py`
+  *and* the inference tables in `ast_java.py` — don't sprinkle string
+  literals.
+
+## 4. Validate
+
+- `ruff check .` — fix or justify warnings.
+- `pytest tests -v` — must pass without `LANCEDB_MCP_RUN_HEAVY`.
+- For schema or ranking work, run `LANCEDB_MCP_RUN_HEAVY=1 pytest
+  tests -v` locally (slow; downloads models).
+- For graph work, eyeball `tests/test_kuzu_queries.py` and
+  `tests/test_ast_graph_build.py` — those exercise the BFS / closure
+  shapes the MCP tools depend on.
+
+## 5. Commit and PR
+
+- Commit messages: present tense, imperative, lowercase first word —
+  match existing style (`fixed call graph review D6`, `cursor config`,
+  `applied fixes for call graph layer`).
+- One logical change per commit when feasible.
+- Branch names: `cursor/<topic>` for cursor agent work, `plan/<name>`
+  for in-progress proposes (matching the existing `plan/tier1-completion`).
+- PR body should reference any propose under `propose/` it implements,
+  list user-visible behaviour changes, and call out reindex / env-var
+  requirements explicitly.
+
+## 6. Don't
+
+- Don't run `gh auth status` or otherwise inspect credentials. They
+  are pre-configured.
+- Don't widen the public surface "just in case" — every new tool,
+  env var, or schema column adds a re-index burden on users.
+- Don't cargo-cult Spring assumptions onto the indexer for one
+  fixture class. Use `.lancedb-mcp.yml` `role_overrides` or
+  `@CodebaseRole` (the brownfield path is there precisely so the core
+  inference tables stay small).
+- Don't push directly to `master`. Always open a PR.

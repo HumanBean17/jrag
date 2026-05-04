@@ -1,0 +1,42 @@
+# Local runtime / index artifacts (huge, binary, regenerated)
+lancedb_data/
+cocoindex_java_lance.db/
+*.kuzu
+*.kuzu.wal
+
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Virtual envs
+.venv/
+venv/
+env/
+ENV/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Local env
+.env
+.env.*
+tmp/
+
+# Test fixture compiled output (the .java sources stay searchable)
+tests/**/target/
+tests/**/build/

@@ -1,0 +1,102 @@
+---
+description: Semantics of the Tree-sitter Java parser, role/capability inference, and the Kuzu AST graph (nodes, edges, call resolution). Load when touching ast_java.py, build_ast_graph.py, graph_enrich.py, kuzu_queries.py, java_ontology.py, or any *graph*/*call*/*ast* test.
+globs: ast_java.py,build_ast_graph.py,graph_enrich.py,kuzu_queries.py,java_ontology.py,tests/**/test_ast_*.py,tests/**/test_call_graph_*.py,tests/**/test_kuzu_*.py,tests/**/test_graph_enrich.py,tests/**/test_brownfield_overrides.py,tests/**/test_meta_chain_core.py
+alwaysApply: false
+---
+
+# AST + Kuzu graph rules
+
+## What the graph contains
+
+**Nodes:** `package`, `file`, `class`, `interface`, `enum`, `record`,
+`annotation`, `method`, `constructor`. Unresolved targets become
+**phantom** nodes (`resolved=false`, FQN guessed from imports / `java.lang`).
+
+**Edges:**
+- `EXTENDS`, `IMPLEMENTS`, `INJECTS` — type-level wiring (Phase 1).
+- `DECLARES` — type → its own method or constructor.
+- `CALLS` — method → method, with `confidence` + `strategy` tags
+  (Phase 3). JDK / Spring / Lombok callees are phantom symbols
+  (`resolved=false`); `find_callers` / `find_callees` default to
+  `exclude_external=true`.
+
+## Roles and capabilities (java_ontology + ast_java)
+
+- `VALID_ROLES` and `VALID_CAPABILITIES` are the source of truth in
+  `java_ontology.py`. Add a new role or capability there *and* in the
+  inference tables (`ROLE_ANNOTATIONS`, the `_*_TO_CAPABILITY` maps in
+  `ast_java.py`). Don't sprinkle string literals across modules.
+- Role assignment is **first-hit-wins** from type annotations.
+- Capabilities are **type-level**: per-method evidence is aggregated up.
+  This is intentional (see `plans/PLAN-CAPABILITIES-MODEL.md`). Don't
+  bolt on per-method capabilities without revisiting that plan.
+- Resolution order in code: built-in inference → config annotation maps
+  → meta-annotation walk → `@CodebaseRole` / `@CodebaseCapability` →
+  `role_overrides.fqn` (highest priority). Preserve this order.
+
+## Brownfield consistency (Kuzu vs Lance)
+
+- **Both** the Kuzu graph writer and Lance chunk enrichment must call
+  `graph_enrich.collect_annotation_meta_chain` — there is exactly **one**
+  such walk: sorted `iter_java_source_files`, the same
+  `COMMON_EXCLUDED_PATH_PATTERNS`, stderr on parse errors, first-seen
+  FQN wins on duplicate simple names. Don't add a second walk.
+- After changing any `@interface` used as a custom stereotype, a **full**
+  `refresh_code_index(confirm=true)` (or full cocoindex reprocess + Kuzu
+  rebuild) is required. The pipeline does not track that dependency.
+- `Symbol` rows on the graph: `role` / `capabilities` are populated for
+  **type** rows only. Method and constructor `Symbol` rows keep
+  `role=OTHER` and `capabilities=[]`. Don't change this without
+  updating `CODEBASE_REQUIREMENTS.md` §A.2.1.
+
+## Call graph (CALLS / DECLARES) semantics
+
+Tree-sitter call sites tracked: `method_invocation`,
+`object_creation_expression`, `method_reference`,
+`explicit_constructor_invocation`. Nested context: `lambda_expression`
+(calls inside a lambda body stay on the enclosing method's `CallSite`
+list with `in_lambda=true`).
+
+- **Anonymous classes** are modeled as synthetic nested types
+  (`<anon:startByte>`, FQN `Outer.<anon:byte>`) with normal `MethodDecl`
+  rows. `CALLS` from those members use the synthetic member as the
+  caller. Bare-call lookup falls through to the lexically enclosing type
+  (`build_ast_graph._lookup_method_candidates`) — this matches `javac`'s
+  access rules. Don't "simplify" by attributing anon calls to the outer
+  method.
+- **Lambdas** keep inner calls on the enclosing named method (no
+  synthetic callable). Don't change without an explicit propose.
+- **Receiver scope (locals):** ONE name→type map per method (fields →
+  inherited fields → parameters → locals). Locals shadow same-named
+  fields/params. Lexical block nesting is **not** modeled. Document any
+  change here in `CODEBASE_REQUIREMENTS.md` §A.2.
+- **`this.f1.f2.m()` / `super.f1.f2.m()`** field chains (no calls in the
+  receiver) resolve by walking declared fields to the final field type.
+  Tested by `call_graph_smoke` / `test_call_graph_smoke_roundtrip` (D6).
+- **Confidence + strategy** stay on every `CALLS` edge. Don't drop them
+  to "clean up" the schema — `find_callers` / `find_callees` accept
+  `min_confidence` and rely on `strategy`.
+- **`overload_ambiguous`** is emitted only when multiple callee
+  candidates remain after the name/arity walk. Single-candidate edges
+  keep their receiver-resolution strategy (e.g. `import_map`,
+  `this_super`).
+
+## File walker / excludes
+
+`java_index_v1_common.iter_java_source_files` filters strictly on
+`*.java` and applies `COMMON_EXCLUDED_PATH_PATTERNS` (test sources,
+`target/`, `build/`, `node_modules/`, `.idea/`, `.venv/`, etc.). Both
+the indexer and `build_ast_graph.py` use it — don't re-implement
+walking. If you need to exclude a new path, add it to that constant.
+
+## Project-root semantics
+
+`module` / `microservice` inference depends on the project root used at
+**index** time:
+
+- CocoIndex flow: `LANCEDB_MCP_PROJECT_ROOT` if set, else `Path(".").resolve()`.
+- `build_ast_graph.py`: `--source-root`, defaulting to cwd.
+- MCP runtime: `LANCEDB_MCP_PROJECT_ROOT`.
+
+Consistency across builds requires the same root. When changing root
+resolution, audit all three call sites.

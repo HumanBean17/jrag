@@ -1,0 +1,91 @@
+---
+description: LanceDB chunk schema, ranking weights, score components, and graph-expansion fusion. Load when touching search_lancedb.py, java_index_flow_lancedb.py, or any *search*/*lancedb* test.
+globs: search_lancedb.py,java_index_flow_lancedb.py,java_index_v1_common.py,chunk_heuristics.py,index_common.py,tests/**/test_search_lancedb*.py,tests/**/test_lancedb_*.py
+alwaysApply: false
+---
+
+# Search and ranking rules
+
+## Schema invariants
+
+`JavaLanceChunk` carries enrichment columns:
+`package`, `module`, `microservice`, `primary_type_fqn`,
+`primary_type_kind`, `role`, `capabilities`, `annotations_on_type`,
+`symbols`, `ontology_version`.
+
+- `annotations_on_type` and `symbols` are **native PyArrow
+  `list<string>`**, not JSON-encoded strings. Older indexes had
+  char-array output; the server defensively JSON-decodes string-form
+  list columns so old indexes don't explode, but `array_contains`
+  filters won't work until re-indexed.
+- Any schema change requires a **full reindex** via
+  `refresh_code_index` or `cocoindex update --full-reprocess -f`.
+  Update `README.md` §5 (the "Re-index required" note) and bump
+  `ontology_version` if semantics change.
+
+## Ranking (Java hits)
+
+Java hits get a role-weighted re-rank after vector / hybrid scoring:
+
+| Role | Weight |
+|------|--------|
+| `CONTROLLER` | +0.10 |
+| `SERVICE` | +0.08 |
+| `FEIGN_CLIENT` | +0.06 |
+| `COMPONENT` | +0.03 |
+| `REPOSITORY` | +0.02 |
+| `MAPPER` / `OTHER` | 0 |
+| `ENTITY` | -0.06 |
+| `CONFIG` | -0.10 |
+
+Plus a **symbol-match bonus**:
+
+1. Method/field overlap: `+0.03` per overlapping declared symbol, capped at `+0.06`.
+2. Action-verb bump: `+0.02` flat when a declared method starts with
+   `process`, `handle`, `on`, `pick`, `select`, `assign`, `notify`,
+   `dispatch`, `publish`, `consume`, `route`, `trigger`, `enqueue`,
+   `distribute`, ...
+3. Type-name overlap: `+0.05` per token shared between
+   `simple_name(primary_type_fqn)` and the query, capped at `+0.10`.
+
+**Both role weights and the symbol bonus are skipped when the caller
+locks `role=`.** Preserve this. The per-row breakdown lives in
+`score_components` (`distance`, `hybrid_rrf`, `role_weight`,
+`symbol_bonus`, `import_penalty`) and feeds the compact `why` string.
+When tweaking weights, update both the table in `README.md` and the
+ranking section in `CODEBASE_REQUIREMENTS.md`.
+
+## Filters and modes
+
+- `role`, `module`, `microservice`, `package_prefix`, `capability` are
+  AND-combined.
+- `auto_hybrid=true` mixes vector + FTS via RRF. Recommended when a
+  query contains identifiers / CamelCase / snake_case tokens.
+- `graph_expand=true` + `expand_depth=1..3` fuses Kuzu BFS results into
+  vector hits via RRF. The Kuzu DB must exist.
+- `context_neighbors=1..2` attaches adjacent chunks as `context_before`
+  / `context_after`. Empty context with neighbors set is a known
+  failure path: set `LANCEDB_MCP_DEBUG_CONTEXT=1` to log why expansion
+  bailed (missing schema columns, empty bucket, chunk not found, scan
+  error). Common cause: stale server after reindex, or legacy index
+  without `range_start` / `range_end`.
+
+## Capabilities axis
+
+`capabilities` is a multi-tag `list<string>` per type — types can
+carry zero or many. They **augment**, never replace, the single
+`role`. Triggers (must stay in sync with `_*_TO_CAPABILITY` maps):
+
+- `MESSAGE_LISTENER` — `@KafkaListener`, `@RabbitListener`, `@JmsListener`, `@SqsListener`, `@EventListener`, `@StreamListener`.
+- `MESSAGE_PRODUCER` — type injects `KafkaTemplate`, `RabbitTemplate`, `JmsTemplate`, `StreamBridge`, or `ApplicationEventPublisher`.
+- `SCHEDULED_TASK` — `@Scheduled` on any method, or class implements `org.quartz.Job`.
+- `EXCEPTION_HANDLER` — `@ControllerAdvice`, `@RestControllerAdvice`, or any method with `@ExceptionHandler`.
+
+## What to avoid
+
+- Don't introduce ranking signals that depend on a specific package
+  prefix or class name from the test fixture (see `tests-and-fixtures.mdc`).
+- Don't change how `score_components` is shaped without updating the
+  `why`-string formatter and tests in `test_search_lancedb*.py`.
+- Don't silently change embedding model — `SBERT_MODEL` must match the
+  one used at index time, and `index_common.py` is the single source.

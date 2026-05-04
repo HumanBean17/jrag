@@ -1,0 +1,57 @@
+---
+description: Python coding style, typing, and tooling conventions used in this bundle.
+globs: **/*.py
+alwaysApply: false
+---
+
+# Python style and tooling
+
+Target Python **3.11+**. The codebase uses `from __future__ import annotations`
+in every module and modern PEP 604 union syntax (`str | None`).
+
+## Conventions
+
+- **Imports:** `from __future__ import annotations` at the very top, then
+  stdlib, then third-party, then local. One module per `import` line.
+- **Typing:** Annotate all public functions and dataclasses. Use built-in
+  generics (`list[str]`, `dict[str, int]`) and PEP 604 unions
+  (`int | None`), not `typing.List` / `typing.Optional`.
+- **Dataclasses:** Prefer `@dataclass` (and `frozen=True` for value
+  objects) for record types. Use `pydantic.BaseModel` only at the MCP
+  tool boundary in `server.py`.
+- **Module docstrings:** One short sentence at the top describing intent.
+  Match the existing tone in `chunk_heuristics.py` / `index_common.py`.
+- **Public API surface:** Modules that expose a small, intentional API
+  (e.g. `java_ontology.py`) declare `__all__`. Add to it when you add a
+  new export.
+- **Private helpers:** Prefix with `_` and keep them module-local. Don't
+  promote a helper to public API just to ease testing — extend the public
+  function or add a fixture.
+- **Side effects at import time:** None. Reading env vars is fine
+  (`index_common.py` does this); doing IO or loading models at import is
+  not.
+- **Logging:** Diagnostics for the indexer and graph builder go to
+  **stderr** (see `graph_enrich` parse-error warnings,
+  `LANCEDB_MCP_DEBUG_CONTEXT=1` debug output). Never `print` to stdout
+  from anything reachable by the MCP server — stdout is the MCP transport.
+
+## Tooling
+
+- `ruff` is pinned in `requirements.txt`. Run `ruff check .` before
+  pushing meaningful changes; fix or justify warnings.
+- Tests run with `pytest` under `asyncio_mode = auto` (see `pytest.ini`
+  at repo root and under `tests/`).
+- No new top-level dependencies without updating `requirements.txt` and
+  thinking about wheel availability on Linux **and** macOS (Intel + ARM)
+  — this bundle has been tuned to work on Intel Mac (`8963a72`).
+
+## What to avoid
+
+- Don't add `print()` debugging in committed code. Use stderr or, for the
+  context-expansion path, the `LANCEDB_MCP_DEBUG_CONTEXT` flag.
+- Don't introduce a hard dependency on `cocoindex` outside
+  `java_index_flow_lancedb.py` / `refresh_code_index`. The whole point
+  of the bundle is that search and MCP run without CocoIndex installed.
+- Don't reach into private helpers of another module. If you need
+  something, lift it into `index_common.py` or `graph_enrich.py` (the
+  designated cross-cutting modules).
