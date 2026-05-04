@@ -79,6 +79,8 @@ async def test_graph_meta(mcp_server) -> None:
     assert out["module_counts"]["chat-assign"] > 0
     assert out["microservice_counts"]["chat-assign"] > 0
     assert out["microservice_counts"]["chat-core"] > 0
+    assert out["counts"].get("calls", 0) > 0
+    assert out["counts"].get("declares", 0) > 0
 
 
 # ---------------- find_implementors ----------------
@@ -117,6 +119,43 @@ async def test_find_injectors(mcp_server) -> None:
     assert out["success"] is True
     consumers = {edge["consumer"]["name"] for edge in out["results"]}
     assert "ChatManagementService" in consumers
+
+
+# ---------------- find_callers / find_callees ----------------
+
+
+async def test_find_callers_tool(mcp_server) -> None:
+    out = _structured(
+        await mcp_server.call_tool(
+            "find_callers",
+            {
+                "fqn_or_signature": (
+                    "com.bank.chat.assign.service.ChatManagementService#assign(AssignmentRequest)"
+                ),
+                "limit": 30,
+            },
+        )
+    )
+    assert out["success"] is True
+    assert any(
+        "ChatManagementController" in e["caller"]["fqn"] for e in out["results"]
+    ), out["results"]
+
+
+async def test_find_callees_tool(mcp_server) -> None:
+    out = _structured(
+        await mcp_server.call_tool(
+            "find_callees",
+            {
+                "fqn_or_signature": (
+                    "com.bank.chat.assign.service.ChatManagementService#assign(AssignmentRequest)"
+                ),
+                "limit": 40,
+            },
+        )
+    )
+    assert out["success"] is True
+    assert out["results"], out
 
 
 # ---------------- list_by_role ----------------

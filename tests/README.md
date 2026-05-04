@@ -90,6 +90,16 @@ When adding tests, please follow these rules:
    those to be tested, add a small dedicated module — don't graft it onto
    `chat-core`.
 
+7. **Call graph proposal §7.1 vs tests.** The checklist in
+   `propose/completed/CALL-GRAPH-PROPOSE.md` §7.1 is distributed across
+   `test_ast_java_calls.py`, `test_call_graph_smoke_roundtrip.py` (Kuzu build
+   of `tests/fixtures/call_graph_smoke/` only), the session Kuzu build,
+   `test_kuzu_queries.py`, `test_ast_graph_build.py`,
+   `tests/fixtures/call_graph_smoke/`, and `test_call_graph_receiver_resolution.py`
+   — not as a single enumerated matrix. For an edge case the bank corpus cannot
+   isolate, add a minimal tmp_path fixture or a tiny extra tree under
+   `tests/fixtures/`.
+
 In short: this corpus is here to keep us honest, not to define what the MCP
 must support. If the MCP becomes correct *only* for this corpus, the test
 suite has failed at its job.

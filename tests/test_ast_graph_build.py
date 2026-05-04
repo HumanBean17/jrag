@@ -48,7 +48,7 @@ def test_schema_has_all_expected_tables(kuzu_db_path: Path) -> None:
     tables = set(_column(conn, "CALL show_tables() RETURN *;", idx=1))
     # We only assert the tables we depend on are present. The builder is
     # free to add more (e.g. CALLS later) without breaking this test.
-    expected = {"Symbol", "GraphMeta", "EXTENDS", "IMPLEMENTS", "INJECTS"}
+    expected = {"Symbol", "GraphMeta", "EXTENDS", "IMPLEMENTS", "INJECTS", "DECLARES", "CALLS"}
     missing = expected - tables
     assert not missing, f"missing schema tables: {missing}; saw {tables}"
 
@@ -89,6 +89,12 @@ def test_each_edge_type_populated(kuzu_db_path: Path) -> None:
     assert _scalar(conn, "MATCH ()-[e:EXTENDS]->() RETURN count(e)") > 0
     assert _scalar(conn, "MATCH ()-[e:IMPLEMENTS]->() RETURN count(e)") > 0
     assert _scalar(conn, "MATCH ()-[e:INJECTS]->() RETURN count(e)") > 0
+
+
+def test_calls_and_declares_edges_populated(kuzu_db_path: Path) -> None:
+    conn = _connect(kuzu_db_path)
+    assert _scalar(conn, "MATCH ()-[e:CALLS]->() RETURN count(e)") > 0
+    assert _scalar(conn, "MATCH ()-[e:DECLARES]->() RETURN count(e)") > 0
 
 
 def test_module_inference_recognises_both_layouts(kuzu_graph) -> None:
@@ -156,7 +162,7 @@ def test_injects_edges_have_mechanism(kuzu_db_path: Path) -> None:
 
 
 def test_symbol_has_capabilities_column(kuzu_db_path: Path) -> None:
-    """Symbol nodes must have a `capabilities` STRING[] column (ontology v3)."""
+    """Symbol nodes must have a `capabilities` STRING[] column (ontology v4)."""
     conn = _connect(kuzu_db_path)
     # Simply SELECT a capabilities value — if the column doesn't exist Kuzu raises.
     try:

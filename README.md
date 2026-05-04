@@ -2,6 +2,8 @@
 
 Self-contained **stdio MCP server** for semantic search over a LanceDB index (Java / SQL / YAML) produced by CocoIndex `java_index_flow_lancedb.py`, *plus* a deterministic AST-derived graph (Kuzu sidecar) for structural code queries.
 
+**Breaking changes:** This repository does not promise backward compatibility for downstream users or integrations. MCP tool contracts, env vars, Lance/Kuzu schemas, config files, and Python APIs may change at any time without a deprecation period. Upgrade by following current `main` and rebuilding or re-indexing when the docs or bundle require it.
+
 The product vision for this tooling is proposed in [`propose/PRODUCT-VISION.md`](./propose/PRODUCT-VISION.md).
 
 **No `cocoindex` Python package is required to run search or MCP** — only `sentence-transformers`, `lancedb`, `kuzu`, `tree_sitter` + `tree_sitter_java`, and `mcp`. CocoIndex is optional and only needed if you use the `refresh_code_index` tool.
@@ -60,7 +62,14 @@ A sidecar deterministic graph derived from Tree-sitter Java parsing lives next t
 
 **Node types:** `package`, `file`, `class`, `interface`, `enum`, `record`, `annotation`, `method`, `constructor`. Unresolved targets become **phantom** nodes (`resolved=false`, FQN guessed from imports / `java.lang`).
 
-**Edge types (Phase 1):** `EXTENDS`, `IMPLEMENTS`, `INJECTS`. Injection mechanisms detected:
+**Edge types (Phase 1 + Phase 3):** `EXTENDS`, `IMPLEMENTS`, `INJECTS` capture type-level wiring.
+**Phase 3 (call graph):** `CALLS` (method → method, confidence-scored, strategy-tagged) and
+`DECLARES` (type → own method or constructor). JDK / Spring / Lombok callees are represented as
+phantom method symbols (`resolved=false`) at index time; `find_callers` / `find_callees` default to
+`exclude_external=true` so those edges can be filtered by FQN prefix without dropping them from the graph.
+Call-site receiver typing uses **one scope map per method** (locals shadow fields/parameters), but **not** full nested-block lexical scope; see **Call graph** under `CODEBASE_REQUIREMENTS.md`.
+
+Injection mechanisms detected:
 - field `@Autowired` / `@Inject` / `@Resource`
 - constructor injection (Spring single-ctor rule and explicit `@Autowired`)
 - setter `@Autowired`
@@ -115,15 +124,17 @@ The DB is dropped and rebuilt from scratch on each run (Phase 1 is a full rebuil
 | Tool | Purpose |
 |------|---------|
 | `codebase_search` | Vector / hybrid / graph-expanded search. Supports `role`, `module`, `microservice`, `package_prefix` filters, `graph_expand=true` + `expand_depth=1..3` for Kuzu-BFS fusion (RRF), and `context_neighbors=1..2` to attach adjacent chunks as `context_before`/`context_after`. Java hits return `score_components` (`distance`, `hybrid_rrf`, `role_weight`, `symbol_bonus`, `import_penalty`) so callers can see why a row ranked where it did. |
-| `trace_flow` | Behavioural trace from a natural-language query. Seeds via vector search, then walks CONTROLLER -> SERVICE/COMPONENT -> FEIGN_CLIENT/REPOSITORY/MAPPER in the Kuzu graph and returns staged chains. |
+| `trace_flow` | Behavioural trace from a natural-language query. Seeds via vector search, then walks CONTROLLER -> SERVICE/COMPONENT -> FEIGN_CLIENT/REPOSITORY/MAPPER in the Kuzu graph and returns staged chains. Defaults to `follow_calls=true` (merges DECLARES+CALLS paths with INJECTS/EXTENDS/IMPLEMENTS); set `follow_calls=false` for type-only wiring. Defaults to `exclude_external=true` on that CALLS hop (same external FQN prefixes as `find_callees` / `expand_methods`: discovered types reached via CALLS, not the caller-only filter used by `find_callers`). |
 | `list_code_index_tables` | Lance tables + Kuzu graph metadata. |
 | `refresh_code_index` | Rebuild LanceDB + Kuzu graph. |
 | `find_implementors` | Classes implementing an interface. |
 | `find_subclasses` | Types extending a class/interface. |
 | `find_injectors` | Classes that inject the given type, incl. mechanism/annotation/field. |
+| `find_callers` | Inbound `CALLS` closure: who invokes a method (or any method of a type via DECLARES). Same `min_confidence`; `exclude_external` filters caller (src) FQNs, not the needle. |
+| `find_callees` | Outbound `CALLS` closure: callees of a method or type. Same `min_confidence`; `exclude_external` filters callee (dst) FQNs, not the needle. |
 | `list_by_role` | Symbols with a given role (CONTROLLER, SERVICE, ...). |
 | `list_by_annotation` | Symbols whose annotation list contains the given simple name. |
-| `graph_neighbors` | Generic BFS over `EXTENDS|IMPLEMENTS|INJECTS`, directional. |
+| `graph_neighbors` | Generic BFS over `EXTENDS|IMPLEMENTS|INJECTS|DECLARES|CALLS`, directional. |
 | `impact_analysis` | Reverse closure: what breaks if this changes. |
 | `graph_meta` | Counts, ontology version, build timestamp, parse errors. |
 
@@ -327,15 +338,15 @@ Typical causes are (a) a stale server that hasn't reloaded after a reindex,
 or (b) a legacy index without `range_start` / `range_end` — the code falls
 back to exact-text matching in that case, so re-running the flow fixes it.
 
-## 6. Deferred (call-graph layer)
+## 6. Deferred (beyond static call graph)
 
-Phase 1 intentionally excludes call-graph edges. These are planned follow-ups:
+**Call graph (static intra-JVM `CALLS` + `DECLARES`) is implemented** — see §5 edge types and
+`find_callers` / `find_callees` / `trace_flow(follow_calls)`. Remaining graph work:
 
-- `CALLS` — method-to-method edges; requires local + cross-type call resolution.
 - `HTTP_CALLS` — Feign (`@FeignClient`), `RestTemplate`, `WebClient`.
 - `ASYNC_CALLS` — Kafka (`@KafkaListener`), Spring messaging patterns.
 - Cross-service topology tools (`get_service_topology`, `trace_request_flow`) depending on the above.
-- Agentic routing layer (query classifier → vector / graph / both) from the DKB paper §4.1; meaningful only once CALLS lands.
+- Agentic routing layer (query classifier → vector / graph / both) from the DKB paper §4.1.
 - Incremental Kuzu updates (per-changed-file) to avoid full rebuild.
 - Optional `codegraph_nodes` LanceDB table embedding symbol summaries so the graph itself is vector-searchable.
 

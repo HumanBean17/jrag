@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Two-pass AST-derived Knowledge Base builder (Kuzu).
+"""Three-pass AST-derived Knowledge Base builder (Kuzu).
 
 Walks a Java source tree with `tree_sitter_java`, writes a deterministic graph of:
     Symbol nodes: package, file, class, interface, enum, record, annotation, method, constructor
-    Rel tables:   EXTENDS, IMPLEMENTS, INJECTS
+    Rel tables:   EXTENDS, IMPLEMENTS, INJECTS, DECLARES, CALLS
 
 Pass 1 builds every node and in-memory resolution indexes.
 Pass 2 resolves each extends/implements/injection target using Java's lookup order
 (same file → explicit import → same package → wildcard import → java.lang → phantom).
+Pass 3 resolves static call sites into confidence-scored CALLS edges and DECLARES.
 
 Usage:
     build_ast_graph.py --source-root <repo> [--kuzu-path <dir>] [--verbose]
@@ -23,9 +24,11 @@ The Kuzu DB is dropped and rebuilt on every run (Phase 1 is a full rebuild).
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import sys
 import time
+from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -34,6 +37,7 @@ import kuzu
 from ast_java import (
     ONTOLOGY_VERSION,
     AnnotationRef,
+    CallSite,
     FieldDecl,
     JavaFileAst,
     MethodDecl,
@@ -56,6 +60,8 @@ from java_index_v1_common import (
     compile_excluded_glob_patterns,
     iter_java_source_files,
 )
+
+log = logging.getLogger(__name__)
 
 _JAVA_LANG_SIMPLE = frozenset({
     "Object", "String", "Integer", "Long", "Short", "Byte", "Boolean", "Double",
@@ -110,6 +116,33 @@ class InjectsRow(EdgeRow):
 
 
 @dataclass
+class CallsRow:
+    src_id: str
+    dst_id: str
+    call_site_line: int = 0
+    call_site_byte: int = 0
+    arg_count: int = 0
+    confidence: float = 0.0
+    strategy: str = "phantom"
+    source: str = "static"
+    resolved: bool = True
+
+
+@dataclass
+class DeclaresRow:
+    src_id: str
+    dst_id: str
+
+
+@dataclass
+class CallResolutionStats:
+    total: int = 0
+    by_strategy: dict[str, int] = field(default_factory=lambda: defaultdict(int))
+    phantom_chained: int = 0
+    phantom_other: int = 0
+
+
+@dataclass
 class GraphTables:
     types: dict[str, TypeIndexEntry] = field(default_factory=dict)  # fqn -> entry
     by_simple_name: dict[str, list[TypeIndexEntry]] = field(default_factory=dict)
@@ -121,6 +154,9 @@ class GraphTables:
     extends_rows: list[EdgeRow] = field(default_factory=list)
     implements_rows: list[EdgeRow] = field(default_factory=list)
     injects_rows: list[InjectsRow] = field(default_factory=list)
+    calls_rows: list[CallsRow] = field(default_factory=list)
+    declares_rows: list[DeclaresRow] = field(default_factory=list)
+    methods_by_type: dict[str, list[MemberEntry]] = field(default_factory=dict)
     parse_errors: int = 0
     skipped_files: int = 0
 
@@ -485,6 +521,499 @@ def pass2_edges(tables: GraphTables, asts: dict[str, JavaFileAst], *, verbose: b
               file=sys.stderr)
 
 
+# ---------- pass 3: call graph ----------
+
+
+def _build_member_indexes(tables: GraphTables) -> None:
+    tables.methods_by_type = {}
+    for m in tables.members:
+        tables.methods_by_type.setdefault(m.parent_fqn, []).append(m)
+
+
+def _direct_supertype_fqns(entry: TypeIndexEntry, tables: GraphTables) -> list[str]:
+    out: list[str] = []
+    for r in tables.extends_rows:
+        if r.src_id == entry.node_id and r.dst_fqn in tables.types:
+            out.append(r.dst_fqn)
+    for r in tables.implements_rows:
+        if r.src_id == entry.node_id and r.dst_fqn in tables.types:
+            out.append(r.dst_fqn)
+    return out
+
+
+def _first_supertype_fqn(tables: GraphTables, type_fqn: str) -> str | None:
+    entry = tables.types.get(type_fqn)
+    if entry is None:
+        return None
+    for r in tables.extends_rows:
+        if r.src_id == entry.node_id and r.dst_fqn in tables.types:
+            return r.dst_fqn
+    for r in tables.implements_rows:
+        if r.src_id == entry.node_id and r.dst_fqn in tables.types:
+            return r.dst_fqn
+    return None
+
+
+def _is_chained_receiver_text(receiver_expr: str) -> bool:
+    """Heuristic: call chain or complex expr (contains a completed call)."""
+    s = receiver_expr.strip()
+    return "(" in s and ")" in s
+
+
+def _resolve_this_super_field_chain(
+    expr: str,
+    *,
+    member: MemberEntry,
+    ast: JavaFileAst,
+    tables: GraphTables,
+) -> str | None:
+    """Resolve `this.a.b` / `super.a` (no calls) to the final field's type FQN."""
+    s = expr.strip()
+    if "(" in s or ")" in s or "." not in s:
+        return None
+    entry = tables.types.get(member.parent_fqn)
+    if entry is None:
+        return None
+    parts = s.split(".")
+    if len(parts) < 2:
+        return None
+    if parts[0] == "this":
+        cur = entry
+    elif parts[0] == "super":
+        sup = _first_supertype_fqn(tables, member.parent_fqn)
+        if sup is None or sup not in tables.types:
+            return None
+        cur = tables.types[sup]
+    else:
+        return None
+    for fname in parts[1:]:
+        fld = next((f for f in cur.decl.fields if f.name == fname), None)
+        if fld is None:
+            return None
+        resolved = _resolve_simple(fld.type_name, current=cur, ast=ast, tables=tables)
+        if resolved is None:
+            return None
+        cur = resolved
+    return cur.decl.fqn
+
+
+def _scope_table(member: MemberEntry, ast: JavaFileAst, tables: GraphTables) -> dict[str, str]:
+    """Map simple variable/field/param name -> resolved declaring type FQN."""
+    scope: dict[str, str] = {}
+    entry = tables.types.get(member.parent_fqn)
+    if entry is None:
+        return scope
+
+    def add_fields(tentry: TypeIndexEntry) -> None:
+        for f in tentry.decl.fields:
+            resolved = _resolve_simple(f.type_name, current=tentry, ast=ast, tables=tables)
+            if resolved is not None:
+                scope[f.name] = resolved.decl.fqn
+
+    add_fields(entry)
+    seen: set[str] = {member.parent_fqn}
+    queue = list(_direct_supertype_fqns(entry, tables))
+    while queue:
+        sup = queue.pop()
+        if sup in seen or sup not in tables.types:
+            continue
+        seen.add(sup)
+        te = tables.types[sup]
+        for f in te.decl.fields:
+            if f.name not in scope:
+                resolved = _resolve_simple(f.type_name, current=te, ast=ast, tables=tables)
+                if resolved is not None:
+                    scope[f.name] = resolved.decl.fqn
+        queue.extend(_direct_supertype_fqns(te, tables))
+
+    for p in member.decl.parameters:
+        resolved = _resolve_simple(p.type_name, current=entry, ast=ast, tables=tables)
+        if resolved is not None:
+            scope[p.name] = resolved.decl.fqn
+
+    # Locals shadow fields and parameters (same simple name → local wins).
+    for name, t_simple in member.decl.local_vars:
+        resolved = _resolve_simple(t_simple, current=entry, ast=ast, tables=tables)
+        if resolved is not None:
+            scope[name] = resolved.decl.fqn
+
+    return scope
+
+
+def _lookup_method_candidates(
+    type_fqn: str,
+    callee_simple: str,
+    arg_count: int,
+    tables: GraphTables,
+    ast: JavaFileAst,
+    *,
+    visited: set[str] | None = None,
+) -> tuple[list[MemberEntry], bool]:
+    """Return (candidates, used_name_only_fallback). Walks type + supertypes."""
+    if visited is None:
+        visited = set()
+    exact: list[MemberEntry] = []
+    name_only: list[MemberEntry] = []
+
+    def collect_on_type(tfqn: str) -> None:
+        nonlocal exact, name_only
+        for m in tables.methods_by_type.get(tfqn, ()):
+            if callee_simple == "<init>":
+                if not m.decl.is_constructor:
+                    continue
+                np = len(m.decl.parameters)
+                if arg_count < 0:
+                    name_only.append(m)
+                elif np == arg_count:
+                    exact.append(m)
+                else:
+                    name_only.append(m)
+                continue
+            if m.decl.is_constructor:
+                continue
+            if m.decl.name != callee_simple:
+                continue
+            np = len(m.decl.parameters)
+            if arg_count < 0:
+                name_only.append(m)
+            elif np == arg_count:
+                exact.append(m)
+            else:
+                name_only.append(m)
+
+    queue = [type_fqn]
+    while queue:
+        tfqn = queue.pop(0)
+        if tfqn in visited or tfqn not in tables.types:
+            continue
+        visited.add(tfqn)
+        collect_on_type(tfqn)
+        te = tables.types[tfqn]
+        for sup in _direct_supertype_fqns(te, tables):
+            if sup not in visited:
+                queue.append(sup)
+
+    if exact:
+        return exact, False
+    if name_only:
+        return name_only, True
+    return [], False
+
+
+def _static_wildcard_resolve(
+    callee_simple: str,
+    ast: JavaFileAst,
+    tables: GraphTables,
+    current: TypeIndexEntry,
+) -> str | None:
+    for tw in ast.file_imports.static_wildcards:
+        if tw not in tables.types:
+            continue
+        for m in tables.methods_by_type.get(tw, ()):
+            if m.decl.name != callee_simple or m.decl.is_constructor:
+                continue
+            if "static" not in m.decl.modifiers:
+                continue
+            return tw
+    return None
+
+
+def _unique_type_simple_resolve(simple: str, tables: GraphTables) -> str | None:
+    """Return the type FQN iff exactly one indexed type uses `simple` as `decl.name`.
+
+    Used only for receiver / static-qualifier disambiguation. Do not use the
+    method index here: an unresolved identifier that equals some method's
+    simple name elsewhere in the project is not evidence about the receiver type.
+    """
+    hits = tables.by_simple_name.get(simple, [])
+    if len(hits) != 1:
+        return None
+    return hits[0].decl.fqn
+
+
+def _suffix_resolve(receiver_simple: str, tables: GraphTables) -> str | None:
+    matches = [fq for fq in tables.types if fq.endswith("." + receiver_simple)]
+    if len(matches) != 1:
+        return None
+    return matches[0]
+
+
+def _resolve_receiver_type(
+    call: CallSite,
+    *,
+    scope: dict[str, str],
+    member: MemberEntry,
+    ast: JavaFileAst,
+    tables: GraphTables,
+) -> tuple[str | None, str, float]:
+    """Returns (receiver_type_fqn_or_none, strategy, confidence)."""
+    expr = call.receiver_expr.strip()
+    callee = call.callee_simple
+
+    if not expr and not call.is_static_call:
+        if callee in ast.file_imports.static_methods:
+            full = ast.file_imports.static_methods[callee]
+            if "." in full:
+                type_fqn = full.rsplit(".", 1)[0]
+                return type_fqn, "static_import", 0.95
+        sw = _static_wildcard_resolve(callee, ast, tables, tables.types[member.parent_fqn])
+        if sw is not None:
+            return sw, "static_import_wildcard", 0.85
+
+    if call.is_static_call and expr:
+        if _is_chained_receiver_text(expr):
+            return None, "chained_receiver", 0.0
+        entry = tables.types.get(member.parent_fqn)
+        if entry is None:
+            return None, "chained_receiver", 0.0
+        resolved = _resolve_simple(expr.split("<", 1)[0].strip(), current=entry, ast=ast, tables=tables)
+        if resolved is not None:
+            return resolved.decl.fqn, "import_map", 0.95
+        uq = _unique_type_simple_resolve(expr, tables)
+        if uq is not None:
+            return uq, "unique_type_name", 0.75
+        sf = _suffix_resolve(expr, tables)
+        if sf is not None:
+            return sf, "suffix", 0.55
+        return None, "phantom", 0.0
+
+    if expr in ("", "this") or (not expr and call.is_static_call is False and not call.receiver_expr):
+        return member.parent_fqn, "this_super", 0.95
+
+    if expr == "super":
+        sup = _first_supertype_fqn(tables, member.parent_fqn)
+        if sup is not None:
+            return sup, "this_super", 0.95
+        return None, "phantom", 0.0
+
+    if _is_chained_receiver_text(expr):
+        return None, "chained_receiver", 0.0
+
+    entry = tables.types.get(member.parent_fqn)
+    if entry is None:
+        return None, "phantom", 0.0
+
+    bare = expr.split("<", 1)[0].strip()
+    if bare in scope:
+        return scope[bare], "import_map", 0.95
+
+    chain = _resolve_this_super_field_chain(expr, member=member, ast=ast, tables=tables)
+    if chain is not None:
+        return chain, "import_map", 0.95
+
+    resolved = _resolve_simple(bare, current=entry, ast=ast, tables=tables)
+    if resolved is not None:
+        return resolved.decl.fqn, "import_map", 0.95
+
+    if entry.package:
+        cand = f"{entry.package}.{bare}"
+        if cand in tables.types:
+            return cand, "same_module", 0.90
+
+    uq = _unique_type_simple_resolve(bare, tables)
+    if uq is not None:
+        return uq, "unique_type_name", 0.75
+
+    sf = _suffix_resolve(bare, tables)
+    if sf is not None:
+        return sf, "suffix", 0.55
+
+    return None, "phantom", 0.0
+
+
+def _phantom_method_id(
+    tables: GraphTables,
+    *,
+    receiver_fqn: str | None,
+    receiver_expr: str,
+    callee: str,
+    arg_count: int,
+) -> str:
+    if receiver_fqn:
+        fqn = f"{receiver_fqn}#{callee}({arg_count})"
+    else:
+        expr_short = (receiver_expr[:50] if receiver_expr else "?")
+        fqn = f"?{expr_short}#{callee}({arg_count})"
+    pid = phantom_id(fqn)
+    if pid not in tables.phantoms:
+        tables.phantoms[pid] = {
+            "id": pid,
+            "kind": "method",
+            "name": callee,
+            "fqn": fqn,
+            "package": "",
+            "module": "",
+            "microservice": "",
+            "filename": "",
+            "start_line": 0,
+            "end_line": 0,
+            "start_byte": 0,
+            "end_byte": 0,
+            "modifiers": [],
+            "annotations": [],
+            "capabilities": [],
+            "role": "OTHER",
+            "signature": f"{callee}({arg_count})",
+            "parent_id": "",
+            "resolved": False,
+        }
+    return pid
+
+
+def _emit_call_edge(
+    tables: GraphTables,
+    stats: CallResolutionStats,
+    *,
+    src_id: str,
+    dst_id: str,
+    call: CallSite,
+    confidence: float,
+    strategy: str,
+    resolved: bool,
+) -> None:
+    tables.calls_rows.append(CallsRow(
+        src_id=src_id,
+        dst_id=dst_id,
+        call_site_line=call.line,
+        call_site_byte=call.byte,
+        arg_count=call.arg_count,
+        confidence=confidence,
+        strategy=strategy,
+        source="static",
+        resolved=resolved,
+    ))
+    stats.total += 1
+    stats.by_strategy[strategy] += 1
+    if strategy == "chained_receiver":
+        stats.phantom_chained += 1
+    elif not resolved or strategy == "phantom":
+        stats.phantom_other += 1
+
+
+def _resolve_and_emit_call(
+    call: CallSite,
+    member: MemberEntry,
+    ast: JavaFileAst,
+    tables: GraphTables,
+    stats: CallResolutionStats,
+) -> None:
+    scope = _scope_table(member, ast, tables)
+    recv_type, strat, conf = _resolve_receiver_type(call, scope=scope, member=member, ast=ast, tables=tables)
+
+    if strat == "chained_receiver":
+        pid = _phantom_method_id(
+            tables, receiver_fqn=None, receiver_expr=call.receiver_expr,
+            callee=call.callee_simple, arg_count=call.arg_count,
+        )
+        _emit_call_edge(
+            tables, stats, src_id=member.node_id, dst_id=pid, call=call,
+            confidence=0.0, strategy="chained_receiver", resolved=False,
+        )
+        return
+
+    if recv_type is None:
+        pid = _phantom_method_id(
+            tables, receiver_fqn=None, receiver_expr=call.receiver_expr,
+            callee=call.callee_simple, arg_count=call.arg_count,
+        )
+        _emit_call_edge(
+            tables, stats, src_id=member.node_id, dst_id=pid, call=call,
+            confidence=0.0, strategy="phantom", resolved=False,
+        )
+        return
+
+    candidates, name_only_fb = _lookup_method_candidates(
+        recv_type, call.callee_simple, call.arg_count, tables, ast,
+    )
+    edge_conf = conf
+    if call.arg_count < 0:
+        edge_strat = "method_reference"
+    elif call.callee_simple == "<init>" and call.receiver_expr == "super" and (
+        call.byte == member.decl.start_byte and call.line == member.decl.start_line
+    ):
+        edge_strat = "implicit_super"
+        edge_conf = 0.90
+    elif call.callee_simple == "<init>" and call.receiver_expr in ("this", "super"):
+        edge_strat = "constructor"
+    elif name_only_fb and len(candidates) > 1:
+        edge_strat = "overload_ambiguous"
+    elif name_only_fb and len(candidates) == 1:
+        # Name-only fallback plus arity left a single candidate — not ambiguous.
+        edge_strat = strat
+    else:
+        edge_strat = strat
+
+    if not candidates:
+        pid = _phantom_method_id(
+            tables, receiver_fqn=recv_type, receiver_expr=call.receiver_expr,
+            callee=call.callee_simple, arg_count=call.arg_count,
+        )
+        _emit_call_edge(
+            tables, stats, src_id=member.node_id, dst_id=pid, call=call,
+            confidence=0.0, strategy="phantom", resolved=False,
+        )
+        return
+
+    if len(candidates) == 1:
+        _emit_call_edge(
+            tables, stats, src_id=member.node_id, dst_id=candidates[0].node_id, call=call,
+            confidence=edge_conf, strategy=edge_strat, resolved=True,
+        )
+        return
+
+    for c in candidates:
+        _emit_call_edge(
+            tables, stats, src_id=member.node_id, dst_id=c.node_id, call=call,
+            confidence=edge_conf, strategy="overload_ambiguous", resolved=True,
+        )
+
+
+def _resolve_method_calls(
+    member: MemberEntry,
+    ast: JavaFileAst,
+    tables: GraphTables,
+    stats: CallResolutionStats,
+) -> None:
+    for call in member.decl.call_sites:
+        try:
+            _resolve_and_emit_call(call, member, ast, tables, stats)
+        except Exception as e:
+            log.warning("call resolution failed for %s: %s", member.decl.signature, e)
+
+
+def _process_file_calls(
+    file_ast: JavaFileAst,
+    file_path: str,
+    tables: GraphTables,
+    stats: CallResolutionStats,
+) -> None:
+    for member in tables.members:
+        if member.file_path != file_path:
+            continue
+        try:
+            _resolve_method_calls(member, file_ast, tables, stats)
+        except Exception as e:
+            log.warning("Failed to extract calls from %s#%s: %s", member.parent_fqn, member.decl.signature, e)
+
+
+def pass3_calls(tables: GraphTables, asts: dict[str, JavaFileAst], *, verbose: bool) -> None:
+    _build_member_indexes(tables)
+    stats = CallResolutionStats()
+    for rel_path, file_ast in asts.items():
+        try:
+            _process_file_calls(file_ast, rel_path, tables, stats)
+        except Exception as e:
+            log.error("Call extraction failed for %s: %s", rel_path, e)
+    pct = 100.0 * stats.phantom_chained / max(1, stats.total)
+    msg = (
+        f"Call resolution: {stats.total} sites, {stats.phantom_chained} chained phantoms "
+        f"({pct:.1f}%), strategies: {dict(stats.by_strategy)}"
+    )
+    log.info(msg)
+    if verbose:
+        print(f"[pass3] {msg}", file=sys.stderr)
+
+
 # ---------- Kuzu write ----------
 
 
@@ -521,6 +1050,12 @@ _SCHEMA_INJECTS = (
     "dst_name STRING, dst_fqn STRING, resolved BOOLEAN, "
     "mechanism STRING, annotation STRING, field_or_param STRING)"
 )
+_SCHEMA_DECLARES = "CREATE REL TABLE DECLARES(FROM Symbol TO Symbol)"
+_SCHEMA_CALLS = (
+    "CREATE REL TABLE CALLS(FROM Symbol TO Symbol, "
+    "call_site_line INT64, call_site_byte INT64, arg_count INT64, "
+    "confidence DOUBLE, strategy STRING, source STRING, resolved BOOLEAN)"
+)
 
 
 def _drop_all(conn: kuzu.Connection) -> None:
@@ -528,6 +1063,8 @@ def _drop_all(conn: kuzu.Connection) -> None:
         "DROP TABLE IF EXISTS EXTENDS",
         "DROP TABLE IF EXISTS IMPLEMENTS",
         "DROP TABLE IF EXISTS INJECTS",
+        "DROP TABLE IF EXISTS CALLS",
+        "DROP TABLE IF EXISTS DECLARES",
         "DROP TABLE IF EXISTS Symbol",
         "DROP TABLE IF EXISTS GraphMeta",
     ):
@@ -538,7 +1075,15 @@ def _drop_all(conn: kuzu.Connection) -> None:
 
 
 def _create_schema(conn: kuzu.Connection) -> None:
-    for stmt in (_SCHEMA_NODE, _SCHEMA_META, _SCHEMA_EXTENDS, _SCHEMA_IMPLEMENTS, _SCHEMA_INJECTS):
+    for stmt in (
+        _SCHEMA_NODE,
+        _SCHEMA_META,
+        _SCHEMA_EXTENDS,
+        _SCHEMA_IMPLEMENTS,
+        _SCHEMA_INJECTS,
+        _SCHEMA_DECLARES,
+        _SCHEMA_CALLS,
+    ):
         conn.execute(stmt)
 
 
@@ -639,6 +1184,23 @@ _CREATE_INJ = (
     "CREATE (a)-[:INJECTS {dst_name: $dst_name, dst_fqn: $dst_fqn, resolved: $resolved, "
     "mechanism: $mechanism, annotation: $annotation, field_or_param: $field_or_param}]->(b)"
 )
+_CREATE_DECL = (
+    "MATCH (a:Symbol {id: $src}), (b:Symbol {id: $dst}) "
+    "CREATE (a)-[:DECLARES]->(b)"
+)
+_CREATE_CALL = (
+    "MATCH (a:Symbol {id: $src}), (b:Symbol {id: $dst}) "
+    "CREATE (a)-[:CALLS {"
+    "call_site_line: $line, call_site_byte: $byte, arg_count: $argc, "
+    "confidence: $conf, strategy: $strat, source: $src_kind, resolved: $resolved"
+    "}]->(b)"
+)
+
+
+def _populate_declares_rows(tables: GraphTables) -> None:
+    tables.declares_rows = [
+        DeclaresRow(src_id=m.parent_id, dst_id=m.node_id) for m in tables.members
+    ]
 
 
 def _write_edges(conn: kuzu.Connection, tables: GraphTables) -> None:
@@ -660,9 +1222,39 @@ def _write_edges(conn: kuzu.Connection, tables: GraphTables) -> None:
             "field_or_param": r.field_or_param,
         })
 
+    for row in tables.declares_rows:
+        conn.execute(_CREATE_DECL, {"src": row.src_id, "dst": row.dst_id})
+
+    seen_calls: set[tuple[str, str, int, int]] = set()
+    unique_calls: list[CallsRow] = []
+    for row in tables.calls_rows:
+        key = (row.src_id, row.dst_id, row.arg_count, row.call_site_line)
+        if key not in seen_calls:
+            seen_calls.add(key)
+            unique_calls.append(row)
+
+    for row in unique_calls:
+        conn.execute(_CREATE_CALL, {
+            "src": row.src_id, "dst": row.dst_id,
+            "line": row.call_site_line,
+            "byte": row.call_site_byte,
+            "argc": row.arg_count,
+            "conf": row.confidence,
+            "strat": row.strategy,
+            "src_kind": row.source,
+            "resolved": row.resolved,
+        })
+
 
 def _write_meta(conn: kuzu.Connection, tables: GraphTables, source_root: Path) -> None:
     import json
+    seen_calls: set[tuple[str, str, int, int]] = set()
+    calls_unique = 0
+    for row in tables.calls_rows:
+        key = (row.src_id, row.dst_id, row.arg_count, row.call_site_line)
+        if key not in seen_calls:
+            seen_calls.add(key)
+            calls_unique += 1
     counts = {
         "packages": len(tables.packages),
         "files": len(tables.files),
@@ -672,6 +1264,8 @@ def _write_meta(conn: kuzu.Connection, tables: GraphTables, source_root: Path) -
         "extends": len(tables.extends_rows),
         "implements": len(tables.implements_rows),
         "injects": len(tables.injects_rows),
+        "declares": len(tables.declares_rows),
+        "calls": calls_unique,
     }
     conn.execute(
         "CREATE (:GraphMeta {key: $k, ontology_version: $ov, built_at: $t, "
@@ -713,6 +1307,7 @@ def write_kuzu(
     )
     if verbose:
         print(f"[write] nodes written in {time.time() - t0:.2f}s", file=sys.stderr)
+    _populate_declares_rows(tables)
     t1 = time.time()
     _write_edges(conn, tables)
     if verbose:
@@ -751,6 +1346,7 @@ def main() -> int:
     tables = GraphTables()
     asts = pass1_parse(root, tables, verbose=args.verbose)
     pass2_edges(tables, asts, verbose=args.verbose)
+    pass3_calls(tables, asts, verbose=args.verbose)
     write_kuzu(kuzu_path, tables, source_root=root, verbose=args.verbose)
     if args.verbose:
         print(f"[done] kuzu at {kuzu_path}", file=sys.stderr)

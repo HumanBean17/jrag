@@ -1,7 +1,7 @@
 # Call-graph layer — active proposal
 
 Status: **active — ready for planning**. Pairs with
-[`plans/PLAN-CALL-GRAPH.md`](../plans/PLAN-CALL-GRAPH.md) for the
+[`plans/completed/PLAN-CALL-GRAPH.md`](../../plans/completed/PLAN-CALL-GRAPH.md) for the
 step-by-step implementation.
 
 This proposal realises **point 4 of `PRODUCT-VISION.md`** ("Adding a Call
@@ -43,7 +43,7 @@ the schema and algorithms that depend on them.
 
 | Decision | Rationale |
 |---|---|
-| **Confidence-scored edges, not binary `resolved`.** Every `CALLS` edge carries `confidence DOUBLE` (0.55–1.0) and `strategy STRING` (`import_map` / `same_module` / `unique_name` / `suffix`). | Lets downstream tools filter `confidence >= 0.8` and show *why* an edge exists. Pattern lifted from `tmp/what-to-borrow-from-cmm.md` §B1 (CMM `pass_calls.c`). |
+| **Confidence-scored edges, not binary `resolved`.** Every `CALLS` edge carries `confidence DOUBLE` (0.55–1.0) and `strategy STRING` (`import_map` / `same_module` / `unique_type_name` / `suffix`, plus static-import / overload / phantom markers in §4.2). | Lets downstream tools filter `confidence >= 0.8` and show *why* an edge exists. Pattern lifted from `tmp/what-to-borrow-from-cmm.md` §B1 (CMM `pass_calls.c`). |
 | **`source STRING` property on every edge, frozen to `'static'` this phase.** | Adding trace-derived (`'trace'`) or DI-proxy (`'di_proxy'`) edges later becomes a data-only change, no schema migration. |
 | **Receiver-type resolution is an explicit algorithm, not "best effort".** Scope-resolved variable table → type FQN → method lookup up the inheritance chain. | Written out in §4.3. The dominant Spring-style pattern (field-injected services calling interface methods) must resolve with high precision; ambiguous cases become phantoms rather than wrong edges. |
 | **Every call-site kind has an explicit rule.** `this.m()` / bare `m()` / `super.m()` / `ClassName.staticM()` / `new Foo(...)` / `Foo::bar` / `this(...)` / `super(...)`. | Prevents silent misses. Constructor calls emit `CALLS` to an `<init>` node so "who instantiates X?" is answerable. |
@@ -61,7 +61,8 @@ the schema and algorithms that depend on them.
 
 Same posture as `plans/completed/PLAN-CAPABILITIES-MODEL.md` (the most
 recent major addition to the graph layer). Nothing existing is removed
-or restructured.
+or restructured. Breaking changes to defaults are acceptable this phase
+(e.g., `trace_flow` gains `follow_calls=True` as the new default).
 
 ### What stays exactly as-is
 
@@ -166,9 +167,11 @@ confidence and a strategy label on the edge.
 4. **`same_module` (0.90)** — receiver type resolves via same-package
    lookup (`<current.package>.<ReceiverType>`) or wildcard-import
    completion.
-5. **`unique_name` (0.75)** — callee simple name is globally unique in
-   the project's method index (across all types). Useful for
-   unqualified calls whose receiver couldn't be typed.
+5. **`unique_type_name` (0.75)** — static qualifier or other unresolved simple
+   identifier matched **exactly one** indexed type by simple name (`decl.name`,
+   via the same type registry as import / same-package resolution). The builder
+   does **not** use a per-method simple-name index for this step (a globally
+   unique *method* name is not evidence about receiver type).
 6. **`suffix` (0.55)** — last-resort: choose the single type whose FQN
    ends with the receiver's simple name. Skip when >1 candidate.
 
@@ -281,8 +284,9 @@ CREATE REL TABLE CALLS (
     call_site_byte  INT64,
     arg_count       INT64,
     confidence      DOUBLE,    -- 0.0 .. 1.0; 0.0 = phantom
-    strategy        STRING,    -- 'import_map' | 'same_module' | 'unique_name'
-                               -- | 'suffix' | 'method_reference'
+    strategy        STRING,    -- 'import_map' | 'same_module' | 'unique_type_name'
+                               -- | 'suffix' | 'static_import' | 'static_import_wildcard'
+                               -- | 'method_reference'
                                -- | 'overload_ambiguous' | 'chained_receiver'
                                -- | 'this_super' | 'constructor' | 'phantom'
     source          STRING,    -- 'static' | 'trace' | 'di_proxy' — 'static' this phase
@@ -324,7 +328,7 @@ Both return `SymbolDto` for each hit **plus** per-edge metadata:
 
 | Tool | Change |
 |---|---|
-| `trace_flow` | New optional `follow_calls: bool = False`. When set, each stage's BFS adds `CALLS` alongside `INJECTS | EXTENDS | IMPLEMENTS` on method nodes reachable from the stage's types (via `DECLARES`). Defaults to `False` for one release; flipped to `True` in a follow-up once stability is confirmed. |
+| `trace_flow` | New optional `follow_calls: bool = True`. When set, each stage's BFS adds `CALLS` alongside `INJECTS | EXTENDS | IMPLEMENTS` on method nodes reachable from the stage's types (via `DECLARES`). Defaults to `True` — breaking change from previous behaviour, but the call-graph-aware trace is the intended primary mode. |
 | `graph_neighbors` | `CALLS` added to the edge-type whitelist. Depth / direction / limit unchanged. |
 | `impact_analysis` | **Unchanged** — stays type-level. A separate `impact_analysis_methods` may ship later if needed. |
 | `graph_meta` | `counts` gains `calls` and `declares`. |
@@ -384,7 +388,7 @@ Extend `tests/test_kuzu_queries.py`:
 3. `find_callers('AssignChatRepository')` (type-form) fans out through
    `DECLARES` and returns the services that call any method of the
    repository, not only those that inject it.
-4. `min_confidence=0.9` filter drops `suffix`/`unique_name` edges.
+4. `min_confidence=0.9` filter drops `suffix`/`unique_type_name` edges.
 5. `exclude_external=True` skips phantom JDK/Spring callees.
 6. `trace_flow(query=..., follow_calls=True)` reaches
    `OperatorAssignedProcessor.onOperatorAssigned` from
@@ -395,19 +399,21 @@ Extend `tests/test_kuzu_queries.py`:
 
 ### 7.3 Regression
 
-All existing tests (`tests/test_*.py`) must pass unchanged. Specifically:
+All existing tests (`tests/test_*.py`) must pass (some may need updates
+for new defaults). Specifically:
 
 - `test_each_edge_type_populated` — still asserts EXTENDS/IMPLEMENTS/INJECTS
   populated; add a parallel assertion for CALLS/DECLARES in a new test.
 - `test_find_injectors_*` — untouched.
-- `test_trace_flow_from_controller_seed` — untouched (default behaviour
-  unchanged because `follow_calls=False` by default).
+- `test_trace_flow_from_controller_seed` — **update assertion** to expect
+  call-graph-expanded results (new default `follow_calls=True`), OR
+  explicitly pass `follow_calls=False` to preserve legacy assertion.
 
 ### 7.4 Micro-fixture for resolution corner cases
 
 New `tests/fixtures/call_graph_smoke/` (small Maven project) covering:
 
-- all resolution strategies (import_map, same_module, unique_name, suffix),
+- all resolution strategies (import_map, same_module, unique_type_name, suffix),
 - static imports (explicit and wildcard),
 - a phantom (JDK call),
 - an overload-ambiguous case,
@@ -488,9 +494,9 @@ Total: **3–4 working days** including tests and docs.
    the `bank-chat-system` fixture for at least three hand-checked cases.
 3. All pre-existing tests pass unchanged (capability / brownfield / kuzu /
    MCP / lance-e2e tests).
-4. `trace_flow(follow_calls=True)` reconstructs the
+4. `trace_flow()` (default `follow_calls=True`) reconstructs the
    `enqueue → pick → assign` chain on the fixture; `follow_calls=False`
-   default remains byte-identical.
+   can be passed explicitly to get the legacy type-only behaviour.
 5. `codebase_search(graph_expand=True)` response rows can be dominated
    by method-body chunks reachable only through `CALLS` — a query that
    used to miss the target chunk hits it.

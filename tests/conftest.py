@@ -45,6 +45,7 @@ def kuzu_db_path(tmp_path_factory, corpus_root: Path) -> Path:
         GraphTables,
         pass1_parse,
         pass2_edges,
+        pass3_calls,
         write_kuzu,
     )
 
@@ -54,6 +55,7 @@ def kuzu_db_path(tmp_path_factory, corpus_root: Path) -> Path:
     tables = GraphTables()
     asts = pass1_parse(corpus_root, tables, verbose=False)
     pass2_edges(tables, asts, verbose=False)
+    pass3_calls(tables, asts, verbose=False)
     write_kuzu(db_path, tables, source_root=corpus_root, verbose=False)
 
     # Sanity: builder must have produced *some* nodes & edges. We don't

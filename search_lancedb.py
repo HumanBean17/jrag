@@ -690,6 +690,10 @@ def _graph_expand_merge(
     try:
         graph = KuzuGraph.get(kuzu_path)
         neighbor_fqns = graph.expand_fqns(seed_fqns, depth=expand_depth)
+        neighbor_fqns = list(dict.fromkeys(
+            neighbor_fqns
+            + graph.expand_methods(seed_fqns, depth=expand_depth, exclude_external=True),
+        ))
     except Exception:
         return vector_rows
 

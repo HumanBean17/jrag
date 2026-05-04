@@ -24,6 +24,7 @@ __all__ = [
     "resolve_kuzu_path",
     "SymbolHit",
     "EdgeHit",
+    "CallEdge",
     "ViaEdge",
     "StageSymbol",
 ]
@@ -77,14 +78,27 @@ class EdgeHit:
 
 
 @dataclass
+class CallEdge:
+    src: SymbolHit
+    dst: SymbolHit
+    confidence: float
+    strategy: str
+    source: str
+    call_site_line: int
+    call_site_byte: int
+    arg_count: int
+    resolved: bool
+
+
+@dataclass
 class ViaEdge:
     """Labelled edge from a previous-stage node to a stage symbol.
 
     Populated by `trace_flow` so callers can see *why* two types ended up
-    in the same chain (e.g. `INJECTS` vs `IMPLEMENTS`) and at what hop
+    in the same chain (e.g. `INJECTS` vs `IMPLEMENTS` vs `CALLS`) and at what hop
     from the frontier they were reached.
     """
-    edge_type: str  # INJECTS | EXTENDS | IMPLEMENTS
+    edge_type: str  # INJECTS | EXTENDS | IMPLEMENTS | CALLS
     from_fqn: str
     hop: int  # 1 = direct neighbour of previous-stage frontier
 
@@ -146,6 +160,24 @@ def _scope_filters(
     return out
 
 
+_EXTERNAL_PREFIXES = (
+    "java.",
+    "javax.",
+    "jakarta.",
+    "org.springframework.",
+    "lombok.",
+)
+
+
+def _type_part_fqn(sym_fqn: str) -> str:
+    return sym_fqn.split("#", 1)[0]
+
+
+def _is_external_fqn(fqn: str) -> bool:
+    base = _type_part_fqn(fqn)
+    return any(base.startswith(p) for p in _EXTERNAL_PREFIXES)
+
+
 def _row_to_symbol(row: dict[str, Any]) -> SymbolHit:
     return SymbolHit(
         id=row.get("id", "") or "",
@@ -166,6 +198,32 @@ def _row_to_symbol(row: dict[str, Any]) -> SymbolHit:
         role=row.get("role", "") or "",
         signature=row.get("signature", "") or "",
         parent_id=row.get("parent_id", "") or "",
+        resolved=bool(row.get("resolved", True)),
+    )
+
+
+_SYM_COLS = (
+    "id", "kind", "name", "fqn", "package", "module", "microservice",
+    "filename", "start_line", "end_line", "start_byte", "end_byte",
+    "modifiers", "annotations", "capabilities", "role", "signature", "parent_id", "resolved",
+)
+
+
+def _prefixed_symbol_row(prefix: str, row: dict[str, Any]) -> dict[str, Any]:
+    p = f"{prefix}_"
+    return {k[len(p) :]: v for k, v in row.items() if k.startswith(p)}
+
+
+def _row_to_call_edge(row: dict[str, Any]) -> CallEdge:
+    return CallEdge(
+        src=_row_to_symbol(_prefixed_symbol_row("caller", row)),
+        dst=_row_to_symbol(_prefixed_symbol_row("callee", row)),
+        confidence=float(row.get("confidence") or 0.0),
+        strategy=str(row.get("strategy") or ""),
+        source=str(row.get("source") or "static"),
+        call_site_line=int(row.get("call_site_line") or 0),
+        call_site_byte=int(row.get("call_site_byte") or 0),
+        arg_count=int(row.get("arg_count") or 0),
         resolved=bool(row.get("resolved", True)),
     )
 
@@ -427,13 +485,211 @@ class KuzuGraph:
             ))
         return out
 
+    def _method_ids_for_call_graph_needle(self, needle: str, *, limit: int) -> list[str]:
+        rows = self._rows(
+            "MATCH (s:Symbol) WHERE s.fqn = $n RETURN s.id AS id, s.kind AS kind LIMIT 1",
+            {"n": needle},
+        )
+        if rows:
+            kind = str(rows[0].get("kind") or "")
+            sid = str(rows[0].get("id") or "")
+            if kind in ("class", "interface", "enum", "record", "annotation") and sid:
+                mrows = self._rows(
+                    "MATCH (t:Symbol {id: $tid})-[:DECLARES]->(m:Symbol) RETURN m.id AS id "
+                    f"LIMIT {int(limit)}",
+                    {"tid": sid},
+                )
+                return [str(r["id"]) for r in mrows if r.get("id")]
+            if kind in ("method", "constructor") and sid:
+                return [sid]
+        rows2 = self._rows(
+            f"MATCH (s:Symbol) WHERE s.name = $n AND s.kind IN ['method','constructor'] "
+            f"RETURN s.id AS id LIMIT {int(limit)}",
+            {"n": needle},
+        )
+        return [str(r["id"]) for r in rows2 if r.get("id")]
+
+    def find_callers(
+        self, needle: str, *,
+        depth: int = 1,
+        limit: int = 100,
+        min_confidence: float = 0.0,
+        exclude_external: bool = True,
+        module: str | None = None,
+        microservice: str | None = None,
+    ) -> list[CallEdge]:
+        frontier = self._method_ids_for_call_graph_needle(needle, limit=max(limit, 50))
+        if not frontier:
+            return []
+        caller_proj = ", ".join(f"caller.{c} AS caller_{c}" for c in _SYM_COLS)
+        callee_proj = ", ".join(f"callee.{c} AS callee_{c}" for c in _SYM_COLS)
+        out: list[CallEdge] = []
+        seen: set[tuple[str, str, int, int]] = set()
+        for _ in range(max(1, int(depth))):
+            params: dict[str, Any] = {
+                "frontier": list(frontier),
+                "minc": float(min_confidence),
+            }
+            sc = _scope_filters("caller", module=module, microservice=microservice, params=params)
+            wh_parts = ["callee.id IN $frontier", "c.confidence >= $minc"]
+            wh_parts.extend(sc)
+            wh = " AND ".join(wh_parts)
+            q = (
+                f"MATCH (caller:Symbol)-[c:CALLS]->(callee:Symbol) WHERE {wh} "
+                f"RETURN {caller_proj}, {callee_proj}, "
+                f"c.call_site_line AS call_site_line, c.call_site_byte AS call_site_byte, "
+                f"c.arg_count AS arg_count, c.confidence AS confidence, c.strategy AS strategy, "
+                f"c.source AS source, c.resolved AS resolved "
+                f"LIMIT {int(limit) * 8}"
+            )
+            next_frontier: list[str] = []
+            for row in self._rows(q, params):
+                ce = _row_to_call_edge(row)
+                # Filter only discovered callers (src). Needle may be external
+                # (e.g. java.util.List#add) while still listing internal callers.
+                if exclude_external and _is_external_fqn(ce.src.fqn):
+                    continue
+                key = (ce.src.id, ce.dst.id, ce.call_site_line, ce.call_site_byte)
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append(ce)
+                next_frontier.append(ce.src.id)
+                if len(out) >= limit:
+                    return out
+            frontier = list(dict.fromkeys(next_frontier))
+            if not frontier:
+                break
+        return out
+
+    def find_callees(
+        self, needle: str, *,
+        depth: int = 1,
+        limit: int = 100,
+        min_confidence: float = 0.0,
+        exclude_external: bool = True,
+        module: str | None = None,
+        microservice: str | None = None,
+    ) -> list[CallEdge]:
+        frontier = self._method_ids_for_call_graph_needle(needle, limit=max(limit, 50))
+        if not frontier:
+            return []
+        caller_proj = ", ".join(f"caller.{c} AS caller_{c}" for c in _SYM_COLS)
+        callee_proj = ", ".join(f"callee.{c} AS callee_{c}" for c in _SYM_COLS)
+        out: list[CallEdge] = []
+        seen: set[tuple[str, str, int, int]] = set()
+        for _ in range(max(1, int(depth))):
+            params: dict[str, Any] = {
+                "frontier": list(frontier),
+                "minc": float(min_confidence),
+            }
+            sc = _scope_filters("callee", module=module, microservice=microservice, params=params)
+            wh_parts = ["caller.id IN $frontier", "c.confidence >= $minc"]
+            wh_parts.extend(sc)
+            wh = " AND ".join(wh_parts)
+            q = (
+                f"MATCH (caller:Symbol)-[c:CALLS]->(callee:Symbol) WHERE {wh} "
+                f"RETURN {caller_proj}, {callee_proj}, "
+                f"c.call_site_line AS call_site_line, c.call_site_byte AS call_site_byte, "
+                f"c.arg_count AS arg_count, c.confidence AS confidence, c.strategy AS strategy, "
+                f"c.source AS source, c.resolved AS resolved "
+                f"LIMIT {int(limit) * 8}"
+            )
+            next_frontier: list[str] = []
+            for row in self._rows(q, params):
+                ce = _row_to_call_edge(row)
+                # Filter only discovered callees (dst). Needle may be external while
+                # still listing non-external outbound calls when any exist.
+                if exclude_external and _is_external_fqn(ce.dst.fqn):
+                    continue
+                key = (ce.src.id, ce.dst.id, ce.call_site_line, ce.call_site_byte)
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append(ce)
+                next_frontier.append(ce.dst.id)
+                if len(out) >= limit:
+                    return out
+            frontier = list(dict.fromkeys(next_frontier))
+            if not frontier:
+                break
+        return out
+
+    def expand_methods(
+        self, fqns: list[str], *, depth: int = 1,
+        min_confidence: float = 0.0, limit: int = 200,
+        exclude_external: bool = True,
+    ) -> list[str]:
+        """Reach type FQNs from seed types via DECLARES → CALLS → DECLARES (reverse).
+
+        When ``exclude_external`` is true (default), types whose FQN matches the
+        same JDK/Spring/Lombok prefixes as ``find_callees`` are omitted from the
+        returned list (they are not indexed in LanceDB anyway). BFS still walks
+        through external callees to find further project types.
+        """
+        if not fqns or depth < 1:
+            return []
+        seed_mids: list[str] = []
+        for tfqn in fqns:
+            r = self._rows(
+                "MATCH (t:Symbol) WHERE t.fqn = $f AND t.kind IN ['class','interface','enum','record','annotation'] "
+                "RETURN t.id AS id LIMIT 1",
+                {"f": tfqn},
+            )
+            if not r or not r[0].get("id"):
+                continue
+            tid = str(r[0]["id"])
+            mrows = self._rows(
+                "MATCH (t:Symbol {id: $tid})-[:DECLARES]->(m:Symbol) RETURN m.id AS id",
+                {"tid": tid},
+            )
+            seed_mids.extend(str(x["id"]) for x in mrows if x.get("id"))
+        frontier = list(dict.fromkeys(seed_mids))
+        out_types: list[str] = []
+        seen_t: set[str] = set()
+        for _ in range(int(depth)):
+            if not frontier:
+                break
+            rows = self._rows(
+                "MATCH (m:Symbol)-[c:CALLS]->(n:Symbol) WHERE m.id IN $ids AND c.confidence >= $mc "
+                "RETURN n.id AS id",
+                {"ids": frontier, "mc": float(min_confidence)},
+            )
+            next_ids: list[str] = []
+            for r in rows:
+                nid = str(r.get("id") or "")
+                if nid:
+                    next_ids.append(nid)
+            next_ids = list(dict.fromkeys(next_ids))
+            for nid in next_ids:
+                srows = self._rows(
+                    "MATCH (s:Symbol {id: $id}) RETURN s.fqn AS fqn LIMIT 1",
+                    {"id": nid},
+                )
+                if not srows:
+                    continue
+                mfqn = str(srows[0].get("fqn") or "")
+                if "#" not in mfqn:
+                    continue
+                tpart = mfqn.split("#", 1)[0]
+                if not tpart or tpart in seen_t:
+                    continue
+                if exclude_external and _is_external_fqn(tpart):
+                    continue
+                seen_t.add(tpart)
+                out_types.append(tpart)
+                if len(out_types) >= limit:
+                    return out_types[:limit]
+            frontier = next_ids
+        return out_types[:limit]
+
     def neighbors(self, fqn_or_name: str, *, depth: int = 1,
                   edge_types: list[str] | None = None,
                   direction: str = "both", limit: int = 200) -> list[SymbolHit]:
         """BFS over `edge_types` up to `depth` hops. `direction` in {out, in, both}."""
         if depth < 1:
             return []
-        edges = edge_types or ["EXTENDS", "IMPLEMENTS", "INJECTS"]
+        edges = edge_types or ["EXTENDS", "IMPLEMENTS", "INJECTS", "DECLARES", "CALLS"]
         edge_pattern = "|".join(edges)
         if direction == "out":
             arrow_l, arrow_r = "-", "->"
@@ -483,7 +739,10 @@ class KuzuGraph:
     def trace_flow(self, seed_fqns: list[str], *,
                    module: str | None = None,
                    microservice: str | None = None,
-                   depth: int = 2, stage_limit: int = 20) -> list[list[StageSymbol]]:
+                   depth: int = 2, stage_limit: int = 20,
+                   follow_calls: bool = True,
+                   min_call_confidence: float = 0.0,
+                   exclude_external: bool = True) -> list[list[StageSymbol]]:
         """Walk stages `CONTROLLER -> SERVICE/COMPONENT -> FEIGN_CLIENT/REPOSITORY/MAPPER`.
 
         Returns a list of stages; each stage is a list of SymbolHit. The first
@@ -491,10 +750,19 @@ class KuzuGraph:
         orchestrator-like roles — see `_ENTRYPOINT_ROLES`). If role-filtered
         seeds come back empty we fall back to unfiltered seeds so a caller
         with no CONTROLLER coverage still gets *something* back.
-        Each subsequent stage is the neighbor-set (INJECTS+EXTENDS+IMPLEMENTS)
-        of the previous stage, restricted to the stage's role allow-list.
+        Each subsequent stage is the neighbor-set (INJECTS+EXTENDS+IMPLEMENTS,
+        optionally merged with type-to-type paths through DECLARES+CALLS when
+        `follow_calls` is true) of the previous stage, restricted to the
+        stage's role allow-list.
 
-        `depth` bounds the neighbor hop count per stage (default 2, max 3).
+        Defaults: ``depth=2`` (clamped to 1..3), ``follow_calls=True``,
+        ``min_call_confidence=0.0``, ``exclude_external=True``. The latter only
+        filters symbols reached via the DECLARES+CALLS hop: discovered **type**
+        symbols matching external FQN prefixes (same list as ``expand_methods`` /
+        the callee side of ``find_callees``), not the seed frontier. INJECTS /
+        EXTENDS / IMPLEMENTS hops ignore ``exclude_external``.
+
+        ``depth`` is the neighbour hop count per stage (not total trace depth).
         """
         if not seed_fqns:
             return []
@@ -568,10 +836,18 @@ class KuzuGraph:
                     f"LIMIT {int(stage_limit) * 4}"
                 )
                 next_frontier: list[str] = []
-                for row in self._rows(q, params):
+                def _ingest_flow_row(
+                    row: dict[str, Any], *, filter_external_fqn: bool = False,
+                ) -> None:
                     sym = _row_to_symbol(row)
+                    if (
+                        filter_external_fqn
+                        and exclude_external
+                        and _is_external_fqn(sym.fqn)
+                    ):
+                        return
                     if not sym.fqn or sym.fqn in visited_fqns:
-                        continue
+                        return
                     edge = ViaEdge(
                         edge_type=str(row.get("edge_type") or ""),
                         from_fqn=str(row.get("from_fqn") or ""),
@@ -581,16 +857,41 @@ class KuzuGraph:
                     if existing is None:
                         stage_results[sym.fqn] = StageSymbol(symbol=sym, via=[edge])
                         next_frontier.append(sym.fqn)
-                        if len(stage_results) >= stage_limit:
-                            break
                     else:
-                        # Same symbol can be reached via multiple edges (e.g.
-                        # both INJECTS and IMPLEMENTS); record up to a few.
                         if len(existing.via) < 4 and not any(
                             v.edge_type == edge.edge_type and v.from_fqn == edge.from_fqn
                             for v in existing.via
                         ):
                             existing.via.append(edge)
+
+                for row in self._rows(q, params):
+                    _ingest_flow_row(row)
+                    if len(stage_results) >= stage_limit:
+                        break
+
+                if follow_calls:
+                    params_cf: dict[str, Any] = {
+                        "fqns": current_frontier,
+                        "roles": list(stage_roles),
+                        "mc": float(min_call_confidence),
+                    }
+                    scope_cf = _scope_filters(
+                        "n", module=module, microservice=microservice, params=params_cf,
+                    )
+                    sccf = (" AND " + " AND ".join(scope_cf)) if scope_cf else ""
+                    qcf = (
+                        "MATCH (root:Symbol)-[:DECLARES]->(m1:Symbol)-[c:CALLS]->(m2:Symbol)"
+                        "<-[:DECLARES]-(n:Symbol) WHERE root.fqn IN $fqns AND n.role IN $roles "
+                        "AND n.resolved AND n.kind IN ['class','interface','enum','record','annotation'] "
+                        f"AND c.confidence >= $mc{sccf} "
+                        f"RETURN {_symbol_return_for('n')}, 'CALLS' AS edge_type, root.fqn AS from_fqn "
+                        f"LIMIT {int(stage_limit) * 4}"
+                    )
+                    for row in self._rows(qcf, params_cf):
+                        _ingest_flow_row(row, filter_external_fqn=True)
+                        if len(stage_results) >= stage_limit:
+                            break
+
                 current_frontier = next_frontier
                 if len(stage_results) >= stage_limit:
                     break

@@ -2,7 +2,7 @@
 
 Status: **ready to implement**. Self-contained: an agent picking this up
 should be able to land it without re-deriving the design. Pairs with
-`propose/CALL-GRAPH-PROPOSE.md` (scope, rationale, schema).
+`propose/completed/CALL-GRAPH-PROPOSE.md` (scope, rationale, schema).
 
 ## Goal
 
@@ -13,16 +13,17 @@ to their own methods. Each `CALLS` edge carries a `confidence` +
 
 Scope is **static, intra-JVM** only. No HTTP/async cross-service edges,
 no AOP proxy resolution, no runtime-trace ingestion (explicit non-goals).
-See `propose/CALL-GRAPH-PROPOSE.md` §8.
+See `propose/completed/CALL-GRAPH-PROPOSE.md` §8.
 
 ## Principles (do not relitigate in review)
 
-- **Purely additive.** No table dropped, no tool signature broken. New
-  params are optional with safe defaults. See `propose/CALL-GRAPH-PROPOSE.md`
+- **Mostly additive, breaking defaults allowed.** No table dropped, no
+  tool signature removed. New params are optional; some defaults change
+  (e.g., `trace_flow.follow_calls=True`). See `propose/completed/CALL-GRAPH-PROPOSE.md`
   §3.
 - **Confidence-scored edges.** 4-strategy cascade from CMM
   (`tmp/what-to-borrow-from-cmm.md` B1). Implementation details in
-  `propose/CALL-GRAPH-PROPOSE.md` §4.2.
+  `propose/completed/CALL-GRAPH-PROPOSE.md` §4.2.
 - **LanceDB untouched.** No reindex; only the Kuzu graph rebuilds.
 - **Ontology bump 3 → 4.** Full graph rebuild required; guarded by
   `KuzuGraph.get()` so stale readers fail loudly.
@@ -33,7 +34,7 @@ See `propose/CALL-GRAPH-PROPOSE.md` §8.
 
 Additions (~150 lines, no removals):
 
-1. New dataclass `CallSite` with fields per `propose/CALL-GRAPH-PROPOSE.md` §4.1
+1. New dataclass `CallSite` with fields per `propose/completed/CALL-GRAPH-PROPOSE.md` §4.1
    (`caller_fqn`, `receiver_expr`, `callee_simple`, `arg_count`,
    `is_static_call`, `is_constructor`, `in_lambda`, `line`, `byte`).
    Exported in `__all__`.
@@ -101,18 +102,18 @@ follow-up.
 
 The current two-pass shape (`pass1_parse`, `pass2_edges`) stays. Append:
 
-#### 3.1 Pass-1 additions
+#### 3.1 Indexes for pass 3
 
-- Build a **method index** alongside `tables.types`:
-  ```python
-  tables.methods_by_type: dict[str, list[MemberEntry]] = {}
-  tables.methods_by_name: dict[str, list[MemberEntry]] = {}  # simple name -> entries
-  ```
-  Populated when `MemberEntry` is appended in `_register_type`.
-- Build a **unique-name index** for the `unique_name` strategy:
-  `tables.methods_by_name[name]`; the resolver checks `len(entries) == 1`.
+- Build a **`methods_by_type`** index at the start of `pass3_calls`
+  (`parent_fqn` → method / constructor members).
+- Receiver-type fallback **`unique_type_name` (0.75)** uses the existing
+  **`by_simple_name`** type registry from pass 1 (exactly one type with that
+  `decl.name`). Do **not** disambiguate receivers with a per-method simple-name
+  map — a globally unique *method* name is not evidence about an unresolved
+  receiver identifier.
 
-No change to existing indexes; these are pure additions to `GraphTables`.
+No change to the existing `tables.types` / `by_simple_name` / `by_package`
+indexes beyond what pass 1 already builds.
 
 #### 3.2 New dataclasses (add in `build_ast_graph.py`)
 
@@ -139,7 +140,7 @@ to `GraphTables`.
 
 Invoked from `main` after `pass2_edges`. Walks every `MemberEntry`,
 resolves each `CallSite` with the algorithm in
-`propose/CALL-GRAPH-PROPOSE.md` §4.3, and appends `CallsRow` entries.
+`propose/completed/CALL-GRAPH-PROPOSE.md` §4.3, and appends `CallsRow` entries.
 
 **Error handling**: Wrap per-method and per-file processing in try/except:
 ```python
@@ -197,7 +198,7 @@ Resolver helpers (new, all within `build_ast_graph.py`):
    - If `expr` is `this` / `super` / empty → `('this_super', 0.95)`.
    - If `expr` is simple identifier in scope table → `(fqn, 'import_map', 0.95)`.
    - If `expr` is chained (`a.b()`) → `(None, 'chained_receiver', 0.0)`.
-   - Else try `same_module` → 0.90, `unique_name` → 0.75, `suffix` → 0.55.
+   - Else try `same_module` → 0.90, `unique_type_name` → 0.75, `suffix` → 0.55.
 3. `_lookup_method(type_fqn: str, callee_simple: str, arg_count: int, *,
    tables: GraphTables) -> list[MemberEntry]` — searches that type's
    methods (and walks resolved supertypes via existing `_resolve_simple`
@@ -221,7 +222,8 @@ Strategy / confidence pairing:
 - Via same-package / wildcard import → 0.90.
 - `this` / `super` / bare call on enclosing type → 0.95, `strategy='this_super'`.
 - Implicit super constructor → 0.90, `strategy='implicit_super'`.
-- Globally-unique callee name (receiver unknown) → 0.75, `strategy='unique_name'`.
+- Globally unique **type** simple name for a static qualifier / unresolved
+  identifier → 0.75, `strategy='unique_type_name'`.
 - Suffix match (single FQN ends with receiver simple) → 0.55.
 - Chained receiver (`a.b().c()`) or expression method reference (`getX()::bar`)
   → 0.0 phantom, `strategy='chained_receiver'`.
@@ -385,9 +387,9 @@ Additions (~80 lines):
    `neighbors()`. `impact_analysis()` stays **unchanged** (type-level,
    per §6.2 of the proposal).
 
-7. `trace_flow` gains optional `follow_calls: bool = False`. When true,
-   in the inner stage loop the Cypher pattern changes from
-   `[e:INJECTS|EXTENDS|IMPLEMENTS]` to:
+7. `trace_flow` gains optional `follow_calls: bool = True` (breaking
+   change — new default). When true, in the inner stage loop the Cypher
+   pattern changes from `[e:INJECTS|EXTENDS|IMPLEMENTS]` to:
    ```cypher
    (root:Symbol)-[:DECLARES]->(m:Symbol)-[c:CALLS]->(m2:Symbol)
      <-[:DECLARES]-(n:Symbol)
@@ -430,8 +432,10 @@ Additions (~80 lines, no removals):
    existing tools). Description must name `min_confidence` and
    `exclude_external` and give two examples (method form, type form).
 3. New `find_callees` tool — symmetric.
-4. `trace_flow` adds `follow_calls: bool = Field(default=False, ...)`.
+4. `trace_flow` adds `follow_calls: bool = Field(default=True, ...)`.
    Forwards to `KuzuGraph.trace_flow(..., follow_calls=follow_calls)`.
+   Breaking change: default is now `True`; callers wanting legacy
+   type-only behaviour must pass `follow_calls=False` explicitly.
 5. `graph_meta` — no code change; the extra counts propagate through
    `GraphMeta.counts` automatically.
 6. Update `_INSTRUCTIONS` to mention `find_callers`, `find_callees`, and
@@ -474,7 +478,7 @@ Java" — keep it in sync.
 ### 9.1 New test files
 
 1. `tests/test_ast_java_calls.py` — unit tests for the 18 corner cases
-   listed in `propose/CALL-GRAPH-PROPOSE.md` §7.1. No tree-sitter fixture
+   listed in `propose/completed/CALL-GRAPH-PROPOSE.md` §7.1. No tree-sitter fixture
    files needed beyond inline source snippets.
 2. `tests/fixtures/call_graph_smoke/` — small Maven project (pom.xml +
    a handful of `.java` files) covering:
@@ -528,11 +532,12 @@ Java" — keep it in sync.
 
 ### 9.3 Regression
 
-All pre-existing tests must pass **unchanged**. Specifically:
+All pre-existing tests must pass (some may need updates for new default):
 
 - Capability / brownfield / Lance e2e tests — call-graph is orthogonal.
-- `test_trace_flow_from_controller_seed` — passes with
-  `follow_calls=False` default (identical output to today).
+- `test_trace_flow_from_controller_seed` — **update assertion** to expect
+  call-graph-expanded results (new default `follow_calls=True`), OR
+  explicitly pass `follow_calls=False` to preserve legacy assertion.
 - `test_find_injectors_*` — untouched; injection edges are independent.
 
 ### 9.4 Manual validation
@@ -552,16 +557,15 @@ Include the stats output in the PR description.
 
 ## Rollout
 
-Single PR. Breaking change (ontology bump → graph rebuild required) but
-the rebuild is the only user-visible action.
+Single PR. Breaking changes:
+- Ontology bump 3 → 4 (graph rebuild required).
+- `trace_flow` default behaviour changes (`follow_calls=True`).
 
-1. Merge with `trace_flow.follow_calls` default `False`.
+1. Merge with `trace_flow.follow_calls` default `True`.
 2. User runs `refresh_code_index(confirm=true)` (or `build_ast_graph.py
    --source-root <repo>`) once.
-3. New MCP tools are live; `follow_calls=True` is opt-in for one release
-   cycle.
-4. Follow-up PR flips the default to `True` once the fixture tests show
-   stable results across two consecutive rebuilds.
+3. New MCP tools are live; call-graph-aware `trace_flow` is the new default.
+   Users can pass `follow_calls=False` explicitly for legacy behaviour.
 
 ## Implementation step list
 
@@ -569,9 +573,9 @@ the rebuild is the only user-visible action.
 |---|---|---|---|
 | 1 | Add `CallSite`, `FileImports` dataclasses; static import parsing; third visitor pass to `parse_java`. | `ast_java.py` | `MethodDecl.call_sites` populated on fixture file; unit tests pass. |
 | 2 | Bump `ONTOLOGY_VERSION` to 4; update docstring. | `ast_java.py` | `ONTOLOGY_VERSION == 4`. |
-| 3 | Extend `GraphTables` with method index + `calls_rows` + `declares_rows` + `CallResolutionStats`. | `build_ast_graph.py` | Pass-1 finishes without regressing existing tests. |
+| 3 | Extend `GraphTables` with `calls_rows` + `declares_rows` + `CallResolutionStats` (and pass-3 `methods_by_type` index). | `build_ast_graph.py` | Pass-1 finishes without regressing existing tests. |
 | 4a | Implement `_scope_table` helper. | `build_ast_graph.py` | Unit test: scope table built correctly for fixture method (fields, params, locals). |
-| 4b | Implement `_resolve_receiver` with full strategy cascade (static imports, this/super, import_map, same_module, unique_name, suffix, chained_receiver). | `build_ast_graph.py` | Unit test: each strategy path exercised. |
+| 4b | Implement `_resolve_receiver` with full strategy cascade (static imports, this/super, import_map, same_module, unique_type_name, suffix, chained_receiver). | `build_ast_graph.py` | Unit test: each strategy path exercised. |
 | 4c | Implement `_lookup_method` with supertype walk. | `build_ast_graph.py` | Unit test: inherited method found via EXTENDS. |
 | 4d | Implement `_emit_call` + `_phantom_method` (with `?` prefix for unresolved receivers). | `build_ast_graph.py` | Unit test: phantom created for unknown callee; stats updated. |
 | 4e | Wire helpers into `pass3_calls` loop with error handling and stats logging. | `build_ast_graph.py` | `calls_rows`/`declares_rows` populated; diagnostic stats logged. |
@@ -582,7 +586,7 @@ the rebuild is the only user-visible action.
 | 9 | Add MCP tools (`find_callers`, `find_callees`), `follow_calls` param on `trace_flow`, update `_INSTRUCTIONS`. | `server.py` | `test_mcp_tools.py` additions pass. |
 | 10 | Update tests: new files + extend `test_ast_graph_build.py` / `test_kuzu_queries.py` / `test_mcp_tools.py`. | `tests/` | `pytest` green. |
 | 11 | Update `README.md` + `CODEBASE_REQUIREMENTS.md`. | docs | Manual review. |
-| 12 | Confirm `propose/CALL-GRAPH-PROPOSE.md` is the only active call-graph proposal (old deferred draft already removed; git history retains it). | `propose/` | Directory listing shows a single call-graph proposal. |
+| 12 | Confirm `propose/completed/CALL-GRAPH-PROPOSE.md` is the only active call-graph proposal (old deferred draft already removed; git history retains it). | `propose/` | Directory listing shows a single call-graph proposal. |
 
 ## Out of scope (for this plan, tracked elsewhere)
 
@@ -603,10 +607,10 @@ core call graph is proven on the `bank-chat-system` corpus.
 2. `pytest` green (new + regression).
 3. `refresh_code_index(confirm=true)` on a real project rebuilds the
    graph only; LanceDB data folder untouched.
-4. A manual `trace_flow(..., follow_calls=True)` call on the corpus
-   returns a chain that includes a method node reached through a `CALLS`
-   edge (visible as `via.edge_type == "CALLS"` in at least one stage
-   entry).
+4. A manual `trace_flow(...)` call (default `follow_calls=True`) on the
+   corpus returns a chain that includes a method node reached through a
+   `CALLS` edge (visible as `via.edge_type == "CALLS"` in at least one
+   stage entry).
 5. `README.md` documents the new tools and the `Phase 3` edge set.
 6. **Performance**: Diagnostic stats logged after `pass3_calls`:
    - Expected scale for `bank-chat-system`: ~500–2000 `CALLS` edges,

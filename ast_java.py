@@ -19,7 +19,9 @@ from tree_sitter import Language, Node, Parser
 
 __all__ = [
     "AnnotationRef",
+    "CallSite",
     "FieldDecl",
+    "FileImports",
     "ParamDecl",
     "MethodDecl",
     "TypeDecl",
@@ -59,7 +61,7 @@ _DTO_LOMBOK_ANNOTATIONS: frozenset[str] = frozenset({
     "EqualsAndHashCode", "ToString",
 })
 
-ONTOLOGY_VERSION = 3
+ONTOLOGY_VERSION = 4
 
 ROLE_ANNOTATIONS: dict[str, str] = {
     # Spring Web
@@ -166,6 +168,30 @@ class ParamDecl:
 
 
 @dataclass
+class FileImports:
+    """Per-compilation-unit import maps used by call-site resolution."""
+
+    explicit: dict[str, str] = field(default_factory=dict)  # SimpleType -> type FQN
+    static_methods: dict[str, str] = field(default_factory=dict)  # simple method name -> "pkg.Type.method"
+    static_wildcards: list[str] = field(default_factory=list)  # type FQNs for `import static T.*`
+
+
+@dataclass
+class CallSite:
+    """A single static call site inside a method or constructor body."""
+
+    caller_fqn: str  # type_fqn#signature (matches Symbol.fqn for method nodes)
+    receiver_expr: str  # raw receiver text; "" for bare calls
+    callee_simple: str  # method name or "<init>"
+    arg_count: int  # -1 for method references (unknown)
+    is_static_call: bool
+    is_constructor: bool
+    in_lambda: bool
+    line: int
+    byte: int
+
+
+@dataclass
 class MethodDecl:
     name: str
     return_type: str  # simple name; "" for constructors / void kept as "void"
@@ -178,6 +204,9 @@ class MethodDecl:
     end_byte: int = 0
     start_line: int = 0
     end_line: int = 0
+    call_sites: list[CallSite] = field(default_factory=list)
+    # Ordered (name, simple_type_name) from `local_variable_declaration` in body.
+    local_vars: list[tuple[str, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -210,6 +239,7 @@ class JavaFileAst:
     all_types: list[TypeDecl]  # flat, includes nested
     parse_error: bool = False
     source_bytes: int = 0
+    file_imports: FileImports = field(default_factory=FileImports)
 
 
 # ---------- helpers ----------
@@ -487,6 +517,204 @@ def _iter_body_members(body: Node) -> Iterable[Node]:
     return [c for c in body.named_children]
 
 
+def _import_declaration_is_static(node: Node, src: bytes) -> bool:
+    for c in node.children:
+        if c.type == "static" and _txt(c, src) == "static":
+            return True
+    return False
+
+
+def _arg_list_count(arg_list: Node | None) -> int:
+    if arg_list is None:
+        return 0
+    return len(arg_list.named_children)
+
+
+def _infer_static_method_invocation(obj: Node | None, src: bytes) -> bool:
+    """Heuristic: ClassName.method() vs instance.method()."""
+    if obj is None:
+        return False
+    if obj.type in ("type_identifier", "scoped_type_identifier"):
+        return True
+    if obj.type == "this" or obj.type == "super":
+        return False
+    if obj.type == "identifier":
+        name = _txt(obj, src)
+        return len(name) > 0 and name[0].isupper()
+    return False
+
+
+def _collect_local_vars(body: Node, src: bytes) -> list[tuple[str, str]]:
+    """Declaration order: (variable name, head simple type name)."""
+    out: list[tuple[str, str]] = []
+    if body is None:
+        return out
+
+    def visit(n: Node) -> None:
+        if n.type == "local_variable_declaration":
+            type_node = n.child_by_field_name("type")
+            if type_node is None:
+                return
+            t_simple = _strip_type_to_simple(type_node, src)
+            for ch in n.named_children:
+                if ch.type != "variable_declarator":
+                    continue
+                name_node = ch.child_by_field_name("name")
+                if name_node is not None:
+                    out.append((_txt(name_node, src), t_simple))
+            return
+        for c in n.children:
+            visit(c)
+
+    visit(body)
+    return out
+
+
+def _collect_call_sites(
+    body: Node,
+    src: bytes,
+    *,
+    caller_fqn: str,
+    in_lambda: bool,
+) -> list[CallSite]:
+    """Walk a block body and collect CallSite records (attributed to caller_fqn)."""
+    out: list[CallSite] = []
+
+    def add_site(
+        *,
+        receiver_expr: str,
+        callee_simple: str,
+        arg_count: int,
+        is_static_call: bool,
+        is_constructor: bool,
+        line: int,
+        byte: int,
+        lam: bool,
+    ) -> None:
+        out.append(
+            CallSite(
+                caller_fqn=caller_fqn,
+                receiver_expr=receiver_expr,
+                callee_simple=callee_simple,
+                arg_count=arg_count,
+                is_static_call=is_static_call,
+                is_constructor=is_constructor,
+                in_lambda=lam,
+                line=line,
+                byte=byte,
+            )
+        )
+
+    def visit(n: Node, lam: bool) -> None:
+        t = n.type
+        if t == "lambda_expression":
+            body_node = n.child_by_field_name("body")
+            if body_node is not None:
+                visit(body_node, True)
+            return
+        if t == "object_creation_expression":
+            type_node = n.child_by_field_name("type")
+            args = n.child_by_field_name("arguments")
+            if type_node is not None:
+                recv = _txt(type_node, src)
+                line = n.start_point[0] + 1
+                add_site(
+                    receiver_expr=recv,
+                    callee_simple="<init>",
+                    arg_count=_arg_list_count(args),
+                    is_static_call=False,
+                    is_constructor=True,
+                    line=line,
+                    byte=n.start_byte,
+                    lam=lam,
+                )
+            for ch in n.named_children:
+                if ch.type == "class_body":
+                    visit(ch, True)
+                else:
+                    visit(ch, lam)
+            return
+        if t == "method_invocation":
+            obj = n.child_by_field_name("object")
+            name_node = n.child_by_field_name("name")
+            callee = _txt(name_node, src) if name_node is not None else ""
+            args = n.child_by_field_name("arguments")
+            argc = _arg_list_count(args)
+            line = n.start_point[0] + 1
+            if obj is None:
+                recv = ""
+                static_call = False
+            else:
+                recv = _txt(obj, src)
+                static_call = _infer_static_method_invocation(obj, src)
+            add_site(
+                receiver_expr=recv,
+                callee_simple=callee,
+                arg_count=argc,
+                is_static_call=static_call,
+                is_constructor=False,
+                line=line,
+                byte=n.start_byte,
+                lam=lam,
+            )
+            for ch in n.children:
+                visit(ch, lam)
+            return
+        if t == "method_reference":
+            parts = [c for c in n.children if c.type != "::"]
+            if not parts:
+                for ch in n.children:
+                    visit(ch, lam)
+                return
+            name_node = parts[-1]
+            if name_node.type != "identifier":
+                for ch in n.children:
+                    visit(ch, lam)
+                return
+            name_id = _txt(name_node, src)
+            qual = parts[0] if len(parts) >= 2 else None
+            recv = _txt(qual, src) if qual is not None else ""
+            chained = qual is not None and qual.type == "method_invocation"
+            add_site(
+                receiver_expr=recv,
+                callee_simple=name_id,
+                arg_count=-1,
+                is_static_call=False,
+                is_constructor=False,
+                line=n.start_point[0] + 1,
+                byte=n.start_byte,
+                lam=lam or chained,
+            )
+            for ch in n.children:
+                visit(ch, lam)
+            return
+        if t == "explicit_constructor_invocation":
+            is_super = any(c.type == "super" for c in n.children)
+            recv = "super" if is_super else "this"
+            args = n.child_by_field_name("arguments")
+            if args is None:
+                for c in n.named_children:
+                    if c.type == "argument_list":
+                        args = c
+                        break
+            add_site(
+                receiver_expr=recv,
+                callee_simple="<init>",
+                arg_count=_arg_list_count(args),
+                is_static_call=False,
+                is_constructor=True,
+                line=n.start_point[0] + 1,
+                byte=n.start_byte,
+                lam=lam,
+            )
+            return
+        for ch in n.children:
+            visit(ch, lam)
+
+    visit(body, in_lambda)
+    return out
+
+
 def _parse_params(formal: Node | None, src: bytes) -> list[ParamDecl]:
     if formal is None:
         return []
@@ -510,7 +738,7 @@ def _parse_params(formal: Node | None, src: bytes) -> list[ParamDecl]:
     return params
 
 
-def _parse_method(node: Node, src: bytes, *, is_constructor: bool) -> MethodDecl:
+def _parse_method(node: Node, src: bytes, *, is_constructor: bool, type_fqn: str) -> MethodDecl:
     mods, anns = _collect_annotations_and_modifiers(node, src)
     name_node = node.child_by_field_name("name")
     name = _txt(name_node, src) if name_node is not None else ("<init>" if is_constructor else "<method>")
@@ -522,7 +750,7 @@ def _parse_method(node: Node, src: bytes, *, is_constructor: bool) -> MethodDecl
     params = _parse_params(node.child_by_field_name("parameters"), src)
     sig_params = ",".join(p.type_name for p in params)
     signature = f"{name}({sig_params})"
-    return MethodDecl(
+    m = MethodDecl(
         name=name,
         return_type=return_type,
         is_constructor=is_constructor,
@@ -535,6 +763,31 @@ def _parse_method(node: Node, src: bytes, *, is_constructor: bool) -> MethodDecl
         start_line=node.start_point[0] + 1,
         end_line=node.end_point[0] + 1,
     )
+    caller_fqn = f"{type_fqn}#{signature}"
+    body = node.child_by_field_name("body")
+    if body is not None:
+        m.local_vars = _collect_local_vars(body, src)
+        sites = _collect_call_sites(body, src, caller_fqn=caller_fqn, in_lambda=False)
+        if is_constructor:
+            had_explicit = any(
+                s.callee_simple == "<init>" and s.receiver_expr in ("this", "super") for s in sites
+            )
+            if not had_explicit:
+                sites.append(
+                    CallSite(
+                        caller_fqn=caller_fqn,
+                        receiver_expr="super",
+                        callee_simple="<init>",
+                        arg_count=0,
+                        is_static_call=False,
+                        is_constructor=True,
+                        in_lambda=False,
+                        line=m.start_line,
+                        byte=m.start_byte,
+                    )
+                )
+        m.call_sites = sites
+    return m
 
 
 def _parse_field(node: Node, src: bytes) -> list[FieldDecl]:
@@ -593,9 +846,9 @@ def _parse_type(node: Node, src: bytes, *, package: str, outer_fqn: str | None) 
             if ch.type == "field_declaration":
                 fields.extend(_parse_field(ch, src))
             elif ch.type == "method_declaration":
-                methods.append(_parse_method(ch, src, is_constructor=False))
+                methods.append(_parse_method(ch, src, is_constructor=False, type_fqn=fqn))
             elif ch.type == "constructor_declaration":
-                methods.append(_parse_method(ch, src, is_constructor=True))
+                methods.append(_parse_method(ch, src, is_constructor=True, type_fqn=fqn))
             elif ch.type in _TYPE_KINDS:
                 nested.append(_parse_type(ch, src, package=package, outer_fqn=fqn))
 
@@ -649,6 +902,7 @@ def parse_java(source: bytes | str) -> JavaFileAst:
         all_types=[],
         parse_error=False,
         source_bytes=len(src),
+        file_imports=FileImports(),
     )
 
     if not src:
@@ -665,6 +919,8 @@ def parse_java(source: bytes | str) -> JavaFileAst:
     imports: list[str] = []
     wildcard_imports: list[str] = []
     explicit_imports: dict[str, str] = {}
+    static_methods: dict[str, str] = {}
+    static_wildcards: list[str] = []
     top_types: list[TypeDecl] = []
 
     for child in root.named_children:
@@ -675,6 +931,7 @@ def parse_java(source: bytes | str) -> JavaFileAst:
                     package = _txt(c, src)
                     break
         elif t == "import_declaration":
+            is_static = _import_declaration_is_static(child, src)
             has_wild = any(c.type == "asterisk" for c in child.children)
             ident_node = None
             for c in child.named_children:
@@ -684,6 +941,15 @@ def parse_java(source: bytes | str) -> JavaFileAst:
             if ident_node is None:
                 continue
             ident = _txt(ident_node, src)
+            if is_static:
+                if has_wild:
+                    static_wildcards.append(ident)
+                    imports.append(f"import static {ident}.*")
+                else:
+                    simple = ident.rsplit(".", 1)[-1]
+                    static_methods[simple] = ident
+                    imports.append(f"import static {ident}")
+                continue
             if has_wild:
                 wildcard_imports.append(ident)
                 imports.append(f"{ident}.*")
@@ -691,7 +957,14 @@ def parse_java(source: bytes | str) -> JavaFileAst:
                 imports.append(ident)
                 simple = ident.rsplit(".", 1)[-1]
                 explicit_imports[simple] = ident
-        elif t in _TYPE_KINDS:
+
+    file_imports = FileImports(
+        explicit=explicit_imports,
+        static_methods=static_methods,
+        static_wildcards=static_wildcards,
+    )
+    for child in root.named_children:
+        if child.type in _TYPE_KINDS:
             top_types.append(_parse_type(child, src, package=package, outer_fqn=None))
 
     all_types = _flatten(top_types)
@@ -704,6 +977,7 @@ def parse_java(source: bytes | str) -> JavaFileAst:
         all_types=all_types,
         parse_error=root.has_error,
         source_bytes=len(src),
+        file_imports=file_imports,
     )
 
 

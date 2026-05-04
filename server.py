@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 from sentence_transformers import SentenceTransformer
 
 from index_common import SBERT_MODEL
-from kuzu_queries import KuzuGraph, resolve_kuzu_path
+from kuzu_queries import CallEdge, KuzuGraph, resolve_kuzu_path
 from search_lancedb import (
     TABLES,
     explain_score_components,
@@ -36,14 +36,19 @@ _INSTRUCTIONS = (
     "deterministic AST-derived graph (Kuzu) for structural queries: implementors, "
     "subclasses, injectors, impact analysis, and graph-expanded codebase_search. "
     "Use codebase_search for meaning-based discovery — prefer limit 5; use offset to page. "
-    "Use find_implementors / find_subclasses / find_injectors / impact_analysis / neighbors / "
-    "list_by_role / list_by_annotation / list_by_capability for exact structural traversal. "
+    "Use find_implementors / find_subclasses / find_injectors / find_callers / find_callees / "
+    "impact_analysis / neighbors / list_by_role / list_by_annotation / list_by_capability for "
+    "exact structural traversal. "
     "Use list_by_capability for behavioural questions about message-driven "
     "(MESSAGE_LISTENER|MESSAGE_PRODUCER), scheduled (SCHEDULED_TASK), or "
     "exception-handling (EXCEPTION_HANDLER) code. "
     "Use trace_flow for CONTROLLER -> SERVICE -> REPOSITORY/FEIGN end-to-end chains; "
     "its seeds are auto-filtered to entrypoint-like roles (CONTROLLER / COMPONENT / "
     "SERVICE / FEIGN_CLIENT), so it's the right tool for 'how / what happens when' queries. "
+    "trace_flow defaults to follow_calls=true (DECLARES+CALLS paths merged with INJECTS/EXTENDS/"
+    "IMPLEMENTS) and exclude_external=true on that CALLS hop (drops discovered types under "
+    "java/javax/jakarta/org.springframework/lombok prefixes); "
+    "pass follow_calls=false for type-only wiring. "
     "For behavioural queries prefer exclude_roles=['DTO','ENTITY','CONFIG','OTHER'] on "
     "codebase_search; for schema/domain questions pass role='DTO' or role='ENTITY' instead. "
     "Set auto_hybrid=true when the query contains identifiers / CamelCase / snake_case "
@@ -189,6 +194,24 @@ class InjectorsOutput(BaseModel):
     message: str | None = None
 
 
+class CallEdgeDto(BaseModel):
+    caller: SymbolDto
+    callee: SymbolDto
+    confidence: float = 0.0
+    strategy: str = ""
+    source: str = "static"
+    call_site_line: int = 0
+    call_site_byte: int = 0
+    arg_count: int = 0
+    resolved: bool = True
+
+
+class CallEdgesOutput(BaseModel):
+    success: bool
+    results: list[CallEdgeDto] = Field(default_factory=list)
+    message: str | None = None
+
+
 class GraphMetaOutput(BaseModel):
     success: bool
     enabled: bool
@@ -235,7 +258,7 @@ class IndexInfoOutput(BaseModel):
 
 
 class ViaEdgeDto(BaseModel):
-    edge_type: str = Field(description="INJECTS | EXTENDS | IMPLEMENTS")
+    edge_type: str = Field(description="INJECTS | EXTENDS | IMPLEMENTS | CALLS")
     from_fqn: str = Field(description="FQN of the parent-stage symbol that introduced this node")
     hop: int = Field(description="1 = direct neighbour of the previous-stage frontier")
 
@@ -371,6 +394,20 @@ def _graph_meta_output() -> GraphMetaOutput:
         counts={k: int(v) for k, v in (meta.get("counts") or {}).items()},
         module_counts=mod_counts,
         microservice_counts=ms_counts,
+    )
+
+
+def _call_edge_to_dto(e: CallEdge) -> CallEdgeDto:
+    return CallEdgeDto(
+        caller=_symbol_to_dto(e.src),
+        callee=_symbol_to_dto(e.dst),
+        confidence=e.confidence,
+        strategy=e.strategy,
+        source=e.source,
+        call_site_line=e.call_site_line,
+        call_site_byte=e.call_site_byte,
+        arg_count=e.arg_count,
+        resolved=e.resolved,
     )
 
 
@@ -757,6 +794,79 @@ def create_mcp_server() -> FastMCP:
         return InjectorsOutput(success=True, results=results)
 
     @mcp.tool(
+        name="find_callers",
+        description=(
+            "Inbound static CALLS closure: who invokes a method or any method of a type. "
+            "Pass a method FQN (`com.foo.Bar#baz()`), a type FQN (fans out via DECLARES), "
+            "or a simple method name (may return many rows). "
+            "Use min_confidence (e.g. 0.9) to drop low-confidence edges; exclude_external=true "
+            "(default) drops edges whose caller (src) is under java/javax/jakarta/"
+            "org.springframework/lombok prefixes — the needle may be external "
+            "(e.g. JDK method) and still return internal callers."
+        ),
+    )
+    async def find_callers(
+        fqn_or_signature: str = Field(
+            description="Method FQN with signature, type FQN, or simple method name.",
+        ),
+        depth: int = Field(default=1, ge=1, le=5),
+        limit: int = Field(default=100, ge=1, le=500),
+        min_confidence: float = Field(default=0.0, ge=0.0, le=1.0),
+        exclude_external: bool = Field(default=True),
+        module: str | None = Field(default=None, description="Maven/Gradle module name."),
+        microservice: str | None = Field(default=None, description="Microservice name."),
+    ) -> CallEdgesOutput:
+        ok, graph, msg = _require_graph()
+        if not ok or graph is None:
+            return CallEdgesOutput(success=False, message=msg)
+        edges = await asyncio.to_thread(
+            graph.find_callers,
+            fqn_or_signature,
+            depth=depth,
+            limit=limit,
+            min_confidence=min_confidence,
+            exclude_external=exclude_external,
+            module=module,
+            microservice=microservice,
+        )
+        return CallEdgesOutput(success=True, results=[_call_edge_to_dto(e) for e in edges])
+
+    @mcp.tool(
+        name="find_callees",
+        description=(
+            "Outbound static CALLS closure: what a method (or type via DECLARES) invokes. "
+            "Same needle shapes as find_callers. "
+            "exclude_external=true (default) drops edges whose callee (dst) matches those "
+            "prefixes; the needle may be external while listing project callees."
+        ),
+    )
+    async def find_callees(
+        fqn_or_signature: str = Field(
+            description="Method FQN with signature, type FQN, or simple method name.",
+        ),
+        depth: int = Field(default=1, ge=1, le=5),
+        limit: int = Field(default=100, ge=1, le=500),
+        min_confidence: float = Field(default=0.0, ge=0.0, le=1.0),
+        exclude_external: bool = Field(default=True),
+        module: str | None = Field(default=None, description="Maven/Gradle module name."),
+        microservice: str | None = Field(default=None, description="Microservice name."),
+    ) -> CallEdgesOutput:
+        ok, graph, msg = _require_graph()
+        if not ok or graph is None:
+            return CallEdgesOutput(success=False, message=msg)
+        edges = await asyncio.to_thread(
+            graph.find_callees,
+            fqn_or_signature,
+            depth=depth,
+            limit=limit,
+            min_confidence=min_confidence,
+            exclude_external=exclude_external,
+            module=module,
+            microservice=microservice,
+        )
+        return CallEdgesOutput(success=True, results=[_call_edge_to_dto(e) for e in edges])
+
+    @mcp.tool(
         name="list_by_role",
         description="All graph symbols with a given role (CONTROLLER|SERVICE|REPOSITORY|...).",
     )
@@ -889,16 +999,19 @@ def create_mcp_server() -> FastMCP:
             "FEIGN_CLIENT/REPOSITORY/MAPPER) and returns the likely chain.\n"
             "Each stage symbol carries `via: [{edge_type, from_fqn, hop}]` so "
             "callers can see *why* it was pulled in (INJECTS / EXTENDS / "
-            "IMPLEMENTS). Stage 0 is seeds and has `via=[]`.\n"
+            "IMPLEMENTS / CALLS). Stage 0 is seeds and has `via=[]`.\n"
             "Examples:\n"
             '  minimal:  {\"query\": \"what happens on new client message\"}\n'
             '  scoped:   {\"query\": \"...\", \"microservice\": \"chat-assign\", '
             '\"seed_limit\": 5, \"stage_limit\": 8, \"depth\": 2}\n'
             "Limits: exactly 3 stages (entrypoints / services / integrations); "
             "`seed_limit` caps the vector-search seeds feeding stage 0; `stage_limit` "
-            "caps per-stage size; `depth` is hops-per-stage, not total depth. This is "
-            "not a full call graph — method-level CALLS / PUBLISHES edges are not yet "
-            "indexed."
+            "caps per-stage size; `depth` is hops-per-stage, not total depth. "
+            "`follow_calls` (default true) merges DECLARES+CALLS paths with type wiring; "
+            "set `follow_calls=false` for type-only INJECTS/EXTENDS/IMPLEMENTS expansion. "
+            "`exclude_external` (default true) drops types reached only via that CALLS hop "
+            "when their type FQN matches JDK/Spring/Lombok-style external prefixes "
+            "(discovered callee types, not seeds)."
         ),
     )
     async def trace_flow(
@@ -912,6 +1025,19 @@ def create_mcp_server() -> FastMCP:
         seed_limit: int = Field(default=5, ge=1, le=20),
         stage_limit: int = Field(default=8, ge=1, le=50),
         depth: int = Field(default=2, ge=1, le=3),
+        follow_calls: bool = Field(
+            default=True,
+            description="When true (default), each stage also expands via DECLARES+CALLS.",
+        ),
+        exclude_external: bool = Field(
+            default=True,
+            description=(
+                "When true (default), symbols pulled in only via the DECLARES+CALLS branch "
+                "are skipped if their type FQN matches external prefixes (java.*, "
+                "javax.*, jakarta.*, org.springframework.*, lombok.*) — discovered types "
+                "only, same idea as filtering callees in find_callees."
+            ),
+        ),
         exclude_roles: list[str] | None = Field(
             default=None,
             description=(
@@ -1005,6 +1131,8 @@ def create_mcp_server() -> FastMCP:
                 graph.trace_flow, seeds,
                 module=module, microservice=microservice,
                 depth=depth, stage_limit=stage_limit,
+                follow_calls=follow_calls,
+                exclude_external=exclude_external,
             )
         except Exception as e:
             return TraceFlowOutput(success=False, message=f"trace failed: {e!s}")

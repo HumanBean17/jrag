@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import pytest
 
+from kuzu_queries import _is_external_fqn
+
 
 def _names(symbols) -> set[str]:
     return {s.name for s in symbols}
@@ -43,6 +45,8 @@ def test_meta(kuzu_graph) -> None:
     assert meta["built_at"] > 0
     assert meta["counts"]["types"] > 0
     assert meta["counts"]["injects"] > 0
+    assert meta["counts"].get("calls", 0) > 0
+    assert meta["counts"].get("declares", 0) > 0
 
 
 def test_module_counts_keys(kuzu_graph) -> None:
@@ -243,7 +247,83 @@ def test_trace_flow_from_controller_seed(kuzu_graph) -> None:
         for entry in later:
             assert entry.via, entry
             for v in entry.via:
+                assert v.edge_type in {"INJECTS", "EXTENDS", "IMPLEMENTS", "CALLS"}
+
+
+def _type_part_fqn(method_fqn: str) -> str:
+    return method_fqn.split("#", 1)[0]
+
+
+def test_trace_flow_follow_calls_false_type_only_edges(kuzu_graph) -> None:
+    seeds = ["com.bank.chat.assign.web.ChatManagementController"]
+    stages = kuzu_graph.trace_flow(seeds, depth=2, stage_limit=20, follow_calls=False)
+    assert stages
+    for later in stages[1:]:
+        for entry in later:
+            for v in entry.via:
                 assert v.edge_type in {"INJECTS", "EXTENDS", "IMPLEMENTS"}
+
+
+def test_find_callers_assign_method(kuzu_graph) -> None:
+    needle = "com.bank.chat.assign.service.ChatManagementService#assign(AssignmentRequest)"
+    edges = kuzu_graph.find_callers(needle, depth=1, limit=50)
+    caller_types = {_type_part_fqn(e.src.fqn) for e in edges}
+    assert "com.bank.chat.assign.web.ChatManagementController" in caller_types, caller_types
+
+
+def test_find_callees_assign_method(kuzu_graph) -> None:
+    needle = "com.bank.chat.assign.service.ChatManagementService#assign(AssignmentRequest)"
+    edges = kuzu_graph.find_callees(needle, depth=1, limit=80)
+    callee_names = {e.dst.name for e in edges}
+    assert "save" in callee_names or "findByConversationId" in callee_names or "resolveSplitName" in callee_names, (
+        callee_names
+    )
+
+
+def test_find_callers_type_form_via_declares(kuzu_graph) -> None:
+    edges = kuzu_graph.find_callers("com.bank.chat.assign.repo.AssignChatRepository", depth=1, limit=100)
+    assert edges, "expected at least one caller of a repository method"
+    assert any("ChatManagement" in e.src.fqn for e in edges), [e.src.fqn for e in edges]
+
+
+def test_min_confidence_filter_drops_edges(kuzu_graph) -> None:
+    needle = "com.bank.chat.assign.service.ChatManagementService#assign(AssignmentRequest)"
+    all_e = kuzu_graph.find_callees(needle, depth=2, limit=200, min_confidence=0.0)
+    hi = kuzu_graph.find_callees(needle, depth=2, limit=200, min_confidence=0.99)
+    assert len(all_e) >= len(hi)
+
+
+def test_exclude_external_filters_known_prefix(kuzu_graph) -> None:
+    needle = "com.bank.chat.assign.service.ChatManagementService#assign(AssignmentRequest)"
+    with_ext = kuzu_graph.find_callees(needle, depth=3, limit=300, exclude_external=False)
+    no_ext = kuzu_graph.find_callees(needle, depth=3, limit=300, exclude_external=True)
+    assert len(with_ext) >= len(no_ext)
+    assert not any(_is_external_fqn(e.dst.fqn) for e in no_ext)
+
+
+def test_expand_methods_from_service_seed(kuzu_graph) -> None:
+    extra = kuzu_graph.expand_methods(
+        ["com.bank.chat.assign.service.ChatManagementService"],
+        depth=1,
+        limit=50,
+    )
+    assert isinstance(extra, list)
+
+
+def test_expand_methods_default_excludes_external_prefixes(kuzu_graph) -> None:
+    extra = kuzu_graph.expand_methods(
+        ["com.bank.chat.assign.service.ChatManagementService"],
+        depth=2,
+        limit=200,
+    )
+    assert not any(_is_external_fqn(t) for t in extra), extra
+
+
+def test_expand_methods_exclude_external_false_can_include_more(kuzu_graph) -> None:
+    seed = ["com.bank.chat.assign.service.ChatManagementService"]
+    with_ext = kuzu_graph.expand_methods(seed, depth=2, limit=300, exclude_external=False)
+    no_ext = kuzu_graph.expand_methods(seed, depth=2, limit=300, exclude_external=True)
+    assert len(with_ext) >= len(no_ext)
 
 
 def test_trace_flow_empty_seeds_returns_empty(kuzu_graph) -> None:

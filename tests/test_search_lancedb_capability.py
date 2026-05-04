@@ -5,6 +5,7 @@ import uuid
 
 from sentence_transformers import SentenceTransformer
 
+from ast_java import ONTOLOGY_VERSION
 from index_common import SBERT_MODEL
 from search_lancedb import TABLES, _query_vector, run_search
 
@@ -35,7 +36,7 @@ def _one_java_row_built_for_capability_filter(
         "role": "OTHER",
         "annotations_on_type": ["KafkaListener"],
         "symbols": ["onMessage"],
-        "ontology_version": 3,
+        "ontology_version": ONTOLOGY_VERSION,
         "capabilities": ["MESSAGE_LISTENER", "SCHEDULED_TASK"],
     }
 

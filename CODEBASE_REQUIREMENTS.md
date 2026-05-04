@@ -66,6 +66,42 @@ inside the MCP.
   generated clients) in committed source trees — they balloon the graph
   with phantom edges.
 
+### A.2 Call graph (static `CALLS` / `DECLARES`)
+
+The graph builder extracts call sites with **tree-sitter-java** node types:
+
+- **Call sites:** `method_invocation`, `object_creation_expression`, `method_reference`,
+  `explicit_constructor_invocation`
+- **Nested context:** `lambda_expression`, `class_body` under `object_creation_expression`
+  (anonymous classes), `local_variable_declaration`, `formal_parameter` (scope / locals)
+- **Imports:** `import_declaration` with a `static` child for `import static ...`
+
+Call resolution is heuristic (confidence + `strategy` on each `CALLS` edge). Chained receivers
+(`foo().bar()`) and expression-qualified method references (`getX()::trim`) intentionally
+produce low-confidence or phantom edges rather than guessing.
+
+**Receiver scope (locals):** The resolver keeps **one** name→type map per method: fields (plus
+visible inherited fields), then parameters, then locals declared anywhere in the method body.
+Locals **overwrite** same-named fields or parameters (Java shadowing at that level). Local names
+are still a **flat list** from an AST walk: **lexical block nesting is not modeled** (no separate
+scope for inner `{ }` vs outer code). If the same simple name is reused in nested blocks with
+different types, receiver resolution can be wrong; the common case (field vs parameter vs
+method-level local, distinct names) is fine.
+
+- **`unique_type_name` (0.75)** — the receiver or static qualifier matched exactly one indexed
+  type by simple name (`decl.name`). The builder does **not** use the per-method name index for
+  that step (a globally unique method name is not evidence about an unresolved receiver identifier).
+- **Overload tagging:** `overload_ambiguous` is emitted only when multiple callee candidates
+  remain after the name/arity walk; when arity narrows to a single candidate, the edge keeps the
+  receiver-resolution strategy (for example `import_map` or `this_super`).
+
+The checklist in `propose/completed/CALL-GRAPH-PROPOSE.md` §7.1 is covered across `tests/test_ast_java_calls.py`
+(parse-only), `tests/test_call_graph_smoke_roundtrip.py` plus `tests/fixtures/call_graph_smoke/`
+(mini Maven tree for scope / overload / wildcard / method-ref graph checks), the session Kuzu
+fixture (`tests/conftest.py`), `tests/test_ast_graph_build.py`, `tests/test_kuzu_queries.py`,
+`tests/test_call_graph_receiver_resolution.py`, and MCP smoke tests — not as one numbered test
+per bullet.
+
 **Important:** `module` and `microservice` inference depends on the
 **project root** used during indexing:
 
