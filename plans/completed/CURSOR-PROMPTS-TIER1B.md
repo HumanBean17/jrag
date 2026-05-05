@@ -1,5 +1,8 @@
 # Cursor task prompts — Tier 1B completion (PR-D1 → PR-D3)
 
+Status: **completed — all PRs merged**. Kept as a reference template for
+future per-PR Cursor delegation work.
+
 One prompt per PR. Each is **self-contained**: copy the prompt verbatim
 into Cursor, attach the files listed in its `@-files` block, and let
 Sonnet execute. Each prompt fits comfortably in a single Sonnet session.
