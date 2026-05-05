@@ -293,7 +293,9 @@ def test_35b_compute_risk_single_cross_service_bonus_is_point_two(monkeypatch) -
             ),
         ],
     )
-    assert rep.risk_score - baseline.risk_score == 0.2
+    # Keep raw terms identical in both runs; only cross-service route-callers differ.
+    assert rep.routes_touched == baseline.routes_touched == ["route-1"]
+    assert abs((rep.risk_score - baseline.risk_score) - 0.2) < 1e-9
 
 
 def test_36_removed_symbol_from_minus_only_hunk(kuzu_graph) -> None:

@@ -1642,7 +1642,7 @@ def pass6_match_edges(
     member_by_id = {m.node_id: m for m in tables.members}
 
     # Pass 6 is idempotent for full rebuilds: each run fully re-derives match outcomes.
-    # If incremental rebuild lands later, this reset must remain pass-scoped.
+    # If incremental rebuild lands later (Tier-2 follow-up), this reset must remain pass-scoped.
     tables.call_edge_stats.http_calls_match_breakdown.clear()
     tables.call_edge_stats.async_calls_match_breakdown.clear()
     tables.call_edge_stats.cross_service_calls_total = 0

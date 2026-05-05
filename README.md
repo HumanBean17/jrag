@@ -389,6 +389,9 @@ would produce, missing fields are inherited from the built-in result. Partial
 overrides are therefore non-destructive (tightening instead of replacing). To
 fully replace the built-in result for a method, supply all relevant fields in
 the override; otherwise unspecified fields default to built-in values.
+Example: if built-in detection produces `client_kind=rest_template`, `method=GET`,
+`path=/users/{id}`, and an override sets only `path=/users/me`, the final call
+keeps `client_kind=rest_template` and `method=GET` while changing only the path.
 
 For source stubs, copy `@CodebaseClient` / `@CodebaseClients` and
 `@CodebaseProducer` / `@CodebaseProducers` from
