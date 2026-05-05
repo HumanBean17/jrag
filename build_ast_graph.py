@@ -145,6 +145,7 @@ class CallResolutionStats:
     phantom_chained: int = 0
     phantom_other: int = 0
     callee_unresolved: int = 0
+    skipped_cross_service: int = 0
 
 
 @dataclass
@@ -252,6 +253,7 @@ class GraphTables:
     methods_by_type: dict[str, list[MemberEntry]] = field(default_factory=dict)
     parse_errors: int = 0
     skipped_files: int = 0
+    pass3_skipped_cross_service: int = 0
 
 
 # ---------- file walk (see `path_filtering.iter_java_source_files`) ----------
@@ -1042,6 +1044,7 @@ def _resolve_and_emit_call(
     recv_type, strat, conf = _resolve_receiver_type(call, scope=scope, member=member, ast=ast, tables=tables)
 
     if strat == "chained_receiver":
+        # Chained-receiver phantoms have no microservice attribution, so they cannot violate cross-service CALLS invariants.
         pid = _phantom_method_id(
             tables, receiver_fqn=None, receiver_expr=call.receiver_expr,
             callee=call.callee_simple, arg_count=call.arg_count,
@@ -1053,6 +1056,7 @@ def _resolve_and_emit_call(
         return
 
     if recv_type is None:
+        # Unresolved-receiver phantoms also carry empty microservice attribution.
         pid = _phantom_method_id(
             tables, receiver_fqn=None, receiver_expr=call.receiver_expr,
             callee=call.callee_simple, arg_count=call.arg_count,
@@ -1066,6 +1070,22 @@ def _resolve_and_emit_call(
     candidates, name_only_fb = _lookup_method_candidates(
         recv_type, call.callee_simple, call.arg_count, tables, ast,
     )
+
+    # Guard relies on `_lookup_method_candidates` returning a same-ms candidate when one exists; revisit if pass3 scopes lookups per-microservice.
+    if member.microservice:
+        same_ms = [c for c in candidates if c.microservice == member.microservice]
+        if same_ms and len(same_ms) != len(candidates):
+            for c in candidates:
+                if c.microservice and c.microservice != member.microservice:
+                    log.warning(
+                        "skipping cross-microservice CALLS edge %s -> %s "
+                        "(caller=%s, callee=%s)",
+                        f"{member.parent_fqn}#{member.decl.signature}",
+                        f"{c.parent_fqn}#{c.decl.signature}",
+                        member.microservice, c.microservice,
+                    )
+                    stats.skipped_cross_service += 1
+            candidates = same_ms
 
     # Compute the call-shape strategy / confidence override BEFORE the
     # empty-candidates check so they are preserved even when the callee cannot
@@ -1106,11 +1126,12 @@ def _resolve_and_emit_call(
         return
 
     if len(candidates) == 1:
+        candidate = candidates[0]
         ref_arity: int | None = None
         if call.arg_count < 0:
-            ref_arity = len(candidates[0].decl.parameters)
+            ref_arity = len(candidate.decl.parameters)
         _emit_call_edge(
-            tables, stats, src_id=member.node_id, dst_id=candidates[0].node_id, call=call,
+            tables, stats, src_id=member.node_id, dst_id=candidate.node_id, call=call,
             confidence=edge_conf, strategy=edge_strat, resolved=True,
             edge_arg_count=ref_arity,
         )
@@ -1165,11 +1186,13 @@ def pass3_calls(tables: GraphTables, asts: dict[str, JavaFileAst], *, verbose: b
     pct_chained = 100.0 * stats.phantom_chained / max(1, stats.total)
     pct_callee_unres = 100.0 * stats.callee_unresolved / max(1, stats.total)
     pct_phantom_recv = 100.0 * stats.phantom_other / max(1, stats.total)
+    tables.pass3_skipped_cross_service = int(stats.skipped_cross_service)
     msg = (
         f"Call resolution: {stats.total} sites, {stats.phantom_chained} chained phantoms "
         f"({pct_chained:.1f}%), {stats.callee_unresolved} unresolved callee "
         f"({pct_callee_unres:.1f}%), {stats.phantom_other} phantom receiver "
-        f"({pct_phantom_recv:.1f}%), strategies: {dict(stats.by_strategy)}"
+        f"({pct_phantom_recv:.1f}%), {stats.skipped_cross_service} skipped cross-service, "
+        f"strategies: {dict(stats.by_strategy)}"
     )
     log.info(msg)
     if verbose:
@@ -1781,7 +1804,8 @@ _SCHEMA_META = (
     "async_producers_from_brownfield_pct DOUBLE, "
     "http_calls_match_breakdown STRING, "
     "async_calls_match_breakdown STRING, "
-    "cross_service_calls_total INT64"
+    "cross_service_calls_total INT64, "
+    "pass3_skipped_cross_service INT64"
     ")"
 )
 
@@ -2158,7 +2182,8 @@ def _write_meta(conn: kuzu.Connection, tables: GraphTables, source_root: Path) -
         "async_producers_from_brownfield_pct: $async_producers_from_brownfield_pct, "
         "http_calls_match_breakdown: $http_calls_match_breakdown, "
         "async_calls_match_breakdown: $async_calls_match_breakdown, "
-        "cross_service_calls_total: $cross_service_calls_total})",
+        "cross_service_calls_total: $cross_service_calls_total, "
+        "pass3_skipped_cross_service: $pass3_skipped_cross_service})",
         {
             "k": "graph",
             "ov": ONTOLOGY_VERSION,
@@ -2183,6 +2208,7 @@ def _write_meta(conn: kuzu.Connection, tables: GraphTables, source_root: Path) -
             "http_calls_match_breakdown": json.dumps(http_match),
             "async_calls_match_breakdown": json.dumps(async_match),
             "cross_service_calls_total": int(call_stats.cross_service_calls_total),
+            "pass3_skipped_cross_service": int(tables.pass3_skipped_cross_service),
         },
     )
 
