@@ -329,7 +329,26 @@ class KuzuGraph:
     # ---- meta ----
 
     def meta(self) -> dict[str, Any]:
-        _META_FULL = (
+        _META_PR_E3 = (
+            "MATCH (m:GraphMeta) RETURN m.key AS key, m.ontology_version AS ontology_version, "
+            "m.built_at AS built_at, m.source_root AS source_root, "
+            "m.counts_json AS counts_json, m.parse_errors AS parse_errors, "
+            "m.routes_total AS routes_total, m.exposes_total AS exposes_total, "
+            "m.routes_by_framework AS routes_by_framework, "
+            "m.routes_resolved_pct AS routes_resolved_pct, "
+            "m.routes_from_brownfield_pct AS routes_from_brownfield_pct, "
+            "m.routes_by_layer AS routes_by_layer, "
+            "m.http_calls_total AS http_calls_total, m.async_calls_total AS async_calls_total, "
+            "m.http_calls_by_strategy AS http_calls_by_strategy, m.async_calls_by_strategy AS async_calls_by_strategy, "
+            "m.http_calls_resolved_pct AS http_calls_resolved_pct, m.async_calls_resolved_pct AS async_calls_resolved_pct, "
+            "m.http_clients_from_brownfield_pct AS http_clients_from_brownfield_pct, "
+            "m.async_producers_from_brownfield_pct AS async_producers_from_brownfield_pct, "
+            "m.http_calls_match_breakdown AS http_calls_match_breakdown, "
+            "m.async_calls_match_breakdown AS async_calls_match_breakdown, "
+            "m.cross_service_calls_total AS cross_service_calls_total, "
+            "m.pass3_skipped_cross_service AS pass3_skipped_cross_service"
+        )
+        _META_PRE_E3 = (
             "MATCH (m:GraphMeta) RETURN m.key AS key, m.ontology_version AS ontology_version, "
             "m.built_at AS built_at, m.source_root AS source_root, "
             "m.counts_json AS counts_json, m.parse_errors AS parse_errors, "
@@ -361,19 +380,23 @@ class KuzuGraph:
             "m.counts_json AS counts_json, m.parse_errors AS parse_errors"
         )
         rows: list[dict[str, Any]]
-        meta_mode = "full"
+        meta_mode = "pr_e3"
         try:
-            rows = self._rows(_META_FULL)
+            rows = self._rows(_META_PR_E3)
         except Exception:
-            meta_mode = "pr_a2"
+            meta_mode = "pre_e3"
             try:
-                rows = self._rows(_META_PR_A2)
+                rows = self._rows(_META_PRE_E3)
             except Exception:
-                meta_mode = "legacy"
+                meta_mode = "pr_a2"
                 try:
-                    rows = self._rows(_META_LEGACY)
-                except Exception as e:
-                    return {"error": f"{e}"}
+                    rows = self._rows(_META_PR_A2)
+                except Exception:
+                    meta_mode = "legacy"
+                    try:
+                        rows = self._rows(_META_LEGACY)
+                    except Exception as e:
+                        return {"error": f"{e}"}
         if not rows:
             return {"error": "no GraphMeta node"}
         row = rows[0]
@@ -398,6 +421,7 @@ class KuzuGraph:
         http_calls_match_breakdown: dict[str, Any] = {}
         async_calls_match_breakdown: dict[str, Any] = {}
         cross_service_calls_total = 0
+        pass3_skipped_cross_service = 0
         if meta_mode != "legacy":
             rfw_raw = row.get("routes_by_framework") or "{}"
             try:
@@ -409,7 +433,7 @@ class KuzuGraph:
             routes_total = int(row.get("routes_total") or 0)
             exposes_total = int(row.get("exposes_total") or 0)
             routes_resolved_pct = float(row.get("routes_resolved_pct") or 0.0)
-        if meta_mode == "full":
+        if meta_mode in ("pr_e3", "pre_e3"):
             routes_from_brownfield_pct = float(row.get("routes_from_brownfield_pct") or 0.0)
             rbl_raw = row.get("routes_by_layer") or "{}"
             try:
@@ -453,6 +477,7 @@ class KuzuGraph:
             if not isinstance(async_calls_match_breakdown, dict):
                 async_calls_match_breakdown = {}
             cross_service_calls_total = int(row.get("cross_service_calls_total") or 0)
+            pass3_skipped_cross_service = int(row.get("pass3_skipped_cross_service") or 0)
         return {
             "ontology_version": int(row.get("ontology_version") or 0),
             "built_at": int(row.get("built_at") or 0),
@@ -476,6 +501,7 @@ class KuzuGraph:
             "http_calls_match_breakdown": http_calls_match_breakdown,
             "async_calls_match_breakdown": async_calls_match_breakdown,
             "cross_service_calls_total": cross_service_calls_total,
+            "pass3_skipped_cross_service": pass3_skipped_cross_service,
             "db_path": self.db_path,
         }
 

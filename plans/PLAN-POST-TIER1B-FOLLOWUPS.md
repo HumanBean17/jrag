@@ -19,7 +19,7 @@ Links go to the review comment so the original context survives.
 | 5 | [PR-D2 #13](https://github.com/HumanBean17/java-enterprise-codebase-rag/pull/13#issuecomment-4378995637) post-D3 follow-up 1 | README: document `anchor`-fills-from-builtin behaviour for partial brownfield overrides | low (doc) |
 | 6 | [PR-D2 #13](https://github.com/HumanBean17/java-enterprise-codebase-rag/pull/13#issuecomment-4378995637) post-D3 follow-up 2 | Proposal §6: add `channel` field to the `OutgoingCallDecl` schema sketch as durable | low (doc) |
 | 7 | [PR-D1 #12](https://github.com/HumanBean17/java-enterprise-codebase-rag/pull/12#issuecomment-4378723605) obs 2 | Second copy of strategy ladder still in `graph_enrich.py:720-724` (annotation/spel/constant_ref) — known consolidation candidate | medium (tech debt) |
-| 8 | [PR-E1 #19 review reply](https://github.com/HumanBean17/java-enterprise-codebase-rag/pull/19#issuecomment-4380659734) | `pass3_calls` doesn't enforce the intra-JVM invariant for `CALLS` edges. Today no cross-microservice CALLS edge is emitted on any fixture (verified on `cross_service_smoke`: 9 CALLS edges, 0 cross), but the cleanliness is incidental — no `caller.microservice == callee.microservice` guard exists. FQN collisions across services or brownfield supertype overrides could in principle break the invariant silently. | low-to-medium (invariant) |
+| 8 | [PR-E1 #19 review reply](https://github.com/HumanBean17/java-enterprise-codebase-rag/pull/19#issuecomment-4380659734) | `pass3_calls` doesn't enforce the intra-JVM invariant for `CALLS` edges. Today no cross-microservice CALLS edge is emitted on any fixture (verified on `cross_service_smoke`: 9 CALLS edges, 0 cross), but the cleanliness is incidental — no `caller.microservice == callee.microservice` guard exists. FQN collisions across services or brownfield supertype overrides could in principle break the invariant silently. **✅ shipped in PR-E3** | low-to-medium (invariant) |
 
 ## Recommended PR boundaries
 
@@ -313,7 +313,9 @@ is surgical, not over-eager.
    (verified by extending one existing graph_meta assertion in
    `tests/test_kuzu_meta.py` or equivalent).
 5. Pass3 verbose log mentions the new counter.
-6. `260+` (current baseline + 1 new test) tests still pass.
+ 6. `260+` (current baseline + 1 new test) tests still pass.
+
+Status: shipped as PR-E3 in [#22](https://github.com/HumanBean17/java-enterprise-codebase-rag/pull/22).
 
 ### Risk
 
