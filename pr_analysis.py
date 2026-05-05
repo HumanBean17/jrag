@@ -37,6 +37,7 @@ class ChangedSymbol:
     change_type: str  # 'added' | 'removed' | 'modified'
     file: str
     hunk_lines: list[int]
+    cross_service_callers_count: int = 0
 
 
 @dataclass
@@ -377,7 +378,11 @@ def _route_ids_for_symbol(graph: Any, symbol_id: str) -> list[str]:
 
 
 def compute_risk(graph: Any, changed: list[ChangedSymbol]) -> PrRiskReport:
-    """Aggregate blast radius, routes, cross-service CALLS, and the v1 risk score."""
+    """Aggregate blast radius, routes, cross-service callers, and v1 risk score.
+
+    Risk score includes a cross-service route-caller bump: +1.0 per caller
+    (capped at +5.0) across changed methods that expose routes.
+    """
     notes: list[str] = []
     blast_by: dict[str, int] = {}
     blast_total = 0
@@ -393,6 +398,7 @@ def compute_risk(graph: Any, changed: list[ChangedSymbol]) -> PrRiskReport:
     _sym_return = ", ".join(f"s.{c} AS {c}" for c in sym_cols)
 
     iface_hit = 0.0
+    enriched_changed: list[ChangedSymbol] = []
     for cs in changed:
         sym_row = graph._rows(
             "MATCH (s:Symbol) WHERE s.id = $id RETURN " + _sym_return,
@@ -420,9 +426,29 @@ def compute_risk(graph: Any, changed: list[ChangedSymbol]) -> PrRiskReport:
             ):
                 cross_total += 1
 
-        for rid in _route_ids_for_symbol(graph, cs.symbol_id):
+        cs_cross_service = 0
+        route_ids = _route_ids_for_symbol(graph, cs.symbol_id)
+        for rid in route_ids:
             if rid not in routes:
                 routes.append(rid)
+            callers = graph._rows(
+                "MATCH (s:Symbol)-[e:HTTP_CALLS|ASYNC_CALLS]->(r:Route {id: $rid}) "
+                "WHERE e.match = 'cross_service' "
+                "RETURN s.id AS id LIMIT 500",
+                {"rid": rid},
+            )
+            cs_cross_service += len(callers)
+        enriched_changed.append(
+            ChangedSymbol(
+                symbol_id=cs.symbol_id,
+                fqn=cs.fqn,
+                kind=cs.kind,
+                change_type=cs.change_type,
+                file=cs.file,
+                hunk_lines=list(cs.hunk_lines),
+                cross_service_callers_count=cs_cross_service,
+            ),
+        )
 
     def _normalize(x: float, ceiling: float) -> float:
         if ceiling <= 0:
@@ -442,7 +468,11 @@ def compute_risk(graph: Any, changed: list[ChangedSymbol]) -> PrRiskReport:
         + w_iface * iface_hit
         + w_routes * _normalize(float(len(routes)), cap_routes)
     )
-    score = max(0.0, min(1.0, raw))
+    cross_service_bonus = min(
+        5.0,
+        float(sum(c.cross_service_callers_count for c in enriched_changed)),
+    )
+    score = max(0.0, raw + cross_service_bonus)
     if score < 0.3:
         band = "low"
     elif score < 0.7:
@@ -451,7 +481,7 @@ def compute_risk(graph: Any, changed: list[ChangedSymbol]) -> PrRiskReport:
         band = "high"
 
     return PrRiskReport(
-        changed_symbols=list(changed),
+        changed_symbols=list(enriched_changed),
         blast_radius_total=blast_total,
         blast_radius_by_symbol=blast_by,
         cross_service_callers=cross_total,

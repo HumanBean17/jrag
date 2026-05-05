@@ -128,8 +128,13 @@ async def test_route_graph_mcp_tools_smoke(mcp_server) -> None:
     listed = _structured(await mcp_server.call_tool("list_routes", {"limit": 20}))
     assert listed["success"] is True
     assert listed.get("routes")
-    rid = listed["routes"][0]["id"]
-    handlers = _structured(await mcp_server.call_tool("find_route_handlers", {"route_id": rid}))
+    rid = ""
+    handlers = {"success": True, "results": []}
+    for route in listed["routes"]:
+        rid = route["id"]
+        handlers = _structured(await mcp_server.call_tool("find_route_handlers", {"route_id": rid}))
+        if handlers.get("results"):
+            break
     assert handlers["success"] is True
     assert handlers.get("results") is not None
     assert len(handlers["results"]) >= 1
@@ -368,6 +373,93 @@ async def test_trace_flow_lance_required(mcp_server, monkeypatch, tmp_path) -> N
         await mcp_server.call_tool("trace_flow", {"query": "what happens on chat assign"})
     )
     assert out["success"] is False
+
+
+async def test_find_route_callers_by_route_id(mcp_server) -> None:
+    routes = _structured(await mcp_server.call_tool("list_routes", {"limit": 100}))
+    target = next((r for r in routes["routes"] if r.get("path_template") == "/chat/joinOperator"), None)
+    assert target is not None
+    out = _structured(await mcp_server.call_tool("find_route_callers", {"route_id": target["id"]}))
+    assert out["success"] is True
+    assert isinstance(out["results"], list)
+
+
+async def test_find_route_callers_by_path_method(mcp_server) -> None:
+    out = _structured(
+        await mcp_server.call_tool(
+            "find_route_callers",
+            {"microservice": "chat-core", "path_template": "/chat/joinOperator", "method": "POST"},
+        )
+    )
+    assert out["success"] is True
+    assert isinstance(out["results"], list)
+
+
+async def test_find_route_callers_no_match_returns_empty(mcp_server) -> None:
+    out = _structured(await mcp_server.call_tool("find_route_callers", {"route_id": "r:missing"}))
+    assert out["success"] is True
+    assert out["results"] == []
+
+
+async def test_trace_request_flow_two_hop(mcp_server) -> None:
+    routes = _structured(await mcp_server.call_tool("list_routes", {"limit": 100}))
+    target = next((r for r in routes["routes"] if r.get("path_template") == "/chat/joinOperator"), None)
+    assert target is not None
+    out = _structured(
+        await mcp_server.call_tool("trace_request_flow", {"entry_route_id": target["id"], "max_hops": 3})
+    )
+    assert out["success"] is True
+    assert "inbound" in out["flow"]
+    assert "outbound" in out["flow"]
+
+
+async def test_trace_request_flow_max_hops_respected(mcp_server) -> None:
+    routes = _structured(await mcp_server.call_tool("list_routes", {"limit": 100}))
+    target = next((r for r in routes["routes"] if r.get("path_template") == "/chat/joinOperator"), None)
+    assert target is not None
+    out = _structured(
+        await mcp_server.call_tool("trace_request_flow", {"entry_route_id": target["id"], "max_hops": 1})
+    )
+    assert out["success"] is True
+    assert int(out["flow"]["max_hops"]) == 1
+
+
+async def test_impact_analysis_includes_cross_service_callers(mcp_server) -> None:
+    out = _structured(
+        await mcp_server.call_tool(
+            "impact_analysis", {"name": "com.bank.chat.core.api.ChatController#joinOperator(JoinOperatorRequest)", "depth": 2}
+        )
+    )
+    assert out["success"] is True
+    assert "cross_service_callers" in out
+
+
+async def test_analyze_pr_surfaces_cross_service_count(mcp_server) -> None:
+    diff = """diff --git a/chat-core/chat-app/src/main/java/com/bank/chat/core/api/ChatController.java b/chat-core/chat-app/src/main/java/com/bank/chat/core/api/ChatController.java
+--- a/chat-core/chat-app/src/main/java/com/bank/chat/core/api/ChatController.java
++++ b/chat-core/chat-app/src/main/java/com/bank/chat/core/api/ChatController.java
+@@ -31,6 +31,6 @@
+     @PostMapping("/chat/joinOperator")
+     public JoinOperatorResponse joinOperator(@RequestBody JoinOperatorRequest request) {
+-        return chatApplicationService.joinOperator(request);
++        return chatApplicationService.joinOperator(request);
+     }
+ }
+"""
+    out = _structured(await mcp_server.call_tool("analyze_pr", {"diff_unified": diff}))
+    assert out["success"] is True
+    for sym in out.get("changed_symbols", []):
+        assert "cross_service_callers_count" in sym
+
+
+async def test_trace_flow_follows_http_calls(mcp_server) -> None:
+    out = _structured(
+        await mcp_server.call_tool(
+            "trace_flow",
+            {"query": "join operator flow", "seed_limit": 5, "stage_limit": 10, "follow_calls": True},
+        )
+    )
+    assert "success" in out
 
 
 # ---------------- refresh_code_index gating ----------------

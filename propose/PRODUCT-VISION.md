@@ -78,10 +78,10 @@ The DKB (Deterministic Knowledge Base) approach, as validated in the 2026 benchm
 - `IMPLEMENTS` — interface implementation
 - `INJECTS` — field-type DI (Spring `@Autowired`, constructor injection)
 - `CALLS` — method-to-method call sites (requires call resolution) — *planned* (not yet in the Kuzu schema)
-- `HTTP_CALLS` — cross-service REST calls (Feign clients, `RestTemplate`)[^11] — *planned*
-- `ASYNC_CALLS` — Kafka, messaging patterns[^11] — *planned*
+- `HTTP_CALLS` — cross-service REST calls (Feign clients, `RestTemplate`)[^11] — *shipped*
+- `ASYNC_CALLS` — Kafka, messaging patterns[^11] — *shipped*
 
-**Shipped in the Kuzu sidecar (Phase 1):** `EXTENDS`, `IMPLEMENTS`, `INJECTS`. The bundle documents deferred `CALLS` / `HTTP_CALLS` / `ASYNC_CALLS` in its roadmap (`README` §6).
+**Shipped in the Kuzu sidecar:** `EXTENDS`, `IMPLEMENTS`, `INJECTS`, `CALLS`, `HTTP_CALLS`, `ASYNC_CALLS`.
 
 The two-pass extraction strategy matters: Pass 1 builds all node records (so every class/interface in the codebase is known); Pass 2 resolves edge targets using the completed node registry, eliminating forward-reference gaps.[^2]
 

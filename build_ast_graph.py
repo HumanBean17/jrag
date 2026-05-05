@@ -63,6 +63,7 @@ from graph_enrich import (
     symbol_id,
 )
 from path_filtering import LayeredIgnore, iter_java_source_files
+from java_ontology import VALID_HTTP_CALL_MATCHES
 
 log = logging.getLogger(__name__)
 
@@ -223,6 +224,9 @@ class CallEdgeStats:
     async_calls_skipped_unresolved: int = 0
     http_clients_from_brownfield_pct: float = 0.0
     async_producers_from_brownfield_pct: float = 0.0
+    http_calls_match_breakdown: dict[str, int] = field(default_factory=lambda: defaultdict(int))
+    async_calls_match_breakdown: dict[str, int] = field(default_factory=lambda: defaultdict(int))
+    cross_service_calls_total: int = 0
 
 
 @dataclass
@@ -1570,6 +1574,174 @@ def pass5_imperative_edges(
         )
 
 
+def _match_call_edge(
+    call: OutgoingCallDecl,
+    routes: list[RouteRow],
+    caller_microservice: str,
+) -> tuple[str, list[RouteRow]]:
+    """Return (match_outcome, candidate_routes) for an outgoing call."""
+    if (
+        (not call.resolved)
+        and call.path_template_call == ""
+        and call.topic_call == ""
+    ):
+        return "unresolved", []
+
+    candidates: list[RouteRow] = []
+    if call.client_kind == "feign_method":
+        candidates = [
+            r for r in routes
+            if r.feign_name and call.feign_target_name and r.feign_name == call.feign_target_name
+        ]
+    elif call.channel == "http":
+        path_value = call.path_template_call
+        method_value = call.method_call
+        for r in routes:
+            if r.kind != "http_endpoint":
+                continue
+            if not (r.method == "" or method_value == "" or r.method == method_value):
+                continue
+            if not r.path_regex:
+                continue
+            try:
+                if re.fullmatch(r.path_regex, path_value or "") is None:
+                    continue
+            except re.error:
+                continue
+            candidates.append(r)
+    elif call.channel == "async":
+        candidates = [
+            r for r in routes
+            if r.topic == call.topic_call and r.broker == call.broker_call
+        ]
+
+    if not candidates:
+        return "phantom", []
+    if len(candidates) > 1:
+        return "ambiguous", candidates
+    if candidates[0].microservice and candidates[0].microservice == caller_microservice:
+        return "intra_service", candidates
+    return "cross_service", candidates
+
+
+def pass6_match_edges(
+    tables: GraphTables,
+    *,
+    verbose: bool,
+) -> None:
+    match_factor: dict[str, float] = {
+        "cross_service": 1.0,
+        "intra_service": 0.6,
+        "ambiguous": 0.5,
+        "phantom": 0.4,
+        "unresolved": 0.3,
+    }
+    route_by_id = {r.id: r for r in tables.routes_rows}
+    all_routes = [r for r in tables.routes_rows if r.microservice]
+    member_by_id = {m.node_id: m for m in tables.members}
+
+    tables.call_edge_stats.http_calls_match_breakdown.clear()
+    tables.call_edge_stats.async_calls_match_breakdown.clear()
+    tables.call_edge_stats.cross_service_calls_total = 0
+
+    def _micro_factor(member: MemberEntry | None) -> float:
+        return 1.0 if (member and member.microservice) else 0.85
+
+    for row in tables.http_call_rows:
+        if row.match != "unresolved":
+            continue
+        member = member_by_id.get(row.symbol_id)
+        base = row.confidence / max(1e-9, (0.3 * _micro_factor(member)))
+        src_route = route_by_id.get(row.route_id)
+        call = OutgoingCallDecl(
+            method_fqn=f"{member.parent_fqn}#{member.decl.signature}" if member else "",
+            method_sig=member.decl.signature if member else "",
+            client_kind="feign_method" if (src_route and src_route.feign_name) else "rest_template",
+            channel="http",
+            feign_target_name=src_route.feign_name if src_route else "",
+            feign_target_url=src_route.feign_url if src_route else "",
+            path_template_call=src_route.path_template if src_route else "",
+            method_call=row.method_call,
+            topic_call="",
+            broker_call="",
+            raw_uri=row.raw_uri,
+            raw_topic="",
+            resolution_strategy=row.strategy,
+            confidence_base=base,
+            resolved=(row.strategy != "unresolved"),
+            filename=member.file_path if member else "",
+            start_line=member.decl.start_line if member else 0,
+            end_line=member.decl.end_line if member else 0,
+        )
+        outcome, candidates = _match_call_edge(call, all_routes, member.microservice if member else "")
+        if outcome in VALID_HTTP_CALL_MATCHES:
+            row.match = outcome
+        if outcome in ("cross_service", "intra_service") and len(candidates) == 1:
+            row.route_id = candidates[0].id
+        row.confidence = call.confidence_base * match_factor[row.match] * _micro_factor(member)
+        tables.call_edge_stats.http_calls_match_breakdown[row.match] += 1
+        if row.match == "cross_service":
+            tables.call_edge_stats.cross_service_calls_total += 1
+
+    for row in tables.async_call_rows:
+        if row.match != "unresolved":
+            continue
+        member = member_by_id.get(row.symbol_id)
+        base = row.confidence / max(1e-9, (0.3 * _micro_factor(member)))
+        src_route = route_by_id.get(row.route_id)
+        call = OutgoingCallDecl(
+            method_fqn=f"{member.parent_fqn}#{member.decl.signature}" if member else "",
+            method_sig=member.decl.signature if member else "",
+            client_kind="kafka_send",
+            channel="async",
+            feign_target_name="",
+            feign_target_url="",
+            path_template_call="",
+            method_call="",
+            topic_call=src_route.topic if src_route else "",
+            broker_call=src_route.broker if src_route else "",
+            raw_uri="",
+            raw_topic=row.raw_topic,
+            resolution_strategy=row.strategy,
+            confidence_base=base,
+            resolved=(row.strategy != "unresolved"),
+            filename=member.file_path if member else "",
+            start_line=member.decl.start_line if member else 0,
+            end_line=member.decl.end_line if member else 0,
+        )
+        outcome, candidates = _match_call_edge(call, all_routes, member.microservice if member else "")
+        if outcome in VALID_HTTP_CALL_MATCHES:
+            row.match = outcome
+        if outcome in ("cross_service", "intra_service") and len(candidates) == 1:
+            row.route_id = candidates[0].id
+        row.confidence = call.confidence_base * match_factor[row.match] * _micro_factor(member)
+        tables.call_edge_stats.async_calls_match_breakdown[row.match] += 1
+        if row.match == "cross_service":
+            tables.call_edge_stats.cross_service_calls_total += 1
+
+    inbound_route_ids = {r.route_id for r in tables.http_call_rows} | {r.route_id for r in tables.async_call_rows}
+    tables.routes_rows = sorted(
+        [
+            r for r in tables.routes_rows
+            if not (
+                (r.microservice == "")
+                and (r.framework == "")
+                and (not r.resolved)
+                and (r.id not in inbound_route_ids)
+            )
+        ],
+        key=lambda r: r.id,
+    )
+
+    if verbose:
+        print(
+            f"[pass6] http_match={dict(sorted(tables.call_edge_stats.http_calls_match_breakdown.items()))}, "
+            f"async_match={dict(sorted(tables.call_edge_stats.async_calls_match_breakdown.items()))}, "
+            f"cross_service_calls_total={tables.call_edge_stats.cross_service_calls_total}",
+            file=sys.stderr,
+        )
+
+
 # ---------- Kuzu write ----------
 
 
@@ -1603,7 +1775,10 @@ _SCHEMA_META = (
     "http_calls_resolved_pct DOUBLE, "
     "async_calls_resolved_pct DOUBLE, "
     "http_clients_from_brownfield_pct DOUBLE, "
-    "async_producers_from_brownfield_pct DOUBLE"
+    "async_producers_from_brownfield_pct DOUBLE, "
+    "http_calls_match_breakdown STRING, "
+    "async_calls_match_breakdown STRING, "
+    "cross_service_calls_total INT64"
     ")"
 )
 
@@ -1938,6 +2113,8 @@ def _write_meta(conn: kuzu.Connection, tables: GraphTables, source_root: Path) -
     call_stats = tables.call_edge_stats
     http_by_strategy = dict(sorted(call_stats.http_calls_by_strategy.items()))
     async_by_strategy = dict(sorted(call_stats.async_calls_by_strategy.items()))
+    http_match = dict(sorted(call_stats.http_calls_match_breakdown.items()))
+    async_match = dict(sorted(call_stats.async_calls_match_breakdown.items()))
     http_resolved_pct = 0.0
     async_resolved_pct = 0.0
     if call_stats.http_calls_total:
@@ -1975,7 +2152,10 @@ def _write_meta(conn: kuzu.Connection, tables: GraphTables, source_root: Path) -
         "http_calls_by_strategy: $http_calls_by_strategy, async_calls_by_strategy: $async_calls_by_strategy, "
         "http_calls_resolved_pct: $http_calls_resolved_pct, async_calls_resolved_pct: $async_calls_resolved_pct, "
         "http_clients_from_brownfield_pct: $http_clients_from_brownfield_pct, "
-        "async_producers_from_brownfield_pct: $async_producers_from_brownfield_pct})",
+        "async_producers_from_brownfield_pct: $async_producers_from_brownfield_pct, "
+        "http_calls_match_breakdown: $http_calls_match_breakdown, "
+        "async_calls_match_breakdown: $async_calls_match_breakdown, "
+        "cross_service_calls_total: $cross_service_calls_total})",
         {
             "k": "graph",
             "ov": ONTOLOGY_VERSION,
@@ -1997,6 +2177,9 @@ def _write_meta(conn: kuzu.Connection, tables: GraphTables, source_root: Path) -
             "async_calls_resolved_pct": async_resolved_pct,
             "http_clients_from_brownfield_pct": call_stats.http_clients_from_brownfield_pct,
             "async_producers_from_brownfield_pct": call_stats.async_producers_from_brownfield_pct,
+            "http_calls_match_breakdown": json.dumps(http_match),
+            "async_calls_match_breakdown": json.dumps(async_match),
+            "cross_service_calls_total": int(call_stats.cross_service_calls_total),
         },
     )
 
@@ -2073,6 +2256,7 @@ def main() -> int:
     pass3_calls(tables, asts, verbose=args.verbose)
     pass4_routes(tables, asts, source_root=root, verbose=args.verbose)
     pass5_imperative_edges(tables, asts, source_root=root, verbose=args.verbose)
+    pass6_match_edges(tables, verbose=args.verbose)
     write_kuzu(kuzu_path, tables, source_root=root, verbose=args.verbose)
     if args.verbose:
         print(f"[done] kuzu at {kuzu_path}", file=sys.stderr)

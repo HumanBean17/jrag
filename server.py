@@ -47,13 +47,14 @@ _INSTRUCTIONS = (
     "Use trace_flow for CONTROLLER -> SERVICE -> REPOSITORY/FEIGN end-to-end chains; "
     "its seeds are auto-filtered to entrypoint-like roles (CONTROLLER / COMPONENT / "
     "SERVICE / FEIGN_CLIENT), so it's the right tool for 'how / what happens when' queries. "
-    "trace_flow defaults to follow_calls=true (DECLARES+CALLS paths merged with INJECTS/EXTENDS/"
+    "trace_flow defaults to follow_calls=true (DECLARES+CALLS plus cross-service HTTP_CALLS/ASYNC_CALLS "
+    "paths merged with INJECTS/EXTENDS/"
     "IMPLEMENTS) and exclude_external=true on that CALLS hop (drops discovered types under "
     "java/javax/jakarta/org.springframework/lombok prefixes); "
     "pass follow_calls=false for type-only wiring. "
     "HTTP routes extracted from Spring mappings may use SpEL (${…}) or constant references — "
     "those rows are unresolved (empty path_template / path_regex) with lower confidence; "
-    "caller-side route edges are not modelled yet (find_route_callers will ship with B2b). "
+    "caller-side route edges are modeled (HTTP_CALLS / ASYNC_CALLS) and queryable via find_route_callers. "
     "For behavioural queries prefer exclude_roles=['DTO','ENTITY','CONFIG','OTHER'] on "
     "codebase_search; for schema/domain questions pass role='DTO' or role='ENTITY' instead. "
     "Set auto_hybrid=true when the query contains identifiers / CamelCase / snake_case "
@@ -260,6 +261,25 @@ class RouteHandlersOutput(BaseModel):
     message: str | None = None
 
 
+class CallerInfoDto(BaseModel):
+    caller_symbol_id: str
+    caller_microservice: str = ""
+    confidence: float = 0.0
+    match: str = ""
+
+
+class FindRouteCallersOutput(BaseModel):
+    success: bool
+    results: list[CallerInfoDto] = Field(default_factory=list)
+    message: str | None = None
+
+
+class TraceRequestFlowOutput(BaseModel):
+    success: bool
+    flow: dict[str, Any] = Field(default_factory=dict)
+    message: str | None = None
+
+
 class SingleRouteOutput(BaseModel):
     success: bool
     route: RouteRowDto | None = None
@@ -320,6 +340,16 @@ class GraphMetaOutput(BaseModel):
     routes_resolved_pct: float = 0.0
     routes_from_brownfield_pct: float = 0.0
     routes_by_layer: dict[str, int] = Field(default_factory=dict)
+    http_calls_match_breakdown: dict[str, int] = Field(default_factory=dict)
+    async_calls_match_breakdown: dict[str, int] = Field(default_factory=dict)
+    cross_service_calls_total: int = 0
+    message: str | None = None
+
+
+class ImpactAnalysisOutput(BaseModel):
+    success: bool
+    results: list[SymbolDto] = Field(default_factory=list)
+    cross_service_callers: list[CallerInfoDto] = Field(default_factory=list)
     message: str | None = None
 
 
@@ -490,6 +520,9 @@ def _graph_meta_output() -> GraphMetaOutput:
         routes_resolved_pct=float(meta.get("routes_resolved_pct") or 0.0),
         routes_from_brownfield_pct=float(meta.get("routes_from_brownfield_pct") or 0.0),
         routes_by_layer=routes_by_layer,
+        http_calls_match_breakdown={str(k): int(v) for k, v in (meta.get("http_calls_match_breakdown") or {}).items()},
+        async_calls_match_breakdown={str(k): int(v) for k, v in (meta.get("async_calls_match_breakdown") or {}).items()},
+        cross_service_calls_total=int(meta.get("cross_service_calls_total") or 0),
     )
 
 
@@ -1045,6 +1078,59 @@ def create_mcp_server() -> FastMCP:
         return SingleRouteOutput(success=True, route=_route_dict_to_dto(row))
 
     @mcp.tool(
+        name="find_route_callers",
+        description=(
+            "List callers of a Route (HTTP_CALLS / ASYNC_CALLS). Lookup by `route_id` "
+            "or by exact `(microservice, path_template, method)`."
+        ),
+    )
+    async def find_route_callers(
+        route_id: str | None = Field(default=None, description="Route.id (optional if path tuple is provided)."),
+        microservice: str = Field(default="", description="Exact Route.microservice for tuple lookup."),
+        path_template: str = Field(default="", description="Exact Route.path_template for tuple lookup."),
+        method: str = Field(default="", description="Exact Route.method for tuple lookup."),
+    ) -> FindRouteCallersOutput:
+        ok, graph, msg = _require_graph()
+        if not ok or graph is None:
+            return FindRouteCallersOutput(success=False, message=msg)
+        rows = await asyncio.to_thread(
+            graph.find_route_callers,
+            route_id,
+            microservice=microservice,
+            path_template=path_template,
+            method=method,
+        )
+        return FindRouteCallersOutput(
+            success=True,
+            results=[
+                CallerInfoDto(
+                    caller_symbol_id=r.caller_symbol_id,
+                    caller_microservice=r.caller_microservice,
+                    confidence=r.confidence,
+                    match=r.match,
+                )
+                for r in rows
+            ],
+        )
+
+    @mcp.tool(
+        name="trace_request_flow",
+        description=(
+            "Trace request flow around one entry route id, including inbound HTTP/ASYNC callers "
+            "and outbound handler CALLS chains."
+        ),
+    )
+    async def trace_request_flow(
+        entry_route_id: str = Field(description="Route.id entrypoint."),
+        max_hops: int = Field(default=5, ge=1, le=8),
+    ) -> TraceRequestFlowOutput:
+        ok, graph, msg = _require_graph()
+        if not ok or graph is None:
+            return TraceRequestFlowOutput(success=False, message=msg)
+        flow = await asyncio.to_thread(graph.trace_request_flow, entry_route_id, max_hops)
+        return TraceRequestFlowOutput(success=True, flow=flow)
+
+    @mcp.tool(
         name="list_by_role",
         description="All graph symbols with a given role (CONTROLLER|SERVICE|REPOSITORY|...).",
     )
@@ -1151,12 +1237,30 @@ def create_mcp_server() -> FastMCP:
         name: str = Field(description="Symbol simple name or FQN"),
         depth: int = Field(default=2, ge=1, le=4),
         limit: int = Field(default=300, ge=1, le=1000),
-    ) -> SymbolListOutput:
+    ) -> ImpactAnalysisOutput:
         ok, graph, msg = _require_graph()
         if not ok or graph is None:
-            return SymbolListOutput(success=False, message=msg)
+            return ImpactAnalysisOutput(success=False, message=msg)
         rows = await asyncio.to_thread(graph.impact_analysis, name, depth=depth, limit=limit)
-        return SymbolListOutput(success=True, results=[_symbol_to_dto(r) for r in rows])
+        cross_service_callers: list[CallerInfoDto] = []
+        for sym in rows:
+            route_ids = await asyncio.to_thread(pr_analysis._route_ids_for_symbol, graph, sym.id)
+            for rid in route_ids:
+                callers = await asyncio.to_thread(graph.find_route_callers, rid)
+                for c in callers:
+                    if c.match == "cross_service":
+                        cross_service_callers.append(CallerInfoDto(
+                            caller_symbol_id=c.caller_symbol_id,
+                            caller_microservice=c.caller_microservice,
+                            confidence=c.confidence,
+                            match=c.match,
+                        ))
+        uniq = {(c.caller_symbol_id, c.match): c for c in cross_service_callers}
+        return ImpactAnalysisOutput(
+            success=True,
+            results=[_symbol_to_dto(r) for r in rows],
+            cross_service_callers=list(uniq.values()),
+        )
 
     @mcp.tool(
         name="analyze_pr",
@@ -1164,7 +1268,7 @@ def create_mcp_server() -> FastMCP:
             "Map a unified diff to changed indexed symbols and estimate blast radius / risk. "
             "Pass full unified-diff text (e.g. `git diff` output). Returns JSON-serializable "
             "risk report: changed_symbols, blast_radius_total, cross_service_callers, "
-            "routes_touched (Route ids via EXPOSES), risk_score (0–1), risk_band, notes. "
+            "routes_touched (Route ids via EXPOSES), risk_score, risk_band, notes. "
             "Binary hunks and file renames are skipped for symbol mapping and surfaced in notes."
         ),
     )
@@ -1243,7 +1347,8 @@ def create_mcp_server() -> FastMCP:
             "Limits: exactly 3 stages (entrypoints / services / integrations); "
             "`seed_limit` caps the vector-search seeds feeding stage 0; `stage_limit` "
             "caps per-stage size; `depth` is hops-per-stage, not total depth. "
-            "`follow_calls` (default true) merges DECLARES+CALLS paths with type wiring; "
+            "`follow_calls` (default true) merges DECLARES+CALLS paths with type wiring and "
+            "cross-service HTTP_CALLS/ASYNC_CALLS handler links; "
             "set `follow_calls=false` for type-only INJECTS/EXTENDS/IMPLEMENTS expansion. "
             "`stage_limit` is shared structural-first: per hop, INJECTS/EXTENDS/IMPLEMENTS "
             "fill the budget first and CALLS only tops up the remaining slots. "
@@ -1265,12 +1370,12 @@ def create_mcp_server() -> FastMCP:
         depth: int = Field(default=2, ge=1, le=3),
         follow_calls: bool = Field(
             default=True,
-            description="When true (default), each stage also expands via DECLARES+CALLS.",
+            description="When true (default), each stage expands via CALLS and cross-service HTTP/ASYNC call edges.",
         ),
         exclude_external: bool = Field(
             default=True,
             description=(
-                "When true (default), symbols pulled in only via the DECLARES+CALLS branch "
+                "When true (default), symbols pulled in via call-edge branches "
                 "are skipped if their type FQN matches external prefixes (java.*, "
                 "javax.*, jakarta.*, org.springframework.*, lombok.*) — discovered types "
                 "only, same idea as filtering callees in find_callees."

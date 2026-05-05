@@ -27,6 +27,7 @@ __all__ = [
     "CallEdge",
     "ViaEdge",
     "StageSymbol",
+    "CallerInfo",
     "find_symbols_in_file_range",
 ]
 
@@ -113,6 +114,14 @@ class StageSymbol:
     """
     symbol: SymbolHit
     via: list[ViaEdge]
+
+
+@dataclass
+class CallerInfo:
+    caller_symbol_id: str
+    caller_microservice: str
+    confidence: float
+    match: str
 
 
 def _symbol_return_for(alias: str) -> str:
@@ -333,7 +342,10 @@ class KuzuGraph:
             "m.http_calls_by_strategy AS http_calls_by_strategy, m.async_calls_by_strategy AS async_calls_by_strategy, "
             "m.http_calls_resolved_pct AS http_calls_resolved_pct, m.async_calls_resolved_pct AS async_calls_resolved_pct, "
             "m.http_clients_from_brownfield_pct AS http_clients_from_brownfield_pct, "
-            "m.async_producers_from_brownfield_pct AS async_producers_from_brownfield_pct"
+            "m.async_producers_from_brownfield_pct AS async_producers_from_brownfield_pct, "
+            "m.http_calls_match_breakdown AS http_calls_match_breakdown, "
+            "m.async_calls_match_breakdown AS async_calls_match_breakdown, "
+            "m.cross_service_calls_total AS cross_service_calls_total"
         )
         _META_PR_A2 = (
             "MATCH (m:GraphMeta) RETURN m.key AS key, m.ontology_version AS ontology_version, "
@@ -383,6 +395,9 @@ class KuzuGraph:
         async_calls_resolved_pct = 0.0
         http_clients_from_brownfield_pct = 0.0
         async_producers_from_brownfield_pct = 0.0
+        http_calls_match_breakdown: dict[str, Any] = {}
+        async_calls_match_breakdown: dict[str, Any] = {}
+        cross_service_calls_total = 0
         if meta_mode != "legacy":
             rfw_raw = row.get("routes_by_framework") or "{}"
             try:
@@ -423,6 +438,21 @@ class KuzuGraph:
             async_calls_resolved_pct = float(row.get("async_calls_resolved_pct") or 0.0)
             http_clients_from_brownfield_pct = float(row.get("http_clients_from_brownfield_pct") or 0.0)
             async_producers_from_brownfield_pct = float(row.get("async_producers_from_brownfield_pct") or 0.0)
+            hmb_raw = row.get("http_calls_match_breakdown") or "{}"
+            amb_raw = row.get("async_calls_match_breakdown") or "{}"
+            try:
+                http_calls_match_breakdown = json.loads(hmb_raw) if isinstance(hmb_raw, str) else (hmb_raw or {})
+            except Exception:
+                http_calls_match_breakdown = {}
+            if not isinstance(http_calls_match_breakdown, dict):
+                http_calls_match_breakdown = {}
+            try:
+                async_calls_match_breakdown = json.loads(amb_raw) if isinstance(amb_raw, str) else (amb_raw or {})
+            except Exception:
+                async_calls_match_breakdown = {}
+            if not isinstance(async_calls_match_breakdown, dict):
+                async_calls_match_breakdown = {}
+            cross_service_calls_total = int(row.get("cross_service_calls_total") or 0)
         return {
             "ontology_version": int(row.get("ontology_version") or 0),
             "built_at": int(row.get("built_at") or 0),
@@ -443,6 +473,9 @@ class KuzuGraph:
             "async_calls_resolved_pct": async_calls_resolved_pct,
             "http_clients_from_brownfield_pct": http_clients_from_brownfield_pct,
             "async_producers_from_brownfield_pct": async_producers_from_brownfield_pct,
+            "http_calls_match_breakdown": http_calls_match_breakdown,
+            "async_calls_match_breakdown": async_calls_match_breakdown,
+            "cross_service_calls_total": cross_service_calls_total,
             "db_path": self.db_path,
         }
 
@@ -1039,9 +1072,8 @@ class KuzuGraph:
                     if len(stage_results) >= stage_limit:
                         break
 
-                # Structural-first budget: CALLS only tops up the slots
-                # structural didn't already claim. Skip the round-trip when
-                # the bucket is already full at this hop.
+                # Structural-first budget: same-microservice CALLS top up first,
+                # then cross-service HTTP/ASYNC caller edges.
                 if follow_calls and len(stage_results) < stage_limit:
                     remaining = stage_limit - len(stage_results)
                     params_cf: dict[str, Any] = {
@@ -1056,12 +1088,38 @@ class KuzuGraph:
                     qcf = (
                         "MATCH (root:Symbol)-[:DECLARES]->(m1:Symbol)-[c:CALLS]->(m2:Symbol)"
                         "<-[:DECLARES]-(n:Symbol) WHERE root.fqn IN $fqns AND n.role IN $roles "
+                        "AND root.microservice = n.microservice "
                         "AND n.resolved AND n.kind IN ['class','interface','enum','record','annotation'] "
                         f"AND c.confidence >= $mc{sccf} "
                         f"RETURN {_symbol_return_for('n')}, 'CALLS' AS edge_type, root.fqn AS from_fqn "
                         f"LIMIT {max(1, remaining * 4)}"
                     )
                     for row in self._rows(qcf, params_cf):
+                        _ingest_flow_row(row, filter_external_fqn=True)
+                        if len(stage_results) >= stage_limit:
+                            break
+                if follow_calls and len(stage_results) < stage_limit:
+                    remaining = stage_limit - len(stage_results)
+                    params_rf: dict[str, Any] = {
+                        "fqns": current_frontier,
+                        "roles": list(stage_roles),
+                        "mc": float(min_call_confidence),
+                    }
+                    scope_rf = _scope_filters(
+                        "n", module=module, microservice=microservice, params=params_rf,
+                    )
+                    scrf = (" AND " + " AND ".join(scope_rf)) if scope_rf else ""
+                    qrf = (
+                        "MATCH (root:Symbol)-[:DECLARES]->(m1:Symbol)-[e:HTTP_CALLS|ASYNC_CALLS]->(rt:Route)"
+                        "<-[:EXPOSES]-(handler:Symbol)<-[:DECLARES]-(n:Symbol) "
+                        "WHERE root.fqn IN $fqns AND n.role IN $roles "
+                        "AND n.resolved AND n.kind IN ['class','interface','enum','record','annotation'] "
+                        "AND e.confidence >= $mc AND root.microservice <> n.microservice "
+                        f"{scrf} "
+                        f"RETURN {_symbol_return_for('n')}, label(e) AS edge_type, root.fqn AS from_fqn "
+                        f"LIMIT {max(1, remaining * 4)}"
+                    )
+                    for row in self._rows(qrf, params_rf):
                         _ingest_flow_row(row, filter_external_fqn=True)
                         if len(stage_results) >= stage_limit:
                             break
@@ -1179,6 +1237,78 @@ class KuzuGraph:
         if not rows:
             return None
         return self._row_to_route_dict(rows[0])
+
+    def find_route_callers(
+        self,
+        route_id: str | None = None,
+        *,
+        microservice: str = "",
+        path_template: str = "",
+        method: str = "",
+    ) -> list[CallerInfo]:
+        rid = route_id or ""
+        if not rid:
+            params: dict[str, Any] = {
+                "microservice": microservice,
+                "path_template": path_template,
+                "method": method,
+            }
+            rows = self._rows(
+                "MATCH (r:Route) "
+                "WHERE r.microservice = $microservice AND r.path_template = $path_template AND r.method = $method "
+                "RETURN r.id AS id LIMIT 1",
+                params,
+            )
+            if not rows:
+                return []
+            rid = str(rows[0].get("id") or "")
+            if not rid:
+                return []
+        rows = self._rows(
+            "MATCH (s:Symbol)-[e:HTTP_CALLS|ASYNC_CALLS]->(r:Route {id: $rid}) "
+            "RETURN s.id AS caller_symbol_id, s.microservice AS caller_microservice, "
+            "e.confidence AS confidence, e.match AS match "
+            "ORDER BY e.confidence DESC, s.id",
+            {"rid": rid},
+        )
+        out: list[CallerInfo] = []
+        for row in rows:
+            out.append(
+                CallerInfo(
+                    caller_symbol_id=str(row.get("caller_symbol_id") or ""),
+                    caller_microservice=str(row.get("caller_microservice") or ""),
+                    confidence=float(row.get("confidence") or 0.0),
+                    match=str(row.get("match") or ""),
+                ),
+            )
+        return out
+
+    def trace_request_flow(self, entry_route_id: str, max_hops: int = 5) -> dict[str, Any]:
+        hops = max(1, min(int(max_hops), 8))
+        inbound = self._rows(
+            f"MATCH (entry:Route {{id: $rid}})<-[e:HTTP_CALLS|ASYNC_CALLS]-(caller:Symbol) "
+            f"OPTIONAL MATCH (origin:Symbol)-[:CALLS*0..{hops}]->(caller) "
+            "RETURN DISTINCT caller.id AS caller_symbol_id, caller.fqn AS caller_fqn, "
+            "caller.microservice AS caller_microservice, e.confidence AS confidence, "
+            "e.match AS match, origin.id AS origin_symbol_id, origin.fqn AS origin_fqn "
+            "ORDER BY confidence DESC, caller_symbol_id",
+            {"rid": entry_route_id},
+        )
+        outbound = self._rows(
+            f"MATCH (handler:Symbol)-[:EXPOSES]->(entry:Route {{id: $rid}}) "
+            f"OPTIONAL MATCH (handler)-[:CALLS*0..{hops}]->(next:Symbol) "
+            "RETURN DISTINCT handler.id AS handler_symbol_id, handler.fqn AS handler_fqn, "
+            "handler.microservice AS handler_microservice, "
+            "next.id AS next_symbol_id, next.fqn AS next_fqn, next.microservice AS next_microservice "
+            "ORDER BY handler_symbol_id, next_symbol_id",
+            {"rid": entry_route_id},
+        )
+        return {
+            "entry_route_id": entry_route_id,
+            "max_hops": hops,
+            "inbound": inbound,
+            "outbound": outbound,
+        }
 
     # ---- used by search_lancedb.graph_expand ----
 
