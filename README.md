@@ -64,7 +64,9 @@ A sidecar deterministic graph derived from Tree-sitter Java parsing lives next t
 
 **Edge types (Phase 1 + Phase 3):** `EXTENDS`, `IMPLEMENTS`, `INJECTS` capture type-level wiring.
 **Phase 3 (call graph):** `CALLS` (method → method, confidence-scored, strategy-tagged) and
-`DECLARES` (type → own method or constructor). JDK / Spring / Lombok callees are represented as
+`DECLARES` (type → own method or constructor).
+**Phase 5 (caller edges):** `HTTP_CALLS` (`Symbol` → `Route`) and `ASYNC_CALLS` (`Symbol` → `Route`).
+JDK / Spring / Lombok callees are represented as
 phantom method symbols (`resolved=false`) at index time; `find_callers` / `find_callees` default to
 `exclude_external=true` so those edges can be filtered by FQN prefix without dropping them from the graph.
 Call-site receiver typing uses **one scope map per method** (locals shadow fields/parameters), but **not** full nested-block lexical scope; see **Call graph** under `CODEBASE_REQUIREMENTS.md`.
@@ -446,8 +448,6 @@ back to exact-text matching in that case, so re-running the flow fixes it.
 **Call graph (static intra-JVM `CALLS` + `DECLARES`) is implemented** — see §5 edge types and
 `find_callers` / `find_callees` / `trace_flow(follow_calls)`. Remaining graph work:
 
-- `HTTP_CALLS` — Feign (`@FeignClient`), `RestTemplate`, `WebClient`.
-- `ASYNC_CALLS` — Kafka (`@KafkaListener`), Spring messaging patterns.
 - Cross-service topology tools (`get_service_topology`, `trace_request_flow`) depending on the above.
 - Agentic routing layer (query classifier → vector / graph / both) from the DKB paper §4.1.
 - Incremental Kuzu updates (per-changed-file) to avoid full rebuild.

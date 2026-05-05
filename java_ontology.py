@@ -43,4 +43,44 @@ VALID_ROUTE_KINDS: frozenset[str] = frozenset((
     "stream_binding",
 ))
 
-__all__ = ["VALID_ROLES", "VALID_CAPABILITIES", "VALID_ROUTE_FRAMEWORKS", "VALID_ROUTE_KINDS"]
+VALID_CLIENT_KINDS: frozenset[str] = frozenset((
+    "feign_method",
+    "rest_template",
+    "web_client",
+    "kafka_send",
+    "stream_bridge_send",
+))
+
+VALID_HTTP_CALL_STRATEGIES: frozenset[str] = frozenset((
+    "feign_method",
+    "rest_template",
+    "web_client",
+    "unresolved",
+))
+
+VALID_ASYNC_CALL_STRATEGIES: frozenset[str] = frozenset((
+    "kafka_template",
+    "stream_bridge",
+    "rabbit_template",
+    "jms_template",
+    "unresolved",
+))
+
+VALID_HTTP_CALL_MATCHES: frozenset[str] = frozenset((
+    "cross_service",
+    "intra_service",
+    "ambiguous",
+    "phantom",
+    "unresolved",
+))
+
+__all__ = [
+    "VALID_ROLES",
+    "VALID_CAPABILITIES",
+    "VALID_ROUTE_FRAMEWORKS",
+    "VALID_ROUTE_KINDS",
+    "VALID_CLIENT_KINDS",
+    "VALID_HTTP_CALL_STRATEGIES",
+    "VALID_ASYNC_CALL_STRATEGIES",
+    "VALID_HTTP_CALL_MATCHES",
+]

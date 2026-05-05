@@ -328,7 +328,10 @@ class KuzuGraph:
             "m.routes_by_framework AS routes_by_framework, "
             "m.routes_resolved_pct AS routes_resolved_pct, "
             "m.routes_from_brownfield_pct AS routes_from_brownfield_pct, "
-            "m.routes_by_layer AS routes_by_layer"
+            "m.routes_by_layer AS routes_by_layer, "
+            "m.http_calls_total AS http_calls_total, m.async_calls_total AS async_calls_total, "
+            "m.http_calls_by_strategy AS http_calls_by_strategy, m.async_calls_by_strategy AS async_calls_by_strategy, "
+            "m.http_calls_resolved_pct AS http_calls_resolved_pct, m.async_calls_resolved_pct AS async_calls_resolved_pct"
         )
         _META_PR_A2 = (
             "MATCH (m:GraphMeta) RETURN m.key AS key, m.ontology_version AS ontology_version, "
@@ -370,6 +373,12 @@ class KuzuGraph:
         routes_by_framework: dict[str, Any] = {}
         routes_from_brownfield_pct = 0.0
         routes_by_layer: dict[str, Any] = {}
+        http_calls_total = 0
+        async_calls_total = 0
+        http_calls_by_strategy: dict[str, Any] = {}
+        async_calls_by_strategy: dict[str, Any] = {}
+        http_calls_resolved_pct = 0.0
+        async_calls_resolved_pct = 0.0
         if meta_mode != "legacy":
             rfw_raw = row.get("routes_by_framework") or "{}"
             try:
@@ -390,6 +399,24 @@ class KuzuGraph:
                 routes_by_layer = {}
             if not isinstance(routes_by_layer, dict):
                 routes_by_layer = {}
+            http_calls_total = int(row.get("http_calls_total") or 0)
+            async_calls_total = int(row.get("async_calls_total") or 0)
+            hbs_raw = row.get("http_calls_by_strategy") or "{}"
+            abs_raw = row.get("async_calls_by_strategy") or "{}"
+            try:
+                http_calls_by_strategy = json.loads(hbs_raw) if isinstance(hbs_raw, str) else (hbs_raw or {})
+            except Exception:
+                http_calls_by_strategy = {}
+            if not isinstance(http_calls_by_strategy, dict):
+                http_calls_by_strategy = {}
+            try:
+                async_calls_by_strategy = json.loads(abs_raw) if isinstance(abs_raw, str) else (abs_raw or {})
+            except Exception:
+                async_calls_by_strategy = {}
+            if not isinstance(async_calls_by_strategy, dict):
+                async_calls_by_strategy = {}
+            http_calls_resolved_pct = float(row.get("http_calls_resolved_pct") or 0.0)
+            async_calls_resolved_pct = float(row.get("async_calls_resolved_pct") or 0.0)
         return {
             "ontology_version": int(row.get("ontology_version") or 0),
             "built_at": int(row.get("built_at") or 0),
@@ -402,6 +429,12 @@ class KuzuGraph:
             "routes_resolved_pct": routes_resolved_pct,
             "routes_from_brownfield_pct": routes_from_brownfield_pct,
             "routes_by_layer": routes_by_layer,
+            "http_calls_total": http_calls_total,
+            "async_calls_total": async_calls_total,
+            "http_calls_by_strategy": http_calls_by_strategy,
+            "async_calls_by_strategy": async_calls_by_strategy,
+            "http_calls_resolved_pct": http_calls_resolved_pct,
+            "async_calls_resolved_pct": async_calls_resolved_pct,
             "db_path": self.db_path,
         }
 
