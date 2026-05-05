@@ -55,8 +55,16 @@ class PrRiskReport:
 
 
 _BINARY_DIFF_LINE = re.compile(r"^Binary files .+ differ\s*$")
+# Heuristic: new Java method/ctor-looking line. Covers annotations, method-level
+# generics, `default` interface methods, and return types with spaces (e.g.
+# `Map<String, String> m(`). Misses multi-line signatures, some compact record
+# forms, and unusual annotations; `_notes_for_unindexed_additions` is best-effort.
 _DECL_ADD = re.compile(
-    r"^\+\s*(?:@\w+(?:\([^)]*\))?\s+)*(?:public|private|protected)\s+[\w.<>,\[\]]+\s+\w+\s*\(",
+    r"^\+\s*"
+    r"(?:(?:@[\w.]+\([^)]*\))\s+)*"
+    r"(?:<[^>]+>\s+)?"
+    r"(?:(?:public|private|protected|default|static|final|synchronized|abstract|native)\s+)*"
+    r"(.+?)\s+(\w+)\s*\(",
 )
 
 
@@ -140,7 +148,12 @@ def collect_diff_file_notes(diff_text: str) -> list[str]:
     return notes
 
 
-def _resolve_graph_filename(graph: Any, path: str) -> str | None:
+def _resolve_graph_filename(
+    graph: Any,
+    path: str,
+    *,
+    ambiguity_notes: list[str] | None = None,
+) -> str | None:
     """Map a diff path to `Symbol.filename` values stored in Kuzu."""
     variants = {_strip_ab_prefix(path)}
     for v in list(variants):
@@ -162,7 +175,15 @@ def _resolve_graph_filename(graph: Any, path: str) -> str | None:
             "RETURN DISTINCT s.filename AS fn LIMIT 8",
             {"tail": "/" + tail},
         )
-        if len(rows) == 1 and rows[0].get("fn"):
+        n = len(rows)
+        if n > 1 and ambiguity_notes is not None:
+            fns = [str(r.get("fn") or "") for r in rows if r.get("fn")]
+            ambiguity_notes.append(
+                f"ambiguous filename tail {tail!r} ({n} graph paths); "
+                f"ENDS WITH resolution skipped ({', '.join(fns[:4])}"
+                f"{'…' if len(fns) > 4 else ''})",
+            )
+        if n == 1 and rows[0].get("fn"):
             return str(rows[0]["fn"])
     return None
 
@@ -238,7 +259,12 @@ def _notes_for_unindexed_additions(
     return notes
 
 
-def map_hunks_to_symbols(graph: Any, hunks: list[DiffHunk]) -> list[ChangedSymbol]:
+def map_hunks_to_symbols(
+    graph: Any,
+    hunks: list[DiffHunk],
+    *,
+    path_ambiguity_notes: list[str] | None = None,
+) -> list[ChangedSymbol]:
     """Map diff hunks to overlapping `Symbol` rows (graph-resident only)."""
     by_id: dict[str, ChangedSymbol] = {}
 
@@ -264,8 +290,16 @@ def map_hunks_to_symbols(graph: Any, hunks: list[DiffHunk]) -> list[ChangedSymbo
             )
 
     for h in hunks:
-        tgt_fn = _resolve_graph_filename(graph, h.target_path)
-        src_fn = _resolve_graph_filename(graph, h.source_path) if h.source_path else tgt_fn
+        tgt_fn = _resolve_graph_filename(
+            graph, h.target_path, ambiguity_notes=path_ambiguity_notes,
+        )
+        src_fn = (
+            _resolve_graph_filename(
+                graph, h.source_path, ambiguity_notes=path_ambiguity_notes,
+            )
+            if h.source_path
+            else tgt_fn
+        )
         if not tgt_fn and not src_fn:
             continue
 
@@ -359,17 +393,21 @@ def compute_risk(graph: Any, changed: list[ChangedSymbol]) -> PrRiskReport:
         "modifiers", "annotations", "capabilities", "role", "signature",
         "parent_id", "resolved",
     )
+    _sym_return = ", ".join(f"s.{c} AS {c}" for c in sym_cols)
 
+    iface_hit = 0.0
     for cs in changed:
         sym_row = graph._rows(
-            "MATCH (s:Symbol) WHERE s.id = $id RETURN "
-            + ", ".join(f"s.{c} AS {c}" for c in sym_cols),
+            "MATCH (s:Symbol) WHERE s.id = $id RETURN " + _sym_return,
             {"id": cs.symbol_id},
         )
         if not sym_row:
             continue
         row0 = sym_row[0]
-        kind = str(row0.get("kind") or "")
+        if iface_hit < 1.0:
+            sym = _row_to_symbol(row0)
+            if _is_public_interface_method(graph, sym):
+                iface_hit = 1.0
         fqn = str(row0.get("fqn") or cs.fqn)
         needle = _impact_needle_for_changed(graph, fqn, cs.kind)
         ia = graph.impact_analysis(needle, depth=2, limit=400)
@@ -400,20 +438,6 @@ def compute_risk(graph: Any, changed: list[ChangedSymbol]) -> PrRiskReport:
     w_cross, cap_cross = 0.3, 20.0
     w_iface = 0.2
     w_routes, cap_routes = 0.1, 5.0
-
-    iface_hit = 0.0
-    for cs in changed:
-        rows = graph._rows(
-            "MATCH (s:Symbol) WHERE s.id = $id RETURN "
-            + ", ".join(f"s.{c} AS {c}" for c in sym_cols),
-            {"id": cs.symbol_id},
-        )
-        if not rows:
-            continue
-        sym = _row_to_symbol(rows[0])
-        if _is_public_interface_method(graph, sym):
-            iface_hit = 1.0
-            break
 
     raw = (
         w_blast * _normalize(float(blast_total), cap_blast)
@@ -458,7 +482,9 @@ def analyze_pr_pipeline(graph: Any, diff_unified: str) -> PrRiskReport:
     """Full PR-B pipeline: parse → notes → map → risk."""
     notes = collect_diff_file_notes(diff_unified)
     hunks = parse_unified_diff(diff_unified)
-    changed = map_hunks_to_symbols(graph, hunks)
+    path_amb: list[str] = []
+    changed = map_hunks_to_symbols(graph, hunks, path_ambiguity_notes=path_amb)
+    notes.extend(path_amb)
     notes.extend(_notes_for_unindexed_additions(graph, diff_unified, changed, hunks))
     rep = compute_risk(graph, changed)
     merged = list(dict.fromkeys([*notes, *rep.notes]))

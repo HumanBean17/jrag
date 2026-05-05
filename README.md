@@ -423,6 +423,14 @@ path is filtered again with the full layered rules.
 Use the `diagnose_ignore` MCP tool (or `LayeredIgnore.diagnose_dict`) to see
 which file and line decided for a given path.
 
+**Monorepo note:** negation detection runs two full-tree ``rglob`` passes when
+constructing a `LayeredIgnore` (ignore files and `.gitignore` files). That is
+usually cheap to amortise; extremely large trees should expect that fixed cost
+per new instance.
+
+**Dependencies:** `pathspec` is pinned in `requirements.txt` and constrained
+the same way in `pyproject.toml` (loose bundle install vs. wheel metadata).
+
 ### Debugging empty `context_before` / `context_after`
 
 If `context_neighbors=1` returns empty context strings, set

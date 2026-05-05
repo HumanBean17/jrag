@@ -141,8 +141,9 @@ def test_45_diagnose_nested_cites_line(tmp_path: Path) -> None:
     d = li.diagnose_dict(f)
     assert d["ignored"] is True
     assert d["layer"] == "nested"
-    assert nested.as_posix() in str(d["explanation"])
-    assert "line 2" in str(d["explanation"])
+    expl = str(d["explanation"])
+    assert "svc/.lancedb-mcp/ignore" in expl
+    assert "line 2" in expl
 
 
 def test_46_outside_project_not_ignored(tmp_path: Path) -> None:

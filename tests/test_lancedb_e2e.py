@@ -110,6 +110,7 @@ def lance_index(tmp_path_factory, corpus_root: Path) -> Path:
         **os.environ,
         "LANCEDB_URI": str(lance_uri),
         "COCOINDEX_DB": str(coco_db),
+        "LANCEDB_MCP_PROJECT_ROOT": str(Path(corpus_root).resolve()),
     }
     proc = subprocess.run(
         [
@@ -163,6 +164,7 @@ def lance_index_capability_smoke(tmp_path_factory) -> Path:
         **os.environ,
         "LANCEDB_URI": str(lance_uri),
         "COCOINDEX_DB": str(coco_db),
+        "LANCEDB_MCP_PROJECT_ROOT": str(CAPABILITY_SMOKE_ROOT.resolve()),
     }
     proc = subprocess.run(
         [
@@ -286,7 +288,12 @@ def test_lancedb_ignore_file_reduces_indexed_java_files(tmp_path_factory) -> Non
         lance_uri = corpus / "lancedb_data"
         coco_db = corpus / "cocoindex.db"
         app_spec = _cocoindex_flow_specifier(bundle_dir, corpus)
-        env = {**os.environ, "LANCEDB_URI": str(lance_uri), "COCOINDEX_DB": str(coco_db)}
+        env = {
+            **os.environ,
+            "LANCEDB_URI": str(lance_uri.resolve()),
+            "COCOINDEX_DB": str(coco_db.resolve()),
+            "LANCEDB_MCP_PROJECT_ROOT": str(corpus.resolve()),
+        }
         proc = subprocess.run(
             [
                 str(cocoindex_bin),

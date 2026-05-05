@@ -89,6 +89,12 @@ def _line_has_negation(lines: Sequence[str]) -> bool:
 
 
 def _scan_negation_any_lancedb(project_root: Path) -> bool:
+    """Return True if any ``.lancedb-mcp/ignore`` contains a negation (``!``) line.
+
+    Runs one ``rglob`` at :class:`LayeredIgnore` construction. Fine for typical
+    repos; very large monorepos pay a full-tree walk on every new ``LayeredIgnore``
+    instance (same for :func:`_scan_negation_any_gitignore`).
+    """
     root = project_root.resolve()
     try:
         for p in root.rglob(".lancedb-mcp"):
@@ -103,6 +109,7 @@ def _scan_negation_any_lancedb(project_root: Path) -> bool:
 
 
 def _scan_negation_any_gitignore(project_root: Path) -> bool:
+    """See :func:`_scan_negation_any_lancedb` (also uses ``rglob``)."""
     root = project_root.resolve()
     try:
         for p in root.rglob(".gitignore"):
@@ -264,6 +271,18 @@ class LayeredIgnore:
         except ValueError:
             return None
 
+    def _path_for_display(self, path: Path | None) -> str:
+        """Project-relative POSIX path when under ``project_root``; else best-effort short path."""
+        if path is None:
+            return ""
+        try:
+            return path.resolve().relative_to(self.project_root).as_posix()
+        except ValueError:
+            try:
+                return path.resolve().relative_to(Path.cwd()).as_posix()
+            except ValueError:
+                return path.as_posix()
+
     def _mega(self, rel_project: str) -> tuple[list[str], GitIgnoreSpec, list[tuple[str, Path | None, int, str]]]:
         mega, meta = _mega_build_for_rel(
             self.project_root,
@@ -318,7 +337,8 @@ class LayeredIgnore:
                 "layer": None,
                 "matching_pattern": None,
                 "explanation": (
-                    f"Path is outside project root {self.project_root} — not ignored."
+                    f"Path {self._path_for_display(path)!r} is outside the configured "
+                    "project root — not ignored."
                 ),
             }
         mega, spec, meta = self._mega(rel)
@@ -339,7 +359,9 @@ class LayeredIgnore:
             }
         src, fp, ln, pat = _winning_row(rel, mega, meta)
         if fp is not None:
-            expl = f"Excluded by {fp} ({src}) at line {ln}: {pat!r}"
+            expl = (
+                f"Excluded by {self._path_for_display(fp)} ({src}) at line {ln}: {pat!r}"
+            )
         else:
             expl = f"Excluded by builtin default ({src}) at builtin line {ln}: {pat!r}"
         return {
