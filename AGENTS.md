@@ -13,9 +13,11 @@ for tools that don't read `.cursor/rules/`.
 - `CODEBASE_REQUIREMENTS.md` — Java-repo assumptions and tuning map.
 - `propose/` and `plans/` (plus their `completed/` subdirs) —
   in-flight scope and the rationale behind current design.
-  - Active proposes: `RANKING-MICROSERVICE-PROPOSE.md`,
+  - Active proposes: `TIER2-INCREMENTAL-REBUILD-PROPOSE.md` (Kuzu
+    diff-driven rebuild), `RANKING-MICROSERVICE-PROPOSE.md`,
     `ENHANCED-ROLE-RECOGNITION-PROPOSE.md`,
-    `REFRESH-CODE-INDEX-AUTO-MODE-PROPOSE.md`,
+    `REFRESH-CODE-INDEX-AUTO-MODE-PROPOSE.md` (paired with TIER2 —
+    decision engine for incremental vs full),
     `DEFERRED-REST-CLIENT-MIGRATION-PROPOSE.md`, `PRODUCT-VISION.md`.
   - Active plans: `PLAN-POST-TIER1B-FOLLOWUPS.md` (PR-E1/PR-E2 —
     deferred catches collected from PR-D1/D2/D3 reviews).

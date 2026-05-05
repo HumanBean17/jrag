@@ -29,9 +29,11 @@ when needed.
 - `tests/README.md` — testing philosophy.
 - `propose/` and `propose/completed/` — design proposes; the active
   ones describe in-flight scope (currently
+  `TIER2-INCREMENTAL-REBUILD-PROPOSE.md` (paired with
+  `REFRESH-CODE-INDEX-AUTO-MODE-PROPOSE.md` — the decision engine
+  for the Kuzu rebuild path),
   `RANKING-MICROSERVICE-PROPOSE.md`,
   `ENHANCED-ROLE-RECOGNITION-PROPOSE.md`,
-  `REFRESH-CODE-INDEX-AUTO-MODE-PROPOSE.md`,
   `DEFERRED-REST-CLIENT-MIGRATION-PROPOSE.md`,
   `PRODUCT-VISION.md`) and the completed ones explain *why* current
   code looks the way it does. Tier 1 + Tier 1B proposes
