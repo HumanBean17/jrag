@@ -353,8 +353,11 @@ New `graph_enrich.resolve_http_client_for_method` and
 
 ## 8. Tests
 
-**[TBD — full plan after extraction patterns settle.]** Mandatory
-buckets:
+**Resolved:** the full per-PR test inventory (48 cases across PR-D1,
+D2, D3) lives in
+[`plans/PLAN-TIER1B-COMPLETION.md`](../plans/PLAN-TIER1B-COMPLETION.md)
+§ PR-D1.4 / PR-D2.4 / PR-D3.5 with one row per case (name + assertion).
+Mandatory buckets covered there:
 
 - **Per-pattern detection** (one fixture per `client_kind`).
 - **Three-strategy resolution** (literal / SpEL / constant) — same
