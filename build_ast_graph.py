@@ -56,6 +56,8 @@ from graph_enrich import (
     microservice_for_path,
     module_for_path,
     phantom_id,
+    resolve_async_producer_for_method,
+    resolve_http_client_for_method,
     resolve_role_and_capabilities,
     resolve_routes_for_method,
     symbol_id,
@@ -219,6 +221,8 @@ class CallEdgeStats:
     async_calls_by_strategy: dict[str, int] = field(default_factory=lambda: defaultdict(int))
     http_calls_skipped_unresolved: int = 0
     async_calls_skipped_unresolved: int = 0
+    http_clients_from_brownfield_pct: float = 0.0
+    async_producers_from_brownfield_pct: float = 0.0
 
 
 @dataclass
@@ -1375,6 +1379,12 @@ def pass5_imperative_edges(
     verbose: bool,
 ) -> None:
     del asts
+    overrides = load_brownfield_overrides(source_root)
+    try:
+        prs = str(source_root.resolve())
+    except OSError:
+        prs = str(source_root)
+    meta_chain = collect_annotation_meta_chain(prs)
     routes_by_id = {r.id: r for r in tables.routes_rows}
     existing_route_ids = set(routes_by_id)
     http_seen: set[tuple[str, str]] = set()
@@ -1407,10 +1417,23 @@ def pass5_imperative_edges(
     for member in sorted(tables.members, key=lambda x: x.node_id):
         if member.decl.is_constructor:
             continue
-        if not member.decl.outgoing_calls:
-            continue
+        type_decl = tables.types[member.parent_fqn].decl
+        final_http_calls = resolve_http_client_for_method(
+            method_decl=member.decl,
+            enclosing_type=type_decl,
+            overrides=overrides,
+            meta_chain=meta_chain,
+            builtin_calls=member.decl.outgoing_calls,
+        )
+        final_async_calls = resolve_async_producer_for_method(
+            method_decl=member.decl,
+            enclosing_type=type_decl,
+            overrides=overrides,
+            meta_chain=meta_chain,
+            builtin_calls=member.decl.outgoing_calls,
+        )
         micro_factor = _micro_factor(member)
-        for call in member.decl.outgoing_calls:
+        for call in final_http_calls + final_async_calls:
             if call.channel == "http":
                 rid = ""
                 strategy = call.resolution_strategy
@@ -1507,6 +1530,32 @@ def pass5_imperative_edges(
                 tables.call_edge_stats.async_calls_by_strategy[strategy] += 1
 
     tables.routes_rows = sorted(route_rows, key=lambda r: r.id)
+    brownfield_strategies = frozenset(
+        (
+            "layer_b_ann",
+            "layer_a_meta",
+            "layer_c_source",
+            "layer_b_fqn",
+            "codebase_client",
+            "codebase_producer",
+        ),
+    )
+    if tables.call_edge_stats.http_calls_total:
+        n_http = sum(
+            v for k, v in tables.call_edge_stats.http_calls_by_strategy.items()
+            if k in brownfield_strategies
+        )
+        tables.call_edge_stats.http_clients_from_brownfield_pct = (
+            100.0 * float(n_http) / float(tables.call_edge_stats.http_calls_total)
+        )
+    if tables.call_edge_stats.async_calls_total:
+        n_async = sum(
+            v for k, v in tables.call_edge_stats.async_calls_by_strategy.items()
+            if k in brownfield_strategies
+        )
+        tables.call_edge_stats.async_producers_from_brownfield_pct = (
+            100.0 * float(n_async) / float(tables.call_edge_stats.async_calls_total)
+        )
     if verbose:
         http_client = dict(sorted(tables.call_edge_stats.http_calls_by_client_kind.items()))
         async_client = dict(sorted(tables.call_edge_stats.async_calls_by_client_kind.items()))
@@ -1552,7 +1601,9 @@ _SCHEMA_META = (
     "http_calls_by_strategy STRING, "
     "async_calls_by_strategy STRING, "
     "http_calls_resolved_pct DOUBLE, "
-    "async_calls_resolved_pct DOUBLE"
+    "async_calls_resolved_pct DOUBLE, "
+    "http_clients_from_brownfield_pct DOUBLE, "
+    "async_producers_from_brownfield_pct DOUBLE"
     ")"
 )
 
@@ -1922,7 +1973,9 @@ def _write_meta(conn: kuzu.Connection, tables: GraphTables, source_root: Path) -
         "routes_from_brownfield_pct: $routes_from_brownfield_pct, routes_by_layer: $routes_by_layer, "
         "http_calls_total: $http_calls_total, async_calls_total: $async_calls_total, "
         "http_calls_by_strategy: $http_calls_by_strategy, async_calls_by_strategy: $async_calls_by_strategy, "
-        "http_calls_resolved_pct: $http_calls_resolved_pct, async_calls_resolved_pct: $async_calls_resolved_pct})",
+        "http_calls_resolved_pct: $http_calls_resolved_pct, async_calls_resolved_pct: $async_calls_resolved_pct, "
+        "http_clients_from_brownfield_pct: $http_clients_from_brownfield_pct, "
+        "async_producers_from_brownfield_pct: $async_producers_from_brownfield_pct})",
         {
             "k": "graph",
             "ov": ONTOLOGY_VERSION,
@@ -1942,6 +1995,8 @@ def _write_meta(conn: kuzu.Connection, tables: GraphTables, source_root: Path) -
             "async_calls_by_strategy": json.dumps(async_by_strategy),
             "http_calls_resolved_pct": http_resolved_pct,
             "async_calls_resolved_pct": async_resolved_pct,
+            "http_clients_from_brownfield_pct": call_stats.http_clients_from_brownfield_pct,
+            "async_producers_from_brownfield_pct": call_stats.async_producers_from_brownfield_pct,
         },
     )
 
