@@ -13,6 +13,7 @@ _CROSS_SERVICE_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "cross_s
 
 
 def _build(root: Path, db_path: Path) -> None:
+    """Build through pass3 only (no routes); sufficient for `pass3_skipped_cross_service` assertions."""
     tables = GraphTables()
     asts = pass1_parse(root, tables, verbose=False)
     pass2_edges(tables, asts, verbose=False)

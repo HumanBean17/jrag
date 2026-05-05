@@ -1071,6 +1071,7 @@ def _resolve_and_emit_call(
         recv_type, call.callee_simple, call.arg_count, tables, ast,
     )
 
+    # Guard relies on `_lookup_method_candidates` returning a same-ms candidate when one exists; revisit if pass3 scopes lookups per-microservice.
     if member.microservice:
         same_ms = [c for c in candidates if c.microservice == member.microservice]
         if same_ms and len(same_ms) != len(candidates):
