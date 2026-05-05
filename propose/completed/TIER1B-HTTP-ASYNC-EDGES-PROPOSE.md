@@ -1,11 +1,11 @@
 # B2b + B6 — `HTTP_CALLS` / `ASYNC_CALLS` + cross-service matcher
 
-Status: **active — ready to implement**. Tier 1 (B2a + B4 + B5) is
-merged; the `Route` schema in §3.1 has been verified against what
-shipped. The implementable plan derived from this proposal lives at
-[`plans/PLAN-TIER1B-COMPLETION.md`](../plans/PLAN-TIER1B-COMPLETION.md);
+Status: **completed — shipped via PR-D1 → PR-D3** (merged 2026-05).
+Moved to `propose/completed/` once Tier 1B was complete. The
+implementable plan derived from this proposal lives at
+[`plans/PLAN-TIER1B-COMPLETION.md`](../../plans/completed/PLAN-TIER1B-COMPLETION.md);
 per-PR Sonnet/Cursor prompts at
-[`plans/CURSOR-PROMPTS-TIER1B.md`](../plans/CURSOR-PROMPTS-TIER1B.md).
+[`plans/CURSOR-PROMPTS-TIER1B.md`](../../plans/completed/CURSOR-PROMPTS-TIER1B.md).
 
 This document is now the **rationale + interface contract** that the
 plan implements. Section 11 lists the open questions that have been
@@ -21,12 +21,12 @@ Before working on this proposal, read in order:
 
 1. [`TIER1-COMPLETION-PROPOSE.md`](TIER1-COMPLETION-PROPOSE.md) §4
    (B2a `Route` + `EXPOSES`) — defines every join key used here.
-2. [`reports/what-to-borrow-from-cmm.md`](../reports/what-to-borrow-from-cmm.md)
+2. [`reports/what-to-borrow-from-cmm.md`](../../reports/what-to-borrow-from-cmm.md)
    §B2 (Route shape) and §B6 (cross-service edges).
-3. [`reports/call-graph-review.md`](../reports/call-graph-review.md)
+3. [`reports/call-graph-review.md`](../../reports/call-graph-review.md)
    — same correctness invariants apply (microservice scoping,
    confidence semantics, phantom-id collisions).
-4. [`plans/completed/PLAN-BROWNFIELD-ROLE-OVERRIDES-design-fixes.md`](../plans/completed/PLAN-BROWNFIELD-ROLE-OVERRIDES-design-fixes.md)
+4. [`plans/completed/PLAN-BROWNFIELD-ROLE-OVERRIDES-design-fixes.md`](../../plans/completed/PLAN-BROWNFIELD-ROLE-OVERRIDES-design-fixes.md)
    — brownfield surface for the **caller** side mirrors the same
    pattern as B2a (see §6).
 5. CMM source (pattern reference, do not port):
@@ -215,7 +215,7 @@ rename `_route_value_atoms` (`ast_java.py:1041`) → `_string_value_atoms`
 and re-use from the new `pass5_imperative_edges`. No separate
 extraction PR — the rename + four call-site updates ship in PR-D1
 as a single atomic change. See
-[`plans/PLAN-TIER1B-COMPLETION.md`](../plans/PLAN-TIER1B-COMPLETION.md)
+[`plans/PLAN-TIER1B-COMPLETION.md`](../../plans/completed/PLAN-TIER1B-COMPLETION.md)
 § PR-D1 deliverable #1.
 
 ### 5.3 Final confidence
@@ -376,7 +376,7 @@ New `graph_enrich.resolve_http_client_for_method` and
 
 **Resolved:** the full per-PR test inventory (48 cases across PR-D1,
 D2, D3) lives in
-[`plans/PLAN-TIER1B-COMPLETION.md`](../plans/PLAN-TIER1B-COMPLETION.md)
+[`plans/PLAN-TIER1B-COMPLETION.md`](../../plans/completed/PLAN-TIER1B-COMPLETION.md)
 § PR-D1.4 / PR-D2.4 / PR-D3.5 with one row per case (name + assertion).
 Mandatory buckets covered there:
 
@@ -465,7 +465,7 @@ but conservative.
 ## 12. References
 
 - [`TIER1-COMPLETION-PROPOSE.md`](TIER1-COMPLETION-PROPOSE.md) — B2a, B4, B5 (active).
-- [`reports/what-to-borrow-from-cmm.md`](../reports/what-to-borrow-from-cmm.md) §B2, §B6.
-- [`reports/call-graph-review.md`](../reports/call-graph-review.md) — invariants this proposal must not regress.
-- [`plans/completed/PLAN-BROWNFIELD-ROLE-OVERRIDES-design-fixes.md`](../plans/completed/PLAN-BROWNFIELD-ROLE-OVERRIDES-design-fixes.md) — mandatory reading for §6.
+- [`reports/what-to-borrow-from-cmm.md`](../../reports/what-to-borrow-from-cmm.md) §B2, §B6.
+- [`reports/call-graph-review.md`](../../reports/call-graph-review.md) — invariants this proposal must not regress.
+- [`plans/completed/PLAN-BROWNFIELD-ROLE-OVERRIDES-design-fixes.md`](../../plans/completed/PLAN-BROWNFIELD-ROLE-OVERRIDES-design-fixes.md) — mandatory reading for §6.
 - [`propose/PRODUCT-VISION.md`](PRODUCT-VISION.md) §3 — `HTTP_CALLS` / `ASYNC_CALLS` are listed as *planned*; this proposal flips them to *shipped*.

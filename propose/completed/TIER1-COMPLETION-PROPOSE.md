@@ -1,9 +1,9 @@
-# Tier 1 completion — active proposal
+# Tier 1 completion — proposal (shipped)
 
-Status: **active — ready for planning**. Pairs with the borrow guide
-[`reports/what-to-borrow-from-cmm.md`](../reports/what-to-borrow-from-cmm.md)
+Status: **completed — shipped via PR-A1 → PR-C** (merged 2026-04 → 2026-05). Moved to `propose/completed/` after PR-D3 (Tier 1B) landed. Pairs with the borrow guide
+[`reports/what-to-borrow-from-cmm.md`](../../reports/what-to-borrow-from-cmm.md)
 and follows on from the completed
-[`propose/completed/CALL-GRAPH-PROPOSE.md`](completed/CALL-GRAPH-PROPOSE.md).
+[`propose/completed/CALL-GRAPH-PROPOSE.md`](CALL-GRAPH-PROPOSE.md).
 
 This proposal closes out **Tier 1 of the borrow guide** within the
 **static-analysis scope**. It explicitly defers items that require
@@ -947,10 +947,10 @@ follow-ups, in order of leverage:
 ## 11. References
 
 - [`TIER1B-HTTP-ASYNC-EDGES-PROPOSE.md`](TIER1B-HTTP-ASYNC-EDGES-PROPOSE.md) - B2b + B6 propose
-- [`reports/what-to-borrow-from-cmm.md`](../reports/what-to-borrow-from-cmm.md) — original borrow guide (Tier 1 §B1–B5).
-- [`propose/completed/CALL-GRAPH-PROPOSE.md`](completed/CALL-GRAPH-PROPOSE.md) — completed call-graph proposal; same shape & style.
-- [`reports/call-graph-review.md`](../reports/call-graph-review.md) — review that surfaced the resolver / extractor invariants.
-- [`plans/completed/PLAN-BROWNFIELD-ROLE-OVERRIDES-design-fixes.md`](../plans/completed/PLAN-BROWNFIELD-ROLE-OVERRIDES-design-fixes.md) — **mandatory reading** for the implementer of §4.6 (brownfield route resolver mirrors this design).
+- [`reports/what-to-borrow-from-cmm.md`](../../reports/what-to-borrow-from-cmm.md) — original borrow guide (Tier 1 §B1–B5).
+- [`propose/completed/CALL-GRAPH-PROPOSE.md`](CALL-GRAPH-PROPOSE.md) — completed call-graph proposal; same shape & style.
+- [`reports/call-graph-review.md`](../../reports/call-graph-review.md) — review that surfaced the resolver / extractor invariants.
+- [`plans/completed/PLAN-BROWNFIELD-ROLE-OVERRIDES-design-fixes.md`](../../plans/completed/PLAN-BROWNFIELD-ROLE-OVERRIDES-design-fixes.md) — **mandatory reading** for the implementer of §4.6 (brownfield route resolver mirrors this design).
 - `graph_enrich.py` §"brownfield role / capability overrides" — the
   existing implementation B2a extends.
 - CMM source for pattern reference (read, don't fork):

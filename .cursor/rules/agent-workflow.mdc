@@ -14,8 +14,11 @@ inferring from code:
 - Brownfield assumptions, role/capability tuning → `CODEBASE_REQUIREMENTS.md`.
 - Why current design exists → `propose/completed/` and `plans/completed/`.
 - Testing philosophy → `tests/README.md`.
-- The currently-active per-PR plan → `plans/PLAN-TIER1B-COMPLETION.md`
-  with its companion prompts in `plans/CURSOR-PROMPTS-TIER1B.md`.
+- Currently-active plans → `plans/PLAN-POST-TIER1B-FOLLOWUPS.md`
+  (PR-E1 + PR-E2 — deferred catches from Tier 1B reviews). Recently
+  completed Tier 1B plans live under `plans/completed/` (see
+  `PLAN-TIER1B-COMPLETION.md` and `CURSOR-PROMPTS-TIER1B.md` as
+  reference templates).
 
 ## Propose-then-implement culture
 
@@ -73,7 +76,7 @@ When you're given a per-PR task prompt from `plans/CURSOR-PROMPTS-*.md`:
   exception: caller-side `HTTP_CALLS` / `ASYNC_CALLS` use option-(b)
   *replacement* rather than union when any brownfield layer fires
   on a method (single network packet → single edge). See
-  `plans/PLAN-TIER1B-COMPLETION.md` § "Caller-side composition
+  `plans/completed/PLAN-TIER1B-COMPLETION.md` § "Caller-side composition
   divergence".
 - Kuzu's Python binder rejects `dict` for `MAP` columns. Store all
   map-shaped graph_meta data (`routes_by_framework`,

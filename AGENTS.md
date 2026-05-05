@@ -13,16 +13,20 @@ for tools that don't read `.cursor/rules/`.
 - `CODEBASE_REQUIREMENTS.md` — Java-repo assumptions and tuning map.
 - `propose/` and `plans/` (plus their `completed/` subdirs) —
   in-flight scope and the rationale behind current design.
-  - Active proposes: `TIER1B-HTTP-ASYNC-EDGES-PROPOSE.md` (B2b/B6
-    HTTP_CALLS / ASYNC_CALLS), `RANKING-MICROSERVICE-PROPOSE.md`,
+  - Active proposes: `RANKING-MICROSERVICE-PROPOSE.md`,
     `ENHANCED-ROLE-RECOGNITION-PROPOSE.md`,
     `REFRESH-CODE-INDEX-AUTO-MODE-PROPOSE.md`,
     `DEFERRED-REST-CLIENT-MIGRATION-PROPOSE.md`, `PRODUCT-VISION.md`.
-  - Active plans: `PLAN-TIER1B-COMPLETION.md` and
-    `CURSOR-PROMPTS-TIER1B.md`. `PLAN-TIER1-COMPLETION.md` and
-    `CURSOR-PROMPTS-TIER1.md` are kept for reference even though
-    Tier 1 has fully merged.
-  - Completed: `propose/completed/CALL-GRAPH-PROPOSE.md`,
+  - Active plans: `PLAN-POST-TIER1B-FOLLOWUPS.md` (PR-E1/PR-E2 —
+    deferred catches collected from PR-D1/D2/D3 reviews).
+  - Completed (Tier 1 + Tier 1B): `propose/completed/TIER1-COMPLETION-PROPOSE.md`,
+    `propose/completed/TIER1B-HTTP-ASYNC-EDGES-PROPOSE.md`,
+    `plans/completed/PLAN-TIER1-COMPLETION.md`,
+    `plans/completed/PLAN-TIER1B-COMPLETION.md`,
+    `plans/completed/CURSOR-PROMPTS-TIER1.md`,
+    `plans/completed/CURSOR-PROMPTS-TIER1B.md`. The two CURSOR-PROMPTS
+    files are kept as reference templates for future per-PR Cursor work.
+  - Older completed: `propose/completed/CALL-GRAPH-PROPOSE.md`,
     `plans/completed/PLAN-CALL-GRAPH.md`,
     `plans/completed/PLAN-CAPABILITIES-MODEL.md`,
     `plans/completed/PLAN-BROWNFIELD-ROLE-OVERRIDES.md`,
@@ -62,7 +66,7 @@ Read these directly. Don't rely on rule files to mirror them.
    are the only path to making this tool usable on legacy codebases.
    New auto-detection logic must compose with brownfield (last layer
    wins), never replace it. See
-   `plans/PLAN-TIER1B-COMPLETION.md` § "Caller-side composition
+   `plans/completed/PLAN-TIER1B-COMPLETION.md` § "Caller-side composition
    divergence" for the one intentional exception (caller-side option-b
    replacement rule for HTTP_CALLS / ASYNC_CALLS).
 7. **Schema changes require a reindex** — update the README
@@ -81,7 +85,9 @@ Read these directly. Don't rely on rule files to mirror them.
 ## Per-PR Cursor task contract
 
 When picking up a per-PR Cursor task prompt (e.g. one of the entries
-under `plans/CURSOR-PROMPTS-TIER1B.md`):
+under `plans/CURSOR-PROMPTS-<topic>.md`; see
+`plans/completed/CURSOR-PROMPTS-TIER1B.md` as the canonical reference
+template):
 
 - Treat the prompt's **Out of scope** list as binding. Sentinel grep
   patterns in the prompt must return zero on `git diff master..HEAD`.

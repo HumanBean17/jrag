@@ -1,10 +1,10 @@
 # Plan: Tier 1 completion (B2a + B4 + B5)
 
-Status: **ready to implement**. Self-contained: an agent picking this up
+Status: **completed — shipped via PR-A1 → PR-C** (merged 2026-04 → 2026-05). Self-contained: an agent picking this up
 should be able to land it without re-deriving the design. Pairs with
-[`propose/TIER1-COMPLETION-PROPOSE.md`](../propose/TIER1-COMPLETION-PROPOSE.md)
+[`propose/TIER1-COMPLETION-PROPOSE.md`](../../propose/completed/TIER1-COMPLETION-PROPOSE.md)
 (scope, rationale, schema). The follow-on proposal
-[`propose/TIER1B-HTTP-ASYNC-EDGES-PROPOSE.md`](../propose/TIER1B-HTTP-ASYNC-EDGES-PROPOSE.md)
+[`propose/TIER1B-HTTP-ASYNC-EDGES-PROPOSE.md`](../../propose/completed/TIER1B-HTTP-ASYNC-EDGES-PROPOSE.md)
 (B2b + B6) depends on this plan landing first — **do not pre-implement
 its hooks here**.
 
@@ -32,7 +32,7 @@ Three sub-features ship in **three independent PRs** (see §Rollout).
 - **Brownfield surface extends `BrownfieldOverrides` — does not parallel
   it.** The route resolver mirrors `resolve_role_and_capabilities`
   shape-for-shape. See
-  [`plans/completed/PLAN-BROWNFIELD-ROLE-OVERRIDES-design-fixes.md`](completed/PLAN-BROWNFIELD-ROLE-OVERRIDES-design-fixes.md)
+  [`plans/completed/PLAN-BROWNFIELD-ROLE-OVERRIDES-design-fixes.md`](PLAN-BROWNFIELD-ROLE-OVERRIDES-design-fixes.md)
   — **mandatory reading** before touching §PR-A3.
 - **Confidence-scored edges.** Same three-strategy ladder as
   `pass3_calls`: literal=1.0, SpEL=0.85, constant_ref=0.7.
@@ -502,7 +502,7 @@ Update `_INSTRUCTIONS` to mention the new tools and the deferred
 **Goal:** Make the route detector work on legacy codebases that use
 custom (non-Spring) annotations. Mirrors the existing role/capability
 brownfield system **exactly**. **Mandatory reading before this PR:**
-[`plans/completed/PLAN-BROWNFIELD-ROLE-OVERRIDES-design-fixes.md`](completed/PLAN-BROWNFIELD-ROLE-OVERRIDES-design-fixes.md).
+[`plans/completed/PLAN-BROWNFIELD-ROLE-OVERRIDES-design-fixes.md`](PLAN-BROWNFIELD-ROLE-OVERRIDES-design-fixes.md).
 
 ## File-by-file changes
 

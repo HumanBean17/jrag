@@ -29,18 +29,20 @@ when needed.
 - `tests/README.md` — testing philosophy.
 - `propose/` and `propose/completed/` — design proposes; the active
   ones describe in-flight scope (currently
-  `TIER1B-HTTP-ASYNC-EDGES-PROPOSE.md` for B2b/B6, plus
   `RANKING-MICROSERVICE-PROPOSE.md`,
   `ENHANCED-ROLE-RECOGNITION-PROPOSE.md`,
   `REFRESH-CODE-INDEX-AUTO-MODE-PROPOSE.md`,
   `DEFERRED-REST-CLIENT-MIGRATION-PROPOSE.md`,
   `PRODUCT-VISION.md`) and the completed ones explain *why* current
-  code looks the way it does.
+  code looks the way it does. Tier 1 + Tier 1B proposes
+  (`TIER1-COMPLETION-PROPOSE.md`, `TIER1B-HTTP-ASYNC-EDGES-PROPOSE.md`)
+  are now under `propose/completed/` since their PR sequences merged.
 - `plans/` and `plans/completed/` — longer-form plans (e.g.
   capabilities model, tier completions, brownfield role overrides).
-  Per-PR Cursor task prompts live alongside plans
-  (`CURSOR-PROMPTS-TIER1B.md` is the active one; PR-D1 and PR-D2
-  have shipped, PR-D3 is next).
+  Active plan: `PLAN-POST-TIER1B-FOLLOWUPS.md` (deferred catches from
+  Tier 1B reviews). Completed Tier 1B plans + cursor-prompts
+  (`PLAN-TIER1B-COMPLETION.md`, `CURSOR-PROMPTS-TIER1B.md`) are kept
+  under `plans/completed/` as reference templates.
 - `.cursor/rules/breaking-changes.mdc` — the no-back-compat policy.
 
 ## File map (top of repo)
@@ -49,7 +51,7 @@ when needed.
 |------|------|
 | `server.py` | MCP stdio server. Every `@mcp.tool` lives here. |
 | `search_lancedb.py` | Vector / hybrid / graph-expanded search; ranking. |
-| `build_ast_graph.py` | Tree-sitter → Kuzu graph builder (full rebuild). Owns `pass1`–`pass5` (extends through `HTTP_CALLS` / `ASYNC_CALLS` caller edges as of ontology 7). PR-D3 will add `pass6_match_edges`. |
+| `build_ast_graph.py` | Tree-sitter → Kuzu graph builder (full rebuild). Owns `pass1`–`pass6` (`pass5` emits `HTTP_CALLS` / `ASYNC_CALLS` caller edges; `pass6_match_edges` resolves cross-service / intra-service / ambiguous / phantom / unresolved match outcomes — ontology 7). |
 | `kuzu_queries.py` | Read-only Cypher helpers used by the server. Includes `meta()` decoder for the Kuzu MAP-as-STRING JSON-blob columns. |
 | `ast_java.py` | Tree-sitter Java parsing, role/capability inference, `_string_value_atoms` helper (shared by route/client/producer extractors), `_collect_outgoing_calls` for caller-side detection. |
 | `graph_enrich.py` | `module` / `microservice` resolution, `BrownfieldOverrides` (route + role + capability + http client + async producer), meta-annotation walk, `resolve_routes_for_method` / `resolve_http_client_for_method` / `resolve_async_producer_for_method`. |

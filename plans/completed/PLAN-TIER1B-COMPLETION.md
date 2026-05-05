@@ -1,8 +1,8 @@
 # Plan: Tier 1B completion (B2b + B6)
 
-Status: **ready to implement**. Self-contained: an agent picking this up
+Status: **completed — shipped via PR-D1 → PR-D3** (merged 2026-05). Self-contained: an agent picking this up
 should be able to land it without re-deriving the design. Pairs with
-[`propose/TIER1B-HTTP-ASYNC-EDGES-PROPOSE.md`](../propose/TIER1B-HTTP-ASYNC-EDGES-PROPOSE.md)
+[`propose/TIER1B-HTTP-ASYNC-EDGES-PROPOSE.md`](../../propose/completed/TIER1B-HTTP-ASYNC-EDGES-PROPOSE.md)
 (scope, rationale, schema). Tier 1
 ([`PLAN-TIER1-COMPLETION.md`](PLAN-TIER1-COMPLETION.md)) **must be
 merged** — this plan reads `Route` rows produced by `pass4_routes` and
@@ -47,7 +47,7 @@ The three sub-features ship in **three independent PRs** (see §Rollout).
   expose multiple paths via path arrays.) See §Caller-side composition
   divergence below for the algorithm.
   Re-read
-  [`plans/completed/PLAN-BROWNFIELD-ROLE-OVERRIDES-design-fixes.md`](completed/PLAN-BROWNFIELD-ROLE-OVERRIDES-design-fixes.md)
+  [`plans/completed/PLAN-BROWNFIELD-ROLE-OVERRIDES-design-fixes.md`](PLAN-BROWNFIELD-ROLE-OVERRIDES-design-fixes.md)
   before touching §PR-D2.
 - **One three-strategy resolver, two callers.** PR-A2's
   `_route_value_atoms` (`ast_java.py:1041`) is renamed to
