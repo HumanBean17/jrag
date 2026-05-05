@@ -9,11 +9,13 @@ description = "MCP server for semantic + structural search over Java codebases"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "pathspec>=1.0.4,<2",
     "unidiff>=0.7.3,<1",
 ]
 
 # This repo is run as a loose script bundle; the wheel intentionally ships no
-# import packages so `pip install .` only pulls declared deps (e.g. unidiff).
+# import packages so `pip install .` only pulls declared deps (pathspec, unidiff, …).
+# Sources (e.g. path_filtering.py, pr_analysis.py) live at repo root and are run in-place.
 [tool.setuptools]
 packages = []
 

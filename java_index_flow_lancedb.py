@@ -37,7 +37,6 @@ from cocoindex.ops.text import RecursiveSplitter, detect_code_language
 from cocoindex.resources.file import PatternFilePathMatcher
 
 from java_index_v1_common import (
-    COMMON_EXCLUDED_PATH_PATTERNS,
     JAVA_CHUNK,
     SBERT_MODEL,
     SQL_CHUNK,
@@ -45,6 +44,7 @@ from java_index_v1_common import (
     chunk_key_range,
     position_to_json,
 )
+from path_filtering import LayeredIgnore
 from ast_java import ONTOLOGY_VERSION, parse_java
 from graph_enrich import enrich_chunk
 
@@ -157,6 +157,8 @@ async def process_java_file(
 ) -> None:
     embedder = coco.use_context(EMBEDDER)
     project_root = coco.use_context(PROJECT_ROOT)
+    if LayeredIgnore(project_root).is_ignored((project_root / file.file_path.path).resolve())[0]:
+        return
     try:
         content = await file.read_text()
     except UnicodeDecodeError:
@@ -218,6 +220,9 @@ async def process_sql_file(
     table: lancedb.TableTarget[SqlLanceChunk],
 ) -> None:
     embedder = coco.use_context(EMBEDDER)
+    project_root = coco.use_context(PROJECT_ROOT)
+    if LayeredIgnore(project_root).is_ignored((project_root / file.file_path.path).resolve())[0]:
+        return
     try:
         content = await file.read_text()
     except UnicodeDecodeError:
@@ -259,6 +264,9 @@ async def process_yaml_file(
     table: lancedb.TableTarget[YamlLanceChunk],
 ) -> None:
     embedder = coco.use_context(EMBEDDER)
+    project_root = coco.use_context(PROJECT_ROOT)
+    if LayeredIgnore(project_root).is_ignored((project_root / file.file_path.path).resolve())[0]:
+        return
     try:
         content = await file.read_text()
     except UnicodeDecodeError:
@@ -327,12 +335,15 @@ async def app_main() -> None:
         yaml_schema,
     )
 
+    project_root = coco.use_context(PROJECT_ROOT)
+    _ignore = LayeredIgnore(project_root)
+    _walk_excludes = _ignore.cocoindex_excluded_patterns()
     java_files = localfs.walk_dir(
         PROJECT_ROOT,
         recursive=True,
         path_matcher=PatternFilePathMatcher(
             included_patterns=["**/*.java"],
-            excluded_patterns=COMMON_EXCLUDED_PATH_PATTERNS,
+            excluded_patterns=_walk_excludes,
         ),
     )
     sql_files = localfs.walk_dir(
@@ -340,7 +351,7 @@ async def app_main() -> None:
         recursive=True,
         path_matcher=PatternFilePathMatcher(
             included_patterns=["**/src/main/resources/db/migration/*.sql"],
-            excluded_patterns=COMMON_EXCLUDED_PATH_PATTERNS,
+            excluded_patterns=_walk_excludes,
         ),
     )
     yaml_files = localfs.walk_dir(
@@ -351,7 +362,7 @@ async def app_main() -> None:
                 "**/src/main/resources/application*.yml",
                 "**/src/main/resources/application*.yaml",
             ],
-            excluded_patterns=COMMON_EXCLUDED_PATH_PATTERNS,
+            excluded_patterns=_walk_excludes,
         ),
     )
 

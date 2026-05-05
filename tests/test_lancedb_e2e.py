@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -32,6 +33,7 @@ pytestmark = [
 ]
 
 CAPABILITY_SMOKE_ROOT = Path(__file__).resolve().parent / "fixtures" / "capability_smoke"
+IGNORE_SMOKE_ROOT = Path(__file__).resolve().parent / "fixtures" / "lancedb_ignore_smoke"
 
 
 def _require_cocoindex_runtime_deps() -> None:
@@ -108,6 +110,7 @@ def lance_index(tmp_path_factory, corpus_root: Path) -> Path:
         **os.environ,
         "LANCEDB_URI": str(lance_uri),
         "COCOINDEX_DB": str(coco_db),
+        "LANCEDB_MCP_PROJECT_ROOT": str(Path(corpus_root).resolve()),
     }
     proc = subprocess.run(
         [
@@ -161,6 +164,7 @@ def lance_index_capability_smoke(tmp_path_factory) -> Path:
         **os.environ,
         "LANCEDB_URI": str(lance_uri),
         "COCOINDEX_DB": str(coco_db),
+        "LANCEDB_MCP_PROJECT_ROOT": str(CAPABILITY_SMOKE_ROOT.resolve()),
     }
     proc = subprocess.run(
         [
@@ -250,6 +254,67 @@ async def test_codebase_search_capability_filter_e2e(
         "MESSAGE_LISTENER" in (h.get("capabilities") or [])
         for h in out["results"]
     ), out["results"]
+
+
+def _unique_java_filenames_in_lance(lance_uri: Path) -> int:
+    import lancedb
+
+    db = lancedb.connect(str(lance_uri))
+    tbl = db.open_table("javacodeindex_java_code")
+    names = tbl.to_arrow().column("filename").to_pylist()
+    return len(set(names))
+
+
+def test_lancedb_ignore_file_reduces_indexed_java_files(tmp_path_factory) -> None:
+    """PR-C test 47: ``.lancedb-mcp/ignore`` excludes generated sources from the Lance index."""
+    _require_cocoindex_runtime_deps()
+    if not IGNORE_SMOKE_ROOT.is_dir():
+        pytest.skip(f"missing fixture tree: {IGNORE_SMOKE_ROOT}")
+    bundle_dir = Path(__file__).resolve().parent.parent
+    cocoindex_bin = Path(sys.executable).parent / "cocoindex"
+    if not cocoindex_bin.is_file():
+        pytest.skip(
+            f"cocoindex CLI not found next to the pytest interpreter ({cocoindex_bin})"
+        )
+
+    work = tmp_path_factory.mktemp("lance_ignore_e2e")
+    with_dir = work / "with_ignore"
+    without_dir = work / "without_ignore"
+    shutil.copytree(IGNORE_SMOKE_ROOT, with_dir)
+    shutil.copytree(IGNORE_SMOKE_ROOT, without_dir)
+    shutil.rmtree(without_dir / ".lancedb-mcp")
+
+    def run_coco(corpus: Path) -> Path:
+        lance_uri = corpus / "lancedb_data"
+        coco_db = corpus / "cocoindex.db"
+        app_spec = _cocoindex_flow_specifier(bundle_dir, corpus)
+        env = {
+            **os.environ,
+            "LANCEDB_URI": str(lance_uri.resolve()),
+            "COCOINDEX_DB": str(coco_db.resolve()),
+            "LANCEDB_MCP_PROJECT_ROOT": str(corpus.resolve()),
+        }
+        proc = subprocess.run(
+            [
+                str(cocoindex_bin),
+                "update",
+                app_spec,
+                "--full-reprocess",
+                "-f",
+            ],
+            cwd=str(corpus),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=900,
+        )
+        assert proc.returncode == 0, proc.stderr
+        return lance_uri
+
+    n_with = _unique_java_filenames_in_lance(run_coco(with_dir))
+    n_without = _unique_java_filenames_in_lance(run_coco(without_dir))
+    assert n_without > n_with
+    assert n_with >= 1
 
 
 async def test_trace_flow_returns_stages(lance_index: Path, monkeypatch) -> None:

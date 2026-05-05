@@ -59,11 +59,7 @@ from graph_enrich import (
     resolve_routes_for_method,
     symbol_id,
 )
-from java_index_v1_common import (
-    COMMON_EXCLUDED_PATH_PATTERNS,
-    compile_excluded_glob_patterns,
-    iter_java_source_files,
-)
+from path_filtering import LayeredIgnore, iter_java_source_files
 
 log = logging.getLogger(__name__)
 
@@ -212,7 +208,7 @@ class GraphTables:
     skipped_files: int = 0
 
 
-# ---------- file walk (see `java_index_v1_common.iter_java_source_files`) ----------
+# ---------- file walk (see `path_filtering.iter_java_source_files`) ----------
 
 
 # ---------- pass 1 ----------
@@ -275,10 +271,10 @@ def _register_type(
 def pass1_parse(root: Path, tables: GraphTables, *, verbose: bool) -> dict[str, JavaFileAst]:
     """Walk files, parse them, populate node indexes. Returns path -> AST."""
     asts: dict[str, JavaFileAst] = {}
-    excludes = compile_excluded_glob_patterns(COMMON_EXCLUDED_PATH_PATTERNS)
+    ignore = LayeredIgnore(root)
     t0 = time.time()
     n_files = 0
-    for p in iter_java_source_files(root, excludes):
+    for p in iter_java_source_files(root, ignore=ignore):
         n_files += 1
         try:
             content = p.read_bytes()

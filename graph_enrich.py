@@ -46,11 +46,7 @@ from java_ontology import (
     VALID_ROUTE_FRAMEWORKS,
     VALID_ROUTE_KINDS,
 )
-from java_index_v1_common import (
-    COMMON_EXCLUDED_PATH_PATTERNS,
-    compile_excluded_glob_patterns,
-    iter_java_source_files,
-)
+from path_filtering import LayeredIgnore, iter_java_source_files
 
 __all__ = [
     "AnnotationDecl",
@@ -242,9 +238,9 @@ def _collect_annotation_decl_index(project_root_str: str) -> dict[str, Annotatio
     root = Path(project_root_str)
     if not root.is_dir():
         return {}
-    excludes = compile_excluded_glob_patterns(COMMON_EXCLUDED_PATH_PATTERNS)
+    ignore = LayeredIgnore(root)
     decls: dict[str, AnnotationDecl] = {}
-    for p in sorted(iter_java_source_files(root, excludes), key=str):
+    for p in sorted(iter_java_source_files(root, ignore=ignore), key=str):
         try:
             content = p.read_bytes()
         except OSError as exc:
