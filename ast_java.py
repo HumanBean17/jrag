@@ -27,6 +27,7 @@ __all__ = [
     "FileImports",
     "ParamDecl",
     "MethodDecl",
+    "OutgoingCallDecl",
     "RouteDecl",
     "ROUTE_META_ANNOTATION_NAMES",
     "TypeDecl",
@@ -66,8 +67,8 @@ _DTO_LOMBOK_ANNOTATIONS: frozenset[str] = frozenset({
     "EqualsAndHashCode", "ToString",
 })
 
-# Phase 4: Route + EXPOSES (B2a); bumps whenever Route extraction / enrichment semantics change.
-ONTOLOGY_VERSION = 6
+# Phase 5: HTTP_CALLS + ASYNC_CALLS (B2b); bumps whenever extraction / enrichment semantics change.
+ONTOLOGY_VERSION = 7
 
 ROLE_ANNOTATIONS: dict[str, str] = {
     # Spring Web
@@ -257,6 +258,7 @@ class MethodDecl:
     # Ordered (name, simple_type_name) from `local_variable_declaration` in body.
     local_vars: list[tuple[str, str]] = field(default_factory=list)
     routes: list["RouteDecl"] = field(default_factory=list)
+    outgoing_calls: list["OutgoingCallDecl"] = field(default_factory=list)
 
 
 @dataclass
@@ -284,6 +286,28 @@ class RouteDecl:
     end_line: int
     # brownfield / B2a composition (graph_enrich.resolve_routes_for_method); not a Kuzu column.
     route_source_layer: str = "builtin"
+
+
+@dataclass
+class OutgoingCallDecl:
+    method_fqn: str
+    method_sig: str
+    client_kind: str
+    channel: str
+    feign_target_name: str
+    feign_target_url: str
+    path_template_call: str
+    method_call: str
+    topic_call: str
+    broker_call: str
+    raw_uri: str
+    raw_topic: str
+    resolution_strategy: str
+    confidence_base: float
+    resolved: bool
+    filename: str
+    start_line: int
+    end_line: int
 
 
 @dataclass
@@ -1038,8 +1062,8 @@ def _record_route_skip(ctx: _ParseCtx) -> None:
     ctx.routes_skipped_unresolved += 1
 
 
-def _route_value_atoms(val: Node, src: bytes, ctx: _ParseCtx) -> list[tuple[str, str, float, bool]]:
-    """Annotation route-ish values: (raw_text, resolution_strategy, confidence, resolved).
+def _string_value_atoms(val: Node, src: bytes, ctx: _ParseCtx) -> list[tuple[str, str, float, bool]]:
+    """String-like values: (raw_text, resolution_strategy, confidence, resolved).
 
     Ladder (PR-A2): literal string without ``${`` → ``annotation`` / 1.0 / resolved;
     string containing ``${`` → ``spel`` / 0.85 / unresolved; anything else
@@ -1057,7 +1081,7 @@ def _route_value_atoms(val: Node, src: bytes, ctx: _ParseCtx) -> list[tuple[str,
     if val.type in ("array_initializer", "element_value_array_initializer"):
         out: list[tuple[str, str, float, bool]] = []
         for ch in val.named_children:
-            out.extend(_route_value_atoms(ch, src, ctx))
+            out.extend(_string_value_atoms(ch, src, ctx))
         return out
     raw = _txt(val, src).strip()
     if not raw:
@@ -1067,7 +1091,7 @@ def _route_value_atoms(val: Node, src: bytes, ctx: _ParseCtx) -> list[tuple[str,
 
 def _literal_strings_from_route_arg(val: Node, src: bytes, ctx: _ParseCtx) -> list[str]:
     """Literal-only slice (for @FeignClient name/url/path where SpEL is not modelled)."""
-    return [a[0] for a in _route_value_atoms(val, src, ctx) if a[3]]
+    return [a[0] for a in _string_value_atoms(val, src, ctx) if a[3]]
 
 
 def _annotation_kv_nodes(ann: Node, src: bytes) -> tuple[dict[str, Node], Node | None]:
@@ -1126,13 +1150,13 @@ def _paths_and_methods_from_mapping_ann(
     had_explicit_path_arg = False
     if "path" in pairs:
         had_explicit_path_arg = True
-        path_atoms.extend(_route_value_atoms(pairs["path"], src, ctx))
+        path_atoms.extend(_string_value_atoms(pairs["path"], src, ctx))
     elif "value" in pairs:
         had_explicit_path_arg = True
-        path_atoms.extend(_route_value_atoms(pairs["value"], src, ctx))
+        path_atoms.extend(_string_value_atoms(pairs["value"], src, ctx))
     elif positional is not None:
         had_explicit_path_arg = True
-        path_atoms.extend(_route_value_atoms(positional, src, ctx))
+        path_atoms.extend(_string_value_atoms(positional, src, ctx))
 
     if simple_name == "GetMapping":
         methods = ["GET"]
@@ -1223,12 +1247,12 @@ def _kafka_topics_from_ann_node(
 ) -> list[tuple[str, str, float, bool]]:
     pairs, positional = _annotation_kv_nodes(ann, src)
     if "topics" in pairs:
-        return _route_value_atoms(pairs["topics"], src, ctx)
+        return _string_value_atoms(pairs["topics"], src, ctx)
     if "topicPattern" in pairs:
         _record_route_skip(ctx)
         return []
     if positional is not None:
-        return _route_value_atoms(positional, src, ctx)
+        return _string_value_atoms(positional, src, ctx)
     return []
 
 
@@ -1237,12 +1261,12 @@ def _rabbit_queues_from_ann_node(
 ) -> list[tuple[str, str, float, bool]]:
     pairs, positional = _annotation_kv_nodes(ann, src)
     if "queues" in pairs:
-        return _route_value_atoms(pairs["queues"], src, ctx)
+        return _string_value_atoms(pairs["queues"], src, ctx)
     if "bindings" in pairs:
         _record_route_skip(ctx)
         return []
     if positional is not None:
-        return _route_value_atoms(positional, src, ctx)
+        return _string_value_atoms(positional, src, ctx)
     return []
 
 
@@ -1252,9 +1276,9 @@ def _jms_destination_from_ann_node(
     pairs, positional = _annotation_kv_nodes(ann, src)
     for key in ("destination", "value"):
         if key in pairs:
-            return _route_value_atoms(pairs[key], src, ctx)
+            return _string_value_atoms(pairs[key], src, ctx)
     if positional is not None:
-        return _route_value_atoms(positional, src, ctx)
+        return _string_value_atoms(positional, src, ctx)
     return []
 
 
@@ -1264,9 +1288,9 @@ def _stream_listener_destinations(
     pairs, positional = _annotation_kv_nodes(ann, src)
     for key in ("value", "name"):
         if key in pairs:
-            return _route_value_atoms(pairs[key], src, ctx)
+            return _string_value_atoms(pairs[key], src, ctx)
     if positional is not None:
-        return _route_value_atoms(positional, src, ctx)
+        return _string_value_atoms(positional, src, ctx)
     return []
 
 
@@ -1460,7 +1484,7 @@ def _parse_codebase_route_inner_annotation(
 
     path_atoms: list[tuple[str, str, float, bool]] = []
     if path_node is not None:
-        path_atoms = _route_value_atoms(path_node, src, ctx)
+        path_atoms = _string_value_atoms(path_node, src, ctx)
     if not path_atoms:
         path_atoms = [("", "annotation", 1.0, True)]
 
@@ -1504,6 +1528,285 @@ def _codebase_route_inner_annotation_nodes(container_ann: Node, src: bytes) -> l
 
     visit(container_ann)
     return found
+
+
+def _field_types_for_type(type_node: Node | None, src: bytes) -> dict[str, str]:
+    out: dict[str, str] = {}
+    if type_node is None:
+        return out
+    body = type_node.child_by_field_name("body")
+    if body is None:
+        return out
+    for ch in body.named_children:
+        if ch.type != "field_declaration":
+            continue
+        tnode = ch.child_by_field_name("type")
+        if tnode is None:
+            continue
+        tname = _strip_type_to_simple(tnode, src)
+        for dc in ch.named_children:
+            if dc.type != "variable_declarator":
+                continue
+            nnode = dc.child_by_field_name("name")
+            if nnode is not None:
+                out[_txt(nnode, src)] = tname
+    return out
+
+
+def _collect_plus_literals(node: Node, src: bytes) -> list[str]:
+    vals: list[str] = []
+    if node.type == "binary_expression":
+        left = node.child_by_field_name("left")
+        right = node.child_by_field_name("right")
+        op = node.child_by_field_name("operator")
+        op_txt = _txt(op, src) if op is not None else ""
+        if op_txt == "+" and left is not None and right is not None:
+            vals.extend(_collect_plus_literals(left, src))
+            vals.extend(_collect_plus_literals(right, src))
+            return vals
+    lit = _string_literal_value(node, src)
+    if lit is not None:
+        vals.append(lit)
+    return vals
+
+
+def _normalize_call_path(raw_path: str) -> str:
+    p = (raw_path or "").strip()
+    if not p:
+        return ""
+    if not p.startswith("/"):
+        p = "/" + p
+    if len(p) > 1:
+        p = p.rstrip("/")
+    return p
+
+
+def _collect_outgoing_calls(
+    method_node: Node,
+    type_node: Node | None,
+    src: bytes,
+    *,
+    ctx: _ParseCtx,
+    project_root: str,
+    method_decl: MethodDecl,
+    type_fqn: str,
+    file_rel: str,
+) -> list[OutgoingCallDecl]:
+    del project_root
+    out: list[OutgoingCallDecl] = []
+    method_fqn = f"{type_fqn}#{method_decl.signature}"
+    type_mods = _find_modifiers_child(type_node) if type_node is not None else None
+    type_ann_names: set[str] = set()
+    feign_target_name = ""
+    feign_target_url = ""
+    if type_mods is not None:
+        for child in type_mods.children:
+            if child.type not in ("marker_annotation", "annotation"):
+                continue
+            simple, _ = _annotation_name(child, src)
+            type_ann_names.add(simple)
+            if simple == "FeignClient":
+                pairs, _ = _annotation_kv_nodes(child, src)
+                if "name" in pairs:
+                    vals = _literal_strings_from_route_arg(pairs["name"], src, ctx)
+                    feign_target_name = vals[0] if vals else ""
+                if "url" in pairs:
+                    vals = _literal_strings_from_route_arg(pairs["url"], src, ctx)
+                    feign_target_url = vals[0] if vals else ""
+    if type_node is not None and type_node.type == "interface_declaration" and "FeignClient" in type_ann_names:
+        out.append(
+            OutgoingCallDecl(
+                method_fqn=method_fqn,
+                method_sig=method_decl.signature,
+                client_kind="feign_method",
+                channel="http",
+                feign_target_name=feign_target_name,
+                feign_target_url=feign_target_url,
+                path_template_call="",
+                method_call="",
+                topic_call="",
+                broker_call="",
+                raw_uri="",
+                raw_topic="",
+                resolution_strategy="feign_method",
+                confidence_base=1.0,
+                resolved=True,
+                filename=file_rel,
+                start_line=method_decl.start_line,
+                end_line=method_decl.end_line,
+            )
+        )
+
+    body = method_node.child_by_field_name("body")
+    if body is None:
+        return out
+    receiver_types: dict[str, str] = {}
+    receiver_types.update(_field_types_for_type(type_node, src))
+    for p in method_decl.parameters:
+        receiver_types[p.name] = p.type_name
+    for n, t in method_decl.local_vars:
+        receiver_types[n] = t
+
+    rest_methods = {
+        "getForObject": "GET",
+        "getForEntity": "GET",
+        "postForEntity": "POST",
+        "postForObject": "POST",
+        "put": "PUT",
+        "delete": "DELETE",
+    }
+    web_methods = {"get", "post", "put", "delete", "patch"}
+
+    def _receiver_type(obj: Node | None) -> str:
+        if obj is None:
+            return ""
+        if obj.type == "identifier":
+            return receiver_types.get(_txt(obj, src), "")
+        return ""
+
+    def visit(n: Node) -> None:
+        if n.type == "method_invocation":
+            obj = n.child_by_field_name("object")
+            name_node = n.child_by_field_name("name")
+            args = n.child_by_field_name("arguments")
+            mname = _txt(name_node, src) if name_node is not None else ""
+            recv_type = _receiver_type(obj)
+            recv_txt = _txt(obj, src) if obj is not None else ""
+            arg_nodes = args.named_children if args is not None else []
+            if recv_type == "RestTemplate" and mname in (set(rest_methods) | {"exchange"}) and arg_nodes:
+                first = arg_nodes[0]
+                atoms = _string_value_atoms(first, src, ctx)
+                method_call = rest_methods.get(mname, "")
+                if mname == "exchange" and len(arg_nodes) > 1:
+                    raw = _txt(arg_nodes[1], src).strip()
+                    if raw.startswith("HttpMethod."):
+                        method_call = raw.rsplit(".", 1)[-1].upper()
+                path_template = ""
+                strategy = "rest_template"
+                conf = 0.3
+                resolved = False
+                raw_uri = _txt(first, src)
+                force_unresolved = first.type in ("method_invocation", "lambda_expression", "ternary_expression")
+                if atoms:
+                    val, strat, base_conf, is_resolved = atoms[0]
+                    path_template = _normalize_call_path(val) if val.startswith("/") else ""
+                    strategy = "rest_template"
+                    conf = base_conf
+                    resolved = is_resolved
+                if force_unresolved:
+                    path_template = ""
+                    conf = 0.3
+                    resolved = False
+                if first.type == "binary_expression":
+                    lits = [s for s in _collect_plus_literals(first, src) if s.startswith("/")]
+                    if lits:
+                        path_template = _normalize_call_path(lits[-1])
+                        conf = 0.7
+                        strategy = "rest_template"
+                        resolved = False
+                out.append(
+                    OutgoingCallDecl(
+                        method_fqn=method_fqn,
+                        method_sig=method_decl.signature,
+                        client_kind="rest_template",
+                        channel="http",
+                        feign_target_name="",
+                        feign_target_url="",
+                        path_template_call=path_template,
+                        method_call=method_call,
+                        topic_call="",
+                        broker_call="",
+                        raw_uri=raw_uri,
+                        raw_topic="",
+                        resolution_strategy=strategy,
+                        confidence_base=conf,
+                        resolved=resolved and bool(path_template),
+                        filename=file_rel,
+                        start_line=n.start_point[0] + 1,
+                        end_line=n.end_point[0] + 1,
+                    )
+                )
+            elif recv_type == "KafkaTemplate" and mname == "send" and arg_nodes:
+                first = arg_nodes[0]
+                atoms = _string_value_atoms(first, src, ctx)
+                topic = ""
+                conf = 0.3
+                resolved = False
+                if atoms:
+                    topic, _s, conf, resolved = atoms[0]
+                out.append(
+                    OutgoingCallDecl(
+                        method_fqn=method_fqn,
+                        method_sig=method_decl.signature,
+                        client_kind="kafka_send",
+                        channel="async",
+                        feign_target_name="",
+                        feign_target_url="",
+                        path_template_call="",
+                        method_call="",
+                        topic_call=topic,
+                        broker_call="",
+                        raw_uri="",
+                        raw_topic=_txt(first, src),
+                        resolution_strategy="kafka_template",
+                        confidence_base=conf,
+                        resolved=resolved,
+                        filename=file_rel,
+                        start_line=n.start_point[0] + 1,
+                        end_line=n.end_point[0] + 1,
+                    )
+                )
+            elif recv_type == "WebClient" and mname in web_methods:
+                out.append(
+                    OutgoingCallDecl(
+                        method_fqn=method_fqn,
+                        method_sig=method_decl.signature,
+                        client_kind="web_client",
+                        channel="http",
+                        feign_target_name="",
+                        feign_target_url="",
+                        path_template_call="",
+                        method_call=mname.upper(),
+                        topic_call="",
+                        broker_call="",
+                        raw_uri=recv_txt,
+                        raw_topic="",
+                        resolution_strategy="unresolved",
+                        confidence_base=0.3,
+                        resolved=False,
+                        filename=file_rel,
+                        start_line=n.start_point[0] + 1,
+                        end_line=n.end_point[0] + 1,
+                    )
+                )
+            elif recv_type == "StreamBridge" and mname == "send":
+                out.append(
+                    OutgoingCallDecl(
+                        method_fqn=method_fqn,
+                        method_sig=method_decl.signature,
+                        client_kind="stream_bridge_send",
+                        channel="async",
+                        feign_target_name="",
+                        feign_target_url="",
+                        path_template_call="",
+                        method_call="",
+                        topic_call="",
+                        broker_call="",
+                        raw_uri="",
+                        raw_topic=_txt(n, src),
+                        resolution_strategy="unresolved",
+                        confidence_base=0.3,
+                        resolved=False,
+                        filename=file_rel,
+                        start_line=n.start_point[0] + 1,
+                        end_line=n.end_point[0] + 1,
+                    )
+                )
+        for c in n.children:
+            visit(c)
+
+    visit(body)
+    return out
 
 
 def _collect_routes(
@@ -1842,6 +2145,16 @@ def _parse_method(
             signature=signature,
             file_rel=file_rel,
             ctx=ctx,
+        )
+        m.outgoing_calls = _collect_outgoing_calls(
+            node,
+            enclosing_type_node,
+            src,
+            ctx=ctx,
+            project_root="",
+            method_decl=m,
+            type_fqn=type_fqn,
+            file_rel=file_rel,
         )
     return m, anon_nested
 

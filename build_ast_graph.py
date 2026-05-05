@@ -44,6 +44,7 @@ from ast_java import (
     CallSite,
     JavaFileAst,
     MethodDecl,
+    OutgoingCallDecl,
     TypeDecl,
     injection_annotation_names,
     lombok_required_args_annotations,
@@ -187,6 +188,40 @@ class RouteExtractionStats:
 
 
 @dataclass
+class HttpCallRow:
+    symbol_id: str
+    route_id: str
+    confidence: float
+    strategy: str
+    method_call: str
+    raw_uri: str
+    match: str
+
+
+@dataclass
+class AsyncCallRow:
+    symbol_id: str
+    route_id: str
+    confidence: float
+    strategy: str
+    direction: str
+    raw_topic: str
+    match: str
+
+
+@dataclass
+class CallEdgeStats:
+    http_calls_total: int = 0
+    async_calls_total: int = 0
+    http_calls_by_client_kind: dict[str, int] = field(default_factory=lambda: defaultdict(int))
+    async_calls_by_client_kind: dict[str, int] = field(default_factory=lambda: defaultdict(int))
+    http_calls_by_strategy: dict[str, int] = field(default_factory=lambda: defaultdict(int))
+    async_calls_by_strategy: dict[str, int] = field(default_factory=lambda: defaultdict(int))
+    http_calls_skipped_unresolved: int = 0
+    async_calls_skipped_unresolved: int = 0
+
+
+@dataclass
 class GraphTables:
     types: dict[str, TypeIndexEntry] = field(default_factory=dict)  # fqn -> entry
     by_simple_name: dict[str, list[TypeIndexEntry]] = field(default_factory=dict)
@@ -202,7 +237,10 @@ class GraphTables:
     declares_rows: list[DeclaresRow] = field(default_factory=list)
     routes_rows: list[RouteRow] = field(default_factory=list)
     exposes_rows: list[ExposesRow] = field(default_factory=list)
+    http_call_rows: list[HttpCallRow] = field(default_factory=list)
+    async_call_rows: list[AsyncCallRow] = field(default_factory=list)
     route_stats: RouteExtractionStats = field(default_factory=RouteExtractionStats)
+    call_edge_stats: CallEdgeStats = field(default_factory=CallEdgeStats)
     methods_by_type: dict[str, list[MemberEntry]] = field(default_factory=dict)
     parse_errors: int = 0
     skipped_files: int = 0
@@ -1329,6 +1367,160 @@ def pass4_routes(
         print(f"[pass4] {msg}", file=sys.stderr)
 
 
+def pass5_imperative_edges(
+    tables: GraphTables,
+    asts: dict[str, JavaFileAst],
+    *,
+    source_root: Path,
+    verbose: bool,
+) -> None:
+    del asts
+    routes_by_id = {r.id: r for r in tables.routes_rows}
+    existing_route_ids = set(routes_by_id)
+    http_seen: set[tuple[str, str]] = set()
+    async_seen: set[tuple[str, str]] = set()
+    route_rows = list(tables.routes_rows)
+
+    def _micro_factor(member: MemberEntry) -> float:
+        ms = microservice_for_path(member.file_path, source_root)
+        return 1.0 if ms else 0.85
+
+    def _append_route(row: RouteRow) -> None:
+        if row.id in existing_route_ids:
+            return
+        existing_route_ids.add(row.id)
+        routes_by_id[row.id] = row
+        route_rows.append(row)
+
+    def _phantom_http_route_id(call: OutgoingCallDecl) -> str:
+        if call.path_template_call and call.method_call:
+            return _route_id("", "http_endpoint", call.method_call, call.path_template_call, call.path_template_call, "", "", "")
+        uniq = hashlib.sha1(f"{call.filename}:{call.start_line}:{call.raw_uri}".encode()).hexdigest()[:12]
+        return f"r:phantom:{uniq}"
+
+    def _phantom_async_route_id(call: OutgoingCallDecl) -> str:
+        if call.topic_call:
+            return _route_id("", "kafka_topic", "", "", "", call.topic_call, call.broker_call, "")
+        uniq = hashlib.sha1(f"{call.filename}:{call.start_line}:{call.raw_topic}".encode()).hexdigest()[:12]
+        return f"r:phantom:{uniq}"
+
+    for member in sorted(tables.members, key=lambda x: x.node_id):
+        if member.decl.is_constructor:
+            continue
+        if not member.decl.outgoing_calls:
+            continue
+        micro_factor = _micro_factor(member)
+        for call in member.decl.outgoing_calls:
+            if call.channel == "http":
+                rid = ""
+                strategy = call.resolution_strategy
+                if call.client_kind == "feign_method":
+                    exposing = next((e for e in tables.exposes_rows if e.symbol_id == member.node_id), None)
+                    if exposing is not None:
+                        rid = exposing.route_id
+                if not rid:
+                    rid = _phantom_http_route_id(call)
+                    _append_route(
+                        RouteRow(
+                            id=rid,
+                            kind="http_endpoint",
+                            framework="",
+                            method=call.method_call,
+                            path=call.path_template_call,
+                            path_template=call.path_template_call,
+                            path_regex="",
+                            topic="",
+                            broker="",
+                            feign_name=call.feign_target_name,
+                            feign_url=call.feign_target_url,
+                            microservice="",
+                            module="",
+                            filename=call.filename,
+                            start_line=call.start_line,
+                            end_line=call.end_line,
+                            resolved=False,
+                            source_layer="builtin",
+                        )
+                    )
+                key = (member.node_id, rid)
+                if key in http_seen:
+                    continue
+                http_seen.add(key)
+                conf = call.confidence_base * 0.3 * micro_factor
+                tables.http_call_rows.append(
+                    HttpCallRow(
+                        symbol_id=member.node_id,
+                        route_id=rid,
+                        confidence=conf,
+                        strategy=strategy,
+                        method_call=call.method_call,
+                        raw_uri=call.raw_uri,
+                        match="unresolved",
+                    )
+                )
+                tables.call_edge_stats.http_calls_total += 1
+                tables.call_edge_stats.http_calls_by_client_kind[call.client_kind] += 1
+                tables.call_edge_stats.http_calls_by_strategy[strategy] += 1
+            elif call.channel == "async":
+                rid = _phantom_async_route_id(call)
+                _append_route(
+                    RouteRow(
+                        id=rid,
+                        kind="kafka_topic",
+                        framework="",
+                        method="",
+                        path="",
+                        path_template="",
+                        path_regex="",
+                        topic=call.topic_call,
+                        broker=call.broker_call,
+                        feign_name="",
+                        feign_url="",
+                        microservice="",
+                        module="",
+                        filename=call.filename,
+                        start_line=call.start_line,
+                        end_line=call.end_line,
+                        resolved=False,
+                        source_layer="builtin",
+                    )
+                )
+                key = (member.node_id, rid)
+                if key in async_seen:
+                    continue
+                async_seen.add(key)
+                conf = call.confidence_base * 0.3 * micro_factor
+                strategy = call.resolution_strategy
+                tables.async_call_rows.append(
+                    AsyncCallRow(
+                        symbol_id=member.node_id,
+                        route_id=rid,
+                        confidence=conf,
+                        strategy=strategy,
+                        direction="producer",
+                        raw_topic=call.raw_topic,
+                        match="unresolved",
+                    )
+                )
+                tables.call_edge_stats.async_calls_total += 1
+                tables.call_edge_stats.async_calls_by_client_kind[call.client_kind] += 1
+                tables.call_edge_stats.async_calls_by_strategy[strategy] += 1
+
+    tables.routes_rows = sorted(route_rows, key=lambda r: r.id)
+    if verbose:
+        http_client = dict(sorted(tables.call_edge_stats.http_calls_by_client_kind.items()))
+        async_client = dict(sorted(tables.call_edge_stats.async_calls_by_client_kind.items()))
+        http_strategy = dict(sorted(tables.call_edge_stats.http_calls_by_strategy.items()))
+        async_strategy = dict(sorted(tables.call_edge_stats.async_calls_by_strategy.items()))
+        print(
+            f"[pass5] HTTP_CALLS: {len(tables.http_call_rows)} edges, "
+            f"ASYNC_CALLS: {len(tables.async_call_rows)} edges; "
+            f"http_by_client_kind={http_client}, async_by_client_kind={async_client}, "
+            f"http_by_strategy={http_strategy}, async_by_strategy={async_strategy}",
+            file=sys.stderr,
+        )
+
+
 # ---------- Kuzu write ----------
 
 
@@ -1354,7 +1546,13 @@ _SCHEMA_META = (
     "routes_by_framework STRING, "
     "routes_resolved_pct DOUBLE, "
     "routes_from_brownfield_pct DOUBLE, "
-    "routes_by_layer STRING"
+    "routes_by_layer STRING, "
+    "http_calls_total INT64, "
+    "async_calls_total INT64, "
+    "http_calls_by_strategy STRING, "
+    "async_calls_by_strategy STRING, "
+    "http_calls_resolved_pct DOUBLE, "
+    "async_calls_resolved_pct DOUBLE"
     ")"
 )
 
@@ -1393,10 +1591,22 @@ _SCHEMA_EXPOSES = (
     "CREATE REL TABLE EXPOSES(FROM Symbol TO Route, "
     "confidence DOUBLE, strategy STRING)"
 )
+_SCHEMA_HTTP_CALLS = (
+    "CREATE REL TABLE HTTP_CALLS(FROM Symbol TO Route, "
+    "confidence DOUBLE, strategy STRING, "
+    "method_call STRING, raw_uri STRING, match STRING)"
+)
+_SCHEMA_ASYNC_CALLS = (
+    "CREATE REL TABLE ASYNC_CALLS(FROM Symbol TO Route, "
+    "confidence DOUBLE, strategy STRING, "
+    "direction STRING, raw_topic STRING, match STRING)"
+)
 
 
 def _drop_all(conn: kuzu.Connection) -> None:
     for stmt in (
+        "DROP TABLE IF EXISTS HTTP_CALLS",
+        "DROP TABLE IF EXISTS ASYNC_CALLS",
         "DROP TABLE IF EXISTS EXPOSES",
         "DROP TABLE IF EXISTS EXTENDS",
         "DROP TABLE IF EXISTS IMPLEMENTS",
@@ -1424,6 +1634,8 @@ def _create_schema(conn: kuzu.Connection) -> None:
         _SCHEMA_DECLARES,
         _SCHEMA_CALLS,
         _SCHEMA_EXPOSES,
+        _SCHEMA_HTTP_CALLS,
+        _SCHEMA_ASYNC_CALLS,
     ):
         conn.execute(stmt)
 
@@ -1551,6 +1763,16 @@ _CREATE_EXPOSES = (
     "MATCH (s:Symbol {id: $sid}), (r:Route {id: $rid}) "
     "CREATE (s)-[:EXPOSES {confidence: $confidence, strategy: $strategy}]->(r)"
 )
+_CREATE_HTTP_CALL = (
+    "MATCH (s:Symbol {id: $sid}), (r:Route {id: $rid}) "
+    "CREATE (s)-[:HTTP_CALLS {confidence: $confidence, strategy: $strategy, "
+    "method_call: $method_call, raw_uri: $raw_uri, match: $match}]->(r)"
+)
+_CREATE_ASYNC_CALL = (
+    "MATCH (s:Symbol {id: $sid}), (r:Route {id: $rid}) "
+    "CREATE (s)-[:ASYNC_CALLS {confidence: $confidence, strategy: $strategy, "
+    "direction: $direction, raw_topic: $raw_topic, match: $match}]->(r)"
+)
 
 
 def _populate_declares_rows(tables: GraphTables) -> None:
@@ -1630,6 +1852,26 @@ def _write_routes_and_exposes(conn: kuzu.Connection, tables: GraphTables) -> Non
             "confidence": row.confidence,
             "strategy": row.strategy,
         })
+    for row in tables.http_call_rows:
+        conn.execute(_CREATE_HTTP_CALL, {
+            "sid": row.symbol_id,
+            "rid": row.route_id,
+            "confidence": row.confidence,
+            "strategy": row.strategy,
+            "method_call": row.method_call,
+            "raw_uri": row.raw_uri,
+            "match": row.match,
+        })
+    for row in tables.async_call_rows:
+        conn.execute(_CREATE_ASYNC_CALL, {
+            "sid": row.symbol_id,
+            "rid": row.route_id,
+            "confidence": row.confidence,
+            "strategy": row.strategy,
+            "direction": row.direction,
+            "raw_topic": row.raw_topic,
+            "match": row.match,
+        })
 
 
 def _write_meta(conn: kuzu.Connection, tables: GraphTables, source_root: Path) -> None:
@@ -1642,6 +1884,19 @@ def _write_meta(conn: kuzu.Connection, tables: GraphTables, source_root: Path) -
             calls_unique += 1
     st = tables.route_stats
     routes_fw = dict(sorted(st.by_framework.items()))
+    call_stats = tables.call_edge_stats
+    http_by_strategy = dict(sorted(call_stats.http_calls_by_strategy.items()))
+    async_by_strategy = dict(sorted(call_stats.async_calls_by_strategy.items()))
+    http_resolved_pct = 0.0
+    async_resolved_pct = 0.0
+    if call_stats.http_calls_total:
+        # PR-D1 definition: "resolved_pct" is strategy-based (strategy != 'unresolved'),
+        # not match-based (all PR-D1 edges keep match='unresolved').
+        resolved_http = sum(v for k, v in call_stats.http_calls_by_strategy.items() if k != "unresolved")
+        http_resolved_pct = float(resolved_http) / float(call_stats.http_calls_total)
+    if call_stats.async_calls_total:
+        resolved_async = sum(v for k, v in call_stats.async_calls_by_strategy.items() if k != "unresolved")
+        async_resolved_pct = float(resolved_async) / float(call_stats.async_calls_total)
     counts = {
         "packages": len(tables.packages),
         "files": len(tables.files),
@@ -1655,6 +1910,8 @@ def _write_meta(conn: kuzu.Connection, tables: GraphTables, source_root: Path) -
         "calls": calls_unique,
         "routes": len(tables.routes_rows),
         "exposes": len(tables.exposes_rows),
+        "http_calls": len(tables.http_call_rows),
+        "async_calls": len(tables.async_call_rows),
     }
     routes_layer = dict(sorted(st.routes_by_layer.items()))
     conn.execute(
@@ -1662,7 +1919,10 @@ def _write_meta(conn: kuzu.Connection, tables: GraphTables, source_root: Path) -
         "source_root: $sr, counts_json: $cj, parse_errors: $pe, "
         "routes_total: $routes_total, exposes_total: $exposes_total, "
         "routes_by_framework: $routes_by_framework, routes_resolved_pct: $routes_resolved_pct, "
-        "routes_from_brownfield_pct: $routes_from_brownfield_pct, routes_by_layer: $routes_by_layer})",
+        "routes_from_brownfield_pct: $routes_from_brownfield_pct, routes_by_layer: $routes_by_layer, "
+        "http_calls_total: $http_calls_total, async_calls_total: $async_calls_total, "
+        "http_calls_by_strategy: $http_calls_by_strategy, async_calls_by_strategy: $async_calls_by_strategy, "
+        "http_calls_resolved_pct: $http_calls_resolved_pct, async_calls_resolved_pct: $async_calls_resolved_pct})",
         {
             "k": "graph",
             "ov": ONTOLOGY_VERSION,
@@ -1676,6 +1936,12 @@ def _write_meta(conn: kuzu.Connection, tables: GraphTables, source_root: Path) -
             "routes_resolved_pct": float(st.routes_resolved_pct),
             "routes_from_brownfield_pct": float(st.routes_from_brownfield_pct),
             "routes_by_layer": json.dumps(routes_layer),
+            "http_calls_total": call_stats.http_calls_total,
+            "async_calls_total": call_stats.async_calls_total,
+            "http_calls_by_strategy": json.dumps(http_by_strategy),
+            "async_calls_by_strategy": json.dumps(async_by_strategy),
+            "http_calls_resolved_pct": http_resolved_pct,
+            "async_calls_resolved_pct": async_resolved_pct,
         },
     )
 
@@ -1751,6 +2017,7 @@ def main() -> int:
     pass2_edges(tables, asts, verbose=args.verbose)
     pass3_calls(tables, asts, verbose=args.verbose)
     pass4_routes(tables, asts, source_root=root, verbose=args.verbose)
+    pass5_imperative_edges(tables, asts, source_root=root, verbose=args.verbose)
     write_kuzu(kuzu_path, tables, source_root=root, verbose=args.verbose)
     if args.verbose:
         print(f"[done] kuzu at {kuzu_path}", file=sys.stderr)
