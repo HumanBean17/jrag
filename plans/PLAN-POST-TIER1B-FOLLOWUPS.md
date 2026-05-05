@@ -18,7 +18,7 @@ Links go to the review comment so the original context survives.
 | 4 | [PR-D3 #15](https://github.com/HumanBean17/java-enterprise-codebase-rag/pull/15#issuecomment-4379649557) obs 5 | Empty-feign-name short-circuit in `_match_call_edge` — add reader comment | low (doc) |
 | 5 | [PR-D2 #13](https://github.com/HumanBean17/java-enterprise-codebase-rag/pull/13#issuecomment-4378995637) post-D3 follow-up 1 | README: document `anchor`-fills-from-builtin behaviour for partial brownfield overrides | low (doc) |
 | 6 | [PR-D2 #13](https://github.com/HumanBean17/java-enterprise-codebase-rag/pull/13#issuecomment-4378995637) post-D3 follow-up 2 | Proposal §6: add `channel` field to the `OutgoingCallDecl` schema sketch as durable | low (doc) |
-| 7 | [PR-D1 #12](https://github.com/HumanBean17/java-enterprise-codebase-rag/pull/12#issuecomment-4378723605) obs 2 | Second copy of strategy ladder still in `graph_enrich.py:720-724` (annotation/spel/constant_ref) — known consolidation candidate | medium (tech debt) |
+| 7 | [PR-D1 #12](https://github.com/HumanBean17/java-enterprise-codebase-rag/pull/12#issuecomment-4378723605) obs 2 | ✅ shipped in PR-E2 — strategy ladder consolidated in `graph_enrich.py` (annotation/spel/constant_ref) | medium (tech debt) |
 
 ## Recommended PR boundaries
 
@@ -182,7 +182,8 @@ pattern hurt us in route resolution before PR-A2 consolidated.
    in context — what does it produce that `resolve_route_for_method` doesn't?).
 2. Either (a) delete the duplicate and route its callers through the
    canonical resolver, or (b) extract a shared helper that both call sites
-   use, depending on which is structurally cleaner.
+   use, depending on which is structurally cleaner. (Implementation note:
+   helper landed as `_route_path_atom` — path-atom focused naming.)
 3. Add a sentinel grep test in `tests/test_call_edge_matching.py` (or a new
    `tests/test_resolver_unification.py`): assert `grep -c "annotation.*spel.*constant_ref"
    graph_enrich.py == 1` to prevent regression.
