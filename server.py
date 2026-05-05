@@ -1268,7 +1268,7 @@ def create_mcp_server() -> FastMCP:
             "Map a unified diff to changed indexed symbols and estimate blast radius / risk. "
             "Pass full unified-diff text (e.g. `git diff` output). Returns JSON-serializable "
             "risk report: changed_symbols, blast_radius_total, cross_service_callers, "
-            "routes_touched (Route ids via EXPOSES), risk_score, risk_band, notes. "
+            "routes_touched (Route ids via EXPOSES), risk_score ([0,1]), risk_band, notes. "
             "Binary hunks and file renames are skipped for symbol mapping and surfaced in notes."
         ),
     )

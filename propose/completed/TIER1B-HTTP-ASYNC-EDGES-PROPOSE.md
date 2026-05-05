@@ -123,6 +123,7 @@ to match. The fields are:
 | Field                | Source                                                                                | Notes                                                                            |
 | -------------------- | ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
 | `client_kind`        | `feign_method` / `rest_template` / `web_client` / `kafka_send` / `stream_bridge_send` | Picks the matcher branch.                                                        |
+| `channel`            | `"http"` or `"async"`                                                                   | Durable discriminator used by `_match_call_edge` to choose HTTP vs async matching. |
 | `feign_target_name`  | `@FeignClient(name=…)` on the interface the caller's method belongs to                | Resolution: literal → SpEL → constant. Same three-strategy ladder as B2a §4.4.5. |
 | `path_template_call` | URI argument of `RestTemplate.exchange` etc., curly-collapsed via B2a's normalizer    | Re-use B2a's normalizer — do not re-implement.                                   |
 | `method_call`        | `HttpMethod.GET` etc., or extracted from the called function (`getForObject` → `GET`) | `''` means "couldn't determine".                                                 |
