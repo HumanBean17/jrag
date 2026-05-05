@@ -785,6 +785,17 @@ def resolve_role_and_capabilities(
 _HTTP_ROUTE_KINDS = frozenset({"http_endpoint", "http_consumer"})
 
 
+def _route_path_atom(raw_value: str, value_kind: str | None) -> tuple[str, str, float, bool]:
+    # Canonical ladder for route path hints: annotation -> spel -> constant_ref.
+    # Note: an empty string literal is still an explicit annotation value (`annotation`).
+    # "No value present" is handled by caller fallback, not by a separate value_kind.
+    if value_kind == "string":
+        if "${" in raw_value:
+            return "", "spel", 0.85, False
+        return raw_value, "annotation", 1.0, True
+    return "", "constant_ref", 0.7, False
+
+
 def _route_hint_lookup(ann: AnnotationRef, hints: dict[str, RouteHint]) -> RouteHint | None:
     q = ann.qualified.strip()
     if q in hints:
@@ -836,15 +847,11 @@ def _http_paths_from_ann_ref(ann: AnnotationRef) -> list[tuple[str, str, float, 
             continue
         v = ann.arguments[key]
         vk = ann.argument_kinds.get(key)
-        if vk == "string" and v is not None:
-            if "${" in v:
-                out.append(("", "spel", 0.85, False))
-            else:
-                out.append((v, "annotation", 1.0, True))
-        elif v:
-            out.append(("", "constant_ref", 0.7, False))
+        if not v:
+            continue
+        out.append(_route_path_atom(v, vk))
     if not out:
-        out.append(("", "annotation", 1.0, True))
+        out.append(_route_path_atom("", "string"))
     return out
 
 

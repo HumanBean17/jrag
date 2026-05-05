@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from ast_java import OutgoingCallDecl
@@ -135,3 +136,10 @@ def test_phantom_routes_cleaned_up_when_real_match_found() -> None:
     tables = _build_tables(_FIXTURE)
     inbound = {r.route_id for r in tables.http_call_rows} | {r.route_id for r in tables.async_call_rows}
     assert all(not (r.id.startswith("r:phantom:") and r.id not in inbound) for r in tables.routes_rows)
+
+
+def test_graph_enrich_has_single_route_strategy_ladder() -> None:
+    graph_enrich = Path(__file__).resolve().parent.parent / "graph_enrich.py"
+    source = graph_enrich.read_text(encoding="utf-8")
+    matches = re.findall(r"annotation.*spel.*constant_ref", source)
+    assert len(matches) == 1

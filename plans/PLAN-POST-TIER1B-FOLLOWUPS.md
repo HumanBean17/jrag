@@ -182,7 +182,8 @@ pattern hurt us in route resolution before PR-A2 consolidated.
    in context — what does it produce that `resolve_route_for_method` doesn't?).
 2. Either (a) delete the duplicate and route its callers through the
    canonical resolver, or (b) extract a shared helper that both call sites
-   use, depending on which is structurally cleaner.
+   use, depending on which is structurally cleaner. (Implementation note:
+   helper landed as `_route_path_atom` — path-atom focused naming.)
 3. Add a sentinel grep test in `tests/test_call_edge_matching.py` (or a new
    `tests/test_resolver_unification.py`): assert `grep -c "annotation.*spel.*constant_ref"
    graph_enrich.py == 1` to prevent regression.
