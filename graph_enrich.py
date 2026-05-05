@@ -787,6 +787,8 @@ _HTTP_ROUTE_KINDS = frozenset({"http_endpoint", "http_consumer"})
 
 def _route_path_atom(raw_value: str, value_kind: str | None) -> tuple[str, str, float, bool]:
     # Canonical ladder for route path hints: annotation -> spel -> constant_ref.
+    # Note: an empty string literal is still an explicit annotation value (`annotation`).
+    # "No value present" is handled by caller fallback, not by a separate value_kind.
     if value_kind == "string":
         if "${" in raw_value:
             return "", "spel", 0.85, False
