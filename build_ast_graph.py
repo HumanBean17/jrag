@@ -213,6 +213,8 @@ class AsyncCallRow:
 class CallEdgeStats:
     http_calls_total: int = 0
     async_calls_total: int = 0
+    http_calls_by_client_kind: dict[str, int] = field(default_factory=lambda: defaultdict(int))
+    async_calls_by_client_kind: dict[str, int] = field(default_factory=lambda: defaultdict(int))
     http_calls_by_strategy: dict[str, int] = field(default_factory=lambda: defaultdict(int))
     async_calls_by_strategy: dict[str, int] = field(default_factory=lambda: defaultdict(int))
     http_calls_skipped_unresolved: int = 0
@@ -1457,6 +1459,7 @@ def pass5_imperative_edges(
                     )
                 )
                 tables.call_edge_stats.http_calls_total += 1
+                tables.call_edge_stats.http_calls_by_client_kind[call.client_kind] += 1
                 tables.call_edge_stats.http_calls_by_strategy[strategy] += 1
             elif call.channel == "async":
                 rid = _phantom_async_route_id(call)
@@ -1500,13 +1503,20 @@ def pass5_imperative_edges(
                     )
                 )
                 tables.call_edge_stats.async_calls_total += 1
+                tables.call_edge_stats.async_calls_by_client_kind[call.client_kind] += 1
                 tables.call_edge_stats.async_calls_by_strategy[strategy] += 1
 
     tables.routes_rows = sorted(route_rows, key=lambda r: r.id)
     if verbose:
+        http_client = dict(sorted(tables.call_edge_stats.http_calls_by_client_kind.items()))
+        async_client = dict(sorted(tables.call_edge_stats.async_calls_by_client_kind.items()))
+        http_strategy = dict(sorted(tables.call_edge_stats.http_calls_by_strategy.items()))
+        async_strategy = dict(sorted(tables.call_edge_stats.async_calls_by_strategy.items()))
         print(
             f"[pass5] HTTP_CALLS: {len(tables.http_call_rows)} edges, "
-            f"ASYNC_CALLS: {len(tables.async_call_rows)} edges",
+            f"ASYNC_CALLS: {len(tables.async_call_rows)} edges; "
+            f"http_by_client_kind={http_client}, async_by_client_kind={async_client}, "
+            f"http_by_strategy={http_strategy}, async_by_strategy={async_strategy}",
             file=sys.stderr,
         )
 
@@ -1880,6 +1890,8 @@ def _write_meta(conn: kuzu.Connection, tables: GraphTables, source_root: Path) -
     http_resolved_pct = 0.0
     async_resolved_pct = 0.0
     if call_stats.http_calls_total:
+        # PR-D1 definition: "resolved_pct" is strategy-based (strategy != 'unresolved'),
+        # not match-based (all PR-D1 edges keep match='unresolved').
         resolved_http = sum(v for k, v in call_stats.http_calls_by_strategy.items() if k != "unresolved")
         http_resolved_pct = float(resolved_http) / float(call_stats.http_calls_total)
     if call_stats.async_calls_total:
