@@ -380,8 +380,9 @@ def _route_ids_for_symbol(graph: Any, symbol_id: str) -> list[str]:
 def compute_risk(graph: Any, changed: list[ChangedSymbol]) -> PrRiskReport:
     """Aggregate blast radius, routes, cross-service callers, and v1 risk score.
 
-    Risk score includes a cross-service route-caller bump: +1.0 per caller
-    (capped at +5.0) across changed methods that expose routes.
+    Risk score stays in [0, 1]. Cross-service route callers add a bounded
+    bump (up to +1.0) after normalization so they influence rank while
+    preserving the public scalar contract.
     """
     notes: list[str] = []
     blast_by: dict[str, int] = {}
@@ -472,7 +473,7 @@ def compute_risk(graph: Any, changed: list[ChangedSymbol]) -> PrRiskReport:
         5.0,
         float(sum(c.cross_service_callers_count for c in enriched_changed)),
     )
-    score = max(0.0, raw + cross_service_bonus)
+    score = max(0.0, min(1.0, raw + (cross_service_bonus / 5.0)))
     if score < 0.3:
         band = "low"
     elif score < 0.7:

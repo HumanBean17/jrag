@@ -66,13 +66,15 @@ VALID_ASYNC_CALL_STRATEGIES: frozenset[str] = frozenset((
     "unresolved",
 ))
 
-VALID_HTTP_CALL_MATCHES: frozenset[str] = frozenset((
+VALID_CALL_MATCHES: frozenset[str] = frozenset((
     "cross_service",
     "intra_service",
     "ambiguous",
     "phantom",
     "unresolved",
 ))
+# Back-compat alias; retained for one release while callers migrate.
+VALID_HTTP_CALL_MATCHES = VALID_CALL_MATCHES
 
 __all__ = [
     "VALID_ROLES",
@@ -82,5 +84,6 @@ __all__ = [
     "VALID_CLIENT_KINDS",
     "VALID_HTTP_CALL_STRATEGIES",
     "VALID_ASYNC_CALL_STRATEGIES",
+    "VALID_CALL_MATCHES",
     "VALID_HTTP_CALL_MATCHES",
 ]

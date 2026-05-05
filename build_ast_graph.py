@@ -63,7 +63,7 @@ from graph_enrich import (
     symbol_id,
 )
 from path_filtering import LayeredIgnore, iter_java_source_files
-from java_ontology import VALID_HTTP_CALL_MATCHES
+from java_ontology import VALID_CALL_MATCHES
 
 log = logging.getLogger(__name__)
 
@@ -1589,6 +1589,7 @@ def _match_call_edge(
 
     candidates: list[RouteRow] = []
     if call.client_kind == "feign_method":
+        # Both sides must provide a non-empty Feign name; empty values are unresolved.
         candidates = [
             r for r in routes
             if r.feign_name and call.feign_target_name and r.feign_name == call.feign_target_name
@@ -1640,6 +1641,8 @@ def pass6_match_edges(
     all_routes = [r for r in tables.routes_rows if r.microservice]
     member_by_id = {m.node_id: m for m in tables.members}
 
+    # Pass 6 is idempotent for full rebuilds: each run fully re-derives match outcomes.
+    # If incremental rebuild lands later, this reset must remain pass-scoped.
     tables.call_edge_stats.http_calls_match_breakdown.clear()
     tables.call_edge_stats.async_calls_match_breakdown.clear()
     tables.call_edge_stats.cross_service_calls_total = 0
@@ -1674,7 +1677,7 @@ def pass6_match_edges(
             end_line=member.decl.end_line if member else 0,
         )
         outcome, candidates = _match_call_edge(call, all_routes, member.microservice if member else "")
-        if outcome in VALID_HTTP_CALL_MATCHES:
+        if outcome in VALID_CALL_MATCHES:
             row.match = outcome
         if outcome in ("cross_service", "intra_service") and len(candidates) == 1:
             row.route_id = candidates[0].id
@@ -1710,7 +1713,7 @@ def pass6_match_edges(
             end_line=member.decl.end_line if member else 0,
         )
         outcome, candidates = _match_call_edge(call, all_routes, member.microservice if member else "")
-        if outcome in VALID_HTTP_CALL_MATCHES:
+        if outcome in VALID_CALL_MATCHES:
             row.match = outcome
         if outcome in ("cross_service", "intra_service") and len(candidates) == 1:
             row.route_id = candidates[0].id

@@ -166,6 +166,136 @@ def test_35_compute_risk_controller_route_and_high_band_when_saturated(
     assert rep.routes_touched
 
 
+def test_35a_compute_risk_cross_service_bonus_saturates_to_one(monkeypatch) -> None:
+    from pr_analysis import ChangedSymbol
+
+    class _FakeGraph:
+        def _rows(self, query, params):
+            if "MATCH (s:Symbol) WHERE s.id = $id RETURN" in query:
+                return [{
+                    "id": params["id"],
+                    "kind": "method",
+                    "name": "handler",
+                    "fqn": "com.acme.Controller#handler()",
+                    "package": "com.acme",
+                    "module": "svc-a",
+                    "microservice": "svc-a",
+                    "filename": "src/main/java/com/acme/Controller.java",
+                    "start_line": 10,
+                    "end_line": 20,
+                    "start_byte": 0,
+                    "end_byte": 0,
+                    "modifiers": [],
+                    "annotations": [],
+                    "capabilities": [],
+                    "role": "CONTROLLER",
+                    "signature": "handler()",
+                    "parent_id": "",
+                    "resolved": True,
+                }]
+            if "MATCH (s:Symbol)-[e:HTTP_CALLS|ASYNC_CALLS]->(r:Route {id: $rid})" in query:
+                return [{"id": str(i)} for i in range(6)]
+            return []
+
+        def impact_analysis(self, name, **kwargs):
+            del name, kwargs
+            return []
+
+        def find_callers(self, name, **kwargs):
+            del name, kwargs
+            return []
+
+    monkeypatch.setattr("pr_analysis._route_ids_for_symbol", lambda graph, sid: ["route-1"])
+    rep = compute_risk(
+        _FakeGraph(),
+        [
+            ChangedSymbol(
+                symbol_id="sym-1",
+                fqn="com.acme.Controller#handler()",
+                kind="method",
+                change_type="modified",
+                file="src/main/java/com/acme/Controller.java",
+                hunk_lines=[12],
+            ),
+        ],
+    )
+    assert rep.risk_score == 1.0
+
+
+def test_35b_compute_risk_single_cross_service_bonus_is_point_two(monkeypatch) -> None:
+    from pr_analysis import ChangedSymbol
+
+    class _FakeGraph:
+        def __init__(self, *, include_callers: bool) -> None:
+            self._include_callers = include_callers
+
+        def _rows(self, query, params):
+            if "MATCH (s:Symbol) WHERE s.id = $id RETURN" in query:
+                return [{
+                    "id": params["id"],
+                    "kind": "method",
+                    "name": "handler",
+                    "fqn": "com.acme.Controller#handler()",
+                    "package": "com.acme",
+                    "module": "svc-a",
+                    "microservice": "svc-a",
+                    "filename": "src/main/java/com/acme/Controller.java",
+                    "start_line": 10,
+                    "end_line": 20,
+                    "start_byte": 0,
+                    "end_byte": 0,
+                    "modifiers": [],
+                    "annotations": [],
+                    "capabilities": [],
+                    "role": "CONTROLLER",
+                    "signature": "handler()",
+                    "parent_id": "",
+                    "resolved": True,
+                }]
+            if "MATCH (s:Symbol)-[e:HTTP_CALLS|ASYNC_CALLS]->(r:Route {id: $rid})" in query:
+                if self._include_callers:
+                    return [{"id": "caller-1"}]
+                return []
+            return []
+
+        def impact_analysis(self, name, **kwargs):
+            del name, kwargs
+            return []
+
+        def find_callers(self, name, **kwargs):
+            del name, kwargs
+            return []
+
+    monkeypatch.setattr("pr_analysis._route_ids_for_symbol", lambda graph, sid: ["route-1"])
+    rep = compute_risk(
+        _FakeGraph(include_callers=True),
+        [
+            ChangedSymbol(
+                symbol_id="sym-1",
+                fqn="com.acme.Controller#handler()",
+                kind="method",
+                change_type="modified",
+                file="src/main/java/com/acme/Controller.java",
+                hunk_lines=[12],
+            ),
+        ],
+    )
+    baseline = compute_risk(
+        _FakeGraph(include_callers=False),
+        [
+            ChangedSymbol(
+                symbol_id="sym-1",
+                fqn="com.acme.Controller#handler()",
+                kind="method",
+                change_type="modified",
+                file="src/main/java/com/acme/Controller.java",
+                hunk_lines=[12],
+            ),
+        ],
+    )
+    assert rep.risk_score - baseline.risk_score == 0.2
+
+
 def test_36_removed_symbol_from_minus_only_hunk(kuzu_graph) -> None:
     diff = """diff --git a/chat-assign/src/main/java/com/bank/chat/assign/service/ChatManagementService.java b/chat-assign/src/main/java/com/bank/chat/assign/service/ChatManagementService.java
 --- a/chat-assign/src/main/java/com/bank/chat/assign/service/ChatManagementService.java

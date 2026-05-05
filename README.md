@@ -384,6 +384,12 @@ layer emits method-level outgoing calls, built-in outgoing calls for that same
 method are replaced (not appended) to avoid double-counting one network call
 site.
 
+When a brownfield caller override specifies only part of what built-in detection
+would produce, missing fields are inherited from the built-in result. Partial
+overrides are therefore non-destructive (tightening instead of replacing). To
+fully replace the built-in result for a method, supply all relevant fields in
+the override; otherwise unspecified fields default to built-in values.
+
 For source stubs, copy `@CodebaseClient` / `@CodebaseClients` and
 `@CodebaseProducer` / `@CodebaseProducers` from
 `tests/fixtures/brownfield_client_stubs/` (same "simple-name only" behavior as
