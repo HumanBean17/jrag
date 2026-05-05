@@ -382,10 +382,31 @@ generalisation as a follow-up.
   role. Unifying them is a larger ontology cleanup.
 - **Drop `FEIGN_CLIENT` once `HTTP_CLIENT` lands.** Or keep it as
   a sub-classifier. Decision deferred.
-- **Symmetric diagnostic for ASYNC_CALLS.** Kafka producers and
+- **Symmetric diagnostic for ASYNC_CALLS.** ~~Kafka producers and
   consumers emit two Route nodes per topic too; the matcher
   pairs them. Verify that the same EXPOSES bug doesn't exist on
-  the producer side.
+  the producer side.~~ **Audited 2026-05-05 — bug does not exist
+  on the async side.** Async messaging uses structurally
+  different annotations per direction: `@KafkaListener` /
+  `@RabbitListener` / `@JmsListener` / `@StreamListener` /
+  `@Bean Function|Consumer|Supplier` on the consumer side, and
+  plain method calls (`KafkaTemplate.send`, `StreamBridge.send`,
+  `JmsTemplate.convertAndSend`) on the producer side. All five
+  `RouteDecl` emission sites in `ast_java.py` (lines 2040, 2071,
+  2096, 2118, 2140) are gated on listener annotations or
+  consumer-Bean signatures; producers (lines 1721, 1883, 1929)
+  emit `OutgoingCall` records with `client_kind=kafka_send` /
+  `stream_bridge_send`, **not** `RouteDecl`. So no producer-side
+  Route is ever created. Empirically confirmed on
+  `tests/fixtures/cross_service_smoke`: exactly 1 Kafka Route
+  (`svc-b kind=kafka_topic`), 1 EXPOSES (from svc-b's listener,
+  correct), and 1 cross-service ASYNC_CALLS edge
+  (`svc-a::ClientA#produce() -> svc-b's kafka_topic`,
+  `match=cross_service`). The asymmetry exists because HTTP
+  reuses `@*Mapping` on both sides (controller and Feign)
+  forcing kind-based disambiguation; async never had that
+  collision. **No scope expansion needed; this fix stays
+  HTTP-only.**
 - **Multi-attribution Routes.** When the shared-module
   multi-attribution proposal lands, Route ownership should
   follow the same set semantics. Cross-reference at
@@ -400,7 +421,7 @@ generalisation as a follow-up.
 | 3 | What's the migration path for old graphs? | Document "rebuild to apply the fix", do not auto-migrate. Confirmed in §6. |
 | 4 | Should `pass4_feign_exposes_suppressed` be in `KuzuGraph.meta()` or only logged? | Recommend meta — useful regression signal. New `_META_PR_FEIGN` tier. |
 | 5 | Audit checklist for downstream tools | Recommend ship a small audit (1-2h) before the implementing PR opens, listing every EXPOSES-reading query and its expected new behaviour. Capture in PR description. |
-| 6 | Symmetric ASYNC_CALLS bug? | §8 future work. Recommend: confirm or rule out **before** the implementing PR opens. If symmetric, expand scope or queue as PR-2 in the same series. |
+| 6 | Symmetric ASYNC_CALLS bug? | **Resolved 2026-05-05 — does not exist.** See §8. Async uses different annotations per direction (`@KafkaListener` consumer vs `KafkaTemplate.send` producer); only listeners emit `RouteDecl`, producers emit `OutgoingCall`. Verified empirically on `cross_service_smoke`. Fix stays HTTP-only. |
 
 ## 10. References
 
