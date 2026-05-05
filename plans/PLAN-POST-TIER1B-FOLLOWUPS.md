@@ -1,9 +1,9 @@
 # Post-Tier-1B follow-ups — small cleanup PR plan
 
-Status: **active — ready to implement (single PR or split into PR-E1 / PR-E2)**.
-Source: catches collected from PR-D1, PR-D2, PR-D3 reviews that were
-intentionally deferred until Tier 1B landed. None are blockers; all are
-either contract-tightening, naming, or doc gaps.
+Status: **active** — PR-E1 (items 1–6) shipped in [#19](https://github.com/HumanBean17/java-enterprise-codebase-rag/pull/19); PR-E2 (item 7) and PR-E3 (item 8) outstanding.
+Source: catches collected from PR-D1, PR-D2, PR-D3 reviews + the PR-E1 review reply.
+None are blockers; all are either contract-tightening, naming, doc gaps,
+or invariant guards.
 
 ## Origin of each item
 
@@ -19,15 +19,15 @@ Links go to the review comment so the original context survives.
 | 5 | [PR-D2 #13](https://github.com/HumanBean17/java-enterprise-codebase-rag/pull/13#issuecomment-4378995637) post-D3 follow-up 1 | README: document `anchor`-fills-from-builtin behaviour for partial brownfield overrides | low (doc) |
 | 6 | [PR-D2 #13](https://github.com/HumanBean17/java-enterprise-codebase-rag/pull/13#issuecomment-4378995637) post-D3 follow-up 2 | Proposal §6: add `channel` field to the `OutgoingCallDecl` schema sketch as durable | low (doc) |
 | 7 | [PR-D1 #12](https://github.com/HumanBean17/java-enterprise-codebase-rag/pull/12#issuecomment-4378723605) obs 2 | Second copy of strategy ladder still in `graph_enrich.py:720-724` (annotation/spel/constant_ref) — known consolidation candidate | medium (tech debt) |
+| 8 | [PR-E1 #19 review reply](https://github.com/HumanBean17/java-enterprise-codebase-rag/pull/19#issuecomment-4380659734) | `pass3_calls` doesn't enforce the intra-JVM invariant for `CALLS` edges. Today no cross-microservice CALLS edge is emitted on any fixture (verified on `cross_service_smoke`: 9 CALLS edges, 0 cross), but the cleanliness is incidental — no `caller.microservice == callee.microservice` guard exists. FQN collisions across services or brownfield supertype overrides could in principle break the invariant silently. | low-to-medium (invariant) |
 
 ## Recommended PR boundaries
 
-Two clean splits work; pick whichever feels right:
+- **PR-E1** (✅ shipped in [#19](https://github.com/HumanBean17/java-enterprise-codebase-rag/pull/19)) — items 1–6 in one PR (risk-score normalisation + the four small renames/comments + two doc fixes).
+- **PR-E2** — item 7 (refactor of the second strategy ladder — needs its own per-PR Cursor task prompt with sentinel greps).
+- **PR-E3** — item 8 (intra-JVM CALLS invariant guard). Tiny PR, ~10 lines + one fixture test. Safe to ship before or after PR-E2.
 
-- **Single PR (PR-E1):** items 1–6 in one PR (risk-score normalisation + the four small renames/comments + two doc fixes). Item 7 (strategy-ladder consolidation) is bigger and touches `graph_enrich.py:720-724` plus its callers — hold it for **PR-E2**.
-- **Two PRs:** PR-E1 = items 1–6 (small, doc-heavy, low risk). PR-E2 = item 7 (refactor — needs its own per-PR Cursor task prompt with sentinel greps).
-
-This document covers both. Implementation guidance below assumes PR-E1 ships first.
+This document covers all three. Implementation guidance below.
 
 ---
 
@@ -204,9 +204,129 @@ on `bank-chat-system` before/after and diffing the route-resolution counts.
 
 ---
 
+## PR-E3 — Intra-JVM CALLS invariant guard (item 8, low-to-medium)
+
+Touches: `build_ast_graph.py` (pass3 + a new counter on `CallResolutionStats`
+and a new `graph_meta` field), `tests/test_call_graph.py` (or a new
+`tests/test_call_invariant.py`), one Java fixture pair (FQN collision across
+two services).
+
+Out of scope: changing `CALLS` schema, narrowing pass3 to per-microservice
+resolution scopes (that's the right long-term answer but is significant work
+— see related ideas in the open Tier-2 incremental rebuild proposal).
+
+### Background
+
+`CALLS` edges represent intra-JVM method dispatch. By Java's runtime model,
+a method call cannot leave the JVM — anything crossing a microservice boundary
+must be a network call (`HTTP_CALLS` or `ASYNC_CALLS`). Today `pass3_calls`
+resolves callees through the global symbol table without filtering on
+`microservice`. It works because real Maven/Gradle modules don't share
+classpaths and fixtures replicate that, but the invariant is **implicit**.
+
+Empirical baseline (from PR-E1 review reply, May 2026):
+
+```
+fixture: tests/fixtures/cross_service_smoke
+Total CALLS edges: 9
+Cross-microservice CALLS edges: 0
+```
+
+### Failure modes the guard would catch
+
+1. **FQN collision across services** — two services declare the same FQN
+   (e.g. shared DTO copy-paste). The `len(candidates) > 1` branch at
+   `build_ast_graph.py:1119` could emit an `overload_ambiguous` CALLS edge
+   crossing services.
+2. **Brownfield supertype/role overrides** — future Layer-4 / Enhanced Role
+   Recognition work could in principle introduce a phantom resolution that
+   crosses the boundary.
+3. **Refactors of `_resolve_and_emit_call`** — a future contributor could
+   add a fallback resolution path that doesn't realise the implicit
+   invariant exists.
+
+### Resolution
+
+Add a guard near `build_ast_graph.py:1119` (the candidate-emit loop):
+
+```python
+if member.microservice and candidate.microservice \
+        and member.microservice != candidate.microservice:
+    log.warning(
+        "skipping cross-microservice CALLS edge %s -> %s "
+        "(caller=%s, callee=%s)",
+        member.fqn, candidate.fqn,
+        member.microservice, candidate.microservice,
+    )
+    stats.skipped_cross_service += 1
+    continue
+```
+
+The guard fires on:
+- `len(candidates) == 1` branch (single resolved candidate is in another service)
+- `len(candidates) > 1` branch (per-candidate filter inside the for loop)
+- Phantom-receiver branch (`stats.phantom_other` path — phantom dst should
+  not be in another service either, since phantoms are scoped to the
+  caller's service)
+
+Add `skipped_cross_service: int = 0` to `CallResolutionStats` and surface
+as `pass3_skipped_cross_service` in `graph_meta`. Verbose log line in
+pass3's stats summary mentions the count.
+
+### Tests
+
+One new fixture: `tests/fixtures/fqn_collision_smoke/` with two services
+(`svc-x`, `svc-y`) each declaring `com.example.SharedDto#process()`. A third
+file in `svc-x` calls `process()`. Without the guard, pass3 emits an
+ambiguous edge — one to `svc-x.SharedDto` (correct) and one to
+`svc-y.SharedDto` (cross-service — invalid).
+
+```python
+def test_call_invariant_blocks_cross_microservice_edges(tmp_path):
+    # Build on the fqn_collision_smoke fixture
+    ...
+    # Assert: no CALLS edge spans services
+    cross = g._rows(
+        "MATCH (a:Symbol)-[:CALLS]->(b:Symbol) "
+        "WHERE a.microservice <> '' AND b.microservice <> '' "
+        "AND a.microservice <> b.microservice "
+        "RETURN count(*) AS c", {}
+    )
+    assert cross[0]['c'] == 0
+    # Assert: counter shows the guard fired at least once
+    assert g.meta()['pass3_skipped_cross_service'] >= 1
+```
+
+A second assertion checks the existing `cross_service_smoke` fixture is
+unaffected (`pass3_skipped_cross_service == 0`) — confirming the guard
+is surgical, not over-eager.
+
+### Definition of done (PR-E3)
+
+1. Guard in `pass3_calls`'s candidate-emit paths.
+2. New counter on `CallResolutionStats` + `graph_meta` field
+   `pass3_skipped_cross_service`.
+3. New `fqn_collision_smoke` fixture and one test that asserts the guard
+   fires (counter ≥ 1) and no cross-service CALLS edge is emitted.
+4. Existing fixtures continue to show `pass3_skipped_cross_service == 0`
+   (verified by extending one existing graph_meta assertion in
+   `tests/test_kuzu_meta.py` or equivalent).
+5. Pass3 verbose log mentions the new counter.
+6. `260+` (current baseline + 1 new test) tests still pass.
+
+### Risk
+
+Very low. Pure additive guard — it can only *prevent* edges, never create
+them. The fixture-based test catches the failure mode it's designed to
+catch. Worst case if the guard is buggy: it fires too aggressively and
+suppresses a legal CALLS edge — surfaces immediately in the existing
+determinism / call-resolution tests.
+
+---
+
 ## Tracking
 
 This plan supersedes loose mentions of these items scattered across PR
-review threads. When PR-E1 / PR-E2 ship, mark each row in the table at the
-top with `✅ shipped in PR-E#`. When all rows are checked, move this file
-to `plans/completed/`.
+review threads. When PR-E1 / PR-E2 / PR-E3 ship, mark each row in the
+table at the top with `✅ shipped in PR-E#`. When all rows are checked,
+move this file to `plans/completed/`.
