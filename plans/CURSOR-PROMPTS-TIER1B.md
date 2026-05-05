@@ -287,8 +287,8 @@ Concretely:
 - Implement `resolve_http_client_for_method(*, method_decl,
   enclosing_type, overrides, meta_chain, builtin_calls)` and
   `resolve_async_producer_for_method(...)` in `graph_enrich.py`.
-  Both must mirror `resolve_routes_for_method` line for line —
-  same composition order, same last-writer-wins semantics:
+  Both mirror `resolve_routes_for_method` for layer composition (same
+  5 layers, same last-writer-wins **between brownfield layers**):
     1. Built-in detection (the `OutgoingCallDecl`s already in
        `builtin_calls`).
     2. Layer B annotations.
@@ -296,6 +296,29 @@ Concretely:
        `collect_annotation_meta_chain`).
     4. Layer C `@CodebaseClient` / `@CodebaseProducer` source stubs.
     5. Layer B FQN (outermost).
+
+  **CRITICAL DIVERGENCE FROM B2a's route resolver** (plan §PR-D2 §3.5):
+  if Layers 2–5 produce ≥1 brownfield `OutgoingCallDecl` for the same
+  method, **drop the built-in `OutgoingCallDecl`s from `builtin_calls`
+  for that method**. Rationale: a `restTemplate.X` or `kafkaTemplate.send`
+  site is a single outgoing network call — emitting both auto-extracted
+  and brownfield-asserted edges from it would double-count one packet.
+  B2a's route resolver does NOT do this (a method can legitimately
+  expose multiple paths via path arrays). Algorithm:
+
+  ```python
+  brownfield_calls = _collect_brownfield_outgoing_calls(...)  # Layers 2–5
+  if brownfield_calls:
+      return brownfield_calls   # caller-side: replace, not append
+  return builtin_calls           # no brownfield → keep auto-detected
+  ```
+
+  The per-method boundary matters: in a class with method `A`
+  (built-in only) and method `B` (built-in + `@CodebaseClient`),
+  only `B`'s built-in edges are dropped. `A`'s are kept untouched.
+  Tests 27, 31a, 31b lock this behaviour. **Call this divergence
+  out explicitly in the PR description so reviewers don't flag it
+  as a bug.**
 - Add `CODEBASE_CLIENT_ANNOTATIONS` and
   `CODEBASE_PRODUCER_ANNOTATIONS` frozensets in `ast_java.py` next
   to the existing `CODEBASE_ROUTE_ANNOTATIONS`.
@@ -317,8 +340,10 @@ Concretely:
   `resolution_strategy ∈ {layer_b_ann, layer_a_meta, layer_c_source,
   layer_b_fqn, codebase_client, codebase_producer}`.
 - Build the new fixture `tests/fixtures/brownfield_client_stubs/`
-  (see plan §4) — 12 cases mirroring `brownfield_route_stubs`.
-- Create `tests/test_brownfield_clients.py` with cases 20–31.
+  (see plan §4) — 14 cases (12 mirroring `brownfield_route_stubs`
+  + 2 for the caller-side replacement-rule divergence).
+- Create `tests/test_brownfield_clients.py` with cases 20–31,
+  31a, 31b.
 
 ## Out of scope (do NOT touch)
 
@@ -365,7 +390,7 @@ don't ship it.
 ## Tests
 
 All tests must pass: `python -m pytest tests -q` should report
-**241 passed, 4 skipped** (229 baseline post-D1 + 12 new tests).
+**243 passed, 4 skipped** (229 baseline post-D1 + 14 new tests).
 
 Sentinel grep checks (must all return zero):
 
@@ -399,6 +424,10 @@ cd /home/user/workspace/user-rag && rm -rf /tmp/check_d2 && \
   --kuzu-path /tmp/check_d2 --verbose 2>&1 | tail -20
 ```
 
+**The PR description must also explicitly call out the caller-side
+replacement-rule divergence** (§PR-D2 §3.5) — reviewers will
+otherwise flag the missing `extend(builtin_calls)` as a bug.
+
 Then check the percentage:
 
 ```python
@@ -417,7 +446,7 @@ clean.)
 ## Definition of Done
 
 - [ ] All deliverables 1–11 above shipped.
-- [ ] All tests pass locally (241 passed, 4 skipped).
+- [ ] All tests pass locally (243 passed, 4 skipped).
 - [ ] Sentinel greps return expected counts.
 - [ ] PR description cites
       `PLAN-BROWNFIELD-ROLE-OVERRIDES-design-fixes.md` line numbers

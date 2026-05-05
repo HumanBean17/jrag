@@ -308,7 +308,28 @@ instead of route-side. Composition order:
 4. Layer C: `@CodebaseClient` / `@CodebaseProducer` in source
 5. Layer B: `http_client_overrides.fqn` / `async_producer_overrides.fqn`
 
-Last writer wins, exactly like B2a.
+Last writer wins **across the brownfield layers (2–5), exactly like
+B2a**. However, the caller side has one explicit divergence from
+B2a's route resolver: when **any** brownfield layer (2–5) fires on a
+method, those brownfield-asserted edges **replace** the built-in
+edges from layer 1 for that same method (rather than being appended
+alongside them).
+
+Rationale: a `restTemplate.exchange` or `kafkaTemplate.send` call
+site represents a single outgoing network packet. If we appended an
+auto-extracted edge **and** a brownfield-asserted edge from the same
+call site, downstream callers would see two edges where only one
+network call exists — double-counting fan-out. B2a's route resolver
+does not have this problem because a single method can legitimately
+expose multiple HTTP paths (via `@RequestMapping(path = {"/a",
+"/b"})`), so route-side composition is purely additive.
+
+The replacement is **per-method scoped**: a sibling method on the
+same class with no brownfield assertion keeps its built-in edges
+untouched. See `plans/PLAN-TIER1B-COMPLETION.md` § 3.5
+("Caller-side composition divergence") for the exact algorithm and
+the lock-in tests (27 replacement, 31a per-method scoping, 31b async
+parity).
 
 ### 6.4 Plumbing
 

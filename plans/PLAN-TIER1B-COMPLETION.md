@@ -37,7 +37,16 @@ The three sub-features ship in **three independent PRs** (see §Rollout).
   edge tables / overrides / tools only.
 - **Brownfield surface extends `BrownfieldOverrides` — does not parallel
   it.** The caller-side resolver mirrors `resolve_routes_for_method`
-  shape-for-shape. Re-read
+  shape-for-shape **except for one explicit divergence**: when both
+  built-in detection AND a method-level brownfield assertion fire on
+  the same method, brownfield **replaces** the built-in edge instead
+  of appending alongside it. Rationale: a `restTemplate.X` call site
+  is a single outgoing network call — emitting both an auto-extracted
+  edge and a brownfield-asserted edge from it would double-count one
+  packet. (B2a's route side keeps both because a method can legitimately
+  expose multiple paths via path arrays.) See §Caller-side composition
+  divergence below for the algorithm.
+  Re-read
   [`plans/completed/PLAN-BROWNFIELD-ROLE-OVERRIDES-design-fixes.md`](completed/PLAN-BROWNFIELD-ROLE-OVERRIDES-design-fixes.md)
   before touching §PR-D2.
 - **One three-strategy resolver, two callers.** PR-A2's
@@ -72,7 +81,7 @@ The three sub-features ship in **three independent PRs** (see §Rollout).
 | PR        | Scope                                                                              | Ontology bump | Files touched (approx) | Test buckets                         | Independent of      |
 | --------- | ---------------------------------------------------------------------------------- | ------------- | ---------------------- | ------------------------------------ | ------------------- |
 | **PR-D1** | B2b core: `HTTP_CALLS` + `ASYNC_CALLS` schema, `pass5_imperative_edges`, shared resolver rename, no brownfield, no MCP tools | 6 → 7         | 4                      | per-pattern detection + resolution + per-outcome | Tier 1 (A1–A3, B, C) |
-| **PR-D2** | B2b brownfield: `@CodebaseClient` / `@CodebaseProducer`, `http_client_overrides` + `async_producer_overrides`, 5-layer resolver | none          | 4                      | 12 brownfield fixtures               | PR-D1               |
+| **PR-D2** | B2b brownfield: `@CodebaseClient` / `@CodebaseProducer`, `http_client_overrides` + `async_producer_overrides`, 5-layer resolver + caller-side replacement-rule | none          | 4                      | 14 brownfield fixtures               | PR-D1               |
 | **PR-D3** | B6 cross-service matcher: match-outcome enum on edges, two new MCP tools, three existing tools extended | none          | 5                      | match-outcome + traversal + MCP      | PR-D1 (matcher needs HTTP_CALLS) |
 
 PRs land in order **D1 → D2 → D3**. PR-D2 and PR-D3 are independently
@@ -560,7 +569,8 @@ Additions (~120 lines, no removals):
    5. Layer B: `fqn_to_http_client_hint` /
       `fqn_to_async_producer_hint` (outermost — last writer wins).
 
-   Last writer wins, exactly like B2a.
+   Last writer wins, exactly like B2a — **with one explicit divergence
+   for the caller side**. See §Caller-side composition divergence below.
 
 ### 2. `ast_java.py` — `@CodebaseClient` / `@CodebaseProducer` parsing
 
@@ -597,10 +607,53 @@ Modify `pass5_imperative_edges` (~10 lines):
   `resolution_strategy ∈ {layer_b_ann, layer_a_meta, layer_c_source,
   layer_b_fqn, codebase_client, codebase_producer}`.
 
+### 3.5 Caller-side composition divergence (the only delta from PR-A3)
+
+B2a's `resolve_routes_for_method` returns the **union** of
+built-in-detected routes and brownfield-asserted routes (a method can
+legitimately expose multiple paths). The caller-side resolver
+**diverges**: when method-level brownfield (Layer 4 `@CodebaseClient` /
+`@CodebaseProducer`, or any Layer 2 / 3 / 5 hint that resolves to the
+same method) produces at least one `OutgoingCallDecl`, the built-in
+ones from `builtin_calls` are **dropped** for that method.
+
+Algorithm inside `resolve_http_client_for_method`:
+
+```python
+final_calls: list[OutgoingCallDecl] = []
+brownfield_calls = _collect_brownfield_outgoing_calls(
+    method_decl, enclosing_type, overrides, meta_chain,
+)
+if brownfield_calls:
+    # Caller-side divergence: brownfield replaces built-in.
+    # Single outgoing call site → single edge.
+    final_calls.extend(brownfield_calls)
+else:
+    final_calls.extend(builtin_calls)
+return final_calls
+```
+
+The **per-method** boundary matters: if method `A` has built-in
+detection and method `B` (in the same class) has a `@CodebaseClient`,
+only `B`'s built-in edges are dropped. `A`'s are kept untouched.
+
+Within `brownfield_calls`, last-writer-wins still applies between the
+four brownfield layers (Layers 2, 3, 4, 5 — outermost wins). Same
+pattern PR-A3 uses for routes.
+
+`resolve_async_producer_for_method` follows the same divergence rule
+for the same reason — a `kafkaTemplate.send` site is a single produce
+operation.
+
+This is the **only** intentional behavioural difference from
+`resolve_routes_for_method`. PR description must call it out
+explicitly so reviewers don't flag it as a bug.
+
 ### 4. New stub source: `tests/fixtures/brownfield_client_stubs/`
 
-12 fixtures mirroring `brownfield_route_stubs` — cases for caller-side
-overrides:
+14 fixtures mirroring `brownfield_route_stubs` — cases for caller-side
+overrides (12 in PR-A3 parity + 2 added for the caller-side
+replacement-rule divergence):
 
 | #  | Case                                                                        |
 | -- | --------------------------------------------------------------------------- |
@@ -611,11 +664,13 @@ overrides:
 | 24 | Layer C source for async: `@CodebaseProducer(topic="x")` on a method        |
 | 25 | Repeatable `@CodebaseClient` (×2): produces two `OutgoingCallDecl`s         |
 | 26 | Last writer wins: layer-B-fqn overrides layer-C-source                      |
-| 27 | Method-level wins over built-in: `@CodebaseClient` on a method that already has `restTemplate.exchange` produces only the override (or both? see PR-A3 for the precedent — replicate exactly) |
+| 27 | Method-level brownfield **replaces** built-in: `@CodebaseClient` on a method that already has `restTemplate.exchange` produces **only** the override edge (the auto-extracted one is dropped). Asserts the caller-side divergence from B2a (see §Caller-side composition divergence). |
 | 28 | `client_kind=feign_method` + `target_service='user-svc'`: ensures `feign_target_name` is forced even on a `RestTemplate.exchange` |
 | 29 | YAML `http_client_overrides.annotations` with unknown `client_kind` → warning + skip |
 | 30 | Brownfield % counter: `http_clients_from_brownfield_pct` ≥ expected fraction on the fixture |
 | 31 | Async-side equivalent of #20: legacy annotation → `kafka_send` + `topic`    |
+| 31a | Per-method scoping of the replacement rule: class with method `A` (built-in `restTemplate.X` only) and method `B` (built-in + `@CodebaseClient`) → `A` keeps its auto-extracted edge, `B` keeps only the brownfield edge. Locks the per-method boundary called out in §3.5. |
+| 31b | Async replacement parity: method with built-in `kafkaTemplate.send` AND `@CodebaseProducer(topic="x")` → only the brownfield edge is emitted. Mirrors test 27 for the async side. |
 
 ### 5. PR-D2 Definition of done
 
@@ -628,7 +683,8 @@ overrides:
       from `@Repeatable` containers as well as singular forms.
 - [ ] `graph_meta` exposes `http_clients_from_brownfield_pct` and
       `async_producers_from_brownfield_pct`.
-- [ ] `pytest` green; 12 new brownfield fixtures pass.
+- [ ] `pytest` green; 14 new brownfield tests pass (12 PR-A3-parity
+      cases + tests 31a, 31b for the replacement-rule divergence).
 - [ ] PR description cites `PLAN-BROWNFIELD-ROLE-OVERRIDES-design-fixes.md`
       line numbers for the resolver's 5-layer table (mandatory — risk #5).
 - [ ] Manual evidence: rebuild bank-chat-system with a sample
@@ -649,7 +705,7 @@ overrides:
 | 8 | Wire `resolve_*_for_method` into `pass5_imperative_edges`           | `build_ast_graph.py`               | tests 27, 28 pass               |
 | 9 | Add `*_from_brownfield_pct` to `graph_meta`                         | `build_ast_graph.py`               | test 30 passes                  |
 | 10 | Create `tests/fixtures/brownfield_client_stubs/`                    | `tests/fixtures/...`              | fixture files in place          |
-| 11 | Create `tests/test_brownfield_clients.py` (12 cases)                | `tests/test_brownfield_clients.py` | all 12 pass                     |
+| 11 | Create `tests/test_brownfield_clients.py` (14 cases including 31a, 31b) | `tests/test_brownfield_clients.py` | all 14 pass                     |
 | 12 | Update `README.md` with brownfield client / producer override docs  | `README.md`                        | manual review                   |
 
 ---
