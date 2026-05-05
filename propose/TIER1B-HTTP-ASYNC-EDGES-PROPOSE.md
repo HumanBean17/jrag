@@ -1,15 +1,17 @@
 # B2b + B6 — `HTTP_CALLS` / `ASYNC_CALLS` + cross-service matcher
 
-Status: **skeleton — not ready for planning**. Pairs with the active
-proposal [`TIER1-COMPLETION-PROPOSE.md`](TIER1-COMPLETION-PROPOSE.md)
-(B2a + B4 + B5). **Do not start implementation until B2a is merged
-and the `Route` schema below is verified against what actually
-shipped.**
+Status: **active — ready to implement**. Tier 1 (B2a + B4 + B5) is
+merged; the `Route` schema in §3.1 has been verified against what
+shipped. The implementable plan derived from this proposal lives at
+[`plans/PLAN-TIER1B-COMPLETION.md`](../plans/PLAN-TIER1B-COMPLETION.md);
+per-PR Sonnet/Cursor prompts at
+[`plans/CURSOR-PROMPTS-TIER1B.md`](../plans/CURSOR-PROMPTS-TIER1B.md).
 
-This document fixes the **join-key contract** between B2a
-(declarations) and B2b/B6 (edges) so the two PRs cannot drift. Most
-sections are deliberately stubs marked **`[TBD — design pass needed]`**
-— the goal here is to lock the *interface*, not the algorithm.
+This document is now the **rationale + interface contract** that the
+plan implements. Section 11 lists the open questions that have been
+resolved (or formally deferred to a v2 proposal) — see the inline
+resolutions there. The join-key contract in §3 remains the source of
+truth for the B2a ↔ B2b ↔ B6 boundary.
 
 ---
 
@@ -193,10 +195,10 @@ Stub list — to be expanded with concrete AST patterns and tests.
 | `client_kind`        | Pattern                                                                                    | Notes                                                                       |
 | -------------------- | ------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------- |
 | `feign_method`       | Method on a `@FeignClient` interface                                                       | The exposer side already wrote a `Route` per method via `feign_inherit` — this is just a join on `Symbol.id`, no new resolution work. **Cleanest case.** |
-| `rest_template`      | `RestTemplate.{exchange,getForObject,postForEntity,…}` invocation                          | URI is first or second arg; method is in the method name or the second arg. **[TBD]** |
-| `web_client`         | `WebClient.{get,post,…}().uri(…).retrieve()` chain                                         | Fluent API → walk the chain back to the URI/method. **[TBD]**               |
-| `kafka_send`         | `KafkaTemplate.send(topic, …)`                                                             | Topic is first arg.                                                         |
-| `stream_bridge_send` | `StreamBridge.send(binding, …)`                                                            | `binding` resolves to a topic via Spring Cloud Stream config — **[TBD]: deferred to v2 of this proposal, emit `unresolved` for now.** |
+| `rest_template`      | `RestTemplate.{exchange,getForObject,getForEntity,postForEntity,postForObject,put,delete}` invocation | **Resolved (PR-D1).** URI is first arg → `_string_value_atoms`. Method derived from method name (`getForObject` → `GET`) or `HttpMethod.X` second arg of `exchange`. String-concat tail (`base + "/path"`) captured at `confidence_base=0.7`. |
+| `web_client`         | `WebClient.{get,post,…}().uri(…).retrieve()` chain                                         | **Deferred to v2.** PR-D1 detects the `WebClient` receiver and emits `unresolved` (`confidence_base=0.3`). Backward-walking the fluent chain is a v2 design pass. |
+| `kafka_send`         | `KafkaTemplate.send(topic, …)`                                                             | **Resolved (PR-D1).** Topic is first arg → `_string_value_atoms`.            |
+| `stream_bridge_send` | `StreamBridge.send(binding, …)`                                                            | **Deferred to v2.** PR-D1 emits `unresolved`. Spring Cloud Stream binding-to-topic resolution requires config ingestion. |
 
 ### 5.2 Resolution ladder
 
@@ -208,8 +210,13 @@ Mirror B2a §4.4.5 exactly. Three strategies in order:
 3. **Constant reference** — keep expression, `confidence_base = 0.7`,
    `resolved=false`.
 
-Re-use B2a's resolver — do not re-implement. **[TBD: extract it from
-`pass4_routes` into a shared helper as part of this PR.]**
+Re-use B2a's resolver — do not re-implement. **Resolved (PR-D1):**
+rename `_route_value_atoms` (`ast_java.py:1041`) → `_string_value_atoms`
+and re-use from the new `pass5_imperative_edges`. No separate
+extraction PR — the rename + four call-site updates ship in PR-D1
+as a single atomic change. See
+[`plans/PLAN-TIER1B-COMPLETION.md`](../plans/PLAN-TIER1B-COMPLETION.md)
+§ PR-D1 deliverable #1.
 
 ### 5.3 Final confidence
 
@@ -224,7 +231,10 @@ Where:
 - `micro_factor`: `1.0` if caller microservice is known, `0.85`
   otherwise.
 
-**[TBD: validate this on the real 5-service codebase. Baseline only.]**
+**Resolved:** adopt §5.3 baseline as written. Validation against the
+real 5-service codebase is a follow-on action item, **not** a release
+blocker — telemetry from `graph_meta.http_calls_match_breakdown`
+(added in PR-D3) feeds the recalibration.
 
 ### 5.4 Where to plug in
 
@@ -379,7 +389,7 @@ buckets:
 | 4  | Multi-broker Kafka — same topic on different brokers wrongly merged                        | Medium   | Include `broker` in the join key. Default broker = `''` so single-broker codebases are unaffected. |
 | 5  | Brownfield divergence from B2a's role/route resolver                                       | High     | Same mitigation as B2a §8 risk #5: implementer cites `PLAN-BROWNFIELD-ROLE-OVERRIDES-design-fixes.md` line numbers. |
 | 6  | Spring Cloud Gateway routes never appear, leaving phantom edges to gateway-routed services | Medium   | Out of scope (§2). Document as known gap in `README` so users add brownfield overrides.     |
-| 7  | `RestTemplate` URIs built via `UriComponentsBuilder` chains                                | Medium   | Best-effort: walk linear builder chains, fall back to `unresolved`. **[TBD: scope decision needed.]** |
+| 7  | `RestTemplate` URIs built via `UriComponentsBuilder` chains                                | Medium   | **Deferred to v2.** PR-D1 emits `unresolved`. A v2 proposal will design the linear-builder-chain walk.                              |
 | 8  | Performance — `pass5` adds another full AST walk                                           | Low      | Re-use the visitor from `pass3_calls`; only the *handlers* differ. Measure on the 5-service codebase before merge. |
 
 ---
@@ -408,24 +418,23 @@ buckets:
 
 ---
 
-## 11. What this proposal does **not** decide
+## 11. Resolutions and v2 deferrals
 
-These are deliberately left for the design pass that will turn this
-skeleton into an active proposal:
+The original skeleton left the items below open. Each is now resolved
+or explicitly deferred. Every deferral carries a v1 escape hatch
+(emit `unresolved`, `confidence_base=0.3`) so the graph stays correct
+but conservative.
 
-- Exact AST patterns for `WebClient` fluent chains and
-  `UriComponentsBuilder` URI construction.
-- `StreamBridge` binding → topic resolution (read Spring Cloud
-  Stream config? defer entirely?).
-- Whether `confidence` weights in §5.3 are correct on the real
-  5-service codebase — needs measurement.
-- Which (if any) OpenAPI / AsyncAPI doc sources to ingest as a
-  fallback resolver.
-- Whether `find_route_callers` should accept regex over
-  `path_template` or only exact-match.
-
-When promoting this skeleton to "active", each `[TBD]` must be
-resolved or explicitly deferred to a v2 proposal.
+| #  | Question                                                                  | Resolution                                                                                              |
+| -- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| 1  | `WebClient` fluent-chain AST patterns                                     | **Deferred to v2.** PR-D1 detects the receiver, emits `unresolved`. v2 proposal will design the backward walk. |
+| 2  | `UriComponentsBuilder` URI construction                                   | **Deferred to v2.** PR-D1 emits `unresolved`. v2 will spec linear-builder-chain handling.               |
+| 3  | `StreamBridge` binding → topic                                            | **Deferred to v2.** PR-D1 emits `unresolved`. v2 needs Spring Cloud Stream config ingestion.            |
+| 4  | `RestTemplate` string concatenation (`base + "/path"`)                    | **In scope (PR-D1).** Right-most literal `/path` operand captured as `path_template_call`, `confidence_base=0.7`, `resolved=False`. Real-world pattern in `ChatCoreJoinClient`. |
+| 5  | Confidence weights in §5.3 on the real 5-service codebase                 | **Adopt baseline; validate post-merge.** `graph_meta.http_calls_match_breakdown` (PR-D3) provides telemetry. Not a release blocker. |
+| 6  | OpenAPI / AsyncAPI doc sources as a fallback resolver                     | **Out of scope (proposal §2 explicit non-goal).** Re-evaluate after B7.                                 |
+| 7  | `find_route_callers` regex vs exact-match                                 | **Exact-match in v1 (PR-D3).** Inputs: `route_id` *or* (`microservice`, `path_template`, `method`). Regex variant is a follow-up.                                                              |
+| 8  | Shared resolver extraction — separate PR or rolled in?                    | **Rolled into PR-D1.** Rename `_route_value_atoms` → `_string_value_atoms` + four call-site updates ship as PR-D1's deliverable #1, not a standalone PR. |
 
 ---
 
