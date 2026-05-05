@@ -9,6 +9,7 @@ description = "MCP server for semantic + structural search over Java codebases"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "pathspec>=0.12,<2",
     "unidiff>=0.7.3,<1",
 ]
 

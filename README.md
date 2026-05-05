@@ -142,6 +142,7 @@ The DB is dropped and rebuilt from scratch on each run (Phase 1 is a full rebuil
 | `graph_neighbors` | Generic BFS over `EXTENDS|IMPLEMENTS|INJECTS|DECLARES|CALLS`, directional. |
 | `impact_analysis` | Reverse closure: what breaks if this changes. |
 | `analyze_pr` | Map a unified diff (`diff_unified`) to overlapping indexed symbols, sum type-level `impact_analysis` blast, count cross-microservice `CALLS`, list touched `Route` ids (`EXPOSES`), and return a v1 `risk_score` / `risk_band` plus `notes` (binary hunks and renames are skipped for symbol mapping). |
+| `diagnose_ignore` | Explain whether a path is excluded for indexing / graph walks and which rule layer won (`builtin_default`, `project_root`, `nested`, `gitignore`). |
 | `graph_meta` | Counts, ontology version, build timestamp, parse errors; route totals / `routes_by_framework` / `routes_resolved_pct` (v5+); `routes_from_brownfield_pct` / `routes_by_layer` (v6+). |
 | `list_routes` | Filterable listing of `Route` nodes (`microservice`, `framework`, `path_prefix`, `method`). |
 | `find_route_handlers` | Symbols that `EXPOSES` a route id (confidence + resolution strategy on the edge). |
@@ -346,8 +347,8 @@ then `route_overrides.fqn`. Rebuild Lance + Kuzu (`refresh_code_index` or
 
 **Kuzu vs Lance (Layer A consistency):** both the Kuzu graph writer and Lance
 chunk enrichment call **one** function, `graph_enrich.collect_annotation_meta_chain`,
-which scans the project with sorted `*.java` paths, the same exclude rules as
-`build_ast_graph` / `iter_java_source_files`, parse-error warnings on stderr, and
+which scans the project with sorted `*.java` paths, the same layered ignore rules as
+`build_ast_graph` / `path_filtering.iter_java_source_files`, parse-error warnings on stderr, and
 deterministic “first wins” for duplicate annotation simple names. Kuzu and Lance
 **should** agree; they can still diverge if the same file is handled differently
 elsewhere in the pipeline (e.g. parse edge cases). If graph tools and
@@ -395,6 +396,32 @@ Combined, these pull `processClientMessage` / `pickEligibleOperator` /
 `onOperatorAssigned` chunks — and the classes that own them — above ones that
 only enqueue or configure. Like role weights, the bonus is **skipped when the
 caller locks `role=`**.
+
+### Ignore patterns
+
+Java file discovery for the Kuzu graph, annotation meta-chain collection, and
+the CocoIndex Lance pipeline share the same layered ignore model
+(`path_filtering.LayeredIgnore`):
+
+1. **Builtin default** — the historical hardcoded list (build dirs, `*.class`,
+   `src/test/java`, dot-directories, …).
+2. **Project root** — optional `<project>/.lancedb-mcp/ignore` (gitignore syntax,
+   including negation with `!`).
+3. **Nested** — any `<subdir>/.lancedb-mcp/ignore` on the path from the project
+   root to the file; closer files override farther ones.
+4. **Git** — every `.gitignore` from the project root down to the file’s
+   directory, merged in order, using `pathspec.GitIgnoreSpec` (same semantics as
+   git). Disable with `LayeredIgnore(..., use_gitignore=False)` (used where the
+   legacy walker did not consult git).
+
+If no `.lancedb-mcp/ignore` exists anywhere under the project, behaviour matches
+the pre-B5 builtin list alone (plus git when enabled). When a negation rule
+could un-ignore paths under directories the CocoIndex walk used to prune
+globally, the walk switches to a permissive exclude list and each candidate
+path is filtered again with the full layered rules.
+
+Use the `diagnose_ignore` MCP tool (or `LayeredIgnore.diagnose_dict`) to see
+which file and line decided for a given path.
 
 ### Debugging empty `context_before` / `context_after`
 

@@ -1,0 +1,178 @@
+"""Tests for layered ignore rules (PR-C B5)."""
+from __future__ import annotations
+
+import warnings
+from pathlib import Path
+
+import pytest
+
+from path_filtering import (
+    COMMON_EXCLUDED_PATH_PATTERNS,
+    LayeredIgnore,
+    compile_excluded_glob_patterns,
+    is_relative_path_excluded,
+    iter_java_source_files,
+)
+
+
+def _legacy_java_file_count(root: Path) -> int:
+    """Pre-B5 file walk: same prunes + fnmatch excludes as ``java_index_v1_common`` had."""
+    import os
+
+    globs = compile_excluded_glob_patterns(COMMON_EXCLUDED_PATH_PATTERNS)
+    n = 0
+    root = root.resolve()
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [
+            d
+            for d in dirnames
+            if d
+            not in (
+                ".git",
+                "target",
+                "build",
+                "out",
+                "node_modules",
+                ".venv",
+                ".idea",
+            )
+        ]
+        for fn in filenames:
+            if not fn.endswith(".java"):
+                continue
+            p = Path(dirpath) / fn
+            try:
+                rel = p.resolve().relative_to(root).as_posix()
+            except ValueError:
+                rel = p.as_posix()
+            if is_relative_path_excluded(rel, globs):
+                continue
+            n += 1
+    return n
+
+
+def test_39_builtin_default_ignores_class_file(tmp_path: Path) -> None:
+    root = tmp_path / "p"
+    root.mkdir()
+    f = root / "Foo.class"
+    f.write_text("", encoding="utf-8")
+    li = LayeredIgnore(root, use_gitignore=False)
+    ign, layer = li.is_ignored(f)
+    assert ign is True
+    assert layer is not None
+    assert layer.source == "builtin_default"
+
+
+def test_40_project_root_negation_unignores(tmp_path: Path) -> None:
+    root = tmp_path / "p"
+    root.mkdir()
+    ig = root / ".lancedb-mcp" / "ignore"
+    ig.parent.mkdir(parents=True)
+    ig.write_text("!**/Foo.class\n", encoding="utf-8")
+    f = root / "Foo.class"
+    f.write_text("", encoding="utf-8")
+    li = LayeredIgnore(root, use_gitignore=False)
+    assert li.is_ignored(f)[0] is False
+
+
+def test_41_nested_ignore_only_under_subtree(tmp_path: Path) -> None:
+    root = tmp_path / "p"
+    (root / "svc" / ".lancedb-mcp").mkdir(parents=True)
+    (root / "svc" / ".lancedb-mcp" / "ignore").write_text("**/Generated*.java\n", encoding="utf-8")
+    hit = root / "svc" / "src" / "GeneratedFoo.java"
+    hit.parent.mkdir(parents=True)
+    hit.write_text("class GeneratedFoo {}\n", encoding="utf-8")
+    sibling = root / "other" / "src" / "GeneratedBar.java"
+    sibling.parent.mkdir(parents=True)
+    sibling.write_text("class GeneratedBar {}\n", encoding="utf-8")
+    li = LayeredIgnore(root, use_gitignore=False)
+    assert li.is_ignored(hit)[0] is True
+    assert li.is_ignored(sibling)[0] is False
+
+
+def test_42_innermost_nested_reincludes(tmp_path: Path) -> None:
+    root = tmp_path / "p"
+    pr = root / ".lancedb-mcp" / "ignore"
+    pr.parent.mkdir(parents=True)
+    pr.write_text("**/Generated*.java\n", encoding="utf-8")
+    nested = root / "svc" / ".lancedb-mcp" / "ignore"
+    nested.parent.mkdir(parents=True)
+    nested.write_text("!**/Generated*.java\n", encoding="utf-8")
+    f = root / "svc" / "GeneratedX.java"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text("class GeneratedX {}\n", encoding="utf-8")
+    li = LayeredIgnore(root, use_gitignore=False)
+    assert li.is_ignored(f)[0] is False
+
+
+def test_43_gitignore_layer(tmp_path: Path) -> None:
+    root = tmp_path / "p"
+    root.mkdir()
+    (root / ".gitignore").write_text("**/customout/**\n", encoding="utf-8")
+    f = root / "src" / "customout" / "X.java"
+    f.parent.mkdir(parents=True)
+    f.write_text("class X {}\n", encoding="utf-8")
+    li_on = LayeredIgnore(root, use_gitignore=True)
+    assert li_on.is_ignored(f)[0] is True
+    assert li_on.is_ignored(f)[1] is not None
+    assert li_on.is_ignored(f)[1].source == "gitignore"
+
+
+def test_44_gitignore_disabled(tmp_path: Path) -> None:
+    root = tmp_path / "p"
+    root.mkdir()
+    (root / ".gitignore").write_text("**/customout/**\n", encoding="utf-8")
+    f = root / "src" / "customout" / "X.java"
+    f.parent.mkdir(parents=True)
+    f.write_text("class X {}\n", encoding="utf-8")
+    li = LayeredIgnore(root, use_gitignore=False)
+    assert li.is_ignored(f)[0] is False
+
+
+def test_45_diagnose_nested_cites_line(tmp_path: Path) -> None:
+    root = tmp_path / "p"
+    nested = root / "svc" / ".lancedb-mcp" / "ignore"
+    nested.parent.mkdir(parents=True)
+    nested.write_text("# header\n**/Generated*.java\n", encoding="utf-8")
+    f = root / "svc" / "GeneratedZ.java"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text("class Z {}\n", encoding="utf-8")
+    li = LayeredIgnore(root, use_gitignore=False)
+    d = li.diagnose_dict(f)
+    assert d["ignored"] is True
+    assert d["layer"] == "nested"
+    assert nested.as_posix() in str(d["explanation"])
+    assert "line 2" in str(d["explanation"])
+
+
+def test_46_outside_project_not_ignored(tmp_path: Path) -> None:
+    root = tmp_path / "p"
+    root.mkdir()
+    li = LayeredIgnore(root, use_gitignore=False)
+    outside = tmp_path / "outside" / "Foo.java"
+    outside.parent.mkdir(parents=True)
+    outside.write_text("class Foo {}\n", encoding="utf-8")
+    assert li.is_ignored(outside) == (False, None)
+
+
+def test_bank_chat_java_count_no_lancedb_ignore_gitignore_off_matches_legacy(
+    corpus_root: Path,
+) -> None:
+    """Behavioural compatibility: no ``.lancedb-mcp/ignore`` and no git layer → same count."""
+    assert not (corpus_root / ".lancedb-mcp" / "ignore").is_file()
+    legacy = _legacy_java_file_count(corpus_root)
+    li = LayeredIgnore(corpus_root, use_gitignore=False)
+    layered = len(list(iter_java_source_files(corpus_root, ignore=li)))
+    assert layered == legacy
+
+
+def test_iter_java_source_files_deprecation_warns(tmp_path: Path) -> None:
+    root = tmp_path / "p"
+    root.mkdir()
+    (root / "A.java").write_text("class A {}\n", encoding="utf-8")
+    globs = compile_excluded_glob_patterns(COMMON_EXCLUDED_PATH_PATTERNS)
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        files = list(iter_java_source_files(root, globs))
+    assert any(x.category is DeprecationWarning for x in w)
+    assert len(files) == 1

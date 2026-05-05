@@ -282,6 +282,20 @@ async def test_impact_analysis(mcp_server) -> None:
 # ---------------- analyze_pr (B4) ----------------
 
 
+async def test_diagnose_ignore_smoke(mcp_server) -> None:
+    out = _structured(
+        await mcp_server.call_tool(
+            "diagnose_ignore",
+            {"path": "chat-assign/src/main/java/com/bank/chat/assign/service/ChatManagementService.java"},
+        )
+    )
+    assert out["success"] is True
+    assert "ignored" in out
+    assert isinstance(out["ignored"], bool)
+    assert "layer" in out
+    assert "explanation" in out
+
+
 async def test_analyze_pr_smoke(mcp_server) -> None:
     diff = """diff --git a/chat-assign/src/main/java/com/bank/chat/assign/service/ChatManagementService.java b/chat-assign/src/main/java/com/bank/chat/assign/service/ChatManagementService.java
 --- a/chat-assign/src/main/java/com/bank/chat/assign/service/ChatManagementService.java

@@ -38,7 +38,7 @@ _INSTRUCTIONS = (
     "subclasses, injectors, impact analysis, and graph-expanded codebase_search. "
     "Use codebase_search for meaning-based discovery — prefer limit 5; use offset to page. "
     "Use find_implementors / find_subclasses / find_injectors / find_callers / find_callees / "
-    "list_routes / find_route_handlers / get_route_by_path / analyze_pr / "
+    "list_routes / find_route_handlers / get_route_by_path / analyze_pr / diagnose_ignore / "
     "impact_analysis / neighbors / list_by_role / list_by_annotation / list_by_capability for "
     "exact structural traversal. "
     "Use list_by_capability for behavioural questions about message-driven "
@@ -73,7 +73,9 @@ _INSTRUCTIONS = (
     "LANCEDB_MCP_ALLOW_REFRESH=1 and cocoindex beside the venv Python. "
     "analyze_pr maps a unified diff to indexed symbols, estimates blast radius "
     "(DI/extends/implements via impact_analysis on enclosing types for methods), "
-    "optional cross-service CALLS edges, touched Spring routes (EXPOSES), and a v1 risk score."
+    "optional cross-service CALLS edges, touched Spring routes (EXPOSES), and a v1 risk score. "
+    "diagnose_ignore explains whether a path is excluded by builtin, .lancedb-mcp/ignore, "
+    "nested ignore files, or .gitignore rules (see README 'Ignore patterns')."
 )
 
 
@@ -275,6 +277,15 @@ class PrAnalyzeOutput(BaseModel):
     risk_score: float = 0.0
     risk_band: str = ""
     notes: list[str] = Field(default_factory=list)
+
+
+class DiagnoseIgnoreOutput(BaseModel):
+    success: bool
+    ignored: bool = False
+    layer: str | None = None
+    matching_pattern: str | None = None
+    explanation: str = ""
+    message: str | None = None
 
 
 class GraphMetaOutput(BaseModel):
@@ -1166,6 +1177,44 @@ def create_mcp_server() -> FastMCP:
         rep = await asyncio.to_thread(pr_analysis.analyze_pr_pipeline, graph, diff_unified)
         payload = pr_analysis.pr_report_to_dict(rep)
         return PrAnalyzeOutput(success=True, **payload)
+
+    @mcp.tool(
+        name="diagnose_ignore",
+        description=(
+            "Explain whether a project path is ignored for indexing / graph walks and which "
+            "layer decided (builtin_default, project_root, nested, gitignore). "
+            "Pass a path relative to LANCEDB_MCP_PROJECT_ROOT (or cwd) or an absolute path "
+            "inside the project."
+        ),
+    )
+    async def diagnose_ignore(
+        path: str = Field(description="File or directory path to diagnose"),
+    ) -> DiagnoseIgnoreOutput:
+        from path_filtering import LayeredIgnore
+
+        root = _project_root()
+        raw = Path(path)
+        try:
+            if raw.is_absolute():
+                abs_path = raw.resolve()
+            else:
+                abs_path = (root / raw).resolve()
+        except OSError as exc:
+            return DiagnoseIgnoreOutput(
+                success=False,
+                message=f"Invalid path: {exc}",
+            )
+        li = LayeredIgnore(root)
+        d = li.diagnose_dict(abs_path)
+        layer_v = d.get("layer")
+        pat_v = d.get("matching_pattern")
+        return DiagnoseIgnoreOutput(
+            success=True,
+            ignored=bool(d.get("ignored")),
+            layer=layer_v if layer_v is None or isinstance(layer_v, str) else str(layer_v),
+            matching_pattern=pat_v if pat_v is None or isinstance(pat_v, str) else str(pat_v),
+            explanation=str(d.get("explanation") or ""),
+        )
 
     @mcp.tool(
         name="graph_meta",
