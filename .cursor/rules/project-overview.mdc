@@ -19,15 +19,28 @@ when needed.
 ## Where to look
 
 - `README.md` — feature surface, env vars, ranking, capabilities,
-  tool list, "Re-index required" callouts.
+  tool list, "Re-index required" callouts. The current
+  `ontology_version` is **7** (HTTP_CALLS / ASYNC_CALLS caller
+  edges + brownfield client/producer composition). Earlier
+  ontology bumps are described inline in the README's
+  callouts list.
 - `CODEBASE_REQUIREMENTS.md` — Java-repo assumptions and per-file
   map of what to edit when a target tree doesn't match defaults.
 - `tests/README.md` — testing philosophy.
 - `propose/` and `propose/completed/` — design proposes; the active
-  ones describe in-flight scope and the completed ones explain *why*
-  current code looks the way it does.
+  ones describe in-flight scope (currently
+  `TIER1B-HTTP-ASYNC-EDGES-PROPOSE.md` for B2b/B6, plus
+  `RANKING-MICROSERVICE-PROPOSE.md`,
+  `ENHANCED-ROLE-RECOGNITION-PROPOSE.md`,
+  `REFRESH-CODE-INDEX-AUTO-MODE-PROPOSE.md`,
+  `DEFERRED-REST-CLIENT-MIGRATION-PROPOSE.md`,
+  `PRODUCT-VISION.md`) and the completed ones explain *why* current
+  code looks the way it does.
 - `plans/` and `plans/completed/` — longer-form plans (e.g.
-  capabilities model, tier completions).
+  capabilities model, tier completions, brownfield role overrides).
+  Per-PR Cursor task prompts live alongside plans
+  (`CURSOR-PROMPTS-TIER1B.md` is the active one; PR-D1 and PR-D2
+  have shipped, PR-D3 is next).
 - `.cursor/rules/breaking-changes.mdc` — the no-back-compat policy.
 
 ## File map (top of repo)
@@ -36,15 +49,17 @@ when needed.
 |------|------|
 | `server.py` | MCP stdio server. Every `@mcp.tool` lives here. |
 | `search_lancedb.py` | Vector / hybrid / graph-expanded search; ranking. |
-| `build_ast_graph.py` | Tree-sitter -> Kuzu graph builder (full rebuild). |
-| `kuzu_queries.py` | Read-only Cypher helpers used by the server. |
-| `ast_java.py` | Tree-sitter Java parsing, role/capability inference. |
-| `graph_enrich.py` | `module` / `microservice` resolution, brownfield overrides, meta-annotation walk. |
-| `java_ontology.py` | Source of truth for `VALID_ROLES` / `VALID_CAPABILITIES`. |
+| `build_ast_graph.py` | Tree-sitter → Kuzu graph builder (full rebuild). Owns `pass1`–`pass5` (extends through `HTTP_CALLS` / `ASYNC_CALLS` caller edges as of ontology 7). PR-D3 will add `pass6_match_edges`. |
+| `kuzu_queries.py` | Read-only Cypher helpers used by the server. Includes `meta()` decoder for the Kuzu MAP-as-STRING JSON-blob columns. |
+| `ast_java.py` | Tree-sitter Java parsing, role/capability inference, `_string_value_atoms` helper (shared by route/client/producer extractors), `_collect_outgoing_calls` for caller-side detection. |
+| `graph_enrich.py` | `module` / `microservice` resolution, `BrownfieldOverrides` (route + role + capability + http client + async producer), meta-annotation walk, `resolve_routes_for_method` / `resolve_http_client_for_method` / `resolve_async_producer_for_method`. |
+| `java_ontology.py` | Source of truth for `VALID_ROLES`, `VALID_CAPABILITIES`, `VALID_CLIENT_KINDS`, `VALID_HTTP_CALL_STRATEGIES`, `VALID_ASYNC_CALL_STRATEGIES`, `VALID_HTTP_CALL_MATCHES`. |
 | `chunk_heuristics.py` | Query-time chunk hints (no AST / no re-index). |
 | `index_common.py` | Embedding config (no CocoIndex dep). |
 | `java_index_flow_lancedb.py` | CocoIndex flow (only used by `refresh_code_index`). |
 | `java_index_v1_common.py` | Shared file walker / exclude patterns. |
+| `path_filtering.py` | Layered ignore patterns (`.gitignore`-style; PR-C / B5). Reused by indexer + graph build. |
+| `pr_analysis.py` | `analyze_pr` MCP tool helpers (PR-B / B4) — diff parsing, hunk-to-symbol mapping. |
 | `mcp.json.example` | Template for `.mcp.json`. |
 
 ## Test layout
@@ -52,4 +67,7 @@ when needed.
 - `tests/conftest.py` — session-scoped Kuzu graph fixture.
 - `tests/bank-chat-system/` — deterministic Java corpus (fixture, not production model).
 - `tests/fixtures/call_graph_smoke/` — mini Maven tree calibrated against the call-graph resolver.
+- `tests/fixtures/brownfield_route_stubs/` — `@CodebaseRoute` / `@CodebaseRoutes` source stubs (PR-A3).
+- `tests/fixtures/brownfield_client_stubs/` — `@CodebaseClient` / `@CodebaseClients` / `@CodebaseProducer` / `@CodebaseProducers` source stubs (PR-D2).
+- `tests/fixtures/http_caller_smoke/` — Feign + RestTemplate + KafkaTemplate + WebClient + StreamBridge fixture for caller-side detection (PR-D1).
 - Heavy e2e tests gated behind `LANCEDB_MCP_RUN_HEAVY=1`.

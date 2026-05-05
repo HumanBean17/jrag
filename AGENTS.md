@@ -8,10 +8,29 @@ for tools that don't read `.cursor/rules/`.
 ## Where to look
 
 - `README.md` — feature surface, env vars, ranking, capabilities,
-  tool list, "Re-index required" callouts.
+  tool list, "Re-index required" callouts. **`ontology_version` is
+  currently 7.**
 - `CODEBASE_REQUIREMENTS.md` — Java-repo assumptions and tuning map.
 - `propose/` and `plans/` (plus their `completed/` subdirs) —
   in-flight scope and the rationale behind current design.
+  - Active proposes: `TIER1B-HTTP-ASYNC-EDGES-PROPOSE.md` (B2b/B6
+    HTTP_CALLS / ASYNC_CALLS), `RANKING-MICROSERVICE-PROPOSE.md`,
+    `ENHANCED-ROLE-RECOGNITION-PROPOSE.md`,
+    `REFRESH-CODE-INDEX-AUTO-MODE-PROPOSE.md`,
+    `DEFERRED-REST-CLIENT-MIGRATION-PROPOSE.md`, `PRODUCT-VISION.md`.
+  - Active plans: `PLAN-TIER1B-COMPLETION.md` and
+    `CURSOR-PROMPTS-TIER1B.md`. `PLAN-TIER1-COMPLETION.md` and
+    `CURSOR-PROMPTS-TIER1.md` are kept for reference even though
+    Tier 1 has fully merged.
+  - Completed: `propose/completed/CALL-GRAPH-PROPOSE.md`,
+    `plans/completed/PLAN-CALL-GRAPH.md`,
+    `plans/completed/PLAN-CAPABILITIES-MODEL.md`,
+    `plans/completed/PLAN-BROWNFIELD-ROLE-OVERRIDES.md`,
+    `plans/completed/PLAN-BROWNFIELD-ROLE-OVERRIDES-design-fixes.md`,
+    `plans/completed/PLAN-COCOINDEX-SYMLINK-FIX.md`,
+    `plans/completed/PLAN-ENUM-ANNOTATION-FIXES.md`,
+    `plans/completed/PLAN-REMOTE-PROJECT-INDEXING.md`. Read these
+    when you need the *why* behind current code.
 - `tests/README.md` — testing philosophy.
 
 Read these directly. Don't rely on rule files to mirror them.
@@ -30,16 +49,47 @@ Read these directly. Don't rely on rule files to mirror them.
    production code.
 4. **`server.py` is stdio MCP.** Nothing reachable from a tool
    handler may write to stdout. Diagnostics go to stderr.
-5. **Single source of truth** for roles and capabilities is
-   `java_ontology.py`. No string literals sprinkled elsewhere.
-6. **Schema changes require a reindex** — update the README
+5. **Single source of truth** for roles, capabilities, client kinds,
+   call strategies, and call match outcomes is `java_ontology.py`.
+   No string literals sprinkled elsewhere. Current valid sets:
+   `VALID_ROLES`, `VALID_CAPABILITIES`, `VALID_CLIENT_KINDS`,
+   `VALID_HTTP_CALL_STRATEGIES`, `VALID_ASYNC_CALL_STRATEGIES`,
+   `VALID_HTTP_CALL_MATCHES`.
+6. **Brownfield overrides are first-class.** Annotation-driven
+   `BrownfieldOverrides` (route, role, capability, http client, async
+   producer) plus their `@CodebaseRoute` / `@CodebaseClient` /
+   `@CodebaseProducer` source-stub equivalents must keep working — they
+   are the only path to making this tool usable on legacy codebases.
+   New auto-detection logic must compose with brownfield (last layer
+   wins), never replace it. See
+   `plans/PLAN-TIER1B-COMPLETION.md` § "Caller-side composition
+   divergence" for the one intentional exception (caller-side option-b
+   replacement rule for HTTP_CALLS / ASYNC_CALLS).
+7. **Schema changes require a reindex** — update the README
    "Re-index required" callout and bump `ontology_version` when
    enrichment semantics change.
 
 ## Workflow
 
 - Branch from `master`. Branch names: `cursor/<topic>` (CLI work),
-  `plan/<name>` (in-progress propose).
+  `plan/<name>` (in-progress propose), `feat/<topic>` and
+  `chore/<topic>` for landed-feature work.
 - Commit messages: present tense, imperative, lowercase first word.
 - Always open a PR; never push to `master`.
 - Run `ruff check .` and `pytest tests -v` before pushing.
+
+## Per-PR Cursor task contract
+
+When picking up a per-PR Cursor task prompt (e.g. one of the entries
+under `plans/CURSOR-PROMPTS-TIER1B.md`):
+
+- Treat the prompt's **Out of scope** list as binding. Sentinel grep
+  patterns in the prompt must return zero on `git diff master..HEAD`.
+- Implement deliverables in the listed order; don't reshape the PR.
+- Match the prompt's expected test count and named tests verbatim.
+- PR description must include: scope statement, manual evidence
+  (with the exact command from the prompt), test count, and
+  intentional design divergences flagged.
+- No drive-by lint fixes (unused imports, formatting nits in
+  unrelated files). They violate the per-PR scope contract even when
+  they look harmless.
