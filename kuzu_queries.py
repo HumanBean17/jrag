@@ -331,7 +331,9 @@ class KuzuGraph:
             "m.routes_by_layer AS routes_by_layer, "
             "m.http_calls_total AS http_calls_total, m.async_calls_total AS async_calls_total, "
             "m.http_calls_by_strategy AS http_calls_by_strategy, m.async_calls_by_strategy AS async_calls_by_strategy, "
-            "m.http_calls_resolved_pct AS http_calls_resolved_pct, m.async_calls_resolved_pct AS async_calls_resolved_pct"
+            "m.http_calls_resolved_pct AS http_calls_resolved_pct, m.async_calls_resolved_pct AS async_calls_resolved_pct, "
+            "m.http_clients_from_brownfield_pct AS http_clients_from_brownfield_pct, "
+            "m.async_producers_from_brownfield_pct AS async_producers_from_brownfield_pct"
         )
         _META_PR_A2 = (
             "MATCH (m:GraphMeta) RETURN m.key AS key, m.ontology_version AS ontology_version, "
@@ -379,6 +381,8 @@ class KuzuGraph:
         async_calls_by_strategy: dict[str, Any] = {}
         http_calls_resolved_pct = 0.0
         async_calls_resolved_pct = 0.0
+        http_clients_from_brownfield_pct = 0.0
+        async_producers_from_brownfield_pct = 0.0
         if meta_mode != "legacy":
             rfw_raw = row.get("routes_by_framework") or "{}"
             try:
@@ -417,6 +421,8 @@ class KuzuGraph:
                 async_calls_by_strategy = {}
             http_calls_resolved_pct = float(row.get("http_calls_resolved_pct") or 0.0)
             async_calls_resolved_pct = float(row.get("async_calls_resolved_pct") or 0.0)
+            http_clients_from_brownfield_pct = float(row.get("http_clients_from_brownfield_pct") or 0.0)
+            async_producers_from_brownfield_pct = float(row.get("async_producers_from_brownfield_pct") or 0.0)
         return {
             "ontology_version": int(row.get("ontology_version") or 0),
             "built_at": int(row.get("built_at") or 0),
@@ -435,6 +441,8 @@ class KuzuGraph:
             "async_calls_by_strategy": async_calls_by_strategy,
             "http_calls_resolved_pct": http_calls_resolved_pct,
             "async_calls_resolved_pct": async_calls_resolved_pct,
+            "http_clients_from_brownfield_pct": http_clients_from_brownfield_pct,
+            "async_producers_from_brownfield_pct": async_producers_from_brownfield_pct,
             "db_path": self.db_path,
         }
 

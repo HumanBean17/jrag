@@ -30,6 +30,9 @@ __all__ = [
     "OutgoingCallDecl",
     "RouteDecl",
     "ROUTE_META_ANNOTATION_NAMES",
+    "CODEBASE_ROUTE_ANNOTATIONS",
+    "CODEBASE_CLIENT_ANNOTATIONS",
+    "CODEBASE_PRODUCER_ANNOTATIONS",
     "TypeDecl",
     "JavaFileAst",
     "parse_java",
@@ -139,6 +142,10 @@ ROUTE_META_ANNOTATION_NAMES: frozenset[str] = _ROUTE_HTTP_MAPPING_NAMES | frozen
     "JmsListener",
     "StreamListener",
 })
+
+CODEBASE_ROUTE_ANNOTATIONS: frozenset[str] = frozenset({"CodebaseRoute", "CodebaseRoutes"})
+CODEBASE_CLIENT_ANNOTATIONS: frozenset[str] = frozenset({"CodebaseClient", "CodebaseClients"})
+CODEBASE_PRODUCER_ANNOTATIONS: frozenset[str] = frozenset({"CodebaseProducer", "CodebaseProducers"})
 
 _ROUTE_ASYNC_METHOD_NAMES = frozenset({
     "KafkaListener",
@@ -1530,6 +1537,141 @@ def _codebase_route_inner_annotation_nodes(container_ann: Node, src: bytes) -> l
     return found
 
 
+def _codebase_client_inner_annotation_nodes(container_ann: Node, src: bytes) -> list[Node]:
+    found: list[Node] = []
+
+    def visit(n: Node) -> None:
+        if n.type == "annotation":
+            name_node = n.child_by_field_name("name")
+            n_simple = _txt(name_node, src).rsplit(".", 1)[-1] if name_node is not None else ""
+            if n_simple == "CodebaseClient":
+                found.append(n)
+        for c in n.children:
+            visit(c)
+
+    visit(container_ann)
+    return found
+
+
+def _codebase_producer_inner_annotation_nodes(container_ann: Node, src: bytes) -> list[Node]:
+    found: list[Node] = []
+
+    def visit(n: Node) -> None:
+        if n.type == "annotation":
+            name_node = n.child_by_field_name("name")
+            n_simple = _txt(name_node, src).rsplit(".", 1)[-1] if name_node is not None else ""
+            if n_simple == "CodebaseProducer":
+                found.append(n)
+        for c in n.children:
+            visit(c)
+
+    visit(container_ann)
+    return found
+
+
+def _parse_codebase_client_annotation(
+    ann: Node,
+    src: bytes,
+    ctx: _ParseCtx,
+    *,
+    method_fqn: str,
+    method_sig: str,
+    file_rel: str,
+    start_line: int,
+    end_line: int,
+) -> OutgoingCallDecl:
+    pairs, _ = _annotation_kv_nodes(ann, src)
+    client_kind = ""
+    if "clientKind" in pairs:
+        atoms = _string_value_atoms(pairs["clientKind"], src, ctx)
+        if atoms:
+            client_kind = atoms[0][0]
+    target_service = ""
+    if "targetService" in pairs:
+        atoms = _string_value_atoms(pairs["targetService"], src, ctx)
+        if atoms:
+            target_service = atoms[0][0]
+    path = ""
+    if "path" in pairs:
+        atoms = _string_value_atoms(pairs["path"], src, ctx)
+        if atoms:
+            path = _normalize_call_path(atoms[0][0]) if atoms[0][0] else ""
+    method_call = ""
+    if "method" in pairs:
+        atoms = _string_value_atoms(pairs["method"], src, ctx)
+        if atoms:
+            method_call = atoms[0][0].upper()
+    return OutgoingCallDecl(
+        method_fqn=method_fqn,
+        method_sig=method_sig,
+        client_kind=client_kind,
+        channel="http",
+        feign_target_name=target_service,
+        feign_target_url="",
+        path_template_call=path,
+        method_call=method_call,
+        topic_call="",
+        broker_call="",
+        raw_uri=path,
+        raw_topic="",
+        resolution_strategy="codebase_client",
+        confidence_base=1.0,
+        resolved=True,
+        filename=file_rel,
+        start_line=start_line,
+        end_line=end_line,
+    )
+
+
+def _parse_codebase_producer_annotation(
+    ann: Node,
+    src: bytes,
+    ctx: _ParseCtx,
+    *,
+    method_fqn: str,
+    method_sig: str,
+    file_rel: str,
+    start_line: int,
+    end_line: int,
+) -> OutgoingCallDecl:
+    pairs, _ = _annotation_kv_nodes(ann, src)
+    client_kind = ""
+    if "clientKind" in pairs:
+        atoms = _string_value_atoms(pairs["clientKind"], src, ctx)
+        if atoms:
+            client_kind = atoms[0][0]
+    topic = ""
+    if "topic" in pairs:
+        atoms = _string_value_atoms(pairs["topic"], src, ctx)
+        if atoms:
+            topic = atoms[0][0]
+    broker = ""
+    if "broker" in pairs:
+        atoms = _string_value_atoms(pairs["broker"], src, ctx)
+        if atoms:
+            broker = atoms[0][0]
+    return OutgoingCallDecl(
+        method_fqn=method_fqn,
+        method_sig=method_sig,
+        client_kind=client_kind,
+        channel="async",
+        feign_target_name="",
+        feign_target_url="",
+        path_template_call="",
+        method_call="",
+        topic_call=topic,
+        broker_call=broker,
+        raw_uri="",
+        raw_topic=topic,
+        resolution_strategy="codebase_producer",
+        confidence_base=1.0,
+        resolved=True,
+        filename=file_rel,
+        start_line=start_line,
+        end_line=end_line,
+    )
+
+
 def _field_types_for_type(type_node: Node | None, src: bytes) -> dict[str, str]:
     out: dict[str, str] = {}
     if type_node is None:
@@ -1806,6 +1948,61 @@ def _collect_outgoing_calls(
             visit(c)
 
     visit(body)
+    for simple, ann in _iter_method_annotation_nodes(method_node, src):
+        if simple == "CodebaseClient":
+            out.append(
+                _parse_codebase_client_annotation(
+                    ann,
+                    src,
+                    ctx,
+                    method_fqn=method_fqn,
+                    method_sig=method_decl.signature,
+                    file_rel=file_rel,
+                    start_line=method_decl.start_line,
+                    end_line=method_decl.end_line,
+                ),
+            )
+        elif simple == "CodebaseClients":
+            for inner in _codebase_client_inner_annotation_nodes(ann, src):
+                out.append(
+                    _parse_codebase_client_annotation(
+                        inner,
+                        src,
+                        ctx,
+                        method_fqn=method_fqn,
+                        method_sig=method_decl.signature,
+                        file_rel=file_rel,
+                        start_line=method_decl.start_line,
+                        end_line=method_decl.end_line,
+                    ),
+                )
+        elif simple == "CodebaseProducer":
+            out.append(
+                _parse_codebase_producer_annotation(
+                    ann,
+                    src,
+                    ctx,
+                    method_fqn=method_fqn,
+                    method_sig=method_decl.signature,
+                    file_rel=file_rel,
+                    start_line=method_decl.start_line,
+                    end_line=method_decl.end_line,
+                ),
+            )
+        elif simple == "CodebaseProducers":
+            for inner in _codebase_producer_inner_annotation_nodes(ann, src):
+                out.append(
+                    _parse_codebase_producer_annotation(
+                        inner,
+                        src,
+                        ctx,
+                        method_fqn=method_fqn,
+                        method_sig=method_decl.signature,
+                        file_rel=file_rel,
+                        start_line=method_decl.start_line,
+                        end_line=method_decl.end_line,
+                    ),
+                )
     return out
 
 

@@ -4,8 +4,6 @@ from __future__ import annotations
 import warnings
 from pathlib import Path
 
-import pytest
-
 from path_filtering import (
     COMMON_EXCLUDED_PATH_PATTERNS,
     LayeredIgnore,

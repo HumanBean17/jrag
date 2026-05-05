@@ -3,8 +3,6 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import pytest
-
 from kuzu_queries import find_symbols_in_file_range
 from pr_analysis import (
     DiffHunk,

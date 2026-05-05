@@ -5,9 +5,7 @@ Each test names the specific detector path it exercises.
 """
 from __future__ import annotations
 
-import pytest
-
-from ast_java import infer_capabilities_for_type, parse_java
+from ast_java import parse_java
 
 
 def _caps(source: str) -> list[str]:

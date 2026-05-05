@@ -97,8 +97,9 @@ Resolution order for `microservice`:
 > 2. `annotations_on_type` / `symbols` are now native PyArrow `list<string>` instead of
 >    JSON-encoded strings (previous builds caused char-array output — see below).
 > 3. **`ontology_version` 5** adds `Route` / `EXPOSES` and route counters on `GraphMeta` —
-> 4. **`ontology_version` 6** adds brownfield route composition (`route_overrides`, `@CodebaseRoute`),
->    `routes_from_brownfield_pct`, and `routes_by_layer` on `GraphMeta` — rebuild Kuzu after upgrading.
+> 4. **`ontology_version` 7** adds caller-side edge extraction (`HTTP_CALLS`, `ASYNC_CALLS`) and
+>    brownfield caller composition (`http_client_overrides`, `async_producer_overrides`,
+>    `@CodebaseClient`, `@CodebaseProducer`) — rebuild Kuzu after upgrading.
 >    rebuild the Kuzu graph (`build_ast_graph.py` or `refresh_code_index`).
 >
 > Any index built before these changes must be rebuilt via
@@ -346,6 +347,45 @@ then meta-annotation walk, then `@CodebaseRole` / `@CodebaseCapability`, then
 composition uses the same Layer A index, then `@CodebaseRoute` / `@CodebaseRoutes`,
 then `route_overrides.fqn`. Rebuild Lance + Kuzu (`refresh_code_index` or
 `build_ast_graph.py`) after changing overrides.
+
+**Caller-side brownfield overrides (`http_client_overrides` / `async_producer_overrides`)**:
+
+```yaml
+http_client_overrides:
+  annotations:
+    ann.LegacyHttpClient:
+      client_kind: rest_template
+      target_service: chat-core
+      path: /chat/joinOperator
+      method: POST
+  fqn:
+    com.legacy.ChatClient:
+      client_kind: feign_method
+      target_service: chat-core
+
+async_producer_overrides:
+  annotations:
+    ann.LegacyEvent:
+      client_kind: kafka_send
+      topic: chat.follow-up
+      broker: ""
+  fqn:
+    com.legacy.EventBus:
+      client_kind: kafka_send
+      topic: chat.follow-up
+```
+
+Unknown `client_kind` values are dropped with a stderr warning. Caller-side
+layering mirrors routes (built-in, layer B annotations, layer A meta, layer C
+source stubs, layer B FQN), with one intentional divergence: if any brownfield
+layer emits method-level outgoing calls, built-in outgoing calls for that same
+method are replaced (not appended) to avoid double-counting one network call
+site.
+
+For source stubs, copy `@CodebaseClient` / `@CodebaseClients` and
+`@CodebaseProducer` / `@CodebaseProducers` from
+`tests/fixtures/brownfield_client_stubs/` (same "simple-name only" behavior as
+`@CodebaseRoute` stubs).
 
 **Kuzu vs Lance (Layer A consistency):** both the Kuzu graph writer and Lance
 chunk enrichment call **one** function, `graph_enrich.collect_annotation_meta_chain`,

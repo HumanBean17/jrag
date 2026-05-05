@@ -14,9 +14,6 @@ from unidiff.errors import UnidiffParseError
 
 from kuzu_queries import SymbolHit, find_symbols_in_file_range, _row_to_symbol
 
-if False:  # typing-only
-    from kuzu_queries import KuzuGraph
-
 
 @dataclass
 class DiffHunk:

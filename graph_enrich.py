@@ -29,10 +29,13 @@ from ast_java import (
     AnnotationRef,
     JavaFileAst,
     MethodDecl,
+    OutgoingCallDecl,
     RouteDecl,
     ROUTE_META_ANNOTATION_NAMES,
     TypeDecl,
     _ROUTE_HTTP_MAPPING_NAMES,
+    CODEBASE_CLIENT_ANNOTATIONS,
+    CODEBASE_PRODUCER_ANNOTATIONS,
     infer_capabilities_for_type,
     infer_role_for_type,
     parse_java,
@@ -42,6 +45,7 @@ from ast_java import (
 )
 from java_ontology import (
     VALID_CAPABILITIES,
+    VALID_CLIENT_KINDS,
     VALID_ROLES,
     VALID_ROUTE_FRAMEWORKS,
     VALID_ROUTE_KINDS,
@@ -62,7 +66,11 @@ __all__ = [
     "microservice_for_path",
     "resolve_role_and_capabilities",
     "resolve_routes_for_method",
+    "resolve_http_client_for_method",
+    "resolve_async_producer_for_method",
     "RouteHint",
+    "HttpClientHint",
+    "AsyncProducerHint",
     "symbol_id",
     "phantom_id",
     "BUILD_MARKERS",
@@ -179,13 +187,32 @@ class RouteHint:
 
 
 @dataclass(frozen=True)
+class HttpClientHint:
+    client_kind: str
+    target_service: str = ""
+    path: str = ""
+    method: str = ""
+
+
+@dataclass(frozen=True)
+class AsyncProducerHint:
+    client_kind: str
+    topic: str = ""
+    broker: str = ""
+
+
+@dataclass(frozen=True)
 class BrownfieldOverrides:
-    annotation_to_role: dict[str, str]
-    annotation_to_capabilities: dict[str, tuple[str, ...]]
-    fqn_role: dict[str, str]
-    fqn_capabilities: dict[str, tuple[str, ...]]
-    annotation_to_route_hint: dict[str, RouteHint]
-    fqn_to_route_hint: dict[str, RouteHint]
+    annotation_to_role: dict[str, str] = field(default_factory=dict)
+    annotation_to_capabilities: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    fqn_role: dict[str, str] = field(default_factory=dict)
+    fqn_capabilities: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    annotation_to_route_hint: dict[str, RouteHint] = field(default_factory=dict)
+    fqn_to_route_hint: dict[str, RouteHint] = field(default_factory=dict)
+    annotation_to_http_client_hint: dict[str, HttpClientHint] = field(default_factory=dict)
+    fqn_to_http_client_hint: dict[str, HttpClientHint] = field(default_factory=dict)
+    annotation_to_async_producer_hint: dict[str, AsyncProducerHint] = field(default_factory=dict)
+    fqn_to_async_producer_hint: dict[str, AsyncProducerHint] = field(default_factory=dict)
 
 
 def _meta_builtins() -> frozenset[str]:
@@ -194,6 +221,8 @@ def _meta_builtins() -> frozenset[str]:
         | frozenset(_METHOD_ANN_TO_CAPABILITY)
         | frozenset(_TYPE_ANN_TO_CAPABILITY)
         | ROUTE_META_ANNOTATION_NAMES
+        | CODEBASE_CLIENT_ANNOTATIONS
+        | CODEBASE_PRODUCER_ANNOTATIONS
     )
 
 
@@ -352,13 +381,13 @@ def _load_brownfield_overrides(project_root_str: str) -> BrownfieldOverrides:
         try:
             import yaml  # PyYAML; already a transitive dep of cocoindex
         except ImportError:
-            return BrownfieldOverrides({}, {}, {}, {}, {}, {})
+            return BrownfieldOverrides({}, {}, {}, {}, {}, {}, {}, {}, {}, {})
         try:
             data = yaml.safe_load(candidate.read_text(encoding="utf-8"))
         except Exception:
-            return BrownfieldOverrides({}, {}, {}, {}, {}, {})
+            return BrownfieldOverrides({}, {}, {}, {}, {}, {}, {}, {}, {}, {})
         if not isinstance(data, dict):
-            return BrownfieldOverrides({}, {}, {}, {}, {}, {})
+            return BrownfieldOverrides({}, {}, {}, {}, {}, {}, {}, {}, {}, {})
         ro = data.get("role_overrides")
         if not isinstance(ro, dict):
             ro = {}
@@ -440,6 +469,10 @@ def _load_brownfield_overrides(project_root_str: str) -> BrownfieldOverrides:
 
         a_route: dict[str, RouteHint] = {}
         f_route: dict[str, RouteHint] = {}
+        a_http: dict[str, HttpClientHint] = {}
+        f_http: dict[str, HttpClientHint] = {}
+        a_async: dict[str, AsyncProducerHint] = {}
+        f_async: dict[str, AsyncProducerHint] = {}
         r_ov = data.get("route_overrides")
         if isinstance(r_ov, dict):
             ann_rt = r_ov.get("annotations")
@@ -503,6 +536,90 @@ def _load_brownfield_overrides(project_root_str: str) -> BrownfieldOverrides:
                         broker=str(val.get("broker", "") or "").strip(),
                     )
 
+        http_ov = data.get("http_client_overrides")
+        if isinstance(http_ov, dict):
+            ann_http = http_ov.get("annotations")
+            if isinstance(ann_http, dict):
+                for key, val in ann_http.items():
+                    ks = str(key).strip()
+                    if not ks or not isinstance(val, dict):
+                        continue
+                    ck = str(val.get("client_kind", "") or "").strip()
+                    if ck not in VALID_CLIENT_KINDS:
+                        print(
+                            f"[lancedb-mcp] http_client_overrides.annotations: unknown client_kind {ck!r} "
+                            f"for key {ks!r} — entry dropped",
+                            file=sys.stderr,
+                        )
+                        continue
+                    a_http[ks] = HttpClientHint(
+                        client_kind=ck,
+                        target_service=str(val.get("target_service", "") or "").strip(),
+                        path=str(val.get("path", "") or "").strip(),
+                        method=str(val.get("method", "") or "").strip().upper(),
+                    )
+            fqn_http = http_ov.get("fqn")
+            if isinstance(fqn_http, dict):
+                for fqn_key, val in fqn_http.items():
+                    fk = str(fqn_key).strip()
+                    if not fk or not isinstance(val, dict):
+                        continue
+                    ck = str(val.get("client_kind", "") or "").strip()
+                    if ck not in VALID_CLIENT_KINDS:
+                        print(
+                            f"[lancedb-mcp] http_client_overrides.fqn: unknown client_kind {ck!r} "
+                            f"for key {fk!r} — entry dropped",
+                            file=sys.stderr,
+                        )
+                        continue
+                    f_http[fk] = HttpClientHint(
+                        client_kind=ck,
+                        target_service=str(val.get("target_service", "") or "").strip(),
+                        path=str(val.get("path", "") or "").strip(),
+                        method=str(val.get("method", "") or "").strip().upper(),
+                    )
+
+        async_ov = data.get("async_producer_overrides")
+        if isinstance(async_ov, dict):
+            ann_async = async_ov.get("annotations")
+            if isinstance(ann_async, dict):
+                for key, val in ann_async.items():
+                    ks = str(key).strip()
+                    if not ks or not isinstance(val, dict):
+                        continue
+                    ck = str(val.get("client_kind", "") or "").strip()
+                    if ck not in VALID_CLIENT_KINDS:
+                        print(
+                            f"[lancedb-mcp] async_producer_overrides.annotations: unknown client_kind {ck!r} "
+                            f"for key {ks!r} — entry dropped",
+                            file=sys.stderr,
+                        )
+                        continue
+                    a_async[ks] = AsyncProducerHint(
+                        client_kind=ck,
+                        topic=str(val.get("topic", "") or "").strip(),
+                        broker=str(val.get("broker", "") or "").strip(),
+                    )
+            fqn_async = async_ov.get("fqn")
+            if isinstance(fqn_async, dict):
+                for fqn_key, val in fqn_async.items():
+                    fk = str(fqn_key).strip()
+                    if not fk or not isinstance(val, dict):
+                        continue
+                    ck = str(val.get("client_kind", "") or "").strip()
+                    if ck not in VALID_CLIENT_KINDS:
+                        print(
+                            f"[lancedb-mcp] async_producer_overrides.fqn: unknown client_kind {ck!r} "
+                            f"for key {fk!r} — entry dropped",
+                            file=sys.stderr,
+                        )
+                        continue
+                    f_async[fk] = AsyncProducerHint(
+                        client_kind=ck,
+                        topic=str(val.get("topic", "") or "").strip(),
+                        broker=str(val.get("broker", "") or "").strip(),
+                    )
+
         return BrownfieldOverrides(
             a_to_r,
             a_to_c,
@@ -510,15 +627,19 @@ def _load_brownfield_overrides(project_root_str: str) -> BrownfieldOverrides:
             fqn_c,
             a_route,
             f_route,
+            a_http,
+            f_http,
+            a_async,
+            f_async,
         )
-    return BrownfieldOverrides({}, {}, {}, {}, {}, {})
+    return BrownfieldOverrides({}, {}, {}, {}, {}, {}, {}, {}, {}, {})
 
 
 def load_brownfield_overrides(
     project_root: str | Path | None,
 ) -> BrownfieldOverrides:
     if project_root is None:
-        return BrownfieldOverrides({}, {}, {}, {}, {}, {})
+        return BrownfieldOverrides({}, {}, {}, {}, {}, {}, {}, {}, {}, {})
     try:
         r = str(Path(project_root).resolve())
     except OSError:
@@ -965,6 +1086,293 @@ def resolve_routes_for_method(
         )
 
     return working
+
+
+def _client_hint_lookup(
+    ann: AnnotationRef,
+    hints: dict[str, HttpClientHint],
+) -> HttpClientHint | None:
+    q = ann.qualified.strip()
+    if q in hints:
+        return hints[q]
+    if ann.name in hints:
+        return hints[ann.name]
+    for k, h in sorted(hints.items(), key=lambda kv: kv[0]):
+        if k.endswith("." + ann.name):
+            return h
+    return None
+
+
+def _async_hint_lookup(
+    ann: AnnotationRef,
+    hints: dict[str, AsyncProducerHint],
+) -> AsyncProducerHint | None:
+    q = ann.qualified.strip()
+    if q in hints:
+        return hints[q]
+    if ann.name in hints:
+        return hints[ann.name]
+    for k, h in sorted(hints.items(), key=lambda kv: kv[0]):
+        if k.endswith("." + ann.name):
+            return h
+    return None
+
+
+def _call_from_http_hint(
+    *,
+    hint: HttpClientHint,
+    base_call: OutgoingCallDecl | None,
+    method_decl: MethodDecl,
+    enclosing_type: TypeDecl,
+    source_layer: str,
+) -> OutgoingCallDecl:
+    filename = base_call.filename if base_call is not None else ""
+    start_line = base_call.start_line if base_call is not None else method_decl.start_line
+    end_line = base_call.end_line if base_call is not None else method_decl.end_line
+    method_fqn = (
+        base_call.method_fqn if base_call is not None else f"{enclosing_type.fqn}#{method_decl.signature}"
+    )
+    method_sig = base_call.method_sig if base_call is not None else method_decl.signature
+    return OutgoingCallDecl(
+        method_fqn=method_fqn,
+        method_sig=method_sig,
+        client_kind=hint.client_kind or (base_call.client_kind if base_call else ""),
+        channel="http",
+        feign_target_name=hint.target_service or (base_call.feign_target_name if base_call else ""),
+        feign_target_url=base_call.feign_target_url if base_call else "",
+        path_template_call=hint.path or (base_call.path_template_call if base_call else ""),
+        method_call=hint.method or (base_call.method_call if base_call else ""),
+        topic_call="",
+        broker_call="",
+        raw_uri=(base_call.raw_uri if base_call else (hint.path or "")),
+        raw_topic="",
+        resolution_strategy=source_layer,
+        confidence_base=1.0,
+        resolved=True,
+        filename=filename,
+        start_line=start_line,
+        end_line=end_line,
+    )
+
+
+def _call_from_async_hint(
+    *,
+    hint: AsyncProducerHint,
+    base_call: OutgoingCallDecl | None,
+    method_decl: MethodDecl,
+    enclosing_type: TypeDecl,
+    source_layer: str,
+) -> OutgoingCallDecl:
+    filename = base_call.filename if base_call is not None else ""
+    start_line = base_call.start_line if base_call is not None else method_decl.start_line
+    end_line = base_call.end_line if base_call is not None else method_decl.end_line
+    method_fqn = (
+        base_call.method_fqn if base_call is not None else f"{enclosing_type.fqn}#{method_decl.signature}"
+    )
+    method_sig = base_call.method_sig if base_call is not None else method_decl.signature
+    return OutgoingCallDecl(
+        method_fqn=method_fqn,
+        method_sig=method_sig,
+        client_kind=hint.client_kind or (base_call.client_kind if base_call else ""),
+        channel="async",
+        feign_target_name="",
+        feign_target_url="",
+        path_template_call="",
+        method_call="",
+        topic_call=hint.topic or (base_call.topic_call if base_call else ""),
+        broker_call=hint.broker or (base_call.broker_call if base_call else ""),
+        raw_uri="",
+        raw_topic=(base_call.raw_topic if base_call else (hint.topic or "")),
+        resolution_strategy=source_layer,
+        confidence_base=1.0,
+        resolved=True,
+        filename=filename,
+        start_line=start_line,
+        end_line=end_line,
+    )
+
+
+def resolve_http_client_for_method(
+    *,
+    method_decl: MethodDecl,
+    enclosing_type: TypeDecl,
+    overrides: BrownfieldOverrides,
+    meta_chain: dict[str, frozenset[str]] | None,
+    builtin_calls: list[OutgoingCallDecl],
+) -> list[OutgoingCallDecl]:
+    builtins_only = [c for c in builtin_calls if c.resolution_strategy != "codebase_client"]
+    layer_c_src = [c for c in builtin_calls if c.resolution_strategy == "codebase_client"]
+    combined_anns: list[tuple[bool, AnnotationRef]] = sorted(
+        [(False, a) for a in enclosing_type.annotations]
+        + [(True, a) for a in method_decl.annotations],
+        key=lambda t: (t[1].name, t[1].qualified, t[0]),
+    )
+    builtin_http = [c for c in builtins_only if c.channel == "http"]
+    brownfield_calls: list[OutgoingCallDecl] = []
+    anchor = builtin_http[0] if builtin_http else (layer_c_src[0] if layer_c_src else None)
+
+    for _is_m, ann in combined_anns:
+        hint = _client_hint_lookup(ann, overrides.annotation_to_http_client_hint)
+        if hint is None:
+            continue
+        brownfield_calls.append(
+            _call_from_http_hint(
+                hint=hint,
+                base_call=anchor,
+                method_decl=method_decl,
+                enclosing_type=enclosing_type,
+                source_layer="layer_b_ann",
+            ),
+        )
+
+    if meta_chain is not None:
+        seen_a: set[tuple[str, str]] = set()
+        for _is_m, ann in combined_anns:
+            key = (ann.name, ann.qualified)
+            if key in seen_a:
+                continue
+            if ann.name in CODEBASE_CLIENT_ANNOTATIONS:
+                continue
+            chain = meta_chain.get(ann.name, frozenset())
+            if "CodebaseClient" not in chain and "CodebaseClients" not in chain:
+                continue
+            hint = overrides.annotation_to_http_client_hint.get("CodebaseClient")
+            if hint is None:
+                hint = HttpClientHint(
+                    client_kind=anchor.client_kind if anchor else "rest_template",
+                    target_service=anchor.feign_target_name if anchor else "",
+                    path=anchor.path_template_call if anchor else "",
+                    method=anchor.method_call if anchor else "",
+                )
+            seen_a.add(key)
+            brownfield_calls.append(
+                _call_from_http_hint(
+                    hint=hint,
+                    base_call=anchor,
+                    method_decl=method_decl,
+                    enclosing_type=enclosing_type,
+                    source_layer="layer_a_meta",
+                ),
+            )
+
+    for c in layer_c_src:
+        if c.channel == "http":
+            brownfield_calls.append(replace(c, resolution_strategy="layer_c_source"))
+
+    fh = overrides.fqn_to_http_client_hint.get(enclosing_type.fqn)
+    if fh is not None:
+        if not brownfield_calls:
+            brownfield_calls.append(
+                _call_from_http_hint(
+                    hint=fh,
+                    base_call=anchor,
+                    method_decl=method_decl,
+                    enclosing_type=enclosing_type,
+                    source_layer="layer_b_fqn",
+                ),
+            )
+        else:
+            brownfield_calls = [
+                _call_from_http_hint(
+                    hint=fh,
+                    base_call=c,
+                    method_decl=method_decl,
+                    enclosing_type=enclosing_type,
+                    source_layer="layer_b_fqn",
+                ) for c in brownfield_calls
+            ]
+    return brownfield_calls if brownfield_calls else builtin_http
+
+
+def resolve_async_producer_for_method(
+    *,
+    method_decl: MethodDecl,
+    enclosing_type: TypeDecl,
+    overrides: BrownfieldOverrides,
+    meta_chain: dict[str, frozenset[str]] | None,
+    builtin_calls: list[OutgoingCallDecl],
+) -> list[OutgoingCallDecl]:
+    builtins_only = [c for c in builtin_calls if c.resolution_strategy != "codebase_producer"]
+    layer_c_src = [c for c in builtin_calls if c.resolution_strategy == "codebase_producer"]
+    combined_anns: list[tuple[bool, AnnotationRef]] = sorted(
+        [(False, a) for a in enclosing_type.annotations]
+        + [(True, a) for a in method_decl.annotations],
+        key=lambda t: (t[1].name, t[1].qualified, t[0]),
+    )
+    builtin_async = [c for c in builtins_only if c.channel == "async"]
+    brownfield_calls: list[OutgoingCallDecl] = []
+    anchor = builtin_async[0] if builtin_async else (layer_c_src[0] if layer_c_src else None)
+
+    for _is_m, ann in combined_anns:
+        hint = _async_hint_lookup(ann, overrides.annotation_to_async_producer_hint)
+        if hint is None:
+            continue
+        brownfield_calls.append(
+            _call_from_async_hint(
+                hint=hint,
+                base_call=anchor,
+                method_decl=method_decl,
+                enclosing_type=enclosing_type,
+                source_layer="layer_b_ann",
+            ),
+        )
+
+    if meta_chain is not None:
+        seen_a: set[tuple[str, str]] = set()
+        for _is_m, ann in combined_anns:
+            key = (ann.name, ann.qualified)
+            if key in seen_a:
+                continue
+            if ann.name in CODEBASE_PRODUCER_ANNOTATIONS:
+                continue
+            chain = meta_chain.get(ann.name, frozenset())
+            if "CodebaseProducer" not in chain and "CodebaseProducers" not in chain:
+                continue
+            hint = overrides.annotation_to_async_producer_hint.get("CodebaseProducer")
+            if hint is None:
+                hint = AsyncProducerHint(
+                    client_kind=anchor.client_kind if anchor else "kafka_send",
+                    topic=anchor.topic_call if anchor else "",
+                    broker=anchor.broker_call if anchor else "",
+                )
+            seen_a.add(key)
+            brownfield_calls.append(
+                _call_from_async_hint(
+                    hint=hint,
+                    base_call=anchor,
+                    method_decl=method_decl,
+                    enclosing_type=enclosing_type,
+                    source_layer="layer_a_meta",
+                ),
+            )
+
+    for c in layer_c_src:
+        if c.channel == "async":
+            brownfield_calls.append(replace(c, resolution_strategy="layer_c_source"))
+
+    fh = overrides.fqn_to_async_producer_hint.get(enclosing_type.fqn)
+    if fh is not None:
+        if not brownfield_calls:
+            brownfield_calls.append(
+                _call_from_async_hint(
+                    hint=fh,
+                    base_call=anchor,
+                    method_decl=method_decl,
+                    enclosing_type=enclosing_type,
+                    source_layer="layer_b_fqn",
+                ),
+            )
+        else:
+            brownfield_calls = [
+                _call_from_async_hint(
+                    hint=fh,
+                    base_call=c,
+                    method_decl=method_decl,
+                    enclosing_type=enclosing_type,
+                    source_layer="layer_b_fqn",
+                ) for c in brownfield_calls
+            ]
+    return brownfield_calls if brownfield_calls else builtin_async
 
 
 def _resolve_with_root(
