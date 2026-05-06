@@ -16,7 +16,7 @@ The product vision for this tooling is proposed in [`propose/PRODUCT-VISION.md`]
 > **Driving this MCP from an agent:**
 > - [`docs/AGENT-GUIDE.md`](./docs/AGENT-GUIDE.md) — copy-paste-into-`QWEN.md` /
 >   `CLAUDE.md` block. Forced reasoning preamble, decision tree, full
->   reference for all 22 tools, ontology glossary (v9), recovery playbook,
+>   reference for all 22 tools, ontology glossary (v10), recovery playbook,
 >   slash-style aliases. Engineered for weak / mid models that otherwise
 >   pick the wrong tool.
 > - [`docs/MANUAL-VERIFICATION-CHECKLIST.md`](./docs/MANUAL-VERIFICATION-CHECKLIST.md)
@@ -117,6 +117,9 @@ Resolution order for `microservice`:
 > 6. **`ontology_version` 9** renames role `FEIGN_CLIENT` to `CLIENT` and adds
 >    capability `HTTP_CLIENT` for `@FeignClient` interfaces — rebuild to refresh
 >    stored role/capability literals.
+> 7. **`ontology_version` 10** adds first-class outbound `Client` nodes and
+>    `DECLARES_CLIENT` edges, plus `GraphMeta` client counters — rebuild the Kuzu
+>    graph after upgrading.
 >
 > Any index built before these changes must be rebuilt via
 > `cocoindex update ... --full-reprocess -f` or `refresh_code_index`. Until

@@ -52,8 +52,8 @@ def test_schema_has_all_expected_tables(kuzu_db_path: Path) -> None:
     # We only assert the tables we depend on are present. The builder is
     # free to add more (e.g. CALLS later) without breaking this test.
     expected = {
-        "Symbol", "Route", "GraphMeta",
-        "EXTENDS", "IMPLEMENTS", "INJECTS", "DECLARES", "CALLS", "EXPOSES",
+        "Symbol", "Route", "Client", "GraphMeta",
+        "EXTENDS", "IMPLEMENTS", "INJECTS", "DECLARES", "CALLS", "EXPOSES", "DECLARES_CLIENT",
     }
     missing = expected - tables
     assert not missing, f"missing schema tables: {missing}; saw {tables}"
