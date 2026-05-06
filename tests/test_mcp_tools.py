@@ -53,6 +53,12 @@ async def test_all_tools_have_non_empty_description(mcp_server) -> None:
     assert missing == [], f"Tools missing description: {missing}"
 
 
+async def test_list_clients_tool_is_registered(mcp_server) -> None:
+    tools = await mcp_server.list_tools()
+    names = {tool.name for tool in tools}
+    assert "list_clients" in names
+
+
 # ---------------- list_code_index_tables ----------------
 
 

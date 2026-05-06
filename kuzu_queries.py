@@ -1377,6 +1377,73 @@ class KuzuGraph:
             "outbound": outbound,
         }
 
+    # ---- outbound clients (LC3) ----
+
+    _CLIENT_RETURN = (
+        "c.id AS id, c.client_kind AS client_kind, c.target_service AS target_service, "
+        "c.method AS method, c.path AS path, c.path_template AS path_template, "
+        "c.path_regex AS path_regex, c.member_fqn AS member_fqn, c.member_id AS member_id, "
+        "c.microservice AS microservice, c.module AS module, c.filename AS filename, "
+        "c.start_line AS start_line, c.end_line AS end_line, c.resolved AS resolved, "
+        "c.source_layer AS source_layer"
+    )
+
+    @staticmethod
+    def _row_to_client_dict(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "id": str(row.get("id") or ""),
+            "client_kind": str(row.get("client_kind") or ""),
+            "target_service": str(row.get("target_service") or ""),
+            "method": str(row.get("method") or ""),
+            "path": str(row.get("path") or ""),
+            "path_template": str(row.get("path_template") or ""),
+            "path_regex": str(row.get("path_regex") or ""),
+            "member_fqn": str(row.get("member_fqn") or ""),
+            "member_id": str(row.get("member_id") or ""),
+            "microservice": str(row.get("microservice") or ""),
+            "module": str(row.get("module") or ""),
+            "filename": str(row.get("filename") or ""),
+            "start_line": int(row.get("start_line") or 0),
+            "end_line": int(row.get("end_line") or 0),
+            "resolved": bool(row.get("resolved", True)),
+            "source_layer": str(row.get("source_layer") or "builtin"),
+        }
+
+    def list_clients(
+        self,
+        *,
+        microservice: str | None = None,
+        client_kind: str | None = None,
+        target_service: str | None = None,
+        path_prefix: str | None = None,
+        method: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        lim = max(1, min(int(limit), 500))
+        params: dict[str, Any] = {"lim": lim}
+        preds: list[str] = []
+        if microservice:
+            params["microservice"] = microservice
+            preds.append("c.microservice = $microservice")
+        if client_kind:
+            params["client_kind"] = client_kind
+            preds.append("c.client_kind = $client_kind")
+        if target_service:
+            params["target_service"] = target_service
+            preds.append("c.target_service = $target_service")
+        if path_prefix:
+            params["path_prefix"] = path_prefix
+            preds.append("c.path STARTS WITH $path_prefix")
+        if method is not None and method != "":
+            params["method"] = method
+            preds.append("c.method = $method")
+        where = (" WHERE " + " AND ".join(preds)) if preds else ""
+        q = (
+            f"MATCH (c:Client){where} RETURN {self._CLIENT_RETURN} "
+            f"ORDER BY c.microservice, c.client_kind, c.path, c.method, c.id LIMIT $lim"
+        )
+        return [self._row_to_client_dict(r) for r in self._rows(q, params)]
+
     # ---- used by search_lancedb.graph_expand ----
 
     def expand_fqns(self, fqns: list[str], *, depth: int = 1,

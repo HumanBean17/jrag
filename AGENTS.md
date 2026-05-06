@@ -9,7 +9,7 @@ for tools that don't read `.cursor/rules/`.
 
 - `README.md` — feature surface, env vars, ranking, capabilities,
  tool list, "Re-index required" callouts. **`ontology_version` is
- currently 8.**
+ currently 10** (`Client` nodes + `list_clients`; see README callouts).
 - `CODEBASE_REQUIREMENTS.md` — Java-repo assumptions and tuning map.
 - `propose/` and `plans/` (plus their `completed/` subdirs) —
   in-flight scope and the rationale behind current design.
@@ -35,7 +35,10 @@ for tools that don't read `.cursor/rules/`.
     `plans/completed/PLAN-BROWNFIELD-ROLE-OVERRIDES-design-fixes.md`,
     `plans/completed/PLAN-COCOINDEX-SYMLINK-FIX.md`,
     `plans/completed/PLAN-ENUM-ANNOTATION-FIXES.md`,
-    `plans/completed/PLAN-REMOTE-PROJECT-INDEXING.md`. Read these
+    `plans/completed/PLAN-REMOTE-PROJECT-INDEXING.md`,
+    `propose/completed/LIST-CLIENTS-MCP-TOOL-PROPOSE.md`,
+    `plans/completed/PLAN-LIST-CLIENTS-MCP-TOOL.md`,
+    `plans/completed/CURSOR-PROMPTS-LIST-CLIENTS-MCP-TOOL.md`. Read these
     when you need the *why* behind current code.
 - `tests/README.md` — testing philosophy.
 
