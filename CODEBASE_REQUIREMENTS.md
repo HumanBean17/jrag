@@ -196,10 +196,11 @@ capabilities are not materialised on graph nodes).
 
 Capabilities are derived at the **type level**: method-level annotation
 evidence is aggregated up to the enclosing type. Per-method capability
-storage is intentionally out of scope for the current ontology
-(version 3) — see `plans/PLAN-CAPABILITIES-MODEL.md`. The deferred
-call-graph layer (`propose/DEFERRED-CALL-GRAPH-PROPOSE.md`) is the
-designated place to revisit method-granularity if the need arises.
+storage is intentionally out of scope for the current ontology — see
+`plans/completed/PLAN-CAPABILITIES-MODEL.md` for the original design.
+The call-graph layer (`propose/completed/CALL-GRAPH-PROPOSE.md`,
+shipped) introduced method-level call edges; method-granularity
+capabilities can be revisited in a follow-up if the need arises.
 
 Capabilities are independent of `role` — a `@Service` can simultaneously
 be a `MESSAGE_PRODUCER` and a `MESSAGE_LISTENER`, for example. The
@@ -550,9 +551,9 @@ This is a larger change; rough map:
 4. `server.py` — expose a new MCP tool (or extend `graph_neighbors` /
    `trace_flow` to recognise the new edge type).
 
-See `propose/DEFERRED-CALL-GRAPH-PROPOSE.md` for the planned shape of
-CALLS / HTTP_CALLS / ASYNC_CALLS — your custom edge should follow the
-same conventions so a future merge is painless.
+See `propose/completed/CALL-GRAPH-PROPOSE.md` for the shipped shape of
+`CALLS` / `HTTP_CALLS` / `ASYNC_CALLS` — your custom edge should follow
+the same conventions.
 
 ---
 

@@ -523,12 +523,18 @@ back to exact-text matching in that case, so re-running the flow fixes it.
 
 ## 6. Deferred (beyond static call graph)
 
-**Call graph (static intra-JVM `CALLS` + `DECLARES`) is implemented** — see §5 edge types and
-`find_callers` / `find_callees` / `trace_flow(follow_calls)`. Remaining graph work:
+**Static intra-JVM `CALLS` / `DECLARES` are shipped** — see §5 edge types
+and `find_callers` / `find_callees` / `trace_flow(follow_calls)`.
+**Cross-service caller edges (`HTTP_CALLS` / `ASYNC_CALLS`) are shipped
+too**, with `find_route_callers`, `trace_request_flow`, and the
+brownfield composition layer documented under §5 "Brownfield overrides".
+Remaining graph work:
 
-- Cross-service topology tools (`get_service_topology`, `trace_request_flow`) depending on the above.
+- `get_service_topology` (microservice-level summary view aggregating `HTTP_CALLS` / `ASYNC_CALLS`).
 - Agentic routing layer (query classifier → vector / graph / both) from the DKB paper §4.1.
-- Incremental Kuzu updates (per-changed-file) to avoid full rebuild.
+- Incremental Kuzu updates (per-changed-file) to avoid full rebuild —
+  see `propose/TIER2-INCREMENTAL-REBUILD-PROPOSE.md` and
+  `propose/REFRESH-CODE-INDEX-AUTO-MODE-PROPOSE.md`.
 - Optional `codegraph_nodes` LanceDB table embedding symbol summaries so the graph itself is vector-searchable.
 
 ## 7. Syncing from the main repo
