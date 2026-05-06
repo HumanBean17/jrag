@@ -46,6 +46,7 @@ from ast_java import (
 from java_ontology import (
     VALID_CAPABILITIES,
     VALID_CLIENT_KINDS,
+    VALID_PRODUCER_KINDS,
     VALID_ROLES,
     VALID_ROUTE_FRAMEWORKS,
     VALID_ROUTE_KINDS,
@@ -623,7 +624,7 @@ def _load_brownfield_overrides(project_root_str: str) -> BrownfieldOverrides:
                     if not ks or not isinstance(val, dict):
                         continue
                     ck = str(val.get("client_kind", "") or "").strip()
-                    if ck not in VALID_CLIENT_KINDS:
+                    if ck not in VALID_PRODUCER_KINDS:
                         print(
                             f"[lancedb-mcp] async_producer_overrides.annotations: unknown client_kind {ck!r} "
                             f"for key {ks!r} — entry dropped",
@@ -642,7 +643,7 @@ def _load_brownfield_overrides(project_root_str: str) -> BrownfieldOverrides:
                     if not fk or not isinstance(val, dict):
                         continue
                     ck = str(val.get("client_kind", "") or "").strip()
-                    if ck not in VALID_CLIENT_KINDS:
+                    if ck not in VALID_PRODUCER_KINDS:
                         print(
                             f"[lancedb-mcp] async_producer_overrides.fqn: unknown client_kind {ck!r} "
                             f"for key {fk!r} — entry dropped",
@@ -1073,6 +1074,12 @@ def resolve_routes_for_method(
         + [(True, a) for a in method_decl.annotations],
         key=lambda t: (t[1].name, t[1].qualified, t[0]),
     )
+    if any(a.name in {"CodebaseRoute", "CodebaseRoutes"} for _m, a in combined_anns):
+        print(
+            "[lancedb-mcp] v1 brownfield annotation detected; migrate to "
+            "CodebaseHttpRoute / CodebaseAsyncRoute / CodebaseClient",
+            file=sys.stderr,
+        )
 
     # ----- Step 2: Layer B — annotation route hints -----
     for _is_m, ann in combined_anns:

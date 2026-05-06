@@ -106,15 +106,15 @@ interface Api {
 '''
     ast = parse_java(src.encode(), filename="Api.java")
     methods = ast.all_types[0].methods
-    routes = []
+    outgoing = []
     for m in methods:
-        routes.extend(m.routes)
+        outgoing.extend(m.outgoing_calls)
     assert len(methods) == 2
-    by_path = {r.path for r in routes}
+    by_path = {c.path_template_call for c in outgoing}
     assert "/users/{id}" in by_path
     assert "/users/extra" in by_path
-    assert all(r.framework == "feign" for r in routes)
-    assert all(r.feign_name == "user-svc" for r in routes)
+    assert all(c.client_kind == "feign_method" for c in outgoing)
+    assert all(c.feign_target_name == "user-svc" for c in outgoing)
 
 
 def test_case7_kafka_listener_literal_topic() -> None:

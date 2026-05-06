@@ -146,7 +146,12 @@ ROUTE_META_ANNOTATION_NAMES: frozenset[str] = _ROUTE_HTTP_MAPPING_NAMES | frozen
     "StreamListener",
 })
 
-CODEBASE_ROUTE_ANNOTATIONS: frozenset[str] = frozenset({"CodebaseRoute", "CodebaseRoutes"})
+CODEBASE_ROUTE_ANNOTATIONS: frozenset[str] = frozenset({
+    "CodebaseHttpRoute",
+    "CodebaseHttpRoutes",
+    "CodebaseAsyncRoute",
+    "CodebaseAsyncRoutes",
+})
 CODEBASE_CLIENT_ANNOTATIONS: frozenset[str] = frozenset({"CodebaseClient", "CodebaseClients"})
 CODEBASE_PRODUCER_ANNOTATIONS: frozenset[str] = frozenset({"CodebaseProducer", "CodebaseProducers"})
 
@@ -1437,7 +1442,7 @@ def _iter_method_annotation_nodes(method_node: Node, src: bytes) -> list[tuple[s
     return out
 
 
-def _parse_codebase_route_inner_annotation(
+def _parse_codebase_http_route_inner_annotation(
     ann: Node,
     src: bytes,
     ctx: _ParseCtx,
@@ -1448,29 +1453,10 @@ def _parse_codebase_route_inner_annotation(
     start_line: int,
     end_line: int,
 ) -> list[RouteDecl]:
-    """One `@CodebaseRoute(...)` element → `RouteDecl`(s) with `resolution_strategy='codebase_route'`."""
-    from java_ontology import VALID_ROUTE_FRAMEWORKS, VALID_ROUTE_KINDS
-
+    """One `@CodebaseHttpRoute(...)` element → `RouteDecl`(s)."""
     pairs, _ = _annotation_kv_nodes(ann, src)
-    fw_node = pairs.get("framework")
-    kind_node = pairs.get("kind")
-    fw = ""
-    kind = ""
-    if fw_node is not None:
-        v, k = _annotation_value(fw_node, src)
-        if k == "enum" and v:
-            fw = str(v).lower()
-    if kind_node is not None:
-        v, k = _annotation_value(kind_node, src)
-        if k == "enum" and v:
-            kind = str(v).lower()
-    if fw not in VALID_ROUTE_FRAMEWORKS or kind not in VALID_ROUTE_KINDS:
-        return []
-
     path_node = pairs.get("path")
     meth_arg = pairs.get("method")
-    topic_node = pairs.get("topic")
-    broker_node = pairs.get("broker")
 
     http_method = ""
     if meth_arg is not None:
@@ -1478,25 +1464,11 @@ def _parse_codebase_route_inner_annotation(
         if mv is not None:
             http_method = str(mv).upper() if mk == "enum" else str(mv).strip().upper()
 
-    topic = ""
-    if topic_node is not None:
-        tv, tk = _annotation_value(topic_node, src)
-        if tv is not None and tk == "string":
-            topic = str(tv)
-        elif tv is not None and tk == "enum":
-            topic = str(tv)
-
-    broker = ""
-    if broker_node is not None:
-        bv, bk = _annotation_value(broker_node, src)
-        if bv is not None and bk == "string":
-            broker = str(bv)
-
     path_atoms: list[tuple[str, str, float, bool]] = []
     if path_node is not None:
         path_atoms = _string_value_atoms(path_node, src, ctx)
-    if not path_atoms:
-        path_atoms = [("", "annotation", 1.0, True)]
+    if not path_atoms or not http_method:
+        return []
 
     out: list[RouteDecl] = []
     for raw_path, _strat, conf, res in path_atoms:
@@ -1504,12 +1476,12 @@ def _parse_codebase_route_inner_annotation(
             RouteDecl(
                 method_fqn=handler_fqn,
                 method_sig=method_sig,
-                kind=kind,
-                framework=fw,
+                kind="http_endpoint",
+                framework="spring_mvc",
                 http_method=http_method,
                 path=raw_path,
-                topic=topic,
-                broker=broker,
+                topic="",
+                broker="",
                 feign_name="",
                 feign_url="",
                 resolution_strategy="codebase_route",
@@ -1531,7 +1503,23 @@ def _codebase_route_inner_annotation_nodes(container_ann: Node, src: bytes) -> l
         if n.type == "annotation":
             name_node = n.child_by_field_name("name")
             n_simple = _txt(name_node, src).rsplit(".", 1)[-1] if name_node is not None else ""
-            if n_simple == "CodebaseRoute":
+            if n_simple == "CodebaseHttpRoute":
+                found.append(n)
+        for c in n.children:
+            visit(c)
+
+    visit(container_ann)
+    return found
+
+
+def _codebase_async_route_inner_annotation_nodes(container_ann: Node, src: bytes) -> list[Node]:
+    found: list[Node] = []
+
+    def visit(n: Node) -> None:
+        if n.type == "annotation":
+            name_node = n.child_by_field_name("name")
+            n_simple = _txt(name_node, src).rsplit(".", 1)[-1] if name_node is not None else ""
+            if n_simple == "CodebaseAsyncRoute":
                 found.append(n)
         for c in n.children:
             visit(c)
@@ -1586,9 +1574,9 @@ def _parse_codebase_client_annotation(
     pairs, _ = _annotation_kv_nodes(ann, src)
     client_kind = ""
     if "clientKind" in pairs:
-        atoms = _string_value_atoms(pairs["clientKind"], src, ctx)
-        if atoms:
-            client_kind = atoms[0][0]
+        val, _kind = _annotation_value(pairs["clientKind"], src)
+        if val:
+            client_kind = str(val)
     target_service = ""
     if "targetService" in pairs:
         atoms = _string_value_atoms(pairs["targetService"], src, ctx)
@@ -1638,21 +1626,18 @@ def _parse_codebase_producer_annotation(
     end_line: int,
 ) -> OutgoingCallDecl:
     pairs, _ = _annotation_kv_nodes(ann, src)
-    client_kind = ""
-    if "clientKind" in pairs:
-        atoms = _string_value_atoms(pairs["clientKind"], src, ctx)
-        if atoms:
-            client_kind = atoms[0][0]
+    client_kind = "kafka_send"
+    kind_node = pairs.get("producerKind") or pairs.get("clientKind")
+    if kind_node is not None:
+        val, _kind = _annotation_value(kind_node, src)
+        if val:
+            client_kind = str(val)
     topic = ""
     if "topic" in pairs:
         atoms = _string_value_atoms(pairs["topic"], src, ctx)
         if atoms:
             topic = atoms[0][0]
     broker = ""
-    if "broker" in pairs:
-        atoms = _string_value_atoms(pairs["broker"], src, ctx)
-        if atoms:
-            broker = atoms[0][0]
     return OutgoingCallDecl(
         method_fqn=method_fqn,
         method_sig=method_sig,
@@ -1744,21 +1729,27 @@ def _collect_outgoing_calls(
     type_ann_names: set[str] = set()
     feign_target_name = ""
     feign_target_url = ""
+    feign_base_path = ""
     if type_mods is not None:
         for child in type_mods.children:
             if child.type not in ("marker_annotation", "annotation"):
                 continue
             simple, _ = _annotation_name(child, src)
             type_ann_names.add(simple)
-            if simple == "FeignClient":
-                pairs, _ = _annotation_kv_nodes(child, src)
-                if "name" in pairs:
-                    vals = _literal_strings_from_route_arg(pairs["name"], src, ctx)
-                    feign_target_name = vals[0] if vals else ""
-                if "url" in pairs:
-                    vals = _literal_strings_from_route_arg(pairs["url"], src, ctx)
-                    feign_target_url = vals[0] if vals else ""
+    feign_target_name, feign_target_url, feign_base_path = _parse_feign_client_literals(type_node, src, ctx)
     if type_node is not None and type_node.type == "interface_declaration" and "FeignClient" in type_ann_names:
+        method_call = ""
+        path_template = ""
+        for simple, ann_node in _iter_method_annotation_nodes(method_node, src):
+            if simple not in _ROUTE_HTTP_MAPPING_NAMES:
+                continue
+            path_atoms, methods = _paths_and_methods_from_mapping_ann(ann_node, src, simple, ctx)
+            if methods:
+                method_call = methods[0]
+            if path_atoms:
+                composed = _compose_http_paths(feign_base_path, [path_atoms[0][0]])[0]
+                path_template = _normalize_call_path(composed)
+            break
         out.append(
             OutgoingCallDecl(
                 method_fqn=method_fqn,
@@ -1767,11 +1758,11 @@ def _collect_outgoing_calls(
                 channel="http",
                 feign_target_name=feign_target_name,
                 feign_target_url=feign_target_url,
-                path_template_call="",
-                method_call="",
+                path_template_call=path_template,
+                method_call=method_call,
                 topic_call="",
                 broker_call="",
-                raw_uri="",
+                raw_uri=path_template,
                 raw_topic="",
                 resolution_strategy="feign_method",
                 confidence_base=1.0,
@@ -2172,13 +2163,15 @@ def _collect_routes(
         if not path_atoms:
             continue
         class_path_prefix = http_base if not feign_iface else feign_base_path
-        fw = "feign" if feign_iface else _http_framework_for_mapping(
+        if feign_iface:
+            continue
+        fw = _http_framework_for_mapping(
             enclosing_body=enclosing_body,
             src=src,
             method_decl=method_decl,
             type_ann_names=type_ann_names,
         )
-        kind = "http_consumer" if feign_iface else "http_endpoint"
+        kind = "http_endpoint"
         for raw_path, m_strat, m_conf, m_res in path_atoms:
             full_path, f_strat, f_conf, f_res = _merge_http_route_with_class_base(
                 class_path_prefix, raw_path, m_strat, m_conf, m_res,
@@ -2205,11 +2198,11 @@ def _collect_routes(
                     )
                 )
 
-    # --- @CodebaseRoute / @CodebaseRoutes (PR-A3 source stubs; Layer C in resolver) ---
+    # --- @CodebaseHttpRoute / @CodebaseHttpRoutes + @CodebaseAsyncRoute(s) ---
     for simple, node in ann_nodes:
-        if simple == "CodebaseRoute":
+        if simple == "CodebaseHttpRoute":
             routes.extend(
-                _parse_codebase_route_inner_annotation(
+                _parse_codebase_http_route_inner_annotation(
                     node,
                     src,
                     ctx,
@@ -2220,10 +2213,10 @@ def _collect_routes(
                     end_line=method_decl.end_line,
                 ),
             )
-        elif simple == "CodebaseRoutes":
+        elif simple == "CodebaseHttpRoutes":
             for inner in _codebase_route_inner_annotation_nodes(node, src):
                 routes.extend(
-                    _parse_codebase_route_inner_annotation(
+                    _parse_codebase_http_route_inner_annotation(
                         inner,
                         src,
                         ctx,
@@ -2234,6 +2227,38 @@ def _collect_routes(
                         end_line=method_decl.end_line,
                     ),
                 )
+        elif simple in ("CodebaseAsyncRoute", "CodebaseAsyncRoutes"):
+            nodes = [node]
+            if simple == "CodebaseAsyncRoutes":
+                nodes = list(_codebase_async_route_inner_annotation_nodes(node, src))
+            for ann in nodes:
+                pairs, _ = _annotation_kv_nodes(ann, src)
+                topic_node = pairs.get("topic")
+                if topic_node is None:
+                    continue
+                topic_atoms = _string_value_atoms(topic_node, src, ctx)
+                for topic, strat, conf, res in topic_atoms:
+                    routes.append(
+                        RouteDecl(
+                            method_fqn=handler_fqn,
+                            method_sig=signature,
+                            kind="kafka_topic",
+                            framework="kafka",
+                            http_method="",
+                            path="",
+                            topic=topic,
+                            broker="",
+                            feign_name="",
+                            feign_url="",
+                            resolution_strategy=strat,
+                            confidence=conf,
+                            resolved=res,
+                            filename=file_rel,
+                            start_line=method_decl.start_line,
+                            end_line=method_decl.end_line,
+                            route_source_layer="layer_c_source",
+                        )
+                    )
 
     return routes
 

@@ -64,7 +64,7 @@ from graph_enrich import (
     symbol_id,
 )
 from path_filtering import LayeredIgnore, iter_java_source_files
-from java_ontology import VALID_CALL_MATCHES
+from java_ontology import VALID_HTTP_CALL_MATCHES
 
 log = logging.getLogger(__name__)
 
@@ -1738,36 +1738,33 @@ def pass6_match_edges(
         member = member_by_id.get(row.symbol_id)
         base = row.confidence / max(1e-9, (0.3 * _micro_factor(member)))
         src_route = route_by_id.get(row.route_id)
-        if src_route is None or src_route.kind != "http_consumer":
-            # PR-F1: when pass4 suppresses EXPOSES for Feign declarations, pass5 can still
-            # leave unresolved Feign rows pointing at phantom routes. Recover caller-side
-            # Feign target hints from the member declaration route.
-            if member is not None:
-                for decl in member.decl.routes:
-                    if decl.kind != "http_consumer":
-                        continue
-                    path_template, path_regex = _normalize_path(decl.path)
-                    src_route = RouteRow(
-                        id="",
-                        kind=decl.kind,
-                        framework=decl.framework,
-                        method=decl.http_method,
-                        path=decl.path,
-                        path_template=path_template,
-                        path_regex=path_regex,
-                        topic=decl.topic,
-                        broker=decl.broker,
-                        feign_name=decl.feign_name,
-                        feign_url=decl.feign_url,
-                        microservice=member.microservice,
-                        module=member.module,
-                        filename=decl.filename,
-                        start_line=decl.start_line,
-                        end_line=decl.end_line,
-                        resolved=decl.resolved,
-                        source_layer=decl.route_source_layer,
-                    )
-                    break
+        if src_route is None and member is not None:
+            # Recover feign caller hints from outgoing client declarations (v2).
+            for decl in member.decl.outgoing_calls:
+                if decl.client_kind != "feign_method":
+                    continue
+                path_template, path_regex = _normalize_path(decl.path_template_call)
+                src_route = RouteRow(
+                    id="",
+                    kind="http_consumer",
+                    framework="feign",
+                    method=decl.method_call,
+                    path=decl.path_template_call,
+                    path_template=path_template,
+                    path_regex=path_regex,
+                    topic="",
+                    broker="",
+                    feign_name=decl.feign_target_name,
+                    feign_url=decl.feign_target_url,
+                    microservice=member.microservice,
+                    module=member.module,
+                    filename=decl.filename,
+                    start_line=decl.start_line,
+                    end_line=decl.end_line,
+                    resolved=decl.resolved,
+                    source_layer="layer_c_source",
+                )
+                break
         # Declared Feign client methods use `http_consumer` routes; synthetic phantoms from
         # imperative clients are `http_endpoint` even when `feign_name` is populated from
         # `@CodebaseClient.targetService` / YAML hints — those must path-match like RestTemplate.
@@ -1807,7 +1804,7 @@ def pass6_match_edges(
             suppressed_auto_cross_count += 1
             if len(suppressed_auto_cross_http) < 5:
                 suppressed_auto_cross_http.append(call.method_fqn)
-        if outcome in VALID_CALL_MATCHES:
+        if outcome in VALID_HTTP_CALL_MATCHES:
             row.match = outcome
         if outcome in ("cross_service", "intra_service") and len(candidates) == 1:
             row.route_id = candidates[0].id
@@ -1853,7 +1850,7 @@ def pass6_match_edges(
             suppressed_auto_cross_count += 1
             if len(suppressed_auto_cross_async) < 5:
                 suppressed_auto_cross_async.append(call.method_fqn)
-        if outcome in VALID_CALL_MATCHES:
+        if outcome in VALID_HTTP_CALL_MATCHES:
             row.match = outcome
         if outcome in ("cross_service", "intra_service") and len(candidates) == 1:
             row.route_id = candidates[0].id

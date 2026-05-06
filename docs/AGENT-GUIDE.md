@@ -264,10 +264,10 @@ flagged with ⚠.
 
 #### Routes (inbound entry points)
 
-##### `list_routes` — list `Route` nodes (HTTP, Feign, Kafka, …)
+##### `list_routes` — list inbound `Route` nodes (HTTP, async)
 
 - **Args:** none required. Optionals: `microservice`, `framework`
-  (`spring_mvc`|`webflux`|`feign`|`kafka`|`rabbitmq`|`jms`|`stream`),
+  (`spring_mvc`|`webflux`|`kafka`|`rabbitmq`|`jms`|`stream`),
   `path_prefix`, `method`, `limit`.
 - ⚠ Routes with empty `framework` are ones the extractor couldn't
   classify — usually annotation-only Kafka topic constants. If you
@@ -276,8 +276,8 @@ flagged with ⚠.
 ##### `find_route_handlers` — symbols that EXPOSES a Route id
 
 - **Args:** **`route_id`** (e.g. `r:0a2bdd…`).
-- ⚠ Feign **consumer** routes do NOT emit `EXPOSES` and return empty —
-  use `find_route_callers` instead.
+- ⚠ Feign declarations are outbound clients and are not represented as inbound
+  routes; use `find_route_callers` / caller tooling instead.
 
 ##### `get_route_by_path` — resolve one Route by (microservice, path, method)
 
@@ -414,16 +414,12 @@ Source of truth: `java_ontology.py`. Pass these strings verbatim
 
 #### Route framework (on `Route` nodes)
 
-`spring_mvc`, `webflux`, `feign`, `kafka`, `rabbitmq`, `jms`, `stream`.
+`spring_mvc`, `webflux`, `kafka`, `rabbitmq`, `jms`, `stream`.
 
 #### Route kind
 
-`http_endpoint`, `http_consumer`, `kafka_topic`, `rabbit_queue`,
+`http_endpoint`, `kafka_topic`, `rabbit_queue`,
 `jms_destination`, `stream_binding`.
-
-- `feign` framework with `http_consumer` kind = a Feign declaration
-  registers an outbound contract; it does NOT expose an inbound handler
-  and won't appear in `find_route_handlers`.
 
 #### Client kind (on `HTTP_CALLS` / `ASYNC_CALLS` edges)
 
@@ -450,7 +446,7 @@ Source of truth: `java_ontology.py`. Pass these strings verbatim
 | Tool returns a validation / type error mentioning a list field           | Stringified JSON: `"[\"DTO\"]"` instead of `["DTO"]`                                                       | Pass real JSON arrays. See *Argument shapes §A* table.                                                |
 | `path_template` filter returns nothing                                   | Passed the raw annotation value, but the graph stores the concatenated servlet form                     | Run `list_routes({"path_prefix":"/your/prefix"})` and copy the exact `path` field, then retry         |
 | Tool says "graph unavailable"                                            | Index not built or `LANCEDB_MCP_PROJECT_ROOT` not set                                                    | Run `graph_meta` to confirm; `refresh_code_index({"confirm":true})` if needed                         |
-| Expected route is missing from `list_routes`                             | Framework not recognised by built-in extractor                                                           | Add `@CodebaseRoute(framework=…, kind=…, path=…, method=…)` per README §3b, then `refresh_code_index` |
+| Expected route is missing from `list_routes`                             | Framework not recognised by built-in extractor                                                           | Add `@CodebaseHttpRoute(path=…, method=…)` or `@CodebaseAsyncRoute(topic=…)` per README §3b, then `refresh_code_index` |
 | `list_by_role` shows a `*Controller` class as `OTHER`                    | Non-Spring web stack (JAX-RS, custom)                                                                    | Add `@CodebaseRole(CodebaseRoleKind.CONTROLLER)` per README §3a, or `role_overrides.fqn` in YAML      |
 | `cross_service_calls_total = 0` but you know there are inter-service calls | Resolution mode is `brownfield_only` and call sites have no brownfield tag, OR target services unindexed | Switch to `cross_service_resolution: auto` in YAML, or tag with `@CodebaseClient`                     |
 | `codebase_search` returns DTOs / config classes instead of behaviour     | Default ranking; no role filter                                                                          | Add `exclude_roles=["DTO","ENTITY","CONFIG","OTHER"]`                                                 |
@@ -471,7 +467,7 @@ shorthand for the right tool + args.
 - `/route <method> <path> [microservice]` → `list_routes({"path_prefix":"<path>","method":"<method>","microservice":"<ms>"})`
 - `/handler <route_id>` → `find_route_handlers({"route_id":"<route_id>"})`
 - `/who-hits <microservice> <path>` → `find_route_callers({"microservice":"<ms>","path_template":"<path>"})`
-- `/why-no-route <fqn>` → 1) `list_by_role({"role":"OTHER"})` to confirm the type wasn't classified, 2) `list_by_annotation` for any custom annotation, 3) suggest brownfield `@CodebaseRoute`
+- `/why-no-route <fqn>` → 1) `list_by_role({"role":"OTHER"})` to confirm the type wasn't classified, 2) `list_by_annotation` for any custom annotation, 3) suggest brownfield `@CodebaseHttpRoute` / `@CodebaseAsyncRoute`
 - `/role-of <name>` → `find_implementors({"name":"<name>"})` if it's an interface; `list_by_role({"role":"…"})` to scan
 - `/impact <fqn>` → `impact_analysis({"name":"<fqn>","depth":2})`
 - `/cross-service <fqn>` → 1) `impact_analysis`, 2) inspect `cross_service_callers`, 3) `find_route_callers` per route

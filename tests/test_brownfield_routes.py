@@ -1,4 +1,4 @@
-"""PR-A3 brownfield route overrides + @CodebaseRoute composition (B2a)."""
+"""PR-A3 brownfield route overrides + v2 source-annotation composition."""
 from __future__ import annotations
 
 import io
@@ -157,8 +157,7 @@ def test_22_layer_c_codebase_route(tmp_path: Path) -> None:
             "package p;\n"
             "import com.example.rag.*;\n"
             "public class X {\n"
-            "  @CodebaseRoute(framework = CodebaseRouteFrameworkKind.spring_mvc, "
-            "kind = CodebaseRouteKind.http_endpoint, path = \"/stub22\")\n"
+            "  @CodebaseHttpRoute(path = \"/stub22\", method = \"GET\")\n"
             "  void m() {}\n}\n"
         ),
     }
@@ -174,8 +173,7 @@ def test_23_layer_c_wins_over_get_mapping(tmp_path: Path) -> None:
             "import org.springframework.web.bind.annotation.*;\n"
             "@RestController\npublic class X {\n"
             "  @GetMapping(\"/a\")\n"
-            "  @CodebaseRoute(framework = CodebaseRouteFrameworkKind.spring_mvc, "
-            "kind = CodebaseRouteKind.http_endpoint, path = \"/b\")\n"
+            "  @CodebaseHttpRoute(path = \"/b\", method = \"GET\")\n"
             "  String m() { return \"\"; }\n}\n"
         ),
     }
@@ -190,11 +188,9 @@ def test_24_codebase_routes_repeatable(tmp_path: Path) -> None:
         "p/X.java": (
             "package p;\nimport com.example.rag.*;\nimport org.springframework.web.bind.annotation.*;\n"
             "@RestController\npublic class X {\n"
-            "  @CodebaseRoute(framework = CodebaseRouteFrameworkKind.spring_mvc, "
-            "kind = CodebaseRouteKind.http_endpoint, path = \"/r1\")\n"
+            "  @CodebaseHttpRoute(path = \"/r1\", method = \"GET\")\n"
             "  void m() {}\n"
-            "  @CodebaseRoute(framework = CodebaseRouteFrameworkKind.spring_mvc, "
-            "kind = CodebaseRouteKind.http_endpoint, path = \"/r2\")\n"
+            "  @CodebaseHttpRoute(path = \"/r2\", method = \"GET\")\n"
             "  void n() {}\n}\n"
         ),
     }
@@ -218,8 +214,7 @@ route_overrides:
             "package p;\n"
             "import com.example.rag.*;\n"
             "public class X {\n"
-            "  @CodebaseRoute(framework = CodebaseRouteFrameworkKind.spring_mvc, "
-            "kind = CodebaseRouteKind.http_endpoint, path = \"/from-code\")\n"
+            "  @CodebaseHttpRoute(path = \"/from-code\", method = \"GET\")\n"
             "  void m() {}\n}\n"
         ),
     }

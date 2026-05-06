@@ -422,8 +422,7 @@ def _kuzu_graph_from_route_fixture(tmp_path: Path) -> KuzuGraph:
 def test_list_routes_filter_by_framework(tmp_path: Path) -> None:
     g = _kuzu_graph_from_route_fixture(tmp_path)
     feign = g.list_routes(framework="feign", limit=200)
-    assert feign
-    assert all(r["framework"] == "feign" for r in feign)
+    assert feign == []
     mvc = g.list_routes(framework="spring_mvc", limit=50)
     assert mvc
     assert all(r["framework"] == "spring_mvc" for r in mvc)
@@ -449,10 +448,7 @@ def test_find_route_handlers_endpoint_route(tmp_path: Path) -> None:
 def test_find_route_handlers_feign_route_returns_empty(tmp_path: Path) -> None:
     g = _kuzu_graph_from_route_fixture(tmp_path)
     rows = g.list_routes(framework="feign", path_prefix="/dupbase/same", limit=10)
-    assert rows, "expected FeignTripleDup routes"
-    rid = rows[0]["id"]
-    handlers = g.find_route_handlers(route_id=rid)
-    assert handlers == []
+    assert rows == []
 
 
 def test_get_route_by_path_microservice_isolated(tmp_path: Path) -> None:
