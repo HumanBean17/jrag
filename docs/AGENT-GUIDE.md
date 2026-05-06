@@ -12,7 +12,7 @@
 > graph already knows exactly. This guide is engineered to keep them on
 > the rails.
 >
-> Calibrated against ontology version **10** (see `ast_java.ONTOLOGY_VERSION` /
+> Calibrated against ontology version **11** (see `ast_java.ONTOLOGY_VERSION` /
 > `java_ontology.py` valid sets).
 
 ---

@@ -20,9 +20,10 @@ when needed.
 
 - `README.md` — feature surface, env vars, ranking, capabilities,
   tool list, "Re-index required" callouts. The current
-  `ontology_version` is **10** (adds `Client` nodes, `DECLARES_CLIENT`,
-  `list_clients`, plus HTTP_CALLS / ASYNC_CALLS caller edges and
-  brownfield composition from earlier bumps). Earlier ontology bumps
+  `ontology_version` is **11** (`@CodebaseAsyncRoute` wins over same-method
+  `@KafkaListener`; adds `Client` nodes, `DECLARES_CLIENT`, `list_clients`, plus
+  HTTP_CALLS / ASYNC_CALLS caller edges and brownfield composition from earlier
+  bumps). Earlier ontology bumps
   are described inline in the README's callouts list.
 - `CODEBASE_REQUIREMENTS.md` — Java-repo assumptions and per-file
   map of what to edit when a target tree doesn't match defaults.

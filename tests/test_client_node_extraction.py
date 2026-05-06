@@ -5,6 +5,7 @@ from pathlib import Path
 
 import kuzu
 
+from ast_java import ONTOLOGY_VERSION
 from graph_enrich import _load_brownfield_overrides, collect_annotation_meta_chain
 
 STUB_ROOT = Path(__file__).resolve().parent / "fixtures" / "brownfield_client_stubs"
@@ -236,7 +237,7 @@ def test_client_schema_persisted_and_queryable(tmp_path: Path) -> None:
         "MATCH (m:GraphMeta) RETURN m.ontology_version, m.clients_total, m.declares_client_total, m.clients_by_kind",
     )
     assert meta_rows
-    assert int(meta_rows[0][0] or 0) == 10
+    assert int(meta_rows[0][0] or 0) == ONTOLOGY_VERSION
     assert int(meta_rows[0][1] or 0) >= 1
     assert int(meta_rows[0][2] or 0) >= 1
 
