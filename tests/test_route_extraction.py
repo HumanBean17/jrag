@@ -117,6 +117,41 @@ interface Api {
     assert all(c.feign_target_name == "user-svc" for c in outgoing)
 
 
+def test_case6b_codebase_client_string_literal_kind_not_treated_as_enum() -> None:
+    src = """
+package x;
+import com.example.rag.CodebaseClient;
+class Api {
+  @CodebaseClient(clientKind = "rest_template", path = "/legacy", method = "GET")
+  void call() {}
+}
+"""
+    ast = parse_java(src.encode(), filename="Api.java")
+    calls = ast.all_types[0].methods[0].outgoing_calls
+    assert len(calls) == 1
+    # String literals are preserved as string annotation values, not enum constants.
+    assert calls[0].client_kind == ""
+    assert calls[0].path_template_call == "/legacy"
+    assert calls[0].method_call == "GET"
+
+
+def test_case6c_codebase_producer_string_literal_kind_not_treated_as_enum() -> None:
+    src = """
+package x;
+import com.example.rag.CodebaseProducer;
+class Api {
+  @CodebaseProducer(producerKind = "kafka_send", topic = "events")
+  void publish() {}
+}
+"""
+    ast = parse_java(src.encode(), filename="Api.java")
+    calls = ast.all_types[0].methods[0].outgoing_calls
+    assert len(calls) == 1
+    # Invalid string literal kind does not override the default enum-backed kind.
+    assert calls[0].client_kind == "kafka_send"
+    assert calls[0].topic_call == "events"
+
+
 def test_case7_kafka_listener_literal_topic() -> None:
     src = '''
 package x;

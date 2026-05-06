@@ -399,6 +399,13 @@ Legacy string-literal forms (`@CodebaseRole("SERVICE")`,
 `@CodebaseCapability("MESSAGE_LISTENER")`) are a breaking change and are no
 longer applied by the resolver.
 
+**Direction matters (inbound vs outbound):**
+
+| Direction | Annotation | Purpose | Feign handling |
+|---|---|---|---|
+| Inbound | `@CodebaseHttpRoute`, `@CodebaseAsyncRoute` | Declare handlers/listeners your service exposes as `Route` nodes. | Not used for Feign. |
+| Outbound | `@CodebaseClient`, `@CodebaseProducer` | Declare call sites/publish sites your service invokes (pass 5/6 caller edges). | `@FeignClient` declarations are outbound (`clientKind=feign_method`), not inbound `Route` rows. |
+
 **3b. Routes** — method-level inbound annotations are split by channel:
 `@CodebaseHttpRoute` for HTTP handlers and `@CodebaseAsyncRoute` for async
 listeners.

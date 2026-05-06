@@ -1575,7 +1575,7 @@ def _parse_codebase_client_annotation(
     client_kind = ""
     if "clientKind" in pairs:
         val, _kind = _annotation_value(pairs["clientKind"], src)
-        if val:
+        if val and _kind == "enum":
             client_kind = str(val)
     target_service = ""
     if "targetService" in pairs:
@@ -1630,7 +1630,7 @@ def _parse_codebase_producer_annotation(
     kind_node = pairs.get("producerKind") or pairs.get("clientKind")
     if kind_node is not None:
         val, _kind = _annotation_value(kind_node, src)
-        if val:
+        if val and _kind == "enum":
             client_kind = str(val)
     topic = ""
     if "topic" in pairs:

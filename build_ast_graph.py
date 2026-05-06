@@ -1765,8 +1765,8 @@ def pass6_match_edges(
                     source_layer="layer_c_source",
                 )
                 break
-        # Declared Feign client methods use `http_consumer` routes; synthetic phantoms from
-        # imperative clients are `http_endpoint` even when `feign_name` is populated from
+        # Feign caller hints are synthesized as transient `http_consumer` routes in pass6;
+        # synthetic phantoms from imperative clients are `http_endpoint` even when `feign_name` is populated from
         # `@CodebaseClient.targetService` / YAML hints — those must path-match like RestTemplate.
         _feign_like = (
             src_route is not None
