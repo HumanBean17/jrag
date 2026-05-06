@@ -265,6 +265,7 @@ class ClientRowDto(BaseModel):
     start_line: int = 0
     end_line: int = 0
     resolved: bool = True
+    source_layer: str = "builtin"
 
 
 class ClientsListOutput(BaseModel):

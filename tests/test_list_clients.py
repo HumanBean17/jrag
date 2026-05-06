@@ -91,20 +91,23 @@ def list_clients_mcp_server(tmp_path_factory):
     KuzuGraph._instance = None
     KuzuGraph._instance_path = None
     server = create_mcp_server()
-    yield server
-    for key, value in saved_env.items():
-        if value is None:
-            os.environ.pop(key, None)
-        else:
-            os.environ[key] = value
-    KuzuGraph._instance = None
-    KuzuGraph._instance_path = None
+    try:
+        yield server
+    finally:
+        for key, value in saved_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        KuzuGraph._instance = None
+        KuzuGraph._instance_path = None
 
 
 async def test_list_clients_returns_rows(list_clients_mcp_server) -> None:
     out = _structured(await list_clients_mcp_server.call_tool("list_clients", {"limit": 50}))
     assert out["success"] is True
     assert out["clients"]
+    assert all("source_layer" in c for c in out["clients"])
 
 
 async def test_list_clients_filter_microservice(list_clients_mcp_server) -> None:

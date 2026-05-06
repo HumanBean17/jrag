@@ -1384,7 +1384,8 @@ class KuzuGraph:
         "c.method AS method, c.path AS path, c.path_template AS path_template, "
         "c.path_regex AS path_regex, c.member_fqn AS member_fqn, c.member_id AS member_id, "
         "c.microservice AS microservice, c.module AS module, c.filename AS filename, "
-        "c.start_line AS start_line, c.end_line AS end_line, c.resolved AS resolved"
+        "c.start_line AS start_line, c.end_line AS end_line, c.resolved AS resolved, "
+        "c.source_layer AS source_layer"
     )
 
     @staticmethod
@@ -1405,6 +1406,7 @@ class KuzuGraph:
             "start_line": int(row.get("start_line") or 0),
             "end_line": int(row.get("end_line") or 0),
             "resolved": bool(row.get("resolved", True)),
+            "source_layer": str(row.get("source_layer") or "builtin"),
         }
 
     def list_clients(

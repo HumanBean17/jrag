@@ -174,7 +174,7 @@ The DB is dropped and rebuilt from scratch on each run (Phase 1 is a full rebuil
 | `trace_request_flow` | Inbound caller + outbound handler flow around one route entrypoint. |
 
 HTTP mappings from literals are fully resolved (non-empty `path_template` / `path_regex`). Values containing Spring ``${…}`` SpEL, or non-string annotation arguments (constant references), are still stored as routes with lower confidence and empty template fields. Caller-side edges are now shipped via `HTTP_CALLS` / `ASYNC_CALLS` and exposed through `find_route_callers` and `trace_request_flow`.
-Use `list_routes` for inbound service exposures and `list_clients` for outbound HTTP declarations (Feign methods and annotated imperative clients). `list_clients` requires graphs rebuilt with `ontology_version` 10+.
+Use `list_routes` for inbound service exposures and `list_clients` for outbound HTTP declarations (Feign methods and annotated imperative clients). `list_clients` rows include `source_layer` so brownfield-vs-builtin provenance is visible to callers. `list_clients` requires graphs rebuilt with `ontology_version` 10+.
 
 **Example — `analyze_pr`:** pass the same unified diff text you would feed to `patch` (e.g. `git diff` output). Paths in the diff should match project-relative `Symbol.filename` values in the graph (e.g. `chat-assign/src/main/java/.../ChatManagementService.java`). A one-line edit inside `assign` returns JSON shaped like:
 

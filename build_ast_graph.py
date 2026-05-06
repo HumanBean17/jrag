@@ -64,7 +64,7 @@ from graph_enrich import (
     symbol_id,
 )
 from path_filtering import LayeredIgnore, iter_java_source_files
-from java_ontology import VALID_HTTP_CALL_MATCHES
+from java_ontology import VALID_CLIENT_KINDS, VALID_HTTP_CALL_MATCHES
 
 log = logging.getLogger(__name__)
 
@@ -1310,6 +1310,10 @@ def _client_id(
 def _client_source_layer(strategy: str) -> str:
     if strategy in {"layer_a_meta", "layer_b_ann", "layer_b_fqn", "layer_c_source"}:
         return strategy
+    # Some caller extraction paths emit client kind as strategy; treat those
+    # as builtin-source declarations instead of warning on every row.
+    if strategy in VALID_CLIENT_KINDS:
+        return "builtin"
     if strategy != "builtin":
         log.warning("unknown client source strategy %r, falling back to builtin", strategy)
     return "builtin"
