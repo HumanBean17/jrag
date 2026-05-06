@@ -122,7 +122,7 @@ def test_brownfield_only_keeps_annotated_cross_service(tmp_path: Path) -> None:
     assert sum(1 for r in tables.http_call_rows if r.match == "cross_service") == 1
 
 
-def test_brownfield_only_preserves_intra_service(tmp_path: Path) -> None:
+def test_brownfield_only_suppresses_feign_auto_cross_service(tmp_path: Path) -> None:
     root = tmp_path / "proj"
     _copy_fixture(root)
     (root / ".lancedb-mcp.yml").write_text(
@@ -132,7 +132,7 @@ def test_brownfield_only_preserves_intra_service(tmp_path: Path) -> None:
     tables = _build_tables(root)
     row = _http_row_for_method(tables, "joinOperator", parent_fqn="smoke.a.BFeignClient")
     assert row is not None
-    assert row.match == "intra_service"
+    assert row.match == "unresolved"
 
 
 def test_meta_reports_cross_service_resolution(tmp_path: Path) -> None:
