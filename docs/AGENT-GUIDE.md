@@ -47,9 +47,126 @@ Q-class: <semantic | exact-symbol | route | call-graph | impact | pr | diagnosti
 Pick: <tool_name>  Why: <≤8 words>
 ```
 
+Then, **before issuing the call**, sanity-check arguments against
+*Argument shapes* below: arrays must be JSON arrays (not stringified),
+method needles must be `pkg.Type#method(SimpleArg1,SimpleArg2)`, and
+path templates must be the normalised servlet form. Most weak-model
+failures here are not wrong-tool-choice but wrong-argument-shape.
+
 Then make the tool call. If the first call returns nothing useful, do
 **not** loop the same tool with random tweaks — go to **Recovery
 playbook** at the bottom of this guide.
+
+### Argument shapes — what the parser actually wants
+
+Two classes of mistakes burn the most calls. Read this once, then refer
+back when a call returns nothing or fails validation.
+
+#### A. JSON, not stringified JSON
+
+FastMCP / Pydantic enforce real JSON types. **Pass arrays as JSON arrays
+and objects as JSON objects — never as a string containing JSON.** This
+is the single most common mistake on weak models because they over-quote
+defensively.
+
+| Param                | ✅ Right                                       | ❌ Wrong (will fail or coerce poorly)                |
+| -------------------- | ----------------------------------------------- | ----------------------------------------------------- |
+| `exclude_roles`      | `["DTO","ENTITY","CONFIG","OTHER"]`              | `"[\"DTO\",\"ENTITY\",\"CONFIG\",\"OTHER\"]"`           |
+| `edge_types`         | `["EXTENDS","IMPLEMENTS"]`                       | `"EXTENDS,IMPLEMENTS"` or `"[EXTENDS,IMPLEMENTS]"`     |
+| `confirm`            | `true`                                          | `"true"`                                              |
+| `limit`              | `20`                                            | `"20"`                                                |
+| `min_confidence`     | `0.9`                                           | `"0.9"`                                               |
+| any optional you don't want | omit the key entirely                    | `null` is OK; empty string `""` is NOT (treated as a real filter that matches nothing) |
+| string enums (`role`, `framework`, `capability`, `kind`) | `"CONTROLLER"`            | `["CONTROLLER"]` (single value, not a list)            |
+
+**One-line rule:** if the schema says `list[str]`, send `["a","b"]`. If
+it says `str`, send `"a"`. Don't wrap arrays in extra quotes "to be
+safe."
+
+#### B. Method needles — FQN + signature, with simple type names
+
+`find_callers` / `find_callees` accept three needle shapes. The signed
+FQN form is the only one that's unambiguous on overloaded methods.
+
+**The FQN format is exactly:**
+
+```
+<package>.<Type>[.<NestedType>]#<methodName>(<SimpleType1>,<SimpleType2>,…)
+```
+
+Key rules:
+
+- **Simple type names only**, no package prefixes inside the parens:
+  `String`, not `java.lang.String`. `List`, not `java.util.List`.
+- **Generics are erased**: `List<String>` → `List`. `Map<String,Long>` → `Map`.
+- **Arrays / varargs**: not formally tested in fixture; if your
+  search misses, try the simple base type without `[]` first.
+- **No spaces** between commas and types: `(String,String,String)`.
+- **No-arg method**: trailing `()`.
+- **Constructor**: methodName is `<init>`. Example:
+  `com.foo.Bar#<init>(String,int)`.
+- **Nested type**: dot-separated under the outer type, before the `#`:
+  `com.foo.Outer.Inner#method()`.
+
+**Examples (verbatim from `tests/bank-chat-system`):**
+
+```
+✅ com.bank.chat.assign.ChatAssignApplication#main(String)
+✅ com.bank.chat.assign.config.AssignProperties.ChatCore#setBaseUrl(String)
+✅ com.bank.chat.assign.integration.ChatCoreJoinClient#joinOperator(String,String,String)
+✅ com.bank.chat.assign.service.OperatorSessionService#openSession(String,List)
+✅ com.bank.chat.assign.ChatAssignApplication#<init>()
+```
+
+**The three needle shapes, ranked by precision:**
+
+1. **Method FQN with signature** — unambiguous, exact match. Use
+   whenever you have it.
+2. **Type FQN** (e.g. `com.foo.Bar`) — fans out to ALL declared
+   methods of that type via `DECLARES`. Useful for "who calls anything
+   on this class."
+3. **Simple method name** (e.g. `joinOperator`) — matches every method
+   of that name across the codebase. May return many rows; only use
+   when you don't know the type.
+
+**Overloaded methods — the failure you actually hit.** If a class has
+both `bar()` and `bar(String)` and you pass `Foo#bar()` expecting
+both, you'll only get the no-arg one. To resolve:
+
+- Don't know the signature? **Drop the parens** entirely and use just
+  the simple name (`bar`) — you'll get rows for every overload, then
+  pick the one(s) you want and re-query with full FQN+sig.
+- Or: pass the **type FQN** (`com.foo.Foo`) which fans out via
+  `DECLARES` and includes every method of every overload.
+- Or: call `codebase_search({"query":"Foo bar","auto_hybrid":true,"limit":5})`
+  to recover the exact stored FQN, then retry with that string.
+
+**How to find the FQN you need:**
+
+- From `codebase_search` results: each `CodeChunkHit` carries `fqn`
+  for the enclosing symbol — copy it verbatim.
+- From `list_by_role` / `list_by_annotation` / `find_implementors`:
+  each `SymbolDto` has an `fqn` field for the type. Then run
+  `find_callees({"fqn_or_signature":"<typeFqn>","depth":1})` to list
+  its methods with their signed FQNs.
+- Phantom rows (`?HashMap<>#<init>(0)`, `?RestTemplate#<init>(0)`) are
+  internal placeholders for unindexed external types. **Never pass
+  them as a needle** — they won't match anything.
+
+#### C. Path templates — the normalised servlet form
+
+`get_route_by_path` and `find_route_callers` expect `path_template` in
+the form the graph stores, NOT the raw `@RequestMapping` value:
+
+| Source code annotation               | What to pass            |
+| ------------------------------------ | ----------------------- |
+| `@GetMapping("/users/{id}")`         | `"/users/{id}"`         |
+| `@PostMapping("/users/{id}/avatar")` | `"/users/{id}/avatar"`  |
+| `@RequestMapping("/api")` + method `@GetMapping("/me")` | the **concatenated** template `"/api/me"` |
+| SpEL only: `@GetMapping("${app.endpoint}")` | empty string — use `list_routes` with `path_prefix` instead |
+
+If unsure, run `list_routes({"path_prefix":"/users"})` first and copy
+the `path` field from a result.
 
 ### Decision tree — pick the first tool
 
@@ -186,10 +303,10 @@ flagged with ⚠.
 
 ##### `find_callers` — inbound CALLS closure for a method or type
 
-- **Args:** **`fqn_or_signature`**. Three needle shapes:
-  - method FQN with sig: `com.foo.Bar#baz(java.lang.String)`
-  - type FQN: `com.foo.Bar` (fans out via DECLARES)
-  - simple method name: `baz` (may return many)
+- **Args:** **`fqn_or_signature`**. Three needle shapes (see *Argument shapes §B* for the full format spec):
+  - method FQN with sig (most precise): `com.foo.Bar#baz(String,int)` — simple type names only, no spaces, generics erased
+  - type FQN: `com.foo.Bar` (fans out to all methods via DECLARES)
+  - simple method name: `baz` (matches all overloads everywhere; useful as a recovery step)
 - Optionals: `depth` (1-5, default 1), `limit`, `min_confidence` (e.g.
   `0.9` to drop low-confidence chained-receiver edges), `exclude_external`
   (default true — drops JDK / Spring / Lombok callers), `module`,
@@ -328,7 +445,10 @@ Source of truth: `java_ontology.py`. Pass these strings verbatim
 
 | Symptom                                                                  | Likely cause                                                                                             | Fix                                                                                                   |
 | ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `find_callers`/`find_callees` returns 0 rows                             | Wrong needle shape: pass FQN with sig (`com.foo.Bar#baz()`), not just `baz`                              | Run `codebase_search` with the simple name to recover the FQN, then retry                             |
+| `find_callers`/`find_callees` returns 0 rows                             | Wrong needle shape: pass FQN with sig (`com.foo.Bar#baz(String,int)`), not just `baz`                    | Run `codebase_search` with the simple name to recover the FQN, then retry                             |
+| `find_callers`/`find_callees` returns LESS than expected on an overloaded method | Needle was `Foo#bar()` but the overload you wanted is `Foo#bar(String)` — the resolver only matched the no-arg one | Drop the parens (`bar`) to list all overloads, then re-query with the full FQN+sig of the right one. Or pass the type FQN to fan out via DECLARES. See *Argument shapes §B*. |
+| Tool returns a validation / type error mentioning a list field           | Stringified JSON: `"[\"DTO\"]"` instead of `["DTO"]`                                                       | Pass real JSON arrays. See *Argument shapes §A* table.                                                |
+| `path_template` filter returns nothing                                   | Passed the raw annotation value, but the graph stores the concatenated servlet form                     | Run `list_routes({"path_prefix":"/your/prefix"})` and copy the exact `path` field, then retry         |
 | Tool says "graph unavailable"                                            | Index not built or `LANCEDB_MCP_PROJECT_ROOT` not set                                                    | Run `graph_meta` to confirm; `refresh_code_index({"confirm":true})` if needed                         |
 | Expected route is missing from `list_routes`                             | Framework not recognised by built-in extractor                                                           | Add `@CodebaseRoute(framework=…, kind=…, path=…, method=…)` per README §3b, then `refresh_code_index` |
 | `list_by_role` shows a `*Controller` class as `OTHER`                    | Non-Spring web stack (JAX-RS, custom)                                                                    | Add `@CodebaseRole(CodebaseRoleKind.CONTROLLER)` per README §3a, or `role_overrides.fqn` in YAML      |
@@ -346,8 +466,8 @@ tried, and what you got back. Do not loop further.
 Paste these into your prompt to nudge a weak model. They are just
 shorthand for the right tool + args.
 
-- `/who-calls <fqn>` → `find_callers({"fqn_or_signature":"<fqn>","depth":1,"min_confidence":0.9})`
-- `/calls-from <fqn>` → `find_callees({"fqn_or_signature":"<fqn>","depth":1})`
+- `/who-calls <fqn-with-sig>` → `find_callers({"fqn_or_signature":"<fqn>","depth":1,"min_confidence":0.9})`. **Pass the full signed FQN** (e.g. `com.foo.Bar#baz(String,int)`) — see *Argument shapes §B* for format. If you only have the simple name, query that first and re-issue with the exact FQN.
+- `/calls-from <fqn-with-sig>` → `find_callees({"fqn_or_signature":"<fqn>","depth":1})`. Same FQN-with-signature rule — simple name will match all overloads but not let you target one.
 - `/route <method> <path> [microservice]` → `list_routes({"path_prefix":"<path>","method":"<method>","microservice":"<ms>"})`
 - `/handler <route_id>` → `find_route_handlers({"route_id":"<route_id>"})`
 - `/who-hits <microservice> <path>` → `find_route_callers({"microservice":"<ms>","path_template":"<path>"})`
