@@ -1841,7 +1841,12 @@ def pass6_match_edges(
         client = clients_by_id.get(edge.client_id)
         if client is None:
             continue
+        # `DECLARES_CLIENT.symbol_id` targets `Symbol.id` for member symbols,
+        # and member symbols are emitted with `id == MemberEntry.node_id`.
         client_hints_by_member[edge.symbol_id].append(client)
+    for member_symbol_id in list(client_hints_by_member.keys()):
+        # Deterministic fallback when a method carries multiple feign declarations.
+        client_hints_by_member[member_symbol_id].sort(key=lambda c: c.id)
 
     # Pass 6 is idempotent for full rebuilds: each run fully re-derives match outcomes.
     # If incremental rebuild lands later (Tier-2 follow-up), this reset must remain pass-scoped.
@@ -1880,6 +1885,7 @@ def pass6_match_edges(
                     topic="",
                     broker="",
                     feign_name=client.target_service,
+                    # `Client` stores service-name hints, not feign URL; matcher keys off feign_name.
                     feign_url="",
                     microservice=member.microservice,
                     module=member.module,
