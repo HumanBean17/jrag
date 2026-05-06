@@ -3,7 +3,7 @@
 > **How to use this file.** Copy the block between the `<!-- BEGIN/END
 > user-rag MCP guide -->` markers below into your project's `QWEN.md`,
 > `CLAUDE.md`, `AGENTS.md`, or equivalent. The block is self-contained:
-> all 22 MCP tools, the ontology glossary (v9), a forced reasoning
+> all 23 MCP tools, the ontology glossary (v10), a forced reasoning
 > preamble, a decision tree, a recovery playbook, and slash-style prompt
 > aliases. Update by re-pulling from this repo when the ontology bumps.
 >
@@ -12,7 +12,8 @@
 > graph already knows exactly. This guide is engineered to keep them on
 > the rails.
 >
-> Calibrated against ontology version **9** (see `java_ontology.py`).
+> Calibrated against ontology version **10** (see `ast_java.ONTOLOGY_VERSION` /
+> `java_ontology.py` valid sets).
 
 ---
 
@@ -178,6 +179,7 @@ the `path` field from a result.
 | "What does method M call"                                        | `find_callees`                                      | `graph_neighbors` for type wiring              |
 | "Show me the handler for HTTP path /foo/bar"                     | `get_route_by_path` then `find_route_handlers`      | `trace_request_flow`                           |
 | "List all HTTP endpoints / Kafka topics"                         | `list_routes` (filter by `framework`)               | `find_route_handlers` per id                   |
+| "List outbound HTTP clients / Feign methods for this service"   | `list_clients` (filter by `client_kind`, `target_service`, `path_prefix`) | `find_route_callers` for resolved call edges   |
 | "Who calls route /foo/bar"                                       | `find_route_callers`                                | `trace_request_flow`                           |
 | "All controllers / services / repositories in service X"         | `list_by_role`                                      | `list_by_role` + `capability=` filter          |
 | "Everything annotated `@Transactional`"                          | `list_by_annotation`                                | `find_callers` per result                      |
@@ -199,7 +201,7 @@ the `path` field from a result.
    work" should start with `codebase_search` (or `trace_flow`); the
    graph alone won't surface the right entry point.
 
-### Tool reference — all 22 tools
+### Tool reference — all 23 tools
 
 Grouped by purpose. Required arguments are **bold**; common mistakes are
 flagged with ⚠.
@@ -272,6 +274,18 @@ flagged with ⚠.
 - ⚠ Routes with empty `framework` are ones the extractor couldn't
   classify — usually annotation-only Kafka topic constants. If you
   expected an HTTP route here, check brownfield overrides.
+
+##### `list_clients` — list outbound `Client` nodes (Feign, imperative HTTP)
+
+- **Args:** none required. Optionals: `microservice`, `client_kind`
+  (`feign_method`|`rest_template`|`web_client`), `target_service`,
+  `path_prefix`, `method`, `limit` (1–500).
+- Returns rows with `path`, `path_template`, `member_fqn`, `source_layer`
+  (`builtin` vs brownfield layers), and other fields from the graph. Pair
+  with `find_route_callers` when you need **resolved** `HTTP_CALLS` edges,
+  not just declarations.
+- ⚠ Requires a graph built with `ontology_version` **10+** — check
+  `graph_meta` first.
 
 ##### `find_route_handlers` — symbols that EXPOSES a Route id
 
@@ -368,7 +382,7 @@ flagged with ⚠.
 ##### `graph_meta` — Kuzu metadata: counts, ontology version, build timestamp
 
 - **Args:** none. First tool to run on a fresh index — confirms
-  `ontology_version=9` and surfaces build counts.
+  `ontology_version=10` and surfaces build counts.
 
 ##### `diagnose_ignore` — explain why a path is ignored
 
@@ -382,7 +396,7 @@ flagged with ⚠.
   `LANCEDB_MCP_ALLOW_REFRESH=1`.
 - ⚠ Always call `graph_meta` after to verify the rebuild succeeded.
 
-### Ontology glossary (version 9)
+### Ontology glossary (version 10)
 
 Source of truth: `java_ontology.py`. Pass these strings verbatim
 (case-sensitive).
@@ -393,7 +407,7 @@ Source of truth: `java_ontology.py`. Pass these strings verbatim
 `CLIENT`, `MAPPER`, `DTO`, `OTHER`.
 
 - `CLIENT` covers Feign clients (`@FeignClient`) and brownfield
-  `@CodebaseRole(CLIENT)`. As of ontology 9, plain `RestTemplate`
+  `@CodebaseRole(CLIENT)`. As of ontology 10, plain `RestTemplate`
   wrappers stay in their natural stereotype role (typically `SERVICE`)
   unless you explicitly tag them.
 - `OTHER` = the inference didn't recognise the type. Treat as a
@@ -421,6 +435,11 @@ Source of truth: `java_ontology.py`. Pass these strings verbatim
 `http_endpoint`, `kafka_topic`, `rabbit_queue`,
 `jms_destination`, `stream_binding`.
 
+#### Client node kind (`Client` rows / `list_clients`)
+
+`feign_method`, `rest_template`, `web_client` (`VALID_CLIENT_KINDS` in
+`java_ontology.py`).
+
 #### Client kind (on `HTTP_CALLS` / `ASYNC_CALLS` edges)
 
 `feign_method`, `rest_template`, `web_client`, `kafka_send`,
@@ -447,6 +466,7 @@ Source of truth: `java_ontology.py`. Pass these strings verbatim
 | `path_template` filter returns nothing                                   | Passed the raw annotation value, but the graph stores the concatenated servlet form                     | Run `list_routes({"path_prefix":"/your/prefix"})` and copy the exact `path` field, then retry         |
 | Tool says "graph unavailable"                                            | Index not built or `LANCEDB_MCP_PROJECT_ROOT` not set                                                    | Run `graph_meta` to confirm; `refresh_code_index({"confirm":true})` if needed                         |
 | Expected route is missing from `list_routes`                             | Framework not recognised by built-in extractor                                                           | Add `@CodebaseHttpRoute(path=…, method=…)` or `@CodebaseAsyncRoute(topic=…)` per README §3b, then `refresh_code_index` |
+| `list_clients` returns no rows / errors                                  | Stale graph (ontology below 10) or no outbound clients in index                                        | Run `graph_meta`; rebuild with `refresh_code_index` if needed; tag call sites with `@CodebaseClient` per README §3c   |
 | `list_by_role` shows a `*Controller` class as `OTHER`                    | Non-Spring web stack (JAX-RS, custom)                                                                    | Add `@CodebaseRole(CodebaseRoleKind.CONTROLLER)` per README §3a, or `role_overrides.fqn` in YAML      |
 | `cross_service_calls_total = 0` but you know there are inter-service calls | Resolution mode is `brownfield_only` and call sites have no brownfield tag, OR target services unindexed | Switch to `cross_service_resolution: auto` in YAML, or tag with `@CodebaseClient`                     |
 | `codebase_search` returns DTOs / config classes instead of behaviour     | Default ranking; no role filter                                                                          | Add `exclude_roles=["DTO","ENTITY","CONFIG","OTHER"]`                                                 |
@@ -465,6 +485,7 @@ shorthand for the right tool + args.
 - `/who-calls <fqn-with-sig>` → `find_callers({"fqn_or_signature":"<fqn>","depth":1,"min_confidence":0.9})`. **Pass the full signed FQN** (e.g. `com.foo.Bar#baz(String,int)`) — see *Argument shapes §B* for format. If you only have the simple name, query that first and re-issue with the exact FQN.
 - `/calls-from <fqn-with-sig>` → `find_callees({"fqn_or_signature":"<fqn>","depth":1})`. Same FQN-with-signature rule — simple name will match all overloads but not let you target one.
 - `/route <method> <path> [microservice]` → `list_routes({"path_prefix":"<path>","method":"<method>","microservice":"<ms>"})`
+- `/clients [microservice]` → `list_clients({"microservice":"<ms>","limit":100})` — add `client_kind` / `path_prefix` when narrowing Feign vs imperative HTTP
 - `/handler <route_id>` → `find_route_handlers({"route_id":"<route_id>"})`
 - `/who-hits <microservice> <path>` → `find_route_callers({"microservice":"<ms>","path_template":"<path>"})`
 - `/why-no-route <fqn>` → 1) `list_by_role({"role":"OTHER"})` to confirm the type wasn't classified, 2) `list_by_annotation` for any custom annotation, 3) suggest brownfield `@CodebaseHttpRoute` / `@CodebaseAsyncRoute`
@@ -489,7 +510,7 @@ shorthand for the right tool + args.
 ## Maintenance notes (for the repo, not the agent)
 
 - Bump the **ontology version** sentence at the top of the BEGIN block
-  whenever `ONTOLOGY_VERSION` changes in `kuzu_queries.py`.
+  whenever `ONTOLOGY_VERSION` changes in `ast_java.py`.
 - When a new MCP tool is added in `server.py`, add it to (a) the
   decision tree, (b) the tool reference, (c) a slash alias if the use
   case is common.

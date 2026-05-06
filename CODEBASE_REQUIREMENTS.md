@@ -186,6 +186,11 @@ root (`role_overrides:`, `route_overrides:`, `http_client_overrides:`,
   `@CodebaseProducers` (method-level outbound HTTP / messaging) — see
   README §3c.
 
+**MCP discovery:** after indexing, use `list_routes` for inbound HTTP and async
+routes and `list_clients` for outbound HTTP `Client` declarations (Feign
+methods plus annotated imperative clients). `list_clients` requires
+`graph_meta.ontology_version` **10** or newer.
+
 See **Brownfield overrides** in `README.md` for the full schema, usage
 examples, and execution order.
 

@@ -2,7 +2,7 @@
   "title": "feat: retarget pass6 hint recovery to Client declarations (PR-LC2)",
   "base": "master",
   "draft": false,
-  "scope": "Implements PR-LC2 from `plans/PLAN-LIST-CLIENTS-MCP-TOOL.md` by retargeting pass6 hint recovery to caller-side `Client` declarations.",
+  "scope": "Implements PR-LC2 from `plans/completed/PLAN-LIST-CLIENTS-MCP-TOOL.md` by retargeting pass6 hint recovery to caller-side `Client` declarations.",
   "what_changed": [
     "Updated `build_ast_graph.py` pass6 fallback hint lookup to recover Feign hints from persisted `Client` rows.",
     "Preserved existing `HTTP_CALLS(Symbol -> Route)` semantics and match outcomes.",

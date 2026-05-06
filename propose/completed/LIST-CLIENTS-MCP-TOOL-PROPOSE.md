@@ -2,10 +2,11 @@
 
 ## Status
 
-Proposal — depends on the brownfield annotations v2 propose
-(`propose/BROWNFIELD-ANNOTATIONS-V2-PROPOSE.md`). This propose
-defines a new MCP tool plus the persistence shape it queries; the
-v2 annotations propose creates the data the tool consumes.
+**Completed** — landed via PR-LC1, PR-LC2, and PR-LC3 (2026-05). Depended on
+the brownfield annotations v2 propose
+(`propose/BROWNFIELD-ANNOTATIONS-V2-PROPOSE.md`). This propose defined the MCP
+tool plus the persistence shape it queries; the v2 annotations propose created
+the data the tool consumes.
 
 ## Problem Statement
 

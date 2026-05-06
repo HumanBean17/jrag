@@ -16,7 +16,7 @@ The product vision for this tooling is proposed in [`propose/PRODUCT-VISION.md`]
 > **Driving this MCP from an agent:**
 > - [`docs/AGENT-GUIDE.md`](./docs/AGENT-GUIDE.md) — copy-paste-into-`QWEN.md` /
 >   `CLAUDE.md` block. Forced reasoning preamble, decision tree, full
->   reference for all 22 tools, ontology glossary (v10), recovery playbook,
+>   reference for all 23 tools, ontology glossary (v10), recovery playbook,
 >   slash-style aliases. Engineered for weak / mid models that otherwise
 >   pick the wrong tool.
 > - [`docs/MANUAL-VERIFICATION-CHECKLIST.md`](./docs/MANUAL-VERIFICATION-CHECKLIST.md)

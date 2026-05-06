@@ -199,10 +199,11 @@ stubs. No `*Service` / `*Repository` classes in OTHER.
 0 `@FeignClient` classes (it uses RestTemplate); on real projects,
 counts should match exactly.
 
-**If failing → fix:** as of ontology 9 (PR-H1), `@FeignClient` →
+**If failing → fix:** as of ontology 9+ (PR-H1), `@FeignClient` →
 `role=CLIENT` + `capability=HTTP_CLIENT`. If you see drift, run
-`graph_meta` and confirm `ontology_version=9`. If yes and still
-broken, re-index — may be a stale graph.
+`graph_meta` and confirm `ontology_version` is current (10 as of the
+`Client` / `list_clients` work). If yes and still broken, re-index — may
+be a stale graph.
 
 ### 2.4 ☐ Message listeners and producers are detected
 
@@ -254,7 +255,7 @@ your custom stereotypes.
 
 ---
 
-## Phase 3 — Routes (4 items)
+## Phase 3 — Routes and outbound clients (5 items)
 
 ### 3.1 ☐ Route count and framework distribution
 
@@ -328,6 +329,22 @@ literal name of, use brownfield route override:
 `@CodebaseAsyncRoute(topic="my.topic")`
 on the listener method (README §3b).
 
+### 3.5 ☐ Outbound HTTP clients surface via `list_clients`
+
+**Verification prompt:**
+
+> Call `graph_meta()` and note `ontology_version` and `clients_total`.
+> Then `list_clients({"limit":200})`. Every row should include
+> `client_kind`, `target_service`, `path`, `method`, and `source_layer`.
+
+**Expected (calibration):** `ontology_version=10`, `clients_total=2`, and
+both clients are `client_kind=rest_template` (imperative HTTP in the
+fixture — no Feign interfaces).
+
+**If failing → fix:** `ontology_version` below 10 → full rebuild. Zero
+clients on a project you know has Feign or tagged `@CodebaseClient` →
+check brownfield stubs (README §3c) and that those sources are indexed.
+
 ### Red flags for Phase 3
 
 - `routes_total = 0` → no controllers were classified or framework not
@@ -335,7 +352,8 @@ on the listener method (README §3b).
 - HTTP routes with empty `method` → annotation extractor didn't see
   `@GetMapping` / `@PostMapping`
 - `routes_from_brownfield_pct` jumped after a refactor → you broke a
-  built-in extraction; check that ontology version is still 9
+  built-in extraction; check that `ontology_version` in `graph_meta`
+  matches the bundle you expect (10 as of `Client` / `list_clients`)
 
 ---
 

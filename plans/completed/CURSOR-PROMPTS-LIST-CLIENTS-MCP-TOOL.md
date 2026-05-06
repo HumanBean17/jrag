@@ -1,7 +1,7 @@
 # Cursor task prompts — list_clients MCP tool (PR-LC1 → PR-LC3)
 
-Status: **active (ready for implementation)**. Generated from
-`plans/PLAN-LIST-CLIENTS-MCP-TOOL.md`.
+Status: **completed** (LC1–LC3 landed). Source plan:
+`plans/completed/PLAN-LIST-CLIENTS-MCP-TOOL.md`.
 
 Use these prompts in landing order: **LC1 -> LC2 -> LC3**.
 If prompt text conflicts with plan text, the plan wins.
@@ -12,12 +12,12 @@ If prompt text conflicts with plan text, the plan wins.
 
 **Branch:** `feat/list-clients-lc1-client-schema` off `master`.
 **Base:** `master`.
-**Plan section:** `plans/PLAN-LIST-CLIENTS-MCP-TOOL.md` § `PR-LC1 - Client schema + extraction + persistence`.
+**Plan section:** `plans/completed/PLAN-LIST-CLIENTS-MCP-TOOL.md` § `PR-LC1 - Client schema + extraction + persistence`.
 **Estimated diff size:** ~4-5 files, ~350-700 LOC.
 
 **Attach (`@-files`):**
-- `@plans/PLAN-LIST-CLIENTS-MCP-TOOL.md`
-- `@propose/LIST-CLIENTS-MCP-TOOL-PROPOSE.md`
+- `@plans/completed/PLAN-LIST-CLIENTS-MCP-TOOL.md`
+- `@propose/completed/LIST-CLIENTS-MCP-TOOL-PROPOSE.md`
 - `@README.md`
 - `@build_ast_graph.py`
 - `@ast_java.py`
@@ -28,7 +28,7 @@ If prompt text conflicts with plan text, the plan wins.
 **Prompt:**
 
 ````
-You are implementing PR-LC1 from `plans/PLAN-LIST-CLIENTS-MCP-TOOL.md`.
+You are implementing PR-LC1 from `plans/completed/PLAN-LIST-CLIENTS-MCP-TOOL.md`.
 Read the PR-LC1 section first. The plan is the source of truth.
 
 ## Scope
@@ -93,12 +93,12 @@ Expected: targeted tests pass; full suite passes.
 
 **Branch:** `feat/list-clients-lc2-pass6-client-hints` off `feat/list-clients-lc1-client-schema` (or `master` if LC1 merged).
 **Base:** PR-LC1 merged (or LC1 branch).
-**Plan section:** `plans/PLAN-LIST-CLIENTS-MCP-TOOL.md` § `PR-LC2 - pass6 hint recovery migration to Client`.
+**Plan section:** `plans/completed/PLAN-LIST-CLIENTS-MCP-TOOL.md` § `PR-LC2 - pass6 hint recovery migration to Client`.
 **Estimated diff size:** ~2-3 files, ~180-350 LOC.
 
 **Attach (`@-files`):**
-- `@plans/PLAN-LIST-CLIENTS-MCP-TOOL.md`
-- `@propose/LIST-CLIENTS-MCP-TOOL-PROPOSE.md`
+- `@plans/completed/PLAN-LIST-CLIENTS-MCP-TOOL.md`
+- `@propose/completed/LIST-CLIENTS-MCP-TOOL-PROPOSE.md`
 - `@README.md`
 - `@build_ast_graph.py`
 - `@kuzu_queries.py`
@@ -107,7 +107,7 @@ Expected: targeted tests pass; full suite passes.
 **Prompt:**
 
 ````
-You are implementing PR-LC2 from `plans/PLAN-LIST-CLIENTS-MCP-TOOL.md`.
+You are implementing PR-LC2 from `plans/completed/PLAN-LIST-CLIENTS-MCP-TOOL.md`.
 Read the PR-LC2 section first. The plan is the source of truth.
 
 ## Scope
@@ -167,12 +167,12 @@ Expected: targeted tests pass; full suite passes.
 
 **Branch:** `feat/list-clients-lc3-mcp-surface` off `feat/list-clients-lc2-pass6-client-hints` (or latest merged predecessor).
 **Base:** PR-LC2 merged (or LC2 branch).
-**Plan section:** `plans/PLAN-LIST-CLIENTS-MCP-TOOL.md` § `PR-LC3 - list_clients MCP tool + query surface + docs`.
+**Plan section:** `plans/completed/PLAN-LIST-CLIENTS-MCP-TOOL.md` § `PR-LC3 - list_clients MCP tool + query surface + docs`.
 **Estimated diff size:** ~3-4 files, ~220-450 LOC.
 
 **Attach (`@-files`):**
-- `@plans/PLAN-LIST-CLIENTS-MCP-TOOL.md`
-- `@propose/LIST-CLIENTS-MCP-TOOL-PROPOSE.md`
+- `@plans/completed/PLAN-LIST-CLIENTS-MCP-TOOL.md`
+- `@propose/completed/LIST-CLIENTS-MCP-TOOL-PROPOSE.md`
 - `@README.md`
 - `@server.py`
 - `@kuzu_queries.py`
@@ -182,7 +182,7 @@ Expected: targeted tests pass; full suite passes.
 **Prompt:**
 
 ````
-You are implementing PR-LC3 from `plans/PLAN-LIST-CLIENTS-MCP-TOOL.md`.
+You are implementing PR-LC3 from `plans/completed/PLAN-LIST-CLIENTS-MCP-TOOL.md`.
 Read the PR-LC3 section first. The plan is the source of truth.
 
 ## Scope

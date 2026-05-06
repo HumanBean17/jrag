@@ -1,7 +1,7 @@
 # Plan Style Reference (Repo-grounded)
 
 This reference distills what made recent plan PRs strong:
-- `#39` (`plans/PLAN-LIST-CLIENTS-MCP-TOOL.md`)
+- `#39` (`plans/completed/PLAN-LIST-CLIENTS-MCP-TOOL.md`)
 - `#11` (`plans/PLAN-TIER1B-COMPLETION.md` + prompts file)
 - `#2` (`plans/PLAN-TIER1-COMPLETION.md`)
 

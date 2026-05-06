@@ -304,7 +304,7 @@ that resolve to a remote endpoint should still produce a
 `Client` projection (or a new column on `Symbol`) to store the
 client-kind metadata that previously lived on the `http_consumer`
 `Route`. **Detailed design for the `Client` projection is a
-separate proposal (see `propose/LIST-CLIENTS-MCP-TOOL-PROPOSE.md`).**
+separate proposal (see `propose/completed/LIST-CLIENTS-MCP-TOOL-PROPOSE.md`).**
 
 ### `list_routes` no longer returns Feign rows
 
@@ -415,7 +415,7 @@ failure.
   propose.** That's a follow-up — the propose covers only the
   annotation shape and the resolver flow change. The persistence
   shape for outbound client metadata is in
-  `propose/LIST-CLIENTS-MCP-TOOL-PROPOSE.md`.
+  `propose/completed/LIST-CLIENTS-MCP-TOOL-PROPOSE.md`.
 - **No source-stub Maven dependency.** Stubs remain copy-paste
   source files; simple-name matching is preserved.
 - **No infer-default for `clientKind`.** Rejected — keep field

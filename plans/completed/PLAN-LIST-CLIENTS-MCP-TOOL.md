@@ -1,13 +1,10 @@
 # Plan: `list_clients` MCP tool + `Client` graph node
 
-Status: **active (planning)**. This plan implements
-[`propose/LIST-CLIENTS-MCP-TOOL-PROPOSE.md`](../propose/LIST-CLIENTS-MCP-TOOL-PROPOSE.md)
-as a multi-PR sequence. It is intentionally **plan-only** and does not
-implement code.
+Status: **completed — shipped via PR-LC1 → PR-LC3** (merged 2026-05). Pairs with
+[`propose/completed/LIST-CLIENTS-MCP-TOOL-PROPOSE.md`](../propose/completed/LIST-CLIENTS-MCP-TOOL-PROPOSE.md).
 
-Depends on: brownfield annotations v2 (the data-shape move that separates
-outbound client declarations from `Route` rows). This plan assumes that
-dependency is merged first.
+Depends on: brownfield annotations v2 (outbound client declarations separated
+from `Route` rows), merged before LC1.
 
 ## Goal
 
@@ -241,10 +238,6 @@ Existing tool-suite test update:
 
 # Tracking
 
-When each PR lands, append status notes here:
-
-- `PR-LC1`: _pending_
-- `PR-LC2`: _pending_
-- `PR-LC3`: _pending_
-
-Once all are shipped, move this file to `plans/completed/`.
+- `PR-LC1`: merged (Client schema + extraction + persistence).
+- `PR-LC2`: merged (pass6 hint recovery on `Client`).
+- `PR-LC3`: merged (`list_clients` MCP tool + query surface + docs/tests).
