@@ -1,0 +1,46 @@
+{
+  "title": "feat: retarget pass6 hint recovery to Client declarations (PR-LC2)",
+  "base": "master",
+  "draft": false,
+  "scope": "Implements PR-LC2 from `plans/PLAN-LIST-CLIENTS-MCP-TOOL.md` by retargeting pass6 hint recovery to caller-side `Client` declarations.",
+  "what_changed": [
+    "Updated `build_ast_graph.py` pass6 fallback hint lookup to recover Feign hints from persisted `Client` rows.",
+    "Preserved existing `HTTP_CALLS(Symbol -> Route)` semantics and match outcomes.",
+    "Added `tests/test_client_hint_recovery.py` with focused continuity regressions."
+  ],
+  "semantics_non_goals": [
+    "No LC3 MCP surface changes in this PR.",
+    "No broad LC1 schema redesign beyond consuming existing `Client` rows."
+  ],
+  "validation": {
+    "lint": [
+      "`ruff check .` ✅"
+    ],
+    "tests": [
+      "`pytest tests/test_client_hint_recovery.py -v` ✅ (4 passed)",
+      "`pytest tests -v` ✅ (302 passed, 4 skipped)"
+    ],
+    "additional_checks": [
+      "`pytest tests/test_feign_not_exposer.py::test_feign_caller_resolves_to_target_endpoint tests/test_client_hint_recovery.py::test_find_route_callers_still_returns_expected_feign_caller -v` ✅"
+    ]
+  },
+  "sentinel_checks": [
+    "`rg \"@mcp.tool\\(name=\\\"list_clients\\\"|ClientRowDto|ClientsListOutput\" server.py kuzu_queries.py` -> no matches ✅"
+  ],
+  "manual_evidence": [
+    "`python build_ast_graph.py --source-root tests/bank-chat-system --kuzu-path /tmp/check_lc2 --verbose`",
+    "Observed pass6 behavior remains stable with expected match breakdowns."
+  ],
+  "out_of_scope_confirmed": [
+    "LC3 MCP tool/DTO/docs (`list_clients`).",
+    "Route tool redesign or companion tools."
+  ],
+  "definition_of_done": [
+    "All listed deliverables for this PR are shipped.",
+    "Required lint/tests pass locally with recorded command output.",
+    "Sentinel checks produce expected results.",
+    "Only in-scope files are modified.",
+    "PR description includes scope, validation, and manual evidence.",
+    "PR targets `master` with agreed title and branch naming."
+  ]
+}
