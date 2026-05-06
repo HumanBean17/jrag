@@ -70,9 +70,10 @@ _DTO_LOMBOK_ANNOTATIONS: frozenset[str] = frozenset({
     "EqualsAndHashCode", "ToString",
 })
 
-# Phase 5: HTTP_CALLS + ASYNC_CALLS (B2b); Phase 6: cross-service resolution mode on GraphMeta.
+# Phase 5: HTTP_CALLS + ASYNC_CALLS (B2b); Phase 6: cross-service resolution mode on GraphMeta;
+# Phase 7: FEIGN_CLIENT role -> CLIENT + HTTP_CLIENT capability vocabulary cleanup.
 # Bumps whenever extraction / enrichment semantics change.
-ONTOLOGY_VERSION = 8
+ONTOLOGY_VERSION = 9
 
 ROLE_ANNOTATIONS: dict[str, str] = {
     # Spring Web
@@ -88,7 +89,7 @@ ROLE_ANNOTATIONS: dict[str, str] = {
     "MappedSuperclass": "ENTITY",
     "Embeddable": "ENTITY",
     # Remoting / messaging
-    "FeignClient": "FEIGN_CLIENT",
+    "FeignClient": "CLIENT",
     # Mappers
     "Mapper": "MAPPER",
 }
@@ -112,6 +113,7 @@ _METHOD_ANN_TO_CAPABILITY: dict[str, str] = {
 _TYPE_ANN_TO_CAPABILITY: dict[str, str] = {
     "ControllerAdvice":     "EXCEPTION_HANDLER",
     "RestControllerAdvice": "EXCEPTION_HANDLER",
+    "FeignClient":          "HTTP_CLIENT",
 }
 
 _INJECTED_TYPES_TO_CAPABILITY: dict[str, str] = {

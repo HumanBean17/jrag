@@ -103,6 +103,9 @@ Resolution order for `microservice`:
 > 5. **`ontology_version` 8** adds `GraphMeta.cross_service_resolution` (from
 >    `cross_service_resolution` in `.lancedb-mcp.yml`) — rebuild the Kuzu graph
 >    (`build_ast_graph.py` or `refresh_code_index`) after upgrading.
+> 6. **`ontology_version` 9** renames role `FEIGN_CLIENT` to `CLIENT` and adds
+>    capability `HTTP_CLIENT` for `@FeignClient` interfaces — rebuild to refresh
+>    stored role/capability literals.
 >
 > Any index built before these changes must be rebuilt via
 > `cocoindex update ... --full-reprocess -f` or `refresh_code_index`. Until
@@ -134,7 +137,7 @@ The DB is dropped and rebuilt from scratch on each run (Phase 1 is a full rebuil
 | Tool | Purpose |
 |------|---------|
 | `codebase_search` | Vector / hybrid / graph-expanded search. Supports `role`, `module`, `microservice`, `package_prefix` filters, `graph_expand=true` + `expand_depth=1..3` for Kuzu-BFS fusion (RRF), and `context_neighbors=1..2` to attach adjacent chunks as `context_before`/`context_after`. Java hits return `score_components` (`distance`, `hybrid_rrf`, `role_weight`, `symbol_bonus`, `import_penalty`) so callers can see why a row ranked where it did. |
-| `trace_flow` | Behavioural trace from a natural-language query. Seeds via vector search, then walks CONTROLLER -> SERVICE/COMPONENT -> FEIGN_CLIENT/REPOSITORY/MAPPER in the Kuzu graph and returns staged chains. Defaults to `follow_calls=true` (merges DECLARES+CALLS paths with INJECTS/EXTENDS/IMPLEMENTS — structural edges fill `stage_limit` first per hop, CALLS tops up the remainder); set `follow_calls=false` for type-only wiring. Defaults to `exclude_external=true` on that CALLS hop (same external FQN prefixes as `find_callees` / `expand_methods`: discovered types reached via CALLS, not the caller-only filter used by `find_callers`). |
+| `trace_flow` | Behavioural trace from a natural-language query. Seeds via vector search, then walks CONTROLLER -> SERVICE/COMPONENT -> CLIENT/REPOSITORY/MAPPER in the Kuzu graph and returns staged chains. Defaults to `follow_calls=true` (merges DECLARES+CALLS paths with INJECTS/EXTENDS/IMPLEMENTS — structural edges fill `stage_limit` first per hop, CALLS tops up the remainder); set `follow_calls=false` for type-only wiring. Defaults to `exclude_external=true` on that CALLS hop (same external FQN prefixes as `find_callees` / `expand_methods`: discovered types reached via CALLS, not the caller-only filter used by `find_callers`). |
 | `list_code_index_tables` | Lance tables + Kuzu graph metadata. |
 | `refresh_code_index` | Rebuild LanceDB + Kuzu graph. |
 | `find_implementors` | Classes implementing an interface. |
@@ -208,7 +211,7 @@ Java hits are reweighted after vector / hybrid scoring by their `role`:
 |------|--------|
 | `CONTROLLER` | +0.10 |
 | `SERVICE` | +0.08 |
-| `FEIGN_CLIENT` | +0.06 |
+| `CLIENT` | +0.06 |
 | `COMPONENT` | +0.03 |
 | `REPOSITORY` | +0.02 |
 | `MAPPER` / `OTHER` | 0 |
@@ -232,6 +235,7 @@ A type can carry zero or many capabilities. Capabilities never
 |---|---|
 | `MESSAGE_LISTENER` | `@KafkaListener`, `@RabbitListener`, `@JmsListener`, `@SqsListener`, `@EventListener`, `@StreamListener` on any method |
 | `MESSAGE_PRODUCER` | type injects `KafkaTemplate`, `RabbitTemplate`, `JmsTemplate`, `StreamBridge`, or `ApplicationEventPublisher` |
+| `HTTP_CLIENT` | type has `@FeignClient` |
 | `SCHEDULED_TASK`   | `@Scheduled` on any method, or class implements `org.quartz.Job` |
 | `EXCEPTION_HANDLER`| `@ControllerAdvice`, `@RestControllerAdvice`, or any method with `@ExceptionHandler` |
 
@@ -268,6 +272,11 @@ role_overrides:
 ```
 
 Unknown role or capability strings are ignored with a warning on load.
+
+`@FeignClient` interfaces now auto-attach `role=CLIENT` and
+`capability=HTTP_CLIENT`. For `RestTemplate`/`WebClient` wrappers, opt in
+explicitly with `@CodebaseRole(CodebaseRoleKind.CLIENT)` and
+`@CodebaseCapability(CodebaseCapabilityKind.HTTP_CLIENT)`.
 
 **Route overrides (`route_overrides`)** — same `.lancedb-mcp.yml` file; maps
 custom annotation names or qualified names (or suffixes such as `com.acme.Foo`
@@ -330,11 +339,11 @@ package com.example.rag; // any package
 import java.lang.annotation.*;
 
 public enum CodebaseRoleKind {
-    CONTROLLER, SERVICE, REPOSITORY, COMPONENT, CONFIG, ENTITY, FEIGN_CLIENT, MAPPER, DTO
+    CONTROLLER, SERVICE, REPOSITORY, COMPONENT, CONFIG, ENTITY, CLIENT, MAPPER, DTO
 }
 
 public enum CodebaseCapabilityKind {
-    MESSAGE_LISTENER, MESSAGE_PRODUCER, SCHEDULED_TASK, EXCEPTION_HANDLER
+    MESSAGE_LISTENER, MESSAGE_PRODUCER, HTTP_CLIENT, SCHEDULED_TASK, EXCEPTION_HANDLER
 }
 
 @Target(ElementType.TYPE)

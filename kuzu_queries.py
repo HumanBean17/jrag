@@ -994,7 +994,7 @@ class KuzuGraph:
     _FLOW_STAGES: tuple[tuple[str, ...], ...] = (
         ("CONTROLLER",),
         ("SERVICE", "COMPONENT"),
-        ("FEIGN_CLIENT", "REPOSITORY", "MAPPER"),
+        ("CLIENT", "REPOSITORY", "MAPPER"),
     )
 
     # Stage-0 accepts any entrypoint-like role. COMPONENT is included because
@@ -1003,7 +1003,7 @@ class KuzuGraph:
     # orchestrator seeds when the caller already narrowed the vector search
     # to services.
     _ENTRYPOINT_ROLES: tuple[str, ...] = (
-        "CONTROLLER", "COMPONENT", "SERVICE", "FEIGN_CLIENT",
+        "CONTROLLER", "COMPONENT", "SERVICE", "CLIENT",
     )
 
     def trace_flow(self, seed_fqns: list[str], *,
@@ -1013,7 +1013,7 @@ class KuzuGraph:
                    follow_calls: bool = True,
                    min_call_confidence: float = 0.0,
                    exclude_external: bool = True) -> list[list[StageSymbol]]:
-        """Walk stages `CONTROLLER -> SERVICE/COMPONENT -> FEIGN_CLIENT/REPOSITORY/MAPPER`.
+        """Walk stages `CONTROLLER -> SERVICE/COMPONENT -> CLIENT/REPOSITORY/MAPPER`.
 
         Returns a list of stages; each stage is a list of SymbolHit. The first
         stage is the seed set (entrypoints matched by FQN, filtered to

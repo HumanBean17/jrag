@@ -143,7 +143,7 @@ Roles are assigned **first hit wins** from the type's annotations
 | `@Component` | `COMPONENT` |
 | `@Configuration` | `CONFIG` |
 | `@Entity`, `@MappedSuperclass`, `@Embeddable` | `ENTITY` |
-| `@FeignClient` | `FEIGN_CLIENT` |
+| `@FeignClient` | `CLIENT` (+ capability `HTTP_CLIENT`) |
 | `@Mapper` | `MAPPER` |
 
 **Recommendations:**
@@ -159,8 +159,10 @@ Roles are assigned **first hit wins** from the type's annotations
   `@CodebaseRole` (see `README.md`).
 - **Annotate Feign clients with `@FeignClient`.** This is a
   **class-level** annotation; manually-coded HTTP clients (raw
-  `RestTemplate`/`WebClient` wrappers) won't get the `FEIGN_CLIENT`
-  boost. Consider switching to Feign or extending the role table.
+  `RestTemplate`/`WebClient` wrappers) won't auto-promote to
+  `CLIENT`/`HTTP_CLIENT`; use brownfield annotations
+  (`@CodebaseRole(CodebaseRoleKind.CLIENT)` +
+  `@CodebaseCapability(CodebaseCapabilityKind.HTTP_CLIENT)`) when needed.
 - **JAX-RS resources** (`@Path`, `@GET`, ...) are not recognised as
   `CONTROLLER` out of the box. Add them to the role table
   (Section B.1) or use a brownfield / `@CodebaseRole` override if you
@@ -343,8 +345,8 @@ ROLE_ANNOTATIONS: dict[str, str] = {
     "Entity": "ENTITY",
     "MappedSuperclass": "ENTITY",
     "Embeddable": "ENTITY",
-    "FeignClient": "FEIGN_CLIENT",
-    "RegisterRestClient": "FEIGN_CLIENT", # MicroProfile RestClient
+    "FeignClient": "CLIENT",
+    "RegisterRestClient": "CLIENT", # MicroProfile RestClient
     "Mapper": "MAPPER",
 }
 ```

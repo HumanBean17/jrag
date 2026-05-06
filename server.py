@@ -42,11 +42,11 @@ _INSTRUCTIONS = (
     "impact_analysis / neighbors / list_by_role / list_by_annotation / list_by_capability for "
     "exact structural traversal. "
     "Use list_by_capability for behavioural questions about message-driven "
-    "(MESSAGE_LISTENER|MESSAGE_PRODUCER), scheduled (SCHEDULED_TASK), or "
+    "(MESSAGE_LISTENER|MESSAGE_PRODUCER), HTTP integration (HTTP_CLIENT), scheduled (SCHEDULED_TASK), or "
     "exception-handling (EXCEPTION_HANDLER) code. "
-    "Use trace_flow for CONTROLLER -> SERVICE -> REPOSITORY/FEIGN end-to-end chains; "
+    "Use trace_flow for CONTROLLER -> SERVICE -> REPOSITORY/CLIENT end-to-end chains; "
     "its seeds are auto-filtered to entrypoint-like roles (CONTROLLER / COMPONENT / "
-    "SERVICE / FEIGN_CLIENT), so it's the right tool for 'how / what happens when' queries. "
+    "SERVICE / CLIENT), so it's the right tool for 'how / what happens when' queries. "
     "trace_flow defaults to follow_calls=true (DECLARES+CALLS plus cross-service HTTP_CALLS/ASYNC_CALLS "
     "paths merged with INJECTS/EXTENDS/"
     "IMPLEMENTS) and exclude_external=true on that CALLS hop (drops discovered types under "
@@ -686,13 +686,13 @@ def create_mcp_server() -> FastMCP:
         auto_hybrid: bool = Field(default=False),
         role: str | None = Field(
             default=None,
-            description="Java only: CONTROLLER|SERVICE|REPOSITORY|COMPONENT|CONFIG|ENTITY|FEIGN_CLIENT|MAPPER|DTO",
+            description="Java only: CONTROLLER|SERVICE|REPOSITORY|COMPONENT|CONFIG|ENTITY|CLIENT|MAPPER|DTO",
         ),
         capability: str | None = Field(
             default=None,
             description=(
                 "Java only: AND-filter to chunks whose enclosing type carries "
-                "this capability (MESSAGE_LISTENER|MESSAGE_PRODUCER|"
+                "this capability (MESSAGE_LISTENER|MESSAGE_PRODUCER|HTTP_CLIENT|"
                 "SCHEDULED_TASK|EXCEPTION_HANDLER). Use `list_by_capability` "
                 "for graph-only queries."
             ),
@@ -856,7 +856,7 @@ def create_mcp_server() -> FastMCP:
         capability: str | None = Field(
             default=None,
             description="Optional: only return symbols also carrying this capability "
-                        "(MESSAGE_LISTENER|MESSAGE_PRODUCER|SCHEDULED_TASK|EXCEPTION_HANDLER).",
+                        "(MESSAGE_LISTENER|MESSAGE_PRODUCER|HTTP_CLIENT|SCHEDULED_TASK|EXCEPTION_HANDLER).",
         ),
     ) -> SymbolListOutput:
         ok, graph, msg = _require_graph()
@@ -880,7 +880,7 @@ def create_mcp_server() -> FastMCP:
         capability: str | None = Field(
             default=None,
             description="Optional: only return symbols also carrying this capability "
-                        "(MESSAGE_LISTENER|MESSAGE_PRODUCER|SCHEDULED_TASK|EXCEPTION_HANDLER).",
+                        "(MESSAGE_LISTENER|MESSAGE_PRODUCER|HTTP_CLIENT|SCHEDULED_TASK|EXCEPTION_HANDLER).",
         ),
     ) -> SymbolListOutput:
         ok, graph, msg = _require_graph()
@@ -1138,14 +1138,14 @@ def create_mcp_server() -> FastMCP:
         description="All graph symbols with a given role (CONTROLLER|SERVICE|REPOSITORY|...).",
     )
     async def list_by_role(
-        role: str = Field(description="CONTROLLER|SERVICE|REPOSITORY|COMPONENT|CONFIG|ENTITY|FEIGN_CLIENT|MAPPER|OTHER"),
+        role: str = Field(description="CONTROLLER|SERVICE|REPOSITORY|COMPONENT|CONFIG|ENTITY|CLIENT|MAPPER|OTHER"),
         module: str | None = Field(default=None, description="Maven/Gradle module name."),
         microservice: str | None = Field(default=None, description="Microservice name."),
         limit: int = Field(default=100, ge=1, le=500),
         capability: str | None = Field(
             default=None,
             description="Optional: AND-filter to symbols also carrying this capability "
-                        "(MESSAGE_LISTENER|MESSAGE_PRODUCER|SCHEDULED_TASK|EXCEPTION_HANDLER).",
+                        "(MESSAGE_LISTENER|MESSAGE_PRODUCER|HTTP_CLIENT|SCHEDULED_TASK|EXCEPTION_HANDLER).",
         ),
     ) -> SymbolListOutput:
         ok, graph, msg = _require_graph()
@@ -1169,7 +1169,7 @@ def create_mcp_server() -> FastMCP:
         capability: str | None = Field(
             default=None,
             description="Optional: AND-filter to symbols also carrying this capability "
-                        "(MESSAGE_LISTENER|MESSAGE_PRODUCER|SCHEDULED_TASK|EXCEPTION_HANDLER).",
+                        "(MESSAGE_LISTENER|MESSAGE_PRODUCER|HTTP_CLIENT|SCHEDULED_TASK|EXCEPTION_HANDLER).",
         ),
     ) -> SymbolListOutput:
         ok, graph, msg = _require_graph()
@@ -1185,7 +1185,7 @@ def create_mcp_server() -> FastMCP:
         name="list_by_capability",
         description=(
             "All graph symbols carrying a given capability "
-            "(MESSAGE_LISTENER|MESSAGE_PRODUCER|SCHEDULED_TASK|EXCEPTION_HANDLER). "
+            "(MESSAGE_LISTENER|MESSAGE_PRODUCER|HTTP_CLIENT|SCHEDULED_TASK|EXCEPTION_HANDLER). "
             "Capabilities are derived from method/type annotations and injected "
             "types; a class can carry several. Pair with `list_by_role` for "
             "primary-purpose questions."
@@ -1193,7 +1193,7 @@ def create_mcp_server() -> FastMCP:
     )
     async def list_by_capability(
         capability: str = Field(
-            description="MESSAGE_LISTENER|MESSAGE_PRODUCER|SCHEDULED_TASK|EXCEPTION_HANDLER",
+            description="MESSAGE_LISTENER|MESSAGE_PRODUCER|HTTP_CLIENT|SCHEDULED_TASK|EXCEPTION_HANDLER",
         ),
         module: str | None = Field(default=None, description="Maven/Gradle module name."),
         microservice: str | None = Field(default=None, description="Microservice name."),
@@ -1335,11 +1335,11 @@ def create_mcp_server() -> FastMCP:
         description=(
             "End-to-end behavioural trace for a natural-language query. "
             "Picks seed entrypoints via vector search (restricted to CONTROLLER / "
-            "COMPONENT / SERVICE / FEIGN_CLIENT roles, plus types carrying "
+            "COMPONENT / SERVICE / CLIENT roles, plus types carrying "
             "MESSAGE_LISTENER or SCHEDULED_TASK capabilities, with a fallback pass "
             "when nothing matches), then walks the Kuzu graph in role-ordered stages "
             "(CONTROLLER/COMPONENT/SERVICE -> SERVICE/COMPONENT -> "
-            "FEIGN_CLIENT/REPOSITORY/MAPPER) and returns the likely chain.\n"
+            "CLIENT/REPOSITORY/MAPPER) and returns the likely chain.\n"
             "Each stage symbol carries `via: [{edge_type, from_fqn, hop}]` so "
             "callers can see *why* it was pulled in (INJECTS / EXTENDS / "
             "IMPLEMENTS / CALLS). Stage 0 is seeds and has `via=[]`.\n"
@@ -1415,7 +1415,7 @@ def create_mcp_server() -> FastMCP:
         if exclude_roles:
             baseline_excludes.update(r.upper() for r in exclude_roles if r)
 
-        entry_roles = ["CONTROLLER", "COMPONENT", "SERVICE", "FEIGN_CLIENT"]
+        entry_roles = ["CONTROLLER", "COMPONENT", "SERVICE", "CLIENT"]
         entry_capabilities = ["MESSAGE_LISTENER", "SCHEDULED_TASK"]
 
         def _seed(role_allowlist: list[str] | None,

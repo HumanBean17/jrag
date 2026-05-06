@@ -185,7 +185,7 @@ _STOPWORDS: frozenset[str] = frozenset({
 _ROLE_SCORE_WEIGHTS: dict[str, float] = {
     "CONTROLLER": 0.10,
     "SERVICE": 0.08,
-    "FEIGN_CLIENT": 0.06,
+    "CLIENT": 0.06,
     "COMPONENT": 0.03,
     "REPOSITORY": 0.02,
     "MAPPER": 0.00,
