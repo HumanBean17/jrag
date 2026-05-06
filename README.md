@@ -150,7 +150,7 @@ The DB is dropped and rebuilt from scratch on each run (Phase 1 is a full rebuil
 | `diagnose_ignore` | Explain whether a path is excluded for indexing / graph walks and which rule layer won (`builtin_default`, `project_root`, `nested`, `gitignore`). |
 | `graph_meta` | Counts, ontology version, build timestamp, parse errors; route totals / `routes_by_framework` / `routes_resolved_pct` (v5+); `routes_from_brownfield_pct` / `routes_by_layer` (v6+). |
 | `list_routes` | Filterable listing of `Route` nodes (`microservice`, `framework`, `path_prefix`, `method`). |
-| `find_route_handlers` | Symbols that `EXPOSES` a route id (confidence + resolution strategy on the edge). |
+| `find_route_handlers` | Endpoint symbols that `EXPOSES` a route id (confidence + resolution strategy on the edge); Feign consumer routes return empty. |
 | `get_route_by_path` | Lookup one `Route` by `microservice` + normalised `path_template` + optional HTTP method. |
 | `find_route_callers` | Callers that reach a route via `HTTP_CALLS` / `ASYNC_CALLS` (by route id or exact route tuple). |
 | `trace_request_flow` | Inbound caller + outbound handler flow around one route entrypoint. |

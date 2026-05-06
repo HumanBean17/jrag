@@ -1032,8 +1032,9 @@ def create_mcp_server() -> FastMCP:
     @mcp.tool(
         name="find_route_handlers",
         description=(
-            "All Symbol nodes that EXPOSES a Route (by route id). Multiple methods can "
-            "share one Route id when they map to the same normalized HTTP template."
+            "All Symbol nodes that EXPOSES a Route (by route id). This returns endpoint "
+            "handlers for exposer routes (for example spring_mvc); Feign consumer routes "
+            "do not emit EXPOSES and therefore return an empty list."
         ),
     )
     async def find_route_handlers(
