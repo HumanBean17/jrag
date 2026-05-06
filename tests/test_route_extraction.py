@@ -135,6 +135,54 @@ class Api {
     assert calls[0].method_call == "GET"
 
 
+def test_case6d_codebase_client_on_interface_abstract_method() -> None:
+    src = """
+package x;
+import com.example.rag.CodebaseClient;
+import com.example.rag.CodebaseClientKind;
+public interface Api {
+  @CodebaseClient(clientKind = CodebaseClientKind.feign_method, targetService = "svc", path = "/p", method = "GET")
+  void m();
+}
+"""
+    ast = parse_java(src.encode(), filename="Api.java")
+    calls = ast.all_types[0].methods[0].outgoing_calls
+    assert len(calls) == 1
+    assert calls[0].client_kind == "feign_method"
+    assert calls[0].feign_target_name == "svc"
+    assert calls[0].path_template_call == "/p"
+    assert calls[0].method_call == "GET"
+    assert calls[0].resolution_strategy == "codebase_client"
+
+
+def test_case6e_codebase_http_route_on_interface_abstract_method() -> None:
+    src = """
+package x;
+import com.example.rag.CodebaseHttpRoute;
+public interface I {
+  @CodebaseHttpRoute(path = "/iface", method = "GET")
+  void m();
+}
+"""
+    ast = parse_java(src.encode(), filename="I.java")
+    routes = ast.all_types[0].methods[0].routes
+    assert any(r.path == "/iface" and r.http_method == "GET" for r in routes)
+
+
+def test_case6f_codebase_http_route_on_abstract_class_method() -> None:
+    src = """
+package x;
+import com.example.rag.CodebaseHttpRoute;
+public abstract class C {
+  @CodebaseHttpRoute(path = "/abs", method = "POST")
+  abstract void m();
+}
+"""
+    ast = parse_java(src.encode(), filename="C.java")
+    routes = ast.all_types[0].methods[0].routes
+    assert any(r.path == "/abs" and r.http_method == "POST" for r in routes)
+
+
 def test_case6c_codebase_producer_string_literal_kind_not_treated_as_enum() -> None:
     src = """
 package x;

@@ -55,6 +55,57 @@ def _rows(db_path: Path, query: str) -> list[tuple]:
     return out
 
 
+def test_client_rows_emitted_for_codebase_client_on_interface_abstract_method(tmp_path: Path) -> None:
+    db = _build(
+        tmp_path,
+        None,
+        {
+            "p/Api.java": (
+                "package p; import com.example.rag.*; "
+                "public interface Api { "
+                "@CodebaseClient(clientKind=CodebaseClientKind.feign_method, targetService=\"user-svc\", "
+                "path=\"/users/{id}\", method=\"GET\") "
+                "Object getUser(String id); }"
+            ),
+        },
+    )
+    rows = _rows(
+        db,
+        "MATCH (c:Client) RETURN c.client_kind, c.target_service, c.path, c.method, c.source_layer",
+    )
+    assert any(
+        row[0] == "feign_method"
+        and row[1] == "user-svc"
+        and row[2] == "/users/{id}"
+        and row[3] == "GET"
+        and row[4] == "layer_c_source"
+        for row in rows
+    )
+
+
+def test_client_rows_emitted_for_codebase_client_on_abstract_class_method(tmp_path: Path) -> None:
+    db = _build(
+        tmp_path,
+        None,
+        {
+            "p/Base.java": (
+                "package p; import com.example.rag.*; "
+                "public abstract class Base { "
+                "@CodebaseClient(clientKind=CodebaseClientKind.rest_template, path=\"/abs\", method=\"POST\") "
+                "abstract void pull(); }"
+            ),
+        },
+    )
+    rows = _rows(
+        db,
+        "MATCH (c:Client) RETURN c.client_kind, c.path, c.method, c.source_layer",
+    )
+    assert any(
+        row[0] == "rest_template" and row[1] == "/abs" and row[2] == "POST" and row[3] == "layer_c_source"
+        for row in rows
+    )
+
+
 def test_client_rows_emitted_for_codebase_client_annotations(tmp_path: Path) -> None:
     db = _build(
         tmp_path,

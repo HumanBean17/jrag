@@ -1712,6 +1712,78 @@ def _normalize_call_path(raw_path: str) -> str:
     return p
 
 
+def _outgoing_calls_from_codebase_client_producer_annotations(
+    method_node: Node,
+    src: bytes,
+    *,
+    method_fqn: str,
+    method_decl: MethodDecl,
+    file_rel: str,
+    ctx: _ParseCtx,
+) -> list[OutgoingCallDecl]:
+    """Brownfield @CodebaseClient(s) / @CodebaseProducer(s) on the method itself.
+
+    Must run even when the method has no body (interfaces, abstract methods).
+    """
+    out: list[OutgoingCallDecl] = []
+    for simple, ann in _iter_method_annotation_nodes(method_node, src):
+        if simple == "CodebaseClient":
+            out.append(
+                _parse_codebase_client_annotation(
+                    ann,
+                    src,
+                    ctx,
+                    method_fqn=method_fqn,
+                    method_sig=method_decl.signature,
+                    file_rel=file_rel,
+                    start_line=method_decl.start_line,
+                    end_line=method_decl.end_line,
+                ),
+            )
+        elif simple == "CodebaseClients":
+            for inner in _codebase_client_inner_annotation_nodes(ann, src):
+                out.append(
+                    _parse_codebase_client_annotation(
+                        inner,
+                        src,
+                        ctx,
+                        method_fqn=method_fqn,
+                        method_sig=method_decl.signature,
+                        file_rel=file_rel,
+                        start_line=method_decl.start_line,
+                        end_line=method_decl.end_line,
+                    ),
+                )
+        elif simple == "CodebaseProducer":
+            out.append(
+                _parse_codebase_producer_annotation(
+                    ann,
+                    src,
+                    ctx,
+                    method_fqn=method_fqn,
+                    method_sig=method_decl.signature,
+                    file_rel=file_rel,
+                    start_line=method_decl.start_line,
+                    end_line=method_decl.end_line,
+                ),
+            )
+        elif simple == "CodebaseProducers":
+            for inner in _codebase_producer_inner_annotation_nodes(ann, src):
+                out.append(
+                    _parse_codebase_producer_annotation(
+                        inner,
+                        src,
+                        ctx,
+                        method_fqn=method_fqn,
+                        method_sig=method_decl.signature,
+                        file_rel=file_rel,
+                        start_line=method_decl.start_line,
+                        end_line=method_decl.end_line,
+                    ),
+                )
+    return out
+
+
 def _collect_outgoing_calls(
     method_node: Node,
     type_node: Node | None,
@@ -1774,8 +1846,17 @@ def _collect_outgoing_calls(
             )
         )
 
+    ann_out = _outgoing_calls_from_codebase_client_producer_annotations(
+        method_node,
+        src,
+        method_fqn=method_fqn,
+        method_decl=method_decl,
+        file_rel=file_rel,
+        ctx=ctx,
+    )
     body = method_node.child_by_field_name("body")
     if body is None:
+        out.extend(ann_out)
         return out
     receiver_types: dict[str, str] = {}
     receiver_types.update(_field_types_for_type(type_node, src))
@@ -1943,61 +2024,7 @@ def _collect_outgoing_calls(
             visit(c)
 
     visit(body)
-    for simple, ann in _iter_method_annotation_nodes(method_node, src):
-        if simple == "CodebaseClient":
-            out.append(
-                _parse_codebase_client_annotation(
-                    ann,
-                    src,
-                    ctx,
-                    method_fqn=method_fqn,
-                    method_sig=method_decl.signature,
-                    file_rel=file_rel,
-                    start_line=method_decl.start_line,
-                    end_line=method_decl.end_line,
-                ),
-            )
-        elif simple == "CodebaseClients":
-            for inner in _codebase_client_inner_annotation_nodes(ann, src):
-                out.append(
-                    _parse_codebase_client_annotation(
-                        inner,
-                        src,
-                        ctx,
-                        method_fqn=method_fqn,
-                        method_sig=method_decl.signature,
-                        file_rel=file_rel,
-                        start_line=method_decl.start_line,
-                        end_line=method_decl.end_line,
-                    ),
-                )
-        elif simple == "CodebaseProducer":
-            out.append(
-                _parse_codebase_producer_annotation(
-                    ann,
-                    src,
-                    ctx,
-                    method_fqn=method_fqn,
-                    method_sig=method_decl.signature,
-                    file_rel=file_rel,
-                    start_line=method_decl.start_line,
-                    end_line=method_decl.end_line,
-                ),
-            )
-        elif simple == "CodebaseProducers":
-            for inner in _codebase_producer_inner_annotation_nodes(ann, src):
-                out.append(
-                    _parse_codebase_producer_annotation(
-                        inner,
-                        src,
-                        ctx,
-                        method_fqn=method_fqn,
-                        method_sig=method_decl.signature,
-                        file_rel=file_rel,
-                        start_line=method_decl.start_line,
-                        end_line=method_decl.end_line,
-                    ),
-                )
+    out.extend(ann_out)
     return out
 
 
