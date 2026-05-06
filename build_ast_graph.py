@@ -34,7 +34,7 @@ import re
 import sys
 import time
 from collections import defaultdict
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
 import kuzu
@@ -1310,6 +1310,8 @@ def _client_id(
 def _client_source_layer(strategy: str) -> str:
     if strategy in {"layer_a_meta", "layer_b_ann", "layer_b_fqn", "layer_c_source"}:
         return strategy
+    if strategy != "builtin":
+        log.warning("unknown client source strategy %r, falling back to builtin", strategy)
     return "builtin"
 
 
@@ -1532,6 +1534,8 @@ def pass5_imperative_edges(
             if call.channel == "http":
                 client_path = (call.path_template_call or "").strip()
                 client_method = (call.method_call or "").strip().upper()
+                # Keep normalized path fields on Client now so LC3 filter semantics
+                # (`path_prefix`) can use persisted columns without extra transforms.
                 client_path_template = ""
                 client_path_regex = ""
                 if client_path:
@@ -2387,24 +2391,7 @@ def _write_routes_and_exposes(conn: kuzu.Connection, tables: GraphTables) -> Non
             "strategy": row.strategy,
         })
     for row in tables.client_rows:
-        conn.execute(_CREATE_CLIENT, {
-            "id": row.id,
-            "client_kind": row.client_kind,
-            "target_service": row.target_service,
-            "path": row.path,
-            "path_template": row.path_template,
-            "path_regex": row.path_regex,
-            "method": row.method,
-            "member_fqn": row.member_fqn,
-            "member_id": row.member_id,
-            "microservice": row.microservice,
-            "module": row.module,
-            "filename": row.filename,
-            "start_line": row.start_line,
-            "end_line": row.end_line,
-            "resolved": row.resolved,
-            "source_layer": row.source_layer,
-        })
+        conn.execute(_CREATE_CLIENT, asdict(row))
     for row in tables.declares_client_rows:
         conn.execute(_CREATE_DECLARES_CLIENT, {
             "sid": row.symbol_id,
