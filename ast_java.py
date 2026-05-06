@@ -71,9 +71,10 @@ _DTO_LOMBOK_ANNOTATIONS: frozenset[str] = frozenset({
 })
 
 # Phase 5: HTTP_CALLS + ASYNC_CALLS (B2b); Phase 6: cross-service resolution mode on GraphMeta;
-# Phase 7: FEIGN_CLIENT role -> CLIENT + HTTP_CLIENT capability vocabulary cleanup.
+# Phase 7: FEIGN_CLIENT role -> CLIENT + HTTP_CLIENT capability vocabulary cleanup;
+# Phase 8: first-class Client node + DECLARES_CLIENT relation, separating outbound declarations from Route.
 # Bumps whenever extraction / enrichment semantics change.
-ONTOLOGY_VERSION = 9
+ONTOLOGY_VERSION = 10
 
 ROLE_ANNOTATIONS: dict[str, str] = {
     # Spring Web
