@@ -143,6 +143,41 @@ def _load_config_microservice_roots(project_root_str: str) -> tuple[str, ...]:
     return ()
 
 
+@lru_cache(maxsize=64)
+def _load_config_cross_service_resolution(project_root_str: str) -> str:
+    """Read `cross_service_resolution` from `.lancedb-mcp.yml` at project_root.
+
+    Returns "auto" or "brownfield_only". Defaults to "auto" when the key is absent
+    or the file is missing / malformed. Unknown values warn on stderr and fall back
+    to "auto".
+    """
+    root = Path(project_root_str)
+    for name in CONFIG_FILENAMES:
+        candidate = root / name
+        if not candidate.is_file():
+            continue
+        try:
+            import yaml  # PyYAML; already a transitive dep of cocoindex
+        except ImportError:
+            return "auto"
+        try:
+            data = yaml.safe_load(candidate.read_text(encoding="utf-8"))
+        except Exception:
+            return "auto"
+        if not isinstance(data, dict):
+            return "auto"
+        val = data.get("cross_service_resolution", "auto")
+        if val not in {"auto", "brownfield_only"}:
+            print(
+                f"[lancedb-mcp] cross_service_resolution: unknown value "
+                f"{val!r}, falling back to 'auto'",
+                file=sys.stderr,
+            )
+            return "auto"
+        return val
+    return "auto"
+
+
 def load_microservice_overrides(project_root: str | Path | None) -> tuple[str, ...]:
     """Combined override list (env var ++ config file).
 

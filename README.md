@@ -100,7 +100,9 @@ Resolution order for `microservice`:
 > 4. **`ontology_version` 7** adds caller-side edge extraction (`HTTP_CALLS`, `ASYNC_CALLS`) and
 >    brownfield caller composition (`http_client_overrides`, `async_producer_overrides`,
 >    `@CodebaseClient`, `@CodebaseProducer`) — rebuild Kuzu after upgrading.
->    rebuild the Kuzu graph (`build_ast_graph.py` or `refresh_code_index`).
+> 5. **`ontology_version` 8** adds `GraphMeta.cross_service_resolution` (from
+>    `cross_service_resolution` in `.lancedb-mcp.yml`) — rebuild the Kuzu graph
+>    (`build_ast_graph.py` or `refresh_code_index`) after upgrading.
 >
 > Any index built before these changes must be rebuilt via
 > `cocoindex update ... --full-reprocess -f` or `refresh_code_index`. Until
@@ -289,6 +291,22 @@ route_overrides:
 ```
 
 Unknown `framework` / `kind` strings are dropped with a stderr warning.
+
+**Cross-service resolution mode** — optional top-level key in the same file:
+
+```yaml
+cross_service_resolution: auto          # default when omitted
+# cross_service_resolution: brownfield_only
+```
+
+With `brownfield_only`, pass 6 does not promote auto-detected call sites to
+`cross_service` matches: only edges where both the caller strategy and every
+matched route’s `source_layer` come from brownfield (`@CodebaseRoute`,
+`@CodebaseClient`, YAML overrides, meta-annotation closure, or FQN maps) stay
+`cross_service`. Everything else that would have been a cross-service match
+becomes `unresolved`. `intra_service`, `phantom`, and `ambiguous` behaviour is
+unchanged. Unknown values log a warning and behave like `auto`.
+
 Resolution order for each method mirrors role brownfield: built-in extraction,
 then annotation map, then meta-annotation closure (same `collect_annotation_meta_chain`
 index as roles — see `plans/completed/PLAN-BROWNFIELD-ROLE-OVERRIDES-design-fixes.md`),

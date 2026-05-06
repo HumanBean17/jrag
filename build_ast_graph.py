@@ -51,6 +51,7 @@ from ast_java import (
     parse_java,
 )
 from graph_enrich import (
+    _load_config_cross_service_resolution,
     collect_annotation_meta_chain,
     load_brownfield_overrides,
     microservice_for_path,
@@ -254,6 +255,7 @@ class GraphTables:
     parse_errors: int = 0
     skipped_files: int = 0
     pass3_skipped_cross_service: int = 0
+    cross_service_resolution: str = "auto"
 
 
 # ---------- file walk (see `path_filtering.iter_java_source_files`) ----------
@@ -1276,6 +1278,7 @@ def pass4_routes(
         prs = str(source_root.resolve())
     except OSError:
         prs = str(source_root)
+    tables.cross_service_resolution = _load_config_cross_service_resolution(prs)
     meta_chain = collect_annotation_meta_chain(prs)
 
     for ast in asts.values():
@@ -1411,6 +1414,7 @@ def pass5_imperative_edges(
         prs = str(source_root.resolve())
     except OSError:
         prs = str(source_root)
+    tables.cross_service_resolution = _load_config_cross_service_resolution(prs)
     meta_chain = collect_annotation_meta_chain(prs)
     routes_by_id = {r.id: r for r in tables.routes_rows}
     existing_route_ids = set(routes_by_id)
@@ -1648,6 +1652,30 @@ def _match_call_edge(
     return "cross_service", candidates
 
 
+_BROWNFIELD_LAYERS = frozenset({
+    "layer_c_source",
+    "layer_b_ann",
+    "layer_b_fqn",
+    "layer_a_meta",
+})
+
+
+def _is_brownfield_sourced(
+    call_strategy: str,
+    candidates: list[RouteRow],
+) -> bool:
+    """Both sides must come from brownfield layers for an edge to count as
+    authoritative under brownfield_only mode."""
+    if not candidates:
+        return False
+    if call_strategy not in _BROWNFIELD_LAYERS:
+        return False
+    return all(
+        getattr(c, "source_layer", "builtin") in _BROWNFIELD_LAYERS
+        for c in candidates
+    )
+
+
 def pass6_match_edges(
     tables: GraphTables,
     *,
@@ -1670,6 +1698,10 @@ def pass6_match_edges(
     tables.call_edge_stats.async_calls_match_breakdown.clear()
     tables.call_edge_stats.cross_service_calls_total = 0
 
+    brownfield_only = tables.cross_service_resolution == "brownfield_only"
+    suppressed_auto_cross: list[str] = []
+    suppressed_auto_cross_count = 0
+
     def _micro_factor(member: MemberEntry | None) -> float:
         return 1.0 if (member and member.microservice) else 0.85
 
@@ -1679,10 +1711,18 @@ def pass6_match_edges(
         member = member_by_id.get(row.symbol_id)
         base = row.confidence / max(1e-9, (0.3 * _micro_factor(member)))
         src_route = route_by_id.get(row.route_id)
+        # Declared Feign client methods use `http_consumer` routes; synthetic phantoms from
+        # imperative clients are `http_endpoint` even when `feign_name` is populated from
+        # `@CodebaseClient.targetService` / YAML hints — those must path-match like RestTemplate.
+        _feign_like = (
+            src_route is not None
+            and src_route.kind == "http_consumer"
+            and bool(src_route.feign_name)
+        )
         call = OutgoingCallDecl(
             method_fqn=f"{member.parent_fqn}#{member.decl.signature}" if member else "",
             method_sig=member.decl.signature if member else "",
-            client_kind="feign_method" if (src_route and src_route.feign_name) else "rest_template",
+            client_kind="feign_method" if _feign_like else "rest_template",
             channel="http",
             feign_target_name=src_route.feign_name if src_route else "",
             feign_target_url=src_route.feign_url if src_route else "",
@@ -1700,6 +1740,16 @@ def pass6_match_edges(
             end_line=member.decl.end_line if member else 0,
         )
         outcome, candidates = _match_call_edge(call, all_routes, member.microservice if member else "")
+        if (
+            brownfield_only
+            and outcome == "cross_service"
+            and not _is_brownfield_sourced(row.strategy, candidates)
+        ):
+            outcome = "unresolved"
+            candidates = []
+            suppressed_auto_cross_count += 1
+            if len(suppressed_auto_cross) < 5:
+                suppressed_auto_cross.append(call.method_fqn)
         if outcome in VALID_CALL_MATCHES:
             row.match = outcome
         if outcome in ("cross_service", "intra_service") and len(candidates) == 1:
@@ -1736,6 +1786,16 @@ def pass6_match_edges(
             end_line=member.decl.end_line if member else 0,
         )
         outcome, candidates = _match_call_edge(call, all_routes, member.microservice if member else "")
+        if (
+            brownfield_only
+            and outcome == "cross_service"
+            and not _is_brownfield_sourced(row.strategy, candidates)
+        ):
+            outcome = "unresolved"
+            candidates = []
+            suppressed_auto_cross_count += 1
+            if len(suppressed_auto_cross) < 5:
+                suppressed_auto_cross.append(call.method_fqn)
         if outcome in VALID_CALL_MATCHES:
             row.match = outcome
         if outcome in ("cross_service", "intra_service") and len(candidates) == 1:
@@ -1760,6 +1820,15 @@ def pass6_match_edges(
     )
 
     if verbose:
+        if brownfield_only:
+            n_bf = tables.call_edge_stats.cross_service_calls_total
+            print(
+                f"[pass6] cross_service_resolution=brownfield_only:\n"
+                f"        {n_bf} cross_service edges from brownfield layers,\n"
+                f"        {suppressed_auto_cross_count} auto-cross-service candidates suppressed -> unresolved\n"
+                f"        (first 5: {', '.join(suppressed_auto_cross)})",
+                file=sys.stderr,
+            )
         print(
             f"[pass6] http_match={dict(sorted(tables.call_edge_stats.http_calls_match_breakdown.items()))}, "
             f"async_match={dict(sorted(tables.call_edge_stats.async_calls_match_breakdown.items()))}, "
@@ -1805,7 +1874,8 @@ _SCHEMA_META = (
     "http_calls_match_breakdown STRING, "
     "async_calls_match_breakdown STRING, "
     "cross_service_calls_total INT64, "
-    "pass3_skipped_cross_service INT64"
+    "pass3_skipped_cross_service INT64, "
+    "cross_service_resolution STRING"
     ")"
 )
 
@@ -1925,6 +1995,11 @@ def _write_nodes(
     meta_chain: dict[str, frozenset[str]] | None,
 ) -> None:
     overrides = load_brownfield_overrides(project_root)
+    try:
+        prs = str(project_root.resolve())
+    except OSError:
+        prs = str(project_root)
+    tables.cross_service_resolution = _load_config_cross_service_resolution(prs)
     mch = meta_chain
     # packages
     for pkg, pid in tables.packages.items():
@@ -2183,7 +2258,8 @@ def _write_meta(conn: kuzu.Connection, tables: GraphTables, source_root: Path) -
         "http_calls_match_breakdown: $http_calls_match_breakdown, "
         "async_calls_match_breakdown: $async_calls_match_breakdown, "
         "cross_service_calls_total: $cross_service_calls_total, "
-        "pass3_skipped_cross_service: $pass3_skipped_cross_service})",
+        "pass3_skipped_cross_service: $pass3_skipped_cross_service, "
+        "cross_service_resolution: $cross_service_resolution})",
         {
             "k": "graph",
             "ov": ONTOLOGY_VERSION,
@@ -2209,6 +2285,7 @@ def _write_meta(conn: kuzu.Connection, tables: GraphTables, source_root: Path) -
             "async_calls_match_breakdown": json.dumps(async_match),
             "cross_service_calls_total": int(call_stats.cross_service_calls_total),
             "pass3_skipped_cross_service": int(tables.pass3_skipped_cross_service),
+            "cross_service_resolution": str(tables.cross_service_resolution),
         },
     )
 

@@ -8,8 +8,8 @@ for tools that don't read `.cursor/rules/`.
 ## Where to look
 
 - `README.md` — feature surface, env vars, ranking, capabilities,
-  tool list, "Re-index required" callouts. **`ontology_version` is
-  currently 7.**
+ tool list, "Re-index required" callouts. **`ontology_version` is
+ currently 8.**
 - `CODEBASE_REQUIREMENTS.md` — Java-repo assumptions and tuning map.
 - `propose/` and `plans/` (plus their `completed/` subdirs) —
   in-flight scope and the rationale behind current design.
