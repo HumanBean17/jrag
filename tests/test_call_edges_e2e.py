@@ -76,8 +76,7 @@ def test_graph_meta_call_edge_counters(tmp_path: Path, corpus_root: Path) -> Non
     assert 0.0 <= m["async_calls_resolved_pct"] <= 1.0
 
 
-def test_ontology_version_bumped_to_7(tmp_path: Path, corpus_root: Path) -> None:
+def test_ontology_version_matches_graph_meta(tmp_path: Path, corpus_root: Path) -> None:
     db = tmp_path / "ontology.kuzu"
     _build(corpus_root, db)
-    assert ONTOLOGY_VERSION == 7
-    assert KuzuGraph(str(db)).meta()["ontology_version"] == 7
+    assert KuzuGraph(str(db)).meta()["ontology_version"] == ONTOLOGY_VERSION

@@ -20,8 +20,9 @@ when needed.
 
 - `README.md` — feature surface, env vars, ranking, capabilities,
   tool list, "Re-index required" callouts. The current
-  `ontology_version` is **7** (HTTP_CALLS / ASYNC_CALLS caller
-  edges + brownfield client/producer composition). Earlier
+  `ontology_version` is **8** (HTTP_CALLS / ASYNC_CALLS caller
+  edges + brownfield client/producer composition + cross-service
+  resolution mode on GraphMeta). Earlier
   ontology bumps are described inline in the README's
   callouts list.
 - `CODEBASE_REQUIREMENTS.md` — Java-repo assumptions and per-file

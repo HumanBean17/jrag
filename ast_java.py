@@ -70,8 +70,9 @@ _DTO_LOMBOK_ANNOTATIONS: frozenset[str] = frozenset({
     "EqualsAndHashCode", "ToString",
 })
 
-# Phase 5: HTTP_CALLS + ASYNC_CALLS (B2b); bumps whenever extraction / enrichment semantics change.
-ONTOLOGY_VERSION = 7
+# Phase 5: HTTP_CALLS + ASYNC_CALLS (B2b); Phase 6: cross-service resolution mode on GraphMeta.
+# Bumps whenever extraction / enrichment semantics change.
+ONTOLOGY_VERSION = 8
 
 ROLE_ANNOTATIONS: dict[str, str] = {
     # Spring Web

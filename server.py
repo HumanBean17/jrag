@@ -343,6 +343,7 @@ class GraphMetaOutput(BaseModel):
     http_calls_match_breakdown: dict[str, int] = Field(default_factory=dict)
     async_calls_match_breakdown: dict[str, int] = Field(default_factory=dict)
     cross_service_calls_total: int = 0
+    cross_service_resolution: str | None = None
     message: str | None = None
 
 
@@ -523,6 +524,7 @@ def _graph_meta_output() -> GraphMetaOutput:
         http_calls_match_breakdown={str(k): int(v) for k, v in (meta.get("http_calls_match_breakdown") or {}).items()},
         async_calls_match_breakdown={str(k): int(v) for k, v in (meta.get("async_calls_match_breakdown") or {}).items()},
         cross_service_calls_total=int(meta.get("cross_service_calls_total") or 0),
+        cross_service_resolution=meta.get("cross_service_resolution"),
     )
 
 
