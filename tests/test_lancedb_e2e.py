@@ -339,6 +339,6 @@ async def test_trace_flow_returns_stages(lance_index: Path, monkeypatch) -> None
     # Stage 0 should contain at least one entrypoint-role symbol.
     stage0 = out["stages"][0]
     assert any(
-        s["symbol"]["role"] in {"CONTROLLER", "COMPONENT", "SERVICE", "FEIGN_CLIENT"}
+        s["symbol"]["role"] in {"CONTROLLER", "COMPONENT", "SERVICE", "CLIENT"}
         for s in stage0["symbols"]
     )
