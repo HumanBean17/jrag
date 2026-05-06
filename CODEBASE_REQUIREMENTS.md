@@ -171,11 +171,22 @@ Roles are assigned **first hit wins** from the type's annotations
 ### A.2.1 Brownfield overrides (config + optional source annotations)
 
 Without changing `ast_java` tables, you can adjust how types get `role`
-and `capabilities` for a given repo via `.lancedb-mcp.yml` at the
-project root (`role_overrides:`) and/or by copying the
-`@CodebaseRole` / `@CodebaseCapability` / `@CodebaseCapabilities`
-stubs from `README.md` into your sources. See **Brownfield overrides**
-in `README.md` for the full schema and execution order.
+and `capabilities`, register inbound routes, and register outbound
+clients/producers for a given repo via `.lancedb-mcp.yml` at the project
+root (`role_overrides:`, `route_overrides:`, `http_client_overrides:`,
+`async_producer_overrides:`) and/or by copying the in-source stubs from
+`README.md` into your sources:
+
+- `@CodebaseRole` / `@CodebaseCapability` / `@CodebaseCapabilities`
+  (class-level role + capabilities) — see README §3a.
+- `@CodebaseRoute` / `@CodebaseRoutes` + `CodebaseRouteFrameworkKind` /
+  `CodebaseRouteKind` (method-level inbound routes) — see README §3b.
+- `@CodebaseClient` / `@CodebaseClients` and `@CodebaseProducer` /
+  `@CodebaseProducers` (method-level outbound HTTP / messaging) — see
+  README §3c.
+
+See **Brownfield overrides** in `README.md` for the full schema, usage
+examples, and execution order.
 
 **Layer A index sources:** Kuzu and Lance both use
 `graph_enrich.collect_annotation_meta_chain` (one disk walk: sorted
@@ -196,10 +207,11 @@ capabilities are not materialised on graph nodes).
 
 Capabilities are derived at the **type level**: method-level annotation
 evidence is aggregated up to the enclosing type. Per-method capability
-storage is intentionally out of scope for the current ontology
-(version 3) — see `plans/PLAN-CAPABILITIES-MODEL.md`. The deferred
-call-graph layer (`propose/DEFERRED-CALL-GRAPH-PROPOSE.md`) is the
-designated place to revisit method-granularity if the need arises.
+storage is intentionally out of scope for the current ontology — see
+`plans/completed/PLAN-CAPABILITIES-MODEL.md` for the original design.
+The call-graph layer (`propose/completed/CALL-GRAPH-PROPOSE.md`,
+shipped) introduced method-level call edges; method-granularity
+capabilities can be revisited in a follow-up if the need arises.
 
 Capabilities are independent of `role` — a `@Service` can simultaneously
 be a `MESSAGE_PRODUCER` and a `MESSAGE_LISTENER`, for example. The
@@ -550,9 +562,9 @@ This is a larger change; rough map:
 4. `server.py` — expose a new MCP tool (or extend `graph_neighbors` /
    `trace_flow` to recognise the new edge type).
 
-See `propose/DEFERRED-CALL-GRAPH-PROPOSE.md` for the planned shape of
-CALLS / HTTP_CALLS / ASYNC_CALLS — your custom edge should follow the
-same conventions so a future merge is painless.
+See `propose/completed/CALL-GRAPH-PROPOSE.md` for the shipped shape of
+`CALLS` / `HTTP_CALLS` / `ASYNC_CALLS` — your custom edge should follow
+the same conventions.
 
 ---
 
