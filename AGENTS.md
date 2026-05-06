@@ -9,7 +9,7 @@ for tools that don't read `.cursor/rules/`.
 
 - `README.md` — feature surface, env vars, ranking, capabilities,
  tool list, "Re-index required" callouts. **`ontology_version` is
- currently 10** (`Client` nodes + `list_clients`; see README callouts).
+ currently 11** (async brownfield route merge + `Client` nodes; see README callouts).
 - `CODEBASE_REQUIREMENTS.md` — Java-repo assumptions and tuning map.
 - `propose/` and `plans/` (plus their `completed/` subdirs) —
   in-flight scope and the rationale behind current design.

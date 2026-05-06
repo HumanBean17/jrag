@@ -120,6 +120,9 @@ Resolution order for `microservice`:
 > 7. **`ontology_version` 10** adds first-class outbound `Client` nodes and
 >    `DECLARES_CLIENT` edges, plus `GraphMeta` client counters — rebuild the Kuzu
 >    graph after upgrading.
+> 8. **`ontology_version` 11** makes `@CodebaseAsyncRoute` authoritative over
+>    same-method `@KafkaListener` auto routes (one `Route` / `EXPOSES` row) —
+>    rebuild the Kuzu graph after upgrading.
 >
 > Any index built before these changes must be rebuilt via
 > `cocoindex update ... --full-reprocess -f` or `refresh_code_index`. Until
@@ -336,7 +339,9 @@ Resolution order for each method mirrors role brownfield: built-in extraction,
 then annotation map, then meta-annotation closure (same `collect_annotation_meta_chain`
 index as roles — see `plans/completed/PLAN-BROWNFIELD-ROLE-OVERRIDES-design-fixes.md`),
 then in-source `@CodebaseHttpRoute` / `@CodebaseAsyncRoute`, then per-type FQN map
-(last writer wins on overlapping fields). For the in-source form, copy the
+(last writer wins on overlapping fields). On the same method, `@CodebaseAsyncRoute`
+replaces built-in `@KafkaListener` extraction so brownfield topic names are not
+duplicated alongside SpEL or multi-topic listeners. For the in-source form, copy the
 `@CodebaseHttpRoute` / `@CodebaseAsyncRoute` stubs shown under
 **3. Last resort — source stubs**
 below into any package — no Maven dependency needed.

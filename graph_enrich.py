@@ -819,6 +819,8 @@ def resolve_role_and_capabilities(
 
 
 _HTTP_ROUTE_KINDS = frozenset({"http_endpoint", "http_consumer"})
+# Layer C `@CodebaseAsyncRoute` replaces same-method auto messaging of these kinds.
+_LAYER_C_ASYNC_REPLACES_BUILTIN_KINDS = frozenset({"kafka_topic"})
 
 
 def _route_path_atom(raw_value: str, value_kind: str | None) -> tuple[str, str, float, bool]:
@@ -962,10 +964,31 @@ def _merge_layer_c_codebase_routes(
     working: list[RouteDecl],
     layer_c: list[RouteDecl],
 ) -> list[RouteDecl]:
-    """Layer C — `@CodebaseRoute` / `@CodebaseRoutes` wins over same-method HTTP builtins."""
+    """Layer C — brownfield in-source routes win over same-method auto extraction.
+
+    HTTP: merge fields onto the first same-method built-in HTTP row.
+    Async: any `@CodebaseAsyncRoute` (`kafka_topic`) for a method drops same-method
+    **built-in** `kafka_topic` rows (typically `@KafkaListener`), then layer C rows
+    are merged/appended so the brownfield topic is authoritative over auto extraction.
+    """
     if not layer_c:
         return working
     merged = [replace(r) for r in working]
+    async_override_mf = {
+        cr.method_fqn
+        for cr in layer_c
+        if cr.kind in _LAYER_C_ASYNC_REPLACES_BUILTIN_KINDS
+    }
+    if async_override_mf:
+        merged = [
+            r
+            for r in merged
+            if not (
+                r.method_fqn in async_override_mf
+                and r.kind in _LAYER_C_ASYNC_REPLACES_BUILTIN_KINDS
+                and r.route_source_layer == "builtin"
+            )
+        ]
     for cr in sorted(layer_c, key=lambda x: (x.path, x.http_method, x.topic)):
         placed = False
         for i, r in enumerate(merged):
@@ -1051,18 +1074,26 @@ def resolve_routes_for_method(
     1. Built-in routes from ``_collect_routes`` (excluding ``@CodebaseRoute`` stubs)
     2. Layer B — ``route_overrides.annotations`` (annotation FQN or simple name)
     3. Layer A — meta-annotation walk via ``collect_annotation_meta_chain``
-    4. Layer C — ``@CodebaseRoute`` / ``@CodebaseRoutes`` from parse
+    4. Layer C — in-source ``@CodebaseHttpRoute`` / ``@CodebaseAsyncRoute`` (and
+       legacy ``@CodebaseRoute``) from parse; async layer C drops built-in
+       ``kafka_topic`` rows for the same method before merge
     5. Layer B — ``route_overrides.fqn`` (outermost; merges onto every route)
     """
     method_fqn = f"{enclosing_type.fqn}#{method_decl.signature}"
     filename = builtin_routes[0].filename if builtin_routes else ""
     sl, el = method_decl.start_line, method_decl.end_line
 
+    # In-source brownfield: `@CodebaseHttpRoute` marks `codebase_route`; async uses
+    # the topic atom strategy but always sets `route_source_layer=layer_c_source`.
     builtins_only = [
-        r for r in builtin_routes if r.resolution_strategy != "codebase_route"
+        r
+        for r in builtin_routes
+        if r.route_source_layer != "layer_c_source" and r.resolution_strategy != "codebase_route"
     ]
     layer_c_src = [
-        r for r in builtin_routes if r.resolution_strategy == "codebase_route"
+        r
+        for r in builtin_routes
+        if r.route_source_layer == "layer_c_source" or r.resolution_strategy == "codebase_route"
     ]
 
     working: list[RouteDecl] = [
