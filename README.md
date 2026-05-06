@@ -655,8 +655,10 @@ Java file discovery for the Kuzu graph, annotation meta-chain collection, and
 the CocoIndex Lance pipeline share the same layered ignore model
 (`path_filtering.LayeredIgnore`):
 
-1. **Builtin default** — the historical hardcoded list (build dirs, `*.class`,
-   `src/test/java`, dot-directories, …).
+1. **Builtin default** — hardcoded patterns applied to every project. See
+   [Builtin default patterns](#builtin-default-patterns) below for the exact
+   list and the build-tool-anchored pruning rules for `out/`, `build/`, and
+   `target/`.
 2. **Project root** — optional `<project>/.lancedb-mcp/ignore` (gitignore syntax,
    including negation with `!`).
 3. **Nested** — any `<subdir>/.lancedb-mcp/ignore` on the path from the project
@@ -665,6 +667,43 @@ the CocoIndex Lance pipeline share the same layered ignore model
    directory, merged in order, using `pathspec.GitIgnoreSpec` (same semantics as
    git). Disable with `LayeredIgnore(..., use_gitignore=False)` (used where the
    legacy walker did not consult git).
+
+#### Builtin default patterns
+
+The builtin default layer (`path_filtering.COMMON_EXCLUDED_PATH_PATTERNS`)
+combines two mechanisms:
+
+**a) Glob patterns** — applied during the layered match (`is_ignored`):
+
+| Pattern | What it excludes |
+|---|---|
+| `**/.*` | Any dot-file or dot-directory at any depth |
+| `**/.git/**` | Git metadata directory |
+| `**/.idea/**` | IntelliJ IDEA project metadata |
+| `**/.venv/**` | Python virtual environments |
+| `**/node_modules/**` | npm/yarn dependency tree |
+| `**/*.class` | Compiled JVM class files |
+| `**/src/test/java/**` | Maven/Gradle test sources (prod-only index by design) |
+| `**/src/test/resources/**` | Test resource bundles |
+
+**b) Build-output directory pruning** — applied during the `os.walk` traversal,
+separate from the glob patterns above. Three directory names (`out`, `build`,
+`target`) are pruned **only when they sit alongside a build-tool indicator
+file** (`pom.xml`, `build.gradle`, `build.gradle.kts`, `settings.gradle`,
+`settings.gradle.kts`). This guards against the false-positive where one of
+these names appears as a legal Java package (e.g.
+`com.example.out.api.AssignEndpoint` lives at
+`src/main/java/com/example/out/api/AssignEndpoint.java`, and `out/` is a
+package directory, not a Maven build output).
+
+A few additional directory names are pruned **unconditionally**, regardless of
+siblings, because they are never legal Java package names: `.git`, `.idea`,
+`.venv`, `node_modules`. (Defined in `path_filtering.UNCONDITIONAL_PRUNE_DIRS`.)
+
+If you need to skip a directory that the builtin default walks (or include one
+it prunes), add a `.lancedb-mcp/ignore` file at the project root or any
+subtree root. Use `diagnose_ignore` to see which layer decided for a given
+file.
 
 If no `.lancedb-mcp/ignore` exists anywhere under the project, behaviour matches
 the pre-B5 builtin list alone (plus git when enabled). When a negation rule
