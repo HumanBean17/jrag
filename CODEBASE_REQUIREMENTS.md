@@ -171,11 +171,22 @@ Roles are assigned **first hit wins** from the type's annotations
 ### A.2.1 Brownfield overrides (config + optional source annotations)
 
 Without changing `ast_java` tables, you can adjust how types get `role`
-and `capabilities` for a given repo via `.lancedb-mcp.yml` at the
-project root (`role_overrides:`) and/or by copying the
-`@CodebaseRole` / `@CodebaseCapability` / `@CodebaseCapabilities`
-stubs from `README.md` into your sources. See **Brownfield overrides**
-in `README.md` for the full schema and execution order.
+and `capabilities`, register inbound routes, and register outbound
+clients/producers for a given repo via `.lancedb-mcp.yml` at the project
+root (`role_overrides:`, `route_overrides:`, `http_client_overrides:`,
+`async_producer_overrides:`) and/or by copying the in-source stubs from
+`README.md` into your sources:
+
+- `@CodebaseRole` / `@CodebaseCapability` / `@CodebaseCapabilities`
+  (class-level role + capabilities) — see README §3a.
+- `@CodebaseRoute` / `@CodebaseRoutes` + `CodebaseRouteFrameworkKind` /
+  `CodebaseRouteKind` (method-level inbound routes) — see README §3b.
+- `@CodebaseClient` / `@CodebaseClients` and `@CodebaseProducer` /
+  `@CodebaseProducers` (method-level outbound HTTP / messaging) — see
+  README §3c.
+
+See **Brownfield overrides** in `README.md` for the full schema, usage
+examples, and execution order.
 
 **Layer A index sources:** Kuzu and Lance both use
 `graph_enrich.collect_annotation_meta_chain` (one disk walk: sorted
