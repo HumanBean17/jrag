@@ -1835,6 +1835,18 @@ def pass6_match_edges(
     route_by_id = {r.id: r for r in tables.routes_rows}
     all_routes = [r for r in tables.routes_rows if r.microservice]
     member_by_id = {m.node_id: m for m in tables.members}
+    clients_by_id = {c.id: c for c in tables.client_rows}
+    client_hints_by_member: dict[str, list[ClientRow]] = defaultdict(list)
+    for edge in tables.declares_client_rows:
+        client = clients_by_id.get(edge.client_id)
+        if client is None:
+            continue
+        # `DECLARES_CLIENT.symbol_id` targets `Symbol.id` for member symbols,
+        # and member symbols are emitted with `id == MemberEntry.node_id`.
+        client_hints_by_member[edge.symbol_id].append(client)
+    for member_symbol_id in list(client_hints_by_member.keys()):
+        # Deterministic fallback when a method carries multiple feign declarations.
+        client_hints_by_member[member_symbol_id].sort(key=lambda c: c.id)
 
     # Pass 6 is idempotent for full rebuilds: each run fully re-derives match outcomes.
     # If incremental rebuild lands later (Tier-2 follow-up), this reset must remain pass-scoped.
@@ -1857,30 +1869,31 @@ def pass6_match_edges(
         base = row.confidence / max(1e-9, (0.3 * _micro_factor(member)))
         src_route = route_by_id.get(row.route_id)
         if src_route is None and member is not None:
-            # Recover feign caller hints from outgoing client declarations (v2).
-            for decl in member.decl.outgoing_calls:
-                if decl.client_kind != "feign_method":
+            # Recover feign caller hints from persisted caller-side Client declarations.
+            for client in client_hints_by_member.get(member.node_id, ()):
+                if client.client_kind != "feign_method":
                     continue
-                path_template, path_regex = _normalize_path(decl.path_template_call)
+                path_template, path_regex = _normalize_path(client.path)
                 src_route = RouteRow(
                     id="",
                     kind="http_consumer",
                     framework="feign",
-                    method=decl.method_call,
-                    path=decl.path_template_call,
+                    method=client.method,
+                    path=client.path,
                     path_template=path_template,
                     path_regex=path_regex,
                     topic="",
                     broker="",
-                    feign_name=decl.feign_target_name,
-                    feign_url=decl.feign_target_url,
+                    feign_name=client.target_service,
+                    # `Client` stores service-name hints, not feign URL; matcher keys off feign_name.
+                    feign_url="",
                     microservice=member.microservice,
                     module=member.module,
-                    filename=decl.filename,
-                    start_line=decl.start_line,
-                    end_line=decl.end_line,
-                    resolved=decl.resolved,
-                    source_layer="layer_c_source",
+                    filename=client.filename,
+                    start_line=client.start_line,
+                    end_line=client.end_line,
+                    resolved=client.resolved,
+                    source_layer=client.source_layer,
                 )
                 break
         # Feign caller hints are synthesized as transient `http_consumer` routes in pass6;
