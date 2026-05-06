@@ -1699,7 +1699,8 @@ def pass6_match_edges(
     tables.call_edge_stats.cross_service_calls_total = 0
 
     brownfield_only = tables.cross_service_resolution == "brownfield_only"
-    suppressed_auto_cross: list[str] = []
+    suppressed_auto_cross_http: list[str] = []
+    suppressed_auto_cross_async: list[str] = []
     suppressed_auto_cross_count = 0
 
     def _micro_factor(member: MemberEntry | None) -> float:
@@ -1748,8 +1749,8 @@ def pass6_match_edges(
             outcome = "unresolved"
             candidates = []
             suppressed_auto_cross_count += 1
-            if len(suppressed_auto_cross) < 5:
-                suppressed_auto_cross.append(call.method_fqn)
+            if len(suppressed_auto_cross_http) < 5:
+                suppressed_auto_cross_http.append(call.method_fqn)
         if outcome in VALID_CALL_MATCHES:
             row.match = outcome
         if outcome in ("cross_service", "intra_service") and len(candidates) == 1:
@@ -1794,8 +1795,8 @@ def pass6_match_edges(
             outcome = "unresolved"
             candidates = []
             suppressed_auto_cross_count += 1
-            if len(suppressed_auto_cross) < 5:
-                suppressed_auto_cross.append(call.method_fqn)
+            if len(suppressed_auto_cross_async) < 5:
+                suppressed_auto_cross_async.append(call.method_fqn)
         if outcome in VALID_CALL_MATCHES:
             row.match = outcome
         if outcome in ("cross_service", "intra_service") and len(candidates) == 1:
@@ -1822,11 +1823,14 @@ def pass6_match_edges(
     if verbose:
         if brownfield_only:
             n_bf = tables.call_edge_stats.cross_service_calls_total
+            first_http = ", ".join(suppressed_auto_cross_http)
+            first_async = ", ".join(suppressed_auto_cross_async)
             print(
                 f"[pass6] cross_service_resolution=brownfield_only:\n"
                 f"        {n_bf} cross_service edges from brownfield layers,\n"
                 f"        {suppressed_auto_cross_count} auto-cross-service candidates suppressed -> unresolved\n"
-                f"        (first 5: {', '.join(suppressed_auto_cross)})",
+                f"        (first 5 http: {first_http})\n"
+                f"        (first 5 async: {first_async})",
                 file=sys.stderr,
             )
         print(
