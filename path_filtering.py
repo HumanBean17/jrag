@@ -26,19 +26,67 @@ from pathspec import GitIgnoreSpec
 # Pruning for LocalFile sources: skip VCS, build outputs, dependency trees, and
 # test sources (we currently index prod Java only to keep the semantic index clean).
 # Also avoids EMFILE under default ulimits when the engine traverses in parallel.
+#
+# Note on build-output dir names: ``out``, ``build`` and ``target`` are also legal
+# Java package names (e.g. ``com.example.out.api``). The unconditional ``**/out/**``
+# pattern that previously lived here false-matched such packages and silently
+# dropped real source files. These dirs are now pruned only when they sit next to
+# a build-tool indicator (``pom.xml``, ``build.gradle``, ``build.gradle.kts``,
+# ``settings.gradle``, ``settings.gradle.kts``) — see ``_is_build_output_dir``
+# and ``BUILD_DIR_NAMES``. If you genuinely need to skip an arbitrary nested
+# directory, add a ``.lancedb-mcp/ignore`` entry at the project or subtree root.
 COMMON_EXCLUDED_PATH_PATTERNS: list[str] = [
     "**/.*",
     "**/.git/**",
     "**/.idea/**",
     "**/.venv/**",
     "**/node_modules/**",
-    "**/target/**",
-    "**/build/**",
-    "**/out/**",
     "**/*.class",
     "**/src/test/java/**",
     "**/src/test/resources/**",
 ]
+
+# Directory names that are pruned ONLY when they sit next to a build-tool indicator.
+# The check is ``parent_dir`` contains any of ``BUILD_TOOL_INDICATORS``.
+BUILD_DIR_NAMES: tuple[str, ...] = ("target", "build", "out")
+
+# Files whose presence in a directory marks it as a JVM build module. When one
+# of these sits next to a ``BUILD_DIR_NAMES`` entry, that entry is treated as
+# build output and pruned from the walk.
+BUILD_TOOL_INDICATORS: tuple[str, ...] = (
+    "pom.xml",
+    "build.gradle",
+    "build.gradle.kts",
+    "settings.gradle",
+    "settings.gradle.kts",
+)
+
+# Directory names always pruned regardless of siblings (universal nuisance dirs;
+# never a legal package name in practice).
+UNCONDITIONAL_PRUNE_DIRS: frozenset[str] = frozenset({
+    ".git",
+    ".idea",
+    ".venv",
+    "node_modules",
+})
+
+
+def _is_build_output_dir(parent_dir: str, dirname: str) -> bool:
+    """True iff ``<parent_dir>/<dirname>`` looks like a JVM build-output directory.
+
+    A name in :data:`BUILD_DIR_NAMES` is build output only when its parent
+    directory contains a build-tool indicator (Maven/Gradle marker file).
+    Otherwise, names like ``out`` are treated as ordinary subdirectories so
+    Java sources under packages such as ``com.example.out.api`` survive the walk.
+    """
+    if dirname not in BUILD_DIR_NAMES:
+        return False
+    try:
+        with os.scandir(parent_dir) as it:
+            siblings = {entry.name for entry in it}
+    except OSError:
+        return False
+    return any(marker in siblings for marker in BUILD_TOOL_INDICATORS)
 
 
 def compile_excluded_glob_patterns(
@@ -403,19 +451,16 @@ def iter_java_source_files(
         ignore_ctx = LayeredIgnore(root)
     root = root.resolve()
     for dirpath, dirnames, filenames in os.walk(root):
+        # Universal nuisance dirs (VCS, IDE, deps) are pruned unconditionally.
+        # Build-output dirs (``out`` / ``build`` / ``target``) are pruned only when
+        # they sit alongside a build-tool indicator file — otherwise names like
+        # ``out`` belong to a Java package (e.g. ``com.example.out.api``) and must
+        # be walked. See ``_is_build_output_dir``.
         dirnames[:] = [
             d
             for d in dirnames
-            if d
-            not in (
-                ".git",
-                "target",
-                "build",
-                "out",
-                "node_modules",
-                ".venv",
-                ".idea",
-            )
+            if d not in UNCONDITIONAL_PRUNE_DIRS
+            and not _is_build_output_dir(dirpath, d)
         ]
         for fn in filenames:
             if not fn.endswith(".java"):

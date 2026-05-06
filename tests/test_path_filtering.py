@@ -175,3 +175,86 @@ def test_iter_java_source_files_deprecation_warns(tmp_path: Path) -> None:
         files = list(iter_java_source_files(root, globs))
     assert any(x.category is DeprecationWarning for x in w)
     assert len(files) == 1
+
+
+def test_out_as_java_package_dir_is_walked_when_no_build_indicator_sibling(
+    tmp_path: Path,
+) -> None:
+    """Regression: a Java package literally named ``out`` under ``src/main/java`` is
+    NOT pruned, because its parent directory has no Maven/Gradle indicator file.
+
+    Prior to this fix, the unconditional ``**/out/**`` glob and unconditional
+    ``os.walk`` prune dropped real source under packages like
+    ``com.example.out.api.AssignEndpoint``.
+    """
+    root = tmp_path / "proj"
+    pkg = root / "src" / "main" / "java" / "com" / "example" / "out" / "api"
+    pkg.mkdir(parents=True)
+    f = pkg / "AssignEndpoint.java"
+    f.write_text("package com.example.out.api; interface AssignEndpoint {}\n", encoding="utf-8")
+    li = LayeredIgnore(root, use_gitignore=False)
+    files = list(iter_java_source_files(root, ignore=li))
+    assert f in files
+    ign, _ = li.is_ignored(f)
+    assert ign is False
+
+
+def test_out_as_build_output_dir_is_pruned_when_pom_xml_sibling_present(
+    tmp_path: Path,
+) -> None:
+    """A real Maven build output directory ``out/`` (sibling to ``pom.xml``) is
+    pruned and its contents skipped."""
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "pom.xml").write_text("<project/>\n", encoding="utf-8")
+    out = root / "out" / "production"
+    out.mkdir(parents=True)
+    bogus = out / "Bogus.java"
+    bogus.write_text("package out.production; class Bogus {}\n", encoding="utf-8")
+    li = LayeredIgnore(root, use_gitignore=False)
+    files = list(iter_java_source_files(root, ignore=li))
+    assert bogus not in files
+
+
+def test_build_output_dir_pruned_when_gradle_kts_sibling_present(tmp_path: Path) -> None:
+    """Gradle Kotlin DSL (``build.gradle.kts``) also marks a directory as a JVM
+    module, so a sibling ``build/`` directory is treated as build output."""
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "build.gradle.kts").write_text("", encoding="utf-8")
+    build_out = root / "build" / "classes"
+    build_out.mkdir(parents=True)
+    bogus = build_out / "Bogus.java"
+    bogus.write_text("package build.classes; class Bogus {}\n", encoding="utf-8")
+    li = LayeredIgnore(root, use_gitignore=False)
+    files = list(iter_java_source_files(root, ignore=li))
+    assert bogus not in files
+
+
+def test_target_as_package_dir_is_walked_without_pom_sibling(tmp_path: Path) -> None:
+    """Symmetric to the ``out`` case: ``target`` may also be a legal Java package
+    name (e.g. ``com.example.target.spec``) and must NOT be pruned when the
+    parent directory lacks a build-tool indicator."""
+    root = tmp_path / "proj"
+    pkg = root / "src" / "main" / "java" / "com" / "example" / "target" / "spec"
+    pkg.mkdir(parents=True)
+    f = pkg / "Spec.java"
+    f.write_text("package com.example.target.spec; class Spec {}\n", encoding="utf-8")
+    li = LayeredIgnore(root, use_gitignore=False)
+    files = list(iter_java_source_files(root, ignore=li))
+    assert f in files
+
+
+def test_unconditional_prune_dirs_remain_pruned_anywhere(tmp_path: Path) -> None:
+    """``.git``, ``.idea``, ``.venv``, ``node_modules`` are pruned regardless of
+    siblings. They are not legal package names so this stays unconditional."""
+    root = tmp_path / "proj"
+    root.mkdir()
+    for nuisance in (".git", ".idea", ".venv", "node_modules"):
+        nuis = root / "src" / "main" / nuisance
+        nuis.mkdir(parents=True)
+        f = nuis / "X.java"
+        f.write_text("class X {}\n", encoding="utf-8")
+    li = LayeredIgnore(root, use_gitignore=False)
+    files = list(iter_java_source_files(root, ignore=li))
+    assert files == []
