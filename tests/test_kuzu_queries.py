@@ -429,15 +429,30 @@ def test_list_routes_filter_by_framework(tmp_path: Path) -> None:
     assert all(r["framework"] == "spring_mvc" for r in mvc)
 
 
-def test_find_route_handlers_feign_array(tmp_path: Path) -> None:
+def test_find_route_handlers_endpoint_route(tmp_path: Path) -> None:
+    g = _kuzu_graph_from_route_fixture(tmp_path)
+    rows = g.list_routes(
+        framework="spring_mvc",
+        microservice="service-a",
+        path_prefix="/api/users",
+        method="GET",
+        limit=10,
+    )
+    assert rows, "expected service-a MVC route"
+    rid = rows[0]["id"]
+    handlers = g.find_route_handlers(route_id=rid)
+    assert len(handlers) == 1
+    fqns = {h["symbol"]["fqn"] for h in handlers}
+    assert len(fqns) == 1
+
+
+def test_find_route_handlers_feign_route_returns_empty(tmp_path: Path) -> None:
     g = _kuzu_graph_from_route_fixture(tmp_path)
     rows = g.list_routes(framework="feign", path_prefix="/dupbase/same", limit=10)
     assert rows, "expected FeignTripleDup routes"
     rid = rows[0]["id"]
     handlers = g.find_route_handlers(route_id=rid)
-    assert len(handlers) == 3
-    fqns = {h["symbol"]["fqn"] for h in handlers}
-    assert len(fqns) == 3
+    assert handlers == []
 
 
 def test_get_route_by_path_microservice_isolated(tmp_path: Path) -> None:

@@ -238,6 +238,7 @@ Document "rebuild to apply the fix" in the PR description.
 - [ ] Cross-service smoke fixture: 1 EXPOSES (down from 2), 1 cross-service HTTP_CALL (up from 1 intra-service)
 - [ ] Verbose pass4 log line includes the suppression count
 - [ ] Existing `pytest tests -q` baseline (`266 passed, 4 skipped` post-PR-E3) does not regress; new tests bring it to **~272 passed, 4 skipped**
+- [ ] Existing `find_route_handlers` behavior is preserved for endpoint routes; Feign consumer routes are either covered by an explicit empty-result contract or a dedicated non-EXPOSES traversal.
 - [ ] PR description includes manual evidence block from above
 - [ ] No new MCP tools, no new annotation types, no schema bump
 

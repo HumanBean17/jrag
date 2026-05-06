@@ -190,6 +190,7 @@ class RouteExtractionStats:
     # Brownfield layers: `layer_b_ann`, `layer_a_meta`, `layer_c_source`, `layer_b_fqn`.
     routes_from_brownfield_pct: float = 0.0
     routes_by_layer: dict[str, int] = field(default_factory=dict)
+    exposes_suppressed_feign: int = 0
 
 
 @dataclass
@@ -1356,6 +1357,10 @@ def pass4_routes(
                     routes_by_id[rid] = replace(prev, source_layer=layer)
             ek = (member.node_id, rid)
             if ek not in exposes_seen:
+                route_kind = routes_by_id[rid].kind
+                if route_kind == "http_consumer":
+                    stats.exposes_suppressed_feign += 1
+                    continue
                 exposes_seen.add(ek)
                 tables.exposes_rows.append(
                     ExposesRow(
@@ -1391,6 +1396,7 @@ def pass4_routes(
 
     msg = (
         f"Route extraction: emitted={n_routes}, exposes={len(tables.exposes_rows)}, "
+        f"exposes_suppressed_feign={stats.exposes_suppressed_feign}, "
         f"skipped_unresolved={stats.routes_skipped_unresolved}, "
         f"routes_resolved_pct={stats.routes_resolved_pct:.1f}, "
         f"routes_from_brownfield_pct={stats.routes_from_brownfield_pct:.1f}, "
@@ -1616,11 +1622,31 @@ def _match_call_edge(
 
     candidates: list[RouteRow] = []
     if call.client_kind == "feign_method":
-        # Both sides must provide a non-empty Feign name; empty values are unresolved.
-        candidates = [
-            r for r in routes
-            if r.feign_name and call.feign_target_name and r.feign_name == call.feign_target_name
-        ]
+        # Prefer endpoint matching by target service + path/method for Feign declarations.
+        path_value = call.path_template_call
+        method_value = call.method_call
+        if path_value:
+            for r in routes:
+                if r.kind != "http_endpoint":
+                    continue
+                if call.feign_target_name and r.microservice != call.feign_target_name:
+                    continue
+                if not (r.method == "" or method_value == "" or r.method == method_value):
+                    continue
+                if not r.path_regex:
+                    continue
+                try:
+                    if re.fullmatch(r.path_regex, path_value or "") is None:
+                        continue
+                except re.error:
+                    continue
+                candidates.append(r)
+        if not candidates:
+            # Fallback for legacy/manual routes that only expose Feign target names.
+            candidates = [
+                r for r in routes
+                if r.feign_name and call.feign_target_name and r.feign_name == call.feign_target_name
+            ]
     elif call.channel == "http":
         path_value = call.path_template_call
         method_value = call.method_call
@@ -1712,6 +1738,36 @@ def pass6_match_edges(
         member = member_by_id.get(row.symbol_id)
         base = row.confidence / max(1e-9, (0.3 * _micro_factor(member)))
         src_route = route_by_id.get(row.route_id)
+        if src_route is None or src_route.kind != "http_consumer":
+            # PR-F1: when pass4 suppresses EXPOSES for Feign declarations, pass5 can still
+            # leave unresolved Feign rows pointing at phantom routes. Recover caller-side
+            # Feign target hints from the member declaration route.
+            if member is not None:
+                for decl in member.decl.routes:
+                    if decl.kind != "http_consumer":
+                        continue
+                    path_template, path_regex = _normalize_path(decl.path)
+                    src_route = RouteRow(
+                        id="",
+                        kind=decl.kind,
+                        framework=decl.framework,
+                        method=decl.http_method,
+                        path=decl.path,
+                        path_template=path_template,
+                        path_regex=path_regex,
+                        topic=decl.topic,
+                        broker=decl.broker,
+                        feign_name=decl.feign_name,
+                        feign_url=decl.feign_url,
+                        microservice=member.microservice,
+                        module=member.module,
+                        filename=decl.filename,
+                        start_line=decl.start_line,
+                        end_line=decl.end_line,
+                        resolved=decl.resolved,
+                        source_layer=decl.route_source_layer,
+                    )
+                    break
         # Declared Feign client methods use `http_consumer` routes; synthetic phantoms from
         # imperative clients are `http_endpoint` even when `feign_name` is populated from
         # `@CodebaseClient.targetService` / YAML hints — those must path-match like RestTemplate.
@@ -1879,6 +1935,7 @@ _SCHEMA_META = (
     "async_calls_match_breakdown STRING, "
     "cross_service_calls_total INT64, "
     "pass3_skipped_cross_service INT64, "
+    "pass4_exposes_suppressed_feign INT64, "
     "cross_service_resolution STRING"
     ")"
 )
@@ -2263,6 +2320,7 @@ def _write_meta(conn: kuzu.Connection, tables: GraphTables, source_root: Path) -
         "async_calls_match_breakdown: $async_calls_match_breakdown, "
         "cross_service_calls_total: $cross_service_calls_total, "
         "pass3_skipped_cross_service: $pass3_skipped_cross_service, "
+        "pass4_exposes_suppressed_feign: $pass4_exposes_suppressed_feign, "
         "cross_service_resolution: $cross_service_resolution})",
         {
             "k": "graph",
@@ -2289,6 +2347,7 @@ def _write_meta(conn: kuzu.Connection, tables: GraphTables, source_root: Path) -
             "async_calls_match_breakdown": json.dumps(async_match),
             "cross_service_calls_total": int(call_stats.cross_service_calls_total),
             "pass3_skipped_cross_service": int(tables.pass3_skipped_cross_service),
+            "pass4_exposes_suppressed_feign": int(st.exposes_suppressed_feign),
             "cross_service_resolution": str(tables.cross_service_resolution),
         },
     )
