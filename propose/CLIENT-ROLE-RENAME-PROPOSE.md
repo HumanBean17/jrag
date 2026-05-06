@@ -43,10 +43,12 @@ and the annotation is true.
 (`ast_java.py:117-122`), auto-detected from injected types. No async
 rename is needed.
 
-~120 LOC. Ontology bump (likely 8 → 9, depending on PR-G1's bump
-landing first). Two-phase deprecation: `FEIGN_CLIENT` accepted in
-brownfield YAML as an alias for `CLIENT+HTTP_CLIENT` for one release,
-with a deprecation warning. Dropped in the release after.
+~105 LOC. Ontology bump (likely 8 → 9, depending on PR-G1's bump
+landing first). **Hard rename — no deprecation alias.** The MCP
+bundle has no users yet; breaking changes are explicitly allowed.
+`FEIGN_CLIENT` is removed from `VALID_ROLES` in the same PR; brownfield
+YAML/annotation inputs that still say `FEIGN_CLIENT` fail validation
+with a clear error pointing at the new vocabulary.
 
 ## 1. Why this is the right shape
 
@@ -155,9 +157,11 @@ new resolution mechanism, **not** a richer cross-service edge model,
 - **G3.** All call sites that key on `FEIGN_CLIENT` literal switch
   to `CLIENT`. List in §5.
 - **G4.** Brownfield YAML and `@CodebaseRole`/`@CodebaseCapability`
-  annotations accept the new vocabulary natively. Both `CLIENT`
-  (new) and `FEIGN_CLIENT` (alias) accepted for one release;
-  `FEIGN_CLIENT` warns "deprecated, use CLIENT+HTTP_CLIENT".
+  annotations accept the new vocabulary (`CLIENT` role,
+  `HTTP_CLIENT` capability). `FEIGN_CLIENT` is removed from
+  `VALID_ROLES` — any brownfield input still using it fails
+  validation with an error that names the replacement
+  (`CLIENT` role + `HTTP_CLIENT` capability).
 - **G5.** Ontology bump (7→8 if PR-G1 hasn't landed; 8→9 if it has).
 - **G6.** No change to auto-promotion scope. RestTemplate-using
   and WebClient-using classes keep their existing role.
@@ -173,8 +177,11 @@ new resolution mechanism, **not** a richer cross-service edge model,
 - **NG2.** Auto-promoting `KafkaTemplate`-injecting classes to
   `CLIENT` role. They already get capability `MESSAGE_PRODUCER`
   via the existing `_INJECTED_TYPES_TO_CAPABILITY` table.
-- **NG3.** Removing `FEIGN_CLIENT` as a brownfield-input alias in
-  v1. Deprecation is two-phase to avoid breaking existing YAML.
+- **NG3.** Maintaining backwards compatibility for `FEIGN_CLIENT` as
+  a brownfield input. The MCP bundle has no users yet — `FEIGN_CLIENT`
+  is dropped from `VALID_ROLES` in v1. No alias, no warning, no
+  two-phase deprecation. Validation error points users at the
+  replacement.
 - **NG4.** Changing `CONTROLLER` to be the inbound counterpart of
   `CLIENT` (i.e., extending `CONTROLLER` to async listeners).
   Separate proposal (parked).
@@ -337,39 +344,23 @@ s["symbol"]["role"] in {"CONTROLLER", "COMPONENT", "SERVICE", "FEIGN_CLIENT"}
 s["symbol"]["role"] in {"CONTROLLER", "COMPONENT", "SERVICE", "CLIENT"}
 ```
 
-### 5.3 Brownfield deprecation alias
+### 5.3 Brownfield validation behaviour (no alias)
 
-In `graph_enrich.py` brownfield validation, accept `FEIGN_CLIENT` as
-a deprecated input that translates to `CLIENT` + `HTTP_CLIENT`:
+`FEIGN_CLIENT` is removed from `VALID_ROLES` in the same PR. The
+existing validator in `graph_enrich.py` already raises on unknown
+roles — we just rely on that path. The error message lists the
+allowed roles, which is enough to redirect users:
 
 ```python
-_DEPRECATED_ROLE_ALIASES: dict[str, tuple[str, tuple[str, ...]]] = {
-    "FEIGN_CLIENT": ("CLIENT", ("HTTP_CLIENT",)),
-}
-
-def _normalize_brownfield_role(
-    role: str,
-    annotation_or_fqn: str,
-) -> tuple[str, tuple[str, ...]]:
-    """Translate deprecated role aliases to (role, extra_capabilities).
-    Logs deprecation warning."""
-    aliased = _DEPRECATED_ROLE_ALIASES.get(role)
-    if aliased is None:
-        return role, ()
-    new_role, extra_caps = aliased
-    print(
-        f"[lancedb-mcp] role_overrides: {role!r} is deprecated for {annotation_or_fqn!r}; "
-        f"use {new_role!r} + capability {extra_caps!r} instead. Translated automatically.",
-        file=sys.stderr,
+# Existing pattern in graph_enrich.py (no new code):
+if role not in VALID_ROLES:
+    raise ValueError(
+        f"role_overrides: {role!r} is not a valid role for "
+        f"{annotation_or_fqn!r}. Valid roles: {sorted(VALID_ROLES)}"
     )
-    return new_role, extra_caps
 ```
 
-Apply in `_load_brownfield_overrides` before validating against
-`VALID_ROLES`. The translated capabilities are merged into the
-target's existing capability set.
-
-This means users with existing YAML like:
+Users with existing YAML like:
 
 ```yaml
 role_overrides:
@@ -377,8 +368,20 @@ role_overrides:
     "com.example.UserApiClient": "FEIGN_CLIENT"
 ```
 
-continue to work — they just get a deprecation warning and the
-role becomes `CLIENT` with capability `HTTP_CLIENT`. Clean v1.
+get a hard validation error and must update to:
+
+```yaml
+role_overrides:
+  fqn:
+    "com.example.UserApiClient": "CLIENT"
+capability_overrides:
+  fqn:
+    "com.example.UserApiClient": ["HTTP_CLIENT"]
+```
+
+This is a deliberate breaking change: the MCP bundle has no users
+yet, so the alias machinery would only add complexity without
+protecting anyone. Clean v1.
 
 ### 5.4 Ontology version
 
@@ -404,13 +407,12 @@ story as every other graph-shape change).
 
 | # | Risk | Likelihood | Mitigation |
 |---|---|---|---|
-| 1 | Existing YAML overrides use `FEIGN_CLIENT` and break | Medium | Two-phase deprecation alias (§5.3). Warn in v1, drop in v2. |
+| 1 | Existing YAML overrides use `FEIGN_CLIENT` and break | N/A | No users yet. Hard rename is explicitly allowed. Validation error points at replacement (§5.3). |
 | 2 | Old graphs' rows have `role="FEIGN_CLIENT"` | High | Ontology bump documented. Rebuild required. Same migration story as past breaking changes. |
 | 3 | Downstream consumers of MCP tool `role` enum (e.g., LLM prompts) hardcode `FEIGN_CLIENT` | Low | The MCP `role` field is documented; this is a vocabulary change. Bump tool description visibly. Note in README "breaking change". |
-| 4 | Behavioural-search ranking changes silently | Low | Same numeric weight (`0.06`). [TBD-3] flags it for review if user reports drift. |
+| 4 | Behavioural-search ranking changes silently | Low | Same numeric weight (`0.06`). [TBD-2] flags it for review if user reports drift. |
 | 5 | `trace_flow` integration stage misclassifies brownfield-annotated RestTemplate clients | Medium | They get role `CLIENT`, which IS in `_FLOW_STAGES[2]`. No regression — actually an improvement (they were `SERVICE` before, missed the integration tier). |
-| 6 | Brownfield deprecation alias adds complexity to `_load_brownfield_overrides` | Low | Single helper function, ~15 LOC, clearly documented. Localized to one file. |
-| 7 | Auto-promotion scope is unchanged but users assume it expanded | Medium | Document explicitly in README and PR description: "Only `@FeignClient` interfaces auto-promote to `CLIENT`. RestTemplate/WebClient users keep their existing role; opt in via brownfield annotations." |
+| 6 | Auto-promotion scope is unchanged but users assume it expanded | Medium | Document explicitly in README and PR description: "Only `@FeignClient` interfaces auto-promote to `CLIENT`. RestTemplate/WebClient users keep their existing role; opt in via brownfield annotations." |
 
 ## 7. Verification
 
@@ -421,14 +423,14 @@ story as every other graph-shape change).
 | 1 | `test_feign_client_emits_client_role` | `@FeignClient interface X` → `Symbol.role == "CLIENT"`, `"HTTP_CLIENT" in Symbol.capabilities` |
 | 2 | `test_no_legacy_feign_client_role_in_graph` | After build, `MATCH (s:Symbol) WHERE s.role = 'FEIGN_CLIENT' RETURN count(s)` returns 0 |
 | 3 | `test_resttemplate_class_unchanged` | Class with `RestTemplate` field but no `@FeignClient` → role unchanged from today's behaviour (e.g., `SERVICE`), no `HTTP_CLIENT` capability auto-added |
-| 4 | `test_brownfield_feign_client_alias_translated` | YAML with `role_overrides.fqn: "com.x.Y": "FEIGN_CLIENT"` → built graph has `role="CLIENT"`, `"HTTP_CLIENT" in capabilities`, deprecation warning logged |
+| 4 | `test_brownfield_feign_client_role_rejected` | YAML with `role_overrides.fqn: "com.x.Y": "FEIGN_CLIENT"` → build raises `ValueError` whose message contains `'CLIENT'` (so the user is redirected). Same behaviour for `@CodebaseRole(role="FEIGN_CLIENT")` in source. |
 | 5 | `test_brownfield_client_role_accepted` | YAML with `role_overrides.fqn: "com.x.Y": "CLIENT"` → built graph has `role="CLIENT"`. No warning. |
 | 6 | `test_brownfield_http_client_capability_accepted` | YAML with `capability_overrides.fqn: "com.x.Y": ["HTTP_CLIENT"]` → built graph has `"HTTP_CLIENT" in capabilities`. No warning. |
 | 7 | `test_message_producer_capability_unchanged` | Class injecting `KafkaTemplate` → `"MESSAGE_PRODUCER" in capabilities` (regression: this proposal does NOT touch async) |
 | 8 | `test_trace_flow_includes_client_in_stage_2` | trace_flow walks through `_FLOW_STAGES[2]` correctly with the new `CLIENT` literal |
 | 9 | `test_codebase_search_entry_roles_includes_client` | `entry_roles` filter accepts `CLIENT` and excludes `FEIGN_CLIENT` (ensures server.py:1415 was updated) |
 
-Test count target: existing baseline + 9. Combined with PR-F1 (+6) and PR-G1 (+8), total target: **~289 passed, 4 skipped** (266 baseline + 6 + 8 + 9).
+Test count target: existing baseline + 9. Combined with PR-F1 (+6) and PR-G1 (+8), total target: **~289 passed, 4 skipped** (266 baseline + 6 + 8 + 9). Note: test #4 changed from "alias translated" to "role rejected" — same test slot, different assertion.
 
 ### Manual evidence
 
@@ -484,13 +486,11 @@ So the queue is:
 
 | # | Decision | Notes |
 |---|----------|-------|
-| 1 | Should the deprecation alias for `FEIGN_CLIENT` be removed in the next ontology bump after this one, or kept indefinitely? | Recommend remove in the next major bump (v2). Single-release deprecation window is enough. Document in v1 PR description. |
-| 2 | Should `@CodebaseRole(role="CLIENT")` without `@CodebaseCapability(capability="HTTP_CLIENT")` be accepted as-is, or auto-add the capability? | Recommend accept as-is (no auto-add). The user explicitly opted in to `CLIENT` role; they may have a non-HTTP client (e.g., gRPC) where `HTTP_CLIENT` would be wrong. Capabilities are independent. |
-| 3 | Is `_ROLE_SCORE_WEIGHTS["CLIENT"] = 0.06` still right when the role can include brownfield-annotated RestTemplate clients? | Recommend keep `0.06` for v1. Revisit only if behavioural-search drift is reported. |
-| 4 | Should the deprecation alias also apply to `@CodebaseRole(role="FEIGN_CLIENT")` in source, not just YAML? | Recommend yes — the alias should be uniform across all brownfield input layers (annotation + YAML). Add to `collect_annotation_meta_chain` translation. |
-| 5 | Should this proposal be folded into a single PR with PR-F1 / PR-G1 (smaller surface) or kept as PR-H1 (separate ontology bump)? | Recommend separate PR-H1. Combining muddies review. |
-| 6 | Should we also rename `_ROLE_SCORE_WEIGHTS` key? | Yes — covered in §5.2. |
-| 7 | Add a test that checks `VALID_ROLES` contains `CLIENT` but not `FEIGN_CLIENT`? | Recommend yes — guards against accidental re-introduction. Test #2 covers the graph-level check; add a unit test on `VALID_ROLES` directly. |
+| 1 | Should `@CodebaseRole(role="CLIENT")` without `@CodebaseCapability(capability="HTTP_CLIENT")` be accepted as-is, or auto-add the capability? | Recommend accept as-is (no auto-add). The user explicitly opted in to `CLIENT` role; they may have a non-HTTP client (e.g., gRPC) where `HTTP_CLIENT` would be wrong. Capabilities are independent. |
+| 2 | Is `_ROLE_SCORE_WEIGHTS["CLIENT"] = 0.06` still right when the role can include brownfield-annotated RestTemplate clients? | Recommend keep `0.06` for v1. Revisit only if behavioural-search drift is reported. |
+| 3 | Should this proposal be folded into a single PR with PR-F1 / PR-G1 (smaller surface) or kept as PR-H1 (separate ontology bump)? | Recommend separate PR-H1. Combining muddies review. |
+| 4 | Should we also rename `_ROLE_SCORE_WEIGHTS` key? | Yes — covered in §5.2. |
+| 5 | Add a test that checks `VALID_ROLES` contains `CLIENT` but not `FEIGN_CLIENT`? | Recommend yes — guards against accidental re-introduction. Test #2 covers the graph-level check; add a unit test on `VALID_ROLES` directly. |
 
 ## 10. References
 
@@ -507,7 +507,7 @@ So the queue is:
   `role` enum strings, `entry_roles` list
 - `tests/test_lancedb_e2e.py:342` — one e2e assertion
 - `graph_enrich.py:375, 408, 446, 733-735` — brownfield role validation
-  (where the deprecation alias hooks in)
+  (existing `VALID_ROLES` check rejects `FEIGN_CLIENT` for free)
 - `propose/DEFERRED-REST-CLIENT-MIGRATION-PROPOSE.md` — **superseded
   and deleted** by this proposal
 - `propose/FEIGN-NOT-AN-EXPOSER-PROPOSE.md` (PR #25) — orthogonal
