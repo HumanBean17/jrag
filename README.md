@@ -12,6 +12,17 @@ The product vision for this tooling is proposed in [`propose/PRODUCT-VISION.md`]
 > for the assumptions this MCP makes about a Java repo (annotations, DI patterns,
 > service layout, naming) and a per-file map of where to edit the bundle if you
 > can't or don't want to refactor your codebase to match.
+>
+> **Driving this MCP from an agent:**
+> - [`docs/AGENT-GUIDE.md`](./docs/AGENT-GUIDE.md) — copy-paste-into-`QWEN.md` /
+>   `CLAUDE.md` block. Forced reasoning preamble, decision tree, full
+>   reference for all 22 tools, ontology glossary (v9), recovery playbook,
+>   slash-style aliases. Engineered for weak / mid models that otherwise
+>   pick the wrong tool.
+> - [`docs/MANUAL-VERIFICATION-CHECKLIST.md`](./docs/MANUAL-VERIFICATION-CHECKLIST.md)
+>   — 7-phase agent-driven verification you run after indexing your real
+>   project. Each item has a copy-paste prompt and calibration data from
+>   `tests/bank-chat-system`.
 
 ## 1. Install
 
