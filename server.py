@@ -249,6 +249,30 @@ class RoutesListOutput(BaseModel):
     message: str | None = None
 
 
+class ClientRowDto(BaseModel):
+    id: str = ""
+    client_kind: str = ""
+    target_service: str = ""
+    method: str = ""
+    path: str = ""
+    path_template: str = ""
+    path_regex: str = ""
+    member_fqn: str = ""
+    member_id: str = ""
+    microservice: str = ""
+    module: str = ""
+    filename: str = ""
+    start_line: int = 0
+    end_line: int = 0
+    resolved: bool = True
+
+
+class ClientsListOutput(BaseModel):
+    success: bool
+    clients: list[ClientRowDto] = Field(default_factory=list)
+    message: str | None = None
+
+
 class RouteHandlerEntryDto(BaseModel):
     symbol: SymbolDto
     confidence: float = 0.0
@@ -558,6 +582,10 @@ def _symbol_to_dto(s) -> SymbolDto:
 
 def _route_dict_to_dto(d: dict[str, Any]) -> RouteRowDto:
     return RouteRowDto.model_validate(d)
+
+
+def _client_dict_to_dto(d: dict[str, Any]) -> ClientRowDto:
+    return ClientRowDto.model_validate(d)
 
 
 def _clean_str_list(val: Any) -> list[str]:
@@ -1028,6 +1056,38 @@ def create_mcp_server() -> FastMCP:
             limit=limit,
         )
         return RoutesListOutput(success=True, routes=[_route_dict_to_dto(r) for r in rows])
+
+    @mcp.tool(
+        name="list_clients",
+        description=(
+            "List outbound Client nodes from the Kuzu graph (Feign methods and "
+            "annotated RestTemplate/WebClient call declarations). Optional filters: "
+            "microservice, client_kind, target_service, path_prefix, HTTP method."
+        ),
+    )
+    async def list_clients(
+        microservice: str | None = Field(default=None, description="Filter to one microservice key (the caller microservice)."),
+        client_kind: str | None = Field(default=None, description="Exact Client.client_kind match (feign_method, rest_template, web_client)."),
+        target_service: str | None = Field(default=None, description="Exact Client.target_service match."),
+        path_prefix: str | None = Field(default=None, description="Client.path STARTS WITH this string."),
+        method: str | None = Field(default=None, description="HTTP verb on Client.method (GET, POST, …); omit for any."),
+        limit: int = Field(default=100, description="Max rows to return (normalized to 1..500)."),
+    ) -> ClientsListOutput:
+        ok, graph, msg = _require_graph()
+        if not ok or graph is None:
+            return ClientsListOutput(success=False, message=msg)
+        lim = max(1, min(int(limit), 500))
+        normalized_method = (method or "").strip().upper()
+        rows = await asyncio.to_thread(
+            graph.list_clients,
+            microservice=microservice,
+            client_kind=client_kind,
+            target_service=target_service,
+            path_prefix=path_prefix,
+            method=normalized_method,
+            limit=lim,
+        )
+        return ClientsListOutput(success=True, clients=[_client_dict_to_dto(r) for r in rows])
 
     @mcp.tool(
         name="find_route_handlers",
