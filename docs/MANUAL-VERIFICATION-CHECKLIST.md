@@ -290,7 +290,7 @@ your handler types weren't classified as CONTROLLER (Phase 2.1).
 at least one HTTP route (9 routes total / 5 controllers).
 
 **If failing → fix:** if a controller has no route, the framework
-isn't recognised on its methods. Add `@CodebaseRoute` per README §3b.
+isn't recognised on its methods. Add `@CodebaseHttpRoute` / `@CodebaseAsyncRoute` per README §3b.
 
 ### 3.3 ☐ HTTP routes have non-empty path AND method
 
@@ -307,7 +307,7 @@ isn't recognised on its methods. Add `@CodebaseRoute` per README §3b.
 **If failing → fix:** unresolvable SpEL paths are normal in some
 `@RequestMapping` forms — accept them. But if a route has
 `framework=spring_mvc` and no path, it's likely a route you should
-override with `@CodebaseRoute`.
+override with `@CodebaseHttpRoute`.
 
 ### 3.4 ☐ Kafka topics are correct (topics, brokers, kinds)
 
@@ -325,7 +325,7 @@ couldn't resolve — they show up but with empty framework.
 
 **If failing → fix:** for unresolved topics that you DO know the
 literal name of, use brownfield route override:
-`@CodebaseRoute(framework=kafka, kind=kafka_topic, topic="my.topic")`
+`@CodebaseAsyncRoute(topic="my.topic")`
 on the listener method (README §3b).
 
 ### Red flags for Phase 3
@@ -427,7 +427,7 @@ fixture). On a real multi-service project, expect `cross_service > 0`.
 **If failing → fix:** if you expected `cross_service` but got
 `phantom`, the target service isn't in the same indexing root, OR the
 `@FeignClient` URL doesn't resolve to a known service. Tag with
-`@CodebaseClient(clientKind="feign_method", targetService="<name>",
+`@CodebaseClient(clientKind=CodebaseClientKind.feign_method, targetService="<name>",
 path="…")` (README §3c).
 
 ### 5.2 ☐ ASYNC_CALLS edges connect producer → topic → listener
@@ -550,12 +550,12 @@ annotation wasn't matched by simple name (typo? wrong package?), or
 the build wasn't rebuilt. `graph_meta` will show
 `routes_from_brownfield_pct > 0` once any brownfield is active.
 
-### 7.2 ☐ `@CodebaseRoute` on a method registers a route
+### 7.2 ☐ `@CodebaseHttpRoute` / `@CodebaseAsyncRoute` on a method registers a route
 
 **Verification prompt:**
 
 > Pick one method where you added
-> `@CodebaseRoute(framework=…, kind=…, path="…", method="…")`. State
+> `@CodebaseHttpRoute(path="…", method="…")` or `@CodebaseAsyncRoute(topic="…")`. State
 > the path/method. Call
 > `get_route_by_path({"microservice":"<your-service>","path_template":"<path>","method":"<method>"})`.
 > The route should resolve. Then `find_route_handlers({"route_id":"<id>"})`
@@ -565,9 +565,8 @@ the build wasn't rebuilt. `graph_meta` will show
 After you add one, `graph_meta().routes_from_brownfield_pct > 0`.
 
 **If failing → fix:** route doesn't resolve → check that the
-`@CodebaseRoute` annotation has the **correct enum values** (see
-README §3b — `framework` and `kind` enums are case-sensitive
-lowercase). Verify `path_template` matches the normalised servlet form
+annotation arguments match the route type (HTTP requires `path` + `method`,
+async requires `topic`). Verify `path_template` matches the normalised servlet form
 (e.g. `/users/{id}` → `/users/{}`).
 
 ### 7.3 ☐ `@CodebaseClient` on a method creates an outbound HTTP_CALLS edge
@@ -575,7 +574,7 @@ lowercase). Verify `path_template` matches the normalised servlet form
 **Verification prompt:**
 
 > Pick one method where you added
-> `@CodebaseClient(clientKind="rest_template", targetService="<svc>", path="…", method="…")`.
+> `@CodebaseClient(clientKind=CodebaseClientKind.rest_template, targetService="<svc>", path="…", method="…")`.
 > Call `find_callees({"fqn_or_signature":"<your-method-fqn>","depth":1,"limit":20})`.
 > An outbound edge to a Route node (the target service's endpoint)
 > should appear. Then call `graph_meta()` and report
@@ -591,7 +590,7 @@ if it returns nothing, index the target service alongside.
 
 ### Red flags for Phase 7
 
-- `routes_from_brownfield_pct = 0` after adding `@CodebaseRoute` →
+- `routes_from_brownfield_pct = 0` after adding `@CodebaseHttpRoute` / `@CodebaseAsyncRoute` →
   build wasn't rebuilt, or annotation didn't parse (typo in enum
   value)
 - Brownfield override "tightens" but doesn't override → this is

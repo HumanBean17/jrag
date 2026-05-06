@@ -179,8 +179,9 @@ root (`role_overrides:`, `route_overrides:`, `http_client_overrides:`,
 
 - `@CodebaseRole` / `@CodebaseCapability` / `@CodebaseCapabilities`
   (class-level role + capabilities) — see README §3a.
-- `@CodebaseRoute` / `@CodebaseRoutes` + `CodebaseRouteFrameworkKind` /
-  `CodebaseRouteKind` (method-level inbound routes) — see README §3b.
+- `@CodebaseHttpRoute` / `@CodebaseHttpRoutes` and
+  `@CodebaseAsyncRoute` / `@CodebaseAsyncRoutes` (method-level inbound routes)
+  — see README §3b.
 - `@CodebaseClient` / `@CodebaseClients` and `@CodebaseProducer` /
   `@CodebaseProducers` (method-level outbound HTTP / messaging) — see
   README §3c.

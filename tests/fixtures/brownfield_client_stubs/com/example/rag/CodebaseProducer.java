@@ -10,7 +10,6 @@ import java.lang.annotation.Target;
 @Retention(RetentionPolicy.SOURCE)
 @Repeatable(CodebaseProducers.class)
 public @interface CodebaseProducer {
-    String clientKind() default "kafka_send";
+    CodebaseProducerKind producerKind() default CodebaseProducerKind.kafka_send;
     String topic();
-    String broker() default "";
 }

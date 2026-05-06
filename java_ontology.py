@@ -27,11 +27,6 @@ VALID_CAPABILITIES: frozenset[str] = frozenset(
 VALID_ROUTE_FRAMEWORKS: frozenset[str] = frozenset((
     "spring_mvc",
     "webflux",
-    "feign",
-    "kafka",
-    "rabbitmq",
-    "jms",
-    "stream",
 ))
 
 VALID_ROUTE_KINDS: frozenset[str] = frozenset((
@@ -47,6 +42,9 @@ VALID_CLIENT_KINDS: frozenset[str] = frozenset((
     "feign_method",
     "rest_template",
     "web_client",
+))
+
+VALID_PRODUCER_KINDS: frozenset[str] = frozenset((
     "kafka_send",
     "stream_bridge_send",
 ))
@@ -66,15 +64,13 @@ VALID_ASYNC_CALL_STRATEGIES: frozenset[str] = frozenset((
     "unresolved",
 ))
 
-VALID_CALL_MATCHES: frozenset[str] = frozenset((
+VALID_HTTP_CALL_MATCHES: frozenset[str] = frozenset((
     "cross_service",
     "intra_service",
     "ambiguous",
     "phantom",
     "unresolved",
 ))
-# Back-compat alias; retained for one release while callers migrate.
-VALID_HTTP_CALL_MATCHES = VALID_CALL_MATCHES
 
 __all__ = [
     "VALID_ROLES",
@@ -82,8 +78,8 @@ __all__ = [
     "VALID_ROUTE_FRAMEWORKS",
     "VALID_ROUTE_KINDS",
     "VALID_CLIENT_KINDS",
+    "VALID_PRODUCER_KINDS",
     "VALID_HTTP_CALL_STRATEGIES",
     "VALID_ASYNC_CALL_STRATEGIES",
-    "VALID_CALL_MATCHES",
     "VALID_HTTP_CALL_MATCHES",
 ]

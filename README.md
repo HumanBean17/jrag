@@ -321,7 +321,7 @@ cross_service_resolution: auto          # default when omitted
 
 With `brownfield_only`, pass 6 does not promote auto-detected call sites to
 `cross_service` matches: only edges where both the caller strategy and every
-matched route’s `source_layer` come from brownfield (`@CodebaseRoute`,
+matched route’s `source_layer` come from brownfield (`@CodebaseHttpRoute` / `@CodebaseAsyncRoute`,
 `@CodebaseClient`, YAML overrides, meta-annotation closure, or FQN maps) stay
 `cross_service`. Everything else that would have been a cross-service match
 becomes `unresolved`. `intra_service`, `phantom`, and `ambiguous` behaviour is
@@ -330,10 +330,10 @@ unchanged. Unknown values log a warning and behave like `auto`.
 Resolution order for each method mirrors role brownfield: built-in extraction,
 then annotation map, then meta-annotation closure (same `collect_annotation_meta_chain`
 index as roles — see `plans/completed/PLAN-BROWNFIELD-ROLE-OVERRIDES-design-fixes.md`),
-then in-source `@CodebaseRoute` / `@CodebaseRoutes`, then per-type FQN map
+then in-source `@CodebaseHttpRoute` / `@CodebaseAsyncRoute`, then per-type FQN map
 (last writer wins on overlapping fields). For the in-source form, copy the
-`@CodebaseRoute` / `@CodebaseRoutes` / `CodebaseRouteFrameworkKind` /
-`CodebaseRouteKind` stubs shown under **3. Last resort — source stubs**
+`@CodebaseHttpRoute` / `@CodebaseAsyncRoute` stubs shown under
+**3. Last resort — source stubs**
 below into any package — no Maven dependency needed.
 
 **2. Meta-annotation walk (automatic)** — `@interface` definitions in your
@@ -399,41 +399,47 @@ Legacy string-literal forms (`@CodebaseRole("SERVICE")`,
 `@CodebaseCapability("MESSAGE_LISTENER")`) are a breaking change and are no
 longer applied by the resolver.
 
-**3b. Routes** — method-level. Apply `@CodebaseRoute` on the inbound entry
-point (HTTP handler, Kafka listener, JMS consumer, etc.) so route
-extraction (pass 4) can register it without recognising the framework:
+**Direction matters (inbound vs outbound):**
+
+| Direction | Annotation | Purpose | Feign handling |
+|---|---|---|---|
+| Inbound | `@CodebaseHttpRoute`, `@CodebaseAsyncRoute` | Declare handlers/listeners your service exposes as `Route` nodes. | Not used for Feign. |
+| Outbound | `@CodebaseClient`, `@CodebaseProducer` | Declare call sites/publish sites your service invokes (pass 5/6 caller edges). | `@FeignClient` declarations are outbound (`clientKind=feign_method`), not inbound `Route` rows. |
+
+**3b. Routes** — method-level inbound annotations are split by channel:
+`@CodebaseHttpRoute` for HTTP handlers and `@CodebaseAsyncRoute` for async
+listeners.
 
 ```java
 package com.example.rag; // any package
 
 import java.lang.annotation.*;
 
-/** Mirrors VALID_ROUTE_FRAMEWORKS in java_ontology.py */
-public enum CodebaseRouteFrameworkKind {
-    spring_mvc, webflux, feign, kafka, rabbitmq, jms, stream
-}
-
-/** Mirrors VALID_ROUTE_KINDS in java_ontology.py */
-public enum CodebaseRouteKind {
-    http_endpoint, http_consumer, kafka_topic, rabbit_queue, jms_destination, stream_binding
+@Target(ElementType.METHOD)
+@Retention(RetentionPolicy.SOURCE)
+@Repeatable(CodebaseHttpRoutes.class)
+public @interface CodebaseHttpRoute {
+    String path();
+    String method();
 }
 
 @Target(ElementType.METHOD)
 @Retention(RetentionPolicy.SOURCE)
-@Repeatable(CodebaseRoutes.class)
-public @interface CodebaseRoute {
-    CodebaseRouteFrameworkKind framework();
-    CodebaseRouteKind kind();
-    String path()   default "";
-    String method() default "";
-    String topic()  default "";
-    String broker() default "";
+public @interface CodebaseHttpRoutes {
+    CodebaseHttpRoute[] value();
 }
 
 @Target(ElementType.METHOD)
 @Retention(RetentionPolicy.SOURCE)
-public @interface CodebaseRoutes {
-    CodebaseRoute[] value();
+@Repeatable(CodebaseAsyncRoutes.class)
+public @interface CodebaseAsyncRoute {
+    String topic();
+}
+
+@Target(ElementType.METHOD)
+@Retention(RetentionPolicy.SOURCE)
+public @interface CodebaseAsyncRoutes {
+    CodebaseAsyncRoute[] value();
 }
 ```
 
@@ -441,45 +447,38 @@ Usage:
 
 ```java
 // HTTP endpoint on a legacy framework the built-in extractor doesn't know
-@CodebaseRoute(
-    framework = CodebaseRouteFrameworkKind.spring_mvc,
-    kind      = CodebaseRouteKind.http_endpoint,
-    path      = "/chat/joinOperator",
-    method    = "POST")
+@CodebaseHttpRoute(path = "/chat/joinOperator", method = "POST")
 public Reply joinOperator(Request req) { /* ... */ }
 
 // Kafka consumer
-@CodebaseRoute(
-    framework = CodebaseRouteFrameworkKind.kafka,
-    kind      = CodebaseRouteKind.kafka_topic,
-    topic     = "chat.follow-up",
-    broker    = "chat-events")
+@CodebaseAsyncRoute(topic = "chat.follow-up")
 public void onFollowUp(Event e) { /* ... */ }
 ```
 
-`path` / `method` are required for HTTP kinds; `topic` (and optionally
-`broker`) for messaging kinds. Unknown enum values fall through Layer A /
-Layer B resolution unchanged. Repeat the annotation to register multiple
-routes against the same method — the compiler wraps them in
-`@CodebaseRoutes` automatically.
+`path` / `method` are required for HTTP routes; `topic` is required for async
+routes. Repeatable containers are `@CodebaseHttpRoutes` and
+`@CodebaseAsyncRoutes`.
 
 **3c. Clients & producers** — method-level. Apply `@CodebaseClient` on
 outbound HTTP call sites and `@CodebaseProducer` on outbound message-publish
-calls so caller-side resolution (pass 6) can register them. `clientKind` is
-a free-form string but should be one of `feign_method`, `rest_template`,
-`web_client`, `kafka_send`, `stream_bridge_send` (see `VALID_CLIENT_KINDS`
-in `java_ontology.py`); unknown values are dropped with a stderr warning.
+calls so caller-side resolution (pass 6) can register them. Both use enum
+typing (`CodebaseClientKind` and `CodebaseProducerKind`) for compile-time
+validation.
 
 ```java
 package com.example.rag; // any package
 
 import java.lang.annotation.*;
 
+public enum CodebaseClientKind {
+    feign_method, rest_template, web_client
+}
+
 @Target(ElementType.METHOD)
 @Retention(RetentionPolicy.SOURCE)
 @Repeatable(CodebaseClients.class)
 public @interface CodebaseClient {
-    String clientKind();
+    CodebaseClientKind clientKind();
     String targetService() default "";
     String path()          default "";
     String method()        default "";
@@ -491,13 +490,16 @@ public @interface CodebaseClients {
     CodebaseClient[] value();
 }
 
+public enum CodebaseProducerKind {
+    kafka_send, stream_bridge_send
+}
+
 @Target(ElementType.METHOD)
 @Retention(RetentionPolicy.SOURCE)
 @Repeatable(CodebaseProducers.class)
 public @interface CodebaseProducer {
-    String clientKind() default "kafka_send";
+    CodebaseProducerKind producerKind() default CodebaseProducerKind.kafka_send;
     String topic();
-    String broker()     default "";
 }
 
 @Target(ElementType.METHOD)
@@ -512,7 +514,7 @@ Usage:
 ```java
 // Outbound HTTP call to another service
 @CodebaseClient(
-    clientKind    = "rest_template",
+    clientKind    = CodebaseClientKind.rest_template,
     targetService = "chat-core",
     path          = "/chat/joinOperator",
     method        = "POST")
@@ -520,13 +522,12 @@ public Reply callJoinOperator(Request req) { /* ... */ }
 
 // Kafka publisher
 @CodebaseProducer(
-    clientKind = "kafka_send",
-    topic      = "chat.follow-up",
-    broker     = "chat-events")
+    producerKind = CodebaseProducerKind.kafka_send,
+    topic        = "chat.follow-up")
 public void publishFollowUp(Event e) { /* ... */ }
 ```
 
-As with `@CodebaseRoute`, multiple `@CodebaseClient` / `@CodebaseProducer`
+As with inbound annotations, multiple `@CodebaseClient` / `@CodebaseProducer`
 annotations on the same method are wrapped in `@CodebaseClients` /
 `@CodebaseProducers` automatically. Partial overrides are non-destructive
 (see *Caller-side brownfield overrides* above).
@@ -534,7 +535,7 @@ annotations on the same method are wrapped in `@CodebaseClients` /
 Resolution order in code: built-in inference, then config annotation maps,
 then meta-annotation walk, then `@CodebaseRole` / `@CodebaseCapability`, then
 `role_overrides.fqn` (highest priority for explicit per-type config). Route
-composition uses the same Layer A index, then `@CodebaseRoute` / `@CodebaseRoutes`,
+composition uses the same Layer A index, then `@CodebaseHttpRoute` / `@CodebaseAsyncRoute`,
 then `route_overrides.fqn`. Rebuild Lance + Kuzu (`refresh_code_index` or
 `build_ast_graph.py`) after changing overrides.
 
@@ -584,7 +585,7 @@ keeps `client_kind=rest_template` and `method=GET` while changing only the path.
 For in-source stubs, see **3c. Clients & producers** above for the full
 `@CodebaseClient` / `@CodebaseClients` / `@CodebaseProducer` /
 `@CodebaseProducers` `@interface` definitions and usage examples (same
-"simple-name only" matching as `@CodebaseRoute` stubs).
+"simple-name only" matching as brownfield route stubs).
 
 **Kuzu vs Lance (Layer A consistency):** both the Kuzu graph writer and Lance
 chunk enrichment call **one** function, `graph_enrich.collect_annotation_meta_chain`,

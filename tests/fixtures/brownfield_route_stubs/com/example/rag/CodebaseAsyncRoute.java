@@ -6,12 +6,9 @@ import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
-@Target(ElementType.METHOD)
+@Target({ElementType.METHOD})
 @Retention(RetentionPolicy.SOURCE)
-@Repeatable(CodebaseClients.class)
-public @interface CodebaseClient {
-    CodebaseClientKind clientKind();
-    String targetService() default "";
-    String path() default "";
-    String method() default "";
+@Repeatable(CodebaseAsyncRoutes.class)
+public @interface CodebaseAsyncRoute {
+    String topic();
 }

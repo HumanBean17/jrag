@@ -62,9 +62,9 @@ def test_feign_caller_resolves_to_target_endpoint() -> None:
     assert route.microservice == "svc-b"
 
 
-def test_feign_route_node_still_present() -> None:
+def test_feign_route_node_is_not_emitted() -> None:
     tables = _build_tables(_FIXTURE)
-    assert any(
+    assert not any(
         r.kind == "http_consumer"
         and r.framework == "feign"
         and r.path_template == "/chat/joinOperator"
@@ -79,7 +79,7 @@ def test_meta_reports_exposes_suppressed_feign_count(tmp_path: Path) -> None:
     write_kuzu(db_path, tables, source_root=_FIXTURE, verbose=False)
     KuzuGraph._instance = None
     KuzuGraph._instance_path = None
-    assert KuzuGraph(str(db_path)).meta()["pass4_exposes_suppressed_feign"] == 1
+    assert KuzuGraph(str(db_path)).meta()["pass4_exposes_suppressed_feign"] == 0
 
 
 def test_meta_returns_none_for_old_graphs(tmp_path: Path) -> None:
