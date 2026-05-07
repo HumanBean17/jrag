@@ -19,7 +19,7 @@ The product vision for this tooling is proposed in [`propose/PRODUCT-VISION.md`]
 >   `describe`, `neighbors`), shared **`NodeFilter`**, **edge-type taxonomy**,
 >   required `neighbors` arguments, ontology glossary (**v11**), recovery
 >   playbook, and slash-style aliases. Operators use **`user-rag`** CLI for
->   refresh / meta / diagnostics — not MCP.
+>   refresh / meta / diagnostics — not MCP; see [`docs/USER-RAG-CLI.md`](./docs/USER-RAG-CLI.md).
 > - [`docs/MANUAL-VERIFICATION-CHECKLIST.md`](./docs/MANUAL-VERIFICATION-CHECKLIST.md)
 >   — 7-phase agent-driven verification you run after indexing your real
 >   project. Each item has a copy-paste prompt and calibration data from
@@ -160,6 +160,8 @@ The DB is dropped and rebuilt from scratch on each run (Phase 1 is a full rebuil
 | `neighbors` | one-hop walk; REQUIRED direction + edge_types | `ids: str \| list[str]`, `direction: "in"\|"out"`, `edge_types: list[str]`, `limit: int=25`, `offset: int=0`, `filter: NodeFilter \| None` | `{"ids":"route:chat-core:POST:/chat/joinOperator","direction":"in","edge_types":["HTTP_CALLS","ASYNC_CALLS"]}` |
 
 ## CLI reference
+
+Operator-focused playbook: [`docs/USER-RAG-CLI.md`](./docs/USER-RAG-CLI.md) (workflows, exit codes, env alignment).
 
 Use `user-rag --help` to see all subcommands. Output mode is automatic:
 JSON when piped, pretty text when run in a TTY.
