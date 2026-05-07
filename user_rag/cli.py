@@ -57,6 +57,7 @@ def _apply_graph_env(args: argparse.Namespace) -> None:
 
 
 def _cmd_refresh(args: argparse.Namespace) -> int:
+    """Return 1 for launched-subprocess failures, 2 for internal pre-launch errors."""
     _apply_graph_env(args)
     result = asyncio.run(server.run_refresh_pipeline(quiet=bool(args.quiet)))
     payload = result.model_dump()
@@ -83,6 +84,7 @@ def _cmd_tables(args: argparse.Namespace) -> int:
 
 def _cmd_diagnose_ignore(args: argparse.Namespace) -> int:
     _apply_graph_env(args)
+    # Keep this after _apply_graph_env so relative paths resolve from --source-root.
     root = server._project_root()
     raw = Path(args.path)
     try:
@@ -165,7 +167,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return int(handler(args))
     except Exception as exc:  # pragma: no cover - defensive top-level guard
-        _emit({"success": False, "message": f"internal error: {exc}"})
+        _emit({"success": False, "exit_code": 2, "message": f"internal error: {exc}"})
         return 2
 
 

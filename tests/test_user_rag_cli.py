@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import json
 import os
 import pty
@@ -73,7 +74,13 @@ def test_cli_meta_pretty_when_tty(corpus_root, kuzu_db_path) -> None:
             ready, _, _ = select.select([master], [], [], 0.2)
             data = b""
             if ready:
-                data = os.read(master, 4096)
+                try:
+                    data = os.read(master, 4096)
+                except OSError as exc:
+                    # Some platforms report slave-closed as EIO on master fd.
+                    if exc.errno == errno.EIO and proc.poll() is not None:
+                        break
+                    raise
                 if data:
                     chunks.append(data)
             if proc.poll() is not None and (not ready or not data):
@@ -137,6 +144,27 @@ def test_cli_analyze_pr_with_diff_file(corpus_root, kuzu_db_path, tmp_path) -> N
         encoding="utf-8",
     )
     proc = _run_cli(["analyze-pr", "--diff-file", str(diff_path)], env=env)
+    assert proc.returncode == 0, proc.stderr
+    payload = json.loads(proc.stdout)
+    assert "risk_score" in payload
+    assert "blast_radius_total" in payload
+
+
+def test_cli_analyze_pr_with_diff_stdin(corpus_root, kuzu_db_path) -> None:
+    env = _base_env(corpus_root)
+    env["KUZU_DB_PATH"] = str(kuzu_db_path)
+    diff_text = """diff --git a/chat-assign/src/main/java/com/bank/chat/assign/service/ChatManagementService.java b/chat-assign/src/main/java/com/bank/chat/assign/service/ChatManagementService.java
+--- a/chat-assign/src/main/java/com/bank/chat/assign/service/ChatManagementService.java
++++ b/chat-assign/src/main/java/com/bank/chat/assign/service/ChatManagementService.java
+@@ -48,5 +48,5 @@
+     @Transactional
+     public void assign(AssignmentRequest request) {
+-        if (request.getConversationId() == null || request.getConversationId().isBlank()) {
++        if (request.getConversationId() == null || request.getConversationId().isBlank() ) {
+             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "conversationId required");
+         }
+"""
+    proc = _run_cli(["analyze-pr", "--diff-stdin"], env=env, stdin=diff_text)
     assert proc.returncode == 0, proc.stderr
     payload = json.loads(proc.stdout)
     assert "risk_score" in payload
