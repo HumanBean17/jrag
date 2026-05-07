@@ -130,8 +130,9 @@ def test_client_method_field_access_httpmethod_post_stores_non_verb_method_strin
 ) -> None:
     """``method = HttpMethod.POST`` is string-parsed as raw ``HttpMethod.POST`` → ``HTTPMETHOD.POST``.
 
-    Callers filtering ``list_clients(method=\"POST\")`` see **no rows** even though a
-    ``Client`` exists; use static-import ``POST`` or a string literal ``\"POST\"``.
+    Callers filtering ``find(kind=\"client\", filter={\"client_method\":\"POST\"})`` see
+    **no rows** even though a ``Client`` exists; use static-import ``POST`` or a
+    string literal ``\"POST\"``.
     """
     extra = {
         "javax/ws/rs/HttpMethod.java": """package javax.ws.rs;

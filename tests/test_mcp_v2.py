@@ -111,7 +111,42 @@ def test_find_route_by_path_prefix(kuzu_graph) -> None:
 def test_find_client_by_client_kind(kuzu_graph) -> None:
     out = find_v2("client", {"client_kind": "feign_method"}, graph=kuzu_graph)
     assert out.success is True
-    assert isinstance(out.results, list)
+    if not out.results:
+        pytest.skip("fixture has no feign_method client rows")
+    assert all("feign_method" in r.fqn for r in out.results)
+
+
+def test_find_client_by_target_service(kuzu_graph) -> None:
+    all_clients = find_v2("client", {}, graph=kuzu_graph)
+    assert all_clients.success is True
+    target = next((r for r in all_clients.results if r.fqn.strip()), None)
+    if target is None:
+        pytest.skip("no client rows with target metadata in fixture")
+    target_service = target.fqn.split(" ", 1)[0]
+    out = find_v2("client", {"target_service": target_service}, graph=kuzu_graph)
+    assert out.success is True
+    assert out.results
+    assert all(r.fqn.startswith(f"{target_service} ") for r in out.results)
+
+
+def test_find_client_by_path_prefix(kuzu_graph) -> None:
+    all_clients = find_v2("client", {}, graph=kuzu_graph)
+    assert all_clients.success is True
+    sample = next((r for r in all_clients.results if "/" in r.fqn), None)
+    if sample is None:
+        pytest.skip("no client rows with path metadata in fixture")
+    parts = sample.fqn.split(" ")
+    path = parts[-1] if parts else ""
+    if not path.startswith("/"):
+        pytest.skip("sample client path is unavailable")
+    prefix = path[: min(len(path), 5)]
+    out = find_v2("client", {"target_path_prefix": prefix}, graph=kuzu_graph)
+    assert out.success is True
+    assert out.results
+    for ref in out.results:
+        bits = ref.fqn.split(" ")
+        assert bits
+        assert bits[-1].startswith(prefix)
 
 
 def test_find_silent_ignore_irrelevant_filter_keys(kuzu_graph) -> None:
