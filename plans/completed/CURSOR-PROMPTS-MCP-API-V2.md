@@ -126,7 +126,7 @@ print('callers:', len(edges.results))
 
 ### Context (read these, don't paste them)
 
-- [`propose/MCP-API-V2-REDESIGN-PROPOSE.md`](../propose/MCP-API-V2-REDESIGN-PROPOSE.md)
+- [`propose/completed/MCP-API-V2-REDESIGN-PROPOSE.md`](../../propose/completed/MCP-API-V2-REDESIGN-PROPOSE.md)
   — the why; specifically §3 (proposed surface) and §4 (`NodeFilter` shape).
 - [`plans/PLAN-MCP-API-V2.md` § Resolved design decisions](./PLAN-MCP-API-V2.md#resolved-design-decisions-from-the-propose)
   — locked decisions; do not relitigate.
@@ -336,7 +336,7 @@ grep -nE "^### Tool reference" README.md
 
 - [`plans/PLAN-MCP-API-V2.md` § PR-V2-3](./PLAN-MCP-API-V2.md#pr-v2-3--delete-v1-navigation-tools)
   — list of the 18 tools to delete.
-- [`propose/MCP-API-V2-REDESIGN-PROPOSE.md`](../propose/MCP-API-V2-REDESIGN-PROPOSE.md)
+- [`propose/completed/MCP-API-V2-REDESIGN-PROPOSE.md`](../../propose/completed/MCP-API-V2-REDESIGN-PROPOSE.md)
   §11 mapping table — for rewriting `propose/PRODUCT-VISION.md` examples.
 - `server.py` history (git log) — to identify each tool's helper-function
   graveyard.
@@ -471,7 +471,7 @@ and `user-rag` is a console-script CLI exposing 5 ops subcommands. The triplet
 of artifacts (propose / plan / cursor-prompts) is the audit trail; close the
 loop by:
 
-1. Move [`propose/MCP-API-V2-REDESIGN-PROPOSE.md`](../propose/MCP-API-V2-REDESIGN-PROPOSE.md)
+1. Move [`propose/MCP-API-V2-REDESIGN-PROPOSE.md`](../../propose/completed/MCP-API-V2-REDESIGN-PROPOSE.md)
    to `propose/completed/` and update `**Status**` to `locked`.
 2. Move [`plans/PLAN-MCP-API-V2.md`](./PLAN-MCP-API-V2.md) to
    `plans/completed/PLAN-MCP-API-V2.md` (mirrors `PLAN-LIST-CLIENTS-MCP-TOOL.md`
