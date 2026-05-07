@@ -78,8 +78,8 @@ same node ids on the same fixture.
 
 ### 1. New file `mcp_v2.py` — handlers + shared schema
 
-- Define Pydantic model `NodeFilter` per propose §4 (3 universal + 4 symbol-only +
-  3 route-only + 4 client-only optional keys; total 14 optional fields, 0 required).
+- Define Pydantic model `NodeFilter` per propose §4 (3 universal + 5 symbol-only +
+  3 route-only + 4 client-only optional keys; total 15 optional fields, 0 required).
 - Define output models:
   - `SearchHit { chunk_id, symbol_id?, fqn?, score, snippet, microservice?, module?, role? }`
   - `NodeRef { id, kind, fqn, microservice?, module?, role? }`
@@ -190,12 +190,15 @@ Equivalence comparison: assert sorted set of returned ids is equal between v1 an
 v2 calls for the same input. Ignore field-by-field DTO differences; the
 equivalence is at the ids level. v2 is a refactor, not a behaviour change.
 
-Final test count expectation: existing **327 passed, 4 skipped** + **32 new** =
-**359 passed, 4 skipped**.
+Final test count expectation: **baseline + 32 new** (18 unit + 14 equivalence).
+DoD is the delta and the new tests being green, not an absolute total — baseline
+counts drift between branches and across machines.
 
 ## Definition of done (PR-V2-1)
 
-- `python -m pytest tests -q` reports 359 passed, 4 skipped.
+- Full suite green (`python -m pytest tests -q` reports zero failures).
+- The 32 new tests are present in `tests/test_mcp_v2.py` (18) and
+  `tests/test_mcp_v2_equivalence.py` (14), all passing.
 - `grep -nE "@mcp.tool" server.py | wc -l` returns 27 (23 v1 + 4 v2).
 - `grep -nE "trace_v2|ask_v2|impact_v2" mcp_v2.py` returns 0.
 - `grep -nE 'kind\s*[:=]' mcp_v2.py | grep -E 'def (describe_v2|neighbors_v2)'`
@@ -267,11 +270,13 @@ will export.
    `search` → pick top hit → `describe` → `neighbors(in, [CALLS])`. Asserts each
    step returns ≥ 1 result on bank-chat-system fixture.
 
-Final test count: 359 (after PR-V2-1) + 6 = **365 passed, 4 skipped**.
+Final test count: **previous baseline + 6 new** (`tests/test_mcp_v2_compose.py`).
+DoD is the delta + suite-green, not an absolute total.
 
 ## Definition of done (PR-V2-2)
 
-- `python -m pytest tests -q` reports 365 passed, 4 skipped.
+- Full suite green.
+- 6 new tests in `tests/test_mcp_v2_compose.py` present and passing.
 - `describe(any_id)` always returns `edge_summary` (non-None) for known nodes.
 - `search` populates `symbol_id` whenever the chunk row carries it.
 - `graph_meta()` output schema includes `edge_counts: dict[str, int]` covering
@@ -357,12 +362,15 @@ No new tests. Modify the existing surface assertion:
   `describe`, `neighbors`) + 5 operational (`graph_meta`, `analyze_pr`,
   `diagnose_ignore`, `list_code_index_tables`, `refresh_code_index`).
 
-Final test count: 365 (after PR-V2-2) − 14 (deleted equivalence tests) + 0–1
-(surface assertion may be new) = **351 passed, 4 skipped** (give or take 1).
+Final test count: **previous baseline − 14 deleted equivalence tests + 0–1 new
+surface assertion**. DoD is suite-green and the deleted file no longer present,
+not an absolute total.
 
 ## Definition of done (PR-V2-3)
 
-- `python -m pytest tests -q` reports ~351 passed, 4 skipped.
+- Full suite green.
+- `tests/test_mcp_v2_equivalence.py` is deleted (verify
+  `ls tests/test_mcp_v2_equivalence.py 2>&1` returns "No such file").
 - `grep -cE "@mcp.tool" server.py` returns 9.
 - `grep -cE "name=\"(codebase_search|find_implementors|find_subclasses|
   find_injectors|find_callers|find_callees|list_routes|list_clients|
@@ -413,11 +421,14 @@ Implementation rules:
     `diagnose_dict(abs_path)`.
   - `analyze-pr` → reads diff text from `--diff-file` or stdin and calls
     `pr_analysis.analyze_pr_pipeline(graph, diff_text)`.
-- Output mode auto-detected:
+- Output mode auto-detected; **no user-facing flag controls it**:
   - `sys.stdout.isatty()` → pretty-print (use `rich` if already a transitive dep;
     otherwise plain indented text).
   - Not a TTY (piped) → `json.dumps(..., default=_jsonable, sort_keys=True,
     indent=None)` — single-line JSON for shell pipelines.
+  - Do **not** add `--pretty`, `--json`, or any equivalent override. The single
+    `isatty()` switch is the contract; tests force it via PTY (see Tests §
+    below).
 - Exit codes: 0 on success, 1 on user error (bad path, missing diff), 2 on
   internal error.
 
@@ -471,8 +482,13 @@ text=True, env={"LANCEDB_MCP_PROJECT_ROOT": ...})` so tests don't depend on
 
 1. `test_cli_meta_outputs_valid_json_when_piped` — assert stdout is JSON-parseable
    and contains `edge_counts`.
-2. `test_cli_meta_pretty_when_tty` — invoke with `force_color`/PTY shim or
-   `--pretty` flag; assert output is not valid JSON (pretty-printed).
+2. `test_cli_meta_pretty_when_tty` — invoke under a real PTY using
+   `os.openpty()` (or `pty.spawn`) so `sys.stdout.isatty()` returns True; assert
+   output is **not** valid JSON (i.e. pretty-printed). Do **not** add a
+   `--pretty` CLI flag — the only switch is `isatty()`. If CI on the target
+   platform makes PTY-based testing flaky, mark this single test
+   `@pytest.mark.skipif(...)` with a clear reason rather than introducing a
+   side-door flag.
 3. `test_cli_tables_lists_known_table` — bank-chat-system fixture rebuilt; assert
    `java` table in output.
 4. `test_cli_diagnose_ignore_walked_path` — pass a path inside the fixture;
@@ -490,11 +506,13 @@ text=True, env={"LANCEDB_MCP_PROJECT_ROOT": ...})` so tests don't depend on
 `tests/test_server.py` (or final-surface test) — update tool-count assertion to
 **exactly 4** registered MCP tools.
 
-Final test count: 351 (after PR-V2-3) + 8 = **359 passed, 4 skipped**.
+Final test count: **previous baseline + 8 new** (`tests/test_user_rag_cli.py`).
+DoD is the delta + suite-green, not an absolute total.
 
 ## Definition of done (PR-V2-4)
 
-- `python -m pytest tests -q` reports 359 passed, 4 skipped.
+- Full suite green.
+- 8 new tests in `tests/test_user_rag_cli.py` present and passing.
 - `grep -cE "@mcp.tool" server.py` returns **4**.
 - `pip install .` (or `pip install -e .`) succeeds; `user-rag --help` lists 5
   subcommands.

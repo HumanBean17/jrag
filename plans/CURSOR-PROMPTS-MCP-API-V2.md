@@ -19,9 +19,17 @@ until the prior PR is merged to `master`.
 - No graph schema changes anywhere in this workstream. Do not bump
   `ONTOLOGY_VERSION` in any PR.
 - Run the full suite (`python -m pytest tests -q`) before opening the PR.
-  Match the test count exactly to the plan's "Final test count" line.
+  Express completion as **baseline + N new** (or − deletions), not as an
+  absolute total.
 - PR description must include: scope statement (one sentence), manual evidence
-  block, test count line, link to the matching `PLAN-MCP-API-V2.md` section.
+  block, link to the matching `PLAN-MCP-API-V2.md` section, and the new-test
+  delta line.
+- **Manual-evidence commands are samples.** They reference the
+  `tests/bank-chat-system` fixture and concrete ids/paths for illustration.
+  Sample output may vary depending on the local fixture state (rebuilds,
+  ontology drift, machine-specific paths). Adapt ids to whatever the local
+  fixture actually contains; the **shape** of the output is the contract, not
+  the exact strings.
 
 ---
 
@@ -74,8 +82,9 @@ for the authoritative list. Headline items:
 See [`plans/PLAN-MCP-API-V2.md` § PR-V2-1 → Tests for PR-V2-1](./PLAN-MCP-API-V2.md#tests-for-pr-v2-1)
 for the full enumeration (18 + 14 = 32 new tests; names are prescribed).
 
-Final: `python -m pytest tests -q` must report **359 passed, 4 skipped**
-(327 baseline + 32 new).
+Final: full suite is green and 32 new tests are added — 18 in
+`tests/test_mcp_v2.py` and 14 in `tests/test_mcp_v2_equivalence.py`. Express
+completion as **baseline + 32 new**, not an absolute count (baselines drift).
 
 ### Manual evidence (paste in PR description)
 
@@ -104,7 +113,8 @@ print('callers:', len(edges.results))
 ### Definition of Done
 
 - [ ] All deliverables shipped per plan §PR-V2-1.
-- [ ] `python -m pytest tests -q` → 359 passed, 4 skipped.
+- [ ] Full suite green; 32 new tests (18 in `tests/test_mcp_v2.py` + 14 in
+      `tests/test_mcp_v2_equivalence.py`) all pass.
 - [ ] `grep -cE "@mcp.tool" server.py` → 27.
 - [ ] `grep -nE "trace_v2|ask_v2|impact_v2" mcp_v2.py` → 0 matches.
 - [ ] `git diff --stat master..HEAD` touches only the 5 files listed in
@@ -172,8 +182,9 @@ Headline items:
 See [`plans/PLAN-MCP-API-V2.md` § PR-V2-2 → Tests for PR-V2-2](./PLAN-MCP-API-V2.md#tests-for-pr-v2-2)
 (6 new tests; names are prescribed).
 
-Final: `python -m pytest tests -q` must report **365 passed, 4 skipped**
-(359 after V2-1 + 6 new).
+Final: full suite green and 6 new tests added in
+`tests/test_mcp_v2_compose.py`. Express completion as **baseline + 6 new**, not
+an absolute count.
 
 ### Manual evidence (paste in PR description)
 
@@ -202,7 +213,7 @@ print(sorted(m.edge_counts.keys()))
 ### Definition of Done
 
 - [ ] All deliverables shipped per plan §PR-V2-2.
-- [ ] `python -m pytest tests -q` → 365 passed, 4 skipped.
+- [ ] Full suite green; 6 new tests in `tests/test_mcp_v2_compose.py` all pass.
 - [ ] `describe(any_known_id).edge_summary` is non-None and only contains
       edge-type keys with non-zero counts.
 - [ ] `graph_meta()` output includes `edge_counts` covering all 9 edge types.
@@ -269,8 +280,10 @@ Headline items:
 See [`plans/PLAN-MCP-API-V2.md` § PR-V2-3 → Tests for PR-V2-3](./PLAN-MCP-API-V2.md#tests-for-pr-v2-3).
 No new tests other than the surface assertion.
 
-Final: `python -m pytest tests -q` must report ~**351 passed, 4 skipped**
-(365 after V2-2 − 14 deleted equivalence tests, ± 1 surface assertion).
+Final: full suite green; `tests/test_mcp_v2_equivalence.py` deleted entirely;
+surface-assertion test updated to expect 9 registered MCP tools. Express
+completion as **baseline − 14 (deleted equivalence) ± 1 (surface assertion)**,
+not an absolute count.
 
 ### Manual evidence (paste in PR description)
 
@@ -291,7 +304,8 @@ grep -nE "^### Tool reference" README.md
 ### Definition of Done
 
 - [ ] All deliverables shipped per plan §PR-V2-3.
-- [ ] `python -m pytest tests -q` → ~351 passed, 4 skipped.
+- [ ] Full suite green; `tests/test_mcp_v2_equivalence.py` no longer exists
+      (`ls tests/test_mcp_v2_equivalence.py 2>&1` reports "No such file").
 - [ ] `grep -cE "@mcp.tool" server.py` → 9.
 - [ ] No v1 tool name remains in `server.py` (see manual evidence regex).
 - [ ] `tests/test_mcp_v2_equivalence.py` does not exist.
@@ -373,8 +387,9 @@ Headline items:
 See [`plans/PLAN-MCP-API-V2.md` § PR-V2-4 → Tests for PR-V2-4](./PLAN-MCP-API-V2.md#tests-for-pr-v2-4)
 (8 new subprocess tests; names are prescribed).
 
-Final: `python -m pytest tests -q` must report **359 passed, 4 skipped**
-(351 after V2-3 + 8 new).
+Final: full suite green and 8 new subprocess tests added in
+`tests/test_user_rag_cli.py`. Express completion as **baseline + 8 new**, not
+an absolute count.
 
 ### Manual evidence (paste in PR description)
 
@@ -402,7 +417,8 @@ ls /tmp/v24_smoke   # expect: kuzu files
 ### Definition of Done
 
 - [ ] All deliverables shipped per plan §PR-V2-4.
-- [ ] `python -m pytest tests -q` → 359 passed, 4 skipped.
+- [ ] Full suite green; 8 new subprocess tests in `tests/test_user_rag_cli.py`
+      all pass.
 - [ ] `grep -cE "@mcp.tool" server.py` → **4**.
 - [ ] `pip install .` (or `pip install -e .`) succeeds; `user-rag --help`
       lists 5 subcommands.

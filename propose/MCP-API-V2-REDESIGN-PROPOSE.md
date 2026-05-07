@@ -167,7 +167,7 @@ NodeFilter:
   client_method?: str
 ```
 
-**11 optional keys, 3 universal.** The agent learns this once and reuses it on `find`, `search.filter`, and `neighbors.filter`. JSON Schema can later add `oneOf` per-kind validation if we want strictness; v2 starts with silent-ignore for ergonomics.
+**15 optional keys total: 3 universal + 12 kind-specific (5 symbol + 3 route + 4 client).** The agent learns this once and reuses it on `find`, `search.filter`, and `neighbors.filter`. JSON Schema can later add `oneOf` per-kind validation if we want strictness; v2 starts with silent-ignore for ergonomics.
 
 ---
 
@@ -414,7 +414,7 @@ To answer a question:
 For traceability:
 
 - The five-primitive insight (now four — dropped `trace`, `ask` → folded into agent reasoning).
-- The shared `NodeFilter` idea (now finalised with 11 keys split universal/symbol/route/client).
+- The shared `NodeFilter` idea (now finalised with 15 keys: 3 universal + 12 kind-specific, split symbol/route/client).
 - The "edges over nodes" return shape for `neighbors`.
 - The hard-cutover migration approach.
 - The `analyze_pr` keep-as-is decision.
