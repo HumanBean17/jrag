@@ -176,6 +176,17 @@ The DB is dropped and rebuilt from scratch on each run (Phase 1 is a full rebuil
 | `find_route_callers` | Callers that reach a route via `HTTP_CALLS` / `ASYNC_CALLS` (by route id or exact route tuple). |
 | `trace_request_flow` | Inbound caller + outbound handler flow around one route entrypoint. |
 
+### v2 navigation tools (preview)
+
+Preview surface from [`propose/MCP-API-V2-REDESIGN-PROPOSE.md`](propose/MCP-API-V2-REDESIGN-PROPOSE.md); this will replace v1 in PR-V2-3.
+
+| Tool | Purpose |
+|------|---------|
+| `search` | locate nodes by NL/code text |
+| `find` | locate nodes by structured filter |
+| `describe` | full record for one node |
+| `neighbors` | one-hop walk; REQUIRED direction + edge_types |
+
 HTTP mappings from literals are fully resolved (non-empty `path_template` / `path_regex`). Values containing Spring ``${…}`` SpEL, or non-string annotation arguments (constant references), are still stored as routes with lower confidence and empty template fields. Caller-side edges are now shipped via `HTTP_CALLS` / `ASYNC_CALLS` and exposed through `find_route_callers` and `trace_request_flow`.
 Use `list_routes` for inbound service exposures and `list_clients` for outbound HTTP declarations (Feign methods and annotated imperative clients). `list_clients` rows include `source_layer` so brownfield-vs-builtin provenance is visible to callers. `list_clients` requires graphs rebuilt with `ontology_version` 10+.
 

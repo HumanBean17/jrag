@@ -22,6 +22,7 @@ from sentence_transformers import SentenceTransformer
 
 from index_common import SBERT_MODEL
 import pr_analysis
+import mcp_v2
 from kuzu_queries import CallEdge, KuzuGraph, resolve_kuzu_path
 from search_lancedb import (
     TABLES,
@@ -1668,6 +1669,64 @@ def create_mcp_server() -> FastMCP:
             graph_exit_code=graph_code,
             graph_stdout=graph_out[-4000:] if len(graph_out) > 4000 else graph_out,
             graph_stderr=graph_err[-4000:] if len(graph_err) > 4000 else graph_err,
+        )
+
+    @mcp.tool(name="search", description="locate nodes by NL/code text")
+    async def search(
+        query: str = Field(description="Search query"),
+        table: str = Field(default="java", description="java | sql | yaml | all"),
+        hybrid: bool = Field(default=False),
+        limit: int = Field(default=5, ge=1, le=50),
+        offset: int = Field(default=0, ge=0, le=500),
+        path_contains: str | None = Field(default=None),
+        filter: dict[str, Any] | None = Field(default=None),
+    ) -> mcp_v2.SearchOutput:
+        return await asyncio.to_thread(
+            mcp_v2.search_v2,
+            query,
+            table,
+            hybrid,
+            limit,
+            offset,
+            path_contains,
+            filter,
+            None,
+        )
+
+    @mcp.tool(name="find", description="locate nodes by structured filter")
+    async def find(
+        kind: str = Field(description="symbol | route | client"),
+        filter: dict[str, Any] = Field(...),
+        limit: int = Field(default=25, ge=1, le=500),
+        offset: int = Field(default=0, ge=0, le=499),
+    ) -> mcp_v2.FindOutput:
+        return await asyncio.to_thread(mcp_v2.find_v2, kind, filter, limit, offset, None)
+
+    @mcp.tool(name="describe", description="full record for one node")
+    async def describe(id: str = Field(description="symbol/route/client id")) -> mcp_v2.DescribeOutput:
+        return await asyncio.to_thread(mcp_v2.describe_v2, id, None)
+
+    @mcp.tool(
+        name="neighbors",
+        description="one-hop walk; REQUIRED direction + edge_types",
+    )
+    async def neighbors(
+        ids: str | list[str] = Field(description="origin id or ids"),
+        direction: str = Field(description="in | out"),
+        edge_types: list[str] = Field(description="edge labels to traverse"),
+        limit: int = Field(default=25, ge=1, le=500),
+        offset: int = Field(default=0, ge=0, le=1000),
+        filter: dict[str, Any] | None = Field(default=None),
+    ) -> mcp_v2.NeighborsOutput:
+        return await asyncio.to_thread(
+            mcp_v2.neighbors_v2,
+            ids,
+            direction,
+            edge_types,
+            limit,
+            offset,
+            filter,
+            None,
         )
 
     return mcp
