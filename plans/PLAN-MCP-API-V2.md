@@ -234,6 +234,9 @@ will export.
   `KuzuGraph.edge_counts_for(node_id) -> dict[str, dict[str, int]]`.
 - Population is unconditional in this PR (no opt-out flag). Cost is one extra
   query per `describe` call; acceptable.
+- PR-V2-1 follow-up (readability only): add a short inline comment near
+  `neighbors_v2` required `Field(...)` parameters clarifying that direct Python
+  calls intentionally use the same validation contract as MCP-bound calls.
 
 ### 2. `mcp_v2.py` — `search.symbol_id` always populated when known
 
@@ -243,6 +246,10 @@ will export.
 - Add a helper `_chunk_to_symbol_id(chunk_row) -> str | None` so the lookup logic
   is single-source.
 - This was inconsistent in v1's `codebase_search` — fix here.
+- PR-V2-1 follow-up (perf checkpoint only): while touching `mcp_v2.py`, measure
+  whether `_resolve_node_kind` round-trips are visible in `describe` /
+  `neighbors` latency. Keep correctness-first behavior unless profiling shows a
+  meaningful hotspot; if needed, spin into a focused perf micro-PR.
 
 ### 3. `kuzu_queries.py` — `meta` per-edge-type counts
 
@@ -331,6 +338,10 @@ For each, also delete:
 - The output Pydantic model if not used elsewhere (most are tool-private).
 - Any helper function only called from the deleted handler.
 - The corresponding import line if it becomes unused.
+- PR-V2-1 follow-up decision: confirm whether keeping `describe(id=...)`
+  parameter name is the final API choice post-cutover (it currently follows the
+  propose/plan contract). Record the decision in PR-V2-3 notes so reviewers do
+  not re-open the naming discussion in PR-V2-4.
 
 ### 2. `README.md` — replace v1 tool reference with v2
 

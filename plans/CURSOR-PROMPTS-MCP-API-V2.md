@@ -177,6 +177,11 @@ Headline items:
    types defined in `build_ast_graph.py:_SCHEMA_*`.
 4. New file `tests/test_mcp_v2_compose.py` with the 6 tests enumerated in the
    plan.
+5. Apply PR-V2-1 review follow-ups that are explicitly in-scope for V2-2:
+   - add an inline comment near `neighbors_v2` required `Field(...)` params
+     clarifying the intentional direct-call + MCP validation contract;
+   - run a light perf checkpoint for `_resolve_node_kind` extra round-trips and
+     keep behavior unchanged unless profiling shows meaningful impact.
 
 ### Tests
 
@@ -257,6 +262,9 @@ Operational tools stay registered (they move to CLI in V2-4). **Nothing else.**
 - `mcp_v2.py` — handlers are stable; do not modify.
 - Ontology / schema changes.
 - README sections other than the tool reference and migration notes.
+- Parameter renaming debates outside explicit scope. PR-V2-3 should record a
+  final decision on keeping `describe(id=...)` as-is (contract-first) versus
+  renaming; do not let this spill into unrelated files.
 
 If you find yourself wanting to touch any of the above, **stop and ask**.
 
