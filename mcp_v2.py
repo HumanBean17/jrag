@@ -65,6 +65,8 @@ def _coerce_filter(
             decoded = json.loads(s)
         except json.JSONDecodeError as exc:
             raise ValueError(f"filter must be a JSON object; invalid JSON: {exc.msg}") from exc
+        if decoded is None:
+            return None
         if not isinstance(decoded, dict):
             raise ValueError(f"filter must decode to a JSON object, got {type(decoded).__name__}")
         return decoded

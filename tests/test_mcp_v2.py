@@ -327,6 +327,23 @@ def test_search_filter_empty_string_treated_as_none(monkeypatch, kuzu_graph) -> 
     assert baseline.results == empty.results == whitespace.results
 
 
+def test_search_filter_json_null_treated_as_none(monkeypatch, kuzu_graph) -> None:
+    monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
+    baseline = search_v2("ChatService", graph=kuzu_graph)
+    out = search_v2("ChatService", filter="null", graph=kuzu_graph)
+    assert baseline.success is True
+    assert out.success is True
+    assert baseline.results == out.results
+
+
+def test_find_filter_json_null_treated_as_empty_filter(kuzu_graph) -> None:
+    empty = find_v2("symbol", {}, graph=kuzu_graph)
+    out = find_v2("symbol", "null", graph=kuzu_graph)
+    assert empty.success is True
+    assert out.success is True
+    assert empty.results == out.results
+
+
 def test_find_filter_accepts_json_string(kuzu_graph) -> None:
     out_dict = find_v2("symbol", {"role": "CONTROLLER"}, graph=kuzu_graph)
     out_str = find_v2("symbol", '{"role":"CONTROLLER"}', graph=kuzu_graph)
