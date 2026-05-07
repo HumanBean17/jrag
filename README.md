@@ -14,11 +14,12 @@ The product vision for this tooling is proposed in [`propose/PRODUCT-VISION.md`]
 > can't or don't want to refactor your codebase to match.
 >
 > **Driving this MCP from an agent:**
-> - [`docs/AGENT-GUIDE.md`](./docs/AGENT-GUIDE.md) — copy-paste-into-`QWEN.md` /
->   `CLAUDE.md` block. Forced reasoning preamble, decision tree, full
->   reference for all 23 tools, ontology glossary (v10), recovery playbook,
->   slash-style aliases. Engineered for weak / mid models that otherwise
->   pick the wrong tool.
+> - [`docs/AGENT-GUIDE.md`](./docs/AGENT-GUIDE.md) — copy-paste into `QWEN.md` /
+>   `CLAUDE.md` / `AGENTS.md`. Covers the **four** MCP tools (`search`, `find`,
+>   `describe`, `neighbors`), shared **`NodeFilter`**, **edge-type taxonomy**,
+>   required `neighbors` arguments, ontology glossary (**v11**), recovery
+>   playbook, and slash-style aliases. Operators use **`user-rag`** CLI for
+>   refresh / meta / diagnostics — not MCP; see [`docs/USER-RAG-CLI.md`](./docs/USER-RAG-CLI.md).
 > - [`docs/MANUAL-VERIFICATION-CHECKLIST.md`](./docs/MANUAL-VERIFICATION-CHECKLIST.md)
 >   — 7-phase agent-driven verification you run after indexing your real
 >   project. Each item has a copy-paste prompt and calibration data from
@@ -160,6 +161,8 @@ The DB is dropped and rebuilt from scratch on each run (Phase 1 is a full rebuil
 
 ## CLI reference
 
+Operator-focused playbook: [`docs/USER-RAG-CLI.md`](./docs/USER-RAG-CLI.md) (workflows, exit codes, env alignment).
+
 Use `user-rag --help` to see all subcommands. Output mode is automatic:
 JSON when piped, pretty text when run in a TTY.
 
@@ -201,9 +204,9 @@ JSON when piped, pretty text when run in a TTY.
 - `analyze_pr` MCP call maps to `user-rag analyze-pr --diff-file <file>` (or `--diff-stdin`).
 - `diagnose_ignore` MCP call maps to `user-rag diagnose-ignore <path>`.
 - `list_code_index_tables` MCP call maps to `user-rag tables`.
-- `refresh_code_index` MCP call maps to `user-rag refresh`.
+- `refresh_code_index` MCP call maps to `user-rag refresh` (requires `LANCEDB_MCP_ALLOW_REFRESH=1` at the pipeline entrypoint; `build_ast_graph.py` alone does not use that flag).
+- **PR-triage / Cursor skills:** if a skill still invoked the removed `analyze_pr` MCP tool, switch it to a shell step: `user-rag analyze-pr --diff-file /tmp/pr.diff` (or `--diff-stdin`).
 
-HTTP mappings from literals are fully resolved (non-empty `path_template` / `path_regex`). Values containing Spring ``${…}`` SpEL, or non-string annotation arguments (constant references), are still stored as routes with lower confidence and empty template fields.
 Caller-side edges (`HTTP_CALLS` / `ASYNC_CALLS`) are available via v2 traversal with `neighbors(direction="in", edge_types=["HTTP_CALLS","ASYNC_CALLS"])` from a route id.
 
 **Example — `analyze_pr`:** pass the same unified diff text you would feed to `patch` (e.g. `git diff` output). Paths in the diff should match project-relative `Symbol.filename` values in the graph (e.g. `chat-assign/src/main/java/.../ChatManagementService.java`). A one-line edit inside `assign` returns JSON shaped like:

@@ -11,6 +11,7 @@ for tools that don't read `.cursor/rules/`.
  MCP tool list (now `search` / `find` / `describe` / `neighbors`),
  CLI ops (`user-rag --help`), and "Re-index required" callouts.
  **`ontology_version` is currently 11** (async brownfield route merge + `Client` nodes; see README callouts).
+- [`docs/USER-RAG-CLI.md`](./docs/USER-RAG-CLI.md) — operator guide for the `user-rag` CLI (refresh, meta, tables, diagnose-ignore, analyze-pr).
 - `CODEBASE_REQUIREMENTS.md` — Java-repo assumptions and tuning map.
 - `propose/` and `plans/` (plus their `completed/` subdirs) —
   in-flight scope and the rationale behind current design.
@@ -30,6 +31,7 @@ for tools that don't read `.cursor/rules/`.
     `plans/completed/CURSOR-PROMPTS-TIER1B.md`. The two CURSOR-PROMPTS
     files are kept as reference templates for future per-PR Cursor work.
   - Older completed: `propose/completed/CALL-GRAPH-PROPOSE.md`,
+    `propose/completed/MCP-API-V2-REDESIGN-PROPOSE.md` (four-tool MCP + `user-rag` CLI),
     `plans/completed/PLAN-CALL-GRAPH.md`,
     `plans/completed/PLAN-CAPABILITIES-MODEL.md`,
     `plans/completed/PLAN-BROWNFIELD-ROLE-OVERRIDES.md`,

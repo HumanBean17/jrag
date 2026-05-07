@@ -297,3 +297,10 @@ def test_neighbors_missing_edge_types_rejected(kuzu_graph) -> None:
     mid = _method_id_with_calls(kuzu_graph, "out")
     with pytest.raises(ValidationError):
         neighbors_v2(mid, direction="in", graph=kuzu_graph)
+
+
+def test_neighbors_empty_edge_types_rejected(kuzu_graph) -> None:
+    # Exercises TypeAdapter(min_length=1), distinct from missing edge_types (validate_call / Field(...)).
+    mid = _method_id_with_calls(kuzu_graph, "out")
+    with pytest.raises(ValidationError):
+        neighbors_v2(mid, direction="in", edge_types=[], graph=kuzu_graph)

@@ -94,15 +94,14 @@ When you're given a per-PR task prompt from `plans/CURSOR-PROMPTS-*.md`:
 
 - `ruff check .` — fix or justify warnings.
 - `pytest tests -v` — must pass without `LANCEDB_MCP_RUN_HEAVY`.
-  Current baseline on master is **243 passed, 4 skipped** (post
-  PR-D2). Each PR-D-series PR adds tests; check the active plan for
-  expected counts.
+  Expect skips only where tests document env gating (see `tests/README.md`).
+  Each plan may add tests; match the active plan if it cites a count.
 - For schema or ranking work, also run with
   `LANCEDB_MCP_RUN_HEAVY=1` locally (slow; downloads models).
 - For graph builder changes, also rebuild a fixture and inspect
-  `graph_meta` to confirm new counters wire up:
+  `user-rag meta` (or `GraphMetaOutput` from the same helper) to confirm new counters wire up:
   ```bash
-  rm -rf /tmp/check && python build_ast_graph.py \
+  rm -rf /tmp/check && /Users/dmitry/Desktop/CursorProjects/java-enterprise-codebase-rag/.venv/bin/python build_ast_graph.py \
     --source-root tests/bank-chat-system --kuzu-path /tmp/check --verbose
   ```
 
@@ -134,7 +133,7 @@ When you're given a per-PR task prompt from `plans/CURSOR-PROMPTS-*.md`:
   `key in result`) into exact counts to chase a number — they are
   intentionally loose.
 - Don't add a hard dependency on `cocoindex` outside
-  `java_index_flow_lancedb.py` / the `refresh_code_index` tool.
+  `java_index_flow_lancedb.py` / the `user-rag refresh` path.
 - Don't introduce a parallel `*Overrides` class when extending
   brownfield support. `BrownfieldOverrides` already holds route,
   role, capability, http client, and async producer dicts — extend
