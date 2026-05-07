@@ -115,10 +115,11 @@ print('callers:', len(edges.results))
 - [ ] All deliverables shipped per plan §PR-V2-1.
 - [ ] Full suite green; 32 new tests (18 in `tests/test_mcp_v2.py` + 14 in
       `tests/test_mcp_v2_equivalence.py`) all pass.
-- [ ] `grep -cE "@mcp.tool" server.py` → 27.
+- [ ] MCP surface includes both v1 and v2 registrations in this PR (target: 27
+      total tools; verify via test and/or script, not grep formatting quirks).
 - [ ] `grep -nE "trace_v2|ask_v2|impact_v2" mcp_v2.py` → 0 matches.
-- [ ] `git diff --stat master..HEAD` touches only the 5 files listed in
-      "Deliverables" above.
+- [ ] Diff is confined to deliverables in this prompt, plus narrowly-related
+      test harness/import updates required to make those changes pass.
 - [ ] PR description contains: scope statement, manual evidence block, test
       count line, link to `plans/PLAN-MCP-API-V2.md` § PR-V2-1.
 - [ ] No ontology bump.
@@ -217,9 +218,10 @@ print(sorted(m.edge_counts.keys()))
 - [ ] `describe(any_known_id).edge_summary` is non-None and only contains
       edge-type keys with non-zero counts.
 - [ ] `graph_meta()` output includes `edge_counts` covering all 9 edge types.
-- [ ] `git diff --stat master..HEAD` touches only `mcp_v2.py`,
-      `kuzu_queries.py`, `server.py` (only the `GraphMetaOutput` model + its
-      callsite), `tests/test_mcp_v2_compose.py`.
+- [ ] Diff is confined to deliverables in this prompt (`mcp_v2.py`,
+      `kuzu_queries.py`, `server.py` for `GraphMetaOutput`/`_graph_meta_output`,
+      `tests/test_mcp_v2_compose.py`), plus narrowly-related test
+      harness/import updates required to make those changes pass.
 - [ ] PR description contains: scope statement, manual evidence block, test
       count line, link to `plans/PLAN-MCP-API-V2.md` § PR-V2-2.
 - [ ] No ontology bump.
@@ -306,15 +308,18 @@ grep -nE "^### Tool reference" README.md
 - [ ] All deliverables shipped per plan §PR-V2-3.
 - [ ] Full suite green; `tests/test_mcp_v2_equivalence.py` no longer exists
       (`ls tests/test_mcp_v2_equivalence.py 2>&1` reports "No such file").
-- [ ] `grep -cE "@mcp.tool" server.py` → 9.
-- [ ] No v1 tool name remains in `server.py` (see manual evidence regex).
+- [ ] Surface assertion verifies 9 registered MCP tools.
+- [ ] Surface assertion (or equivalent parse-based check) verifies no removed
+      v1 navigation tool name remains registered.
 - [ ] `tests/test_mcp_v2_equivalence.py` does not exist.
 - [ ] README §"Tool reference" lists exactly the 4 v2 tools as primary; ops
       tools noted as transitional.
 - [ ] `propose/PRODUCT-VISION.md` example invocations updated to v2.
-- [ ] `git diff --stat master..HEAD` touches only `server.py`, `README.md`,
-      `propose/PRODUCT-VISION.md`, `tests/test_mcp_v2_equivalence.py`
-      (deleted), `tests/test_server.py` (or new surface-assertion test).
+- [ ] Diff is confined to deliverables in this prompt (`server.py`, `README.md`,
+      `propose/PRODUCT-VISION.md`, deleted `tests/test_mcp_v2_equivalence.py`,
+      `tests/test_server.py` or equivalent surface-assertion test), plus
+      narrowly-related test harness/import updates required to make those
+      changes pass.
 - [ ] PR description contains: scope statement, manual evidence block, test
       count line, link to `plans/PLAN-MCP-API-V2.md` § PR-V2-3.
 - [ ] No ontology bump.
@@ -370,8 +375,8 @@ Headline items:
 2. `pyproject.toml`: `packages = ["user_rag"]`, `[project.scripts]` table with
    `user-rag = "user_rag.cli:main"`.
 3. `server.py`: delete 5 operational `@mcp.tool` registrations + their output
-   models + unused imports. After this PR, `grep -cE "@mcp.tool" server.py`
-   returns **4**.
+   models + unused imports. After this PR, MCP surface is exactly 4 tools
+   (`search`/`find`/`describe`/`neighbors`), verified via surface assertion.
 4. `README.md`: add top-level `## CLI reference` section (5 subcommands with
    synopsis, flags, examples). Delete the "operational tools (transitional)"
    block from `## Tool reference`. Add "Migration from v1" subsection mapping
@@ -419,7 +424,7 @@ ls /tmp/v24_smoke   # expect: kuzu files
 - [ ] All deliverables shipped per plan §PR-V2-4.
 - [ ] Full suite green; 8 new subprocess tests in `tests/test_user_rag_cli.py`
       all pass.
-- [ ] `grep -cE "@mcp.tool" server.py` → **4**.
+- [ ] Surface assertion verifies **4** registered MCP tools.
 - [ ] `pip install .` (or `pip install -e .`) succeeds; `user-rag --help`
       lists 5 subcommands.
 - [ ] `user-rag meta | python -c "import json,sys; json.loads(sys.stdin.read())"`
@@ -428,10 +433,11 @@ ls /tmp/v24_smoke   # expect: kuzu files
       the 4 navigation tools.
 - [ ] `AGENTS.md` references `user-rag --help` for ops.
 - [ ] No `mcp_v2.py` changes.
-- [ ] `git diff --stat master..HEAD` touches only: `user_rag/__init__.py`,
+- [ ] Diff is confined to deliverables in this prompt (`user_rag/__init__.py`,
       `user_rag/cli.py`, `pyproject.toml`, `server.py`, `README.md`,
       `AGENTS.md`, `tests/test_user_rag_cli.py`, plus the surface-assertion
-      test.
+      test), plus narrowly-related test harness/import updates required to make
+      those changes pass.
 - [ ] PR description contains: scope statement, manual evidence block, test
       count line, link to `plans/PLAN-MCP-API-V2.md` § PR-V2-4, **plus a
       manual TODO note** for Dmitry to update the `cursor-pr-review` user

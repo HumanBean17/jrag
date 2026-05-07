@@ -199,12 +199,16 @@ counts drift between branches and across machines.
 - Full suite green (`python -m pytest tests -q` reports zero failures).
 - The 32 new tests are present in `tests/test_mcp_v2.py` (18) and
   `tests/test_mcp_v2_equivalence.py` (14), all passing.
-- `grep -nE "@mcp.tool" server.py | wc -l` returns 27 (23 v1 + 4 v2).
+- MCP tool surface includes both v1 and v2 registrations in this PR (target: 27
+  total tools; verify via test and/or script, not formatting-dependent grep
+  alone).
 - `grep -nE "trace_v2|ask_v2|impact_v2" mcp_v2.py` returns 0.
 - `grep -nE 'kind\s*[:=]' mcp_v2.py | grep -E 'def (describe_v2|neighbors_v2)'`
   returns 0 (no `kind` parameter on those handlers).
-- `git diff --stat master..HEAD` touches only: `mcp_v2.py`, `server.py`,
-  `tests/test_mcp_v2.py`, `tests/test_mcp_v2_equivalence.py`, `README.md`.
+- Diff is confined to deliverables for this PR:
+  `mcp_v2.py`, `server.py`, `tests/test_mcp_v2.py`,
+  `tests/test_mcp_v2_equivalence.py`, `README.md`, plus any narrowly-related
+  test harness/import updates required to make those changes pass.
 - Manual evidence (find Controller → describe → neighbors-in CALLS) included in
   PR description.
 - No ontology bump.
@@ -281,9 +285,10 @@ DoD is the delta + suite-green, not an absolute total.
 - `search` populates `symbol_id` whenever the chunk row carries it.
 - `graph_meta()` output schema includes `edge_counts: dict[str, int]` covering
   all 9 edge types defined in `build_ast_graph.py:_SCHEMA_*`.
-- `git diff --stat master..HEAD` touches only: `mcp_v2.py`, `kuzu_queries.py`,
-  `server.py` (only the `GraphMetaOutput` model + `_graph_meta_output` callsite),
-  `tests/test_mcp_v2_compose.py`.
+- Diff is confined to deliverables for this PR: `mcp_v2.py`, `kuzu_queries.py`,
+  `server.py` (for `GraphMetaOutput` model + `_graph_meta_output` callsite),
+  `tests/test_mcp_v2_compose.py`, plus any narrowly-related test harness/import
+  updates required to make those changes pass.
 - No ontology bump.
 
 ---
@@ -356,9 +361,9 @@ For each, also delete:
 
 No new tests. Modify the existing surface assertion:
 
-- Update `tests/test_server.py` (or wherever the registered-tool-count assertion
-  lives — check during implementation; if no such test exists, add it now in this
-  PR) to assert: exactly 9 MCP tools registered = 4 navigation (`search`, `find`,
+- Update `tests/test_server.py` (or wherever the registered-tool-surface
+  assertion lives — check during implementation; if no such test exists, add it
+  now in this PR) to assert: exactly 9 MCP tools registered = 4 navigation (`search`, `find`,
   `describe`, `neighbors`) + 5 operational (`graph_meta`, `analyze_pr`,
   `diagnose_ignore`, `list_code_index_tables`, `refresh_code_index`).
 
@@ -371,13 +376,9 @@ not an absolute total.
 - Full suite green.
 - `tests/test_mcp_v2_equivalence.py` is deleted (verify
   `ls tests/test_mcp_v2_equivalence.py 2>&1` returns "No such file").
-- `grep -cE "@mcp.tool" server.py` returns 9.
-- `grep -cE "name=\"(codebase_search|find_implementors|find_subclasses|
-  find_injectors|find_callers|find_callees|list_routes|list_clients|
-  find_route_handlers|get_route_by_path|find_route_callers|trace_request_flow|
-  list_by_role|list_by_annotation|list_by_capability|graph_neighbors|
-  impact_analysis|trace_flow)\""` (single-line, no spaces) on `server.py`
-  returns 0.
+- Surface assertion verifies 9 registered MCP tools.
+- Surface assertion (or equivalent parse-based check) verifies none of the 18
+  removed v1 navigation tool names remain registered.
 - README §"Tool reference" lists exactly the 4 v2 tools as primary; ops tools
   are noted as transitional.
 - `tests/test_mcp_v2_equivalence.py` does not exist.
@@ -446,7 +447,8 @@ Remove `@mcp.tool` blocks for: `graph_meta`, `analyze_pr`, `diagnose_ignore`,
 `list_code_index_tables`, `refresh_code_index`. Also remove their output Pydantic
 models if not used elsewhere, and any helper imports that become unused.
 
-After this PR: `grep -cE "@mcp.tool" server.py` → **4** (search/find/describe/neighbors).
+After this PR, MCP surface is **exactly 4 tools**
+(`search`/`find`/`describe`/`neighbors`), verified via test and/or script.
 
 ### 4. `README.md` — CLI reference
 
@@ -513,7 +515,7 @@ DoD is the delta + suite-green, not an absolute total.
 
 - Full suite green.
 - 8 new tests in `tests/test_user_rag_cli.py` present and passing.
-- `grep -cE "@mcp.tool" server.py` returns **4**.
+- Surface assertion verifies **4** registered MCP tools.
 - `pip install .` (or `pip install -e .`) succeeds; `user-rag --help` lists 5
   subcommands.
 - `user-rag meta | python -c "import json,sys; json.loads(sys.stdin.read())"`
@@ -521,9 +523,11 @@ DoD is the delta + suite-green, not an absolute total.
 - README has top-level `## CLI reference` section; `## Tool reference` lists
   only the 4 v2 tools.
 - `AGENTS.md` references `user-rag --help` for ops.
-- `git diff --stat master..HEAD` touches: `user_rag/__init__.py`, `user_rag/cli.py`,
-  `pyproject.toml`, `server.py`, `README.md`, `AGENTS.md`,
-  `tests/test_user_rag_cli.py`, plus the surface-assertion test.
+- Diff is confined to deliverables for this PR:
+  `user_rag/__init__.py`, `user_rag/cli.py`, `pyproject.toml`, `server.py`,
+  `README.md`, `AGENTS.md`, `tests/test_user_rag_cli.py`, plus the
+  surface-assertion test and any narrowly-related test harness/import updates
+  required to make those changes pass.
 - No ontology bump.
 - No `mcp_v2.py` changes.
 
