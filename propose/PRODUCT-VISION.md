@@ -322,16 +322,14 @@ Expose the graph and vector index as discrete MCP tools. Implemented tools today
 
 | Tool | What it does |
 |---|---|
-| `codebase_search` | Vector / hybrid (RRF) / **graph_expand** (vector top-k + Kuzu BFS + RRF) over LanceDB chunks |
-| `list_by_role` / `list_by_annotation` / `list_by_capability` | Filter symbols or search by `role`, annotations, or capability tags |
-| `find_implementors` / `find_subclasses` / `find_injectors` | Kuzu: `IMPLEMENTS`, `EXTENDS`/`IMPLEMENTS`, reverse `INJECTS` |
-| `graph_neighbors` | Configurable BFS on structural edges (`EXTENDS`, `IMPLEMENTS`, `INJECTS`) |
-| `impact_analysis` | Reverse structural closure (what is affected if this type changes) |
-| `trace_flow` | Staged **structural** trace (seeds from vector search; walks roles + injection graph — not a full `CALLS` / `HTTP_CALLS` chain until those edges exist) |
-| `graph_meta` / `list_code_index_tables` | Kuzu + LanceDB metadata, counts, ontology version |
-| `refresh_code_index` | Optional: rebuild LanceDB (CocoIndex) + Kuzu; gated by env |
+| `search` | Locate nodes by natural-language/code text with optional structural filtering |
+| `find` | Locate nodes by structured `NodeFilter` across `symbol`, `route`, or `client` |
+| `describe` | Return one node record plus per-edge-type in/out summary |
+| `neighbors` | One-hop traversal over explicit `direction` and `edge_types` (batch ids supported) |
+| `graph_meta` / `list_code_index_tables` | Operational metadata (transitional; moving to `user-rag` CLI) |
+| `analyze_pr` / `diagnose_ignore` / `refresh_code_index` | Operational commands (transitional; moving to `user-rag` CLI) |
 
-**Deferred** (per roadmap, until call/inter-service graph lands): `find_callers` / `find_callees` on `CALLS`, `trace_request_flow` over `HTTP_CALLS` → `CALLS`, and a dedicated `get_service_topology` beyond current metadata and filters.
+The v1 navigation verbs are removed; the `describe(id=...)` parameter name remains the stable contract in v2.
 
 This tool-per-capability model lets the agent (e.g. Claude Code) pick the right retrieval per sub-question, rather than always running a fixed pipeline.[^23][^24]
 
@@ -397,7 +395,7 @@ The DKB benchmark paper has a public GitHub repository (`graph-based-rag-ast-vs-
 - **Use AST parsing (DKB), not LLM-based graph extraction:** LLM-KB skips ~30% of files and costs 20–45× more. Tree-sitter completes in seconds and is fully deterministic.[^2]
 - **Your 5-service topology is a first-class graph asset (roadmap):** model inter-service Feign/Kafka dependencies as `HTTP_CALLS` and `ASYNC_CALLS` edges when Phase 2 lands.[^21][^11]
 - **Bidirectional traversal is non-negotiable:** successor-only graphs miss upstream consumers (controllers that inject services); the interface-consumer expansion fixes Spring DI wiring gaps.[^1][^2]
-- **Route queries to the right tool:** structural questions → Kuzu-backed MCP tools; semantic questions → `codebase_search` on LanceDB; combined flows use **hybrid** and **graph_expand** with RRF.[^9][^22][^10]
+- **Route queries to the right tool:** structural questions → `find` / `neighbors`; semantic questions → `search`; combined flows iterate `search` → `describe` → `neighbors`.[^9][^22][^10]
 
 ---
 

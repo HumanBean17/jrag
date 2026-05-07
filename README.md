@@ -78,10 +78,10 @@ A sidecar deterministic graph derived from Tree-sitter Java parsing lives next t
 `DECLARES` (type → own method or constructor).
 **Phase 5 (caller edges):** `HTTP_CALLS` (`Symbol` → `Route`) and `ASYNC_CALLS` (`Symbol` → `Route`).
 JDK / Spring / Lombok callees are represented as
-phantom method symbols (`resolved=false`) at index time; `find_callers` / `find_callees` default to
+phantom method symbols (`resolved=false`) at index time; caller/callee traversals default to
 `exclude_external=true` so those edges can be filtered by FQN prefix without dropping them from the graph.
 Call-site receiver typing uses **one scope map per method** (locals shadow fields/parameters), but **not** full nested-block lexical scope; see **Call graph** under `CODEBASE_REQUIREMENTS.md`.
-**Anonymous classes** (`new T() { … }`) are indexed as synthetic nested types (`…<anon:startByte>`); `CALLS` from their methods use that member as the caller so `find_callers` reaches the handler body. **Lambdas** still attribute inner calls to the enclosing named method (no synthetic callable symbol). Unqualified calls from anonymous members fall through to the lexically enclosing type for callee lookup (same as the Java compiler’s access rules).
+**Anonymous classes** (`new T() { … }`) are indexed as synthetic nested types (`…<anon:startByte>`); `CALLS` from their methods use that member as the caller so inbound-call traversal reaches the handler body. **Lambdas** still attribute inner calls to the enclosing named method (no synthetic callable symbol). Unqualified calls from anonymous members fall through to the lexically enclosing type for callee lookup (same as the Java compiler’s access rules).
 
 Injection mechanisms detected:
 - field `@Autowired` / `@Inject` / `@Resource`
@@ -149,46 +149,31 @@ For `refresh_code_index`, the server runs `cocoindex` with `cwd` set to the bund
 
 The DB is dropped and rebuilt from scratch on each run (Phase 1 is a full rebuild; incremental updates are future work).
 
-### Tools exposed by the server
+### Tool reference
 
-| Tool | Purpose |
-|------|---------|
-| `codebase_search` | Vector / hybrid / graph-expanded search. Supports `role`, `module`, `microservice`, `package_prefix` filters, `graph_expand=true` + `expand_depth=1..3` for Kuzu-BFS fusion (RRF), and `context_neighbors=1..2` to attach adjacent chunks as `context_before`/`context_after`. Java hits return `score_components` (`distance`, `hybrid_rrf`, `role_weight`, `symbol_bonus`, `import_penalty`) so callers can see why a row ranked where it did. |
-| `trace_flow` | Behavioural trace from a natural-language query. Seeds via vector search, then walks CONTROLLER -> SERVICE/COMPONENT -> CLIENT/REPOSITORY/MAPPER in the Kuzu graph and returns staged chains. Defaults to `follow_calls=true` (merges DECLARES+CALLS paths with INJECTS/EXTENDS/IMPLEMENTS — structural edges fill `stage_limit` first per hop, CALLS tops up the remainder); set `follow_calls=false` for type-only wiring. Defaults to `exclude_external=true` on that CALLS hop (same external FQN prefixes as `find_callees` / `expand_methods`: discovered types reached via CALLS, not the caller-only filter used by `find_callers`). |
-| `list_code_index_tables` | Lance tables + Kuzu graph metadata. |
-| `refresh_code_index` | Rebuild LanceDB + Kuzu graph. |
-| `find_implementors` | Classes implementing an interface. |
-| `find_subclasses` | Types extending a class/interface. |
-| `find_injectors` | Classes that inject the given type, incl. mechanism/annotation/field. |
-| `find_callers` | Inbound `CALLS` closure: who invokes a method (or any method of a type via DECLARES). Same `min_confidence`; `exclude_external` filters caller (src) FQNs, not the needle. |
-| `find_callees` | Outbound `CALLS` closure: callees of a method or type. Same `min_confidence`; `exclude_external` filters callee (dst) FQNs, not the needle. |
-| `list_by_role` | Symbols with a given role (CONTROLLER, SERVICE, ...). |
-| `list_by_annotation` | Symbols whose annotation list contains the given simple name. |
-| `graph_neighbors` | Generic BFS over `EXTENDS|IMPLEMENTS|INJECTS|DECLARES|CALLS`, directional. |
-| `impact_analysis` | Reverse closure: what breaks if this changes. |
-| `analyze_pr` | Map a unified diff (`diff_unified`) to overlapping indexed symbols, sum type-level `impact_analysis` blast, count cross-microservice `CALLS`, list touched `Route` ids (`EXPOSES`), and return a v1 `risk_score` / `risk_band` plus `notes` (binary hunks and renames are skipped for symbol mapping). |
-| `diagnose_ignore` | Explain whether a path is excluded for indexing / graph walks and which rule layer won (`builtin_default`, `project_root`, `nested`, `gitignore`). |
-| `graph_meta` | Counts, ontology version, build timestamp, parse errors; route totals / `routes_by_framework` / `routes_resolved_pct` (v5+); `routes_from_brownfield_pct` / `routes_by_layer` (v6+). |
-| `list_routes` | Filterable listing of `Route` nodes (`microservice`, `framework`, `path_prefix`, `method`). |
-| `list_clients` | Filterable listing of outbound `Client` nodes (`microservice`, `client_kind`, `target_service`, `path_prefix`, `method`). |
-| `find_route_handlers` | Endpoint symbols that `EXPOSES` a route id (confidence + resolution strategy on the edge); Feign consumer routes return empty. |
-| `get_route_by_path` | Lookup one `Route` by `microservice` + normalised `path_template` + optional HTTP method. |
-| `find_route_callers` | Callers that reach a route via `HTTP_CALLS` / `ASYNC_CALLS` (by route id or exact route tuple). |
-| `trace_request_flow` | Inbound caller + outbound handler flow around one route entrypoint. |
+| Tool | Purpose | Args | Example |
+|------|---------|------|---------|
+| `search` | locate nodes by NL/code text | `query: str`, `table: str="java"`, `hybrid: bool=False`, `limit: int=5`, `offset: int=0`, `path_contains: str \| None`, `filter: NodeFilter \| None` | `{"query":"join operator flow","limit":5}` |
+| `find` | locate nodes by structured filter | `kind: "symbol"\|"route"\|"client"`, `filter: NodeFilter`, `limit: int=25`, `offset: int=0` | `{"kind":"symbol","filter":{"role":"CONTROLLER"}}` |
+| `describe` | full record + edge counts for one node | `id: str` | `{"id":"sym:com.bank.chat.core.api.ChatController#joinOperator(JoinOperatorRequest)"}` |
+| `neighbors` | one-hop walk; REQUIRED direction + edge_types | `ids: str \| list[str]`, `direction: "in"\|"out"`, `edge_types: list[str]`, `limit: int=25`, `offset: int=0`, `filter: NodeFilter \| None` | `{"ids":"route:chat-core:POST:/chat/joinOperator","direction":"in","edge_types":["HTTP_CALLS","ASYNC_CALLS"]}` |
 
-### v2 navigation tools (preview)
+Operational tools (transitional state for this release; moving to `user-rag` CLI in next release):
 
-Preview surface from [`propose/MCP-API-V2-REDESIGN-PROPOSE.md`](propose/MCP-API-V2-REDESIGN-PROPOSE.md); this will replace v1 in PR-V2-3.
+- `graph_meta` — operational
+- `analyze_pr` — operational
+- `diagnose_ignore` — operational
+- `list_code_index_tables` — operational
+- `refresh_code_index` — operational
 
-| Tool | Purpose |
-|------|---------|
-| `search` | locate nodes by NL/code text |
-| `find` | locate nodes by structured filter |
-| `describe` | full record for one node |
-| `neighbors` | one-hop walk; REQUIRED direction + edge_types |
+### Migration notes
 
-HTTP mappings from literals are fully resolved (non-empty `path_template` / `path_regex`). Values containing Spring ``${…}`` SpEL, or non-string annotation arguments (constant references), are still stored as routes with lower confidence and empty template fields. Caller-side edges are now shipped via `HTTP_CALLS` / `ASYNC_CALLS` and exposed through `find_route_callers` and `trace_request_flow`.
-Use `list_routes` for inbound service exposures and `list_clients` for outbound HTTP declarations (Feign methods and annotated imperative clients). `list_clients` rows include `source_layer` so brownfield-vs-builtin provenance is visible to callers. `list_clients` requires graphs rebuilt with `ontology_version` 10+.
+- v1 navigation tools are removed; use `search` / `find` / `describe` / `neighbors`.
+- `describe` keeps `id` as the stable parameter name (`describe(id=...)`).
+- Operational tools remain MCP-registered in this release and move to `user-rag` CLI in the next one.
+
+HTTP mappings from literals are fully resolved (non-empty `path_template` / `path_regex`). Values containing Spring ``${…}`` SpEL, or non-string annotation arguments (constant references), are still stored as routes with lower confidence and empty template fields.
+Caller-side edges (`HTTP_CALLS` / `ASYNC_CALLS`) are available via v2 traversal with `neighbors(direction="in", edge_types=["HTTP_CALLS","ASYNC_CALLS"])` from a route id.
 
 **Example — `analyze_pr`:** pass the same unified diff text you would feed to `patch` (e.g. `git diff` output). Paths in the diff should match project-relative `Symbol.filename` values in the graph (e.g. `chat-assign/src/main/java/.../ChatManagementService.java`). A one-line edit inside `assign` returns JSON shaped like:
 
@@ -269,9 +254,8 @@ A type can carry zero or many capabilities. Capabilities never
 | `SCHEDULED_TASK`   | `@Scheduled` on any method, or class implements `org.quartz.Job` |
 | `EXCEPTION_HANDLER`| `@ControllerAdvice`, `@RestControllerAdvice`, or any method with `@ExceptionHandler` |
 
-Use `list_by_capability` to enumerate types carrying a capability, or
-pass `capability=...` to `codebase_search` / `list_by_role` /
-`list_by_annotation` / `find_*` to AND-filter results.
+Use `find(kind="symbol", filter={"capability":"..."})` to enumerate types carrying a capability.
+Use `search(..., filter={"capability":"..."})` or `neighbors(..., filter={"capability":"..."})` for capability-aware narrowing.
 
 ### Brownfield overrides
 
@@ -615,7 +599,7 @@ which scans the project with sorted `*.java` paths, the same layered ignore rule
 deterministic “first wins” for duplicate annotation simple names. Kuzu and Lance
 **should** agree; they can still diverge if the same file is handled differently
 elsewhere in the pipeline (e.g. parse edge cases). If graph tools and
-`codebase_search` disagree on a type, run a full reindex and compare.
+`search` disagree on a type, run a full reindex and compare.
 
 **Limitations (Layer A / brownfield):**
 
@@ -745,10 +729,8 @@ back to exact-text matching in that case, so re-running the flow fixes it.
 
 ## 6. Deferred (beyond static call graph)
 
-**Static intra-JVM `CALLS` / `DECLARES` are shipped** — see §5 edge types
-and `find_callers` / `find_callees` / `trace_flow(follow_calls)`.
-**Cross-service caller edges (`HTTP_CALLS` / `ASYNC_CALLS`) are shipped
-too**, with `find_route_callers`, `trace_request_flow`, and the
+**Static intra-JVM `CALLS` / `DECLARES` are shipped** — see §5 edge types and v2 `neighbors` traversal.
+**Cross-service caller edges (`HTTP_CALLS` / `ASYNC_CALLS`) are shipped too**, also via v2 `neighbors` traversal and the
 brownfield composition layer documented under §5 "Brownfield overrides".
 Remaining graph work:
 
