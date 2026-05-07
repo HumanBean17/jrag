@@ -1,6 +1,6 @@
 # MCP API v2 — Redesign Proposal (revised)
 
-**Status**: draft v2 — supersedes the original draft and folds in the use-case validation
+**Status**: locked — implemented across PR-V2-1..PR-V2-4
 **Author**: Dmitry + Computer
 **Date**: 2026-05-07
 **Replaces**: prior `MCP-API-V2-REDESIGN-PROPOSE.md` and `MCP-API-V2-USE-CASES.md`

@@ -1,7 +1,7 @@
 # Plan: MCP API v2 redesign — 4-tool graph navigator + ops CLI
 
-Status: **draft — under review on PR #48**. Pairs with
-[`propose/MCP-API-V2-REDESIGN-PROPOSE.md`](../propose/MCP-API-V2-REDESIGN-PROPOSE.md).
+Status: **completed**. Pairs with
+[`propose/completed/MCP-API-V2-REDESIGN-PROPOSE.md`](../../propose/completed/MCP-API-V2-REDESIGN-PROPOSE.md).
 
 Depends on: brownfield annotations v2 (PR #38) and async route merge (PR #46) — both
 merged before this work. No new graph-data dependencies.
