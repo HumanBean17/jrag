@@ -313,7 +313,7 @@ class KuzuGraph:
                     raise RuntimeError(
                         f"Graph ontology version {graph_version} is older than the "
                         f"required version {_ONTOLOGY_VERSION}. "
-                        "Run: LANCEDB_MCP_ALLOW_REFRESH=1 refresh_code_index(confirm=true) "
+                        "Run: LANCEDB_MCP_ALLOW_REFRESH=1 user-rag refresh --source-root <repo> "
                         "or: python build_ast_graph.py --source-root <repo>"
                     )
                 cls._instance = instance

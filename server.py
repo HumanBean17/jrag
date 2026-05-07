@@ -17,8 +17,11 @@ from search_lancedb import TABLES
 
 _COCOINDEX_TARGET = "java_index_flow_lancedb.py:JavaCodeIndexLance"
 _INSTRUCTIONS = (
-    "Graph navigation MCP over LanceDB+Kuzu. "
-    "Use search/find/describe/neighbors for navigation and structural traversal."
+    "Java codebase graph navigator (LanceDB + Kuzu). "
+    "Tools: search (NL/code locate), find (structured NodeFilter), describe (one node + edge counts), "
+    "neighbors (one hop; you MUST pass direction in|out AND edge_types list — no defaults). "
+    "Edge labels: EXTENDS, IMPLEMENTS, INJECTS, DECLARES, DECLARES_CLIENT, CALLS, EXPOSES, HTTP_CALLS, ASYNC_CALLS. "
+    "Rebuild, meta, tables, diagnose-ignore, analyze-pr: use user-rag CLI — not MCP."
 )
 
 
@@ -268,11 +271,20 @@ def create_mcp_server() -> FastMCP:
     async def search(
         query: str = Field(description="Search query"),
         table: str = Field(default="java", description="java | sql | yaml | all"),
-        hybrid: bool = Field(default=False),
+        hybrid: bool = Field(
+            default=False,
+            description="If true, fuse FTS + vector (single-table java/sql/yaml only)",
+        ),
         limit: int = Field(default=5, ge=1, le=50),
         offset: int = Field(default=0, ge=0, le=500),
-        path_contains: str | None = Field(default=None),
-        filter: dict[str, Any] | None = Field(default=None),
+        path_contains: str | None = Field(
+            default=None,
+            description="Substring match on file path (pre-filter from index)",
+        ),
+        filter: dict[str, Any] | None = Field(
+            default=None,
+            description="Optional NodeFilter (symbol-oriented keys) applied to each hit after search",
+        ),
     ) -> mcp_v2.SearchOutput:
         return await asyncio.to_thread(
             mcp_v2.search_v2,
@@ -289,24 +301,34 @@ def create_mcp_server() -> FastMCP:
     @mcp.tool(name="find", description="locate nodes by structured filter")
     async def find(
         kind: str = Field(description="symbol | route | client"),
-        filter: dict[str, Any] = Field(...),
+        filter: dict[str, Any] = Field(
+            ...,
+            description="Required NodeFilter object (shared schema; irrelevant keys ignored per kind)",
+        ),
         limit: int = Field(default=25, ge=1, le=500),
         offset: int = Field(default=0, ge=0, le=499),
     ) -> mcp_v2.FindOutput:
         return await asyncio.to_thread(mcp_v2.find_v2, kind, filter, limit, offset, None)
 
     @mcp.tool(name="describe", description="full record + edge counts for one node")
-    async def describe(id: str = Field(description="symbol/route/client id")) -> mcp_v2.DescribeOutput:
+    async def describe(id: str = Field(description="Graph node id with sym:, route:, or client: prefix")) -> mcp_v2.DescribeOutput:
         return await asyncio.to_thread(mcp_v2.describe_v2, id, None)
 
     @mcp.tool(name="neighbors", description="one-hop walk; REQUIRED direction + edge_types")
     async def neighbors(
-        ids: str | list[str] = Field(description="origin id or ids"),
-        direction: str = Field(description="in | out"),
-        edge_types: list[str] = Field(description="edge labels to traverse"),
-        limit: int = Field(default=25, ge=1, le=500),
+        ids: str | list[str] = Field(description="Origin symbol/route/client id, or list for batch"),
+        direction: str = Field(
+            description="Required: in (predecessors) or out (successors); no default",
+        ),
+        edge_types: list[str] = Field(
+            description="Required non-empty list of edge labels (e.g. CALLS, EXPOSES, HTTP_CALLS)",
+        ),
+        limit: int = Field(default=25, ge=1, le=500, description="Max edges after merge (batch expands all origins first)"),
         offset: int = Field(default=0, ge=0, le=1000),
-        filter: dict[str, Any] | None = Field(default=None),
+        filter: dict[str, Any] | None = Field(
+            default=None,
+            description="Optional NodeFilter applied to the other endpoint of each edge",
+        ),
     ) -> mcp_v2.NeighborsOutput:
         return await asyncio.to_thread(
             mcp_v2.neighbors_v2,

@@ -4,14 +4,18 @@ import json
 import os
 from pathlib import Path
 import threading
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field, ValidationError, validate_call
+from pydantic import BaseModel, Field, TypeAdapter, ValidationError, validate_call
 from sentence_transformers import SentenceTransformer
 
 from index_common import SBERT_MODEL
 from kuzu_queries import KuzuGraph
 from search_lancedb import TABLES, run_search
+
+_NEIGHBOR_EDGE_TYPES_ADAPTER = TypeAdapter(
+    Annotated[list[str], Field(min_length=1, description="At least one graph edge label")]
+)
 
 _st_lock = threading.Lock()
 _st_model: SentenceTransformer | None = None
@@ -434,6 +438,7 @@ def neighbors_v2(
     graph: Any | None = None,
 ) -> NeighborsOutput:
     try:
+        _NEIGHBOR_EDGE_TYPES_ADAPTER.validate_python(edge_types)
         g = graph or KuzuGraph.get()
         nf = NodeFilter.model_validate(filter) if filter is not None and not isinstance(filter, NodeFilter) else filter
         origins = [ids] if isinstance(ids, str) else list(ids)

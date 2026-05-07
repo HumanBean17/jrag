@@ -1,27 +1,37 @@
 # Manual Verification Checklist — `java-enterprise-codebase-rag`
 
 Use this **after** you've read `README.md` + `CODEBASE_REQUIREMENTS.md`,
-applied any brownfield annotations, and built the index against your
-real project. The checklist drives an MCP-aware agent (Qwen Code,
-Claude Code, Cursor, …) through 7 phases of progressively deeper
-verification.
+[`docs/AGENT-GUIDE.md`](./AGENT-GUIDE.md), applied any brownfield annotations,
+and built the index against your real project. The checklist mixes **shell**
+checks (`user-rag` CLI for graph health and Lance tables) with **MCP**
+checks (`search` / `find` / `describe` / `neighbors` — the only navigation
+tools).
 
 Each item has:
 
 - ☐ a checkbox
-- a **Verification prompt** — paste verbatim into your agent
+- a **Verification prompt** — paste verbatim into your agent (or run the
+  shell snippet yourself)
 - **Expected (calibration)** — what the same prompt produces on
-  `tests/bank-chat-system` (the in-repo fixture, ontology v9). If your
-  numbers diverge wildly from the calibration column, that's a signal,
-  not a verdict — your project just is bigger or smaller; what matters
-  is the **shape** (proportions, error rates, presence of expected
-  edges).
+  `tests/bank-chat-system` (ontology **11**). If your numbers diverge wildly,
+  that's a signal, not a verdict — what matters is the **shape** (proportions,
+  error rates, presence of expected edges).
 - **If failing → fix** — concrete next step
 
 Calibration was captured against `tests/bank-chat-system` on
-`master @ d62b48c` (post PR-H1, ontology version 9): 84 files, 92
-types, 474 members, 0 parse errors, 17 routes, 793 calls, 2 HTTP_CALLS,
-5 ASYNC_CALLS, microservices = `chat-core` + `chat-assign`.
+`master @ e90cbecc` (ontology version **11**): 84 files, 92 types, 474
+members, 0 parse errors, 17 routes, 11 `EXPOSES`, 793 `CALLS`, 2 `HTTP_CALLS`,
+5 `ASYNC_CALLS`, 2 `Client` rows, microservices = `chat-core` + `chat-assign`.
+
+**Convention:** Graph ops use MCP. Index health / rebuild / PR analysis use
+**`user-rag`** (see README **CLI reference**). Example:
+
+```bash
+export KUZU_DB_PATH=/tmp/verify_kuzu
+export LANCEDB_MCP_PROJECT_ROOT=/path/to/your/project
+user-rag meta
+user-rag tables
+```
 
 ---
 
@@ -39,10 +49,10 @@ python build_ast_graph.py \
 # 2. Read the summary lines (last ~10 lines of the log)
 tail -12 /tmp/verify_build.log
 
-# 3. Point the MCP server at the new graph + run it from the agent of choice
+# 3. Point the runtime at the graph + project root
 export LANCEDB_MCP_PROJECT_ROOT=/path/to/your/project
-export LANCEDB_MCP_KUZU_PATH=/tmp/verify_kuzu
-# … then start your MCP client (Qwen Code / Claude Code) so it sees this MCP
+export KUZU_DB_PATH=/tmp/verify_kuzu
+# … then start your MCP client so it sees this server + env
 ```
 
 > **Quick read of the build log.** The `[pass3]` line tells you
@@ -51,13 +61,13 @@ export LANCEDB_MCP_KUZU_PATH=/tmp/verify_kuzu
 > service hits 95-100; Kafka-heavy services drop to 70-90 because some
 > topics are SpEL `${…}`). `[pass6]` shows cross-service match results.
 
-**Calibration on `tests/bank-chat-system`:**
+**Calibration on `tests/bank-chat-system` (representative build log lines):**
 
 ```
-[pass1] parsed 84 files in 0.24s: 92 types, 474 members, 0 parse errors, 0 skipped
-[pass2] emitted 10 EXTENDS, 14 IMPLEMENTS, 71 INJECTS, 8 phantoms in 0.00s
-[pass3] Call resolution: 800 sites, 77 chained phantoms (9.6%), 294 unresolved callee (36.8%), 138 phantom receiver (17.2%), …
-[pass4] Route extraction: emitted=11, exposes=11, skipped_unresolved=0, routes_resolved_pct=81.8, by_framework={'spring_mvc': 9, 'kafka': 2}
+[pass1] parsed 84 files …: 92 types, 474 members, 0 parse errors …
+[pass2] emitted 10 EXTENDS, 14 IMPLEMENTS, 71 INJECTS, …
+[pass3] Call resolution: … (percentages vary slightly by bundle version)
+[pass4] Route extraction: emitted=11, exposes=11, … routes_resolved_pct≈81.8, by_framework={'spring_mvc': 9, 'kafka': 2}
 [pass5] HTTP_CALLS: 2 edges, ASYNC_CALLS: 5 edges
 [pass6] http_match={'phantom': 2}, async_match={'intra_service': 1, 'phantom': 4}, cross_service_calls_total=0
 ```
@@ -70,188 +80,162 @@ export LANCEDB_MCP_KUZU_PATH=/tmp/verify_kuzu
 
 ## Phase 1 — Index health (4 items)
 
-### 1.1 ☐ Ontology version is 9
+### 1.1 ☐ Ontology version is 11
 
 **Verification prompt:**
 
-> Call `graph_meta()`. Report `ontology_version`, `built_at`,
-> `source_root`, and `parse_errors`. Does `ontology_version` equal `9`?
+> In a shell with `KUZU_DB_PATH` and `LANCEDB_MCP_PROJECT_ROOT` set for your
+> graph, run `user-rag meta` (JSON output if piped). Report
+> `ontology_version`, `built_at`, `source_root`, and `parse_errors`. Does
+> `ontology_version` equal `11`?
 
-**Expected (calibration):** `ontology_version: 9`,
-`source_root: /home/user/workspace/user-rag/tests/bank-chat-system`,
+**Expected (calibration):** `ontology_version: 11`,
 `parse_errors: 0`.
 
-**If failing → fix:** older ontology means you're running a stale wheel
-or an old graph file. Re-pull the repo, `git rev-parse HEAD`, then
-rebuild from scratch with `rm -rf /tmp/verify_kuzu && python
-build_ast_graph.py …`.
+**If failing → fix:** older ontology means a stale graph file. Re-pull the
+repo, `git rev-parse HEAD`, then rebuild from scratch with
+`rm -rf /tmp/verify_kuzu && python build_ast_graph.py …`.
 
 ### 1.2 ☐ Parse error rate is acceptable
 
 **Verification prompt:**
 
-> Call `graph_meta()`. Look at `counts.files` and `parse_errors`. Compute
-> `parse_errors / files * 100`. If above 1%, name the most likely
-> culprit by inspecting the build log (`/tmp/verify_build.log`) for
-> `[parse-error]` lines.
+> From `user-rag meta` JSON, read `counts.files` (or equivalent) and
+> `parse_errors`. Compute `parse_errors / files * 100`. If above 1%, inspect
+> `/tmp/verify_build.log` for `[parse-error]` lines.
 
 **Expected (calibration):** `0 / 84 = 0%`.
 
-**If failing → fix:** > 5% means tree-sitter is choking — usually
-non-UTF-8 files or generated sources you forgot to ignore. Add to
-`.gitignore` or to the project's `lancedb_mcp_ignore`. Re-run
-`diagnose_ignore({"path":"src/main/generated"})` to confirm the rule
-took effect.
+**If failing → fix:** > 5% usually means non-UTF-8 files or generated sources
+you forgot to ignore. Add ignore rules, then run
+`user-rag diagnose-ignore src/main/generated` (adjust path) to confirm.
 
 ### 1.3 ☐ Symbol counts match the project's rough scale
 
 **Verification prompt:**
 
-> Call `graph_meta()`. Report `counts.types`, `counts.members`,
-> `counts.injects`. For a back-of-envelope sanity check, run
-> `wc -l src/**/*.java` outside the agent and compare: types should be
-> ~1 per non-trivial file.
+> From `user-rag meta`, report `counts.types`, `counts.members`,
+> `counts.injects`. Compare to a rough `wc` of Java lines outside the agent.
 
-**Expected (calibration):** 92 types from 84 files (= 1.10 types/file —
-nested classes account for the slight overshoot), 474 members, 71
-injects.
+**Expected (calibration):** 92 types from 84 files (~1.1 types/file), 474
+members, 71 injects.
 
-**If failing → fix:** types ≪ files usually means tree-sitter parser
-errors swallowed type declarations. Cross-check Phase 1.2.
+**If failing → fix:** types ≪ files → cross-check Phase 1.2.
 
-### 1.4 ☐ LanceDB tables exist and are readable
+### 1.4 ☐ LanceDB tables exist and MCP search works
 
 **Verification prompt:**
 
-> Call `list_code_index_tables()`. Report `lancedb_uri`,
-> `embedding_model`, the list of tables, and `refresh_enabled`. Then
-> run `codebase_search({"query":"main","table":"java","limit":1})`.
-> Did it return at least 1 hit?
+> Run `user-rag tables` and confirm tables include `java` (and others you
+> expect). Then call MCP `search` with
+> `{"query":"main","table":"java","limit":1}`. At least one hit?
 
-**Expected (calibration):** tables include `java`, `sql`, `yaml`; the
-search returns ≥1 chunk.
+**Expected (calibration):** tables include `java`, `sql`, `yaml`; search
+returns ≥1 chunk when the Lance index exists for the fixture.
 
-**If failing → fix:** missing tables → run
-`refresh_code_index({"confirm":true})` (slow, requires
-`LANCEDB_MCP_ALLOW_REFRESH=1`). Empty results from `codebase_search` →
-the embedding model didn't load; check `SBERT_MODEL` env and disk
-space.
+**If failing → fix:** missing tables → `user-rag refresh` (slow, needs
+`LANCEDB_MCP_ALLOW_REFRESH=1`). Empty `search` → check `LANCEDB_URI`,
+`SBERT_MODEL`, and that the index was built for this tree.
 
 ### Red flags for Phase 1
 
 - `parse_errors / files > 5%` → ignore rules wrong
 - `routes = 0` and you have controllers → see Phase 3
-- `injects = 0` and you have any DI → built-in inference broken,
-  rebuild
+- `injects = 0` and you have any DI → inference broken, rebuild
 
 ---
 
 ## Phase 2 — Roles & capabilities (5 items)
 
+MCP: use `find` with `kind="symbol"` and a `filter` object (`NodeFilter`).
+
 ### 2.1 ☐ Controllers are recognised
 
 **Verification prompt:**
 
-> Call `list_by_role({"role":"CONTROLLER","limit":200})`. Then call
-> `codebase_search({"query":"controller","table":"java","limit":50,
-> "exclude_roles":["CONTROLLER"]})`. From the second result list,
-> identify any class whose simple name ends in `Controller` /
-> `Resource` / `Endpoint`. Report each as a candidate brownfield
-> override.
+> Call `find` with
+> `{"kind":"symbol","filter":{"role":"CONTROLLER"},"limit":200}`. Then call
+> `search` with
+> `{"query":"controller","table":"java","limit":50,"filter":{"exclude_roles":["CONTROLLER"]}}`.
+> From the second result list, flag any class whose simple name ends in
+> `Controller` / `Resource` / `Endpoint`.
 
 **Expected (calibration):** 5 CONTROLLERs (`ChatIngressController`,
 `JoinOperatorController`, `DevAssignmentController`,
 `ChatManagementController`, `OperatorManagementController`). Zero
-`*Controller` classes appear in the second list.
+`*Controller` classes should appear in the second list.
 
-**If failing → fix:** for each candidate not classified, add either
-`@CodebaseRole(CodebaseRoleKind.CONTROLLER)` (README §3a) or a
-`role_overrides.fqn` entry in `.lancedb-mcp.yml`. Rebuild.
+**If failing → fix:** brownfield `@CodebaseRole(CONTROLLER)` or
+`role_overrides.fqn` in `.lancedb-mcp.yml`. Rebuild.
 
 ### 2.2 ☐ Services and repositories are recognised
 
 **Verification prompt:**
 
-> Call `list_by_role({"role":"SERVICE","limit":200})` and
-> `list_by_role({"role":"REPOSITORY","limit":200})`. Spot-check 3
-> service results: read each via `codebase_search` to confirm they
-> contain business logic (not DTOs). Then call
-> `list_by_role({"role":"OTHER","limit":100})` and report any class
-> whose simple name ends in `Service`, `Repository`, `Dao`, or `Repo`.
+> Call `find` with `{"kind":"symbol","filter":{"role":"SERVICE"},"limit":200}`
+> and `{"kind":"symbol","filter":{"role":"REPOSITORY"},"limit":200}`.
+> Spot-check services. Call
+> `find` with `{"kind":"symbol","filter":{"role":"OTHER"},"limit":100}` and
+> report names ending in `Service`, `Repository`, `Dao`, or `Repo`.
 
 **Expected (calibration):** 7 SERVICEs (incl. `ChatManagementService`,
-`DistributionChunkService`, `OperatorSessionService`); REPOSITORYs
-exist in real Spring projects but the fixture has 0 due to in-memory
-stubs. No `*Service` / `*Repository` classes in OTHER.
+`DistributionChunkService`, `OperatorSessionService`); REPOSITORY may be 0 in
+the fixture. No `*Service` / `*Repository` in OTHER for obvious Spring types.
 
-**If failing → fix:** brownfield override per 2.1.
+**If failing → fix:** brownfield overrides per 2.1.
 
 ### 2.3 ☐ Feign clients carry CLIENT + HTTP_CLIENT
 
 **Verification prompt:**
 
-> Call `list_by_role({"role":"CLIENT","capability":"HTTP_CLIENT","limit":50})`.
-> Then call `list_by_annotation({"annotation":"FeignClient","limit":50})`.
-> Every `@FeignClient`-annotated type should appear in the first list.
-> Report any divergence.
+> Call `find` with
+> `{"kind":"symbol","filter":{"role":"CLIENT","capability":"HTTP_CLIENT"},"limit":50}`.
+> Then `find` with
+> `{"kind":"symbol","filter":{"annotation":"FeignClient"},"limit":50}`.
+> On projects with `@FeignClient`, every such type should appear in the first
+> list.
 
-**Expected (calibration):** the fixture has Feign-style call sites but
-0 `@FeignClient` classes (it uses RestTemplate); on real projects,
-counts should match exactly.
+**Expected (calibration):** fixture uses RestTemplate-style clients, not
+`@FeignClient` types; on real projects counts should align.
 
-**If failing → fix:** as of ontology 9+ (PR-H1), `@FeignClient` →
-`role=CLIENT` + `capability=HTTP_CLIENT`. If you see drift, run
-`graph_meta` and confirm `ontology_version` is current (10 as of the
-`Client` / `list_clients` work). If yes and still broken, re-index — may
-be a stale graph.
+**If failing → fix:** confirm `user-rag meta` → `ontology_version` ≥ 10 for
+`Client` nodes; full rebuild if stale.
 
 ### 2.4 ☐ Message listeners and producers are detected
 
 **Verification prompt:**
 
-> Call `list_by_capability({"capability":"MESSAGE_LISTENER","limit":50})`
-> and `list_by_capability({"capability":"MESSAGE_PRODUCER","limit":50})`.
-> Then `list_by_annotation({"annotation":"KafkaListener","limit":50})`
-> and confirm all results from the annotation query also appear in the
-> capability query. Repeat for `RabbitListener`, `JmsListener`, and
-> `EventListener` if your project uses them.
+> Call `find` with
+> `{"kind":"symbol","filter":{"capability":"MESSAGE_LISTENER"},"limit":50}`
+> and the same for `MESSAGE_PRODUCER`. Cross-check with
+> `{"kind":"symbol","filter":{"annotation":"KafkaListener"},"limit":50}`.
 
 **Expected (calibration):** 2 listeners (`DistributionTriggerListener`,
 `ChatKafkaListener`) and 2 producers (`DistributionTriggerPublisher`,
 `FollowUpKafkaPublisher`).
 
-**If failing → fix:** custom listener annotations → meta-annotation
-walk should pick them up automatically (Layer A). If not, add to
-`role_overrides.annotations` in `.lancedb-mcp.yml` (README §"Brownfield
-overrides").
+**If failing → fix:** custom listener annotations → meta-annotation walk
+or `role_overrides.annotations` in `.lancedb-mcp.yml`.
 
 ### 2.5 ☐ OTHER role is small relative to type count
 
 **Verification prompt:**
 
-> Call `list_by_role({"role":"OTHER","limit":500})` and report the
-> count. Compute `OTHER / total_types` from `graph_meta().counts.types`.
-> What fraction of OTHER are obviously utility classes (exceptions,
-> records, internal helpers) vs candidates the inference should have
-> handled?
+> Call `find` with `{"kind":"symbol","filter":{"role":"OTHER"},"limit":500}`.
+> Compare count to `counts.types` from `user-rag meta`. What fraction look
+> like DTOs/helpers vs missed stereotypes?
 
-**Expected (calibration):** 43 OTHER out of 92 types (47%) — fixture
-has many record DTOs and helper classes. On a real project this should
-be < 30% if you're well-annotated; 30-50% suggests you need a few
-brownfield overrides.
+**Expected (calibration):** ~43 OTHER / 92 types in the fixture (many record
+DTOs). On a well-annotated service codebase, expect lower OTHER share.
 
-**If failing → fix:** > 60% OTHER almost always means a non-Spring
-stack the inference doesn't know — add `role_overrides.annotations` for
-your custom stereotypes.
+**If failing → fix:** > 60% OTHER often means an unsupported web/DI stack —
+add brownfield overrides.
 
 ### Red flags for Phase 2
 
-- `*Controller` classes in `OTHER` → JAX-RS or custom web framework
-  not annotated
-- Feign clients without `HTTP_CLIENT` capability → ontology drift,
-  rebuild
-- `MESSAGE_LISTENER` count = 0 in a Kafka-heavy project → meta-walk
-  failed to find your annotation
+- `*Controller` in OTHER → JAX-RS / custom web stack
+- Feign without `HTTP_CLIENT` → ontology / rebuild issue
+- `MESSAGE_LISTENER` = 0 in a Kafka-heavy project → annotation walk gap
 
 ---
 
@@ -261,238 +245,174 @@ your custom stereotypes.
 
 **Verification prompt:**
 
-> Call `graph_meta()` and report `routes_total`, `routes_by_framework`,
-> `routes_resolved_pct`, `routes_from_brownfield_pct`. Then
-> `list_routes({"limit":500})` to see them. Does the framework mix
-> match what you'd expect (e.g. mostly `spring_mvc` for an HTTP
-> service)?
+> Run `user-rag meta` and report `routes_total`, `routes_by_framework`,
+> `routes_resolved_pct`, `routes_from_brownfield_pct`. Then MCP `find` with
+> `{"kind":"route","filter":{},"limit":500}` (narrow with `microservice` on
+> large repos).
 
 **Expected (calibration):** `routes_total=17`,
-`routes_by_framework={spring_mvc: 9, kafka: 2}` (the remaining 6 are
-extracted but unframework'd Kafka topic constants),
-`routes_resolved_pct=81.8`, `routes_from_brownfield_pct=0.0`.
+`routes_by_framework` includes `spring_mvc: 9`, `kafka: 2` (remaining rows are
+less-classified Kafka/topic shapes),
+`routes_resolved_pct≈81.82`, `routes_from_brownfield_pct=0.0`.
 
-**If failing → fix:** `routes_resolved_pct < 60` on a Spring project
-means many `@RequestMapping` paths are SpEL/`${…}` (acceptable) or
-your handler types weren't classified as CONTROLLER (Phase 2.1).
+**If failing → fix:** low `routes_resolved_pct` on Spring → SpEL paths or
+missing CONTROLLER classification (Phase 2.1).
 
 ### 3.2 ☐ Every controller exposes ≥1 route
 
 **Verification prompt:**
 
-> Call `list_by_role({"role":"CONTROLLER","limit":200})`. For each
-> result FQN, call `find_callees({"fqn_or_signature":"<fqn>","depth":1,
-> "limit":5})` to confirm it has methods. Then call
-> `list_routes({"limit":500})` and verify each controller appears
-> at least once in the routes' handler set (run
-> `find_route_handlers` on a sample of route ids).
+> `find` controllers (`kind=symbol`, `role=CONTROLLER`). For one controller
+> symbol `id`, call `neighbors` with
+> `{"ids":"<id>","direction":"out","edge_types":["DECLARES"],"limit":50}`.
+> Pick a few `route` ids from `find(kind=route)` and call `neighbors` with
+> `{"ids":"<route_id>","direction":"in","edge_types":["EXPOSES"],"limit":50}` — handler symbols should appear.
 
-**Expected (calibration):** all 5 controllers in the fixture expose
-at least one HTTP route (9 routes total / 5 controllers).
+**Expected (calibration):** all 5 fixture controllers participate in HTTP
+routing (9 `spring_mvc` routes total across them).
 
-**If failing → fix:** if a controller has no route, the framework
-isn't recognised on its methods. Add `@CodebaseHttpRoute` / `@CodebaseAsyncRoute` per README §3b.
+**If failing → fix:** add `@CodebaseHttpRoute` / `@CodebaseAsyncRoute` per
+README §3b.
 
 ### 3.3 ☐ HTTP routes have non-empty path AND method
 
 **Verification prompt:**
 
-> Call `list_routes({"framework":"spring_mvc","limit":200})`. Report
-> any route where `path` is empty or `method` is empty. (Empty `path`
-> with `framework=spring_mvc` usually means `@RequestMapping` with no
-> path — programmatic routing — which is rare and worth investigating.)
+> `find` with
+> `{"kind":"route","filter":{"framework":"spring_mvc"},"limit":200}`. Flag
+> any row where `path` or HTTP method is empty in `describe(id=…)`.
 
-**Expected (calibration):** all 9 spring_mvc routes have non-empty
-`path` and `method`.
+**Expected (calibration):** all 9 `spring_mvc` routes have non-empty path and
+method in graph data.
 
-**If failing → fix:** unresolvable SpEL paths are normal in some
-`@RequestMapping` forms — accept them. But if a route has
-`framework=spring_mvc` and no path, it's likely a route you should
-override with `@CodebaseHttpRoute`.
+**If failing → fix:** brownfield `@CodebaseHttpRoute` for ambiguous mappings.
 
-### 3.4 ☐ Kafka topics are correct (topics, brokers, kinds)
+### 3.4 ☐ Kafka topics are correct
 
 **Verification prompt:**
 
-> Call `list_routes({"framework":"kafka","limit":200})`. For each
-> result, confirm: `kind=kafka_topic` and `topic` is non-empty. Cross-
-> reference against your project's `application.yml` /
-> `application.properties` Kafka topic names.
+> `find` with `{"kind":"route","filter":{"framework":"kafka"},"limit":200}`.
+> Confirm `topic` is populated where the extractor resolved it; compare to
+> config files.
 
-**Expected (calibration):** 2 kafka routes
-(`ChatTopics.INCOMING`, `${assign.kafka.distribution-topic}`). The
-6 unframework'd Kafka rows in 3.1 are SpEL constants the extractor
-couldn't resolve — they show up but with empty framework.
+**Expected (calibration):** 2 kafka-classified routes; additional Kafka-like
+rows may appear with looser framework labels — treat as a shape check, not an
+exact count.
 
-**If failing → fix:** for unresolved topics that you DO know the
-literal name of, use brownfield route override:
-`@CodebaseAsyncRoute(topic="my.topic")`
-on the listener method (README §3b).
+**If failing → fix:** brownfield `@CodebaseAsyncRoute(topic="…")`.
 
-### 3.5 ☐ Outbound HTTP clients surface via `list_clients`
+### 3.5 ☐ Outbound HTTP clients surface via `find(kind="client")`
 
 **Verification prompt:**
 
-> Call `graph_meta()` and note `ontology_version` and `clients_total`.
-> Then `list_clients({"limit":200})`. Every row should include
-> `client_kind`, `target_service`, `path`, `method`, and `source_layer`.
+> `user-rag meta` → `ontology_version` and `counts.clients`. Then MCP `find`
+> with `{"kind":"client","filter":{},"limit":200}`. Rows should include
+> `client_kind`, `target_service`, paths, `source_layer`.
 
-**Expected (calibration):** `ontology_version=10`, `clients_total=2`, and
-both clients are `client_kind=rest_template` (imperative HTTP in the
-fixture — no Feign interfaces).
+**Expected (calibration):** `ontology_version=11`, `counts.clients=2`, both
+`rest_template` in the fixture.
 
-**If failing → fix:** `ontology_version` below 10 → full rebuild. Zero
-clients on a project you know has Feign or tagged `@CodebaseClient` →
-check brownfield stubs (README §3c) and that those sources are indexed.
+**If failing → fix:** ontology < 10 → full rebuild. Zero clients when you
+expect Feign → README §3c brownfield.
 
 ### Red flags for Phase 3
 
-- `routes_total = 0` → no controllers were classified or framework not
-  recognised
-- HTTP routes with empty `method` → annotation extractor didn't see
-  `@GetMapping` / `@PostMapping`
-- `routes_from_brownfield_pct` jumped after a refactor → you broke a
-  built-in extraction; check that `ontology_version` in `graph_meta`
-  matches the bundle you expect (10 as of `Client` / `list_clients`)
+- `routes_total = 0` → Phase 2 classification / framework gap
+- `routes_from_brownfield_pct` surprises after refactor → compare
+  `ontology_version` to bundle expectations
 
 ---
 
 ## Phase 4 — Call graph (3 items)
 
-### 4.1 ☐ Pick a known method, verify `find_callers` matches IDE
+### 4.1 ☐ Known method: inbound `CALLS` matches IDE usages
 
 **Verification prompt:**
 
-> Pick one method in your project that you know has 3-5 callers (for
-> example a service method called by 1-2 controllers and 1-2 other
-> services). State its FQN+signature.
-> Call `find_callers({"fqn_or_signature":"<fqn>#<method>(<args>)","depth":1,"min_confidence":0.9,"limit":50})`.
-> Open your IDE, run "Find Usages" on the same method, and compare:
-> for each IDE caller, does it appear in the MCP result? List
-> mismatches.
+> Pick a method with known callers. Resolve its **symbol id** via `search`
+> or `find` + `describe`. Call `neighbors` with
+> `{"ids":"<sym_id>","direction":"in","edge_types":["CALLS"],"limit":50}`.
+> Compare to IDE “Find Usages”. Optionally filter mentally by
+> `attrs.confidence` (high confidence first).
 
-**Expected (calibration):** any service method like
-`com.bank.chat.assign.service.DistributionService#assignNext()` should
-have 1-3 callers. Whether your IDE matches MCP exactly depends on:
-reflection (won't show in MCP), generated code (depends on indexing
-config), and JDK external code (filtered by `exclude_external`).
+**Expected (calibration):** e.g. `DistributionService#assignNext` has a small set of inbound `CALLS`; JDK-only phantom callers may differ from IDE.
 
-**If failing → fix:** if MCP misses callers your IDE finds, lower
-`min_confidence` to `0.0` and retry. If still missing, the call site
-was resolved as `phantom` — check your generic / reflection-heavy code
-isn't dominating.
+**If failing → fix:** if edges missing, check phantom/low-confidence explanations in `CODEBASE_REQUIREMENTS.md` call graph section.
 
-### 4.2 ☐ End-to-end chain reproduces via `find_callees`
+### 4.2 ☐ Entry route → handler → service chain
 
 **Verification prompt:**
 
-> Pick one HTTP entry point. Call `list_routes({"framework":"spring_mvc","limit":1})`,
-> grab the route id, then `find_route_handlers({"route_id":"<id>"})`
-> to get the handler FQN. Then `find_callees` on the handler with
-> `depth=2`. Does the chain reach a service method (depth 1) and then
-> a repository / external call (depth 2)?
+> `find` one `spring_mvc` route; `describe` the route id. `neighbors` with
+> `{"ids":"<route_id>","direction":"in","edge_types":["EXPOSES"],"limit":50}` to get handler symbol id(s).
+> Then `neighbors` on the handler with `{"ids":"<handler_sym_id>","direction":"out","edge_types":["CALLS"],"limit":50}`,
+> repeat one more hop if needed. Does the chain reach service / repo code?
 
-**Expected (calibration):** `JoinOperatorController#joinOperator` →
-`ChatOrchestrationService#…` → repository / Kafka publisher.
+**Expected (calibration):** `JoinOperatorController#joinOperator` → service → repository / messaging.
 
-**If failing → fix:** if depth-2 returns nothing, your service classes
-might be classified as OTHER (back to Phase 2.2). Or `min_confidence`
-is filtering legit edges — try `min_confidence=0.0`.
+**If failing → fix:** handler classified as OTHER → Phase 2.2.
 
 ### 4.3 ☐ Phantom rate is acceptable
 
 **Verification prompt:**
 
-> Look at the `[pass3]` line in `/tmp/verify_build.log`. Report
-> `chained_phantoms %`, `unresolved_callee %`, `phantom_receiver %`.
+> Read `[pass3]` from `/tmp/verify_build.log` and report phantom /
+> unresolved percentages.
 
-**Expected (calibration):** chained phantoms 9.6%, unresolved callee
-36.8%, phantom receiver 17.2%. The fixture has many cross-service
-references that legitimately resolve to phantoms (other-service types
-that aren't in the same indexing root).
+**Expected (calibration):** fixture shows substantial unresolved/phantom shares by design (cross-service-ish references). Treat as baseline, not failure.
 
-**If failing → fix:** > 50% unresolved on a single-service indexing
-likely means you didn't include the project's library jars or generated
-sources path. > 30% chained phantoms can mean overly fluent APIs the
-resolver can't follow — usually accept as a known limitation.
+**If failing → fix:** > 50% unresolved on a **single** service repo → indexing root / generated sources issues.
 
 ### Red flags for Phase 4
 
-- `find_callers` returns 0 with `min_confidence=0.0` → wrong needle
-  shape (use FQN+sig, not simple name)
-- depth-2 closure returns nothing on a real chain → roles wrong (Phase
-  2)
+- Zero inbound `CALLS` for a hot method → wrong symbol id or confidence filtering too aggressive mentally
+- Chain stops at OTHER services → Phase 2
 
 ---
 
 ## Phase 5 — Cross-service edges (3 items)
 
-### 5.1 ☐ HTTP_CALLS edges exist and resolve correctly
+### 5.1 ☐ HTTP_CALLS metadata
 
 **Verification prompt:**
 
-> Call `graph_meta()` and report `http_calls_total`,
-> `http_calls_by_strategy`, `http_calls_match_breakdown`. Then pick
-> a known cross-service HTTP call site (e.g. a Feign interface method
-> on service A whose target is service B). Call
-> `find_route_callers({"microservice":"<B>","path_template":"<path>"})`
-> and confirm A appears as a caller with `match=cross_service`.
+> `user-rag meta` → report `counts.http_calls`, `http_calls_match_breakdown`,
+> `edge_counts.HTTP_CALLS`. On a real project, pick a known Feign call and
+> locate the consumer symbol id, then `neighbors` with
+> `{"ids":"<sym_id>","direction":"out","edge_types":["HTTP_CALLS"],"limit":50}` and inspect `attrs.match`.
 
-**Expected (calibration):** `http_calls_total=2`,
-`http_calls_match_breakdown={phantom: 2}` (no cross-service in the
-fixture). On a real multi-service project, expect `cross_service > 0`.
+**Expected (calibration):** `http_calls_match_breakdown={"phantom":2}`, `edge_counts.HTTP_CALLS=2`, `cross_service_calls_total=0` on the fixture.
 
-**If failing → fix:** if you expected `cross_service` but got
-`phantom`, the target service isn't in the same indexing root, OR the
-`@FeignClient` URL doesn't resolve to a known service. Tag with
-`@CodebaseClient(clientKind=CodebaseClientKind.feign_method, targetService="<name>",
-path="…")` (README §3c).
+**If failing → fix:** expected `cross_service` but see `phantom` → target service not indexed or URL resolution; use `@CodebaseClient` per README §3c.
 
-### 5.2 ☐ ASYNC_CALLS edges connect producer → topic → listener
+### 5.2 ☐ ASYNC_CALLS producer → consumer
 
 **Verification prompt:**
 
-> Call `graph_meta()` and report `async_calls_total`,
-> `async_calls_by_strategy`, `async_calls_match_breakdown`. Pick a
-> known Kafka topic. Call
-> `find_route_callers({"microservice":"<consumer-service>","path_template":""})`
-> with the route id of the consumer route. Confirm the producer
-> appears as a caller.
+> `user-rag meta` → `async_calls_match_breakdown`, `edge_counts.ASYNC_CALLS`.
+> On a real project, walk `neighbors` with explicit `ids`, `direction`, `limit`, and e.g.
+> `edge_types":["ASYNC_CALLS"]` (add `HTTP_CALLS` when relevant).
 
-**Expected (calibration):** `async_calls_total=5`,
-`async_calls_match_breakdown={intra_service: 1, phantom: 4}`. On real
-projects with multi-service Kafka, expect `cross_service` matches.
+**Expected (calibration):** `async_calls_match_breakdown={"intra_service":1,"phantom":4}`, 5 async edges total on the fixture.
 
-**If failing → fix:** mostly `phantom` on real cross-service async
-calls means the consumer side doesn't have a `Route` node for the
-topic. Either the listener isn't classified (Phase 2.4) or the topic
-literal couldn't be resolved (Phase 3.4).
+**If failing → fix:** consumer route missing → Phase 2.4 / 3.4.
 
-### 5.3 ☐ `cross_service_resolution` flag flips behaviour as expected
+### 5.3 ☐ `cross_service_resolution` toggles behaviour
 
 **Verification prompt:**
 
-> Pick one cross-service call site that resolved to `cross_service` in
-> the default `auto` mode. Edit `.lancedb-mcp.yml` to add
-> `cross_service_resolution: brownfield_only`. Rebuild
-> (`refresh_code_index({"confirm":true})`) and re-run the same
-> `find_route_callers` query. The previously-cross_service edge
-> should now be `unresolved` (unless your call site is brownfield-
-> tagged). Confirm.
+> On a project with real `cross_service` matches: set
+> `cross_service_resolution: brownfield_only` in `.lancedb-mcp.yml`, run
+> `user-rag refresh`, re-check the same `neighbors` / meta breakdown. Edges
+> should tighten to brownfield-tagged sites.
 
-**Expected (calibration):** N/A — fixture has 0 cross-service edges.
-Use this on your real project as a smoke test of the flag.
+**Expected (calibration):** N/A on fixture (no cross-service matches).
 
-**If failing → fix:** flag flag has no effect → you didn't actually
-rebuild after editing the YAML. `graph_meta().built_at` should be a
-fresh timestamp.
+**If failing → fix:** confirm `built_at` changed after rebuild (`user-rag meta`).
 
 ### Red flags for Phase 5
 
-- `cross_service_calls_total = 0` on a multi-service project →
-  resolver couldn't bind any caller to its target. Check that all
-  services are under one indexing root, and check microservice
-  detection (top-level dirs under `LANCEDB_MCP_PROJECT_ROOT`).
+- `cross_service_calls_total = 0` on a true multi-service monorepo → resolver / microservice boundary configuration
 
 ---
 
@@ -502,118 +422,68 @@ fresh timestamp.
 
 **Verification prompt:**
 
-> Pick a behavioural concept that exists in your code (e.g.
-> "operator assignment", "session lifecycle", "retry on Kafka send").
-> Call `codebase_search({"query":"<concept>","limit":8,
-> "exclude_roles":["DTO","ENTITY","CONFIG","OTHER"],
-> "context_neighbors":1})`. The top 3 hits should be in files you'd
-> naturally point at for that concept.
+> MCP `search` with behavioural query, e.g.
+> `{"query":"operator assignment flow","table":"java","limit":8,"filter":{"exclude_roles":["DTO","ENTITY","CONFIG","OTHER"]}}`.
+> Top hits should land in orchestration / controller code.
 
-**Expected (calibration):** `query="how chat assigns on operator"` →
-top hits include `DistributionService`, `OperatorSessionService`,
-`JoinOperatorController` (the assignment chain).
+**Expected (calibration):** query about chat operator assignment surfaces `DistributionService`, `OperatorSessionService`, `JoinOperatorController`.
 
-**If failing → fix:** top hits are DTOs / configs → you forgot
-`exclude_roles`. Top hits are unrelated → embeddings are off (check
-`SBERT_MODEL` and that `refresh_code_index` actually ran on the
-current code).
+**If failing → fix:** add / tune `filter`; confirm Lance index matches tree.
 
-### 6.2 ☐ Identifier query benefits from `auto_hybrid`
+### 6.2 ☐ Identifier query benefits from hybrid mode
 
 **Verification prompt:**
 
-> Pick a class your project defines (e.g. `DistributionChunkService`).
-> Run two queries: with `auto_hybrid=false` (default) and with
-> `auto_hybrid=true`. Report the top 3 hits from each.
+> Run `search` twice for a distinctive class name: once `hybrid=false`, once
+> `hybrid=true` (keep `table="java"`).
 
-**Expected (calibration):** without auto_hybrid, top results are still
-relevant but ranked lower; with auto_hybrid=true, the FTS+vector RRF
-pushes the exact-name file to position 1.
+**Expected (calibration):** hybrid often pulls the defining file higher for identifier-like queries.
 
-**If failing → fix:** auto_hybrid has no effect → `table=all` (it
-requires a single table). Stick to `table=java`.
+**If failing → fix:** hybrid with `table="all"` is unsupported for fusion — use `java` only.
 
 ### Red flags for Phase 6
 
-- Chunk count from `codebase_search` is 0 on a known-good query →
-  LanceDB tables empty or wrong embedding model
-- `graph_expand=true` returns more results than `=false` but they're
-  noise → expand depth too aggressive, set to 1
+- Zero hits on known-good query → empty Lance table or wrong `LANCEDB_URI`
 
 ---
 
-## Phase 7 — Brownfield overrides actually applied (3 items)
+## Phase 7 — Brownfield overrides (3 items)
 
-> Run this phase **only after** you've explicitly added at least one
-> brownfield annotation (or YAML override) to a real type in your
-> project. Otherwise skip — there's nothing to verify.
+> Run only after you added brownfield annotations or YAML overrides.
 
-### 7.1 ☐ `@CodebaseRole` on a class flips the role
+### 7.1 ☐ `@CodebaseRole` flips the role
 
 **Verification prompt:**
 
-> Pick one class where you added `@CodebaseRole(CodebaseRoleKind.X)`.
-> State the FQN and the X you set. Call
-> `list_by_role({"role":"X","limit":500})` and confirm the FQN appears
-> in the results. Then call `find_implementors({"name":"<simple-name>"})`
-> (or `codebase_search` if it's a concrete class) to confirm the
-> annotation was picked up.
+> After tagging a class, rebuild. `find` with
+> `{"kind":"symbol","filter":{"role":"<X>"},"limit":500}` must include its
+> FQN. Confirm via `describe` / `search`.
 
-**Expected (calibration):** N/A — fixture has no brownfield class
-annotations applied. After you add one and rebuild, this verification
-should pass.
+**If failing → fix:** typo in annotation simple name or no rebuild.
 
-**If failing → fix:** the class doesn't appear → either the
-annotation wasn't matched by simple name (typo? wrong package?), or
-the build wasn't rebuilt. `graph_meta` will show
-`routes_from_brownfield_pct > 0` once any brownfield is active.
-
-### 7.2 ☐ `@CodebaseHttpRoute` / `@CodebaseAsyncRoute` on a method registers a route
+### 7.2 ☐ `@CodebaseHttpRoute` / `@CodebaseAsyncRoute` registers
 
 **Verification prompt:**
 
-> Pick one method where you added
-> `@CodebaseHttpRoute(path="…", method="…")` or `@CodebaseAsyncRoute(topic="…")`. State
-> the path/method. Call
-> `get_route_by_path({"microservice":"<your-service>","path_template":"<path>","method":"<method>"})`.
-> The route should resolve. Then `find_route_handlers({"route_id":"<id>"})`
-> — your method's enclosing type should appear.
+> Rebuild, then `find` with
+> `{"kind":"route","filter":{"path_prefix":"<your-prefix>","http_method":"<METHOD>"},"limit":20}`.
+> `describe` the route; `neighbors` `in` / `EXPOSES` should reach your
+> handler.
 
-**Expected (calibration):** N/A — fixture has 0 brownfield routes.
-After you add one, `graph_meta().routes_from_brownfield_pct > 0`.
+**If failing → fix:** path/method/topic args must match README §3b normalised forms.
 
-**If failing → fix:** route doesn't resolve → check that the
-annotation arguments match the route type (HTTP requires `path` + `method`,
-async requires `topic`). Verify `path_template` matches the normalised servlet form
-(e.g. `/users/{id}` → `/users/{}`).
-
-### 7.3 ☐ `@CodebaseClient` on a method creates an outbound HTTP_CALLS edge
+### 7.3 ☐ `@CodebaseClient` creates caller-side edges
 
 **Verification prompt:**
 
-> Pick one method where you added
-> `@CodebaseClient(clientKind=CodebaseClientKind.rest_template, targetService="<svc>", path="…", method="…")`.
-> Call `find_callees({"fqn_or_signature":"<your-method-fqn>","depth":1,"limit":20})`.
-> An outbound edge to a Route node (the target service's endpoint)
-> should appear. Then call `graph_meta()` and report
-> `http_clients_from_brownfield_pct` (should be > 0).
+> Rebuild. From the annotated method's symbol id, call `neighbors` e.g.
+> `{"ids":"<sym_id>","direction":"out","edge_types":["HTTP_CALLS","ASYNC_CALLS"],"limit":50}` (trim edge types to what you expect). Target routes should exist on the callee service index.
 
-**Expected (calibration):** N/A — fixture has 0 brownfield clients.
-
-**If failing → fix:** edge doesn't appear → most common cause is the
-target service / path doesn't have a `Route` node yet (the consumer
-side has to be indexed too). Verify by
-`get_route_by_path({"microservice":"<svc>","path_template":"<path>"})` —
-if it returns nothing, index the target service alongside.
+**If failing → fix:** callee service must be indexed with matching `Route` rows.
 
 ### Red flags for Phase 7
 
-- `routes_from_brownfield_pct = 0` after adding `@CodebaseHttpRoute` / `@CodebaseAsyncRoute` →
-  build wasn't rebuilt, or annotation didn't parse (typo in enum
-  value)
-- Brownfield override "tightens" but doesn't override → this is
-  **intended behaviour** (partial overrides are non-destructive — see
-  README §"Caller-side brownfield overrides")
+- Brownfield routes/clients absent after edits → no rebuild or parse failure
 
 ---
 
@@ -621,28 +491,20 @@ if it returns nothing, index the target service alongside.
 
 If everything is green:
 
-- Save your `.lancedb-mcp.yml` and any `@Codebase*` annotations to
-  source control. They're now part of your project's brownfield
-  contract.
-- Pin the ontology version (9) somewhere in your README so future devs
-  know what shape of graph this MCP produces.
-- Run `graph_meta` weekly (or after big refactors) and diff the
-  `counts` block — surprise drops are the leading indicator of broken
-  indexing.
+- Commit `.lancedb-mcp.yml` and `@Codebase*` stubs.
+- Record **ontology 11** (or current `user-rag meta` value) in your team docs.
+- Periodically diff `user-rag meta` `counts` after large refactors.
 
-If something is red and the "→ fix" doesn't help:
+If something is red:
 
-- Capture `graph_meta()` output, `/tmp/verify_build.log` last 30
-  lines, and the failing prompt. File an issue against the repo with
-  those three artefacts; they're enough to diagnose 90% of cases.
+- Capture `user-rag meta` JSON, `/tmp/verify_build.log` tail, and the failing
+  prompt.
 
 ---
 
 ## Appendix — calibration source
 
-All calibration numbers in this checklist come from
-`tests/bank-chat-system` indexed with `master @ d62b48c` (post PR-H1
-merge, ontology version 9). Reproduce with:
+Reproduce fixture numbers with:
 
 ```bash
 cd /path/to/java-enterprise-codebase-rag
@@ -650,4 +512,7 @@ rm -rf /tmp/calib_kuzu
 python build_ast_graph.py \
   --source-root tests/bank-chat-system \
   --kuzu-path /tmp/calib_kuzu --verbose
+user-rag meta --source-root tests/bank-chat-system --kuzu-path /tmp/calib_kuzu
 ```
+
+Current snapshot: `tests/bank-chat-system`, `master @ e90cbecc`, ontology **11**.
