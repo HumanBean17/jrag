@@ -8,8 +8,9 @@ for tools that don't read `.cursor/rules/`.
 ## Where to look
 
 - `README.md` — feature surface, env vars, ranking, capabilities,
- tool list, "Re-index required" callouts. **`ontology_version` is
- currently 11** (async brownfield route merge + `Client` nodes; see README callouts).
+ MCP tool list (now `search` / `find` / `describe` / `neighbors`),
+ CLI ops (`user-rag --help`), and "Re-index required" callouts.
+ **`ontology_version` is currently 11** (async brownfield route merge + `Client` nodes; see README callouts).
 - `CODEBASE_REQUIREMENTS.md` — Java-repo assumptions and tuning map.
 - `propose/` and `plans/` (plus their `completed/` subdirs) —
   in-flight scope and the rationale behind current design.

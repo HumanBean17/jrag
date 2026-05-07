@@ -9,15 +9,40 @@ description = "MCP server for semantic + structural search over Java codebases"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "kuzu>=0.11.3,<0.12",
+    "lancedb>=0.25.3,<0.31",
+    "mcp>=1.27.0,<2",
+    "numpy>=1.26.4,<2.5",
     "pathspec>=1.0.4,<2",
+    "pyarrow>=23.0.1,<24",
+    "PyYAML>=6.0.3,<7",
+    "sentence-transformers>=5.4.0,<6",
+    "tree-sitter>=0.25.2,<0.26",
+    "tree-sitter-java>=0.23.5,<0.24",
     "unidiff>=0.7.3,<1",
 ]
 
-# This repo is run as a loose script bundle; the wheel intentionally ships no
-# import packages so `pip install .` only pulls declared deps (pathspec, unidiff, …).
-# Sources (e.g. path_filtering.py, pr_analysis.py) live at repo root and are run in-place.
+[project.scripts]
+user-rag = "user_rag.cli:main"
+
 [tool.setuptools]
-packages = []
+packages = ["user_rag"]
+py-modules = [
+    "ast_java",
+    "build_ast_graph",
+    "chunk_heuristics",
+    "graph_enrich",
+    "index_common",
+    "java_index_flow_lancedb",
+    "java_index_v1_common",
+    "java_ontology",
+    "kuzu_queries",
+    "mcp_v2",
+    "path_filtering",
+    "pr_analysis",
+    "search_lancedb",
+    "server",
+]
 
 [tool.ruff]
 line-length = 100
