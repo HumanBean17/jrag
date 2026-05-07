@@ -77,14 +77,18 @@ def test_cli_meta_pretty_when_tty(corpus_root, kuzu_db_path) -> None:
                 try:
                     data = os.read(master, 4096)
                 except OSError as exc:
-                    # Some platforms report slave-closed as EIO on master fd.
-                    if exc.errno == errno.EIO and proc.poll() is not None:
+                    # After the child exits, draining the PTY master can raise EIO (notably on Darwin).
+                    if exc.errno == errno.EIO:
+                        if proc.poll() is None:
+                            proc.wait(timeout=30)
                         break
                     raise
                 if data:
                     chunks.append(data)
-            if proc.poll() is not None and (not ready or not data):
+            if proc.poll() is not None and not data:
                 break
+        if proc.poll() is None:
+            proc.wait(timeout=30)
         out = b"".join(chunks).decode("utf-8", errors="replace")
     finally:
         try:
@@ -173,6 +177,7 @@ def test_cli_analyze_pr_with_diff_stdin(corpus_root, kuzu_db_path) -> None:
 
 def test_cli_refresh_rebuilds_kuzu_path(corpus_root, tmp_path) -> None:
     env = _base_env(corpus_root)
+    env["LANCEDB_MCP_ALLOW_REFRESH"] = "1"
     kuzu_path = tmp_path / "cli_refresh.kuzu"
     proc = _run_cli(
         [
@@ -193,7 +198,25 @@ def test_cli_refresh_rebuilds_kuzu_path(corpus_root, tmp_path) -> None:
     assert int(payload["counts"].get("types", 0)) > 0
 
 
-def test_cli_unknown_subcommand_exits_2(corpus_root) -> None:
+def test_cli_refresh_disabled_without_allow_env(corpus_root, tmp_path) -> None:
+    env = _base_env(corpus_root)
+    env.pop("LANCEDB_MCP_ALLOW_REFRESH", None)
+    kuzu_path = tmp_path / "cli_refresh_blocked.kuzu"
+    proc = _run_cli(
+        [
+            "refresh",
+            "--source-root",
+            str(corpus_root),
+            "--kuzu-path",
+            str(kuzu_path),
+            "--quiet",
+        ],
+        env=env,
+    )
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    payload = json.loads(proc.stdout)
+    assert payload.get("success") is False
+    assert "LANCEDB_MCP_ALLOW_REFRESH" in (payload.get("message") or "")
     env = _base_env(corpus_root)
     proc = _run_cli(["bogus"], env=env)
     assert proc.returncode == 2

@@ -25,6 +25,18 @@ async def test_all_tools_have_non_empty_description(mcp_server) -> None:
     assert missing == [], f"tools missing description: {missing}"
 
 
+async def test_tool_input_schema_top_level_properties_have_nonempty_descriptions(mcp_server) -> None:
+    tools = await mcp_server.list_tools()
+    for tool in tools:
+        schema = tool.inputSchema or {}
+        props = schema.get("properties") or {}
+        for param_name, spec in props.items():
+            desc = spec.get("description")
+            assert isinstance(desc, str) and desc.strip(), (
+                f"{tool.name}.{param_name}: expected non-empty description in MCP inputSchema"
+            )
+
+
 def test_cocoindex_subprocess_env_sets_project_root(monkeypatch, tmp_path) -> None:
     import server
 
