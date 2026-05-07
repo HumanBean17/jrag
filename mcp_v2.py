@@ -262,30 +262,8 @@ def _load_node_record(graph: KuzuGraph, node_id: str, kind: Literal["symbol", "r
     return rows[0]
 
 
-def _edge_summary_for_node(graph: Any, node_id: str) -> dict[str, dict[str, int]]:
-    if hasattr(graph, "edge_counts_for"):
-        return graph.edge_counts_for(node_id)
-    rows = graph._rows(  # noqa: SLF001
-        "MATCH (n {id: $id})-[e]->() "
-        "RETURN label(e) AS edge_type, 'out' AS direction, count(e) AS n "
-        "UNION ALL "
-        "MATCH (n {id: $id})<-[e]-() "
-        "RETURN label(e) AS edge_type, 'in' AS direction, count(e) AS n",
-        {"id": node_id},
-    )
-    out: dict[str, dict[str, int]] = {}
-    for row in rows:
-        edge_type = str(row.get("edge_type") or "")
-        direction = str(row.get("direction") or "")
-        if edge_type == "" or direction not in ("in", "out"):
-            continue
-        out.setdefault(edge_type, {"in": 0, "out": 0})
-        out[edge_type][direction] = int(row.get("n") or 0)
-    return {
-        edge_type: dirs
-        for edge_type, dirs in out.items()
-        if int(dirs.get("in", 0)) > 0 or int(dirs.get("out", 0)) > 0
-    }
+def _edge_summary_for_node(graph: KuzuGraph, node_id: str) -> dict[str, dict[str, int]]:
+    return graph.edge_counts_for(node_id)
 
 
 def _node_matches_filter(kind: Literal["symbol", "route", "client"], row: dict[str, Any], f: NodeFilter | None) -> bool:

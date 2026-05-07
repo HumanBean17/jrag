@@ -143,6 +143,9 @@ def test_describe_route_returns_record(kuzu_graph) -> None:
 
 def test_describe_client_returns_record(kuzu_graph) -> None:
     class FakeGraph:
+        def edge_counts_for(self, node_id: str) -> dict[str, dict[str, int]]:
+            return {}
+
         def _rows(self, query: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
             if "MATCH (n:Client)" in query:
                 return [
