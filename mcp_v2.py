@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import threading
@@ -143,7 +144,7 @@ def _row_to_search_hit(row: dict[str, Any]) -> SearchHit:
     score = float(row.get("_rrf_score") or row.get("_score") or 0.0)
     return SearchHit(
         chunk_id=_chunk_id_from_row(row),
-        symbol_id=str(row.get("symbol_id")) if row.get("symbol_id") else None,
+        symbol_id=_chunk_to_symbol_id(row),
         fqn=str(row.get("primary_type_fqn")) if row.get("primary_type_fqn") else None,
         score=score,
         snippet=str(row.get("text") or ""),
@@ -151,6 +152,25 @@ def _row_to_search_hit(row: dict[str, Any]) -> SearchHit:
         module=str(row.get("module")) if row.get("module") else None,
         role=str(row.get("role")) if row.get("role") else None,
     )
+
+
+def _chunk_to_symbol_id(chunk_row: dict[str, Any]) -> str | None:
+    symbol_id = chunk_row.get("symbol_id")
+    if symbol_id:
+        return str(symbol_id)
+    meta = chunk_row.get("metadata")
+    if isinstance(meta, str):
+        try:
+            parsed = json.loads(meta)
+            if isinstance(parsed, dict):
+                meta = parsed
+        except Exception:
+            meta = None
+    if isinstance(meta, dict):
+        nested = meta.get("symbol_id")
+        if nested:
+            return str(nested)
+    return None
 
 
 def _symbol_where_from_filter(f: NodeFilter) -> tuple[str, dict[str, Any]]:
@@ -240,6 +260,32 @@ def _load_node_record(graph: KuzuGraph, node_id: str, kind: Literal["symbol", "r
     if not rows:
         return None
     return rows[0]
+
+
+def _edge_summary_for_node(graph: Any, node_id: str) -> dict[str, dict[str, int]]:
+    if hasattr(graph, "edge_counts_for"):
+        return graph.edge_counts_for(node_id)
+    rows = graph._rows(  # noqa: SLF001
+        "MATCH (n {id: $id})-[e]->() "
+        "RETURN label(e) AS edge_type, 'out' AS direction, count(e) AS n "
+        "UNION ALL "
+        "MATCH (n {id: $id})<-[e]-() "
+        "RETURN label(e) AS edge_type, 'in' AS direction, count(e) AS n",
+        {"id": node_id},
+    )
+    out: dict[str, dict[str, int]] = {}
+    for row in rows:
+        edge_type = str(row.get("edge_type") or "")
+        direction = str(row.get("direction") or "")
+        if edge_type == "" or direction not in ("in", "out"):
+            continue
+        out.setdefault(edge_type, {"in": 0, "out": 0})
+        out[edge_type][direction] = int(row.get("n") or 0)
+    return {
+        edge_type: dirs
+        for edge_type, dirs in out.items()
+        if int(dirs.get("in", 0)) > 0 or int(dirs.get("out", 0)) > 0
+    }
 
 
 def _node_matches_filter(kind: Literal["symbol", "route", "client"], row: dict[str, Any], f: NodeFilter | None) -> bool:
@@ -386,9 +432,10 @@ def describe_v2(id: str, graph: KuzuGraph | None = None) -> DescribeOutput:
         if row is None:
             return DescribeOutput(success=False, message=f"No node found for `{id}`")
         ref = _node_ref_from_row(kind, row)
+        edge_summary = _edge_summary_for_node(g, id)
         return DescribeOutput(
             success=True,
-            record=NodeRecord(id=ref.id, kind=kind, fqn=ref.fqn, data=row, edge_summary=None),
+            record=NodeRecord(id=ref.id, kind=kind, fqn=ref.fqn, data=row, edge_summary=edge_summary),
         )
     except ValueError as exc:
         return DescribeOutput(success=False, message=str(exc))
@@ -399,6 +446,8 @@ def describe_v2(id: str, graph: KuzuGraph | None = None) -> DescribeOutput:
 @validate_call(config={"arbitrary_types_allowed": True})
 def neighbors_v2(
     ids: str | list[str],
+    # Required fields are intentional: direct Python calls and MCP-bound calls
+    # share the same validation contract through @validate_call.
     direction: Literal["in", "out"] = Field(...),
     edge_types: list[str] = Field(...),
     limit: int = 25,

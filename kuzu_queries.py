@@ -9,6 +9,7 @@ intentionally dependency-light: nothing here imports LanceDB or sentence-transfo
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 from dataclasses import asdict, dataclass
@@ -18,6 +19,8 @@ from typing import Any
 import kuzu
 
 from ast_java import ONTOLOGY_VERSION as _ONTOLOGY_VERSION
+
+log = logging.getLogger(__name__)
 
 __all__ = [
     "KuzuGraph",
@@ -176,6 +179,18 @@ _EXTERNAL_PREFIXES = (
     "jakarta.",
     "org.springframework.",
     "lombok.",
+)
+
+_EDGE_TYPES: tuple[str, ...] = (
+    "EXTENDS",
+    "IMPLEMENTS",
+    "INJECTS",
+    "DECLARES",
+    "CALLS",
+    "EXPOSES",
+    "DECLARES_CLIENT",
+    "HTTP_CALLS",
+    "ASYNC_CALLS",
 )
 
 
@@ -517,6 +532,20 @@ class KuzuGraph:
                 cross_service_resolution = (
                     str(raw_csr) if raw_csr not in (None, "") else None
                 )
+        edge_counts = {edge: 0 for edge in _EDGE_TYPES}
+        failed_edges: list[str] = []
+        for edge_type in _EDGE_TYPES:
+            try:
+                edge_rows = self._rows(
+                    f"MATCH ()-[e:{edge_type}]->() RETURN count(e) AS n"
+                )
+                edge_counts[edge_type] = int(edge_rows[0].get("n") or 0) if edge_rows else 0
+            except Exception as exc:
+                failed_edges.append(edge_type)
+                log.warning("edge count query failed for %s: %s", edge_type, exc)
+        if len(failed_edges) == len(_EDGE_TYPES):
+            log.warning("edge count queries failed for all edge types; returning zeroed edge_counts")
+
         return {
             "ontology_version": int(row.get("ontology_version") or 0),
             "built_at": int(row.get("built_at") or 0),
@@ -543,7 +572,31 @@ class KuzuGraph:
             "pass3_skipped_cross_service": pass3_skipped_cross_service,
             "pass4_exposes_suppressed_feign": pass4_exposes_suppressed_feign,
             "cross_service_resolution": cross_service_resolution,
+            "edge_counts": edge_counts,
             "db_path": self.db_path,
+        }
+
+    def edge_counts_for(self, node_id: str) -> dict[str, dict[str, int]]:
+        rows = self._rows(
+            "MATCH (n {id: $id})-[e]->() "
+            "RETURN label(e) AS edge_type, 'out' AS direction, count(e) AS n "
+            "UNION ALL "
+            "MATCH (n {id: $id})<-[e]-() "
+            "RETURN label(e) AS edge_type, 'in' AS direction, count(e) AS n",
+            {"id": node_id},
+        )
+        out: dict[str, dict[str, int]] = {}
+        for row in rows:
+            edge_type = str(row.get("edge_type") or "")
+            direction = str(row.get("direction") or "")
+            if edge_type == "" or direction not in ("in", "out"):
+                continue
+            out.setdefault(edge_type, {"in": 0, "out": 0})
+            out[edge_type][direction] = int(row.get("n") or 0)
+        return {
+            edge_type: dirs
+            for edge_type, dirs in out.items()
+            if int(dirs.get("in", 0)) > 0 or int(dirs.get("out", 0)) > 0
         }
 
     def _scope_counts(self, column: str) -> dict[str, int]:

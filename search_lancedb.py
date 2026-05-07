@@ -34,6 +34,8 @@ JAVA_ENRICHED_COLUMNS: tuple[str, ...] = (
     "role",
     "annotations_on_type",
     "symbols",
+    "symbol_id",
+    "metadata",
     "ontology_version",
     "capabilities",
 )

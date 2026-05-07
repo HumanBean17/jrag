@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from search_lancedb import _rrf_merge
+import numpy as np
+
+import search_lancedb
+from search_lancedb import JAVA_ENRICHED_COLUMNS, _rrf_merge
 
 
 def test_rrf_merge_weights_second_list_by_row() -> None:
@@ -32,3 +35,61 @@ def test_rrf_merge_weights_second_list_by_row() -> None:
     by_file = {m["filename"]: float(m["_rrf_score"]) for m in merged}
     # Rank 0 in graph list (weight 1.0) should contribute more than rank 1 (weight 0.5).
     assert by_file["b.java"] > by_file["c.java"]
+
+
+def test_java_enriched_columns_include_symbol_identity_fields() -> None:
+    assert "symbol_id" in JAVA_ENRICHED_COLUMNS
+    assert "metadata" in JAVA_ENRICHED_COLUMNS
+
+
+def test_search_one_table_selects_symbol_identity_columns_when_schema_has_them(monkeypatch) -> None:
+    selected: list[str] = []
+
+    class _FakeQuery:
+        def select(self, cols):
+            selected[:] = list(cols)
+            return self
+
+        def limit(self, _n):
+            return self
+
+        def to_list(self):
+            return []
+
+    class _FakeTable:
+        def search(self, *_args, **_kwargs):
+            return _FakeQuery()
+
+    class _FakeDb:
+        def open_table(self, _name):
+            return _FakeTable()
+
+    monkeypatch.setattr(
+        search_lancedb,
+        "_table_columns",
+        lambda *_args, **_kwargs: {
+            "filename",
+            "text",
+            "start",
+            "end",
+            "language",
+            "package",
+            "primary_type_fqn",
+            "symbol_id",
+            "metadata",
+        },
+    )
+    search_lancedb._search_one_table(
+        "javacodeindex_java_code",
+        uri="mem://",
+        db=_FakeDb(),
+        query_vec=np.zeros((3,), dtype=np.float32),
+        limit=5,
+        path_predicate=None,
+        kind="java",
+        hybrid=False,
+        fts_text=None,
+        extra_predicates=None,
+    )
+    assert "symbol_id" in selected
+    assert "metadata" in selected

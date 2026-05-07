@@ -366,6 +366,7 @@ class GraphMetaOutput(BaseModel):
     routes_resolved_pct: float = 0.0
     routes_from_brownfield_pct: float = 0.0
     routes_by_layer: dict[str, int] = Field(default_factory=dict)
+    edge_counts: dict[str, int] = Field(default_factory=dict)
     http_calls_match_breakdown: dict[str, int] = Field(default_factory=dict)
     async_calls_match_breakdown: dict[str, int] = Field(default_factory=dict)
     cross_service_calls_total: int = 0
@@ -547,6 +548,7 @@ def _graph_meta_output() -> GraphMetaOutput:
         routes_resolved_pct=float(meta.get("routes_resolved_pct") or 0.0),
         routes_from_brownfield_pct=float(meta.get("routes_from_brownfield_pct") or 0.0),
         routes_by_layer=routes_by_layer,
+        edge_counts={str(k): int(v) for k, v in (meta.get("edge_counts") or {}).items()},
         http_calls_match_breakdown={str(k): int(v) for k, v in (meta.get("http_calls_match_breakdown") or {}).items()},
         async_calls_match_breakdown={str(k): int(v) for k, v in (meta.get("async_calls_match_breakdown") or {}).items()},
         cross_service_calls_total=int(meta.get("cross_service_calls_total") or 0),
