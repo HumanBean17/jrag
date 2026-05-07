@@ -154,10 +154,13 @@ The DB is dropped and rebuilt from scratch on each run (Phase 1 is a full rebuil
 
 | Tool | Purpose | Args | Example |
 |------|---------|------|---------|
-| `search` | locate nodes by NL/code text | `query: str`, `table: str="java"`, `hybrid: bool=False`, `limit: int=5`, `offset: int=0`, `path_contains: str \| None`, `filter: NodeFilter \| None` | `{"query":"join operator flow","limit":5}` |
-| `find` | locate nodes by structured filter | `kind: "symbol"\|"route"\|"client"`, `filter: NodeFilter`, `limit: int=25`, `offset: int=0` | `{"kind":"symbol","filter":{"role":"CONTROLLER"}}` |
+| `search` | locate nodes by NL/code text | `query: str`, `table: str="java"`, `hybrid: bool=False`, `limit: int=5`, `offset: int=0`, `path_contains: str \| None`, `filter: NodeFilter \| str \| None` | `{"query":"join operator flow","limit":5}` |
+| `find` | locate nodes by structured filter | `kind: "symbol"\|"route"\|"client"`, `filter: NodeFilter \| str`, `limit: int=25`, `offset: int=0` | `{"kind":"symbol","filter":{"role":"CONTROLLER"}}` |
 | `describe` | full record + edge counts for one node | `id: str` | `{"id":"sym:com.bank.chat.core.api.ChatController#joinOperator(JoinOperatorRequest)"}` |
-| `neighbors` | one-hop walk; REQUIRED direction + edge_types | `ids: str \| list[str]`, `direction: "in"\|"out"`, `edge_types: list[str]`, `limit: int=25`, `offset: int=0`, `filter: NodeFilter \| None` | `{"ids":"route:chat-core:POST:/chat/joinOperator","direction":"in","edge_types":["HTTP_CALLS","ASYNC_CALLS"]}` |
+| `neighbors` | one-hop walk; REQUIRED direction + edge_types | `ids: str \| list[str]`, `direction: "in"\|"out"`, `edge_types: list[str]`, `limit: int=25`, `offset: int=0`, `filter: NodeFilter \| str \| None` | `{"ids":"route:chat-core:POST:/chat/joinOperator","direction":"in","edge_types":["HTTP_CALLS","ASYNC_CALLS"]}` |
+
+- `filter` is a JSON object matching the `NodeFilter` schema (wire types are `object` or, as a fallback, a JSON-encoded string for clients that flatten objects in tool calls). Prefer the object form when the client supports it.
+- For `find`, an empty or whitespace-only filter string, or the JSON literal `null`, is treated like `{}` (match anything).
 
 ## CLI reference
 

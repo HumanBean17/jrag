@@ -20,6 +20,7 @@ _INSTRUCTIONS = (
     "Java codebase graph navigator (LanceDB + Kuzu). "
     "Tools: search (NL/code locate), find (structured NodeFilter), describe (one node + edge counts), "
     "neighbors (one hop; you MUST pass direction in|out AND edge_types list — no defaults). "
+    "NodeFilter `filter` is a JSON object (preferred); a JSON-encoded string is also accepted as a fallback. "
     "Edge labels: EXTENDS, IMPLEMENTS, INJECTS, DECLARES, DECLARES_CLIENT, CALLS, EXPOSES, HTTP_CALLS, ASYNC_CALLS. "
     "Rebuild, meta, tables, diagnose-ignore, analyze-pr: use user-rag CLI — not MCP."
 )
@@ -290,9 +291,12 @@ def create_mcp_server() -> FastMCP:
             default=None,
             description="Substring match on file path (pre-filter from index)",
         ),
-        filter: dict[str, Any] | None = Field(
+        filter: dict[str, Any] | str | None = Field(
             default=None,
-            description="Optional NodeFilter (symbol-oriented keys) applied to each hit after search",
+            description=(
+                "Optional NodeFilter (symbol-oriented keys) applied to each hit after search. "
+                "Prefer a JSON object; a JSON-encoded string is accepted as a fallback."
+            ),
         ),
     ) -> mcp_v2.SearchOutput:
         return await asyncio.to_thread(
@@ -310,9 +314,12 @@ def create_mcp_server() -> FastMCP:
     @mcp.tool(name="find", description="locate nodes by structured filter")
     async def find(
         kind: Literal["symbol", "route", "client"] = Field(description="symbol | route | client"),
-        filter: dict[str, Any] = Field(
+        filter: dict[str, Any] | str = Field(
             ...,
-            description="Required NodeFilter object (shared schema; irrelevant keys ignored per kind)",
+            description=(
+                "Required NodeFilter (shared schema; irrelevant keys ignored per kind). "
+                "Prefer a JSON object; a JSON-encoded string is accepted as a fallback."
+            ),
         ),
         limit: int = Field(default=25, ge=1, le=500, description="Max nodes to return"),
         offset: int = Field(default=0, ge=0, le=499, description="Skip this many nodes (pagination)"),
@@ -351,9 +358,12 @@ def create_mcp_server() -> FastMCP:
             le=1000,
             description="Skip this many edges after merge (pagination)",
         ),
-        filter: dict[str, Any] | None = Field(
+        filter: dict[str, Any] | str | None = Field(
             default=None,
-            description="Optional NodeFilter applied to the other endpoint of each edge",
+            description=(
+                "Optional NodeFilter applied to the other endpoint of each edge. "
+                "Prefer a JSON object; a JSON-encoded string is accepted as a fallback."
+            ),
         ),
     ) -> mcp_v2.NeighborsOutput:
         return await asyncio.to_thread(

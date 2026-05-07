@@ -51,6 +51,28 @@ class NodeFilter(BaseModel):
     client_method: str | None = None
 
 
+def _coerce_filter(
+    value: NodeFilter | dict[str, Any] | str | None,
+) -> NodeFilter | dict[str, Any] | None:
+    """Normalize MCP tool input: weak clients sometimes pass JSON-encoded strings."""
+    if value is None or isinstance(value, NodeFilter):
+        return value
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return None
+        try:
+            decoded = json.loads(s)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"filter must be a JSON object; invalid JSON: {exc.msg}") from exc
+        if decoded is None:
+            return None
+        if not isinstance(decoded, dict):
+            raise ValueError(f"filter must decode to a JSON object, got {type(decoded).__name__}")
+        return decoded
+    return value
+
+
 class SearchHit(BaseModel):
     chunk_id: str
     symbol_id: str | None = None
@@ -322,7 +344,7 @@ def search_v2(
     limit: int = 5,
     offset: int = 0,
     path_contains: str | None = None,
-    filter: NodeFilter | dict[str, Any] | None = None,
+    filter: NodeFilter | dict[str, Any] | str | None = None,
     graph: KuzuGraph | None = None,
 ) -> SearchOutput:
     try:
@@ -346,7 +368,12 @@ def search_v2(
             device=device,
             model=model,
         )
-        nf = NodeFilter.model_validate(filter) if filter is not None and not isinstance(filter, NodeFilter) else filter
+        raw_filter = _coerce_filter(filter)
+        nf = (
+            NodeFilter.model_validate(raw_filter)
+            if raw_filter is not None and not isinstance(raw_filter, NodeFilter)
+            else raw_filter
+        )
         hits: list[SearchHit] = []
         for row in rows:
             if path_contains and path_contains not in str(row.get("filename") or ""):
@@ -363,14 +390,17 @@ def search_v2(
 
 def find_v2(
     kind: Literal["symbol", "route", "client"],
-    filter: NodeFilter | dict[str, Any],
+    filter: NodeFilter | dict[str, Any] | str,
     limit: int = 25,
     offset: int = 0,
     graph: KuzuGraph | None = None,
 ) -> FindOutput:
     try:
         g = graph or KuzuGraph.get()
-        nf = NodeFilter.model_validate(filter)
+        raw_filter = _coerce_filter(filter)
+        if raw_filter is None:
+            raw_filter = {}
+        nf = NodeFilter.model_validate(raw_filter) if not isinstance(raw_filter, NodeFilter) else raw_filter
         if kind == "symbol":
             where, params = _symbol_where_from_filter(nf)
             params["lim"] = int(limit) + int(offset)
@@ -434,13 +464,18 @@ def neighbors_v2(
     edge_types: list[str] = Field(...),
     limit: int = 25,
     offset: int = 0,
-    filter: NodeFilter | dict[str, Any] | None = None,
+    filter: NodeFilter | dict[str, Any] | str | None = None,
     graph: Any | None = None,
 ) -> NeighborsOutput:
     try:
         _NEIGHBOR_EDGE_TYPES_ADAPTER.validate_python(edge_types)
         g = graph or KuzuGraph.get()
-        nf = NodeFilter.model_validate(filter) if filter is not None and not isinstance(filter, NodeFilter) else filter
+        raw_filter = _coerce_filter(filter)
+        nf = (
+            NodeFilter.model_validate(raw_filter)
+            if raw_filter is not None and not isinstance(raw_filter, NodeFilter)
+            else raw_filter
+        )
         origins = [ids] if isinstance(ids, str) else list(ids)
         results: list[Edge] = []
         for origin_id in origins:

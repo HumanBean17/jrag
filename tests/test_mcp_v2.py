@@ -304,3 +304,67 @@ def test_neighbors_empty_edge_types_rejected(kuzu_graph) -> None:
     mid = _method_id_with_calls(kuzu_graph, "out")
     with pytest.raises(ValidationError):
         neighbors_v2(mid, direction="in", edge_types=[], graph=kuzu_graph)
+
+
+def test_search_filter_accepts_json_string(monkeypatch, kuzu_graph) -> None:
+    monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
+    want = {"microservice": "chat-assign"}
+    out_dict = search_v2("ChatService", filter=want, graph=kuzu_graph)
+    out_str = search_v2("ChatService", filter='{"microservice":"chat-assign"}', graph=kuzu_graph)
+    assert out_dict.success is True
+    assert out_str.success is True
+    assert out_dict.results == out_str.results
+
+
+def test_search_filter_empty_string_treated_as_none(monkeypatch, kuzu_graph) -> None:
+    monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
+    baseline = search_v2("ChatService", graph=kuzu_graph)
+    empty = search_v2("ChatService", filter="", graph=kuzu_graph)
+    whitespace = search_v2("ChatService", filter="   ", graph=kuzu_graph)
+    assert baseline.success is True
+    assert empty.success is True
+    assert whitespace.success is True
+    assert baseline.results == empty.results == whitespace.results
+
+
+def test_search_filter_json_null_treated_as_none(monkeypatch, kuzu_graph) -> None:
+    monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
+    baseline = search_v2("ChatService", graph=kuzu_graph)
+    out = search_v2("ChatService", filter="null", graph=kuzu_graph)
+    assert baseline.success is True
+    assert out.success is True
+    assert baseline.results == out.results
+
+
+def test_find_filter_json_null_treated_as_empty_filter(kuzu_graph) -> None:
+    empty = find_v2("symbol", {}, graph=kuzu_graph)
+    out = find_v2("symbol", "null", graph=kuzu_graph)
+    assert empty.success is True
+    assert out.success is True
+    assert empty.results == out.results
+
+
+def test_find_filter_accepts_json_string(kuzu_graph) -> None:
+    out_dict = find_v2("symbol", {"role": "CONTROLLER"}, graph=kuzu_graph)
+    out_str = find_v2("symbol", '{"role":"CONTROLLER"}', graph=kuzu_graph)
+    assert out_dict.success is True
+    assert out_str.success is True
+    assert out_dict.results == out_str.results
+
+
+def test_neighbors_filter_accepts_json_string(kuzu_graph) -> None:
+    mid = _method_id_with_calls(kuzu_graph, "out")
+    flt = {"role": "SERVICE"}
+    out_dict = neighbors_v2(mid, direction="out", edge_types=["CALLS"], filter=flt, graph=kuzu_graph)
+    out_str = neighbors_v2(mid, direction="out", edge_types=["CALLS"], filter='{"role":"SERVICE"}', graph=kuzu_graph)
+    assert out_dict.success is True
+    assert out_str.success is True
+    assert out_dict.results == out_str.results
+
+
+def test_filter_invalid_json_returns_failure(monkeypatch, kuzu_graph) -> None:
+    monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
+    out = search_v2("ChatService", filter="{not json", graph=kuzu_graph)
+    assert out.success is False
+    assert out.message is not None
+    assert "JSON" in out.message
