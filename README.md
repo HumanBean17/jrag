@@ -2,6 +2,14 @@
 
 Self-contained **stdio MCP server** for semantic search over a LanceDB index (Java / SQL / YAML) produced by CocoIndex `java_index_flow_lancedb.py`, *plus* a deterministic AST-derived graph (Kuzu sidecar) for structural code queries.
 
+> **What this MCP is:** a **GPS for code navigation**, not a reasoning engine.
+> Agents use a simple loop:
+> 1. **Locate** entry nodes (`search` / `find`)
+> 2. **Inspect** what a node is (`describe`)
+> 3. **Walk** one hop at a time (`neighbors`) until enough evidence is gathered
+>
+> The MCP exposes structure and adjacency; the agent owns multi-hop reasoning and stop conditions.
+
 **Breaking changes:** This repository does not promise backward compatibility for downstream users or integrations. MCP tool contracts, env vars, Lance/Kuzu schemas, config files, and Python APIs may change at any time without a deprecation period. Upgrade by following current `main` and rebuilding or re-indexing when the docs or bundle require it.
 
 The product vision for this tooling is proposed in [`propose/PRODUCT-VISION.md`](./propose/PRODUCT-VISION.md).
