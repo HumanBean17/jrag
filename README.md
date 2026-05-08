@@ -1,37 +1,37 @@
-# LanceDB code search MCP (export bundle)
+# java-codebase-rag
 
-Self-contained **stdio MCP server** for semantic search over a LanceDB index (Java / SQL / YAML) produced by CocoIndex `java_index_flow_lancedb.py`, *plus* a deterministic AST-derived graph (Kuzu sidecar) for structural code queries.
+A graph-native code intelligence layer for Java microservice estates, exposed to LLM agents via the **Model Context Protocol (MCP)**.
+
+The system extracts a deterministic property graph from Java source (tree-sitter), stores it in **Kuzu** (graph) alongside a **LanceDB** vector index (chunks), and exposes a deliberately small MCP surface — **four tools**: `search`, `find`, `describe`, `neighbors` — that collapse onto three primitive agent operations: **locate**, **inspect**, **walk**.
 
 > **What this MCP is:** a **GPS for code navigation**, not a reasoning engine.
 > Agents use a simple loop:
+>
 > 1. **Locate** entry nodes (`search` / `find`)
 > 2. **Inspect** what a node is (`describe`)
 > 3. **Walk** one hop at a time (`neighbors`) until enough evidence is gathered
 >
 > The MCP exposes structure and adjacency; the agent owns multi-hop reasoning and stop conditions.
 
-**Breaking changes:** This repository does not promise backward compatibility for downstream users or integrations. MCP tool contracts, env vars, Lance/Kuzu schemas, config files, and Python APIs may change at any time without a deprecation period. Upgrade by following current `main` and rebuilding or re-indexing when the docs or bundle require it.
+For the design rationale, the GPS metaphor, and the full ontology, see [`docs/paper/paper.pdf`](./docs/paper/paper.pdf) (architecture report).
 
-The product vision for this tooling is proposed in [`propose/PRODUCT-VISION.md`](./propose/PRODUCT-VISION.md).
+> **Stability disclaimer.** This repo does **not** promise backward compatibility. MCP tool contracts, env vars, Lance/Kuzu schemas, config files, and Python APIs may change without a deprecation period. Track `main` and re-index when the docs say to.
 
-**No `cocoindex` Python package is required to run search or MCP navigation tools** — only `sentence-transformers`, `lancedb`, `kuzu`, `tree_sitter` + `tree_sitter_java`, and `mcp`. CocoIndex is optional and only needed if you use `java-codebase-rag refresh`.
+---
 
-> **Tuning for your codebase:** see [`CODEBASE_REQUIREMENTS.md`](./CODEBASE_REQUIREMENTS.md)
-> for the assumptions this MCP makes about a Java repo (annotations, DI patterns,
-> service layout, naming) and a per-file map of where to edit the bundle if you
-> can't or don't want to refactor your codebase to match.
->
-> **Driving this MCP from an agent:**
-> - [`docs/AGENT-GUIDE.md`](./docs/AGENT-GUIDE.md) — copy-paste into `QWEN.md` /
->   `CLAUDE.md` / `AGENTS.md`. Covers the **four** MCP tools (`search`, `find`,
->   `describe`, `neighbors`), shared **`NodeFilter`**, **edge-type taxonomy**,
->   required `neighbors` arguments, ontology glossary (**v11**), recovery
->   playbook, and slash-style aliases. Operators use **`java-codebase-rag`** CLI for
->   refresh / meta / diagnostics — not MCP; see [`docs/USER-RAG-CLI.md`](./docs/USER-RAG-CLI.md).
-> - [`docs/MANUAL-VERIFICATION-CHECKLIST.md`](./docs/MANUAL-VERIFICATION-CHECKLIST.md)
->   — 7-phase agent-driven verification you run after indexing your real
->   project. Each item has a copy-paste prompt and calibration data from
->   `tests/bank-chat-system`.
+## Contents
+
+1. [Install](#1-install)
+2. [Environment variables](#2-environment-variables)
+3. [MCP host setup](#3-mcp-host-setup) — Claude Code, Claude Desktop
+4. [MCP tool reference](#4-mcp-tool-reference)
+5. [CLI reference (`java-codebase-rag`)](#5-cli-reference-java-codebase-rag)
+6. [Graph layer](#6-graph-layer) — Kuzu schema, edges, capabilities, ranking
+7. [Brownfield overrides](#7-brownfield-overrides) — config + in-source annotations
+8. [Ignore patterns](#8-ignore-patterns)
+9. [Further reading](#9-further-reading)
+
+---
 
 ## 1. Install
 
@@ -41,26 +41,38 @@ python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
 
-Use **Python 3.11+**. The embedding model must match the one used when the index was built (default: `sentence-transformers/all-MiniLM-L6-v2`).
+- **Python 3.11+** required.
+- **Embedding model** must match what the index was built with (default `sentence-transformers/all-MiniLM-L6-v2`).
+- The `cocoindex` package is **only** needed if you run `java-codebase-rag refresh`. Search and MCP navigation work without it.
 
-## 2. Environment
+For the assumptions this MCP makes about your Java repo (annotations, DI patterns, naming) and a per-file map of where to edit if you can't refactor your codebase to match, see [`CODEBASE_REQUIREMENTS.md`](./CODEBASE_REQUIREMENTS.md).
+
+---
+
+## 2. Environment variables
+
+Variable names retain the historical `LANCEDB_MCP_` prefix and will be renamed in a separate pass.
 
 | Variable | Purpose |
-|----------|---------|
-| `LANCEDB_URI` | **Required for real use:** absolute path to the `lancedb_data` directory (or remote LanceDB URI). |
+|---|---|
+| `LANCEDB_URI` | **Required.** Absolute path to the `lancedb_data` directory (or remote LanceDB URI). |
 | `SBERT_MODEL` | Hub id or local directory; must match indexer. |
 | `SBERT_DEVICE` | Optional: `cpu`, `cuda`, `mps`. |
-| `LANCEDB_MCP_PROJECT_ROOT` | **Java project root** to index and to resolve `module` / `microservice` (search tools, `build_ast_graph.py`, and the CocoIndex flow when run via `java-codebase-rag refresh`). You do **not** need a copy of `java_index_flow_lancedb.py` in that tree—the bundled flow is used when the file is missing there. If unset, the MCP process working directory is used (see graph section below). |
-| `LANCEDB_MCP_ALLOW_REFRESH` | Set to `1` to enable the heavy `java-codebase-rag refresh` flow (cocoindex + Kuzu rebuild). |
+| `LANCEDB_MCP_PROJECT_ROOT` | Java project root used for indexing and to resolve `module` / `microservice` for search. If unset, the MCP process working directory is used. |
+| `LANCEDB_MCP_ALLOW_REFRESH` | Set to `1` to enable `java-codebase-rag refresh` (heavy: full cocoindex + Kuzu rebuild). |
 | `KUZU_DB_PATH` | Absolute path to the Kuzu graph DB. Defaults to `${LANCEDB_URI}/code_graph.kuzu`. |
-| `LANCEDB_MCP_GRAPH_ENABLED` | `1`/`0` to force on/off; auto-on when the Kuzu DB exists. |
-| `LANCEDB_MCP_MICROSERVICE_ROOTS` | Optional comma-separated directory names that should be treated as microservice roots (overrides structural inference). Same effect as listing them under `microservice_roots:` in `.lancedb-mcp.yml` at the project root. |
+| `LANCEDB_MCP_GRAPH_ENABLED` | `1`/`0` to force on/off. Auto-on when the Kuzu DB exists. |
+| `LANCEDB_MCP_MICROSERVICE_ROOTS` | Optional comma-separated directory names treated as microservice roots. Same effect as `microservice_roots:` in `.lancedb-mcp.yml` at the project root. |
 
-## 3. Claude Code
+---
 
-**Project scope:** copy `mcp.json.example` to your repo as `.mcp.json`, replace absolute paths, merge with existing `mcpServers` if any.
+## 3. MCP host setup
 
-Or use the CLI:
+### Claude Code
+
+**Project scope:** copy `mcp.json.example` to your repo as `.mcp.json`, replace absolute paths, and merge with any existing `mcpServers`.
+
+**Or via CLI:**
 
 ```bash
 claude mcp add --transport stdio java-codebase-rag -- \
@@ -68,162 +80,69 @@ claude mcp add --transport stdio java-codebase-rag -- \
   /path/to/mcp_lancedb_bundle/server.py
 ```
 
-Then set env vars in `.mcp.json` or your shell profile as needed (`LANCEDB_URI`, `KUZU_DB_PATH`, etc.).
+Set env vars (`LANCEDB_URI`, `KUZU_DB_PATH`, etc.) in `.mcp.json` or your shell profile. Official docs: [Claude Code settings](https://docs.anthropic.com/en/docs/claude-code/settings).
 
-Official docs: [Claude Code settings](https://docs.anthropic.com/en/docs/claude-code/settings) (see MCP / `.mcp.json`).
+### Claude Desktop
 
-## 4. Claude Desktop
+Edit `claude_desktop_config.json` (macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`) and add an entry under `mcpServers` with the same `command`, `args`, and `env` as in `mcp.json.example`.
 
-Edit `claude_desktop_config.json` (e.g. macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`) and add an entry under `mcpServers` with the same `command`, `args`, and `env` as in `mcp.json.example`.
+### Driving the MCP from an agent
 
-## 5. AST Graph layer (Kuzu)
+- **[`docs/AGENT-GUIDE.md`](./docs/AGENT-GUIDE.md)** — copy-paste into `QWEN.md` / `CLAUDE.md` / `AGENTS.md`. Covers the four MCP tools, the shared `NodeFilter`, the edge-type taxonomy, required `neighbors` arguments, the ontology glossary (currently **v11**), the recovery playbook, and slash-style aliases.
+- **[`docs/MANUAL-VERIFICATION-CHECKLIST.md`](./docs/MANUAL-VERIFICATION-CHECKLIST.md)** — 7-phase agent-driven verification you run after indexing your real project. Each item has a copy-paste prompt and calibration data from `tests/bank-chat-system`.
 
-A sidecar deterministic graph derived from Tree-sitter Java parsing lives next to the LanceDB files (default `${LANCEDB_URI}/code_graph.kuzu`).
+---
 
-**Node types:** `package`, `file`, `class`, `interface`, `enum`, `record`, `annotation`, `method`, `constructor`. Unresolved targets become **phantom** nodes (`resolved=false`, FQN guessed from imports / `java.lang`).
-
-**Edge types (Phase 1 + Phase 3):** `EXTENDS`, `IMPLEMENTS`, `INJECTS` capture type-level wiring.
-**Phase 3 (call graph):** `CALLS` (method → method, confidence-scored, strategy-tagged) and
-`DECLARES` (type → own method or constructor).
-**Phase 5 (caller edges):** `HTTP_CALLS` (`Symbol` → `Route`) and `ASYNC_CALLS` (`Symbol` → `Route`).
-JDK / Spring / Lombok callees are represented as
-phantom method symbols (`resolved=false`) at index time; caller/callee traversals default to
-`exclude_external=true` so those edges can be filtered by FQN prefix without dropping them from the graph.
-Call-site receiver typing uses **one scope map per method** (locals shadow fields/parameters), but **not** full nested-block lexical scope; see **Call graph** under `CODEBASE_REQUIREMENTS.md`.
-**Anonymous classes** (`new T() { … }`) are indexed as synthetic nested types (`…<anon:startByte>`); `CALLS` from their methods use that member as the caller so inbound-call traversal reaches the handler body. **Lambdas** still attribute inner calls to the enclosing named method (no synthetic callable symbol). Unqualified calls from anonymous members fall through to the lexically enclosing type for callee lookup (same as the Java compiler’s access rules).
-
-Injection mechanisms detected:
-- field `@Autowired` / `@Inject` / `@Resource`
-- constructor injection (Spring single-ctor rule and explicit `@Autowired`)
-- setter `@Autowired`
-- Lombok `@RequiredArgsConstructor` (final fields) and `@AllArgsConstructor` (all non-static)
-
-**Java chunk rows are enriched** with `package`, `module`, `microservice`, `primary_type_fqn`, `primary_type_kind`, `role`, `capabilities`, `annotations_on_type`, `symbols`, `ontology_version`. `role` and `capabilities` are inferred in `ast_java` / `graph_enrich` (see **Brownfield overrides** below for per-project customisation).
-
-**Two location fields are tracked per Java symbol / chunk:**
-
-- `module` — the *innermost* build-marker (`pom.xml`, `build.gradle`, `build.gradle.kts`, `build.sbt`) ancestor's directory name. This is the legacy `service` field, renamed.
-- `microservice` — the *outermost* build-marker ancestor under `LANCEDB_MCP_PROJECT_ROOT`. For a single-module project both equal the same name; for a multi-module reactor (e.g. `chat-core/{chat-app,chat-engine,...}`) every child module collapses to `microservice='chat-core'` while keeping its own `module='chat-app'` etc.
-
-Resolution order for `microservice`:
-1. explicit override list — `LANCEDB_MCP_MICROSERVICE_ROOTS=foo,bar` env var or
-   `microservice_roots: [foo, bar]` in `.lancedb-mcp.yml` at the project root;
-2. outermost build marker between `project_root` and the file;
-3. first path segment under `project_root`;
-4. `""` if nothing matches.
-
-> **Re-index required.** The `JavaLanceChunk` schema evolves with this bundle:
-> 1. it gained enrichment columns (first cut of the graph work); and
-> 2. `annotations_on_type` / `symbols` are now native PyArrow `list<string>` instead of
->    JSON-encoded strings (previous builds caused char-array output — see below).
-> 3. **`ontology_version` 5** adds `Route` / `EXPOSES` and route counters on `GraphMeta` —
-> 4. **`ontology_version` 7** adds caller-side edge extraction (`HTTP_CALLS`, `ASYNC_CALLS`) and
->    brownfield caller composition (`http_client_overrides`, `async_producer_overrides`,
->    `@CodebaseClient`, `@CodebaseProducer`) — rebuild Kuzu after upgrading.
-> 5. **`ontology_version` 8** adds `GraphMeta.cross_service_resolution` (from
->    `cross_service_resolution` in `.lancedb-mcp.yml`) — rebuild the Kuzu graph
->    (`build_ast_graph.py` or `java-codebase-rag refresh`) after upgrading.
-> 6. **`ontology_version` 9** renames role `FEIGN_CLIENT` to `CLIENT` and adds
->    capability `HTTP_CLIENT` for `@FeignClient` interfaces — rebuild to refresh
->    stored role/capability literals.
-> 7. **`ontology_version` 10** adds first-class outbound `Client` nodes and
->    `DECLARES_CLIENT` edges, plus `GraphMeta` client counters — rebuild the Kuzu
->    graph after upgrading.
-> 8. **`ontology_version` 11** makes `@CodebaseAsyncRoute` authoritative over
->    same-method `@KafkaListener` auto routes (one `Route` / `EXPOSES` row) —
->    rebuild the Kuzu graph after upgrading.
->
-> Any index built before these changes must be rebuilt via
-> `cocoindex update ... --full-reprocess -f` or `java-codebase-rag refresh`. Until
-> re-indexed, the server defensively JSON-decodes string-form list columns so
-> nothing explodes, but filters like `array_contains` will not work.
-
-### Building the graph
-
-Via CLI: `java-codebase-rag refresh` (with `LANCEDB_MCP_ALLOW_REFRESH=1`) first runs `cocoindex update` to rebuild chunks, then invokes `build_ast_graph.py` to rebuild Kuzu.
-
-Standalone:
-
-```bash
-# scan the current working directory
-.venv/bin/python build_ast_graph.py --verbose
-
-# or point at a specific repo root
-.venv/bin/python build_ast_graph.py --source-root /path/to/repo --verbose
-```
-
-> If `--source-root` is omitted, the current working directory is used. The same convention applies to the MCP server: when `LANCEDB_MCP_PROJECT_ROOT` is unset, the process's current working directory is used as the project root.
-
-For `java-codebase-rag refresh`, the server refresh pipeline runs `cocoindex` with `cwd` set to the bundle directory (so Python imports resolve), but sets `LANCEDB_MCP_PROJECT_ROOT` on that subprocess to the same resolved project root as above so indexing targets your Java tree—not the bundle.
-
-The DB is dropped and rebuilt from scratch on each run (Phase 1 is a full rebuild; incremental updates are future work).
-
-### Tool reference
+## 4. MCP tool reference
 
 | Tool | Purpose | Args | Example |
-|------|---------|------|---------|
-| `search` | locate nodes by NL/code text | `query: str`, `table: str="java"`, `hybrid: bool=False`, `limit: int=5`, `offset: int=0`, `path_contains: str \| None`, `filter: NodeFilter \| str \| None` | `{"query":"join operator flow","limit":5}` |
-| `find` | locate nodes by structured filter | `kind: "symbol"\|"route"\|"client"`, `filter: NodeFilter \| str`, `limit: int=25`, `offset: int=0` | `{"kind":"symbol","filter":{"role":"CONTROLLER"}}` |
-| `describe` | full record + edge counts for one node | `id: str` | `{"id":"sym:com.bank.chat.core.api.ChatController#joinOperator(JoinOperatorRequest)"}` |
-| `neighbors` | one-hop walk; REQUIRED direction + edge_types | `ids: str \| list[str]`, `direction: "in"\|"out"`, `edge_types: list[str]`, `limit: int=25`, `offset: int=0`, `filter: NodeFilter \| str \| None` | `{"ids":"route:chat-core:POST:/chat/joinOperator","direction":"in","edge_types":["HTTP_CALLS","ASYNC_CALLS"]}` |
+|---|---|---|---|
+| `search` | Locate nodes by NL/code text. | `query: str`, `table: str="java"`, `hybrid: bool=False`, `limit: int=5`, `offset: int=0`, `path_contains: str \| None`, `filter: NodeFilter \| str \| None` | `{"query":"join operator flow","limit":5}` |
+| `find` | Locate nodes by structured filter. | `kind: "symbol"\|"route"\|"client"`, `filter: NodeFilter \| str`, `limit: int=25`, `offset: int=0` | `{"kind":"symbol","filter":{"role":"CONTROLLER"}}` |
+| `describe` | Full record + edge counts for one node. | `id: str` | `{"id":"sym:com.bank.chat.core.api.ChatController#joinOperator(JoinOperatorRequest)"}` |
+| `neighbors` | One-hop walk. **Required**: `direction` and `edge_types`. | `ids: str \| list[str]`, `direction: "in"\|"out"`, `edge_types: list[str]`, `limit: int=25`, `offset: int=0`, `filter: NodeFilter \| str \| None` | `{"ids":"route:chat-core:POST:/chat/joinOperator","direction":"in","edge_types":["HTTP_CALLS","ASYNC_CALLS"]}` |
 
-- `filter` is a JSON object matching the `NodeFilter` schema (wire types are `object` or, as a fallback, a JSON-encoded string for clients that flatten objects in tool calls). Prefer the object form when the client supports it.
-- Symbol-only NodeFilter keys include `symbol_kind` (single value) and `symbol_kinds` (set-membership list) for declaration granularity (`class`, `interface`, `enum`, `record`, `annotation`, `method`, `constructor`).
-- `find(kind="symbol", ...)` results now include `symbol_kind` so callers can inspect declaration granularity without an extra `describe` call.
-- Example: `{"kind":"symbol","filter":{"microservice":"chat-core","symbol_kind":"interface"}}`
-- For `find`, an empty or whitespace-only filter string, or the JSON literal `null`, is treated like `{}` (match anything).
+**`NodeFilter` notes:**
 
-## CLI reference
+- `filter` is a JSON object matching the `NodeFilter` schema. Wire types are `object` or, as a fallback, a JSON-encoded string for clients that flatten objects.
+- Symbol-only keys: `symbol_kind` (single value) and `symbol_kinds` (set membership) for declaration granularity (`class`, `interface`, `enum`, `record`, `annotation`, `method`, `constructor`).
+- `find(kind="symbol", ...)` results include `symbol_kind` so callers can see declaration granularity without a follow-up `describe`.
+- For `find`, an empty / whitespace-only filter string or the JSON literal `null` is treated like `{}` (match anything).
 
-Operator-focused playbook: [`docs/USER-RAG-CLI.md`](./docs/USER-RAG-CLI.md) (workflows, exit codes, env alignment).
+Example:
 
-Use `java-codebase-rag --help` to see all subcommands. Output mode is automatic:
-JSON when piped, pretty text when run in a TTY.
+```json
+{"kind":"symbol","filter":{"microservice":"chat-core","symbol_kind":"interface"}}
+```
 
-### `java-codebase-rag refresh`
+---
 
-- Synopsis: `java-codebase-rag refresh [--source-root DIR] [--kuzu-path DIR] [--lancedb-path DIR] [--quiet]`
-- Flags: `--source-root str`, `--kuzu-path str`, `--lancedb-path str`, `--quiet`
-- Example: `java-codebase-rag refresh --source-root tests/bank-chat-system --kuzu-path /tmp/v24_smoke --quiet`
+## 5. CLI reference (`java-codebase-rag`)
 
-### `java-codebase-rag meta`
+Operator playbook with workflows, exit codes, and env alignment: [`docs/JAVA-CODEBASE-RAG-CLI.md`](./docs/JAVA-CODEBASE-RAG-CLI.md).
 
-- Synopsis: `java-codebase-rag meta [--source-root DIR] [--kuzu-path DIR] [--lancedb-path DIR]`
-- Flags: `--source-root str`, `--kuzu-path str`, `--lancedb-path str`
-- Example: `java-codebase-rag meta | python -c "import json,sys; print(json.loads(sys.stdin.read())['edge_counts'])"`
+Run `java-codebase-rag --help` to list all subcommands. Output mode is automatic: JSON when piped, pretty text in a TTY.
 
-### `java-codebase-rag tables`
+| Subcommand | Synopsis |
+|---|---|
+| `refresh` | `java-codebase-rag refresh [--source-root DIR] [--kuzu-path DIR] [--lancedb-path DIR] [--quiet]` |
+| `meta` | `java-codebase-rag meta [--source-root DIR] [--kuzu-path DIR] [--lancedb-path DIR]` |
+| `tables` | `java-codebase-rag tables [--source-root DIR] [--kuzu-path DIR] [--lancedb-path DIR]` |
+| `diagnose-ignore` | `java-codebase-rag diagnose-ignore <path> [--source-root DIR] [--kuzu-path DIR] [--lancedb-path DIR]` |
+| `analyze-pr` | `java-codebase-rag analyze-pr [--diff-file FILE \| --diff-stdin] [--source-root DIR] [--kuzu-path DIR] [--lancedb-path DIR]` |
 
-- Synopsis: `java-codebase-rag tables [--source-root DIR] [--kuzu-path DIR] [--lancedb-path DIR]`
-- Flags: `--source-root str`, `--kuzu-path str`, `--lancedb-path str`
-- Example: `java-codebase-rag tables`
+Examples:
 
-### `java-codebase-rag diagnose-ignore`
+```bash
+java-codebase-rag refresh --source-root tests/bank-chat-system --kuzu-path /tmp/v24_smoke --quiet
+java-codebase-rag meta | python -c "import json,sys; print(json.loads(sys.stdin.read())['edge_counts'])"
+java-codebase-rag diagnose-ignore tests/bank-chat-system/.git/HEAD
+java-codebase-rag analyze-pr --diff-file /tmp/pr.diff
+```
 
-- Synopsis: `java-codebase-rag diagnose-ignore <path> [--source-root DIR] [--kuzu-path DIR] [--lancedb-path DIR]`
-- Flags: positional `path`, plus `--source-root str`, `--kuzu-path str`, `--lancedb-path str`
-- Example: `java-codebase-rag diagnose-ignore tests/bank-chat-system/.git/HEAD`
+### `analyze-pr` output shape
 
-### `java-codebase-rag analyze-pr`
-
-- Synopsis: `java-codebase-rag analyze-pr [--diff-file FILE | --diff-stdin] [--source-root DIR] [--kuzu-path DIR] [--lancedb-path DIR]`
-- Flags: `--diff-file str` or `--diff-stdin`, plus `--source-root str`, `--kuzu-path str`, `--lancedb-path str`
-- Example: `java-codebase-rag analyze-pr --diff-file /tmp/pr.diff`
-
-### Migration from v1
-
-- v1 navigation tools are removed; use `search` / `find` / `describe` / `neighbors`.
-- `describe` keeps `id` as the stable parameter name (`describe(id=...)`).
-- `graph_meta` MCP call maps to `java-codebase-rag meta`.
-- `analyze_pr` MCP call maps to `java-codebase-rag analyze-pr --diff-file <file>` (or `--diff-stdin`).
-- `diagnose_ignore` MCP call maps to `java-codebase-rag diagnose-ignore <path>`.
-- `list_code_index_tables` MCP call maps to `java-codebase-rag tables`.
-- `refresh_code_index` MCP call maps to `java-codebase-rag refresh` (requires `LANCEDB_MCP_ALLOW_REFRESH=1` at the pipeline entrypoint; `build_ast_graph.py` alone does not use that flag).
-- **PR-triage / Cursor skills:** if a skill still invoked the removed `analyze_pr` MCP tool, switch it to a shell step: `java-codebase-rag analyze-pr --diff-file /tmp/pr.diff` (or `--diff-stdin`).
-
-Caller-side edges (`HTTP_CALLS` / `ASYNC_CALLS`) are available via v2 traversal with `neighbors(direction="in", edge_types=["HTTP_CALLS","ASYNC_CALLS"])` from a route id.
-
-**Example — `analyze_pr`:** pass the same unified diff text you would feed to `patch` (e.g. `git diff` output). Paths in the diff should match project-relative `Symbol.filename` values in the graph (e.g. `chat-assign/src/main/java/.../ChatManagementService.java`). A one-line edit inside `assign` returns JSON shaped like:
+Pass the same unified diff text you would feed to `patch` (e.g. `git diff` output). Paths in the diff should match project-relative `Symbol.filename` values in the graph (e.g. `chat-assign/src/main/java/.../ChatManagementService.java`). A one-line edit returns:
 
 ```json
 {
@@ -248,7 +167,7 @@ Caller-side edges (`HTTP_CALLS` / `ASYNC_CALLS`) are available via v2 traversal 
 }
 ```
 
-### Manual test
+### Manual search
 
 ```bash
 # Vector
@@ -266,12 +185,110 @@ LANCEDB_URI=/path/to/lancedb_data .venv/bin/python search_lancedb.py "rate limit
   --table java --limit 3 --context-neighbors 1
 ```
 
-### Ranking behaviour
+### Building the graph standalone
+
+`java-codebase-rag refresh` (with `LANCEDB_MCP_ALLOW_REFRESH=1`) runs `cocoindex update` to rebuild chunks, then invokes `build_ast_graph.py` to rebuild Kuzu. To rebuild only the graph:
+
+```bash
+# Scan the current working directory
+.venv/bin/python build_ast_graph.py --verbose
+
+# Or point at a specific repo root
+.venv/bin/python build_ast_graph.py --source-root /path/to/repo --verbose
+```
+
+If `--source-root` is omitted, the current working directory is used. The same convention applies to the MCP server when `LANCEDB_MCP_PROJECT_ROOT` is unset.
+
+For `refresh`, the pipeline runs `cocoindex` with `cwd` set to the bundle directory (so Python imports resolve), but sets `LANCEDB_MCP_PROJECT_ROOT` on that subprocess to the resolved project root so indexing targets your Java tree, not the bundle. The Kuzu DB is dropped and rebuilt from scratch on each run; incremental updates are future work.
+
+---
+
+## 6. Graph layer
+
+A deterministic property graph derived from tree-sitter Java parsing lives next to the LanceDB files (default `${LANCEDB_URI}/code_graph.kuzu`). Current ontology version: **11**.
+
+### Node kinds
+
+| Kind | Examples |
+|---|---|
+| `Symbol` | `package`, `file`, `class`, `interface`, `enum`, `record`, `annotation`, `method`, `constructor` |
+| `Route` | HTTP endpoint or async listener (one row per declared route) |
+| `Client` | Outbound HTTP / messaging call site |
+
+Unresolved targets become **phantom** nodes (`resolved=false`, FQN guessed from imports / `java.lang`).
+
+### Edge types (9)
+
+| Edge | Direction | Meaning |
+|---|---|---|
+| `EXTENDS` | type → type | Class- or interface-inheritance. |
+| `IMPLEMENTS` | type → interface | Interface implementation. |
+| `INJECTS` | type → type | DI: field, constructor, or setter injection (incl. Lombok). |
+| `DECLARES` | type → method/constructor | Type declares a callable. |
+| `DECLARES_CLIENT` | type → client | Type declares an outbound call site. |
+| `CALLS` | method → method | In-process call (confidence-scored, strategy-tagged). |
+| `EXPOSES` | type → route | Type exposes an HTTP/async route. |
+| `HTTP_CALLS` | symbol → route | Cross-service HTTP call (caller-side). |
+| `ASYNC_CALLS` | symbol → route | Cross-service async (Kafka, Rabbit, JMS, …). |
+
+JDK / Spring / Lombok callees are represented as **phantom** method symbols at index time. Caller/callee traversals default to `exclude_external=true` so those edges are filtered by FQN prefix without dropping them from the graph.
+
+### Call-graph notes
+
+- Receiver typing uses **one scope map per method** (locals shadow fields/parameters), but **not** full nested-block lexical scope. See `CODEBASE_REQUIREMENTS.md` → *Call graph*.
+- **Anonymous classes** (`new T() { … }`) are indexed as synthetic nested types (`…<anon:startByte>`); `CALLS` from their methods use that member as the caller so inbound-call traversal reaches the handler body.
+- **Lambdas** still attribute inner calls to the enclosing named method (no synthetic callable symbol).
+- Unqualified calls from anonymous members fall through to the lexically enclosing type for callee lookup (matches Java compiler scoping).
+
+### Injection mechanisms detected
+
+- Field `@Autowired` / `@Inject` / `@Resource`
+- Constructor injection (Spring single-ctor rule and explicit `@Autowired`)
+- Setter `@Autowired`
+- Lombok `@RequiredArgsConstructor` (final fields) and `@AllArgsConstructor` (all non-static)
+
+### Chunk enrichment (Lance)
+
+Java chunk rows are enriched with `package`, `module`, `microservice`, `primary_type_fqn`, `primary_type_kind`, `role`, `capabilities`, `annotations_on_type`, `symbols`, `ontology_version`. `role` and `capabilities` are inferred in `ast_java` / `graph_enrich`.
+
+### `module` vs `microservice`
+
+Two location fields are tracked per Java symbol / chunk:
+
+- **`module`** — the *innermost* build-marker (`pom.xml`, `build.gradle`, `build.gradle.kts`, `build.sbt`) ancestor's directory name. (Legacy `service` field, renamed.)
+- **`microservice`** — the *outermost* build-marker ancestor under `LANCEDB_MCP_PROJECT_ROOT`. For a single-module project both equal the same name; for a multi-module reactor (e.g. `chat-core/{chat-app,chat-engine,...}`) every child collapses to `microservice='chat-core'` while keeping its own `module='chat-app'`.
+
+Resolution order for `microservice`:
+
+1. Explicit override list — `LANCEDB_MCP_MICROSERVICE_ROOTS=foo,bar` env var or `microservice_roots: [foo, bar]` in `.lancedb-mcp.yml`.
+2. Outermost build marker between `project_root` and the file.
+3. First path segment under `project_root`.
+4. `""` if nothing matches.
+
+### Re-index required when ontology changes
+
+Current ontology version is **11**. Any index built before this version must be rebuilt via `cocoindex update ... --full-reprocess -f` or `java-codebase-rag refresh`. Until re-indexed, the server defensively JSON-decodes string-form list columns so nothing explodes, but filters like `array_contains` will not work.
+
+### Capabilities
+
+In addition to the single primary `role` per Java type, the indexer extracts a multi-tag `capabilities: list[str]` field from method-level annotations, type-level annotations, injected types, and supertypes. A type can carry zero or many capabilities. Capabilities never *replace* the role; they augment it.
+
+| Capability | Trigger |
+|---|---|
+| `MESSAGE_LISTENER` | `@KafkaListener`, `@RabbitListener`, `@JmsListener`, `@SqsListener`, `@EventListener`, `@StreamListener` on any method. |
+| `MESSAGE_PRODUCER` | Type injects `KafkaTemplate`, `RabbitTemplate`, `JmsTemplate`, `StreamBridge`, or `ApplicationEventPublisher`. |
+| `HTTP_CLIENT` | Type has `@FeignClient`. |
+| `SCHEDULED_TASK` | `@Scheduled` on any method, or class implements `org.quartz.Job`. |
+| `EXCEPTION_HANDLER` | `@ControllerAdvice`, `@RestControllerAdvice`, or any method with `@ExceptionHandler`. |
+
+Use `find(kind="symbol", filter={"capability":"..."})` to enumerate types carrying a capability. Use `search(..., filter={"capability":"..."})` or `neighbors(..., filter={"capability":"..."})` for capability-aware narrowing.
+
+### Ranking
 
 Java hits are reweighted after vector / hybrid scoring by their `role`:
 
 | Role | Weight |
-|------|--------|
+|---|---|
 | `CONTROLLER` | +0.10 |
 | `SERVICE` | +0.08 |
 | `CLIENT` | +0.06 |
@@ -281,39 +298,33 @@ Java hits are reweighted after vector / hybrid scoring by their `role`:
 | `ENTITY` | -0.06 |
 | `CONFIG` | -0.10 |
 
-This favours orchestrators / entrypoints / integrations over configuration and
-schema chunks for "what happens when..."-style queries while keeping repositories
-and entities reachable. The weights are **skipped** when you pass an explicit
-`role=` filter, and the per-row breakdown is surfaced in `score_components`.
+This favours orchestrators / entrypoints / integrations over configuration and schema chunks for *what happens when…*-style queries, while keeping repositories and entities reachable. Weights are **skipped** when you pass an explicit `role=` filter; the per-row breakdown is surfaced in `score_components`.
 
-### Capabilities
+On top of role weights, Java chunks receive a **symbol-match bonus** (exposed as `score_components.symbol_bonus`). Three additive components, all capped:
 
-In addition to the single primary `role` per Java type, the indexer
-extracts a multi-tag `capabilities: list[str]` field from method-level
-annotations, type-level annotations, injected types, and supertypes.
-A type can carry zero or many capabilities. Capabilities never
-*replace* the role; they augment it.
+1. **Method / field overlap** — each declared symbol whose tokens overlap the query earns `+0.03` (capped at `+0.06`).
+2. **Action-verb bump** — chunks declaring a method whose name begins with an action verb (`process`, `handle`, `on`, `pick`, `select`, `assign`, `notify`, `dispatch`, `publish`, `consume`, `route`, `trigger`, `enqueue`, `distribute`, …) get a flat `+0.02`.
+3. **Type-name overlap** — strongest single lexical signal: when the simple name of `primary_type_fqn` shares tokens with the query, each overlap hit earns `+0.05` (capped at `+0.10`).
 
-| Capability | Trigger |
-|---|---|
-| `MESSAGE_LISTENER` | `@KafkaListener`, `@RabbitListener`, `@JmsListener`, `@SqsListener`, `@EventListener`, `@StreamListener` on any method |
-| `MESSAGE_PRODUCER` | type injects `KafkaTemplate`, `RabbitTemplate`, `JmsTemplate`, `StreamBridge`, or `ApplicationEventPublisher` |
-| `HTTP_CLIENT` | type has `@FeignClient` |
-| `SCHEDULED_TASK`   | `@Scheduled` on any method, or class implements `org.quartz.Job` |
-| `EXCEPTION_HANDLER`| `@ControllerAdvice`, `@RestControllerAdvice`, or any method with `@ExceptionHandler` |
+Combined, these pull `processClientMessage` / `pickEligibleOperator` / `onOperatorAssigned` chunks — and the classes that own them — above ones that only enqueue or configure. Like role weights, the bonus is **skipped when the caller locks `role=`**.
 
-Use `find(kind="symbol", filter={"capability":"..."})` to enumerate types carrying a capability.
-Use `search(..., filter={"capability":"..."})` or `neighbors(..., filter={"capability":"..."})` for capability-aware narrowing.
+### Debugging empty `context_before` / `context_after`
 
-### Brownfield overrides
+If `context_neighbors=1` returns empty context strings, set `LANCEDB_MCP_DEBUG_CONTEXT=1` in the MCP server env before launching. The server logs (to stderr) why expansion bailed: missing schema columns, empty bucket scan, chunk not found in bucket, or underlying scan error. Typical causes are (a) a stale server that hasn't reloaded after a reindex, or (b) a legacy index without `range_start` / `range_end` — the code falls back to exact-text matching, so re-running fixes it.
 
-For Spring-centric defaults that do not match your tree (custom wrapper
-stereotypes, non-Spring stacks, vendored code), you can steer `role` and
-`capabilities` without forking the indexer.
+---
 
-**1. Config (`.lancedb-mcp.yml` at the project root, same file as
-`microservice_roots`)** — `role_overrides` maps annotation simple names
-and/or per-type FQNs to roles and capabilities:
+## 7. Brownfield overrides
+
+For Spring-centric defaults that don't match your tree (custom wrapper stereotypes, non-Spring stacks, vendored code), you can steer `role`, `capabilities`, routes, and clients without forking the indexer. Three layers, in priority order:
+
+1. **Config** — `.lancedb-mcp.yml` at the project root.
+2. **Meta-annotation walk** — automatic discovery of `@interface` chains in your source.
+3. **Source stubs** — copy `@CodebaseRole`, `@CodebaseCapability`, `@CodebaseHttpRoute`, `@CodebaseAsyncRoute`, `@CodebaseClient`, `@CodebaseProducer` definitions into any package.
+
+### 7.1 Config: `role_overrides`, `route_overrides`
+
+`.lancedb-mcp.yml` at the project root (same file as `microservice_roots`). `role_overrides` maps annotation simple names and/or per-type FQNs to roles and capabilities:
 
 ```yaml
 microservice_roots: []
@@ -335,21 +346,14 @@ role_overrides:
 
 Unknown role or capability strings are ignored with a warning on load.
 
-`@FeignClient` interfaces now auto-attach `role=CLIENT` and
-`capability=HTTP_CLIENT`. For `RestTemplate`/`WebClient` wrappers, opt in
-explicitly with `@CodebaseRole(CodebaseRoleKind.CLIENT)` and
-`@CodebaseCapability(CodebaseCapabilityKind.HTTP_CLIENT)`.
+`@FeignClient` interfaces auto-attach `role=CLIENT` and `capability=HTTP_CLIENT`. For `RestTemplate` / `WebClient` wrappers, opt in explicitly with `@CodebaseRole(CodebaseRoleKind.CLIENT)` and `@CodebaseCapability(CodebaseCapabilityKind.HTTP_CLIENT)`.
 
-**Route overrides (`route_overrides`)** — same `.lancedb-mcp.yml` file; maps
-custom annotation names or qualified names (or suffixes such as `com.acme.Foo`
-when usage sites show only `Foo`) and per-type FQNs to `Route` fields for
-methods that do not otherwise resolve from Spring / Feign / messaging
-built-ins. Shape:
+`route_overrides` maps custom annotation names (or suffixes such as `com.acme.Foo` when usage sites show only `Foo`) and per-type FQNs to `Route` fields for methods that don't otherwise resolve from Spring / Feign / messaging built-ins:
 
 ```yaml
 route_overrides:
   annotations:
-    ann.AcmeRoute:          # or simple name `AcmeRoute` when that matches usage
+    ann.AcmeRoute:
       framework: spring_mvc
       kind: http_endpoint
       method: GET
@@ -363,48 +367,24 @@ route_overrides:
 
 Unknown `framework` / `kind` strings are dropped with a stderr warning.
 
-**Cross-service resolution mode** — optional top-level key in the same file:
+### 7.2 Cross-service resolution mode
+
+Optional top-level key in the same YAML file:
 
 ```yaml
 cross_service_resolution: auto          # default when omitted
 # cross_service_resolution: brownfield_only
 ```
 
-With `brownfield_only`, pass 6 does not promote auto-detected call sites to
-`cross_service` matches: only edges where both the caller strategy and every
-matched route’s `source_layer` come from brownfield (`@CodebaseHttpRoute` / `@CodebaseAsyncRoute`,
-`@CodebaseClient`, YAML overrides, meta-annotation closure, or FQN maps) stay
-`cross_service`. Everything else that would have been a cross-service match
-becomes `unresolved`. `intra_service`, `phantom`, and `ambiguous` behaviour is
-unchanged. Unknown values log a warning and behave like `auto`.
+With `brownfield_only`, the resolver does **not** promote auto-detected call sites to `cross_service` matches: only edges where both the caller strategy and every matched route's `source_layer` come from brownfield (`@CodebaseHttpRoute` / `@CodebaseAsyncRoute`, `@CodebaseClient`, YAML overrides, meta-annotation closure, or FQN maps) stay `cross_service`. Everything else that would have been a cross-service match becomes `unresolved`. `intra_service`, `phantom`, and `ambiguous` behaviour is unchanged. Unknown values log a warning and behave like `auto`.
 
-Resolution order for each method mirrors role brownfield: built-in extraction,
-then annotation map, then meta-annotation closure (same `collect_annotation_meta_chain`
-index as roles — see `plans/completed/PLAN-BROWNFIELD-ROLE-OVERRIDES-design-fixes.md`),
-then in-source `@CodebaseHttpRoute` / `@CodebaseAsyncRoute`, then per-type FQN map
-(last writer wins on overlapping fields). On the same method, `@CodebaseAsyncRoute`
-replaces built-in `@KafkaListener` extraction so brownfield topic names are not
-duplicated alongside SpEL or multi-topic listeners. For the in-source form, copy the
-`@CodebaseHttpRoute` / `@CodebaseAsyncRoute` stubs shown under
-**3. Last resort — source stubs**
-below into any package — no Maven dependency needed.
+Resolution order for each method: built-in extraction → annotation map → meta-annotation closure → in-source `@CodebaseHttpRoute` / `@CodebaseAsyncRoute` → per-type FQN map (last writer wins on overlapping fields). On the same method, `@CodebaseAsyncRoute` replaces built-in `@KafkaListener` extraction so brownfield topic names aren't duplicated alongside SpEL or multi-topic listeners.
 
-**2. Meta-annotation walk (automatic)** — `@interface` definitions in your
-source can carry meta-annotations; Layer A resolves chains to built-in
-stereotype and capability trigger names (e.g. `@Service`, `@KafkaListener`)
-via `graph_enrich.collect_annotation_meta_chain` (single index for both
-Kuzu and Lance — see below).
+### 7.3 Source stubs
 
-**3. Last resort — source stubs** — copy the `@interface` definitions below
-into your project (any package) and annotate your classes/methods. All
-stubs are matched by **simple name only** (no Maven dependency on this
-bundle). The route and client/producer stubs also live verbatim under
-`tests/fixtures/brownfield_route_stubs/com/example/rag/` and
-`tests/fixtures/brownfield_client_stubs/com/example/rag/` for copy-pasting.
+If config and meta-annotations aren't enough, copy these `@interface` definitions into any package — **simple-name-only** matching means no Maven dependency on this bundle. Verbatim copies live under `tests/fixtures/brownfield_route_stubs/` and `tests/fixtures/brownfield_client_stubs/` for copy-pasting.
 
-**3a. Roles & capabilities** — class-level. Apply
-`@CodebaseRole(CodebaseRoleKind.SERVICE)` /
-`@CodebaseCapability(CodebaseCapabilityKind.MESSAGE_LISTENER)` on a class:
+#### Roles & capabilities (class-level)
 
 ```java
 package com.example.rag; // any package
@@ -421,22 +401,16 @@ public enum CodebaseCapabilityKind {
 
 @Target(ElementType.TYPE)
 @Retention(RetentionPolicy.SOURCE)
-public @interface CodebaseRole {
-    CodebaseRoleKind value();
-}
+public @interface CodebaseRole { CodebaseRoleKind value(); }
 
 @Target(ElementType.TYPE)
 @Retention(RetentionPolicy.SOURCE)
 @Repeatable(CodebaseCapabilities.class)
-public @interface CodebaseCapability {
-    CodebaseCapabilityKind value();
-}
+public @interface CodebaseCapability { CodebaseCapabilityKind value(); }
 
 @Target(ElementType.TYPE)
 @Retention(RetentionPolicy.SOURCE)
-public @interface CodebaseCapabilities {
-    CodebaseCapability[] value();
-}
+public @interface CodebaseCapabilities { CodebaseCapability[] value(); }
 ```
 
 Usage:
@@ -448,87 +422,53 @@ Usage:
 public class LegacyChatService { /* ... */ }
 ```
 
-Legacy string-literal forms (`@CodebaseRole("SERVICE")`,
-`@CodebaseCapability("MESSAGE_LISTENER")`) are a breaking change and are no
-longer applied by the resolver.
+> Legacy string-literal forms (`@CodebaseRole("SERVICE")`) are no longer applied by the resolver.
 
-**Direction matters (inbound vs outbound):**
+#### Direction matters: inbound vs outbound
 
-| Direction | Annotation | Purpose | Feign handling |
-|---|---|---|---|
-| Inbound | `@CodebaseHttpRoute`, `@CodebaseAsyncRoute` | Declare handlers/listeners your service exposes as `Route` nodes. | Not used for Feign. |
-| Outbound | `@CodebaseClient`, `@CodebaseProducer` | Declare call sites/publish sites your service invokes (pass 5/6 caller edges). | `@FeignClient` declarations are outbound (`clientKind=feign_method`), not inbound `Route` rows. |
+| Direction | Annotation | Purpose |
+|---|---|---|
+| Inbound | `@CodebaseHttpRoute`, `@CodebaseAsyncRoute` | Declare handlers/listeners your service exposes as `Route` nodes. |
+| Outbound | `@CodebaseClient`, `@CodebaseProducer` | Declare call sites/publish sites your service invokes (caller edges). |
 
-**3b. Routes** — method-level inbound annotations are split by channel:
-`@CodebaseHttpRoute` for HTTP handlers and `@CodebaseAsyncRoute` for async
-listeners.
+`@FeignClient` declarations are outbound (`clientKind=feign_method`), not inbound `Route` rows.
+
+#### Routes (method-level, inbound)
 
 ```java
-package com.example.rag; // any package
-
-import java.lang.annotation.*;
-
-@Target(ElementType.METHOD)
-@Retention(RetentionPolicy.SOURCE)
+@Target(ElementType.METHOD) @Retention(RetentionPolicy.SOURCE)
 @Repeatable(CodebaseHttpRoutes.class)
-public @interface CodebaseHttpRoute {
-    String path();
-    String method();
-}
+public @interface CodebaseHttpRoute { String path(); String method(); }
 
-@Target(ElementType.METHOD)
-@Retention(RetentionPolicy.SOURCE)
-public @interface CodebaseHttpRoutes {
-    CodebaseHttpRoute[] value();
-}
+@Target(ElementType.METHOD) @Retention(RetentionPolicy.SOURCE)
+public @interface CodebaseHttpRoutes { CodebaseHttpRoute[] value(); }
 
-@Target(ElementType.METHOD)
-@Retention(RetentionPolicy.SOURCE)
+@Target(ElementType.METHOD) @Retention(RetentionPolicy.SOURCE)
 @Repeatable(CodebaseAsyncRoutes.class)
-public @interface CodebaseAsyncRoute {
-    String topic();
-}
+public @interface CodebaseAsyncRoute { String topic(); }
 
-@Target(ElementType.METHOD)
-@Retention(RetentionPolicy.SOURCE)
-public @interface CodebaseAsyncRoutes {
-    CodebaseAsyncRoute[] value();
-}
+@Target(ElementType.METHOD) @Retention(RetentionPolicy.SOURCE)
+public @interface CodebaseAsyncRoutes { CodebaseAsyncRoute[] value(); }
 ```
 
 Usage:
 
 ```java
-// HTTP endpoint on a legacy framework the built-in extractor doesn't know
 @CodebaseHttpRoute(path = "/chat/joinOperator", method = "POST")
 public Reply joinOperator(Request req) { /* ... */ }
 
-// Kafka consumer
 @CodebaseAsyncRoute(topic = "chat.follow-up")
 public void onFollowUp(Event e) { /* ... */ }
 ```
 
-`path` / `method` are required for HTTP routes; `topic` is required for async
-routes. Repeatable containers are `@CodebaseHttpRoutes` and
-`@CodebaseAsyncRoutes`.
+`path` / `method` are required for HTTP routes; `topic` is required for async routes.
 
-**3c. Clients & producers** — method-level. Apply `@CodebaseClient` on
-outbound HTTP call sites and `@CodebaseProducer` on outbound message-publish
-calls so caller-side resolution (pass 6) can register them. Both use enum
-typing (`CodebaseClientKind` and `CodebaseProducerKind`) for compile-time
-validation.
+#### Clients & producers (method-level, outbound)
 
 ```java
-package com.example.rag; // any package
+public enum CodebaseClientKind { feign_method, rest_template, web_client }
 
-import java.lang.annotation.*;
-
-public enum CodebaseClientKind {
-    feign_method, rest_template, web_client
-}
-
-@Target(ElementType.METHOD)
-@Retention(RetentionPolicy.SOURCE)
+@Target(ElementType.METHOD) @Retention(RetentionPolicy.SOURCE)
 @Repeatable(CodebaseClients.class)
 public @interface CodebaseClient {
     CodebaseClientKind clientKind();
@@ -537,35 +477,25 @@ public @interface CodebaseClient {
     String method()        default "";
 }
 
-@Target(ElementType.METHOD)
-@Retention(RetentionPolicy.SOURCE)
-public @interface CodebaseClients {
-    CodebaseClient[] value();
-}
+@Target(ElementType.METHOD) @Retention(RetentionPolicy.SOURCE)
+public @interface CodebaseClients { CodebaseClient[] value(); }
 
-public enum CodebaseProducerKind {
-    kafka_send, stream_bridge_send
-}
+public enum CodebaseProducerKind { kafka_send, stream_bridge_send }
 
-@Target(ElementType.METHOD)
-@Retention(RetentionPolicy.SOURCE)
+@Target(ElementType.METHOD) @Retention(RetentionPolicy.SOURCE)
 @Repeatable(CodebaseProducers.class)
 public @interface CodebaseProducer {
     CodebaseProducerKind producerKind() default CodebaseProducerKind.kafka_send;
     String topic();
 }
 
-@Target(ElementType.METHOD)
-@Retention(RetentionPolicy.SOURCE)
-public @interface CodebaseProducers {
-    CodebaseProducer[] value();
-}
+@Target(ElementType.METHOD) @Retention(RetentionPolicy.SOURCE)
+public @interface CodebaseProducers { CodebaseProducer[] value(); }
 ```
 
 Usage:
 
 ```java
-// Outbound HTTP call to another service
 @CodebaseClient(
     clientKind    = CodebaseClientKind.rest_template,
     targetService = "chat-core",
@@ -573,26 +503,15 @@ Usage:
     method        = "POST")
 public Reply callJoinOperator(Request req) { /* ... */ }
 
-// Kafka publisher
 @CodebaseProducer(
     producerKind = CodebaseProducerKind.kafka_send,
     topic        = "chat.follow-up")
 public void publishFollowUp(Event e) { /* ... */ }
 ```
 
-As with inbound annotations, multiple `@CodebaseClient` / `@CodebaseProducer`
-annotations on the same method are wrapped in `@CodebaseClients` /
-`@CodebaseProducers` automatically. Partial overrides are non-destructive
-(see *Caller-side brownfield overrides* above).
+Resolution order in code: built-in inference → config annotation maps → meta-annotation walk → `@CodebaseRole` / `@CodebaseCapability` → `role_overrides.fqn` (highest priority for explicit per-type config). Route composition uses the same first-pass index, then `@CodebaseHttpRoute` / `@CodebaseAsyncRoute`, then `route_overrides.fqn`. Rebuild Lance + Kuzu (`java-codebase-rag refresh` or `build_ast_graph.py`) after changing overrides.
 
-Resolution order in code: built-in inference, then config annotation maps,
-then meta-annotation walk, then `@CodebaseRole` / `@CodebaseCapability`, then
-`role_overrides.fqn` (highest priority for explicit per-type config). Route
-composition uses the same Layer A index, then `@CodebaseHttpRoute` / `@CodebaseAsyncRoute`,
-then `route_overrides.fqn`. Rebuild Lance + Kuzu (`java-codebase-rag refresh` or
-`build_ast_graph.py`) after changing overrides.
-
-**Caller-side brownfield overrides (`http_client_overrides` / `async_producer_overrides`)**:
+### 7.4 Caller-side overrides
 
 ```yaml
 http_client_overrides:
@@ -619,187 +538,76 @@ async_producer_overrides:
       topic: chat.follow-up
 ```
 
-Unknown `client_kind` values are dropped with a stderr warning. Caller-side
-layering mirrors routes (built-in, layer B annotations, layer A meta, layer C
-source stubs, layer B FQN), with one intentional divergence: if any brownfield
-layer emits method-level outgoing calls, built-in outgoing calls for that same
-method are replaced (not appended) to avoid double-counting one network call
-site.
+Unknown `client_kind` values are dropped with a stderr warning. **One intentional divergence** from route layering: if any brownfield layer emits method-level outgoing calls, built-in outgoing calls for that same method are **replaced** (not appended) to avoid double-counting one network call site.
 
-When a brownfield caller override specifies only part of what built-in detection
-would produce, missing fields are inherited from the built-in result. Partial
-overrides are therefore non-destructive (tightening instead of replacing). To
-fully replace the built-in result for a method, supply all relevant fields in
-the override; otherwise unspecified fields default to built-in values.
-Example: if built-in detection produces `client_kind=rest_template`, `method=GET`,
-`path=/users/{id}`, and an override sets only `path=/users/me`, the final call
-keeps `client_kind=rest_template` and `method=GET` while changing only the path.
+When a brownfield caller override specifies only part of what built-in detection would produce, missing fields are inherited from built-in — partial overrides are non-destructive (tightening, not replacing). Example: built-in produces `client_kind=rest_template`, `method=GET`, `path=/users/{id}`; an override sets only `path=/users/me`; the final call keeps `client_kind=rest_template` and `method=GET` while changing only the path.
 
-For in-source stubs, see **3c. Clients & producers** above for the full
-`@CodebaseClient` / `@CodebaseClients` / `@CodebaseProducer` /
-`@CodebaseProducers` `@interface` definitions and usage examples (same
-"simple-name only" matching as brownfield route stubs).
+### 7.5 Brownfield limitations
 
-**Kuzu vs Lance (Layer A consistency):** both the Kuzu graph writer and Lance
-chunk enrichment call **one** function, `graph_enrich.collect_annotation_meta_chain`,
-which scans the project with sorted `*.java` paths, the same layered ignore rules as
-`build_ast_graph` / `path_filtering.iter_java_source_files`, parse-error warnings on stderr, and
-deterministic “first wins” for duplicate annotation simple names. Kuzu and Lance
-**should** agree; they can still diverge if the same file is handled differently
-elsewhere in the pipeline (e.g. parse edge cases). If graph tools and
-`search` disagree on a type, run a full reindex and compare.
+- **Duplicate `@interface` simple names across packages.** The meta map keys by simple name. If two distinct types share a name (`com.team1.X` and `com.team2.X`), only the first after **sorted file order** is kept; a stderr message names both FQNs. Resolve by renaming, or use `role_overrides.fqn` / `@CodebaseRole`.
+- **Incremental indexing and annotation sources.** The indexer may only reprocess changed files. If you edit an `@interface` declaration (e.g. remove a `@Service` meta-annotation from a wrapper), every class that used it may need re-enrichment; the pipeline does not track that dependency automatically. **Run a full `java-codebase-rag refresh` after changing any `@interface` used as a custom stereotype.**
+- **`Symbol` rows scope.** `role` and `capabilities` on the graph are computed for **type** nodes (classes, interfaces, etc.). Method and constructor `Symbol` rows use defaults `role=OTHER` and `capabilities=[]`.
 
-**Limitations (Layer A / brownfield):**
+### 7.6 Lance / Kuzu consistency
 
-1. **Duplicate `@interface` simple names across packages.** Layer A keys the
-   meta map by simple name (usage sites do not always have import-resolved
-   FQNs). If two distinct types share a name (e.g. `com.team1.X` and
-   `com.team2.X`), only the first after **sorted** file order is kept; a stderr
-   message names both FQNs. Resolve by renaming, or use `role_overrides.fqn` /
-   `@CodebaseRole` on affected types.
-2. **Incremental indexing and annotation sources.** The indexer may only
-   reprocess changed files. If you edit an `@interface` declaration (e.g. remove
-   a `@Service` meta-annotation from a wrapper), every class that used that
-   annotation may need re-enrichment; the pipeline does not track that dependency
-   automatically. **When to do a full rebuild:** after changing any
-   `@interface` used as a custom stereotype, run a full
-   `java-codebase-rag refresh` (or full cocoindex reprocess and rebuild
-   Kuzu) so all dependents pick up the new `meta_chain`.
+Both the Kuzu graph writer and Lance chunk enrichment call **one** function — `graph_enrich.collect_annotation_meta_chain` — which scans the project with sorted `*.java` paths, the same layered ignore rules as `build_ast_graph` / `path_filtering.iter_java_source_files`, parse-error warnings on stderr, and deterministic *first wins* for duplicate annotation simple names. Kuzu and Lance **should** agree; they can still diverge if the same file is handled differently elsewhere in the pipeline (e.g. parse edge cases). If graph tools and `search` disagree on a type, run a full reindex and compare.
 
-**Kuzu `Symbol` rows (scope):** `role` and `capabilities` on the graph are
-computed for **type** nodes (classes, interfaces, etc.). Method and constructor
-`Symbol` rows are not passed through the brownfield resolver; they use default
-`role=OTHER` and `capabilities=[]`.
+---
 
-On top of role weights, java chunks receive a **symbol-match bonus** (exposed as
-`score_components.symbol_bonus`). It has three additive components, all capped:
+## 8. Ignore patterns
 
-1. **Method / field overlap** — each declared symbol whose tokens overlap the
-   query earns `+0.03` (capped at `+0.06`).
-2. **Action-verb bump** — chunks declaring a method whose name begins with an
-   action verb (`process`, `handle`, `on`, `pick`, `select`, `assign`, `notify`,
-   `dispatch`, `publish`, `consume`, `route`, `trigger`, `enqueue`,
-   `distribute`, ...) get a flat `+0.02`.
-3. **Type-name overlap** — the strongest single lexical signal: when the simple
-   name of `primary_type_fqn` (e.g. `DistributionChunkService`,
-   `OperatorSessionService`, `JoinOperatorController`) shares tokens with the
-   query, each overlap hit earns `+0.05` (capped at `+0.10`). Class naming in
-   this codebase encodes the domain concept, so this pulls the "right class"
-   above chunks that merely mention the concept in a comment or enqueue path.
+Java file discovery for the Kuzu graph, annotation meta-chain collection, and the CocoIndex Lance pipeline share the same layered ignore model (`path_filtering.LayeredIgnore`):
 
-Combined, these pull `processClientMessage` / `pickEligibleOperator` /
-`onOperatorAssigned` chunks — and the classes that own them — above ones that
-only enqueue or configure. Like role weights, the bonus is **skipped when the
-caller locks `role=`**.
+1. **Builtin default** — hardcoded patterns applied to every project.
+2. **Project root** — optional `<project>/.lancedb-mcp/ignore` (gitignore syntax, including negation with `!`).
+3. **Nested** — any `<subdir>/.lancedb-mcp/ignore` on the path from the project root to the file; closer files override farther ones.
+4. **Git** — every `.gitignore` from the project root down to the file's directory, merged in order, using `pathspec.GitIgnoreSpec` (same semantics as git). Disable with `LayeredIgnore(..., use_gitignore=False)`.
 
-### Ignore patterns
+### Builtin default patterns
 
-Java file discovery for the Kuzu graph, annotation meta-chain collection, and
-the CocoIndex Lance pipeline share the same layered ignore model
-(`path_filtering.LayeredIgnore`):
+The builtin default layer (`path_filtering.COMMON_EXCLUDED_PATH_PATTERNS`) combines two mechanisms.
 
-1. **Builtin default** — hardcoded patterns applied to every project. See
-   [Builtin default patterns](#builtin-default-patterns) below for the exact
-   list and the build-tool-anchored pruning rules for `out/`, `build/`, and
-   `target/`.
-2. **Project root** — optional `<project>/.lancedb-mcp/ignore` (gitignore syntax,
-   including negation with `!`).
-3. **Nested** — any `<subdir>/.lancedb-mcp/ignore` on the path from the project
-   root to the file; closer files override farther ones.
-4. **Git** — every `.gitignore` from the project root down to the file’s
-   directory, merged in order, using `pathspec.GitIgnoreSpec` (same semantics as
-   git). Disable with `LayeredIgnore(..., use_gitignore=False)` (used where the
-   legacy walker did not consult git).
+**a) Glob patterns** (applied during the layered match):
 
-#### Builtin default patterns
-
-The builtin default layer (`path_filtering.COMMON_EXCLUDED_PATH_PATTERNS`)
-combines two mechanisms:
-
-**a) Glob patterns** — applied during the layered match (`is_ignored`):
-
-| Pattern | What it excludes |
+| Pattern | Excludes |
 |---|---|
-| `**/.*` | Any dot-file or dot-directory at any depth |
-| `**/.git/**` | Git metadata directory |
-| `**/.idea/**` | IntelliJ IDEA project metadata |
-| `**/.venv/**` | Python virtual environments |
-| `**/node_modules/**` | npm/yarn dependency tree |
-| `**/*.class` | Compiled JVM class files |
-| `**/src/test/java/**` | Maven/Gradle test sources (prod-only index by design) |
-| `**/src/test/resources/**` | Test resource bundles |
+| `**/.*` | Any dot-file or dot-directory at any depth. |
+| `**/.git/**` | Git metadata. |
+| `**/.idea/**` | IntelliJ project metadata. |
+| `**/.venv/**` | Python virtual environments. |
+| `**/node_modules/**` | npm/yarn dependency tree. |
+| `**/*.class` | Compiled JVM class files. |
+| `**/src/test/java/**` | Maven/Gradle test sources (prod-only index by design). |
+| `**/src/test/resources/**` | Test resource bundles. |
 
-**b) Build-output directory pruning** — applied during the `os.walk` traversal,
-separate from the glob patterns above. Three directory names (`out`, `build`,
-`target`) are pruned **only when they sit alongside a build-tool indicator
-file** (`pom.xml`, `build.gradle`, `build.gradle.kts`, `settings.gradle`,
-`settings.gradle.kts`). This guards against the false-positive where one of
-these names appears as a legal Java package (e.g.
-`com.example.out.api.AssignEndpoint` lives at
-`src/main/java/com/example/out/api/AssignEndpoint.java`, and `out/` is a
-package directory, not a Maven build output).
+**b) Build-output directory pruning** (during `os.walk` traversal). Three directory names — `out`, `build`, `target` — are pruned **only** when they sit alongside a build-tool indicator file (`pom.xml`, `build.gradle`, `build.gradle.kts`, `settings.gradle`, `settings.gradle.kts`). This guards against the false-positive where one of these names is a legal Java package (e.g. `com.example.out.api.AssignEndpoint` lives at `src/main/java/com/example/out/api/AssignEndpoint.java`, where `out/` is a package, not a Maven build output).
 
-A few additional directory names are pruned **unconditionally**, regardless of
-siblings, because they are never legal Java package names: `.git`, `.idea`,
-`.venv`, `node_modules`. (Defined in `path_filtering.UNCONDITIONAL_PRUNE_DIRS`.)
+A few directory names are pruned **unconditionally** because they are never legal Java package names: `.git`, `.idea`, `.venv`, `node_modules` (defined in `path_filtering.UNCONDITIONAL_PRUNE_DIRS`).
 
-If you need to skip a directory that the builtin default walks (or include one
-it prunes), add a `.lancedb-mcp/ignore` file at the project root or any
-subtree root. Use `java-codebase-rag diagnose-ignore <path>` to see which layer decided
-for a given file.
+To skip a directory the builtin walks (or include one it prunes), add a `.lancedb-mcp/ignore` file at the project root or any subtree root. Use `java-codebase-rag diagnose-ignore <path>` to see which layer decided for a given file.
 
-If no `.lancedb-mcp/ignore` exists anywhere under the project, behaviour matches
-the pre-B5 builtin list alone (plus git when enabled). When a negation rule
-could un-ignore paths under directories the CocoIndex walk used to prune
-globally, the walk switches to a permissive exclude list and each candidate
-path is filtered again with the full layered rules.
+If no `.lancedb-mcp/ignore` exists anywhere under the project, behaviour matches the builtin list alone (plus git when enabled). When a negation rule could un-ignore paths under directories the CocoIndex walk used to prune globally, the walk switches to a permissive exclude list and each candidate path is filtered again with the full layered rules.
 
-Use `java-codebase-rag diagnose-ignore <path>` (or `LayeredIgnore.diagnose_dict`) to see
-which file and line decided for a given path.
+**Monorepo note:** negation detection runs two full-tree `rglob` passes when constructing a `LayeredIgnore` (ignore files and `.gitignore` files). Usually cheap to amortise; extremely large trees should expect that fixed cost per new instance.
 
-**Monorepo note:** negation detection runs two full-tree ``rglob`` passes when
-constructing a `LayeredIgnore` (ignore files and `.gitignore` files). That is
-usually cheap to amortise; extremely large trees should expect that fixed cost
-per new instance.
+**Dependencies:** `pathspec` is pinned in `requirements.txt` and constrained the same way in `pyproject.toml` (loose bundle install vs. wheel metadata).
 
-**Dependencies:** `pathspec` is pinned in `requirements.txt` and constrained
-the same way in `pyproject.toml` (loose bundle install vs. wheel metadata).
+---
 
-### Debugging empty `context_before` / `context_after`
+## 9. Further reading
 
-If `context_neighbors=1` returns empty context strings, set
-`LANCEDB_MCP_DEBUG_CONTEXT=1` in the MCP server env before launching. The
-server then logs (to stderr) why expansion bailed: missing schema columns,
-empty bucket scan, chunk not found in bucket, or underlying scan error.
-Typical causes are (a) a stale server that hasn't reloaded after a reindex,
-or (b) a legacy index without `range_start` / `range_end` — the code falls
-back to exact-text matching in that case, so re-running the flow fixes it.
+| Document | What's in it |
+|---|---|
+| [`docs/paper/paper.pdf`](./docs/paper/paper.pdf) | Architecture report — design rationale, GPS metaphor, three-layer architecture, design principles, future work. |
+| [`docs/AGENT-GUIDE.md`](./docs/AGENT-GUIDE.md) | Agent-facing guide. Copy-paste into `QWEN.md` / `CLAUDE.md` / `AGENTS.md`. |
+| [`docs/JAVA-CODEBASE-RAG-CLI.md`](./docs/JAVA-CODEBASE-RAG-CLI.md) | Operator playbook for the CLI: workflows, exit codes, env alignment. |
+| [`docs/MANUAL-VERIFICATION-CHECKLIST.md`](./docs/MANUAL-VERIFICATION-CHECKLIST.md) | 7-phase agent-driven verification after indexing your project. |
+| [`CODEBASE_REQUIREMENTS.md`](./CODEBASE_REQUIREMENTS.md) | Assumptions about your Java repo + per-file edit map for non-conforming codebases. |
+| [`propose/PRODUCT-VISION.md`](./propose/PRODUCT-VISION.md) | Long-term product direction. |
 
-## 6. Deferred (beyond static call graph)
+### Roadmap (graph layer)
 
-**Static intra-JVM `CALLS` / `DECLARES` are shipped** — see §5 edge types and v2 `neighbors` traversal.
-**Cross-service caller edges (`HTTP_CALLS` / `ASYNC_CALLS`) are shipped too**, also via v2 `neighbors` traversal and the
-brownfield composition layer documented under §5 "Brownfield overrides".
-Remaining graph work:
-
-- `get_service_topology` (microservice-level summary view aggregating `HTTP_CALLS` / `ASYNC_CALLS`).
-- Agentic routing layer (query classifier → vector / graph / both) from the DKB paper §4.1.
-- Incremental Kuzu updates (per-changed-file) to avoid full rebuild —
-  see `propose/TIER2-INCREMENTAL-REBUILD-PROPOSE.md` and
-  `propose/REFRESH-CODE-INDEX-AUTO-MODE-PROPOSE.md`.
+- `get_service_topology` — microservice-level summary aggregating `HTTP_CALLS` / `ASYNC_CALLS`.
+- Agentic routing layer (query classifier → vector / graph / both).
+- Incremental Kuzu updates (per-changed-file) — see [`propose/TIER2-INCREMENTAL-REBUILD-PROPOSE.md`](./propose/TIER2-INCREMENTAL-REBUILD-PROPOSE.md) and [`propose/REFRESH-CODE-INDEX-AUTO-MODE-PROPOSE.md`](./propose/REFRESH-CODE-INDEX-AUTO-MODE-PROPOSE.md).
 - Optional `codegraph_nodes` LanceDB table embedding symbol summaries so the graph itself is vector-searchable.
-
-## 7. Syncing from the main repo
-
-If you develop in `chat-test`, copy these files into `mcp_lancedb_bundle/` when you change behavior:
-
-- `chunk_heuristics.py`
-- `ast_java.py`
-- `java_ontology.py`
-- `graph_enrich.py`
-- `kuzu_queries.py`
-- `build_ast_graph.py`
-- `search_lancedb.py` (switch imports to `index_common` as in this bundle)
-- `server.py` (from `mcp_lancedb_server.py`, with bundle imports)
-
-`index_common.py` stays bundle-specific (no CocoIndex import).
