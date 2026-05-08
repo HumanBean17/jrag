@@ -357,6 +357,28 @@ def test_neighbors_empty_edge_types_rejected(kuzu_graph) -> None:
         neighbors_v2(mid, direction="in", edge_types=[], graph=kuzu_graph)
 
 
+def test_neighbors_invalid_direction_rejected(kuzu_graph) -> None:
+    mid = _method_id_with_calls(kuzu_graph, "out")
+    with pytest.raises(ValidationError):
+        neighbors_v2(mid, direction="upstream", edge_types=["CALLS"], graph=kuzu_graph)
+
+
+def test_neighbors_invalid_edge_type_rejected(kuzu_graph) -> None:
+    mid = _method_id_with_calls(kuzu_graph, "out")
+    with pytest.raises(ValidationError):
+        neighbors_v2(mid, direction="in", edge_types=["calls"], graph=kuzu_graph)
+
+
+async def test_find_invalid_kind_rejected(mcp_server) -> None:
+    with pytest.raises(ToolError, match="Input should be"):
+        await mcp_server.call_tool("find", {"kind": "method", "filter": {}})
+
+
+async def test_search_invalid_table_rejected(mcp_server) -> None:
+    with pytest.raises(ToolError, match="Input should be"):
+        await mcp_server.call_tool("search", {"query": "foo", "table": "code"})
+
+
 def test_search_filter_accepts_json_string(monkeypatch, kuzu_graph) -> None:
     monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
     want = {"microservice": "chat-assign"}
