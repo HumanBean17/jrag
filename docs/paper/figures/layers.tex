@@ -1,0 +1,63 @@
+\begin{tikzpicture}[
+  font=\small,
+  node distance=0.6cm and 0.8cm,
+  layer/.style={
+    rectangle,
+    rounded corners=4pt,
+    draw=black!60,
+    line width=0.6pt,
+    minimum width=13.2cm,
+    minimum height=2.0cm,
+    align=left,
+    inner sep=8pt
+  },
+  l1col/.style={fill=blue!5},
+  l2col/.style={fill=green!7},
+  l3col/.style={fill=orange!8},
+  arrow/.style={-{Stealth[length=2.5mm]}, line width=0.6pt, black!70},
+  pill/.style={
+    rectangle, rounded corners=2pt,
+    draw=black!50, fill=white, line width=0.4pt,
+    inner sep=3pt, font=\footnotesize\ttfamily
+  },
+  label/.style={font=\footnotesize\bfseries, anchor=north west},
+  sublabel/.style={font=\footnotesize\itshape, anchor=north west}
+]
+
+% --- Layer 3: Reason ---
+\node[layer, l3col] (l3) {};
+\node[label] at ($(l3.north west) + (0.3, -0.2)$) {Layer 3 \textemdash{} Reason};
+\node[sublabel] at ($(l3.north west) + (0.3, -0.7)$) {Agent host \textemdash{} prompts, planning, tool-call orchestration};
+\node[pill] at ($(l3.south west) + (1.6, 0.6)$) {Claude Code};
+\node[pill] at ($(l3.south west) + (4.0, 0.6)$) {Qwen Code};
+\node[pill] at ($(l3.south west) + (6.0, 0.6)$) {Cursor (MCP)};
+\node[pill] at ($(l3.south west) + (8.4, 0.6)$) {AGENT-GUIDE.md};
+\node[pill] at ($(l3.south west) + (11.0, 0.6)$) {QWEN.md};
+
+% --- Layer 2: Navigate ---
+\node[layer, l2col, below=of l3] (l2) {};
+\node[label] at ($(l2.north west) + (0.3, -0.2)$) {Layer 2 \textemdash{} Navigate (the MCP)};
+\node[sublabel] at ($(l2.north west) + (0.3, -0.7)$) {4 tools \textbar{} 3 primitives \textbar{} typed JSON only};
+\node[pill, fill=green!15] at ($(l2.south west) + (1.7, 0.6)$) {search \textsc{(locate)}};
+\node[pill, fill=green!15] at ($(l2.south west) + (4.5, 0.6)$) {find \textsc{(locate)}};
+\node[pill, fill=green!15] at ($(l2.south west) + (7.4, 0.6)$) {describe \textsc{(inspect)}};
+\node[pill, fill=green!15] at ($(l2.south west) + (10.4, 0.6)$) {neighbors \textsc{(walk)}};
+
+% --- Layer 1: Extract & Store ---
+\node[layer, l1col, below=of l2] (l1) {};
+\node[label] at ($(l1.north west) + (0.3, -0.2)$) {Layer 1 \textemdash{} Extract \& Store};
+\node[sublabel] at ($(l1.north west) + (0.3, -0.7)$) {Tree-sitter \textrightarrow{} Cocoindex \textrightarrow{} K\`uzu (3 node kinds, 9 edge types)};
+\node[pill] at ($(l1.south west) + (1.5, 0.6)$) {Java source};
+\node[pill] at ($(l1.south west) + (3.7, 0.6)$) {tree-sitter};
+\node[pill] at ($(l1.south west) + (5.8, 0.6)$) {Cocoindex};
+\node[pill] at ($(l1.south west) + (7.8, 0.6)$) {K\`uzu};
+\node[pill] at ($(l1.south west) + (9.5, 0.6)$) {FAISS \textsc{(vec)}};
+
+% --- Arrows: queries down, results up ---
+\draw[arrow] ($(l3.south) + (-1.3,0)$) -- node[left, font=\footnotesize\itshape, pos=0.5] {tool calls} ($(l2.north) + (-1.3,0)$);
+\draw[arrow] ($(l2.north) + (1.3,0)$) -- node[right, font=\footnotesize\itshape, pos=0.5] {typed JSON} ($(l3.south) + (1.3,0)$);
+
+\draw[arrow] ($(l2.south) + (-1.3,0)$) -- node[left, font=\footnotesize\itshape, pos=0.5] {Cypher / vec query} ($(l1.north) + (-1.3,0)$);
+\draw[arrow] ($(l1.north) + (1.3,0)$) -- node[right, font=\footnotesize\itshape, pos=0.5] {nodes \& edges} ($(l2.south) + (1.3,0)$);
+
+\end{tikzpicture}

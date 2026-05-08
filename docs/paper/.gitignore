@@ -1,0 +1,9 @@
+# Tectonic / LaTeX build artefacts. Source files (.tex, .bib) and the final
+# paper.pdf are committed; everything else regenerates on `make`.
+*.aux
+*.bbl
+*.blg
+*.log
+*.out
+*.synctex.gz
+*.toc
