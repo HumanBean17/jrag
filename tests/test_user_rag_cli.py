@@ -32,8 +32,8 @@ def _base_env(corpus_root: Path) -> dict[str, str]:
 
 
 def _run_cli(args: list[str], *, env: dict[str, str], stdin: str | None = None) -> subprocess.CompletedProcess:
-    exe = shutil.which("user-rag")
-    assert exe is not None, "expected installed user-rag entrypoint"
+    exe = shutil.which("java-codebase-rag")
+    assert exe is not None, "expected installed java-codebase-rag entrypoint"
     return subprocess.run(
         [exe, *args],
         capture_output=True,
@@ -57,8 +57,8 @@ def test_cli_meta_outputs_valid_json_when_piped(corpus_root, kuzu_db_path) -> No
 def test_cli_meta_pretty_when_tty(corpus_root, kuzu_db_path) -> None:
     env = _base_env(corpus_root)
     env["KUZU_DB_PATH"] = str(kuzu_db_path)
-    exe = shutil.which("user-rag")
-    assert exe is not None, "expected installed user-rag entrypoint"
+    exe = shutil.which("java-codebase-rag")
+    assert exe is not None, "expected installed java-codebase-rag entrypoint"
     master, slave = pty.openpty()
     try:
         proc = subprocess.Popen(

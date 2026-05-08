@@ -3,7 +3,7 @@
 Use this **after** you've read `README.md` + `CODEBASE_REQUIREMENTS.md`,
 [`docs/AGENT-GUIDE.md`](./AGENT-GUIDE.md), applied any brownfield annotations,
 and built the index against your real project. The checklist mixes **shell**
-checks (`user-rag` CLI for graph health and Lance tables) with **MCP**
+checks (`java-codebase-rag` CLI for graph health and Lance tables) with **MCP**
 checks (`search` / `find` / `describe` / `neighbors` — the only navigation
 tools).
 
@@ -24,13 +24,13 @@ members, 0 parse errors, 17 routes, 11 `EXPOSES`, 793 `CALLS`, 2 `HTTP_CALLS`,
 5 `ASYNC_CALLS`, 2 `Client` rows, microservices = `chat-core` + `chat-assign`.
 
 **Convention:** Graph ops use MCP. Index health / rebuild / PR analysis use
-**`user-rag`** (see README **CLI reference**). Example:
+**`java-codebase-rag`** (see README **CLI reference**). Example:
 
 ```bash
 export KUZU_DB_PATH=/tmp/verify_kuzu
 export LANCEDB_MCP_PROJECT_ROOT=/path/to/your/project
-user-rag meta
-user-rag tables
+java-codebase-rag meta
+java-codebase-rag tables
 ```
 
 ---
@@ -85,7 +85,7 @@ export KUZU_DB_PATH=/tmp/verify_kuzu
 **Verification prompt:**
 
 > In a shell with `KUZU_DB_PATH` and `LANCEDB_MCP_PROJECT_ROOT` set for your
-> graph, run `user-rag meta` (JSON output if piped). Report
+> graph, run `java-codebase-rag meta` (JSON output if piped). Report
 > `ontology_version`, `built_at`, `source_root`, and `parse_errors`. Does
 > `ontology_version` equal `11`?
 
@@ -100,7 +100,7 @@ repo, `git rev-parse HEAD`, then rebuild from scratch with
 
 **Verification prompt:**
 
-> From `user-rag meta` JSON, read `counts.files` (or equivalent) and
+> From `java-codebase-rag meta` JSON, read `counts.files` (or equivalent) and
 > `parse_errors`. Compute `parse_errors / files * 100`. If above 1%, inspect
 > `/tmp/verify_build.log` for `[parse-error]` lines.
 
@@ -108,13 +108,13 @@ repo, `git rev-parse HEAD`, then rebuild from scratch with
 
 **If failing → fix:** > 5% usually means non-UTF-8 files or generated sources
 you forgot to ignore. Add ignore rules, then run
-`user-rag diagnose-ignore src/main/generated` (adjust path) to confirm.
+`java-codebase-rag diagnose-ignore src/main/generated` (adjust path) to confirm.
 
 ### 1.3 ☐ Symbol counts match the project's rough scale
 
 **Verification prompt:**
 
-> From `user-rag meta`, report `counts.types`, `counts.members`,
+> From `java-codebase-rag meta`, report `counts.types`, `counts.members`,
 > `counts.injects`. Compare to a rough `wc` of Java lines outside the agent.
 
 **Expected (calibration):** 92 types from 84 files (~1.1 types/file), 474
@@ -126,14 +126,14 @@ members, 71 injects.
 
 **Verification prompt:**
 
-> Run `user-rag tables` and confirm tables include `java` (and others you
+> Run `java-codebase-rag tables` and confirm tables include `java` (and others you
 > expect). Then call MCP `search` with
 > `{"query":"main","table":"java","limit":1}`. At least one hit?
 
 **Expected (calibration):** tables include `java`, `sql`, `yaml`; search
 returns ≥1 chunk when the Lance index exists for the fixture.
 
-**If failing → fix:** missing tables → `user-rag refresh` (slow, needs
+**If failing → fix:** missing tables → `java-codebase-rag refresh` (slow, needs
 `LANCEDB_MCP_ALLOW_REFRESH=1`). Empty `search` → check `LANCEDB_URI`,
 `SBERT_MODEL`, and that the index was built for this tree.
 
@@ -198,7 +198,7 @@ the fixture. No `*Service` / `*Repository` in OTHER for obvious Spring types.
 **Expected (calibration):** fixture uses RestTemplate-style clients, not
 `@FeignClient` types; on real projects counts should align.
 
-**If failing → fix:** confirm `user-rag meta` → `ontology_version` ≥ 10 for
+**If failing → fix:** confirm `java-codebase-rag meta` → `ontology_version` ≥ 10 for
 `Client` nodes; full rebuild if stale.
 
 ### 2.4 ☐ Message listeners and producers are detected
@@ -222,7 +222,7 @@ or `role_overrides.annotations` in `.lancedb-mcp.yml`.
 **Verification prompt:**
 
 > Call `find` with `{"kind":"symbol","filter":{"role":"OTHER"},"limit":500}`.
-> Compare count to `counts.types` from `user-rag meta`. What fraction look
+> Compare count to `counts.types` from `java-codebase-rag meta`. What fraction look
 > like DTOs/helpers vs missed stereotypes?
 
 **Expected (calibration):** ~43 OTHER / 92 types in the fixture (many record
@@ -245,7 +245,7 @@ add brownfield overrides.
 
 **Verification prompt:**
 
-> Run `user-rag meta` and report `routes_total`, `routes_by_framework`,
+> Run `java-codebase-rag meta` and report `routes_total`, `routes_by_framework`,
 > `routes_resolved_pct`, `routes_from_brownfield_pct`. Then MCP `find` with
 > `{"kind":"route","filter":{},"limit":500}` (narrow with `microservice` on
 > large repos).
@@ -305,7 +305,7 @@ exact count.
 
 **Verification prompt:**
 
-> `user-rag meta` → `ontology_version` and `counts.clients`. Then MCP `find`
+> `java-codebase-rag meta` → `ontology_version` and `counts.clients`. Then MCP `find`
 > with `{"kind":"client","filter":{},"limit":200}`. Rows should include
 > `client_kind`, `target_service`, paths, `source_layer`.
 
@@ -376,7 +376,7 @@ expect Feign → README §3c brownfield.
 
 **Verification prompt:**
 
-> `user-rag meta` → report `counts.http_calls`, `http_calls_match_breakdown`,
+> `java-codebase-rag meta` → report `counts.http_calls`, `http_calls_match_breakdown`,
 > `edge_counts.HTTP_CALLS`. On a real project, pick a known Feign call and
 > locate the consumer symbol id, then `neighbors` with
 > `{"ids":"<sym_id>","direction":"out","edge_types":["HTTP_CALLS"],"limit":50}` and inspect `attrs.match`.
@@ -389,7 +389,7 @@ expect Feign → README §3c brownfield.
 
 **Verification prompt:**
 
-> `user-rag meta` → `async_calls_match_breakdown`, `edge_counts.ASYNC_CALLS`.
+> `java-codebase-rag meta` → `async_calls_match_breakdown`, `edge_counts.ASYNC_CALLS`.
 > On a real project, walk `neighbors` with explicit `ids`, `direction`, `limit`, and e.g.
 > `edge_types":["ASYNC_CALLS"]` (add `HTTP_CALLS` when relevant).
 
@@ -403,12 +403,12 @@ expect Feign → README §3c brownfield.
 
 > On a project with real `cross_service` matches: set
 > `cross_service_resolution: brownfield_only` in `.lancedb-mcp.yml`, run
-> `user-rag refresh`, re-check the same `neighbors` / meta breakdown. Edges
+> `java-codebase-rag refresh`, re-check the same `neighbors` / meta breakdown. Edges
 > should tighten to brownfield-tagged sites.
 
 **Expected (calibration):** N/A on fixture (no cross-service matches).
 
-**If failing → fix:** confirm `built_at` changed after rebuild (`user-rag meta`).
+**If failing → fix:** confirm `built_at` changed after rebuild (`java-codebase-rag meta`).
 
 ### Red flags for Phase 5
 
@@ -492,12 +492,12 @@ expect Feign → README §3c brownfield.
 If everything is green:
 
 - Commit `.lancedb-mcp.yml` and `@Codebase*` stubs.
-- Record **ontology 11** (or current `user-rag meta` value) in your team docs.
-- Periodically diff `user-rag meta` `counts` after large refactors.
+- Record **ontology 11** (or current `java-codebase-rag meta` value) in your team docs.
+- Periodically diff `java-codebase-rag meta` `counts` after large refactors.
 
 If something is red:
 
-- Capture `user-rag meta` JSON, `/tmp/verify_build.log` tail, and the failing
+- Capture `java-codebase-rag meta` JSON, `/tmp/verify_build.log` tail, and the failing
   prompt.
 
 ---
@@ -512,7 +512,7 @@ rm -rf /tmp/calib_kuzu
 python build_ast_graph.py \
   --source-root tests/bank-chat-system \
   --kuzu-path /tmp/calib_kuzu --verbose
-user-rag meta --source-root tests/bank-chat-system --kuzu-path /tmp/calib_kuzu
+java-codebase-rag meta --source-root tests/bank-chat-system --kuzu-path /tmp/calib_kuzu
 ```
 
 Current snapshot: `tests/bank-chat-system`, `master @ e90cbecc`, ontology **11**.

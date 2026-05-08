@@ -127,7 +127,7 @@ def _cmd_analyze_pr(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="user-rag")
+    parser = argparse.ArgumentParser(prog="java-codebase-rag")
     subparsers = parser.add_subparsers(dest="subcommand")
 
     refresh = subparsers.add_parser("refresh")

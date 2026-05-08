@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "lancedb-code": {
+    "java-codebase-rag": {
       "type": "stdio",
       "command": "/ABSOLUTE/PATH/TO/mcp_lancedb_bundle/.venv/bin/python",
       "args": ["/ABSOLUTE/PATH/TO/mcp_lancedb_bundle/server.py"],

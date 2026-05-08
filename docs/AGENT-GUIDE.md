@@ -1,7 +1,7 @@
 # Agent Guide — `java-enterprise-codebase-rag` MCP
 
 > **How to use this file.** Copy the block between the `<!-- BEGIN/END
-> user-rag MCP guide -->` markers below into your project's `QWEN.md`,
+> java-codebase-rag MCP guide -->` markers below into your project's `QWEN.md`,
 > `CLAUDE.md`, `AGENTS.md`, or equivalent. The block is self-contained:
 > **four** MCP navigation tools, one shared **`NodeFilter`**, edge-type
 > taxonomy, a forced reasoning preamble, a decision tree, a recovery
@@ -18,9 +18,9 @@
 
 ---
 
-<!-- BEGIN user-rag MCP guide -->
+<!-- BEGIN java-codebase-rag MCP guide -->
 
-## user-rag MCP — agent operating manual
+## java-codebase-rag MCP — agent operating manual
 
 This MCP indexes Java enterprise projects into two stores:
 
@@ -29,7 +29,7 @@ This MCP indexes Java enterprise projects into two stores:
 
 **MCP surface (navigation only):** `search`, `find`, `describe`, `neighbors`.
 
-**Operator / diagnostics (not MCP):** use the **`user-rag`** CLI — `refresh`, `meta`, `tables`, `diagnose-ignore`, `analyze-pr`. Rebuilds are slow; the coding agent should not pretend it can refresh via MCP.
+**Operator / diagnostics (not MCP):** use the **`java-codebase-rag`** CLI — `refresh`, `meta`, `tables`, `diagnose-ignore`, `analyze-pr`. Rebuilds are slow; the coding agent should not pretend it can refresh via MCP.
 
 **Use this MCP when** you need whole-codebase context: who calls what, what handles a route, what a method invokes, where clients point, or fuzzy “where is concept X” entry points.
 
@@ -142,9 +142,9 @@ Exact allowed values for roles, capabilities, client kinds, etc. live in `java_o
 | Who implements interface T? | `find` symbol for T, or `search` | `neighbors(..., direction="in", edge_types=["IMPLEMENTS"])` |
 | Who injects type T? | Symbol id for T | `neighbors(..., direction="in", edge_types=["INJECTS"])` |
 | Impact / “what breaks if I change X”? | **No magic tool** — you loop | `neighbors` with `in` + relevant edge types (`CALLS`, `INJECTS`, …), repeat until bounded |
-| Index health / ontology / counts | Not MCP | Shell: `user-rag meta` |
-| Rebuild index | Not MCP | `user-rag refresh` (requires `LANCEDB_MCP_ALLOW_REFRESH=1`) |
-| PR blast radius | Not MCP | `user-rag analyze-pr --diff-file …` |
+| Index health / ontology / counts | Not MCP | Shell: `java-codebase-rag meta` |
+| Rebuild index | Not MCP | `java-codebase-rag refresh` (requires `LANCEDB_MCP_ALLOW_REFRESH=1`) |
+| PR blast radius | Not MCP | `java-codebase-rag analyze-pr --diff-file …` |
 
 **Rules of thumb:**
 
@@ -196,10 +196,10 @@ Source of truth: `java_ontology.py`. Strings are case-sensitive.
 | ------- | ------------ | --- |
 | `neighbors` validation error | Missing `direction` or `edge_types` | Add both explicitly |
 | Empty `neighbors` | Wrong edge type for the node kind, or wrong direction | Check `describe.edge_summary`; `EXPOSES` is Symbol↔Route — direction matters |
-| Cannot find symbol | Wrong id or stale index | `search` with distinctive string; verify `user-rag meta` (CLI) |
+| Cannot find symbol | Wrong id or stale index | `search` with distinctive string; verify `java-codebase-rag meta` (CLI) |
 | `find` returns too much | Over-broad filter | Add `microservice`, `fqn_prefix`, `path_prefix`, etc. |
 | Route not found | Path mismatch | Use `path_prefix` on `find(kind="route", …)`; check README brownfield routes |
-| Need ontology / rebuild / PR analysis | Wrong layer | Use **`user-rag`** CLI, not MCP |
+| Need ontology / rebuild / PR analysis | Wrong layer | Use **`java-codebase-rag`** CLI, not MCP |
 
 After two failed attempts on the same intent, stop and report tool name, args, and response.
 
@@ -215,7 +215,7 @@ After two failed attempts on the same intent, stop and report tool name, args, a
 - `/who-hits-route <route_id>` → `neighbors({"ids":"<route_id>","direction":"in","edge_types":["HTTP_CALLS","ASYNC_CALLS","EXPOSES"]})`.
 - `/implements <type_sym_id>` → `neighbors({"ids":"<type_sym_id>","direction":"in","edge_types":["IMPLEMENTS"]})`.
 - `/injects <type_sym_id>` → `neighbors({"ids":"<type_sym_id>","direction":"in","edge_types":["INJECTS"]})`.
-- `/health` → (CLI) `user-rag meta` — not an MCP call.
+- `/health` → (CLI) `java-codebase-rag meta` — not an MCP call.
 
 ### Canonical workflow: “explain feature X”
 
@@ -224,7 +224,7 @@ After two failed attempts on the same intent, stop and report tool name, args, a
 3. Walk outward with `neighbors` using **small** `edge_types` sets (e.g. start `CALLS` out, or `EXPOSES` / cross-service edges for boundaries).
 4. Stop when you can answer; do not prefetch unrelated subgraphs.
 
-<!-- END user-rag MCP guide -->
+<!-- END java-codebase-rag MCP guide -->
 
 ---
 

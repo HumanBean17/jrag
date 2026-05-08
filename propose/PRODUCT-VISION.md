@@ -326,8 +326,8 @@ Expose the graph and vector index as discrete MCP tools. Implemented tools today
 | `find` | Locate nodes by structured `NodeFilter` across `symbol`, `route`, or `client` |
 | `describe` | Return one node record plus per-edge-type in/out summary |
 | `neighbors` | One-hop traversal over explicit `direction` and `edge_types` (batch ids supported) |
-| `graph_meta` / `list_code_index_tables` | Operational metadata (transitional; moving to `user-rag` CLI) |
-| `analyze_pr` / `diagnose_ignore` / `refresh_code_index` | Operational commands (transitional; moving to `user-rag` CLI) |
+| `graph_meta` / `list_code_index_tables` | Operational metadata (transitional; moving to `java-codebase-rag` CLI) |
+| `analyze_pr` / `diagnose_ignore` / `refresh_code_index` | Operational commands (transitional; moving to `java-codebase-rag` CLI) |
 
 The v1 navigation verbs are removed; the `describe(id=...)` parameter name remains the stable contract in v2.
 
