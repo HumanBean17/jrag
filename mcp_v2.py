@@ -13,7 +13,7 @@ from index_common import SBERT_MODEL
 from kuzu_queries import KuzuGraph
 from search_lancedb import TABLES, run_search
 
-SymbolKind = Literal["class", "interface", "enum", "record", "annotation", "method", "constructor"]
+DeclarationSymbolKind = Literal["class", "interface", "enum", "record", "annotation", "method", "constructor"]
 
 _NEIGHBOR_EDGE_TYPES_ADAPTER = TypeAdapter(
     Annotated[list[str], Field(min_length=1, description="At least one graph edge label")]
@@ -44,8 +44,8 @@ class NodeFilter(BaseModel):
     annotation: str | None = None
     capability: str | None = None
     fqn_prefix: str | None = None
-    symbol_kind: SymbolKind | None = None
-    symbol_kinds: list[SymbolKind] | None = None
+    symbol_kind: DeclarationSymbolKind | None = None
+    symbol_kinds: list[DeclarationSymbolKind] | None = None
     http_method: str | None = None
     path_prefix: str | None = None
     framework: str | None = None
@@ -92,7 +92,7 @@ class NodeRef(BaseModel):
     id: str
     kind: Literal["symbol", "route", "client"]
     fqn: str
-    symbol_kind: SymbolKind | None = None
+    symbol_kind: str | None = None
     microservice: str | None = None
     module: str | None = None
     role: str | None = None
@@ -239,7 +239,7 @@ def _symbol_where_from_filter(f: NodeFilter) -> tuple[str, dict[str, Any]]:
 
 
 def _node_ref_from_row(kind: Literal["symbol", "route", "client"], row: dict[str, Any]) -> NodeRef:
-    symbol_kind: SymbolKind | None = None
+    symbol_kind: str | None = None
     if kind == "symbol":
         fqn = str(row.get("fqn") or "")
         role = str(row.get("role") or "") or None
