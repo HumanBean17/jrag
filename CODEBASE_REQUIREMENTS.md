@@ -1,6 +1,6 @@
 # Codebase requirements & MCP tuning guide
 
-This document explains how to get the best out of the `lancedb-code` MCP
+This document explains how to get the best out of the `java-codebase-rag` MCP
 (LanceDB vector index + Kuzu AST graph + role-aware ranking) on a Java
 codebase, and — if you cannot or will not change the codebase — exactly
 **which files in this bundle to edit** so the MCP adapts to your project.
@@ -118,7 +118,7 @@ per bullet.
 
 - For the CocoIndex flow (`java_index_flow_lancedb.py`), indexed files
   are rooted at **`LANCEDB_MCP_PROJECT_ROOT`** when that env var is set
-  (e.g. `user-rag refresh` sets it on the cocoindex subprocess while
+  (e.g. `java-codebase-rag refresh` sets it on the cocoindex subprocess while
   keeping `cwd` on the bundle for imports); otherwise `project_root` is
   `Path(".").resolve()` (the cocoindex process working directory).
 - For `build_ast_graph.py` standalone, it's `--source-root` (defaults
@@ -190,7 +190,7 @@ root (`role_overrides:`, `route_overrides:`, `http_client_overrides:`,
 inbound HTTP and async routes and `kind="client"` for outbound HTTP `Client`
 declarations (Feign methods plus annotated imperative clients). Client rows
 require a graph built with `ontology_version` **10** or newer — confirm with
-`user-rag meta` (JSON field `ontology_version`).
+`java-codebase-rag meta` (JSON field `ontology_version`).
 
 See **Brownfield overrides** in `README.md` for the full schema, usage
 examples, and execution order.
@@ -370,7 +370,7 @@ ROLE_ANNOTATIONS: dict[str, str] = {
 }
 ```
 
-After editing, **rebuild the graph** (`user-rag refresh` with
+After editing, **rebuild the graph** (`java-codebase-rag refresh` with
 `LANCEDB_MCP_ALLOW_REFRESH=1`, or `build_ast_graph.py`) and **re-run the
 LanceDB indexer** so per-chunk
 `role` values are recomputed.
@@ -582,14 +582,14 @@ the same conventions.
 | Symptom | First thing to check |
 |---------|---------------------|
 | `module` / `microservice` is empty on most chunks | A.1 (build markers + `.lancedb-mcp.yml`) → B.4 |
-| `microservice=...` filter returns 0 hits | check `user-rag meta` output (`microservice_counts`) for canonical names; → A.1 / B.4 |
+| `microservice=...` filter returns 0 hits | check `java-codebase-rag meta` output (`microservice_counts`) for canonical names; → A.1 / B.4 |
 | Everything ranks as `OTHER` | A.2 (stereotypes) → B.1 |
 | Sparse `INJECTS` graph | A.4 (DI patterns) → B.3 |
 | Wrong class wins for "what does X do?" | A.5 (naming) → B.2 (verbs / caps) |
 | Important `.properties` / `.xml` configs missing | A.6 → B.5 |
-| Recently re-indexed but search is stale | Restart the MCP server; re-run `user-rag refresh` (with `LANCEDB_MCP_ALLOW_REFRESH=1`) |
+| Recently re-indexed but search is stale | Restart the MCP server; re-run `java-codebase-rag refresh` (with `LANCEDB_MCP_ALLOW_REFRESH=1`) |
 | `context_before` / `context_after` empty | Set `LANCEDB_MCP_DEBUG_CONTEXT=1` (see README §5) |
-| Graph has lots of phantom nodes | Expected for external libs; inspect via `user-rag meta` — only worry if domain types are phantoms (means resolution is failing; check imports). Use `find` / `neighbors` and filter or interpret `resolved` flags on symbols as needed. |
+| Graph has lots of phantom nodes | Expected for external libs; inspect via `java-codebase-rag meta` — only worry if domain types are phantoms (means resolution is failing; check imports). Use `find` / `neighbors` and filter or interpret `resolved` flags on symbols as needed. |
 | Graph tools unavailable / silent failures | Kuzu DB missing or wrong path — verify `KUZU_DB_PATH` or `${LANCEDB_URI}/code_graph.kuzu` exists (see README §5 "AST Graph layer"). |
 
 ---
@@ -598,7 +598,7 @@ the same conventions.
 
 | Change you made | Re-run |
 |-----------------|--------|
-| Role table, DI annotations, DTO heuristics, exclusion patterns, file-type patterns, chunk sizes, embedding model | **Both** the LanceDB indexer (`cocoindex update ... --full-reprocess` or `user-rag refresh`) **and** `build_ast_graph.py` |
+| Role table, DI annotations, DTO heuristics, exclusion patterns, file-type patterns, chunk sizes, embedding model | **Both** the LanceDB indexer (`cocoindex update ... --full-reprocess` or `java-codebase-rag refresh`) **and** `build_ast_graph.py` |
 | Graph-only logic (new edge type, module/microservice inference, phantom resolution) | `build_ast_graph.py` + `graph_enrich.py` |
 | Ranking weights, action-verb list, search-time caps, hybrid/RRF behaviour | Nothing — restart the MCP server |
 | Server tool surface (new tools, parameter changes) | Restart the MCP server (and re-register in the client if the tool list changed) |

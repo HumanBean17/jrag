@@ -23,7 +23,7 @@ dependencies = [
 ]
 
 [project.scripts]
-user-rag = "user_rag.cli:main"
+java-codebase-rag = "user_rag.cli:main"
 
 [tool.setuptools]
 packages = ["user_rag"]

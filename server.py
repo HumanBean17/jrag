@@ -22,7 +22,7 @@ _INSTRUCTIONS = (
     "neighbors (one hop; you MUST pass direction in|out AND edge_types list — no defaults). "
     "NodeFilter `filter` is a JSON object (preferred); a JSON-encoded string is also accepted as a fallback. "
     "Edge labels: EXTENDS, IMPLEMENTS, INJECTS, DECLARES, DECLARES_CLIENT, CALLS, EXPOSES, HTTP_CALLS, ASYNC_CALLS. "
-    "Rebuild, meta, tables, diagnose-ignore, analyze-pr: use user-rag CLI — not MCP."
+    "Rebuild, meta, tables, diagnose-ignore, analyze-pr: use java-codebase-rag CLI — not MCP."
 )
 
 
@@ -116,7 +116,7 @@ def _graph_meta_output() -> GraphMetaOutput:
             success=True,
             enabled=False,
             db_path=resolve_kuzu_path(),
-            message="Kuzu graph not present; run user-rag refresh or build_ast_graph.py",
+            message="Kuzu graph not present; run java-codebase-rag refresh or build_ast_graph.py",
         )
     try:
         graph = KuzuGraph.get()
@@ -192,7 +192,7 @@ async def run_refresh_pipeline(*, quiet: bool = False) -> RefreshIndexOutput:
     if not _refresh_allowed():
         return RefreshIndexOutput(
             success=False,
-            message="Refresh disabled: set LANCEDB_MCP_ALLOW_REFRESH=1 (or true/yes), then run user-rag refresh.",
+            message="Refresh disabled: set LANCEDB_MCP_ALLOW_REFRESH=1 (or true/yes), then run java-codebase-rag refresh.",
             exit_code=None,
         )
     root = _project_root()
@@ -272,7 +272,7 @@ async def run_refresh_pipeline(*, quiet: bool = False) -> RefreshIndexOutput:
 
 
 def create_mcp_server() -> FastMCP:
-    mcp = FastMCP("lancedb-code-search", instructions=_INSTRUCTIONS)
+    mcp = FastMCP("java-codebase-rag", instructions=_INSTRUCTIONS)
 
     @mcp.tool(name="search", description="locate nodes by NL/code text")
     async def search(

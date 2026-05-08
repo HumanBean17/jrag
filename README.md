@@ -14,7 +14,7 @@ Self-contained **stdio MCP server** for semantic search over a LanceDB index (Ja
 
 The product vision for this tooling is proposed in [`propose/PRODUCT-VISION.md`](./propose/PRODUCT-VISION.md).
 
-**No `cocoindex` Python package is required to run search or MCP navigation tools** — only `sentence-transformers`, `lancedb`, `kuzu`, `tree_sitter` + `tree_sitter_java`, and `mcp`. CocoIndex is optional and only needed if you use `user-rag refresh`.
+**No `cocoindex` Python package is required to run search or MCP navigation tools** — only `sentence-transformers`, `lancedb`, `kuzu`, `tree_sitter` + `tree_sitter_java`, and `mcp`. CocoIndex is optional and only needed if you use `java-codebase-rag refresh`.
 
 > **Tuning for your codebase:** see [`CODEBASE_REQUIREMENTS.md`](./CODEBASE_REQUIREMENTS.md)
 > for the assumptions this MCP makes about a Java repo (annotations, DI patterns,
@@ -26,7 +26,7 @@ The product vision for this tooling is proposed in [`propose/PRODUCT-VISION.md`]
 >   `CLAUDE.md` / `AGENTS.md`. Covers the **four** MCP tools (`search`, `find`,
 >   `describe`, `neighbors`), shared **`NodeFilter`**, **edge-type taxonomy**,
 >   required `neighbors` arguments, ontology glossary (**v11**), recovery
->   playbook, and slash-style aliases. Operators use **`user-rag`** CLI for
+>   playbook, and slash-style aliases. Operators use **`java-codebase-rag`** CLI for
 >   refresh / meta / diagnostics — not MCP; see [`docs/USER-RAG-CLI.md`](./docs/USER-RAG-CLI.md).
 > - [`docs/MANUAL-VERIFICATION-CHECKLIST.md`](./docs/MANUAL-VERIFICATION-CHECKLIST.md)
 >   — 7-phase agent-driven verification you run after indexing your real
@@ -50,8 +50,8 @@ Use **Python 3.11+**. The embedding model must match the one used when the index
 | `LANCEDB_URI` | **Required for real use:** absolute path to the `lancedb_data` directory (or remote LanceDB URI). |
 | `SBERT_MODEL` | Hub id or local directory; must match indexer. |
 | `SBERT_DEVICE` | Optional: `cpu`, `cuda`, `mps`. |
-| `LANCEDB_MCP_PROJECT_ROOT` | **Java project root** to index and to resolve `module` / `microservice` (search tools, `build_ast_graph.py`, and the CocoIndex flow when run via `user-rag refresh`). You do **not** need a copy of `java_index_flow_lancedb.py` in that tree—the bundled flow is used when the file is missing there. If unset, the MCP process working directory is used (see graph section below). |
-| `LANCEDB_MCP_ALLOW_REFRESH` | Set to `1` to enable the heavy `user-rag refresh` flow (cocoindex + Kuzu rebuild). |
+| `LANCEDB_MCP_PROJECT_ROOT` | **Java project root** to index and to resolve `module` / `microservice` (search tools, `build_ast_graph.py`, and the CocoIndex flow when run via `java-codebase-rag refresh`). You do **not** need a copy of `java_index_flow_lancedb.py` in that tree—the bundled flow is used when the file is missing there. If unset, the MCP process working directory is used (see graph section below). |
+| `LANCEDB_MCP_ALLOW_REFRESH` | Set to `1` to enable the heavy `java-codebase-rag refresh` flow (cocoindex + Kuzu rebuild). |
 | `KUZU_DB_PATH` | Absolute path to the Kuzu graph DB. Defaults to `${LANCEDB_URI}/code_graph.kuzu`. |
 | `LANCEDB_MCP_GRAPH_ENABLED` | `1`/`0` to force on/off; auto-on when the Kuzu DB exists. |
 | `LANCEDB_MCP_MICROSERVICE_ROOTS` | Optional comma-separated directory names that should be treated as microservice roots (overrides structural inference). Same effect as listing them under `microservice_roots:` in `.lancedb-mcp.yml` at the project root. |
@@ -63,7 +63,7 @@ Use **Python 3.11+**. The embedding model must match the one used when the index
 Or use the CLI:
 
 ```bash
-claude mcp add --transport stdio lancedb-code -- \
+claude mcp add --transport stdio java-codebase-rag -- \
   /path/to/mcp_lancedb_bundle/.venv/bin/python \
   /path/to/mcp_lancedb_bundle/server.py
 ```
@@ -122,7 +122,7 @@ Resolution order for `microservice`:
 >    `@CodebaseClient`, `@CodebaseProducer`) — rebuild Kuzu after upgrading.
 > 5. **`ontology_version` 8** adds `GraphMeta.cross_service_resolution` (from
 >    `cross_service_resolution` in `.lancedb-mcp.yml`) — rebuild the Kuzu graph
->    (`build_ast_graph.py` or `user-rag refresh`) after upgrading.
+>    (`build_ast_graph.py` or `java-codebase-rag refresh`) after upgrading.
 > 6. **`ontology_version` 9** renames role `FEIGN_CLIENT` to `CLIENT` and adds
 >    capability `HTTP_CLIENT` for `@FeignClient` interfaces — rebuild to refresh
 >    stored role/capability literals.
@@ -134,13 +134,13 @@ Resolution order for `microservice`:
 >    rebuild the Kuzu graph after upgrading.
 >
 > Any index built before these changes must be rebuilt via
-> `cocoindex update ... --full-reprocess -f` or `user-rag refresh`. Until
+> `cocoindex update ... --full-reprocess -f` or `java-codebase-rag refresh`. Until
 > re-indexed, the server defensively JSON-decodes string-form list columns so
 > nothing explodes, but filters like `array_contains` will not work.
 
 ### Building the graph
 
-Via CLI: `user-rag refresh` (with `LANCEDB_MCP_ALLOW_REFRESH=1`) first runs `cocoindex update` to rebuild chunks, then invokes `build_ast_graph.py` to rebuild Kuzu.
+Via CLI: `java-codebase-rag refresh` (with `LANCEDB_MCP_ALLOW_REFRESH=1`) first runs `cocoindex update` to rebuild chunks, then invokes `build_ast_graph.py` to rebuild Kuzu.
 
 Standalone:
 
@@ -154,7 +154,7 @@ Standalone:
 
 > If `--source-root` is omitted, the current working directory is used. The same convention applies to the MCP server: when `LANCEDB_MCP_PROJECT_ROOT` is unset, the process's current working directory is used as the project root.
 
-For `user-rag refresh`, the server refresh pipeline runs `cocoindex` with `cwd` set to the bundle directory (so Python imports resolve), but sets `LANCEDB_MCP_PROJECT_ROOT` on that subprocess to the same resolved project root as above so indexing targets your Java tree—not the bundle.
+For `java-codebase-rag refresh`, the server refresh pipeline runs `cocoindex` with `cwd` set to the bundle directory (so Python imports resolve), but sets `LANCEDB_MCP_PROJECT_ROOT` on that subprocess to the same resolved project root as above so indexing targets your Java tree—not the bundle.
 
 The DB is dropped and rebuilt from scratch on each run (Phase 1 is a full rebuild; incremental updates are future work).
 
@@ -177,49 +177,49 @@ The DB is dropped and rebuilt from scratch on each run (Phase 1 is a full rebuil
 
 Operator-focused playbook: [`docs/USER-RAG-CLI.md`](./docs/USER-RAG-CLI.md) (workflows, exit codes, env alignment).
 
-Use `user-rag --help` to see all subcommands. Output mode is automatic:
+Use `java-codebase-rag --help` to see all subcommands. Output mode is automatic:
 JSON when piped, pretty text when run in a TTY.
 
-### `user-rag refresh`
+### `java-codebase-rag refresh`
 
-- Synopsis: `user-rag refresh [--source-root DIR] [--kuzu-path DIR] [--lancedb-path DIR] [--quiet]`
+- Synopsis: `java-codebase-rag refresh [--source-root DIR] [--kuzu-path DIR] [--lancedb-path DIR] [--quiet]`
 - Flags: `--source-root str`, `--kuzu-path str`, `--lancedb-path str`, `--quiet`
-- Example: `user-rag refresh --source-root tests/bank-chat-system --kuzu-path /tmp/v24_smoke --quiet`
+- Example: `java-codebase-rag refresh --source-root tests/bank-chat-system --kuzu-path /tmp/v24_smoke --quiet`
 
-### `user-rag meta`
+### `java-codebase-rag meta`
 
-- Synopsis: `user-rag meta [--source-root DIR] [--kuzu-path DIR] [--lancedb-path DIR]`
+- Synopsis: `java-codebase-rag meta [--source-root DIR] [--kuzu-path DIR] [--lancedb-path DIR]`
 - Flags: `--source-root str`, `--kuzu-path str`, `--lancedb-path str`
-- Example: `user-rag meta | python -c "import json,sys; print(json.loads(sys.stdin.read())['edge_counts'])"`
+- Example: `java-codebase-rag meta | python -c "import json,sys; print(json.loads(sys.stdin.read())['edge_counts'])"`
 
-### `user-rag tables`
+### `java-codebase-rag tables`
 
-- Synopsis: `user-rag tables [--source-root DIR] [--kuzu-path DIR] [--lancedb-path DIR]`
+- Synopsis: `java-codebase-rag tables [--source-root DIR] [--kuzu-path DIR] [--lancedb-path DIR]`
 - Flags: `--source-root str`, `--kuzu-path str`, `--lancedb-path str`
-- Example: `user-rag tables`
+- Example: `java-codebase-rag tables`
 
-### `user-rag diagnose-ignore`
+### `java-codebase-rag diagnose-ignore`
 
-- Synopsis: `user-rag diagnose-ignore <path> [--source-root DIR] [--kuzu-path DIR] [--lancedb-path DIR]`
+- Synopsis: `java-codebase-rag diagnose-ignore <path> [--source-root DIR] [--kuzu-path DIR] [--lancedb-path DIR]`
 - Flags: positional `path`, plus `--source-root str`, `--kuzu-path str`, `--lancedb-path str`
-- Example: `user-rag diagnose-ignore tests/bank-chat-system/.git/HEAD`
+- Example: `java-codebase-rag diagnose-ignore tests/bank-chat-system/.git/HEAD`
 
-### `user-rag analyze-pr`
+### `java-codebase-rag analyze-pr`
 
-- Synopsis: `user-rag analyze-pr [--diff-file FILE | --diff-stdin] [--source-root DIR] [--kuzu-path DIR] [--lancedb-path DIR]`
+- Synopsis: `java-codebase-rag analyze-pr [--diff-file FILE | --diff-stdin] [--source-root DIR] [--kuzu-path DIR] [--lancedb-path DIR]`
 - Flags: `--diff-file str` or `--diff-stdin`, plus `--source-root str`, `--kuzu-path str`, `--lancedb-path str`
-- Example: `user-rag analyze-pr --diff-file /tmp/pr.diff`
+- Example: `java-codebase-rag analyze-pr --diff-file /tmp/pr.diff`
 
 ### Migration from v1
 
 - v1 navigation tools are removed; use `search` / `find` / `describe` / `neighbors`.
 - `describe` keeps `id` as the stable parameter name (`describe(id=...)`).
-- `graph_meta` MCP call maps to `user-rag meta`.
-- `analyze_pr` MCP call maps to `user-rag analyze-pr --diff-file <file>` (or `--diff-stdin`).
-- `diagnose_ignore` MCP call maps to `user-rag diagnose-ignore <path>`.
-- `list_code_index_tables` MCP call maps to `user-rag tables`.
-- `refresh_code_index` MCP call maps to `user-rag refresh` (requires `LANCEDB_MCP_ALLOW_REFRESH=1` at the pipeline entrypoint; `build_ast_graph.py` alone does not use that flag).
-- **PR-triage / Cursor skills:** if a skill still invoked the removed `analyze_pr` MCP tool, switch it to a shell step: `user-rag analyze-pr --diff-file /tmp/pr.diff` (or `--diff-stdin`).
+- `graph_meta` MCP call maps to `java-codebase-rag meta`.
+- `analyze_pr` MCP call maps to `java-codebase-rag analyze-pr --diff-file <file>` (or `--diff-stdin`).
+- `diagnose_ignore` MCP call maps to `java-codebase-rag diagnose-ignore <path>`.
+- `list_code_index_tables` MCP call maps to `java-codebase-rag tables`.
+- `refresh_code_index` MCP call maps to `java-codebase-rag refresh` (requires `LANCEDB_MCP_ALLOW_REFRESH=1` at the pipeline entrypoint; `build_ast_graph.py` alone does not use that flag).
+- **PR-triage / Cursor skills:** if a skill still invoked the removed `analyze_pr` MCP tool, switch it to a shell step: `java-codebase-rag analyze-pr --diff-file /tmp/pr.diff` (or `--diff-stdin`).
 
 Caller-side edges (`HTTP_CALLS` / `ASYNC_CALLS`) are available via v2 traversal with `neighbors(direction="in", edge_types=["HTTP_CALLS","ASYNC_CALLS"])` from a route id.
 
@@ -589,7 +589,7 @@ Resolution order in code: built-in inference, then config annotation maps,
 then meta-annotation walk, then `@CodebaseRole` / `@CodebaseCapability`, then
 `role_overrides.fqn` (highest priority for explicit per-type config). Route
 composition uses the same Layer A index, then `@CodebaseHttpRoute` / `@CodebaseAsyncRoute`,
-then `route_overrides.fqn`. Rebuild Lance + Kuzu (`user-rag refresh` or
+then `route_overrides.fqn`. Rebuild Lance + Kuzu (`java-codebase-rag refresh` or
 `build_ast_graph.py`) after changing overrides.
 
 **Caller-side brownfield overrides (`http_client_overrides` / `async_producer_overrides`)**:
@@ -663,7 +663,7 @@ elsewhere in the pipeline (e.g. parse edge cases). If graph tools and
    annotation may need re-enrichment; the pipeline does not track that dependency
    automatically. **When to do a full rebuild:** after changing any
    `@interface` used as a custom stereotype, run a full
-   `user-rag refresh` (or full cocoindex reprocess and rebuild
+   `java-codebase-rag refresh` (or full cocoindex reprocess and rebuild
    Kuzu) so all dependents pick up the new `meta_chain`.
 
 **Kuzu `Symbol` rows (scope):** `role` and `capabilities` on the graph are
@@ -745,7 +745,7 @@ siblings, because they are never legal Java package names: `.git`, `.idea`,
 
 If you need to skip a directory that the builtin default walks (or include one
 it prunes), add a `.lancedb-mcp/ignore` file at the project root or any
-subtree root. Use `user-rag diagnose-ignore <path>` to see which layer decided
+subtree root. Use `java-codebase-rag diagnose-ignore <path>` to see which layer decided
 for a given file.
 
 If no `.lancedb-mcp/ignore` exists anywhere under the project, behaviour matches
@@ -754,7 +754,7 @@ could un-ignore paths under directories the CocoIndex walk used to prune
 globally, the walk switches to a permissive exclude list and each candidate
 path is filtered again with the full layered rules.
 
-Use `user-rag diagnose-ignore <path>` (or `LayeredIgnore.diagnose_dict`) to see
+Use `java-codebase-rag diagnose-ignore <path>` (or `LayeredIgnore.diagnose_dict`) to see
 which file and line decided for a given path.
 
 **Monorepo note:** negation detection runs two full-tree ``rglob`` passes when

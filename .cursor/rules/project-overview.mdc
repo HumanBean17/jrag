@@ -19,7 +19,7 @@ when needed.
 ## Where to look
 
 - `README.md` — feature surface, env vars, ranking, capabilities,
-  MCP tools (`search` / `find` / `describe` / `neighbors`), `user-rag` CLI,
+  MCP tools (`search` / `find` / `describe` / `neighbors`), `java-codebase-rag` CLI,
   "Re-index required" callouts. The current
   `ontology_version` is **11** (`@CodebaseAsyncRoute` wins over same-method
   `@KafkaListener`; adds `Client` nodes, `DECLARES_CLIENT`, `find(kind="client")`, plus
@@ -62,10 +62,10 @@ when needed.
 | `java_ontology.py` | Source of truth for `VALID_ROLES`, `VALID_CAPABILITIES`, `VALID_CLIENT_KINDS`, `VALID_HTTP_CALL_STRATEGIES`, `VALID_ASYNC_CALL_STRATEGIES`, `VALID_HTTP_CALL_MATCHES`. |
 | `chunk_heuristics.py` | Query-time chunk hints (no AST / no re-index). |
 | `index_common.py` | Embedding config (no CocoIndex dep). |
-| `java_index_flow_lancedb.py` | CocoIndex flow (used by `user-rag refresh` when refresh is allowed). |
+| `java_index_flow_lancedb.py` | CocoIndex flow (used by `java-codebase-rag refresh` when refresh is allowed). |
 | `java_index_v1_common.py` | Shared file walker / exclude patterns. |
 | `path_filtering.py` | Layered ignore patterns (`.gitignore`-style; PR-C / B5). Reused by indexer + graph build. |
-| `pr_analysis.py` | `user-rag analyze-pr` helpers (PR-B / B4) — diff parsing, hunk-to-symbol mapping. |
+| `pr_analysis.py` | `java-codebase-rag analyze-pr` helpers (PR-B / B4) — diff parsing, hunk-to-symbol mapping. |
 | `mcp.json.example` | Template for `.mcp.json`. |
 
 ## Test layout

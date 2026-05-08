@@ -315,7 +315,7 @@ class KuzuGraph:
                         f"required version {_ONTOLOGY_VERSION}. "
                         "Rebuild the graph: `python build_ast_graph.py --source-root <repo>`, "
                         "or set LANCEDB_MCP_ALLOW_REFRESH=1 and run "
-                        "`user-rag refresh --source-root <repo>` for a full Lance+Kuzu re-index."
+                        "`java-codebase-rag refresh --source-root <repo>` for a full Lance+Kuzu re-index."
                     )
                 cls._instance = instance
                 cls._instance_path = resolved
