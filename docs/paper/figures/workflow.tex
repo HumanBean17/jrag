@@ -1,0 +1,71 @@
+\begin{tikzpicture}[
+  font=\footnotesize,
+  node distance=0.55cm and 0.75cm,
+  user/.style={
+    rectangle, rounded corners=3pt, draw=black!60, fill=gray!10,
+    line width=0.5pt, minimum width=4.5cm, align=left, inner sep=5pt
+  },
+  agent/.style={
+    rectangle, rounded corners=3pt, draw=black!60, fill=orange!10,
+    line width=0.5pt, minimum width=4.5cm, align=left, inner sep=5pt
+  },
+  call/.style={
+    rectangle, rounded corners=3pt, draw=black!60, fill=green!10,
+    line width=0.5pt, minimum width=11.5cm, align=left, inner sep=5pt,
+    font=\footnotesize\ttfamily
+  },
+  result/.style={
+    rectangle, rounded corners=3pt, draw=black!50, fill=blue!5,
+    line width=0.4pt, minimum width=11.5cm, align=left, inner sep=5pt,
+    font=\footnotesize\ttfamily
+  },
+  ans/.style={
+    rectangle, rounded corners=3pt, draw=black!60, fill=orange!15,
+    line width=0.5pt, minimum width=11.5cm, align=left, inner sep=5pt
+  },
+  arr/.style={-{Stealth[length=2.2mm]}, line width=0.4pt, black!70},
+  lbl/.style={font=\footnotesize\bfseries\itshape}
+]
+
+% --- Step 0: user question ---
+\node[user] (u) {\textbf{User:} ``Who calls \texttt{RefundService.approve}?''};
+
+% --- Step 1: agent reasons ---
+\node[agent, below=of u] (a1)
+  {\textbf{Agent:} fuzzy NL question \textrightarrow{} start with \texttt{search}.};
+
+% --- Call 1: search ---
+\node[call, below=of a1] (c1)
+  {[1] search(query="RefundService approve method")};
+\node[result, below=0.25cm of c1] (r1)
+  {\textrightarrow{} [\{id:"sym:com.acme.refund.RefundService\#approve(\ldots)", kind:"symbol", \ldots\}]};
+
+% --- Step 2: agent confirms ---
+\node[agent, below=of r1] (a2)
+  {\textbf{Agent:} candidate looks right \textrightarrow{} confirm with \texttt{describe}.};
+
+% --- Call 2: describe ---
+\node[call, below=of a2] (c2)
+  {[2] describe(id="sym:com.acme.refund.RefundService\#approve(\ldots)")};
+\node[result, below=0.25cm of c2] (r2)
+  {\textrightarrow{} \{kind:"method", file:"\ldots/RefundService.java", lines:[42,71], summary:"Approves a pending \ldots"\}};
+
+% --- Step 3: agent walks ---
+\node[agent, below=of r2] (a3)
+  {\textbf{Agent:} confirmed \textrightarrow{} walk inbound CALLS edges.};
+
+% --- Call 3: neighbors ---
+\node[call, below=of a3] (c3)
+  {[3] neighbors(id="\ldots\#approve(\ldots)", direction="in", edge\_types=["CALLS"])};
+\node[result, below=0.25cm of c3] (r3)
+  {\textrightarrow{} [\{id:"\ldots RefundController\#postApprove(\ldots)"\}, \{id:"\ldots BatchJob\#run()"\}, \ldots]};
+
+% --- Final answer ---
+\node[ans, below=of r3] (final)
+  {\textbf{Agent reports:} 4 callers \textemdash{} \texttt{RefundController.postApprove}, \texttt{BatchJob.run}, \texttt{AdminCli.approve}, \texttt{RefundSaga.onAuthorized}.};
+
+% --- Vertical arrows ---
+\foreach \from/\to in {u/a1, a1/c1, c1/r1, r1/a2, a2/c2, c2/r2, r2/a3, a3/c3, c3/r3, r3/final}
+  \draw[arr] (\from) -- (\to);
+
+\end{tikzpicture}

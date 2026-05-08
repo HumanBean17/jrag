@@ -1,0 +1,47 @@
+\begin{tikzpicture}[
+  font=\small,
+  node distance=1.3cm and 2.1cm,
+  prim/.style={
+    circle, draw=black!70, line width=0.7pt,
+    minimum size=2.3cm, align=center,
+    font=\footnotesize\bfseries
+  },
+  loc/.style={fill=blue!10},
+  ins/.style={fill=orange!12},
+  walk/.style={fill=green!12},
+  tool/.style={
+    rectangle, rounded corners=3pt,
+    draw=black!50, fill=white, line width=0.4pt,
+    inner sep=4pt, font=\footnotesize\ttfamily
+  },
+  arr/.style={-{Stealth[length=2.5mm]}, line width=0.6pt, black!70},
+  q/.style={font=\footnotesize\itshape, align=center}
+]
+
+% --- Three primitives in a row ---
+\node[prim, loc]  (locate)  {LOCATE\\ \footnotesize\itshape where am I?};
+\node[prim, ins,  right=of locate] (inspect) {INSPECT\\ \footnotesize\itshape what is here?};
+\node[prim, walk, right=of inspect] (walk)   {WALK\\ \footnotesize\itshape where can I go?};
+
+% --- Tools above each primitive ---
+\node[tool, above=0.7cm of locate, xshift=-0.85cm] (s)  {search};
+\node[tool, above=0.7cm of locate, xshift=0.85cm]  (f)  {find};
+\node[tool, above=0.7cm of inspect]                (d)  {describe};
+\node[tool, above=0.7cm of walk]                   (n)  {neighbors};
+
+% --- Connections tools -> primitives ---
+\draw[arr] (s)  -- (locate.north -| s);
+\draw[arr] (f)  -- (locate.north -| f);
+\draw[arr] (d)  -- (inspect);
+\draw[arr] (n)  -- (walk);
+
+% --- Sample inputs/outputs below each primitive ---
+\node[q, below=0.5cm of locate] (li) {input: \texttt{"refund authoriser"}\\ output: candidate node ids};
+\node[q, below=0.5cm of inspect] (ii) {input: node \texttt{id}\\ output: full record};
+\node[q, below=0.5cm of walk]    (wi) {input: \texttt{id, in/out, edge\_types[]}\\ output: adjacent nodes};
+
+% --- Title strip below ---
+\node[font=\itshape, below=2.7cm of inspect] (title)
+  {\textbf{Every agent question $=$ a chain over these three primitives.}};
+
+\end{tikzpicture}
