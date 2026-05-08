@@ -102,6 +102,44 @@ def test_find_symbol_by_role(kuzu_graph) -> None:
     assert all(r.role == "CONTROLLER" for r in out.results if r.role is not None)
 
 
+def test_find_symbol_empty_filter_handles_non_declaration_symbol_kinds(kuzu_graph) -> None:
+    out = find_v2("symbol", {}, graph=kuzu_graph)
+    assert out.success is True
+    assert out.results
+    # Regression guard: Symbol rows can include non-declaration kinds (e.g., package/file).
+    assert all(isinstance(r.symbol_kind, str) and r.symbol_kind for r in out.results)
+
+
+def test_find_symbol_by_symbol_kind_method(kuzu_graph) -> None:
+    out = find_v2("symbol", {"symbol_kind": "method"}, graph=kuzu_graph)
+    assert out.success is True
+    assert out.results
+    assert all(r.symbol_kind == "method" for r in out.results)
+
+
+def test_find_symbol_by_symbol_kind_interface(kuzu_graph) -> None:
+    out = find_v2("symbol", {"symbol_kind": "interface"}, graph=kuzu_graph)
+    assert out.success is True
+    if not out.results:
+        pytest.skip("fixture has no interface symbols")
+    assert all(r.symbol_kind == "interface" for r in out.results)
+
+
+def test_find_symbol_by_symbol_kinds_type_level(kuzu_graph) -> None:
+    type_level_kinds = ["class", "interface", "enum", "record", "annotation"]
+    out = find_v2("symbol", {"symbol_kinds": type_level_kinds}, graph=kuzu_graph)
+    assert out.success is True
+    assert out.results
+    assert all(r.symbol_kind in set(type_level_kinds) for r in out.results)
+
+
+def test_find_symbol_projection_includes_symbol_kind(kuzu_graph) -> None:
+    out = find_v2("symbol", {"symbol_kind": "method"}, graph=kuzu_graph)
+    assert out.success is True
+    assert out.results
+    assert all(isinstance(r.symbol_kind, str) and r.symbol_kind for r in out.results)
+
+
 def test_find_route_by_path_prefix(kuzu_graph) -> None:
     out = find_v2("route", {"path_prefix": "/api"}, graph=kuzu_graph)
     assert out.success is True
@@ -215,6 +253,19 @@ def test_describe_unknown_id_returns_error(kuzu_graph) -> None:
     out = describe_v2("bogus:1", graph=kuzu_graph)
     assert out.success is False
     assert out.message
+
+
+def test_describe_package_or_file_symbol_succeeds(kuzu_graph) -> None:
+    rows = kuzu_graph._rows(  # noqa: SLF001
+        "MATCH (s:Symbol) WHERE s.kind IN ['package', 'file'] RETURN s.id AS id LIMIT 1"
+    )
+    if not rows:
+        pytest.skip("fixture has no package/file symbol rows")
+    out = describe_v2(str(rows[0]["id"]), graph=kuzu_graph)
+    assert out.success is True
+    assert out.record is not None
+    assert out.record.kind == "symbol"
+    assert out.record.data.get("kind") in {"package", "file"}
 
 
 def test_neighbors_in_calls(kuzu_graph) -> None:
@@ -347,6 +398,14 @@ def test_find_filter_json_null_treated_as_empty_filter(kuzu_graph) -> None:
 def test_find_filter_accepts_json_string(kuzu_graph) -> None:
     out_dict = find_v2("symbol", {"role": "CONTROLLER"}, graph=kuzu_graph)
     out_str = find_v2("symbol", '{"role":"CONTROLLER"}', graph=kuzu_graph)
+    assert out_dict.success is True
+    assert out_str.success is True
+    assert out_dict.results == out_str.results
+
+
+def test_find_symbol_kind_filter_accepts_json_string(kuzu_graph) -> None:
+    out_dict = find_v2("symbol", {"symbol_kind": "method"}, graph=kuzu_graph)
+    out_str = find_v2("symbol", '{"symbol_kind":"method"}', graph=kuzu_graph)
     assert out_dict.success is True
     assert out_str.success is True
     assert out_dict.results == out_str.results

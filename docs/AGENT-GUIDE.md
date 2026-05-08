@@ -120,7 +120,7 @@ One object shape everywhere. **For `find`, `filter` is required** — use at lea
 | Keys | Applies to |
 | ---- | ---------- |
 | `microservice`, `module`, `source_layer` | All kinds (`source_layer` mainly **client**: `builtin` / brownfield) |
-| `role`, `exclude_roles`, `annotation`, `capability`, `fqn_prefix` | **symbol** (ignored for route/client) |
+| `role`, `exclude_roles`, `annotation`, `capability`, `fqn_prefix`, `symbol_kind`, `symbol_kinds` | **symbol** (ignored for route/client) |
 | `http_method`, `path_prefix`, `framework` | **route** |
 | `client_kind`, `target_service`, `target_path_prefix`, `client_method` | **client** |
 
@@ -132,6 +132,7 @@ Exact allowed values for roles, capabilities, client kinds, etc. live in `java_o
 | ---------- | ---------- | ----------------- |
 | Fuzzy / NL “where is X” | `search` | `describe` → `neighbors` |
 | All controllers in service S | `find(kind="symbol", filter={"microservice":S,"role":"CONTROLLER"})` | `neighbors` for `CALLS` / `EXPOSES` |
+| List interfaces in service S | `find(kind="symbol", filter={"microservice":S,"symbol_kind":"interface"})` | `neighbors` / `describe` |
 | List HTTP or Kafka entry points | `find(kind="route", filter={...})` | `describe` |
 | List Feign / HTTP clients | `find(kind="client", filter={...})` | `neighbors(..., out, ["HTTP_CALLS"])` if needed |
 | Who calls method M? | Resolve id via `search` or `find` | `neighbors(ids=sym_id, direction="in", edge_types=["CALLS"])` |
