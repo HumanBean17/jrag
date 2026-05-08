@@ -14,9 +14,20 @@ from kuzu_queries import KuzuGraph
 from search_lancedb import TABLES, run_search
 
 DeclarationSymbolKind = Literal["class", "interface", "enum", "record", "annotation", "method", "constructor"]
+EdgeType = Literal[
+    "EXTENDS",
+    "IMPLEMENTS",
+    "INJECTS",
+    "DECLARES",
+    "DECLARES_CLIENT",
+    "CALLS",
+    "EXPOSES",
+    "HTTP_CALLS",
+    "ASYNC_CALLS",
+]
 
 _NEIGHBOR_EDGE_TYPES_ADAPTER = TypeAdapter(
-    Annotated[list[str], Field(min_length=1, description="At least one graph edge label")]
+    Annotated[list[EdgeType], Field(min_length=1, description="At least one graph edge label")]
 )
 
 _st_lock = threading.Lock()
@@ -481,7 +492,7 @@ def neighbors_v2(
     # Required fields are intentional: direct Python calls and MCP-bound calls
     # share the same validation contract through @validate_call.
     direction: Literal["in", "out"] = Field(...),
-    edge_types: list[str] = Field(...),
+    edge_types: list[EdgeType] = Field(...),
     limit: int = 25,
     offset: int = 0,
     filter: NodeFilter | dict[str, Any] | str | None = None,

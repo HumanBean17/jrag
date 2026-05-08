@@ -2,6 +2,20 @@
 from __future__ import annotations
 
 
+def _enum_sets(node: object) -> list[set[str]]:
+    found: list[set[str]] = []
+    if isinstance(node, dict):
+        enum_vals = node.get("enum")
+        if isinstance(enum_vals, list) and all(isinstance(v, str) for v in enum_vals):
+            found.append(set(enum_vals))
+        for value in node.values():
+            found.extend(_enum_sets(value))
+    elif isinstance(node, list):
+        for value in node:
+            found.extend(_enum_sets(value))
+    return found
+
+
 async def test_registered_tool_surface_is_v2_navigation_only(mcp_server) -> None:
     tools = await mcp_server.list_tools()
     names = {tool.name for tool in tools}
@@ -35,6 +49,35 @@ async def test_tool_input_schema_top_level_properties_have_nonempty_descriptions
             assert isinstance(desc, str) and desc.strip(), (
                 f"{tool.name}.{param_name}: expected non-empty description in MCP inputSchema"
             )
+
+
+async def test_tool_input_schema_includes_expected_enums(mcp_server) -> None:
+    tools = await mcp_server.list_tools()
+    by_name = {tool.name: tool for tool in tools}
+
+    search_schema = by_name["search"].inputSchema or {}
+    find_schema = by_name["find"].inputSchema or {}
+    neighbors_schema = by_name["neighbors"].inputSchema or {}
+
+    search_table = ((search_schema.get("properties") or {}).get("table") or {})
+    find_kind = ((find_schema.get("properties") or {}).get("kind") or {})
+    neighbors_direction = ((neighbors_schema.get("properties") or {}).get("direction") or {})
+    neighbors_edge_types = ((neighbors_schema.get("properties") or {}).get("edge_types") or {})
+
+    assert {"java", "sql", "yaml", "all"} in _enum_sets(search_table)
+    assert {"symbol", "route", "client"} in _enum_sets(find_kind)
+    assert {"in", "out"} in _enum_sets(neighbors_direction)
+    assert {
+        "EXTENDS",
+        "IMPLEMENTS",
+        "INJECTS",
+        "DECLARES",
+        "DECLARES_CLIENT",
+        "CALLS",
+        "EXPOSES",
+        "HTTP_CALLS",
+        "ASYNC_CALLS",
+    } in _enum_sets(neighbors_edge_types.get("items") or {})
 
 
 def test_cocoindex_subprocess_env_sets_project_root(monkeypatch, tmp_path) -> None:

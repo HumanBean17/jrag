@@ -279,7 +279,7 @@ def create_mcp_server() -> FastMCP:
         query: str = Field(description="Search query"),
         table: Literal["java", "sql", "yaml", "all"] = Field(
             default="java",
-            description="java | sql | yaml | all",
+            description="Which content table to search. 'all' fuses java/sql/yaml results.",
         ),
         hybrid: bool = Field(
             default=False,
@@ -313,7 +313,12 @@ def create_mcp_server() -> FastMCP:
 
     @mcp.tool(name="find", description="locate nodes by structured filter")
     async def find(
-        kind: Literal["symbol", "route", "client"] = Field(description="symbol | route | client"),
+        kind: Literal["symbol", "route", "client"] = Field(
+            description=(
+                "Which graph table to search. 'symbol' = declarations, "
+                "'route' = endpoints, 'client' = outbound clients."
+            )
+        ),
         filter: dict[str, Any] | str = Field(
             ...,
             description=(
@@ -342,9 +347,9 @@ def create_mcp_server() -> FastMCP:
     async def neighbors(
         ids: str | list[str] = Field(description="Origin symbol/route/client id, or list for batch"),
         direction: Literal["in", "out"] = Field(
-            description="Required: in (predecessors) or out (successors); no default",
+            description="Required. 'in' = predecessors (callers), 'out' = successors (callees). No default.",
         ),
-        edge_types: list[str] = Field(
+        edge_types: list[mcp_v2.EdgeType] = Field(
             description="Required non-empty list of edge labels (e.g. CALLS, EXPOSES, HTTP_CALLS)",
         ),
         limit: int = Field(
