@@ -11,7 +11,7 @@ for tools that don't read `.cursor/rules/`.
  MCP tool list (now `search` / `find` / `describe` / `neighbors`),
  CLI ops (`java-codebase-rag --help`), and "Re-index required" callouts.
  **`ontology_version` is currently 11** (async brownfield route merge + `Client` nodes; see README callouts).
-- [`docs/USER-RAG-CLI.md`](./docs/USER-RAG-CLI.md) — operator guide for the `java-codebase-rag` CLI (refresh, meta, tables, diagnose-ignore, analyze-pr).
+- [`docs/JAVA-CODEBASE-RAG-CLI.md`](./docs/JAVA-CODEBASE-RAG-CLI.md) — operator guide for the `java-codebase-rag` CLI (refresh, meta, tables, diagnose-ignore, analyze-pr).
 - `CODEBASE_REQUIREMENTS.md` — Java-repo assumptions and tuning map.
 - `propose/` and `plans/` (plus their `completed/` subdirs) —
   in-flight scope and the rationale behind current design.
