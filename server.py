@@ -318,6 +318,7 @@ def create_mcp_server() -> FastMCP:
             ...,
             description=(
                 "Required NodeFilter (shared schema; irrelevant keys ignored per kind). "
+                "Symbol filters also support symbol_kind and symbol_kinds. "
                 "Prefer a JSON object; a JSON-encoded string is accepted as a fallback."
             ),
         ),

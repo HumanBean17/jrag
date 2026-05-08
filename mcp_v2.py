@@ -13,6 +13,8 @@ from index_common import SBERT_MODEL
 from kuzu_queries import KuzuGraph
 from search_lancedb import TABLES, run_search
 
+SymbolKind = Literal["class", "interface", "enum", "record", "annotation", "method", "constructor"]
+
 _NEIGHBOR_EDGE_TYPES_ADAPTER = TypeAdapter(
     Annotated[list[str], Field(min_length=1, description="At least one graph edge label")]
 )
@@ -42,6 +44,8 @@ class NodeFilter(BaseModel):
     annotation: str | None = None
     capability: str | None = None
     fqn_prefix: str | None = None
+    symbol_kind: SymbolKind | None = None
+    symbol_kinds: list[SymbolKind] | None = None
     http_method: str | None = None
     path_prefix: str | None = None
     framework: str | None = None
@@ -88,6 +92,7 @@ class NodeRef(BaseModel):
     id: str
     kind: Literal["symbol", "route", "client"]
     fqn: str
+    symbol_kind: SymbolKind | None = None
     microservice: str | None = None
     module: str | None = None
     role: str | None = None
@@ -223,14 +228,23 @@ def _symbol_where_from_filter(f: NodeFilter) -> tuple[str, dict[str, Any]]:
     if f.fqn_prefix:
         preds.append("s.fqn STARTS WITH $fqn_prefix")
         params["fqn_prefix"] = f.fqn_prefix
+    if f.symbol_kind:
+        preds.append("s.kind = $symbol_kind")
+        params["symbol_kind"] = f.symbol_kind
+    if f.symbol_kinds:
+        preds.append("s.kind IN $symbol_kinds")
+        params["symbol_kinds"] = list(f.symbol_kinds)
     where = f"WHERE {' AND '.join(preds)}" if preds else ""
     return where, params
 
 
 def _node_ref_from_row(kind: Literal["symbol", "route", "client"], row: dict[str, Any]) -> NodeRef:
+    symbol_kind: SymbolKind | None = None
     if kind == "symbol":
         fqn = str(row.get("fqn") or "")
         role = str(row.get("role") or "") or None
+        symbol_kind_val = str(row.get("symbol_kind") or row.get("kind") or "").strip()
+        symbol_kind = symbol_kind_val or None
     elif kind == "route":
         method = str(row.get("method") or "")
         path = str(row.get("path_template") or row.get("path") or "")
@@ -246,6 +260,7 @@ def _node_ref_from_row(kind: Literal["symbol", "route", "client"], row: dict[str
         id=str(row.get("id") or ""),
         kind=kind,
         fqn=fqn,
+        symbol_kind=symbol_kind,
         microservice=str(row.get("microservice") or "") or None,
         module=str(row.get("module") or "") or None,
         role=role,
@@ -304,6 +319,7 @@ def _node_matches_filter(kind: Literal["symbol", "route", "client"], row: dict[s
     if kind == "symbol":
         role = str(row.get("role") or "")
         fqn_val = str(row.get("fqn") or row.get("primary_type_fqn") or "")
+        symbol_kind_val = str(row.get("kind") or row.get("symbol_kind") or "")
         if f.role and role != f.role:
             return False
         if f.exclude_roles and role in set(f.exclude_roles):
@@ -313,6 +329,10 @@ def _node_matches_filter(kind: Literal["symbol", "route", "client"], row: dict[s
         if f.capability and f.capability not in list(row.get("capabilities") or []):
             return False
         if f.fqn_prefix and not fqn_val.startswith(f.fqn_prefix):
+            return False
+        if f.symbol_kind and symbol_kind_val != f.symbol_kind:
+            return False
+        if f.symbol_kinds and symbol_kind_val not in set(f.symbol_kinds):
             return False
     elif kind == "route":
         if f.http_method and str(row.get("method") or "") != f.http_method:
@@ -406,7 +426,7 @@ def find_v2(
             params["lim"] = int(limit) + int(offset)
             rows = g._rows(  # noqa: SLF001
                 f"MATCH (s:Symbol) {where} RETURN s.id AS id, s.fqn AS fqn, s.microservice AS microservice, "
-                "s.module AS module, s.role AS role ORDER BY s.fqn LIMIT $lim",
+                "s.module AS module, s.role AS role, s.kind AS symbol_kind ORDER BY s.fqn LIMIT $lim",
                 params,
             )
             rows = rows[offset : offset + limit]

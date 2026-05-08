@@ -160,6 +160,9 @@ The DB is dropped and rebuilt from scratch on each run (Phase 1 is a full rebuil
 | `neighbors` | one-hop walk; REQUIRED direction + edge_types | `ids: str \| list[str]`, `direction: "in"\|"out"`, `edge_types: list[str]`, `limit: int=25`, `offset: int=0`, `filter: NodeFilter \| str \| None` | `{"ids":"route:chat-core:POST:/chat/joinOperator","direction":"in","edge_types":["HTTP_CALLS","ASYNC_CALLS"]}` |
 
 - `filter` is a JSON object matching the `NodeFilter` schema (wire types are `object` or, as a fallback, a JSON-encoded string for clients that flatten objects in tool calls). Prefer the object form when the client supports it.
+- Symbol-only NodeFilter keys include `symbol_kind` (single value) and `symbol_kinds` (set-membership list) for declaration granularity (`class`, `interface`, `enum`, `record`, `annotation`, `method`, `constructor`).
+- `find(kind="symbol", ...)` results now include `symbol_kind` so callers can inspect declaration granularity without an extra `describe` call.
+- Example: `{"kind":"symbol","filter":{"microservice":"chat-core","symbol_kind":"interface"}}`
 - For `find`, an empty or whitespace-only filter string, or the JSON literal `null`, is treated like `{}` (match anything).
 
 ## CLI reference
