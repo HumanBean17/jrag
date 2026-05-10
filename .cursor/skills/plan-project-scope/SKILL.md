@@ -1,5 +1,5 @@
 ---
-name: plan
+name: plan-project-scope
 description: Write high-quality implementation plans for this repository using the merged plan format. Use when creating, updating, or reviewing files under `plans/`, splitting work into multiple PRs, or generating per-PR execution contracts.
 disable-model-invocation: true
 ---
