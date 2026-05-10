@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+# This module is imported on every CLI invocation, including bare `--help`.
+# Heavy imports (`server`, `pr_analysis`, `path_filtering.LayeredIgnore`) transitively
+# pull `sentence_transformers` → `torch`, `lancedb`, and `kuzu`, which together
+# take multiple seconds to import even on warm caches. To keep `--help` /
+# argparse error paths snappy, those modules are imported lazily inside the
+# handlers that actually use them.
+
 import argparse
 import asyncio
 import json
@@ -8,10 +15,6 @@ import pprint
 import sys
 from pathlib import Path
 from typing import Any
-
-import pr_analysis
-import server
-from path_filtering import LayeredIgnore
 
 
 def _jsonable(value: Any) -> Any:
@@ -58,6 +61,8 @@ def _apply_graph_env(args: argparse.Namespace) -> None:
 
 def _cmd_refresh(args: argparse.Namespace) -> int:
     """Return 1 for launched-subprocess failures, 2 for internal pre-launch errors."""
+    import server  # lazy: pulls sentence_transformers/torch/lancedb/kuzu
+
     _apply_graph_env(args)
     result = asyncio.run(server.run_refresh_pipeline(quiet=bool(args.quiet)))
     payload = result.model_dump()
@@ -69,6 +74,8 @@ def _cmd_refresh(args: argparse.Namespace) -> int:
 
 
 def _cmd_meta(args: argparse.Namespace) -> int:
+    import server  # lazy
+
     _apply_graph_env(args)
     payload = server._graph_meta_output().model_dump()
     _emit(payload)
@@ -76,6 +83,8 @@ def _cmd_meta(args: argparse.Namespace) -> int:
 
 
 def _cmd_tables(args: argparse.Namespace) -> int:
+    import server  # lazy
+
     _apply_graph_env(args)
     payload = server.list_code_index_tables_payload().model_dump()
     _emit(payload)
@@ -83,6 +92,9 @@ def _cmd_tables(args: argparse.Namespace) -> int:
 
 
 def _cmd_diagnose_ignore(args: argparse.Namespace) -> int:
+    import server  # lazy
+    from path_filtering import LayeredIgnore  # lazy
+
     _apply_graph_env(args)
     # Keep this after _apply_graph_env so relative paths resolve from --source-root.
     root = server._project_root()
@@ -115,7 +127,11 @@ def _cmd_analyze_pr(args: argparse.Namespace) -> int:
     if not diff_text.strip():
         _emit({"success": False, "message": "Diff is empty"})
         return 1
-    from kuzu_queries import KuzuGraph
+
+    # Heavy imports stay below the empty-diff guard so the empty-diff path
+    # doesn't pay for Kuzu / pr_analysis loading. Matches pre-PR-#67 behaviour.
+    import pr_analysis  # lazy
+    from kuzu_queries import KuzuGraph  # lazy
 
     if not KuzuGraph.exists():
         _emit({"success": False, "message": "Kuzu graph not found"})
