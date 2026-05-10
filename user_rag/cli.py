@@ -118,9 +118,6 @@ def _read_diff_text(args: argparse.Namespace) -> str:
 
 
 def _cmd_analyze_pr(args: argparse.Namespace) -> int:
-    import pr_analysis  # lazy
-    from kuzu_queries import KuzuGraph  # lazy
-
     _apply_graph_env(args)
     try:
         diff_text = _read_diff_text(args)
@@ -130,6 +127,11 @@ def _cmd_analyze_pr(args: argparse.Namespace) -> int:
     if not diff_text.strip():
         _emit({"success": False, "message": "Diff is empty"})
         return 1
+
+    # Heavy imports stay below the empty-diff guard so the empty-diff path
+    # doesn't pay for Kuzu / pr_analysis loading. Matches pre-PR-#67 behaviour.
+    import pr_analysis  # lazy
+    from kuzu_queries import KuzuGraph  # lazy
 
     if not KuzuGraph.exists():
         _emit({"success": False, "message": "Kuzu graph not found"})
