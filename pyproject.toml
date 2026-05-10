@@ -3,7 +3,7 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "java-enterprise-codebase-rag"
+name = "java-codebase-rag"
 version = "0.0.0"
 description = "MCP server for semantic + structural search over Java codebases"
 readme = "README.md"

@@ -1,6 +1,6 @@
 # Plan: `cross_service_resolution` config flag
 
-Status: **active** — propose merged in [#26](https://github.com/HumanBean17/java-enterprise-codebase-rag/pull/26).
+Status: **active** — propose merged in [#26](https://github.com/HumanBean17/java-codebase-rag/pull/26).
 Source: `propose/CROSS-SERVICE-RESOLUTION-FLAG-PROPOSE.md` on master.
 Companion plan: `plans/PLAN-FEIGN-NOT-AN-EXPOSER.md` (orthogonal — different pass; either order works, but combined testing on `cross_service_smoke` is cleaner).
 

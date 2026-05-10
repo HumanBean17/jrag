@@ -123,8 +123,8 @@ Users will configure their MCP client (Cursor, Claude Code, etc.) like this:
   "mcpServers": {
     "lancedb-code": {
       "type": "stdio",
-      "command": "/path/to/java-enterprise-codebase-rag/.venv/bin/python",
-      "args": ["/path/to/java-enterprise-codebase-rag/server.py"],
+      "command": "/path/to/java-codebase-rag/.venv/bin/python",
+      "args": ["/path/to/java-codebase-rag/server.py"],
       "env": {
         "LANCEDB_MCP_ALLOW_REFRESH": "1",
         "LANCEDB_MCP_PROJECT_ROOT": "/path/to/my-java-project",

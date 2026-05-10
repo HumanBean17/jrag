@@ -13,7 +13,7 @@
 - **Consolidate environment variables from 9 to 5** (headline count: nine non-`SBERT_*` names folded or renamed — see §3.5 inventory). Drop `LANCEDB_MCP_ALLOW_REFRESH`, `LANCEDB_MCP_GRAPH_ENABLED`, `LANCEDB_MCP_MICROSERVICE_ROOTS`, `LANCEDB_MCP_PROJECT_ROOT`, `KUZU_DB_PATH`, `COCOINDEX_DB`. Merge `LANCEDB_URI` + `KUZU_DB_PATH` into a single `JAVA_CODEBASE_RAG_INDEX_DIR`. Rename `LANCEDB_MCP_DEBUG_CONTEXT` and the test-only `LANCEDB_MCP_RUN_HEAVY` for prefix consistency. Keep `SBERT_MODEL` / `SBERT_DEVICE` but also make them YAML-configurable.
 - **Rename project-scope config**: `.lancedb-mcp.yml` → `.java-codebase-rag.yml`. Promote `microservice_roots`, `embedding.model`, `embedding.device` (and any other knob that's per-project) into it. Precedence: CLI flag > env var > YAML > built-in default.
 - **Rename `lancedb_data` default index directory** to `.java-codebase-rag/` (a hidden dotted directory under the project root, matching the dotted-config-file convention). All hardcoded `./lancedb_data` defaults updated.
-- **Rename Python package** `user_rag/` → `java_codebase_rag/`. Update `pyproject.toml [project.scripts]`, all imports, the test file `tests/test_user_rag_cli.py`, and the `python -m user_rag.cli` example in the operator playbook. Also update `pyproject.toml [project].name` from `java-enterprise-codebase-rag` to `java-codebase-rag` (matching the new GitHub repo name).
+- **Rename Python package** `user_rag/` → `java_codebase_rag/`. Update `pyproject.toml [project.scripts]`, all imports, the test file `tests/test_user_rag_cli.py`, and the `python -m user_rag.cli` example in the operator playbook. Set `pyproject.toml [project].name` to **`java-codebase-rag`** (aligned with the GitHub repository basename).
 - One-release deprecation: `refresh` stays as a hidden alias for `reprocess` with a stderr warning, then drops. **No deprecation window for env vars / config / package rename** — breaking changes allowed (no users yet).
 - Migration shape: **3 PRs** — propose merge → CLI + config consolidation (this design) → docs update across the full tree. Engine work for true Kuzu incremental is out of scope and tracked under `propose/TIER2-INCREMENTAL-REBUILD-PROPOSE.md`.
 
@@ -219,9 +219,8 @@ Three more renames that the env-var work makes the natural moment for:
 | Default index directory | `./lancedb_data` | `./.java-codebase-rag` (under project root) |
 | YAML config file | `.lancedb-mcp.yml` | `.java-codebase-rag.yml` |
 | Python package directory | `user_rag/` | `java_codebase_rag/` |
-| `pyproject.toml [project].name` | `java-enterprise-codebase-rag` | `java-codebase-rag` |
+| `pyproject.toml [project].name` & GitHub repo basename | *(aligned in this rollout)* | `java-codebase-rag` |
 | Operator-facing module invocation | `python -m user_rag.cli` | `python -m java_codebase_rag.cli` |
-| GitHub repo (already done by user) | `java-enterprise-codebase-rag` | `java-codebase-rag` |
 
 **Test file rename:** `tests/test_user_rag_cli.py` → `tests/test_java_codebase_rag_cli.py`. Internal helper `_install_user_rag_entrypoint` renamed alongside.
 
@@ -377,7 +376,7 @@ The startup-slowness fix (deferred imports in `cli.py`) is a **separate, prior P
 
 18. **Default index directory: `./.java-codebase-rag/`** (was `./lancedb_data/`). Dot-prefix matches the YAML filename style and de-clutters `ls`.
 19. **Python package `user_rag/` → `java_codebase_rag/`**. `[project.scripts]` updated to `java-codebase-rag = "java_codebase_rag.cli:main"`.
-20. **`pyproject.toml` `[project].name` → `java-codebase-rag`** (was `java-enterprise-codebase-rag`). Matches GitHub repo + CLI binary + Python package. One name across all four surfaces.
+20. **`pyproject.toml` `[project].name` is `java-codebase-rag`**, matching the GitHub repository basename, CLI binary, and distribution name.
 21. **Internal module names are unchanged**: `kuzu_queries.py`, `search_lancedb.py`, `mcp_v2.py`, `index_common.py`, etc. Only the top-level package directory is renamed. Internal names are implementation detail; renaming them is gratuitous churn.
 22. **All renames land in PR-CLI-2** (single implementation PR), not split. Doing them piecemeal would either ship a temporarily-inconsistent codebase or require many overlapping PRs. One atomic commit is cleaner given breaking changes are allowed.
 

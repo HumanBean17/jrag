@@ -236,15 +236,15 @@ signal) so cocoindex catch-up is exercised under the new CLI.
 **Commands (must pass before merge):**
 
 ```bash
-/Users/dmitry/Desktop/CursorProjects/java-enterprise-codebase-rag/.venv/bin/ruff check .
-/Users/dmitry/Desktop/CursorProjects/java-enterprise-codebase-rag/.venv/bin/python -m pytest tests -v
+.venv/bin/ruff check .
+.venv/bin/python -m pytest tests -v
 ```
 
 Heavy: `LANCEDB_MCP_RUN_HEAVY` name changes to `JAVA_CODEBASE_RAG_RUN_HEAVY` in
 the same PR — run heavy locally when touching indexer paths:
 
 ```bash
-JAVA_CODEBASE_RAG_RUN_HEAVY=1 /Users/dmitry/Desktop/CursorProjects/java-enterprise-codebase-rag/.venv/bin/python -m pytest tests -v
+JAVA_CODEBASE_RAG_RUN_HEAVY=1 .venv/bin/python -m pytest tests -v
 ```
 
 ## Definition of done (PR-CLI-2)

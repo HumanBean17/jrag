@@ -1,6 +1,6 @@
 # Post-Tier-1B follow-ups — small cleanup PR plan
 
-Status: **active** — PR-E1 (items 1–6) shipped in [#19](https://github.com/HumanBean17/java-enterprise-codebase-rag/pull/19); PR-E2 (item 7) and PR-E3 (item 8) outstanding.
+Status: **active** — PR-E1 (items 1–6) shipped in [#19](https://github.com/HumanBean17/java-codebase-rag/pull/19); PR-E2 (item 7) and PR-E3 (item 8) outstanding.
 Source: catches collected from PR-D1, PR-D2, PR-D3 reviews + the PR-E1 review reply.
 None are blockers; all are either contract-tightening, naming, doc gaps,
 or invariant guards.
@@ -12,18 +12,18 @@ Links go to the review comment so the original context survives.
 
 | # | From PR | Item | Severity |
 |---|---------|------|----------|
-| 1 | [PR-D3 #15](https://github.com/HumanBean17/java-enterprise-codebase-rag/pull/15#issuecomment-4379649557) obs 1 | `risk_score` upper clamp removed — contract change `[0,1]` → `[0,6+]` | medium (contract) |
-| 2 | [PR-D3 #15](https://github.com/HumanBean17/java-enterprise-codebase-rag/pull/15#issuecomment-4379649557) obs 2 | `VALID_HTTP_CALL_MATCHES` is misnamed — also used by async loop | low (cosmetic) |
-| 3 | [PR-D3 #15](https://github.com/HumanBean17/java-enterprise-codebase-rag/pull/15#issuecomment-4379649557) obs 3 | `pass6_match_edges` reset is implicit; idempotency comment for future incremental-rebuild path | low (doc) |
-| 4 | [PR-D3 #15](https://github.com/HumanBean17/java-enterprise-codebase-rag/pull/15#issuecomment-4379649557) obs 5 | Empty-feign-name short-circuit in `_match_call_edge` — add reader comment | low (doc) |
-| 5 | [PR-D2 #13](https://github.com/HumanBean17/java-enterprise-codebase-rag/pull/13#issuecomment-4378995637) post-D3 follow-up 1 | README: document `anchor`-fills-from-builtin behaviour for partial brownfield overrides | low (doc) |
-| 6 | [PR-D2 #13](https://github.com/HumanBean17/java-enterprise-codebase-rag/pull/13#issuecomment-4378995637) post-D3 follow-up 2 | Proposal §6: add `channel` field to the `OutgoingCallDecl` schema sketch as durable | low (doc) |
-| 7 | [PR-D1 #12](https://github.com/HumanBean17/java-enterprise-codebase-rag/pull/12#issuecomment-4378723605) obs 2 | Second copy of strategy ladder still in `graph_enrich.py:720-724` (annotation/spel/constant_ref) — known consolidation candidate | medium (tech debt) |
-| 8 | [PR-E1 #19 review reply](https://github.com/HumanBean17/java-enterprise-codebase-rag/pull/19#issuecomment-4380659734) | `pass3_calls` doesn't enforce the intra-JVM invariant for `CALLS` edges. Today no cross-microservice CALLS edge is emitted on any fixture (verified on `cross_service_smoke`: 9 CALLS edges, 0 cross), but the cleanliness is incidental — no `caller.microservice == callee.microservice` guard exists. FQN collisions across services or brownfield supertype overrides could in principle break the invariant silently. **✅ shipped in PR-E3** | low-to-medium (invariant) |
+| 1 | [PR-D3 #15](https://github.com/HumanBean17/java-codebase-rag/pull/15#issuecomment-4379649557) obs 1 | `risk_score` upper clamp removed — contract change `[0,1]` → `[0,6+]` | medium (contract) |
+| 2 | [PR-D3 #15](https://github.com/HumanBean17/java-codebase-rag/pull/15#issuecomment-4379649557) obs 2 | `VALID_HTTP_CALL_MATCHES` is misnamed — also used by async loop | low (cosmetic) |
+| 3 | [PR-D3 #15](https://github.com/HumanBean17/java-codebase-rag/pull/15#issuecomment-4379649557) obs 3 | `pass6_match_edges` reset is implicit; idempotency comment for future incremental-rebuild path | low (doc) |
+| 4 | [PR-D3 #15](https://github.com/HumanBean17/java-codebase-rag/pull/15#issuecomment-4379649557) obs 5 | Empty-feign-name short-circuit in `_match_call_edge` — add reader comment | low (doc) |
+| 5 | [PR-D2 #13](https://github.com/HumanBean17/java-codebase-rag/pull/13#issuecomment-4378995637) post-D3 follow-up 1 | README: document `anchor`-fills-from-builtin behaviour for partial brownfield overrides | low (doc) |
+| 6 | [PR-D2 #13](https://github.com/HumanBean17/java-codebase-rag/pull/13#issuecomment-4378995637) post-D3 follow-up 2 | Proposal §6: add `channel` field to the `OutgoingCallDecl` schema sketch as durable | low (doc) |
+| 7 | [PR-D1 #12](https://github.com/HumanBean17/java-codebase-rag/pull/12#issuecomment-4378723605) obs 2 | Second copy of strategy ladder still in `graph_enrich.py:720-724` (annotation/spel/constant_ref) — known consolidation candidate | medium (tech debt) |
+| 8 | [PR-E1 #19 review reply](https://github.com/HumanBean17/java-codebase-rag/pull/19#issuecomment-4380659734) | `pass3_calls` doesn't enforce the intra-JVM invariant for `CALLS` edges. Today no cross-microservice CALLS edge is emitted on any fixture (verified on `cross_service_smoke`: 9 CALLS edges, 0 cross), but the cleanliness is incidental — no `caller.microservice == callee.microservice` guard exists. FQN collisions across services or brownfield supertype overrides could in principle break the invariant silently. **✅ shipped in PR-E3** | low-to-medium (invariant) |
 
 ## Recommended PR boundaries
 
-- **PR-E1** (✅ shipped in [#19](https://github.com/HumanBean17/java-enterprise-codebase-rag/pull/19)) — items 1–6 in one PR (risk-score normalisation + the four small renames/comments + two doc fixes).
+- **PR-E1** (✅ shipped in [#19](https://github.com/HumanBean17/java-codebase-rag/pull/19)) — items 1–6 in one PR (risk-score normalisation + the four small renames/comments + two doc fixes).
 - **PR-E2** — item 7 (refactor of the second strategy ladder — needs its own per-PR Cursor task prompt with sentinel greps).
 - **PR-E3** — item 8 (intra-JVM CALLS invariant guard). Tiny PR, ~10 lines + one fixture test. Safe to ship before or after PR-E2.
 
@@ -315,7 +315,7 @@ is surgical, not over-eager.
 5. Pass3 verbose log mentions the new counter.
  6. `260+` (current baseline + 1 new test) tests still pass.
 
-Status: shipped as PR-E3 in [#22](https://github.com/HumanBean17/java-enterprise-codebase-rag/pull/22).
+Status: shipped as PR-E3 in [#22](https://github.com/HumanBean17/java-codebase-rag/pull/22).
 
 ### Risk
 

@@ -1,13 +1,13 @@
 # Call Graph Layer — Code Review
 
-**Repository:** [HumanBean17/java-enterprise-codebase-rag](https://github.com/HumanBean17/java-enterprise-codebase-rag)
+**Repository:** [HumanBean17/java-codebase-rag](https://github.com/HumanBean17/java-codebase-rag)
 **Commits reviewed:**
 - `b3a15d8` — *call graph layer propose*
 - `fb5473f` — *call graph layer implementation*
 
 **Reference docs:**
-- [`propose/completed/CALL-GRAPH-PROPOSE.md`](https://github.com/HumanBean17/java-enterprise-codebase-rag/blob/master/propose/completed/CALL-GRAPH-PROPOSE.md)
-- [`plans/completed/PLAN-CALL-GRAPH.md`](https://github.com/HumanBean17/java-enterprise-codebase-rag/blob/master/plans/completed/PLAN-CALL-GRAPH.md)
+- [`propose/completed/CALL-GRAPH-PROPOSE.md`](https://github.com/HumanBean17/java-codebase-rag/blob/master/propose/completed/CALL-GRAPH-PROPOSE.md)
+- [`plans/completed/PLAN-CALL-GRAPH.md`](https://github.com/HumanBean17/java-codebase-rag/blob/master/plans/completed/PLAN-CALL-GRAPH.md)
 
 **Test status:** all 24 new call-graph tests pass locally
 (`tests/test_ast_java_calls.py`, `tests/test_call_graph_smoke_roundtrip.py`,
@@ -358,7 +358,7 @@ exercises it; none of the existing files do.
 This is solid Phase-3 work. Land the three bug fixes and the codebase is
 in an excellent spot to start on the next phase — either cross-service
 `HTTP_CALLS` (B6 / B7 in
-[`what-to-borrow-from-cmm.md`](https://github.com/HumanBean17/java-enterprise-codebase-rag/blob/master/tmp/what-to-borrow-from-cmm.md))
+[`what-to-borrow-from-cmm.md`](https://github.com/HumanBean17/java-codebase-rag/blob/master/tmp/what-to-borrow-from-cmm.md))
 or runtime-trace ingestion (B3 from the same doc). Both will lean on the
 resolver and confidence machinery just built; the bug fixes above make
 that lean trustworthy.
