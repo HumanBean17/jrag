@@ -1,6 +1,6 @@
 # What to Borrow from Codebase-Memory MCP
 
-A focused, prioritized guide for evolving `java-enterprise-codebase-rag` (AMA agent) by adopting proven patterns from [DeusData/codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp) (paper: [arXiv:2603.27277](https://arxiv.org/abs/2603.27277)) — without giving up your Spring-aware, hybrid (vector + graph) edge.
+A focused, prioritized guide for evolving `java-codebase-rag` (AMA agent) by adopting proven patterns from [DeusData/codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp) (paper: [arXiv:2603.27277](https://arxiv.org/abs/2603.27277)) — without giving up your Spring-aware, hybrid (vector + graph) edge.
 
 > **Guiding principle.** CMM optimizes for *token efficiency at acceptable quality* across 66 languages. Your AMA agent optimizes for *answer quality on Spring/Java microservices* via hybrid retrieval. Borrow CMM's structural mechanics; keep your semantic / role-aware layer as the differentiator.
 
@@ -237,7 +237,7 @@ Layered ignores (B5) can land anywhere — drop it in alongside the next indexer
 
 - Codebase-Memory MCP source — [github.com/DeusData/codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp)
 - Paper — [Codebase-Memory: Tree-Sitter-Based Knowledge Graphs for LLM Code Exploration via MCP (arXiv:2603.27277)](https://arxiv.org/abs/2603.27277)
-- Your repo — [HumanBean17/java-enterprise-codebase-rag](https://github.com/HumanBean17/java-enterprise-codebase-rag)
+- Your repo — [HumanBean17/java-codebase-rag](https://github.com/HumanBean17/java-codebase-rag)
 - Key CMM files referenced above:
   - [`pass_calls.c`](https://github.com/DeusData/codebase-memory-mcp/blob/master/src/pipeline/pass_calls.c) — call resolution
   - [`pass_route_nodes.c`](https://github.com/DeusData/codebase-memory-mcp/blob/master/src/pipeline/pass_route_nodes.c) — route nodes

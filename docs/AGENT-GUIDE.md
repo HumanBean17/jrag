@@ -1,4 +1,4 @@
-# Agent Guide — `java-enterprise-codebase-rag` MCP
+# Agent Guide — `java-codebase-rag` MCP
 
 > **How to use this file.** Copy the block between the `<!-- BEGIN/END
 > java-codebase-rag MCP guide -->` markers below into your project's `QWEN.md`,

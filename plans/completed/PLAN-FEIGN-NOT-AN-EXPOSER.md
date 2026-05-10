@@ -1,6 +1,6 @@
 # Plan: @FeignClient is a caller, not an exposer
 
-Status: **active** — propose merged in [#25](https://github.com/HumanBean17/java-enterprise-codebase-rag/pull/25).
+Status: **active** — propose merged in [#25](https://github.com/HumanBean17/java-codebase-rag/pull/25).
 Source: `propose/FEIGN-NOT-AN-EXPOSER-PROPOSE.md` on master.
 Companion plan: `plans/PLAN-CROSS-SERVICE-RESOLUTION-FLAG.md` (orthogonal — different pass; can ship in either order).
 

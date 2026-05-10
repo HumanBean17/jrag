@@ -1,4 +1,4 @@
-# Manual Verification Checklist — `java-enterprise-codebase-rag`
+# Manual Verification Checklist — `java-codebase-rag`
 
 Use this **after** you've read `README.md` + `CODEBASE_REQUIREMENTS.md`,
 [`docs/AGENT-GUIDE.md`](./AGENT-GUIDE.md), applied any brownfield annotations,
@@ -507,7 +507,7 @@ If something is red:
 Reproduce fixture numbers with:
 
 ```bash
-cd /path/to/java-enterprise-codebase-rag
+cd /path/to/java-codebase-rag
 rm -rf /tmp/calib_kuzu
 python build_ast_graph.py \
   --source-root tests/bank-chat-system \

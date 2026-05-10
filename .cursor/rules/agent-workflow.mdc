@@ -101,7 +101,7 @@ When you're given a per-PR task prompt from `plans/CURSOR-PROMPTS-*.md`:
 - For graph builder changes, also rebuild a fixture and inspect
   `java-codebase-rag meta` (or `GraphMetaOutput` from the same helper) to confirm new counters wire up:
   ```bash
-  rm -rf /tmp/check && /Users/dmitry/Desktop/CursorProjects/java-enterprise-codebase-rag/.venv/bin/python build_ast_graph.py \
+  rm -rf /tmp/check && .venv/bin/python build_ast_graph.py \
     --source-root tests/bank-chat-system --kuzu-path /tmp/check --verbose
   ```
 
