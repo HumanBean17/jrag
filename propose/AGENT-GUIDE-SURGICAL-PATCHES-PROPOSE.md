@@ -8,7 +8,7 @@
 
 - Today's `docs/AGENT-GUIDE.md` is a strong operating manual for the four MCP tools but it does not inoculate the agent against three recurring failure modes: treating empty results as ground truth, treating MCP as exhaustive across reflection / unindexed code / build files, and over-trusting a stale graph after `increment`.
 - Add **three surgical patches** to AGENT-GUIDE.md, total ≤ 60 lines: a *"What this MCP is NOT"* subsection, a *"Staleness & fallback"* paragraph, and a *"Confidence calibration on cross-service edges"* paragraph.
-- All three patches land **inside** the `<!-- BEGIN/END java-codebase-rag MCP guide -->` markers so the drop-in `CLAUDE.md` / `AGENTS.md` block stays self-contained.
+- All three patches land **inside** the `<!-- BEGIN java-codebase-rag MCP guide -->` … `<!-- END java-codebase-rag MCP guide -->` markers so the drop-in `CLAUDE.md` / `AGENTS.md` block stays self-contained.
 - **Scope is hard-bounded.** No restructure, no new sections at the top level, no ontology bump, no cardinal-number changes ("four MCP navigation tools" stays exact). Only insertions inside existing slots.
 - This propose is the companion to `EXPLORATION-SKILL-PROPOSE.md` (the standalone `java-codebase-explore` skill). The split is intentional: AGENT-GUIDE.md stays as the operating manual; the new skill is the strategy guide. These patches are the **minimum** the manual needs even if the skill never ships.
 - **Migration shape**: **2 PRs** — propose merge → AGENT-GUIDE.md patch. No code changes. No schema changes. No ontology bump.
@@ -34,7 +34,7 @@ This frame rules out:
 ## §2 — Design principles
 
 1. **Minimum-viable patch.** Each of the three patches is ≤ 25 lines. Total addition budget: 60 lines. If a patch grows past that, it belongs in the exploration skill.
-2. **Inside the markers, every time.** All three patches land inside `<!-- BEGIN/END java-codebase-rag MCP guide -->` so downstream `CLAUDE.md` blocks pick them up on the next pull.
+2. **Inside the markers, every time.** All three patches land inside `<!-- BEGIN java-codebase-rag MCP guide -->` … `<!-- END java-codebase-rag MCP guide -->` so downstream `CLAUDE.md` blocks pick them up on the next pull.
 3. **No structural change.** Insertion only; no section reorder, no rename. Maintenance friction stays at "pull a fresh block".
 4. **Cardinal numbers untouched.** Existing counts ("four tools", "nine edges") are load-bearing for the rest of the doc and the ontology-bump checklist. Patches must not introduce a new counted thing.
 5. **Tone match.** Existing AGENT-GUIDE.md is terse, table-heavy, second-person imperative. Patches must match — no soft language, no "you might want to consider".
@@ -42,11 +42,11 @@ This frame rules out:
 
 ## §3 — The proposed surface
 
-Three patches. Each lands at an explicit insertion point in the current file. Line numbers below are calibrated against `propose/exploration-skill` branch master at `2feb8aa` (AGENT-GUIDE.md = 236 lines).
+Three patches. Each lands at an explicit **heading / anchor** in `docs/AGENT-GUIDE.md` (do not rely on stale line numbers; re-locate by search).
 
 ### Patch A — *"What this MCP is NOT"* subsection
 
-**Insertion point**: between the existing **"Do NOT use this MCP when…"** paragraph (line 36) and the **"Workflow (GPS model)"** heading (line 38).
+**Insertion point**: between the existing **"Do NOT use this MCP when…"** paragraph and the **"Workflow (GPS model)"** heading.
 
 **Content** (≤ 12 lines):
 
@@ -70,20 +70,29 @@ disagreement as evidence of staleness, not as a contradiction.
 
 **Why the placement**: it sits exactly where the existing "do NOT use" framing already lives, extending the same thought rather than introducing a new structural section.
 
-### Patch B — *"Staleness & fallback"* paragraph
+### Patch B — *"Staleness & fallback"* (recovery rows + staleness note)
 
-**Insertion point**: as a new row added to the **Recovery playbook** table (current rows: 6) plus a one-paragraph note immediately under the table.
+**Canonical block order (single source of truth):**
+
+1. Append **two new rows** at the **end** of the *Recovery playbook* markdown table (after the last pre-patch row).
+2. The table is followed by a blank line, then the existing sentence **unchanged** (this propose does not edit it):
+
+   `After two failed attempts on the same intent, stop and report tool name, args, and response.`
+
+3. Append the staleness paragraph (the block that begins with `**Staleness rule:**`) on the lines **immediately after** that sentence (not between the last table row and that sentence).
+
+There is **no** “staleness paragraph directly under the table” placement: the `After two failed attempts…` line stays between the table and the staleness paragraph.
 
 **Content** (≤ 8 lines added to existing table + 4-line note):
 
-New row at the end of the recovery table:
+New rows (step 1):
 
 ```markdown
 | Result disagrees with the open file | Index is stale (typical after `increment`-only catch-up) | Trust the file. Confirm staleness with `java-codebase-rag meta` (last `reprocess` time). Report as staleness, not contradiction. |
 | Empty `search` result on a string you can read in the open file | Project not indexed, wrong `table` (try `all`), or chunking missed it | Try `find(kind=symbol, filter={"fqn_prefix": …})`. Fall back to `rg` in the project tree if still empty. |
 ```
 
-Note appended immediately under the table. The existing `After two failed attempts…` line is **retained as-is** (this propose does not remove it); the staleness note is appended after it:
+Staleness paragraph (step 3, after the `After two failed attempts…` line):
 
 ```markdown
 **Staleness rule:** after `java-codebase-rag increment`, Lance is fresh
@@ -92,11 +101,11 @@ A graph older than the source tree is normal mid-development. When in
 doubt, run `meta` and compare against your working tree.
 ```
 
-**Why the placement**: the recovery playbook is exactly where agents land after a confusing result. Two new rows + a one-paragraph note keep the structural shape unchanged.
+**Why the placement**: the recovery playbook is where agents land after a confusing result; the staleness note reads as a follow-on to the existing “stop thrashing” sentence, not as a stray table footer.
 
 ### Patch C — *"Confidence calibration on cross-service edges"* paragraph
 
-**Insertion point**: end of the **"Tool reference — four tools"** section, inside the **`neighbors`** subsection, immediately after the **Batching** line (line 178).
+**Insertion point**: end of the **"Tool reference — four tools"** section, inside the **`neighbors`** subsection, immediately after the **Batching** bullet.
 
 **Content** (≤ 8 lines):
 
@@ -123,7 +132,7 @@ doubt, run `meta` and compare against your working tree.
 - Ontology version 11 sentence: unchanged.
 - Slash aliases section: unchanged.
 - The footer "Maintenance notes" block: unchanged (this propose does not add a new maintenance invariant; the existing one already covers MCP-behaviour bumps).
-- The marker pair `<!-- BEGIN / END java-codebase-rag MCP guide -->`: position unchanged. All three patches land **inside** the markers.
+- The marker pair `<!-- BEGIN java-codebase-rag MCP guide -->` / `<!-- END java-codebase-rag MCP guide -->`: position unchanged. All three patches land **inside** the markers.
 
 ## §4 — Use-case re-walk
 
@@ -180,16 +189,16 @@ No surface revisions triggered.
 
 ### PR-AGP-2 — apply the patches
 
-**Title**: `docs(agent-guide): anti-capabilities, staleness, confidence`
+**Title**: `docs(agent-guide): out-of-frame limits, staleness, neighbor edge confidence`
 **Purpose**: apply Patches A, B, C inside the marker block.
-**Tests**: none. Acceptance check: grep verifies the three new headings / phrases exist; line-count diff confirms the doc grew by ≤ 60 lines; the marker pair still bounds the same range; ontology-version sentence and "four MCP navigation tools" phrasing unchanged. All checks run by hand in the PR description.
+**Tests**: none. Acceptance check (by hand in the PR description): `rg` (or equivalent) shows the new `### What this MCP is NOT` subsection, the two new recovery-table rows, the `**Staleness rule:**` paragraph **after** the unchanged `After two failed attempts…` line, and the new `**Confidence:**` bullet under `neighbors`; line-count diff confirms the doc grew by ≤ 60 lines; marker comments unchanged; load-bearing cardinals unchanged (`nine edge types`, ontology glossary still anchored on version **11**, and the intro still states **four** MCP navigation tools in the existing wording). All checks run by hand in the PR description.
 
 Total: 2 PRs.
 
 ## §7 — Decisions taken (no longer open)
 
-1. **Three patches, no more.** Anti-capabilities, staleness, confidence calibration. Anything else belongs in the exploration skill.
-2. **All patches inside the `<!-- BEGIN/END … -->` markers.** Drop-in block stays self-contained.
+1. **Three patches, no more.** Out-of-frame limits (Patch A), staleness & fallback (Patch B), neighbor-edge confidence reporting (Patch C). Anything else belongs in the exploration skill.
+2. **All patches inside the BEGIN/END `java-codebase-rag MCP guide` marker comments.** Drop-in block stays self-contained.
 3. **Insertion only, no restructure.** Headings, ordering, and section count remain unchanged.
 4. **Total addition budget ≤ 60 lines.** Hard cap. If a patch grows during implementation, defer to the exploration skill.
 5. **Cardinal numbers in the doc remain frozen.** "Four MCP navigation tools", "nine edge types", "ontology version 11" all stay exact strings.
@@ -210,48 +219,65 @@ Total: 2 PRs.
 | The marker pair drifts during the patch | PR acceptance check explicitly greps for the unchanged marker strings and validates the bounded range. |
 | Patch B's `meta` reference becomes stale if the CLI is renamed | Cross-reference uses the canonical CLI name `java-codebase-rag meta`; CLI renames already trigger doc-wide updates by the existing maintenance note. |
 
-## Appendix A — Final shipped diff (verbatim insertions)
+## Appendix A — Verbatim insertions (implementation order **A → B → C**)
 
-For the implementation PR, the three patches assemble into this diff against `docs/AGENT-GUIDE.md` (line numbers indicative; insertion-only, no removals):
+For the implementation PR, apply patches in **Patch A → Patch B → Patch C**
+order (same as §3). This appendix lists **verbatim** insertion blocks in that
+order. It is **not** a unified-diff file order: Patch B’s staleness paragraph
+is **after** the existing `After two failed attempts…` sentence (see §3 Patch B
+canonical block order).
 
+### A.1 — Patch A (after “Do NOT use this MCP when…”, before `**Workflow (GPS model):**`)
+
+```markdown
+### What this MCP is NOT
+
+The MCP indexes Java production code, SQL, and YAML — nothing else.
+Treat the following as out of frame:
+
+- **Test files, build files, deploy / runtime story** — read `pom.xml`,
+  `build.gradle`, `Dockerfile`, `.github/workflows/`, README directly.
+- **Reflection, dynamic dispatch, SPI lookups** — `CALLS` resolves
+  static method calls only; the resolved caller set is a **lower bound**.
+- **Unindexed services / repos** — verify with `java-codebase-rag meta`
+  before treating an empty `search` result as proof of absence.
+- **"When did X change", "who changed X"** — use `git log` / `git blame`.
+
+When MCP disagrees with the open file, the file wins; report the
+disagreement as evidence of staleness, not as a contradiction.
 ```
-@@ after the "Do NOT use this MCP when…" paragraph @@
-+### What this MCP is NOT
-+
-+The MCP indexes Java production code, SQL, and YAML — nothing else.
-+Treat the following as out of frame:
-+
-+- **Test files, build files, deploy / runtime story** — read `pom.xml`,
-+  `build.gradle`, `Dockerfile`, `.github/workflows/`, README directly.
-+- **Reflection, dynamic dispatch, SPI lookups** — `CALLS` resolves
-+  static method calls only; the resolved caller set is a **lower bound**.
-+- **Unindexed services / repos** — verify with `java-codebase-rag meta`
-+  before treating an empty `search` result as proof of absence.
-+- **"When did X change", "who changed X"** — use `git log` / `git blame`.
-+
-+When MCP disagrees with the open file, the file wins; report the
-+disagreement as evidence of staleness, not as a contradiction.
 
-@@ inside the `neighbors` subsection, after "Batching: …" @@
-+- **Confidence:** Cross-service edges (`HTTP_CALLS`, `ASYNC_CALLS`)
-+  carry confidence, strategy, and match metadata on `edge.attrs`
-+  (`attrs.confidence`, `attrs.strategy`, `attrs.match`). Low
-+  confidence means the resolver had to guess at the route binding —
-+  treat it as a **resolver gap signal**, not a hallucination. Report
-+  low-confidence edges with their confidence value, not as facts.
-+  Intra-service edges (`CALLS`, `INJECTS`, `IMPLEMENTS`, `EXTENDS`,
-+  `DECLARES`, `DECLARES_CLIENT`, `EXPOSES`) faithfully represent
-+  the static graph; the resolved set is still a **lower bound** under
-+  reflection / dynamic dispatch (see *What this MCP is NOT*).
+### A.2 — Patch B part 1 (two new rows at end of Recovery playbook table)
 
-@@ at the end of the Recovery playbook table, then a note below @@
-+| Result disagrees with the open file | Index is stale (typical after `increment`-only catch-up) | Trust the file. Confirm staleness with `java-codebase-rag meta` (last `reprocess` time). Report as staleness, not contradiction. |
-+| Empty `search` result on a string you can read in the open file | Project not indexed, wrong `table` (try `all`), or chunking missed it | Try `find(kind=symbol, filter={"fqn_prefix": …})`. Fall back to `rg` in the project tree if still empty. |
-+
-+**Staleness rule:** after `java-codebase-rag increment`, Lance is fresh
-+but Kuzu may be stale (see `propose/TIER2-INCREMENTAL-REBUILD-PROPOSE.md`).
-+A graph older than the source tree is normal mid-development. When in
-+doubt, run `meta` and compare against your working tree.
+```markdown
+| Result disagrees with the open file | Index is stale (typical after `increment`-only catch-up) | Trust the file. Confirm staleness with `java-codebase-rag meta` (last `reprocess` time). Report as staleness, not contradiction. |
+| Empty `search` result on a string you can read in the open file | Project not indexed, wrong `table` (try `all`), or chunking missed it | Try `find(kind=symbol, filter={"fqn_prefix": …})`. Fall back to `rg` in the project tree if still empty. |
+```
+
+(Context: the pre-existing line `After two failed attempts on the same intent, stop and report tool name, args, and response.` stays **unchanged** immediately after the table.)
+
+### A.3 — Patch B part 2 (after `After two failed attempts…`)
+
+```markdown
+**Staleness rule:** after `java-codebase-rag increment`, Lance is fresh
+but Kuzu may be stale (see `propose/TIER2-INCREMENTAL-REBUILD-PROPOSE.md`).
+A graph older than the source tree is normal mid-development. When in
+doubt, run `meta` and compare against your working tree.
+```
+
+### A.4 — Patch C (after `**Batching:**` under `#### neighbors`)
+
+```markdown
+- **Confidence:** Cross-service edges (`HTTP_CALLS`, `ASYNC_CALLS`)
+  carry confidence, strategy, and match metadata on `edge.attrs`
+  (`attrs.confidence`, `attrs.strategy`, `attrs.match`). Low
+  confidence means the resolver had to guess at the route binding —
+  treat it as a **resolver gap signal**, not a hallucination. Report
+  low-confidence edges with their confidence value, not as facts.
+  Intra-service edges (`CALLS`, `INJECTS`, `IMPLEMENTS`, `EXTENDS`,
+  `DECLARES`, `DECLARES_CLIENT`, `EXPOSES`) faithfully represent
+  the static graph; the resolved set is still a **lower bound** under
+  reflection / dynamic dispatch (see *What this MCP is NOT*).
 ```
 
 Net additions: ~48 lines. Under the 60-line budget.
