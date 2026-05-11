@@ -11,7 +11,7 @@
 - **Standalone, not a sequel.** The skill is operable without `AGENT-GUIDE.md` open in the same context. It inlines a minimal cheat sheet (4 tools, 9 edge types, 3 node kinds, key slash aliases) and defers exact argument shapes to the MCP tool descriptions themselves, which every MCP client surfaces natively.
 - **Scope boundary**: AGENT-GUIDE.md remains the operating manual (drop-in `CLAUDE.md` block, argument shapes, recovery playbook). The new skill is the **strategy guide** ("how to explore an unfamiliar Java microservices system end-to-end, with this MCP as one tool among several").
 - **Activation**: explicit user phrases like *"explore this codebase"*, *"help me understand this system"*, *"map the call graph for X"*, *"plan a change to service Y"*, *"onboard onto this code"*. Not on every PR review and not on every `search` call.
-- **Migration shape**: **2 PRs** — propose merge → ship the skill (markdown + zip + minimal README integration). No code changes. No ontology bump.
+- **Migration shape**: **2 PRs** — propose merge → ship the skill (markdown + zip + README integration: **§3** *Driving the MCP from an agent* bullet + **§9** *Further reading* table row, both linking the skill next to AGENT-GUIDE). No code changes. No ontology bump.
 - **Maintenance discipline**: cheat-sheet appendix is the only place ontology strings appear in this skill; ontology version bumps update AGENT-GUIDE.md, the skill cheat sheet, and `README.md` in lockstep (already a documented invariant for AGENT-GUIDE.md).
 
 ---
@@ -50,7 +50,7 @@ This frame rules out:
 
 Two artefacts shipped from this repo:
 
-- `docs/skills/java-codebase-explore.md` — the canonical, human-readable skill body. Lives next to `AGENT-GUIDE.md`.
+- `docs/skills/java-codebase-explore.md` — the canonical, human-readable skill body. Under `docs/skills/` (same docs tree as `docs/AGENT-GUIDE.md`, not the same directory).
 - `docs/skills/java-codebase-explore.zip` — a **Perplexity-format** skill bundle suitable for `save_custom_skill` (Perplexity Computer). Contains the `.md` plus a `SKILL.md` manifest in the Perplexity packaging convention. Other platforms (Claude Code, Cursor) are out of scope for v1 — see §8 risk row for the rationale.
 
 Both are regenerated together by a small script (`scripts/build-explore-skill.sh`) so the `.zip` and the `.md` never drift. The script lives in this repo; running it is part of the release checklist that already exists for ontology bumps.
@@ -62,9 +62,9 @@ The skill body is structured as follows. Each section is required unless marked 
 1. **Activation note** (frontmatter / opening paragraph). Names the skill, states the activation phrases, and sets the scope boundary against AGENT-GUIDE.md in one sentence.
 2. **Pre-flight: is the index built?** Canonical first call (`java-codebase-rag meta`), what to do if the project is unindexed, what to do if the graph is older than Lance (post-`increment` state).
 3. **Map the seams first.** The canonical opening move for any new estate: `find(kind=route, …)`, `find(kind=client, …)`, possibly `find(kind=symbol, filter={"role":"CONTROLLER"})`. Rationale: you cannot reason about a system you have not enumerated.
-4. **Mission catalogue.** 6 named missions (locked in §7), each with a fixed shape (see §3.3 below).
+4. **Mission catalogue.** Six named missions (count locked in §7 item 5; names and triggers in §3.3), each with a fixed shape (see §3.3 below).
 5. **When MCP is the wrong layer.** Explicit fallback paths to `rg`, file reads, `git log`, README, build files, and the CLI. With one-line rules of thumb per fallback.
-6. **What this MCP is NOT.** Anti-capabilities table (see §3.4).
+6. **What this MCP is NOT.** Anti-capabilities section (verbatim Appendix A; sketch table in §3.4).
 7. **Confidence and staleness.** How to read `edge.attrs.confidence` / `attrs.strategy` / `attrs.match` (the wire field on the `Edge` payload is `attrs`); what to do when MCP disagrees with the open file; what `increment` means for graph freshness.
 8. **Anti-patterns.** Numbered list of the 6–8 failure modes the skill is built to prevent. Mirrors and extends the anti-patterns list already in AGENT-GUIDE.md, with system-level additions (fishing-trip search, unbounded walks, treating empty as ground truth, asking MCP for non-MCP things).
 9. **Cheat sheet appendix.** Minimal inline reference: 4 tools (one line each), 9 edge types (taxonomy table), 3 node kinds, the most-used slash aliases. Everything else links to AGENT-GUIDE.md by URL.
@@ -84,7 +84,7 @@ Each mission in §3.2.4 follows the same template:
 **Fallbacks**: <when this mission needs `rg` / file reads / CLI instead>
 ```
 
-Missions shipped in v1 (locked in §6):
+Missions shipped in v1 (listed here; count locked in §7 item 5):
 
 1. **Understand a feature** — user asks "how does feature X work?" or "explain how Y is implemented."
 2. **Plan a change** — user asks "I need to modify Z; what's the blast radius?" Maps to `analyze-pr` for diff-bearing cases.
@@ -95,9 +95,9 @@ Missions shipped in v1 (locked in §6):
 
 Six missions cover ~90% of the exploration intents we've seen in this repo's history. Adding a 7th mission requires a propose, not a drive-by PR (mirrors the cardinal-number discipline from CLI-SCENARIOS §6).
 
-### 3.4 Anti-capabilities table (sketch)
+### 3.4 Anti-capabilities (sketch)
 
-The exact wording is drafted in Appendix A, but the shape is:
+Appendix A ships as a **seven-item** bullet list in the skill body. The table below is only a structural sketch; the item cap matches the §8 “dumping ground” risk row.
 
 | What agents wrongly expect | Reality |
 | -------------------------- | ------- |
@@ -191,7 +191,7 @@ No surface revisions triggered.
 ### PR-EXPLORE-2 — ship the skill
 
 **Title**: `feat(docs): java-codebase-explore agent skill`
-**Purpose**: add `docs/skills/java-codebase-explore.md`, the build script `scripts/build-explore-skill.sh`, and the generated `docs/skills/java-codebase-explore.zip`. README gets a one-line pointer in the same section that mentions AGENT-GUIDE.md.
+**Purpose**: add `docs/skills/java-codebase-explore.md`, the build script `scripts/build-explore-skill.sh`, and the generated `docs/skills/java-codebase-explore.zip`. **README:** add a short pointer in **§3** *Driving the MCP from an agent* (new bullet next to the AGENT-GUIDE bullet) **and** a row in **§9** *Further reading* so operators who skip §3 still find the skill.
 **Tests**: none (doc-only). Acceptance check: a fresh agent given only the skill body must complete **UC2** (onboard onto an unfamiliar service) **and UC6** (debug a symptom — second smoke case to exercise the fallback rules) using the documented sequences without asking the user for tool-shape clarification. Verified by hand in the PR description, not in CI.
 
 Total: 2 PRs.
@@ -207,7 +207,7 @@ Total: 2 PRs.
 7. **Anti-capabilities are first-class.** They get their own section, not a footnote in a mission.
 8. **No code changes.** No ontology bump. No schema bump.
 9. **Activation phrases are intent-scoped.** Listed in §3.5; no auto-activation on every `search` call or PR review.
-10. **Cheat sheet is the only place ontology strings appear.** Bumping the ontology updates AGENT-GUIDE.md, README, and this skill in lockstep; the maintenance note in AGENT-GUIDE.md is amended to mention the skill.
+10. **Cheat sheet is the only place ontology strings appear.** Bumping the ontology updates AGENT-GUIDE.md, README, and this skill in lockstep. A maintenance note in `docs/AGENT-GUIDE.md` that names this skill is **out of scope for PR-EXPLORE-2** (that file stays unchanged here); it lands with [`AGENT-GUIDE-SURGICAL-PATCHES-PROPOSE.md`](./AGENT-GUIDE-SURGICAL-PATCHES-PROPOSE.md) or a small follow-up doc PR after coordination — same split as `plans/PLAN-EXPLORATION-SKILL.md` states.
 
 ## §8 — Risks and how we mitigate
 
@@ -218,9 +218,9 @@ Total: 2 PRs.
 | Six missions don't cover real-world intent distribution | Use-case re-walk covered 16 cases with 0 misses. v2 adds missions only if a real session needs one. |
 | Skill body too long to be effective (skill bloat) | Strict section budget: target ≤ 800 lines including cheat sheet. Re-walked use cases use ≤ 5 calls each, so prose can stay tight. |
 | The `.zip` package format diverges across target platforms (Claude Code vs Cursor vs Perplexity) | v1 ships **Perplexity format only** — the primary consumer. Adding Claude Code / Cursor variants is deferred until a real downstream consumer needs them. This is the single source of truth on package scope; §1 / §3.1 align with this row. |
-| The "What this MCP is NOT" section becomes a dumping ground | Cap at 7 rows; new entries require a propose entry, mirroring the cardinal-number discipline from CLI-SCENARIOS §6. |
-| README pointer rots when AGENT-GUIDE.md or skill is renamed | Pointer goes in a single block alongside the AGENT-GUIDE.md mention; one place to update. |
-| Skill body translation drift if user-rag becomes bilingual | English-only by decision §3.7 (v2 question if the need is real). |
+| The "What this MCP is NOT" section becomes a dumping ground | Cap at **seven** Appendix A items; new entries require a propose amendment, mirroring the cardinal-number discipline from CLI-SCENARIOS §6. |
+| README pointers rot when AGENT-GUIDE.md or skill is renamed | Two touchpoints (**§3** bullet + **§9** table row) ship in the same PR so discoverability stays aligned; update both together. |
+| Skill body translation drift if user-rag becomes bilingual | English-only for shipped skill prose in v1 (see §5 translation non-goal); downstream translation is out of scope here. |
 
 ## Appendix A — Anti-capabilities draft (verbatim wording for the skill)
 
