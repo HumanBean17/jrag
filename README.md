@@ -55,7 +55,7 @@ The operator-facing surface is **five** variables (plus MCP-only `JAVA_CODEBASE_
 
 | Variable | Purpose |
 |---|---|
-| `JAVA_CODEBASE_RAG_INDEX_DIR` | Directory for Lance tables, Kuzu at `code_graph.kuzu/`, and cocoindex state (`cocoindex.db`). Default: `./.java-codebase-rag/` under the resolved Java tree root. |
+| `JAVA_CODEBASE_RAG_INDEX_DIR` | Local filesystem **directory** for Lance tables, the Kuzu file `code_graph.kuzu`, and cocoindex state (`cocoindex.db`). Not a `lancedb://` or cloud URI — use a path. Default: `./.java-codebase-rag/` under the resolved Java tree root. |
 | `SBERT_MODEL` | Hub id or local directory; must match indexer. Overridable via `.java-codebase-rag.yml` `embedding.model` and `--embedding-model`. |
 | `SBERT_DEVICE` | Optional: `cpu`, `cuda`, `mps`. Overridable via YAML `embedding.device` and `--embedding-device`. |
 | `JAVA_CODEBASE_RAG_DEBUG_CONTEXT` | When truthy, verbose stderr logging for chunk context expansion (diagnostics only). |
@@ -82,19 +82,19 @@ mkdir -p .java-codebase-rag
 mv .lancedb-mcp/ignore .java-codebase-rag/ignore   # if you had a project-level ignore file
 ```
 
-**Environment rename quick reference** (old values are ignored; set the replacement explicitly):
+**Environment rename quick reference** (old values are ignored; set the replacement explicitly). **`JAVA_CODEBASE_RAG_INDEX_DIR` is always a host directory path** (for example `/srv/rag/acme/.java-codebase-rag` or `./.java-codebase-rag`); it replaces directory-style index roots, not `lancedb://…` connection strings.
 
-| Old | Replacement |
-|---|---|
-| `LANCEDB_URI` | `JAVA_CODEBASE_RAG_INDEX_DIR` |
-| `KUZU_DB_PATH` | *(removed)* — graph lives at `$JAVA_CODEBASE_RAG_INDEX_DIR/code_graph.kuzu` |
-| `LANCEDB_MCP_PROJECT_ROOT` | *(removed)* — use `--source-root` / cwd for CLI; `JAVA_CODEBASE_RAG_SOURCE_ROOT` for MCP |
-| `LANCEDB_MCP_MICROSERVICE_ROOTS` | *(removed)* — use `microservice_roots:` in `.java-codebase-rag.yml` only |
-| `LANCEDB_MCP_ALLOW_REFRESH` | *(removed)* — lifecycle commands have their own safety rules |
-| `LANCEDB_MCP_GRAPH_ENABLED` | *(removed)* — graph is on when `code_graph.kuzu` exists |
-| `LANCEDB_MCP_DEBUG_CONTEXT` | `JAVA_CODEBASE_RAG_DEBUG_CONTEXT` |
-| `LANCEDB_MCP_RUN_HEAVY` | `JAVA_CODEBASE_RAG_RUN_HEAVY` |
-| `COCOINDEX_DB` | *(removed from public surface)* — default state DB is under the index dir |
+| Old | Replacement | Typical shape |
+|---|---|---|
+| `LANCEDB_URI` | `JAVA_CODEBASE_RAG_INDEX_DIR` | Same path you used as the on-disk index folder (or the parent you meant to standardize as `.java-codebase-rag/`). |
+| `KUZU_DB_PATH` | *(removed)* — graph lives at `$JAVA_CODEBASE_RAG_INDEX_DIR/code_graph.kuzu` | Single Kuzu file inside the index dir. |
+| `LANCEDB_MCP_PROJECT_ROOT` | *(removed)* — use `--source-root` / cwd for CLI; `JAVA_CODEBASE_RAG_SOURCE_ROOT` for MCP | Absolute path to the Java repo root. |
+| `LANCEDB_MCP_MICROSERVICE_ROOTS` | *(removed)* — use `microservice_roots:` in `.java-codebase-rag.yml` only | YAML list of paths, not an env string. |
+| `LANCEDB_MCP_ALLOW_REFRESH` | *(removed)* — lifecycle commands have their own safety rules | n/a |
+| `LANCEDB_MCP_GRAPH_ENABLED` | *(removed)* — graph is on when `code_graph.kuzu` exists | n/a |
+| `LANCEDB_MCP_DEBUG_CONTEXT` | `JAVA_CODEBASE_RAG_DEBUG_CONTEXT` | `1` / `true` for verbose diagnostics. |
+| `LANCEDB_MCP_RUN_HEAVY` | `JAVA_CODEBASE_RAG_RUN_HEAVY` | `1` only when running heavy pytest locally. |
+| `COCOINDEX_DB` | *(removed from public surface)* — default state DB is under the index dir | e.g. `<index-dir>/cocoindex.db` |
 
 Python imports use the **`java_codebase_rag`** package (`python -m java_codebase_rag.cli`). There is no `user_rag` compatibility shim.
 
@@ -653,5 +653,5 @@ If no `.java-codebase-rag/ignore` exists anywhere under the project, behaviour m
 
 - `get_service_topology` — microservice-level summary aggregating `HTTP_CALLS` / `ASYNC_CALLS`.
 - Agentic routing layer (query classifier → vector / graph / both).
-- Incremental Kuzu updates (per-changed-file) — see [`propose/TIER2-INCREMENTAL-REBUILD-PROPOSE.md`](./propose/TIER2-INCREMENTAL-REBUILD-PROPOSE.md) and [`propose/REFRESH-CODE-INDEX-AUTO-MODE-PROPOSE.md`](./propose/REFRESH-CODE-INDEX-AUTO-MODE-PROPOSE.md).
+- Incremental Kuzu updates (per-changed-file) — see [`propose/TIER2-INCREMENTAL-REBUILD-PROPOSE.md`](./propose/TIER2-INCREMENTAL-REBUILD-PROPOSE.md) and [`propose/INDEX-AUTO-MODE-PROPOSE.md`](./propose/INDEX-AUTO-MODE-PROPOSE.md).
 - Optional `codegraph_nodes` LanceDB table embedding symbol summaries so the graph itself is vector-searchable.

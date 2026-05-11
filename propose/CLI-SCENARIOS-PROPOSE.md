@@ -314,7 +314,7 @@ Open a GitHub issue titled **"AST graph (Kuzu) incremental rebuild"** referencin
 - `.cursor/rules/*.mdc` — agent workflow / env / CLI contract; see **Agent rules audit** below (must match post-rename surface).
 - `CODEBASE_REQUIREMENTS.md` — every `.lancedb-mcp.yml` / `LANCEDB_MCP_*` / `lancedb_data` reference updated.
 - `mcp.json.example` — **PR-CLI-3 is a second pass only:** PR-CLI-2 updates this file so **env keys match the live server**; PR-CLI-3 reconciles comments, examples, and any doc drift — **no conflicting edits**; if both PRs touch it, **PR-CLI-2 wins** for structure, PR-CLI-3 for prose polish.
-- `propose/REFRESH-CODE-INDEX-AUTO-MODE-PROPOSE.md` — one-line note that `refresh` is being renamed to `reprocess`.
+- `propose/INDEX-AUTO-MODE-PROPOSE.md` — one-line note that `refresh` is being renamed to `reprocess`.
 - `propose/TIER2-INCREMENTAL-REBUILD-PROPOSE.md` — one-line note that the new tracking issue (created in PR-CLI-2) is the user-facing handle.
 - `propose/PRODUCT-VISION.md` — update `lancedb_data` mention (§ about Kuzu's on-disk footprint) and any `refresh` reference.
 - `.gitignore` — add `.java-codebase-rag/`, keep `lancedb_data/` for grace-period cleanup, or remove if PR-CLI-2 doesn't keep any compatibility shim.

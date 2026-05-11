@@ -18,8 +18,8 @@ for tools that don't read `.cursor/rules/`.
   - Active proposes: `TIER2-INCREMENTAL-REBUILD-PROPOSE.md` (Kuzu
     diff-driven rebuild), `RANKING-MICROSERVICE-PROPOSE.md`,
     `ENHANCED-ROLE-RECOGNITION-PROPOSE.md`,
-    the code-index auto-mode proposal in `propose/` (paired with TIER2 —
-    decision engine for incremental vs full),
+    `INDEX-AUTO-MODE-PROPOSE.md` (paired with TIER2 — decision engine for
+    incremental vs full),
     `DEFERRED-REST-CLIENT-MIGRATION-PROPOSE.md`, `PRODUCT-VISION.md`.
   - Active plans: `PLAN-POST-TIER1B-FOLLOWUPS.md` (PR-E1/PR-E2 —
     deferred catches collected from PR-D1/D2/D3 reviews).

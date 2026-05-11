@@ -3,7 +3,7 @@
 Status: **active — ready for planning**.
 User-facing tracking for graph-side incremental work: GitHub issue **#73** (linked from the `increment` stderr warning in `java_codebase_rag/cli.py`).
 Pairs with the focused MCP-tool proposal
-[`propose/REFRESH-CODE-INDEX-AUTO-MODE-PROPOSE.md`](REFRESH-CODE-INDEX-AUTO-MODE-PROPOSE.md)
+[`propose/INDEX-AUTO-MODE-PROPOSE.md`](INDEX-AUTO-MODE-PROPOSE.md)
 (decision engine for `refresh_code_index`) and supersedes its
 "future Kuzu work" footnote in [`propose/PRODUCT-VISION.md`](PRODUCT-VISION.md) §99.
 

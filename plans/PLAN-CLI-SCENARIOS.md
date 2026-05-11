@@ -283,7 +283,7 @@ Follow the **explicit file list** in propose §6 (`README.md`,
 `docs/MANUAL-VERIFICATION-CHECKLIST.md`, `docs/paper/paper.tex` + rebuild
 `paper.pdf`, `AGENTS.md`, **`.cursor/rules/*.mdc`** (agent rules audit),
 `CODEBASE_REQUIREMENTS.md`, `mcp.json.example` (comments only — keys from PR-CLI-2),
-`propose/REFRESH-CODE-INDEX-AUTO-MODE-PROPOSE.md`,
+`propose/INDEX-AUTO-MODE-PROPOSE.md`,
 `propose/TIER2-INCREMENTAL-REBUILD-PROPOSE.md`, `propose/PRODUCT-VISION.md`,
 `.gitignore`).
 
