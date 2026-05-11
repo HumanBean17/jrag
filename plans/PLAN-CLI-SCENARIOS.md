@@ -2,6 +2,7 @@
 
 Status: **active**. This plan implements
 [`propose/CLI-SCENARIOS-PROPOSE.md`](../propose/CLI-SCENARIOS-PROPOSE.md).
+**PR-CLI-1** (propose approval + plan tracking) is [#72](https://github.com/HumanBean17/java-codebase-rag/pull/72); merge that PR to `master` to close the gate on mainline.
 
 Depends on: **none** (engine work for Kuzu incremental rebuild stays under
 [`propose/TIER2-INCREMENTAL-REBUILD-PROPOSE.md`](../propose/TIER2-INCREMENTAL-REBUILD-PROPOSE.md)
@@ -70,7 +71,7 @@ before PR-CLI-2 so contributors exercising new subcommands do not pay multi-seco
 
 | PR | Scope | Ontology bump | Files touched (approx) | Test buckets | Independent of |
 | --- | --- | --- | --- | --- | --- |
-| **PR-CLI-1** | Land / freeze propose (doc-only merge of `CLI-SCENARIOS-PROPOSE.md` if not already on `master`) | none | `propose/CLI-SCENARIOS-PROPOSE.md` (status bump) | n/a | none |
+| **PR-CLI-1** | Land / freeze propose (doc-only merge of `CLI-SCENARIOS-PROPOSE.md` if not already on `master`) | none | `propose/CLI-SCENARIOS-PROPOSE.md` (status bump); `plans/PLAN-CLI-SCENARIOS.md` (tracking) | n/a | none |
 | **PR-CLI-2** | Full implementation: lifecycle handlers, env + YAML + index layout, package rename, `server.py` / indexer / path helpers, **`mcp_v2.py`**, **`path_filtering.py`** (`.lancedb-mcp/ignore` → `.java-codebase-rag/ignore`), help redesign, tracking issue constant, user-visible stderr hints; **`mcp.json.example`** env keys = source of truth | none | `pyproject.toml`, package dir rename, `server.py`, `mcp_v2.py`, `java_codebase_rag/cli.py`, `java_index_flow_lancedb.py`, `graph_enrich.py`, `path_filtering.py`, `search_lancedb.py`, `kuzu_queries.py`, `build_ast_graph.py`, tests, `mcp.json.example`, `.gitignore`, any other `user_rag` / env / path references in Python | unit + integration + help-structure test (see below) | PR-CLI-1 merged |
 | **PR-CLI-3** | Doc and example sweep + **`.cursor/rules/`** + migration sections + acceptance grep; **`mcp.json.example`** comment/example polish only (keys already correct from PR-CLI-2) | none | `README.md`, `docs/*`, `AGENTS.md`, `.cursor/rules/*.mdc`, `CODEBASE_REQUIREMENTS.md`, `mcp.json.example` (prose only if needed), selected `propose/*.md`, `.gitignore` notes | manual grep audit; `ruff` / `pytest` unchanged by docs | PR-CLI-2 merged |
 
@@ -120,7 +121,7 @@ Landing order: **PR-CLI-1 → PR-CLI-2 → PR-CLI-3**.
 
 | # | Step | File(s) | Done when |
 | --- | --- | --- | --- |
-| 1 | Review & merge propose | `propose/CLI-SCENARIOS-PROPOSE.md` | On `master` |
+| 1 | Review & merge propose | `propose/CLI-SCENARIOS-PROPOSE.md`; plan tracking in this file | [#72](https://github.com/HumanBean17/java-codebase-rag/pull/72) merged to `master` |
 
 ---
 
@@ -356,7 +357,7 @@ Add **Migration from legacy names** sections with explicit `mv` commands
 
 # Tracking
 
-- `PR-CLI-1`: _pending_
+- `PR-CLI-1`: **done (awaiting `master` merge)** — [#72](https://github.com/HumanBean17/java-codebase-rag/pull/72) (propose **approved** + this plan’s tracking update)
 - `PR-CLI-2`: _pending_
 - `PR-CLI-3`: _pending_
 - `Kuzu incremental tracking issue`: _pending_ (created during PR-CLI-2)
