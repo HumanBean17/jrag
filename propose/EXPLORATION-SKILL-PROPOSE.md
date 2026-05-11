@@ -1,6 +1,6 @@
 # EXPLORATION-SKILL — a standalone agent skill for exploring Java microservice estates
 
-**Status**: draft
+**Status**: approved — locked design for PR-EXPLORE-2 (§3–§7 authoritative).
 **Author**: Dmitriy Teriaev + Perplexity Computer
 **Date**: 2026-05-11
 
