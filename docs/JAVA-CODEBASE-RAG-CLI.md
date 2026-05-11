@@ -32,14 +32,14 @@ java-codebase-rag meta --source-root /path/to/java/repo --index-dir /path/to/.ja
 
 | Variable | Role |
 | -------- | ---- |
-| `JAVA_CODEBASE_RAG_INDEX_DIR` | Root directory for Lance tables, `code_graph.kuzu/`, and default cocoindex state. Default: `./.java-codebase-rag/` under the resolved Java tree root. Overridden by `--index-dir` or YAML `index_dir:`. |
+| `JAVA_CODEBASE_RAG_INDEX_DIR` | Root directory for Lance tables, the Kuzu file `code_graph.kuzu`, and default cocoindex state. Default: `./.java-codebase-rag/` under the resolved Java tree root. Overridden by `--index-dir` or YAML `index_dir:`. |
 | `SBERT_MODEL` / `SBERT_DEVICE` | Embedding model and device; must match the index. Overridden by `--embedding-model` / `--embedding-device` or YAML `embedding.model` / `embedding.device`. |
 | `JAVA_CODEBASE_RAG_DEBUG_CONTEXT` | Verbose stderr logging for context expansion (diagnostic). |
 | `JAVA_CODEBASE_RAG_RUN_HEAVY` | Test-only gate for slow end-to-end indexer tests (`pytest`). |
 
 **Precedence** (when a knob exists in more than one place): **CLI flag > env var > YAML (`.java-codebase-rag.yml`) > built-in default**.
 
-Legacy names (`LANCEDB_URI`, `LANCEDB_MCP_*`, `KUZU_DB_PATH`, `COCOINDEX_DB`, …) are **never** applied; the CLI may emit a **one-line stderr hint** if it detects them. Rename config with:
+Only the variable names in the table above are read as configuration. Rename on-disk config with:
 
 ```bash
 mv .lancedb-mcp.yml .java-codebase-rag.yml
@@ -101,7 +101,7 @@ java-codebase-rag increment --source-root /path/to/java/repo --index-dir /path/t
 
 ### `reprocess`
 
-Full **Lance reprocess** + **full Kuzu rebuild** (same pipeline as the historical `refresh` command).
+Full **Lance reprocess** + **full Kuzu rebuild** (full indexing pipeline).
 
 ```bash
 java-codebase-rag reprocess --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-rag --quiet
@@ -117,7 +117,7 @@ java-codebase-rag erase --source-root /path/to/java/repo --index-dir /path/to/.j
 
 ### Hidden `refresh` alias
 
-Invoking `java-codebase-rag refresh` runs **`reprocess`** and prints a one-line **stderr** deprecation warning. The alias is removed after the next release; migrate scripts to `reprocess`.
+Invoking `java-codebase-rag refresh` runs **`reprocess`** and prints a one-line **stderr** deprecation warning. Prefer **`reprocess`** in scripts.
 
 ## Introspection subcommands
 
@@ -159,7 +159,7 @@ git diff > /tmp/pr.diff
 java-codebase-rag analyze-pr --diff-file /tmp/pr.diff --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-rag
 ```
 
-Paths in the diff should align with **`Symbol.filename`** layout in the graph (project-relative Java paths). Use this from **PR-triage scripts** or Cursor skills instead of the removed MCP `analyze_pr` tool.
+Paths in the diff should align with **`Symbol.filename`** layout in the graph (project-relative Java paths). Use this from **PR-triage scripts** or Cursor skills; PR mapping is **CLI-only** (the MCP exposes retrieval tools only).
 
 ## Suggested workflows
 

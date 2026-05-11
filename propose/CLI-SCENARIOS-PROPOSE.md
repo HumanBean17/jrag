@@ -305,7 +305,7 @@ Open a GitHub issue titled **"AST graph (Kuzu) incremental rebuild"** referencin
 
 **PR-CLI-3 doc sweep.** Every file expected to need an edit; reviewer should run the acceptance grep at the end to confirm none missed.
 
-- `README.md` — §2 (env vars) shrunk to 5-row table; §5 (CLI reference) rewritten with new subcommand table; §6 (graph layer) updated for new YAML filename; §7 (brownfield overrides) examples renamed; §8 (ignore patterns) updated: **today** `path_filtering.py` uses project-level `<project>/.lancedb-mcp/ignore` and nested `<dir>/.lancedb-mcp/ignore`; **PR-CLI-2** renames that segment to **`<project>/.java-codebase-rag/ignore`** and **`<dir>/.java-codebase-rag/ignore`** (same layered semantics — not a second ignore mechanism); new "Migration from legacy names" section with explicit `mv` commands (operators with an existing `.lancedb-mcp/ignore` move it under `.java-codebase-rag/ignore`).
+- `README.md` — §2 (env vars) shrunk to 5-row table; §5 (CLI reference) rewritten with new subcommand table; §6 (graph layer) updated for new YAML filename; §7 (brownfield overrides) examples renamed; §8 (ignore patterns) updated: **today** `path_filtering.py` uses project-level `<project>/.lancedb-mcp/ignore` and nested `<dir>/.lancedb-mcp/ignore`; **PR-CLI-2** renames that segment to **`<project>/.java-codebase-rag/ignore`** and **`<dir>/.java-codebase-rag/ignore`** (same layered semantics — not a second ignore mechanism); **on-disk layout migration** subsection with explicit `mv` commands (operators with an existing `.lancedb-mcp/ignore` move it under `.java-codebase-rag/ignore`).
 - `docs/JAVA-CODEBASE-RAG-CLI.md` — operator playbook restructured per-scenario (`init` / `increment` / `reprocess` / `erase`), exit codes table updated, deprecation note for `refresh`, `python -m java_codebase_rag.cli` invocation example, env-var section updated.
 - `docs/AGENT-GUIDE.md` — any `refresh`, `LANCEDB_MCP_*`, or `.lancedb-mcp.yml` reference updated.
 - `docs/MANUAL-VERIFICATION-CHECKLIST.md` — setup phase replaces `refresh` with `init` (first-time path); env-var setup updated; YAML config filename updated.
@@ -317,7 +317,7 @@ Open a GitHub issue titled **"AST graph (Kuzu) incremental rebuild"** referencin
 - `propose/INDEX-AUTO-MODE-PROPOSE.md` — one-line note that `refresh` is being renamed to `reprocess`.
 - `propose/TIER2-INCREMENTAL-REBUILD-PROPOSE.md` — one-line note that the new tracking issue (created in PR-CLI-2) is the user-facing handle.
 - `propose/PRODUCT-VISION.md` — update `lancedb_data` mention (§ about Kuzu's on-disk footprint) and any `refresh` reference.
-- `.gitignore` — add `.java-codebase-rag/`, keep `lancedb_data/` for grace-period cleanup, or remove if PR-CLI-2 doesn't keep any compatibility shim.
+- `.gitignore` — add `.java-codebase-rag/`, keep `lancedb_data/` for grace-period cleanup, or remove if PR-CLI-2 drops that grace-period entry.
 
 **Agent rules audit (PR-CLI-3, manual checklist — use together with acceptance grep below):**
 

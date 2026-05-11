@@ -327,9 +327,9 @@ Expose the graph and vector index as discrete MCP tools. The live stdio server r
 | `describe` | Return one node record plus per-edge-type in/out summary |
 | `neighbors` | One-hop traversal over explicit `direction` and `edge_types` (batch ids supported) |
 
-**Operator CLI (not MCP):** Graph meta, Lance table inventory, ignore diagnostics, PR diff analysis, and index lifecycle (`init`, `increment`, `reprocess`, `erase`) are implemented only on the `java-codebase-rag` CLI (`meta`, `tables`, `diagnose-ignore`, `analyze-pr`, plus the lifecycle verbs). Older MCP tool names (`graph_meta`, `list_code_index_tables`, `analyze_pr`, `diagnose_ignore`, `refresh_code_index`) are not registered on the wire.
+**Operator CLI (not MCP):** Graph meta, Lance table inventory, ignore diagnostics, PR diff analysis, and index lifecycle (`init`, `increment`, `reprocess`, `erase`) are implemented only on the `java-codebase-rag` CLI (`meta`, `tables`, `diagnose-ignore`, `analyze-pr`, plus the lifecycle verbs). The MCP wire surface is the four retrieval tools in the table above.
 
-The v1 navigation verbs are removed; the `describe(id=...)` parameter name remains the stable contract in v2.
+The `describe(id=...)` parameter name is the stable v2 contract for single-node introspection.
 
 This tool-per-capability model lets the agent (e.g. Claude Code) pick the right retrieval per sub-question, rather than always running a fixed pipeline.[^23][^24]
 

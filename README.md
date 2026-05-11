@@ -63,17 +63,17 @@ The operator-facing surface is **five** variables (plus MCP-only `JAVA_CODEBASE_
 
 **MCP host launchers** also set `JAVA_CODEBASE_RAG_SOURCE_ROOT` to the Java repository root when it differs from the server process cwd (see `mcp.json.example`).
 
-Legacy names (`LANCEDB_URI`, `LANCEDB_MCP_*`, `KUZU_DB_PATH`, `COCOINDEX_DB`, …) are **not** read for configuration; the CLI may print a one-line stderr hint if it detects them. Project config must live in **`.java-codebase-rag.yml`** (or `.yaml`) — see the migration block below.
+Only the names in the table above (plus `JAVA_CODEBASE_RAG_SOURCE_ROOT` for MCP hosts) are read as configuration. Project config belongs in **`.java-codebase-rag.yml`** (or `.yaml`).
 
-### Migration from legacy names
+### On-disk layout migration
 
-If you still have paths or files from older installs:
+If you still have paths or files from older layout conventions:
 
 ```bash
 # Default index directory (when you intend to keep the same data)
 mv lancedb_data .java-codebase-rag
 
-# Project YAML (loader does not read the old filename)
+# Project YAML (only `.java-codebase-rag.yml` / `.yaml` are loaded)
 mv .lancedb-mcp.yml .java-codebase-rag.yml
 # or: mv .lancedb-mcp.yaml .java-codebase-rag.yaml
 
@@ -82,25 +82,18 @@ mkdir -p .java-codebase-rag
 mv .lancedb-mcp/ignore .java-codebase-rag/ignore   # if you had a project-level ignore file
 ```
 
-**Environment rename quick reference** (old values are ignored; set the replacement explicitly). **`JAVA_CODEBASE_RAG_INDEX_DIR` is always a host directory path** (for example `/srv/rag/acme/.java-codebase-rag` or `./.java-codebase-rag`); it replaces directory-style index roots, not `lancedb://…` connection strings.
+**Where things live today** (for scripts and operators):
 
-| Old | Replacement | Typical shape |
-|---|---|---|
-| `LANCEDB_URI` | `JAVA_CODEBASE_RAG_INDEX_DIR` | Same path you used as the on-disk index folder (or the parent you meant to standardize as `.java-codebase-rag/`). |
-| `KUZU_DB_PATH` | *(removed)* — graph lives at `$JAVA_CODEBASE_RAG_INDEX_DIR/code_graph.kuzu` | Single Kuzu file inside the index dir. |
-| `LANCEDB_MCP_PROJECT_ROOT` | *(removed)* — use `--source-root` / cwd for CLI; `JAVA_CODEBASE_RAG_SOURCE_ROOT` for MCP | Absolute path to the Java repo root. |
-| `LANCEDB_MCP_MICROSERVICE_ROOTS` | *(removed)* — use `microservice_roots:` in `.java-codebase-rag.yml` only | YAML list of paths, not an env string. |
-| `LANCEDB_MCP_ALLOW_REFRESH` | *(removed)* — lifecycle commands have their own safety rules | n/a |
-| `LANCEDB_MCP_GRAPH_ENABLED` | *(removed)* — graph is on when `code_graph.kuzu` exists | n/a |
-| `LANCEDB_MCP_DEBUG_CONTEXT` | `JAVA_CODEBASE_RAG_DEBUG_CONTEXT` | `1` / `true` for verbose diagnostics. |
-| `LANCEDB_MCP_RUN_HEAVY` | `JAVA_CODEBASE_RAG_RUN_HEAVY` | `1` only when running heavy pytest locally. |
-| `COCOINDEX_DB` | *(removed from public surface)* — default state DB is under the index dir | e.g. `<index-dir>/cocoindex.db` |
+- **`JAVA_CODEBASE_RAG_INDEX_DIR`** — filesystem path to the index directory (not a URI). Lance opens this directory; Kuzu is always `<index-dir>/code_graph.kuzu`; cocoindex keeps **`cocoindex.db`** next to them.
+- **Java tree root** — CLI: `--source-root` (else cwd). MCP stdio: set `JAVA_CODEBASE_RAG_SOURCE_ROOT` when the Java repo root differs from the server process cwd.
+- **`microservice_roots`** — configure only under **`microservice_roots:`** in `.java-codebase-rag.yml` (or `.yaml`).
+- **Chunk context diagnostics / heavy tests** — `JAVA_CODEBASE_RAG_DEBUG_CONTEXT`, `JAVA_CODEBASE_RAG_RUN_HEAVY` (see the table above).
 
-Python imports use the **`java_codebase_rag`** package (`python -m java_codebase_rag.cli`). There is no `user_rag` compatibility shim.
+Python package: **`java_codebase_rag`** (`python -m java_codebase_rag.cli`).
 
-**Operator note:** `java-codebase-rag refresh` remains available **one release** as a hidden alias of `reprocess` (stderr deprecation only); new scripts should call `reprocess`.
+**Operator note:** the hidden CLI verb **`refresh`** invokes **`reprocess`** and prints a one-line stderr deprecation; call **`reprocess`** in new scripts.
 
-If you suspect an orphaned old index directory is wasting disk, search your machine for directories named `lancedb_data` and remove or archive them after you have migrated data into `.java-codebase-rag/`.
+If an old on-disk index folder is wasting space, relocate or delete it after your data lives under `.java-codebase-rag/` (some installs used a top-level directory named `lancedb_data`).
 
 ---
 
@@ -167,12 +160,12 @@ Shared flags on all subcommands: `--source-root`, `--index-dir`, `--embedding-mo
 |---|---|---|
 | Lifecycle | `init` | First-time index; refuses if the index dir already has artifacts. |
 | Lifecycle | `increment` | CocoIndex catch-up (Lance only); prints a stderr warning that Kuzu is unchanged until `reprocess`. |
-| Lifecycle | `reprocess` | Full Lance reprocess + full Kuzu rebuild (same pipeline as the legacy `refresh` command). |
+| Lifecycle | `reprocess` | Full Lance reprocess + full Kuzu rebuild (full indexing pipeline). |
 | Lifecycle | `erase` | Deletes index artifacts; requires `--yes` or interactive TTY confirm. |
 | Introspection | `meta`, `tables`, `diagnose-ignore` | Health, table listing, ignore-layer diagnostics. |
 | Analysis | `analyze-pr` | Blast-radius / risk from a unified diff. |
 
-The hidden alias `refresh` → `reprocess` prints a one-line stderr deprecation and will be removed after the next release.
+The hidden alias `refresh` → `reprocess` prints a one-line stderr deprecation; prefer `reprocess` in scripts.
 
 Examples:
 
@@ -354,7 +347,7 @@ Combined, these pull `processClientMessage` / `pickEligibleOperator` / `onOperat
 
 ### Debugging empty `context_before` / `context_after`
 
-If `context_neighbors=1` returns empty context strings, set `JAVA_CODEBASE_RAG_DEBUG_CONTEXT=1` in the MCP server env before launching. The server logs (to stderr) why expansion bailed: missing schema columns, empty bucket scan, chunk not found in bucket, or underlying scan error. Typical causes are (a) a stale server that hasn't reloaded after a reindex, or (b) a legacy index without `range_start` / `range_end` — the code falls back to exact-text matching, so re-running fixes it.
+If `context_neighbors=1` returns empty context strings, set `JAVA_CODEBASE_RAG_DEBUG_CONTEXT=1` in the MCP server env before launching. The server logs (to stderr) why expansion bailed: missing schema columns, empty bucket scan, chunk not found in bucket, or underlying scan error. Typical causes are (a) a stale server that hasn't reloaded after a reindex, or (b) an index missing `range_start` / `range_end` columns — the code falls back to exact-text matching, so re-running fixes it.
 
 ---
 
@@ -466,7 +459,7 @@ Usage:
 public class LegacyChatService { /* ... */ }
 ```
 
-> Legacy string-literal forms (`@CodebaseRole("SERVICE")`) are no longer applied by the resolver.
+> Resolver binds `@CodebaseRole(CodebaseRoleKind.…)`; string-literal `@CodebaseRole("…")` forms are ignored.
 
 #### Direction matters: inbound vs outbound
 
