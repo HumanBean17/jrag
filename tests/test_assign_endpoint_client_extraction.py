@@ -19,7 +19,7 @@ def _copy_stubs(dest: Path) -> None:
 
 def _build(tmp: Path, yml: str | None, extra_files: dict[str, str]) -> Path:
     if yml is not None:
-        (tmp / ".lancedb-mcp.yml").write_text(yml, encoding="utf-8")
+        (tmp / ".java-codebase-rag.yml").write_text(yml, encoding="utf-8")
     _copy_stubs(tmp)
     for rel, body in extra_files.items():
         p = tmp / rel

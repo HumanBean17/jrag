@@ -28,7 +28,7 @@ if str(BUNDLE_DIR) not in sys.path:
 def pytest_configure(config) -> None:
     config.addinivalue_line(
         "markers",
-        "lance_e2e: end-to-end cocoindex + Lance (optional; also gate with LANCEDB_MCP_RUN_HEAVY).",
+        "lance_e2e: end-to-end cocoindex + Lance (optional; also gate with JAVA_CODEBASE_RAG_RUN_HEAVY).",
     )
 
 
@@ -71,16 +71,14 @@ def kuzu_db_path(tmp_path_factory, corpus_root: Path) -> Path:
 def mcp_env(kuzu_db_path: Path, tmp_path_factory) -> dict[str, str]:
     """Configure env vars the MCP server reads on startup.
 
-    LANCEDB_URI points at an *empty* directory: it must exist (server
-    validates with `Path(uri).exists()`) but does not need to contain a
-    real index, because graph-only tools don't touch LanceDB.
+    ``JAVA_CODEBASE_RAG_INDEX_DIR`` is the parent of ``code_graph.kuzu`` so
+    ``resolve_kuzu_path()`` matches the session graph fixture. Lance tables
+    are not required for graph-only tools.
     """
-    fake_lance = tmp_path_factory.mktemp("fake_lancedb_data")
+    idx_dir = kuzu_db_path.parent
     env = {
-        "KUZU_DB_PATH": str(kuzu_db_path),
-        "LANCEDB_URI": str(fake_lance),
-        "LANCEDB_MCP_GRAPH_ENABLED": "1",
-        "LANCEDB_MCP_PROJECT_ROOT": str(CORPUS_ROOT),
+        "JAVA_CODEBASE_RAG_INDEX_DIR": str(idx_dir),
+        "JAVA_CODEBASE_RAG_SOURCE_ROOT": str(CORPUS_ROOT),
     }
     for k, v in env.items():
         os.environ[k] = v

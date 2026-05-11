@@ -382,7 +382,9 @@ def search_v2(
         model_name = os.environ.get("SBERT_MODEL", SBERT_MODEL)
         device = os.environ.get("SBERT_DEVICE") or None
         model = _get_sentence_transformer(model_name, device)
-        uri = os.environ.get("LANCEDB_URI", "./lancedb_data")
+        uri = os.environ.get("JAVA_CODEBASE_RAG_INDEX_DIR", "").strip() or str(
+            (Path.cwd() / ".java-codebase-rag").resolve()
+        )
         uri_path = Path(uri)
         if not uri.startswith(("s3://", "gs://", "az://")) and uri_path.exists():
             uri = str(uri_path.resolve())

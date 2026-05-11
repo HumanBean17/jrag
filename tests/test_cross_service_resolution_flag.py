@@ -1,4 +1,4 @@
-"""PR-G1: `cross_service_resolution` in `.lancedb-mcp.yml` (auto vs brownfield_only)."""
+"""PR-G1: `cross_service_resolution` in `.java-codebase-rag.yml` (auto vs brownfield_only)."""
 from __future__ import annotations
 
 import io
@@ -71,7 +71,7 @@ def test_cross_service_resolution_auto_default(tmp_path: Path) -> None:
 def test_brownfield_only_suppresses_auto_cross_service(tmp_path: Path) -> None:
     root = tmp_path / "proj"
     _copy_fixture(root)
-    (root / ".lancedb-mcp.yml").write_text(
+    (root / ".java-codebase-rag.yml").write_text(
         "cross_service_resolution: brownfield_only\n",
         encoding="utf-8",
     )
@@ -84,7 +84,7 @@ def test_brownfield_only_suppresses_auto_cross_service(tmp_path: Path) -> None:
 def test_brownfield_only_keeps_annotated_cross_service(tmp_path: Path) -> None:
     root = tmp_path / "proj"
     _copy_fixture(root)
-    (root / ".lancedb-mcp.yml").write_text(
+    (root / ".java-codebase-rag.yml").write_text(
         "cross_service_resolution: brownfield_only\n",
         encoding="utf-8",
     )
@@ -121,7 +121,7 @@ def test_brownfield_only_keeps_annotated_cross_service(tmp_path: Path) -> None:
 def test_brownfield_only_suppresses_feign_auto_cross_service(tmp_path: Path) -> None:
     root = tmp_path / "proj"
     _copy_fixture(root)
-    (root / ".lancedb-mcp.yml").write_text(
+    (root / ".java-codebase-rag.yml").write_text(
         "cross_service_resolution: brownfield_only\n",
         encoding="utf-8",
     )
@@ -136,7 +136,7 @@ def test_meta_reports_cross_service_resolution(tmp_path: Path) -> None:
 
     root = tmp_path / "proj"
     _copy_fixture(root)
-    (root / ".lancedb-mcp.yml").write_text(
+    (root / ".java-codebase-rag.yml").write_text(
         "cross_service_resolution: brownfield_only\n",
         encoding="utf-8",
     )
@@ -233,7 +233,7 @@ def test_meta_resolution_null_for_old_graphs(tmp_path: Path) -> None:
 def test_unknown_value_falls_back_to_auto(tmp_path: Path) -> None:
     root = tmp_path / "ymlonly"
     root.mkdir()
-    (root / ".lancedb-mcp.yml").write_text(
+    (root / ".java-codebase-rag.yml").write_text(
         "cross_service_resolution: nonsense\n",
         encoding="utf-8",
     )
@@ -247,7 +247,7 @@ def test_unknown_value_falls_back_to_auto(tmp_path: Path) -> None:
 def test_brownfield_client_with_auto_route_does_not_match(tmp_path: Path) -> None:
     root = tmp_path / "proj"
     _copy_fixture(root)
-    (root / ".lancedb-mcp.yml").write_text(
+    (root / ".java-codebase-rag.yml").write_text(
         "cross_service_resolution: brownfield_only\n",
         encoding="utf-8",
     )

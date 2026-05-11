@@ -39,13 +39,10 @@ def resolve_kuzu_path(explicit: str | None = None) -> str:
     """Resolve the Kuzu DB path the same way the builder does."""
     if explicit:
         return str(Path(explicit).expanduser())
-    env = os.environ.get("KUZU_DB_PATH", "").strip()
-    if env:
-        return str(Path(os.path.expanduser(env)))
-    lance = os.environ.get("LANCEDB_URI", "").strip()
-    if lance and not lance.startswith(("s3://", "gs://", "az://")):
-        return str(Path(os.path.expanduser(lance.rstrip("/"))) / "code_graph.kuzu")
-    return "./lancedb_data/code_graph.kuzu"
+    idx = os.environ.get("JAVA_CODEBASE_RAG_INDEX_DIR", "").strip()
+    if idx and not idx.startswith(("s3://", "gs://", "az://")):
+        return str(Path(os.path.expanduser(idx.rstrip("/"))) / "code_graph.kuzu")
+    return str((Path.cwd() / ".java-codebase-rag" / "code_graph.kuzu").resolve())
 
 
 @dataclass
@@ -314,8 +311,8 @@ class KuzuGraph:
                         f"Graph ontology version {graph_version} is older than the "
                         f"required version {_ONTOLOGY_VERSION}. "
                         "Rebuild the graph: `python build_ast_graph.py --source-root <repo>`, "
-                        "or set LANCEDB_MCP_ALLOW_REFRESH=1 and run "
-                        "`java-codebase-rag refresh --source-root <repo>` for a full Lance+Kuzu re-index."
+                        "or run `java-codebase-rag reprocess --source-root <repo>` for a full "
+                        "Lance+Kuzu re-index."
                     )
                 cls._instance = instance
                 cls._instance_path = resolved

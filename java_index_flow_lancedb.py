@@ -4,10 +4,9 @@ CocoIndex 1.0 app: index Java, Flyway SQL, and YAML into LanceDB.
 LanceDB requires a single primary key per table; each chunk gets a UUID `id`.
 
 Environment:
-  LANCEDB_URI — database directory or URI (default: ./lancedb_data)
-  COCOINDEX_DB — CocoIndex state DB path (optional)
-  LANCEDB_MCP_PROJECT_ROOT — when set, Java/SQL/YAML files under this path are indexed
-    (otherwise the process working directory, e.g. cocoindex cwd)
+  JAVA_CODEBASE_RAG_INDEX_DIR — Lance tables + Kuzu + cocoindex state (default: ./.java-codebase-rag)
+  JAVA_CODEBASE_RAG_SOURCE_ROOT — Java repo root for indexing (optional; else cocoindex cwd)
+  SBERT_MODEL / SBERT_DEVICE — embedding (optional; YAML also supported via java-codebase-rag CLI)
 
 Dependencies:
   pip install "cocoindex[lancedb]" sentence-transformers
@@ -120,10 +119,15 @@ class YamlLanceChunk:
 
 @coco.lifespan
 async def coco_lifespan(builder: coco.EnvironmentBuilder) -> AsyncIterator[None]:
-    builder.settings.db_path = Path(
-        os.environ.get("COCOINDEX_DB", "./cocoindex_java_lance.db")
-    )
-    env_root = os.environ.get("LANCEDB_MCP_PROJECT_ROOT", "").strip()
+    idx_raw = os.environ.get("JAVA_CODEBASE_RAG_INDEX_DIR", "").strip()
+    if idx_raw and not idx_raw.startswith(("s3://", "gs://", "az://")):
+        index_dir = Path(idx_raw).expanduser().resolve()
+    else:
+        index_dir = (Path(".").resolve() / ".java-codebase-rag").resolve()
+    index_dir.mkdir(parents=True, exist_ok=True)
+    builder.settings.db_path = index_dir / "cocoindex.db"
+
+    env_root = os.environ.get("JAVA_CODEBASE_RAG_SOURCE_ROOT", "").strip()
     if env_root:
         root = Path(env_root).expanduser().resolve()
     else:
@@ -132,11 +136,12 @@ async def coco_lifespan(builder: coco.EnvironmentBuilder) -> AsyncIterator[None]
 
     embedder = SentenceTransformerEmbedder(
         SBERT_MODEL,
+        device=os.environ.get("SBERT_DEVICE") or None,
         trust_remote_code=True,
     )
     builder.provide(EMBEDDER, embedder)
 
-    uri = os.environ.get("LANCEDB_URI", "./lancedb_data")
+    uri = str(index_dir)
 
     @asynccontextmanager
     async def _lance_cm() -> AsyncIterator[Any]:

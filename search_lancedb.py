@@ -539,11 +539,11 @@ def _search_one_table(
 
 
 def _debug_ctx(msg: str) -> None:
-    """Emit context-expansion diagnostics when LANCEDB_MCP_DEBUG_CONTEXT is set.
+    """Emit context-expansion diagnostics when JAVA_CODEBASE_RAG_DEBUG_CONTEXT is set.
 
     Writes to stderr so it doesn't pollute MCP stdout. Cheap no-op otherwise.
     """
-    if os.environ.get("LANCEDB_MCP_DEBUG_CONTEXT"):
+    if os.environ.get("JAVA_CODEBASE_RAG_DEBUG_CONTEXT"):
         print(f"[context_neighbors] {msg}", file=sys.stderr)
 
 
@@ -940,7 +940,8 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=10)
     parser.add_argument(
         "--lancedb-uri",
-        default=os.environ.get("LANCEDB_URI", "./lancedb_data"),
+        default=os.environ.get("JAVA_CODEBASE_RAG_INDEX_DIR", "")
+        or str((Path.cwd() / ".java-codebase-rag").resolve()),
     )
     parser.add_argument("--path-contains", metavar="SUBSTR", default=None)
     parser.add_argument("--model", default=SBERT_MODEL)

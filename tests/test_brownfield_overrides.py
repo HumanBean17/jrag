@@ -135,7 +135,7 @@ class TestResolveBasics:
 
 class TestConfigWarnings:
     def test_unknown_role_dropped(self, tmp_path: Path) -> None:
-        yml = tmp_path / ".lancedb-mcp.yaml"
+        yml = tmp_path / ".java-codebase-rag.yaml"
         yml.write_text(
             "role_overrides:\n  annotations:\n    W: __NOT_A_REAL_ROLE__\n",
             encoding="utf-8",
@@ -147,7 +147,7 @@ class TestConfigWarnings:
         assert "NOT_A_REAL" in f.getvalue() or "unknown" in f.getvalue().lower()
 
     def test_malformed_yaml_produces_empty_overrides(self, tmp_path: Path) -> None:
-        (tmp_path / ".lancedb-mcp.yaml").write_text(
+        (tmp_path / ".java-codebase-rag.yaml").write_text(
             "role_overrides: [\n  not closed\n",
             encoding="utf-8",
         )
@@ -465,7 +465,7 @@ def test_fqn_fires_with_enrich_chunk_lance_path(tmp_path: Path) -> None:
     """Regression: role_overrides fqn + enrich_chunk feeds capabilities to callers."""
     from graph_enrich import enrich_chunk
 
-    y = tmp_path / ".lancedb-mcp.yaml"
+    y = tmp_path / ".java-codebase-rag.yaml"
     y.write_text(
         "role_overrides:\n  fqn:\n"
         "    com.legacy.Foo: { role: SERVICE, capabilities: [MESSAGE_LISTENER] }\n",

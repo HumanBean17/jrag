@@ -3,8 +3,8 @@
 Resolution order (later overrides earlier; innermost nested wins among peers):
 
 1. ``builtin_default`` — legacy ``COMMON_EXCLUDED_PATH_PATTERNS`` (gitignore-style).
-2. ``project_root`` — ``<project>/.lancedb-mcp/ignore``.
-3. ``nested`` — each ``<dir>/.lancedb-mcp/ignore`` along the path from project root
+2. ``project_root`` — ``<project>/.java-codebase-rag/ignore``.
+3. ``nested`` — each ``<dir>/.java-codebase-rag/ignore`` along the path from project root
    to the file's parent (outer dirs first, inner dirs last).
 4. ``gitignore`` — each ``.gitignore`` from project root down to the file's parent
    (when ``use_gitignore`` is true), using :class:`pathspec.GitIgnoreSpec`.
@@ -34,7 +34,7 @@ from pathspec import GitIgnoreSpec
 # a build-tool indicator (``pom.xml``, ``build.gradle``, ``build.gradle.kts``,
 # ``settings.gradle``, ``settings.gradle.kts``) — see ``_is_build_output_dir``
 # and ``BUILD_DIR_NAMES``. If you genuinely need to skip an arbitrary nested
-# directory, add a ``.lancedb-mcp/ignore`` entry at the project or subtree root.
+# directory, add a ``.java-codebase-rag/ignore`` entry at the project or subtree root.
 COMMON_EXCLUDED_PATH_PATTERNS: list[str] = [
     "**/.*",
     "**/.git/**",
@@ -136,8 +136,8 @@ def _line_has_negation(lines: Sequence[str]) -> bool:
     return False
 
 
-def _scan_negation_any_lancedb(project_root: Path) -> bool:
-    """Return True if any ``.lancedb-mcp/ignore`` contains a negation (``!``) line.
+def _scan_negation_any_bundle_ignore(project_root: Path) -> bool:
+    """Return True if any ``.java-codebase-rag/ignore`` contains a negation (``!``) line.
 
     Runs one ``rglob`` at :class:`LayeredIgnore` construction. Fine for typical
     repos; very large monorepos pay a full-tree walk on every new ``LayeredIgnore``
@@ -145,7 +145,7 @@ def _scan_negation_any_lancedb(project_root: Path) -> bool:
     """
     root = project_root.resolve()
     try:
-        for p in root.rglob(".lancedb-mcp"):
+        for p in root.rglob(".java-codebase-rag"):
             if not p.is_dir():
                 continue
             ign = p / "ignore"
@@ -157,7 +157,7 @@ def _scan_negation_any_lancedb(project_root: Path) -> bool:
 
 
 def _scan_negation_any_gitignore(project_root: Path) -> bool:
-    """See :func:`_scan_negation_any_lancedb` (also uses ``rglob``)."""
+    """See :func:`_scan_negation_any_bundle_ignore` (also uses ``rglob``)."""
     root = project_root.resolve()
     try:
         for p in root.rglob(".gitignore"):
@@ -227,7 +227,7 @@ def _mega_build_for_rel(
     dir_parts = parts[:-1] if len(parts) > 1 else ()
     for i in range(1, len(dir_parts) + 1):
         anchor = self_root.joinpath(*dir_parts[:i])
-        nested_path = anchor / ".lancedb-mcp" / "ignore"
+        nested_path = anchor / ".java-codebase-rag" / "ignore"
         if not nested_path.is_file():
             continue
         prefix = anchor.relative_to(self_root).as_posix()
@@ -292,12 +292,12 @@ class LayeredIgnore:
             if builtin_patterns is not None
             else list(COMMON_EXCLUDED_PATH_PATTERNS)
         )
-        self._project_ignore_path = self.project_root / ".lancedb-mcp" / "ignore"
+        self._project_ignore_path = self.project_root / ".java-codebase-rag" / "ignore"
         self._project_lines: list[str] | None = None
         if self._project_ignore_path.is_file():
             self._project_lines = _read_ignore_lines(self._project_ignore_path)
         self._permissive_coco_walk = (
-            _scan_negation_any_lancedb(self.project_root)
+            _scan_negation_any_bundle_ignore(self.project_root)
             or (use_gitignore and _scan_negation_any_gitignore(self.project_root))
         )
 

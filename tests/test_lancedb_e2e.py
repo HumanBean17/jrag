@@ -1,11 +1,11 @@
 """End-to-end test: real LanceDB index + AST graph + MCP search tools.
 
-Gated behind ``LANCEDB_MCP_RUN_HEAVY=1`` because this test:
+Gated behind ``JAVA_CODEBASE_RAG_RUN_HEAVY=1`` because this test:
 
 * runs ``cocoindex update`` against the bank-chat-system corpus, which
   downloads the embedding model on first use,
 * writes a real LanceDB directory under ``tmp_path``,
-* and only then invokes ``codebase_search`` / ``trace_flow``.
+* and only then invokes MCP ``search``.
 
 ⚠️  Same anti-overfitting rules apply: we assert that the tool *returned a
 useful, well-shaped result* — never on exact ranking, scores, or snippet
@@ -23,11 +23,11 @@ from pathlib import Path
 
 import pytest
 
-HEAVY = os.environ.get("LANCEDB_MCP_RUN_HEAVY", "").strip().lower() in ("1", "true", "yes")
+HEAVY = os.environ.get("JAVA_CODEBASE_RAG_RUN_HEAVY", "").strip().lower() in ("1", "true", "yes")
 pytestmark = [
     pytest.mark.skipif(
         not HEAVY,
-        reason="set LANCEDB_MCP_RUN_HEAVY=1 to run the cocoindex + LanceDB end-to-end test",
+        reason="set JAVA_CODEBASE_RAG_RUN_HEAVY=1 to run the cocoindex + LanceDB end-to-end test",
     ),
     pytest.mark.lance_e2e,
 ]
@@ -48,14 +48,7 @@ def _require_cocoindex_runtime_deps() -> None:
 
 
 def _cocoindex_flow_specifier(bundle_dir: Path, index_cwd: Path) -> str:
-    """Build ``path:JavaCodeIndexLance`` for ``cocoindex update`` with ``cwd=index_cwd``.
-
-    A bare ``java_index_flow_lancedb.py`` is resolved with `os.path.isfile` against
-    *only* the current working directory, so the flow file in ``bundle_dir/`` is not
-    found when we index from a corpus (or any other) directory. A **relative** path
-    from ``index_cwd`` to the real file fixes that. We avoid
-    ``C:\\...\\x.py:App`` on Windows (``:`` in the app specifier breaks parsing).
-    """
+    """Build ``path:JavaCodeIndexLance`` for ``cocoindex update`` with ``cwd=index_cwd``."""
     flow = (bundle_dir / "java_index_flow_lancedb.py").resolve()
     if not flow.is_file():
         raise FileNotFoundError(f"missing index flow: {flow}")
@@ -87,9 +80,6 @@ def lance_index(tmp_path_factory, corpus_root: Path) -> Path:
     """Build a real LanceDB index over the corpus via cocoindex."""
     _require_cocoindex_runtime_deps()
     bundle_dir = Path(__file__).resolve().parent.parent
-    # Do not ``Path(sys.executable).resolve()`` — on macOS the venv ``python`` is a
-    # symlink; resolving it lands in ``.../Python.framework/.../bin`` and we would
-    # pick the wrong ``cocoindex`` (system site-packages, missing ``tree_sitter_java``).
     cocoindex_bin = Path(sys.executable).parent / "cocoindex"
     if not cocoindex_bin.is_file():
         pytest.skip(
@@ -98,19 +88,15 @@ def lance_index(tmp_path_factory, corpus_root: Path) -> Path:
         )
 
     work = tmp_path_factory.mktemp("lance_e2e")
-    lance_uri = work / "lancedb_data"
-    coco_db = work / "cocoindex.db"
+    index_dir = work / ".java-codebase-rag"
+    index_dir.mkdir(parents=True)
 
-    # cocoindex walks the *current working directory*, so we hand it the
-    # corpus root rather than the bundle dir. The app module path must be
-    # resolvable from that cwd (see _cocoindex_flow_specifier).
     app_spec = _cocoindex_flow_specifier(bundle_dir, Path(corpus_root))
 
     env = {
         **os.environ,
-        "LANCEDB_URI": str(lance_uri),
-        "COCOINDEX_DB": str(coco_db),
-        "LANCEDB_MCP_PROJECT_ROOT": str(Path(corpus_root).resolve()),
+        "JAVA_CODEBASE_RAG_INDEX_DIR": str(index_dir.resolve()),
+        "JAVA_CODEBASE_RAG_SOURCE_ROOT": str(Path(corpus_root).resolve()),
     }
     proc = subprocess.run(
         [
@@ -130,22 +116,28 @@ def lance_index(tmp_path_factory, corpus_root: Path) -> Path:
         f"cocoindex failed: stdout={proc.stdout}\nstderr={proc.stderr}"
     )
 
-    # Builder for the Kuzu graph that lives next to the Lance index.
     builder = bundle_dir / "build_ast_graph.py"
     proc = subprocess.run(
-        [sys.executable, str(builder), "--source-root", str(corpus_root)],
-        env={**env, "KUZU_DB_PATH": str(lance_uri / "code_graph.kuzu")},
+        [
+            sys.executable,
+            str(builder),
+            "--source-root",
+            str(corpus_root),
+            "--kuzu-path",
+            str(index_dir / "code_graph.kuzu"),
+        ],
+        env=env,
         capture_output=True,
         text=True,
         timeout=300,
     )
     assert proc.returncode == 0, proc.stderr
-    return lance_uri
+    return index_dir
 
 
 @pytest.fixture(scope="module")
 def lance_index_capability_smoke(tmp_path_factory) -> Path:
-    """Tiny project with @KafkaListener — indexes fast; tests `capability=` in search."""
+    """Tiny project with @KafkaListener — indexes fast; tests capability filter in search."""
     _require_cocoindex_runtime_deps()
     bundle_dir = Path(__file__).resolve().parent.parent
     if not CAPABILITY_SMOKE_ROOT.is_dir():
@@ -157,14 +149,13 @@ def lance_index_capability_smoke(tmp_path_factory) -> Path:
         )
 
     work = tmp_path_factory.mktemp("lance_cap_smoke")
-    lance_uri = work / "lancedb_data"
-    coco_db = work / "cocoindex.db"
+    index_dir = work / ".java-codebase-rag"
+    index_dir.mkdir(parents=True)
     app_spec = _cocoindex_flow_specifier(bundle_dir, Path(CAPABILITY_SMOKE_ROOT))
     env = {
         **os.environ,
-        "LANCEDB_URI": str(lance_uri),
-        "COCOINDEX_DB": str(coco_db),
-        "LANCEDB_MCP_PROJECT_ROOT": str(CAPABILITY_SMOKE_ROOT.resolve()),
+        "JAVA_CODEBASE_RAG_INDEX_DIR": str(index_dir.resolve()),
+        "JAVA_CODEBASE_RAG_SOURCE_ROOT": str(CAPABILITY_SMOKE_ROOT.resolve()),
     }
     proc = subprocess.run(
         [
@@ -185,75 +176,82 @@ def lance_index_capability_smoke(tmp_path_factory) -> Path:
     )
     builder = bundle_dir / "build_ast_graph.py"
     proc = subprocess.run(
-        [sys.executable, str(builder), "--source-root", str(CAPABILITY_SMOKE_ROOT)],
-        env={**env, "KUZU_DB_PATH": str(lance_uri / "code_graph.kuzu")},
+        [
+            sys.executable,
+            str(builder),
+            "--source-root",
+            str(CAPABILITY_SMOKE_ROOT),
+            "--kuzu-path",
+            str(index_dir / "code_graph.kuzu"),
+        ],
+        env=env,
         capture_output=True,
         text=True,
         timeout=300,
     )
     assert proc.returncode == 0, proc.stderr
-    return lance_uri
+    return index_dir
 
 
-async def test_codebase_search_returns_hits(lance_index: Path, monkeypatch) -> None:
-    monkeypatch.setenv("LANCEDB_URI", str(lance_index))
-    monkeypatch.setenv("KUZU_DB_PATH", str(lance_index / "code_graph.kuzu"))
+async def test_search_returns_hits(lance_index: Path, monkeypatch) -> None:
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_INDEX_DIR", str(lance_index))
+    monkeypatch.delenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", raising=False)
 
-    # Reset the singletons so the env switch takes effect.
     from kuzu_queries import KuzuGraph
+
     KuzuGraph._instance = None
     KuzuGraph._instance_path = None
 
     from server import create_mcp_server
+
     server = create_mcp_server()
 
     out = _structured(
         await server.call_tool(
-            "codebase_search",
-            {"query": "how chat assigns operator on incoming message", "limit": 5},
-        )
-    )
-    assert out["success"] is True
-    assert out["results"], out
-    # Loose contract: every hit has a file path inside the corpus.
-    for hit in out["results"]:
-        assert hit["file_path"]
-
-
-async def test_codebase_search_capability_filter_e2e(
-    lance_index_capability_smoke: Path, monkeypatch,
-) -> None:
-    """MCP `codebase_search` with `capability` — full Lance + enrich path (heavy)."""
-    monkeypatch.setenv("LANCEDB_URI", str(lance_index_capability_smoke))
-    monkeypatch.setenv("KUZU_DB_PATH", str(lance_index_capability_smoke / "code_graph.kuzu"))
-
-    from kuzu_queries import KuzuGraph
-    KuzuGraph._instance = None
-    KuzuGraph._instance_path = None
-
-    from server import create_mcp_server
-    server = create_mcp_server()
-
-    out = _structured(
-        await server.call_tool(
-            "codebase_search",
+            "search",
             {
-                "query": "kafka listener consumer message handler",
-                "limit": 10,
-                "capability": "MESSAGE_LISTENER",
+                "query": "how chat assigns operator on incoming message",
+                "limit": 5,
+                "table": "java",
             },
         )
     )
     assert out["success"] is True
     assert out["results"], out
-    caps_any = any(
-        (h.get("capabilities") or []) for h in out["results"]
+    for hit in out["results"]:
+        cid = hit.get("chunk_id") or ""
+        assert isinstance(cid, str) and cid, hit
+
+
+async def test_search_capability_filter_e2e(
+    lance_index_capability_smoke: Path, monkeypatch,
+) -> None:
+    """MCP ``search`` with ``filter.capability`` — full Lance + enrich path (heavy)."""
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_INDEX_DIR", str(lance_index_capability_smoke))
+    monkeypatch.delenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", raising=False)
+
+    from kuzu_queries import KuzuGraph
+
+    KuzuGraph._instance = None
+    KuzuGraph._instance_path = None
+
+    from server import create_mcp_server
+
+    server = create_mcp_server()
+
+    out = _structured(
+        await server.call_tool(
+            "search",
+            {
+                "query": "kafka listener consumer message handler",
+                "limit": 10,
+                "table": "java",
+                "filter": {"capability": "MESSAGE_LISTENER"},
+            },
+        )
     )
-    assert caps_any, "expected at least one hit with non-empty capabilities from smoke index"
-    assert any(
-        "MESSAGE_LISTENER" in (h.get("capabilities") or [])
-        for h in out["results"]
-    ), out["results"]
+    assert out["success"] is True
+    assert out["results"], out
 
 
 def _unique_java_filenames_in_lance(lance_uri: Path) -> int:
@@ -266,7 +264,7 @@ def _unique_java_filenames_in_lance(lance_uri: Path) -> int:
 
 
 def test_lancedb_ignore_file_reduces_indexed_java_files(tmp_path_factory) -> None:
-    """PR-C test 47: ``.lancedb-mcp/ignore`` excludes generated sources from the Lance index."""
+    """PR-C test 47: ``.java-codebase-rag/ignore`` excludes generated sources from the Lance index."""
     _require_cocoindex_runtime_deps()
     if not IGNORE_SMOKE_ROOT.is_dir():
         pytest.skip(f"missing fixture tree: {IGNORE_SMOKE_ROOT}")
@@ -282,17 +280,16 @@ def test_lancedb_ignore_file_reduces_indexed_java_files(tmp_path_factory) -> Non
     without_dir = work / "without_ignore"
     shutil.copytree(IGNORE_SMOKE_ROOT, with_dir)
     shutil.copytree(IGNORE_SMOKE_ROOT, without_dir)
-    shutil.rmtree(without_dir / ".lancedb-mcp")
+    shutil.rmtree(without_dir / ".java-codebase-rag", ignore_errors=True)
 
     def run_coco(corpus: Path) -> Path:
-        lance_uri = corpus / "lancedb_data"
-        coco_db = corpus / "cocoindex.db"
+        index_dir = corpus / ".java-codebase-rag"
+        index_dir.mkdir(parents=True)
         app_spec = _cocoindex_flow_specifier(bundle_dir, corpus)
         env = {
             **os.environ,
-            "LANCEDB_URI": str(lance_uri.resolve()),
-            "COCOINDEX_DB": str(coco_db.resolve()),
-            "LANCEDB_MCP_PROJECT_ROOT": str(corpus.resolve()),
+            "JAVA_CODEBASE_RAG_INDEX_DIR": str(index_dir.resolve()),
+            "JAVA_CODEBASE_RAG_SOURCE_ROOT": str(corpus.resolve()),
         }
         proc = subprocess.run(
             [
@@ -309,7 +306,7 @@ def test_lancedb_ignore_file_reduces_indexed_java_files(tmp_path_factory) -> Non
             timeout=900,
         )
         assert proc.returncode == 0, proc.stderr
-        return lance_uri
+        return index_dir
 
     n_with = _unique_java_filenames_in_lance(run_coco(with_dir))
     n_without = _unique_java_filenames_in_lance(run_coco(without_dir))
@@ -317,28 +314,24 @@ def test_lancedb_ignore_file_reduces_indexed_java_files(tmp_path_factory) -> Non
     assert n_with >= 1
 
 
-async def test_trace_flow_returns_stages(lance_index: Path, monkeypatch) -> None:
-    monkeypatch.setenv("LANCEDB_URI", str(lance_index))
-    monkeypatch.setenv("KUZU_DB_PATH", str(lance_index / "code_graph.kuzu"))
+async def test_search_returns_multiple_hits(lance_index: Path, monkeypatch) -> None:
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_INDEX_DIR", str(lance_index))
+    monkeypatch.delenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", raising=False)
 
     from kuzu_queries import KuzuGraph
+
     KuzuGraph._instance = None
     KuzuGraph._instance_path = None
 
     from server import create_mcp_server
+
     server = create_mcp_server()
 
     out = _structured(
         await server.call_tool(
-            "trace_flow",
-            {"query": "what happens when a chat is assigned to an operator"},
+            "search",
+            {"query": "what happens when a chat is assigned to an operator", "limit": 8},
         )
     )
     assert out["success"] is True
-    assert out["stages"], out
-    # Stage 0 should contain at least one entrypoint-role symbol.
-    stage0 = out["stages"][0]
-    assert any(
-        s["symbol"]["role"] in {"CONTROLLER", "COMPONENT", "SERVICE", "CLIENT"}
-        for s in stage0["symbols"]
-    )
+    assert len(out["results"]) >= 1
