@@ -120,6 +120,7 @@ Edit `claude_desktop_config.json` (macOS: `~/Library/Application Support/Claude/
 ### Driving the MCP from an agent
 
 - **[`docs/AGENT-GUIDE.md`](./docs/AGENT-GUIDE.md)** — copy-paste into `QWEN.md` / `CLAUDE.md` / `AGENTS.md`. Covers the four MCP tools, the shared `NodeFilter`, the edge-type taxonomy, required `neighbors` arguments, the ontology glossary (currently **v11**), the recovery playbook, and slash-style aliases.
+- **[`docs/skills/java-codebase-explore.md`](./docs/skills/java-codebase-explore.md)** — exploration **strategy** (missions, fallbacks, anti-capabilities, stopping rules); AGENT-GUIDE remains the **operating manual** for tool shapes and recovery.
 - **[`docs/MANUAL-VERIFICATION-CHECKLIST.md`](./docs/MANUAL-VERIFICATION-CHECKLIST.md)** — 7-phase agent-driven verification you run after indexing your real project. Each item has a copy-paste prompt and calibration data from `tests/bank-chat-system`.
 
 ---
@@ -637,6 +638,7 @@ If no `.java-codebase-rag/ignore` exists anywhere under the project, behaviour m
 |---|---|
 | [`docs/paper/paper.pdf`](./docs/paper/paper.pdf) | Architecture report — design rationale, GPS metaphor, three-layer architecture, design principles, future work. |
 | [`docs/AGENT-GUIDE.md`](./docs/AGENT-GUIDE.md) | Agent-facing guide. Copy-paste into `QWEN.md` / `CLAUDE.md` / `AGENTS.md`. |
+| [`docs/skills/java-codebase-explore.md`](./docs/skills/java-codebase-explore.md) | Agent exploration skill (strategy, missions, fallbacks); packaged zip [`docs/skills/java-codebase-explore.zip`](./docs/skills/java-codebase-explore.zip) via `./scripts/build-explore-skill.sh` for Perplexity-style hosts. |
 | [`docs/JAVA-CODEBASE-RAG-CLI.md`](./docs/JAVA-CODEBASE-RAG-CLI.md) | Operator playbook for the CLI: workflows, exit codes, env alignment. |
 | [`docs/MANUAL-VERIFICATION-CHECKLIST.md`](./docs/MANUAL-VERIFICATION-CHECKLIST.md) | 7-phase agent-driven verification after indexing your project. |
 | [`CODEBASE_REQUIREMENTS.md`](./CODEBASE_REQUIREMENTS.md) | Assumptions about your Java repo + per-file edit map for non-conforming codebases. |
