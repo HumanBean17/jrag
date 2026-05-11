@@ -316,9 +316,9 @@ Query Classifier (LLM with schema context)
               └───────────────────┘
 ```
 
-### 6.3 Specialized agent tools (MCP — `mcp_lancedb_bundle`)
+### 6.3 Specialized agent tools (MCP — `java-codebase-rag`)
 
-Expose the graph and vector index as discrete MCP tools. Implemented tools today (names match the server):[^11]
+Expose the graph and vector index as discrete MCP tools. The live stdio server registers **four** retrieval tools (names match `server.py`):
 
 | Tool | What it does |
 |---|---|
@@ -326,8 +326,8 @@ Expose the graph and vector index as discrete MCP tools. Implemented tools today
 | `find` | Locate nodes by structured `NodeFilter` across `symbol`, `route`, or `client` |
 | `describe` | Return one node record plus per-edge-type in/out summary |
 | `neighbors` | One-hop traversal over explicit `direction` and `edge_types` (batch ids supported) |
-| `graph_meta` / `list_code_index_tables` | Operational metadata (transitional; moving to `java-codebase-rag` CLI) |
-| `analyze_pr` / `diagnose_ignore` / `refresh_code_index` | Operational commands (superseded on the operator side by the `java-codebase-rag` CLI: `analyze-pr`, `diagnose-ignore`, lifecycle verbs including `reprocess`) |
+
+**Operator CLI (not MCP):** Graph meta, Lance table inventory, ignore diagnostics, PR diff analysis, and index lifecycle (`init`, `increment`, `reprocess`, `erase`) are implemented only on the `java-codebase-rag` CLI (`meta`, `tables`, `diagnose-ignore`, `analyze-pr`, plus the lifecycle verbs). Older MCP tool names (`graph_meta`, `list_code_index_tables`, `analyze_pr`, `diagnose_ignore`, `refresh_code_index`) are not registered on the wire.
 
 The v1 navigation verbs are removed; the `describe(id=...)` parameter name remains the stable contract in v2.
 

@@ -512,11 +512,14 @@ Reproduce fixture numbers with:
 
 ```bash
 cd /path/to/java-codebase-rag
-rm -rf /tmp/calib_kuzu
-python build_ast_graph.py \
+rm -rf /tmp/calib_index
+.venv/bin/python build_ast_graph.py \
   --source-root tests/bank-chat-system \
-  --kuzu-path /tmp/calib_kuzu --verbose
-java-codebase-rag meta --source-root tests/bank-chat-system --kuzu-path /tmp/calib_kuzu
+  --kuzu-path /tmp/calib_index/code_graph.kuzu \
+  --verbose
+java-codebase-rag meta --source-root tests/bank-chat-system --index-dir /tmp/calib_index
 ```
+
+`build_ast_graph.py` still takes `--kuzu-path` (the Kuzu file). Point it at `<index-dir>/code_graph.kuzu` so it matches the layout `java-codebase-rag meta --index-dir` expects under that directory.
 
 Current snapshot: `tests/bank-chat-system`, `master @ e90cbecc`, ontology **11**.
