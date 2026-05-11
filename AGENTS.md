@@ -11,15 +11,15 @@ for tools that don't read `.cursor/rules/`.
  MCP tool list (now `search` / `find` / `describe` / `neighbors`),
  CLI ops (`java-codebase-rag --help`), and "Re-index required" callouts.
  **`ontology_version` is currently 11** (async brownfield route merge + `Client` nodes; see README callouts).
-- [`docs/JAVA-CODEBASE-RAG-CLI.md`](./docs/JAVA-CODEBASE-RAG-CLI.md) — operator guide for the `java-codebase-rag` CLI (refresh, meta, tables, diagnose-ignore, analyze-pr).
+- [`docs/JAVA-CODEBASE-RAG-CLI.md`](./docs/JAVA-CODEBASE-RAG-CLI.md) — operator guide for the `java-codebase-rag` CLI (`init` / `increment` / `reprocess` / `erase`, `meta`, `tables`, `diagnose-ignore`, `analyze-pr`; one-release hidden verb alias of `reprocess` with stderr deprecation only — see that doc).
 - `CODEBASE_REQUIREMENTS.md` — Java-repo assumptions and tuning map.
 - `propose/` and `plans/` (plus their `completed/` subdirs) —
   in-flight scope and the rationale behind current design.
   - Active proposes: `TIER2-INCREMENTAL-REBUILD-PROPOSE.md` (Kuzu
     diff-driven rebuild), `RANKING-MICROSERVICE-PROPOSE.md`,
     `ENHANCED-ROLE-RECOGNITION-PROPOSE.md`,
-    `REFRESH-CODE-INDEX-AUTO-MODE-PROPOSE.md` (paired with TIER2 —
-    decision engine for incremental vs full),
+    `INDEX-AUTO-MODE-PROPOSE.md` (paired with TIER2 — decision engine for
+    incremental vs full),
     `DEFERRED-REST-CLIENT-MIGRATION-PROPOSE.md`, `PRODUCT-VISION.md`.
   - Active plans: `PLAN-POST-TIER1B-FOLLOWUPS.md` (PR-E1/PR-E2 —
     deferred catches collected from PR-D1/D2/D3 reviews).
@@ -88,7 +88,8 @@ Read these directly. Don't rely on rule files to mirror them.
   `chore/<topic>` for landed-feature work.
 - Commit messages: present tense, imperative, lowercase first word.
 - Always open a PR; never push to `master`.
-- Run `ruff check .` and `pytest tests -v` before pushing.
+- Run `.venv/bin/ruff check .` and `.venv/bin/python -m pytest tests -v` before pushing.
+- Heavy indexer tests: `JAVA_CODEBASE_RAG_RUN_HEAVY=1` (see `tests/README.md`).
 
 ## Per-PR Cursor task contract
 

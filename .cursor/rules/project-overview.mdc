@@ -32,7 +32,7 @@ when needed.
 - `propose/` and `propose/completed/` — design proposes; the active
   ones describe in-flight scope (currently
   `TIER2-INCREMENTAL-REBUILD-PROPOSE.md` (paired with
-  `REFRESH-CODE-INDEX-AUTO-MODE-PROPOSE.md` — the decision engine
+  `INDEX-AUTO-MODE-PROPOSE.md` — the decision engine
   for the Kuzu rebuild path),
   `RANKING-MICROSERVICE-PROPOSE.md`,
   `ENHANCED-ROLE-RECOGNITION-PROPOSE.md`,
@@ -62,7 +62,7 @@ when needed.
 | `java_ontology.py` | Source of truth for `VALID_ROLES`, `VALID_CAPABILITIES`, `VALID_CLIENT_KINDS`, `VALID_HTTP_CALL_STRATEGIES`, `VALID_ASYNC_CALL_STRATEGIES`, `VALID_HTTP_CALL_MATCHES`. |
 | `chunk_heuristics.py` | Query-time chunk hints (no AST / no re-index). |
 | `index_common.py` | Embedding config (no CocoIndex dep). |
-| `java_index_flow_lancedb.py` | CocoIndex flow (used by `java-codebase-rag refresh` when refresh is allowed). |
+| `java_index_flow_lancedb.py` | CocoIndex flow (used by `java-codebase-rag init` / `increment` / `reprocess` / `erase`). |
 | `java_index_v1_common.py` | Shared file walker / exclude patterns. |
 | `path_filtering.py` | Layered ignore patterns (`.gitignore`-style; PR-C / B5). Reused by indexer + graph build. |
 | `pr_analysis.py` | `java-codebase-rag analyze-pr` helpers (PR-B / B4) — diff parsing, hunk-to-symbol mapping. |

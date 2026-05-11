@@ -305,7 +305,7 @@ Open a GitHub issue titled **"AST graph (Kuzu) incremental rebuild"** referencin
 
 **PR-CLI-3 doc sweep.** Every file expected to need an edit; reviewer should run the acceptance grep at the end to confirm none missed.
 
-- `README.md` — §2 (env vars) shrunk to 5-row table; §5 (CLI reference) rewritten with new subcommand table; §6 (graph layer) updated for new YAML filename; §7 (brownfield overrides) examples renamed; §8 (ignore patterns) updated: **today** `path_filtering.py` uses project-level `<project>/.lancedb-mcp/ignore` and nested `<dir>/.lancedb-mcp/ignore`; **PR-CLI-2** renames that segment to **`<project>/.java-codebase-rag/ignore`** and **`<dir>/.java-codebase-rag/ignore`** (same layered semantics — not a second ignore mechanism); new "Migration from legacy names" section with explicit `mv` commands (operators with an existing `.lancedb-mcp/ignore` move it under `.java-codebase-rag/ignore`).
+- `README.md` — §2 (env vars) shrunk to 5-row table; §5 (CLI reference) rewritten with new subcommand table; §6 (graph layer) updated for new YAML filename; §7 (brownfield overrides) examples renamed; §8 (ignore patterns) updated: **today** `path_filtering.py` uses project-level `<project>/.lancedb-mcp/ignore` and nested `<dir>/.lancedb-mcp/ignore`; **PR-CLI-2** renames that segment to **`<project>/.java-codebase-rag/ignore`** and **`<dir>/.java-codebase-rag/ignore`** (same layered semantics — not a second ignore mechanism); **on-disk layout migration** subsection with explicit `mv` commands (operators with an existing `.lancedb-mcp/ignore` move it under `.java-codebase-rag/ignore`).
 - `docs/JAVA-CODEBASE-RAG-CLI.md` — operator playbook restructured per-scenario (`init` / `increment` / `reprocess` / `erase`), exit codes table updated, deprecation note for `refresh`, `python -m java_codebase_rag.cli` invocation example, env-var section updated.
 - `docs/AGENT-GUIDE.md` — any `refresh`, `LANCEDB_MCP_*`, or `.lancedb-mcp.yml` reference updated.
 - `docs/MANUAL-VERIFICATION-CHECKLIST.md` — setup phase replaces `refresh` with `init` (first-time path); env-var setup updated; YAML config filename updated.
@@ -314,10 +314,10 @@ Open a GitHub issue titled **"AST graph (Kuzu) incremental rebuild"** referencin
 - `.cursor/rules/*.mdc` — agent workflow / env / CLI contract; see **Agent rules audit** below (must match post-rename surface).
 - `CODEBASE_REQUIREMENTS.md` — every `.lancedb-mcp.yml` / `LANCEDB_MCP_*` / `lancedb_data` reference updated.
 - `mcp.json.example` — **PR-CLI-3 is a second pass only:** PR-CLI-2 updates this file so **env keys match the live server**; PR-CLI-3 reconciles comments, examples, and any doc drift — **no conflicting edits**; if both PRs touch it, **PR-CLI-2 wins** for structure, PR-CLI-3 for prose polish.
-- `propose/REFRESH-CODE-INDEX-AUTO-MODE-PROPOSE.md` — one-line note that `refresh` is being renamed to `reprocess`.
+- `propose/INDEX-AUTO-MODE-PROPOSE.md` — one-line note that `refresh` is being renamed to `reprocess`.
 - `propose/TIER2-INCREMENTAL-REBUILD-PROPOSE.md` — one-line note that the new tracking issue (created in PR-CLI-2) is the user-facing handle.
 - `propose/PRODUCT-VISION.md` — update `lancedb_data` mention (§ about Kuzu's on-disk footprint) and any `refresh` reference.
-- `.gitignore` — add `.java-codebase-rag/`, keep `lancedb_data/` for grace-period cleanup, or remove if PR-CLI-2 doesn't keep any compatibility shim.
+- `.gitignore` — add `.java-codebase-rag/`, keep `lancedb_data/` for grace-period cleanup, or remove if PR-CLI-2 drops that grace-period entry.
 
 **Agent rules audit (PR-CLI-3, manual checklist — use together with acceptance grep below):**
 
@@ -341,6 +341,8 @@ Expected output after PR-CLI-3 (docs + rules):
 **Codebase note (separate from the acceptance grep):** Python sources will **intentionally** still contain substrings such as `lancedb` in **internal** module filenames (`search_lancedb.py`, etc., per §3.8). Reviewers should **not** expect `grep -r lancedb *.py` to go to zero. The grep scope above is for **operator-facing docs and examples** only; an optional separate audit can target user-visible strings in `server.py` tool descriptions and error messages.
 
 The startup-slowness fix (deferred imports in `cli.py`) is a **separate, prior PR** outside this migration; it does not change the surface and should land before PR-CLI-2 so contributors testing the new subcommands aren't taxed by the multi-second startup.
+
+**PR-CLI-3 (docs sweep):** README, `docs/*`, `AGENTS.md`, `.cursor/rules/*.mdc`, `CODEBASE_REQUIREMENTS.md`, `mcp.json.example` path placeholders, selected `propose/*.md` one-line notes, `docs/paper/paper.tex` + rebuilt `paper.pdf`, migration `mv` sections, and acceptance grep per the command in this section.
 
 ---
 

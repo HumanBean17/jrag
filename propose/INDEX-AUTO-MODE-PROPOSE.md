@@ -1,5 +1,9 @@
 # Proposal: Smart `refresh_code_index` Mode Selection
 
+> **Note (2026):** the operator CLI’s full rebuild verb is now `java-codebase-rag reprocess` (see `propose/CLI-SCENARIOS-PROPOSE.md`); this MCP-side proposal still refers to `refresh_code_index` by name.
+>
+> For embeddings or search over raw `propose/` text, expect both that historical MCP name and current CLI wording in the same document until this draft is implemented or archived under `propose/completed/`.
+
 ## Goal
 
 Extend `refresh_code_index` so it can choose incremental vs full rebuild automatically, while staying safe for rename/delete/move and indexing-semantics changes.

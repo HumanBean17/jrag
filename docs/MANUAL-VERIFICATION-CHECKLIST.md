@@ -27,10 +27,10 @@ members, 0 parse errors, 17 routes, 11 `EXPOSES`, 793 `CALLS`, 2 `HTTP_CALLS`,
 **`java-codebase-rag`** (see README **CLI reference**). Example:
 
 ```bash
-export KUZU_DB_PATH=/tmp/verify_kuzu
-export LANCEDB_MCP_PROJECT_ROOT=/path/to/your/project
-java-codebase-rag meta
-java-codebase-rag tables
+export JAVA_CODEBASE_RAG_INDEX_DIR=/tmp/verify_index
+export JAVA_CODEBASE_RAG_SOURCE_ROOT=/path/to/your/project
+java-codebase-rag meta --source-root "$JAVA_CODEBASE_RAG_SOURCE_ROOT" --index-dir "$JAVA_CODEBASE_RAG_INDEX_DIR"
+java-codebase-rag tables --source-root "$JAVA_CODEBASE_RAG_SOURCE_ROOT" --index-dir "$JAVA_CODEBASE_RAG_INDEX_DIR"
 ```
 
 ---
@@ -41,17 +41,20 @@ Run **once** before working through the phases:
 
 ```bash
 # 1. Build the graph against your project (verbose, deterministic)
-rm -rf /tmp/verify_kuzu
-python build_ast_graph.py \
-  --source-root /path/to/your/project \
-  --kuzu-path /tmp/verify_kuzu --verbose 2>&1 | tee /tmp/verify_build.log
+export JAVA_CODEBASE_RAG_SOURCE_ROOT=/path/to/your/project
+export JAVA_CODEBASE_RAG_INDEX_DIR=/tmp/verify_index
+rm -rf "$JAVA_CODEBASE_RAG_INDEX_DIR"
+mkdir -p "$JAVA_CODEBASE_RAG_INDEX_DIR"
+.venv/bin/python build_ast_graph.py \
+  --source-root "$JAVA_CODEBASE_RAG_SOURCE_ROOT" \
+  --kuzu-path "$JAVA_CODEBASE_RAG_INDEX_DIR/code_graph.kuzu" --verbose 2>&1 | tee /tmp/verify_build.log
 
 # 2. Read the summary lines (last ~10 lines of the log)
 tail -12 /tmp/verify_build.log
 
-# 3. Point the runtime at the graph + project root
-export LANCEDB_MCP_PROJECT_ROOT=/path/to/your/project
-export KUZU_DB_PATH=/tmp/verify_kuzu
+# 3. Point the runtime at the index dir + Java tree (MCP: same vars in .mcp.json)
+export JAVA_CODEBASE_RAG_SOURCE_ROOT=/path/to/your/project
+export JAVA_CODEBASE_RAG_INDEX_DIR=/tmp/verify_index
 # … then start your MCP client so it sees this server + env
 ```
 
@@ -84,8 +87,8 @@ export KUZU_DB_PATH=/tmp/verify_kuzu
 
 **Verification prompt:**
 
-> In a shell with `KUZU_DB_PATH` and `LANCEDB_MCP_PROJECT_ROOT` set for your
-> graph, run `java-codebase-rag meta` (JSON output if piped). Report
+> In a shell with `JAVA_CODEBASE_RAG_INDEX_DIR` and `JAVA_CODEBASE_RAG_SOURCE_ROOT`
+> set for your graph, run `java-codebase-rag meta` (JSON output if piped). Report
 > `ontology_version`, `built_at`, `source_root`, and `parse_errors`. Does
 > `ontology_version` equal `11`?
 
@@ -94,7 +97,8 @@ export KUZU_DB_PATH=/tmp/verify_kuzu
 
 **If failing → fix:** older ontology means a stale graph file. Re-pull the
 repo, `git rev-parse HEAD`, then rebuild from scratch with
-`rm -rf /tmp/verify_kuzu && python build_ast_graph.py …`.
+`rm -rf "$JAVA_CODEBASE_RAG_INDEX_DIR" && .venv/bin/python build_ast_graph.py …`
+(see Phase pre-flight for the full flag pattern).
 
 ### 1.2 ☐ Parse error rate is acceptable
 
@@ -133,8 +137,8 @@ members, 71 injects.
 **Expected (calibration):** tables include `java`, `sql`, `yaml`; search
 returns ≥1 chunk when the Lance index exists for the fixture.
 
-**If failing → fix:** missing tables → `java-codebase-rag refresh` (slow, needs
-`LANCEDB_MCP_ALLOW_REFRESH=1`). Empty `search` → check `LANCEDB_URI`,
+**If failing → fix:** missing tables → `java-codebase-rag reprocess` (slow).
+Empty `search` → check `JAVA_CODEBASE_RAG_INDEX_DIR`,
 `SBERT_MODEL`, and that the index was built for this tree.
 
 ### Red flags for Phase 1
@@ -166,7 +170,7 @@ MCP: use `find` with `kind="symbol"` and a `filter` object (`NodeFilter`).
 `*Controller` classes should appear in the second list.
 
 **If failing → fix:** brownfield `@CodebaseRole(CONTROLLER)` or
-`role_overrides.fqn` in `.lancedb-mcp.yml`. Rebuild.
+`role_overrides.fqn` in `.java-codebase-rag.yml`. Rebuild.
 
 ### 2.2 ☐ Services and repositories are recognised
 
@@ -215,7 +219,7 @@ the fixture. No `*Service` / `*Repository` in OTHER for obvious Spring types.
 `FollowUpKafkaPublisher`).
 
 **If failing → fix:** custom listener annotations → meta-annotation walk
-or `role_overrides.annotations` in `.lancedb-mcp.yml`.
+or `role_overrides.annotations` in `.java-codebase-rag.yml`.
 
 ### 2.5 ☐ OTHER role is small relative to type count
 
@@ -402,8 +406,8 @@ expect Feign → README §3c brownfield.
 **Verification prompt:**
 
 > On a project with real `cross_service` matches: set
-> `cross_service_resolution: brownfield_only` in `.lancedb-mcp.yml`, run
-> `java-codebase-rag refresh`, re-check the same `neighbors` / meta breakdown. Edges
+> `cross_service_resolution: brownfield_only` in `.java-codebase-rag.yml`, run
+> `java-codebase-rag reprocess`, re-check the same `neighbors` / meta breakdown. Edges
 > should tighten to brownfield-tagged sites.
 
 **Expected (calibration):** N/A on fixture (no cross-service matches).
@@ -443,7 +447,7 @@ expect Feign → README §3c brownfield.
 
 ### Red flags for Phase 6
 
-- Zero hits on known-good query → empty Lance table or wrong `LANCEDB_URI`
+- Zero hits on known-good query → empty Lance table or wrong `JAVA_CODEBASE_RAG_INDEX_DIR`
 
 ---
 
@@ -491,7 +495,7 @@ expect Feign → README §3c brownfield.
 
 If everything is green:
 
-- Commit `.lancedb-mcp.yml` and `@Codebase*` stubs.
+- Commit `.java-codebase-rag.yml` and `@Codebase*` stubs.
 - Record **ontology 11** (or current `java-codebase-rag meta` value) in your team docs.
 - Periodically diff `java-codebase-rag meta` `counts` after large refactors.
 
@@ -508,11 +512,14 @@ Reproduce fixture numbers with:
 
 ```bash
 cd /path/to/java-codebase-rag
-rm -rf /tmp/calib_kuzu
-python build_ast_graph.py \
+rm -rf /tmp/calib_index
+.venv/bin/python build_ast_graph.py \
   --source-root tests/bank-chat-system \
-  --kuzu-path /tmp/calib_kuzu --verbose
-java-codebase-rag meta --source-root tests/bank-chat-system --kuzu-path /tmp/calib_kuzu
+  --kuzu-path /tmp/calib_index/code_graph.kuzu \
+  --verbose
+java-codebase-rag meta --source-root tests/bank-chat-system --index-dir /tmp/calib_index
 ```
+
+`build_ast_graph.py` still takes `--kuzu-path` (the Kuzu file). Point it at `<index-dir>/code_graph.kuzu` so it matches the layout `java-codebase-rag meta --index-dir` expects under that directory.
 
 Current snapshot: `tests/bank-chat-system`, `master @ e90cbecc`, ontology **11**.

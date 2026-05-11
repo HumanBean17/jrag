@@ -1,4 +1,4 @@
-# Tests for `mcp_lancedb_bundle`
+# Tests for `java-codebase-rag`
 
 These tests exercise:
 
@@ -24,15 +24,15 @@ bank-chat-system/
 ## Running
 
 ```bash
-cd mcp_lancedb_bundle
+cd /path/to/java-codebase-rag
 .venv/bin/pip install -r requirements.txt
-.venv/bin/pytest tests -v
+.venv/bin/python -m pytest tests -v
 ```
 
 The session-scoped `kuzu_graph` fixture in `conftest.py` builds the Kuzu DB
 from the bank-chat-system corpus exactly once per pytest run, into a
-`tmp_path_factory` directory, and points `KUZU_DB_PATH` (and a *fake*
-`LANCEDB_URI`) at it for the duration of the session.
+`tmp_path_factory` directory, and sets `JAVA_CODEBASE_RAG_INDEX_DIR` /
+`JAVA_CODEBASE_RAG_SOURCE_ROOT` for the duration of the session.
 
 The heavier end-to-end test that runs `cocoindex` + a real LanceDB index is
 gated behind `JAVA_CODEBASE_RAG_RUN_HEAVY=1` because it downloads the embedding

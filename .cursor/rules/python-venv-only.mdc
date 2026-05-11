@@ -11,4 +11,5 @@ alwaysApply: true
 - When running tests, linters, or scripts, invoke the `.venv/bin` executables directly.
 - Examples:
   - `.venv/bin/python -m pytest tests -q`
+  - `.venv/bin/ruff check .`
   - `.venv/bin/pip install -r requirements.txt`

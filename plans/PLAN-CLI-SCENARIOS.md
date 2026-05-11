@@ -283,7 +283,7 @@ Follow the **explicit file list** in propose §6 (`README.md`,
 `docs/MANUAL-VERIFICATION-CHECKLIST.md`, `docs/paper/paper.tex` + rebuild
 `paper.pdf`, `AGENTS.md`, **`.cursor/rules/*.mdc`** (agent rules audit),
 `CODEBASE_REQUIREMENTS.md`, `mcp.json.example` (comments only — keys from PR-CLI-2),
-`propose/REFRESH-CODE-INDEX-AUTO-MODE-PROPOSE.md`,
+`propose/INDEX-AUTO-MODE-PROPOSE.md`,
 `propose/TIER2-INCREMENTAL-REBUILD-PROPOSE.md`, `propose/PRODUCT-VISION.md`,
 `.gitignore`).
 
@@ -359,5 +359,5 @@ Add **Migration from legacy names** sections with explicit `mv` commands
 
 - `PR-CLI-1`: **done (awaiting `master` merge)** — [#72](https://github.com/HumanBean17/java-codebase-rag/pull/72) (propose **approved** + this plan’s tracking update)
 - `PR-CLI-2`: **implemented (awaiting merge to `master`)** — lifecycle CLI + config consolidation in tree
-- `PR-CLI-3`: _pending_
+- `PR-CLI-3`: **in review** — `chore/cli-scenarios-docs`: README / docs / `AGENTS.md` / `.cursor/rules/` / migration / `paper.pdf` rebuild; mark **merged** when the PR lands on `master` (acceptance grep per `propose/CLI-SCENARIOS-PROPOSE.md` §6)
 - `Kuzu incremental tracking issue`: **opened** — [#73](https://github.com/HumanBean17/java-codebase-rag/issues/73) (Tier 2 engine scope; URL matches `KUZU_INCREMENTAL_TRACKING_ISSUE_URL` in `java_codebase_rag/cli.py`)
