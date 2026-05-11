@@ -191,16 +191,7 @@ Exact allowed values for roles, capabilities, client kinds, etc. live in `java_o
 - **Purpose:** One hop over explicit edge types; returns **edges** with attributes (`confidence`, `strategy`, `match`, …) and the **`other`** node.
 - **Args:** `ids` (string or array — batch allowed), **`direction`** (`in`|`out`), **`edge_types`** (non-empty list), `limit`, `offset`, optional `filter` on the other node.
 - **Batching:** Multiple origins are expanded; pagination slices the **combined** edge list — use larger `limit` when batching many ids.
-- **Confidence:** Cross-service edges (`HTTP_CALLS`, `ASYNC_CALLS`)
-  carry confidence, strategy, and match metadata on `edge.attrs`
-  (`attrs.confidence`, `attrs.strategy`, `attrs.match`). Low
-  confidence means the resolver had to guess at the route binding —
-  treat it as a **resolver gap signal**, not a hallucination. Report
-  low-confidence edges with their confidence value, not as facts.
-  Intra-service edges (`CALLS`, `INJECTS`, `IMPLEMENTS`, `EXTENDS`,
-  `DECLARES`, `DECLARES_CLIENT`, `EXPOSES`) faithfully represent
-  the static graph; the resolved set is still a **lower bound** under
-  reflection / dynamic dispatch (see *What this MCP is NOT*).
+- **Confidence:** Cross-service edges (`HTTP_CALLS`, `ASYNC_CALLS`) carry confidence, strategy, and match metadata on `edge.attrs` (`attrs.confidence`, `attrs.strategy`, `attrs.match`). Low confidence means the resolver had to guess at the route binding — treat it as a **resolver gap signal**, not a hallucination. Report low-confidence edges with their confidence value, not as facts. Intra-service edges (`CALLS`, `INJECTS`, `IMPLEMENTS`, `EXTENDS`, `DECLARES`, `DECLARES_CLIENT`, `EXPOSES`) faithfully represent the static graph; the resolved set is still a **lower bound** under reflection / dynamic dispatch (see *What this MCP is NOT*).
 
 ### Ontology glossary (version 11)
 
@@ -231,10 +222,7 @@ Source of truth: `java_ontology.py`. Strings are case-sensitive.
 
 After two failed attempts on the same intent, stop and report tool name, args, and response.
 
-**Staleness rule:** after `java-codebase-rag increment`, Lance is fresh
-but Kuzu may be stale (see `propose/TIER2-INCREMENTAL-REBUILD-PROPOSE.md`).
-A graph older than the source tree is normal mid-development. When in
-doubt, run `meta` and compare against your working tree.
+**Staleness rule:** after `java-codebase-rag increment`, Lance is fresh but Kuzu may be stale (see https://github.com/HumanBean17/java-codebase-rag/blob/master/propose/TIER2-INCREMENTAL-REBUILD-PROPOSE.md). A graph older than the source tree is normal mid-development. When in doubt, run `meta` and compare against your working tree.
 
 ### Slash-style aliases (prompt templates)
 
