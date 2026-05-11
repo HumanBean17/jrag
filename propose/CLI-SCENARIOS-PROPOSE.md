@@ -1,6 +1,6 @@
 # CLI-SCENARIOS — restructure `java-codebase-rag` CLI, config, and naming
 
-**Status**: planned
+**Status**: approved — signed off for implementation via §6 (PR-CLI-2 / PR-CLI-3).
 **Author**: Dmitriy Teriaev + Perplexity Computer
 **Date**: 2026-05-10
 
@@ -439,11 +439,14 @@ Track progress on Kuzu incremental rebuild:
     https://github.com/<org>/<repo>/issues/<N>
 ```
 
-`<org>`, `<repo>`, and `<N>` are filled in by PR-CLI-2 using the **canonical GitHub remote** for this project at the time the tracking issue is opened (today’s distribution name is `java-codebase-rag`; the org slug is whatever the repo lives under). The full URL is a **single constant** at module scope in `cli.py` — update it in one place if the issue moves or the repo is transferred.
+The line above stays a **placeholder in this document** on purpose: **no final issue URL is recorded here** (avoid stale or guessed slugs). **PR-CLI-2** opens the tracking issue on the **canonical GitHub remote** for this project, then replaces the placeholder with the real URL in code: a **single module-level constant** in `cli.py` (package path after rename: `java_codebase_rag/cli.py`). Operators see the resolved URL only from the shipped CLI warning, not from this propose.
+
+`<org>`, `<repo>`, and `<N>` are filled in using that remote at the time the issue is filed (distribution name is `java-codebase-rag`; org slug is whatever the repo lives under). Update the constant in one place if the issue moves or the repo is transferred.
 
 ---
 
 ## Appendix B — What changed (traceability)
 
+- **2026-05-11 (PR-CLI-1):** Status set to **approved** (signed off for PR-CLI-2 / PR-CLI-3). **Appendix A** traceability tightened: final GitHub issue URL lands only in **PR-CLI-2** (constant in `cli.py`), not in this propose.
 - **2026-05-11:** Review pass — locked **detect + stderr hint, never honor** for legacy env; auditable **11-name** env inventory + “9 → 5” explanation; **`COCOINDEX_DB`** decision aligned with code; **`index_dir:`** in YAML; **`meta` embedding provenance** in scope; **UC21 / UC26–27** rewrote; **Appendix A** placeholder URL; **§6** docs-vs-code grep note; **MCP-wide** env migration called out in §3.5 / PR-CLI-2; **UC12 / §7** no-op `increment` warning; author line trimmed.
 - **2026-05-11 (tighten-up):** **`--source-root` only** (no `--project-root`); **ignore path** tied to `path_filtering.py` rename; **`mcp.json.example` PR-CLI-2 vs PR-CLI-3** ownership; **acceptance grep + `.cursor/rules/`** + agent audit checklist; **`mcp_v2.py`** explicit in PR-CLI-2 table.
