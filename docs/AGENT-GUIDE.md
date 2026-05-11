@@ -35,6 +35,22 @@ This MCP indexes Java enterprise projects into two stores:
 
 **Do NOT use this MCP when** the answer is already in the open file, or for third-party library trivia from training data alone. Prefer the smallest call that answers the question.
 
+### What this MCP is NOT
+
+The MCP indexes Java production code, SQL, and YAML — nothing else.
+Treat the following as out of frame:
+
+- **Test files, build files, deploy / runtime story** — read `pom.xml`,
+  `build.gradle`, `Dockerfile`, `.github/workflows/`, README directly.
+- **Reflection, dynamic dispatch, SPI lookups** — `CALLS` resolves
+  static method calls only; the resolved caller set is a **lower bound**.
+- **Unindexed services / repos** — verify with `java-codebase-rag meta`
+  before treating an empty `search` result as proof of absence.
+- **"When did X change", "who changed X"** — use `git log` / `git blame`.
+
+When MCP disagrees with the open file, the file wins; report the
+disagreement as evidence of staleness, not as a contradiction.
+
 **Workflow (GPS model):**
 
 1. **Locate** — `search` (natural language / fragment) or `find` (structured `NodeFilter`).
@@ -175,6 +191,16 @@ Exact allowed values for roles, capabilities, client kinds, etc. live in `java_o
 - **Purpose:** One hop over explicit edge types; returns **edges** with attributes (`confidence`, `strategy`, `match`, …) and the **`other`** node.
 - **Args:** `ids` (string or array — batch allowed), **`direction`** (`in`|`out`), **`edge_types`** (non-empty list), `limit`, `offset`, optional `filter` on the other node.
 - **Batching:** Multiple origins are expanded; pagination slices the **combined** edge list — use larger `limit` when batching many ids.
+- **Confidence:** Cross-service edges (`HTTP_CALLS`, `ASYNC_CALLS`)
+  carry confidence, strategy, and match metadata on `edge.attrs`
+  (`attrs.confidence`, `attrs.strategy`, `attrs.match`). Low
+  confidence means the resolver had to guess at the route binding —
+  treat it as a **resolver gap signal**, not a hallucination. Report
+  low-confidence edges with their confidence value, not as facts.
+  Intra-service edges (`CALLS`, `INJECTS`, `IMPLEMENTS`, `EXTENDS`,
+  `DECLARES`, `DECLARES_CLIENT`, `EXPOSES`) faithfully represent
+  the static graph; the resolved set is still a **lower bound** under
+  reflection / dynamic dispatch (see *What this MCP is NOT*).
 
 ### Ontology glossary (version 11)
 
@@ -200,8 +226,15 @@ Source of truth: `java_ontology.py`. Strings are case-sensitive.
 | `find` returns too much | Over-broad filter | Add `microservice`, `fqn_prefix`, `path_prefix`, etc. |
 | Route not found | Path mismatch | Use `path_prefix` on `find(kind="route", …)`; check README brownfield routes |
 | Need ontology / rebuild / PR analysis | Wrong layer | Use **`java-codebase-rag`** CLI, not MCP |
+| Result disagrees with the open file | Index is stale (typical after `increment`-only catch-up) | Trust the file. Confirm staleness with `java-codebase-rag meta` (last `reprocess` time). Report as staleness, not contradiction. |
+| Empty `search` result on a string you can read in the open file | Project not indexed, wrong `table` (try `all`), or chunking missed it | Try `find(kind=symbol, filter={"fqn_prefix": …})`. Fall back to `rg` in the project tree if still empty. |
 
 After two failed attempts on the same intent, stop and report tool name, args, and response.
+
+**Staleness rule:** after `java-codebase-rag increment`, Lance is fresh
+but Kuzu may be stale (see `propose/TIER2-INCREMENTAL-REBUILD-PROPOSE.md`).
+A graph older than the source tree is normal mid-development. When in
+doubt, run `meta` and compare against your working tree.
 
 ### Slash-style aliases (prompt templates)
 
