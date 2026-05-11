@@ -23,10 +23,10 @@ dependencies = [
 ]
 
 [project.scripts]
-java-codebase-rag = "user_rag.cli:main"
+java-codebase-rag = "java_codebase_rag.cli:main"
 
 [tool.setuptools]
-packages = ["user_rag"]
+packages = ["java_codebase_rag"]
 py-modules = [
     "ast_java",
     "build_ast_graph",

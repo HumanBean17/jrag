@@ -11,7 +11,7 @@ Two location concepts are tracked per file:
   search inside a microservice.
 - **microservice** — the *outermost* build-marker ancestor under
   `project_root`. Represents one deployable / repo. Resolution order:
-    1. explicit override list (env var or config file at project root);
+    1. explicit override list (YAML at project root);
     2. outermost build marker between `project_root` and the file;
     3. first path segment under `project_root`;
     4. empty.
@@ -19,7 +19,6 @@ Two location concepts are tracked per file:
 from __future__ import annotations
 
 import hashlib
-import os
 import sys
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
@@ -75,7 +74,6 @@ __all__ = [
     "symbol_id",
     "phantom_id",
     "BUILD_MARKERS",
-    "MICROSERVICE_ROOTS_ENV",
     "CONFIG_FILENAMES",
 ]
 
@@ -86,10 +84,8 @@ BUILD_MARKERS = (
     "build.sbt",
 )
 
-MICROSERVICE_ROOTS_ENV = "LANCEDB_MCP_MICROSERVICE_ROOTS"
-
 # Recognised config filenames at `project_root` (first match wins).
-CONFIG_FILENAMES = (".lancedb-mcp.yml", ".lancedb-mcp.yaml")
+CONFIG_FILENAMES = (".java-codebase-rag.yml", ".java-codebase-rag.yaml")
 
 
 @dataclass
@@ -114,7 +110,7 @@ def _parse_csv(raw: str) -> list[str]:
 
 @lru_cache(maxsize=64)
 def _load_config_microservice_roots(project_root_str: str) -> tuple[str, ...]:
-    """Read `microservice_roots` from `.lancedb-mcp.yml` at project_root.
+    """Read `microservice_roots` from `.java-codebase-rag.yml` at project_root.
 
     Cached per project_root to avoid re-reading on every chunk. Failures
     (file missing, malformed YAML, missing key) silently return an empty
@@ -146,7 +142,7 @@ def _load_config_microservice_roots(project_root_str: str) -> tuple[str, ...]:
 
 @lru_cache(maxsize=64)
 def _load_config_cross_service_resolution(project_root_str: str) -> str:
-    """Read `cross_service_resolution` from `.lancedb-mcp.yml` at project_root.
+    """Read `cross_service_resolution` from `.java-codebase-rag.yml` at project_root.
 
     Returns "auto" or "brownfield_only". Defaults to "auto" when the key is absent
     or the file is missing / malformed. Unknown values warn on stderr and fall back
@@ -180,19 +176,9 @@ def _load_config_cross_service_resolution(project_root_str: str) -> str:
 
 
 def load_microservice_overrides(project_root: str | Path | None) -> tuple[str, ...]:
-    """Combined override list (env var ++ config file).
-
-    Env var `LANCEDB_MCP_MICROSERVICE_ROOTS` takes precedence; both
-    sources are merged in declaration order, deduplicated.
-    """
+    """Microservice root overrides from project YAML only (`microservice_roots:`)."""
     out: list[str] = []
     seen: set[str] = set()
-
-    env_raw = os.environ.get(MICROSERVICE_ROOTS_ENV, "").strip()
-    for name in _parse_csv(env_raw):
-        if name not in seen:
-            seen.add(name)
-            out.append(name)
 
     if project_root is not None:
         try:
@@ -406,7 +392,7 @@ def compute_meta_chains_from_decls(
 
 @lru_cache(maxsize=64)
 def _load_brownfield_overrides(project_root_str: str) -> BrownfieldOverrides:
-    """Read `role_overrides` from `.lancedb-mcp.yml` at project_root. Cached per root."""
+    """Read `role_overrides` from `.java-codebase-rag.yml` at project_root. Cached per root."""
     root = Path(project_root_str)
     valid_roles = VALID_ROLES
     valid_caps = VALID_CAPABILITIES

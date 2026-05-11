@@ -2,7 +2,7 @@
 
 These tests construct a synthetic on-disk monorepo to exercise both
 single-module and multi-module shapes, plus the override mechanisms
-(env var + `.lancedb-mcp.yml`).
+(YAML-only: `.java-codebase-rag.yml`).
 """
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ from pathlib import Path
 import pytest
 
 from graph_enrich import (
-    MICROSERVICE_ROOTS_ENV,
     _load_config_microservice_roots,
     microservice_for_path,
     module_for_path,
@@ -82,25 +81,24 @@ def test_no_build_marker_falls_back_to_top_level_directory(monorepo: Path) -> No
     assert microservice_for_path(str(f), monorepo) == "loose"
 
 
-def test_env_override_takes_precedence(monorepo: Path, monkeypatch) -> None:
-    """An explicit microservice root in the env var should win even when a
-    deeper build marker exists."""
-    # Re-key the layout: name `mod-a` as a microservice root, even though
-    # structurally it'd be classified as a module under `multi-svc`.
-    monkeypatch.setenv(MICROSERVICE_ROOTS_ENV, "mod-a")
+def test_yaml_mod_a_override(monorepo: Path) -> None:
+    """`microservice_roots:` in `.java-codebase-rag.yml` can promote a module path."""
     _load_config_microservice_roots.cache_clear()
+    (monorepo / ".java-codebase-rag.yml").write_text(
+        "microservice_roots:\n  - mod-a\n",
+        encoding="utf-8",
+    )
     f = monorepo / "multi-svc/mod-a/src/main/java/A.java"
     assert microservice_for_path(str(f), monorepo) == "mod-a"
-    # Sibling without an override matches falls back to structural inference.
     f_b = monorepo / "multi-svc/mod-b/src/main/java/B.java"
     assert microservice_for_path(str(f_b), monorepo) == "multi-svc"
-
-
-def test_yaml_config_override(monorepo: Path, monkeypatch) -> None:
-    """`.lancedb-mcp.yml` at project_root must be honoured."""
-    monkeypatch.delenv(MICROSERVICE_ROOTS_ENV, raising=False)
     _load_config_microservice_roots.cache_clear()
-    (monorepo / ".lancedb-mcp.yml").write_text(
+
+
+def test_yaml_config_override(monorepo: Path) -> None:
+    """`.java-codebase-rag.yml` at project_root must be honoured."""
+    _load_config_microservice_roots.cache_clear()
+    (monorepo / ".java-codebase-rag.yml").write_text(
         "microservice_roots:\n  - mod-b\n",
         encoding="utf-8",
     )

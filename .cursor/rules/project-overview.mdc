@@ -76,4 +76,4 @@ when needed.
 - `tests/fixtures/brownfield_route_stubs/` — `@CodebaseRoute` / `@CodebaseRoutes` source stubs (PR-A3).
 - `tests/fixtures/brownfield_client_stubs/` — `@CodebaseClient` / `@CodebaseClients` / `@CodebaseProducer` / `@CodebaseProducers` source stubs (PR-D2).
 - `tests/fixtures/http_caller_smoke/` — Feign + RestTemplate + KafkaTemplate + WebClient + StreamBridge fixture for caller-side detection (PR-D1).
-- Heavy e2e tests gated behind `LANCEDB_MCP_RUN_HEAVY=1`.
+- Heavy e2e tests gated behind `JAVA_CODEBASE_RAG_RUN_HEAVY=1`.

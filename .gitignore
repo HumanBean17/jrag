@@ -35,6 +35,10 @@ htmlcov/
 .DS_Store
 
 # Local runtime / data artifacts
+.java-codebase-rag/
+# Track layered-ignore fixtures under tests/ (blanket rule above would hide them).
+!tests/**/.java-codebase-rag/
+!tests/**/.java-codebase-rag/**
 lancedb_data/
 cocoindex_java_lance.db/
 *.kuzu

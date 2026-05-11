@@ -82,7 +82,7 @@ def test_resttemplate_class_unchanged(tmp_path: Path) -> None:
 def test_brownfield_feign_client_role_dropped(tmp_path: Path) -> None:
     root = tmp_path / "proj"
     _copy_fixture(root)
-    (root / ".lancedb-mcp.yml").write_text(
+    (root / ".java-codebase-rag.yml").write_text(
         "role_overrides:\n"
         "  annotations:\n"
         "    FeignClient: FEIGN_CLIENT\n"
@@ -104,7 +104,7 @@ def test_brownfield_feign_client_role_dropped(tmp_path: Path) -> None:
 def test_brownfield_client_role_accepted(tmp_path: Path) -> None:
     root = tmp_path / "proj"
     _copy_fixture(root)
-    (root / ".lancedb-mcp.yml").write_text(
+    (root / ".java-codebase-rag.yml").write_text(
         "role_overrides:\n"
         "  fqn:\n"
         "    smoke.a.ClientA:\n"
@@ -123,7 +123,7 @@ def test_brownfield_client_role_accepted(tmp_path: Path) -> None:
 def test_brownfield_http_client_capability_accepted(tmp_path: Path) -> None:
     root = tmp_path / "proj"
     _copy_fixture(root)
-    (root / ".lancedb-mcp.yml").write_text(
+    (root / ".java-codebase-rag.yml").write_text(
         "role_overrides:\n"
         "  fqn:\n"
         "    smoke.a.ClientA:\n"

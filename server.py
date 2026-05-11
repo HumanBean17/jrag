@@ -10,6 +10,7 @@ from typing import Any, Literal
 
 import mcp_v2
 from index_common import SBERT_MODEL
+from java_codebase_rag.config import emit_legacy_env_hints_if_present
 from kuzu_queries import KuzuGraph, resolve_kuzu_path
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
@@ -22,7 +23,7 @@ _INSTRUCTIONS = (
     "neighbors (one hop; you MUST pass direction in|out AND edge_types list — no defaults). "
     "NodeFilter `filter` is a JSON object (preferred); a JSON-encoded string is also accepted as a fallback. "
     "Edge labels: EXTENDS, IMPLEMENTS, INJECTS, DECLARES, DECLARES_CLIENT, CALLS, EXPOSES, HTTP_CALLS, ASYNC_CALLS. "
-    "Rebuild, meta, tables, diagnose-ignore, analyze-pr: use java-codebase-rag CLI — not MCP."
+    "Reprocess/init, meta, tables, diagnose-ignore, analyze-pr: use java-codebase-rag CLI — not MCP."
 )
 
 
@@ -66,22 +67,26 @@ class IndexInfoOutput(BaseModel):
     lancedb_uri: str
     embedding_model: str
     project_root: str
-    refresh_enabled: bool
     cocoindex_target: str
     tables: dict[str, str]
     graph: GraphMetaOutput
 
 
 def _resolve_lancedb_uri() -> str:
-    raw = os.environ.get("LANCEDB_URI", "./lancedb_data")
-    p = Path(raw)
-    if p.exists() and not raw.startswith(("s3://", "gs://", "az://")):
-        return str(p.resolve())
+    raw = os.environ.get("JAVA_CODEBASE_RAG_INDEX_DIR", "").strip()
+    if not raw:
+        raw = str((Path.cwd() / ".java-codebase-rag").resolve())
+    p = Path(raw).expanduser()
+    if not str(raw).startswith(("s3://", "gs://", "az://")):
+        try:
+            return str(p.resolve())
+        except OSError:
+            return str(p)
     return raw
 
 
 def _project_root() -> Path:
-    env = os.environ.get("LANCEDB_MCP_PROJECT_ROOT", "").strip()
+    env = os.environ.get("JAVA_CODEBASE_RAG_SOURCE_ROOT", "").strip()
     if env:
         return Path(env).expanduser().resolve()
     return Path.cwd().resolve()
@@ -89,25 +94,15 @@ def _project_root() -> Path:
 
 def _cocoindex_subprocess_env(project_root: Path) -> dict[str, str]:
     sub_env = os.environ.copy()
-    sub_env["LANCEDB_MCP_PROJECT_ROOT"] = str(project_root)
+    sub_env["JAVA_CODEBASE_RAG_SOURCE_ROOT"] = str(project_root)
+    idx = os.environ.get("JAVA_CODEBASE_RAG_INDEX_DIR", "").strip()
+    if idx:
+        sub_env["JAVA_CODEBASE_RAG_INDEX_DIR"] = str(Path(idx).expanduser().resolve())
     return sub_env
 
 
 def _graph_enabled() -> bool:
-    raw = os.environ.get("LANCEDB_MCP_GRAPH_ENABLED", "").strip().lower()
-    if raw in ("0", "false", "no"):
-        return False
-    if raw in ("1", "true", "yes"):
-        return True
     return KuzuGraph.exists()
-
-
-def _refresh_allowed() -> bool:
-    return os.environ.get("LANCEDB_MCP_ALLOW_REFRESH", "").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-    )
 
 
 def _graph_meta_output() -> GraphMetaOutput:
@@ -116,7 +111,7 @@ def _graph_meta_output() -> GraphMetaOutput:
             success=True,
             enabled=False,
             db_path=resolve_kuzu_path(),
-            message="Kuzu graph not present; run java-codebase-rag refresh or build_ast_graph.py",
+            message="Kuzu graph not present; run java-codebase-rag reprocess or build_ast_graph.py",
         )
     try:
         graph = KuzuGraph.get()
@@ -181,7 +176,6 @@ def list_code_index_tables_payload() -> IndexInfoOutput:
         lancedb_uri=_resolve_lancedb_uri(),
         embedding_model=os.environ.get("SBERT_MODEL", SBERT_MODEL),
         project_root=str(_project_root()),
-        refresh_enabled=_refresh_allowed(),
         cocoindex_target=_COCOINDEX_TARGET,
         tables=dict(TABLES),
         graph=_graph_meta_output(),
@@ -189,12 +183,6 @@ def list_code_index_tables_payload() -> IndexInfoOutput:
 
 
 async def run_refresh_pipeline(*, quiet: bool = False) -> RefreshIndexOutput:
-    if not _refresh_allowed():
-        return RefreshIndexOutput(
-            success=False,
-            message="Refresh disabled: set LANCEDB_MCP_ALLOW_REFRESH=1 (or true/yes), then run java-codebase-rag refresh.",
-            exit_code=None,
-        )
     root = _project_root()
     cocoindex_bin = Path(sys.executable).parent / "cocoindex"
     if not cocoindex_bin.is_file():
@@ -238,12 +226,20 @@ async def run_refresh_pipeline(*, quiet: bool = False) -> RefreshIndexOutput:
         builder = Path(__file__).resolve().parent / "build_ast_graph.py"
         if builder.is_file():
             try:
-                graph_args = [sys.executable, str(builder), "--source-root", str(root)]
+                graph_args = [
+                    sys.executable,
+                    str(builder),
+                    "--source-root",
+                    str(root),
+                    "--kuzu-path",
+                    resolve_kuzu_path(),
+                ]
                 if not quiet:
                     graph_args.append("--verbose")
                 gproc = await asyncio.create_subprocess_exec(
                     *graph_args,
                     cwd=str(root),
+                    env=_cocoindex_subprocess_env(root),
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )
@@ -387,6 +383,7 @@ def create_mcp_server() -> FastMCP:
 
 
 def main() -> None:
+    emit_legacy_env_hints_if_present()
     asyncio.run(create_mcp_server().run_stdio_async())
 
 

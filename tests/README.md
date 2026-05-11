@@ -35,12 +35,12 @@ from the bank-chat-system corpus exactly once per pytest run, into a
 `LANCEDB_URI`) at it for the duration of the session.
 
 The heavier end-to-end test that runs `cocoindex` + a real LanceDB index is
-gated behind `LANCEDB_MCP_RUN_HEAVY=1` because it downloads the embedding
+gated behind `JAVA_CODEBASE_RAG_RUN_HEAVY=1` because it downloads the embedding
 model on first run and indexes the corpus from scratch (~minute on a
 warm cache, several minutes cold).
 
 ```bash
-LANCEDB_MCP_RUN_HEAVY=1 .venv/bin/pytest tests -v
+JAVA_CODEBASE_RAG_RUN_HEAVY=1 .venv/bin/pytest tests -v
 ```
 
 ---
@@ -71,7 +71,7 @@ When adding tests, please follow these rules:
    the MCP tool's *contract* (validation, error message when the index is
    missing) can always be tested without LanceDB; the *integration* should
    be added to `test_lancedb_e2e.py` and gated behind
-   `LANCEDB_MCP_RUN_HEAVY`.
+   `JAVA_CODEBASE_RAG_RUN_HEAVY`.
 
 4. **When a test fails after a refactor, re-read the assertion first.** Most
    of the assertions here are intentionally loose (`>=`, `in`, `subset of`)

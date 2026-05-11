@@ -13,13 +13,12 @@ Pass 3 resolves static call sites into confidence-scored CALLS edges and DECLARE
 Pass 4 emits Route rows plus Symbol→Route EXPOSES edges from literal annotation metadata.
 
 Usage:
-    build_ast_graph.py --source-root <repo> [--kuzu-path <dir>] [--verbose]
+    build_ast_graph.py --source-root <repo> [--kuzu-path <path>] [--verbose]
 
-Default KUZU path resolution order:
-    --kuzu-path CLI arg
-    KUZU_DB_PATH env var
-    ${LANCEDB_URI%/}/code_graph.kuzu (if LANCEDB_URI is a local dir)
-    ./lancedb_data/code_graph.kuzu
+Default Kuzu database path resolution order:
+    --kuzu-path CLI arg (path passed to kuzu.Database(...))
+    JAVA_CODEBASE_RAG_INDEX_DIR/code_graph.kuzu (if set and local)
+    ./.java-codebase-rag/code_graph.kuzu under cwd
 
 The Kuzu DB is dropped and rebuilt on every run (Phase 1 is a full rebuild).
 """
@@ -2580,19 +2579,23 @@ def write_kuzu(
 
 
 def _default_kuzu_path() -> Path:
-    env = os.environ.get("KUZU_DB_PATH", "").strip()
-    if env:
-        return Path(os.path.expanduser(env))
-    lance = os.environ.get("LANCEDB_URI", "").strip()
-    if lance and not lance.startswith(("s3://", "gs://", "az://")):
-        return Path(os.path.expanduser(lance.rstrip("/"))) / "code_graph.kuzu"
-    return Path("./lancedb_data/code_graph.kuzu")
+    idx = os.environ.get("JAVA_CODEBASE_RAG_INDEX_DIR", "").strip()
+    if idx and not idx.startswith(("s3://", "gs://", "az://")):
+        return Path(os.path.expanduser(idx.rstrip("/"))) / "code_graph.kuzu"
+    return Path.cwd() / ".java-codebase-rag" / "code_graph.kuzu"
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build an AST-derived Kuzu graph for Java sources.")
     parser.add_argument("--source-root", default=None, help="Repository / monorepo root to scan for .java (defaults to current working directory)")
-    parser.add_argument("--kuzu-path", default=None, help="Kuzu DB directory (defaults to $KUZU_DB_PATH or LANCEDB_URI-derived)")
+    parser.add_argument(
+        "--kuzu-path",
+        default=None,
+        help=(
+            "Kuzu database path (file/dir as used by kuzu.Database; "
+            "default: $JAVA_CODEBASE_RAG_INDEX_DIR/code_graph.kuzu or ./.java-codebase-rag/code_graph.kuzu)"
+        ),
+    )
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 

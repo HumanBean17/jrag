@@ -64,7 +64,7 @@ def test_39_builtin_default_ignores_class_file(tmp_path: Path) -> None:
 def test_40_project_root_negation_unignores(tmp_path: Path) -> None:
     root = tmp_path / "p"
     root.mkdir()
-    ig = root / ".lancedb-mcp" / "ignore"
+    ig = root / ".java-codebase-rag" / "ignore"
     ig.parent.mkdir(parents=True)
     ig.write_text("!**/Foo.class\n", encoding="utf-8")
     f = root / "Foo.class"
@@ -75,8 +75,8 @@ def test_40_project_root_negation_unignores(tmp_path: Path) -> None:
 
 def test_41_nested_ignore_only_under_subtree(tmp_path: Path) -> None:
     root = tmp_path / "p"
-    (root / "svc" / ".lancedb-mcp").mkdir(parents=True)
-    (root / "svc" / ".lancedb-mcp" / "ignore").write_text("**/Generated*.java\n", encoding="utf-8")
+    (root / "svc" / ".java-codebase-rag").mkdir(parents=True)
+    (root / "svc" / ".java-codebase-rag" / "ignore").write_text("**/Generated*.java\n", encoding="utf-8")
     hit = root / "svc" / "src" / "GeneratedFoo.java"
     hit.parent.mkdir(parents=True)
     hit.write_text("class GeneratedFoo {}\n", encoding="utf-8")
@@ -90,10 +90,10 @@ def test_41_nested_ignore_only_under_subtree(tmp_path: Path) -> None:
 
 def test_42_innermost_nested_reincludes(tmp_path: Path) -> None:
     root = tmp_path / "p"
-    pr = root / ".lancedb-mcp" / "ignore"
+    pr = root / ".java-codebase-rag" / "ignore"
     pr.parent.mkdir(parents=True)
     pr.write_text("**/Generated*.java\n", encoding="utf-8")
-    nested = root / "svc" / ".lancedb-mcp" / "ignore"
+    nested = root / "svc" / ".java-codebase-rag" / "ignore"
     nested.parent.mkdir(parents=True)
     nested.write_text("!**/Generated*.java\n", encoding="utf-8")
     f = root / "svc" / "GeneratedX.java"
@@ -129,7 +129,7 @@ def test_44_gitignore_disabled(tmp_path: Path) -> None:
 
 def test_45_diagnose_nested_cites_line(tmp_path: Path) -> None:
     root = tmp_path / "p"
-    nested = root / "svc" / ".lancedb-mcp" / "ignore"
+    nested = root / "svc" / ".java-codebase-rag" / "ignore"
     nested.parent.mkdir(parents=True)
     nested.write_text("# header\n**/Generated*.java\n", encoding="utf-8")
     f = root / "svc" / "GeneratedZ.java"
@@ -140,7 +140,7 @@ def test_45_diagnose_nested_cites_line(tmp_path: Path) -> None:
     assert d["ignored"] is True
     assert d["layer"] == "nested"
     expl = str(d["explanation"])
-    assert "svc/.lancedb-mcp/ignore" in expl
+    assert "svc/.java-codebase-rag/ignore" in expl
     assert "line 2" in expl
 
 
@@ -157,8 +157,8 @@ def test_46_outside_project_not_ignored(tmp_path: Path) -> None:
 def test_bank_chat_java_count_no_lancedb_ignore_gitignore_off_matches_legacy(
     corpus_root: Path,
 ) -> None:
-    """Behavioural compatibility: no ``.lancedb-mcp/ignore`` and no git layer → same count."""
-    assert not (corpus_root / ".lancedb-mcp" / "ignore").is_file()
+    """Behavioural compatibility: no ``.java-codebase-rag/ignore`` and no git layer → same count."""
+    assert not (corpus_root / ".java-codebase-rag" / "ignore").is_file()
     legacy = _legacy_java_file_count(corpus_root)
     li = LayeredIgnore(corpus_root, use_gitignore=False)
     layered = len(list(iter_java_source_files(corpus_root, ignore=li)))
