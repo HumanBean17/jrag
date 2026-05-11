@@ -29,7 +29,7 @@ This MCP indexes Java enterprise projects into two stores:
 
 **MCP surface (navigation only):** `search`, `find`, `describe`, `neighbors`.
 
-**Operator / diagnostics (not MCP):** use the **`java-codebase-rag`** CLI — `refresh`, `meta`, `tables`, `diagnose-ignore`, `analyze-pr`. Rebuilds are slow; the coding agent should not pretend it can refresh via MCP.
+**Operator / diagnostics (not MCP):** use the **`java-codebase-rag`** CLI — lifecycle (`init`, `increment`, `reprocess`, `erase`) plus `meta`, `tables`, `diagnose-ignore`, `analyze-pr`. Rebuilds are slow; the coding agent should not pretend it can reindex via MCP.
 
 **Use this MCP when** you need whole-codebase context: who calls what, what handles a route, what a method invokes, where clients point, or fuzzy “where is concept X” entry points.
 
@@ -143,7 +143,7 @@ Exact allowed values for roles, capabilities, client kinds, etc. live in `java_o
 | Who injects type T? | Symbol id for T | `neighbors(..., direction="in", edge_types=["INJECTS"])` |
 | Impact / “what breaks if I change X”? | **No magic tool** — you loop | `neighbors` with `in` + relevant edge types (`CALLS`, `INJECTS`, …), repeat until bounded |
 | Index health / ontology / counts | Not MCP | Shell: `java-codebase-rag meta` |
-| Rebuild index | Not MCP | `java-codebase-rag refresh` (requires `LANCEDB_MCP_ALLOW_REFRESH=1`) |
+| Rebuild index | Not MCP | `java-codebase-rag reprocess` (full rebuild) or `java-codebase-rag increment` (Lance catch-up; graph may stay stale until `reprocess`) |
 | PR blast radius | Not MCP | `java-codebase-rag analyze-pr --diff-file …` |
 
 **Rules of thumb:**

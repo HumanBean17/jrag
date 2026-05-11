@@ -44,18 +44,17 @@ inside the MCP.
     name; for a multi-module Maven/Gradle reactor it's the *child*
     module name (e.g. `chat-app`).
   - **`microservice`** — the *outermost* build-marker ancestor under
-    `LANCEDB_MCP_PROJECT_ROOT` (e.g. `chat-core` for a reactor whose
+    the resolved Java tree root (e.g. `chat-core` for a reactor whose
     children all live under `chat-core/`). Resolution falls back to:
-    explicit override (env `LANCEDB_MCP_MICROSERVICE_ROOTS=foo,bar` or
-    `microservice_roots: [foo, bar]` in `.lancedb-mcp.yml` at the
-    project root) → outermost build marker → first path segment under
-    `project_root` → empty string.
+    explicit override (`microservice_roots: [foo, bar]` in
+    `.java-codebase-rag.yml` at the project root — YAML-only) → outermost
+    build marker → first path segment under `project_root` → empty string.
   - **Recommendation:** name your microservice directories meaningfully
     (`order-service/pom.xml`, not `app/pom.xml` — every microservice
     named `app` would collapse into one bucket).
   - **Monorepo layout without build markers:** add the per-microservice
-    directory names to `microservice_roots` in `.lancedb-mcp.yml` (or
-    the env var) and the MCP will accept them as the `microservice=...`
+    directory names to `microservice_roots` in `.java-codebase-rag.yml`
+    and the MCP will accept them as the `microservice=...`
     filter values. Anything else returns an empty `microservice` and
     `microservice=` filters become useless.
   - See: `graph_enrich.py::module_for_path`,
@@ -117,18 +116,17 @@ per bullet.
 **project root** used during indexing:
 
 - For the CocoIndex flow (`java_index_flow_lancedb.py`), indexed files
-  are rooted at **`LANCEDB_MCP_PROJECT_ROOT`** when that env var is set
-  (e.g. `java-codebase-rag refresh` sets it on the cocoindex subprocess while
-  keeping `cwd` on the bundle for imports); otherwise `project_root` is
-  `Path(".").resolve()` (the cocoindex process working directory).
+  are rooted at the resolved Java tree root (CLI `--source-root` or cwd;
+  MCP `JAVA_CODEBASE_RAG_SOURCE_ROOT` when set). The subprocess keeps
+  `cwd` on the bundle for imports while targeting your repo.
 - For `build_ast_graph.py` standalone, it's `--source-root` (defaults
   to `cwd`).
-- For MCP runtime, `LANCEDB_MCP_PROJECT_ROOT` selects the Java project
-  tree for search metadata, graph build, and CocoIndex indexing.
+- For MCP runtime, the same Java tree root is used for search metadata,
+  graph build, and CocoIndex indexing.
 
-Consistency across builds requires the same `LANCEDB_MCP_PROJECT_ROOT`
-(or the same cocoindex `cwd` when the env var is unset) and matching
-`--source-root` for standalone graph builds.
+Consistency across builds requires the same resolved Java tree root and
+index directory (`JAVA_CODEBASE_RAG_INDEX_DIR` / `--index-dir` / YAML
+`index_dir:`) across CLI, MCP, and standalone `build_ast_graph.py` runs.
 
 ### A.2 Annotations the MCP knows about (role inference)
 
@@ -172,7 +170,7 @@ Roles are assigned **first hit wins** from the type's annotations
 
 Without changing `ast_java` tables, you can adjust how types get `role`
 and `capabilities`, register inbound routes, and register outbound
-clients/producers for a given repo via `.lancedb-mcp.yml` at the project
+clients/producers for a given repo via `.java-codebase-rag.yml` at the project
 root (`role_overrides:`, `route_overrides:`, `http_client_overrides:`,
 `async_producer_overrides:`) and/or by copying the in-source stubs from
 `README.md` into your sources:
@@ -323,11 +321,11 @@ The CocoIndex flow indexes only:
   but very large files with complex nesting may produce noisy chunk
   boundaries.
 - **Kuzu graph sidecar location.** The graph defaults to
-  `${LANCEDB_URI}/code_graph.kuzu` (or `$KUZU_DB_PATH` if set). If
-  your index is at `/data/lancedb_data` but Kuzu ends up elsewhere, the
-  MCP will silently operate in vector-only mode (no graph-backed `find` /
-  `describe` / `neighbors`). Verify both paths match, or set `KUZU_DB_PATH`
-  explicitly.
+  `<JAVA_CODEBASE_RAG_INDEX_DIR>/code_graph.kuzu` (see README for the
+  default index dir). If Lance tables and Kuzu are split across directories
+  by mistake, the MCP can silently operate in vector-only mode (no graph-backed
+  `find` / `describe` / `neighbors`). Verify `java-codebase-rag meta` reports the
+  paths you expect.
 
 ---
 
@@ -370,8 +368,8 @@ ROLE_ANNOTATIONS: dict[str, str] = {
 }
 ```
 
-After editing, **rebuild the graph** (`java-codebase-rag refresh` with
-`LANCEDB_MCP_ALLOW_REFRESH=1`, or `build_ast_graph.py`) and **re-run the
+After editing, **rebuild the graph** (`java-codebase-rag reprocess`, or
+`build_ast_graph.py`) and **re-run the
 LanceDB indexer** so per-chunk
 `role` values are recomputed.
 
@@ -446,13 +444,12 @@ You'd do this if:
 - you want to exclude additional directories (generated code, vendored
   forks).
 
-**No-code option (recommended first):** drop a `.lancedb-mcp.yml` at
+**No-code option (recommended first):** drop a `.java-codebase-rag.yml` at
 the project root listing the directory names that should be treated as
-microservice roots, or set `LANCEDB_MCP_MICROSERVICE_ROOTS=foo,bar` in
-the env. The override list wins over structural inference.
+microservice roots. The override list wins over structural inference.
 
 ```yaml
-# .lancedb-mcp.yml
+# .java-codebase-rag.yml
 microservice_roots:
   - order-service
   - billing-service
@@ -581,16 +578,16 @@ the same conventions.
 
 | Symptom | First thing to check |
 |---------|---------------------|
-| `module` / `microservice` is empty on most chunks | A.1 (build markers + `.lancedb-mcp.yml`) → B.4 |
+| `module` / `microservice` is empty on most chunks | A.1 (build markers + `.java-codebase-rag.yml`) → B.4 |
 | `microservice=...` filter returns 0 hits | check `java-codebase-rag meta` output (`microservice_counts`) for canonical names; → A.1 / B.4 |
 | Everything ranks as `OTHER` | A.2 (stereotypes) → B.1 |
 | Sparse `INJECTS` graph | A.4 (DI patterns) → B.3 |
 | Wrong class wins for "what does X do?" | A.5 (naming) → B.2 (verbs / caps) |
 | Important `.properties` / `.xml` configs missing | A.6 → B.5 |
-| Recently re-indexed but search is stale | Restart the MCP server; re-run `java-codebase-rag refresh` (with `LANCEDB_MCP_ALLOW_REFRESH=1`) |
-| `context_before` / `context_after` empty | Set `LANCEDB_MCP_DEBUG_CONTEXT=1` (see README §5) |
+| Recently re-indexed but search is stale | Restart the MCP server; re-run `java-codebase-rag reprocess` |
+| `context_before` / `context_after` empty | Set `JAVA_CODEBASE_RAG_DEBUG_CONTEXT=1` (see README graph section) |
 | Graph has lots of phantom nodes | Expected for external libs; inspect via `java-codebase-rag meta` — only worry if domain types are phantoms (means resolution is failing; check imports). Use `find` / `neighbors` and filter or interpret `resolved` flags on symbols as needed. |
-| Graph tools unavailable / silent failures | Kuzu DB missing or wrong path — verify `KUZU_DB_PATH` or `${LANCEDB_URI}/code_graph.kuzu` exists (see README §5 "AST Graph layer"). |
+| Graph tools unavailable / silent failures | Kuzu DB missing or wrong path — verify `<index-dir>/code_graph.kuzu` exists and `JAVA_CODEBASE_RAG_INDEX_DIR` matches (see README graph layer). |
 
 ---
 
@@ -598,7 +595,7 @@ the same conventions.
 
 | Change you made | Re-run |
 |-----------------|--------|
-| Role table, DI annotations, DTO heuristics, exclusion patterns, file-type patterns, chunk sizes, embedding model | **Both** the LanceDB indexer (`cocoindex update ... --full-reprocess` or `java-codebase-rag refresh`) **and** `build_ast_graph.py` |
+| Role table, DI annotations, DTO heuristics, exclusion patterns, file-type patterns, chunk sizes, embedding model | **Both** the LanceDB indexer (`cocoindex update ... --full-reprocess` or `java-codebase-rag reprocess`) **and** `build_ast_graph.py` |
 | Graph-only logic (new edge type, module/microservice inference, phantom resolution) | `build_ast_graph.py` + `graph_enrich.py` |
 | Ranking weights, action-verb list, search-time caps, hybrid/RRF behaviour | Nothing — restart the MCP server |
 | Server tool surface (new tools, parameter changes) | Restart the MCP server (and re-register in the client if the tool list changed) |

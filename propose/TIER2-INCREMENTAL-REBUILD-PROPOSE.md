@@ -1,6 +1,7 @@
 # Tier 2 — Incremental Kuzu rebuild
 
 Status: **active — ready for planning**.
+User-facing tracking for graph-side incremental work: GitHub issue **#73** (linked from the `increment` stderr warning in `java_codebase_rag/cli.py`).
 Pairs with the focused MCP-tool proposal
 [`propose/REFRESH-CODE-INDEX-AUTO-MODE-PROPOSE.md`](REFRESH-CODE-INDEX-AUTO-MODE-PROPOSE.md)
 (decision engine for `refresh_code_index`) and supersedes its

@@ -342,6 +342,8 @@ Expected output after PR-CLI-3 (docs + rules):
 
 The startup-slowness fix (deferred imports in `cli.py`) is a **separate, prior PR** outside this migration; it does not change the surface and should land before PR-CLI-2 so contributors testing the new subcommands aren't taxed by the multi-second startup.
 
+**PR-CLI-3 (docs sweep):** README, `docs/*`, `AGENTS.md`, `.cursor/rules/*.mdc`, `CODEBASE_REQUIREMENTS.md`, `mcp.json.example` path placeholders, selected `propose/*.md` one-line notes, `docs/paper/paper.tex` + rebuilt `paper.pdf`, migration `mv` sections, and acceptance grep per the command in this section.
+
 ---
 
 ## §7 — Decisions taken (no longer open)

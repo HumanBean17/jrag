@@ -2,8 +2,8 @@
   "mcpServers": {
     "java-codebase-rag": {
       "type": "stdio",
-      "command": "/ABSOLUTE/PATH/TO/mcp_lancedb_bundle/.venv/bin/python",
-      "args": ["/ABSOLUTE/PATH/TO/mcp_lancedb_bundle/server.py"],
+      "command": "/ABSOLUTE/PATH/TO/java-codebase-rag/.venv/bin/python",
+      "args": ["/ABSOLUTE/PATH/TO/java-codebase-rag/server.py"],
       "env": {
         "JAVA_CODEBASE_RAG_INDEX_DIR": "/ABSOLUTE/PATH/TO/.java-codebase-rag",
         "JAVA_CODEBASE_RAG_SOURCE_ROOT": "/ABSOLUTE/PATH/TO/your-java-project",

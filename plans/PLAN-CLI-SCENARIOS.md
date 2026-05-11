@@ -359,5 +359,5 @@ Add **Migration from legacy names** sections with explicit `mv` commands
 
 - `PR-CLI-1`: **done (awaiting `master` merge)** — [#72](https://github.com/HumanBean17/java-codebase-rag/pull/72) (propose **approved** + this plan’s tracking update)
 - `PR-CLI-2`: **implemented (awaiting merge to `master`)** — lifecycle CLI + config consolidation in tree
-- `PR-CLI-3`: _pending_
+- `PR-CLI-3`: **in review** — `chore/cli-scenarios-docs`: README / docs / `AGENTS.md` / `.cursor/rules/` / migration / `paper.pdf` rebuild; mark **merged** when the PR lands on `master` (acceptance grep per `propose/CLI-SCENARIOS-PROPOSE.md` §6)
 - `Kuzu incremental tracking issue`: **opened** — [#73](https://github.com/HumanBean17/java-codebase-rag/issues/73) (Tier 2 engine scope; URL matches `KUZU_INCREMENTAL_TRACKING_ISSUE_URL` in `java_codebase_rag/cli.py`)

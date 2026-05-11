@@ -90,18 +90,18 @@ In the benchmark, LLM-KB skipped 377 out of 1210 files (31.2% miss rate), reduci
 
 ### 2.3 How this bundle wires CocoIndex, LanceDB, and Kuzu
 
-1. **Vector / chunk index (LanceDB):** a CocoIndex flow (e.g. `java_index_flow_lancedb.py` in the repo) walks sources, applies Tree-sitter-based chunking, embeds, and writes **LanceDB** tables. At query time the MCP / CLI loads embeddings from `LANCEDB_URI` and runs vector search, optional **FTS + vector RRF** (`auto_hybrid`), and filters on enriched columns (`role`, `microservice`, `module`, …).[^6][^7]
+1. **Vector / chunk index (LanceDB):** a CocoIndex flow (e.g. `java_index_flow_lancedb.py` in the repo) walks sources, applies Tree-sitter-based chunking, embeds, and writes **LanceDB** tables. At query time the MCP / CLI loads embeddings from the resolved index directory (`JAVA_CODEBASE_RAG_INDEX_DIR`, default `.java-codebase-rag/` under the Java tree) and runs vector search, optional **FTS + vector RRF** (`auto_hybrid`), and filters on enriched columns (`role`, `microservice`, `module`, …).[^6][^7]
 
 2. **Graph index (Kuzu):** `build_ast_graph.py` runs **in parallel** (same repo root, same `.java` sources). It is **not** required for read-only search if the Kuzu file already exists. Output defaults to `code_graph.kuzu` next to the LanceDB directory. Query-time access is read-only Cypher from Python (`kuzu`).
 
 3. **Cross-service `HTTP_CALLS` / `ASYNC_CALLS` (future):** Feign / `RestTemplate` / Kafka static patterns belong in a later pass once method- and service-level edges are modeled; see §8.[^14][^15][^11]
 
-4. **Incremental updates:** CocoIndex can incrementally refresh LanceDB chunks. The Kuzu build in Phase 1 is a **full rebuild** when the graph is regenerated; incremental graph diffing is a future improvement (bundle `README`).
+4. **Incremental updates:** CocoIndex can incrementally update LanceDB chunks. The Kuzu build in Phase 1 is a **full rebuild** when the graph is regenerated; incremental graph diffing is a future improvement (bundle `README`).
 
 ### 2.4 Why Kuzu (and what LanceDB covers)
 
 - **LanceDB** holds dense retrieval: embeddings, optional FTS, and chunk metadata (package, FQN, role, capabilities, `microservice` / `module`, …) produced with the same Tree-sitter chunks the agent reads.
-- **Kuzu** is an **embedded** property graph with **Cypher**, no separate server process, and a small on-disk footprint beside `lancedb_data`. It matches the “structural retriever + parallel to vectors” model without running Neo4j or another cluster alongside the MCP process.
+- **Kuzu** is an **embedded** property graph with **Cypher**, no separate server process, and a small on-disk footprint beside the resolved Lance index directory (default `.java-codebase-rag/` under the Java tree). It matches the “structural retriever + parallel to vectors” model without running Neo4j or another cluster alongside the MCP process.
 
 Research stacks often cite pgvector or other vector stores; functionally, **LanceDB plays that role here**, paired with Kuzu for graph traversals.[^12]
 
@@ -327,7 +327,7 @@ Expose the graph and vector index as discrete MCP tools. Implemented tools today
 | `describe` | Return one node record plus per-edge-type in/out summary |
 | `neighbors` | One-hop traversal over explicit `direction` and `edge_types` (batch ids supported) |
 | `graph_meta` / `list_code_index_tables` | Operational metadata (transitional; moving to `java-codebase-rag` CLI) |
-| `analyze_pr` / `diagnose_ignore` / `refresh_code_index` | Operational commands (transitional; moving to `java-codebase-rag` CLI) |
+| `analyze_pr` / `diagnose_ignore` / `refresh_code_index` | Operational commands (superseded on the operator side by the `java-codebase-rag` CLI: `analyze-pr`, `diagnose-ignore`, lifecycle verbs including `reprocess`) |
 
 The v1 navigation verbs are removed; the `describe(id=...)` parameter name remains the stable contract in v2.
 

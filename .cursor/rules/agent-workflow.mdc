@@ -92,8 +92,8 @@ When you're given a per-PR task prompt from `plans/CURSOR-PROMPTS-*.md`:
 
 ## Validate
 
-- `ruff check .` — fix or justify warnings.
-- `pytest tests -v` — must pass without `JAVA_CODEBASE_RAG_RUN_HEAVY`.
+- `.venv/bin/ruff check .` — fix or justify warnings.
+- `.venv/bin/python -m pytest tests -v` — must pass without `JAVA_CODEBASE_RAG_RUN_HEAVY`.
   Expect skips only where tests document env gating (see `tests/README.md`).
   Each plan may add tests; match the active plan if it cites a count.
 - For schema or ranking work, also run with
@@ -133,7 +133,8 @@ When you're given a per-PR task prompt from `plans/CURSOR-PROMPTS-*.md`:
   `key in result`) into exact counts to chase a number — they are
   intentionally loose.
 - Don't add a hard dependency on `cocoindex` outside
-  `java_index_flow_lancedb.py` / the `java-codebase-rag refresh` path.
+  `java_index_flow_lancedb.py` / the `java-codebase-rag` lifecycle (`init` /
+  `increment` / `reprocess` / `erase`) path.
 - Don't introduce a parallel `*Overrides` class when extending
   brownfield support. `BrownfieldOverrides` already holds route,
   role, capability, http client, and async producer dicts — extend
