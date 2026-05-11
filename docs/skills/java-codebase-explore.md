@@ -27,13 +27,13 @@ when_not_to_load:
 
 ## Activation
 
-This skill is **`java-codebase-explore`**: use it when the user’s intent matches the activation phrases in the YAML metadata above (explore the estate, understand the system, map call paths, plan a change, onboard, draft a propose, or debug a symptom). It is the **strategy guide** (when to use MCP versus other tools, how to sequence exploration, stopping rules, and anti-capabilities). **[`docs/AGENT-GUIDE.md`](../AGENT-GUIDE.md)** remains the **operating manual** for exact JSON argument shapes, recovery moves, and slash-style aliases—open or link it when you need those details; this document does not duplicate them.
+This skill is **`java-codebase-explore`**: use it when the user’s intent matches the activation phrases in the YAML metadata above (explore the estate, understand the system, map call paths, plan a change, onboard, draft a propose, or debug a symptom). It is the **strategy guide** (when to use MCP versus other tools, how to sequence exploration, stopping rules, and anti-capabilities). **[`docs/AGENT-GUIDE.md`](https://github.com/HumanBean17/java-codebase-rag/blob/master/docs/AGENT-GUIDE.md)** remains the **operating manual** for exact JSON argument shapes, recovery moves, and slash-style aliases—open or link it when you need those details; this document does not duplicate them. Cross-links below use **GitHub `blob/master` URLs** (not `../` paths) so they still resolve when this skill is installed from the Perplexity zip without a full repo checkout.
 
 ## Pre-flight: is the index built?
 
 Before any mission, establish whether the project is indexed and whether graph and vector layers are aligned.
 
-1. Run **`java-codebase-rag meta`** (with the same `--source-root` / `--index-dir` / env as the operator setup). Parse the JSON payload: ontology version, counts, `edge_counts`, paths, and any `success: false` outcome (see [`docs/JAVA-CODEBASE-RAG-CLI.md`](../JAVA-CODEBASE-RAG-CLI.md) for `meta` semantics and exit codes).
+1. Run **`java-codebase-rag meta`** (with the same `--source-root` / `--index-dir` / env as the operator setup). Parse the JSON payload: ontology version, counts, `edge_counts`, paths, and any `success: false` outcome (see [`docs/JAVA-CODEBASE-RAG-CLI.md`](https://github.com/HumanBean17/java-codebase-rag/blob/master/docs/JAVA-CODEBASE-RAG-CLI.md) for `meta` semantics and exit codes).
 2. **Unindexed or missing graph:** if there is no usable index or `meta` indicates failure, do not pretend the MCP can see the repo. Stop MCP-driven missions until **`java-codebase-rag init`** (or **`reprocess`** where appropriate) has been run per the CLI guide; meanwhile use **`rg`**, README, and build files to orient.
 3. **Lance vs Kuzu after `increment`:** **`increment`** refreshes the CocoIndex / Lance side **without** rebuilding Kuzu. Expect **stale graph navigation** until **`reprocess`** (full Lance reprocess + full Kuzu rebuild). Treat `meta` (and last `reprocess` / provenance fields there) as the source of truth for how fresh the graph is; if graph and source disagree, prefer the **open file** and report staleness.
 
@@ -79,7 +79,7 @@ You cannot reason reliably about cross-service behaviour until these surfaces ex
 
 1. **`neighbors(direction="in", edge_types=["CALLS","INJECTS",…])`** from the target method(s); repeat one hop at a time until diminishing returns.
 2. For API or route changes: **`find(kind="route", filter={…})`** on the owning microservice; **`neighbors`** with `EXPOSES` / `HTTP_CALLS` / `ASYNC_CALLS` as needed.
-3. For PR-shaped work, use **`java-codebase-rag analyze-pr`** (CLI only) with a diff when the user has a branch or patch—see [`docs/JAVA-CODEBASE-RAG-CLI.md`](../JAVA-CODEBASE-RAG-CLI.md).
+3. For PR-shaped work, use **`java-codebase-rag analyze-pr`** (CLI only) with a diff when the user has a branch or patch—see [`docs/JAVA-CODEBASE-RAG-CLI.md`](https://github.com/HumanBean17/java-codebase-rag/blob/master/docs/JAVA-CODEBASE-RAG-CLI.md).
 
 **Stopping rule:** You can list concrete symbols/routes/clients at risk and say what is **not** knowable from static graph alone (reflection, unindexed services).
 
@@ -167,7 +167,7 @@ Use non-MCP work **first-class**, not as a last resort:
 | **File reads** | Single-file truth for logic the graph has not ingested or when **`increment`** left Kuzu stale. |
 | **`git log` / `git blame`** | History, ownership, “when did this regress”—never MCP. |
 | **README, `pom.xml`, `build.gradle`, Docker, workflows** | Build/run/deploy and module structure—never MCP. |
-| **`java-codebase-rag` CLI** | Lifecycle (`init` / `increment` / `reprocess`), **`meta`**, **`tables`**, **`analyze-pr`**, **`diagnose-ignore`**—per [`docs/JAVA-CODEBASE-RAG-CLI.md`](../JAVA-CODEBASE-RAG-CLI.md). |
+| **`java-codebase-rag` CLI** | Lifecycle (`init` / `increment` / `reprocess`), **`meta`**, **`tables`**, **`analyze-pr`**, **`diagnose-ignore`**—per [`docs/JAVA-CODEBASE-RAG-CLI.md`](https://github.com/HumanBean17/java-codebase-rag/blob/master/docs/JAVA-CODEBASE-RAG-CLI.md). |
 
 If answering the question would require runtime truth (live traffic, actual DB rows, dynamic classpath), say so and stop relying on MCP.
 
@@ -214,7 +214,7 @@ disagreement as evidence of staleness, not as a contradiction.
 5. **Using MCP for CLI-only or repo-meta questions.** `analyze-pr` shape, exit codes, ignore diagnostics → **CLI doc + `--help`**, not `search`.
 6. **Treating the graph as runtime telemetry.** Throughput, live queues, and prod-only config are out of scope—say so and switch tools.
 7. **Over-trusting post-`increment` navigation.** If users ran **`increment`** without **`reprocess`**, expect **stale Kuzu**; prefer **`meta`**, file reads, or queue **`reprocess`** before high-stakes conclusions.
-8. **Asking the user for JSON shapes** that already ship in MCP tool descriptions and **[`docs/AGENT-GUIDE.md`](../AGENT-GUIDE.md)**—read those surfaces instead of inventing parameters.
+8. **Asking the user for JSON shapes** that already ship in MCP tool descriptions and **[`docs/AGENT-GUIDE.md`](https://github.com/HumanBean17/java-codebase-rag/blob/master/docs/AGENT-GUIDE.md)**—read those surfaces instead of inventing parameters.
 
 ## Cheat sheet (inline reference)
 
@@ -223,8 +223,10 @@ Four MCP tools:
 - `search(query, table, hybrid, limit, filter)` — fuzzy locate.
 - `find(kind, filter, limit)` — structured listing; `filter` is required.
 - `describe(id)` — full node + `edge_summary`.
-- `neighbors(ids, direction, edge_types, filter, limit)` — one hop;
+- `neighbors(ids, direction, edge_types, limit, offset, filter)` — one hop;
   `direction` and `edge_types` are required.
+
+*Shorthand:* MCP calls are always **named JSON** arguments per the live tool schema, not positional Python. The lines above are mnemonic; for pagination and optional filters, match the tool surface (e.g. `neighbors` exposes `limit`, then `offset`, then optional `filter`).
 
 Three node kinds: `symbol`, `route`, `client`. Ids carry a prefix
 (`sym:`, `route:` / `r:`, `client:` / `c:`).
@@ -240,4 +242,4 @@ Nine edge types:
 | Cross-service | `HTTP_CALLS`, `ASYNC_CALLS` |
 
 For exact argument shapes, recovery playbook, and slash aliases see
-`docs/AGENT-GUIDE.md` in the java-codebase-rag repo.
+[`docs/AGENT-GUIDE.md`](https://github.com/HumanBean17/java-codebase-rag/blob/master/docs/AGENT-GUIDE.md) in the java-codebase-rag repo.

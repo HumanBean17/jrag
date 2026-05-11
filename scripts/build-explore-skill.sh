@@ -16,8 +16,9 @@
 #   docs/skills/java-codebase-explore.zip  (overwritten; commit the result)
 #
 # Determinism: file mtimes inside the archive are normalized so repeated runs
-# produce identical bytes where zip stores timestamps. If your zip(1) still
-# embeds OS-specific extras, note any residual noise in the PR.
+# on the *same* machine / zip(1) build usually yield identical bytes. Do not
+# treat a checksum from another maintainer or CI image as a portable contract:
+# zip implementations and extra fields can still differ across OS releases.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
