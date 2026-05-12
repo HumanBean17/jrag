@@ -7,6 +7,7 @@ optional one-line stderr hints may fire when deprecated names are detected.
 from __future__ import annotations
 
 import os
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,6 +26,43 @@ ENV_DEBUG_CONTEXT = "JAVA_CODEBASE_RAG_DEBUG_CONTEXT"
 ENV_RUN_HEAVY = "JAVA_CODEBASE_RAG_RUN_HEAVY"
 
 _DEFAULT_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+
+# Matches either $VAR or ${VAR} (POSIX shell variable syntax).
+_UNRESOLVED_VAR_RE = re.compile(r"\$(\w+|\{[^}]+\})")
+
+
+def maybe_expand_embedding_model_path(value: str) -> str:
+    """Expand ``~`` and ``$VAR`` when *value* is path-shaped.
+
+    Path-shape: starts with ``/``, ``./``, ``../``, ``~``, or contains ``$``.
+    Plain ``org/name`` (hub id) does not match and is passed through unchanged.
+
+    Used for ``embedding.model`` after precedence resolution and for runtime
+    ``SBERT_MODEL`` reads (e.g. MCP) so the string matches ``ResolvedOperatorConfig``.
+    """
+    needs_expand = value.startswith(("/", "./", "../", "~")) or "$" in value
+    if not needs_expand:
+        return value
+    expanded = os.path.expandvars(os.path.expanduser(value))
+    if _UNRESOLVED_VAR_RE.search(expanded):
+        print(
+            f"java-codebase-rag: path-shaped model string contains unresolved variable: {expanded}",
+            file=sys.stderr,
+        )
+    return expanded
+
+
+def resolved_sbert_model_for_process_env(import_time_default: str) -> str:
+    """``SBERT_MODEL`` from the process environment, with the same expansion as YAML/CLI resolution.
+
+    *import_time_default* is typically ``index_common.SBERT_MODEL`` (expanded at import
+    when ``SBERT_MODEL`` was unset); when the env var is set or non-empty, that value wins
+    and is normalized with :func:`maybe_expand_embedding_model_path`.
+    """
+    raw = os.environ.get("SBERT_MODEL")
+    picked = import_time_default if (raw is None or not str(raw).strip()) else str(raw).strip()
+    return maybe_expand_embedding_model_path(picked)
+
 
 # Legacy env keys: never honored; detection-only hints name the replacement (if any).
 _LEGACY_ENV_HINTS: tuple[tuple[str, str], ...] = (
@@ -226,6 +264,7 @@ def resolve_operator_config(
         yaml_path=("embedding", "model"),
         default=_DEFAULT_EMBEDDING_MODEL,
     )
+    model = maybe_expand_embedding_model_path(model)
     device, device_src = _pick_optional_device(
         cli_val=cli_embedding_device,
         env_key="SBERT_DEVICE",

@@ -119,13 +119,12 @@ embedding:
   # Hub id OR local directory containing the sentence-transformers model files.
   # - Hub id example: `sentence-transformers/all-MiniLM-L6-v2`
   # - Local path examples: `/opt/models/minilm`, `~/models/minilm`, `$MODEL_DIR/minilm`
-  # - PLANNED (PR-YAML-EXPAND-1, see propose/YAML-PATH-EXPANSION-PROPOSE.md):
-  #   `~` and `$VAR` will be expanded when the value is path-shaped (starts with
-  #   `/`, `./`, `../`, `~`, or contains `$`). Plain `org/name` is treated as
-  #   a hub id and passed through unchanged. Until the impl PR lands, the
-  #   indexer subprocess expands the env var at import time but `meta` and MCP
-  #   search show the literal YAML value; use absolute paths for now if you
-  #   need consistent output.
+  # - Resolution applies expanduser + expandvars when the value is path-shaped
+  #   (starts with `/`, `./`, `../`, `~`, or contains `$`). Same rule for
+  #   `SBERT_MODEL` and `--embedding-model` after precedence picks the string.
+  #   Plain `org/name` is treated as a hub id and passed through unchanged.
+  #   A relative path without `./` (e.g. `models/minilm`) is ambiguous with
+  #   hub-id shape — prepend `./` if you mean a local directory.
   # - Env: SBERT_MODEL. CLI: --embedding-model. Default: sentence-transformers/all-MiniLM-L6-v2
   model: sentence-transformers/all-MiniLM-L6-v2
 
@@ -212,7 +211,7 @@ async_producer_overrides:
 | Field | Expanded? | Notes |
 |---|---|---|
 | `index_dir` | partial | `~` expanded; `$VAR` is NOT expanded. Relative paths resolve against `source_root`. |
-| `embedding.model` (when path-shaped) | yes (PLANNED, PR-YAML-EXPAND-1) | Path-shape = starts with `/`, `./`, `../`, `~`, or contains `$`. Plain `org/name` is treated as a hub id and passed through. Behaviour ships with the impl PR; the propose for the design call is `propose/YAML-PATH-EXPANSION-PROPOSE.md`. |
+| `embedding.model` (when path-shaped) | yes | Path-shape = starts with `/`, `./`, `../`, `~`, or contains `$`. Plain `org/name` is treated as a hub id and passed through. Applies to the value after CLI > env > YAML > default precedence. Long-lived MCP hosts also apply the same expansion when reading `SBERT_MODEL` from the process environment (so table metadata and search agree with `index_common` defaults). |
 | `embedding.device` | n/a | Device strings (`cpu`, `cuda`, `mps`) aren't paths. |
 | `microservice_roots[*]` | no | Each entry is a directory **name** relative to `source_root`, not an arbitrary path. |
 | Brownfield `path:` / `topic:` values | no | These are URL paths and Kafka topic names, not filesystem paths. Literal characters preserved. |
@@ -223,6 +222,7 @@ async_producer_overrides:
 - **Don't commit secrets** into this YAML — it sits next to your source tree and is read by every operator who clones it.
 - **Rebuild after editing brownfield overrides.** `java-codebase-rag reprocess` rebuilds Lance + Kuzu so the new overrides take effect. Editing `embedding.model` also requires reprocess (the embeddings in Lance must match the reader's model).
 - **Diagnose what's loaded.** `java-codebase-rag meta` prints the resolved config and each value's `*_source` (`cli` / `env` / `yaml` / `default`) — see `embedding_model_source`, `embedding_device_source`, `index_dir_source`.
+- **`embedding.model` and `$` in directory names.** `expandvars` treats `$VAR` / `${VAR}` like the shell. HuggingFace hub ids never contain `$`. If a local filesystem path contains a literal `$` in a directory name, use an absolute path that avoids `$`-expansion patterns, or expect `expandvars` to interpret `$` sequences.
 
 Deeper documentation for the brownfield blocks (`role_overrides`, `route_overrides`, `http_client_overrides`, `async_producer_overrides`, `cross_service_resolution`) lives in [§7 Brownfield overrides](#7-brownfield-overrides).
 
@@ -337,6 +337,8 @@ Pass the same unified diff text you would feed to `patch` (e.g. `git diff` outpu
 ```
 
 ### Manual search
+
+`--model` defaults from `SBERT_MODEL` (same path-shaped `~` / `$VAR` expansion as MCP and `java-codebase-rag` config). Omit `--model` to use the env default; pass a hub id or local path explicitly when needed.
 
 ```bash
 # Vector

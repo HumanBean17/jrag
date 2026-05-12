@@ -17,6 +17,7 @@ from sentence_transformers import SentenceTransformer
 
 from chunk_heuristics import analyze_chunk, looks_like_code_identifier
 from index_common import SBERT_MODEL
+from java_codebase_rag.config import maybe_expand_embedding_model_path, resolved_sbert_model_for_process_env
 
 TABLES: dict[str, str] = {
     "java": "javacodeindex_java_code",
@@ -944,7 +945,14 @@ def main() -> None:
         or str((Path.cwd() / ".java-codebase-rag").resolve()),
     )
     parser.add_argument("--path-contains", metavar="SUBSTR", default=None)
-    parser.add_argument("--model", default=SBERT_MODEL)
+    parser.add_argument(
+        "--model",
+        default=None,
+        help=(
+            "sentence-transformers hub id or local model directory "
+            f"(default: SBERT_MODEL env or {SBERT_MODEL!r})"
+        ),
+    )
     parser.add_argument("--device", default=None)
     parser.add_argument("--text-width", type=int, default=320)
     parser.add_argument("--hybrid", action="store_true")
@@ -978,6 +986,12 @@ def main() -> None:
         print("Error: --auto-hybrid needs a single --table.", file=sys.stderr)
         sys.exit(2)
 
+    raw_model = args.model
+    if raw_model is None or not str(raw_model).strip():
+        model_name = resolved_sbert_model_for_process_env(SBERT_MODEL)
+    else:
+        model_name = maybe_expand_embedding_model_path(str(raw_model).strip())
+
     try:
         results = run_search(
             args.query,
@@ -985,7 +999,7 @@ def main() -> None:
             table_keys=keys,
             limit=args.limit,
             path_substring=args.path_contains,
-            model_name=args.model,
+            model_name=model_name,
             device=args.device,
             hybrid=args.hybrid,
             fts_text=args.fts_text,

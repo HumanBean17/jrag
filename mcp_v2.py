@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field, TypeAdapter, ValidationError, validate_ca
 from sentence_transformers import SentenceTransformer
 
 from index_common import SBERT_MODEL
+from java_codebase_rag.config import resolved_sbert_model_for_process_env
 from kuzu_queries import KuzuGraph
 from search_lancedb import TABLES, run_search
 
@@ -379,7 +380,7 @@ def search_v2(
     graph: KuzuGraph | None = None,
 ) -> SearchOutput:
     try:
-        model_name = os.environ.get("SBERT_MODEL", SBERT_MODEL)
+        model_name = resolved_sbert_model_for_process_env(SBERT_MODEL)
         device = os.environ.get("SBERT_DEVICE") or None
         model = _get_sentence_transformer(model_name, device)
         uri = os.environ.get("JAVA_CODEBASE_RAG_INDEX_DIR", "").strip() or str(

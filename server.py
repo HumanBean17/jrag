@@ -10,7 +10,7 @@ from typing import Any, Literal
 
 import mcp_v2
 from index_common import SBERT_MODEL
-from java_codebase_rag.config import emit_legacy_env_hints_if_present
+from java_codebase_rag.config import emit_legacy_env_hints_if_present, resolved_sbert_model_for_process_env
 from kuzu_queries import KuzuGraph, resolve_kuzu_path
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
@@ -174,7 +174,7 @@ def _graph_meta_output() -> GraphMetaOutput:
 def list_code_index_tables_payload() -> IndexInfoOutput:
     return IndexInfoOutput(
         lancedb_uri=_resolve_lancedb_uri(),
-        embedding_model=os.environ.get("SBERT_MODEL", SBERT_MODEL),
+        embedding_model=resolved_sbert_model_for_process_env(SBERT_MODEL),
         project_root=str(_project_root()),
         cocoindex_target=_COCOINDEX_TARGET,
         tables=dict(TABLES),
