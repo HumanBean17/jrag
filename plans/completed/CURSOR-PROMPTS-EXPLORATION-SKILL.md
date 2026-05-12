@@ -1,7 +1,7 @@
 # Cursor task prompts — java-codebase-explore skill (PR-EXPLORE-1 → PR-EXPLORE-2)
 
-Status: **active**. Implements [`plans/PLAN-EXPLORATION-SKILL.md`](./PLAN-EXPLORATION-SKILL.md)
-and [`propose/EXPLORATION-SKILL-PROPOSE.md`](../propose/EXPLORATION-SKILL-PROPOSE.md).
+Status: **completed** (reference). Implements [`plans/completed/PLAN-EXPLORATION-SKILL.md`](./PLAN-EXPLORATION-SKILL.md)
+and [`propose/completed/EXPLORATION-SKILL-PROPOSE.md`](../../propose/completed/EXPLORATION-SKILL-PROPOSE.md).
 
 One prompt per PR. Each is **self-contained**: copy the prompt verbatim into Cursor,
 attach the files listed in its `@-files` block, and execute. If the prompt disagrees
@@ -30,25 +30,25 @@ with the plan, **the plan wins**.
 
 **Branch:** `plan/exploration-skill-propose` off `master` (or `chore/exploration-skill-propose`).
 **Base:** `master`.
-**Plan section:** `plans/PLAN-EXPLORATION-SKILL.md` § PR-EXPLORE-1.
+**Plan section:** `plans/completed/PLAN-EXPLORATION-SKILL.md` § PR-EXPLORE-1.
 **Estimated diff size:** 1 file, small LOC (status line tweak only if needed).
 
 **Attach (`@-files`):**
 
-- `@plans/PLAN-EXPLORATION-SKILL.md` (read **PR-EXPLORE-1** section first)
-- `@propose/EXPLORATION-SKILL-PROPOSE.md`
+- `@plans/completed/PLAN-EXPLORATION-SKILL.md` (read **PR-EXPLORE-1** section first)
+- `@propose/completed/EXPLORATION-SKILL-PROPOSE.md`
 
 **Prompt:**
 
 ````
-You are implementing PR-EXPLORE-1 from `plans/PLAN-EXPLORATION-SKILL.md`.
+You are implementing PR-EXPLORE-1 from `plans/completed/PLAN-EXPLORATION-SKILL.md`.
 
 Read the **PR-EXPLORE-1 — Propose merge (lock design)** section in full. The plan
-and `propose/EXPLORATION-SKILL-PROPOSE.md` are the source of truth.
+and `propose/completed/EXPLORATION-SKILL-PROPOSE.md` are the source of truth.
 
 ## Scope
 
-- Land `propose/EXPLORATION-SKILL-PROPOSE.md` on the default branch as the locked
+- Land `propose/completed/EXPLORATION-SKILL-PROPOSE.md` on the default branch as the locked
   design for the java-codebase-explore skill.
 - Optional: update the propose **Status** line from draft to the repo’s agreed
   convention (e.g. ready for implementation) if that matches maintainer practice.
@@ -64,7 +64,7 @@ and `propose/EXPLORATION-SKILL-PROPOSE.md` are the source of truth.
 
 ## Deliverables
 
-1. Single PR whose diff is **only** `propose/EXPLORATION-SKILL-PROPOSE.md` (plus
+1. Single PR whose diff is **only** `propose/completed/EXPLORATION-SKILL-PROPOSE.md` (plus
    trivial typo fixes in that same file if you find load-bearing errors — avoid
    scope creep).
 2. PR title aligned with propose §6, e.g. `propose: java-codebase-explore skill`
@@ -85,14 +85,14 @@ Run from repo root after your edits (before commit):
 git status --short
 ```
 
-Expected: only `propose/EXPLORATION-SKILL-PROPOSE.md` modified (or empty if you
+Expected: only `propose/completed/EXPLORATION-SKILL-PROPOSE.md` modified (or empty if you
 only need to open a PR from an already-correct file).
 
 ```bash
 git diff --name-only
 ```
 
-Expected: **only** `propose/EXPLORATION-SKILL-PROPOSE.md`.
+Expected: **only** `propose/completed/EXPLORATION-SKILL-PROPOSE.md`.
 
 Forbidden paths on this branch (must be **absent** from `git diff --name-only`):
 
@@ -120,14 +120,14 @@ Forbidden paths on this branch (must be **absent** from `git diff --name-only`):
 **Branch:** `feat/java-codebase-explore-skill` off `master` (preferred: after
 PR-EXPLORE-1 is merged, rebase so design is locked on `master`).
 **Base:** `master` (post PR-EXPLORE-1 merge recommended).
-**Plan section:** `plans/PLAN-EXPLORATION-SKILL.md` § PR-EXPLORE-2.
+**Plan section:** `plans/completed/PLAN-EXPLORATION-SKILL.md` § PR-EXPLORE-2.
 **Estimated diff size:** ~4 files (new `docs/skills/` tree, new `scripts/`, binary zip,
 `README.md`), skill body target ≤ ~800 lines per plan.
 
 **Attach (`@-files`):**
 
-- `@plans/PLAN-EXPLORATION-SKILL.md` (read **PR-EXPLORE-2** section first)
-- `@propose/EXPLORATION-SKILL-PROPOSE.md` (§3.2 outline, §3.3 missions, §3.5 metadata,
+- `@plans/completed/PLAN-EXPLORATION-SKILL.md` (read **PR-EXPLORE-2** section first)
+- `@propose/completed/EXPLORATION-SKILL-PROPOSE.md` (§3.2 outline, §3.3 missions, §3.5 metadata,
   Appendix A verbatim, Appendix B verbatim, §4 UC2 / UC6 rows)
 - `@README.md` (§3 *Driving the MCP from an agent*, §9 *Further reading* — edit only
   the bullets/table rows the plan names)
@@ -137,10 +137,10 @@ PR-EXPLORE-1 is merged, rebase so design is locked on `master`).
 **Prompt:**
 
 ````
-You are implementing PR-EXPLORE-2 from `plans/PLAN-EXPLORATION-SKILL.md`.
+You are implementing PR-EXPLORE-2 from `plans/completed/PLAN-EXPLORATION-SKILL.md`.
 
 Read the **PR-EXPLORE-2 — Ship skill + build automation + README** section and
-`propose/EXPLORATION-SKILL-PROPOSE.md` §3 / Appendices A–B. The plan and propose
+`propose/completed/EXPLORATION-SKILL-PROPOSE.md` §3 / Appendices A–B. The plan and propose
 are the source of truth.
 
 ## Scope
@@ -152,7 +152,7 @@ are the source of truth.
      Anti-patterns → Cheat sheet appendix.
    - Each mission uses the uniform template from propose §3.3 (When it applies /
      Goal / Opening move / Sequence / Stopping rule / Fallbacks). Mission set
-     and names are exactly those in `plans/PLAN-EXPLORATION-SKILL.md` PR-EXPLORE-2
+     and names are exactly those in `plans/completed/PLAN-EXPLORATION-SKILL.md` PR-EXPLORE-2
      (Understand a feature; Plan a change; Onboard onto an unfamiliar service;
      Trace a cross-service flow; Prepare to write a propose doc; Debug a specific
      symptom).
@@ -289,7 +289,7 @@ noise explicitly if present).
 - [ ] All deliverables present; script runs; zip committed
 - [ ] Sentinels green; no forbidden paths in diff
 - [ ] PR title: `feat(docs): java-codebase-explore agent skill` (or repo-equivalent
-  conventional commit / PR title per `propose/EXPLORATION-SKILL-PROPOSE.md` §6)
+  conventional commit / PR title per `propose/completed/EXPLORATION-SKILL-PROPOSE.md` §6)
 - [ ] Branch: `feat/java-codebase-explore-skill`
 - [ ] Manual UC2 + UC6 evidence recorded in PR body
 ````
@@ -301,4 +301,4 @@ noise explicitly if present).
 - [x] One section per PR in plan landing order
 - [x] Each prompt: scope, out of scope, numbered deliverables, tests/sentinels,
       manual evidence, DoD
-- [x] No scope drift from `plans/PLAN-EXPLORATION-SKILL.md`
+- [x] No scope drift from `plans/completed/PLAN-EXPLORATION-SKILL.md`

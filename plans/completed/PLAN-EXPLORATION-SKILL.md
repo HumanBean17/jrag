@@ -1,11 +1,11 @@
 # Plan: java-codebase-explore agent skill
 
-Status: **active (planning)**. This plan implements
-[`propose/EXPLORATION-SKILL-PROPOSE.md`](../propose/EXPLORATION-SKILL-PROPOSE.md).
+Status: **completed** (landed). This plan implemented
+[`propose/completed/EXPLORATION-SKILL-PROPOSE.md`](../../propose/completed/EXPLORATION-SKILL-PROPOSE.md).
 
 Depends on: **none** (doc-only rollout). **Coordination note:** companion work
-[`propose/AGENT-GUIDE-SURGICAL-PATCHES-PROPOSE.md`](../propose/AGENT-GUIDE-SURGICAL-PATCHES-PROPOSE.md)
-and [`plans/PLAN-AGENT-GUIDE-SURGICAL-PATCHES.md`](./PLAN-AGENT-GUIDE-SURGICAL-PATCHES.md)
+[`propose/completed/AGENT-GUIDE-SURGICAL-PATCHES-PROPOSE.md`](../../propose/completed/AGENT-GUIDE-SURGICAL-PATCHES-PROPOSE.md)
+and [`plans/completed/PLAN-AGENT-GUIDE-SURGICAL-PATCHES.md`](./PLAN-AGENT-GUIDE-SURGICAL-PATCHES.md)
 are **parallel**, not prerequisites. This plan does **not** edit
 `docs/AGENT-GUIDE.md` in PR-EXPLORE-2. Propose §7 item 10’s maintenance note
 (AGENT-GUIDE mentions this skill) is satisfied when the surgical-patches plan
@@ -55,7 +55,7 @@ skill ship PR alone.
 
 | PR | Scope | Ontology bump | Files touched (approx) | Test buckets | Independent of |
 | --- | --- | --- | --- | --- | --- |
-| PR-EXPLORE-1 | Merge / lock [`propose/EXPLORATION-SKILL-PROPOSE.md`](../propose/EXPLORATION-SKILL-PROPOSE.md) on default branch | No | Propose only (optional Status line) | None (doc-only) | — |
+| PR-EXPLORE-1 | Merge / lock [`propose/completed/EXPLORATION-SKILL-PROPOSE.md`](../../propose/completed/EXPLORATION-SKILL-PROPOSE.md) on default branch | No | Propose only (optional Status line) | None (doc-only) | — |
 | PR-EXPLORE-2 | Ship skill markdown, build script, generated zip, README pointers | No | `docs/skills/java-codebase-explore.md`, `docs/skills/java-codebase-explore.zip`, `scripts/build-explore-skill.sh`, `README.md` | None in CI; **manual** UC2 + UC6 acceptance in PR body | PR-EXPLORE-1 merged preferred so design is locked before prose ships |
 
 Landing order: **PR-EXPLORE-1 → PR-EXPLORE-2**.
@@ -80,7 +80,7 @@ Landing order: **PR-EXPLORE-1 → PR-EXPLORE-2**.
 
 ## File-by-file changes
 
-### 1. `propose/EXPLORATION-SKILL-PROPOSE.md`
+### 1. `propose/completed/EXPLORATION-SKILL-PROPOSE.md`
 
 - Land on default branch as the locked design source (status text may flip from
   draft to agreed per repo convention).
@@ -100,7 +100,7 @@ Landing order: **PR-EXPLORE-1 → PR-EXPLORE-2**.
 
 | # | Step | File(s) | Done when |
 | --- | --- | --- | --- |
-| 1 | Open PR titled per propose §6 (`propose: java-codebase-explore skill` or equivalent) | `propose/EXPLORATION-SKILL-PROPOSE.md` | CI green; single-file or propose-only diff |
+| 1 | Open PR titled per propose §6 (`propose: java-codebase-explore skill` or equivalent) | `propose/completed/EXPLORATION-SKILL-PROPOSE.md` | CI green; single-file or propose-only diff |
 | 2 | Merge to default branch | — | PR-EXPLORE-2 can branch from updated master |
 
 ---
@@ -216,7 +216,7 @@ frontmatter if the host requires it) so Perplexity manifest stays aligned.
 # Out of scope
 
 - Edits to `docs/AGENT-GUIDE.md` (belongs to
-  [`PLAN-AGENT-GUIDE-SURGICAL-PATCHES`](./PLAN-AGENT-GUIDE-SURGICAL-PATCHES.md)
+  [`plans/completed/PLAN-AGENT-GUIDE-SURGICAL-PATCHES.md`](./PLAN-AGENT-GUIDE-SURGICAL-PATCHES.md)
   unless explicitly merged into a follow-up after coordination).
 - MCP / Python / graph / Lance / Kuzu / `server.py` changes.
 - `ontology_version` bump as part of this plan (no enrichment change).
@@ -230,21 +230,21 @@ frontmatter if the host requires it) so Perplexity manifest stays aligned.
 
 # Whole-plan done definition
 
-1. `propose/EXPLORATION-SKILL-PROPOSE.md` merged (PR-EXPLORE-1).
+1. `propose/completed/EXPLORATION-SKILL-PROPOSE.md` merged (PR-EXPLORE-1).
 2. `docs/skills/java-codebase-explore.md`, `docs/skills/java-codebase-explore.zip`,
    and `scripts/build-explore-skill.sh` merged; README updated in both §3 and
    §9 (PR-EXPLORE-2).
 3. Manual UC2 + UC6 evidence recorded in PR-EXPLORE-2 description.
-4. After both PRs land: move propose to `propose/completed/` per repo convention
-   and move **this** plan to `plans/completed/PLAN-EXPLORATION-SKILL.md`.
+4. ~~After both PRs land: move propose to `propose/completed/` per repo convention
+   and move **this** plan to `plans/completed/PLAN-EXPLORATION-SKILL.md`.~~ **Done.**
 
 # Tracking
 
-- `PR-EXPLORE-1`: _pending_
-- `PR-EXPLORE-2`: _pending_
-- Handoff doc: [`plans/CURSOR-PROMPTS-EXPLORATION-SKILL.md`](./CURSOR-PROMPTS-EXPLORATION-SKILL.md)
+- `PR-EXPLORE-1`: **merged**
+- `PR-EXPLORE-2`: **merged**
+- Handoff doc: [`plans/completed/CURSOR-PROMPTS-EXPLORATION-SKILL.md`](./CURSOR-PROMPTS-EXPLORATION-SKILL.md)
   (per-PR Cursor prompts; mirrors
-  [`plans/completed/CURSOR-PROMPTS-TIER1B.md`](./completed/CURSOR-PROMPTS-TIER1B.md)
+  [`plans/completed/CURSOR-PROMPTS-TIER1B.md`](./CURSOR-PROMPTS-TIER1B.md)
   style).
 
 ## Plan authoring checklist

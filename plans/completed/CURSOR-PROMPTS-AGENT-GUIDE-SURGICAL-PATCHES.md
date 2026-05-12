@@ -1,9 +1,9 @@
 # Cursor task prompts — AGENT-GUIDE surgical patches (PR-AGP-1 → PR-AGP-2)
 
-Status: **active**. Companion to
-[`plans/PLAN-AGENT-GUIDE-SURGICAL-PATCHES.md`](./PLAN-AGENT-GUIDE-SURGICAL-PATCHES.md)
+Status: **completed** (reference). Companion to
+[`plans/completed/PLAN-AGENT-GUIDE-SURGICAL-PATCHES.md`](./PLAN-AGENT-GUIDE-SURGICAL-PATCHES.md)
 and
-[`propose/AGENT-GUIDE-SURGICAL-PATCHES-PROPOSE.md`](../propose/AGENT-GUIDE-SURGICAL-PATCHES-PROPOSE.md).
+[`propose/completed/AGENT-GUIDE-SURGICAL-PATCHES-PROPOSE.md`](../../propose/completed/AGENT-GUIDE-SURGICAL-PATCHES-PROPOSE.md).
 
 One prompt per PR. Each is **self-contained**: copy the prompt into Cursor in
 agent mode, attach the files from its `@-files` block, and execute.
@@ -25,15 +25,15 @@ agent mode, attach the files from its `@-files` block, and execute.
 
 **Universal rules**
 
-- [`propose/AGENT-GUIDE-SURGICAL-PATCHES-PROPOSE.md`](../propose/AGENT-GUIDE-SURGICAL-PATCHES-PROPOSE.md)
+- [`propose/completed/AGENT-GUIDE-SURGICAL-PATCHES-PROPOSE.md`](../../propose/completed/AGENT-GUIDE-SURGICAL-PATCHES-PROPOSE.md)
   **§3 Patch B “Canonical block order”** is the single source of truth for
   where the staleness paragraph sits (after `After two failed attempts…`, not
   directly under the table). Appendix A subsection **A.1 → A.4** matches
   **implementation order Patch A → B → C**; use it for verbatim wording.
 - If anything still disagrees, **§3 wins** over Appendix prose layout.
 - **No drive-by edits** outside the deliverables list for that PR.
-- After **both** PRs merge, move the propose + plan to `completed/` per
-  `PLAN-AGENT-GUIDE-SURGICAL-PATCHES.md` whole-plan done (human or follow-up PR).
+- ~~After **both** PRs merge, move the propose + plan to `completed/`~~ **Done**
+  — artefacts live under `propose/completed/` and `plans/completed/`.
 
 ---
 
@@ -45,19 +45,19 @@ agent mode, attach the files from its `@-files` block, and execute.
 
 **Base:** `master` at latest.
 
-**Plan section:** `plans/PLAN-AGENT-GUIDE-SURGICAL-PATCHES.md` § PR-AGP-1.
+**Plan section:** `plans/completed/PLAN-AGENT-GUIDE-SURGICAL-PATCHES.md` § PR-AGP-1.
 
 **Estimated diff size:** 1 file, small (status line optional).
 
 **Attach (`@-files`):**
 
-- `@plans/PLAN-AGENT-GUIDE-SURGICAL-PATCHES.md` (PR-AGP-1 section only in scope)
-- `@propose/AGENT-GUIDE-SURGICAL-PATCHES-PROPOSE.md`
+- `@plans/completed/PLAN-AGENT-GUIDE-SURGICAL-PATCHES.md` (PR-AGP-1 section only in scope)
+- `@propose/completed/AGENT-GUIDE-SURGICAL-PATCHES-PROPOSE.md`
 
 **Prompt:**
 
 ````
-You are implementing PR-AGP-1 from `plans/PLAN-AGENT-GUIDE-SURGICAL-PATCHES.md`.
+You are implementing PR-AGP-1 from `plans/completed/PLAN-AGENT-GUIDE-SURGICAL-PATCHES.md`.
 
 Read the **PR-AGP-1 — Propose merge** section of the plan in full before
 editing anything.
@@ -67,7 +67,7 @@ editing anything.
 Land the propose document on the default branch so PR-AGP-2 can cite §3 /
 Appendix A as the locked insertion spec.
 
-- Touch **only** `propose/AGENT-GUIDE-SURGICAL-PATCHES-PROPOSE.md`.
+- Touch **only** `propose/completed/AGENT-GUIDE-SURGICAL-PATCHES-PROPOSE.md`.
 - Optionally update **Status** from `draft` to agreed wording if your team
   requires it before the apply PR. Do **not** change §3 patch text or Appendix A
   without an explicit new propose revision.
@@ -81,7 +81,7 @@ Appendix A as the locked insertion spec.
 
 ## Deliverables
 
-1. `propose/AGENT-GUIDE-SURGICAL-PATCHES-PROPOSE.md` merged-ready on your branch.
+1. `propose/completed/AGENT-GUIDE-SURGICAL-PATCHES-PROPOSE.md` merged-ready on your branch.
 2. PR description lists: scope statement, link to this plan + propose, **test
    count 0 new tests**, note that `docs/AGENT-GUIDE.md` is intentionally untouched.
 
@@ -103,7 +103,7 @@ After your commit(s), on `git diff master..HEAD`:
 git diff master..HEAD --name-only
 ```
 
-**Expected:** only `propose/AGENT-GUIDE-SURGICAL-PATCHES-PROPOSE.md` appears
+**Expected:** only `propose/completed/AGENT-GUIDE-SURGICAL-PATCHES-PROPOSE.md` appears
 (plus no other paths). If anything else appears, you violated scope — revert.
 
 Confirm AGENT-GUIDE is untouched:
@@ -132,23 +132,23 @@ text below).
 
 **Base:** `master` at latest.
 
-**Plan section:** `plans/PLAN-AGENT-GUIDE-SURGICAL-PATCHES.md` § PR-AGP-2.
+**Plan section:** `plans/completed/PLAN-AGENT-GUIDE-SURGICAL-PATCHES.md` § PR-AGP-2.
 
 **Estimated diff size:** 1 file, ≤ 60 net lines added.
 
 **Attach (`@-files`):**
 
-- `@plans/PLAN-AGENT-GUIDE-SURGICAL-PATCHES.md` (PR-AGP-2 section)
-- `@propose/AGENT-GUIDE-SURGICAL-PATCHES-PROPOSE.md` (§3 Patch B canonical order +
+- `@plans/completed/PLAN-AGENT-GUIDE-SURGICAL-PATCHES.md` (PR-AGP-2 section)
+- `@propose/completed/AGENT-GUIDE-SURGICAL-PATCHES-PROPOSE.md` (§3 Patch B canonical order +
   Appendix A.1–A.4 — verbatim wording and **A → B → C** apply order)
 - `@docs/AGENT-GUIDE.md`
 
 **Prompt:**
 
 ````
-You are implementing PR-AGP-2 from `plans/PLAN-AGENT-GUIDE-SURGICAL-PATCHES.md`.
+You are implementing PR-AGP-2 from `plans/completed/PLAN-AGENT-GUIDE-SURGICAL-PATCHES.md`.
 
-Read propose `propose/AGENT-GUIDE-SURGICAL-PATCHES-PROPOSE.md` §3 (especially
+Read propose `propose/completed/AGENT-GUIDE-SURGICAL-PATCHES-PROPOSE.md` §3 (especially
 Patch B canonical block order) and Appendix A.1–A.4 before editing. Verbatim
 markdown comes from Appendix; **placement** for Patch B follows §3 (staleness
 paragraph **after** the unchanged `After two failed attempts…` line).
@@ -318,11 +318,8 @@ Use the **Acceptance** command block above verbatim; include its `rg` hits
 
 ## Post-rollout (human or chore PR)
 
-After PR-AGP-2 merges:
+After PR-AGP-2 merged, the repo convention moves landed:
 
-1. Move `propose/AGENT-GUIDE-SURGICAL-PATCHES-PROPOSE.md` →
-   `propose/completed/AGENT-GUIDE-SURGICAL-PATCHES-PROPOSE.md`.
-2. Move `plans/PLAN-AGENT-GUIDE-SURGICAL-PATCHES.md` →
-   `plans/completed/PLAN-AGENT-GUIDE-SURGICAL-PATCHES.md`.
-3. Update this file's **Status** line to **completed** and fix any relative links
-   if paths change.
+1. **`propose/completed/AGENT-GUIDE-SURGICAL-PATCHES-PROPOSE.md`** — on default branch.
+2. **`plans/completed/PLAN-AGENT-GUIDE-SURGICAL-PATCHES.md`** — this plan file.
+3. **This prompts file** — status **completed**; relative links point at `completed/` paths.

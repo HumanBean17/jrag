@@ -1,12 +1,12 @@
 # Plan: AGENT-GUIDE surgical patches (failure-mode inoculation)
 
-Status: **active (planning)**. This plan implements
-[`propose/AGENT-GUIDE-SURGICAL-PATCHES-PROPOSE.md`](../propose/AGENT-GUIDE-SURGICAL-PATCHES-PROPOSE.md).
+Status: **completed** (landed). This plan implemented
+[`propose/completed/AGENT-GUIDE-SURGICAL-PATCHES-PROPOSE.md`](../../propose/completed/AGENT-GUIDE-SURGICAL-PATCHES-PROPOSE.md).
 
 Depends on: **none** (documentation only; no code or schema).
 
 Companion prompts:
-[`plans/CURSOR-PROMPTS-AGENT-GUIDE-SURGICAL-PATCHES.md`](./CURSOR-PROMPTS-AGENT-GUIDE-SURGICAL-PATCHES.md)
+[`plans/completed/CURSOR-PROMPTS-AGENT-GUIDE-SURGICAL-PATCHES.md`](./CURSOR-PROMPTS-AGENT-GUIDE-SURGICAL-PATCHES.md)
 (Cursor-ready per-PR contracts; structural reference
 `plans/completed/CURSOR-PROMPTS-TIER1B.md`).
 
@@ -41,7 +41,7 @@ Companion prompts:
 
 | PR | Scope | Ontology bump | Files touched (approx) | Test buckets | Independent of |
 | --- | --- | --- | --- | --- | --- |
-| PR-AGP-1 | Land / lock the propose on the default branch (status text as agreed); **no** `AGENT-GUIDE.md` edits | No | `propose/AGENT-GUIDE-SURGICAL-PATCHES-PROPOSE.md` only (plus optional Status line tweak) | None (doc-only) | — |
+| PR-AGP-1 | Land / lock the propose on the default branch (status text as agreed); **no** `AGENT-GUIDE.md` edits | No | `propose/completed/AGENT-GUIDE-SURGICAL-PATCHES-PROPOSE.md` only (plus optional Status line tweak) | None (doc-only) | — |
 | PR-AGP-2 | Apply Patches A, B, C verbatim intent from propose §3 / Appendix A | No | `docs/AGENT-GUIDE.md` only | None; manual acceptance checklist | PR-AGP-1 merged preferred so “locked patches” precede apply PR |
 
 Landing order: **PR-AGP-1 → PR-AGP-2**.
@@ -63,7 +63,7 @@ Landing order: **PR-AGP-1 → PR-AGP-2**.
 
 ## File-by-file changes
 
-### 1. `propose/AGENT-GUIDE-SURGICAL-PATCHES-PROPOSE.md`
+### 1. `propose/completed/AGENT-GUIDE-SURGICAL-PATCHES-PROPOSE.md`
 
 - Ensure the file is on the default branch with content matching the locked
   three-patch design (§3 + Appendix A).
@@ -85,7 +85,7 @@ Landing order: **PR-AGP-1 → PR-AGP-2**.
 
 | # | Step | File(s) | Done when |
 | - | - | - | - |
-| 1 | Open PR from `chore/` or `plan/` branch; scope = propose only | `propose/AGENT-GUIDE-SURGICAL-PATCHES-PROPOSE.md` | CI green; no AGENT-GUIDE diff |
+| 1 | Open PR from `chore/` or `plan/` branch; scope = propose only | `propose/completed/AGENT-GUIDE-SURGICAL-PATCHES-PROPOSE.md` | CI green; no AGENT-GUIDE diff |
 | 2 | PR description references this plan + propose | PR body | Linked |
 | 3 | Merge to default branch | — | PR-AGP-1 closed |
 
@@ -182,13 +182,12 @@ Landing order: **PR-AGP-1 → PR-AGP-2**.
 
 1. PR-AGP-1 and PR-AGP-2 merged; `docs/AGENT-GUIDE.md` contains Patches A–C inside
    the marker block with acceptance checks satisfied.
-2. `propose/AGENT-GUIDE-SURGICAL-PATCHES-PROPOSE.md` moved to
-   `propose/completed/` after the **full** two-PR rollout (repo convention).
-3. This plan moved to `plans/completed/PLAN-AGENT-GUIDE-SURGICAL-PATCHES.md`
-   after the same rollout.
+2. `propose/completed/AGENT-GUIDE-SURGICAL-PATCHES-PROPOSE.md` on the default branch
+   per repo convention.
+3. ~~This plan moved to `plans/completed/PLAN-AGENT-GUIDE-SURGICAL-PATCHES.md`.~~ **Done.**
 
 ## Tracking
 
-- `PR-AGP-1`: _pending_
-- `PR-AGP-2`: _pending_
-- [`CURSOR-PROMPTS-AGENT-GUIDE-SURGICAL-PATCHES.md`](./CURSOR-PROMPTS-AGENT-GUIDE-SURGICAL-PATCHES.md): _created_
+- `PR-AGP-1`: **merged**
+- `PR-AGP-2`: **merged**
+- [`plans/completed/CURSOR-PROMPTS-AGENT-GUIDE-SURGICAL-PATCHES.md`](./CURSOR-PROMPTS-AGENT-GUIDE-SURGICAL-PATCHES.md): **completed** (reference prompts)

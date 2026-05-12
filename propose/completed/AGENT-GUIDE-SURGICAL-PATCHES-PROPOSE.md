@@ -10,7 +10,7 @@
 - Add **three surgical patches** to AGENT-GUIDE.md, total ≤ 60 lines: a *"What this MCP is NOT"* subsection, a *"Staleness & fallback"* paragraph, and a *"Confidence calibration on cross-service edges"* paragraph.
 - All three patches land **inside** the `<!-- BEGIN java-codebase-rag MCP guide -->` … `<!-- END java-codebase-rag MCP guide -->` markers so the drop-in `CLAUDE.md` / `AGENTS.md` block stays self-contained.
 - **Scope is hard-bounded.** No restructure, no new sections at the top level, no ontology bump, no cardinal-number changes ("four MCP navigation tools" stays exact). Only insertions inside existing slots.
-- This propose is the companion to `EXPLORATION-SKILL-PROPOSE.md` (the standalone `java-codebase-explore` skill). The split is intentional: AGENT-GUIDE.md stays as the operating manual; the new skill is the strategy guide. These patches are the **minimum** the manual needs even if the skill never ships.
+- This propose is the companion to [`EXPLORATION-SKILL-PROPOSE.md`](./EXPLORATION-SKILL-PROPOSE.md) (the standalone `java-codebase-explore` skill). The split is intentional: AGENT-GUIDE.md stays as the operating manual; the new skill is the strategy guide. These patches are the **minimum** the manual needs even if the skill never ships.
 - **Migration shape**: **2 PRs** — propose merge → AGENT-GUIDE.md patch. No code changes. No schema changes. No ontology bump.
 
 ---
