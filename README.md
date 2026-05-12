@@ -95,6 +95,137 @@ Python package: **`java_codebase_rag`** (`python -m java_codebase_rag.cli`).
 
 If an old on-disk index folder is wasting space, relocate or delete it after your data lives under `.java-codebase-rag/` (some installs used a top-level directory named `lancedb_data`).
 
+### Project YAML reference (`.java-codebase-rag.yml`)
+
+A single file at the project root (the directory you pass as `--source-root`, or cwd) holds everything that isn't an environment variable. The two accepted filenames are `.java-codebase-rag.yml` and `.java-codebase-rag.yaml`; if both exist, `.yml` wins. Legacy `.lancedb-mcp.yml` is no longer read.
+
+**All keys are optional.** A project with no YAML at all uses built-in defaults plus env vars. Add only the keys you need.
+
+```yaml
+# .java-codebase-rag.yml — full reference, every key annotated.
+# Place at the project root (same directory you pass as --source-root).
+
+# -------- Core knobs (mirror env vars; precedence: CLI > env > YAML > default) --------
+
+# Index directory: where Lance tables, code_graph.kuzu, and cocoindex.db live.
+# - Tilde (`~`) is expanded; `$VAR` is NOT (use absolute paths or `~`).
+# - Relative paths resolve against source_root, not cwd.
+# - Env: JAVA_CODEBASE_RAG_INDEX_DIR. CLI: --index-dir. Default: ./.java-codebase-rag/
+index_dir: ./.java-codebase-rag
+
+# Embedding configuration. Must match between indexer and reader — if you change
+# `embedding.model`, rebuild the index (`java-codebase-rag reprocess`).
+embedding:
+  # Hub id OR local directory containing the sentence-transformers model files.
+  # - Hub id example: `sentence-transformers/all-MiniLM-L6-v2`
+  # - Local path examples: `/opt/models/minilm`, `~/models/minilm`, `$MODEL_DIR/minilm`
+  # - PLANNED (PR-YAML-EXPAND-1, see propose/YAML-PATH-EXPANSION-PROPOSE.md):
+  #   `~` and `$VAR` will be expanded when the value is path-shaped (starts with
+  #   `/`, `./`, `../`, `~`, or contains `$`). Plain `org/name` is treated as
+  #   a hub id and passed through unchanged. Until the impl PR lands, the
+  #   indexer subprocess expands the env var at import time but `meta` and MCP
+  #   search show the literal YAML value; use absolute paths for now if you
+  #   need consistent output.
+  # - Env: SBERT_MODEL. CLI: --embedding-model. Default: sentence-transformers/all-MiniLM-L6-v2
+  model: sentence-transformers/all-MiniLM-L6-v2
+
+  # Optional. One of: cpu, cuda, mps, cuda:0, cuda:1, ...
+  # When omitted, sentence-transformers picks automatically.
+  # Env: SBERT_DEVICE. CLI: --embedding-device.
+  device: cpu
+
+# -------- Microservice layout --------
+
+# Explicit microservice roots, relative to source_root. When set, takes priority
+# over auto-detection (build markers + outermost source-set folding).
+# Each entry is a directory NAME (no leading slash, no `~`). See §7 for the
+# auto-detection fallback and the diagnose-microservice CLI verb.
+microservice_roots:
+  - chat-core
+  - chat-orchestrator
+  - ranking
+
+# -------- Cross-service edge resolution --------
+
+# How the resolver treats auto-detected cross-service call edges. See §7.2.
+# - auto             (default): promote auto-detected callers to cross_service when a route matches.
+# - brownfield_only           : only edges where both ends come from brownfield annotations or YAML
+#                               stay cross_service; everything else becomes `unresolved`.
+cross_service_resolution: auto
+
+# -------- Brownfield overrides (see §7 for full schema and semantics) --------
+
+# Roles & capabilities for custom stereotypes the indexer can't recognise.
+role_overrides:
+  annotations:
+    AcmeService: SERVICE
+    CompanyController: CONTROLLER
+  capabilities:
+    CompanyKafkaTopic: [MESSAGE_LISTENER]
+  fqn:
+    com.legacy.OrderProcessor:
+      role: SERVICE
+      capabilities: [MESSAGE_LISTENER]
+
+# Server-side route declarations for endpoints the framework introspector can't see.
+route_overrides:
+  annotations:
+    ann.AcmeRoute:
+      framework: spring_mvc
+      kind: http_endpoint
+      method: GET
+      path: /acme
+  fqn:
+    com.legacy.UserApi:
+      framework: spring_mvc
+      kind: http_endpoint
+      path: /legacy/users
+
+# Caller-side HTTP client overrides (RestTemplate/WebClient wrappers, custom Feign-likes).
+http_client_overrides:
+  annotations:
+    ann.LegacyHttpClient:
+      client_kind: rest_template
+      target_service: chat-core
+      path: /chat/joinOperator
+      method: POST
+  fqn:
+    com.legacy.ChatClient:
+      client_kind: feign_method
+      target_service: chat-core
+
+# Caller-side async producer overrides (Kafka/RabbitMQ event publishers).
+async_producer_overrides:
+  annotations:
+    ann.LegacyEvent:
+      client_kind: kafka_send
+      topic: chat.follow-up
+      broker: ""
+  fqn:
+    com.legacy.EventBus:
+      client_kind: kafka_send
+      topic: chat.follow-up
+```
+
+**Path expansion (what gets `~` / `$VAR` treatment):**
+
+| Field | Expanded? | Notes |
+|---|---|---|
+| `index_dir` | partial | `~` expanded; `$VAR` is NOT expanded. Relative paths resolve against `source_root`. |
+| `embedding.model` (when path-shaped) | yes (PLANNED, PR-YAML-EXPAND-1) | Path-shape = starts with `/`, `./`, `../`, `~`, or contains `$`. Plain `org/name` is treated as a hub id and passed through. Behaviour ships with the impl PR; the propose for the design call is `propose/YAML-PATH-EXPANSION-PROPOSE.md`. |
+| `embedding.device` | n/a | Device strings (`cpu`, `cuda`, `mps`) aren't paths. |
+| `microservice_roots[*]` | no | Each entry is a directory **name** relative to `source_root`, not an arbitrary path. |
+| Brownfield `path:` / `topic:` values | no | These are URL paths and Kafka topic names, not filesystem paths. Literal characters preserved. |
+
+**Tips & gotchas:**
+
+- **The file must be at `source_root`**, not in `$HOME`. The MCP server reads `JAVA_CODEBASE_RAG_SOURCE_ROOT` to find it; the CLI uses `--source-root` (else cwd).
+- **Don't commit secrets** into this YAML — it sits next to your source tree and is read by every operator who clones it.
+- **Rebuild after editing brownfield overrides.** `java-codebase-rag reprocess` rebuilds Lance + Kuzu so the new overrides take effect. Editing `embedding.model` also requires reprocess (the embeddings in Lance must match the reader's model).
+- **Diagnose what's loaded.** `java-codebase-rag meta` prints the resolved config and each value's `*_source` (`cli` / `env` / `yaml` / `default`) — see `embedding_model_source`, `embedding_device_source`, `index_dir_source`.
+
+Deeper documentation for the brownfield blocks (`role_overrides`, `route_overrides`, `http_client_overrides`, `async_producer_overrides`, `cross_service_resolution`) lives in [§7 Brownfield overrides](#7-brownfield-overrides).
+
 ---
 
 ## 3. MCP host setup
