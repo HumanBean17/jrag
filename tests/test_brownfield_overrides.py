@@ -483,31 +483,6 @@ def test_fqn_fires_with_enrich_chunk_lance_path(tmp_path: Path) -> None:
     assert c.role == "SERVICE"
 
 
-def test_lance_table_round_trips_list_capabilities(tmp_path: Path) -> None:
-    """Lance can store and read list<string> `capabilities` (CocoIndex write path)."""
-    import lancedb
-    import pyarrow as pa
-
-    root = tmp_path / "lance"
-    root.mkdir()
-    db = lancedb.connect(str(root))
-    tbl = db.create_table(
-        "chunks",
-        pa.table(
-            {
-                "id": [1],
-                "capabilities": pa.array(
-                    [["MESSAGE_LISTENER"]], type=pa.list_(pa.string())
-                ),
-            }
-        ),
-    )
-    round_tbl = db.open_table(tbl.name)
-    row = round_tbl.to_arrow()
-    c = list(row["capabilities"].to_pylist()[0])
-    assert c == ["MESSAGE_LISTENER"]
-
-
 def test_tier1_java_lance_chunk_capabilities_list_type_matches_other_lists() -> None:
     """Pre-flight tier 1: `capabilities` uses the same Arrow list<string> as other list cols."""
     import java_index_flow_lancedb as java_lance
@@ -581,3 +556,32 @@ def test_tier2_lance_row_carries_enrich_capabilities_without_lancedb() -> None:
         ontology_version=ONTOLOGY_VERSION,
     )
     assert "MESSAGE_LISTENER" in row.capabilities
+
+
+def test_lance_table_round_trips_list_capabilities(tmp_path: Path) -> None:
+    """Lance can store and read list<string> `capabilities` (CocoIndex write path).
+
+    Runs after tier1/tier2: importing lancedb/pyarrow first breaks cocoindex's
+    numpy import in the same pytest process (numpy._core.numeric).
+    """
+    import lancedb
+    import pyarrow as pa
+
+    root = tmp_path / "lance"
+    root.mkdir()
+    db = lancedb.connect(str(root))
+    tbl = db.create_table(
+        "chunks",
+        pa.table(
+            {
+                "id": [1],
+                "capabilities": pa.array(
+                    [["MESSAGE_LISTENER"]], type=pa.list_(pa.string())
+                ),
+            }
+        ),
+    )
+    round_tbl = db.open_table(tbl.name)
+    row = round_tbl.to_arrow()
+    c = list(row["capabilities"].to_pylist()[0])
+    assert c == ["MESSAGE_LISTENER"]
