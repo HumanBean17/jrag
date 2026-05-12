@@ -35,6 +35,7 @@ from cocoindex.ops.sentence_transformers import SentenceTransformerEmbedder
 from cocoindex.ops.text import RecursiveSplitter, detect_code_language
 from cocoindex.resources.file import PatternFilePathMatcher
 
+from java_codebase_rag.config import resolved_sbert_model_for_process_env
 from java_index_v1_common import (
     JAVA_CHUNK,
     SBERT_MODEL,
@@ -135,7 +136,7 @@ async def coco_lifespan(builder: coco.EnvironmentBuilder) -> AsyncIterator[None]
     builder.provide(PROJECT_ROOT, root)
 
     embedder = SentenceTransformerEmbedder(
-        SBERT_MODEL,
+        resolved_sbert_model_for_process_env(SBERT_MODEL),
         device=os.environ.get("SBERT_DEVICE") or None,
         trust_remote_code=True,
     )

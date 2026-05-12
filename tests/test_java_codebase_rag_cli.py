@@ -127,6 +127,76 @@ def test_embedding_model_precedence_cli_over_env_over_yaml_over_default(
     assert "MiniLM" in r4.embedding_model
 
 
+def test_embedding_model_yaml_expands_tilde(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("SBERT_MODEL", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    (tmp_path / ".java-codebase-rag.yml").write_text(
+        "embedding:\n  model: ~/models/minilm\n",
+        encoding="utf-8",
+    )
+    cfg = resolve_operator_config(source_root=tmp_path)
+    assert cfg.embedding_model == str(tmp_path / "home" / "models" / "minilm")
+    assert cfg.embedding_model_source == "yaml"
+
+
+def test_embedding_model_yaml_expands_envvar(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("SBERT_MODEL", raising=False)
+    monkeypatch.setenv("MY_MODEL_DIR", "/abs/models")
+    (tmp_path / ".java-codebase-rag.yml").write_text(
+        "embedding:\n  model: $MY_MODEL_DIR/minilm\n",
+        encoding="utf-8",
+    )
+    cfg = resolve_operator_config(source_root=tmp_path)
+    assert cfg.embedding_model == "/abs/models/minilm"
+    assert cfg.embedding_model_source == "yaml"
+
+
+def test_embedding_model_yaml_hub_id_not_expanded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("SBERT_MODEL", raising=False)
+    (tmp_path / ".java-codebase-rag.yml").write_text(
+        "embedding:\n  model: BAAI/bge-small-en-v1.5\n",
+        encoding="utf-8",
+    )
+    cfg = resolve_operator_config(source_root=tmp_path)
+    assert cfg.embedding_model == "BAAI/bge-small-en-v1.5"
+    assert cfg.embedding_model_source == "yaml"
+
+
+def test_embedding_model_cli_quoted_tilde_expanded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UC10b: quoted CLI argument bypasses shell expansion; helper canonicalises."""
+    monkeypatch.delenv("SBERT_MODEL", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    cfg = resolve_operator_config(
+        source_root=tmp_path,
+        cli_embedding_model="~/cli/x",  # quoted in shell → arrives literal
+    )
+    assert cfg.embedding_model == str(tmp_path / "home" / "cli" / "x")
+    assert cfg.embedding_model_source == "cli"
+
+
+def test_embedding_model_yaml_unresolved_var_keeps_literal_stderr_hint_uc9(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.delenv("SBERT_MODEL", raising=False)
+    (tmp_path / ".java-codebase-rag.yml").write_text(
+        "embedding:\n  model: $UNDEFINED_FOO/x\n",
+        encoding="utf-8",
+    )
+    cfg = resolve_operator_config(source_root=tmp_path)
+    assert cfg.embedding_model == "$UNDEFINED_FOO/x"
+    assert cfg.embedding_model_source == "yaml"
+    err = capsys.readouterr().err
+    assert "unresolved variable" in err
+
+
 def test_embedding_device_precedence_cli_over_env_over_yaml_over_default(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
