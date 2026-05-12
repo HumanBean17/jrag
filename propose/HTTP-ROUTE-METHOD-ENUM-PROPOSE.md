@@ -1,8 +1,8 @@
 # Brownfield HTTP annotations: rename `@CodebaseClient` → `@CodebaseHttpClient`, type `method` as a shared `CodebaseHttpMethod` enum on both sides, lock brownfield-exclusivity
 
-**Status**: under review
+**Status**: approved — signed off for implementation (`plans/PLAN-HTTP-ROUTE-METHOD-ENUM.md`).
 **Author**: Dmitriy Teriaev + Perplexity Computer
-**Date**: 2026-05-12 (v3)
+**Date**: 2026-05-12 (v4 doc alignment)
 
 ## TL;DR
 
@@ -12,7 +12,7 @@
 - **New foundational principle**: a brownfield annotation is the **exclusive** source of truth for its facet — when present, framework introspection of that facet (path, method, target service) is **skipped entirely**. Annotation and Spring/JAX-RS metadata coexist on the same method; the brownfield annotation always wins; no merge, no diff, no warning on disagreement.
 - `method` is unconditionally required on **all** `@CodebaseHttpClient` annotations, including `clientKind=feign_method`. The verb declared on the brownfield annotation is the truth even if the Feign interface also has `@GetMapping("/x")`. The duplication is **accepted as the price of brownfield-exclusivity**.
 - **Breaking change accepted** — no users yet, no migration path, no soft-deprecation.
-- Ships in **3 PRs**: PR-1 enum stub + structured-log scaffolding **with zero behaviour change**; PR-2 atomic rename + parser rewrite to enum on client side + `_merge_layer_c_codebase_routes` HTTP branch rewritten from merge to replace (closes the only axis where brownfield-exclusivity was being violated, see §6 Q4); PR-3 docs (AGENT-GUIDE.md, exploration skill cheat sheet trailer).
+- Ships in **3 PRs**: PR-1 enum stub + structured-log emitter scaffolding **with zero behaviour change**; PR-2 atomic rename + parser rewrite to enum on client side + `_merge_layer_c_codebase_routes` HTTP branch rewritten from merge to replace (closes the only axis where brownfield-exclusivity was being violated, see §6 Q4) + **extractor-time** INFO `brownfield-exclusivity-shadowing` on brownfield/framework co-presence (§3); PR-3 docs (AGENT-GUIDE.md, exploration skill cheat sheet trailer).
 - `Route.attrs.http_method` and `Client.attrs.http_method` graph attributes stay **`String`** (the enum's `.name()`). Wire format unchanged; agent-facing JSON identical.
 - YAML override shape (`route_overrides.method`, `http_client_overrides.method`) stays **`String`** — independent of source-annotation surface per v2-locked decision.
 
@@ -174,7 +174,7 @@ public PaymentReceipt charge(PaymentRequest r) {
 - Line 152–153 — recognised-annotation simple-name list `{"CodebaseHttpRoute", "CodebaseHttpRoutes"}`. Add `CodebaseHttpClient`/`CodebaseHttpClients` to the existing `CODEBASE_CLIENT_ANNOTATIONS` set (line 157); remove `CodebaseClient`/`CodebaseClients` (no backward-compat alias).
 - Line 1467 — `http_method = str(mv).upper() if mk == "enum" else str(mv).strip().upper()`. The `else` branch becomes dead code on the route side and stays alive on the client side until PR-2; after PR-2, both branches require `mk == "enum"`.
 
-A new check fires at extractor entry: when a method carries both a brownfield annotation (`@CodebaseHttpRoute` / `@CodebaseHttpClient`) **and** a framework annotation that would normally drive route/client inference (`@GetMapping`, `@FeignClient`, etc.), the extractor logs an INFO-level structured event `brownfield-exclusivity-shadowing` listing which framework annotation was bypassed. This is observability, not validation — it never blocks extraction, but it makes the principle 1 behaviour visible in `build_ast_graph.py --verbose`.
+A new check fires **during extraction** (`ast_java.py`, per method): when a method carries both a brownfield annotation (`@CodebaseHttpRoute` / `@CodebaseHttpClient`) **and** at least one framework annotation that would normally drive route/client inference on that method (`@GetMapping`, `@FeignClient`, `@RequestMapping`, JAX-RS verbs, etc. — exact set locked in implementation), the extractor logs an INFO-level structured event **`brownfield-exclusivity-shadowing`** listing which framework annotations are bypassed for observability. This trigger is **co-presence on the method**, not “a built-in graph row was dropped” (that can miss Feign-only cases or double-fire if we also logged from `graph_enrich.py`). **`_merge_layer_c_codebase_routes`** only implements merge→replace **behaviour**; it does **not** emit a second INFO for the same concern. Logs remain stderr; operators typically enable verbose graph builds (`build_ast_graph.py --verbose`) to see high-volume diagnostics. Observability only — never blocks extraction.
 
 ## §4 — What this deliberately does NOT do
 
@@ -237,7 +237,7 @@ This is the question the v2 doc handwaved. Reading `graph_enrich.py` and `ast_ja
 | Outbound HTTP (clients) | `resolve_http_client_for_method` in `graph_enrich.py:1261–1351` | **Replace.** `return brownfield_calls if brownfield_calls else builtin_http` — any brownfield call drops all built-in calls. | Yes. |
 | Outbound async (producers) | `resolve_async_producer_for_method`, same shape | **Replace.** Symmetric to outbound HTTP. | Yes. |
 
-So principle 7 implies one concrete behaviour change in PR-2: rewrite `_merge_layer_c_codebase_routes`'s HTTP branch (currently lines 980–1000) to mirror the async branch above it — drop same-method built-in HTTP rows when a brownfield HTTP route is present, then append brownfield rows. Zero AST-extractor change required; the asymmetry-fix lives in one file, one function, one branch.
+So principle 7 implies one concrete **graph** behaviour change in PR-2: rewrite `_merge_layer_c_codebase_routes`'s HTTP branch (currently lines 980–1000) to mirror the async branch above it — drop same-method built-in HTTP rows when a brownfield HTTP route is present, then append brownfield rows. That asymmetry-fix lives in one file, one function, one branch and does **not** by itself require any AST shape change. **Separate PR-2 work** (see §3 and §8): `ast_java.py` rename/enum parsing plus **extractor-time** `brownfield-exclusivity-shadowing` logging and WARN on string `method`.
 
 The parser side is a separate change (see PR-2 in §8): client `method` is currently parsed by `_string_value_atoms` in `ast_java.py:1594` and must be **rewritten** to enum-aware parsing — it has no existing `mk == "enum"` branch to "tighten" the way the route side does.
 
@@ -274,8 +274,8 @@ No use case requires a primitive that doesn't exist. UC10 is the only case where
 
 Touches:
 - New file: `tests/fixtures/brownfield_route_stubs/com/example/rag/CodebaseHttpMethod.java` (the enum file itself; placement matches the existing split between `brownfield_route_stubs/` and `brownfield_client_stubs/` — the enum is referenced from the route side first, the client side picks it up in PR-2). Optional symlink or duplicate under `brownfield_client_stubs/` if Java compile order requires it; defer to plan-level.
-- `build_ast_graph.py` — introduce a private `_emit_shadowing_event(method_fqn, framework_anns, brownfield_ann)` helper and a `--verbose` flag that calls it. **Not yet wired** to any call site in `ast_java.py` / `graph_enrich.py`; the helper exists, the call sites land in PR-2.
-- One new test that exercises the helper in isolation (asserts structured log shape: `event=brownfield-exclusivity-shadowing`, `method_fqn=...`, `bypassed_anns=[...]`).
+- Structured logging **helpers** in Python (location chosen in the plan to avoid `ast_java` ↔ `build_ast_graph` import cycles — e.g. a tiny `brownfield_events.py` or private helpers in `build_ast_graph.py` with a documented import strategy): a parameterized `_emit_structured_brownfield_event(...)` (or equivalent) capable of emitting **`brownfield-exclusivity-shadowing`** at INFO with stable field names. **No production call sites** in PR-1: nothing in `ast_java.py`, `graph_enrich.py`, or CLI paths invokes the helper except an **optional unit test** that calls it directly. **Do not** add a `--verbose` flag or any behaviour that implies shadowing runs during normal graph builds in PR-1.
+- One new test that exercises the helper in isolation (asserts structured log shape: `event=brownfield-exclusivity-shadowing`, `method_fqn=...`, `bypassed_anns=[...]` or the field names the implementation locks).
 
 No `ast_java.py` parser changes. No `graph_enrich.py` resolver changes. No renames. No stub-format changes. CI: ruff + pytest as today; existing suite byte-identical except for the new log-helper test.
 
@@ -291,11 +291,12 @@ One atomic commit. The behaviour-change PR — four coordinated changes that mus
 - `_parse_codebase_client_annotation` (line 1565): replace the `_string_value_atoms` lookup for `method` with the enum-aware path (`_annotation_value(..., mk == "enum"`)). Route parser already does this; mirror it.
 - Update `CODEBASE_CLIENT_ANNOTATIONS` frozenset (line 157): drop `{"CodebaseClient", "CodebaseClients"}`, add `{"CodebaseHttpClient", "CodebaseHttpClients"}`.
 - Update string-literal switch arms at line 1540 (`n_simple == "CodebaseClient"`), line 1731 (`simple == "CodebaseClient"`), line 1744 (`simple == "CodebaseClients"`).
-- Emit structured WARN when a `method` element is encountered with `mk != "enum"` (mid-migration safety per decision #13). Reuses PR-1's helper for structured log shape.
+- Emit structured WARN when a `method` element is encountered with `mk != "enum"` (mid-migration safety per decision #13). Use the **same structured-log machinery** as INFO (shared parameterized `_emit_structured_brownfield_event(...)` or a dedicated thin wrapper) with `event=brownfield-method-string-literal` and severity WARN — **do not** reuse the shadowing-specific wrapper in a way that emits the wrong `event=` key.
+- After parsing a method, if it carries `@CodebaseHttpRoute` / `@CodebaseHttpClient` **and** shadowable framework annotations (per §3), emit INFO **`brownfield-exclusivity-shadowing`** once per method via that machinery (UC9).
 
 **3. Inbound-HTTP exclusivity (`graph_enrich.py`):**
 - Rewrite `_merge_layer_c_codebase_routes` lines 980–1000 (HTTP branch) to mirror the async branch above it (lines 963–977): when any layer-C HTTP route is present for a method, drop same-method built-in HTTP rows from `merged` *before* appending layer-C rows. Closes the asymmetry documented in §6 Q4.
-- Wire PR-1's `_emit_shadowing_event` helper to fire INFO `brownfield-exclusivity-shadowing` for each dropped built-in row.
+- **No** INFO `brownfield-exclusivity-shadowing` from this merge path — extractor co-presence (bullet above) is the single trigger so we never double-log the same principle-1 story.
 - Update `CodebaseClient` string-keyed dispatch in `meta_chain` walker (lines 1300–1305) to match the renamed annotation. Note: the `meta_chain` dict is keyed by annotation simple name at index time — the indexer rebuild after PR-2 is what makes this consistent. Document in plan.
 - Update `graph_enrich.py:1097` printf string (v1-deprecation log).
 
@@ -325,7 +326,7 @@ No code change. CI: docs only.
 5. **`@CodebaseClient` → `@CodebaseHttpClient` rename. No backward-compat alias.** `@CodebaseClients` → `@CodebaseHttpClients` for the plural.
 6. **`method` is mandatory on `@CodebaseHttpClient`.** No default. Every client annotation declares a verb regardless of `clientKind`.
 7. **Brownfield-exclusivity principle.** When a brownfield annotation is present on a method, framework introspection of the facets the annotation declares is skipped entirely for that method.
-8. **Shadowing is observability, not validation.** INFO-level structured log `brownfield-exclusivity-shadowing` lists which framework annotations were bypassed when a brownfield annotation forced the resolver to drop them. No warnings on disagreement (UC10), no compile-time enforcement. *This is a distinct event from decision #13's WARN — see decision #18 for the severity-by-event matrix.*
+8. **Shadowing is observability, not validation.** INFO-level structured log `brownfield-exclusivity-shadowing` lists which framework annotations are bypassed when a brownfield HTTP route/client annotation **co-exists** on the method with framework annotations that would otherwise drive inference (extractor-time; §3). It is **not** tied to whether a separate built-in Kuzu row existed. No warnings on disagreement (UC10), no compile-time enforcement. *This is a distinct event from decision #13's WARN — see decision #18 for the severity-by-event matrix.*
 9. **Feign duplication accepted.** A Feign interface method with `@GetMapping("/x")` + `@CodebaseHttpClient(path="/x", method=CodebaseHttpMethod.GET, …)` is the canonical form. The duplication is the price of principle 7.
 10. **Breaking change accepted, no migration path, no soft-deprecation.** PR-2 is one atomic commit.
 11. **`Route.attrs.http_method` and `Client.attrs.http_method` stay `String`** (the enum's `.name()`). Wire format unchanged for all agent-facing consumers.
@@ -336,9 +337,9 @@ No code change. CI: docs only.
 16. **Future verb additions are propose-amendments to the enum file.** Not parameterised via a `CUSTOM("query")` escape hatch.
 17. **Future non-HTTP outbound channels get their own typed annotations** (`@CodebaseGrpcClient`, `@CodebaseMqProducer`, etc.), not enum extensions inside `@CodebaseHttpClient`.
 18. **Severity-by-event matrix.** Two structured events, two deliberately different severities:
-    - `brownfield-exclusivity-shadowing` — **INFO**. Fires when the resolver drops a built-in framework row because a brownfield annotation is present. Agent-facing audit signal; not actionable at compile time. Decision #8.
+    - `brownfield-exclusivity-shadowing` — **INFO**. Fires in **`ast_java.py`** when a method has brownfield HTTP annotations **and** shadowable framework annotations on the same method (co-presence). Agent-facing audit signal; not actionable at compile time. Decision #8. **Not** emitted from `_merge_layer_c_codebase_routes` (avoids duplicate / narrower merge-only triggers).
     - `brownfield-method-string-literal` — **WARN**. Fires when the parser sees `method="GET"` (legacy string form) instead of `method=CodebaseHttpMethod.GET`. Mid-migration safety net; the parse still produces a row. Decision #13.
-    No third level. No collapsing to a single event.
+    No third level. No collapsing to a single event. Both events may share one **parameterized** structured-log helper distinguished by `event=` and severity; they must not share a single hard-coded `event=` wrapper.
 19. **Inbound-HTTP merge → replace is a real behaviour change in PR-2.** `_merge_layer_c_codebase_routes`'s HTTP branch (lines 980–1000) is rewritten to mirror its own async branch (lines 963–977): drop same-method built-in HTTP rows before appending layer-C rows. This is the *only* axis where principle 7 was being violated; the other three (inbound async, outbound HTTP, outbound async) already match principle 7 and are unchanged. §6 Q4 documents the asymmetry.
 20. **PR-1 ships zero behaviour change.** Enum stub + structured-log helper only; not wired to call sites. PR-2 is the atomic behaviour PR. Avoids the v2-doc trap of a "foundation PR" that ambiguously claims to ship a guard for behaviour PR-2 actually introduces.
 
@@ -346,7 +347,7 @@ No code change. CI: docs only.
 
 | Risk | Mitigation |
 |---|---|
-| UC10 / Feign-verb-disagreement is silent — developer changes `@GetMapping` to `@PostMapping` but forgets the brownfield annotation; runtime 405 in production | INFO `brownfield-exclusivity-shadowing` log surfaces shadowed framework annotations during `build_ast_graph.py --verbose`. AGENT-GUIDE.md (PR-3) documents the principle and the inspection workflow. Real defence is the agent-facing audit, not compile-time. |
+| UC10 / Feign-verb-disagreement is silent — developer changes `@GetMapping` to `@PostMapping` but forgets the brownfield annotation; runtime 405 in production | INFO `brownfield-exclusivity-shadowing` log surfaces bypassed framework annotations when brownfield and framework annotations **co-exist** on the method (extractor; gate with verbose graph build). AGENT-GUIDE.md (PR-3) documents the principle and the inspection workflow. Real defence is the agent-facing audit, not compile-time. |
 | Half-migrated codebases (PR-2 reverts partially via rebase mistake; a fixture file still has string literals or old annotation name) | Extractor WARN on string-typed `method` field; extractor IGNORES old `@CodebaseClient` simple name (no fallback) so half-migrated test files fail loudly at extraction time. |
 | A real-world codebase indexes `@CodebaseHttpClient(method="TRACE")` style legacy code | Won't compile after PR-2 ships. Forces explicit propose-amendment conversation. |
 | Cross-service edge breaks because caller/callee disagree on enum-vs-string method comparison | Wire format unchanged: `attrs.http_method` is `.name()` string after extraction. Resolver compares strings, identical to today. |
@@ -417,7 +418,7 @@ public enum CodebaseHttpMethod {
 | Added: §6 Q4 "inbound vs outbound exclusivity asymmetry table" — four-axis matrix showing today's behaviour | Reviewer point 2: "HTTP inbound exclusivity is not already implicit. `_merge_layer_c_codebase_routes` **merges** layer C onto built-in HTTP. That's supplement, not replace." Audit confirmed: async, outbound HTTP, outbound async ALL replace (line 968–977, 1351, symmetric). Only inbound HTTP merges. Q4 names this as the real change PR-2 must make. |
 | Restructured: PR-1 ships zero behaviour change (enum stub + structured-log helper only). PR-2 is the atomic behaviour PR (rename + parser rewrite + merge→replace + WARN). | Reviewer point 6: PR-1's old description ambiguously claimed to ship a "guard" for behaviour PR-2 actually introduces. Locked as decision #20. |
 | Rewrote: PR-2 parser bullets explicitly call client `method` parsing a **rewrite**, not a "tightening" of an existing enum branch | Reviewer point 1: `_parse_codebase_client_annotation` at `ast_java.py:1594` uses `_string_value_atoms`, not `mk == "enum"`. There is no enum branch to tighten on the client side. Decision #13 reworded. |
-| Rewrote: decision #19 — inbound-HTTP merge → replace is a real behaviour change in PR-2 | Locks the asymmetry-fix to one site (`_merge_layer_c_codebase_routes` HTTP branch, lines 980–1000), mirroring the async branch above it. Pushes back on reviewer's suggestion that AST changes might be needed: zero AST change required; the fix is one function. |
+| Rewrote: decision #19 — inbound-HTTP merge → replace is a real behaviour change in PR-2 | Locks the asymmetry-fix to one site (`_merge_layer_c_codebase_routes` HTTP branch, lines 980–1000), mirroring the async branch above it. Graph-only: extractor still changes for rename/enum/shadowing logging, but the merge asymmetry fix itself is one function. |
 | Added: decision #18 severity-by-event matrix | Reviewer point 3: #8 (INFO shadowing) and #13 (WARN string-method) are two distinct events with deliberately different severities. Doc was internally consistent but invited misreading. Explicit matrix removes ambiguity. |
 | Renamed: shadowing event `brownfield-exclusivity-shadowing` (INFO) vs string-method event `brownfield-method-string-literal` (WARN) named separately | Same as above. Two named events, two severities, no overlap. |
 | Fixed: PR-1 stub path `tests/fixtures/brownfield_stubs/...` → `tests/fixtures/brownfield_route_stubs/...` | Reviewer point 4: actual repo split is `brownfield_route_stubs/` + `brownfield_client_stubs/`. |
@@ -435,3 +436,13 @@ public enum CodebaseHttpMethod {
 - Brownfield-exclusivity principle as the spine of the doc (TL;DR / §1 Frame / §2 Principle #1 / §6 Q3–Q4 / §9 #7)
 - Feign verb duplication accepted as price of principle 7
 - Five HTTP source stubs (`CodebaseHttpRoute`, `CodebaseHttpRoutes`, `CodebaseHttpClient`, `CodebaseHttpClients`, `CodebaseHttpMethod`)
+
+---
+**v3 → v4 (doc alignment — shadowing trigger + PR-1 + WARN emitter):**
+
+| Change | Why |
+|---|---|
+| §3 / §8 / #8 / #18: **`brownfield-exclusivity-shadowing` fires at extractor co-presence** (`ast_java.py`); `_merge_layer_c_codebase_routes` does **merge→replace only**, no duplicate INFO from graph merge | Plan vs propose had diverged (merge-drop vs co-presence); UC9 needs Feign + brownfield without requiring a dropped built-in row. |
+| §8 PR-1: drop “`--verbose` calls the helper”; helpers are test-only invocation in PR-1 | Avoid implying PR-1 ships runtime shadowing. |
+| §8 PR-2 WARN: shared **parameterized** structured emitter (or two thin wrappers), not wrong `event=` reuse | Decision #18 stays two distinct events. |
+| §6 Q4 closing paragraph | Clarify graph-only merge fix vs separate `ast_java.py` work. |
