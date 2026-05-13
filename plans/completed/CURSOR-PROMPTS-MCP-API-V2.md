@@ -366,8 +366,7 @@ the MCP surface is exactly 4 tools. **Nothing else.**
   promoting the new CLI module. Existing root scripts (`server.py`,
   `build_ast_graph.py`, etc.) stay outside the package.
 - Ontology / schema changes.
-- The `cursor-pr-review` user skill — note in PR description as a manual TODO
-  for the user; do **NOT** include skill changes in the repo PR diff.
+- The `pr-review` skill under `.cursor/skills/pr-review/` — if the MCP V2 migration touches review bash, update `SKILL.md` in-repo or note a follow-up in the PR description.
 
 If you find yourself wanting to touch any of the above, **stop and ask**.
 
@@ -448,7 +447,7 @@ ls /tmp/v24_smoke   # expect: kuzu files
       those changes pass.
 - [ ] PR description contains: scope statement, manual evidence block, test
       count line, link to `plans/PLAN-MCP-API-V2.md` § PR-V2-4, **plus a
-      manual TODO note** for Dmitry to update the `cursor-pr-review` user
+      manual TODO note** to update `.cursor/skills/pr-review/SKILL.md` (or equivalent) for the `pr-review`
       skill (its `analyze_pr` MCP call → `user-rag analyze-pr --diff-file`).
 - [ ] No ontology bump.
 

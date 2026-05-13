@@ -9,12 +9,12 @@ Depends on: **none** (first landing is CI so later fixture work is mechanically 
 
 - Establish a **mechanical merge gate**: GitHub Actions runs the full default test suite on every PR and on pushes to `master`, with branch protection requiring the workflow check before merge (`JAVA_CODEBASE_RAG_RUN_HEAVY=0` in CI).
 - **Collapse redundant graph builds** in pytest: one session build per static corpus (bank-chat-system + each small fixture tree used read-only), plus a shared test-layer builder for per-`tmp_path` corpora.
-- **Codify iteration discipline**: authors declare a `Tests to run (iteration loop)` subset in task prompts; reviewers require evidence (subset command + exit code, and link to green CI after the gate exists). Skill updates ship **outside** this repo (user-scoped library); the repo documents the link in `tests/README.md`.
+- **Codify iteration discipline**: authors declare a `Tests to run (iteration loop)` subset in each per-PR execution prompt (`plans/CURSOR-PROMPTS-*.md` and ad hoc prompts that follow the same scaffold). The repo **[`plan-prompts`](../.cursor/skills/plan-prompts/SKILL.md)** skill defines that scaffold. Reviewers require **pasteable** evidence (subset command + exit code, and link to green CI after the gate exists) per the repo **[`pr-review`](../.cursor/skills/pr-review/SKILL.md)** skill. Both skills are versioned under **`.cursor/skills/`** in this repository (optionally copied to a personal `~/.cursor/skills/` tree). `tests/README.md` documents both.
 
 ## Principles (do not relitigate in review)
 
 - **"Gate" means enforcement** (required CI status check + branch protection); **"convention" means discipline** (declared pytest subset, pasted evidence). Do not use "gate" for author-only habits before CI lands.
-- **No production code** in repo PRs: PR-3 touches `.github/workflows/` + a **minimal** `tests/README.md` stub; PR-1 **extends** that README section (same heading — no duplicate competing sections); PR-2 is not a repo PR.
+- **No production code** in repo PRs: PR-3 touches `.github/workflows/` + a **minimal** `tests/README.md` stub; PR-1 **extends** that README section (same heading — no duplicate competing sections). PR-2 must not touch production graph/indexer/MCP code; it **may** update **`.cursor/skills/plan-prompts/`** and **`.cursor/skills/pr-review/`** (repo Cursor skills only).
 - **Session DB pass-depth matches consumers**: the bank-chat session graph is **not** “whatever `conftest.py` happened to run first.” Before any Tier-1 migration, enumerate **every** test that will share a session DB and the **exact** `build_ast_graph` pass chain + `write_kuzu` it assumes today. **Widening** the session fixture (e.g. adding pass5/6) is allowed only if no consumer relied on an **intentionally weaker** graph (missing caller edges, missing match resolution, or different meta semantics). If requirements **conflict**, introduce **multiple** session-scoped bank fixtures (different pass suffixes) or keep the conflicting tests on **per-test** `tmp_path` builds — never silently point tests at a weaker or stronger graph than their current `_build` without updating assertions by explicit review.
 - **No ontology bump, no re-index** — graph semantics unchanged; only test harness + CI.
 - **Landing order is binding**: **PR-3 → PR-1 → PR-2**. Shipping PR-1 before PR-3 would make it easier to merge fixture regressions without mechanical detection; PR-2’s review checklist references green CI.
@@ -29,7 +29,7 @@ Depends on: **none** (first landing is CI so later fixture work is mechanically 
 | --- | --- | --- | --- | --- | --- |
 | **PR-3** | GitHub Actions workflow + branch protection API/settings; short `tests/README.md` subsection (**CI gate only**) | No | `.github/workflows/test.yml`, `tests/README.md` (stub subsection) | Workflow red/green; optional dummy-failing commit on a branch before merge | Nothing |
 | **PR-1** | Session fixtures per corpus; Tier 1/2/3 migration; `tests/_builders.py`; **extends** the same `tests/README.md` subsection (tiers, fixtures, iteration convention) | No | `tests/conftest.py`, `tests/_builders.py`, ~12 test modules, `tests/README.md` | Full `pytest tests` (must be green in CI after PR-3) | PR-3 merged |
-| **PR-2** | `cursor-task-prompt` + `cursor-pr-review` skills (`Tests to run`, evidence steps) | N/A (skills not in repo) | Author skill library only | Human verification of skill text; optional dry-run prompt | PR-3 merged (so CI link in review skill is real) |
+| **PR-2** | **`plan-prompts`** + **`pr-review`** Cursor skills: iteration scaffold + review evidence | No | `.cursor/skills/plan-prompts/`, `.cursor/skills/pr-review/` | Human verification of both skills; optional dry-run | PR-3 merged (so CI link in **pr-review** is real) |
 
 **Landing order: PR-3 → PR-1 → PR-2.**
 
@@ -50,7 +50,7 @@ Depends on: **none** (first landing is CI so later fixture work is mechanically 
 | `tests/_builders.py` | Thin wrappers importing **production** `build_ast_graph` passes — **no copied logic**. Several tests today run **pass5/6** (`pass5_imperative_edges`, `pass6_match_edges`); the shipped helper(s) must match each call site (appendix in propose shows pass1–4 + `write_kuzu` only — extend as needed for Tier-2 session builds and any Tier-3 caller that needs the full pipeline). |
 | Mixed files | **`test_ast_graph_build.py`**: most tests already use `kuzu_db_path`; two tests rebuild `route_extraction_smoke` into `tmp_path` — prefer **`kuzu_graph_route_extraction_smoke`** (session) if assertions are read-only, else Tier-3 helper. **`test_kuzu_queries.py`**: audit the `route_extraction_smoke` inline build (≈ line 403); same rule. |
 | **`test_call_edge_matching.py`** | Mostly pure `_match_call_edge` / `graph_enrich` source reads; `_build_tables` hits **`cross_service_smoke`** read-only — candidate for **Tier 2** session materialization or a **`build_graph_tables(root)`** helper (no Kuzu) per audit, even though propose listed it under Tier 3. **Audit outcome wins** over the propose table row. |
-| PR-2 delivery | **Not** a git PR to this repo; update user-scoped skills via `save_custom_skill` (or equivalent). **`tests/README.md` merged in PR-1** must read correctly **before** PR-2 lands: describe the iteration convention by pointing at **[`propose/TEST-SUITE-FAST-LOOP-PROPOSE.md`](../propose/TEST-SUITE-FAST-LOOP-PROPOSE.md)** (and this plan), and name the **`cursor-task-prompt` / `cursor-pr-review`** skills as living in the **author’s skill library** (updated in PR-2) — not “after PR-2” in a way that implies missing docs. |
+| PR-2 delivery | **`plan-prompts`** and **`pr-review`** live under **`.cursor/skills/`** in git. **`tests/README.md` merged in PR-1** must already point at **[`propose/TEST-SUITE-FAST-LOOP-PROPOSE.md`](../propose/TEST-SUITE-FAST-LOOP-PROPOSE.md)** (and this plan) and link both skills so contributors find the canonical copies. |
 
 ---
 
@@ -147,7 +147,7 @@ Target modules from propose (verify no writes to fixture dirs / session DB):
 ### 6. `tests/README.md`
 
 - **Extend the same “CI merge gate” / testing doc section PR-3 started** — append, do not create a second competing “how tests work” chapter.
-- Document **three-tier model**, when to add a new session fixture, Tier-2 audit rule, **bank-chat consumer matrix** expectation for future edits, and the **iteration subset** convention with links to **[`propose/TEST-SUITE-FAST-LOOP-PROPOSE.md`](../propose/TEST-SUITE-FAST-LOOP-PROPOSE.md)** + this plan; name **`cursor-task-prompt`** and **`cursor-pr-review`** as maintained in the **author skill library** (PR-2 updates them — the README stays truthful on day one).
+- Document **three-tier model**, when to add a new session fixture, Tier-2 audit rule, **bank-chat consumer matrix** expectation for future edits, and the **iteration subset** convention with links to **[`propose/TEST-SUITE-FAST-LOOP-PROPOSE.md`](../propose/TEST-SUITE-FAST-LOOP-PROPOSE.md)** + this plan; link the repo **`plan-prompts`** and **`pr-review`** skills under `.cursor/skills/` (PR-2 aligns both; either may land before the other if text already matches).
 - Document **before/after** timing capture expectation for the PR-1 description (per propose §9 #10).
 
 ## Tests for PR-1
@@ -170,7 +170,7 @@ Representative high-signal modules to re-run locally during implementation (not 
 - [ ] Full **`pytest tests -v`** green locally and on CI.
 - [ ] No redundant full rebuild of the same static corpus across files in one session (verify with rough timing or pytest logging if useful).
 - [ ] **Bank-chat consumer matrix** (pass chain per test / fixture) attached in PR-1 description and satisfied by `conftest.py` fixture layout.
-- [ ] `tests/README.md` **extends** PR-3’s subsection: tiers + fixtures + propose/plan links + skill-library pointer + CI cross-reference (no duplicate gate sections).
+- [ ] `tests/README.md` **extends** PR-3’s subsection: tiers + fixtures + propose/plan links + pointers to `.cursor/skills/plan-prompts` and `.cursor/skills/pr-review` + CI cross-reference (no duplicate gate sections).
 
 ## Implementation step list
 
@@ -188,30 +188,34 @@ Representative high-signal modules to re-run locally during implementation (not 
 
 ---
 
-# PR-2 — Skill library (ships last)
+# PR-2 — Prompt + review conventions (ships last)
 
-## Changes (outside this repository)
+## Changes
 
-1. **`cursor-task-prompt`**: add **`## Tests to run (iteration loop)`** between deliverables and tests sections — bullet list of `tests/test_*.py` paths + one-line rationale; allow **empty list** for docs-only work (UC15).
-2. **`cursor-pr-review`**: add verification requiring **(a)** pasted `pytest …` command + exit code for the declared subset, and **(b)** link to **green PR CI run** for the full suite (post PR-3).
+### In this repository (`plan-prompts`)
+
+1. **[`.cursor/skills/plan-prompts/`](../.cursor/skills/plan-prompts/)** — each generated **`plans/CURSOR-PROMPTS-*.md`** per-PR **Prompt** block includes **`## Tests to run (iteration loop)`** between **Deliverables** and **Tests**: bullet list of `tests/test_*.py` paths + one-line rationale; allow **empty / docs-only** pattern (UC15). Skill text, scaffold, and examples stay aligned with [`propose/TEST-SUITE-FAST-LOOP-PROPOSE.md`](../propose/TEST-SUITE-FAST-LOOP-PROPOSE.md) §5.
+
+### In this repository (`pr-review`)
+
+2. **[`.cursor/skills/pr-review/`](../.cursor/skills/pr-review/)** — checklist requires **(a)** pasted `pytest …` command + exit code for the declared subset, and **(b)** link to **green PR CI run** for the full suite (post PR-3). Reject checkbox-only subset claims (per propose §9 #18).
 
 ## Tests for PR-2
 
-- Human: skill text matches propose §5; `save_custom_skill` applied; dry-run one PR prompt/review cycle.
+- Human: **`plan-prompts`** and **`pr-review`** text matches propose §5 / §9 #18; dry-run one prompt/review cycle.
 
 ## Definition of done (PR-2)
 
-- [ ] Both skills updated and saved in the user skill library.
-- [ ] Review skill rejects “checkbox only” evidence for subset (per propose §9 #18).
+- [ ] **`plan-prompts`** in-repo content matches the contract (including UC15).
+- [ ] **`pr-review`** in-repo content matches the evidence contract and rejects “checkbox only” subset claims.
 
 ## Implementation step list
 
 | # | Step | Done when |
 | --- | --- | --- |
-| 1 | Draft `Tests to run` section in task prompt skill | Matches propose template intent |
-| 2 | Draft evidence requirements in review skill | Subset + CI link both required post PR-3 |
-| 3 | `save_custom_skill` / library publish | Skills live in user storage |
-| 4 | Cross-check `tests/README.md` from PR-1 | Skill names + library location match saved skills; no stale “TBD” |
+| 1 | Verify or extend **`plan-prompts`** `SKILL.md` / reference / examples | Scaffold + heading verbatim; matches propose §5 |
+| 2 | Verify or extend **`pr-review`** `SKILL.md` | Subset + CI link both required post PR-3 |
+| 3 | Cross-check **`tests/README.md`** | Links to both skills under `.cursor/skills/`; no stale “TBD” |
 
 ---
 
@@ -241,10 +245,10 @@ Representative high-signal modules to re-run locally during implementation (not 
 
 1. PR-3 merged: default CI runs **`pytest tests`** on PR + `master` push; branch protection blocks broken merges.
 2. PR-1 merged: session-scoped graphs + `_builders.py` in use; **`tests/README.md`** documents tiers and CI; before/after timing noted in PR-1 body.
-3. PR-2 complete: user skills updated; review flow uses **two evidences** (subset + CI).
+3. PR-2 complete: **`plan-prompts`** and **`pr-review`** skills committed under **`.cursor/skills/`**; review flow uses **two evidences** (subset + CI).
 
 # Tracking
 
 - **PR-3 (CI + protection)**: _pending_
 - **PR-1 (fixtures)**: _pending_
-- **PR-2 (skills)**: _pending_
+- **PR-2 (plan-prompts + pr-review)**: _pending_

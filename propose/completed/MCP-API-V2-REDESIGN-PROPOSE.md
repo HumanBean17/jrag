@@ -181,7 +181,7 @@ The v1 MCP carried 5 operational tools (`graph_meta`, `list_code_index_tables`, 
 | `graph_meta` | operator debugging "is the index built?" | borderline (could cite counts in answers) — YAGNI, drop from MCP |
 | `list_code_index_tables` | operator | never |
 | `diagnose_ignore` | human (Dmitry, last week's `**/out/**` debug) | never |
-| `analyze_pr` | the **PR-triage agent**, not the AMA agent — already a CLI/bash workflow (`cursor-pr-review` skill) | never (different consumer) |
+| `analyze_pr` | the **PR-triage agent**, not the AMA agent — already a CLI/bash workflow (`pr-review` skill) | never (different consumer) |
 
 None of these belong on the AMA agent's surface. They move into a `user-rag` command-line tool — a unix-style operator's toolbelt, JSON output when piped, pretty when TTY:
 
@@ -197,7 +197,7 @@ Why this is the right cut:
 
 1. **`refresh` was never safely agent-callable.** Rebuilds take minutes. CLI-only is *correct*, not just convenient.
 2. **`diagnose-ignore` matches its caller.** Last week's `**/out/**` debug was a human-in-bash workflow; a CLI fits better than JSON-RPC.
-3. **`analyze-pr` belongs with the PR-triage workflow,** which is already bash/`gh`/`cursor-pr-review` driven and doesn't need an MCP at all.
+3. **`analyze-pr` belongs with the PR-triage workflow,** which is already bash/`gh`/`pr-review` driven and doesn't need an MCP at all.
 4. **`meta` and `tables`** are index-health inspection — operator concerns, not agent reasoning.
 
 **Total v2 MCP surface: 4 tools.** Total CLI surface: 5 subcommands. They cover everything v1 covered, in the right place for each consumer.
@@ -313,7 +313,7 @@ No external consumers. v1 names go away in PR-V2-3 with no deprecation period. I
 - Remove the 5 operational tool registrations from `server.py`.
 - Add `[project.scripts] user-rag = "user_rag.cli:main"` to `pyproject.toml`.
 - Update README with a `### CLI reference` section; remove ops tools from `### Tool reference`.
-- Update `cursor-pr-review` skill (or the equivalent ops-side workflow) to call `user-rag analyze-pr --diff-file /tmp/pr.diff` instead of an MCP call.
+- Update `pr-review` skill (or the equivalent ops-side workflow) to call `user-rag analyze-pr --diff-file /tmp/pr.diff` instead of an MCP call.
 - **Tests**: CLI integration tests via `subprocess.run(['user-rag', ...])` on the bank-chat-system fixture for each subcommand; final MCP surface assertion = exactly 4 tools registered.
 
 Total work estimate: ~700 LoC of test changes, ~500 LoC of handler + CLI code (mostly mechanical). No graph schema changes, no extraction pipeline changes, no LanceDB schema changes.
