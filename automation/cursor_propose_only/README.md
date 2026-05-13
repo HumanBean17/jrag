@@ -11,6 +11,7 @@ From repository root:
 - `.venv/bin/python automation/cursor_propose_only/cli.py prepare ...`
 - `.venv/bin/python automation/cursor_propose_only/cli.py evaluate ...`
 - `.venv/bin/python automation/cursor_propose_only/execute.py ...`
+- `.venv/bin/python automation/cursor_propose_only/autopilot.py ...`
 
 ## Select specific proposals
 
@@ -97,6 +98,38 @@ Notes:
 - command templates support placeholders such as `{task_prompt_file}`,
   `{review_prompt_file}`, `{pr_url}`, `{branch}`, `{base}`, `{round}`
 - workflow state is persisted in `reports/propose_automation/workflow.json`
+
+## Fully automated (single command)
+
+If you want: "I provide propose(s), workflow runs, I come back to ready PRs",
+use `autopilot.py`.
+
+```bash
+.venv/bin/python automation/cursor_propose_only/autopilot.py \
+  --repo-root . \
+  --proposal-dir propose \
+  --output-dir reports/propose_automation_selected \
+  --proposal TEST-SUITE-FAST-LOOP-PROPOSE.md \
+  --planning-rounds 2 \
+  --planning-min-severity medium \
+  --implementation-rounds 2 \
+  --implementation-min-severity medium \
+  --planner-command 'cursor-agent run --model auto --prompt-file {planner_prompt_file}' \
+  --planning-review-command 'cursor-agent run --model auto --prompt-file {review_prompt_file}' \
+  --implementation-command 'cursor-agent run --model auto --prompt-file {task_prompt_file}' \
+  --implementation-review-command 'cursor-agent run --model auto --prompt-file {review_prompt_file}' \
+  --merge-command 'gh pr merge {pr_url} --squash --delete-branch' \
+  --run
+```
+
+Behavior:
+
+1. Generates workflow bundle (`prepare` equivalent)
+2. Runs planner command for each selected proposal
+3. Runs planning review rounds with severity gating and planner-fix loops
+4. Parses generated `plans/CURSOR-PROMPTS-*.md`
+5. Runs implementation and implementation-review loops per PR section
+6. Marks tasks `ready_to_merge` or `merged` (if merge command is provided)
 
 ## Reviewer format convention
 

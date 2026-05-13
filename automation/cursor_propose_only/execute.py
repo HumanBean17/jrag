@@ -194,6 +194,13 @@ def execute_workflow(
     for job in workflow.get("jobs", []):
         job_id = str(job.get("job_id", "job"))
         job_root = output_root / _safe_name(job_id)
+        planning_status = str(job.get("planning_status", ""))
+        if planning_status and planning_status != "ready_to_execute":
+            if planning_status.startswith("blocked_"):
+                job["execution_status"] = "skipped_planning_blocked"
+            else:
+                job["execution_status"] = "skipped_planning_pending"
+            continue
         cursor_prompts_path = repo_root / str(job.get("cursor_prompts_path", ""))
         if not cursor_prompts_path.is_file():
             job["execution_status"] = "blocked_missing_cursor_prompts"
