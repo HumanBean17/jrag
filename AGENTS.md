@@ -89,6 +89,11 @@ Read these directly. Don't rely on rule files to mirror them.
 - Commit messages: present tense, imperative, lowercase first word.
 - Always open a PR; never push to `master`.
 - Run `.venv/bin/ruff check .` and `.venv/bin/python -m pytest tests -v` before pushing.
+- Exception for isolated automation-only changes: if edits are limited to
+  `automation/cursor_propose_only/**` (plus optional references to that workflow
+  in docs), full `tests -v` is not required. Run:
+  - `.venv/bin/ruff check .`
+  - `.venv/bin/python -m pytest automation/cursor_propose_only/tests -q`
 - Heavy indexer tests: `JAVA_CODEBASE_RAG_RUN_HEAVY=1` (see `tests/README.md`).
 
 ## Per-PR Cursor task contract
