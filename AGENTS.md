@@ -10,7 +10,7 @@ for tools that don't read `.cursor/rules/`.
 - `README.md` — feature surface, env vars, ranking, capabilities,
  MCP tool list (now `search` / `find` / `describe` / `neighbors`),
  CLI ops (`java-codebase-rag --help`), and "Re-index required" callouts.
- **`ontology_version` is currently 11** (async brownfield route merge + `Client` nodes; see README callouts).
+ **`ontology_version` is currently 12** (HTTP brownfield rename + `CodebaseHttpMethod` enum + inbound HTTP layer-C replace; see README graph section).
 - [`docs/JAVA-CODEBASE-RAG-CLI.md`](./docs/JAVA-CODEBASE-RAG-CLI.md) — operator guide for the `java-codebase-rag` CLI (`init` / `increment` / `reprocess` / `erase`, `meta`, `tables`, `diagnose-ignore`, `analyze-pr`; one-release hidden verb alias of `reprocess` with stderr deprecation only — see that doc).
 - `CODEBASE_REQUIREMENTS.md` — Java-repo assumptions and tuning map.
 - `propose/` and `plans/` (plus their `completed/` subdirs) —
@@ -69,7 +69,7 @@ Read these directly. Don't rely on rule files to mirror them.
    `VALID_HTTP_CALL_MATCHES`.
 6. **Brownfield overrides are first-class.** Annotation-driven
    `BrownfieldOverrides` (route, role, capability, http client, async
-   producer) plus their `@CodebaseRoute` / `@CodebaseClient` /
+   producer) plus their `@CodebaseRoute` / `@CodebaseHttpClient` /
    `@CodebaseProducer` source-stub equivalents must keep working — they
    are the only path to making this tool usable on legacy codebases.
    New auto-detection logic must compose with brownfield (last layer

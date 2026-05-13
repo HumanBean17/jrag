@@ -250,7 +250,7 @@ Edit `claude_desktop_config.json` (macOS: `~/Library/Application Support/Claude/
 
 ### Driving the MCP from an agent
 
-- **[`docs/AGENT-GUIDE.md`](./docs/AGENT-GUIDE.md)** — copy-paste into `QWEN.md` / `CLAUDE.md` / `AGENTS.md`. Covers the four MCP tools, the shared `NodeFilter`, the edge-type taxonomy, required `neighbors` arguments, the ontology glossary (currently **v11**), the recovery playbook, and slash-style aliases.
+- **[`docs/AGENT-GUIDE.md`](./docs/AGENT-GUIDE.md)** — copy-paste into `QWEN.md` / `CLAUDE.md` / `AGENTS.md`. Covers the four MCP tools, the shared `NodeFilter`, the edge-type taxonomy, required `neighbors` arguments, the ontology glossary (currently **v12**), the recovery playbook, and slash-style aliases.
 - **[`docs/skills/java-codebase-explore.md`](./docs/skills/java-codebase-explore.md)** — exploration **strategy** (missions, fallbacks, anti-capabilities, stopping rules); AGENT-GUIDE remains the **operating manual** for tool shapes and recovery.
 - **[`docs/MANUAL-VERIFICATION-CHECKLIST.md`](./docs/MANUAL-VERIFICATION-CHECKLIST.md)** — 7-phase agent-driven verification you run after indexing your real project. Each item has a copy-paste prompt and calibration data from `tests/bank-chat-system`.
 
@@ -376,7 +376,7 @@ For `reprocess`, the pipeline runs `cocoindex` with `cwd` set to the bundle dire
 
 ## 6. Graph layer
 
-A deterministic property graph derived from tree-sitter Java parsing lives next to the LanceDB tables under the index directory (default `${JAVA_CODEBASE_RAG_INDEX_DIR:-./.java-codebase-rag}/code_graph.kuzu`). Current ontology version: **11**.
+A deterministic property graph derived from tree-sitter Java parsing lives next to the LanceDB tables under the index directory (default `${JAVA_CODEBASE_RAG_INDEX_DIR:-./.java-codebase-rag}/code_graph.kuzu`). Current ontology version: **12**.
 
 ### Node kinds
 
@@ -438,7 +438,9 @@ Resolution order for `microservice`:
 
 ### Re-index required when ontology changes
 
-Current ontology version is **11**. Any index built before this version must be rebuilt via `cocoindex update ... --full-reprocess -f` or `java-codebase-rag reprocess`. Until re-indexed, the server defensively JSON-decodes string-form list columns so nothing explodes, but filters like `array_contains` will not work.
+Current ontology version is **12**. Any index built before this version must be rebuilt via `cocoindex update ... --full-reprocess -f` or `java-codebase-rag reprocess`. Until re-indexed, the server defensively JSON-decodes string-form list columns so nothing explodes, but filters like `array_contains` will not work.
+
+Ontology **12** renames `@CodebaseClient` to `@CodebaseHttpClient`, types HTTP `method` as the shared `CodebaseHttpMethod` enum on both inbound and outbound stubs, and makes inbound layer-C HTTP routes **replace** same-method built-in Spring rows (no merge). Rebuild after upgrading so `meta_chain` keys and annotation simple names match the extractor.
 
 ### Capabilities
 
@@ -491,7 +493,7 @@ For Spring-centric defaults that don't match your tree (custom wrapper stereotyp
 
 1. **Config** — `.java-codebase-rag.yml` at the project root.
 2. **Meta-annotation walk** — automatic discovery of `@interface` chains in your source.
-3. **Source stubs** — copy `@CodebaseRole`, `@CodebaseCapability`, `@CodebaseHttpRoute`, `@CodebaseAsyncRoute`, `@CodebaseClient`, `@CodebaseProducer` definitions into any package.
+3. **Source stubs** — copy `@CodebaseRole`, `@CodebaseCapability`, `@CodebaseHttpRoute`, `@CodebaseAsyncRoute`, `@CodebaseHttpClient`, `@CodebaseProducer` definitions into any package.
 
 ### 7.1 Config: `role_overrides`, `route_overrides`
 
@@ -547,9 +549,9 @@ cross_service_resolution: auto          # default when omitted
 # cross_service_resolution: brownfield_only
 ```
 
-With `brownfield_only`, the resolver does **not** promote auto-detected call sites to `cross_service` matches: only edges where both the caller strategy and every matched route's `source_layer` come from brownfield (`@CodebaseHttpRoute` / `@CodebaseAsyncRoute`, `@CodebaseClient`, YAML overrides, meta-annotation closure, or FQN maps) stay `cross_service`. Everything else that would have been a cross-service match becomes `unresolved`. `intra_service`, `phantom`, and `ambiguous` behaviour is unchanged. Unknown values log a warning and behave like `auto`.
+With `brownfield_only`, the resolver does **not** promote auto-detected call sites to `cross_service` matches: only edges where both the caller strategy and every matched route's `source_layer` come from brownfield (`@CodebaseHttpRoute` / `@CodebaseAsyncRoute`, `@CodebaseHttpClient`, YAML overrides, meta-annotation closure, or FQN maps) stay `cross_service`. Everything else that would have been a cross-service match becomes `unresolved`. `intra_service`, `phantom`, and `ambiguous` behaviour is unchanged. Unknown values log a warning and behave like `auto`.
 
-Resolution order for each method: built-in extraction → annotation map → meta-annotation closure → in-source `@CodebaseHttpRoute` / `@CodebaseAsyncRoute` → per-type FQN map (last writer wins on overlapping fields). On the same method, `@CodebaseAsyncRoute` replaces built-in `@KafkaListener` extraction so brownfield topic names aren't duplicated alongside SpEL or multi-topic listeners.
+Resolution order for each method: built-in extraction → annotation map → meta-annotation closure → in-source `@CodebaseHttpRoute` / `@CodebaseAsyncRoute` → per-type FQN map (last writer wins on overlapping fields). On the same method, `@CodebaseAsyncRoute` replaces built-in `@KafkaListener` extraction so brownfield topic names aren't duplicated alongside SpEL or multi-topic listeners. For HTTP, `@CodebaseHttpRoute` replaces same-method built-in Spring mapping rows (brownfield exclusivity); enable `build_ast_graph.py --verbose` to see `brownfield-exclusivity-shadowing` INFO when framework annotations are bypassed.
 
 ### 7.3 Source stubs
 
@@ -600,16 +602,20 @@ public class LegacyChatService { /* ... */ }
 | Direction | Annotation | Purpose |
 |---|---|---|
 | Inbound | `@CodebaseHttpRoute`, `@CodebaseAsyncRoute` | Declare handlers/listeners your service exposes as `Route` nodes. |
-| Outbound | `@CodebaseClient`, `@CodebaseProducer` | Declare call sites/publish sites your service invokes (caller edges). |
+| Outbound | `@CodebaseHttpClient`, `@CodebaseProducer` | Declare call sites/publish sites your service invokes (caller edges). |
 
 `@FeignClient` declarations are outbound (`clientKind=feign_method`), not inbound `Route` rows.
 
 #### Routes (method-level, inbound)
 
 ```java
+public enum CodebaseHttpMethod {
+    GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS
+}
+
 @Target(ElementType.METHOD) @Retention(RetentionPolicy.SOURCE)
 @Repeatable(CodebaseHttpRoutes.class)
-public @interface CodebaseHttpRoute { String path(); String method(); }
+public @interface CodebaseHttpRoute { String path(); CodebaseHttpMethod method(); }
 
 @Target(ElementType.METHOD) @Retention(RetentionPolicy.SOURCE)
 public @interface CodebaseHttpRoutes { CodebaseHttpRoute[] value(); }
@@ -625,7 +631,7 @@ public @interface CodebaseAsyncRoutes { CodebaseAsyncRoute[] value(); }
 Usage:
 
 ```java
-@CodebaseHttpRoute(path = "/chat/joinOperator", method = "POST")
+@CodebaseHttpRoute(path = "/chat/joinOperator", method = CodebaseHttpMethod.POST)
 public Reply joinOperator(Request req) { /* ... */ }
 
 @CodebaseAsyncRoute(topic = "chat.follow-up")
@@ -640,16 +646,16 @@ public void onFollowUp(Event e) { /* ... */ }
 public enum CodebaseClientKind { feign_method, rest_template, web_client }
 
 @Target(ElementType.METHOD) @Retention(RetentionPolicy.SOURCE)
-@Repeatable(CodebaseClients.class)
-public @interface CodebaseClient {
+@Repeatable(CodebaseHttpClients.class)
+public @interface CodebaseHttpClient {
     CodebaseClientKind clientKind();
     String targetService() default "";
     String path()          default "";
-    String method()        default "";
+    CodebaseHttpMethod method();
 }
 
 @Target(ElementType.METHOD) @Retention(RetentionPolicy.SOURCE)
-public @interface CodebaseClients { CodebaseClient[] value(); }
+public @interface CodebaseHttpClients { CodebaseHttpClient[] value(); }
 
 public enum CodebaseProducerKind { kafka_send, stream_bridge_send }
 
@@ -667,11 +673,11 @@ public @interface CodebaseProducers { CodebaseProducer[] value(); }
 Usage:
 
 ```java
-@CodebaseClient(
+@CodebaseHttpClient(
     clientKind    = CodebaseClientKind.rest_template,
     targetService = "chat-core",
     path          = "/chat/joinOperator",
-    method        = "POST")
+    method        = CodebaseHttpMethod.POST)
 public Reply callJoinOperator(Request req) { /* ... */ }
 
 @CodebaseProducer(

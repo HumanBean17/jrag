@@ -7,6 +7,6 @@ import java.lang.annotation.Target;
 
 @Target(ElementType.METHOD)
 @Retention(RetentionPolicy.SOURCE)
-public @interface CodebaseClients {
-    CodebaseClient[] value();
+public @interface CodebaseHttpClients {
+    CodebaseHttpClient[] value();
 }

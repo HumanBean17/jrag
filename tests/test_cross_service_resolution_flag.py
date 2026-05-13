@@ -97,7 +97,7 @@ def test_brownfield_only_keeps_annotated_cross_service(tmp_path: Path) -> None:
     )
     body = body.replace(
         "    @PostMapping(\"/chat/joinOperator\")\n    public String joinOperator()",
-        "    @CodebaseHttpRoute(path = \"/chat/joinOperator\", method = \"POST\")\n"
+        "    @CodebaseHttpRoute(path = \"/chat/joinOperator\", method = com.example.rag.CodebaseHttpMethod.POST)\n"
         "    @PostMapping(\"/chat/joinOperator\")\n    public String joinOperator()",
     )
     ctrl.write_text(body, encoding="utf-8")
@@ -107,8 +107,8 @@ def test_brownfield_only_keeps_annotated_cross_service(tmp_path: Path) -> None:
     cbody = cbody.replace(
         "    public void callCrossService() {\n"
         "        restTemplate.postForEntity(\"/chat/joinOperator\", null, String.class);",
-        "    @com.example.rag.CodebaseClient(clientKind = com.example.rag.CodebaseClientKind.rest_template, "
-        "targetService = \"svc-b\", path = \"/chat/joinOperator\", method = \"POST\")\n"
+        "    @com.example.rag.CodebaseHttpClient(clientKind = com.example.rag.CodebaseClientKind.rest_template, "
+        "targetService = \"svc-b\", path = \"/chat/joinOperator\", method = com.example.rag.CodebaseHttpMethod.POST)\n"
         "    public void callCrossService() {\n"
         "        restTemplate.postForEntity(\"/chat/joinOperator\", null, String.class);",
     )
@@ -256,8 +256,8 @@ def test_brownfield_client_with_auto_route_does_not_match(tmp_path: Path) -> Non
     cbody = cbody.replace(
         "interface BFeignClient {\n    @PostMapping(\"/chat/joinOperator\")\n    String joinOperator();",
         "interface BFeignClient {\n"
-        "    @com.example.rag.CodebaseClient(clientKind = com.example.rag.CodebaseClientKind.feign_method, "
-        "targetService = \"svc-b\", path = \"/chat/joinOperator\", method = \"POST\")\n"
+        "    @com.example.rag.CodebaseHttpClient(clientKind = com.example.rag.CodebaseClientKind.feign_method, "
+        "targetService = \"svc-b\", path = \"/chat/joinOperator\", method = com.example.rag.CodebaseHttpMethod.POST)\n"
         "    @PostMapping(\"/chat/joinOperator\")\n"
         "    String joinOperator();",
     )

@@ -1,6 +1,10 @@
 """PR-A1 route literal extraction (`ast_java`) and path canonicalisation (`build_ast_graph`)."""
 from __future__ import annotations
 
+import io
+import json
+from contextlib import redirect_stderr
+
 from ast_java import parse_java
 from build_ast_graph import _normalize_path, _route_id
 
@@ -117,12 +121,12 @@ interface Api {
     assert all(c.feign_target_name == "user-svc" for c in outgoing)
 
 
-def test_case6b_codebase_client_string_literal_kind_not_treated_as_enum() -> None:
+def test_case6b_codebase_http_client_string_literal_kind_not_treated_as_enum() -> None:
     src = """
 package x;
-import com.example.rag.CodebaseClient;
+import com.example.rag.*;
 class Api {
-  @CodebaseClient(clientKind = "rest_template", path = "/legacy", method = "GET")
+  @CodebaseHttpClient(clientKind = "rest_template", path = "/legacy", method = CodebaseHttpMethod.GET)
   void call() {}
 }
 """
@@ -135,13 +139,12 @@ class Api {
     assert calls[0].method_call == "GET"
 
 
-def test_case6d_codebase_client_on_interface_abstract_method() -> None:
+def test_case6d_codebase_http_client_on_interface_abstract_method() -> None:
     src = """
 package x;
-import com.example.rag.CodebaseClient;
-import com.example.rag.CodebaseClientKind;
+import com.example.rag.*;
 public interface Api {
-  @CodebaseClient(clientKind = CodebaseClientKind.feign_method, targetService = "svc", path = "/p", method = "GET")
+  @CodebaseHttpClient(clientKind = CodebaseClientKind.feign_method, targetService = "svc", path = "/p", method = CodebaseHttpMethod.GET)
   void m();
 }
 """
@@ -158,9 +161,9 @@ public interface Api {
 def test_case6e_codebase_http_route_on_interface_abstract_method() -> None:
     src = """
 package x;
-import com.example.rag.CodebaseHttpRoute;
+import com.example.rag.*;
 public interface I {
-  @CodebaseHttpRoute(path = "/iface", method = "GET")
+  @CodebaseHttpRoute(path = "/iface", method = CodebaseHttpMethod.GET)
   void m();
 }
 """
@@ -172,9 +175,9 @@ public interface I {
 def test_case6f_codebase_http_route_on_abstract_class_method() -> None:
     src = """
 package x;
-import com.example.rag.CodebaseHttpRoute;
+import com.example.rag.*;
 public abstract class C {
-  @CodebaseHttpRoute(path = "/abs", method = "POST")
+  @CodebaseHttpRoute(path = "/abs", method = CodebaseHttpMethod.POST)
   abstract void m();
 }
 """
@@ -337,3 +340,76 @@ interface Endpoints { String USERS = "/u"; }
     assert r.confidence == 0.7
     assert r.resolved is False
     assert "+" in r.path or "Endpoints.USERS" in r.path
+
+
+def test_verbose_emits_brownfield_exclusivity_shadowing_for_http_route_co_presence() -> None:
+    src = """
+package x;
+import com.example.rag.*;
+import org.springframework.web.bind.annotation.*;
+@RestController
+class C {
+  @GetMapping("/p")
+  @CodebaseHttpRoute(path = "/bf", method = CodebaseHttpMethod.GET)
+  String m() { return ""; }
+}
+"""
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        parse_java(src.encode(), filename="C.java", verbose=True)
+    shadow_lines = [
+        ln for ln in buf.getvalue().splitlines() if "brownfield-exclusivity-shadowing" in ln
+    ]
+    assert shadow_lines, buf.getvalue()
+    rec = json.loads(shadow_lines[0])
+    assert rec["event"] == "brownfield-exclusivity-shadowing"
+    assert rec["severity"] == "INFO"
+    assert "GetMapping" in rec["shadowed_framework_annotations"]
+
+
+def test_codebase_http_route_string_method_emits_warn() -> None:
+    src = """
+package x;
+import com.example.rag.*;
+class X {
+  @CodebaseHttpRoute(path = "/legacy", method = "GET")
+  void m() {}
+}
+"""
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        parse_java(src.encode(), filename="X.java", verbose=False)
+    warn_lines = [ln for ln in buf.getvalue().splitlines() if "brownfield-method-string-literal" in ln]
+    assert warn_lines
+    rec = json.loads(warn_lines[0])
+    assert rec["event"] == "brownfield-method-string-literal"
+    assert rec["severity"] == "WARN"
+
+
+def test_verbose_emits_brownfield_exclusivity_shadowing_for_http_client_and_feign() -> None:
+    src = """
+package x;
+import com.example.rag.*;
+import org.springframework.cloud.openfeign.FeignClient;
+import org.springframework.web.bind.annotation.GetMapping;
+@FeignClient(name = "orders")
+interface Api {
+  @GetMapping("/x")
+  @CodebaseHttpClient(
+      clientKind = CodebaseClientKind.feign_method,
+      targetService = "orders",
+      path = "/x",
+      method = CodebaseHttpMethod.GET)
+  Object m();
+}
+"""
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        parse_java(src.encode(), filename="Api.java", verbose=True)
+    shadow_lines = [
+        ln for ln in buf.getvalue().splitlines() if "brownfield-exclusivity-shadowing" in ln
+    ]
+    assert shadow_lines
+    rec = json.loads(shadow_lines[0])
+    anns = rec["shadowed_framework_annotations"]
+    assert "GetMapping" in anns and "FeignClient" in anns

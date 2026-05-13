@@ -376,7 +376,7 @@ def pass1_parse(root: Path, tables: GraphTables, *, verbose: bool) -> dict[str, 
         except ValueError:
             rel = p.as_posix()
         try:
-            ast = parse_java(content, filename=rel)
+            ast = parse_java(content, filename=rel, verbose=verbose)
         except Exception:
             tables.parse_errors += 1
             continue
@@ -1901,7 +1901,7 @@ def pass6_match_edges(
                 break
         # Feign caller hints are synthesized as transient `http_consumer` routes in pass6;
         # synthetic phantoms from imperative clients are `http_endpoint` even when `feign_name` is populated from
-        # `@CodebaseClient.targetService` / YAML hints — those must path-match like RestTemplate.
+        # `@CodebaseHttpClient.targetService` / YAML hints — those must path-match like RestTemplate.
         _feign_like = (
             src_route is not None
             and src_route.kind == "http_consumer"

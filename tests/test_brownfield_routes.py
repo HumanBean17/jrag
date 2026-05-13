@@ -157,7 +157,7 @@ def test_22_layer_c_codebase_route(tmp_path: Path) -> None:
             "package p;\n"
             "import com.example.rag.*;\n"
             "public class X {\n"
-            "  @CodebaseHttpRoute(path = \"/stub22\", method = \"GET\")\n"
+            "  @CodebaseHttpRoute(path = \"/stub22\", method = CodebaseHttpMethod.GET)\n"
             "  void m() {}\n}\n"
         ),
     }
@@ -173,14 +173,14 @@ def test_23_layer_c_wins_over_get_mapping(tmp_path: Path) -> None:
             "import org.springframework.web.bind.annotation.*;\n"
             "@RestController\npublic class X {\n"
             "  @GetMapping(\"/a\")\n"
-            "  @CodebaseHttpRoute(path = \"/b\", method = \"GET\")\n"
+            "  @CodebaseHttpRoute(path = \"/b\", method = CodebaseHttpMethod.GET)\n"
             "  String m() { return \"\"; }\n}\n"
         ),
     }
     db = _build(tmp_path, None, java)
     paths = _route_paths(db)
-    assert "/b" in paths
-    assert "/a" not in paths or paths.count("/b") >= 1
+    assert paths.count("/b") == 1
+    assert "/a" not in paths
 
 
 def test_24_codebase_routes_repeatable(tmp_path: Path) -> None:
@@ -188,9 +188,9 @@ def test_24_codebase_routes_repeatable(tmp_path: Path) -> None:
         "p/X.java": (
             "package p;\nimport com.example.rag.*;\nimport org.springframework.web.bind.annotation.*;\n"
             "@RestController\npublic class X {\n"
-            "  @CodebaseHttpRoute(path = \"/r1\", method = \"GET\")\n"
+            "  @CodebaseHttpRoute(path = \"/r1\", method = CodebaseHttpMethod.GET)\n"
             "  void m() {}\n"
-            "  @CodebaseHttpRoute(path = \"/r2\", method = \"GET\")\n"
+            "  @CodebaseHttpRoute(path = \"/r2\", method = CodebaseHttpMethod.GET)\n"
             "  void n() {}\n}\n"
         ),
     }
@@ -214,7 +214,7 @@ route_overrides:
             "package p;\n"
             "import com.example.rag.*;\n"
             "public class X {\n"
-            "  @CodebaseHttpRoute(path = \"/from-code\", method = \"GET\")\n"
+            "  @CodebaseHttpRoute(path = \"/from-code\", method = CodebaseHttpMethod.GET)\n"
             "  void m() {}\n}\n"
         ),
     }
@@ -327,3 +327,30 @@ route_overrides:
     by_layer = m.get("routes_by_layer") or {}
     assert isinstance(by_layer, dict)
     assert int(by_layer.get("layer_b_ann", 0)) >= 1
+
+
+def test_31_layer_c_http_replaces_builtin_spring_row(tmp_path: Path) -> None:
+    java = {
+        "p/X.java": (
+            "package p;\n"
+            "import com.example.rag.*;\n"
+            "import org.springframework.web.bind.annotation.*;\n"
+            "@RestController\npublic class X {\n"
+            "  @GetMapping(\"/x\")\n"
+            "  @CodebaseHttpRoute(path = \"/x\", method = CodebaseHttpMethod.GET)\n"
+            "  String m() { return \"\"; }\n}\n"
+        ),
+    }
+    db = _build(tmp_path, None, java)
+    conn = kuzu.Connection(kuzu.Database(str(db), read_only=True))
+    n = int(
+        conn.execute(
+            "MATCH (rt:Route) WHERE rt.path = '/x' AND rt.method = 'GET' RETURN count(*)",
+        ).get_next()[0],
+    )
+    assert n == 1
+    strat = conn.execute(
+        "MATCH (:Symbol)-[e:EXPOSES]->(:Route) WHERE e.strategy = 'codebase_route' "
+        "RETURN count(*)",
+    ).get_next()[0]
+    assert int(strat) >= 1

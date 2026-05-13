@@ -18,6 +18,11 @@ from functools import lru_cache
 from typing import Iterable
 
 import tree_sitter_java as _ts_java
+
+from brownfield_events import (
+    emit_brownfield_exclusivity_shadowing,
+    emit_brownfield_method_string_literal,
+)
 from tree_sitter import Language, Node, Parser
 
 __all__ = [
@@ -31,7 +36,7 @@ __all__ = [
     "RouteDecl",
     "ROUTE_META_ANNOTATION_NAMES",
     "CODEBASE_ROUTE_ANNOTATIONS",
-    "CODEBASE_CLIENT_ANNOTATIONS",
+    "CODEBASE_HTTP_CLIENT_ANNOTATIONS",
     "CODEBASE_PRODUCER_ANNOTATIONS",
     "TypeDecl",
     "JavaFileAst",
@@ -74,8 +79,9 @@ _DTO_LOMBOK_ANNOTATIONS: frozenset[str] = frozenset({
 # Phase 7: FEIGN_CLIENT role -> CLIENT + HTTP_CLIENT capability vocabulary cleanup;
 # Phase 8: first-class Client node + DECLARES_CLIENT relation, separating outbound declarations from Route.
 # Phase 9: `@CodebaseAsyncRoute` replaces same-method built-in `@KafkaListener` routes in graph composition.
+# Phase 10: `@CodebaseHttpClient` rename + `CodebaseHttpMethod` enum; inbound HTTP layer-C replaces built-in rows.
 # Bumps whenever extraction / enrichment semantics change.
-ONTOLOGY_VERSION = 11
+ONTOLOGY_VERSION = 12
 
 ROLE_ANNOTATIONS: dict[str, str] = {
     # Spring Web
@@ -154,7 +160,23 @@ CODEBASE_ROUTE_ANNOTATIONS: frozenset[str] = frozenset({
     "CodebaseAsyncRoute",
     "CodebaseAsyncRoutes",
 })
-CODEBASE_CLIENT_ANNOTATIONS: frozenset[str] = frozenset({"CodebaseClient", "CodebaseClients"})
+CODEBASE_HTTP_CLIENT_ANNOTATIONS: frozenset[str] = frozenset(
+    {"CodebaseHttpClient", "CodebaseHttpClients"}
+)
+
+# Framework annotations bypassed when `@CodebaseHttpRoute` / `@CodebaseHttpClient` wins (verbose INFO).
+_BROWNFIELD_SHADOWABLE_HTTP_FRAMEWORK_METHOD_ANNOTATIONS: frozenset[str] = (
+    _ROUTE_HTTP_MAPPING_NAMES
+    | frozenset({
+        "GET",
+        "POST",
+        "PUT",
+        "PATCH",
+        "DELETE",
+        "HEAD",
+        "OPTIONS",
+    })
+)
 CODEBASE_PRODUCER_ANNOTATIONS: frozenset[str] = frozenset({"CodebaseProducer", "CodebaseProducers"})
 
 _ROUTE_ASYNC_METHOD_NAMES = frozenset({
@@ -364,6 +386,7 @@ class JavaFileAst:
 @dataclass
 class _ParseCtx:
     routes_skipped_unresolved: int = 0
+    verbose: bool = False
 
 
 # ---------- helpers ----------
@@ -1444,6 +1467,39 @@ def _iter_method_annotation_nodes(method_node: Node, src: bytes) -> list[tuple[s
     return out
 
 
+def _maybe_emit_brownfield_exclusivity_shadowing(
+    method_node: Node,
+    src: bytes,
+    *,
+    ctx: _ParseCtx,
+    method_fqn: str,
+    file_rel: str,
+    type_anns: list[AnnotationRef],
+) -> None:
+    """INFO when brownfield HTTP route/client co-exists with shadowable framework annotations."""
+    if not ctx.verbose:
+        return
+    method_anns = _iter_method_annotation_nodes(method_node, src)
+    has_bf_route = any(s in ("CodebaseHttpRoute", "CodebaseHttpRoutes") for s, _ in method_anns)
+    has_bf_client = any(s in ("CodebaseHttpClient", "CodebaseHttpClients") for s, _ in method_anns)
+    if not has_bf_route and not has_bf_client:
+        return
+    shadowed: list[str] = []
+    for s, _ in method_anns:
+        if s in _BROWNFIELD_SHADOWABLE_HTTP_FRAMEWORK_METHOD_ANNOTATIONS:
+            shadowed.append(s)
+    type_names = {a.name for a in type_anns}
+    if has_bf_client and "FeignClient" in type_names:
+        shadowed.append("FeignClient")
+    if not shadowed:
+        return
+    emit_brownfield_exclusivity_shadowing(
+        method_fqn=method_fqn,
+        file=file_rel,
+        shadowed_framework_annotations=sorted(frozenset(shadowed)),
+    )
+
+
 def _parse_codebase_http_route_inner_annotation(
     ann: Node,
     src: bytes,
@@ -1464,7 +1520,15 @@ def _parse_codebase_http_route_inner_annotation(
     if meth_arg is not None:
         mv, mk = _annotation_value(meth_arg, src)
         if mv is not None:
-            http_method = str(mv).upper() if mk == "enum" else str(mv).strip().upper()
+            if mk == "enum":
+                http_method = str(mv).upper()
+            else:
+                http_method = str(mv).strip().upper()
+                emit_brownfield_method_string_literal(
+                    method_fqn=handler_fqn,
+                    file=file_rel,
+                    reason="codebase_http_route_method_non_enum",
+                )
 
     path_atoms: list[tuple[str, str, float, bool]] = []
     if path_node is not None:
@@ -1530,14 +1594,14 @@ def _codebase_async_route_inner_annotation_nodes(container_ann: Node, src: bytes
     return found
 
 
-def _codebase_client_inner_annotation_nodes(container_ann: Node, src: bytes) -> list[Node]:
+def _codebase_http_client_inner_annotation_nodes(container_ann: Node, src: bytes) -> list[Node]:
     found: list[Node] = []
 
     def visit(n: Node) -> None:
         if n.type == "annotation":
             name_node = n.child_by_field_name("name")
             n_simple = _txt(name_node, src).rsplit(".", 1)[-1] if name_node is not None else ""
-            if n_simple == "CodebaseClient":
+            if n_simple == "CodebaseHttpClient":
                 found.append(n)
         for c in n.children:
             visit(c)
@@ -1562,7 +1626,7 @@ def _codebase_producer_inner_annotation_nodes(container_ann: Node, src: bytes) -
     return found
 
 
-def _parse_codebase_client_annotation(
+def _parse_codebase_http_client_annotation(
     ann: Node,
     src: bytes,
     ctx: _ParseCtx,
@@ -1591,9 +1655,26 @@ def _parse_codebase_client_annotation(
             path = _normalize_call_path(atoms[0][0]) if atoms[0][0] else ""
     method_call = ""
     if "method" in pairs:
-        atoms = _string_value_atoms(pairs["method"], src, ctx)
-        if atoms:
-            method_call = atoms[0][0].upper()
+        mnode = pairs["method"]
+        mv, mk = _annotation_value(mnode, src)
+        if mv is not None and mk == "enum":
+            method_call = str(mv).upper()
+        elif mv is not None:
+            method_call = str(mv).strip().upper()
+            emit_brownfield_method_string_literal(
+                method_fqn=method_fqn,
+                file=file_rel,
+                reason="codebase_http_client_method_non_enum",
+            )
+        else:
+            atoms = _string_value_atoms(mnode, src, ctx)
+            if atoms:
+                method_call = atoms[0][0].upper()
+                emit_brownfield_method_string_literal(
+                    method_fqn=method_fqn,
+                    file=file_rel,
+                    reason="codebase_http_client_method_non_enum",
+                )
     return OutgoingCallDecl(
         method_fqn=method_fqn,
         method_sig=method_sig,
@@ -1713,7 +1794,7 @@ def _normalize_call_path(raw_path: str) -> str:
     return p
 
 
-def _outgoing_calls_from_codebase_client_producer_annotations(
+def _outgoing_calls_from_codebase_http_client_producer_annotations(
     method_node: Node,
     src: bytes,
     *,
@@ -1722,15 +1803,15 @@ def _outgoing_calls_from_codebase_client_producer_annotations(
     file_rel: str,
     ctx: _ParseCtx,
 ) -> list[OutgoingCallDecl]:
-    """Brownfield @CodebaseClient(s) / @CodebaseProducer(s) on the method itself.
+    """Brownfield @CodebaseHttpClient(s) / @CodebaseProducer(s) on the method itself.
 
     Must run even when the method has no body (interfaces, abstract methods).
     """
     out: list[OutgoingCallDecl] = []
     for simple, ann in _iter_method_annotation_nodes(method_node, src):
-        if simple == "CodebaseClient":
+        if simple == "CodebaseHttpClient":
             out.append(
-                _parse_codebase_client_annotation(
+                _parse_codebase_http_client_annotation(
                     ann,
                     src,
                     ctx,
@@ -1741,10 +1822,10 @@ def _outgoing_calls_from_codebase_client_producer_annotations(
                     end_line=method_decl.end_line,
                 ),
             )
-        elif simple == "CodebaseClients":
-            for inner in _codebase_client_inner_annotation_nodes(ann, src):
+        elif simple == "CodebaseHttpClients":
+            for inner in _codebase_http_client_inner_annotation_nodes(ann, src):
                 out.append(
-                    _parse_codebase_client_annotation(
+                    _parse_codebase_http_client_annotation(
                         inner,
                         src,
                         ctx,
@@ -1847,7 +1928,7 @@ def _collect_outgoing_calls(
             )
         )
 
-    ann_out = _outgoing_calls_from_codebase_client_producer_annotations(
+    ann_out = _outgoing_calls_from_codebase_http_client_producer_annotations(
         method_node,
         src,
         method_fqn=method_fqn,
@@ -2410,6 +2491,14 @@ def _parse_method(
             type_fqn=type_fqn,
             file_rel=file_rel,
         )
+        _maybe_emit_brownfield_exclusivity_shadowing(
+            node,
+            src,
+            ctx=ctx,
+            method_fqn=caller_fqn,
+            file_rel=file_rel,
+            type_anns=type_anns,
+        )
     return m, anon_nested
 
 
@@ -2525,14 +2614,14 @@ def _flatten(types: list[TypeDecl]) -> list[TypeDecl]:
 # ---------- public API ----------
 
 
-def parse_java(source: bytes | str, *, filename: str = "") -> JavaFileAst:
+def parse_java(source: bytes | str, *, filename: str = "", verbose: bool = False) -> JavaFileAst:
     """Parse a Java file into a JavaFileAst. Never raises on invalid source."""
     if isinstance(source, str):
         src = source.encode("utf-8", errors="replace")
     else:
         src = source
 
-    ctx = _ParseCtx()
+    ctx = _ParseCtx(verbose=verbose)
     empty = JavaFileAst(
         package="",
         imports=[],

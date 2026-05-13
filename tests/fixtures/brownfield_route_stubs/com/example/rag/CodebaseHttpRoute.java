@@ -11,5 +11,5 @@ import java.lang.annotation.Target;
 @Repeatable(CodebaseHttpRoutes.class)
 public @interface CodebaseHttpRoute {
     String path();
-    String method();
+    CodebaseHttpMethod method();
 }

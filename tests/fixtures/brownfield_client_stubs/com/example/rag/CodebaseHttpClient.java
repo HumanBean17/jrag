@@ -8,10 +8,10 @@ import java.lang.annotation.Target;
 
 @Target(ElementType.METHOD)
 @Retention(RetentionPolicy.SOURCE)
-@Repeatable(CodebaseClients.class)
-public @interface CodebaseClient {
+@Repeatable(CodebaseHttpClients.class)
+public @interface CodebaseHttpClient {
     CodebaseClientKind clientKind();
     String targetService() default "";
     String path() default "";
-    String method() default "";
+    CodebaseHttpMethod method();
 }

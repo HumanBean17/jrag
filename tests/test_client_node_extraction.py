@@ -64,8 +64,8 @@ def test_client_rows_emitted_for_codebase_client_on_interface_abstract_method(tm
             "p/Api.java": (
                 "package p; import com.example.rag.*; "
                 "public interface Api { "
-                "@CodebaseClient(clientKind=CodebaseClientKind.feign_method, targetService=\"user-svc\", "
-                "path=\"/users/{id}\", method=\"GET\") "
+                "@CodebaseHttpClient(clientKind=CodebaseClientKind.feign_method, targetService=\"user-svc\", "
+                "path=\"/users/{id}\", method=CodebaseHttpMethod.GET) "
                 "Object getUser(String id); }"
             ),
         },
@@ -92,7 +92,7 @@ def test_client_rows_emitted_for_codebase_client_on_abstract_class_method(tmp_pa
             "p/Base.java": (
                 "package p; import com.example.rag.*; "
                 "public abstract class Base { "
-                "@CodebaseClient(clientKind=CodebaseClientKind.rest_template, path=\"/abs\", method=\"POST\") "
+                "@CodebaseHttpClient(clientKind=CodebaseClientKind.rest_template, path=\"/abs\", method=CodebaseHttpMethod.POST) "
                 "abstract void pull(); }"
             ),
         },
@@ -114,7 +114,7 @@ def test_client_rows_emitted_for_codebase_client_annotations(tmp_path: Path) -> 
         {
             "p/X.java": (
                 "package p; import com.example.rag.*; class X { "
-                "@CodebaseClient(clientKind=CodebaseClientKind.rest_template, targetService=\"chat-core\", path=\"/x\", method=\"POST\") "
+                "@CodebaseHttpClient(clientKind=CodebaseClientKind.rest_template, targetService=\"chat-core\", path=\"/x\", method=CodebaseHttpMethod.POST) "
                 "void m() {} }"
             ),
         },
@@ -162,7 +162,7 @@ def test_declares_client_edge_targets_client_id(tmp_path: Path) -> None:
         {
             "p/X.java": (
                 "package p; import com.example.rag.*; class X { "
-                "@CodebaseClient(clientKind=CodebaseClientKind.rest_template, path=\"/edge\", method=\"GET\") void m() {} }"
+                "@CodebaseHttpClient(clientKind=CodebaseClientKind.rest_template, path=\"/edge\", method=CodebaseHttpMethod.GET) void m() {} }"
             ),
         },
     )
@@ -179,7 +179,7 @@ def test_client_id_is_deterministic_across_rebuilds(tmp_path: Path) -> None:
     files = {
         "p/X.java": (
             "package p; import com.example.rag.*; class X { "
-            "@CodebaseClient(clientKind=CodebaseClientKind.rest_template, targetService=\"svc\", path=\"/stable\", method=\"GET\") "
+            "@CodebaseHttpClient(clientKind=CodebaseClientKind.rest_template, targetService=\"svc\", path=\"/stable\", method=CodebaseHttpMethod.GET) "
             "void m() {} }"
         ),
     }
@@ -206,7 +206,7 @@ http_client_overrides:
         {
             "p/X.java": (
                 "package p; import com.example.rag.*; class X { "
-                "@CodebaseClient(clientKind=CodebaseClientKind.rest_template, targetService=\"svc-source\", path=\"/source\", method=\"GET\") "
+                "@CodebaseHttpClient(clientKind=CodebaseClientKind.rest_template, targetService=\"svc-source\", path=\"/source\", method=CodebaseHttpMethod.GET) "
                 "void m() {} }"
             ),
         },
@@ -225,7 +225,7 @@ def test_client_schema_persisted_and_queryable(tmp_path: Path) -> None:
         {
             "p/X.java": (
                 "package p; import com.example.rag.*; class X { "
-                "@CodebaseClient(clientKind=CodebaseClientKind.rest_template, path=\"/meta\", method=\"GET\") void m() {} }"
+                "@CodebaseHttpClient(clientKind=CodebaseClientKind.rest_template, path=\"/meta\", method=CodebaseHttpMethod.GET) void m() {} }"
             ),
         },
     )

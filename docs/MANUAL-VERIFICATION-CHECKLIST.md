@@ -387,7 +387,7 @@ expect Feign → README §3c brownfield.
 
 **Expected (calibration):** `http_calls_match_breakdown={"phantom":2}`, `edge_counts.HTTP_CALLS=2`, `cross_service_calls_total=0` on the fixture.
 
-**If failing → fix:** expected `cross_service` but see `phantom` → target service not indexed or URL resolution; use `@CodebaseClient` per README §3c.
+**If failing → fix:** expected `cross_service` but see `phantom` → target service not indexed or URL resolution; use `@CodebaseHttpClient` per README brownfield section.
 
 ### 5.2 ☐ ASYNC_CALLS producer → consumer
 
@@ -476,7 +476,7 @@ expect Feign → README §3c brownfield.
 
 **If failing → fix:** path/method/topic args must match README §3b normalised forms.
 
-### 7.3 ☐ `@CodebaseClient` creates caller-side edges
+### 7.3 ☐ `@CodebaseHttpClient` creates caller-side edges
 
 **Verification prompt:**
 

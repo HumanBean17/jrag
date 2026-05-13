@@ -142,13 +142,13 @@ def test_22_layer_a_meta_annotation_chain(tmp_path: Path) -> None:
     yml = """
 http_client_overrides:
   annotations:
-    CodebaseClient:
+    CodebaseHttpClient:
       client_kind: rest_template
       path: /meta-client
       method: GET
 """
     java = {
-        "ann/LegacyHttpClient.java": "package ann; import java.lang.annotation.*; import com.example.rag.*; @CodebaseClient(clientKind=CodebaseClientKind.rest_template, path=\"/x\", method=\"GET\") @Retention(RetentionPolicy.RUNTIME) @Target(ElementType.METHOD) public @interface LegacyHttpClient {}",
+        "ann/LegacyHttpClient.java": "package ann; import java.lang.annotation.*; import com.example.rag.*; @CodebaseHttpClient(clientKind=CodebaseClientKind.rest_template, path=\"/x\", method=CodebaseHttpMethod.GET) @Retention(RetentionPolicy.RUNTIME) @Target(ElementType.METHOD) public @interface LegacyHttpClient {}",
         "p/X.java": "package p; import ann.LegacyHttpClient; class X { @LegacyHttpClient void m() {} }",
     }
     db = _build(tmp_path, yml, java)
@@ -160,7 +160,7 @@ def test_23_layer_c_source_codebase_client(tmp_path: Path) -> None:
     java = {
         "p/X.java": (
             "package p; import com.example.rag.*; class X { "
-            "@CodebaseClient(clientKind=CodebaseClientKind.rest_template, path=\"/stub23\", method=\"PUT\") void m() {} }"
+            "@CodebaseHttpClient(clientKind=CodebaseClientKind.rest_template, path=\"/stub23\", method=CodebaseHttpMethod.PUT) void m() {} }"
         ),
     }
     db = _build(tmp_path, None, java)
@@ -184,9 +184,9 @@ def test_25_repeatable_codebase_clients(tmp_path: Path) -> None:
     java = {
         "p/X.java": (
             "package p; import com.example.rag.*; class X { "
-            "@CodebaseClients({"
-            "@CodebaseClient(clientKind=CodebaseClientKind.rest_template, path=\"/r1\", method=\"GET\"),"
-            "@CodebaseClient(clientKind=CodebaseClientKind.rest_template, path=\"/r2\", method=\"POST\")"
+            "@CodebaseHttpClients({"
+            "@CodebaseHttpClient(clientKind=CodebaseClientKind.rest_template, path=\"/r1\", method=CodebaseHttpMethod.GET),"
+            "@CodebaseHttpClient(clientKind=CodebaseClientKind.rest_template, path=\"/r2\", method=CodebaseHttpMethod.POST)"
             "}) void m() {} }"
         ),
     }
@@ -207,7 +207,7 @@ http_client_overrides:
     java = {
         "p/X.java": (
             "package p; import com.example.rag.*; class X { "
-            "@CodebaseClient(clientKind=CodebaseClientKind.rest_template, path=\"/from-source\", method=\"POST\") void m() {} }"
+            "@CodebaseHttpClient(clientKind=CodebaseClientKind.rest_template, path=\"/from-source\", method=CodebaseHttpMethod.POST) void m() {} }"
         ),
     }
     db = _build(tmp_path, yml, java)
@@ -220,7 +220,7 @@ def test_27_method_level_brownfield_replaces_builtin_http(tmp_path: Path) -> Non
         "p/X.java": (
             "package p; import org.springframework.web.client.RestTemplate; import com.example.rag.*; "
             "class X { RestTemplate restTemplate; "
-            "@CodebaseClient(clientKind=CodebaseClientKind.rest_template, path=\"/override\", method=\"POST\") "
+            "@CodebaseHttpClient(clientKind=CodebaseClientKind.rest_template, path=\"/override\", method=CodebaseHttpMethod.POST) "
             "void m(){ restTemplate.exchange(\"/builtin\", org.springframework.http.HttpMethod.GET, null, String.class); } }"
         ),
     }
@@ -273,7 +273,7 @@ def test_30_brownfield_percentage_counter(tmp_path: Path) -> None:
         "p/X.java": (
             "package p; import org.springframework.web.client.RestTemplate; import com.example.rag.*; "
             "class X { RestTemplate restTemplate; "
-            "@CodebaseClient(clientKind=CodebaseClientKind.rest_template, path=\"/bf\", method=\"GET\") void a(){ restTemplate.getForObject(\"/builtin\", String.class); } "
+            "@CodebaseHttpClient(clientKind=CodebaseClientKind.rest_template, path=\"/bf\", method=CodebaseHttpMethod.GET) void a(){ restTemplate.getForObject(\"/builtin\", String.class); } "
             "void b(){ restTemplate.getForObject(\"/builtin-b\", String.class); } }"
         ),
     }
@@ -305,7 +305,7 @@ def test_31a_per_method_scoping_http_replacement(tmp_path: Path) -> None:
             "package p; import org.springframework.web.client.RestTemplate; import com.example.rag.*; "
             "class X { RestTemplate restTemplate; "
             "void a(){ restTemplate.getForObject(\"/a\", String.class); } "
-            "@CodebaseClient(clientKind=CodebaseClientKind.rest_template, path=\"/b-override\", method=\"GET\") "
+            "@CodebaseHttpClient(clientKind=CodebaseClientKind.rest_template, path=\"/b-override\", method=CodebaseHttpMethod.GET) "
             "void b(){ restTemplate.getForObject(\"/b\", String.class); } }"
         ),
     }
