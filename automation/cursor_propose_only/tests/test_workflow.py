@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from propose_only_automation import apply_review_result, evaluate_review, prepare_bundle
+from automation.cursor_propose_only.workflow import apply_review_result, evaluate_review, prepare_bundle
 
 
 def test_prepare_bundle_writes_manifest_and_prompts(tmp_path: Path) -> None:

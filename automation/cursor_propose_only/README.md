@@ -1,22 +1,20 @@
 # Cursor propose-only automation
 
-This repository now includes a lightweight orchestration helper for a
-"propose + review only" loop.
+This workflow is intentionally isolated under `automation/cursor_propose_only/`
+so orchestration sources are not mixed with production runtime code, main docs,
+or the primary test suite.
 
-The helper does not execute implementation work. It generates prompt bundles,
-tracks review rounds, and applies severity-based approval gating.
+## Commands
 
-## Command
+From repository root:
 
-Use the script from repository root:
+- `.venv/bin/python automation/cursor_propose_only/cli.py prepare ...`
+- `.venv/bin/python automation/cursor_propose_only/cli.py evaluate ...`
 
-- `.venv/bin/python scripts/propose_only_orchestrator.py prepare ...`
-- `.venv/bin/python scripts/propose_only_orchestrator.py evaluate ...`
-
-## 1) Generate a propose-only workflow bundle
+## Generate a propose-only workflow bundle
 
 ```bash
-.venv/bin/python scripts/propose_only_orchestrator.py prepare \
+.venv/bin/python automation/cursor_propose_only/cli.py prepare \
   --repo-root . \
   --proposal-dir propose \
   --output-dir reports/propose_automation \
@@ -32,13 +30,13 @@ Generated artifacts:
 - `reports/propose_automation/jobs/<job-id>/reviewer_prompt_round2.md`
 - `reports/propose_automation/jobs/<job-id>/reviewer_prompt_round3.md`
 
-## 2) Evaluate each reviewer response
+## Evaluate each reviewer response
 
 Use one fresh reviewer session per round. Save each reviewer response to a file,
 then evaluate it with severity gating.
 
 ```bash
-.venv/bin/python scripts/propose_only_orchestrator.py evaluate \
+.venv/bin/python automation/cursor_propose_only/cli.py evaluate \
   --workflow reports/propose_automation/workflow.json \
   --job-id <job-id> \
   --round 1 \
@@ -53,7 +51,7 @@ Status transitions:
 - approved with no actionable issues -> `ready_to_merge`
 - final round still failing -> `blocked_after_reviews`
 
-## Review format convention
+## Reviewer format convention
 
 For consistent parsing, reviewer findings should follow:
 
