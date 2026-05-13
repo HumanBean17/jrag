@@ -3,15 +3,16 @@
 **Status**: draft
 **Author**: Dmitriy Teriaev + Perplexity Computer
 **Date**: 2026-05-11
+**Last amended**: 2026-05-13 (pass5/pass6 + cocoindex stdout tee + risk-table wording)
 
 ## TL;DR
 
 - Today, `java-codebase-rag init` / `increment` / `reprocess` on a large Java estate sit silent for **tens of seconds to minutes** while two long subprocesses (`cocoindex update` then `build_ast_graph.py`) run. The user has no way to tell whether the tool is alive, stuck, or just slow — a real failure mode on Sberbank-scale codebases.
 - **Root cause is structural, not cosmetic.** `server.py:run_refresh_pipeline` spawns both subprocesses with `stdout=PIPE, stderr=PIPE` and calls `proc.communicate()`, so every progress line the pipeline already prints (`[pass1] parsed N files in X.XXs …`, the cocoindex update output, `[write] kuzu at …`) is **buffered to the end** and only flushed after the whole pipeline finishes. The pipeline isn't quiet — its voice is being held until after it stops talking.
 - **This propose ships only the minimal mode (Mode 1).** Phase 2 — TTY-pretty rendering with `rich` / progress bars / colors — is deferred to a separate later propose (`CLI-PRETTY-OUTPUT-PROPOSE.md`) and explicitly out of scope here. The split is intentional: minimal mode fixes 80% of the perceived "is it stuck?" problem at 20% of the work and zero new dependencies.
-- **What ships in Mode 1**: (a) **stream** both subprocesses' stderr live to the user instead of buffering, (b) **wrap** cocoindex with one-line announcements (`[lance] running cocoindex update…` / `[lance] done in X.XXs`), (c) **heartbeat** lines every ~5 s during long passes in `build_ast_graph.py`, (d) per-pass start lines (today's pipeline only prints per-pass *end* lines — opening "now starting pass 2" lines close the silent-gap perception), (e) a one-line overall **pipeline header** and **footer** in the CLI driver.
+- **What ships in Mode 1**: (a) **stream** each subprocess's **stdout and stderr** live to the operator (relay **verbatim** to the parent process's stderr — the human channel) instead of buffering until `communicate()` returns, (b) **wrap** cocoindex with one-line announcements (`[lance] running cocoindex update…` / `[lance] done in X.XXs`), (c) **heartbeat** lines every ~5 s during long passes in `build_ast_graph.py`, (d) per-pass start lines (today's pipeline only prints per-pass *end* lines — opening "now starting pass 2" lines close the silent-gap perception), (e) a one-line overall **pipeline header** and **footer** in the CLI driver.
 - **Scope hard-cap: lifecycle commands only** (`init`, `increment`, `reprocess`, `erase`). `meta`, `tables`, `diagnose-ignore`, `analyze-pr` stay byte-for-byte identical in this round.
-- **Backwards-compatibility invariant**: machine-readable stdout for all existing commands stays byte-for-byte identical. Only **stderr** changes. Existing `--quiet` / `quiet=True` paths must continue to suppress every new heartbeat / wrap / header line we add.
+- **Backwards-compatibility invariant**: machine-readable **CLI stdout** for all existing commands stays byte-for-byte identical. New human-facing text (including **relayed subprocess stdout**, not only stderr) is written to **stderr** or suppressed under `--quiet` / `quiet=True`.
 - **No new runtime dependencies.** `rich` / `tqdm` / `click` deliberately deferred to Phase 2.
 - **Migration shape**: **3 PRs** — propose merge → stream + wrap (the structural fix) → heartbeats + start lines + pipeline header/footer (the cosmetic-but-real fix). Tests focus on the streaming invariant + `--quiet` parity; no progress-bar UI tests in this round.
 
@@ -35,12 +36,12 @@ This frame rules out:
 - Capturing and reformatting cocoindex output. We don't own cocoindex's text; we wrap it.
 - Changing `meta` / `tables` / `diagnose-ignore` / `analyze-pr`. They're fast and out of scope.
 - Adding a `--format=plain|pretty|json` flag in this round. The plain format **is** the format until Phase 2.
-- Changing machine-readable stdout payloads. Stdout is the agent / CI contract; stderr is the human channel; this propose touches stderr only.
+- Changing machine-readable **CLI** stdout payloads. **CLI** stdout is the agent / CI contract; stderr is the human channel; this propose does not add new bytes to **CLI** stdout.
 
 ## §2 — Design principles
 
-1. **Stream first, beautify never (in this round).** Live unbuffered stderr is worth more than any progress bar; bars are deferred to Phase 2.
-2. **stdout is the agent contract; stderr is the human channel.** Every new line we emit lands on stderr. Stdout payloads for `meta` / `tables` / `analyze-pr` remain byte-for-byte identical.
+1. **Stream first, beautify never (in this round).** Live relay of each child's **stdout and stderr** to the parent's stderr is worth more than any progress bar; bars are deferred to Phase 2.
+2. **CLI stdout is the agent contract; stderr is the human channel.** Every new line **we synthesize** lands on stderr. Relayed subprocess bytes also go to stderr so they are visible before exit. **CLI** stdout payloads for `meta` / `tables` / `analyze-pr` remain byte-for-byte identical.
 3. **No new runtime dependencies.** No `rich`, no `tqdm`, no `click`. Pure stdlib `time` / `sys` / `threading`.
 4. **Honest about partial knowledge.** When a pass cannot announce a percentage (e.g. cocoindex internals are opaque to us), we say "running…" with elapsed time, not a fake bar. Mirrors the "partial fidelity is loud" principle from CLI-SCENARIOS §2.
 5. **`--quiet` is sacred.** The existing `--quiet` flag (which sets `quiet=True` and drops `--verbose` from the graph builder) must continue to suppress *every* new line this propose adds, including the pipeline header / footer and heartbeats. CI consumers depend on it.
@@ -52,15 +53,17 @@ This frame rules out:
 
 ### 3.1 The five improvements, in implementation order
 
-#### Improvement 1 — Stream both subprocesses' stderr live (PR-PROG-2, structural)
+#### Improvement 1 — Stream each subprocess's stdout and stderr live (PR-PROG-2, structural)
 
 **File**: `server.py:run_refresh_pipeline`
 
-**What changes**: replace `stdout=PIPE, stderr=PIPE` + `proc.communicate()` with **stdout captured to memory (for the machine-readable summary), stderr inherited or relayed line-by-line to the parent process's stderr in real time**. Both subprocesses get the same treatment.
+**What changes**: replace `stdout=PIPE, stderr=PIPE` + `proc.communicate()` with **async readers on both child streams**. Each chunk or line is (1) **relayed verbatim** to the parent process's stderr (the human channel) as soon as it arrives and (2) **appended to an in-memory buffer** so `RefreshIndexOutput` can still attach the same stdout / stderr tail windows the CLI already surfaces. Both subprocesses (cocoindex, then `build_ast_graph.py`) get the same treatment.
+
+**Child stdout vs stderr**: graph-builder progress today is on stderr, but cocoindex may emit progress on **stdout**, **stderr**, or both depending on version and logging. PR-PROG-2 must **not** assume “progress is stderr-only”; relay **both** streams. If a release prints nothing until exit, the `[lance] …` wrap still brackets the silent window.
 
 **Why this is improvement 1**: every other improvement depends on it. Today's per-pass `[pass1] parsed N files in X.XXs` line is *already printed* — it just lands in `graph_err` instead of the terminal. Streaming makes the existing voice audible immediately.
 
-**Quiet-mode behaviour**: when `quiet=True`, stderr is captured (today's behaviour) and not relayed. CI / agent consumers see no change.
+**Quiet-mode behaviour**: when `quiet=True`, both stdout and stderr are captured (today's behaviour) and not relayed. CI / agent consumers see no change.
 
 **Out of scope**: parsing or rewriting subprocess output. We pass it through verbatim.
 
@@ -75,13 +78,15 @@ This frame rules out:
 
 **Why**: cocoindex's own output is opaque (and shape varies across releases). We don't pretend to know its progress; we honestly bracket "we entered cocoindex" and "we left cocoindex" with elapsed time. The user sees the bracket even on a fresh-install run where cocoindex itself prints little.
 
+**Tag `[lance]`**: names the **LanceDB / CocoIndex** vector-index phase (historical shorthand in this codebase — not “generic HTTP”).
+
 **Quiet-mode behaviour**: suppressed.
 
 **Out of scope**: parsing cocoindex's output; reformatting it; injecting a progress bar over it.
 
 #### Improvement 3 — Heartbeats inside long passes (PR-PROG-3, cosmetic-real)
 
-**File**: `build_ast_graph.py`, inside the four passes (`pass1` parse, `pass2` emit, `pass3` enrich, `pass4` cross-service) and the `write` block.
+**File**: `build_ast_graph.py`, inside the six passes (`pass1` parse, `pass2` structural rows, `pass3` calls, `pass4` routes, `pass5` imperative caller edges, `pass6` call-edge matching) and the `write_kuzu` block.
 
 **What changes**: each pass runs a tiny background thread (or `asyncio.create_task`, whichever matches the call site) that prints `[passN] running … <elapsed>s elapsed` every ~5 seconds while the pass is in progress. Thread is cancelled when the pass completes. Heartbeat carries **no percentage** — pass-internal granularity (file counts, edge counts) is delegated to Phase 2.
 
@@ -95,7 +100,7 @@ This frame rules out:
 
 **File**: same — `build_ast_graph.py`.
 
-**What changes**: every pass that currently prints a `[passN] done in X.XXs …` line at the end gains a paired `[passN] starting …` line at the beginning, with a one-phrase description of what the pass does.
+**What changes**: every pass that currently prints a trailing verbose **summary** line (wording unchanged) gains a paired `[passN] starting …` line at the beginning, with a one-phrase description of what the pass does. (`pass6` may already print a multi-line block in some configs; start-line + heartbeats still bracket that pass.)
 
 Today's behaviour: silent for the full duration of the pass, then one summary line at the end.
 Proposed: one line at the start, heartbeats every 5 s, summary line at the end.
@@ -150,7 +155,16 @@ java-codebase-rag init · source=/home/dmitry/sberbank-estate · index=.java-cod
 [pass2] starting · emitting EXTENDS / IMPLEMENTS / DECLARES rows
 [pass2] running … 5s elapsed
 …
-[pass4] cross-service edges emitted in 12.41s
+[pass4] starting · route and EXPOSES extraction
+…
+[pass4] Route extraction: emitted=…, exposes=…, …
+[pass5] starting · imperative HTTP_CALLS / ASYNC_CALLS edges
+…
+[pass5] HTTP_CALLS: … edges, ASYNC_CALLS: … edges; …
+[pass6] starting · cross-service call-edge matching
+…
+[pass6] http_match={…}, async_match={…}, …
+[write] starting · writing Kuzu graph to disk
 [write] kuzu at .java-codebase-rag/kuzu
 java-codebase-rag init · finished in 187.43s (exit=0)
 ```
@@ -163,7 +177,7 @@ The user now sees something happening at most ~5 s apart for the entire duration
 
 ### 3.4 Stdout invariant (locked)
 
-For each of `init` / `increment` / `reprocess` / `erase`, the **stdout payload** at command exit is byte-for-byte identical to today's payload. This is the agent / CI contract and is the strongest invariant in this propose. PR-PROG-3 ships a small test (`tests/test_cli_progress_stdout_invariant.py`) that runs each command against a tiny fixture and diffs the captured stdout against a recorded baseline.
+For each of `init` / `increment` / `reprocess` / `erase`, the **`java-codebase-rag` stdout payload** at command exit is byte-for-byte identical to today's payload. This is the agent / CI contract and is the strongest invariant in this propose. PR-PROG-3 ships a small test (`tests/test_cli_progress_stdout_invariant.py`) that runs each command against a tiny fixture and diffs the captured stdout against a recorded baseline.
 
 ## §4 — Use-case re-walk
 
@@ -186,7 +200,7 @@ Walking 16 realistic invocations through the proposed surface. Each row records 
 | UC13 | `java-codebase-rag reprocess` on a totally fresh repo (no cocoindex state) | Interactive | Same as UC1; cocoindex's first-run output (which can be quiet for ~30 s on cold cache) is bracketed by the wrap and softened by the graph-side heartbeats kicking in once it exits | Identical |
 | UC14 | `init` from a CI shell that strips ANSI / colors aggressively | CI / agent | No ANSI escapes are ever emitted (Mode 1 is plain-text only). Nothing to strip. | Identical |
 | UC15 | User runs `reprocess` with `JAVA_CODEBASE_RAG_INDEX_DIR=...` to a network-mounted disk; one pass is unusually slow | Interactive | The 5 s heartbeat cadence makes the slow pass obvious: `[pass2] running … 35s elapsed` is visibly different from a normal `[pass2] running … 5s elapsed` then summary. | Identical |
-| UC16 | User reads `--help` and discovers the new behaviour | Interactive | `--help` text gains one sentence noting that progress is streamed to stderr and `--quiet` suppresses it. (Doc-only change, in PR-PROG-3.) | Identical |
+| UC16 | User reads `--help` and discovers the new behaviour | Interactive | `--help` text gains one sentence noting that subprocess progress is streamed to **stderr** (including child stdout when the tool relays it) and `--quiet` suppresses it. (Doc-only change, in PR-PROG-3.) | Identical |
 
 **Result of the re-walk:**
 
@@ -221,12 +235,12 @@ No surface revisions triggered.
 **Purpose**: this document. Lock the 5 improvements and the deferral of Phase 2.
 **Tests**: none (doc-only).
 
-### PR-PROG-2 — stream subprocess stderr + cocoindex wrap
+### PR-PROG-2 — stream subprocess stdout+stderr + cocoindex wrap
 
-**Title**: `feat(cli): stream subprocess stderr live; wrap cocoindex with announcements`
-**Purpose**: structural fix. `server.py:run_refresh_pipeline` no longer buffers subprocess stderr until completion. Cocoindex gets the wrap-around `[lance] running…` / `[lance] finished in …` lines.
+**Title**: `feat(cli): stream subprocess stdout and stderr live; wrap cocoindex with announcements`
+**Purpose**: structural fix. `server.py:run_refresh_pipeline` no longer buffers subprocess output until completion; both child streams are relayed live to the parent's stderr while buffers retain tails for `RefreshIndexOutput`. Cocoindex gets the wrap-around `[lance] running…` / `[lance] finished in …` lines.
 **Tests**:
-- Unit test for the streaming relay (asyncio task reads from a fake pipe and writes to a captured sink in real time, not after `.wait()`).
+- Unit test for the streaming relay (asyncio tasks read from fake stdout+stderr pipes and write to a captured sink in real time, not after `.wait()`).
 - `--quiet` parity test: stderr is empty when `quiet=True`, identical to today.
 - Stdout invariant test: `init` against the fixture repo produces a stdout byte-string identical to a recorded baseline.
 
@@ -240,7 +254,7 @@ No surface revisions triggered.
 - Pipeline header / footer wrap the whole command.
 - `--quiet` parity: every new line type is suppressed.
 - Stdout invariant test (regression on the PR-PROG-2 test).
-- Docs: README + AGENT-GUIDE.md gain a one-sentence note that lifecycle commands stream progress on stderr.
+- Docs: README + AGENT-GUIDE.md gain a one-sentence note that lifecycle commands stream subprocess progress to **stderr** (including relayed child stdout) and `--quiet` suppresses it.
 
 Total: 3 PRs.
 
@@ -248,8 +262,8 @@ Total: 3 PRs.
 
 1. **Two-phase split is locked.** This propose ships only Mode 1 (plain stderr, no deps). Mode 2 (pretty / `rich` / bars / colors) is a separate later propose. No flag now; no opt-in for pretty rendering in this round.
 2. **Scope is lifecycle commands only.** `init`, `increment`, `reprocess`, `erase`. `meta`, `tables`, `diagnose-ignore`, `analyze-pr` stay byte-for-byte identical.
-3. **Cocoindex handling is wrap-only.** We do not parse, capture, or reformat cocoindex output. The wrap is two CLI-driver-owned stderr lines around the subprocess.
-4. **Stdout is the agent contract; this propose touches only stderr.** Stdout payloads for all commands are byte-for-byte identical post-implementation. Tested.
+3. **Cocoindex handling is wrap-only.** We do not parse, capture, or reformat cocoindex output. The wrap is two CLI-driver-owned stderr lines around the subprocess. (Relay still forwards child bytes verbatim — wrap lines are additive.)
+4. **CLI stdout is the agent contract; human progress uses stderr.** Payloads printed by `java-codebase-rag` to **its own stdout** stay byte-for-byte identical. Child-process stdout is no longer “invisible until exit,” but it is **streamed to stderr** for humans and **accumulated** for the same structured return values as today — not printed on the CLI's stdout.
 5. **No new runtime dependencies.** Pure stdlib. `rich` / `tqdm` / `click` deferred to Phase 2.
 6. **Heartbeat cadence locked at 5 s.** Not configurable in this round.
 7. **`--quiet` suppresses every new line.** No new line type bypasses the quiet path. CI / agent consumers see no behavioural change in `--quiet` mode.
@@ -263,7 +277,7 @@ Total: 3 PRs.
 
 | Risk | Mitigation |
 | ---- | ---------- |
-| Streaming subprocess stderr changes the asyncio control flow in `run_refresh_pipeline` and breaks the MCP `refresh` path (still used by tests / fallbacks) | PR-PROG-2 keeps `--quiet` / `quiet=True` semantically identical: captured stderr, not relayed. MCP callers (which pass `quiet=True`) see byte-for-byte identical behaviour. New streaming code path is exercised only when `quiet=False`. |
+| Streaming subprocess I/O changes the asyncio control flow in `run_refresh_pipeline` and breaks a caller that assumed buffered `communicate()` | PR-PROG-2 keeps `--quiet` / `quiet=True` semantically identical: stdout and stderr both captured, not relayed (today's behaviour). Callers today are the CLI (`quiet` mirrors `--quiet`) and tests; none rely on live relay when `quiet=True`. New streaming path is exercised only when `quiet=False`. |
 | Heartbeat thread leaks if a pass crashes mid-execution | Heartbeat helper is a context manager (`with heartbeat("pass1"): …`) that cancels its background thread / task in `__exit__`, including on exception. Unit test covers the exception path. |
 | Heartbeat thread interleaves with the main thread's prints, corrupting line atomicity | All heartbeat writes use `print(..., file=sys.stderr, flush=True)` with a module-level `threading.Lock` shared between heartbeat and pass-end writers. Lock scope is the single `print` call. |
 | 5 s cadence wrong for some environments (too noisy / too quiet) | Cadence is locked for this round (§7 decision #6). If a real consumer reports a problem, a future propose can introduce a configurable cadence. Two-PR cost to defer is small. |
@@ -272,8 +286,8 @@ Total: 3 PRs.
 | Stdout invariant test breaks because timing / wall-clock leaks into stdout | Baseline test redirects only stderr for capture; stdout is asserted against a string baseline that includes no timestamps. If a timestamp accidentally lands on stdout, the test fails — by design. |
 | Non-TTY environments (CI / agent sandboxes) get noisy because we strip nothing | The new lines are line-oriented, no ANSI, no redraws. Line-oriented CI logs are the *target* shape, not an accident. Verified by UC4 / UC8 / UC12. |
 | cocoindex prints a huge amount of output and floods the user terminal | Out of scope — we pass cocoindex output through verbatim by §2 principle 4. If this becomes a real problem, a future propose may add a `--lance-quiet` flag. |
-| Phase 2 lands and the event format changes, breaking consumers who started parsing the new stderr | Stderr is the **human** channel by §2 principle 2. Consumers that parse it do so at their own risk; the agent / CI contract is stdout, which is invariant. PR-PROG-3 README note states this explicitly. |
-| `build_ast_graph.py` has 4 passes today but a future propose adds pass5 | Heartbeat / start-line / summary-line scaffolding is per-pass and additive. New passes use the same helper. No structural coupling. |
+| Phase 2 lands and the event format changes, breaking consumers who started parsing the new stderr | Stderr is the **human** channel by §2 principle 2. Consumers that parse it do so at their own risk; the agent / CI contract is **CLI** stdout, which is invariant. PR-PROG-3 README note states this explicitly. |
+| `build_ast_graph.py` gains a future `pass7` (or renames a pass) | Heartbeat / start-line / summary-line scaffolding is per-pass and additive. New passes use the same helper. Appendix B is updated in the same PR that changes pass structure. |
 
 ## Appendix A — Output spec (verbatim, for the implementation PR)
 
@@ -282,7 +296,7 @@ The shipped lines, exactly. Anchored here so PR-PROG-2 / PR-PROG-3 can be review
 ```
 java-codebase-rag <subcommand> · source=<source-root> · index=<index-dir>
 [lance] running cocoindex update (project_root=<source-root>)
-…cocoindex's own output, unmodified, streamed live…
+…cocoindex's own stdout and stderr, unmodified, streamed live…
 [lance] cocoindex update finished in <X.XX>s (exit=<code>)
 [passN] starting · <one-phrase description>
 [passN] running … <elapsed>s elapsed       (every ~5 s)
@@ -292,8 +306,9 @@ java-codebase-rag <subcommand> · finished in <X.XX>s (exit=<code>)
 ```
 
 Rules:
-- Every line goes to **stderr**.
-- Every line is suppressed when `--quiet`.
+- **CLI-owned** lines (header, footer, `[lance] …` wrap, `[passN] …` heartbeats / starts) go to **stderr**.
+- **Subprocess stdout and stderr** are **relayed verbatim to stderr** as bytes arrive (may be partial lines); the CLI's **own stdout** is unchanged.
+- Every synthesized line is suppressed when `--quiet` (relayed child bytes are not forwarded in quiet mode — same capture behaviour as today).
 - `<elapsed>` is integer seconds (no decimals on heartbeats); pipeline header / footer use `<X.XX>s` (two decimals).
 - The pipeline-header / footer lines use the U+00B7 middle dot (`·`) as a separator. No other special characters.
 - No ANSI escapes anywhere.
@@ -307,8 +322,10 @@ For grep stability, these strings are committed here:
 | ---- | ---------- |
 | `pass1` | `[pass1] starting · parsing Java files under source root` |
 | `pass2` | `[pass2] starting · emitting EXTENDS / IMPLEMENTS / DECLARES rows` |
-| `pass3` | `[pass3] starting · enrichment (role / capability / framework annotations)` |
-| `pass4` | `[pass4] starting · cross-service edges (HTTP_CALLS / ASYNC_CALLS)` |
+| `pass3` | `[pass3] starting · call resolution (outgoing calls per site)` |
+| `pass4` | `[pass4] starting · route and EXPOSES extraction` |
+| `pass5` | `[pass5] starting · imperative HTTP_CALLS / ASYNC_CALLS edges` |
+| `pass6` | `[pass6] starting · cross-service call-edge matching` |
 | `write` | `[write] starting · writing Kuzu graph to disk` |
 
 If a pass's actual work materially changes in a future PR, the wording is updated in lockstep with that PR (mirrors the AGENT-GUIDE.md maintenance invariant).
