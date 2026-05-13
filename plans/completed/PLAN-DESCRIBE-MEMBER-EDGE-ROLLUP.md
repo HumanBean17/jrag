@@ -5,7 +5,7 @@ Status: **complete** (PR-1 landed). Source propose:
 
 Depends on: **none** for graph or indexer work (read-path only).
 
-**Coordinate with:** [`propose/DESCRIBE-OVERRIDE-ROLLUP-PROPOSE.md`](../../propose/DESCRIBE-OVERRIDE-ROLLUP-PROPOSE.md) if both describe rollups land in the same release window. That propose extends the **same** `_edge_summary_for_node` hook for **method and constructor** symbols with different composed keys. Prefer **one** `kind` + `row` signature change and one composable `_edge_summary_for_node` body with **disjoint** branches (type rollup vs override rollup), or land two PRs in an order where the second PR only adds the method/constructor branch without reshaping the signature again.
+**Related:** Companion describe rollup for method symbols (override-axis `edge_summary` keys) lives in [`propose/completed/DESCRIBE-OVERRIDE-ROLLUP-PROPOSE.md`](../../propose/completed/DESCRIBE-OVERRIDE-ROLLUP-PROPOSE.md) and [`plans/completed/PLAN-DESCRIBE-OVERRIDE-ROLLUP.md`](PLAN-DESCRIBE-OVERRIDE-ROLLUP.md) (landed in PR #110).
 
 ## Goal
 

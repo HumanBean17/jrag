@@ -32,7 +32,9 @@ for tools that don't read `.cursor/rules/`.
     files are kept as reference templates for future per-PR Cursor work.
   - Older completed: `propose/completed/CALL-GRAPH-PROPOSE.md`,
     `propose/completed/DESCRIBE-MEMBER-EDGE-ROLLUP-PROPOSE.md`,
+    `propose/completed/DESCRIBE-OVERRIDE-ROLLUP-PROPOSE.md`,
     `plans/completed/PLAN-DESCRIBE-MEMBER-EDGE-ROLLUP.md`,
+    `plans/completed/PLAN-DESCRIBE-OVERRIDE-ROLLUP.md`,
     `propose/completed/MCP-API-V2-REDESIGN-PROPOSE.md` (four-tool MCP + `java-codebase-rag` CLI),
     `plans/completed/PLAN-CALL-GRAPH.md`,
     `plans/completed/PLAN-CAPABILITIES-MODEL.md`,
