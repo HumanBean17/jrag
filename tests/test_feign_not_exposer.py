@@ -4,22 +4,10 @@ from pathlib import Path
 
 import kuzu
 
-from build_ast_graph import GraphTables, pass1_parse, pass2_edges, pass3_calls, pass4_routes
-from build_ast_graph import pass5_imperative_edges, pass6_match_edges, write_kuzu
+from build_ast_graph import GraphTables, write_kuzu
 from kuzu_queries import KuzuGraph
 
 _FIXTURE = Path(__file__).resolve().parent / "fixtures" / "cross_service_smoke"
-
-
-def _build_tables(project_root: Path) -> GraphTables:
-    tables = GraphTables()
-    asts = pass1_parse(project_root, tables, verbose=False)
-    pass2_edges(tables, asts, verbose=False)
-    pass3_calls(tables, asts, verbose=False)
-    pass4_routes(tables, asts, source_root=project_root, verbose=False)
-    pass5_imperative_edges(tables, asts, source_root=project_root, verbose=False)
-    pass6_match_edges(tables, verbose=False)
-    return tables
 
 
 def _member_id(tables: GraphTables, *, parent_fqn: str, method_name: str) -> str:
@@ -29,8 +17,8 @@ def _member_id(tables: GraphTables, *, parent_fqn: str, method_name: str) -> str
     raise AssertionError(f"member not found: {parent_fqn}#{method_name}")
 
 
-def test_feign_client_does_not_emit_exposes() -> None:
-    tables = _build_tables(_FIXTURE)
+def test_feign_client_does_not_emit_exposes(graph_tables_cross_service_smoke: GraphTables) -> None:
+    tables = graph_tables_cross_service_smoke
     feign_member_id = _member_id(
         tables,
         parent_fqn="smoke.a.BFeignClient",
@@ -46,8 +34,8 @@ def test_feign_client_does_not_emit_exposes() -> None:
     assert endpoint_member_id in exposes_sources
 
 
-def test_feign_caller_resolves_to_target_endpoint() -> None:
-    tables = _build_tables(_FIXTURE)
+def test_feign_caller_resolves_to_target_endpoint(graph_tables_cross_service_smoke: GraphTables) -> None:
+    tables = graph_tables_cross_service_smoke
     caller_id = _member_id(
         tables,
         parent_fqn="smoke.a.BFeignClient",
@@ -62,8 +50,8 @@ def test_feign_caller_resolves_to_target_endpoint() -> None:
     assert route.microservice == "svc-b"
 
 
-def test_feign_route_node_is_not_emitted() -> None:
-    tables = _build_tables(_FIXTURE)
+def test_feign_route_node_is_not_emitted(graph_tables_cross_service_smoke: GraphTables) -> None:
+    tables = graph_tables_cross_service_smoke
     assert not any(
         r.kind == "http_consumer"
         and r.framework == "feign"
@@ -73,9 +61,9 @@ def test_feign_route_node_is_not_emitted() -> None:
     )
 
 
-def test_meta_reports_exposes_suppressed_feign_count(tmp_path: Path) -> None:
+def test_meta_reports_exposes_suppressed_feign_count(tmp_path: Path, graph_tables_cross_service_smoke: GraphTables) -> None:
     db_path = tmp_path / "feign_meta.kuzu"
-    tables = _build_tables(_FIXTURE)
+    tables = graph_tables_cross_service_smoke
     write_kuzu(db_path, tables, source_root=_FIXTURE, verbose=False)
     KuzuGraph._instance = None
     KuzuGraph._instance_path = None
@@ -158,8 +146,8 @@ def test_meta_returns_none_for_old_graphs(tmp_path: Path) -> None:
     assert KuzuGraph(str(db_path)).meta()["pass4_exposes_suppressed_feign"] is None
 
 
-def test_no_change_to_async_routes() -> None:
-    tables = _build_tables(_FIXTURE)
+def test_no_change_to_async_routes(graph_tables_cross_service_smoke: GraphTables) -> None:
+    tables = graph_tables_cross_service_smoke
     listener_id = _member_id(
         tables,
         parent_fqn="smoke.b.OrdersListenerB",

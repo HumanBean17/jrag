@@ -10,7 +10,7 @@ from pathlib import Path
 
 import kuzu
 
-from build_ast_graph import GraphTables, pass1_parse, pass2_edges, pass3_calls, write_kuzu
+from _builders import build_kuzu_to
 
 
 def _connect(db_path: Path) -> kuzu.Connection:
@@ -42,13 +42,8 @@ def test_resolved_receiver_unindexed_callee_preserves_strategy(tmp_path: Path) -
         encoding="utf-8",
     )
 
-    tables = GraphTables()
-    asts = pass1_parse(root, tables, verbose=False)
-    pass2_edges(tables, asts, verbose=False)
-    pass3_calls(tables, asts, verbose=False)
-
     db_path = tmp_path / "b3.kuzu"
-    write_kuzu(db_path, tables, source_root=root, verbose=False)
+    build_kuzu_to(root, db_path, max_pass=3)
 
     conn = _connect(db_path)
     r = conn.execute(
@@ -106,13 +101,8 @@ def test_receiver_disambiguation_uses_type_index_not_method_unique(tmp_path: Pat
         encoding="utf-8",
     )
 
-    tables = GraphTables()
-    asts = pass1_parse(root, tables, verbose=False)
-    pass2_edges(tables, asts, verbose=False)
-    pass3_calls(tables, asts, verbose=False)
-
     db_path = tmp_path / "cg.kuzu"
-    write_kuzu(db_path, tables, source_root=root, verbose=False)
+    build_kuzu_to(root, db_path, max_pass=3)
 
     conn = _connect(db_path)
     r = conn.execute(
@@ -153,13 +143,8 @@ def test_uppercase_local_receiver_not_treated_as_static_qualifier(tmp_path: Path
         encoding="utf-8",
     )
 
-    tables = GraphTables()
-    asts = pass1_parse(root, tables, verbose=False)
-    pass2_edges(tables, asts, verbose=False)
-    pass3_calls(tables, asts, verbose=False)
-
     db_path = tmp_path / "n3.kuzu"
-    write_kuzu(db_path, tables, source_root=root, verbose=False)
+    build_kuzu_to(root, db_path, max_pass=3)
 
     conn = _connect(db_path)
     r = conn.execute(

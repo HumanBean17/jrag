@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from build_ast_graph import GraphTables, pass1_parse, pass2_edges, pass3_calls, pass4_routes
-from build_ast_graph import pass5_imperative_edges, pass6_match_edges, write_kuzu
+from _builders import build_graph_tables_to, build_kuzu_to
+from build_ast_graph import GraphTables
 from graph_enrich import _load_brownfield_overrides, collect_annotation_meta_chain
 from kuzu_queries import KuzuGraph
 
@@ -29,19 +29,12 @@ def _copy_fixture(dest: Path) -> None:
 
 
 def _build_tables(project_root: Path) -> GraphTables:
-    tables = GraphTables()
-    asts = pass1_parse(project_root, tables, verbose=False)
-    pass2_edges(tables, asts, verbose=False)
-    pass3_calls(tables, asts, verbose=False)
-    pass4_routes(tables, asts, source_root=project_root, verbose=False)
-    pass5_imperative_edges(tables, asts, source_root=project_root, verbose=False)
-    pass6_match_edges(tables, verbose=False)
-    return tables
+    """Full pipeline on a **mutable** tree (copy under tmp_path); not the session fixture."""
+    return build_graph_tables_to(project_root, max_pass=6)
 
 
 def _build_graph(project_root: Path, db_path: Path) -> KuzuGraph:
-    tables = _build_tables(project_root)
-    write_kuzu(db_path, tables, source_root=project_root, verbose=False)
+    build_kuzu_to(project_root, db_path, max_pass=6)
     return KuzuGraph(str(db_path))
 
 

@@ -2,29 +2,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from build_ast_graph import (
-    GraphTables,
-    pass1_parse,
-    pass2_edges,
-    pass3_calls,
-    pass4_routes,
-    pass5_imperative_edges,
-    pass6_match_edges,
-    write_kuzu,
-)
+from build_ast_graph import GraphTables, pass6_match_edges, write_kuzu
 from kuzu_queries import KuzuGraph
 
 _FIXTURE = Path(__file__).resolve().parent / "fixtures" / "cross_service_smoke"
 
 
 def _build_tables() -> GraphTables:
-    tables = GraphTables()
-    asts = pass1_parse(_FIXTURE, tables, verbose=False)
-    pass2_edges(tables, asts, verbose=False)
-    pass3_calls(tables, asts, verbose=False)
-    pass4_routes(tables, asts, source_root=_FIXTURE, verbose=False)
-    pass5_imperative_edges(tables, asts, source_root=_FIXTURE, verbose=False)
-    return tables
+    from _builders import build_graph_tables_to
+
+    return build_graph_tables_to(_FIXTURE, max_pass=5)
 
 
 def _member_id(tables: GraphTables, *, parent_fqn: str, method_name: str) -> str:

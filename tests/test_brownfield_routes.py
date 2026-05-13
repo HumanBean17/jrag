@@ -33,22 +33,10 @@ def _build(tmp: Path, yml: str | None, extra_files: dict[str, str]) -> Path:
         p = tmp / rel
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(body, encoding="utf-8")
-    from build_ast_graph import (
-        GraphTables,
-        pass1_parse,
-        pass2_edges,
-        pass3_calls,
-        pass4_routes,
-        write_kuzu,
-    )
+    from _builders import build_kuzu_into
 
     db_path = tmp / "g.kuzu"
-    tables = GraphTables()
-    asts = pass1_parse(tmp, tables, verbose=False)
-    pass2_edges(tables, asts, verbose=False)
-    pass3_calls(tables, asts, verbose=False)
-    pass4_routes(tables, asts, source_root=tmp, verbose=False)
-    write_kuzu(db_path, tables, source_root=tmp, verbose=False)
+    build_kuzu_into(tmp, db_path)
     return db_path
 
 

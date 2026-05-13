@@ -18,8 +18,6 @@ import pytest
 
 from ast_java import ONTOLOGY_VERSION
 
-_ROUTE_EXTRACTION_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "route_extraction_smoke"
-
 
 def _connect(db_path: Path) -> kuzu.Connection:
     db = kuzu.Database(str(db_path), read_only=True)
@@ -197,27 +195,9 @@ def test_routes_and_exposes_populated(kuzu_db_path: Path) -> None:
     assert _scalar(conn, "MATCH ()-[e:EXPOSES]->() RETURN count(e)") >= 1
 
 
-def test_route_id_includes_microservice(tmp_path: Path) -> None:
+def test_route_id_includes_microservice(kuzu_db_path_route_extraction_smoke: Path) -> None:
     """Same HTTP path in two declared microservices → distinct Route primary keys."""
-    from build_ast_graph import (
-        GraphTables,
-        pass1_parse,
-        pass2_edges,
-        pass3_calls,
-        pass4_routes,
-        write_kuzu,
-    )
-
-    root = _ROUTE_EXTRACTION_FIXTURE.resolve()
-    assert root.is_dir(), root
-    db_path = tmp_path / "routes_micro.kuzu"
-    tables = GraphTables()
-    asts = pass1_parse(root, tables, verbose=False)
-    pass2_edges(tables, asts, verbose=False)
-    pass3_calls(tables, asts, verbose=False)
-    pass4_routes(tables, asts, source_root=root, verbose=False)
-    write_kuzu(db_path, tables, source_root=root, verbose=False)
-
+    db_path = kuzu_db_path_route_extraction_smoke
     conn = _connect(db_path)
     ids = _column(
         conn,
@@ -227,25 +207,8 @@ def test_route_id_includes_microservice(tmp_path: Path) -> None:
     assert len(set(ids)) >= 2, ids
 
 
-def test_exposes_edge_direction(tmp_path: Path) -> None:
-    from build_ast_graph import (
-        GraphTables,
-        pass1_parse,
-        pass2_edges,
-        pass3_calls,
-        pass4_routes,
-        write_kuzu,
-    )
-
-    root = _ROUTE_EXTRACTION_FIXTURE.resolve()
-    db_path = tmp_path / "routes_dir.kuzu"
-    tables = GraphTables()
-    asts = pass1_parse(root, tables, verbose=False)
-    pass2_edges(tables, asts, verbose=False)
-    pass3_calls(tables, asts, verbose=False)
-    pass4_routes(tables, asts, source_root=root, verbose=False)
-    write_kuzu(db_path, tables, source_root=root, verbose=False)
-
+def test_exposes_edge_direction(kuzu_db_path_route_extraction_smoke: Path) -> None:
+    db_path = kuzu_db_path_route_extraction_smoke
     conn = _connect(db_path)
     fwd = _scalar(conn, "MATCH (s:Symbol)-[:EXPOSES]->(r:Route) RETURN count(*)")
     rev = _scalar(conn, "MATCH (r:Route)-[:EXPOSES]->(s:Symbol) RETURN count(*)")
