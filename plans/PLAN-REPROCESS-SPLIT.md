@@ -45,11 +45,11 @@ Landing order: **RS1**.
 | --- | --- |
 | Flag shape | Use `--vectors-only` and `--graph-only` as argparse mutually-exclusive options on `reprocess`. |
 | Output model | Add `phases_run: list[Literal["vectors","graph"]]` to `RefreshIndexOutput` (additive contract). |
-| No-flag path | Continue using `server.run_refresh_pipeline(...)` to preserve orchestration; add `phases_run=["vectors","graph"]` in that path. |
+| No-flag path | Continue using `server.run_refresh_pipeline(...)` to preserve orchestration; add `phases_run` for phases actually spawned (`[]` for setup failure, `["vectors"]` if cocoindex ran and graph did not, `["vectors","graph"]` if graph spawned). |
 | Selective path wiring | Use `java_codebase_rag.pipeline.run_cocoindex_update` and `run_build_ast_graph` directly from `cli.py`; skip lazy `import server` for selective paths. |
 | Drift communication | Emit one stderr line after successful partial run; `--quiet` does not suppress this warning. |
-| Exit mapping rewrite | Replace current `return 2 if payload.get("exit_code") is None else 1` logic with requested-phase-aware mapping. |
-| Pretty output | Keep existing pretty/JSON auto-emission behavior; rely on payload + warning line without adding a new renderer mode. |
+| Exit mapping rewrite | Replace current `return 2 if payload.get("exit_code") is None else 1` logic with phase-spawn-aware mapping: setup / usage / phase-never-spawned failures exit `2`; requested build failures exit `1`. |
+| Pretty output | Match the propose: when stdout is a TTY, include `Rebuilt:` / `Skipped:` bullets for selective runs while preserving JSON output when piped. |
 
 ---
 
@@ -66,27 +66,43 @@ Landing order: **RS1**.
   - branch into three explicit flows: default both, vectors-only, graph-only;
   - for vectors-only, run `run_cocoindex_update(..., full_reprocess=True, quiet=...)`;
   - for graph-only, run `run_build_ast_graph(..., verbose=not quiet, env=...)`;
-  - emit payload with `phases_run` reflecting actually requested/ran phases;
+  - emit payload with `phases_run` reflecting actually spawned phases, not merely
+    requested phases;
   - print partial-run drift warning to stderr only after successful selective run;
-  - rewrite final CLI return mapping so graph-only non-zero builder exit returns `1`, not `2`.
+  - rewrite final CLI return mapping so graph-only non-zero builder exit returns `1`, not `2`;
+  - explicitly map helper-level setup failures (`returncode` `126` / `127`, missing
+    binary / missing bundled script) to exit `2` with `phases_run=[]`;
+  - add a small reprocess pretty renderer so TTY output shows `Rebuilt:` and
+    `Skipped:` for selective runs without changing piped JSON.
 - Keep `refresh` alias behavior unchanged (still warns + rewrites to `reprocess`).
 
 ### 2. `server.py`
 
 - Extend `RefreshIndexOutput` model with additive `phases_run` field.
-- Populate `phases_run=["vectors","graph"]` on no-flag refresh path success/failure
-  where phases are invoked (and `[]` for early pre-spawn failures where appropriate).
+- Populate `phases_run` from actual no-flag execution:
+  - `[]` for early setup failures before cocoindex spawns;
+  - `["vectors"]` after cocoindex spawns, including cocoindex build failure before
+    graph is attempted;
+  - `["vectors","graph"]` after graph builder spawns, including graph build failure.
 
 ### 3. `docs/JAVA-CODEBASE-RAG-CLI.md`
 
 - Update `reprocess` section with new selective invocations and warning behavior.
 - Document mutually-exclusive usage error shape and expected exit behavior for
   selective build failures vs preflight failures.
+- Document the actual argparse stderr shape emitted by this CLI. Do not promise a
+  full `usage:` block unless the implementation changes `main()` to print one for
+  `argparse.ArgumentError`.
 
 ### 4. `README.md`
 
 - Update lifecycle command summary row for `reprocess` to mention selective flags.
-- Keep wording consistent with operator guidance already referencing reprocess.
+- Sweep the README for operator-facing statements that currently equate
+  `reprocess` with "full Lance + full Kuzu" and qualify them as default/no-flag
+  behavior where needed.
+- Keep "re-index required" guidance clear: full `reprocess` remains the safe
+  coherence operation after ontology changes; selective flags are for known
+  one-store invalidations.
 
 ### 5. `tests/test_java_codebase_rag_cli.py`
 
@@ -97,6 +113,10 @@ Landing order: **RS1**.
   4. `test_reprocess_graph_only_build_failure_returns_exit_1`
   5. `test_reprocess_vectors_only_emits_graph_stale_warning`
   6. `test_reprocess_graph_only_emits_vectors_stale_warning`
+  7. `test_reprocess_vectors_only_setup_failure_returns_exit_2_without_phase`
+  8. `test_reprocess_graph_only_setup_failure_returns_exit_2_without_phase`
+  9. `test_reprocess_no_flag_cocoindex_failure_records_vectors_only`
+  10. `test_reprocess_pretty_output_lists_rebuilt_and_skipped`
 - Preserve and keep green existing integration anchor:
   - `test_cli_reprocess_builds_kuzu_path` (no-flag regression coverage).
 
@@ -108,7 +128,11 @@ Landing order: **RS1**.
 4. `test_reprocess_graph_only_build_failure_returns_exit_1`
 5. `test_reprocess_vectors_only_emits_graph_stale_warning`
 6. `test_reprocess_graph_only_emits_vectors_stale_warning`
-7. `test_cli_reprocess_builds_kuzu_path` (existing regression anchor)
+7. `test_reprocess_vectors_only_setup_failure_returns_exit_2_without_phase`
+8. `test_reprocess_graph_only_setup_failure_returns_exit_2_without_phase`
+9. `test_reprocess_no_flag_cocoindex_failure_records_vectors_only`
+10. `test_reprocess_pretty_output_lists_rebuilt_and_skipped`
+11. `test_cli_reprocess_builds_kuzu_path` (existing regression anchor)
 
 ## Definition of done (PR-RS1)
 
@@ -116,19 +140,24 @@ Landing order: **RS1**.
 - [ ] `--vectors-only` runs only cocoindex full reprocess path and never invokes graph builder.
 - [ ] `--graph-only` runs only graph builder and never invokes cocoindex.
 - [ ] Selective success emits one drift warning to stderr naming the non-rebuilt store.
-- [ ] JSON payload includes `phases_run` with values matching requested execution.
+- [ ] JSON payload includes `phases_run` with values matching phases actually spawned.
 - [ ] Graph-only build failure exits with code `1` (not `2`).
+- [ ] Selective setup failures exit with code `2`, emit no drift warning, and report
+      `phases_run=[]`.
+- [ ] No-flag cocoindex failure reports `phases_run=["vectors"]` because graph was
+      not spawned.
+- [ ] TTY pretty output for selective success includes `Rebuilt:` and `Skipped:`.
 - [ ] No-flag `reprocess` lifecycle test remains green.
-- [ ] `python -m pytest tests/test_java_codebase_rag_cli.py -q` passes.
+- [ ] `.venv/bin/python -m pytest tests/test_java_codebase_rag_cli.py -q` passes.
 
 ## Implementation step list
 
 | # | Step | File(s) | Done when |
 | - | - | - | - |
 | 1 | Add parser flags + update help text | `java_codebase_rag/cli.py` | `reprocess --help` shows `[--vectors-only | --graph-only]` |
-| 2 | Refactor `_cmd_reprocess` flow split | `java_codebase_rag/cli.py` | Three explicit modes work with correct payload + return mapping |
+| 2 | Refactor `_cmd_reprocess` flow split | `java_codebase_rag/cli.py` | Three explicit modes work with correct payload, setup/build exit mapping, drift warnings, and selective pretty output |
 | 3 | Extend refresh payload model | `server.py` | `RefreshIndexOutput` serializes `phases_run` consistently |
-| 4 | Add/adjust CLI docs | `docs/JAVA-CODEBASE-RAG-CLI.md`, `README.md` | Docs match new CLI behavior and warnings |
+| 4 | Add/adjust CLI docs | `docs/JAVA-CODEBASE-RAG-CLI.md`, `README.md` | Docs match new CLI behavior, warning policy, argparse error shape, and default-vs-selective wording |
 | 5 | Add selective CLI tests | `tests/test_java_codebase_rag_cli.py` | New tests pass locally and anchor exit-code semantics |
 
 ---
@@ -142,6 +171,8 @@ Landing order: **RS1**.
 | 3 | Selective paths accidentally pull heavy `server` imports | Medium | Keep selective branches on lightweight `pipeline` helpers only. |
 | 4 | Drift warning becomes noisy or suppressible unexpectedly | Low | Emit exactly one deterministic line and keep independent from `--quiet`. |
 | 5 | Help/docs mismatch with parser behavior | Low | Update parser description and CLI docs in same PR with usage test coverage. |
+| 6 | Direct helper setup failures (`126` / `127`) are mislabeled as build failures | High | Add setup-failure tests for both selective modes and map phase-never-spawned to exit `2` with `phases_run=[]`. |
+| 7 | Propose / plan mismatch on TTY pretty output | Medium | Implement the propose's `Rebuilt:` / `Skipped:` selective pretty output and test it directly. |
 
 # Out of scope
 
@@ -157,8 +188,10 @@ Landing order: **RS1**.
 1. Selective reprocess flags are available and mutually exclusive, with phase
    isolation enforced.
 2. Exit semantics are correct for requested-phase failures and setup/usage errors.
-3. Payload contract is additive (`phases_run`) and documented for operators.
-4. CLI docs and README lifecycle summary reflect selective reprocess behavior.
+3. Payload contract is additive (`phases_run`) and documented for operators,
+   including actual-spawned semantics for failures.
+4. CLI docs and README lifecycle references reflect selective reprocess behavior
+   and keep no-flag `reprocess` as the recommended coherence operation.
 5. CLI test suite includes selective coverage and keeps existing no-flag
    regression anchor green.
 
