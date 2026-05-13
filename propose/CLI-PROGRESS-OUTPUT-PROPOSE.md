@@ -1,9 +1,9 @@
 # CLI-PROGRESS-OUTPUT — make `java-codebase-rag` lifecycle commands tell the user what they're doing
 
-**Status**: draft
+**Status**: approved — locked for Phase 1 implementation per `plans/PLAN-CLI-PROGRESS-OUTPUT.md`; §7 authoritative.
 **Author**: Dmitriy Teriaev + Perplexity Computer
 **Date**: 2026-05-11
-**Last amended**: 2026-05-13 (pass5/pass6 + cocoindex stdout tee + risk wording + quiet stderr baseline parity §3.3)
+**Last amended**: 2026-05-13 (pass5/pass6 + cocoindex stdout tee + risk wording + quiet stderr baseline parity §3.3; PR-1: status locked for implementation)
 
 ## TL;DR
 
