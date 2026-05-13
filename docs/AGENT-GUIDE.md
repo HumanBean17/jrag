@@ -66,7 +66,7 @@ When a method carries **`@CodebaseHttpRoute`** or **`@CodebaseHttpClient`** (inc
 **Workflow (GPS model):**
 
 1. **Locate** — `search` (natural language / fragment) or `find` (structured `NodeFilter`).
-2. **Inspect** — `describe(id)` to see the full record and `edge_summary` (per-edge-type in/out counts).
+2. **Inspect** — `describe(id)` to see the full record and `edge_summary` (per stored edge label `in`/`out` counts, plus optional composed dot-keys for type Symbols — see `describe` below).
 3. **Walk** — `neighbors` in a loop with explicit **`direction`** and **`edge_types`** until you have enough evidence. Multi-hop “trace” and “impact” are **your** reasoning, not a separate tool.
 
 ### Forced reasoning preamble (every tool call)
@@ -195,10 +195,10 @@ Exact allowed values for roles, capabilities, client kinds, etc. live in `java_o
 
 #### `describe`
 
-- **Purpose:** Full node payload + `edge_summary` (counts only: per edge type, `in` / `out`).
+- **Purpose:** Full node payload + `edge_summary`: `in` / `out` counts **per stored graph edge label** (what exists as edges in Kuzu). For **type** Symbols only (`class`, `interface`, `enum`, `record`, `annotation`), the same map may also include **describe-time composed** dot-keys — summaries of member edges, not stored labels — see the next bullets (`DECLARES.DECLARES_CLIENT`, `DECLARES.EXPOSES`); those keys are **not** valid in `neighbors(edge_types=…)`.
 - **Args:** `id` (symbol, route, or client id).
 
-**Composed `edge_summary` keys.** For type Symbols, `edge_summary` may include keys with dot notation: `<parent_relation>.<projected_relation>`. Two are emitted today:
+**Composed `edge_summary` keys (type Symbols).** Keys use dot notation: `<parent_relation>.<projected_relation>`. Two are emitted today:
 
 - `DECLARES.DECLARES_CLIENT` — the type's methods declare brownfield HTTP clients (count is the number of `Client` rows reached through `DECLARES → DECLARES_CLIENT`). To enumerate them: `neighbors(ids=<class_id>, direction="out", edge_types=["DECLARES"])` → for each method id, `neighbors(ids=<method_id>, direction="out", edge_types=["DECLARES_CLIENT"])`.
 - `DECLARES.EXPOSES` — the type's methods expose routes. Same walk shape with `EXPOSES`.

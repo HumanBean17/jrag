@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from mcp_v2 import describe_v2, neighbors_v2, search_v2
+from mcp_v2 import (
+    _TYPE_SYMBOL_KINDS_FOR_EDGE_ROLLUP,
+    describe_v2,
+    neighbors_v2,
+    search_v2,
+)
 from server import _graph_meta_output
 
 
@@ -18,7 +23,7 @@ _EDGE_TYPES = (
     "INJECTS",
 )
 
-_ROLLUP_TYPE_KINDS = ["class", "interface", "enum", "record", "annotation"]
+_ROLLUP_TYPE_KINDS = sorted(_TYPE_SYMBOL_KINDS_FOR_EDGE_ROLLUP)
 
 
 def _controller_method_with_calls(kuzu_graph) -> tuple[str, str]:
