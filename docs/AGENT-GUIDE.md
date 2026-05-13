@@ -198,6 +198,15 @@ Exact allowed values for roles, capabilities, client kinds, etc. live in `java_o
 - **Purpose:** Full node payload + `edge_summary` (counts only: per edge type, `in` / `out`).
 - **Args:** `id` (symbol, route, or client id).
 
+**Composed `edge_summary` keys.** For type Symbols, `edge_summary` may include keys with dot notation: `<parent_relation>.<projected_relation>`. Two are emitted today:
+
+- `DECLARES.DECLARES_CLIENT` — the type's methods declare brownfield HTTP clients (count is the number of `Client` rows reached through `DECLARES → DECLARES_CLIENT`). To enumerate them: `neighbors(ids=<class_id>, direction="out", edge_types=["DECLARES"])` → for each method id, `neighbors(ids=<method_id>, direction="out", edge_types=["DECLARES_CLIENT"])`.
+- `DECLARES.EXPOSES` — the type's methods expose routes. Same walk shape with `EXPOSES`.
+
+Composed keys are **read-only**: they cannot be passed to `neighbors(edge_types=…)` (the dot is not a valid `EdgeType` literal — the call fails with a Pydantic `ValidationError`). Use them as a hop affordance only.
+
+Note on counting semantics: composed counts measure **edge rows**, not distinct member methods. One method that declares multiple `Client` rows (e.g. a `rest_template` method with several call sites) contributes its full edge count to `DECLARES.DECLARES_CLIENT`. The "does this class have any clients?" predicate is answered by `count > 0`; the count itself is an affordance for how rich the downstream walk will be.
+
 #### `neighbors`
 
 - **Purpose:** One hop over explicit edge types; returns **edges** with attributes (`confidence`, `strategy`, `match`, …) and the **`other`** node.

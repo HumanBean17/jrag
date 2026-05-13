@@ -1,6 +1,6 @@
 # DESCRIBE-MEMBER-EDGE-ROLLUP — Surface method-level `DECLARES_CLIENT` / `EXPOSES` in the class's `edge_summary`
 
-**Status**: under review (v2.1)
+**Status**: **completed** — landed as PR-1 (read-path rollup; see [`plans/completed/PLAN-DESCRIBE-MEMBER-EDGE-ROLLUP.md`](../../plans/completed/PLAN-DESCRIBE-MEMBER-EDGE-ROLLUP.md)).
 **Author**: Dmitriy Teriaev + Perplexity Computer
 **Date**: 2026-05-12
 

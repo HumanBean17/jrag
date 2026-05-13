@@ -18,6 +18,8 @@ _EDGE_TYPES = (
     "INJECTS",
 )
 
+_ROLLUP_TYPE_KINDS = ["class", "interface", "enum", "record", "annotation"]
+
 
 def _controller_method_with_calls(kuzu_graph) -> tuple[str, str]:
     rows = kuzu_graph._rows(  # noqa: SLF001
@@ -185,3 +187,69 @@ def test_search_describe_neighbors_chain_end_to_end(kuzu_graph, monkeypatch) -> 
     neighbors_out = neighbors_v2(top_symbol_id, direction="in", edge_types=["CALLS"], graph=kuzu_graph)
     assert neighbors_out.success is True
     assert neighbors_out.results
+
+
+def test_describe_class_with_brownfield_clients_emits_composed_key(kuzu_graph) -> None:
+    rows = kuzu_graph._rows(  # noqa: SLF001
+        "MATCH (t:Symbol)-[:DECLARES]->(m:Symbol)-[e:DECLARES_CLIENT]->(:Client) "
+        "WHERE t.kind IN $kinds "
+        "RETURN t.id AS id, count(e) AS n ORDER BY n DESC LIMIT 1",
+        {"kinds": _ROLLUP_TYPE_KINDS},
+    )
+    assert rows
+    tid = str(rows[0]["id"])
+    n = int(rows[0]["n"] or 0)
+    assert n >= 1
+    out = describe_v2(tid, graph=kuzu_graph)
+    assert out.success is True
+    assert out.record is not None
+    assert out.record.edge_summary is not None
+    assert out.record.edge_summary["DECLARES.DECLARES_CLIENT"]["out"] == n
+
+
+def test_describe_controller_class_emits_composed_exposes(kuzu_graph) -> None:
+    rows = kuzu_graph._rows(  # noqa: SLF001
+        "MATCH (t:Symbol)-[:DECLARES]->(m:Symbol)-[e:EXPOSES]->(:Route) "
+        "WHERE t.role = 'CONTROLLER' AND t.kind = 'class' "
+        "RETURN t.id AS id, count(e) AS n ORDER BY n DESC LIMIT 1",
+    )
+    assert rows
+    tid = str(rows[0]["id"])
+    n = int(rows[0]["n"] or 0)
+    assert n >= 1
+    out = describe_v2(tid, graph=kuzu_graph)
+    assert out.success is True
+    assert out.record is not None
+    assert out.record.edge_summary is not None
+    assert out.record.edge_summary["DECLARES.EXPOSES"]["out"] == n
+
+
+def test_describe_method_symbol_no_composed_keys(kuzu_graph) -> None:
+    node_id, _ = _controller_method_with_calls(kuzu_graph)
+    out = describe_v2(node_id, graph=kuzu_graph)
+    assert out.success is True
+    assert out.record is not None
+    assert out.record.edge_summary is not None
+    es = out.record.edge_summary
+    assert "DECLARES.DECLARES_CLIENT" not in es
+    assert "DECLARES.EXPOSES" not in es
+
+
+def test_describe_pojo_no_composed_keys(kuzu_graph) -> None:
+    rows = kuzu_graph._rows(  # noqa: SLF001
+        "MATCH (t:Symbol)-[:DECLARES]->(:Symbol) "
+        "WHERE t.kind IN $kinds "
+        "AND NOT EXISTS { MATCH (t)-[:DECLARES]->(m:Symbol)-[:DECLARES_CLIENT]->() } "
+        "AND NOT EXISTS { MATCH (t)-[:DECLARES]->(m:Symbol)-[:EXPOSES]->() } "
+        "RETURN t.id AS id LIMIT 1",
+        {"kinds": _ROLLUP_TYPE_KINDS},
+    )
+    assert rows
+    tid = str(rows[0]["id"])
+    out = describe_v2(tid, graph=kuzu_graph)
+    assert out.success is True
+    assert out.record is not None
+    assert out.record.edge_summary is not None
+    es = out.record.edge_summary
+    assert "DECLARES.DECLARES_CLIENT" not in es
+    assert "DECLARES.EXPOSES" not in es

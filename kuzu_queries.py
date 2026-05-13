@@ -597,6 +597,27 @@ class KuzuGraph:
             if int(dirs.get("in", 0)) > 0 or int(dirs.get("out", 0)) > 0
         }
 
+    def member_edge_rollup_for(self, type_id: str) -> dict[str, dict[str, int]]:
+        """2-hop DECLARES member edge counts for a type Symbol (describe-time only).
+
+        Keys use dot notation and are not stored graph edge labels.
+        """
+        params = {"id": type_id}
+        rollup: dict[str, dict[str, int]] = {}
+        for key, rel in (
+            ("DECLARES.DECLARES_CLIENT", "DECLARES_CLIENT"),
+            ("DECLARES.EXPOSES", "EXPOSES"),
+        ):
+            rows = self._rows(
+                f"MATCH (t:Symbol {{id: $id}})-[:DECLARES]->(m:Symbol)-[e:{rel}]->() "
+                "RETURN count(e) AS n",
+                params,
+            )
+            n = sum(int(r.get("n") or 0) for r in rows) if rows else 0
+            if n > 0:
+                rollup[key] = {"in": 0, "out": n}
+        return rollup
+
     def _scope_counts(self, column: str) -> dict[str, int]:
         """Generic helper: count resolved type symbols grouped by `column`.
 
