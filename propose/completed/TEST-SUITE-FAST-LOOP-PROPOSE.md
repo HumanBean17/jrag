@@ -1,6 +1,6 @@
 # TEST-SUITE-FAST-LOOP — collapse repeated graph builds and ship per-PR test selection
 
-**Status**: under review
+**Status**: locked — implemented across PR-1 (#100), PR-2 (#101), and PR-3 (#102).
 **Author**: Dmitriy Teriaev + Computer
 **Date**: 2026-05-12 (v3)
 

@@ -1,7 +1,7 @@
 # Plan: test suite fast loop
 
-Status: **active (planning)**. This plan implements
-[`propose/TEST-SUITE-FAST-LOOP-PROPOSE.md`](../propose/TEST-SUITE-FAST-LOOP-PROPOSE.md).
+Status: **completed**. This plan implements
+[`propose/completed/TEST-SUITE-FAST-LOOP-PROPOSE.md`](../../propose/completed/TEST-SUITE-FAST-LOOP-PROPOSE.md).
 
 Depends on: **none** (first landing is CI so later fixture work is mechanically validated).
 
@@ -50,7 +50,7 @@ Depends on: **none** (first landing is CI so later fixture work is mechanically 
 | `tests/_builders.py` | Thin wrappers importing **production** `build_ast_graph` passes — **no copied logic**. Several tests today run **pass5/6** (`pass5_imperative_edges`, `pass6_match_edges`); the shipped helper(s) must match each call site (appendix in propose shows pass1–4 + `write_kuzu` only — extend as needed for Tier-2 session builds and any Tier-3 caller that needs the full pipeline). |
 | Mixed files | **`test_ast_graph_build.py`**: most tests already use `kuzu_db_path`; two tests rebuild `route_extraction_smoke` into `tmp_path` — prefer **`kuzu_graph_route_extraction_smoke`** (session) if assertions are read-only, else Tier-3 helper. **`test_kuzu_queries.py`**: audit the `route_extraction_smoke` inline build (≈ line 403); same rule. |
 | **`test_call_edge_matching.py`** | Mostly pure `_match_call_edge` / `graph_enrich` source reads; `_build_tables` hits **`cross_service_smoke`** read-only — candidate for **Tier 2** session materialization or a **`build_graph_tables(root)`** helper (no Kuzu) per audit, even though propose listed it under Tier 3. **Audit outcome wins** over the propose table row. |
-| PR-2 delivery | **`plan-prompts`** and **`pr-review`** live under **`.cursor/skills/`** in git. **`tests/README.md` merged in PR-1** must already point at **[`propose/TEST-SUITE-FAST-LOOP-PROPOSE.md`](../propose/TEST-SUITE-FAST-LOOP-PROPOSE.md)** (and this plan) and link both skills so contributors find the canonical copies. |
+| PR-2 delivery | **`plan-prompts`** and **`pr-review`** live under **`.cursor/skills/`** in git. **`tests/README.md` merged in PR-1** must already point at **[`propose/completed/TEST-SUITE-FAST-LOOP-PROPOSE.md`](../../propose/completed/TEST-SUITE-FAST-LOOP-PROPOSE.md)** (and this plan) and link both skills so contributors find the canonical copies. |
 
 ---
 
@@ -147,7 +147,7 @@ Target modules from propose (verify no writes to fixture dirs / session DB):
 ### 6. `tests/README.md`
 
 - **Extend the same “CI merge gate” / testing doc section PR-3 started** — append, do not create a second competing “how tests work” chapter.
-- Document **three-tier model**, when to add a new session fixture, Tier-2 audit rule, **bank-chat consumer matrix** expectation for future edits, and the **iteration subset** convention with links to **[`propose/TEST-SUITE-FAST-LOOP-PROPOSE.md`](../propose/TEST-SUITE-FAST-LOOP-PROPOSE.md)** + this plan; link the repo **`plan-prompts`** and **`pr-review`** skills under `.cursor/skills/` (PR-2 aligns both; either may land before the other if text already matches).
+- Document **three-tier model**, when to add a new session fixture, Tier-2 audit rule, **bank-chat consumer matrix** expectation for future edits, and the **iteration subset** convention with links to **[`propose/completed/TEST-SUITE-FAST-LOOP-PROPOSE.md`](../../propose/completed/TEST-SUITE-FAST-LOOP-PROPOSE.md)** + this plan; link the repo **`plan-prompts`** and **`pr-review`** skills under `.cursor/skills/` (PR-2 aligns both; either may land before the other if text already matches).
 - Document **before/after** timing capture expectation for the PR-1 description (per propose §9 #10).
 
 ## Tests for PR-1
@@ -194,7 +194,7 @@ Representative high-signal modules to re-run locally during implementation (not 
 
 ### In this repository (`plan-prompts`)
 
-1. **[`.cursor/skills/plan-prompts/`](../.cursor/skills/plan-prompts/)** — each generated **`plans/CURSOR-PROMPTS-*.md`** per-PR **Prompt** block includes **`## Tests to run (iteration loop)`** between **Deliverables** and **Tests**: bullet list of `tests/test_*.py` paths + one-line rationale; allow **empty / docs-only** pattern (UC15). Skill text, scaffold, and examples stay aligned with [`propose/TEST-SUITE-FAST-LOOP-PROPOSE.md`](../propose/TEST-SUITE-FAST-LOOP-PROPOSE.md) §5.
+1. **[`.cursor/skills/plan-prompts/`](../.cursor/skills/plan-prompts/)** — each generated **`plans/CURSOR-PROMPTS-*.md`** per-PR **Prompt** block includes **`## Tests to run (iteration loop)`** between **Deliverables** and **Tests**: bullet list of `tests/test_*.py` paths + one-line rationale; allow **empty / docs-only** pattern (UC15). Skill text, scaffold, and examples stay aligned with [`propose/completed/TEST-SUITE-FAST-LOOP-PROPOSE.md`](../../propose/completed/TEST-SUITE-FAST-LOOP-PROPOSE.md) §5.
 
 ### In this repository (`pr-review`)
 
@@ -249,6 +249,6 @@ Representative high-signal modules to re-run locally during implementation (not 
 
 # Tracking
 
-- **PR-3 (CI + protection)**: _pending_
-- **PR-1 (fixtures)**: _pending_
-- **PR-2 (plan-prompts + pr-review)**: _pending_
+- **PR-1 (fixtures)**: merged in #100 (`d83cd30`)
+- **PR-2 (plan-prompts + pr-review)**: merged in #101 (`2738a84`)
+- **PR-3 (CI + protection)**: merged in #102 (`cursor/pr-3-ci-workflow` → `master`); branch protection on `master` requires the `test` status check, force-push disabled, `enforce_admins: false`. Landing order ended up PR-1 → PR-2 → PR-3 rather than the plan's stated PR-3 → PR-1 → PR-2; PR-3's green check closed the window.
