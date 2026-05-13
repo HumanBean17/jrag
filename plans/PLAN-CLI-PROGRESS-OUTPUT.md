@@ -9,7 +9,7 @@ Depends on: **none** (orthogonal to graph schema / ontology). No `ontology_versi
 
 - **Stop buffering** lifecycle subprocess output until exit: relay each child’s **stdout and stderr** to the operator’s **stderr** as bytes arrive (verbatim), while still accumulating the same tail windows for structured results (`RefreshIndexOutput`, CLI failure payloads).
 - **Bracket opaque phases** with honest stderr lines: cocoindex wrap (`[lance] …`), pipeline header/footer (`java_codebase_rag/cli.py`), pass-start lines and **5 s** heartbeats in `build_ast_graph.py` (verbose path only).
-- **Preserve contracts**: machine-readable **`java-codebase-rag` stdout** for `init` / `increment` / `reprocess` / `erase` stays **byte-for-byte identical** to today; `--quiet` suppresses every new synthesized and relayed progress byte on stderr (errors excepted as today); `meta` / `tables` / `diagnose-ignore` / `analyze-pr` unchanged.
+- **Preserve contracts**: machine-readable **`java-codebase-rag` stdout** for `init` / `increment` / `reprocess` / `erase` stays **byte-for-byte identical** to today; under `--quiet`, **stderr matches a per-subcommand baseline from today** (no **new** bytes from streaming relay, `[lance]` wrap, header/footer, pass starts, or heartbeats). Pre-existing stderr stays unchanged — notably `increment --quiet` always prints the multi-line Kuzu staleness warning today and continues to; `meta` / `tables` / `diagnose-ignore` / `analyze-pr` unchanged.
 
 ## Principles (do not relitigate in review)
 
@@ -18,7 +18,7 @@ Depends on: **none** (orthogonal to graph schema / ontology). No `ontology_versi
 - **No parsing or reformatting** of cocoindex or graph-builder lines; wrap lines are additive CLI-owned prefixes only.
 - **Summary line grep parity** — existing `[passN] …` summary strings in `build_ast_graph.py` stay **verbatim**; only **new** start/heartbeat lines are added.
 - **Heartbeat cadence fixed at 5 s** (integer seconds in messages); not configurable in this rollout.
-- **Quiet is sacred** — `quiet=True` / `--quiet` must match today’s capture-only behaviour (no live relay of progress).
+- **Quiet is sacred** — `quiet=True` / `--quiet` must keep capture-only subprocess behaviour (no live relay) **and** must not add any **new** stderr markers from this work. **Parity = stderr byte-for-byte equal to today's baseline per subcommand**, not `stderr == ""` for every command (`increment --quiet` already emits the staleness warning block).
 - **Five improvements, two implementation PRs after propose** — align with propose §6: structural streaming PR, then cosmetic PR (+ docs). Propose’s “PR-PROG-1 = propose merge” is documentation land; once the propose is on the target branch, implementation starts at propose’s PR-PROG-2.
 
 ## PR breakdown — overview
@@ -95,7 +95,7 @@ Landing order: **PR-1 (optional) → PR-2 → PR-3**.
 Prefer a dedicated module `tests/test_cli_progress_stdout_invariant.py` (name from propose §6) grouping stdout baseline checks.
 
 1. `test_stream_relay_arrives_before_wait` — asyncio (or threaded) fake child: bytes written to child stdout/stderr appear on a **sink** before process exit, proving no end-of-process batching in non-quiet mode.
-2. `test_refresh_pipeline_quiet_stderr_empty` — `run_refresh_pipeline(quiet=True)` produces **no relayed** progress on stderr under a controlled fixture or mocked subprocesses (match today: only errors).
+2. `test_refresh_pipeline_quiet_stderr_baseline` — `run_refresh_pipeline(quiet=True)`: stderr has **no new** progress markers from this work; compare to baseline or assert relay/wrap lines absent (subprocess output captured only, as today).
 3. `test_cli_lifecycle_stdout_invariant_init` — `java-codebase-rag init --quiet` (tiny fixture, temp index dir): captured **stdout** matches a **checked-in baseline** string (propose §3.4).
 4. `test_cli_lifecycle_stdout_invariant_reprocess` — same for `reprocess --quiet` when CI can run the pipeline; if full cocoindex is unavoidable, gate behind `JAVA_CODEBASE_RAG_RUN_HEAVY` **only as a last resort** — prefer stubbed subprocesses or payload builders so default `pytest tests` stays ungated.
 
@@ -155,7 +155,7 @@ Use `tests/test_cli_quiet_parity.py` for quiet regression (propose §8 / §6).
 1. `test_pass_heartbeat_fires_when_pass_slowed` — inject a delay stub or env-controlled slow fixture so a pass exceeds 5 s; assert at least one heartbeat line **before** summary.
 2. `test_pass_start_before_pass_body` — start line appears before first pass-specific verbose output.
 3. `test_pipeline_header_footer_present` — non-quiet lifecycle command includes header regex and footer regex on stderr.
-4. `test_cli_quiet_suppresses_all_new_progress_types` — lifecycle commands with `--quiet`: stderr has **no** new bracket lines (establish baseline; allow only pre-existing stderr such as increment Kuzu warning lines **unchanged** from today).
+4. `test_cli_quiet_stderr_baseline_per_subcommand` — for `init` / `increment` / `reprocess` / `erase --yes` with `--quiet`, captured **stderr** equals a **checked-in per-subcommand baseline** from current behaviour (or assert absence of new markers: `[lance]`, `java-codebase-rag … ·`, `[passN] starting`, `[passN] running …`). **Expect non-empty baseline for `increment --quiet`** (staleness warning).
 5. Re-run / extend `test_cli_lifecycle_stdout_invariant_*` from PR-2 — stdout baselines still match.
 
 ## Definition of done (PR-3)
@@ -182,9 +182,10 @@ Use `tests/test_cli_quiet_parity.py` for quiet regression (propose §8 / §6).
 | --- | --- | --- | --- |
 | 1 | Line interleaving from concurrent stderr writes | Medium | Module-level `threading.Lock` around **single** `print(..., flush=True)` calls (propose §8). |
 | 2 | Heartbeat thread leaks on exception | Medium | Context manager `__exit__` always cancels background worker; unit test exception path. |
-| 3 | Accidental timestamp or progress on stdout | High | Baseline byte comparison tests; code review: only `_emit` / `print` to stdout for payloads. |
-| 4 | `init` path forgotten | High | Explicit `pipeline.py` + `cli.py` scope in PR-2; grep for `capture_output=True` after PR-2. |
-| 5 | UTF-8 decode errors on relay | Low | Keep `errors="replace"` consistent with today’s decode of captured bytes. |
+| 3 | Quiet tests assert `stderr == ""` for `increment --quiet` and fail | Medium | Lock rule in propose §3.3 + plan: **baseline parity**; record `increment` quiet stderr fixture including staleness block. |
+| 4 | Accidental timestamp or progress on stdout | High | Baseline byte comparison tests; code review: only `_emit` / `print` to stdout for payloads. |
+| 5 | `init` path forgotten | High | Explicit `pipeline.py` + `cli.py` scope in PR-2; grep for `capture_output=True` after PR-2. |
+| 6 | UTF-8 decode errors on relay | Low | Keep `errors="replace"` consistent with today’s decode of captured bytes. |
 
 # Out of scope
 
@@ -198,7 +199,7 @@ Use `tests/test_cli_quiet_parity.py` for quiet regression (propose §8 / §6).
 # Whole-plan done definition
 
 1. Long `init` / `reprocess` runs emit visible stderr at most ~5 s apart during graph passes (verbose) and stream cocoindex + builder child output live when not `--quiet`.
-2. `--quiet` lifecycle runs: stdout payloads match checked baselines; stderr has no **new** progress noise beyond what exists today (e.g. increment’s existing Kuzu staleness warning unchanged in spirit).
+2. `--quiet` lifecycle runs: stdout payloads match checked baselines; **stderr matches per-subcommand baselines from today** (no new markers from this work; `increment --quiet` baseline includes the existing staleness warning).
 3. Documentation and `--help` describe stderr streaming and `--quiet` suppression.
 4. `propose/CLI-PROGRESS-OUTPUT-PROPOSE.md` status updated to **completed** when the feature set is merged; this plan moved to `plans/completed/` after the final PR lands.
 
