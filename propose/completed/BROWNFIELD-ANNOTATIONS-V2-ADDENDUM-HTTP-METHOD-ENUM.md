@@ -5,7 +5,7 @@ This file extends **[`BROWNFIELD-ANNOTATIONS-V2-PROPOSE.md`](./BROWNFIELD-ANNOTA
 ## References
 
 - Design: [`../HTTP-ROUTE-METHOD-ENUM-PROPOSE.md`](../HTTP-ROUTE-METHOD-ENUM-PROPOSE.md)
-- Execution plan: [`../../plans/PLAN-HTTP-ROUTE-METHOD-ENUM.md`](../../plans/PLAN-HTTP-ROUTE-METHOD-ENUM.md)
+- Execution plan: [`../../plans/completed/PLAN-HTTP-ROUTE-METHOD-ENUM.md`](../../plans/completed/PLAN-HTTP-ROUTE-METHOD-ENUM.md)
 - Agent-facing summary: [`../../docs/AGENT-GUIDE.md`](../../docs/AGENT-GUIDE.md) (brownfield HTTP exclusivity subsection)
 
 ## What landed (summary)
