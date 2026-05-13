@@ -44,6 +44,55 @@ _REFRESH_DEPRECATION = (
     "This alias will be removed in the next release."
 )
 
+_REPROCESS_DRIFT_VECTORS_ONLY = (
+    "java-codebase-rag reprocess: rebuilt vectors only; graph (code_graph.kuzu) was NOT rebuilt "
+    "and may now reflect a stale source snapshot."
+)
+
+
+def _reprocess_drift_graph_only_line(index_dir: Path) -> str:
+    return (
+        "java-codebase-rag reprocess: rebuilt graph only; vectors (Lance tables under "
+        f"{index_dir}) were NOT rebuilt and may now reflect a stale source snapshot."
+    )
+
+
+def _reprocess_exit_code(payload: dict[str, Any]) -> int:
+    if payload.get("success"):
+        return 0
+    phases_run = payload.get("phases_run") or []
+    if not phases_run:
+        return 2
+    return 1
+
+
+# Preflight detection must stay aligned with stub CompletedProcess shapes in
+# java_codebase_rag/pipeline.py (missing cocoindex / flow / build_ast_graph.py).
+def _is_cocoindex_preflight_blocker(coco: Any) -> bool:
+    """True when ``run_cocoindex_update`` returned without spawning cocoindex."""
+    return bool(coco.returncode in (126, 127) and len(getattr(coco, "args", ()) or ()) <= 1)
+
+
+def _is_graph_preflight_blocker(g: Any) -> bool:
+    """True when ``run_build_ast_graph`` returned without spawning the builder."""
+    return bool(g.returncode in (126, 127) and len(getattr(g, "args", ()) or ()) <= 1)
+
+
+def _emit_reprocess_selective_tty(*, mode: str) -> None:
+    if mode == "vectors":
+        print("Rebuilt: vectors")
+        print("Skipped: graph (use `java-codebase-rag reprocess --graph-only` or `reprocess` to refresh)")
+    else:
+        print("Rebuilt: graph")
+        print("Skipped: vectors (use `java-codebase-rag reprocess --vectors-only` or `reprocess` to refresh)")
+
+
+def _emit_reprocess_outcome(payload: dict[str, Any], *, selective_tty_mode: str | None = None) -> None:
+    if payload.get("success") and selective_tty_mode and sys.stdout.isatty():
+        _emit_reprocess_selective_tty(mode=selective_tty_mode)
+        return
+    _emit(payload)
+
 
 def _jsonable(value: Any) -> Any:
     if hasattr(value, "model_dump"):
@@ -176,18 +225,90 @@ def _cmd_increment(args: argparse.Namespace) -> int:
 
 
 def _cmd_reprocess(args: argparse.Namespace) -> int:
-    import server  # lazy: pulls sentence_transformers/torch/lancedb/kuzu
-
     cfg = _resolved_from_ns(args)
     _startup_hints(cfg)
     cfg.apply_to_os_environ()
+    env = cfg.subprocess_env()
+    vectors_only = bool(getattr(args, "vectors_only", False))
+    graph_only = bool(getattr(args, "graph_only", False))
+
+    if vectors_only:
+        coco = run_cocoindex_update(env, full_reprocess=True, quiet=bool(args.quiet))
+        if _is_cocoindex_preflight_blocker(coco):
+            payload: dict[str, Any] = {
+                "success": False,
+                "exit_code": None,
+                "stdout": clip(coco.stdout, 8000),
+                "stderr": clip(coco.stderr, 8000),
+                "message": coco.stderr.strip() or f"cocoindex setup exit {coco.returncode}",
+                "graph_exit_code": None,
+                "graph_stdout": "",
+                "graph_stderr": "",
+                "phases_run": [],
+            }
+            _emit_reprocess_outcome(payload)
+            return _reprocess_exit_code(payload)
+        ok = coco.returncode == 0
+        payload = {
+            "success": ok,
+            "exit_code": coco.returncode,
+            "stdout": clip(coco.stdout, 8000),
+            "stderr": clip(coco.stderr, 8000),
+            "message": None if ok else f"cocoindex exit {coco.returncode}",
+            "graph_exit_code": None,
+            "graph_stdout": "",
+            "graph_stderr": "",
+            "phases_run": ["vectors"],
+        }
+        if ok:
+            print(_REPROCESS_DRIFT_VECTORS_ONLY, file=sys.stderr)
+        _emit_reprocess_outcome(payload, selective_tty_mode="vectors" if ok else None)
+        return _reprocess_exit_code(payload)
+
+    if graph_only:
+        g = run_build_ast_graph(
+            source_root=cfg.source_root,
+            kuzu_path=cfg.kuzu_path,
+            verbose=not args.quiet,
+            env=env,
+        )
+        if _is_graph_preflight_blocker(g):
+            payload = {
+                "success": False,
+                "exit_code": None,
+                "stdout": "",
+                "stderr": "",
+                "message": g.stderr.strip() or f"graph builder setup exit {g.returncode}",
+                "graph_exit_code": None,
+                "graph_stdout": clip(g.stdout, 4000),
+                "graph_stderr": clip(g.stderr, 4000),
+                "phases_run": [],
+            }
+            _emit_reprocess_outcome(payload)
+            return _reprocess_exit_code(payload)
+        ok = g.returncode == 0
+        payload = {
+            "success": ok,
+            "exit_code": None,
+            "stdout": "",
+            "stderr": "",
+            "message": None if ok else f"graph builder exit {g.returncode}",
+            "graph_exit_code": g.returncode,
+            "graph_stdout": clip(g.stdout, 4000),
+            "graph_stderr": clip(g.stderr, 4000),
+            "phases_run": ["graph"],
+        }
+        if ok:
+            print(_reprocess_drift_graph_only_line(cfg.index_dir), file=sys.stderr)
+        _emit_reprocess_outcome(payload, selective_tty_mode="graph" if ok else None)
+        return _reprocess_exit_code(payload)
+
+    import server  # lazy: pulls sentence_transformers/torch/lancedb/kuzu
+
     result = asyncio.run(server.run_refresh_pipeline(quiet=bool(args.quiet)))
     payload = result.model_dump()
-    if payload.get("success"):
-        _emit(payload)
-        return 0
-    _emit(payload)
-    return 2 if payload.get("exit_code") is None else 1
+    _emit_reprocess_outcome(payload)
+    return _reprocess_exit_code(payload)
 
 
 def _cmd_erase(args: argparse.Namespace) -> int:
@@ -342,7 +463,7 @@ def build_parser() -> argparse.ArgumentParser:
         "Lifecycle (manage the index):\n"
         "  init            Create a fresh index from a Java repository.\n"
         "  increment       Pick up changes since the last index update (Lance only).\n"
-        "  reprocess       Rebuild the entire index from scratch.\n"
+        "  reprocess       Full vector + graph rebuild (default); optional --vectors-only / --graph-only.\n"
         "  erase           Delete the index from disk.\n\n"
         "Introspection (inspect the index):\n"
         "  meta            Print ontology version, edge counts, and table summary.\n"
@@ -383,11 +504,25 @@ def build_parser() -> argparse.ArgumentParser:
 
     reprocess = subparsers.add_parser(
         "reprocess",
-        help="Rebuild the entire index from scratch.",
-        description="Full Lance reprocess plus Kuzu graph rebuild (same as the legacy refresh pipeline).",
+        help="Rebuild vectors and/or Kuzu (default: both full phases).",
+        description=(
+            "Default: full Lance reprocess (cocoindex --full-reprocess) then full Kuzu graph rebuild. "
+            "Use --vectors-only or --graph-only to run a single phase (mutually exclusive)."
+        ),
     )
     _add_index_embedding_flags(reprocess)
     reprocess.add_argument("--quiet", action="store_true")
+    _rex = reprocess.add_mutually_exclusive_group()
+    _rex.add_argument(
+        "--vectors-only",
+        action="store_true",
+        help="Run only the Lance/cocoindex full reprocess phase (no graph builder).",
+    )
+    _rex.add_argument(
+        "--graph-only",
+        action="store_true",
+        help="Run only build_ast_graph.py (no cocoindex / Lance reprocess).",
+    )
     reprocess.set_defaults(handler=_cmd_reprocess)
 
     erase = subparsers.add_parser(
