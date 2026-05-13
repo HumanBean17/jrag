@@ -3,7 +3,7 @@
 **Status**: draft
 **Author**: Dmitriy Teriaev + Perplexity Computer
 **Date**: 2026-05-11
-**Last amended**: 2026-05-13 (pass5/pass6 + cocoindex stdout tee + risk-table wording)
+**Last amended**: 2026-05-13 (pass5/pass6 + cocoindex stdout tee + risk wording + quiet stderr baseline parity §3.3)
 
 ## TL;DR
 
@@ -12,7 +12,7 @@
 - **This propose ships only the minimal mode (Mode 1).** Phase 2 — TTY-pretty rendering with `rich` / progress bars / colors — is deferred to a separate later propose (`CLI-PRETTY-OUTPUT-PROPOSE.md`) and explicitly out of scope here. The split is intentional: minimal mode fixes 80% of the perceived "is it stuck?" problem at 20% of the work and zero new dependencies.
 - **What ships in Mode 1**: (a) **stream** each subprocess's **stdout and stderr** live to the operator (relay **verbatim** to the parent process's stderr — the human channel) instead of buffering until `communicate()` returns, (b) **wrap** cocoindex with one-line announcements (`[lance] running cocoindex update…` / `[lance] done in X.XXs`), (c) **heartbeat** lines every ~5 s during long passes in `build_ast_graph.py`, (d) per-pass start lines (today's pipeline only prints per-pass *end* lines — opening "now starting pass 2" lines close the silent-gap perception), (e) a one-line overall **pipeline header** and **footer** in the CLI driver.
 - **Scope hard-cap: lifecycle commands only** (`init`, `increment`, `reprocess`, `erase`). `meta`, `tables`, `diagnose-ignore`, `analyze-pr` stay byte-for-byte identical in this round.
-- **Backwards-compatibility invariant**: machine-readable **CLI stdout** for all existing commands stays byte-for-byte identical. New human-facing text (including **relayed subprocess stdout**, not only stderr) is written to **stderr** or suppressed under `--quiet` / `quiet=True`.
+- **Backwards-compatibility invariant**: machine-readable **CLI stdout** for all existing commands stays byte-for-byte identical. New human-facing text (including **relayed subprocess stdout**, not only stderr) is written to **stderr** or suppressed under `--quiet` / `quiet=True` (see §3.3: **baseline parity** for overall stderr, not global empty string).
 - **No new runtime dependencies.** `rich` / `tqdm` / `click` deliberately deferred to Phase 2.
 - **Migration shape**: **3 PRs** — propose merge → stream + wrap (the structural fix) → heartbeats + start lines + pipeline header/footer (the cosmetic-but-real fix). Tests focus on the streaming invariant + `--quiet` parity; no progress-bar UI tests in this round.
 
@@ -44,7 +44,7 @@ This frame rules out:
 2. **CLI stdout is the agent contract; stderr is the human channel.** Every new line **we synthesize** lands on stderr. Relayed subprocess bytes also go to stderr so they are visible before exit. **CLI** stdout payloads for `meta` / `tables` / `analyze-pr` remain byte-for-byte identical.
 3. **No new runtime dependencies.** No `rich`, no `tqdm`, no `click`. Pure stdlib `time` / `sys` / `threading`.
 4. **Honest about partial knowledge.** When a pass cannot announce a percentage (e.g. cocoindex internals are opaque to us), we say "running…" with elapsed time, not a fake bar. Mirrors the "partial fidelity is loud" principle from CLI-SCENARIOS §2.
-5. **`--quiet` is sacred.** The existing `--quiet` flag (which sets `quiet=True` and drops `--verbose` from the graph builder) must continue to suppress *every* new line this propose adds, including the pipeline header / footer and heartbeats. CI consumers depend on it.
+5. **`--quiet` is sacred.** The `--quiet` flag (which sets `quiet=True` and drops `--verbose` from the graph builder) must continue to suppress *every* new line **this propose adds**, including the pipeline header / footer and heartbeats. **Overall** `--quiet` stderr behaviour follows §3.3: **baseline equality** with today per subcommand, not “stderr is always empty” (`increment --quiet` already prints the staleness warning). CI consumers depend on no *additional* noise from this work.
 6. **Cardinal-number discipline.** This propose locks **5 user-visible improvements** (stream, cocoindex wrap, heartbeats, pass-start lines, pipeline header/footer) across **3 PRs**. Adding a 6th improvement in this round requires a propose amendment, not a drive-by. Mirrors [`propose/completed/CLI-SCENARIOS-PROPOSE.md`](completed/CLI-SCENARIOS-PROPOSE.md) §6.
 7. **Heartbeat cadence is fixed at ~5 s.** Not adjustable in this round (one knob, one default; matches CLI-SCENARIOS "one source of truth per config knob" principle). A future propose may make it configurable if a real consumer needs it.
 8. **No structural change to the pipeline.** We surface existing phases; we do not split, merge, reorder, or rename passes in `build_ast_graph.py`.
@@ -173,7 +173,11 @@ The user now sees something happening at most ~5 s apart for the entire duration
 
 ### 3.3 What `--quiet` looks like
 
-`java-codebase-rag init --quiet` produces **no stderr output** except errors (today's behaviour, preserved). stdout (the machine-readable summary the CLI driver prints at exit) is byte-for-byte identical to today's output. CI logs and agent-sandbox runs see no change in line count or content.
+**Stdout:** the machine-readable summary the CLI prints at exit is byte-for-byte identical to today's output (same as §3.4).
+
+**Stderr — quiet parity rule (locked):** `--quiet` must not add any **new** stderr bytes from this propose: no relayed subprocess output, no `[lance]` wrap lines, no pipeline header/footer, no pass-start or heartbeat lines. **Pre-existing CLI stderr is unchanged.** Today, `increment --quiet` always prints a fixed multi-line **Kuzu graph may be stale** warning to stderr before cocoindex (`java_codebase_rag/cli.py`); that block is outside this propose and must remain bit-identical in `--quiet` runs. Tests therefore assert **per-subcommand stderr baselines** recorded from current behaviour (or assert absence of new markers such as `[lance]`, `java-codebase-rag <subcmd> ·`, `[passN] starting`, `[passN] running …`), not `stderr == ""` for every lifecycle command.
+
+On a **success** path with no extra warnings, `init --quiet` / `reprocess --quiet` / `erase --yes` typically still have empty stderr, as today.
 
 ### 3.4 Stdout invariant (locked)
 
@@ -181,15 +185,16 @@ For each of `init` / `increment` / `reprocess` / `erase`, the **`java-codebase-r
 
 ## §4 — Use-case re-walk
 
-Walking 16 realistic invocations through the proposed surface. Each row records the **mode** (interactive vs CI / agent), the **observable change** post-PR-PROG-3, and whether the **stdout invariant** holds.
+Walking 17 realistic invocations through the proposed surface. Each row records the **mode** (interactive vs CI / agent), the **observable change** post-PR-PROG-3, and whether the **stdout invariant** holds.
 
 | # | Invocation | Mode | Observable change | Stdout invariant |
 |---|---|---|---|---|
 | UC1 | `java-codebase-rag init` on 4500-file estate | Interactive | 5 s max silence; pipeline header + cocoindex wrap + per-pass start/heartbeat/summary + footer | Identical |
 | UC2 | `java-codebase-rag init` on a 50-file toy repo | Interactive | Same lines, but most heartbeats never fire (passes finish in <5 s). Header / footer / start / summary still print. | Identical |
-| UC3 | `java-codebase-rag init --quiet` | Interactive | No stderr output (today's behaviour) | Identical |
+| UC3 | `java-codebase-rag init --quiet` | Interactive | No **new** stderr from this propose; stderr matches today's baseline (usually empty on success) | Identical |
 | UC4 | `java-codebase-rag reprocess` in CI (non-TTY, output redirected) | CI / agent | Stderr lines now appear in the CI log in real time instead of one final burst — fine for line-oriented CI consumers; no ANSI escapes | Identical |
 | UC5 | `java-codebase-rag increment` (small Lance delta, full graph rebuild) | Interactive | Cocoindex wrap shows quick exit (e.g. 2 s); graph rebuild still gets heartbeats. User can tell which side is slow. | Identical |
+| UC5b | `java-codebase-rag increment --quiet` | CI / agent | Same multi-line Kuzu staleness stderr warning as today; still no `[lance]` / header / relayed subprocess lines | Identical |
 | UC6 | `java-codebase-rag erase --yes` | Interactive | Pipeline header + footer; no cocoindex / pass lines (no subprocess work) | Identical |
 | UC7 | Cursor agent runs `init` in a sandbox shell | CI / agent | Sees lines streamed instead of a single burst; agent can detect progress / hang on its own | Identical |
 | UC8 | User pipes output to a file: `java-codebase-rag init 2> log.txt` | CI / agent | Log file fills as the command runs (was: log file appears empty until exit, then fills) | Identical |
@@ -204,10 +209,10 @@ Walking 16 realistic invocations through the proposed surface. Each row records 
 
 **Result of the re-walk:**
 
-- 16 of 16 invocations: stdout invariant holds.
-- 16 of 16: observable stderr change is improvement, never regression.
-- 0 of 16: requires a 6th improvement, an ANSI / pretty rendering, or a percentage-bar.
-- UC4 / UC8 / UC12 explicitly exercise the **non-TTY / agent / log-file** consumer to validate that no ANSI / redraw / TTY-only construct sneaks in.
+- 17 of 17 invocations: stdout invariant holds.
+- 17 of 17: observable stderr change is improvement, never regression (quiet rows use the §3.3 baseline rule).
+- 0 of 17: requires a 6th improvement, an ANSI / pretty rendering, or a percentage-bar.
+- UC4 / UC8 / UC12 / UC5b explicitly exercise the **non-TTY / agent / log-file** consumer to validate that no ANSI / redraw / TTY-only construct sneaks in.
 
 No surface revisions triggered.
 
@@ -241,7 +246,7 @@ No surface revisions triggered.
 **Purpose**: structural fix. `server.py:run_refresh_pipeline` no longer buffers subprocess output until completion; both child streams are relayed live to the parent's stderr while buffers retain tails for `RefreshIndexOutput`. Cocoindex gets the wrap-around `[lance] running…` / `[lance] finished in …` lines.
 **Tests**:
 - Unit test for the streaming relay (asyncio tasks read from fake stdout+stderr pipes and write to a captured sink in real time, not after `.wait()`).
-- `--quiet` parity test: stderr is empty when `quiet=True`, identical to today.
+- `--quiet` parity test: captured **stderr** matches a **per-subcommand baseline** from current behaviour (or asserts absence of new markers only); not `stderr == ""` for every command — `increment --quiet` already emits the staleness warning block today.
 - Stdout invariant test: `init` against the fixture repo produces a stdout byte-string identical to a recorded baseline.
 
 ### PR-PROG-3 — heartbeats + pass-start lines + pipeline header/footer
@@ -252,7 +257,7 @@ No surface revisions triggered.
 - Heartbeat fires at least once when a fixture pass is artificially slowed to >5 s; does not fire on a fast pass.
 - Pass-start line is emitted before any pass-internal output.
 - Pipeline header / footer wrap the whole command.
-- `--quiet` parity: every new line type is suppressed.
+- `--quiet` parity: every **new** line type from this propose is suppressed; stderr matches **recorded baselines** per subcommand where non-empty stderr already exists today (see §3.3).
 - Stdout invariant test (regression on the PR-PROG-2 test).
 - Docs: README + AGENT-GUIDE.md gain a one-sentence note that lifecycle commands stream subprocess progress to **stderr** (including relayed child stdout) and `--quiet` suppresses it.
 
@@ -266,7 +271,7 @@ Total: 3 PRs.
 4. **CLI stdout is the agent contract; human progress uses stderr.** Payloads printed by `java-codebase-rag` to **its own stdout** stay byte-for-byte identical. Child-process stdout is no longer “invisible until exit,” but it is **streamed to stderr** for humans and **accumulated** for the same structured return values as today — not printed on the CLI's stdout.
 5. **No new runtime dependencies.** Pure stdlib. `rich` / `tqdm` / `click` deferred to Phase 2.
 6. **Heartbeat cadence locked at 5 s.** Not configurable in this round.
-7. **`--quiet` suppresses every new line.** No new line type bypasses the quiet path. CI / agent consumers see no behavioural change in `--quiet` mode.
+7. **`--quiet` suppresses every new stderr byte from this propose** (relay, `[lance]` wrap, header/footer, pass starts, heartbeats). Pre-existing CLI stderr (notably `increment`'s staleness warning) is unchanged; parity is **baseline equality**, not global empty stderr.
 8. **Five improvements, three PRs, locked.** Adding a 6th improvement in this round requires an amendment to this propose.
 9. **Per-pass start lines are net-new; summary lines preserved verbatim.** Grep parity invariant: any consumer that today greps for `[passN] parsed` / `[passN] emitted` / etc. continues to match.
 10. **No ANSI escapes, no TTY detection, no redraw-in-place.** Mode 1 is plain-text in all environments. TTY-aware rendering is Phase 2.
@@ -282,7 +287,7 @@ Total: 3 PRs.
 | Heartbeat thread interleaves with the main thread's prints, corrupting line atomicity | All heartbeat writes use `print(..., file=sys.stderr, flush=True)` with a module-level `threading.Lock` shared between heartbeat and pass-end writers. Lock scope is the single `print` call. |
 | 5 s cadence wrong for some environments (too noisy / too quiet) | Cadence is locked for this round (§7 decision #6). If a real consumer reports a problem, a future propose can introduce a configurable cadence. Two-PR cost to defer is small. |
 | User confused by new lines breaking their muscle memory for the old summary-only output | Existing summary lines are preserved verbatim (§7 decision #9). Anyone grepping `[passN] parsed` keeps working. README + AGENT-GUIDE.md get a one-sentence note in PR-PROG-3. |
-| `--quiet` parity bug: one of the new line types slips through quiet mode | Dedicated unit test in PR-PROG-3 (`test_cli_quiet_parity.py`) runs every lifecycle command with `--quiet` against a fixture and asserts captured stderr is empty (or matches today's empty baseline). |
+| `--quiet` parity bug: one of the new line types slips through quiet mode | Dedicated unit test in PR-PROG-3 (`test_cli_quiet_parity.py`) runs each lifecycle command with `--quiet` against a fixture and asserts **stderr matches a recorded per-subcommand baseline** from current behaviour (or asserts absence of new markers). Does **not** require empty stderr for `increment --quiet`, which today prints the Kuzu staleness warning (§3.3). |
 | Stdout invariant test breaks because timing / wall-clock leaks into stdout | Baseline test redirects only stderr for capture; stdout is asserted against a string baseline that includes no timestamps. If a timestamp accidentally lands on stdout, the test fails — by design. |
 | Non-TTY environments (CI / agent sandboxes) get noisy because we strip nothing | The new lines are line-oriented, no ANSI, no redraws. Line-oriented CI logs are the *target* shape, not an accident. Verified by UC4 / UC8 / UC12. |
 | cocoindex prints a huge amount of output and floods the user terminal | Out of scope — we pass cocoindex output through verbatim by §2 principle 4. If this becomes a real problem, a future propose may add a `--lance-quiet` flag. |
@@ -308,7 +313,7 @@ java-codebase-rag <subcommand> · finished in <X.XX>s (exit=<code>)
 Rules:
 - **CLI-owned** lines (header, footer, `[lance] …` wrap, `[passN] …` heartbeats / starts) go to **stderr**.
 - **Subprocess stdout and stderr** are **relayed verbatim to stderr** as bytes arrive (may be partial lines); the CLI's **own stdout** is unchanged.
-- Every synthesized line is suppressed when `--quiet` (relayed child bytes are not forwarded in quiet mode — same capture behaviour as today).
+- Every synthesized line is suppressed when `--quiet` (relayed child bytes are not forwarded in quiet mode — same capture behaviour as today). **Overall** `--quiet` stderr follows §3.3: **byte-for-byte baseline parity** with today per subcommand, not global empty stderr (see `increment --quiet` staleness warning).
 - `<elapsed>` is integer seconds (no decimals on heartbeats); pipeline header / footer use `<X.XX>s` (two decimals).
 - The pipeline-header / footer lines use the U+00B7 middle dot (`·`) as a separator. No other special characters.
 - No ANSI escapes anywhere.
