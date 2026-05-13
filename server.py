@@ -5,11 +5,17 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Any, Literal
 
 import mcp_v2
 from index_common import SBERT_MODEL
+from java_codebase_rag.cli_progress import (
+    accumulate_and_relay_subprocess_streams,
+    emit_lance_cocoindex_finish,
+    emit_lance_cocoindex_start,
+)
 from java_codebase_rag.config import emit_legacy_env_hints_if_present, resolved_sbert_model_for_process_env
 from kuzu_queries import KuzuGraph, resolve_kuzu_path
 from mcp.server.fastmcp import FastMCP
@@ -213,25 +219,55 @@ async def run_refresh_pipeline(*, quiet: bool = False) -> RefreshIndexOutput:
                 message=f"java_index_flow_lancedb.py not found under {root} nor {bundle_dir}",
                 phases_run=[],
             )
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            str(cocoindex_bin),
-            "update",
-            _COCOINDEX_TARGET,
-            "--full-reprocess",
-            "-f",
-            cwd=str(flow_path.parent),
-            env=_cocoindex_subprocess_env(root),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        out_b, err_b = await proc.communicate()
-    except Exception as exc:
-        return RefreshIndexOutput(
-            success=False,
-            message=f"spawn failed: {exc!s}",
-            phases_run=[],
-        )
+    proc: asyncio.subprocess.Process | None = None
+    out_b, err_b = b"", b""
+    if quiet:
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                str(cocoindex_bin),
+                "update",
+                _COCOINDEX_TARGET,
+                "--full-reprocess",
+                "-f",
+                cwd=str(flow_path.parent),
+                env=_cocoindex_subprocess_env(root),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            out_b, err_b = await proc.communicate()
+        except Exception as exc:
+            return RefreshIndexOutput(
+                success=False,
+                message=f"spawn failed: {exc!s}",
+                phases_run=[],
+            )
+    else:
+        emit_lance_cocoindex_start(root)
+        t0 = time.perf_counter()
+        code_c = -1
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                str(cocoindex_bin),
+                "update",
+                _COCOINDEX_TARGET,
+                "--full-reprocess",
+                "-f",
+                cwd=str(flow_path.parent),
+                env=_cocoindex_subprocess_env(root),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            out_b, err_b = await accumulate_and_relay_subprocess_streams(proc, relay=True)
+            code_c = proc.returncode if proc.returncode is not None else -1
+        except Exception as exc:
+            return RefreshIndexOutput(
+                success=False,
+                message=f"spawn failed: {exc!s}",
+                phases_run=[],
+            )
+        finally:
+            emit_lance_cocoindex_finish(elapsed_s=time.perf_counter() - t0, exit_code=code_c)
+    assert proc is not None
     out = out_b.decode(errors="replace")
     err = err_b.decode(errors="replace")
     ok = proc.returncode == 0
@@ -261,7 +297,10 @@ async def run_refresh_pipeline(*, quiet: bool = False) -> RefreshIndexOutput:
                     stderr=asyncio.subprocess.PIPE,
                 )
                 phases_run = ["vectors", "graph"]
-                gout_b, gerr_b = await gproc.communicate()
+                if quiet:
+                    gout_b, gerr_b = await gproc.communicate()
+                else:
+                    gout_b, gerr_b = await accumulate_and_relay_subprocess_streams(gproc, relay=True)
                 graph_code = gproc.returncode
                 graph_out = gout_b.decode(errors="replace")
                 graph_err = gerr_b.decode(errors="replace")
