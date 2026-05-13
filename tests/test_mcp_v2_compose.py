@@ -1,7 +1,13 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
+import pytest
+from pydantic import ValidationError
+
+from _builders import build_kuzu_to
+from kuzu_queries import KuzuGraph
 from mcp_v2 import (
     _TYPE_SYMBOL_KINDS_FOR_EDGE_ROLLUP,
     describe_v2,
@@ -24,6 +30,82 @@ _EDGE_TYPES = (
 )
 
 _ROLLUP_TYPE_KINDS = sorted(_TYPE_SYMBOL_KINDS_FOR_EDGE_ROLLUP)
+
+_OVERRIDE_AXIS_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "override_axis_rollup_smoke"
+
+
+@pytest.fixture
+def override_axis_graph(tmp_path: Path) -> KuzuGraph:
+    db_path = tmp_path / "code_graph.kuzu"
+    build_kuzu_to(_OVERRIDE_AXIS_FIXTURE, db_path, max_pass=5)
+    return KuzuGraph(str(db_path))
+
+
+def _collect_ids(cell: Any) -> list[str]:
+    if cell is None:
+        return []
+    if isinstance(cell, list):
+        return [str(x) for x in cell if x is not None and str(x) != ""]
+    s = str(cell)
+    return [s] if s else []
+
+
+def _dispatch_down_override_method_ids(graph: KuzuGraph, method_id: str) -> list[str]:
+    rows = graph._rows(  # noqa: SLF001
+        "MATCH (m:Symbol {id: $id})<-[:DECLARES]-(t:Symbol) "
+        "MATCH (impl:Symbol)-[:IMPLEMENTS|EXTENDS]->(t) "
+        "MATCH (impl)-[:DECLARES]->(mover:Symbol) "
+        "WHERE mover.signature = m.signature AND mover.id <> m.id "
+        "RETURN collect(DISTINCT mover.id) AS ids",
+        {"id": method_id},
+    )
+    if not rows:
+        return []
+    return list(dict.fromkeys(_collect_ids(rows[0].get("ids"))))
+
+
+def _dispatch_up_declaration_method_ids(graph: KuzuGraph, method_id: str) -> list[str]:
+    rows = graph._rows(  # noqa: SLF001
+        "MATCH (m:Symbol {id: $id})<-[:DECLARES]-(impl:Symbol) "
+        "MATCH (impl)-[:IMPLEMENTS|EXTENDS]->(parent:Symbol) "
+        "MATCH (parent)-[:DECLARES]->(decl_m:Symbol) "
+        "WHERE decl_m.signature = m.signature AND decl_m.id <> m.id "
+        "RETURN collect(DISTINCT decl_m.id) AS ids",
+        {"id": method_id},
+    )
+    if not rows:
+        return []
+    return list(dict.fromkeys(_collect_ids(rows[0].get("ids"))))
+
+
+def _edge_row_count_from_methods(graph: KuzuGraph, method_ids: list[str], rel: str) -> int:
+    total = 0
+    for mid in method_ids:
+        rows = graph._rows(  # noqa: SLF001
+            f"MATCH (x:Symbol {{id: $mid}})-[e:{rel}]->() RETURN count(e) AS n",
+            {"mid": mid},
+        )
+        total += int(rows[0].get("n") or 0) if rows else 0
+    return total
+
+
+def _method_id_without_dispatch_rollups(kuzu_graph: KuzuGraph) -> str:
+    rows = kuzu_graph._rows(  # noqa: SLF001
+        "MATCH (m:Symbol) "
+        "WHERE m.kind = 'method' "
+        "AND NOT list_contains(COALESCE(m.modifiers, []), 'static') "
+        "AND NOT EXISTS { "
+        "MATCH (m)<-[:DECLARES]-(t:Symbol), (impl:Symbol)-[:IMPLEMENTS|EXTENDS]->(t), "
+        "(impl)-[:DECLARES]->(mover:Symbol) "
+        "WHERE mover.signature = m.signature AND mover.id <> m.id } "
+        "AND NOT EXISTS { "
+        "MATCH (m)<-[:DECLARES]-(impl:Symbol), (impl)-[:IMPLEMENTS|EXTENDS]->(parent:Symbol), "
+        "(parent)-[:DECLARES]->(decl:Symbol) "
+        "WHERE decl.signature = m.signature AND decl.id <> m.id } "
+        "RETURN m.id AS id LIMIT 1",
+    )
+    assert rows
+    return str(rows[0]["id"])
 
 
 def _controller_method_with_calls(kuzu_graph) -> tuple[str, str]:
@@ -258,3 +340,102 @@ def test_describe_pojo_no_composed_keys(kuzu_graph) -> None:
     es = out.record.edge_summary
     assert "DECLARES.DECLARES_CLIENT" not in es
     assert "DECLARES.EXPOSES" not in es
+
+
+def test_describe_interface_method_with_annotated_impl_emits_rollup(kuzu_graph) -> None:
+    rows = kuzu_graph._rows(  # noqa: SLF001
+        "MATCH (iface:Symbol {fqn: $fqn})-[:DECLARES]->(m:Symbol) "
+        "WHERE m.kind = 'method' AND m.name = 'requestAssignment' "
+        "RETURN m.id AS id LIMIT 1",
+        {"fqn": "com.bank.chat.engine.assign.ChatAssignmentPort"},
+    )
+    assert rows
+    mid = str(rows[0]["id"])
+    impl_ids = _dispatch_down_override_method_ids(kuzu_graph, mid)
+    assert impl_ids
+    want_ob = len(impl_ids)
+    want_dc = _edge_row_count_from_methods(kuzu_graph, impl_ids, "DECLARES_CLIENT")
+    out = describe_v2(mid, graph=kuzu_graph)
+    assert out.success is True
+    assert out.record is not None
+    assert out.record.edge_summary is not None
+    es = out.record.edge_summary
+    assert es.get("OVERRIDDEN_BY") == {"in": 0, "out": want_ob}
+    assert es.get("OVERRIDDEN_BY.DECLARES_CLIENT") == {"in": 0, "out": want_dc}
+    with pytest.raises(ValidationError):
+        neighbors_v2(mid, direction="out", edge_types=["OVERRIDDEN_BY"], graph=kuzu_graph)
+
+
+def test_describe_concrete_override_emits_overrides_rollup(kuzu_graph) -> None:
+    rows = kuzu_graph._rows(  # noqa: SLF001
+        "MATCH (t:Symbol {fqn: $fqn})-[:DECLARES]->(m:Symbol) "
+        "WHERE m.kind = 'method' AND m.name = 'requestAssignment' "
+        "RETURN m.id AS id LIMIT 1",
+        {"fqn": "com.bank.chat.engine.assign.ConfigurableChatAssignment"},
+    )
+    assert rows
+    mid = str(rows[0]["id"])
+    decl_ids = _dispatch_up_declaration_method_ids(kuzu_graph, mid)
+    assert decl_ids
+    want_ov = len(decl_ids)
+    out = describe_v2(mid, graph=kuzu_graph)
+    assert out.success is True
+    assert out.record is not None
+    assert out.record.edge_summary is not None
+    assert out.record.edge_summary.get("OVERRIDES") == {"in": 0, "out": want_ov}
+
+
+def test_describe_method_no_overrides_silent(kuzu_graph) -> None:
+    mid = _method_id_without_dispatch_rollups(kuzu_graph)
+    out = describe_v2(mid, graph=kuzu_graph)
+    assert out.success is True
+    assert out.record is not None
+    assert out.record.edge_summary is not None
+    es = out.record.edge_summary
+    assert "OVERRIDDEN_BY" not in es
+    assert "OVERRIDDEN_BY.DECLARES_CLIENT" not in es
+    assert "OVERRIDDEN_BY.EXPOSES" not in es
+    assert "OVERRIDES" not in es
+
+
+def test_describe_abstract_method_with_route_override_emits_exposes(override_axis_graph: KuzuGraph) -> None:
+    rows = override_axis_graph._rows(  # noqa: SLF001
+        "MATCH (t:Symbol {fqn: $fqn})-[:DECLARES]->(m:Symbol) "
+        "WHERE m.kind = 'method' AND m.name = 'handle' "
+        "RETURN m.id AS id LIMIT 1",
+        {"fqn": "orolla.abstractroute.AbstractApi"},
+    )
+    assert rows
+    mid = str(rows[0]["id"])
+    impl_ids = _dispatch_down_override_method_ids(override_axis_graph, mid)
+    assert impl_ids
+    want_ob = len(impl_ids)
+    want_ex = _edge_row_count_from_methods(override_axis_graph, impl_ids, "EXPOSES")
+    assert want_ex >= 1
+    out = describe_v2(mid, graph=override_axis_graph)
+    assert out.success is True
+    assert out.record is not None
+    assert out.record.edge_summary is not None
+    es = out.record.edge_summary
+    assert es.get("OVERRIDDEN_BY") == {"in": 0, "out": want_ob}
+    assert es.get("OVERRIDDEN_BY.EXPOSES") == {"in": 0, "out": want_ex}
+
+
+def test_describe_interface_method_diamond_override_counts_once_per_upstream(
+    override_axis_graph: KuzuGraph,
+) -> None:
+    rows = override_axis_graph._rows(  # noqa: SLF001
+        "MATCH (t:Symbol {fqn: $fqn})-[:DECLARES]->(m:Symbol) "
+        "WHERE m.kind = 'method' AND m.name = 'shared' "
+        "RETURN m.id AS id LIMIT 1",
+        {"fqn": "orolla.diamond.DiamondC"},
+    )
+    assert rows
+    mid = str(rows[0]["id"])
+    decl_ids = _dispatch_up_declaration_method_ids(override_axis_graph, mid)
+    assert len(decl_ids) == 2
+    out = describe_v2(mid, graph=override_axis_graph)
+    assert out.success is True
+    assert out.record is not None
+    assert out.record.edge_summary is not None
+    assert out.record.edge_summary.get("OVERRIDES") == {"in": 0, "out": 2}

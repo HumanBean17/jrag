@@ -41,6 +41,8 @@ _TYPE_SYMBOL_KINDS_FOR_EDGE_ROLLUP = frozenset(
     {"class", "interface", "enum", "record", "annotation"}
 )
 
+_METHOD_SYMBOL_KINDS_FOR_OVERRIDE_ROLLUP = frozenset({"method"})
+
 
 def _get_sentence_transformer(model_name: str, device: str | None) -> SentenceTransformer:
     global _st_model
@@ -129,7 +131,10 @@ class NodeRecord(BaseModel):
             "enum, record, annotation), may also include composed dot-keys "
             "`DECLARES.DECLARES_CLIENT` and `DECLARES.EXPOSES`: 2-hop summaries "
             "(DECLARES to member, then that edge) — edge-row counts, not EdgeType literals; "
-            "do not pass them to neighbors(edge_types=…)."
+            "do not pass them to neighbors(edge_types=…). For method Symbols, may include "
+            "override-axis virtual keys `OVERRIDDEN_BY`, `OVERRIDDEN_BY.DECLARES_CLIENT`, "
+            "`OVERRIDDEN_BY.EXPOSES`, and `OVERRIDES` (same dot convention; also not valid "
+            "EdgeType literals for neighbors)."
         ),
     )
 
@@ -335,8 +340,11 @@ def _edge_summary_for_node(
     graph: KuzuGraph, node_id: str, *, kind: str, row: dict[str, Any]
 ) -> dict[str, dict[str, int]]:
     summary = dict(graph.edge_counts_for(node_id))
-    if kind == "symbol" and str(row.get("kind") or "") in _TYPE_SYMBOL_KINDS_FOR_EDGE_ROLLUP:
+    sym_kind = str(row.get("kind") or "")
+    if kind == "symbol" and sym_kind in _TYPE_SYMBOL_KINDS_FOR_EDGE_ROLLUP:
         summary.update(graph.member_edge_rollup_for(node_id))
+    elif kind == "symbol" and sym_kind in _METHOD_SYMBOL_KINDS_FOR_OVERRIDE_ROLLUP:
+        summary.update(graph.override_axis_rollup_for(node_id))
     return summary
 
 
