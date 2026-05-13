@@ -1,7 +1,7 @@
 # Plan: reprocess selective phase rebuild (`--vectors-only` / `--graph-only`)
 
-Status: **active (planning)**. This plan implements
-[`propose/REPROCESS-SPLIT-PROPOSE.md`](../propose/REPROCESS-SPLIT-PROPOSE.md).
+Status: **completed — shipped** to `master`. This plan implemented
+[`propose/completed/REPROCESS-SPLIT-PROPOSE.md`](../propose/completed/REPROCESS-SPLIT-PROPOSE.md).
 
 Depends on: **none**.
 
@@ -136,19 +136,19 @@ Landing order: **RS1**.
 
 ## Definition of done (PR-RS1)
 
-- [ ] `reprocess --help` shows mutually-exclusive selective flags.
-- [ ] `--vectors-only` runs only cocoindex full reprocess path and never invokes graph builder.
-- [ ] `--graph-only` runs only graph builder and never invokes cocoindex.
-- [ ] Selective success emits one drift warning to stderr naming the non-rebuilt store.
-- [ ] JSON payload includes `phases_run` with values matching phases actually spawned.
-- [ ] Graph-only build failure exits with code `1` (not `2`).
-- [ ] Selective setup failures exit with code `2`, emit no drift warning, and report
+- [x] `reprocess --help` shows mutually-exclusive selective flags.
+- [x] `--vectors-only` runs only cocoindex full reprocess path and never invokes graph builder.
+- [x] `--graph-only` runs only graph builder and never invokes cocoindex.
+- [x] Selective success emits one drift warning to stderr naming the non-rebuilt store.
+- [x] JSON payload includes `phases_run` with values matching phases actually spawned.
+- [x] Graph-only build failure exits with code `1` (not `2`).
+- [x] Selective setup failures exit with code `2`, emit no drift warning, and report
       `phases_run=[]`.
-- [ ] No-flag cocoindex failure reports `phases_run=["vectors"]` because graph was
+- [x] No-flag cocoindex failure reports `phases_run=["vectors"]` because graph was
       not spawned.
-- [ ] TTY pretty output for selective success includes `Rebuilt:` and `Skipped:`.
-- [ ] No-flag `reprocess` lifecycle test remains green.
-- [ ] `.venv/bin/python -m pytest tests/test_java_codebase_rag_cli.py -q` passes.
+- [x] TTY pretty output for selective success includes `Rebuilt:` and `Skipped:`.
+- [x] No-flag `reprocess` lifecycle test remains green.
+- [x] `.venv/bin/python -m pytest tests/test_java_codebase_rag_cli.py -q` passes.
 
 ## Implementation step list
 
@@ -159,6 +159,8 @@ Landing order: **RS1**.
 | 3 | Extend refresh payload model | `server.py` | `RefreshIndexOutput` serializes `phases_run` consistently |
 | 4 | Add/adjust CLI docs | `docs/JAVA-CODEBASE-RAG-CLI.md`, `README.md` | Docs match new CLI behavior, warning policy, argparse error shape, and default-vs-selective wording |
 | 5 | Add selective CLI tests | `tests/test_java_codebase_rag_cli.py` | New tests pass locally and anchor exit-code semantics |
+
+All rows landed on `master` (PR-RS1).
 
 ---
 
@@ -197,4 +199,4 @@ Landing order: **RS1**.
 
 # Tracking
 
-- `PR-RS1`: _pending_
+- `PR-RS1`: **landed** on `master` (selective `reprocess`, `phases_run`, docs, CLI tests).
