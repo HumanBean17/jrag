@@ -1,7 +1,9 @@
 # Plan: HTTP brownfield enum method, `@CodebaseHttpClient` rename, inbound exclusivity
 
-Status: **active (planning)**. This plan implements
+Status: **complete**. This plan implements
 [`propose/HTTP-ROUTE-METHOD-ENUM-PROPOSE.md`](../propose/HTTP-ROUTE-METHOD-ENUM-PROPOSE.md).
+PR-1 and PR-2 landed earlier on `master`; PR-3 adds agent docs and the v2 addendum
+[`propose/completed/BROWNFIELD-ANNOTATIONS-V2-ADDENDUM-HTTP-METHOD-ENUM.md`](../propose/completed/BROWNFIELD-ANNOTATIONS-V2-ADDENDUM-HTTP-METHOD-ENUM.md).
 
 Depends on: **none** (lands on current `master`).
 
@@ -210,9 +212,9 @@ Landing order: **PR-1 → PR-2 → PR-3**.
 
 ## Definition of done (PR-3)
 
-- [ ] Agent guide documents exclusivity + UC10.
-- [ ] Addendum file exists and links parent propose + this plan.
-- [ ] No Python behaviour change in PR-3.
+- [x] Agent guide documents exclusivity + UC10.
+- [x] Addendum file exists and links parent propose + this plan.
+- [x] No Python behaviour change in PR-3.
 
 ---
 
@@ -243,11 +245,13 @@ Landing order: **PR-1 → PR-2 → PR-3**.
 3. No remaining `CodebaseClient` / `CodebaseClients` in production Python, tests, or fixture Java per grep contract.
 4. Completed propose addendum exists under `propose/completed/`.
 
+These criteria are met on `master` after PR-3.
+
 # Tracking
 
-- `PR-1`: _pending_
-- `PR-2`: _pending_
-- `PR-3`: _pending_
+- `PR-1`: _merged_
+- `PR-2`: _merged_
+- `PR-3`: _merged_
 
 # Optional companion
 

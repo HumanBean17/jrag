@@ -12,9 +12,13 @@
 > `neighbors` arguments, pass stringified JSON, or use vector search for
 > questions the graph answers exactly. This guide keeps them on the rails.
 >
-> Calibrated against ontology version **11** (see `ast_java.ONTOLOGY_VERSION` /
-> `java_ontology.py` valid sets). Design rationale:
-> [`propose/completed/MCP-API-V2-REDESIGN-PROPOSE.md`](../propose/completed/MCP-API-V2-REDESIGN-PROPOSE.md).
+> Calibrated against ontology version **12** (see `ast_java.ONTOLOGY_VERSION` /
+> `java_ontology.py` valid sets): HTTP brownfield rename (`@CodebaseHttpClient`),
+> shared `CodebaseHttpMethod` enum, inbound layer-C HTTP routes replace same-method
+> built-in rows. **Design rationale:** navigation surface and tools —
+> [`propose/completed/MCP-API-V2-REDESIGN-PROPOSE.md`](../propose/completed/MCP-API-V2-REDESIGN-PROPOSE.md);
+> HTTP brownfield rename, `CodebaseHttpMethod`, and exclusivity —
+> [`propose/HTTP-ROUTE-METHOD-ENUM-PROPOSE.md`](../propose/HTTP-ROUTE-METHOD-ENUM-PROPOSE.md).
 
 ---
 
@@ -50,6 +54,14 @@ Treat the following as out of frame:
 
 When MCP disagrees with the open file, the file wins; report the
 disagreement as evidence of staleness, not as a contradiction.
+
+### Brownfield HTTP annotations (exclusivity)
+
+When a method carries **`@CodebaseHttpRoute`** or **`@CodebaseHttpClient`** (including plural containers), the extractor treats that annotation as the **only** source of truth for the facets it declares (`path`, HTTP verb, `targetService`, `clientKind`, etc.). Framework annotations on the **same** method that would normally drive route or client inference—Spring MVC/WebFlux mapping annotations, **`@FeignClient`**-scoped method mappings, JAX-RS verb annotations, and the like—are **bypassed** for that axis. Do not assume the graph “merges” brownfield with the framework row; for inbound HTTP, layer-C brownfield routes **replace** same-method built-in Spring rows in the graph.
+
+**Observability:** If brownfield and shadowable framework annotations **co-exist** on a method, a **verbose** graph build emits a structured stderr line with **`event=brownfield-exclusivity-shadowing`** (severity INFO), listing which framework annotation simple names were skipped. Typical operator invocation: `.venv/bin/python build_ast_graph.py --source-root … --kuzu-path … --verbose`. Non-verbose builds may omit this traffic.
+
+**UC10 (silent disagreement):** The brownfield annotation wins even when its HTTP verb or path disagrees with what Spring or Feign shows on the method (for example Feign **`@GetMapping`** vs brownfield **`CodebaseHttpMethod.POST`**). There is **no** merge-time warning for that mismatch—wrong assumptions surface at runtime (for example HTTP 405) or through code review. When auditing, prefer the indexed brownfield row and, if needed, the verbose shadowing log over the framework-only reading.
 
 **Workflow (GPS model):**
 
@@ -193,7 +205,7 @@ Exact allowed values for roles, capabilities, client kinds, etc. live in `java_o
 - **Batching:** Multiple origins are expanded; pagination slices the **combined** edge list — use larger `limit` when batching many ids.
 - **Confidence:** Cross-service edges (`HTTP_CALLS`, `ASYNC_CALLS`) carry confidence, strategy, and match metadata on `edge.attrs` (`attrs.confidence`, `attrs.strategy`, `attrs.match`). Low confidence means the resolver had to guess at the route binding — treat it as a **resolver gap signal**, not a hallucination. Report low-confidence edges with their confidence value, not as facts. Intra-service edges (`CALLS`, `INJECTS`, `IMPLEMENTS`, `EXTENDS`, `DECLARES`, `DECLARES_CLIENT`, `EXPOSES`) faithfully represent the static graph; the resolved set is still a **lower bound** under reflection / dynamic dispatch (see *What this MCP is NOT*).
 
-### Ontology glossary (version 11)
+### Ontology glossary (version 12)
 
 Source of truth: `java_ontology.py`. Strings are case-sensitive.
 
