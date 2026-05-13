@@ -31,6 +31,8 @@ for tools that don't read `.cursor/rules/`.
     `plans/completed/CURSOR-PROMPTS-TIER1B.md`. The two CURSOR-PROMPTS
     files are kept as reference templates for future per-PR Cursor work.
   - Older completed: `propose/completed/CALL-GRAPH-PROPOSE.md`,
+    `propose/completed/DESCRIBE-MEMBER-EDGE-ROLLUP-PROPOSE.md`,
+    `plans/completed/PLAN-DESCRIBE-MEMBER-EDGE-ROLLUP.md`,
     `propose/completed/MCP-API-V2-REDESIGN-PROPOSE.md` (four-tool MCP + `java-codebase-rag` CLI),
     `plans/completed/PLAN-CALL-GRAPH.md`,
     `plans/completed/PLAN-CAPABILITIES-MODEL.md`,

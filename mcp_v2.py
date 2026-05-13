@@ -15,6 +15,9 @@ from kuzu_queries import KuzuGraph
 from search_lancedb import TABLES, run_search
 
 DeclarationSymbolKind = Literal["class", "interface", "enum", "record", "annotation", "method", "constructor"]
+
+# Composed describe-time keys in edge_summary (e.g. DECLARES.DECLARES_CLIENT) are
+# intentionally not EdgeType literals — neighbors(edge_types=...) rejects them.
 EdgeType = Literal[
     "EXTENDS",
     "IMPLEMENTS",
@@ -33,6 +36,10 @@ _NEIGHBOR_EDGE_TYPES_ADAPTER = TypeAdapter(
 
 _st_lock = threading.Lock()
 _st_model: SentenceTransformer | None = None
+
+_TYPE_SYMBOL_KINDS_FOR_EDGE_ROLLUP = frozenset(
+    {"class", "interface", "enum", "record", "annotation"}
+)
 
 
 def _get_sentence_transformer(model_name: str, device: str | None) -> SentenceTransformer:
@@ -115,7 +122,16 @@ class NodeRecord(BaseModel):
     kind: Literal["symbol", "route", "client"]
     fqn: str
     data: dict[str, Any] = Field(default_factory=dict)
-    edge_summary: dict[str, dict[str, int]] | None = None
+    edge_summary: dict[str, dict[str, int]] | None = Field(
+        default=None,
+        description=(
+            "Per graph edge label, in/out incident counts. For type Symbols (class, interface, "
+            "enum, record, annotation), may also include composed dot-keys "
+            "`DECLARES.DECLARES_CLIENT` and `DECLARES.EXPOSES`: 2-hop summaries "
+            "(DECLARES to member, then that edge) — edge-row counts, not EdgeType literals; "
+            "do not pass them to neighbors(edge_types=…)."
+        ),
+    )
 
 
 class Edge(BaseModel):
@@ -315,8 +331,13 @@ def _load_node_record(graph: KuzuGraph, node_id: str, kind: Literal["symbol", "r
     return rows[0]
 
 
-def _edge_summary_for_node(graph: KuzuGraph, node_id: str) -> dict[str, dict[str, int]]:
-    return graph.edge_counts_for(node_id)
+def _edge_summary_for_node(
+    graph: KuzuGraph, node_id: str, *, kind: str, row: dict[str, Any]
+) -> dict[str, dict[str, int]]:
+    summary = dict(graph.edge_counts_for(node_id))
+    if kind == "symbol" and str(row.get("kind") or "") in _TYPE_SYMBOL_KINDS_FOR_EDGE_ROLLUP:
+        summary.update(graph.member_edge_rollup_for(node_id))
+    return summary
 
 
 def _node_matches_filter(kind: Literal["symbol", "route", "client"], row: dict[str, Any], f: NodeFilter | None) -> bool:
@@ -478,7 +499,7 @@ def describe_v2(id: str, graph: KuzuGraph | None = None) -> DescribeOutput:
         if row is None:
             return DescribeOutput(success=False, message=f"No node found for `{id}`")
         ref = _node_ref_from_row(kind, row)
-        edge_summary = _edge_summary_for_node(g, id)
+        edge_summary = _edge_summary_for_node(g, id, kind=kind, row=row)
         return DescribeOutput(
             success=True,
             record=NodeRecord(id=ref.id, kind=kind, fqn=ref.fqn, data=row, edge_summary=edge_summary),

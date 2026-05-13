@@ -1,11 +1,11 @@
 # Plan: describe member edge rollup (`edge_summary` composed keys)
 
-Status: **active (planning)**. This plan implements
-[`propose/DESCRIBE-MEMBER-EDGE-ROLLUP-PROPOSE.md`](../propose/DESCRIBE-MEMBER-EDGE-ROLLUP-PROPOSE.md).
+Status: **complete** (PR-1 landed). Source propose:
+[`propose/completed/DESCRIBE-MEMBER-EDGE-ROLLUP-PROPOSE.md`](../../propose/completed/DESCRIBE-MEMBER-EDGE-ROLLUP-PROPOSE.md).
 
 Depends on: **none** for graph or indexer work (read-path only).
 
-**Coordinate with:** [`propose/DESCRIBE-OVERRIDE-ROLLUP-PROPOSE.md`](../propose/DESCRIBE-OVERRIDE-ROLLUP-PROPOSE.md) if both describe rollups land in the same release window. That propose extends the **same** `_edge_summary_for_node` hook for **method and constructor** symbols with different composed keys. Prefer **one** `kind` + `row` signature change and one composable `_edge_summary_for_node` body with **disjoint** branches (type rollup vs override rollup), or land two PRs in an order where the second PR only adds the method/constructor branch without reshaping the signature again.
+**Coordinate with:** [`propose/DESCRIBE-OVERRIDE-ROLLUP-PROPOSE.md`](../../propose/DESCRIBE-OVERRIDE-ROLLUP-PROPOSE.md) if both describe rollups land in the same release window. That propose extends the **same** `_edge_summary_for_node` hook for **method and constructor** symbols with different composed keys. Prefer **one** `kind` + `row` signature change and one composable `_edge_summary_for_node` body with **disjoint** branches (type rollup vs override rollup), or land two PRs in an order where the second PR only adds the method/constructor branch without reshaping the signature again.
 
 ## Goal
 
@@ -100,14 +100,14 @@ If the session graph ever lacks a row for scenario (1) or (4), **do not** relax 
 
 ## Definition of done (PR-1)
 
-- [ ] `member_edge_rollup_for` exists and returns only positive-count composed keys.
-- [ ] `describe_v2` merges rollup for eligible type symbols only.
-- [ ] `neighbors_v2(..., edge_types=["DECLARES.DECLARES_CLIENT"])` still fails validation (same class of error as today for invalid literals).
-- [ ] Four tests above pass, e.g.  
+- [x] `member_edge_rollup_for` exists and returns only positive-count composed keys.
+- [x] `describe_v2` merges rollup for eligible type symbols only.
+- [x] `neighbors_v2(..., edge_types=["DECLARES.DECLARES_CLIENT"])` still fails validation (same class of error as today for invalid literals).
+- [x] Four tests above pass, e.g.  
   `.venv/bin/python -m pytest tests/test_mcp_v2_compose.py::test_describe_class_with_brownfield_clients_emits_composed_key tests/test_mcp_v2_compose.py::test_describe_controller_class_emits_composed_exposes tests/test_mcp_v2_compose.py::test_describe_method_symbol_no_composed_keys tests/test_mcp_v2_compose.py::test_describe_pojo_no_composed_keys -v`  
   (adjust module path if tests land in `test_mcp_v2.py`), or run full `.venv/bin/python -m pytest tests -v`.
-- [ ] `.venv/bin/ruff check .` clean.
-- [ ] AGENT-GUIDE updated; README updated if the optional bullet is taken.
+- [x] `.venv/bin/ruff check .` clean.
+- [x] AGENT-GUIDE updated; README updated if the optional bullet is taken.
 
 ## Implementation step list
 
@@ -143,9 +143,9 @@ If the session graph ever lacks a row for scenario (1) or (4), **do not** relax 
 
 ## Whole-plan done definition
 
-1. Merged PR satisfies **Definition of done (PR-1)**.
-2. Propose moved to `propose/completed/` when the PR lands (repo convention).
+1. **Definition of done (PR-1)** — satisfied (implementation landed).
+2. Propose archived at [`propose/completed/DESCRIBE-MEMBER-EDGE-ROLLUP-PROPOSE.md`](../../propose/completed/DESCRIBE-MEMBER-EDGE-ROLLUP-PROPOSE.md).
 
 ## Tracking
 
-- `PR-1`: _pending_
+- `PR-1`: **done** (code + docs + tests landed; propose in `propose/completed/`)
