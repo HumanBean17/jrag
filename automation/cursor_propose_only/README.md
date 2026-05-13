@@ -10,6 +10,7 @@ From repository root:
 
 - `.venv/bin/python automation/cursor_propose_only/cli.py prepare ...`
 - `.venv/bin/python automation/cursor_propose_only/cli.py evaluate ...`
+- `.venv/bin/python automation/cursor_propose_only/execute.py ...`
 
 ## Select specific proposals
 
@@ -71,6 +72,31 @@ Status transitions:
 - actionable issue found -> `needs_fixes`
 - approved with no actionable issues -> `ready_to_merge`
 - final round still failing -> `blocked_after_reviews`
+
+## Automate implementation after plans are ready
+
+When `plans/CURSOR-PROMPTS-<TOPIC>.md` exists, run `execute.py` to iterate PR
+sections in order, run implementation command(s), run review loops, and mark
+tasks as `ready_to_merge` / `merged`.
+
+```bash
+.venv/bin/python automation/cursor_propose_only/execute.py \
+  --repo-root . \
+  --workflow reports/propose_automation/workflow.json \
+  --rounds 3 \
+  --min-severity medium \
+  --implementation-command 'cursor-agent run --model auto --prompt-file {task_prompt_file}' \
+  --review-command 'cursor-agent run --model auto --prompt-file {review_prompt_file}' \
+  --merge-command 'gh pr merge {pr_url} --squash --delete-branch' \
+  --run
+```
+
+Notes:
+
+- without `--run`, `execute.py` performs a dry-run and only stages prompts/state
+- command templates support placeholders such as `{task_prompt_file}`,
+  `{review_prompt_file}`, `{pr_url}`, `{branch}`, `{base}`, `{round}`
+- workflow state is persisted in `reports/propose_automation/workflow.json`
 
 ## Reviewer format convention
 
