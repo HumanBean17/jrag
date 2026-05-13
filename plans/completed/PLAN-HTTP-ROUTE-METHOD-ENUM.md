@@ -1,9 +1,9 @@
 # Plan: HTTP brownfield enum method, `@CodebaseHttpClient` rename, inbound exclusivity
 
 Status: **complete**. This plan implements
-[`propose/HTTP-ROUTE-METHOD-ENUM-PROPOSE.md`](../propose/HTTP-ROUTE-METHOD-ENUM-PROPOSE.md).
+[`propose/HTTP-ROUTE-METHOD-ENUM-PROPOSE.md`](../../propose/HTTP-ROUTE-METHOD-ENUM-PROPOSE.md).
 PR-1 and PR-2 landed earlier on `master`; PR-3 adds agent docs and the v2 addendum
-[`propose/completed/BROWNFIELD-ANNOTATIONS-V2-ADDENDUM-HTTP-METHOD-ENUM.md`](../propose/completed/BROWNFIELD-ANNOTATIONS-V2-ADDENDUM-HTTP-METHOD-ENUM.md).
+[`propose/completed/BROWNFIELD-ANNOTATIONS-V2-ADDENDUM-HTTP-METHOD-ENUM.md`](../../propose/completed/BROWNFIELD-ANNOTATIONS-V2-ADDENDUM-HTTP-METHOD-ENUM.md).
 
 Depends on: **none** (lands on current `master`).
 

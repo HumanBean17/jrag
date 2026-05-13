@@ -1,6 +1,6 @@
 # Brownfield HTTP annotations: rename `@CodebaseClient` → `@CodebaseHttpClient`, type `method` as a shared `CodebaseHttpMethod` enum on both sides, lock brownfield-exclusivity
 
-**Status**: approved — signed off for implementation (`plans/PLAN-HTTP-ROUTE-METHOD-ENUM.md`).
+**Status**: implemented — see [`plans/completed/PLAN-HTTP-ROUTE-METHOD-ENUM.md`](../plans/completed/PLAN-HTTP-ROUTE-METHOD-ENUM.md).
 **Author**: Dmitriy Teriaev + Perplexity Computer
 **Date**: 2026-05-12 (v4 doc alignment)
 
