@@ -13,11 +13,11 @@
 - **Frame**: the suite is two artifacts — an *iteration loop* (fast subset, runs every change) and a *merge check* (full suite, runs before merge). Making the iteration loop faster is honest; calling the full suite a "gate" before CI exists is not.
 - **Three shipped changes**:
   - **A. Session-scoped fixtures keyed by corpus** — collapse N rebuilds of the same input into one per session, plus per-fixture session graphs for the small smoke corpora. (PR-1, repo)
-  - **B. Per-PR test selection convention** — author declares a `Tests to run` subset for iteration; reviewer demands evidence. This is a *convention*, not enforcement. (PR-2: repo **`plan-prompts`** skill + user **`pr-review`** skill)
+  - **B. Per-PR test selection convention** — author declares a `Tests to run` subset for iteration; reviewer demands evidence. This is a *convention*, not enforcement. (PR-2: **`plan-prompts`** + **`pr-review`** under `.cursor/skills/`)
   - **C. Make the merge gate real** — add `.github/workflows/test.yml` running the full suite on every PR + push to master, then enable branch protection on `master` requiring that check to pass. After this lands, the word "gate" in this propose stops being a polite fiction. (PR-3, repo)
 - **What goes away**: ad-hoc `_build()` helpers in 11+ test files that re-run all four passes for every test; and the implicit "author remembers to run the full suite" merge model.
 - **What stays**: tests that mutate `tmp_path` per-test (5 files) keep their pattern but call a faster pre-parsed builder helper.
-- **3 work items**: PR-1 (repo, `tests/` + `tests/README.md`), PR-2 (**`plan-prompts`** in `.cursor/skills/plan-prompts/` + **`pr-review`** in the author’s Cursor user skill library), PR-3 (repo, CI workflow + branch protection). Order matters — see §8.
+- **3 work items**: PR-1 (repo, `tests/` + `tests/README.md`), PR-2 (**`plan-prompts`** + **`pr-review`** under `.cursor/skills/`), PR-3 (repo, CI workflow + branch protection). Order matters — see §8.
 
 ---
 
@@ -36,7 +36,7 @@ This propose does not invent new test infrastructure beyond CI itself. It collap
 
 ## §2 Design principles
 
-1. **No production code change.** PR-1 touches only `tests/` plus `tests/README.md`. PR-2 touches the repo **plan-prompts** Cursor skill (`.cursor/skills/plan-prompts/`, no production `*.py` outside `tests/`) and the user-scoped **pr-review** skill. PR-3 touches only `.github/workflows/` plus repo settings. Production code is out of scope for all three.
+1. **No production code change.** PR-1 touches only `tests/` plus `tests/README.md`. PR-2 touches the repo **plan-prompts** and **pr-review** Cursor skills under `.cursor/skills/` (no production `*.py` outside `tests/`). PR-3 touches only `.github/workflows/` plus repo settings. Production code is out of scope for all three.
 2. **"Gate" means enforcement, "convention" means discipline.** Words have to match what they mechanically do. The full suite becomes a real merge gate only after PR-3 lands (workflow + required status check). Before that, it is a convention the author follows.
 3. **Session fixtures are corpus-scoped, not test-scoped.** Each distinct corpus tree gets exactly one parse per session, regardless of how many test files consume it.
 4. **Per-test `tmp_path` mutation is a legitimate pattern.** Tests that copy stubs and write YAMLs per case stay per-test — they just stop re-importing `build_ast_graph` modules from scratch.
@@ -67,10 +67,10 @@ Tier 1 and Tier 2 are the bulk of the win. Tier 3 stays per-test because the tes
 Each propose-derived PR carries a `Tests to run (iteration loop)` block in its execution prompt (typically inside `plans/CURSOR-PROMPTS-*.md`), naming the test subset relevant to the change. Three additions:
 
 1. **Repo `plan-prompts` skill** (`.cursor/skills/plan-prompts/`) — when generating or auditing prompts, require the **`## Tests to run (iteration loop)`** section between **Deliverables** and **Tests** so authors name the subset whenever work is delegated from a plan.
-2. **User `pr-review` skill** — verification requires *evidence*, not a checkbox: the reviewer must include the actual `pytest <files>` command + exit code, and (after PR-3) a link to the green CI run of the full suite. This decouples "subset ran during iteration" from "full suite passed before merge" — two evidences, two purposes.
+2. **Repo `pr-review` skill** (`.cursor/skills/pr-review/`) — verification requires *evidence*, not a checkbox: the reviewer must include the actual `pytest <files>` command + exit code, and (after PR-3) a link to the green CI run of the full suite. This decouples "subset ran during iteration" from "full suite passed before merge" — two evidences, two purposes.
 3. **PR description template** — add a one-line section listing the iteration subset; the full-suite check becomes a green status check once PR-3 lands.
 
-**`plan-prompts`** is versioned in this repository. **`pr-review`** is maintained in the author’s Cursor user skill library (`~/.cursor/skills/pr-review/` or `save_custom_skill`), not committed here. The repo’s `docs/skills/` tree holds the separate `java-codebase-explore` artifact and is unrelated.
+**`plan-prompts`** and **`pr-review`** are versioned in this repository under `.cursor/skills/`. Contributors may **copy** them into a personal `~/.cursor/skills/` tree if their Cursor setup only loads global skills. The repo’s `docs/skills/` tree holds the separate `java-codebase-explore` artifact and is unrelated.
 
 Before PR-3 lands, B is a *convention*, not enforcement — the author can lie to the evidence requirement and nothing will catch it. After PR-3 lands, the full-suite half is mechanically enforced and the subset half remains a discipline question.
 
@@ -165,9 +165,9 @@ Run only these during iteration. Full suite is the merge gate.
 Rationale: <one-line "why these"; e.g. "PR touches _parse_codebase_client_annotation; brownfield_clients + ast_java_calls exercise it">.
 ```
 
-### `pr-review` skill (user-scoped) — evidence checklist
+### `pr-review` skill (repo) — evidence checklist
 
-The **pr-review** skill (author’s Cursor user library) adds a review gate **before** generic “manual evidence reproduced”:
+The **pr-review** skill (`.cursor/skills/pr-review/` in this repository) adds a review gate **before** generic “manual evidence reproduced”:
 
 - Require the **exact** `pytest <files>` command + **exit code** (or pytest summary) for the files listed under **`## Tests to run (iteration loop)`** in the task prompt. **Checkbox-only** lines (“subset ran [x]”) are **not** sufficient.
 - After PR-3: require a **link** to the **green** GitHub Actions run for the **full** suite on this PR at the reviewed commit.
@@ -261,7 +261,7 @@ No use case requires a primitive that's missing.
 3. Tier 1 files (6 files): replace inline `_build()` with `kuzu_db_path` / `kuzu_graph` fixture consumption.
 4. Tier 2 files (6 files): replace inline `pass1..pass4` chain with the new per-fixture `kuzu_graph_<name>` fixtures. **Mandatory pre-merge audit per file**: confirm no test writes to the session graph or the fixture directory (see decision #17).
 5. Tier 3 files (5 files): replace inline `_build()` with `build_kuzu_into(tmp)` import; tests stay per-test.
-6. `tests/README.md` — document the three-tier model, when to add a new session fixture, and the cross-reference to the repo **`plan-prompts`** skill and the user **`pr-review`** skill.
+6. `tests/README.md` — document the three-tier model, when to add a new session fixture, and the cross-reference to the repo **`plan-prompts`** and **`pr-review`** skills under `.cursor/skills/`.
 
 **Test summary**: CI status check (from PR-3) must be green; before/after wall-time must be in the PR description.
 
@@ -269,23 +269,23 @@ No use case requires a primitive that's missing.
 
 ### PR-2 — `plan-prompts` + `pr-review` (ships LAST)
 
-**Purpose**: codify the `Tests to run` convention in **plan-prompts** (repo) and the evidence checklist in **pr-review** (user). Ships last because the **pr-review** full-suite evidence requirement references the CI status check from PR-3.
+**Purpose**: codify the `Tests to run` convention in **plan-prompts** and the evidence checklist in **pr-review**, both under **`.cursor/skills/`** in this repository. Ships last because the **pr-review** full-suite evidence requirement references the CI status check from PR-3.
 
-**Split delivery:**
-1. **Repo — `plan-prompts`** (`.cursor/skills/plan-prompts/`): `SKILL.md` / `reference.md` / `examples.md` require the `## Tests to run (iteration loop)` template between **Deliverables** and **Tests** in every generated per-PR prompt (`plans/CURSOR-PROMPTS-*.md`).
-2. **User library — `pr-review`**: verification requires (a) pasted `pytest <files>` command + exit code (subset evidence) and (b) a link to the green CI run on the PR (full-suite enforcement). Publish via `save_custom_skill` or install under `~/.cursor/skills/pr-review/`.
+**Changes (in-repo):**
+1. **`.cursor/skills/plan-prompts/`** — `SKILL.md` / `reference.md` / `examples.md` require the `## Tests to run (iteration loop)` template between **Deliverables** and **Tests** in every generated per-PR prompt (`plans/CURSOR-PROMPTS-*.md`).
+2. **`.cursor/skills/pr-review/`** — `SKILL.md` requires (a) pasted `pytest <files>` command + exit code (subset evidence) and (b) a link to the green CI run on the PR (full-suite enforcement). The two evidences serve two different purposes.
 
-**Cross-reference:** `tests/README.md` (PR-1) names **`plan-prompts`** (this repo) and **`pr-review`** (user) so contributors know where each contract lives.
+**Cross-reference:** `tests/README.md` (PR-1) links both skill paths so contributors open the canonical copies in git.
 
-**Verification**: human review of **plan-prompts** in git + **pr-review** in the user library against this propose.
+**Verification**: human review of both skills in-repo against this propose.
 
-**Test subset for iteration**: none (skill / doc surface, not `tests/` code).
+**Test subset for iteration**: none (Cursor skill / doc surface, not `tests/` code).
 
 ---
 
 ## §9 Decisions taken (no longer open)
 
-1. **Three work items in strict order**: PR-3 (CI + branch protection) first, PR-1 (fixture refactor) second, PR-2 (**plan-prompts** repo + **pr-review** user) last. Reversing this order would mean the propose ships its "merge gate" language before the merge gate exists. v3 fixes that.
+1. **Three work items in strict order**: PR-3 (CI + branch protection) first, PR-1 (fixture refactor) second, PR-2 (**plan-prompts** + **pr-review** in `.cursor/skills/`) last. Reversing this order would mean the propose ships its "merge gate" language before the merge gate exists. v3 fixes that.
 2. **Three-tier classification is canonical**: Tier 1 reuses bank-chat-system session, Tier 2 reuses per-fixture session, Tier 3 stays per-test with a shared builder helper.
 3. **Per-fixture session fixtures are named, not parametrised.** Tests depend on a specific corpus.
 4. **No new pytest plugins** in this propose. `xdist`/`testmon` deferred.
@@ -303,7 +303,7 @@ No use case requires a primitive that's missing.
 16. **CI is in scope (as PR-3), not deferred.** v2's decision to defer CI to a follow-up propose was a mistake — it left the v1–v2 "merge gate" language unsupported by any mechanism. v3 promotes CI into the propose as PR-3 and ships it first.
 17. **Tier-2 audit is a merge gate for PR-1**, not just a §10 risk. Each of the 6 Tier-2 files must be audited for write-to-fixture or write-to-DB behaviour before its migration is included. If a file fails the audit, it drops to Tier 3.
 18. **PR-2 review evidence is mandatory and concrete**: pasted `pytest <files>` command + exit code (iteration discipline) **and** a link to the green CI run (mechanical merge gate from PR-3). Two evidences, two purposes. Checkbox alone is rejected.
-19. **PR-2 is split across repo and user.** The **`plan-prompts`** skill lives in **this repo** under `.cursor/skills/plan-prompts/` and encodes the `## Tests to run (iteration loop)` contract for `plans/CURSOR-PROMPTS-*.md` (and matching ad-hoc prompts). The **`pr-review`** skill lives in the author’s **Cursor user skill library** (for example `~/.cursor/skills/pr-review/`) and is not committed here. The `docs/skills/` tree holds the unrelated `java-codebase-explore` artifact.
+19. **PR-2 ships both skills in-repo.** The **`plan-prompts`** and **`pr-review`** skills live under **`.cursor/skills/`** in this repository (`plan-prompts/` and `pr-review/`). Either skill may be **copied** to `~/.cursor/skills/` for Cursor installs that only load personal skills. The `docs/skills/` tree holds the unrelated `java-codebase-explore` artifact.
 20. **TL;DR language tightened**: "no production-code change" replaces "both green-field on `tests/`" because PR-1 also touches `tests/README.md` (test-operator docs, not production).
 21. **Word discipline locked**: "gate" means mechanical enforcement (CI status check, branch protection). "Convention" means author discipline. v1–v2 misused "gate" for what was actually convention. v3 audits every occurrence; principle #2 in §2 is the binding rule.
 22. **PR-3 ships first because order matters**: the CI workflow validates PR-1 mechanically and gives PR-2's evidence requirement something real to reference. Reverse order would mean shipping the *language* before the *enforcement*.
@@ -386,7 +386,7 @@ What **didn't change** (and why):
 - Three-tier fixture classification (Tier 1 / Tier 2 / Tier 3) — the fix to iteration speed is unchanged.
 - Tier-2 audit as a merge gate for PR-1 (decision #17) — still required.
 - The use-case set (16 UCs) — v3 adds a column, not new use cases. UC12/UC14 are the same use cases but with honest outcomes.
-- PR-2 remains a distinct work item after PR-1; it ships as **plan-prompts** updates under `.cursor/skills/plan-prompts/` (repo) plus **pr-review** in the author’s Cursor user skill library (see §8 PR-2 and decision #19).
+- PR-2 ships **`plan-prompts`** and **`pr-review`** under `.cursor/skills/` in git (see §8 PR-2 and decision #19); optional **copy** to `~/.cursor/skills/` for global-skill-only Cursor setups.
 - The deferral of `pytest-xdist`, `pytest-testmon`, and cross-session caching.
 
 ### v1 → v2 (prior revision)
@@ -411,7 +411,7 @@ Amendments responding to review comment id `4433175457` on PR #93.
 
 What **didn't change** (and why):
 - Three-tier classification (Tier 1 / Tier 2 / Tier 3) — reviewer endorsed it.
-- Three numbered work items (PR-3, PR-1, PR-2) and their landing order are unchanged; **plan-prompts** / **pr-review** naming only clarifies where each contract lives (repo vs user skill library).
+- Three numbered work items (PR-3, PR-1, PR-2) and their landing order are unchanged; **plan-prompts** / **pr-review** naming clarifies that both contracts live under **`.cursor/skills/`** in git (optional copy to `~/.cursor/skills/`).
 - The decision to defer `pytest-xdist` / `pytest-testmon` / cross-session caching — reviewer agreed it was reasonable.
 - Use-case re-walk — the 16 UCs remain valid against the v2 surface; no UC referenced a primitive that changed.
 

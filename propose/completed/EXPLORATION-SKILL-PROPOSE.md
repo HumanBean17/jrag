@@ -131,7 +131,7 @@ when_to_load:
   - "onboard onto this code"
   - "write a propose doc for redesign of <component>"
 when_not_to_load:
-  - routine PR review (use a review skill such as `pr-review` if you have it; example external skill, not shipped from this repo)
+  - routine PR review (use the **`pr-review`** project skill at `.cursor/skills/pr-review/` in `java-codebase-rag`, or your own review checklist)
   - single-question lookups answerable by one MCP call
   - editing existing code where the agent is already oriented
 ```
@@ -214,7 +214,7 @@ Total: 2 PRs.
 | Risk | Mitigation |
 | ---- | ---------- |
 | Skill body and AGENT-GUIDE.md drift on the 4-tool / 9-edge surface | Cheat sheet is the only overlap; ontology-bump checklist explicitly lists both files. |
-| Agents over-activate the skill (treat it as default for any search) | Activation phrases in §3.5 are intent-scoped; description explicitly states "use a review-oriented skill (example: `pr-review`) for routine PR review". `pr-review` is an example of such a skill (it lives in Dmitriy's user-skill library) and not shipped from this repo. |
+| Agents over-activate the skill (treat it as default for any search) | Activation phrases in §3.5 are intent-scoped; description explicitly states "use a review-oriented skill (example: **`pr-review`** in `java-codebase-rag` under `.cursor/skills/pr-review/`) for routine PR review". |
 | Six missions don't cover real-world intent distribution | Use-case re-walk covered 16 cases with 0 misses. v2 adds missions only if a real session needs one. |
 | Skill body too long to be effective (skill bloat) | Strict section budget: target ≤ 800 lines including cheat sheet. Re-walked use cases use ≤ 5 calls each, so prose can stay tight. |
 | The `.zip` package format diverges across target platforms (Claude Code vs Cursor vs Perplexity) | v1 ships **Perplexity format only** — the primary consumer. Adding Claude Code / Cursor variants is deferred until a real downstream consumer needs them. This is the single source of truth on package scope; §1 / §3.1 align with this row. |

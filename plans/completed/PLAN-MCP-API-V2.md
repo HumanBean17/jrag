@@ -478,7 +478,7 @@ After this PR, MCP surface is **exactly 4 tools**
 - Update the "Where to look" / tool-list paragraph to reflect the 4-tool MCP
   surface and reference `user-rag --help` for ops.
 
-### 6. `pr-review` skill (user-scoped) — update bash snippets
+### 6. `pr-review` skill (`.cursor/skills/pr-review/` in this repo) — update bash snippets
 
 - Update any references to `analyze_pr` MCP calls to `user-rag analyze-pr
   --diff-file /tmp/pr.diff`. Use the `update_user_skill` flow (or have the user
@@ -554,4 +554,4 @@ DoD is the delta + suite-green, not an absolute total.
 | Removing v1 tools breaks the agent system prompt | V2-3 | `propose/PRODUCT-VISION.md` and README are updated in the same PR. Agent prompt is separate (not in this repo). |
 | CLI subprocess tests are slow / flaky | V2-4 | Each subprocess invocation hits a pre-built fixture under `/tmp`; no rebuilds inside tests. Targeted at < 5s total. |
 | `pyproject.toml` package layout breaks the existing flat-script bundle | V2-4 | Today's `packages = []` is intentional; we promote it to `packages = ["user_rag"]` only — root scripts (`server.py`, `build_ast_graph.py`, etc.) stay outside the package. Tested by `pip install .` succeeding. |
-| User skill `pr-review` still calls `analyze_pr` MCP after V2-4 | V2-4 | PR description includes a manual TODO for the user to update the skill. CLI version of the call is documented in README's "Migration from v1" subsection. |
+| `pr-review` skill under `.cursor/skills/pr-review/` still calls `analyze_pr` MCP after V2-4 | V2-4 | PR description includes a manual TODO to update that skill. CLI version of the call is documented in README's "Migration from v1" subsection. |

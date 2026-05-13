@@ -66,7 +66,7 @@ Per [`propose/TEST-SUITE-FAST-LOOP-PROPOSE.md`](../../../propose/TEST-SUITE-FAST
 - **Merge gate:** state that the **full** default suite (`pytest tests`, `JAVA_CODEBASE_RAG_RUN_HEAVY` unset or `0`) is enforced at merge time by CI once the repo workflow exists; the iteration list is for speed only.
 - **Docs-only (UC15):** if the PR is documentation-only with no test signal, use an explicit empty pattern, e.g. a single bullet `*(none — docs-only change; full suite still runs in CI.)*` — do not invent a fake file list.
 
-This heading must stay verbatim so reviewers (and the user-scoped **`pr-review`** skill, if present) can grep for it.
+This heading must stay verbatim so reviewers (and the repo **`pr-review`** skill in `.cursor/skills/pr-review/`) can grep for it.
 
 ## Style rules
 
