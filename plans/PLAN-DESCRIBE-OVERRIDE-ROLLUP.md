@@ -60,8 +60,7 @@ Landing order: **PR-1 only**.
   - Return `collect(DISTINCT mover.id)` (or equivalent) into Python; if non-empty, set `OVERRIDDEN_BY` to `{"in": 0, "out": len(impl_ids)}` (use **distinct id count**, matching propose appendix which uses `len(impls)` after distinct collect).
   - **Brownfield:** from that id list, count all outgoing `DECLARES_CLIENT` and `EXPOSES` edges (separate aggregates); emit `OVERRIDDEN_BY.DECLARES_CLIENT` / `OVERRIDDEN_BY.EXPOSES` only when counts > 0.
   - **Dispatch-up:** symmetric walk `(m)<-[:DECLARES]-(impl)`, `(impl)-[:IMPLEMENTS|EXTENDS]->(parent)`, `(parent)-[:DECLARES]->(decl_m)` with `decl_m.signature = m.signature`, `decl_m.id <> m.id`. Count **distinct** `decl_m.id` for `OVERRIDES` (UC7 allows `out: 2` — no dedup across declarations).
-  - **Static on described method:** if using Cypher-only gating, anchor `WHERE NOT list_contains(COALESCE(m.modifiers, []), 'static')` (verify `COALESCE` / empty-list behaviour against Kuzu version used in CI) for both directions; or skip helper entirely from `mcp_v2` when modifiers contain `static`.
-- **Dispatch-up for static m:** UC8 requires rollup silent; ensure the dispatch-up branch does not emit `OVERRIDES` for static interface methods when that would contradict the table — gating the **whole** helper on static `m` matches propose UC8 “all omitted”.
+  - **Static on described method (UC8):** use one **whole-helper** gate so static `m` returns `{}` with no queries (Python: bail out before Cypher) or a single top-level `MATCH (m:Symbol {id: $id}) WHERE NOT list_contains(COALESCE(m.modifiers, []), 'static')` wrapper — never run dispatch-down, brownfield counts, or dispatch-up alone. That keeps `OVERRIDES` off static interface methods as well as the declaration-side keys.
 
 ### 2. `mcp_v2.py`
 
@@ -96,7 +95,7 @@ Add **exactly** these five tests (propose §6):
 
 ### 6. Regression guard: existing `test_describe_method_symbol_no_composed_keys`
 
-- That test proves **type-rolloup** `DECLARES.*` keys stay off method nodes. After this PR, the same method may legitimately show `OVERRIDDEN_BY` / `OVERRIDES`.
+- That test proves **type-rollup** `DECLARES.*` keys stay off method nodes. After this PR, the same method may legitimately show `OVERRIDDEN_BY` / `OVERRIDES`.
 - **Amend assertions** to only require absence of keys `DECLARES.DECLARES_CLIENT` and `DECLARES.EXPOSES` (unchanged intent). Do not require zero dot-keys globally.
 
 ## Tests for PR-1

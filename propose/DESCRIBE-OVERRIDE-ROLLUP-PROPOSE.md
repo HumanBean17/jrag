@@ -191,9 +191,9 @@ In `docs/AGENT-GUIDE.md` under `describe`:
     2. Run the dispatch-down walk (declarations → impls) and dispatch-up walk (override → declarations) using `signature` equality.
     3. Count `DECLARES_CLIENT` / `EXPOSES` outgoing edges on the collected override method ids.
     4. Emit non-zero keys only.
-  - In `mcp_v2._edge_summary_for_node` (or `describe_v2`), check `kind == "symbol"` AND `data.kind in {"method", "constructor"}`. If so, call the rollup helper and merge non-zero results.
+  - In `mcp_v2._edge_summary_for_node` (or `describe_v2`), check `kind == "symbol"` AND `data.kind == "method"`, then merge non-zero rollup results (constructors: no helper call — see [`plans/PLAN-DESCRIBE-OVERRIDE-ROLLUP.md`](../plans/PLAN-DESCRIBE-OVERRIDE-ROLLUP.md) §PR-1).
   - Update `DescribeOutput` documentation / pydantic field-level description to mention method-side rollup keys.
-- **Test summary**: 5 new tests in `tests/test_mcp_v2.py`:
+- **Test summary**: 5 new tests in `tests/test_mcp_v2_compose.py` (same module as PR-89 describe `edge_summary` tests; avoids splitting describe rollups across files):
   - `test_describe_interface_method_with_annotated_impl_emits_rollup` — UC1 fixture.
   - `test_describe_concrete_override_emits_overrides_rollup` — UC2 fixture.
   - `test_describe_method_no_overrides_silent` — UC6 fixture (no upstream, no impls).
