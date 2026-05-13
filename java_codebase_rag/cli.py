@@ -169,7 +169,12 @@ def _cmd_init(args: argparse.Namespace) -> int:
         return 2
     cfg.index_dir.mkdir(parents=True, exist_ok=True)
     env = cfg.subprocess_env()
-    coco = run_cocoindex_update(env, full_reprocess=False, quiet=bool(args.quiet))
+    coco = run_cocoindex_update(
+        env,
+        full_reprocess=False,
+        quiet=bool(args.quiet),
+        lance_project_root=None if args.quiet else cfg.source_root,
+    )
     if coco.returncode != 0:
         _emit(
             {
@@ -208,7 +213,12 @@ def _cmd_increment(args: argparse.Namespace) -> int:
     cfg.apply_to_os_environ()
     _emit_increment_kuzu_warning()
     env = cfg.subprocess_env()
-    coco = run_cocoindex_update(env, full_reprocess=False, quiet=bool(args.quiet))
+    coco = run_cocoindex_update(
+        env,
+        full_reprocess=False,
+        quiet=bool(args.quiet),
+        lance_project_root=None if args.quiet else cfg.source_root,
+    )
     if coco.returncode != 0:
         _emit(
             {
