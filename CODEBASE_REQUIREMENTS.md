@@ -180,14 +180,14 @@ root (`role_overrides:`, `route_overrides:`, `http_client_overrides:`,
 - `@CodebaseHttpRoute` / `@CodebaseHttpRoutes` and
   `@CodebaseAsyncRoute` / `@CodebaseAsyncRoutes` (method-level inbound routes)
   — see README §3b.
-- `@CodebaseClient` / `@CodebaseClients` and `@CodebaseProducer` /
+- `@CodebaseHttpClient` / `@CodebaseHttpClients` and `@CodebaseProducer` /
   `@CodebaseProducers` (method-level outbound HTTP / messaging) — see
   README §3c.
 
 **MCP discovery:** after indexing, use MCP `find` with `kind="route"` for
 inbound HTTP and async routes and `kind="client"` for outbound HTTP `Client`
 declarations (Feign methods plus annotated imperative clients). Client rows
-require a graph built with `ontology_version` **10** or newer — confirm with
+require a graph built with `ontology_version` **12** or newer — confirm with
 `java-codebase-rag meta` (JSON field `ontology_version`).
 
 See **Brownfield overrides** in `README.md` for the full schema, usage

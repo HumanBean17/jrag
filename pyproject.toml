@@ -29,6 +29,7 @@ java-codebase-rag = "java_codebase_rag.cli:main"
 packages = ["java_codebase_rag"]
 py-modules = [
     "ast_java",
+    "brownfield_events",
     "build_ast_graph",
     "chunk_heuristics",
     "graph_enrich",

@@ -33,7 +33,7 @@ from ast_java import (
     ROUTE_META_ANNOTATION_NAMES,
     TypeDecl,
     _ROUTE_HTTP_MAPPING_NAMES,
-    CODEBASE_CLIENT_ANNOTATIONS,
+    CODEBASE_HTTP_CLIENT_ANNOTATIONS,
     CODEBASE_PRODUCER_ANNOTATIONS,
     infer_capabilities_for_type,
     infer_role_for_type,
@@ -243,7 +243,7 @@ def _meta_builtins() -> frozenset[str]:
         | frozenset(_METHOD_ANN_TO_CAPABILITY)
         | frozenset(_TYPE_ANN_TO_CAPABILITY)
         | ROUTE_META_ANNOTATION_NAMES
-        | CODEBASE_CLIENT_ANNOTATIONS
+        | CODEBASE_HTTP_CLIENT_ANNOTATIONS
         | CODEBASE_PRODUCER_ANNOTATIONS
     )
 
@@ -952,7 +952,9 @@ def _merge_layer_c_codebase_routes(
 ) -> list[RouteDecl]:
     """Layer C — brownfield in-source routes win over same-method auto extraction.
 
-    HTTP: merge fields onto the first same-method built-in HTTP row.
+    HTTP: any `@CodebaseHttpRoute` for a method drops same-method **built-in** HTTP
+    rows (typically `@GetMapping`), then layer C HTTP rows are appended so the
+    brownfield path/method is authoritative (no field merge onto surviving built-ins).
     Async: any `@CodebaseAsyncRoute` (`kafka_topic`) for a method drops same-method
     **built-in** `kafka_topic` rows (typically `@KafkaListener`), then layer C rows
     are merged/appended so the brownfield topic is authoritative over auto extraction.
@@ -975,7 +977,23 @@ def _merge_layer_c_codebase_routes(
                 and r.route_source_layer == "builtin"
             )
         ]
+    http_override_mf = {
+        cr.method_fqn for cr in layer_c if cr.kind in _HTTP_ROUTE_KINDS
+    }
+    if http_override_mf:
+        merged = [
+            r
+            for r in merged
+            if not (
+                r.method_fqn in http_override_mf
+                and r.kind in _HTTP_ROUTE_KINDS
+                and r.route_source_layer == "builtin"
+            )
+        ]
     for cr in sorted(layer_c, key=lambda x: (x.path, x.http_method, x.topic)):
+        if cr.kind in _HTTP_ROUTE_KINDS:
+            merged.append(replace(cr))
+            continue
         placed = False
         for i, r in enumerate(merged):
             if (
@@ -1094,7 +1112,7 @@ def resolve_routes_for_method(
     if any(a.name in {"CodebaseRoute", "CodebaseRoutes"} for _m, a in combined_anns):
         print(
             "[lancedb-mcp] v1 brownfield annotation detected; migrate to "
-            "CodebaseHttpRoute / CodebaseAsyncRoute / CodebaseClient",
+            "CodebaseHttpRoute / CodebaseAsyncRoute / CodebaseHttpClient",
             file=sys.stderr,
         )
 
@@ -1297,12 +1315,12 @@ def resolve_http_client_for_method(
             key = (ann.name, ann.qualified)
             if key in seen_a:
                 continue
-            if ann.name in CODEBASE_CLIENT_ANNOTATIONS:
+            if ann.name in CODEBASE_HTTP_CLIENT_ANNOTATIONS:
                 continue
             chain = meta_chain.get(ann.name, frozenset())
-            if "CodebaseClient" not in chain and "CodebaseClients" not in chain:
+            if "CodebaseHttpClient" not in chain and "CodebaseHttpClients" not in chain:
                 continue
-            hint = overrides.annotation_to_http_client_hint.get("CodebaseClient")
+            hint = overrides.annotation_to_http_client_hint.get("CodebaseHttpClient")
             if hint is None:
                 hint = HttpClientHint(
                     client_kind=anchor.client_kind if anchor else "rest_template",

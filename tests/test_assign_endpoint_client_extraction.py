@@ -1,4 +1,4 @@
-"""Regression: JAX-RS-style Feign-like interface + @CodebaseClient (user AssignEndpoint shape)."""
+"""Regression: JAX-RS-style Feign-like interface + @CodebaseHttpClient (user AssignEndpoint shape)."""
 
 from __future__ import annotations
 
@@ -125,15 +125,10 @@ public final class HttpMethod {
 }
 
 
-def test_client_method_field_access_httpmethod_post_stores_non_verb_method_string(
+def test_client_method_field_access_codebase_http_method_post_stores_post(
     tmp_path: Path,
 ) -> None:
-    """``method = HttpMethod.POST`` is string-parsed as raw ``HttpMethod.POST`` → ``HTTPMETHOD.POST``.
-
-    Callers filtering ``find(kind=\"client\", filter={\"client_method\":\"POST\"})`` see
-    **no rows** even though a ``Client`` exists; use static-import ``POST`` or a
-    string literal ``\"POST\"``.
-    """
+    """``method = CodebaseHttpMethod.POST`` stores ``POST`` on the Client row."""
     extra = {
         "javax/ws/rs/HttpMethod.java": """package javax.ws.rs;
 public final class HttpMethod {
@@ -144,10 +139,9 @@ public final class HttpMethod {
 
 import com.example.rag.*;
 import static com.example.rag.CodebaseClientKind.feign_method;
-import javax.ws.rs.HttpMethod;
 
 public interface E {
-    @CodebaseClient(clientKind = feign_method, path = "/x", method = HttpMethod.POST)
+    @CodebaseHttpClient(clientKind = feign_method, path = "/x", method = CodebaseHttpMethod.POST)
     void m();
 }
 """,
@@ -155,11 +149,11 @@ public interface E {
     db = _build(tmp_path, None, extra)
     rows = _rows(db, "MATCH (c:Client) RETURN c.method, c.path, c.client_kind")
     assert rows
-    assert any(row[0] == "HTTPMETHOD.POST" and row[1] == "/x" and row[2] == "feign_method" for row in rows)
+    assert any(row[0] == "POST" and row[1] == "/x" and row[2] == "feign_method" for row in rows)
 
 
 def test_assign_endpoint_style_interface_emits_client_row(tmp_path: Path) -> None:
-    """Mirror user AssignEndpoint: role/capability + JAX-RS-ish + @CodebaseClient on no-body method.
+    """Mirror user AssignEndpoint: role/capability + JAX-RS-ish + @CodebaseHttpClient on no-body method.
 
     Uses unqualified ``feign_method`` (static import) and ``method = POST`` (javax.ws.rs.HttpMethod.POST).
     """
@@ -184,7 +178,7 @@ public interface AssignEndpoint {
 
     @POST
     @PATH("/operator/session/open")
-    @CodebaseClient(
+    @CodebaseHttpClient(
         clientKind = feign_method,
         path = "/operator/session/open",
         method = POST
