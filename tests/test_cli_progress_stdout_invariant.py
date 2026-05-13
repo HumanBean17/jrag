@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import os
 import shutil
 import subprocess
@@ -114,6 +115,7 @@ def test_refresh_pipeline_quiet_stderr_baseline(monkeypatch: pytest.MonkeyPatch,
     assert "idx_out" in out.stdout
 
 
+@pytest.mark.skipif(os.environ.get("JAVA_CODEBASE_RAG_RUN_HEAVY", "").strip() != "1", reason="cocoindex lifecycle; set JAVA_CODEBASE_RAG_RUN_HEAVY=1")
 @pytest.mark.skipif(not _cocoindex_available(), reason="cocoindex not installed in venv")
 def test_cli_lifecycle_stdout_invariant_init(corpus_root: Path, tmp_path: Path) -> None:
     baseline = (_FIXTURE_DIR / "init_quiet_success.stdout.txt").read_text(encoding="utf-8")
@@ -180,3 +182,94 @@ def test_cli_lifecycle_stdout_invariant_reprocess(
         )
     assert rc == 0
     assert buf.getvalue() == baseline
+
+
+def test_cli_lifecycle_stdout_invariant_erase_quiet(tmp_path: Path) -> None:
+    idx = tmp_path / "idx_so"
+    idx.mkdir()
+    env = os.environ.copy()
+    env["JAVA_CODEBASE_RAG_INDEX_DIR"] = str(idx)
+    env["JAVA_CODEBASE_RAG_SOURCE_ROOT"] = str(tmp_path)
+    proc = _run_cli(
+        ["erase", "--source-root", str(tmp_path), "--index-dir", str(idx), "--yes", "--quiet"],
+        env=env,
+    )
+    assert proc.returncode == 0
+    assert proc.stdout.strip() == '{"message": "erase completed", "success": true}'
+
+
+@pytest.mark.skipif(os.environ.get("JAVA_CODEBASE_RAG_RUN_HEAVY", "").strip() != "1", reason="cocoindex lifecycle; set JAVA_CODEBASE_RAG_RUN_HEAVY=1")
+@pytest.mark.skipif(not _cocoindex_available(), reason="cocoindex not installed in venv")
+def test_cli_lifecycle_stdout_invariant_init_increment_reprocess_when_cocoindex(
+    tmp_path: Path,
+    corpus_root: Path,
+) -> None:
+    idx = tmp_path / "idx_inv"
+    env = os.environ.copy()
+    env["JAVA_CODEBASE_RAG_INDEX_DIR"] = str(idx)
+    env["JAVA_CODEBASE_RAG_SOURCE_ROOT"] = str(corpus_root.resolve())
+
+    r_pre = _run_cli(
+        ["erase", "--source-root", str(corpus_root), "--index-dir", str(idx), "--yes", "--quiet"],
+        env=env,
+    )
+    assert r_pre.returncode == 0, r_pre.stderr
+
+    r_init = _run_cli(
+        ["init", "--source-root", str(corpus_root), "--index-dir", str(idx), "--quiet"],
+        env=env,
+    )
+    assert r_init.returncode == 0, r_init.stderr + r_init.stdout
+    assert r_init.stdout.strip() == '{"message": "init completed", "success": true}'
+
+    r_inc = _run_cli(
+        ["increment", "--source-root", str(corpus_root), "--index-dir", str(idx), "--quiet"],
+        env=env,
+    )
+    assert r_inc.returncode == 0, r_inc.stderr + r_inc.stdout
+    inc_payload = json.loads(r_inc.stdout)
+    assert inc_payload == {
+        "success": True,
+        "message": "increment completed (Lance only; graph may be stale — see stderr)",
+    }
+
+    r_rep = _run_cli(
+        ["reprocess", "--source-root", str(corpus_root), "--index-dir", str(idx), "--quiet"],
+        env=env,
+    )
+    assert r_rep.returncode == 0, r_rep.stderr + r_rep.stdout
+    rep_payload = json.loads(r_rep.stdout)
+    assert rep_payload.get("success") is True
+    assert isinstance(rep_payload.get("stdout"), str)
+    assert isinstance(rep_payload.get("graph_stderr"), str)
+
+
+def test_pipeline_footer_reflects_exception_before_propagate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from java_codebase_rag.config import resolve_operator_config
+
+    import java_codebase_rag.cli as cli_mod
+
+    cfg = resolve_operator_config(source_root=tmp_path, cli_index_dir=str(tmp_path / "ix_footer"))
+    codes: list[int] = []
+
+    def capture_footer(_sub: str, _t0: float, code: int) -> None:
+        codes.append(code)
+
+    monkeypatch.setattr(cli_mod, "_pipeline_footer", capture_footer)
+
+    def boom() -> int:
+        raise RuntimeError("simulated handler failure")
+
+    with pytest.raises(RuntimeError, match="simulated handler failure"):
+        cli_mod._run_with_pipeline_progress("reprocess", cfg, quiet=False, work=boom)
+    assert codes == [2]
+
+    codes.clear()
+
+    def exit5() -> int:
+        raise SystemExit(5)
+
+    with pytest.raises(SystemExit) as excinfo:
+        cli_mod._run_with_pipeline_progress("reprocess", cfg, quiet=False, work=exit5)
+    assert excinfo.value.code == 5
+    assert codes == [5]

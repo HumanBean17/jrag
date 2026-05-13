@@ -62,11 +62,17 @@ The session-scoped fixtures in `conftest.py` materialize Kuzu (and, where needed
 The heavier end-to-end test that runs `cocoindex` + a real LanceDB index is
 gated behind `JAVA_CODEBASE_RAG_RUN_HEAVY=1` because it downloads the embedding
 model on first run and indexes the corpus from scratch (~minute on a
-warm cache, several minutes cold).
+warm cache, several minutes cold). The same gate applies to full
+`java-codebase-rag` lifecycle subprocess checks in
+`tests/test_cli_progress_stdout_invariant.py` and the cocoindex portion of
+`tests/test_cli_quiet_parity.py` so default `pytest tests` stays fast when
+`cocoindex` is installed.
 
 ```bash
 JAVA_CODEBASE_RAG_RUN_HEAVY=1 .venv/bin/pytest tests -v
 ```
+
+**`JAVA_CODEBASE_RAG_TEST_GRAPH_SLOW_SEC`:** optional float read by `build_ast_graph.py` in pass1 only. When set (e.g. `6`), pass1 sleeps that many seconds under `--verbose` so tests can assert heartbeat lines. Leave unset for normal `pytest` runs.
 
 ---
 

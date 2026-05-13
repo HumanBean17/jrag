@@ -33,7 +33,7 @@ This MCP indexes Java enterprise projects into two stores:
 
 **MCP surface (navigation only):** `search`, `find`, `describe`, `neighbors`.
 
-**Operator / diagnostics (not MCP):** use the **`java-codebase-rag`** CLI — lifecycle (`init`, `increment`, `reprocess`, `erase`) plus `meta`, `tables`, `diagnose-ignore`, `analyze-pr`. Rebuilds are slow; the coding agent should not pretend it can reindex via MCP.
+**Operator / diagnostics (not MCP):** use the **`java-codebase-rag`** CLI — lifecycle (`init`, `increment`, `reprocess`, `erase`) plus `meta`, `tables`, `diagnose-ignore`, `analyze-pr`. Rebuilds are slow; the coding agent should not pretend it can reindex via MCP. For lifecycle commands, subprocess progress is written to **stderr** (use **`--quiet`** to suppress it); **stdout** is only the structured result payload.
 
 **Use this MCP when** you need whole-codebase context: who calls what, what handles a route, what a method invokes, where clients point, or fuzzy “where is concept X” entry points.
 

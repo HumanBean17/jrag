@@ -31,6 +31,7 @@ import logging
 import os
 import re
 import sys
+import threading
 import time
 from collections import defaultdict
 from dataclasses import asdict, dataclass, field, replace
@@ -66,6 +67,55 @@ from path_filtering import LayeredIgnore, iter_java_source_files
 from java_ontology import VALID_CLIENT_KINDS, VALID_HTTP_CALL_MATCHES
 
 log = logging.getLogger(__name__)
+
+_VERBOSE_STDERR_LOCK = threading.Lock()
+
+_PASS1_START = "[pass1] starting · parsing Java files under source root"
+_PASS2_START = "[pass2] starting · emitting EXTENDS / IMPLEMENTS / DECLARES rows"
+_PASS3_START = "[pass3] starting · call resolution (outgoing calls per site)"
+_PASS4_START = "[pass4] starting · route and EXPOSES extraction"
+_PASS5_START = "[pass5] starting · imperative HTTP_CALLS / ASYNC_CALLS edges"
+_PASS6_START = "[pass6] starting · cross-service call-edge matching"
+_WRITE_START = "[write] starting · writing Kuzu graph to disk"
+
+
+def _verbose_stderr_line(content: str) -> None:
+    with _VERBOSE_STDERR_LOCK:
+        print(content, file=sys.stderr, flush=True)
+
+
+class _VerbosePassHeartbeats:
+    """Emit ``[tag] running … Ns elapsed`` every 5s on stderr while in scope (verbose only)."""
+
+    def __init__(self, tag: str, *, verbose: bool) -> None:
+        self._tag = tag
+        self._verbose = verbose
+        self._thr: threading.Thread | None = None
+        self._stop: threading.Event | None = None
+
+    def __enter__(self) -> None:
+        if not self._verbose:
+            return None
+        self._stop = threading.Event()
+        stop = self._stop
+        tag = self._tag
+
+        def worker() -> None:
+            t0 = time.monotonic()
+            while not stop.wait(timeout=5.0):
+                elapsed = int(time.monotonic() - t0)
+                _verbose_stderr_line(f"{tag} running … {elapsed}s elapsed")
+
+        self._thr = threading.Thread(target=worker, name=f"hb-{tag}", daemon=True)
+        self._thr.start()
+        return None
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        if self._thr is not None and self._stop is not None:
+            self._stop.set()
+            self._thr.join(timeout=2.0)
+        return False
+
 
 _JAVA_LANG_SIMPLE = frozenset({
     "Object", "String", "Integer", "Long", "Short", "Byte", "Boolean", "Double",
@@ -362,51 +412,64 @@ def pass1_parse(root: Path, tables: GraphTables, *, verbose: bool) -> dict[str, 
     ignore = LayeredIgnore(root)
     t0 = time.time()
     n_files = 0
-    for p in iter_java_source_files(root, ignore=ignore):
-        n_files += 1
+    if verbose:
+        _verbose_stderr_line(_PASS1_START)
+    slow_sec = 0.0
+    raw_slow = os.environ.get("JAVA_CODEBASE_RAG_TEST_GRAPH_SLOW_SEC", "").strip()
+    if raw_slow:
         try:
-            content = p.read_bytes()
-        except OSError:
-            tables.skipped_files += 1
-            continue
-        if not content.strip():
-            continue
-        try:
-            rel = p.resolve().relative_to(root.resolve()).as_posix()
+            slow_sec = float(raw_slow)
         except ValueError:
-            rel = p.as_posix()
-        try:
-            ast = parse_java(content, filename=rel, verbose=verbose)
-        except Exception:
-            tables.parse_errors += 1
-            continue
-        if ast.parse_error:
-            tables.parse_errors += 1
-            # Still index what tree-sitter gave us; robust to syntax errors.
-        module = module_for_path(str(p), root)
-        microservice = microservice_for_path(str(p), root)
-        asts[rel] = ast
+            slow_sec = 0.0
+    with _VerbosePassHeartbeats("[pass1]", verbose=verbose):
+        if verbose and slow_sec > 0:
+            time.sleep(slow_sec)
+        for p in iter_java_source_files(root, ignore=ignore):
+            n_files += 1
+            try:
+                content = p.read_bytes()
+            except OSError:
+                tables.skipped_files += 1
+                continue
+            if not content.strip():
+                continue
+            try:
+                rel = p.resolve().relative_to(root.resolve()).as_posix()
+            except ValueError:
+                rel = p.as_posix()
+            try:
+                ast = parse_java(content, filename=rel, verbose=verbose)
+            except Exception:
+                tables.parse_errors += 1
+                continue
+            if ast.parse_error:
+                tables.parse_errors += 1
+                # Still index what tree-sitter gave us; robust to syntax errors.
+            module = module_for_path(str(p), root)
+            microservice = microservice_for_path(str(p), root)
+            asts[rel] = ast
 
-        # file node
-        file_id = symbol_id("file", rel, rel, 0)
-        tables.files[rel] = file_id
+            # file node
+            file_id = symbol_id("file", rel, rel, 0)
+            tables.files[rel] = file_id
 
-        # package node (created lazily; nodes deduped by id)
-        if ast.package and ast.package not in tables.packages:
-            tables.packages[ast.package] = symbol_id("package", ast.package, "", 0)
+            # package node (created lazily; nodes deduped by id)
+            if ast.package and ast.package not in tables.packages:
+                tables.packages[ast.package] = symbol_id("package", ast.package, "", 0)
 
-        for t in ast.top_level_types:
-            _register_type(
-                tables, t, file_path=rel,
-                module=module, microservice=microservice, outer_fqn=None,
-            )
+            for t in ast.top_level_types:
+                _register_type(
+                    tables, t, file_path=rel,
+                    module=module, microservice=microservice, outer_fqn=None,
+                )
 
     if verbose:
         elapsed = time.time() - t0
-        print(f"[pass1] parsed {n_files} files in {elapsed:.2f}s: "
-              f"{len(tables.types)} types, {len(tables.members)} members, "
-              f"{tables.parse_errors} parse errors, {tables.skipped_files} skipped",
-              file=sys.stderr)
+        _verbose_stderr_line(
+            f"[pass1] parsed {n_files} files in {elapsed:.2f}s: "
+            f"{len(tables.types)} types, {len(tables.members)} members, "
+            f"{tables.parse_errors} parse errors, {tables.skipped_files} skipped",
+        )
     return asts
 
 
@@ -639,19 +702,23 @@ def pass2_edges(tables: GraphTables, asts: dict[str, JavaFileAst], *, verbose: b
     seen_ext: set[tuple[str, str]] = set()
     seen_impl: set[tuple[str, str]] = set()
     seen_inj: set[tuple[str, str, str, str]] = set()
-    for fqn, entry in tables.types.items():
-        ast = asts.get(entry.file_path)
-        if ast is None:
-            continue
-        _emit_extends_implements(entry, ast, tables, seen_ext=seen_ext, seen_impl=seen_impl)
-        _emit_injects(entry, ast, tables, seen=seen_inj)
+    if verbose:
+        _verbose_stderr_line(_PASS2_START)
+    with _VerbosePassHeartbeats("[pass2]", verbose=verbose):
+        for fqn, entry in tables.types.items():
+            ast = asts.get(entry.file_path)
+            if ast is None:
+                continue
+            _emit_extends_implements(entry, ast, tables, seen_ext=seen_ext, seen_impl=seen_impl)
+            _emit_injects(entry, ast, tables, seen=seen_inj)
     if verbose:
         elapsed = time.time() - t0
-        print(f"[pass2] emitted {len(tables.extends_rows)} EXTENDS, "
-              f"{len(tables.implements_rows)} IMPLEMENTS, "
-              f"{len(tables.injects_rows)} INJECTS, "
-              f"{len(tables.phantoms)} phantoms in {elapsed:.2f}s",
-              file=sys.stderr)
+        _verbose_stderr_line(
+            f"[pass2] emitted {len(tables.extends_rows)} EXTENDS, "
+            f"{len(tables.implements_rows)} IMPLEMENTS, "
+            f"{len(tables.injects_rows)} INJECTS, "
+            f"{len(tables.phantoms)} phantoms in {elapsed:.2f}s",
+        )
 
 
 # ---------- pass 3: call graph ----------
@@ -1216,13 +1283,16 @@ def _process_file_calls(
 
 
 def pass3_calls(tables: GraphTables, asts: dict[str, JavaFileAst], *, verbose: bool) -> None:
+    if verbose:
+        _verbose_stderr_line(_PASS3_START)
     _build_member_indexes(tables)
     stats = CallResolutionStats()
-    for rel_path, file_ast in asts.items():
-        try:
-            _process_file_calls(file_ast, rel_path, tables, stats)
-        except Exception as e:
-            log.error("Call extraction failed for %s: %s", rel_path, e)
+    with _VerbosePassHeartbeats("[pass3]", verbose=verbose):
+        for rel_path, file_ast in asts.items():
+            try:
+                _process_file_calls(file_ast, rel_path, tables, stats)
+            except Exception as e:
+                log.error("Call extraction failed for %s: %s", rel_path, e)
     pct_chained = 100.0 * stats.phantom_chained / max(1, stats.total)
     pct_callee_unres = 100.0 * stats.callee_unresolved / max(1, stats.total)
     pct_phantom_recv = 100.0 * stats.phantom_other / max(1, stats.total)
@@ -1236,7 +1306,7 @@ def pass3_calls(tables: GraphTables, asts: dict[str, JavaFileAst], *, verbose: b
     )
     log.info(msg)
     if verbose:
-        print(f"[pass3] {msg}", file=sys.stderr)
+        _verbose_stderr_line(f"[pass3] {msg}")
 
 
 _PATH_VAR_SEG = re.compile(r"^\{([^:{}]+)(?::([^}]*))?\}$")  # whole path segment
@@ -1342,118 +1412,121 @@ def pass4_routes(
         prs = str(source_root)
     tables.cross_service_resolution = _load_config_cross_service_resolution(prs)
     meta_chain = collect_annotation_meta_chain(prs)
+    if verbose:
+        _verbose_stderr_line(_PASS4_START)
+    with _VerbosePassHeartbeats("[pass4]", verbose=verbose):
 
-    for ast in asts.values():
-        stats.routes_skipped_unresolved += ast.routes_skipped_unresolved
+        for ast in asts.values():
+            stats.routes_skipped_unresolved += ast.routes_skipped_unresolved
 
-    routes_by_id: dict[str, RouteRow] = {}
-    exposes_seen: set[tuple[str, str]] = set()
+        routes_by_id: dict[str, RouteRow] = {}
+        exposes_seen: set[tuple[str, str]] = set()
 
-    http_kinds = frozenset({"http_endpoint", "http_consumer"})
+        http_kinds = frozenset({"http_endpoint", "http_consumer"})
 
-    for member in sorted(tables.members, key=lambda m: m.node_id):
-        if member.decl.is_constructor:
-            continue
-        ast = asts.get(member.file_path)
-        if ast is None:
-            continue
-        type_decl = tables.types[member.parent_fqn].decl
-        final_routes = resolve_routes_for_method(
-            method_decl=member.decl,
-            enclosing_type=type_decl,
-            overrides=overrides,
-            meta_chain=meta_chain,
-            builtin_routes=member.decl.routes,
-        )
-        if not final_routes:
-            continue
-        for decl in final_routes:
-            path_template, path_regex = ("", "")
-            if decl.kind in http_kinds:
-                if decl.resolved and decl.resolution_strategy in (
-                    "annotation",
-                    "codebase_route",
-                ):
-                    path_template, path_regex = _normalize_path(decl.path)
-                else:
-                    path_template, path_regex = "", ""
-            rid = _route_id(
-                decl.framework,
-                decl.kind,
-                decl.http_method,
-                path_template,
-                decl.path,
-                decl.topic,
-                decl.broker,
-                member.microservice,
+        for member in sorted(tables.members, key=lambda m: m.node_id):
+            if member.decl.is_constructor:
+                continue
+            ast = asts.get(member.file_path)
+            if ast is None:
+                continue
+            type_decl = tables.types[member.parent_fqn].decl
+            final_routes = resolve_routes_for_method(
+                method_decl=member.decl,
+                enclosing_type=type_decl,
+                overrides=overrides,
+                meta_chain=meta_chain,
+                builtin_routes=member.decl.routes,
             )
-            layer = decl.route_source_layer
-            if rid not in routes_by_id:
-                routes_by_id[rid] = RouteRow(
-                    id=rid,
-                    kind=decl.kind,
-                    framework=decl.framework,
-                    method=decl.http_method,
-                    path=decl.path,
-                    path_template=path_template,
-                    path_regex=path_regex,
-                    topic=decl.topic,
-                    broker=decl.broker,
-                    feign_name=decl.feign_name,
-                    feign_url=decl.feign_url,
-                    microservice=member.microservice,
-                    module=member.module,
-                    filename=decl.filename,
-                    start_line=decl.start_line,
-                    end_line=decl.end_line,
-                    resolved=decl.resolved,
-                    source_layer=layer,
+            if not final_routes:
+                continue
+            for decl in final_routes:
+                path_template, path_regex = ("", "")
+                if decl.kind in http_kinds:
+                    if decl.resolved and decl.resolution_strategy in (
+                        "annotation",
+                        "codebase_route",
+                    ):
+                        path_template, path_regex = _normalize_path(decl.path)
+                    else:
+                        path_template, path_regex = "", ""
+                rid = _route_id(
+                    decl.framework,
+                    decl.kind,
+                    decl.http_method,
+                    path_template,
+                    decl.path,
+                    decl.topic,
+                    decl.broker,
+                    member.microservice,
                 )
-            else:
-                prev = routes_by_id[rid]
-                if _ROUTE_LAYER_RANK.get(layer, 0) > _ROUTE_LAYER_RANK.get(
-                    prev.source_layer,
-                    0,
-                ):
-                    routes_by_id[rid] = replace(prev, source_layer=layer)
-            ek = (member.node_id, rid)
-            if ek not in exposes_seen:
-                route_kind = routes_by_id[rid].kind
-                if route_kind == "http_consumer":
-                    stats.exposes_suppressed_feign += 1
-                    continue
-                exposes_seen.add(ek)
-                tables.exposes_rows.append(
-                    ExposesRow(
-                        symbol_id=member.node_id,
-                        route_id=rid,
-                        confidence=decl.confidence,
-                        strategy=decl.resolution_strategy,
-                    ),
-                )
+                layer = decl.route_source_layer
+                if rid not in routes_by_id:
+                    routes_by_id[rid] = RouteRow(
+                        id=rid,
+                        kind=decl.kind,
+                        framework=decl.framework,
+                        method=decl.http_method,
+                        path=decl.path,
+                        path_template=path_template,
+                        path_regex=path_regex,
+                        topic=decl.topic,
+                        broker=decl.broker,
+                        feign_name=decl.feign_name,
+                        feign_url=decl.feign_url,
+                        microservice=member.microservice,
+                        module=member.module,
+                        filename=decl.filename,
+                        start_line=decl.start_line,
+                        end_line=decl.end_line,
+                        resolved=decl.resolved,
+                        source_layer=layer,
+                    )
+                else:
+                    prev = routes_by_id[rid]
+                    if _ROUTE_LAYER_RANK.get(layer, 0) > _ROUTE_LAYER_RANK.get(
+                        prev.source_layer,
+                        0,
+                    ):
+                        routes_by_id[rid] = replace(prev, source_layer=layer)
+                ek = (member.node_id, rid)
+                if ek not in exposes_seen:
+                    route_kind = routes_by_id[rid].kind
+                    if route_kind == "http_consumer":
+                        stats.exposes_suppressed_feign += 1
+                        continue
+                    exposes_seen.add(ek)
+                    tables.exposes_rows.append(
+                        ExposesRow(
+                            symbol_id=member.node_id,
+                            route_id=rid,
+                            confidence=decl.confidence,
+                            strategy=decl.resolution_strategy,
+                        ),
+                    )
 
-    tables.routes_rows = sorted(routes_by_id.values(), key=lambda r: r.id)
+        tables.routes_rows = sorted(routes_by_id.values(), key=lambda r: r.id)
 
-    for row in tables.routes_rows:
-        stats.by_framework[row.framework] += 1
-        stats.by_kind[row.kind] += 1
+        for row in tables.routes_rows:
+            stats.by_framework[row.framework] += 1
+            stats.by_kind[row.kind] += 1
 
-    n_routes = len(tables.routes_rows)
-    if n_routes:
-        stats.routes_resolved_pct = 100.0 * sum(
-            1 for r in tables.routes_rows if r.resolved
-        ) / n_routes
-        stats.routes_from_brownfield_pct = 100.0 * sum(
-            1 for r in tables.routes_rows if r.source_layer != "builtin"
-        ) / n_routes
-    else:
-        stats.routes_resolved_pct = 100.0
-        stats.routes_from_brownfield_pct = 0.0
+        n_routes = len(tables.routes_rows)
+        if n_routes:
+            stats.routes_resolved_pct = 100.0 * sum(
+                1 for r in tables.routes_rows if r.resolved
+            ) / n_routes
+            stats.routes_from_brownfield_pct = 100.0 * sum(
+                1 for r in tables.routes_rows if r.source_layer != "builtin"
+            ) / n_routes
+        else:
+            stats.routes_resolved_pct = 100.0
+            stats.routes_from_brownfield_pct = 0.0
 
-    by_layer: dict[str, int] = defaultdict(int)
-    for row in tables.routes_rows:
-        by_layer[row.source_layer] += 1
-    stats.routes_by_layer = dict(sorted(by_layer.items()))
+        by_layer: dict[str, int] = defaultdict(int)
+        for row in tables.routes_rows:
+            by_layer[row.source_layer] += 1
+        stats.routes_by_layer = dict(sorted(by_layer.items()))
 
     msg = (
         f"Route extraction: emitted={n_routes}, exposes={len(tables.exposes_rows)}, "
@@ -1465,7 +1538,7 @@ def pass4_routes(
     )
     log.info(msg)
     if verbose:
-        print(f"[pass4] {msg}", file=sys.stderr)
+        _verbose_stderr_line(f"[pass4] {msg}")
 
 
 def pass5_imperative_edges(
@@ -1514,96 +1587,142 @@ def pass5_imperative_edges(
         uniq = hashlib.sha1(f"{call.filename}:{call.start_line}:{call.raw_topic}".encode()).hexdigest()[:12]
         return f"r:phantom:{uniq}"
 
-    for member in sorted(tables.members, key=lambda x: x.node_id):
-        if member.decl.is_constructor:
-            continue
-        type_decl = tables.types[member.parent_fqn].decl
-        final_http_calls = resolve_http_client_for_method(
-            method_decl=member.decl,
-            enclosing_type=type_decl,
-            overrides=overrides,
-            meta_chain=meta_chain,
-            builtin_calls=member.decl.outgoing_calls,
-        )
-        final_async_calls = resolve_async_producer_for_method(
-            method_decl=member.decl,
-            enclosing_type=type_decl,
-            overrides=overrides,
-            meta_chain=meta_chain,
-            builtin_calls=member.decl.outgoing_calls,
-        )
-        micro_factor = _micro_factor(member)
-        for call in final_http_calls + final_async_calls:
-            if call.channel == "http":
-                client_path = (call.path_template_call or "").strip()
-                client_method = (call.method_call or "").strip().upper()
-                # Keep normalized path fields on Client now so LC3 filter semantics
-                # (`path_prefix`) can use persisted columns without extra transforms.
-                client_path_template = ""
-                client_path_regex = ""
-                if client_path:
-                    client_path_template, client_path_regex = _normalize_path(client_path)
-                cid = _client_id(
-                    microservice=member.microservice,
-                    member_fqn=call.method_fqn,
-                    client_kind=call.client_kind,
-                    path=client_path,
-                    method=client_method,
-                )
-                if cid not in client_seen:
-                    client_seen.add(cid)
-                    tables.client_rows.append(
-                        ClientRow(
-                            id=cid,
-                            client_kind=call.client_kind,
-                            target_service=call.feign_target_name,
-                            path=client_path,
-                            path_template=client_path_template,
-                            path_regex=client_path_regex,
-                            method=client_method,
-                            member_fqn=call.method_fqn,
-                            member_id=member.node_id,
-                            microservice=member.microservice,
-                            module=member.module,
-                            filename=call.filename,
-                            start_line=call.start_line,
-                            end_line=call.end_line,
-                            resolved=call.resolved,
-                            source_layer=_client_source_layer(call.resolution_strategy),
-                        ),
+    if verbose:
+        _verbose_stderr_line(_PASS5_START)
+    with _VerbosePassHeartbeats("[pass5]", verbose=verbose):
+        for member in sorted(tables.members, key=lambda x: x.node_id):
+            if member.decl.is_constructor:
+                continue
+            type_decl = tables.types[member.parent_fqn].decl
+            final_http_calls = resolve_http_client_for_method(
+                method_decl=member.decl,
+                enclosing_type=type_decl,
+                overrides=overrides,
+                meta_chain=meta_chain,
+                builtin_calls=member.decl.outgoing_calls,
+            )
+            final_async_calls = resolve_async_producer_for_method(
+                method_decl=member.decl,
+                enclosing_type=type_decl,
+                overrides=overrides,
+                meta_chain=meta_chain,
+                builtin_calls=member.decl.outgoing_calls,
+            )
+            micro_factor = _micro_factor(member)
+            for call in final_http_calls + final_async_calls:
+                if call.channel == "http":
+                    client_path = (call.path_template_call or "").strip()
+                    client_method = (call.method_call or "").strip().upper()
+                    # Keep normalized path fields on Client now so LC3 filter semantics
+                    # (`path_prefix`) can use persisted columns without extra transforms.
+                    client_path_template = ""
+                    client_path_regex = ""
+                    if client_path:
+                        client_path_template, client_path_regex = _normalize_path(client_path)
+                    cid = _client_id(
+                        microservice=member.microservice,
+                        member_fqn=call.method_fqn,
+                        client_kind=call.client_kind,
+                        path=client_path,
+                        method=client_method,
                     )
-                dkey = (member.node_id, cid)
-                if dkey not in declares_client_seen:
-                    declares_client_seen.add(dkey)
-                    tables.declares_client_rows.append(
-                        DeclaresClientRow(
+                    if cid not in client_seen:
+                        client_seen.add(cid)
+                        tables.client_rows.append(
+                            ClientRow(
+                                id=cid,
+                                client_kind=call.client_kind,
+                                target_service=call.feign_target_name,
+                                path=client_path,
+                                path_template=client_path_template,
+                                path_regex=client_path_regex,
+                                method=client_method,
+                                member_fqn=call.method_fqn,
+                                member_id=member.node_id,
+                                microservice=member.microservice,
+                                module=member.module,
+                                filename=call.filename,
+                                start_line=call.start_line,
+                                end_line=call.end_line,
+                                resolved=call.resolved,
+                                source_layer=_client_source_layer(call.resolution_strategy),
+                            ),
+                        )
+                    dkey = (member.node_id, cid)
+                    if dkey not in declares_client_seen:
+                        declares_client_seen.add(dkey)
+                        tables.declares_client_rows.append(
+                            DeclaresClientRow(
+                                symbol_id=member.node_id,
+                                client_id=cid,
+                                confidence=call.confidence_base,
+                                strategy=call.resolution_strategy,
+                            ),
+                        )
+                    rid = ""
+                    strategy = call.resolution_strategy
+                    if call.client_kind == "feign_method":
+                        exposing = next((e for e in tables.exposes_rows if e.symbol_id == member.node_id), None)
+                        if exposing is not None:
+                            rid = exposing.route_id
+                    if not rid:
+                        rid = _phantom_http_route_id(call)
+                        _append_route(
+                            RouteRow(
+                                id=rid,
+                                kind="http_endpoint",
+                                framework="",
+                                method=call.method_call,
+                                path=call.path_template_call,
+                                path_template=call.path_template_call,
+                                path_regex="",
+                                topic="",
+                                broker="",
+                                feign_name=call.feign_target_name,
+                                feign_url=call.feign_target_url,
+                                microservice="",
+                                module="",
+                                filename=call.filename,
+                                start_line=call.start_line,
+                                end_line=call.end_line,
+                                resolved=False,
+                                source_layer="builtin",
+                            )
+                        )
+                    key = (member.node_id, rid)
+                    if key in http_seen:
+                        continue
+                    http_seen.add(key)
+                    conf = call.confidence_base * 0.3 * micro_factor
+                    tables.http_call_rows.append(
+                        HttpCallRow(
                             symbol_id=member.node_id,
-                            client_id=cid,
-                            confidence=call.confidence_base,
-                            strategy=call.resolution_strategy,
-                        ),
+                            route_id=rid,
+                            confidence=conf,
+                            strategy=strategy,
+                            method_call=call.method_call,
+                            raw_uri=call.raw_uri,
+                            match="unresolved",
+                        )
                     )
-                rid = ""
-                strategy = call.resolution_strategy
-                if call.client_kind == "feign_method":
-                    exposing = next((e for e in tables.exposes_rows if e.symbol_id == member.node_id), None)
-                    if exposing is not None:
-                        rid = exposing.route_id
-                if not rid:
-                    rid = _phantom_http_route_id(call)
+                    tables.call_edge_stats.http_calls_total += 1
+                    tables.call_edge_stats.http_calls_by_client_kind[call.client_kind] += 1
+                    tables.call_edge_stats.http_calls_by_strategy[strategy] += 1
+                elif call.channel == "async":
+                    rid = _phantom_async_route_id(call)
                     _append_route(
                         RouteRow(
                             id=rid,
-                            kind="http_endpoint",
+                            kind="kafka_topic",
                             framework="",
-                            method=call.method_call,
-                            path=call.path_template_call,
-                            path_template=call.path_template_call,
+                            method="",
+                            path="",
+                            path_template="",
                             path_regex="",
-                            topic="",
-                            broker="",
-                            feign_name=call.feign_target_name,
-                            feign_url=call.feign_target_url,
+                            topic=call.topic_call,
+                            broker=call.broker_call,
+                            feign_name="",
+                            feign_url="",
                             microservice="",
                             module="",
                             filename=call.filename,
@@ -1613,118 +1732,74 @@ def pass5_imperative_edges(
                             source_layer="builtin",
                         )
                     )
-                key = (member.node_id, rid)
-                if key in http_seen:
-                    continue
-                http_seen.add(key)
-                conf = call.confidence_base * 0.3 * micro_factor
-                tables.http_call_rows.append(
-                    HttpCallRow(
-                        symbol_id=member.node_id,
-                        route_id=rid,
-                        confidence=conf,
-                        strategy=strategy,
-                        method_call=call.method_call,
-                        raw_uri=call.raw_uri,
-                        match="unresolved",
+                    key = (member.node_id, rid)
+                    if key in async_seen:
+                        continue
+                    async_seen.add(key)
+                    conf = call.confidence_base * 0.3 * micro_factor
+                    strategy = call.resolution_strategy
+                    tables.async_call_rows.append(
+                        AsyncCallRow(
+                            symbol_id=member.node_id,
+                            route_id=rid,
+                            confidence=conf,
+                            strategy=strategy,
+                            direction="producer",
+                            raw_topic=call.raw_topic,
+                            match="unresolved",
+                        )
                     )
-                )
-                tables.call_edge_stats.http_calls_total += 1
-                tables.call_edge_stats.http_calls_by_client_kind[call.client_kind] += 1
-                tables.call_edge_stats.http_calls_by_strategy[strategy] += 1
-            elif call.channel == "async":
-                rid = _phantom_async_route_id(call)
-                _append_route(
-                    RouteRow(
-                        id=rid,
-                        kind="kafka_topic",
-                        framework="",
-                        method="",
-                        path="",
-                        path_template="",
-                        path_regex="",
-                        topic=call.topic_call,
-                        broker=call.broker_call,
-                        feign_name="",
-                        feign_url="",
-                        microservice="",
-                        module="",
-                        filename=call.filename,
-                        start_line=call.start_line,
-                        end_line=call.end_line,
-                        resolved=False,
-                        source_layer="builtin",
-                    )
-                )
-                key = (member.node_id, rid)
-                if key in async_seen:
-                    continue
-                async_seen.add(key)
-                conf = call.confidence_base * 0.3 * micro_factor
-                strategy = call.resolution_strategy
-                tables.async_call_rows.append(
-                    AsyncCallRow(
-                        symbol_id=member.node_id,
-                        route_id=rid,
-                        confidence=conf,
-                        strategy=strategy,
-                        direction="producer",
-                        raw_topic=call.raw_topic,
-                        match="unresolved",
-                    )
-                )
-                tables.call_edge_stats.async_calls_total += 1
-                tables.call_edge_stats.async_calls_by_client_kind[call.client_kind] += 1
-                tables.call_edge_stats.async_calls_by_strategy[strategy] += 1
+                    tables.call_edge_stats.async_calls_total += 1
+                    tables.call_edge_stats.async_calls_by_client_kind[call.client_kind] += 1
+                    tables.call_edge_stats.async_calls_by_strategy[strategy] += 1
 
-    tables.routes_rows = sorted(route_rows, key=lambda r: r.id)
-    tables.client_rows = sorted(tables.client_rows, key=lambda c: c.id)
-    tables.declares_client_rows = sorted(
-        tables.declares_client_rows,
-        key=lambda e: (e.symbol_id, e.client_id),
-    )
-    tables.client_stats.clients_total = len(tables.client_rows)
-    tables.client_stats.declares_client_total = len(tables.declares_client_rows)
-    tables.client_stats.clients_by_kind = defaultdict(int)
-    for row in tables.client_rows:
-        tables.client_stats.clients_by_kind[row.client_kind] += 1
-    brownfield_strategies = frozenset(
-        (
-            "layer_b_ann",
-            "layer_a_meta",
-            "layer_c_source",
-            "layer_b_fqn",
-            "codebase_client",
-            "codebase_producer",
-        ),
-    )
-    if tables.call_edge_stats.http_calls_total:
-        n_http = sum(
-            v for k, v in tables.call_edge_stats.http_calls_by_strategy.items()
-            if k in brownfield_strategies
+        tables.routes_rows = sorted(route_rows, key=lambda r: r.id)
+        tables.client_rows = sorted(tables.client_rows, key=lambda c: c.id)
+        tables.declares_client_rows = sorted(
+            tables.declares_client_rows,
+            key=lambda e: (e.symbol_id, e.client_id),
         )
-        tables.call_edge_stats.http_clients_from_brownfield_pct = (
-            100.0 * float(n_http) / float(tables.call_edge_stats.http_calls_total)
+        tables.client_stats.clients_total = len(tables.client_rows)
+        tables.client_stats.declares_client_total = len(tables.declares_client_rows)
+        tables.client_stats.clients_by_kind = defaultdict(int)
+        for row in tables.client_rows:
+            tables.client_stats.clients_by_kind[row.client_kind] += 1
+        brownfield_strategies = frozenset(
+            (
+                "layer_b_ann",
+                "layer_a_meta",
+                "layer_c_source",
+                "layer_b_fqn",
+                "codebase_client",
+                "codebase_producer",
+            ),
         )
-    if tables.call_edge_stats.async_calls_total:
-        n_async = sum(
-            v for k, v in tables.call_edge_stats.async_calls_by_strategy.items()
-            if k in brownfield_strategies
-        )
-        tables.call_edge_stats.async_producers_from_brownfield_pct = (
-            100.0 * float(n_async) / float(tables.call_edge_stats.async_calls_total)
-        )
+        if tables.call_edge_stats.http_calls_total:
+            n_http = sum(
+                v for k, v in tables.call_edge_stats.http_calls_by_strategy.items()
+                if k in brownfield_strategies
+            )
+            tables.call_edge_stats.http_clients_from_brownfield_pct = (
+                100.0 * float(n_http) / float(tables.call_edge_stats.http_calls_total)
+            )
+        if tables.call_edge_stats.async_calls_total:
+            n_async = sum(
+                v for k, v in tables.call_edge_stats.async_calls_by_strategy.items()
+                if k in brownfield_strategies
+            )
+            tables.call_edge_stats.async_producers_from_brownfield_pct = (
+                100.0 * float(n_async) / float(tables.call_edge_stats.async_calls_total)
+            )
     if verbose:
         http_client = dict(sorted(tables.call_edge_stats.http_calls_by_client_kind.items()))
         async_client = dict(sorted(tables.call_edge_stats.async_calls_by_client_kind.items()))
         http_strategy = dict(sorted(tables.call_edge_stats.http_calls_by_strategy.items()))
         async_strategy = dict(sorted(tables.call_edge_stats.async_calls_by_strategy.items()))
-        print(
+        _verbose_stderr_line(
             f"[pass5] HTTP_CALLS: {len(tables.http_call_rows)} edges, "
             f"ASYNC_CALLS: {len(tables.async_call_rows)} edges; "
             f"http_by_client_kind={http_client}, async_by_client_kind={async_client}, "
             f"http_by_strategy={http_strategy}, async_by_strategy={async_strategy}",
-            file=sys.stderr,
         )
 
 
@@ -1865,166 +1940,167 @@ def pass6_match_edges(
     def _micro_factor(member: MemberEntry | None) -> float:
         return 1.0 if (member and member.microservice) else 0.85
 
-    for row in tables.http_call_rows:
-        if row.match != "unresolved":
-            continue
-        member = member_by_id.get(row.symbol_id)
-        base = row.confidence / max(1e-9, (0.3 * _micro_factor(member)))
-        src_route = route_by_id.get(row.route_id)
-        if src_route is None and member is not None:
-            # Recover feign caller hints from persisted caller-side Client declarations.
-            for client in client_hints_by_member.get(member.node_id, ()):
-                if client.client_kind != "feign_method":
-                    continue
-                path_template, path_regex = _normalize_path(client.path)
-                src_route = RouteRow(
-                    id="",
-                    kind="http_consumer",
-                    framework="feign",
-                    method=client.method,
-                    path=client.path,
-                    path_template=path_template,
-                    path_regex=path_regex,
-                    topic="",
-                    broker="",
-                    feign_name=client.target_service,
-                    # `Client` stores service-name hints, not feign URL; matcher keys off feign_name.
-                    feign_url="",
-                    microservice=member.microservice,
-                    module=member.module,
-                    filename=client.filename,
-                    start_line=client.start_line,
-                    end_line=client.end_line,
-                    resolved=client.resolved,
-                    source_layer=client.source_layer,
-                )
-                break
-        # Feign caller hints are synthesized as transient `http_consumer` routes in pass6;
-        # synthetic phantoms from imperative clients are `http_endpoint` even when `feign_name` is populated from
-        # `@CodebaseHttpClient.targetService` / YAML hints — those must path-match like RestTemplate.
-        _feign_like = (
-            src_route is not None
-            and src_route.kind == "http_consumer"
-            and bool(src_route.feign_name)
-        )
-        call = OutgoingCallDecl(
-            method_fqn=f"{member.parent_fqn}#{member.decl.signature}" if member else "",
-            method_sig=member.decl.signature if member else "",
-            client_kind="feign_method" if _feign_like else "rest_template",
-            channel="http",
-            feign_target_name=src_route.feign_name if src_route else "",
-            feign_target_url=src_route.feign_url if src_route else "",
-            path_template_call=src_route.path_template if src_route else "",
-            method_call=row.method_call,
-            topic_call="",
-            broker_call="",
-            raw_uri=row.raw_uri,
-            raw_topic="",
-            resolution_strategy=row.strategy,
-            confidence_base=base,
-            resolved=(row.strategy != "unresolved"),
-            filename=member.file_path if member else "",
-            start_line=member.decl.start_line if member else 0,
-            end_line=member.decl.end_line if member else 0,
-        )
-        outcome, candidates = _match_call_edge(call, all_routes, member.microservice if member else "")
-        if (
-            brownfield_only
-            and outcome == "cross_service"
-            and not _is_brownfield_sourced(row.strategy, candidates)
-        ):
-            outcome = "unresolved"
-            candidates = []
-            suppressed_auto_cross_count += 1
-            if len(suppressed_auto_cross_http) < 5:
-                suppressed_auto_cross_http.append(call.method_fqn)
-        if outcome in VALID_HTTP_CALL_MATCHES:
-            row.match = outcome
-        if outcome in ("cross_service", "intra_service") and len(candidates) == 1:
-            row.route_id = candidates[0].id
-        row.confidence = call.confidence_base * match_factor[row.match] * _micro_factor(member)
-        tables.call_edge_stats.http_calls_match_breakdown[row.match] += 1
-        if row.match == "cross_service":
-            tables.call_edge_stats.cross_service_calls_total += 1
-
-    for row in tables.async_call_rows:
-        if row.match != "unresolved":
-            continue
-        member = member_by_id.get(row.symbol_id)
-        base = row.confidence / max(1e-9, (0.3 * _micro_factor(member)))
-        src_route = route_by_id.get(row.route_id)
-        call = OutgoingCallDecl(
-            method_fqn=f"{member.parent_fqn}#{member.decl.signature}" if member else "",
-            method_sig=member.decl.signature if member else "",
-            client_kind="kafka_send",
-            channel="async",
-            feign_target_name="",
-            feign_target_url="",
-            path_template_call="",
-            method_call="",
-            topic_call=src_route.topic if src_route else "",
-            broker_call=src_route.broker if src_route else "",
-            raw_uri="",
-            raw_topic=row.raw_topic,
-            resolution_strategy=row.strategy,
-            confidence_base=base,
-            resolved=(row.strategy != "unresolved"),
-            filename=member.file_path if member else "",
-            start_line=member.decl.start_line if member else 0,
-            end_line=member.decl.end_line if member else 0,
-        )
-        outcome, candidates = _match_call_edge(call, all_routes, member.microservice if member else "")
-        if (
-            brownfield_only
-            and outcome == "cross_service"
-            and not _is_brownfield_sourced(row.strategy, candidates)
-        ):
-            outcome = "unresolved"
-            candidates = []
-            suppressed_auto_cross_count += 1
-            if len(suppressed_auto_cross_async) < 5:
-                suppressed_auto_cross_async.append(call.method_fqn)
-        if outcome in VALID_HTTP_CALL_MATCHES:
-            row.match = outcome
-        if outcome in ("cross_service", "intra_service") and len(candidates) == 1:
-            row.route_id = candidates[0].id
-        row.confidence = call.confidence_base * match_factor[row.match] * _micro_factor(member)
-        tables.call_edge_stats.async_calls_match_breakdown[row.match] += 1
-        if row.match == "cross_service":
-            tables.call_edge_stats.cross_service_calls_total += 1
-
-    inbound_route_ids = {r.route_id for r in tables.http_call_rows} | {r.route_id for r in tables.async_call_rows}
-    tables.routes_rows = sorted(
-        [
-            r for r in tables.routes_rows
-            if not (
-                (r.microservice == "")
-                and (r.framework == "")
-                and (not r.resolved)
-                and (r.id not in inbound_route_ids)
+    if verbose:
+        _verbose_stderr_line(_PASS6_START)
+    with _VerbosePassHeartbeats("[pass6]", verbose=verbose):
+        for row in tables.http_call_rows:
+            if row.match != "unresolved":
+                continue
+            member = member_by_id.get(row.symbol_id)
+            base = row.confidence / max(1e-9, (0.3 * _micro_factor(member)))
+            src_route = route_by_id.get(row.route_id)
+            if src_route is None and member is not None:
+                # Recover feign caller hints from persisted caller-side Client declarations.
+                for client in client_hints_by_member.get(member.node_id, ()):
+                    if client.client_kind != "feign_method":
+                        continue
+                    path_template, path_regex = _normalize_path(client.path)
+                    src_route = RouteRow(
+                        id="",
+                        kind="http_consumer",
+                        framework="feign",
+                        method=client.method,
+                        path=client.path,
+                        path_template=path_template,
+                        path_regex=path_regex,
+                        topic="",
+                        broker="",
+                        feign_name=client.target_service,
+                        # `Client` stores service-name hints, not feign URL; matcher keys off feign_name.
+                        feign_url="",
+                        microservice=member.microservice,
+                        module=member.module,
+                        filename=client.filename,
+                        start_line=client.start_line,
+                        end_line=client.end_line,
+                        resolved=client.resolved,
+                        source_layer=client.source_layer,
+                    )
+                    break
+            # Feign caller hints are synthesized as transient `http_consumer` routes in pass6;
+            # synthetic phantoms from imperative clients are `http_endpoint` even when `feign_name` is populated from
+            # `@CodebaseHttpClient.targetService` / YAML hints — those must path-match like RestTemplate.
+            _feign_like = (
+                src_route is not None
+                and src_route.kind == "http_consumer"
+                and bool(src_route.feign_name)
             )
-        ],
-        key=lambda r: r.id,
-    )
+            call = OutgoingCallDecl(
+                method_fqn=f"{member.parent_fqn}#{member.decl.signature}" if member else "",
+                method_sig=member.decl.signature if member else "",
+                client_kind="feign_method" if _feign_like else "rest_template",
+                channel="http",
+                feign_target_name=src_route.feign_name if src_route else "",
+                feign_target_url=src_route.feign_url if src_route else "",
+                path_template_call=src_route.path_template if src_route else "",
+                method_call=row.method_call,
+                topic_call="",
+                broker_call="",
+                raw_uri=row.raw_uri,
+                raw_topic="",
+                resolution_strategy=row.strategy,
+                confidence_base=base,
+                resolved=(row.strategy != "unresolved"),
+                filename=member.file_path if member else "",
+                start_line=member.decl.start_line if member else 0,
+                end_line=member.decl.end_line if member else 0,
+            )
+            outcome, candidates = _match_call_edge(call, all_routes, member.microservice if member else "")
+            if (
+                brownfield_only
+                and outcome == "cross_service"
+                and not _is_brownfield_sourced(row.strategy, candidates)
+            ):
+                outcome = "unresolved"
+                candidates = []
+                suppressed_auto_cross_count += 1
+                if len(suppressed_auto_cross_http) < 5:
+                    suppressed_auto_cross_http.append(call.method_fqn)
+            if outcome in VALID_HTTP_CALL_MATCHES:
+                row.match = outcome
+            if outcome in ("cross_service", "intra_service") and len(candidates) == 1:
+                row.route_id = candidates[0].id
+            row.confidence = call.confidence_base * match_factor[row.match] * _micro_factor(member)
+            tables.call_edge_stats.http_calls_match_breakdown[row.match] += 1
+            if row.match == "cross_service":
+                tables.call_edge_stats.cross_service_calls_total += 1
+
+        for row in tables.async_call_rows:
+            if row.match != "unresolved":
+                continue
+            member = member_by_id.get(row.symbol_id)
+            base = row.confidence / max(1e-9, (0.3 * _micro_factor(member)))
+            src_route = route_by_id.get(row.route_id)
+            call = OutgoingCallDecl(
+                method_fqn=f"{member.parent_fqn}#{member.decl.signature}" if member else "",
+                method_sig=member.decl.signature if member else "",
+                client_kind="kafka_send",
+                channel="async",
+                feign_target_name="",
+                feign_target_url="",
+                path_template_call="",
+                method_call="",
+                topic_call=src_route.topic if src_route else "",
+                broker_call=src_route.broker if src_route else "",
+                raw_uri="",
+                raw_topic=row.raw_topic,
+                resolution_strategy=row.strategy,
+                confidence_base=base,
+                resolved=(row.strategy != "unresolved"),
+                filename=member.file_path if member else "",
+                start_line=member.decl.start_line if member else 0,
+                end_line=member.decl.end_line if member else 0,
+            )
+            outcome, candidates = _match_call_edge(call, all_routes, member.microservice if member else "")
+            if (
+                brownfield_only
+                and outcome == "cross_service"
+                and not _is_brownfield_sourced(row.strategy, candidates)
+            ):
+                outcome = "unresolved"
+                candidates = []
+                suppressed_auto_cross_count += 1
+                if len(suppressed_auto_cross_async) < 5:
+                    suppressed_auto_cross_async.append(call.method_fqn)
+            if outcome in VALID_HTTP_CALL_MATCHES:
+                row.match = outcome
+            if outcome in ("cross_service", "intra_service") and len(candidates) == 1:
+                row.route_id = candidates[0].id
+            row.confidence = call.confidence_base * match_factor[row.match] * _micro_factor(member)
+            tables.call_edge_stats.async_calls_match_breakdown[row.match] += 1
+            if row.match == "cross_service":
+                tables.call_edge_stats.cross_service_calls_total += 1
+
+        inbound_route_ids = {r.route_id for r in tables.http_call_rows} | {r.route_id for r in tables.async_call_rows}
+        tables.routes_rows = sorted(
+            [
+                r for r in tables.routes_rows
+                if not (
+                    (r.microservice == "")
+                    and (r.framework == "")
+                    and (not r.resolved)
+                    and (r.id not in inbound_route_ids)
+                )
+            ],
+            key=lambda r: r.id,
+        )
 
     if verbose:
         if brownfield_only:
             n_bf = tables.call_edge_stats.cross_service_calls_total
             first_http = ", ".join(suppressed_auto_cross_http)
             first_async = ", ".join(suppressed_auto_cross_async)
-            print(
+            _verbose_stderr_line(
                 f"[pass6] cross_service_resolution=brownfield_only:\n"
                 f"        {n_bf} cross_service edges from brownfield layers,\n"
                 f"        {suppressed_auto_cross_count} auto-cross-service candidates suppressed -> unresolved\n"
                 f"        (first 5 http: {first_http})\n"
                 f"        (first 5 async: {first_async})",
-                file=sys.stderr,
             )
-        print(
+        _verbose_stderr_line(
             f"[pass6] http_match={dict(sorted(tables.call_edge_stats.http_calls_match_breakdown.items()))}, "
             f"async_match={dict(sorted(tables.call_edge_stats.async_calls_match_breakdown.items()))}, "
             f"cross_service_calls_total={tables.call_edge_stats.cross_service_calls_total}",
-            file=sys.stderr,
         )
 
 
@@ -2548,31 +2624,34 @@ def write_kuzu(
         meta_chain = collect_annotation_meta_chain(
             str(source_root.resolve()),
         )
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    db = kuzu.Database(str(db_path))
-    conn = kuzu.Connection(db)
-    _drop_all(conn)
-    _create_schema(conn)
-    t0 = time.time()
-    _write_nodes(
-        conn,
-        tables,
-        project_root=source_root,
-        meta_chain=meta_chain,
-    )
     if verbose:
-        print(f"[write] nodes written in {time.time() - t0:.2f}s", file=sys.stderr)
-    _populate_declares_rows(tables)
-    t1 = time.time()
-    _write_edges(conn, tables)
-    if verbose:
-        print(f"[write] edges written in {time.time() - t1:.2f}s", file=sys.stderr)
-    t2 = time.time()
-    _write_routes_and_exposes(conn, tables)
-    if verbose:
-        print(f"[write] routes/exposes written in {time.time() - t2:.2f}s", file=sys.stderr)
-    _write_meta(conn, tables, source_root)
-    conn.close()
+        _verbose_stderr_line(_WRITE_START)
+    with _VerbosePassHeartbeats("[write]", verbose=verbose):
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        db = kuzu.Database(str(db_path))
+        conn = kuzu.Connection(db)
+        _drop_all(conn)
+        _create_schema(conn)
+        t0 = time.time()
+        _write_nodes(
+            conn,
+            tables,
+            project_root=source_root,
+            meta_chain=meta_chain,
+        )
+        if verbose:
+            _verbose_stderr_line(f"[write] nodes written in {time.time() - t0:.2f}s")
+        _populate_declares_rows(tables)
+        t1 = time.time()
+        _write_edges(conn, tables)
+        if verbose:
+            _verbose_stderr_line(f"[write] edges written in {time.time() - t1:.2f}s")
+        t2 = time.time()
+        _write_routes_and_exposes(conn, tables)
+        if verbose:
+            _verbose_stderr_line(f"[write] routes/exposes written in {time.time() - t2:.2f}s")
+        _write_meta(conn, tables, source_root)
+        conn.close()
 
 
 # ---------- CLI ----------
@@ -2615,7 +2694,7 @@ def main() -> int:
     pass6_match_edges(tables, verbose=args.verbose)
     write_kuzu(kuzu_path, tables, source_root=root, verbose=args.verbose)
     if args.verbose:
-        print(f"[done] kuzu at {kuzu_path}", file=sys.stderr)
+        _verbose_stderr_line(f"[done] kuzu at {kuzu_path}")
     return 0
 
 
