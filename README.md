@@ -263,7 +263,7 @@ Edit `claude_desktop_config.json` (macOS: `~/Library/Application Support/Claude/
 |---|---|---|---|
 | `search` | Locate nodes by NL/code text. | `query: str`, `table: str="java"`, `hybrid: bool=False`, `limit: int=5`, `offset: int=0`, `path_contains: str \| None`, `filter: NodeFilter \| str \| None` | `{"query":"join operator flow","limit":5}` |
 | `find` | Locate nodes by structured filter. | `kind: "symbol"\|"route"\|"client"`, `filter: NodeFilter \| str`, `limit: int=25`, `offset: int=0` | `{"kind":"symbol","filter":{"role":"CONTROLLER"}}` |
-| `describe` | Full record + edge counts for one node. For **type** symbols, `edge_summary` may also include composed dot-keys (`DECLARES.DECLARES_CLIENT`, `DECLARES.EXPOSES`); see [`docs/AGENT-GUIDE.md`](./docs/AGENT-GUIDE.md) (`describe`). | `id: str` | `{"id":"sym:com.bank.chat.core.api.ChatController#joinOperator(JoinOperatorRequest)"}` |
+| `describe` | Full record + edge counts for one node. For **type** symbols, `edge_summary` may include composed dot-keys (`DECLARES.DECLARES_CLIENT`, `DECLARES.EXPOSES`); for **method** symbols it may include override-axis virtual keys (`OVERRIDDEN_BY`, `OVERRIDDEN_BY.DECLARES_CLIENT`, `OVERRIDDEN_BY.EXPOSES`, `OVERRIDES`). See [`docs/AGENT-GUIDE.md`](./docs/AGENT-GUIDE.md) (`describe`). | `id: str` | `{"id":"sym:com.bank.chat.core.api.ChatController#joinOperator(JoinOperatorRequest)"}` |
 | `neighbors` | One-hop walk. **Required**: `direction` and `edge_types`. | `ids: str \| list[str]`, `direction: "in"\|"out"`, `edge_types: list[str]`, `limit: int=25`, `offset: int=0`, `filter: NodeFilter \| str \| None` | `{"ids":"route:chat-core:POST:/chat/joinOperator","direction":"in","edge_types":["HTTP_CALLS","ASYNC_CALLS"]}` |
 
 **`NodeFilter` notes:**

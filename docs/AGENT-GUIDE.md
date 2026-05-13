@@ -195,7 +195,7 @@ Exact allowed values for roles, capabilities, client kinds, etc. live in `java_o
 
 #### `describe`
 
-- **Purpose:** Full node payload + `edge_summary`: `in` / `out` counts **per stored graph edge label** (what exists as edges in Kuzu). For **type** Symbols only (`class`, `interface`, `enum`, `record`, `annotation`), the same map may also include **describe-time composed** dot-keys — summaries of member edges, not stored labels — see the next bullets (`DECLARES.DECLARES_CLIENT`, `DECLARES.EXPOSES`); those keys are **not** valid in `neighbors(edge_types=…)`.
+- **Purpose:** Full node payload + `edge_summary`: `in` / `out` counts **per stored graph edge label** (what exists as edges in Kuzu). For **type** Symbols only (`class`, `interface`, `enum`, `record`, `annotation`), the same map may also include **describe-time composed** dot-keys — summaries of member edges, not stored labels — see the next bullets (`DECLARES.DECLARES_CLIENT`, `DECLARES.EXPOSES`); those keys are **not** valid in `neighbors(edge_types=…)`. For **method** Symbols, the map may include **override-axis** virtual keys (`OVERRIDDEN_BY`, `OVERRIDDEN_BY.DECLARES_CLIENT`, `OVERRIDDEN_BY.EXPOSES`, `OVERRIDES`); see **Override-axis keys (method Symbols)** below — also not `EdgeType` literals.
 - **Args:** `id` (symbol, route, or client id).
 
 **Composed `edge_summary` keys (type Symbols).** Keys use dot notation: `<parent_relation>.<projected_relation>`. Two are emitted today:
@@ -206,6 +206,18 @@ Exact allowed values for roles, capabilities, client kinds, etc. live in `java_o
 Composed keys are **read-only**: they cannot be passed to `neighbors(edge_types=…)` (the dot is not a valid `EdgeType` literal — the call fails with a Pydantic `ValidationError`). Use them as a hop affordance only.
 
 Note on counting semantics: composed counts measure **edge rows**, not distinct member methods. One method that declares multiple `Client` rows (e.g. a `rest_template` method with several call sites) contributes its full edge count to `DECLARES.DECLARES_CLIENT`. The "does this class have any clients?" predicate is answered by `count > 0`; the count itself is an affordance for how rich the downstream walk will be.
+
+**Override-axis keys (method Symbols).** These name dispatch-axis virtual relations (computed at describe-time from `IMPLEMENTS` / `EXTENDS` plus matching `Symbol.signature`; not stored edges):
+
+- `OVERRIDDEN_BY` — on declarations reachable from implementing / extending classes in one hop: count of **distinct** concrete override methods with the same `signature` string as the described method (not counting the declaration itself).
+- `OVERRIDDEN_BY.DECLARES_CLIENT` / `OVERRIDDEN_BY.EXPOSES` — same dispatch-down walk, then count outgoing `DECLARES_CLIENT` / `EXPOSES` edges from those override methods. Counts are **edge rows** on overrides (not distinct methods): one override with multiple client edges contributes the full row count. Omitted when zero.
+- `OVERRIDES` — on a concrete method: count of **distinct** upstream declarations (interface / superclass methods with the same `signature`) one `IMPLEMENTS`/`EXTENDS` hop from the declaring class. A class implementing two interfaces that both declare the same signature yields `out: 2` (two declaration symbols).
+
+Walk recipe (declaration side): `neighbors(ids=<method_id>, direction="in", edge_types=["DECLARES"])` → declaring type → `neighbors(ids=<type_id>, direction="in", edge_types=["IMPLEMENTS","EXTENDS"])` → each subtype class → `neighbors(ids=<class_id>, direction="out", edge_types=["DECLARES"])` and filter rows where `signature` matches the interface method.
+
+Static methods suppress the entire override-axis rollup. Constructors do not receive these keys.
+
+These keys are **not** valid `EdgeType` literals — `neighbors(edge_types=["OVERRIDDEN_BY"])` fails at the Pydantic boundary. Use them as hop affordances only.
 
 #### `neighbors`
 

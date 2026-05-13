@@ -19,7 +19,7 @@ from search_lancedb import TABLES
 _COCOINDEX_TARGET = "java_index_flow_lancedb.py:JavaCodeIndexLance"
 _INSTRUCTIONS = (
     "Java codebase graph navigator (LanceDB + Kuzu). "
-    "Tools: search (NL/code locate), find (structured NodeFilter), describe (one node + edge_summary: stored edge-label counts and optional composed keys for type Symbols), "
+    "Tools: search (NL/code locate), find (structured NodeFilter), describe (one node + edge_summary: stored edge-label counts and optional composed keys for type Symbols and override-axis virtual keys for method Symbols), "
     "neighbors (one hop; you MUST pass direction in|out AND edge_types list — no defaults). "
     "NodeFilter `filter` is a JSON object (preferred); a JSON-encoded string is also accepted as a fallback. "
     "Edge labels: EXTENDS, IMPLEMENTS, INJECTS, DECLARES, DECLARES_CLIENT, CALLS, EXPOSES, HTTP_CALLS, ASYNC_CALLS. "
@@ -333,7 +333,9 @@ def create_mcp_server() -> FastMCP:
         description=(
             "full record + edge_summary: in/out per stored edge label; "
             "type Symbols may add composed keys DECLARES.DECLARES_CLIENT, DECLARES.EXPOSES "
-            "(describe-time 2-hop member summaries; not valid in neighbors edge_types)"
+            "(describe-time 2-hop member summaries; not valid in neighbors edge_types); "
+            "method Symbols may add override-axis virtual keys OVERRIDDEN_BY, "
+            "OVERRIDDEN_BY.DECLARES_CLIENT, OVERRIDDEN_BY.EXPOSES, OVERRIDES (same restriction)"
         ),
     )
     async def describe(

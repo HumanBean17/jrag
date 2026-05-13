@@ -22,6 +22,17 @@ from ast_java import ONTOLOGY_VERSION as _ONTOLOGY_VERSION
 
 log = logging.getLogger(__name__)
 
+
+def _coerce_id_list(raw: Any) -> list[str]:
+    """Normalize Kuzu ``collect(DISTINCT ...)`` list results to string ids."""
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return [str(x) for x in raw if x is not None and str(x) != ""]
+    s = str(raw)
+    return [s] if s else []
+
+
 __all__ = [
     "KuzuGraph",
     "resolve_kuzu_path",
@@ -616,6 +627,72 @@ class KuzuGraph:
             n = sum(int(r.get("n") or 0) for r in rows) if rows else 0
             if n > 0:
                 rollup[key] = {"in": 0, "out": n}
+        return rollup
+
+    def _edge_row_count_from_method_ids(self, method_ids: list[str], rel: str) -> int:
+        """Count outgoing ``rel`` edges from method symbols (describe rollup helper)."""
+        total = 0
+        for mid in method_ids:
+            rows = self._rows(
+                f"MATCH (x:Symbol {{id: $mid}})-[e:{rel}]->() RETURN count(e) AS n",
+                {"mid": mid},
+            )
+            total += int(rows[0].get("n") or 0) if rows else 0
+        return total
+
+    def override_axis_rollup_for(self, method_id: str) -> dict[str, dict[str, int]]:
+        """Dispatch-axis composed keys for method Symbols (describe-time only).
+
+        Uses one-hop ``IMPLEMENTS`` / ``EXTENDS`` class edges plus ``Symbol.signature``
+        equality. Omits keys with zero counts (same convention as ``edge_counts_for``).
+        Returns ``{}`` for non-methods, constructors (caller should skip), and static methods.
+        """
+        params = {"id": method_id}
+        gate = self._rows(
+            "MATCH (m:Symbol {id: $id}) "
+            "WHERE m.kind = 'method' "
+            "AND NOT list_contains(COALESCE(m.modifiers, []), 'static') "
+            "RETURN 1 AS ok LIMIT 1",
+            params,
+        )
+        if not gate:
+            return {}
+
+        rollup: dict[str, dict[str, int]] = {}
+
+        down_rows = self._rows(
+            "MATCH (m:Symbol {id: $id})<-[:DECLARES]-(t:Symbol) "
+            "MATCH (impl:Symbol)-[:IMPLEMENTS|EXTENDS]->(t) "
+            "MATCH (impl)-[:DECLARES]->(mover:Symbol) "
+            "WHERE mover.signature = m.signature AND mover.id <> m.id "
+            "RETURN collect(DISTINCT mover.id) AS ids",
+            params,
+        )
+        impl_ids = _coerce_id_list(down_rows[0].get("ids") if down_rows else None)
+
+        if impl_ids:
+            distinct_impl = list(dict.fromkeys(impl_ids))
+            rollup["OVERRIDDEN_BY"] = {"in": 0, "out": len(distinct_impl)}
+            n_dc = self._edge_row_count_from_method_ids(distinct_impl, "DECLARES_CLIENT")
+            if n_dc > 0:
+                rollup["OVERRIDDEN_BY.DECLARES_CLIENT"] = {"in": 0, "out": n_dc}
+            n_ex = self._edge_row_count_from_method_ids(distinct_impl, "EXPOSES")
+            if n_ex > 0:
+                rollup["OVERRIDDEN_BY.EXPOSES"] = {"in": 0, "out": n_ex}
+
+        up_rows = self._rows(
+            "MATCH (m:Symbol {id: $id})<-[:DECLARES]-(impl:Symbol) "
+            "MATCH (impl)-[:IMPLEMENTS|EXTENDS]->(parent:Symbol) "
+            "MATCH (parent)-[:DECLARES]->(decl_m:Symbol) "
+            "WHERE decl_m.signature = m.signature AND decl_m.id <> m.id "
+            "RETURN collect(DISTINCT decl_m.id) AS ids",
+            params,
+        )
+        decl_ids = _coerce_id_list(up_rows[0].get("ids") if up_rows else None)
+        if decl_ids:
+            distinct_decl = list(dict.fromkeys(decl_ids))
+            rollup["OVERRIDES"] = {"in": 0, "out": len(distinct_decl)}
+
         return rollup
 
     def _scope_counts(self, column: str) -> dict[str, int]:
