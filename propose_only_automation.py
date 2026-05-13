@@ -1,0 +1,358 @@
+from __future__ import annotations
+
+import argparse
+import json
+import re
+from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+SEVERITY_ORDER = {
+    "trivial": 0,
+    "low": 1,
+    "medium": 2,
+    "high": 3,
+    "critical": 4,
+}
+
+SEVERITY_CHOICES = tuple(SEVERITY_ORDER.keys())
+
+_ISSUE_LINE_RE = re.compile(
+    r"^\s*(?:[-*]\s*)?(?:\[(critical|high|medium|low|trivial)\]|"
+    r"(critical|high|medium|low|trivial)\s*[:\-])\s*(.+?)\s*$",
+    re.IGNORECASE,
+)
+_APPROVED_RE = re.compile(r"\bAPPROVED\b", re.IGNORECASE)
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewIssue:
+    severity: str
+    summary: str
+
+
+def _validate_severity(severity: str) -> str:
+    normalized = severity.strip().lower()
+    if normalized not in SEVERITY_ORDER:
+        allowed = ", ".join(SEVERITY_CHOICES)
+        raise ValueError(f"Invalid severity {severity!r}; expected one of: {allowed}")
+    return normalized
+
+
+def _slugify(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+    return slug or "proposal"
+
+
+def _topic_from_propose_name(name: str) -> str:
+    if name.upper().endswith("-PROPOSE"):
+        base = name[: -len("-PROPOSE")]
+    else:
+        base = name
+    token = re.sub(r"[^A-Za-z0-9]+", "-", base).strip("-")
+    return token.upper() or "TOPIC"
+
+
+def _relpath(path: Path, repo_root: Path) -> str:
+    try:
+        return str(path.resolve().relative_to(repo_root.resolve()))
+    except ValueError:
+        return str(path.resolve())
+
+
+def discover_proposals(
+    proposal_dir: Path, *, pattern: str = "*-PROPOSE.md", include_completed: bool = False
+) -> list[Path]:
+    if not proposal_dir.exists():
+        raise FileNotFoundError(f"Proposal directory does not exist: {proposal_dir}")
+    paths = sorted(p for p in proposal_dir.glob(pattern) if p.is_file())
+    if include_completed:
+        completed = proposal_dir / "completed"
+        if completed.exists():
+            paths.extend(sorted(p for p in completed.glob(pattern) if p.is_file()))
+    return sorted(set(paths))
+
+
+def render_planner_prompt(propose_path: str, plan_path: str, cursor_prompt_path: str) -> str:
+    return (
+        f"# Planner prompt — {Path(propose_path).name}\n\n"
+        "You are a planning agent for this repository.\n\n"
+        "## Task\n"
+        "Use the proposal below to generate/update the implementation plan and per-PR Cursor prompts.\n\n"
+        f"- Proposal input: `{propose_path}`\n"
+        f"- Plan output: `{plan_path}`\n"
+        f"- Prompt output: `{cursor_prompt_path}`\n\n"
+        "## Requirements\n"
+        "1. Produce plan + prompt files only.\n"
+        "2. Do not implement production code.\n"
+        "3. Keep out-of-scope guardrails explicit in each PR prompt.\n"
+        "4. Keep tests/checks explicit per PR prompt.\n"
+    )
+
+
+def render_reviewer_prompt(
+    propose_path: str,
+    plan_path: str,
+    cursor_prompt_path: str,
+    *,
+    round_number: int,
+    min_severity: str,
+) -> str:
+    return (
+        f"# Reviewer prompt — round {round_number}\n\n"
+        "You are a fresh reviewer session for propose/planning artifacts.\n\n"
+        "## Review scope\n"
+        f"- `{propose_path}`\n"
+        f"- `{plan_path}`\n"
+        f"- `{cursor_prompt_path}`\n\n"
+        "## Rules\n"
+        f"1. Report only issues with severity `{min_severity}` or higher.\n"
+        "2. Ignore low/trivial style nits.\n"
+        "3. If no actionable issues remain, return exactly `APPROVED`.\n"
+        "4. Format findings as `[SEVERITY] summary` (e.g., `[HIGH] ...`).\n"
+    )
+
+
+def parse_review_issues(review_text: str) -> list[ReviewIssue]:
+    issues: list[ReviewIssue] = []
+    for line in review_text.splitlines():
+        match = _ISSUE_LINE_RE.match(line)
+        if not match:
+            continue
+        severity = (match.group(1) or match.group(2) or "").lower()
+        summary = match.group(3).strip()
+        issues.append(ReviewIssue(severity=severity, summary=summary))
+    return issues
+
+
+def evaluate_review(review_text: str, *, min_severity: str) -> dict[str, Any]:
+    threshold = _validate_severity(min_severity)
+    issues = parse_review_issues(review_text)
+    actionable = [
+        issue
+        for issue in issues
+        if SEVERITY_ORDER[issue.severity] >= SEVERITY_ORDER[threshold]
+    ]
+    approved_token = bool(_APPROVED_RE.search(review_text))
+    return {
+        "approved": approved_token and not actionable,
+        "approved_token_present": approved_token,
+        "min_severity": threshold,
+        "issue_count": len(issues),
+        "actionable_issue_count": len(actionable),
+        "issues": [asdict(issue) for issue in issues],
+        "actionable_issues": [asdict(issue) for issue in actionable],
+    }
+
+
+def _readme_text(rounds: int, min_severity: str, workflow_path: str) -> str:
+    return (
+        "# Propose-only automation bundle\n\n"
+        "This directory is generated by `scripts/propose_only_orchestrator.py`.\n\n"
+        "## Workflow\n"
+        "1. Run planner prompt for each job to produce plan artifacts.\n"
+        f"2. Run {rounds} reviewer rounds in fresh sessions.\n"
+        f"3. Reviewer threshold is `{min_severity}` and higher.\n"
+        "4. Save each reviewer response to a file.\n"
+        "5. Evaluate each response with:\n\n"
+        f"   `.venv/bin/python scripts/propose_only_orchestrator.py evaluate --workflow {workflow_path}"
+        " --job-id <job-id> --round <n> --review-file <file> --write`\n"
+    )
+
+
+def prepare_bundle(
+    *,
+    repo_root: Path,
+    proposal_dir: Path,
+    output_dir: Path,
+    rounds: int,
+    min_severity: str,
+    pattern: str,
+    include_completed: bool,
+) -> dict[str, Any]:
+    if rounds < 1:
+        raise ValueError("rounds must be >= 1")
+    threshold = _validate_severity(min_severity)
+    proposals = discover_proposals(proposal_dir, pattern=pattern, include_completed=include_completed)
+
+    jobs_dir = output_dir / "jobs"
+    jobs_dir.mkdir(parents=True, exist_ok=True)
+
+    jobs: list[dict[str, Any]] = []
+    for proposal in proposals:
+        topic = _topic_from_propose_name(proposal.stem)
+        job_id = _slugify(topic)
+        job_dir = jobs_dir / job_id
+        job_dir.mkdir(parents=True, exist_ok=True)
+
+        plan_path = repo_root / "plans" / f"PLAN-{topic}.md"
+        cursor_prompt_path = repo_root / "plans" / f"CURSOR-PROMPTS-{topic}.md"
+
+        planner_prompt_path = job_dir / "planner_prompt.md"
+        planner_prompt_path.write_text(
+            render_planner_prompt(
+                _relpath(proposal, repo_root),
+                _relpath(plan_path, repo_root),
+                _relpath(cursor_prompt_path, repo_root),
+            ),
+            encoding="utf-8",
+        )
+
+        reviewer_prompts: list[str] = []
+        for round_index in range(1, rounds + 1):
+            reviewer_path = job_dir / f"reviewer_prompt_round{round_index}.md"
+            reviewer_path.write_text(
+                render_reviewer_prompt(
+                    _relpath(proposal, repo_root),
+                    _relpath(plan_path, repo_root),
+                    _relpath(cursor_prompt_path, repo_root),
+                    round_number=round_index,
+                    min_severity=threshold,
+                ),
+                encoding="utf-8",
+            )
+            reviewer_prompts.append(_relpath(reviewer_path, repo_root))
+
+        jobs.append(
+            {
+                "job_id": job_id,
+                "status": "pending_planner",
+                "propose_path": _relpath(proposal, repo_root),
+                "plan_path": _relpath(plan_path, repo_root),
+                "cursor_prompts_path": _relpath(cursor_prompt_path, repo_root),
+                "planner_prompt_path": _relpath(planner_prompt_path, repo_root),
+                "reviewer_prompt_paths": reviewer_prompts,
+                "reviews": [],
+            }
+        )
+
+    workflow = {
+        "generated_at_utc": datetime.now(UTC).isoformat(),
+        "proposal_dir": _relpath(proposal_dir, repo_root),
+        "review_rounds": rounds,
+        "min_severity": threshold,
+        "jobs": jobs,
+    }
+    output_dir.mkdir(parents=True, exist_ok=True)
+    workflow_path = output_dir / "workflow.json"
+    workflow_path.write_text(json.dumps(workflow, indent=2, sort_keys=True), encoding="utf-8")
+    (output_dir / "README.md").write_text(
+        _readme_text(rounds=rounds, min_severity=threshold, workflow_path=_relpath(workflow_path, repo_root)),
+        encoding="utf-8",
+    )
+    return workflow
+
+
+def apply_review_result(
+    *,
+    workflow_path: Path,
+    review_file: Path,
+    job_id: str,
+    round_number: int,
+    min_severity: str,
+) -> dict[str, Any]:
+    workflow = json.loads(workflow_path.read_text(encoding="utf-8"))
+    if round_number < 1:
+        raise ValueError("round_number must be >= 1")
+    if round_number > int(workflow.get("review_rounds", 0)):
+        raise ValueError(
+            f"round_number {round_number} exceeds configured rounds ({workflow.get('review_rounds')})"
+        )
+    _validate_severity(min_severity)
+    review_text = review_file.read_text(encoding="utf-8")
+    result = evaluate_review(review_text, min_severity=min_severity)
+
+    jobs = workflow.get("jobs", [])
+    for job in jobs:
+        if job.get("job_id") != job_id:
+            continue
+        job.setdefault("reviews", [])
+        job["reviews"].append(
+            {
+                "round_number": round_number,
+                "review_file": str(review_file),
+                **result,
+            }
+        )
+        if result["approved"]:
+            job["status"] = "ready_to_merge"
+        elif round_number >= int(workflow.get("review_rounds", 0)):
+            job["status"] = "blocked_after_reviews"
+        else:
+            job["status"] = "needs_fixes"
+        break
+    else:
+        raise ValueError(f"Unknown job_id: {job_id}")
+
+    workflow_path.write_text(json.dumps(workflow, indent=2, sort_keys=True), encoding="utf-8")
+    return result
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Generate and gate propose-only orchestration bundles.")
+    subparsers = parser.add_subparsers(dest="subcommand", required=True)
+
+    prepare = subparsers.add_parser("prepare", help="Generate planner/reviewer prompt bundles.")
+    prepare.add_argument("--repo-root", default=".", help="Repository root used for relative paths.")
+    prepare.add_argument("--proposal-dir", default="propose", help="Directory containing proposal markdown files.")
+    prepare.add_argument("--output-dir", default="reports/propose_automation", help="Output directory.")
+    prepare.add_argument("--rounds", type=int, default=3, help="Number of fresh reviewer rounds.")
+    prepare.add_argument(
+        "--min-severity", choices=SEVERITY_CHOICES, default="medium", help="Actionable review threshold."
+    )
+    prepare.add_argument("--glob", default="*-PROPOSE.md", help="Glob pattern for proposal selection.")
+    prepare.add_argument(
+        "--include-completed",
+        action="store_true",
+        help="Also include proposals under proposal-dir/completed.",
+    )
+
+    evaluate = subparsers.add_parser("evaluate", help="Evaluate a reviewer response and optionally persist it.")
+    evaluate.add_argument("--review-file", required=True, help="Path to markdown/text reviewer output.")
+    evaluate.add_argument(
+        "--min-severity", choices=SEVERITY_CHOICES, default="medium", help="Actionable review threshold."
+    )
+    evaluate.add_argument("--workflow", help="workflow.json path; required with --write.")
+    evaluate.add_argument("--job-id", help="Job identifier in workflow.json; required with --write.")
+    evaluate.add_argument("--round", dest="round_number", type=int, default=1, help="1-based review round.")
+    evaluate.add_argument("--write", action="store_true", help="Write result back into workflow.json.")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    if args.subcommand == "prepare":
+        workflow = prepare_bundle(
+            repo_root=Path(args.repo_root).resolve(),
+            proposal_dir=Path(args.proposal_dir).resolve(),
+            output_dir=Path(args.output_dir).resolve(),
+            rounds=int(args.rounds),
+            min_severity=args.min_severity,
+            pattern=args.glob,
+            include_completed=bool(args.include_completed),
+        )
+        print(json.dumps(workflow, indent=2, sort_keys=True))
+        return 0
+
+    review_file = Path(args.review_file).resolve()
+    if args.write:
+        if not args.workflow or not args.job_id:
+            parser.error("--workflow and --job-id are required with --write")
+        result = apply_review_result(
+            workflow_path=Path(args.workflow).resolve(),
+            review_file=review_file,
+            job_id=args.job_id,
+            round_number=int(args.round_number),
+            min_severity=args.min_severity,
+        )
+    else:
+        result = evaluate_review(review_file.read_text(encoding="utf-8"), min_severity=args.min_severity)
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
