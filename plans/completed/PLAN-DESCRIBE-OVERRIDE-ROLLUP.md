@@ -1,7 +1,7 @@
 # Plan: describe override-axis rollup (`edge_summary` virtual dispatch keys)
 
-Status: **active (planning)**. This plan implements
-[`propose/DESCRIBE-OVERRIDE-ROLLUP-PROPOSE.md`](../propose/DESCRIBE-OVERRIDE-ROLLUP-PROPOSE.md).
+Status: **completed** (landed in PR #110). This plan implemented
+[`propose/completed/DESCRIBE-OVERRIDE-ROLLUP-PROPOSE.md`](../../propose/completed/DESCRIBE-OVERRIDE-ROLLUP-PROPOSE.md).
 
 Depends on: **none** for graph or indexer work (read-path only). **Coordinate with landed PR-89:** [`plans/completed/PLAN-DESCRIBE-MEMBER-EDGE-ROLLUP.md`](completed/PLAN-DESCRIBE-MEMBER-EDGE-ROLLUP.md) — `_edge_summary_for_node` in `mcp_v2.py` already threads `kind` + `row` and merges type-side `member_edge_rollup_for`. This rollout adds a **disjoint** branch for **method** symbols only (not constructors — short-circuit). Type and method branches are mutually exclusive on `row["kind"]`.
 
@@ -151,8 +151,8 @@ Add **exactly** these five tests (propose §6):
 
 1. Propose §3 surface behaviour matches `describe_v2` output on covered scenarios (UC1, UC2, UC5–UC7, UC6 silent).
 2. Documentation and Pydantic field descriptions tell agents not to pass virtual keys to `neighbors`.
-3. All default `pytest tests` pass; propose moved to `propose/completed/` only **after** the PR merges (repo convention).
+3. All default `pytest tests` pass; propose moved to `propose/completed/` after PR #110 merged (repo convention).
 
 ## Tracking
 
-- `PR-1`: _pending_
+- `PR-1`: merged (PR #110)
