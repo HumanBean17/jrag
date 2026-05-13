@@ -19,7 +19,7 @@ If `java-codebase-rag` is missing, run the module entrypoint:
 
 ## Output mode
 
-- **TTY:** human-readable `pprint` of the payload on stdout.
+- **TTY:** human-readable `pprint` of the payload on stdout (except **successful selective `reprocess`** with `--vectors-only` / `--graph-only`, which prints `Rebuilt:` / `Skipped:` lines instead of dumping the full dict).
 - **Piped / non-TTY:** **single JSON object** per invocation on stdout (no trailing noise). Use this in scripts and CI.
 
 Example:
@@ -78,8 +78,8 @@ Relative paths for `diagnose-ignore <path>` are resolved against the MCP/CLI pro
 | Code | Typical meaning |
 | ---- | ---------------- |
 | `0` | Success (payload may still report logical failures inside JSON for some commands — always parse stdout in scripts). |
-| `1` | Subcommand-specific failure (e.g. `analyze-pr` cannot read diff, graph missing, invalid path for `diagnose-ignore`). |
-| `2` | No subcommand / help printed; **`init`** refused because the index dir is non-empty; **`erase`** refused in non-TTY without `--yes`; **`meta`** when graph payload reports `success: false`; unhandled internal error in `main`. |
+| `1` | Subcommand-specific failure (e.g. `analyze-pr` cannot read diff, graph missing, invalid path for `diagnose-ignore`). For **`reprocess`**, a **requested phase subprocess** ran and exited non-zero (see `phases_run` in stdout JSON). |
+| `2` | No subcommand / help printed; **`init`** refused because the index dir is non-empty; **`erase`** refused in non-TTY without `--yes`; **`meta`** when graph payload reports `success: false`; unhandled internal error in `main`. For **`reprocess`**, invalid flag combination (handled like other argparse errors), or a **setup failure before any phase subprocess was spawned** (`phases_run: []` in the JSON payload — e.g. cocoindex binary missing next to this Python, flow file missing). |
 
 ## Lifecycle subcommands
 
@@ -101,10 +101,41 @@ java-codebase-rag increment --source-root /path/to/java/repo --index-dir /path/t
 
 ### `reprocess`
 
-Full **Lance reprocess** + **full Kuzu rebuild** (full indexing pipeline).
+**Default (no extra flags):** full **Lance** reprocess (cocoindex `--full-reprocess`) then full **Kuzu** rebuild via `build_ast_graph.py`, in that order. This remains the recommended **coherence** operation when both stores might be out of date.
+
+**Selective flags (mutually exclusive):**
+
+- `--vectors-only` — runs only the cocoindex full reprocess phase; does **not** invoke the graph builder.
+- `--graph-only` — runs only `build_ast_graph.py`; does **not** invoke cocoindex.
+
+Passing **both** flags is rejected by argparse **before** any subprocess runs. The error is printed on **stderr** in this form (wording may vary slightly with Python/argparse version):
+
+```text
+java-codebase-rag: argument --graph-only: not allowed with argument --vectors-only
+```
+
+Use `java-codebase-rag reprocess --help` for the live synopsis.
+
+#### Drift warning (stderr)
+
+After a **successful** selective run, the CLI prints **exactly one** line to **stderr** naming the store that was **not** rebuilt. **`--quiet` does not suppress this line** (quiet only affects subprocess verbosity). There is no extra exit code for drift; scripts should treat stderr as informational.
+
+#### JSON payload: `phases_run`
+
+The stdout JSON includes an additive list field `phases_run`: which phases actually **spawned** subprocesses, in order (`"vectors"`, `"graph"`). Examples:
+
+- Default success after both phases: `["vectors", "graph"]`
+- Default run where cocoindex fails before the graph step: `["vectors"]` (graph never started)
+- `--vectors-only` success: `["vectors"]`
+- `--graph-only` success: `["graph"]`
+- Setup failure before any phase (missing cocoindex binary, missing bundled flow file, or pipeline preflight `126`/`127` stubs): `[]`
+
+Because `exit_code` and `graph_exit_code` can be `null` in multiple situations, **prefer branching on `phases_run` first**, then on the relevant per-phase exit field. **Asymmetry:** `--vectors-only` reports the cocoindex process in `exit_code` (and leaves `graph_exit_code` null); `--graph-only` leaves top-level `exit_code` null and reports the graph builder in `graph_exit_code`, so scripts that only read `exit_code` miss graph-only outcomes unless they branch on `phases_run` / `graph_exit_code`.
 
 ```bash
 java-codebase-rag reprocess --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-rag --quiet
+java-codebase-rag reprocess --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-rag --vectors-only --quiet
+java-codebase-rag reprocess --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-rag --graph-only --quiet
 ```
 
 ### `erase`
@@ -192,7 +223,7 @@ java-codebase-rag analyze-pr --diff-file /tmp/pr.diff --source-root /path/to/jav
 
 ## Graph-only escape hatch
 
-To rebuild **only** Kuzu (no Lance re-embed), call the graph builder directly:
+Prefer **`java-codebase-rag reprocess --graph-only`** when you only need Kuzu rebuilt from the current Lance snapshot. To run the graph builder **without** going through the CLI (advanced / scripting):
 
 ```bash
 .venv/bin/python build_ast_graph.py --source-root /path/to/java/repo --kuzu-path /path/to/.java-codebase-rag/code_graph.kuzu --verbose

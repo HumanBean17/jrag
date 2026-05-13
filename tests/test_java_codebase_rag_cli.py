@@ -506,6 +506,304 @@ def test_cli_analyze_pr_with_diff_stdin(corpus_root, kuzu_db_path) -> None:
     assert "risk_score" in payload
 
 
+def test_reprocess_vectors_only_skips_graph(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    idx = tmp_path / "idx_vo"
+    idx.mkdir()
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_INDEX_DIR", str(idx))
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", str(tmp_path))
+
+    def fake_coco(*_a: object, **_k: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            args=["coco", "u", "t", "f"],
+            returncode=0,
+            stdout="",
+            stderr="",
+        )
+
+    def graph_should_not_run(**_kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise AssertionError("graph builder must not run for --vectors-only")
+
+    monkeypatch.setattr(cli_mod, "run_cocoindex_update", fake_coco)
+    monkeypatch.setattr(cli_mod, "run_build_ast_graph", graph_should_not_run)
+
+    class _NonTty(io.StringIO):
+        def isatty(self) -> bool:
+            return False
+
+    nout = _NonTty()
+    monkeypatch.setattr(cli_mod.sys, "stdout", nout)
+    rc = cli_mod.main(
+        ["reprocess", "--source-root", str(tmp_path), "--index-dir", str(idx), "--vectors-only"],
+    )
+    assert rc == 0
+    payload = json.loads(nout.getvalue())
+    assert payload["phases_run"] == ["vectors"]
+
+
+def test_reprocess_graph_only_skips_vectors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    idx = tmp_path / "idx_go"
+    idx.mkdir()
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_INDEX_DIR", str(idx))
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", str(tmp_path))
+
+    def coco_should_not_run(*_a: object, **_k: object) -> subprocess.CompletedProcess[str]:
+        raise AssertionError("cocoindex must not run for --graph-only")
+
+    def fake_graph(**_kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            args=["py", "build_ast_graph.py"],
+            returncode=0,
+            stdout="",
+            stderr="",
+        )
+
+    monkeypatch.setattr(cli_mod, "run_cocoindex_update", coco_should_not_run)
+    monkeypatch.setattr(cli_mod, "run_build_ast_graph", fake_graph)
+    out = io.StringIO()
+    monkeypatch.setattr(cli_mod.sys, "stdout", out)
+    rc = cli_mod.main(
+        ["reprocess", "--source-root", str(tmp_path), "--index-dir", str(idx), "--graph-only"],
+    )
+    assert rc == 0
+    assert json.loads(out.getvalue())["phases_run"] == ["graph"]
+
+
+def test_reprocess_mutually_exclusive_flags_rejected(tmp_path: Path) -> None:
+    buf = io.StringIO()
+    with contextlib.redirect_stderr(buf):
+        rc = cli_mod.main(
+            [
+                "reprocess",
+                "--source-root",
+                str(tmp_path),
+                "--vectors-only",
+                "--graph-only",
+            ],
+        )
+    assert rc == 2
+    err = buf.getvalue()
+    assert "not allowed with argument" in err or "mutually exclusive" in err.lower()
+
+
+def test_reprocess_graph_only_build_failure_returns_exit_1(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    idx = tmp_path / "idx_gf"
+    idx.mkdir()
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_INDEX_DIR", str(idx))
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", str(tmp_path))
+
+    def fake_graph(**_kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            args=["py", "build_ast_graph.py"],
+            returncode=9,
+            stdout="",
+            stderr="boom",
+        )
+
+    monkeypatch.setattr(cli_mod, "run_build_ast_graph", fake_graph)
+    out = io.StringIO()
+    monkeypatch.setattr(cli_mod.sys, "stdout", out)
+    rc = cli_mod.main(
+        ["reprocess", "--source-root", str(tmp_path), "--index-dir", str(idx), "--graph-only"],
+    )
+    assert rc == 1
+    payload = json.loads(out.getvalue())
+    assert payload["phases_run"] == ["graph"]
+    assert payload["graph_exit_code"] == 9
+
+
+def test_reprocess_vectors_only_emits_graph_stale_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    idx = tmp_path / "idx_wv"
+    idx.mkdir()
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_INDEX_DIR", str(idx))
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", str(tmp_path))
+
+    def fake_coco(*_a: object, **_k: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            args=["coco", "u", "t", "f"],
+            returncode=0,
+            stdout="",
+            stderr="",
+        )
+
+    monkeypatch.setattr(cli_mod, "run_cocoindex_update", fake_coco)
+    monkeypatch.setattr(
+        cli_mod,
+        "run_build_ast_graph",
+        lambda **_k: subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr=""),
+    )
+    err = io.StringIO()
+    out = io.StringIO()
+    monkeypatch.setattr(cli_mod.sys, "stderr", err)
+    monkeypatch.setattr(cli_mod.sys, "stdout", out)
+    rc = cli_mod.main(
+        ["reprocess", "--source-root", str(tmp_path), "--index-dir", str(idx), "--vectors-only"],
+    )
+    assert rc == 0
+    assert "code_graph.kuzu" in err.getvalue()
+
+
+def test_reprocess_graph_only_emits_vectors_stale_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    idx = tmp_path / "idx_wg"
+    idx.mkdir()
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_INDEX_DIR", str(idx))
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", str(tmp_path))
+
+    def fake_graph(**_kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            args=["py", "build_ast_graph.py"],
+            returncode=0,
+            stdout="",
+            stderr="",
+        )
+
+    monkeypatch.setattr(cli_mod, "run_build_ast_graph", fake_graph)
+    err = io.StringIO()
+    out = io.StringIO()
+    monkeypatch.setattr(cli_mod.sys, "stderr", err)
+    monkeypatch.setattr(cli_mod.sys, "stdout", out)
+    rc = cli_mod.main(
+        ["reprocess", "--source-root", str(tmp_path), "--index-dir", str(idx), "--graph-only"],
+    )
+    assert rc == 0
+    assert "Lance tables under" in err.getvalue()
+    assert str(idx) in err.getvalue()
+
+
+def test_reprocess_vectors_only_setup_failure_returns_exit_2_without_phase(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    idx = tmp_path / "idx_vs"
+    idx.mkdir()
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_INDEX_DIR", str(idx))
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", str(tmp_path))
+
+    def fake_coco(*_a: object, **_k: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            args=["/nonexistent/cocoindex"],
+            returncode=127,
+            stdout="",
+            stderr="cocoindex not found next to Python",
+        )
+
+    monkeypatch.setattr(cli_mod, "run_cocoindex_update", fake_coco)
+    err = io.StringIO()
+    out = io.StringIO()
+    monkeypatch.setattr(cli_mod.sys, "stderr", err)
+    monkeypatch.setattr(cli_mod.sys, "stdout", out)
+    rc = cli_mod.main(
+        ["reprocess", "--source-root", str(tmp_path), "--index-dir", str(idx), "--vectors-only"],
+    )
+    assert rc == 2
+    assert json.loads(out.getvalue())["phases_run"] == []
+    assert "rebuilt vectors only" not in err.getvalue().lower()
+
+
+def test_reprocess_graph_only_setup_failure_returns_exit_2_without_phase(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    idx = tmp_path / "idx_gs"
+    idx.mkdir()
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_INDEX_DIR", str(idx))
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", str(tmp_path))
+
+    def fake_graph(**_kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            args=[],
+            returncode=126,
+            stdout="",
+            stderr="build_ast_graph.py not found",
+        )
+
+    monkeypatch.setattr(cli_mod, "run_build_ast_graph", fake_graph)
+    err = io.StringIO()
+    out = io.StringIO()
+    monkeypatch.setattr(cli_mod.sys, "stderr", err)
+    monkeypatch.setattr(cli_mod.sys, "stdout", out)
+    rc = cli_mod.main(
+        ["reprocess", "--source-root", str(tmp_path), "--index-dir", str(idx), "--graph-only"],
+    )
+    assert rc == 2
+    assert json.loads(out.getvalue())["phases_run"] == []
+    assert "rebuilt graph only" not in err.getvalue().lower()
+
+
+def test_reprocess_no_flag_cocoindex_failure_records_vectors_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import server as server_mod
+
+    idx = tmp_path / "idx_nf"
+    idx.mkdir()
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_INDEX_DIR", str(idx))
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", str(tmp_path))
+
+    async def fake_refresh(*, quiet: bool = False) -> server_mod.RefreshIndexOutput:
+        return server_mod.RefreshIndexOutput(
+            success=False,
+            exit_code=1,
+            stdout="out",
+            stderr="err",
+            message="cocoindex exit 1",
+            graph_exit_code=None,
+            graph_stdout="",
+            graph_stderr="",
+            phases_run=["vectors"],
+        )
+
+    monkeypatch.setattr(server_mod, "run_refresh_pipeline", fake_refresh)
+    out = io.StringIO()
+    monkeypatch.setattr(cli_mod.sys, "stdout", out)
+    rc = cli_mod.main(
+        ["reprocess", "--source-root", str(tmp_path), "--index-dir", str(idx)],
+    )
+    assert rc == 1
+    payload = json.loads(out.getvalue())
+    assert payload["phases_run"] == ["vectors"]
+
+
+def test_reprocess_pretty_output_lists_rebuilt_and_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    idx = tmp_path / "idx_po"
+    idx.mkdir()
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_INDEX_DIR", str(idx))
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", str(tmp_path))
+
+    def fake_coco(*_a: object, **_k: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            args=["coco", "u", "t", "f"],
+            returncode=0,
+            stdout="",
+            stderr="",
+        )
+
+    monkeypatch.setattr(cli_mod, "run_cocoindex_update", fake_coco)
+
+    class TtyOut(io.StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    tty = TtyOut()
+    monkeypatch.setattr(cli_mod.sys, "stdout", tty)
+    rc = cli_mod.main(
+        ["reprocess", "--source-root", str(tmp_path), "--index-dir", str(idx), "--vectors-only"],
+    )
+    assert rc == 0
+    text = tty.getvalue()
+    assert "Rebuilt: vectors" in text
+    assert "Skipped: graph" in text
+
+
 def test_cli_reprocess_builds_kuzu_path(corpus_root, tmp_path) -> None:
     if not _cocoindex_available():
         pytest.skip("cocoindex CLI missing")

@@ -220,7 +220,7 @@ async_producer_overrides:
 
 - **The file must be at `source_root`**, not in `$HOME`. The MCP server reads `JAVA_CODEBASE_RAG_SOURCE_ROOT` to find it; the CLI uses `--source-root` (else cwd).
 - **Don't commit secrets** into this YAML — it sits next to your source tree and is read by every operator who clones it.
-- **Rebuild after editing brownfield overrides.** `java-codebase-rag reprocess` rebuilds Lance + Kuzu so the new overrides take effect. Editing `embedding.model` also requires reprocess (the embeddings in Lance must match the reader's model).
+- **Rebuild after editing brownfield overrides.** Run a full `java-codebase-rag reprocess` (no flags) so Lance and Kuzu stay coherent, or use `--graph-only` / `--vectors-only` when you know only one store needs invalidation. Editing `embedding.model` requires a vector rebuild (`reprocess` or `--vectors-only`).
 - **Diagnose what's loaded.** `java-codebase-rag meta` prints the resolved config and each value's `*_source` (`cli` / `env` / `yaml` / `default`) — see `embedding_model_source`, `embedding_device_source`, `index_dir_source`.
 - **`embedding.model` and `$` in directory names.** `expandvars` treats `$VAR` / `${VAR}` like the shell. HuggingFace hub ids never contain `$`. If a local filesystem path contains a literal `$` in a directory name, use an absolute path that avoids `$`-expansion patterns, or expect `expandvars` to interpret `$` sequences.
 
@@ -293,7 +293,7 @@ Shared flags on all subcommands: `--source-root`, `--index-dir`, `--embedding-mo
 |---|---|---|
 | Lifecycle | `init` | First-time index; refuses if the index dir already has artifacts. |
 | Lifecycle | `increment` | CocoIndex catch-up (Lance only); prints a stderr warning that Kuzu is unchanged until `reprocess`. |
-| Lifecycle | `reprocess` | Full Lance reprocess + full Kuzu rebuild (full indexing pipeline). |
+| Lifecycle | `reprocess` | Default: full Lance reprocess + full Kuzu rebuild. Optional `--vectors-only` / `--graph-only` (mutually exclusive) for a single phase. |
 | Lifecycle | `erase` | Deletes index artifacts; requires `--yes` or interactive TTY confirm. |
 | Introspection | `meta`, `tables`, `diagnose-ignore` | Health, table listing, ignore-layer diagnostics. |
 | Analysis | `analyze-pr` | Blast-radius / risk from a unified diff. |
@@ -359,7 +359,7 @@ JAVA_CODEBASE_RAG_INDEX_DIR=/path/to/.java-codebase-rag .venv/bin/python search_
 
 ### Building the graph standalone
 
-`java-codebase-rag reprocess` runs `cocoindex update` with a full reprocess flag, then invokes `build_ast_graph.py` to rebuild Kuzu under the resolved index directory. To rebuild only the graph:
+`java-codebase-rag reprocess` (default, no flags) runs `cocoindex update` with a full reprocess flag, then invokes `build_ast_graph.py` to rebuild Kuzu under the resolved index directory. For a **graph-only** rebuild from the CLI, prefer `java-codebase-rag reprocess --graph-only` (see [`docs/JAVA-CODEBASE-RAG-CLI.md`](./docs/JAVA-CODEBASE-RAG-CLI.md)). To invoke the graph builder directly:
 
 ```bash
 # Scan the current working directory
@@ -439,7 +439,7 @@ Resolution order for `microservice`:
 
 ### Re-index required when ontology changes
 
-Current ontology version is **12**. Any index built before this version must be rebuilt via `cocoindex update ... --full-reprocess -f` or `java-codebase-rag reprocess`. Until re-indexed, the server defensively JSON-decodes string-form list columns so nothing explodes, but filters like `array_contains` will not work.
+Current ontology version is **12**. Any index built before this version must be rebuilt via `cocoindex update ... --full-reprocess -f` or a full `java-codebase-rag reprocess` (no selective flags) so vectors and graph stay aligned. Until re-indexed, the server defensively JSON-decodes string-form list columns so nothing explodes, but filters like `array_contains` will not work.
 
 Ontology **12** renames `@CodebaseClient` to `@CodebaseHttpClient`, types HTTP `method` as the shared `CodebaseHttpMethod` enum on both inbound and outbound stubs, and makes inbound layer-C HTTP routes **replace** same-method built-in Spring rows (no merge). Rebuild after upgrading so `meta_chain` keys and annotation simple names match the extractor.
 
@@ -687,7 +687,7 @@ public Reply callJoinOperator(Request req) { /* ... */ }
 public void publishFollowUp(Event e) { /* ... */ }
 ```
 
-Resolution order in code: built-in inference → config annotation maps → meta-annotation walk → `@CodebaseRole` / `@CodebaseCapability` → `role_overrides.fqn` (highest priority for explicit per-type config). Route composition uses the same first-pass index, then `@CodebaseHttpRoute` / `@CodebaseAsyncRoute`, then `route_overrides.fqn`. Rebuild Lance + Kuzu (`java-codebase-rag reprocess` or `build_ast_graph.py`) after changing overrides.
+Resolution order in code: built-in inference → config annotation maps → meta-annotation walk → `@CodebaseRole` / `@CodebaseCapability` → `role_overrides.fqn` (highest priority for explicit per-type config). Route composition uses the same first-pass index, then `@CodebaseHttpRoute` / `@CodebaseAsyncRoute`, then `route_overrides.fqn`. Rebuild the affected store (`java-codebase-rag reprocess`, or `--vectors-only` / `--graph-only` when appropriate, or `build_ast_graph.py` for graph-only manual runs) after changing overrides.
 
 ### 7.4 Caller-side overrides
 

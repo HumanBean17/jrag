@@ -53,6 +53,15 @@ class GraphMetaOutput(BaseModel):
 
 
 class RefreshIndexOutput(BaseModel):
+    """Structured result for ``run_refresh_pipeline`` / CLI ``reprocess`` JSON.
+
+    ``phases_run`` records which phase subprocesses actually started; the CLI maps
+    failures to exit **2** when it is empty (setup / nothing spawned) and exit **1**
+    when it is non-empty (build failure). Callers constructing this model manually
+    must set ``phases_run`` accordingly — omitting it leaves the default ``[]``,
+    which the CLI treats like a preflight failure.
+    """
+
     success: bool
     exit_code: int | None = None
     stdout: str = ""
@@ -61,6 +70,7 @@ class RefreshIndexOutput(BaseModel):
     graph_exit_code: int | None = None
     graph_stdout: str = ""
     graph_stderr: str = ""
+    phases_run: list[Literal["vectors", "graph"]] = Field(default_factory=list)
 
 
 class IndexInfoOutput(BaseModel):
@@ -189,6 +199,7 @@ async def run_refresh_pipeline(*, quiet: bool = False) -> RefreshIndexOutput:
         return RefreshIndexOutput(
             success=False,
             message=f"cocoindex not found next to Python: {cocoindex_bin}",
+            phases_run=[],
         )
     flow_path = root / "java_index_flow_lancedb.py"
     bundle_dir = Path(__file__).resolve().parent
@@ -200,6 +211,7 @@ async def run_refresh_pipeline(*, quiet: bool = False) -> RefreshIndexOutput:
             return RefreshIndexOutput(
                 success=False,
                 message=f"java_index_flow_lancedb.py not found under {root} nor {bundle_dir}",
+                phases_run=[],
             )
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -215,10 +227,15 @@ async def run_refresh_pipeline(*, quiet: bool = False) -> RefreshIndexOutput:
         )
         out_b, err_b = await proc.communicate()
     except Exception as exc:
-        return RefreshIndexOutput(success=False, message=f"spawn failed: {exc!s}")
+        return RefreshIndexOutput(
+            success=False,
+            message=f"spawn failed: {exc!s}",
+            phases_run=[],
+        )
     out = out_b.decode(errors="replace")
     err = err_b.decode(errors="replace")
     ok = proc.returncode == 0
+    phases_run: list[Literal["vectors", "graph"]] = ["vectors"]
     graph_code: int | None = None
     graph_out = ""
     graph_err = ""
@@ -243,6 +260,7 @@ async def run_refresh_pipeline(*, quiet: bool = False) -> RefreshIndexOutput:
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )
+                phases_run = ["vectors", "graph"]
                 gout_b, gerr_b = await gproc.communicate()
                 graph_code = gproc.returncode
                 graph_out = gout_b.decode(errors="replace")
@@ -264,6 +282,7 @@ async def run_refresh_pipeline(*, quiet: bool = False) -> RefreshIndexOutput:
         graph_exit_code=graph_code,
         graph_stdout=graph_out[-4000:] if len(graph_out) > 4000 else graph_out,
         graph_stderr=graph_err[-4000:] if len(graph_err) > 4000 else graph_err,
+        phases_run=phases_run,
     )
 
 
