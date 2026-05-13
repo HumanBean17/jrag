@@ -205,7 +205,7 @@ Use `tests/test_cli_quiet_parity.py` for quiet regression (propose §8 / §6).
 
 # Tracking
 
-- `PR-1` (propose): _pending_
+- `PR-1` (propose): _done_
 - `PR-2` (stream + wrap): _pending_
 - `PR-3` (heartbeats + docs): _pending_
 
