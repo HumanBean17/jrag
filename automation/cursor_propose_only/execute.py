@@ -4,12 +4,15 @@ import argparse
 import json
 import re
 import subprocess
+import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from automation.cursor_propose_only.workflow import evaluate_review
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 _PR_SECTION_RE = re.compile(r"^##\s+(PR-[^\n]+)$", re.MULTILINE)
 _PROMPT_BLOCK_RE = re.compile(r"\*\*Prompt:\*\*\s*\n\s*(`{3,})\n(.*?)\n\1", re.DOTALL)
@@ -39,6 +42,12 @@ class CommandResult:
 
 def _now_utc() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _evaluate_review(review_text: str, *, min_severity: str) -> dict[str, Any]:
+    from automation.cursor_propose_only.workflow import evaluate_review
+
+    return evaluate_review(review_text, min_severity=min_severity)
 
 
 def _json_dump(path: Path, payload: dict[str, Any]) -> None:
@@ -297,7 +306,7 @@ def execute_workflow(
                     )
                     break
 
-                review_eval = evaluate_review(
+                review_eval = _evaluate_review(
                     review_output_file.read_text(encoding="utf-8"), min_severity=min_severity
                 )
                 task_state.setdefault("review_rounds", []).append(
