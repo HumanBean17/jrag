@@ -108,3 +108,50 @@ template):
 - No drive-by lint fixes (unused imports, formatting nits in
   unrelated files). They violate the per-PR scope contract even when
   they look harmless.
+
+## Cursor Cloud specific instructions
+
+This is a self-contained Python project — no external services
+(no Postgres, Kafka, Docker) are needed. All storage (Kuzu, LanceDB,
+CocoIndex state) is embedded/file-based.
+
+### Environment
+
+- Python 3.11+ with `.venv` at repo root. The update script creates
+  the venv and installs deps if missing.
+- `.venv/bin` must be on `PATH` for CLI tests
+  (`test_java_codebase_rag_cli.py` uses
+  `shutil.which("java-codebase-rag")`). The update script handles
+  this via `~/.bashrc`.
+- The package must be installed in **editable mode**
+  (`pip install -e .`) so the `java-codebase-rag` CLI entry point
+  is registered. The update script handles this.
+
+### Running checks
+
+Standard commands per `README.md` § 1 and `AGENTS.md` § Workflow:
+
+```bash
+.venv/bin/ruff check .
+.venv/bin/python -m pytest tests -v
+```
+
+Heavy (CocoIndex + LanceDB e2e) tests are gated behind
+`JAVA_CODEBASE_RAG_RUN_HEAVY=1` and download the embedding model on
+first run. They are not required for normal development.
+
+### Hello-world verification
+
+Build the Kuzu graph from the test fixture and inspect it:
+
+```bash
+rm -rf /tmp/check && .venv/bin/python build_ast_graph.py \
+  --source-root tests/bank-chat-system \
+  --kuzu-path /tmp/check/code_graph.kuzu --verbose
+.venv/bin/java-codebase-rag meta \
+  --source-root tests/bank-chat-system --index-dir /tmp/check
+```
+
+The MCP server (`server.py`) is stdio-based and is not started as a
+long-running dev server — it is invoked by MCP hosts (Claude Desktop,
+Claude Code) directly.
