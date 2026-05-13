@@ -21,6 +21,7 @@ If `java-codebase-rag` is missing, run the module entrypoint:
 
 - **TTY:** human-readable `pprint` of the payload on stdout (except **successful selective `reprocess`** with `--vectors-only` / `--graph-only`, which prints `Rebuilt:` / `Skipped:` lines instead of dumping the full dict).
 - **Piped / non-TTY:** **single JSON object** per invocation on stdout (no trailing noise). Use this in scripts and CI.
+- **Lifecycle stderr:** `init`, `increment`, `reprocess`, and `erase` stream subprocess progress (and relayed child stdout) to **stderr**; pass **`--quiet`** to suppress that stream. **stdout** stays the JSON/pprint payload only.
 
 Example:
 

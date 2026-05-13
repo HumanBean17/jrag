@@ -285,7 +285,7 @@ Example:
 
 Operator playbook with workflows, exit codes, and env alignment: [`docs/JAVA-CODEBASE-RAG-CLI.md`](./docs/JAVA-CODEBASE-RAG-CLI.md).
 
-Run `java-codebase-rag --help` to list grouped subcommands (lifecycle / introspection / analysis). Output mode is automatic: JSON when piped, pretty text in a TTY. Module entrypoint: `python -m java_codebase_rag.cli`.
+Run `java-codebase-rag --help` to list grouped subcommands (lifecycle / introspection / analysis). Output mode is automatic: JSON when piped, pretty text in a TTY. Module entrypoint: `python -m java_codebase_rag.cli`. Lifecycle commands (`init`, `increment`, `reprocess`, `erase`) stream subprocess progress to **stderr** (including any child stdout the tool relays); **`--quiet`** suppresses that human channel; **stdout** remains the machine-readable contract (JSON or pprint).
 
 Shared flags on all subcommands: `--source-root`, `--index-dir`, `--embedding-model`, `--embedding-device` (each optional; see the CLI guide for precedence).
 

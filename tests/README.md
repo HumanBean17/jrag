@@ -68,6 +68,8 @@ warm cache, several minutes cold).
 JAVA_CODEBASE_RAG_RUN_HEAVY=1 .venv/bin/pytest tests -v
 ```
 
+**`JAVA_CODEBASE_RAG_TEST_GRAPH_SLOW_SEC`:** optional float read by `build_ast_graph.py` in pass1 only. When set (e.g. `6`), pass1 sleeps that many seconds under `--verbose` so tests can assert heartbeat lines. Leave unset for normal `pytest` runs.
+
 ---
 
 ## ⚠️ Note for future contributors — DO NOT OVERFIT THE MCP TO THIS CORPUS

@@ -9,8 +9,9 @@ import json
 import pprint
 import shutil
 import sys
+import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from java_codebase_rag.config import (
     ResolvedOperatorConfig,
@@ -94,6 +95,47 @@ def _emit_reprocess_outcome(payload: dict[str, Any], *, selective_tty_mode: str 
     _emit(payload)
 
 
+_PIPELINE_SEP = "\u00b7"
+
+
+def _pipeline_header(subcommand: str, cfg: ResolvedOperatorConfig) -> None:
+    root = cfg.source_root.resolve()
+    idx = cfg.index_dir.resolve()
+    print(
+        f"java-codebase-rag {subcommand} {_PIPELINE_SEP} source={root} {_PIPELINE_SEP} index={idx}",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
+def _pipeline_footer(subcommand: str, started: float, exit_code: int) -> None:
+    elapsed = time.perf_counter() - started
+    print(
+        f"java-codebase-rag {subcommand} {_PIPELINE_SEP} finished in {elapsed:.2f}s (exit={exit_code})",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
+def _run_with_pipeline_progress(
+    subcommand: str,
+    cfg: ResolvedOperatorConfig,
+    *,
+    quiet: bool,
+    work: Callable[[], int],
+) -> int:
+    if quiet:
+        return int(work())
+    _pipeline_header(subcommand, cfg)
+    t0 = time.perf_counter()
+    code = 0
+    try:
+        code = int(work())
+        return code
+    finally:
+        _pipeline_footer(subcommand, t0, code)
+
+
 def _jsonable(value: Any) -> Any:
     if hasattr(value, "model_dump"):
         return value.model_dump()
@@ -168,43 +210,47 @@ def _cmd_init(args: argparse.Namespace) -> int:
         )
         return 2
     cfg.index_dir.mkdir(parents=True, exist_ok=True)
-    env = cfg.subprocess_env()
-    coco = run_cocoindex_update(
-        env,
-        full_reprocess=False,
-        quiet=bool(args.quiet),
-        lance_project_root=None if args.quiet else cfg.source_root,
-    )
-    if coco.returncode != 0:
-        _emit(
-            {
-                "success": False,
-                "exit_code": coco.returncode,
-                "stdout": clip(coco.stdout, 8000),
-                "stderr": clip(coco.stderr, 8000),
-                "message": f"cocoindex exit {coco.returncode}",
-            }
+
+    def work() -> int:
+        env = cfg.subprocess_env()
+        coco = run_cocoindex_update(
+            env,
+            full_reprocess=False,
+            quiet=bool(args.quiet),
+            lance_project_root=None if args.quiet else cfg.source_root,
         )
-        return 1
-    g = run_build_ast_graph(
-        source_root=cfg.source_root,
-        kuzu_path=cfg.kuzu_path,
-        verbose=not args.quiet,
-        env=env,
-    )
-    if g.returncode != 0:
-        _emit(
-            {
-                "success": False,
-                "exit_code": g.returncode,
-                "stdout": clip(g.stdout, 4000),
-                "stderr": clip(g.stderr, 4000),
-                "message": f"graph builder exit {g.returncode}",
-            }
+        if coco.returncode != 0:
+            _emit(
+                {
+                    "success": False,
+                    "exit_code": coco.returncode,
+                    "stdout": clip(coco.stdout, 8000),
+                    "stderr": clip(coco.stderr, 8000),
+                    "message": f"cocoindex exit {coco.returncode}",
+                }
+            )
+            return 1
+        g = run_build_ast_graph(
+            source_root=cfg.source_root,
+            kuzu_path=cfg.kuzu_path,
+            verbose=not args.quiet,
+            env=env,
         )
-        return 1
-    _emit({"success": True, "message": "init completed"})
-    return 0
+        if g.returncode != 0:
+            _emit(
+                {
+                    "success": False,
+                    "exit_code": g.returncode,
+                    "stdout": clip(g.stdout, 4000),
+                    "stderr": clip(g.stderr, 4000),
+                    "message": f"graph builder exit {g.returncode}",
+                }
+            )
+            return 1
+        _emit({"success": True, "message": "init completed"})
+        return 0
+
+    return _run_with_pipeline_progress("init", cfg, quiet=bool(args.quiet), work=work)
 
 
 def _cmd_increment(args: argparse.Namespace) -> int:
@@ -212,113 +258,121 @@ def _cmd_increment(args: argparse.Namespace) -> int:
     _startup_hints(cfg)
     cfg.apply_to_os_environ()
     _emit_increment_kuzu_warning()
-    env = cfg.subprocess_env()
-    coco = run_cocoindex_update(
-        env,
-        full_reprocess=False,
-        quiet=bool(args.quiet),
-        lance_project_root=None if args.quiet else cfg.source_root,
-    )
-    if coco.returncode != 0:
-        _emit(
-            {
-                "success": False,
-                "exit_code": coco.returncode,
-                "stdout": clip(coco.stdout, 8000),
-                "stderr": clip(coco.stderr, 8000),
-                "message": f"cocoindex exit {coco.returncode}",
-            }
+
+    def work() -> int:
+        env = cfg.subprocess_env()
+        coco = run_cocoindex_update(
+            env,
+            full_reprocess=False,
+            quiet=bool(args.quiet),
+            lance_project_root=None if args.quiet else cfg.source_root,
         )
-        return 1
-    _emit({"success": True, "message": "increment completed (Lance only; graph may be stale — see stderr)"})
-    return 0
+        if coco.returncode != 0:
+            _emit(
+                {
+                    "success": False,
+                    "exit_code": coco.returncode,
+                    "stdout": clip(coco.stdout, 8000),
+                    "stderr": clip(coco.stderr, 8000),
+                    "message": f"cocoindex exit {coco.returncode}",
+                }
+            )
+            return 1
+        _emit({"success": True, "message": "increment completed (Lance only; graph may be stale — see stderr)"})
+        return 0
+
+    return _run_with_pipeline_progress("increment", cfg, quiet=bool(args.quiet), work=work)
 
 
 def _cmd_reprocess(args: argparse.Namespace) -> int:
     cfg = _resolved_from_ns(args)
     _startup_hints(cfg)
     cfg.apply_to_os_environ()
-    env = cfg.subprocess_env()
-    vectors_only = bool(getattr(args, "vectors_only", False))
-    graph_only = bool(getattr(args, "graph_only", False))
 
-    if vectors_only:
-        coco = run_cocoindex_update(env, full_reprocess=True, quiet=bool(args.quiet))
-        if _is_cocoindex_preflight_blocker(coco):
-            payload: dict[str, Any] = {
-                "success": False,
-                "exit_code": None,
+    def work() -> int:
+        env = cfg.subprocess_env()
+        vectors_only = bool(getattr(args, "vectors_only", False))
+        graph_only = bool(getattr(args, "graph_only", False))
+
+        if vectors_only:
+            coco = run_cocoindex_update(env, full_reprocess=True, quiet=bool(args.quiet))
+            if _is_cocoindex_preflight_blocker(coco):
+                payload: dict[str, Any] = {
+                    "success": False,
+                    "exit_code": None,
+                    "stdout": clip(coco.stdout, 8000),
+                    "stderr": clip(coco.stderr, 8000),
+                    "message": coco.stderr.strip() or f"cocoindex setup exit {coco.returncode}",
+                    "graph_exit_code": None,
+                    "graph_stdout": "",
+                    "graph_stderr": "",
+                    "phases_run": [],
+                }
+                _emit_reprocess_outcome(payload)
+                return _reprocess_exit_code(payload)
+            ok = coco.returncode == 0
+            payload = {
+                "success": ok,
+                "exit_code": coco.returncode,
                 "stdout": clip(coco.stdout, 8000),
                 "stderr": clip(coco.stderr, 8000),
-                "message": coco.stderr.strip() or f"cocoindex setup exit {coco.returncode}",
+                "message": None if ok else f"cocoindex exit {coco.returncode}",
                 "graph_exit_code": None,
                 "graph_stdout": "",
                 "graph_stderr": "",
-                "phases_run": [],
+                "phases_run": ["vectors"],
             }
-            _emit_reprocess_outcome(payload)
+            if ok:
+                print(_REPROCESS_DRIFT_VECTORS_ONLY, file=sys.stderr)
+            _emit_reprocess_outcome(payload, selective_tty_mode="vectors" if ok else None)
             return _reprocess_exit_code(payload)
-        ok = coco.returncode == 0
-        payload = {
-            "success": ok,
-            "exit_code": coco.returncode,
-            "stdout": clip(coco.stdout, 8000),
-            "stderr": clip(coco.stderr, 8000),
-            "message": None if ok else f"cocoindex exit {coco.returncode}",
-            "graph_exit_code": None,
-            "graph_stdout": "",
-            "graph_stderr": "",
-            "phases_run": ["vectors"],
-        }
-        if ok:
-            print(_REPROCESS_DRIFT_VECTORS_ONLY, file=sys.stderr)
-        _emit_reprocess_outcome(payload, selective_tty_mode="vectors" if ok else None)
-        return _reprocess_exit_code(payload)
 
-    if graph_only:
-        g = run_build_ast_graph(
-            source_root=cfg.source_root,
-            kuzu_path=cfg.kuzu_path,
-            verbose=not args.quiet,
-            env=env,
-        )
-        if _is_graph_preflight_blocker(g):
+        if graph_only:
+            g = run_build_ast_graph(
+                source_root=cfg.source_root,
+                kuzu_path=cfg.kuzu_path,
+                verbose=not args.quiet,
+                env=env,
+            )
+            if _is_graph_preflight_blocker(g):
+                payload = {
+                    "success": False,
+                    "exit_code": None,
+                    "stdout": "",
+                    "stderr": "",
+                    "message": g.stderr.strip() or f"graph builder setup exit {g.returncode}",
+                    "graph_exit_code": None,
+                    "graph_stdout": clip(g.stdout, 4000),
+                    "graph_stderr": clip(g.stderr, 4000),
+                    "phases_run": [],
+                }
+                _emit_reprocess_outcome(payload)
+                return _reprocess_exit_code(payload)
+            ok = g.returncode == 0
             payload = {
-                "success": False,
+                "success": ok,
                 "exit_code": None,
                 "stdout": "",
                 "stderr": "",
-                "message": g.stderr.strip() or f"graph builder setup exit {g.returncode}",
-                "graph_exit_code": None,
+                "message": None if ok else f"graph builder exit {g.returncode}",
+                "graph_exit_code": g.returncode,
                 "graph_stdout": clip(g.stdout, 4000),
                 "graph_stderr": clip(g.stderr, 4000),
-                "phases_run": [],
+                "phases_run": ["graph"],
             }
-            _emit_reprocess_outcome(payload)
+            if ok:
+                print(_reprocess_drift_graph_only_line(cfg.index_dir), file=sys.stderr)
+            _emit_reprocess_outcome(payload, selective_tty_mode="graph" if ok else None)
             return _reprocess_exit_code(payload)
-        ok = g.returncode == 0
-        payload = {
-            "success": ok,
-            "exit_code": None,
-            "stdout": "",
-            "stderr": "",
-            "message": None if ok else f"graph builder exit {g.returncode}",
-            "graph_exit_code": g.returncode,
-            "graph_stdout": clip(g.stdout, 4000),
-            "graph_stderr": clip(g.stderr, 4000),
-            "phases_run": ["graph"],
-        }
-        if ok:
-            print(_reprocess_drift_graph_only_line(cfg.index_dir), file=sys.stderr)
-        _emit_reprocess_outcome(payload, selective_tty_mode="graph" if ok else None)
+
+        import server  # lazy: pulls sentence_transformers/torch/lancedb/kuzu
+
+        result = asyncio.run(server.run_refresh_pipeline(quiet=bool(args.quiet)))
+        payload = result.model_dump()
+        _emit_reprocess_outcome(payload)
         return _reprocess_exit_code(payload)
 
-    import server  # lazy: pulls sentence_transformers/torch/lancedb/kuzu
-
-    result = asyncio.run(server.run_refresh_pipeline(quiet=bool(args.quiet)))
-    payload = result.model_dump()
-    _emit_reprocess_outcome(payload)
-    return _reprocess_exit_code(payload)
+    return _run_with_pipeline_progress("reprocess", cfg, quiet=bool(args.quiet), work=work)
 
 
 def _cmd_erase(args: argparse.Namespace) -> int:
@@ -350,37 +404,41 @@ def _cmd_erase(args: argparse.Namespace) -> int:
         if ans not in ("y", "yes"):
             print("Aborted.", file=sys.stderr)
             return 2
-    env = cfg.subprocess_env()
-    drop = run_cocoindex_drop(env, quiet=False)
-    if drop.returncode == 127:
-        print(
-            "java-codebase-rag erase: cocoindex CLI not found next to this Python; "
-            "skipped `cocoindex drop` — cocoindex.db (if any) was not removed by CocoIndex.",
-            file=sys.stderr,
-        )
-    elif drop.returncode != 0:
-        print(clip(drop.stderr, 4000), file=sys.stderr)
-    if cfg.kuzu_path.exists():
-        shutil.rmtree(cfg.kuzu_path, ignore_errors=True)
-    if cfg.cocoindex_db.exists():
-        try:
-            cfg.cocoindex_db.unlink()
-        except OSError:
-            pass
-    if cfg.index_dir.is_dir():
-        try:
-            import lancedb
 
-            db = lancedb.connect(str(cfg.index_dir.resolve()))
-            for name in list(db.table_names()):
-                try:
-                    db.drop_table(name)
-                except Exception as exc:
-                    print(f"warning: failed to drop Lance table {name!r}: {exc}", file=sys.stderr)
-        except Exception:
-            pass
-    _emit({"success": True, "message": "erase completed"})
-    return 0
+    def work() -> int:
+        env = cfg.subprocess_env()
+        drop = run_cocoindex_drop(env, quiet=bool(args.quiet))
+        if drop.returncode == 127:
+            print(
+                "java-codebase-rag erase: cocoindex CLI not found next to this Python; "
+                "skipped `cocoindex drop` — cocoindex.db (if any) was not removed by CocoIndex.",
+                file=sys.stderr,
+            )
+        elif drop.returncode != 0:
+            print(clip(drop.stderr, 4000), file=sys.stderr)
+        if cfg.kuzu_path.exists():
+            shutil.rmtree(cfg.kuzu_path, ignore_errors=True)
+        if cfg.cocoindex_db.exists():
+            try:
+                cfg.cocoindex_db.unlink()
+            except OSError:
+                pass
+        if cfg.index_dir.is_dir():
+            try:
+                import lancedb
+
+                db = lancedb.connect(str(cfg.index_dir.resolve()))
+                for name in list(db.table_names()):
+                    try:
+                        db.drop_table(name)
+                    except Exception as exc:
+                        print(f"warning: failed to drop Lance table {name!r}: {exc}", file=sys.stderr)
+            except Exception:
+                pass
+        _emit({"success": True, "message": "erase completed"})
+        return 0
+
+    return _run_with_pipeline_progress("erase", cfg, quiet=bool(args.quiet), work=work)
 
 
 def _cmd_meta(args: argparse.Namespace) -> int:
@@ -470,6 +528,8 @@ def _cmd_analyze_pr(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     description = (
         "java-codebase-rag — graph-native code intelligence for Java microservices.\n\n"
+        "Lifecycle commands stream subprocess progress to stderr (including relayed child stdout); "
+        "--quiet suppresses that stream; stdout remains the machine-readable payload.\n\n"
         "Lifecycle (manage the index):\n"
         "  init            Create a fresh index from a Java repository.\n"
         "  increment       Pick up changes since the last index update (Lance only).\n"
@@ -542,6 +602,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_index_embedding_flags(erase)
     erase.add_argument("--yes", action="store_true", help="Confirm destructive deletion (required in CI)")
+    erase.add_argument("--quiet", action="store_true")
     erase.set_defaults(handler=_cmd_erase)
 
     meta = subparsers.add_parser("meta", help="Print graph meta and embedding resolution.")
