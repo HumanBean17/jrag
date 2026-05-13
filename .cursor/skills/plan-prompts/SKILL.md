@@ -1,6 +1,6 @@
 ---
 name: plan-prompts
-description: Generate per-PR Cursor execution prompts in `plans/CURSOR-PROMPTS-*.md` from an existing `plans/PLAN-*.md`. Use when the user asks to split implementation into Cursor-ready PR prompts with strict in-scope/out-of-scope guardrails.
+description: Generate per-PR Cursor execution prompts in `plans/CURSOR-PROMPTS-*.md` from an existing `plans/PLAN-*.md`. Each prompt must include `## Tests to run (iteration loop)` (pytest file subset + rationales) between Deliverables and Tests per TEST-SUITE-FAST-LOOP. Use when the user asks to split implementation into Cursor-ready PR prompts with strict in-scope/out-of-scope guardrails.
 disable-model-invocation: true
 ---
 
@@ -51,10 +51,22 @@ Each PR prompt must include all of:
 - **Scope** with concrete deliverables mapped to plan section
 - **Out of scope (do NOT touch)** list mirroring plan boundaries
 - **Deliverables** numbered and testable
-- **Tests** command and expected result format (counts only if known)
+- **`## Tests to run (iteration loop)`** — pytest **file** subset for fast local iteration (see below); must appear **after Deliverables and before the full Tests section**
+- **Tests** command and expected result format for the full or plan-required run (counts only if known)
 - **Sentinel checks** (`rg` patterns) where scope enforcement is critical
 - **Manual evidence** commands when plan requires runtime proof
 - **Definition of Done** checklist with PR title + branch convention
+
+### Tests to run (iteration loop) — required subsection
+
+Per [`propose/TEST-SUITE-FAST-LOOP-PROPOSE.md`](../../../propose/TEST-SUITE-FAST-LOOP-PROPOSE.md) and [`plans/PLAN-TEST-SUITE-FAST-LOOP.md`](../../../plans/PLAN-TEST-SUITE-FAST-LOOP.md) PR-2:
+
+- Add a markdown section with the **exact heading** `## Tests to run (iteration loop)` inside the fenced **Prompt** block, **immediately after** `## Deliverables` and **before** `## Tests`.
+- Content: bullet list of `tests/test_*.py` paths, each with a **one-line rationale** tied to the PR’s code paths.
+- **Merge gate:** state that the **full** default suite (`pytest tests`, `JAVA_CODEBASE_RAG_RUN_HEAVY` unset or `0`) is enforced at merge time by CI once the repo workflow exists; the iteration list is for speed only.
+- **Docs-only (UC15):** if the PR is documentation-only with no test signal, use an explicit empty pattern, e.g. a single bullet `*(none — docs-only change; full suite still runs in CI.)*` — do not invent a fake file list.
+
+This heading must stay verbatim so reviewers (and the user-scoped **`pr-review`** skill, if present) can grep for it.
 
 ## Style rules
 
@@ -95,6 +107,15 @@ Read the PR-XX section first. The plan is the source of truth.
 1. <deliverable>
 2. <deliverable>
 
+## Tests to run (iteration loop)
+
+Run only these files during local iteration; full suite is the merge gate (CI on PR + `master`).
+
+- `tests/test_<file>.py` — <one-line rationale>
+- `tests/test_<other>.py` — <one-line rationale>
+
+Docs-only PRs (UC15): use a single bullet such as *(none — docs-only change; full suite still runs in CI.)* instead of inventing paths.
+
 ## Tests
 Run: `<command>`
 Expected: <result format / count if known>
@@ -117,6 +138,7 @@ Expected: <result format / count if known>
 - [ ] Prompt file covers every PR from the plan in order
 - [ ] Each prompt has explicit scope and out-of-scope
 - [ ] Deliverables are numbered and verifiable
+- [ ] Each generated prompt includes **`## Tests to run (iteration loop)`** between Deliverables and Tests (or the UC15 docs-only line)
 - [ ] Tests and sentinel checks are present where needed
 - [ ] No scope drift from plan decisions
 

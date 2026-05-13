@@ -35,7 +35,7 @@ Status: **active**. One prompt per PR; each prompt is self-contained.
 If you need to touch these areas, stop and ask.
 ```
 
-## Example deliverables + tests
+## Example deliverables + iteration subset + tests
 
 ```markdown
 ## Deliverables
@@ -43,8 +43,15 @@ If you need to touch these areas, stop and ask.
 2. Wire create/drop lifecycle.
 3. Add extraction tests for declared client rows.
 
+## Tests to run (iteration loop)
+
+Run only these files during local iteration; full suite is the merge gate (CI on PR + `master`).
+
+- `tests/test_client_node_extraction.py` — exercises new `Client` rows and extraction.
+- `tests/test_ast_graph_build.py` — schema and graph build paths touched by DDL wiring.
+
 ## Tests
-Run: `python -m pytest tests/test_client_node_extraction.py -q`
+Run: `.venv/bin/python -m pytest tests/test_client_node_extraction.py tests/test_ast_graph_build.py -v`
 Expected: all tests pass.
 
 ## Sentinel checks

@@ -18,7 +18,7 @@ when_to_load:
   - "onboard onto this code"
   - "write a propose doc for redesign of <component>"
 when_not_to_load:
-  - routine PR review (use a review skill such as `cursor-pr-review` if you have it; example external skill, not shipped from this repo)
+  - routine PR review (use a review skill such as `pr-review` if you have it; example external skill, not shipped from this repo)
   - single-question lookups answerable by one MCP call
   - editing existing code where the agent is already oriented
 ---
