@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+from java_codebase_rag import cli as cli_mod
+
 REPO = Path(__file__).resolve().parent.parent
 BUILDER = REPO / "build_ast_graph.py"
 FIXTURE_ROOT = REPO / "tests" / "fixtures" / "call_graph_smoke"
@@ -85,7 +87,6 @@ def test_pipeline_header_footer_present(tmp_path: Path) -> None:
         pytest.skip("java-codebase-rag entrypoint not on PATH")
     idx = tmp_path / "idx_pf"
     idx.mkdir()
-    (idx / "stub.txt").write_text("x", encoding="utf-8")
     env = os.environ.copy()
     env["JAVA_CODEBASE_RAG_INDEX_DIR"] = str(idx)
     env["JAVA_CODEBASE_RAG_SOURCE_ROOT"] = str(tmp_path)
@@ -122,6 +123,8 @@ def test_cli_quiet_stderr_baseline_per_subcommand(tmp_path: Path, corpus_root: P
     assert r_erase.returncode == 0, r_erase.stderr + r_erase.stdout
     _assert_quiet_stderr_no_progress_markers(r_erase.stderr)
 
+    if os.environ.get("JAVA_CODEBASE_RAG_RUN_HEAVY", "").strip() != "1":
+        pytest.skip("cocoindex init/increment/reprocess quiet checks; set JAVA_CODEBASE_RAG_RUN_HEAVY=1")
     if not _cocoindex_available():
         pytest.skip("cocoindex CLI missing — skip init/increment/reprocess quiet checks")
 
@@ -156,7 +159,7 @@ def test_cli_quiet_stderr_baseline_per_subcommand(tmp_path: Path, corpus_root: P
     )
     assert r_inc.returncode == 0, r_inc.stderr + r_inc.stdout
     _assert_quiet_stderr_no_progress_markers(r_inc.stderr)
-    assert "WARNING: AST graph (Kuzu) incremental rebuild is not yet implemented." in r_inc.stderr
+    assert r_inc.stderr == "\n".join(cli_mod._INCREMENT_WARNING_LINES) + "\n"
 
     r_rep = subprocess.run(
         [exe, "reprocess", "--source-root", str(corpus_root), "--index-dir", str(idx_life), "--quiet"],

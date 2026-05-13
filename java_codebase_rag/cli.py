@@ -132,6 +132,19 @@ def _run_with_pipeline_progress(
     try:
         code = int(work())
         return code
+    except BaseException as exc:
+        # Keep footer aligned with process outcome (main maps unhandled Exception -> exit 2).
+        if isinstance(exc, SystemExit):
+            c = exc.code
+            if isinstance(c, int):
+                code = c
+            elif c in (None, False):
+                code = 0
+            else:
+                code = 1
+        elif code == 0:
+            code = 2
+        raise
     finally:
         _pipeline_footer(subcommand, t0, code)
 
@@ -560,7 +573,11 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     _add_index_embedding_flags(init)
-    init.add_argument("--quiet", action="store_true")
+    init.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Suppress stderr progress relay; stdout payload unchanged.",
+    )
     init.set_defaults(handler=_cmd_init)
 
     increment = subparsers.add_parser(
@@ -569,7 +586,11 @@ def build_parser() -> argparse.ArgumentParser:
         description="Runs cocoindex catch-up (no full reprocess). Does not rebuild Kuzu; see stderr warning.",
     )
     _add_index_embedding_flags(increment)
-    increment.add_argument("--quiet", action="store_true")
+    increment.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Suppress stderr progress relay; stdout payload unchanged.",
+    )
     increment.set_defaults(handler=_cmd_increment)
 
     reprocess = subparsers.add_parser(
@@ -581,7 +602,11 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     _add_index_embedding_flags(reprocess)
-    reprocess.add_argument("--quiet", action="store_true")
+    reprocess.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Suppress stderr progress relay; stdout payload unchanged.",
+    )
     _rex = reprocess.add_mutually_exclusive_group()
     _rex.add_argument(
         "--vectors-only",
@@ -602,7 +627,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_index_embedding_flags(erase)
     erase.add_argument("--yes", action="store_true", help="Confirm destructive deletion (required in CI)")
-    erase.add_argument("--quiet", action="store_true")
+    erase.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Suppress stderr progress relay; stdout payload unchanged.",
+    )
     erase.set_defaults(handler=_cmd_erase)
 
     meta = subparsers.add_parser("meta", help="Print graph meta and embedding resolution.")

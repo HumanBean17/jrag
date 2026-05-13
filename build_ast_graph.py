@@ -422,7 +422,7 @@ def pass1_parse(root: Path, tables: GraphTables, *, verbose: bool) -> dict[str, 
         except ValueError:
             slow_sec = 0.0
     with _VerbosePassHeartbeats("[pass1]", verbose=verbose):
-        if slow_sec > 0:
+        if verbose and slow_sec > 0:
             time.sleep(slow_sec)
         for p in iter_java_source_files(root, ignore=ignore):
             n_files += 1
@@ -1415,15 +1415,15 @@ def pass4_routes(
     if verbose:
         _verbose_stderr_line(_PASS4_START)
     with _VerbosePassHeartbeats("[pass4]", verbose=verbose):
-        
+
         for ast in asts.values():
             stats.routes_skipped_unresolved += ast.routes_skipped_unresolved
-        
+
         routes_by_id: dict[str, RouteRow] = {}
         exposes_seen: set[tuple[str, str]] = set()
-        
+
         http_kinds = frozenset({"http_endpoint", "http_consumer"})
-        
+
         for member in sorted(tables.members, key=lambda m: m.node_id):
             if member.decl.is_constructor:
                 continue
@@ -1504,13 +1504,13 @@ def pass4_routes(
                             strategy=decl.resolution_strategy,
                         ),
                     )
-        
+
         tables.routes_rows = sorted(routes_by_id.values(), key=lambda r: r.id)
-        
+
         for row in tables.routes_rows:
             stats.by_framework[row.framework] += 1
             stats.by_kind[row.kind] += 1
-        
+
         n_routes = len(tables.routes_rows)
         if n_routes:
             stats.routes_resolved_pct = 100.0 * sum(
@@ -1522,7 +1522,7 @@ def pass4_routes(
         else:
             stats.routes_resolved_pct = 100.0
             stats.routes_from_brownfield_pct = 0.0
-        
+
         by_layer: dict[str, int] = defaultdict(int)
         for row in tables.routes_rows:
             by_layer[row.source_layer] += 1
@@ -1752,7 +1752,7 @@ def pass5_imperative_edges(
                     tables.call_edge_stats.async_calls_total += 1
                     tables.call_edge_stats.async_calls_by_client_kind[call.client_kind] += 1
                     tables.call_edge_stats.async_calls_by_strategy[strategy] += 1
-    
+
         tables.routes_rows = sorted(route_rows, key=lambda r: r.id)
         tables.client_rows = sorted(tables.client_rows, key=lambda c: c.id)
         tables.declares_client_rows = sorted(
@@ -2024,7 +2024,7 @@ def pass6_match_edges(
             tables.call_edge_stats.http_calls_match_breakdown[row.match] += 1
             if row.match == "cross_service":
                 tables.call_edge_stats.cross_service_calls_total += 1
-    
+
         for row in tables.async_call_rows:
             if row.match != "unresolved":
                 continue
@@ -2070,7 +2070,7 @@ def pass6_match_edges(
             tables.call_edge_stats.async_calls_match_breakdown[row.match] += 1
             if row.match == "cross_service":
                 tables.call_edge_stats.cross_service_calls_total += 1
-    
+
         inbound_route_ids = {r.route_id for r in tables.http_call_rows} | {r.route_id for r in tables.async_call_rows}
         tables.routes_rows = sorted(
             [
