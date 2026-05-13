@@ -11,6 +11,27 @@ From repository root:
 - `.venv/bin/python automation/cursor_propose_only/cli.py prepare ...`
 - `.venv/bin/python automation/cursor_propose_only/cli.py evaluate ...`
 
+## Select specific proposals
+
+If you only want a subset, pass `--proposal` multiple times:
+
+```bash
+.venv/bin/python automation/cursor_propose_only/cli.py prepare \
+  --repo-root . \
+  --proposal-dir propose \
+  --output-dir reports/propose_automation_selected \
+  --proposal HTTP-ROUTE-METHOD-ENUM-PROPOSE.md \
+  --proposal ENHANCED-ROLE-RECOGNITION-PROPOSE.md \
+  --rounds 3 \
+  --min-severity medium
+```
+
+Notes:
+
+- `--proposal` paths may be absolute or relative to `--proposal-dir`
+- when `--proposal` is provided, `--glob` is ignored
+- add `--include-completed` if selected files can come from `propose/completed/`
+
 ## Generate a propose-only workflow bundle
 
 ```bash

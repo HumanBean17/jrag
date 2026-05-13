@@ -3,7 +3,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from automation.cursor_propose_only.workflow import apply_review_result, evaluate_review, prepare_bundle
+from automation.cursor_propose_only.workflow import (
+    apply_review_result,
+    evaluate_review,
+    prepare_bundle,
+    resolve_selected_proposals,
+)
 
 
 def test_prepare_bundle_writes_manifest_and_prompts(tmp_path: Path) -> None:
@@ -94,3 +99,41 @@ def test_apply_review_result_updates_job_status(tmp_path: Path) -> None:
     )
     after_approve = json.loads(workflow_path.read_text(encoding="utf-8"))
     assert after_approve["jobs"][0]["status"] == "ready_to_merge"
+
+
+def test_prepare_bundle_explicit_selection_filters_proposals(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    proposal_dir = repo_root / "propose"
+    output_dir = repo_root / "reports" / "propose_automation"
+    proposal_dir.mkdir(parents=True)
+    (proposal_dir / "ALPHA-PROPOSE.md").write_text("# Alpha\n", encoding="utf-8")
+    (proposal_dir / "BETA-PROPOSE.md").write_text("# Beta\n", encoding="utf-8")
+
+    workflow = prepare_bundle(
+        repo_root=repo_root,
+        proposal_dir=proposal_dir,
+        output_dir=output_dir,
+        rounds=3,
+        min_severity="medium",
+        pattern="*-PROPOSE.md",
+        include_completed=False,
+        selected_proposals=["BETA-PROPOSE.md"],
+    )
+
+    assert len(workflow["jobs"]) == 1
+    assert workflow["jobs"][0]["job_id"] == "beta"
+
+
+def test_resolve_selected_proposals_supports_completed_when_enabled(tmp_path: Path) -> None:
+    proposal_dir = tmp_path / "propose"
+    completed_dir = proposal_dir / "completed"
+    completed_dir.mkdir(parents=True)
+    proposal_path = completed_dir / "DONE-PROPOSE.md"
+    proposal_path.write_text("# Done\n", encoding="utf-8")
+
+    selected = resolve_selected_proposals(
+        proposal_dir,
+        selected_proposals=["DONE-PROPOSE.md"],
+        include_completed=True,
+    )
+    assert selected == [proposal_path.resolve()]

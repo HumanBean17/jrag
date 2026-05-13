@@ -253,6 +253,7 @@ Edit `claude_desktop_config.json` (macOS: `~/Library/Application Support/Claude/
 - **[`docs/AGENT-GUIDE.md`](./docs/AGENT-GUIDE.md)** — copy-paste into `QWEN.md` / `CLAUDE.md` / `AGENTS.md`. Covers the four MCP tools, the shared `NodeFilter`, the edge-type taxonomy, required `neighbors` arguments, the ontology glossary (currently **v12**), the recovery playbook, and slash-style aliases.
 - **[`docs/skills/java-codebase-explore.md`](./docs/skills/java-codebase-explore.md)** — exploration **strategy** (missions, fallbacks, anti-capabilities, stopping rules); AGENT-GUIDE remains the **operating manual** for tool shapes and recovery.
 - **[`docs/MANUAL-VERIFICATION-CHECKLIST.md`](./docs/MANUAL-VERIFICATION-CHECKLIST.md)** — 7-phase agent-driven verification you run after indexing your real project. Each item has a copy-paste prompt and calibration data from `tests/bank-chat-system`.
+- **[`automation/cursor_propose_only/README.md`](./automation/cursor_propose_only/README.md)** — optional proposal orchestration workflow (planner/reviewer prompts with severity gating and explicit `--proposal` selection).
 
 ---
 
@@ -780,6 +781,7 @@ If no `.java-codebase-rag/ignore` exists anywhere under the project, behaviour m
 | [`docs/skills/java-codebase-explore.md`](./docs/skills/java-codebase-explore.md) | Agent exploration skill (strategy, missions, fallbacks); packaged zip [`docs/skills/java-codebase-explore.zip`](./docs/skills/java-codebase-explore.zip) via `./scripts/build-explore-skill.sh` for Perplexity-style hosts. |
 | [`docs/JAVA-CODEBASE-RAG-CLI.md`](./docs/JAVA-CODEBASE-RAG-CLI.md) | Operator playbook for the CLI: workflows, exit codes, env alignment. |
 | [`docs/MANUAL-VERIFICATION-CHECKLIST.md`](./docs/MANUAL-VERIFICATION-CHECKLIST.md) | 7-phase agent-driven verification after indexing your project. |
+| [`automation/cursor_propose_only/README.md`](./automation/cursor_propose_only/README.md) | Optional propose-only orchestration workflow for planning/review loops, including explicit proposal selection via `--proposal`. |
 | [`CODEBASE_REQUIREMENTS.md`](./CODEBASE_REQUIREMENTS.md) | Assumptions about your Java repo + per-file edit map for non-conforming codebases. |
 | [`propose/PRODUCT-VISION.md`](./propose/PRODUCT-VISION.md) | Long-term product direction. |
 

@@ -74,6 +74,56 @@ def discover_proposals(
     return sorted(set(paths))
 
 
+def resolve_selected_proposals(
+    proposal_dir: Path, selected_proposals: list[str], *, include_completed: bool = False
+) -> list[Path]:
+    if not proposal_dir.exists():
+        raise FileNotFoundError(f"Proposal directory does not exist: {proposal_dir}")
+    if not selected_proposals:
+        return []
+
+    search_roots = [proposal_dir.resolve()]
+    completed = proposal_dir / "completed"
+    if include_completed and completed.exists():
+        search_roots.append(completed.resolve())
+
+    resolved: list[Path] = []
+    for entry in selected_proposals:
+        candidate = Path(entry).expanduser()
+        candidates: list[Path] = []
+        if candidate.is_absolute():
+            candidates.append(candidate)
+        else:
+            candidates.append(proposal_dir / candidate)
+            if include_completed:
+                candidates.append(completed / candidate)
+
+        found = next((path for path in candidates if path.is_file()), None)
+        if found is None:
+            raise FileNotFoundError(
+                f"Selected proposal not found: {entry!r} (checked under {proposal_dir})"
+            )
+
+        found_resolved = found.resolve()
+        if not any(
+            (
+                found_resolved == root
+                or (
+                    found_resolved.is_relative_to(root)
+                    if hasattr(found_resolved, "is_relative_to")
+                    else str(found_resolved).startswith(str(root) + "/")
+                )
+            )
+            for root in search_roots
+        ):
+            raise ValueError(
+                f"Selected proposal must be under {proposal_dir} (or completed/ when enabled): {entry!r}"
+            )
+        resolved.append(found_resolved)
+
+    return sorted(set(resolved))
+
+
 def render_planner_prompt(propose_path: str, plan_path: str, cursor_prompt_path: str) -> str:
     return (
         f"# Planner prompt — {Path(propose_path).name}\n\n"
@@ -170,11 +220,17 @@ def prepare_bundle(
     min_severity: str,
     pattern: str,
     include_completed: bool,
+    selected_proposals: list[str] | None = None,
 ) -> dict[str, Any]:
     if rounds < 1:
         raise ValueError("rounds must be >= 1")
     threshold = _validate_severity(min_severity)
-    proposals = discover_proposals(proposal_dir, pattern=pattern, include_completed=include_completed)
+    if selected_proposals:
+        proposals = resolve_selected_proposals(
+            proposal_dir, selected_proposals, include_completed=include_completed
+        )
+    else:
+        proposals = discover_proposals(proposal_dir, pattern=pattern, include_completed=include_completed)
 
     jobs_dir = output_dir / "jobs"
     jobs_dir.mkdir(parents=True, exist_ok=True)
@@ -303,6 +359,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     prepare.add_argument("--glob", default="*-PROPOSE.md", help="Glob pattern for proposal selection.")
     prepare.add_argument(
+        "--proposal",
+        action="append",
+        default=[],
+        help=(
+            "Specific proposal file to include (repeatable). Paths can be absolute "
+            "or relative to --proposal-dir. When set, --glob is ignored."
+        ),
+    )
+    prepare.add_argument(
         "--include-completed",
         action="store_true",
         help="Also include proposals under proposal-dir/completed.",
@@ -333,6 +398,7 @@ def main(argv: list[str] | None = None) -> int:
             min_severity=args.min_severity,
             pattern=args.glob,
             include_completed=bool(args.include_completed),
+            selected_proposals=list(args.proposal or []),
         )
         print(json.dumps(workflow, indent=2, sort_keys=True))
         return 0
