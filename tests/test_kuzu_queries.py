@@ -396,31 +396,8 @@ def test_kuzu_graph_get_raises_when_graph_ontology_too_old(tmp_path: Path) -> No
         KuzuGraph._instance_path = prev_path
 
 
-_ROUTE_EXTRACTION_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "route_extraction_smoke"
-
-
-def _kuzu_graph_from_route_fixture(tmp_path: Path) -> KuzuGraph:
-    from build_ast_graph import (
-        GraphTables,
-        pass1_parse,
-        pass2_edges,
-        pass3_calls,
-        pass4_routes,
-        write_kuzu,
-    )
-
-    db_path = tmp_path / "route_fixture.kuzu"
-    tables = GraphTables()
-    asts = pass1_parse(_ROUTE_EXTRACTION_FIXTURE, tables, verbose=False)
-    pass2_edges(tables, asts, verbose=False)
-    pass3_calls(tables, asts, verbose=False)
-    pass4_routes(tables, asts, source_root=_ROUTE_EXTRACTION_FIXTURE, verbose=False)
-    write_kuzu(db_path, tables, source_root=_ROUTE_EXTRACTION_FIXTURE, verbose=False)
-    return KuzuGraph(str(db_path))
-
-
-def test_list_routes_filter_by_framework(tmp_path: Path) -> None:
-    g = _kuzu_graph_from_route_fixture(tmp_path)
+def test_list_routes_filter_by_framework(kuzu_graph_route_extraction_smoke) -> None:
+    g = kuzu_graph_route_extraction_smoke
     feign = g.list_routes(framework="feign", limit=200)
     assert feign == []
     mvc = g.list_routes(framework="spring_mvc", limit=50)
@@ -428,8 +405,8 @@ def test_list_routes_filter_by_framework(tmp_path: Path) -> None:
     assert all(r["framework"] == "spring_mvc" for r in mvc)
 
 
-def test_find_route_handlers_endpoint_route(tmp_path: Path) -> None:
-    g = _kuzu_graph_from_route_fixture(tmp_path)
+def test_find_route_handlers_endpoint_route(kuzu_graph_route_extraction_smoke) -> None:
+    g = kuzu_graph_route_extraction_smoke
     rows = g.list_routes(
         framework="spring_mvc",
         microservice="service-a",
@@ -445,14 +422,14 @@ def test_find_route_handlers_endpoint_route(tmp_path: Path) -> None:
     assert len(fqns) == 1
 
 
-def test_find_route_handlers_feign_route_returns_empty(tmp_path: Path) -> None:
-    g = _kuzu_graph_from_route_fixture(tmp_path)
+def test_find_route_handlers_feign_route_returns_empty(kuzu_graph_route_extraction_smoke) -> None:
+    g = kuzu_graph_route_extraction_smoke
     rows = g.list_routes(framework="feign", path_prefix="/dupbase/same", limit=10)
     assert rows == []
 
 
-def test_get_route_by_path_microservice_isolated(tmp_path: Path) -> None:
-    g = _kuzu_graph_from_route_fixture(tmp_path)
+def test_get_route_by_path_microservice_isolated(kuzu_graph_route_extraction_smoke) -> None:
+    g = kuzu_graph_route_extraction_smoke
     tpl = "/api/users"
     ra = g.get_route_by_path(microservice="service-a", path_template=tpl, method="GET")
     rb = g.get_route_by_path(microservice="service-b", path_template=tpl, method="GET")

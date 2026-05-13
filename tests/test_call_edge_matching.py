@@ -4,31 +4,7 @@ import re
 from pathlib import Path
 
 from ast_java import OutgoingCallDecl
-from build_ast_graph import (
-    GraphTables,
-    RouteRow,
-    _match_call_edge,
-    pass1_parse,
-    pass2_edges,
-    pass3_calls,
-    pass4_routes,
-    pass5_imperative_edges,
-    pass6_match_edges,
-)
-
-
-_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "cross_service_smoke"
-
-
-def _build_tables(root: Path) -> GraphTables:
-    tables = GraphTables()
-    asts = pass1_parse(root, tables, verbose=False)
-    pass2_edges(tables, asts, verbose=False)
-    pass3_calls(tables, asts, verbose=False)
-    pass4_routes(tables, asts, source_root=root, verbose=False)
-    pass5_imperative_edges(tables, asts, source_root=root, verbose=False)
-    pass6_match_edges(tables, verbose=False)
-    return tables
+from build_ast_graph import GraphTables, RouteRow, _match_call_edge
 
 
 def _mk_call(**kwargs) -> OutgoingCallDecl:
@@ -56,8 +32,8 @@ def _mk_call(**kwargs) -> OutgoingCallDecl:
     return OutgoingCallDecl(**base)
 
 
-def test_match_cross_service_resttemplate() -> None:
-    tables = _build_tables(_FIXTURE)
+def test_match_cross_service_resttemplate(graph_tables_cross_service_smoke: GraphTables) -> None:
+    tables = graph_tables_cross_service_smoke
     assert any(r.match == "cross_service" for r in tables.http_call_rows)
 
 
@@ -125,15 +101,15 @@ def test_kafka_topic_broker_disambiguation() -> None:
     assert len(candidates) == 1
 
 
-def test_confidence_recomputed_per_outcome() -> None:
-    tables = _build_tables(_FIXTURE)
+def test_confidence_recomputed_per_outcome(graph_tables_cross_service_smoke: GraphTables) -> None:
+    tables = graph_tables_cross_service_smoke
     by_match = {r.match: r.confidence for r in tables.http_call_rows}
     assert by_match.get("cross_service", 0.0) >= by_match.get("intra_service", 0.0)
     assert by_match.get("phantom", 0.0) <= by_match.get("cross_service", 1.0)
 
 
-def test_phantom_routes_cleaned_up_when_real_match_found() -> None:
-    tables = _build_tables(_FIXTURE)
+def test_phantom_routes_cleaned_up_when_real_match_found(graph_tables_cross_service_smoke: GraphTables) -> None:
+    tables = graph_tables_cross_service_smoke
     inbound = {r.route_id for r in tables.http_call_rows} | {r.route_id for r in tables.async_call_rows}
     assert all(not (r.id.startswith("r:phantom:") and r.id not in inbound) for r in tables.routes_rows)
 

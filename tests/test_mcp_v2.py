@@ -155,12 +155,11 @@ def test_find_client_by_client_kind(kuzu_graph) -> None:
 
 
 def test_find_client_by_target_service(kuzu_graph) -> None:
-    all_clients = find_v2("client", {}, graph=kuzu_graph)
-    assert all_clients.success is True
-    target = next((r for r in all_clients.results if r.fqn.strip()), None)
-    if target is None:
-        pytest.skip("no client rows with target metadata in fixture")
-    target_service = target.fqn.split(" ", 1)[0]
+    rows = kuzu_graph.list_clients(limit=500)
+    seed = next((r for r in rows if str(r.get("target_service") or "").strip()), None)
+    if seed is None:
+        pytest.skip("no client rows with target_service in fixture")
+    target_service = str(seed["target_service"])
     out = find_v2("client", {"target_service": target_service}, graph=kuzu_graph)
     assert out.success is True
     assert out.results

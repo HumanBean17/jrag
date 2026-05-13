@@ -1,12 +1,12 @@
 """Shared pytest fixtures for the mcp_lancedb_bundle test suite.
 
-The session-scoped `kuzu_graph` fixture builds the AST graph from the
-`bank-chat-system` corpus exactly once and points the MCP environment
-variables at the resulting Kuzu DB so every other test can rely on it
-without paying the parse cost again.
+Session-scoped graphs are built once per static corpus (see ``tests/README.md``).
+The bank-chat chain ``corpus_root → kuzu_db_path → mcp_env → kuzu_graph → mcp_server``
+runs pass1–5 + ``write_kuzu`` (no pass6) so Tier-1 caller-edge tests match the
+pre-refactor bank pipeline while avoiding a second full parse for MCP tests.
 
 ⚠️  Do not bake fixture-specific assumptions into the production code under
-test. See `tests/README.md` for the project's anti-overfitting rules.
+test. See ``tests/README.md`` for the project's anti-overfitting rules.
 """
 from __future__ import annotations
 
@@ -14,7 +14,12 @@ import os
 import sys
 from pathlib import Path
 
+from typing import TYPE_CHECKING
+
 import pytest
+
+if TYPE_CHECKING:
+    from build_ast_graph import GraphTables
 
 BUNDLE_DIR = Path(__file__).resolve().parent.parent
 TESTS_DIR = Path(__file__).resolve().parent
@@ -38,32 +43,30 @@ def corpus_root() -> Path:
     return CORPUS_ROOT
 
 
+def _session_db_path(tmp_path_factory: pytest.TempPathFactory, name: str) -> Path:
+    base = tmp_path_factory.mktemp(f"kuzu_{name}")
+    return base / "code_graph.kuzu"
+
+
 @pytest.fixture(scope="session")
 def kuzu_db_path(tmp_path_factory, corpus_root: Path) -> Path:
-    """Build the Kuzu graph once per session against the bank-chat-system corpus."""
-    from build_ast_graph import (
-        GraphTables,
-        pass1_parse,
-        pass2_edges,
-        pass3_calls,
-        pass4_routes,
-        write_kuzu,
-    )
+    """Bank-chat Kuzu DB: pass1–5 + ``write_kuzu`` (no pass6)."""
+    import kuzu
 
-    db_dir = tmp_path_factory.mktemp("kuzu_db")
-    db_path = db_dir / "code_graph.kuzu"
+    from _builders import build_kuzu_to
 
-    tables = GraphTables()
-    asts = pass1_parse(corpus_root, tables, verbose=False)
-    pass2_edges(tables, asts, verbose=False)
-    pass3_calls(tables, asts, verbose=False)
-    pass4_routes(tables, asts, source_root=corpus_root, verbose=False)
-    write_kuzu(db_path, tables, source_root=corpus_root, verbose=False)
+    db_path = _session_db_path(tmp_path_factory, "bank_chat")
+    build_kuzu_to(corpus_root, db_path, max_pass=5)
 
-    # Sanity: builder must have produced *some* nodes & edges. We don't
-    # assert exact counts here — that's the job of test_ast_graph_build.
-    assert tables.types, "build produced no type nodes"
-    assert tables.injects_rows, "build produced no INJECTS edges"
+    conn = kuzu.Connection(kuzu.Database(str(db_path), read_only=True))
+    n_types = 0
+    r = conn.execute("MATCH (s:Symbol) WHERE s.kind = 'class' RETURN count(*) AS n")
+    if r.has_next():
+        n_types = int(r.get_next()[0] or 0)
+    assert n_types >= 1, "expected class symbols in session bank graph"
+    r = conn.execute("MATCH ()-[e:INJECTS]->() RETURN count(e) AS n")
+    n_injects = int(r.get_next()[0] or 0) if r.has_next() else 0
+    assert n_injects >= 1, "build produced no INJECTS edges"
     return db_path
 
 
@@ -90,8 +93,6 @@ def kuzu_graph(mcp_env, kuzu_db_path: Path):
     """Read-only KuzuGraph singleton bound to the session DB."""
     from kuzu_queries import KuzuGraph
 
-    # Reset the cached singleton so tests don't see a stale path from
-    # an earlier session / interactive run.
     KuzuGraph._instance = None
     KuzuGraph._instance_path = None
     return KuzuGraph.get(str(kuzu_db_path))
@@ -103,3 +104,74 @@ def mcp_server(mcp_env, kuzu_graph):
     from server import create_mcp_server
 
     return create_mcp_server()
+
+
+# --- Session graphs for small static corpora under tests/fixtures/ ---
+
+
+@pytest.fixture(scope="session")
+def kuzu_db_path_call_graph_smoke(tmp_path_factory) -> Path:
+    from _builders import build_kuzu_to
+
+    root = TESTS_DIR / "fixtures" / "call_graph_smoke"
+    assert root.is_dir(), root
+    db_path = _session_db_path(tmp_path_factory, "call_graph_smoke")
+    return build_kuzu_to(root, db_path, max_pass=3)
+
+
+@pytest.fixture(scope="session")
+def kuzu_db_path_route_extraction_smoke(tmp_path_factory) -> Path:
+    from _builders import build_kuzu_to
+
+    root = TESTS_DIR / "fixtures" / "route_extraction_smoke"
+    assert root.is_dir(), root
+    db_path = _session_db_path(tmp_path_factory, "route_extraction_smoke")
+    return build_kuzu_to(root, db_path, max_pass=4)
+
+
+@pytest.fixture(scope="session")
+def kuzu_graph_route_extraction_smoke(kuzu_db_path_route_extraction_smoke: Path):
+    """Read-only ``KuzuGraph`` for ``route_extraction_smoke`` (own DB path; not ``KuzuGraph.get``)."""
+    from kuzu_queries import KuzuGraph
+
+    return KuzuGraph(str(kuzu_db_path_route_extraction_smoke))
+
+
+@pytest.fixture(scope="session")
+def kuzu_db_path_cross_service_smoke(tmp_path_factory) -> Path:
+    from _builders import build_kuzu_to
+
+    root = TESTS_DIR / "fixtures" / "cross_service_smoke"
+    assert root.is_dir(), root
+    db_path = _session_db_path(tmp_path_factory, "cross_service_smoke")
+    return build_kuzu_to(root, db_path, max_pass=6)
+
+
+@pytest.fixture(scope="session")
+def kuzu_db_path_fqn_collision_smoke(tmp_path_factory) -> Path:
+    from _builders import build_kuzu_to
+
+    root = TESTS_DIR / "fixtures" / "fqn_collision_smoke"
+    assert root.is_dir(), root
+    db_path = _session_db_path(tmp_path_factory, "fqn_collision_smoke")
+    return build_kuzu_to(root, db_path, max_pass=3)
+
+
+@pytest.fixture(scope="session")
+def kuzu_db_path_http_caller_smoke(tmp_path_factory) -> Path:
+    from _builders import build_kuzu_to
+
+    root = TESTS_DIR / "fixtures" / "http_caller_smoke"
+    assert root.is_dir(), root
+    db_path = _session_db_path(tmp_path_factory, "http_caller_smoke")
+    return build_kuzu_to(root, db_path, max_pass=5)
+
+
+@pytest.fixture(scope="session")
+def graph_tables_cross_service_smoke() -> "GraphTables":
+    """In-memory tables for ``tests/fixtures/cross_service_smoke`` through pass6 (read-only tests)."""
+    from _builders import build_graph_tables_to
+
+    root = TESTS_DIR / "fixtures" / "cross_service_smoke"
+    assert root.is_dir(), root
+    return build_graph_tables_to(root, max_pass=6)

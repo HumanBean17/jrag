@@ -29,10 +29,35 @@ cd /path/to/java-codebase-rag
 .venv/bin/python -m pytest tests -v
 ```
 
-The session-scoped `kuzu_graph` fixture in `conftest.py` builds the Kuzu DB
-from the bank-chat-system corpus exactly once per pytest run, into a
-`tmp_path_factory` directory, and sets `JAVA_CODEBASE_RAG_INDEX_DIR` /
-`JAVA_CODEBASE_RAG_SOURCE_ROOT` for the duration of the session.
+## CI merge gate and fixture tiers
+
+**Merge gate (mechanical):** GitHub Actions is intended to run the full default suite (`pytest tests` with `JAVA_CODEBASE_RAG_RUN_HEAVY` unset or `0`) on every pull request and on pushes to `master`. The workflow file is added under `.github/workflows/` as part of PR-3 in [`plans/PLAN-TEST-SUITE-FAST-LOOP.md`](../plans/PLAN-TEST-SUITE-FAST-LOOP.md); until that lands, running the full suite locally before merge remains the safety check.
+
+**Iteration subset (convention):** During implementation, authors name a `pytest` file subset in task prompts; reviewers ask for the exact command and exit code. See [`propose/TEST-SUITE-FAST-LOOP-PROPOSE.md`](../propose/TEST-SUITE-FAST-LOOP-PROPOSE.md) and the same plan document. The **`cursor-task-prompt`** and **`cursor-pr-review`** skills that encode this live in the **author’s Cursor skill library** (updated per PR-2 of that plan), not in this repository.
+
+**Fixture tiers (PR-1):**
+
+| Tier | When | Pattern |
+| --- | --- | --- |
+| **1** | Read-only assertions against `tests/bank-chat-system/` | Use session `corpus_root` → `kuzu_db_path` → `kuzu_graph` / `mcp_server`. The session bank graph is built **once** per pytest process with pass1–5 + `write_kuzu` (**no pass6**), matching the bank caller-edge tests without strengthening pass6 match-resolution semantics. |
+| **2** | Read-only use of a static tree under `tests/fixtures/<name>/` | Prefer session fixtures in `conftest.py` (for example `kuzu_db_path_call_graph_smoke`, `kuzu_db_path_route_extraction_smoke`, `kuzu_graph_route_extraction_smoke`, `kuzu_db_path_cross_service_smoke`, `kuzu_db_path_fqn_collision_smoke`, `kuzu_db_path_http_caller_smoke`) or `graph_tables_cross_service_smoke` when tests need in-memory `GraphTables`. **Audit each file:** if a test copies the fixture into `tmp_path` and mutates files or YAML, it stays Tier 3 — do not point it at a shared session DB or shared `GraphTables`. |
+| **3** | Per-test corpora under `tmp_path` (brownfield stubs, generated YAML, etc.) | Keep per-test isolation; build via helpers in [`tests/_builders.py`](./_builders.py) (`build_kuzu_into`, `build_kuzu_imperative_into`, `build_kuzu_full_into`, or `build_graph_tables_to`) instead of duplicating `pass*` imports. |
+
+**Consumer matrix (bank-chat and call invariant):** When changing the session bank pipeline (`kuzu_db_path`) or adding a parallel bank fixture, update the PR description with a short matrix of which tests depend on which pass depth. Conflicting requirements (for example pass6 changing HTTP_CALLS match rows that tests still expect as `unresolved`) must be resolved with a **separate** named session fixture or per-test builds — not by silently changing semantics.
+
+| Test / area | Fixture / build | Pass depth | Semantics note |
+| --- | --- | --- | --- |
+| Session bank (`kuzu_db_path`, `kuzu_graph`, MCP) | `conftest` | pass1–5 + write, **no pass6** | Keeps bank `HTTP_CALLS` / `ASYNC_CALLS` matches `unresolved` for `test_call_edges_e2e`. |
+| `test_call_invariant_inert_on_bank_chat_system` | `kuzu_graph` | same as session bank | **Was** pass1–3 + write only. `pass3_skipped_cross_service` is a pass3 counter persisted on `GraphMeta`; passes 4–5 do not re-run pass3 or rewrite that field, so the value `0` for bank-chat is unchanged vs the old per-test build. |
+| `test_call_invariant_inert_on_clean_fixtures` | `kuzu_db_path_cross_service_smoke` | pass1–6 + write | **Was** pass1–3 + write on a fresh copy. Assertion is still `pass3_skipped_cross_service == 0` (pass3-only meta); later passes do not alter that counter for this fixture tree. |
+
+**Tier-3 on copied `cross_service_smoke`:** `test_cross_service_resolution_flag.py` and `test_client_role_rename.py` copy the fixture into `tmp_path`, edit YAML/Java, then build. They **cannot** use the read-only session graph or shared `graph_tables_cross_service_smoke`; they call `build_graph_tables_to` / `build_kuzu_to` from `_builders.py` on each **mutable** copy so pass chains stay centralized.
+
+**`test_mcp_v2.test_find_client_by_target_service`:** The seed row must come from `list_clients()` rows with a real `target_service` column. Using the first token of the display `fqn` was incorrect when `target_service` is empty (more client rows after pass5). That is a test bugfix, not a fixture-speed change — call it out in the PR.
+
+**Timing:** Large fixture refactors should note rough wall-time before and after in the PR body (see the plan propose).
+
+The session-scoped fixtures in `conftest.py` materialize Kuzu (and, where needed, in-memory `GraphTables`) under `tmp_path_factory` so the static trees under `tests/` are never written at test time.
 
 The heavier end-to-end test that runs `cocoindex` + a real LanceDB index is
 gated behind `JAVA_CODEBASE_RAG_RUN_HEAVY=1` because it downloads the embedding

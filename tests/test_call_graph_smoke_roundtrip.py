@@ -5,7 +5,6 @@ from pathlib import Path
 
 import kuzu
 
-from build_ast_graph import GraphTables, pass1_parse, pass2_edges, pass3_calls, write_kuzu
 from kuzu_queries import KuzuGraph
 
 _FIXTURE_ROOT = Path(__file__).resolve().parent / "fixtures" / "call_graph_smoke"
@@ -13,16 +12,6 @@ _FIXTURE_ROOT = Path(__file__).resolve().parent / "fixtures" / "call_graph_smoke
 
 def _connect(db_path: Path) -> kuzu.Connection:
     return kuzu.Connection(kuzu.Database(str(db_path), read_only=True))
-
-
-def _build_smoke_db(tmp_path: Path) -> Path:
-    tables = GraphTables()
-    asts = pass1_parse(_FIXTURE_ROOT, tables, verbose=False)
-    pass2_edges(tables, asts, verbose=False)
-    pass3_calls(tables, asts, verbose=False)
-    db_path = tmp_path / "smoke_graph.kuzu"
-    write_kuzu(db_path, tables, source_root=_FIXTURE_ROOT, verbose=False)
-    return db_path
 
 
 def _rows(conn: kuzu.Connection, q: str) -> list:
@@ -37,9 +26,9 @@ def test_smoke_fixture_root_exists() -> None:
     assert _FIXTURE_ROOT.is_dir(), _FIXTURE_ROOT
 
 
-def test_this_super_field_chain_resolves_receiver_d6(tmp_path: Path) -> None:
+def test_this_super_field_chain_resolves_receiver_d6(kuzu_db_path_call_graph_smoke: Path) -> None:
     """D6: `this.root.mid.inner.target()` / `super.root.mid.inner.target()` — field chain, no calls in receiver."""
-    db = _build_smoke_db(tmp_path)
+    db = kuzu_db_path_call_graph_smoke
     conn = _connect(db)
     for type_prefix, method_name in (
         ("smoke.FieldChainReceivers#", "byThisChain"),
@@ -59,9 +48,9 @@ def test_this_super_field_chain_resolves_receiver_d6(tmp_path: Path) -> None:
         assert all(float(r[0]) >= 0.94 for r in rows), rows
 
 
-def test_scope_receivers_calls_resolved_import_map(tmp_path: Path) -> None:
+def test_scope_receivers_calls_resolved_import_map(kuzu_db_path_call_graph_smoke: Path) -> None:
     """§7.1 #4–6: field / param / local `Svc` receiver → `Svc.work` via scope + import_map."""
-    db = _build_smoke_db(tmp_path)
+    db = kuzu_db_path_call_graph_smoke
     conn = _connect(db)
     for method in ("byField", "byParam", "byLocal"):
         q = (
@@ -75,9 +64,9 @@ def test_scope_receivers_calls_resolved_import_map(tmp_path: Path) -> None:
         assert n >= 1, f"expected import_map CALLS for {method}"
 
 
-def test_local_shadows_field_same_name_resolves_receiver(tmp_path: Path) -> None:
+def test_local_shadows_field_same_name_resolves_receiver(kuzu_db_path_call_graph_smoke: Path) -> None:
     """Local `dup` shadows field `dup` (String): `dup.work()` must target smoke.Svc."""
-    db = _build_smoke_db(tmp_path)
+    db = kuzu_db_path_call_graph_smoke
     conn = _connect(db)
     n = int(
         _rows(
@@ -92,9 +81,9 @@ def test_local_shadows_field_same_name_resolves_receiver(tmp_path: Path) -> None
     assert n >= 1
 
 
-def test_wildcard_static_import_strategy(tmp_path: Path) -> None:
+def test_wildcard_static_import_strategy(kuzu_db_path_call_graph_smoke: Path) -> None:
     """§7.1 #15: `import static …*` bare call → static_import_wildcard."""
-    db = _build_smoke_db(tmp_path)
+    db = kuzu_db_path_call_graph_smoke
     conn = _connect(db)
     rows = _rows(
         conn,
@@ -107,9 +96,9 @@ def test_wildcard_static_import_strategy(tmp_path: Path) -> None:
     assert "static_import_wildcard" in strats, strats
 
 
-def test_overload_sameArity_emits_two_overload_ambiguous_edges(tmp_path: Path) -> None:
+def test_overload_sameArity_emits_two_overload_ambiguous_edges(kuzu_db_path_call_graph_smoke: Path) -> None:
     """§7.1 #13: two one-arg overloads → two resolved edges tagged overload_ambiguous."""
-    db = _build_smoke_db(tmp_path)
+    db = kuzu_db_path_call_graph_smoke
     conn = _connect(db)
     rows = _rows(
         conn,
@@ -121,9 +110,9 @@ def test_overload_sameArity_emits_two_overload_ambiguous_edges(tmp_path: Path) -
     assert len(rows) == 2, f"expected 2 overload_ambiguous targets, got {rows}"
 
 
-def test_overload_distinct_arities_single_targets(tmp_path: Path) -> None:
+def test_overload_distinct_arities_single_targets(kuzu_db_path_call_graph_smoke: Path) -> None:
     """§7.1 #12: arity distinguishes overloads (no overload_ambiguous on arity())."""
-    db = _build_smoke_db(tmp_path)
+    db = kuzu_db_path_call_graph_smoke
     conn = _connect(db)
     amb = _rows(
         conn,
@@ -145,9 +134,9 @@ def test_overload_distinct_arities_single_targets(tmp_path: Path) -> None:
     assert n == 2, "ovl(1) and ovl(1,2) should each resolve"
 
 
-def test_expr_qualified_method_ref_chained_receiver(tmp_path: Path) -> None:
+def test_expr_qualified_method_ref_chained_receiver(kuzu_db_path_call_graph_smoke: Path) -> None:
     """§7.1 #18 (graph): expression-qualified `getX()::trim` → chained_receiver phantom."""
-    db = _build_smoke_db(tmp_path)
+    db = kuzu_db_path_call_graph_smoke
     conn = _connect(db)
     rows = _rows(
         conn,
@@ -159,9 +148,9 @@ def test_expr_qualified_method_ref_chained_receiver(tmp_path: Path) -> None:
     assert any(str(r[0]) == "chained_receiver" and r[1] is False for r in rows), rows
 
 
-def test_anonymous_class_calls_attributed_to_synthetic_member(tmp_path: Path) -> None:
+def test_anonymous_class_calls_attributed_to_synthetic_member(kuzu_db_path_call_graph_smoke: Path) -> None:
     """D3: `pingFromAnon()` inside `new Runnable(){ run(){...}}` → CALLS from synthetic `run()`, not NestedCalls#m."""
-    db = _build_smoke_db(tmp_path)
+    db = kuzu_db_path_call_graph_smoke
     conn = _connect(db)
     outer = _rows(
         conn,
@@ -180,13 +169,13 @@ def test_anonymous_class_calls_attributed_to_synthetic_member(tmp_path: Path) ->
     assert int(inner[0][0]) >= 1, "expected CALLS from synthetic anonymous run() to pingFromAnon"
 
 
-def test_find_callers_external_java_util_needle_lists_internal_callers(tmp_path: Path) -> None:
+def test_find_callers_external_java_util_needle_lists_internal_callers(kuzu_db_path_call_graph_smoke: Path) -> None:
     """exclude_external filters callers (src) only: JDK needle still returns in-repo callers."""
-    db = _build_smoke_db(tmp_path)
+    db = kuzu_db_path_call_graph_smoke
     try:
         KuzuGraph._instance = None
         KuzuGraph._instance_path = None
-        g = KuzuGraph.get(str(db))
+        g = KuzuGraph(str(db))
         edges = g.find_callers(
             "java.util.Objects#requireNonNull(1)",
             depth=1,
@@ -203,10 +192,10 @@ def test_find_callers_external_java_util_needle_lists_internal_callers(tmp_path:
 
 # ---- B1: implicit default constructor resolution ----
 
-def test_implicit_default_ctor_is_resolved(tmp_path: Path) -> None:
+def test_implicit_default_ctor_is_resolved(kuzu_db_path_call_graph_smoke: Path) -> None:
     """B1: `new Svc()` (Svc has no explicit ctor) resolves to Svc#<init>() with
     strategy='constructor' and resolved=true, not a phantom."""
-    db = _build_smoke_db(tmp_path)
+    db = kuzu_db_path_call_graph_smoke
     conn = _connect(db)
     for caller_method in ("byLocal", "shadowLocalOverField"):
         rows = _rows(
@@ -226,10 +215,10 @@ def test_implicit_default_ctor_is_resolved(tmp_path: Path) -> None:
 
 # ---- B2: implicit super to java.lang.Object ----
 
-def test_implicit_super_to_object_uses_implicit_super_strategy(tmp_path: Path) -> None:
+def test_implicit_super_to_object_uses_implicit_super_strategy(kuzu_db_path_call_graph_smoke: Path) -> None:
     """B2: WildUtils() has no extends clause; its synthesized implicit-super call must
     use strategy='implicit_super' and confidence=0.90, not phantom/0.0."""
-    db = _build_smoke_db(tmp_path)
+    db = kuzu_db_path_call_graph_smoke
     conn = _connect(db)
     rows = _rows(
         conn,
@@ -251,11 +240,11 @@ def test_implicit_super_to_object_uses_implicit_super_strategy(tmp_path: Path) -
 
 # ---- B3: static-import to JDK keeps high confidence ----
 
-def test_static_import_to_jdk_keeps_high_confidence(tmp_path: Path) -> None:
+def test_static_import_to_jdk_keeps_high_confidence(kuzu_db_path_call_graph_smoke: Path) -> None:
     """B3: StaticImportTest.m calls requireNonNull via explicit static import.
     The edge must carry strategy='static_import', confidence>=0.95, resolved=false
     (callee is JDK phantom), not phantom/0.0."""
-    db = _build_smoke_db(tmp_path)
+    db = kuzu_db_path_call_graph_smoke
     conn = _connect(db)
     rows = _rows(
         conn,
@@ -272,15 +261,15 @@ def test_static_import_to_jdk_keeps_high_confidence(tmp_path: Path) -> None:
 
 
 def test_min_confidence_filter_keeps_high_confidence_static_import_callers(
-    tmp_path: Path,
+    kuzu_db_path_call_graph_smoke: Path,
 ) -> None:
     """B3: find_callers with min_confidence=0.9 must still return StaticImportTest
     for the JDK requireNonNull needle (previously returned empty because edge was 0.0)."""
-    db = _build_smoke_db(tmp_path)
+    db = kuzu_db_path_call_graph_smoke
     try:
         KuzuGraph._instance = None
         KuzuGraph._instance_path = None
-        g = KuzuGraph.get(str(db))
+        g = KuzuGraph(str(db))
         edges = g.find_callers(
             "java.util.Objects#requireNonNull(1)",
             depth=1,
@@ -301,9 +290,9 @@ def test_min_confidence_filter_keeps_high_confidence_static_import_callers(
         KuzuGraph._instance_path = None
 
 
-def test_d1_phantom_method_ref_and_invocation_share_symbol(tmp_path: Path) -> None:
+def test_d1_phantom_method_ref_and_invocation_share_symbol(kuzu_db_path_call_graph_smoke: Path) -> None:
     """D1: method ref (arg_count=-1) and normal call to same unindexed callee share one dst Symbol."""
-    db = _build_smoke_db(tmp_path)
+    db = kuzu_db_path_call_graph_smoke
     conn = _connect(db)
     rows = _rows(
         conn,
@@ -322,9 +311,9 @@ def test_d1_phantom_method_ref_and_invocation_share_symbol(tmp_path: Path) -> No
     assert set(arities) == {-1, 0}, f"edges should keep site arities on CALLS; got {arities}"
 
 
-def test_d2_method_ref_unambiguous_emits_resolved_arity_on_calls_edge(tmp_path: Path) -> None:
+def test_d2_method_ref_unambiguous_emits_resolved_arity_on_calls_edge(kuzu_db_path_call_graph_smoke: Path) -> None:
     """D2: single matching method for a :: ref — CALLS.arg_count is the method arity, not -1."""
-    db = _build_smoke_db(tmp_path)
+    db = kuzu_db_path_call_graph_smoke
     conn = _connect(db)
     rows = _rows(
         conn,

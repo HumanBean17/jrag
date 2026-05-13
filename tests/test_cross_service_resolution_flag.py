@@ -9,8 +9,8 @@ from pathlib import Path
 import kuzu
 import pytest
 
-from build_ast_graph import GraphTables, pass1_parse, pass2_edges, pass3_calls, pass4_routes
-from build_ast_graph import pass5_imperative_edges, pass6_match_edges, write_kuzu
+from _builders import build_graph_tables_to, build_kuzu_to
+from build_ast_graph import GraphTables
 from graph_enrich import _load_config_cross_service_resolution
 
 _FIXTURE = Path(__file__).resolve().parent / "fixtures" / "cross_service_smoke"
@@ -43,20 +43,12 @@ def _http_row_for_method(tables: GraphTables, method_name: str, *, parent_fqn: s
 
 
 def _build_tables(project_root: Path) -> GraphTables:
-    tables = GraphTables()
-    asts = pass1_parse(project_root, tables, verbose=False)
-    pass2_edges(tables, asts, verbose=False)
-    pass3_calls(tables, asts, verbose=False)
-    pass4_routes(tables, asts, source_root=project_root, verbose=False)
-    pass5_imperative_edges(tables, asts, source_root=project_root, verbose=False)
-    pass6_match_edges(tables, verbose=False)
-    return tables
+    """Full pipeline on a **mutable** tree (copy under tmp_path); not the session fixture."""
+    return build_graph_tables_to(project_root, max_pass=6)
 
 
-def _build_db(project_root: Path, db_path: Path) -> GraphTables:
-    tables = _build_tables(project_root)
-    write_kuzu(db_path, tables, source_root=project_root, verbose=False)
-    return tables
+def _build_db(project_root: Path, db_path: Path) -> None:
+    build_kuzu_to(project_root, db_path, max_pass=6)
 
 
 def test_cross_service_resolution_auto_default(tmp_path: Path) -> None:
