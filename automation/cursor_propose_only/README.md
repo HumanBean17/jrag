@@ -109,7 +109,7 @@ use `autopilot.py`.
   --repo-root . \
   --proposal-dir propose \
   --output-dir reports/propose_automation_selected \
-  --proposal TEST-SUITE-FAST-LOOP-PROPOSE.md \
+  --proposal TIER2-INCREMENTAL-REBUILD-PROPOSE.md \
   --planning-rounds 2 \
   --planning-min-severity medium \
   --implementation-rounds 2 \

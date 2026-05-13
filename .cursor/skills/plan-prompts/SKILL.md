@@ -59,7 +59,7 @@ Each PR prompt must include all of:
 
 ### Tests to run (iteration loop) — required subsection
 
-Per [`propose/TEST-SUITE-FAST-LOOP-PROPOSE.md`](../../../propose/TEST-SUITE-FAST-LOOP-PROPOSE.md) and [`plans/PLAN-TEST-SUITE-FAST-LOOP.md`](../../../plans/PLAN-TEST-SUITE-FAST-LOOP.md) PR-2:
+Per [`propose/completed/TEST-SUITE-FAST-LOOP-PROPOSE.md`](../../../propose/completed/TEST-SUITE-FAST-LOOP-PROPOSE.md) and [`plans/completed/PLAN-TEST-SUITE-FAST-LOOP.md`](../../../plans/completed/PLAN-TEST-SUITE-FAST-LOOP.md) PR-2:
 
 - Add a markdown section with the **exact heading** `## Tests to run (iteration loop)` inside the fenced **Prompt** block, **immediately after** `## Deliverables` and **before** `## Tests`.
 - Content: bullet list of `tests/test_*.py` paths, each with a **one-line rationale** tied to the PR’s code paths.
