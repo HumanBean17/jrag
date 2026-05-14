@@ -15,11 +15,11 @@ as a multi-PR sequence. This file is plan-only and does not implement code.
 ```markdown
 ## PR breakdown - overview
 
-| PR | Scope | Ontology bump | Files touched (approx) | Test buckets | Independent of |
+| PR | Scope | Ontology bump | Primary surfaces | Test buckets | Independent of |
 | --- | --- | --- | --- | --- | --- |
-| PR-X1 | schema + extraction | 9 -> 10 | 4-5 | extraction + schema | prerequisite only |
-| PR-X2 | matcher integration | none | 2-3 | regression + continuity | PR-X1 |
-| PR-X3 | MCP tool + docs | none | 3-4 | tool filters + docs | PR-X1 |
+| PR-X1 | schema + extraction | 9 -> 10 | `build_ast_graph`, `ast_java` | extraction + schema | prerequisite only |
+| PR-X2 | matcher integration | none | `pass6`, matcher tests | regression + continuity | PR-X1 |
+| PR-X3 | MCP tool + docs | none | `mcp_v2`, README | tool filters + docs | PR-X1 |
 
 Landing order: **X1 -> X2 -> X3**.
 ```

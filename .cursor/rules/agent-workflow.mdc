@@ -48,15 +48,16 @@ When you're given a per-PR task prompt from `plans/CURSOR-PROMPTS-*.md`:
 - **Implement in the listed order.** Do not reshape the PR or roll
   multiple PRs together.
 - **Match named tests verbatim.** When the plan §4 table lists
-  `test_<scenario>_<expected>`, that is the exact name to use. Test
-  count must match the prompt's claim.
+  `test_<scenario>_<expected>`, that is the exact name to use. If you
+  add, drop, or rename tests, update the plan/prompt text in the same
+  change so reviewers are not chasing a stale list.
 - **No drive-by lint fixes.** Removing an unused `import` in a file
   the PR doesn't otherwise touch is still a scope leak. If a file
   isn't in the deliverables list, don't touch it.
 - **PR description must include**: scope statement, manual evidence
-  (with the exact command from the prompt), test count, and any
-  intentional design divergences from sibling PRs called out
-  explicitly so the reviewer doesn't flag them as bugs.
+  (with the exact command from the prompt), and any intentional design
+  divergences from sibling PRs called out explicitly so the reviewer
+  doesn't flag them as bugs.
 
 ## Editing rules
 

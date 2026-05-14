@@ -126,10 +126,11 @@ template):
 - Treat the prompt's **Out of scope** list as binding. Sentinel grep
   patterns in the prompt must return zero on `git diff master..HEAD`.
 - Implement deliverables in the listed order; don't reshape the PR.
-- Match the prompt's expected test count and named tests verbatim.
-- PR description must include: scope statement, manual evidence
-  (with the exact command from the prompt), test count, and
-  intentional design divergences flagged.
+- Match named tests verbatim when the prompt lists `test_*` names; if
+  the test set changes, update the prompt/plan text in the same change.
+- PR description must include: scope statement, manual evidence (with
+  the exact command from the prompt), and intentional design
+  divergences flagged.
 - No drive-by lint fixes (unused imports, formatting nits in
   unrelated files). They violate the per-PR scope contract even when
   they look harmless.

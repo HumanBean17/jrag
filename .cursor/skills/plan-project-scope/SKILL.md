@@ -41,7 +41,7 @@ Strong plans in this repo consistently include:
 - upfront **Status** and dependency context (`Depends on`, if applicable)
 - a clear **Goal** section with concrete expected outcomes
 - explicit **Principles (do not relitigate in review)** to freeze key decisions
-- a **PR breakdown overview table** (scope, ontology bump, files, tests, dependency order)
+- a **PR breakdown overview table** (scope, ontology bump, primary surfaces, tests, dependency order) — `Primary surfaces` is a short qualitative hint (modules or concerns), not a file count or LoC budget
 - per-PR sections with:
   - file-by-file changes
   - named tests (verbatim test function names where possible)
@@ -72,7 +72,7 @@ Depends on: <dependency or "none">.
 - <principle 2>
 
 ## PR breakdown - overview
-| PR | Scope | Ontology bump | Files touched (approx) | Test buckets | Independent of |
+| PR | Scope | Ontology bump | Primary surfaces | Test buckets | Independent of |
 | --- | --- | --- | --- | --- | --- |
 | PR-X1 | ... | ... | ... | ... | ... |
 
@@ -128,6 +128,7 @@ Landing order: **X1 -> X2 -> X3**.
 - Name tests exactly when feasible; avoid vague "add tests".
 - Call out ontology bump and re-index impact for schema/enrichment changes.
 - Keep "Out of scope" strict; use it to prevent scope creep during implementation.
+- Treat `Primary surfaces` column entries as qualitative (areas touched), not budgets implementers must match.
 - Do not add compatibility shims unless explicitly requested.
 
 ## Per-PR execution prompt option
@@ -139,7 +140,7 @@ Each PR prompt should include:
 - branch/base
 - in-scope deliverables
 - out-of-scope guardrails
-- explicit test count/commands
+- pytest commands and evidence expectations (avoid hard totals that go stale)
 - definition of done and PR title convention
 
 Use `plans/completed/CURSOR-PROMPTS-TIER1B.md` as the structural reference.

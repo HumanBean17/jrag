@@ -16,7 +16,6 @@ Status: **active**. One prompt per PR; each prompt is self-contained.
 **Branch:** `feat/topic-x1` off `master`.
 **Base:** `master`.
 **Plan section:** `plans/PLAN-TOPIC.md` § PR-X1.
-**Estimated diff size:** ~4 files, ~300 LOC.
 
 **Attach (`@-files`):**
 - `@plans/PLAN-TOPIC.md`
