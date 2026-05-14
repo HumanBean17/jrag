@@ -75,7 +75,6 @@ class NodeFilter(BaseModel):
     client_kind: str | None = None
     target_service: str | None = None
     target_path_prefix: str | None = None
-    client_method: str | None = None
 
 
 _NODEFILTER_FIELD_ORDER: tuple[str, ...] = tuple(NodeFilter.model_fields.keys())
@@ -106,7 +105,7 @@ _NODEFILTER_APPLICABLE_FIELDS: dict[Literal["symbol", "route", "client"], tuple[
         "client_kind",
         "target_service",
         "target_path_prefix",
-        "client_method",
+        "http_method",
     ),
 }
 
@@ -475,7 +474,7 @@ def _node_matches_filter(kind: Literal["symbol", "route", "client"], row: dict[s
             path = str(row.get("path") or "")
             if not path.startswith(f.target_path_prefix):
                 return False
-        if f.client_method and str(row.get("method") or "") != f.client_method:
+        if f.http_method and str(row.get("method") or "") != f.http_method:
             return False
     return True
 
@@ -581,7 +580,7 @@ def find_v2(
                 client_kind=nf.client_kind,
                 target_service=nf.target_service,
                 path_prefix=nf.target_path_prefix,
-                method=nf.client_method,
+                method=nf.http_method,
                 limit=max(500, limit + offset),
             )
             rows = [r for r in rows if _node_matches_filter("client", r, nf)]
