@@ -5,7 +5,7 @@ Use this when converting `PLAN-*` into `CURSOR-PROMPTS-*`.
 ## Core quality bar
 
 1. Prompt is self-contained and executable by another agent.
-2. Scope is locked to one PR section only.
+2. Scope stays within one PR section only.
 3. Out-of-scope is explicit and enforceable.
 4. Deliverables are concrete and numbered.
 5. **Iteration subset** (`## Tests to run (iteration loop)`) lists `tests/test_*.py` bullets with one-line rationales (or UC15 docs-only line) between Deliverables and Tests.

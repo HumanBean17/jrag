@@ -41,7 +41,8 @@ Strong plans in this repo consistently include:
 - upfront **Status** and dependency context (`Depends on`, if applicable)
 - a clear **Goal** section with concrete expected outcomes
 - explicit **Principles (do not relitigate in review)** to freeze key decisions
-- a **PR breakdown overview table** (scope, ontology bump, files, tests, dependency order)
+- a **PR breakdown overview table** (scope, ontology bump, areas of concern, tests, dependency order)
+- **Areas of concern column:** short **risk/review lens** (what to double-check or where coupling is likely). **Not** a module allowlist, **not** exhaustive, and **not** a substitute for the per-PR **File-by-file changes** section (that section remains the touch-scope contract)
 - per-PR sections with:
   - file-by-file changes
   - named tests (verbatim test function names where possible)
@@ -72,7 +73,7 @@ Depends on: <dependency or "none">.
 - <principle 2>
 
 ## PR breakdown - overview
-| PR | Scope | Ontology bump | Files touched (approx) | Test buckets | Independent of |
+| PR | Scope | Ontology bump | Areas of concern | Test buckets | Independent of |
 | --- | --- | --- | --- | --- | --- |
 | PR-X1 | ... | ... | ... | ... | ... |
 
@@ -128,6 +129,7 @@ Landing order: **X1 -> X2 -> X3**.
 - Name tests exactly when feasible; avoid vague "add tests".
 - Call out ontology bump and re-index impact for schema/enrichment changes.
 - Keep "Out of scope" strict; use it to prevent scope creep during implementation.
+- Treat **Areas of concern** as **heads-up text for reviewers** (coupling, regression risk, semantic hotspots). Do **not** phrase it as “only these modules” — honest implementation may touch adjacent files; when that happens, update the **File-by-file changes** list and **Out of scope** so the contract stays clear.
 - Do not add compatibility shims unless explicitly requested.
 
 ## Per-PR execution prompt option
@@ -139,7 +141,7 @@ Each PR prompt should include:
 - branch/base
 - in-scope deliverables
 - out-of-scope guardrails
-- explicit test count/commands
+- pytest commands and evidence expectations (avoid hard totals that go stale)
 - definition of done and PR title convention
 
 Use `plans/completed/CURSOR-PROMPTS-TIER1B.md` as the structural reference.

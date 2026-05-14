@@ -22,7 +22,7 @@ Do not use this skill if there is no plan yet. Write/update the plan first.
 Before writing prompts, confirm:
 1. Source plan file path (for example `plans/PLAN-XYZ.md`).
 2. PR list and landing order from the plan.
-3. Any fixed constraints (test count expectations, files not to touch, branch naming).
+3. Any fixed constraints (branch naming, files or areas not to touch).
 
 If already present in the plan, do not ask again.
 
@@ -41,7 +41,7 @@ Write one file:
 Include:
 - status line
 - one section per PR in plan landing order
-- `Branch`, `Base`, `Plan section`, estimated diff size
+- `Branch`, `Base`, `Plan section`
 - `@-files` list for context attachment
 - copy-paste `Prompt` block with strict scope contract
 
@@ -52,7 +52,7 @@ Each PR prompt must include all of:
 - **Out of scope (do NOT touch)** list mirroring plan boundaries
 - **Deliverables** numbered and testable
 - **`## Tests to run (iteration loop)`** — pytest **file** subset for fast local iteration (see below); must appear **after Deliverables and before the full Tests section**
-- **Tests** command and expected result format for the full or plan-required run (counts only if known)
+- **Tests** command and expected signals (pass/fail, skips, fixtures); avoid hard totals that go stale across branches
 - **Sentinel checks** (`rg` patterns) where scope enforcement is critical
 - **Manual evidence** commands when plan requires runtime proof
 - **Definition of Done** checklist with PR title + branch convention
@@ -84,7 +84,6 @@ This heading must stay verbatim so reviewers (and the repo **`pr-review`** skill
 **Branch:** `feat/<topic>` off `<base>`.
 **Base:** `<base branch or predecessor PR branch>`.
 **Plan section:** `plans/PLAN-<TOPIC>.md` § <section>.
-**Estimated diff size:** ~<n> files, ~<m> LOC.
 
 **Attach (`@-files`):**
 - `@plans/PLAN-<TOPIC>.md`
@@ -118,7 +117,7 @@ Docs-only PRs (UC15): use a single bullet such as *(none — docs-only change; f
 
 ## Tests
 Run: `<command>`
-Expected: <result format / count if known>
+Expected: <pass/fail, skips, key fixtures — not a brittle total count>
 
 ## Sentinel checks
 - `<rg command>`

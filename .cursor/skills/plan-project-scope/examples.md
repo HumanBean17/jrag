@@ -15,14 +15,16 @@ as a multi-PR sequence. This file is plan-only and does not implement code.
 ```markdown
 ## PR breakdown - overview
 
-| PR | Scope | Ontology bump | Files touched (approx) | Test buckets | Independent of |
+| PR | Scope | Ontology bump | Areas of concern | Test buckets | Independent of |
 | --- | --- | --- | --- | --- | --- |
-| PR-X1 | schema + extraction | 9 -> 10 | 4-5 | extraction + schema | prerequisite only |
-| PR-X2 | matcher integration | none | 2-3 | regression + continuity | PR-X1 |
-| PR-X3 | MCP tool + docs | none | 3-4 | tool filters + docs | PR-X1 |
+| PR-X1 | schema + extraction | 9 -> 10 | graph DDL vs writer drift; extraction edge cases | extraction + schema | prerequisite only |
+| PR-X2 | matcher integration | none | ambiguous matches; query-layer churn | regression + continuity | PR-X1 |
+| PR-X3 | MCP tool + docs | none | tool contract vs docs drift; operator confusion | tool filters + docs | PR-X1 |
 
 Landing order: **X1 -> X2 -> X3**.
 ```
+
+The **Areas of concern** cells are **review hints** (risks, coupling), not a filename allowlist and not the authority on what may be edited — use the per-PR **File-by-file changes** section for that.
 
 ## 3) Per-PR section skeleton
 
