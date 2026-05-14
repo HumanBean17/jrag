@@ -1,7 +1,7 @@
 # Plan: Lossless-permissive `NodeFilter` contract
 
-Status: **active (planning)**. This plan implements
-[`propose/LOSSLESS-PERMISSIVE-NODEFILTER-PROPOSE.md`](../propose/LOSSLESS-PERMISSIVE-NODEFILTER-PROPOSE.md).
+Status: **completed**. This plan implemented
+[`propose/completed/LOSSLESS-PERMISSIVE-NODEFILTER-PROPOSE.md`](../../propose/completed/LOSSLESS-PERMISSIVE-NODEFILTER-PROPOSE.md).
 
 Depends on: **none** (orthogonal to graph/Kuzu work such as upstream #119).
 
@@ -136,5 +136,5 @@ Landing order: **PR-N1 only**.
 
 ## Tracking
 
-- `PR-N1`: _pending_
+- `PR-N1`: _done_
 - Per-PR Cursor prompts: [`plans/CURSOR-PROMPTS-LOSSLESS-PERMISSIVE-NODEFILTER.md`](./CURSOR-PROMPTS-LOSSLESS-PERMISSIVE-NODEFILTER.md)
