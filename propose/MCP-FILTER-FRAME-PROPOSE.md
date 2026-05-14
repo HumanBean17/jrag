@@ -10,9 +10,9 @@
 - **Frame**: MCP V2 is a typed query language for the code graph. Filters and traversal targets are strict — every input field maps to one and only one stored attribute, inapplicable inputs fail loud. `search.query` is the single carve-out: opaque natural-language or code text, ranked results.
 - **Why this and not permissive**: every shipped strict surface (EdgeType literal, kind enum, direction enum) has zero issues; every shipped permissive surface (filter bag, silent-drop) accounts for #117 / #118 / part of #119 in one session.
 - **Migration step 1 already shipped** (#122): `extra="forbid"` on NodeFilter + per-kind applicability validation across `search` / `find` / `neighbors`. Loud-fail surface is live.
-- **What's left**: aligned-vocabulary audit (Appendix A), the 7 frame-edge questions from #117, and `resolve` as a deferred named primitive (own propose, own PR).
-- **Migration shape**: 3 PRs after this propose locks. PR-FRAME-1 (vocabulary audit + renames with deprecation aliases), PR-FRAME-2 (lock the 7 edge-question decisions as code + tests), PR-FRAME-3 (revisit-trigger doc + telemetry hooks). `resolve` is a separate propose, not part of this migration.
-- **Versioning**: V2.x incremental unless step-1 renames produce a breaking change not covered by a deprecation alias. V3.0 only if forced.
+- **What's left**: vocabulary audit (Appendix A), the 7 frame-edge decisions from #117, and `resolve` as a deferred named primitive (own propose, own PR).
+- **Migration shape**: 3 PRs after this propose locks. PR-FRAME-1 (vocabulary audit + renames, no users so no deprecation aliases), PR-FRAME-2 (lock the 7 edge-question decisions as code + tests, including `describe(fqn=…)`), PR-FRAME-3 (revisit-trigger doc + lightweight local counters). `resolve` is a separate propose, not part of this migration.
+- **No-users constraint**: breaking changes are allowed. No deprecation aliases, no transition-window scaffolding, no V2.x-vs-V3.0 ceremony — rename, ship, move on.
 - **Builds on, does not replace, PR #89 V2 decisions**: four primitives, closed EdgeType, rollup dot-keys read-only, `_coerce_filter` lossless JSON-decoding.
 
 ---
@@ -38,7 +38,7 @@ The carve-out earns its keep because `search` is fundamentally about *inexact re
 5. **EdgeType is a closed set.** Rollup dot-keys are read-only signals on outputs, never accepted as `neighbors(edge_types=...)` values (PR #89 decision #11, preserved).
 6. **Each smart behavior given up gets a named home.** Removal without relocation is forbidden — the relocation table (§5) is a hard requirement, not a courtesy.
 7. **Revisit trigger is concrete, not vague.** Three issues with workflows that have no clean `search` / `resolve` / multi-call analog within 6 months reopens the frame.
-8. **Frame decisions are versioned by impact, not by aesthetics.** V2.x for additive + deprecation-alias-friendly. V3.0 only if a rename has no alias path.
+8. **No users, no version ceremony.** Breaking changes are allowed; renames ship in place. Frame revision events are tracked in commit history, not version numbers.
 
 ---
 
@@ -74,12 +74,12 @@ The four primitives (`search`, `find`, `describe`, `neighbors`) are unchanged in
 The strict frame doesn't automatically answer the following questions. The propose locks each:
 
 1. **Wildcards in structured predicates.** `fqn_prefix="com.x.*Service"` is **rejected**. Wildcard semantics are smart-by-nature (LIKE-shaped operators leak engine details into the contract). If wildcard match is the actual intent, use `search(query="com.x.*Service")` or `resolve` (deferred). **Decision: no wildcards in any structured predicate.**
-2. **FQN-as-identifier in `describe`.** `describe(fqn="...")` is a lossless alias for `describe(id=...)` **only when** the FQN ↔ ID mapping is bijective for the node kind. For Symbols today, FQN identifies a class/method uniquely within a microservice; the alias holds. For Routes and Clients, FQN is not the natural identifier. **Decision: `describe` accepts `id` or `fqn` for Symbols; `id` only for Routes and Clients.** Multi-microservice FQN collisions are resolved via `microservice` co-parameter or fall through to `resolve`.
-3. **Multi-value field semantics.** `microservice=["a", "b"]` means **OR** (disjunction within field). Cross-field is **AND** (conjunction across fields). This matches SQL `IN` and is the only sane structured-predicate default. **Decision: within-field OR, cross-field AND.**
+2. **FQN-as-identifier in `describe`.** Today `describe` accepts `(id, kind)` — there is no `fqn` parameter. **Decision: PR-FRAME-2 adds `fqn` as a second accepted identifier shape for `describe`, accepted only when `kind="symbol"`.** Routes and Clients accept `id` only (FQN is not their natural identifier). Multi-microservice FQN collisions are resolved via a `microservice` co-parameter or fall through to `resolve` once it ships. This is an additive change to the tool schema, not a frame-only statement.
+3. **Multi-value field semantics.** `microservice=["a", "b"]` means **OR** (disjunction within field). Cross-field is **AND** (conjunction across fields). This matches SQL `IN` and is the only sane structured-predicate default. Today the schema exercises this with `symbol_kinds` (multi-value OR) and `exclude_roles` (multi-value negation); the decision generalizes their semantics to any multi-value field added later. **Decision: within-field OR, cross-field AND.**
 4. **Negation predicates.** `exclude_roles` exists today. Negation is **strict structured predicate**, not smart behavior — it's just "field NOT IN list". Generalizable as `exclude_<fieldname>` parameters where useful. **Decision: negation predicates are strict; add `exclude_<fieldname>` mirrors only where vocabulary audit (Appendix A) flags a real need.**
 5. **Empty-filter semantics.** `find(kind="client", filter={})` means **"all clients of the requested kind"** (current behavior, locked). `filter=None` is equivalent. The agent can always page through if the result is large. **Decision: empty filter = no predicate, full result set; safety is enforced by pagination, not by required predicates.**
 6. **Revisit-trigger tightening.** "N legitimate workflows hit fail-loud" is sharpened: **N=3**, "legitimate" = "issue filed where the workflow has no clean analog under `search` + (deferred) `resolve` + multi-call patterns under the strict frame". **Decision: revisit when 3 such issues accumulate within 6 months of frame lock.**
-7. **Transition-window gap.** Between strict-frame lock and `resolve` shipping, identifier-resolution workflows fall back to `search` + `describe`-per-candidate. **Decision: explicitly document this fallback in the agent-facing tool descriptions until `resolve` ships; do not gate frame lock on `resolve` being ready.**
+7. **Identifier-resolution fallback (pre-`resolve`).** Until `resolve` ships, identifier-resolution workflows fall back to `search` + `describe`-per-candidate. **Decision: document this fallback in the agent-facing tool descriptions; do not gate frame lock on `resolve` being ready.** Not a user-facing transition — the AMA agent is the only consumer.
 
 ### 3.5 `resolve` as named-but-deferred primitive
 
@@ -104,7 +104,7 @@ The strict frame doesn't automatically answer the following questions. The propo
 | UC4 | Agent typos a Symbol-only field on `find(kind="client")` | 1 (loud fail) | Returns `success=False, message="Invalid filter for kind='client': populated field(s) not applicable: [fqn_prefix]. Applicable field(s): [microservice, module, source_layer, client_kind, target_service, target_path_prefix, client_method]"`. Already shipped (#122). |
 | UC5 | Agent searches for "smartcare assign client" by free text | 1 | `search(query="smartcare assign client")` — ranked results, score-based |
 | UC6 | Agent has FQN `com.foo.SmartCareAssignClient` and wants the node | 1 | `describe(fqn="com.foo.SmartCareAssignClient")` — bijective for Symbols (decision §3.4.2) |
-| UC7 | Agent has identifier `"smartcare"` (short service name) and wants canonical | 1 (or 2) | Pre-`resolve`: `search(query="smartcare")` → ranked results. Post-`resolve`: `resolve("smartcare", hint_kind="microservice")` → canonical or candidates. **Transition-window**: §3.4.7 documents the fallback. |
+| UC7 | Agent has identifier `"smartcare"` (short service name) and wants canonical | 1 (or 2) | Pre-`resolve`: `search(query="smartcare")` → ranked results. Post-`resolve`: `resolve("smartcare", hint_kind="microservice")` → canonical or candidates. §3.4.7 documents the pre-`resolve` fallback. |
 | UC8 | Agent gets a class and wants all overriders | 2 | `describe(id=X)` → read `edge_summary["OVERRIDDEN_BY"].out` → `neighbors(in, [EXTENDS, IMPLEMENTS])` on declarer + class-level walk. Note: `OVERRIDDEN_BY` stays a read-only signal (PR #89 decision #11); decomposition lives in #118. |
 | UC9 | Agent gets a class and wants all clients that route to its members | 2 | `describe(id=X)` → read `edge_summary["DECLARES.DECLARES_CLIENT"].out` → `neighbors(out, [DECLARES])` → `neighbors(out, [DECLARES_CLIENT])` per member. The 2-call rollup pattern. |
 | UC10 | Agent passes wildcard `fqn_prefix="com.*.assign"` | 1 (loud fail) | Returns `success=False, message="..."` — wildcards rejected (decision §3.4.1). Agent's next step: `search(query="com assign")` or wait for `resolve`. |
@@ -119,7 +119,7 @@ The strict frame doesn't automatically answer the following questions. The propo
 
 **Findings from the re-walk:**
 
-- **No missing primitive surfaces.** Every UC has a clean answer under the strict frame, even if some need 2 calls or the transition-window `search` fallback (UC7).
+- **No missing primitive surfaces.** Every UC has a clean answer under the strict frame, even if some need 2 calls or the pre-`resolve` `search` fallback (UC7).
 - **UC7 is the workflow most visibly degraded** before `resolve` ships — but `search` covers it acceptably, and the agent learns the pattern from the tool description.
 - **UC8 and UC9 (rollup decomposition)** are honest 2-call patterns. They're the reason #118 is open: someone might prefer dot-notation in `neighbors`, but that's a separate frame decision.
 - **UC15 is the most interesting carve-out boundary.** An agent might try to write structured queries inside `search.query`. The frame holds: `search` is text-in, ranked-out; `find` is structured-in, exact-out. No DSL in the middle.
@@ -145,17 +145,17 @@ The strict frame doesn't automatically answer the following questions. The propo
 
 Migration step 1 (extra="forbid" + per-kind applicability) **already shipped as #122**. The remaining migration is 3 PRs.
 
-### PR-FRAME-1 — Aligned-vocabulary audit + renames
+### PR-FRAME-1 — Vocabulary renames
 
-Apply the Appendix A field-by-field audit. Rename misaligned vocabulary with deprecation aliases for any non-breaking-friendly cases. Test that aliases route to canonical names; test that canonical names still work; test that the inapplicability error message reflects renamed fields.
+Apply the Appendix A field-by-field audit. Rename misaligned vocabulary in place — **no deprecation aliases, no users to migrate**. Update `_NODEFILTER_APPLICABLE_FIELDS`, `NodeFilter`, all call-site references, and tests in one commit. Verify the inapplicability error message reflects renamed fields.
 
 ### PR-FRAME-2 — Lock the 7 frame-edge decisions in code
 
-Code + tests for decisions §3.4.1–§3.4.7. Wildcard rejection, FQN-as-identifier alias on `describe`, OR within field / AND across fields, negation predicate mirrors where flagged by audit, empty-filter pagination test, revisit-trigger doc string, transition-window note in tool descriptions.
+Code + tests for decisions §3.4.1–§3.4.7. Wildcard rejection, `describe(fqn=…)` for Symbol kind (additive parameter, not an alias), OR within field / AND across fields, negation predicate mirrors where flagged by audit, empty-filter pagination test, revisit-trigger doc string, identifier-resolution fallback note in tool descriptions.
 
-### PR-FRAME-3 — Telemetry hooks + agent-facing tool description updates
+### PR-FRAME-3 — Lightweight local counters + tool-description updates
 
-Telemetry for revisit-trigger counting (count fail-loud events per workflow shape). Update tool descriptions to teach the contract: applicable fields per kind, FQN-vs-ID rules per kind, transition-window note for identifier resolution.
+Local counter for revisit-trigger tracking — a stderr counter or a small local file recording fail-loud events per workflow shape. Not product telemetry; no observability stack. Update tool descriptions to teach the contract: applicable fields per kind, identifier shapes per kind, identifier-resolution fallback for the AMA agent.
 
 `resolve` ships as its own propose + PR series, not part of this migration.
 
@@ -173,10 +173,10 @@ Telemetry for revisit-trigger counting (count fail-loud events per workflow shap
 8. **Negation predicates are strict structured predicates.** Add `exclude_<fieldname>` mirrors only where Appendix A flags a real need. §3.4.4.
 9. **Empty filter = no predicate; pagination is the safety net.** §3.4.5.
 10. **Revisit trigger: 3 legitimate workflows fail-loud within 6 months reopens.** §3.4.6.
-11. **Transition-window: `search` + `describe`-per-candidate is the documented identifier-resolution fallback until `resolve` ships.** §3.4.7.
+11. **Identifier-resolution fallback: `search` + `describe`-per-candidate is the documented pattern until `resolve` ships.** §3.4.7.
 12. **`resolve` is named in the frame, designed in a separate propose.** §3.5.
 13. **`search.filter` follows strict-frame rules even though hosted inside `search`.** Carve-out is precisely scoped to `query` and `score`. §3.3.
-14. **Versioning is by impact**: V2.x incremental unless a rename in PR-FRAME-1 has no deprecation-alias path. V3.0 only if forced.
+14. **No users, no version ceremony.** Renames ship in place; no V2.x / V3.0 distinction. Frame revision events (§3.4.6 revisit trigger) are noted in commit history, not version numbers.
 15. **PR #89 invariants are preserved, not relitigated**: four primitives, closed EdgeType, rollup dot-keys read-only, `_coerce_filter` lossless JSON-decoding.
 
 ---
@@ -185,19 +185,18 @@ Telemetry for revisit-trigger counting (count fail-loud events per workflow shap
 
 | Risk | Mitigation |
 |---|---|
-| Agent workflows hit fail-loud often during transition window (between #122 ship and `resolve` ship). | Tool description teaches the `search` + `describe`-per-candidate fallback. Telemetry (PR-FRAME-3) counts fail-loud events; if rate is high, accelerate `resolve` propose. |
-| Aligned-vocabulary audit (Appendix A) surfaces a rename that has no clean deprecation alias. | Lock the rename as V3.0 if needed; otherwise ship as V2.x with alias. Decision is made at audit time, not at frame-lock time. |
-| `resolve` design takes longer than expected; transition window stretches. | `search` covers ~80% of identifier-resolution workflows under the frame. Frame doesn't gate on `resolve` (decision §3.4.7). |
+| Agent workflows hit fail-loud often pre-`resolve` (between #122 ship and `resolve` ship). | Tool description teaches the `search` + `describe`-per-candidate fallback. Local counters (PR-FRAME-3) track fail-loud events; if rate is high, accelerate `resolve` propose. |
+| `resolve` design takes longer than expected; identifier-resolution fallback stays in use. | `search` covers most identifier-resolution workflows under the frame. Frame doesn't gate on `resolve` (decision §3.4.7). |
 | Wildcard rejection (§3.4.1) feels too strict to agents who try `fqn_prefix="com.x.*"`. | Error message can hint: "wildcards not supported in structured predicates; use search(query='...') for ranked text match". Hint candidates feed back into PR #120 family. |
 | Strict frame produces verbose error messages that crowd the LLM context. | Error messages are structured (`success=False, message=...`), not chatty. Applicable-field list is the only structured payload. |
 | The carve-out boundary on `search.query` blurs over time (someone tries DSL parsing). | Decision §15 (PR #89 invariants preserved) + decision §3.3 (search.filter strict) + tool description language. Frame is restateable; if blur happens, that's a revisit-trigger event. |
-| Revisit-trigger N=3 is arbitrary; could be too lenient or too strict. | First revisit is a learning event. If 3 turns out to be wrong, decision §3.4.6 changes; that's V2.x cheap. |
+| Revisit-trigger N=3 is arbitrary; could be too lenient or too strict. | First revisit is a learning event. If 3 turns out to be wrong, decision §3.4.6 changes — cheap to amend, no users to migrate. |
 
 ---
 
 ## Appendix A — Aligned-vocabulary audit (the work this propose hands to PR-FRAME-1)
 
-Field-by-field audit across the 17 NodeFilter fields. Each row: where the field applies, what the concept is, and whether the name is aligned with other kinds that share the concept.
+Vocabulary audit across the 17 NodeFilter fields — **concept alignment, not applicability bugs**. Today `_NODEFILTER_APPLICABLE_FIELDS` already keeps fields disjoint per kind; this audit asks whether two same-concept fields under different names should share a name across kinds. Each row: where the field applies, what the concept is, and whether the name is aligned with other kinds that share the concept.
 
 | Field | Applies to | Concept | Alignment status | Action |
 |---|---|---|---|---|
@@ -217,9 +216,9 @@ Field-by-field audit across the 17 NodeFilter fields. Each row: where the field 
 | `client_kind` | client | RestTemplate / Feign / WebClient / ... | client-only | keep |
 | `target_service` | client | which service this client calls | client-only | **AUDIT**: could a `target_microservice` rename make this consistent with `microservice`? Or is "service" the right abstraction (allows future non-microservice targets)? Decision: keep `target_service` (more general); document the distinction. |
 | `target_path_prefix` | client | client-side URL target prefix | client-only | see `path_prefix` audit; keep both |
-| `client_method` | client | HTTP method the client uses | client-only | **AUDIT**: vs `http_method` on Route. Same HTTP-method concept on different sides. Rename `client_method` → `http_method` with cross-kind aligned semantics? Decision likely yes — both name the HTTP method; the kind disambiguates server-side vs client-side. **This is the most plausible cross-kind alignment in the audit.** |
+| `client_method` | client | HTTP method the client uses | client-only | **AUDIT**: vs `http_method` on Route. Same HTTP-method concept on different sides. Rename `client_method` → `http_method` with cross-kind aligned semantics — **this is the most plausible cross-kind alignment in the audit**. Post-rename, `_NODEFILTER_APPLICABLE_FIELDS` lists `http_method` under both `route` and `client`; PR-FRAME-2 tests cover both kinds with the same predicate name. |
 
-**Summary**: 3 audit decisions to make in PR-FRAME-1 — `source_layer`/`role`, `target_service` vs `target_microservice`, and `client_method` vs `http_method` cross-kind alignment. Most plausible renames are deprecation-alias-friendly, so V2.x incremental.
+**Summary**: 3 audit decisions to make in PR-FRAME-1 — `source_layer`/`role`, `target_service` vs `target_microservice`, and `client_method` vs `http_method` cross-kind alignment. With no users, renames ship in place; no alias scaffolding.
 
 ---
 
@@ -230,7 +229,7 @@ Field-by-field audit across the 17 NodeFilter fields. Each row: where the field 
 - `mcp_v2.py:83–93` — `_NODEFILTER_APPLICABLE_FIELDS` (per-kind map, shipped #122)
 - `mcp_v2.py:130–146` — `_nodefilter_inapplicable_fields` / `_nodefilter_applicability_error` (shipped #122)
 - `mcp_v2.py:525, 557, 678` — enforcement at search/find/neighbors entry points (shipped #122)
-- `mcp_v2.py:79–98` — `_coerce_filter` (lossless JSON-decoding, kept)
+- `mcp_v2.py:161–180` — `_coerce_filter` (lossless JSON-decoding, kept)
 - Issue #117 — frame direction locked
 - Issue #118 — rollup decomposition (depends on §3.2 + UC8/UC9 in this propose)
 - Issue #122 — lossless-permissive shipped; this propose's migration step 1
