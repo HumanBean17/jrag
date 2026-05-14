@@ -150,7 +150,13 @@ One object shape everywhere. **For `find`, `filter` is required** — use at lea
 | `microservice`, `module`, `source_layer` | All kinds (`source_layer` mainly **client**: `builtin` / brownfield) |
 | `role`, `exclude_roles`, `annotation`, `capability`, `fqn_prefix`, `symbol_kind`, `symbol_kinds` | **symbol** (ignored for route/client) |
 | `http_method`, `path_prefix`, `framework` | **route** |
-| `client_kind`, `target_service`, `target_path_prefix`, `client_method` | **client** |
+| `client_kind`, `target_service`, `target_path_prefix`, `http_method` | **client** |
+
+The same `http_method` key filters HTTP verbs on **routes** (server-side declared method) and on **clients** (caller-side method on the outbound call). It is not applicable to **symbol** rows.
+
+**`source_layer` vs `role`:** On **Client** nodes, `source_layer` records which brownfield or built-in layer produced the client declaration (`builtin`, `layer_a_meta`, `layer_b_ann`, `layer_c_source`, `layer_b_fqn`, …). On **Symbol** nodes, `role` is the inferred architectural stereotype (`CONTROLLER`, `SERVICE`, `REPO`, …). They answer different questions; names stay distinct.
+
+**`target_service` vs `microservice`:** `microservice` is the service **where the node lives** (home service / owning module). `target_service` (clients only) is the **remote service being called**. A client in `operator-api` may list `partner-api` as `target_service`.
 
 Exact allowed values for roles, capabilities, client kinds, etc. live in `java_ontology.py`.
 

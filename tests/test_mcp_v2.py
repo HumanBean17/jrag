@@ -238,6 +238,43 @@ def test_nodefilter_applicability_table_covers_all_fields() -> None:
     assert declared == covered
 
 
+def test_http_method_field_applies_to_route_kind(kuzu_graph) -> None:
+    routes = kuzu_graph.list_routes(limit=2000)
+    post_ids = {str(r["id"]) for r in routes if str(r.get("method") or "").upper() == "POST"}
+    if not post_ids:
+        pytest.skip("fixture has no POST routes")
+    out = find_v2("route", {"http_method": "POST"}, graph=kuzu_graph, limit=500)
+    assert out.success is True
+    assert out.results
+    assert {r.id for r in out.results} <= post_ids
+    assert all(r.fqn == "POST" or r.fqn.startswith("POST ") for r in out.results)
+
+
+def test_http_method_field_applies_to_client_kind(kuzu_graph) -> None:
+    clients = kuzu_graph.list_clients(limit=2000)
+    post_ids = {str(r["id"]) for r in clients if str(r.get("method") or "").upper() == "POST"}
+    if not post_ids:
+        pytest.skip("fixture has no POST clients")
+    out = find_v2("client", {"http_method": "POST"}, graph=kuzu_graph, limit=500)
+    assert out.success is True
+    assert out.results
+    assert {r.id for r in out.results} <= post_ids
+
+
+def test_http_method_field_inapplicable_to_symbol(kuzu_graph) -> None:
+    out = find_v2("symbol", {"http_method": "POST"}, graph=kuzu_graph)
+    assert out.success is False
+    assert out.message is not None
+    assert "http_method" in out.message
+    assert "kind='symbol'" in out.message
+
+
+def test_nodefilter_rejects_old_client_method_field() -> None:
+    with pytest.raises(ValidationError) as excinfo:
+        NodeFilter.model_validate({"client_method": "POST"})
+    assert any("client_method" in str(e.get("loc", ())) for e in excinfo.value.errors())
+
+
 async def test_find_missing_filter_rejected(mcp_server) -> None:
     with pytest.raises(ToolError, match="Field required"):
         await mcp_server.call_tool("find", {"kind": "symbol"})
