@@ -1,12 +1,12 @@
 # Cursor task prompts — CLI scenarios (PR-CLI-1 → PR-CLI-3)
 
 Status: **active**. Implements
-[`plans/PLAN-CLI-SCENARIOS.md`](./PLAN-CLI-SCENARIOS.md) and
-[`propose/CLI-SCENARIOS-PROPOSE.md`](../propose/CLI-SCENARIOS-PROPOSE.md).
+[`plans/completed/PLAN-CLI-SCENARIOS.md`](./PLAN-CLI-SCENARIOS.md) and
+[`propose/completed/CLI-SCENARIOS-PROPOSE.md`](../propose/completed/CLI-SCENARIOS-PROPOSE.md).
 
 One prompt per PR. Each is **self-contained**: copy the prompt verbatim into
 Cursor, attach the files listed in its `@-files` block, and execute in agent
-mode. If this prompt disagrees with **`plans/PLAN-CLI-SCENARIOS.md`**, the plan
+mode. If this prompt disagrees with **`plans/completed/PLAN-CLI-SCENARIOS.md`**, the plan
 wins.
 
 **Workflow per PR**
@@ -34,22 +34,22 @@ wins.
 
 **Branch:** `chore/cli-scenarios-propose-approval` off `master`.  
 **Base:** `master`.  
-**Plan section:** `plans/PLAN-CLI-SCENARIOS.md` § PR-CLI-1.  
+**Plan section:** `plans/completed/PLAN-CLI-SCENARIOS.md` § PR-CLI-1.  
 **Estimated diff size:** 1 file, ~10 LOC.
 
 **Attach (`@-files`):**
 
-- `@plans/PLAN-CLI-SCENARIOS.md` (PR-CLI-1 section only)
-- `@propose/CLI-SCENARIOS-PROPOSE.md`
+- `@plans/completed/PLAN-CLI-SCENARIOS.md` (PR-CLI-1 section only)
+- `@propose/completed/CLI-SCENARIOS-PROPOSE.md`
 
 **Prompt:**
 
 ````
-You are implementing PR-CLI-1 from `plans/PLAN-CLI-SCENARIOS.md`.
+You are implementing PR-CLI-1 from `plans/completed/PLAN-CLI-SCENARIOS.md`.
 
 ## Scope
 
-- Update `propose/CLI-SCENARIOS-PROPOSE.md` **status** from **draft** to **approved**
+- Update `propose/completed/CLI-SCENARIOS-PROPOSE.md` **status** from **draft** to **approved**
   (or the repo’s equivalent convention) if reviewers have signed off.
 - Ensure **Appendix A** still states that the real issue URL is filled in **PR-CLI-2**
   (placeholder or canonical remote note — do not invent a final URL here).
@@ -71,7 +71,7 @@ None (documentation only).
 
 ## Sentinel checks
 
-- `git diff master --name-only` should list **only** `propose/CLI-SCENARIOS-PROPOSE.md`
+- `git diff master --name-only` should list **only** `propose/completed/CLI-SCENARIOS-PROPOSE.md`
   (or be empty if already merged).
 
 ## Manual evidence
@@ -92,16 +92,16 @@ N/A.
 **Branch:** `feat/cli-scenarios` off `master` (after PR-CLI-1 is on `master`, or
 stack if your team allows).  
 **Base:** `master` (contains merged PR-CLI-1).  
-**Plan section:** `plans/PLAN-CLI-SCENARIOS.md` § PR-CLI-2 + **Resolved design
+**Plan section:** `plans/completed/PLAN-CLI-SCENARIOS.md` § PR-CLI-2 + **Resolved design
 decisions** table.  
-**Propose:** `propose/CLI-SCENARIOS-PROPOSE.md` §3, §7, Appendix A (warning text).  
+**Propose:** `propose/completed/CLI-SCENARIOS-PROPOSE.md` §3, §7, Appendix A (warning text).  
 **Estimated diff size:** ~25–40 files, large LOC (single atomic PR; prefer
 sequential commits per concern inside the branch).
 
 **Attach (`@-files`):**
 
-- `@plans/PLAN-CLI-SCENARIOS.md`
-- `@propose/CLI-SCENARIOS-PROPOSE.md`
+- `@plans/completed/PLAN-CLI-SCENARIOS.md`
+- `@propose/completed/CLI-SCENARIOS-PROPOSE.md`
 - `@user_rag/cli.py` (pre-rename; becomes `java_codebase_rag/cli.py`)
 - `@server.py`
 - `@java_index_flow_lancedb.py`
@@ -122,10 +122,10 @@ sequential commits per concern inside the branch).
 **Prompt:**
 
 ````
-You are implementing PR-CLI-2 from `plans/PLAN-CLI-SCENARIOS.md`.
+You are implementing PR-CLI-2 from `plans/completed/PLAN-CLI-SCENARIOS.md`.
 
 Read the **PR-CLI-2** section and the **Resolved design decisions** table in full.
-Cross-check behaviour with `propose/CLI-SCENARIOS-PROPOSE.md` §3 / §7 / Appendix A.
+Cross-check behaviour with `propose/completed/CLI-SCENARIOS-PROPOSE.md` §3 / §7 / Appendix A.
 If this prompt and the plan disagree, the plan wins.
 
 ## Scope
@@ -274,14 +274,14 @@ production code paths must use the consolidated model.
 
 **Branch:** `chore/cli-scenarios-docs` off `master` (after PR-CLI-2 merged).  
 **Base:** `master`.  
-**Plan section:** `plans/PLAN-CLI-SCENARIOS.md` § PR-CLI-3; propose §6 (doc list +
+**Plan section:** `plans/completed/PLAN-CLI-SCENARIOS.md` § PR-CLI-3; propose §6 (doc list +
 acceptance grep + agent rules audit).  
 **Estimated diff size:** ~15–25 files, mostly markdown.
 
 **Attach (`@-files`):**
 
-- `@plans/PLAN-CLI-SCENARIOS.md` (PR-CLI-3 section)
-- `@propose/CLI-SCENARIOS-PROPOSE.md` (§6)
+- `@plans/completed/PLAN-CLI-SCENARIOS.md` (PR-CLI-3 section)
+- `@propose/completed/CLI-SCENARIOS-PROPOSE.md` (§6)
 - `@README.md`
 - `@AGENTS.md`
 - `@CODEBASE_REQUIREMENTS.md`
@@ -295,8 +295,8 @@ acceptance grep + agent rules audit).
 **Prompt:**
 
 ````
-You are implementing PR-CLI-3 from `plans/PLAN-CLI-SCENARIOS.md` and
-`propose/CLI-SCENARIOS-PROPOSE.md` §6.
+You are implementing PR-CLI-3 from `plans/completed/PLAN-CLI-SCENARIOS.md` and
+`propose/completed/CLI-SCENARIOS-PROPOSE.md` §6.
 
 ## Scope
 

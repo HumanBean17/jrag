@@ -1,6 +1,6 @@
 # CLI-SCENARIOS — restructure `java-codebase-rag` CLI, config, and naming
 
-**Status**: approved — signed off for implementation via §6 (PR-CLI-2 / PR-CLI-3).
+**Status**: completed — shipped (lifecycle verbs, config consolidation, package rename; plan closed under `plans/completed/PLAN-CLI-SCENARIOS.md`).
 **Author**: Dmitriy Teriaev + Perplexity Computer
 **Date**: 2026-05-10
 

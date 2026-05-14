@@ -1,6 +1,6 @@
 # REPROCESS-SPLIT — Make `reprocess` selectively rebuild vectors and/or graph
 
-**Status**: under review
+**Status**: completed — shipped (`reprocess --vectors-only` / `--graph-only`, `phases_run`, drift warnings, docs, and CLI tests on `master`).
 **Author**: Dmitriy Teriaev + Perplexity Computer
 **Date**: 2026-05-12 (revised 2026-05-13 after review)
 

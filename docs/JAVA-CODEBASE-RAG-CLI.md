@@ -94,7 +94,7 @@ java-codebase-rag init --source-root /path/to/java/repo --index-dir /path/to/.ja
 
 ### `increment`
 
-Runs cocoindex **catch-up** without a full Lance reprocess. **Does not** rebuild Kuzu. Every run prints a **multi-line stderr warning** that graph navigation may be stale until you run `reprocess` (see [`propose/CLI-SCENARIOS-PROPOSE.md`](../propose/CLI-SCENARIOS-PROPOSE.md) Appendix A for the contract).
+Runs cocoindex **catch-up** without a full Lance reprocess. **Does not** rebuild Kuzu. Every run prints a **multi-line stderr warning** that graph navigation may be stale until you run `reprocess` (see [`propose/completed/CLI-SCENARIOS-PROPOSE.md`](../propose/completed/CLI-SCENARIOS-PROPOSE.md) Appendix A for the contract).
 
 ```bash
 java-codebase-rag increment --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-rag --quiet
