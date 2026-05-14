@@ -27,6 +27,18 @@ def _method_id_with_calls(kuzu_graph, direction: str) -> str:
     return str(rows[0]["id"])
 
 
+def _method_id_declares_client_and_other_out_edge(kuzu_graph) -> str | None:
+    """A method with DECLARES_CLIENT plus another out-label (Kuzu #119 strict-subset case)."""
+    for pattern in (
+        "MATCH (m:Symbol {kind: 'method'})-[:DECLARES_CLIENT]->() MATCH (m)-[:CALLS]->() RETURN m.id AS id LIMIT 1",
+        "MATCH (m:Symbol {kind: 'method'})-[:DECLARES_CLIENT]->() MATCH (m)-[:HTTP_CALLS]->() RETURN m.id AS id LIMIT 1",
+    ):
+        rows = kuzu_graph._rows(pattern)  # noqa: SLF001
+        if rows:
+            return str(rows[0]["id"])
+    return None
+
+
 def _first_route_with_handler(kuzu_graph) -> str:
     for route in kuzu_graph.list_routes(limit=200):
         if kuzu_graph.find_route_handlers(route_id=route["id"]):
@@ -281,6 +293,24 @@ def test_neighbors_out_calls(kuzu_graph) -> None:
     assert isinstance(out.results, list)
 
 
+def test_neighbors_edge_types_strict_subset_respects_label_filter(kuzu_graph) -> None:
+    """Regression (#119): Kuzu can drop `label(e) IN $list`; use OR of `label(e) = $p` instead."""
+    mid = _method_id_declares_client_and_other_out_edge(kuzu_graph)
+    if mid is None:
+        pytest.skip("no method with DECLARES_CLIENT and CALLS or HTTP_CALLS out-edges")
+    dc_rows = kuzu_graph._rows(  # noqa: SLF001
+        "MATCH (m:Symbol)-[e:DECLARES_CLIENT]->() WHERE m.id = $id RETURN count(e) AS n",
+        {"id": mid},
+    )
+    assert dc_rows
+    want_dc = int(dc_rows[0]["n"])
+    assert want_dc >= 1
+    out = neighbors_v2(mid, direction="out", edge_types=["DECLARES_CLIENT"], graph=kuzu_graph)
+    assert out.success is True
+    assert all(e.edge_type == "DECLARES_CLIENT" for e in out.results)
+    assert len(out.results) == want_dc
+
+
 def test_neighbors_route_in_exposes_returns_handler(kuzu_graph) -> None:
     route_id = _first_route_with_handler(kuzu_graph)
     out = neighbors_v2(route_id, direction="in", edge_types=["EXPOSES"], graph=kuzu_graph)
@@ -291,7 +321,11 @@ def test_neighbors_route_in_exposes_returns_handler(kuzu_graph) -> None:
 def test_neighbors_route_in_http_calls_returns_callers(kuzu_graph) -> None:
     class FakeGraph:
         def _rows(self, query: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-            if "MATCH (a)<-[e]-(b)" in query:
+            if (
+                "MATCH (a)<-[e]-(b)" in query
+                and "WHERE a.id" in query
+                and "RETURN b.id AS other_id" in query
+            ):
                 return [{"other_id": "sym:caller", "edge_type": "HTTP_CALLS", "confidence": 0.8, "match": "cross_service"}]
             if "MATCH (n:Symbol)" in query:
                 return [

@@ -532,6 +532,12 @@ def neighbors_v2(
 ) -> NeighborsOutput:
     try:
         _NEIGHBOR_EDGE_TYPES_ADAPTER.validate_python(edge_types)
+        # Kuzu 0.11.x can drop `label(e) IN $list` in WHERE; use OR of scalar equalities instead.
+        # Typed unions like `[e:CALLS|HTTP_CALLS]` fail the binder when RETURN references rel
+        # columns that exist on only some of the union members.
+        labels = list(dict.fromkeys(edge_types))
+        label_params = [f"l{i}" for i in range(len(labels))]
+        label_predicate = "(" + " OR ".join(f"label(e) = ${name}" for name in label_params) + ")"
         g = graph or KuzuGraph.get()
         raw_filter = _coerce_filter(filter)
         nf = (
@@ -543,27 +549,30 @@ def neighbors_v2(
         results: list[Edge] = []
         for origin_id in origins:
             _resolve_node_kind(g, origin_id)
+            q_params = {"id": origin_id, **dict(zip(label_params, labels, strict=True))}
             if direction == "out":
                 rows = g._rows(  # noqa: SLF001
-                    "MATCH (a)-[e]->(b) WHERE a.id = $id AND label(e) IN $edge_types "
+                    "MATCH (a)-[e]->(b) WHERE a.id = $id AND "
+                    f"{label_predicate} "
                     "RETURN b.id AS other_id, label(e) AS edge_type, e.confidence AS confidence, "
                     "e.strategy AS strategy, e.match AS match, e.mechanism AS mechanism, "
                     "e.annotation AS annotation, e.field_or_param AS field_or_param, "
                     "e.source AS source, e.call_site_line AS call_site_line, "
                     "e.call_site_byte AS call_site_byte, e.arg_count AS arg_count, "
                     "e.resolved AS resolved",
-                    {"id": origin_id, "edge_types": edge_types},
+                    q_params,
                 )
             else:
                 rows = g._rows(  # noqa: SLF001
-                    "MATCH (a)<-[e]-(b) WHERE a.id = $id AND label(e) IN $edge_types "
+                    "MATCH (a)<-[e]-(b) WHERE a.id = $id AND "
+                    f"{label_predicate} "
                     "RETURN b.id AS other_id, label(e) AS edge_type, e.confidence AS confidence, "
                     "e.strategy AS strategy, e.match AS match, e.mechanism AS mechanism, "
                     "e.annotation AS annotation, e.field_or_param AS field_or_param, "
                     "e.source AS source, e.call_site_line AS call_site_line, "
                     "e.call_site_byte AS call_site_byte, e.arg_count AS arg_count, "
                     "e.resolved AS resolved",
-                    {"id": origin_id, "edge_types": edge_types},
+                    q_params,
                 )
             for row in rows:
                 other_id = str(row.get("other_id") or "")

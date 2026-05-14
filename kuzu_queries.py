@@ -5,6 +5,11 @@ so the MCP server can serialize them without further mapping.
 
 The Kuzu database is opened read-only and cached per-process. This module is
 intentionally dependency-light: nothing here imports LanceDB or sentence-transformers.
+
+Cypher pitfalls (see also ``AGENTS.md``): avoid ``label(e) IN $list`` in ``WHERE`` for
+relationship-type filters; use OR of ``label(e) = $param`` with bound parameters.
+Typed unions ``-[e:A|B]-`` require every ``RETURN`` column on ``e`` to exist on all
+listed rel types, or the binder may fail.
 """
 from __future__ import annotations
 
