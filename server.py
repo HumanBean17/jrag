@@ -396,18 +396,25 @@ def create_mcp_server() -> FastMCP:
             "type Symbols may add composed keys DECLARES.DECLARES_CLIENT, DECLARES.EXPOSES "
             "(describe-time 2-hop member summaries; not valid in neighbors edge_types); "
             "method Symbols may add override-axis virtual keys OVERRIDDEN_BY, "
-            "OVERRIDDEN_BY.DECLARES_CLIENT, OVERRIDDEN_BY.EXPOSES, OVERRIDES (same restriction)"
+            "OVERRIDDEN_BY.DECLARES_CLIENT, OVERRIDDEN_BY.EXPOSES, OVERRIDES (same restriction). "
+            "Pass id for any node kind, or fqn as an alternative identifier for Symbol nodes only."
         ),
     )
     async def describe(
-        id: str = Field(
+        id: str | None = Field(
+            default=None,
             description=(
                 "Graph node id: sym:, route:, or client: prefix "
-                '(e.g. sym:com.bank.chat.core.api.ChatController#joinOperator(JoinOperatorRequest))'
+                '(e.g. sym:com.bank.chat.core.api.ChatController#joinOperator(JoinOperatorRequest)). '
+                "When set, takes precedence over fqn."
             ),
         ),
+        fqn: str | None = Field(
+            default=None,
+            description="Exact FQN for Symbol lookup (alternative to id; Symbol kind only)",
+        ),
     ) -> mcp_v2.DescribeOutput:
-        return await asyncio.to_thread(mcp_v2.describe_v2, id, None)
+        return await asyncio.to_thread(mcp_v2.describe_v2, id, fqn, None)
 
     @mcp.tool(name="neighbors", description="one-hop walk; REQUIRED direction + edge_types")
     async def neighbors(

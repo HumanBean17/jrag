@@ -116,7 +116,7 @@ def test_find_symbol_by_role(kuzu_graph) -> None:
     assert all(r.role == "CONTROLLER" for r in out.results if r.role is not None)
 
 
-def test_find_symbol_empty_filter_handles_non_declaration_symbol_kinds(kuzu_graph) -> None:
+def test_find_symbol_empty_filter_returns_results(kuzu_graph) -> None:
     out = find_v2("symbol", {}, graph=kuzu_graph)
     assert out.success is True
     assert out.results
@@ -606,3 +606,185 @@ def test_filter_invalid_json_returns_failure(monkeypatch, kuzu_graph) -> None:
     assert out.success is False
     assert out.message is not None
     assert "JSON" in out.message
+
+
+def test_wildcard_in_fqn_prefix_rejected(kuzu_graph) -> None:
+    out = find_v2("symbol", {"fqn_prefix": "com.foo.*"}, graph=kuzu_graph)
+    assert out.success is False
+    assert out.message
+    assert "fqn_prefix" in out.message
+    assert "search(query=..." in out.message
+
+
+def test_wildcard_in_path_prefix_rejected(kuzu_graph) -> None:
+    out = find_v2("route", {"path_prefix": "/api/*"}, graph=kuzu_graph)
+    assert out.success is False
+    assert out.message
+    assert "path_prefix" in out.message
+    assert "search(query=..." in out.message
+
+
+def test_wildcard_in_target_path_prefix_rejected(kuzu_graph) -> None:
+    out = find_v2("client", {"target_path_prefix": "/api/*"}, graph=kuzu_graph)
+    assert out.success is False
+    assert out.message
+    assert "target_path_prefix" in out.message
+    assert "search(query=..." in out.message
+
+
+def test_wildcard_question_mark_in_fqn_prefix_rejected(kuzu_graph) -> None:
+    out = find_v2("symbol", {"fqn_prefix": "com.foo.?"}, graph=kuzu_graph)
+    assert out.success is False
+    assert out.message
+    assert "fqn_prefix" in out.message
+
+
+def test_search_wildcard_in_fqn_prefix_rejected_without_run_search(monkeypatch, kuzu_graph) -> None:
+    calls: list[int] = []
+
+    def boom(*_a, **_k):
+        calls.append(1)
+        return _fake_search_rows()
+
+    monkeypatch.setattr("mcp_v2.run_search", boom)
+    out = search_v2("anything", filter={"fqn_prefix": "com.*"}, graph=kuzu_graph)
+    assert out.success is False
+    assert out.message
+    assert "fqn_prefix" in out.message
+    assert calls == []
+
+
+def test_neighbors_wildcard_in_filter_rejected_before_graph_query(kuzu_graph) -> None:
+    class ExplodeGraph:
+        def _rows(self, *_a, **_k) -> list:
+            raise AssertionError("graph must not be queried when wildcard rejects filter")
+
+    out = neighbors_v2(
+        "sym:unused",
+        direction="out",
+        edge_types=["CALLS"],
+        filter={"fqn_prefix": "com.*"},
+        graph=ExplodeGraph(),  # type: ignore[arg-type]
+    )
+    assert out.success is False
+    assert out.message
+    assert "fqn_prefix" in out.message
+
+
+def test_describe_by_fqn_returns_symbol(kuzu_graph) -> None:
+    symbol = kuzu_graph.list_by_role("SERVICE", limit=1)[0]
+    out = describe_v2(fqn=symbol.fqn, graph=kuzu_graph)
+    assert out.success is True
+    assert out.record is not None
+    assert out.record.id == symbol.id
+    assert out.record.kind == "symbol"
+    assert out.message is None
+
+
+def test_describe_by_fqn_unknown_returns_error(kuzu_graph) -> None:
+    out = describe_v2(fqn="com.nonexistent.Foo", graph=kuzu_graph)
+    assert out.success is False
+    assert out.message == "No Symbol found for fqn='com.nonexistent.Foo'"
+
+
+def test_describe_by_fqn_id_takes_precedence(kuzu_graph) -> None:
+    svc = kuzu_graph.list_by_role("SERVICE", limit=1)[0]
+    ctrl = kuzu_graph.list_by_role("CONTROLLER", limit=1)[0]
+    out = describe_v2(id=svc.id, fqn=ctrl.fqn, graph=kuzu_graph)
+    assert out.success is True
+    assert out.record is not None
+    assert out.record.id == svc.id
+    assert str(out.record.data.get("role") or "") == "SERVICE"
+
+
+def test_describe_by_fqn_duplicate_returns_first_with_disambiguation_hint() -> None:
+    class DupFqnGraph:
+        def _rows(self, query: str, params: dict | None = None) -> list:
+            p = params or {}
+            if "WHERE s.fqn = $fqn" in query:
+                if p.get("fqn") == "com.fixture.DupeName":
+                    return [{"id": "sym:dupe-a"}, {"id": "sym:dupe-b"}]
+            if "MATCH (n:Symbol)" in query and "WHERE n.id = $id" in query:
+                if p.get("id") == "sym:dupe-a":
+                    return [
+                        {
+                            "id": "sym:dupe-a",
+                            "kind": "file",
+                            "name": "DupeName",
+                            "fqn": "com.fixture.DupeName",
+                            "package": "com.fixture",
+                            "module": "fixture",
+                            "microservice": "svc-a",
+                            "filename": "DupeName.java",
+                            "start_line": 1,
+                            "end_line": 1,
+                            "start_byte": 0,
+                            "end_byte": 0,
+                            "modifiers": [],
+                            "annotations": [],
+                            "capabilities": [],
+                            "role": "",
+                            "signature": "",
+                            "parent_id": "",
+                            "resolved": True,
+                        }
+                    ]
+            return []
+
+        def edge_counts_for(self, node_id: str) -> dict[str, dict[str, int]]:
+            return {}
+
+    out = describe_v2(fqn="com.fixture.DupeName", graph=DupFqnGraph())  # type: ignore[arg-type]
+    assert out.success is True
+    assert out.record is not None
+    assert out.record.id == "sym:dupe-a"
+    assert out.message
+    assert "multiple symbols share this FQN" in out.message
+    assert "find(kind='symbol'" in out.message
+    assert "describe(id=..." in out.message
+    assert "search(query=..." in out.message
+
+
+def test_describe_by_fqn_requires_id_or_fqn(kuzu_graph) -> None:
+    out = describe_v2(graph=kuzu_graph)
+    assert out.success is False
+    assert out.message == "id or fqn required"
+
+
+def test_multi_value_symbol_kinds_or_semantics(kuzu_graph) -> None:
+    out = find_v2("symbol", {"symbol_kinds": ["class", "interface"]}, graph=kuzu_graph, limit=200)
+    assert out.success is True
+    assert out.results
+    assert all(r.symbol_kind in {"class", "interface"} for r in out.results)
+
+
+def test_cross_field_and_semantics(kuzu_graph) -> None:
+    controllers = find_v2("symbol", {"role": "CONTROLLER"}, graph=kuzu_graph, limit=50)
+    assert controllers.success is True
+    assert controllers.results
+    ms = next((r.microservice for r in controllers.results if r.microservice), None)
+    if not ms:
+        pytest.skip("no controller with microservice in fixture")
+    out = find_v2(
+        "symbol",
+        {"microservice": ms, "role": "CONTROLLER"},
+        graph=kuzu_graph,
+        limit=200,
+    )
+    assert out.success is True
+    assert out.results
+    assert all((r.microservice or "") == ms for r in out.results)
+    assert all((r.role or "") == "CONTROLLER" for r in out.results)
+
+
+def test_exclude_roles_negation_predicate(kuzu_graph) -> None:
+    out = find_v2("symbol", {"exclude_roles": ["CONTROLLER"]}, graph=kuzu_graph, limit=500)
+    assert out.success is True
+    assert out.results
+    assert not any(r.role == "CONTROLLER" for r in out.results)
+
+
+def test_empty_filter_returns_full_result_set(kuzu_graph) -> None:
+    out = find_v2("client", {}, graph=kuzu_graph)
+    assert out.success is True
+    assert out.results
