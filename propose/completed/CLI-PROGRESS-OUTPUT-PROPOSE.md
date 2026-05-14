@@ -1,9 +1,9 @@
 # CLI-PROGRESS-OUTPUT — make `java-codebase-rag` lifecycle commands tell the user what they're doing
 
-**Status**: approved — locked for Phase 1 implementation per `plans/PLAN-CLI-PROGRESS-OUTPUT.md`; §7 authoritative.
+**Status**: completed — Phase 1 implementation landed; archived with `plans/completed/PLAN-CLI-PROGRESS-OUTPUT.md`; §7 remains authoritative history.
 **Author**: Dmitriy Teriaev + Perplexity Computer
 **Date**: 2026-05-11
-**Last amended**: 2026-05-13 (pass5/pass6 + cocoindex stdout tee + risk wording + quiet stderr baseline parity §3.3; PR-1: status locked for implementation)
+**Last amended**: 2026-05-14 (phase complete; moved to `propose/completed/`)
 
 ## TL;DR
 
@@ -20,7 +20,7 @@
 
 ## §1 — Frame: what is this propose, really?
 
-The `java-codebase-rag` CLI is the operator's lifecycle interface to the index ([`CLI-SCENARIOS-PROPOSE.md`](completed/CLI-SCENARIOS-PROPOSE.md) §1). Its current output behaviour breaks two implicit promises of any lifecycle CLI:
+The `java-codebase-rag` CLI is the operator's lifecycle interface to the index ([`CLI-SCENARIOS-PROPOSE.md`](CLI-SCENARIOS-PROPOSE.md) §1). Its current output behaviour breaks two implicit promises of any lifecycle CLI:
 
 1. **"I'm alive."** A long-running command must keep emitting *something* often enough that the user does not start guessing.
 2. **"I tell the truth about what's happening."** When the work involves multiple phases, the user should be able to tell which phase is running right now, not only which phase finished N minutes ago.
@@ -45,7 +45,7 @@ This frame rules out:
 3. **No new runtime dependencies.** No `rich`, no `tqdm`, no `click`. Pure stdlib `time` / `sys` / `threading`.
 4. **Honest about partial knowledge.** When a pass cannot announce a percentage (e.g. cocoindex internals are opaque to us), we say "running…" with elapsed time, not a fake bar. Mirrors the "partial fidelity is loud" principle from CLI-SCENARIOS §2.
 5. **`--quiet` is sacred.** The `--quiet` flag (which sets `quiet=True` and drops `--verbose` from the graph builder) must continue to suppress *every* new line **this propose adds**, including the pipeline header / footer and heartbeats. **Overall** `--quiet` stderr behaviour follows §3.3: **baseline equality** with today per subcommand, not “stderr is always empty” (`increment --quiet` already prints the staleness warning). CI consumers depend on no *additional* noise from this work.
-6. **Cardinal-number discipline.** This propose locks **5 user-visible improvements** (stream, cocoindex wrap, heartbeats, pass-start lines, pipeline header/footer) across **3 PRs**. Adding a 6th improvement in this round requires a propose amendment, not a drive-by. Mirrors [`propose/completed/CLI-SCENARIOS-PROPOSE.md`](completed/CLI-SCENARIOS-PROPOSE.md) §6.
+6. **Cardinal-number discipline.** This propose locks **5 user-visible improvements** (stream, cocoindex wrap, heartbeats, pass-start lines, pipeline header/footer) across **3 PRs**. Adding a 6th improvement in this round requires a propose amendment, not a drive-by. Mirrors [`propose/completed/CLI-SCENARIOS-PROPOSE.md`](CLI-SCENARIOS-PROPOSE.md) §6.
 7. **Heartbeat cadence is fixed at ~5 s.** Not adjustable in this round (one knob, one default; matches CLI-SCENARIOS "one source of truth per config knob" principle). A future propose may make it configurable if a real consumer needs it.
 8. **No structural change to the pipeline.** We surface existing phases; we do not split, merge, reorder, or rename passes in `build_ast_graph.py`.
 

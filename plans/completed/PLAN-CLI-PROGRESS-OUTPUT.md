@@ -1,7 +1,7 @@
 # Plan: CLI progress output (Phase 1 — stream + heartbeats)
 
-Status: **active**. This plan implements
-[`propose/CLI-PROGRESS-OUTPUT-PROPOSE.md`](../propose/CLI-PROGRESS-OUTPUT-PROPOSE.md).
+Status: **completed**. This plan implements
+[`propose/completed/CLI-PROGRESS-OUTPUT-PROPOSE.md`](../../propose/completed/CLI-PROGRESS-OUTPUT-PROPOSE.md).
 
 Depends on: **none** (orthogonal to graph schema / ontology). No `ontology_version` bump and no re-index requirement.
 
@@ -25,7 +25,7 @@ Depends on: **none** (orthogonal to graph schema / ontology). No `ontology_versi
 
 | PR | Scope | Ontology bump | Files touched (approx) | Test buckets | Independent of |
 | --- | --- | --- | --- | --- | --- |
-| PR-1 | Propose merge / scope lock (if not already on main) | no | `propose/CLI-PROGRESS-OUTPUT-PROPOSE.md` | none | none |
+| PR-1 | Propose merge / scope lock (if not already on main) | no | `propose/completed/CLI-PROGRESS-OUTPUT-PROPOSE.md` | none | none |
 | PR-2 | Live stream stdout+stderr; cocoindex `[lance]` wrap; full buffers for tails; quiet parity | no | `server.py`, `java_codebase_rag/pipeline.py`, `java_codebase_rag/cli.py`, new test module | unit + integration (stdout invariant, quiet) | PR-1 if propose already merged |
 | PR-3 | Pass-start lines, 5 s heartbeats (`build_ast_graph.py` + `write`), pipeline header/footer, README + `docs/JAVA-CODEBASE-RAG-CLI.md` + `docs/AGENT-GUIDE.md` + `--help` one-liner | no | `build_ast_graph.py`, `java_codebase_rag/cli.py`, `README.md`, CLI docs, agent guide, tests | heartbeat ordering, header/footer, quiet extension, stdout invariant regression | PR-2 |
 
@@ -46,7 +46,7 @@ Landing order: **PR-1 (optional) → PR-2 → PR-3**.
 
 ## File-by-file changes
 
-### 1. `propose/CLI-PROGRESS-OUTPUT-PROPOSE.md`
+### 1. `propose/completed/CLI-PROGRESS-OUTPUT-PROPOSE.md`
 
 - Land or refresh status so the propose is the reviewed anchor for Phase 1 scope and Phase 2 deferrals.
 
@@ -62,7 +62,7 @@ Landing order: **PR-1 (optional) → PR-2 → PR-3**.
 
 | # | Step | File(s) | Done when |
 | --- | --- | --- | --- |
-| 1 | Confirm propose merged | `propose/CLI-PROGRESS-OUTPUT-PROPOSE.md` | PR-2 branch can rebase on it |
+| 1 | Confirm propose merged | `propose/completed/CLI-PROGRESS-OUTPUT-PROPOSE.md` | PR-2 branch can rebase on it |
 
 ---
 
@@ -201,12 +201,12 @@ Use `tests/test_cli_quiet_parity.py` for quiet regression (propose §8 / §6).
 1. Long `init` / `reprocess` runs emit visible stderr at most ~5 s apart during graph passes (verbose) and stream cocoindex + builder child output live when not `--quiet`.
 2. `--quiet` lifecycle runs: stdout payloads match checked baselines; **stderr matches per-subcommand baselines from today** (no new markers from this work; `increment --quiet` baseline includes the existing staleness warning).
 3. Documentation and `--help` describe stderr streaming and `--quiet` suppression.
-4. `propose/CLI-PROGRESS-OUTPUT-PROPOSE.md` status updated to **completed** when the feature set is merged; this plan moved to `plans/completed/` after the final PR lands.
+4. `propose/completed/CLI-PROGRESS-OUTPUT-PROPOSE.md` status updated to **completed** when the feature set is merged; this plan moved to `plans/completed/` after the final PR lands.
 
 # Tracking
 
 - `PR-1` (propose): _done_
-- `PR-2` (stream + wrap): _pending_
-- `PR-3` (heartbeats + docs): _pending_
+- `PR-2` (stream + wrap): _done_
+- `PR-3` (heartbeats + docs): _done_
 
 Optional follow-up: add `plans/CURSOR-PROMPTS-CLI-PROGRESS-OUTPUT.md` using `plans/completed/CURSOR-PROMPTS-TIER1B.md` as the structural template for per-PR Cursor handoffs.
