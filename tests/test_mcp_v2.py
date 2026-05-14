@@ -7,6 +7,8 @@ from pydantic import ValidationError
 from mcp.server.fastmcp.exceptions import ToolError
 
 from mcp_v2 import (
+    NodeFilter,
+    _NODEFILTER_APPLICABLE_FIELDS,
     describe_v2,
     find_v2,
     neighbors_v2,
@@ -198,10 +200,42 @@ def test_find_client_by_path_prefix(kuzu_graph) -> None:
         assert bits[-1].startswith(prefix)
 
 
-def test_find_silent_ignore_irrelevant_filter_keys(kuzu_graph) -> None:
+def test_find_cross_kind_filter_fields_return_failure(kuzu_graph) -> None:
     out = find_v2("symbol", {"path_prefix": "/api"}, graph=kuzu_graph)
-    assert out.success is True
-    assert isinstance(out.results, list)
+    assert out.success is False
+    assert out.message is not None
+    assert "path_prefix" in out.message
+    assert "kind='symbol'" in out.message
+
+
+def test_find_unknown_filter_key_returns_failure(kuzu_graph) -> None:
+    out = find_v2("symbol", {"typo_key": "x"}, graph=kuzu_graph)
+    assert out.success is False
+    assert out.message is not None
+    assert "Invalid filter" in out.message
+    assert "typo_key" in out.message
+
+
+def test_find_symbol_only_field_with_kind_client_returns_failure(kuzu_graph) -> None:
+    out = find_v2("client", {"fqn_prefix": "com.example"}, graph=kuzu_graph)
+    assert out.success is False
+    assert out.message is not None
+    assert "fqn_prefix" in out.message
+    assert "kind='client'" in out.message
+
+
+def test_find_client_only_field_with_kind_symbol_returns_failure(kuzu_graph) -> None:
+    out = find_v2("symbol", {"client_kind": "feign_method"}, graph=kuzu_graph)
+    assert out.success is False
+    assert out.message is not None
+    assert "client_kind" in out.message
+    assert "kind='symbol'" in out.message
+
+
+def test_nodefilter_applicability_table_covers_all_fields() -> None:
+    declared = set(NodeFilter.model_fields.keys())
+    covered = set().union(*_NODEFILTER_APPLICABLE_FIELDS.values())
+    assert declared == covered
 
 
 async def test_find_missing_filter_rejected(mcp_server) -> None:
@@ -433,6 +467,24 @@ def test_search_filter_accepts_json_string(monkeypatch, kuzu_graph) -> None:
     assert out_dict.results == out_str.results
 
 
+def test_search_unknown_filter_key_returns_failure(monkeypatch, kuzu_graph) -> None:
+    monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
+    out = search_v2("ChatService", filter={"typo_key": "x"}, graph=kuzu_graph)
+    assert out.success is False
+    assert out.message is not None
+    assert "Invalid filter" in out.message
+    assert "typo_key" in out.message
+
+
+def test_search_cross_kind_filter_returns_failure(monkeypatch, kuzu_graph) -> None:
+    monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
+    out = search_v2("ChatService", filter={"path_prefix": "/api"}, graph=kuzu_graph)
+    assert out.success is False
+    assert out.message is not None
+    assert "path_prefix" in out.message
+    assert "kind='symbol'" in out.message
+
+
 def test_search_filter_empty_string_treated_as_none(monkeypatch, kuzu_graph) -> None:
     monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
     baseline = search_v2("ChatService", graph=kuzu_graph)
@@ -485,6 +537,30 @@ def test_neighbors_filter_accepts_json_string(kuzu_graph) -> None:
     assert out_dict.success is True
     assert out_str.success is True
     assert out_dict.results == out_str.results
+
+
+def test_neighbors_filter_unknown_key_returns_failure(kuzu_graph) -> None:
+    mid = _method_id_with_calls(kuzu_graph, "out")
+    out = neighbors_v2(mid, direction="out", edge_types=["CALLS"], filter={"typo_key": "x"}, graph=kuzu_graph)
+    assert out.success is False
+    assert out.message is not None
+    assert "Invalid filter" in out.message
+    assert "typo_key" in out.message
+
+
+def test_neighbors_filter_cross_kind_on_neighbor_returns_failure(kuzu_graph) -> None:
+    mid = _method_id_with_calls(kuzu_graph, "out")
+    out = neighbors_v2(mid, direction="out", edge_types=["CALLS"], filter={"path_prefix": "/api"}, graph=kuzu_graph)
+    assert out.success is False
+    assert out.message is not None
+    assert "path_prefix" in out.message
+    assert "kind='symbol'" in out.message
+
+
+def test_neighbors_validate_call_still_raises(kuzu_graph) -> None:
+    mid = _method_id_with_calls(kuzu_graph, "out")
+    with pytest.raises(ValidationError):
+        neighbors_v2(mid, direction="upstream", edge_types=["CALLS"], graph=kuzu_graph)
 
 
 def test_filter_invalid_json_returns_failure(monkeypatch, kuzu_graph) -> None:
