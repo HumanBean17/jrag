@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposal — not yet implemented. Tracks upstream discussion: [HumanBean17/java-codebase-rag#122](https://github.com/HumanBean17/java-codebase-rag/issues/122) (tactical subset of the strategic frame question in #117).
+Completed — implemented in PR-N1 (`enforce lossless NodeFilter (forbid extras + kind applicability)`). Tracks upstream discussion: [HumanBean17/java-codebase-rag#122](https://github.com/HumanBean17/java-codebase-rag/issues/122) (tactical subset of the strategic frame question in #117).
 
 ## Problem Statement
 
