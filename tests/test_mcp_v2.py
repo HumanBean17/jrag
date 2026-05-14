@@ -116,7 +116,7 @@ def test_find_symbol_by_role(kuzu_graph) -> None:
     assert all(r.role == "CONTROLLER" for r in out.results if r.role is not None)
 
 
-def test_find_symbol_empty_filter_handles_non_declaration_symbol_kinds(kuzu_graph) -> None:
+def test_find_symbol_empty_filter_returns_results(kuzu_graph) -> None:
     out = find_v2("symbol", {}, graph=kuzu_graph)
     assert out.success is True
     assert out.results
@@ -606,3 +606,105 @@ def test_filter_invalid_json_returns_failure(monkeypatch, kuzu_graph) -> None:
     assert out.success is False
     assert out.message is not None
     assert "JSON" in out.message
+
+
+def test_wildcard_in_fqn_prefix_rejected(kuzu_graph) -> None:
+    out = find_v2("symbol", {"fqn_prefix": "com.foo.*"}, graph=kuzu_graph)
+    assert out.success is False
+    assert out.message
+    assert "fqn_prefix" in out.message
+    assert "search(query=..." in out.message
+
+
+def test_wildcard_in_path_prefix_rejected(kuzu_graph) -> None:
+    out = find_v2("route", {"path_prefix": "/api/*"}, graph=kuzu_graph)
+    assert out.success is False
+    assert out.message
+    assert "path_prefix" in out.message
+    assert "search(query=..." in out.message
+
+
+def test_wildcard_in_target_path_prefix_rejected(kuzu_graph) -> None:
+    out = find_v2("client", {"target_path_prefix": "/api/*"}, graph=kuzu_graph)
+    assert out.success is False
+    assert out.message
+    assert "target_path_prefix" in out.message
+    assert "search(query=..." in out.message
+
+
+def test_wildcard_question_mark_in_fqn_prefix_rejected(kuzu_graph) -> None:
+    out = find_v2("symbol", {"fqn_prefix": "com.foo.?"}, graph=kuzu_graph)
+    assert out.success is False
+    assert out.message
+    assert "fqn_prefix" in out.message
+
+
+def test_describe_by_fqn_returns_symbol(kuzu_graph) -> None:
+    symbol = kuzu_graph.list_by_role("SERVICE", limit=1)[0]
+    out = describe_v2(fqn=symbol.fqn, graph=kuzu_graph)
+    assert out.success is True
+    assert out.record is not None
+    assert out.record.id == symbol.id
+    assert out.record.kind == "symbol"
+    assert out.message is None
+
+
+def test_describe_by_fqn_unknown_returns_error(kuzu_graph) -> None:
+    out = describe_v2(fqn="com.nonexistent.Foo", graph=kuzu_graph)
+    assert out.success is False
+    assert out.message == "No Symbol found for fqn='com.nonexistent.Foo'"
+
+
+def test_describe_by_fqn_id_takes_precedence(kuzu_graph) -> None:
+    svc = kuzu_graph.list_by_role("SERVICE", limit=1)[0]
+    ctrl = kuzu_graph.list_by_role("CONTROLLER", limit=1)[0]
+    out = describe_v2(id=svc.id, fqn=ctrl.fqn, graph=kuzu_graph)
+    assert out.success is True
+    assert out.record is not None
+    assert out.record.id == svc.id
+    assert str(out.record.data.get("role") or "") == "SERVICE"
+
+
+def test_describe_by_fqn_requires_id_or_fqn(kuzu_graph) -> None:
+    out = describe_v2(graph=kuzu_graph)
+    assert out.success is False
+    assert out.message == "id or fqn required"
+
+
+def test_multi_value_symbol_kinds_or_semantics(kuzu_graph) -> None:
+    out = find_v2("symbol", {"symbol_kinds": ["class", "interface"]}, graph=kuzu_graph, limit=200)
+    assert out.success is True
+    assert out.results
+    assert all(r.symbol_kind in {"class", "interface"} for r in out.results)
+
+
+def test_cross_field_and_semantics(kuzu_graph) -> None:
+    controllers = find_v2("symbol", {"role": "CONTROLLER"}, graph=kuzu_graph, limit=50)
+    assert controllers.success is True
+    assert controllers.results
+    ms = next((r.microservice for r in controllers.results if r.microservice), None)
+    if not ms:
+        pytest.skip("no controller with microservice in fixture")
+    out = find_v2(
+        "symbol",
+        {"microservice": ms, "role": "CONTROLLER"},
+        graph=kuzu_graph,
+        limit=200,
+    )
+    assert out.success is True
+    assert out.results
+    assert all((r.microservice or "") == ms for r in out.results)
+    assert all((r.role or "") == "CONTROLLER" for r in out.results)
+
+
+def test_exclude_roles_negation_predicate(kuzu_graph) -> None:
+    out = find_v2("symbol", {"exclude_roles": ["CONTROLLER"]}, graph=kuzu_graph, limit=500)
+    assert out.success is True
+    assert out.results
+    assert not any(r.role == "CONTROLLER" for r in out.results)
+
+
+def test_empty_filter_returns_full_result_set(kuzu_graph) -> None:
+    out = find_v2("client", {}, graph=kuzu_graph)
+    assert out.success is True
+    assert out.results

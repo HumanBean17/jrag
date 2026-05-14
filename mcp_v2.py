@@ -1,3 +1,20 @@
+"""MCP V2 graph query surface (``search`` / ``find`` / ``describe`` / ``neighbors``).
+
+Strict frame contract
+---------------------
+NodeFilter is a typed predicate bag: each populated field maps to one stored graph
+attribute for the selected kind; inapplicable fields fail loud with a teaching message.
+The ``search`` tool's ``query`` parameter is the ranked-text carve-out; structured
+prefix fields (``fqn_prefix``, ``path_prefix``, ``target_path_prefix``) reject ``*``
+and ``?`` — see ``_validate_no_wildcards``.
+
+Revisit trigger (``propose/MCP-FILTER-FRAME-PROPOSE.md`` section 3.4.6)
+--------------------------------------------------------------
+If **three** legitimate issue-tracker workflows appear within **six months** of frame
+lock where the strict frame has no clean analog under ``search``, deferred
+``resolve``, or documented multi-call patterns, reopen the frame for revision.
+"""
+
 from __future__ import annotations
 
 import json
@@ -142,6 +159,20 @@ def _nodefilter_applicability_error(kind: Literal["symbol", "route", "client"], 
         f"Invalid filter for kind='{kind}': populated field(s) not applicable: [{bad}]. "
         f"Applicable field(s): [{applicable}]"
     )
+
+
+def _validate_no_wildcards(nf: NodeFilter) -> str | None:
+    """Reject ``*`` / ``?`` in prefix-match fields; wildcards belong in ``search(query=…)``."""
+    for field_name in ("fqn_prefix", "path_prefix", "target_path_prefix"):
+        val = getattr(nf, field_name)
+        if val is None:
+            continue
+        if "*" in val or "?" in val:
+            return (
+                f"Wildcards (* and ?) are not supported in structured filter field `{field_name}`; "
+                "use search(query=...) for ranked text match instead."
+            )
+    return None
 
 
 def _filter_validation_error_message(exc: ValidationError) -> str:
@@ -490,6 +521,19 @@ def search_v2(
     graph: KuzuGraph | None = None,
 ) -> SearchOutput:
     try:
+        raw_filter = _coerce_filter(filter)
+        try:
+            nf = (
+                NodeFilter.model_validate(raw_filter)
+                if raw_filter is not None and not isinstance(raw_filter, NodeFilter)
+                else raw_filter
+            )
+        except ValidationError as exc:
+            return SearchOutput(success=False, message=_filter_validation_error_message(exc))
+        if nf and (err := _nodefilter_applicability_error("symbol", nf)):
+            return SearchOutput(success=False, message=err)
+        if nf and (err := _validate_no_wildcards(nf)):
+            return SearchOutput(success=False, message=err)
         model_name = resolved_sbert_model_for_process_env(SBERT_MODEL)
         device = os.environ.get("SBERT_DEVICE") or None
         model = _get_sentence_transformer(model_name, device)
@@ -512,17 +556,6 @@ def search_v2(
             device=device,
             model=model,
         )
-        raw_filter = _coerce_filter(filter)
-        try:
-            nf = (
-                NodeFilter.model_validate(raw_filter)
-                if raw_filter is not None and not isinstance(raw_filter, NodeFilter)
-                else raw_filter
-            )
-        except ValidationError as exc:
-            return SearchOutput(success=False, message=_filter_validation_error_message(exc))
-        if nf and (err := _nodefilter_applicability_error("symbol", nf)):
-            return SearchOutput(success=False, message=err)
         hits: list[SearchHit] = []
         for row in rows:
             if path_contains and path_contains not in str(row.get("filename") or ""):
@@ -554,6 +587,8 @@ def find_v2(
         except ValidationError as exc:
             return FindOutput(success=False, message=_filter_validation_error_message(exc))
         if err := _nodefilter_applicability_error(kind, nf):
+            return FindOutput(success=False, message=err)
+        if err := _validate_no_wildcards(nf):
             return FindOutput(success=False, message=err)
         if kind == "symbol":
             where, params = _symbol_where_from_filter(nf)
@@ -590,18 +625,42 @@ def find_v2(
         return FindOutput(success=False, message=str(exc))
 
 
-def describe_v2(id: str, graph: KuzuGraph | None = None) -> DescribeOutput:
+def describe_v2(
+    id: str | None = None,
+    fqn: str | None = None,
+    graph: KuzuGraph | None = None,
+) -> DescribeOutput:
     try:
         g = graph or KuzuGraph.get()
-        kind = _resolve_node_kind(g, id)
-        row = _load_node_record(g, id, kind)
+        has_id = bool(id and str(id).strip())
+        has_fqn = bool(fqn and str(fqn).strip())
+        if not has_id and not has_fqn:
+            return DescribeOutput(success=False, message="id or fqn required")
+        hint_message: str | None = None
+        node_id: str
+        if has_id:
+            node_id = str(id).strip()
+        else:
+            fqn_val = str(fqn).strip()
+            rows = g._rows(  # noqa: SLF001
+                "MATCH (s:Symbol) WHERE s.fqn = $fqn RETURN s.id AS id LIMIT 2",
+                {"fqn": fqn_val},
+            )
+            if not rows:
+                return DescribeOutput(success=False, message=f"No Symbol found for fqn='{fqn_val}'")
+            node_id = str(rows[0]["id"] or "")
+            if len(rows) > 1:
+                hint_message = "multiple symbols share this FQN; pass microservice to disambiguate"
+        kind = _resolve_node_kind(g, node_id)
+        row = _load_node_record(g, node_id, kind)
         if row is None:
-            return DescribeOutput(success=False, message=f"No node found for `{id}`")
+            return DescribeOutput(success=False, message=f"No node found for `{node_id}`")
         ref = _node_ref_from_row(kind, row)
-        edge_summary = _edge_summary_for_node(g, id, kind=kind, row=row)
+        edge_summary = _edge_summary_for_node(g, node_id, kind=kind, row=row)
         return DescribeOutput(
             success=True,
             record=NodeRecord(id=ref.id, kind=kind, fqn=ref.fqn, data=row, edge_summary=edge_summary),
+            message=hint_message,
         )
     except ValueError as exc:
         return DescribeOutput(success=False, message=str(exc))
@@ -639,6 +698,8 @@ def neighbors_v2(
             )
         except ValidationError as exc:
             return NeighborsOutput(success=False, message=_filter_validation_error_message(exc))
+        if nf and (err := _validate_no_wildcards(nf)):
+            return NeighborsOutput(success=False, message=err)
         origins = [ids] if isinstance(ids, str) else list(ids)
         results: list[Edge] = []
         for origin_id in origins:
