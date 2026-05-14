@@ -85,6 +85,22 @@ Read these directly. Don't rely on rule files to mirror them.
    "Re-index required" callout and bump `ontology_version` when
    enrichment semantics change.
 
+## Kuzu Cypher pitfalls
+
+When adding or editing Cypher run against Kuzu (for example in
+`kuzu_queries.py`, `mcp_v2.py`, or any `KuzuGraph._rows` caller):
+
+- **Do not filter relationship types with** `label(e) IN $list` **or**
+  `label(e) IN ["A","B"]` **in** `WHERE`. On supported versions this can
+  be ignored or wrong; prefer **OR of scalar equalities**
+  (`label(e) = $p OR label(e) = $q …`) with bound parameters, after
+  validating labels against an allowlist (see `neighbors_v2` in
+  `mcp_v2.py`).
+- **Typed union patterns** like `-[e:CALLS|HTTP_CALLS]->` are only safe if
+  every column you `RETURN` from `e` exists on **all** of those
+  relationship types in the graph schema. Otherwise prefer untyped `[e]`
+  plus explicit label filtering, or split queries.
+
 ## Workflow
 
 - Branch from `master`. Branch names: `cursor/<topic>` (CLI work),

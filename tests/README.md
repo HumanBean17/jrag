@@ -29,6 +29,8 @@ cd /path/to/java-codebase-rag
 .venv/bin/python -m pytest tests -v
 ```
 
+**Kuzu Cypher:** When writing queries or asserting on edge filters, follow the pitfalls note in [`AGENTS.md`](../AGENTS.md) (avoid `label(e) IN $list` for type filters; be careful with typed union rel patterns).
+
 ## CI merge gate and fixture tiers
 
 **Merge gate (mechanical):** [`.github/workflows/test.yml`](../.github/workflows/test.yml) runs `pytest tests` with `JAVA_CODEBASE_RAG_RUN_HEAVY=0` on every pull request and on every push to `master`. Branch protection on `master` requires the `test` status check to pass before merge and disables force-push. Break-glass policy: `enforce_admins: false` so the sole maintainer can bypass for emergency hotfixes — explain the bypass in the merge commit.
