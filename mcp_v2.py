@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 import threading
 from typing import Annotated, Any, Literal
@@ -59,6 +60,23 @@ _TYPE_SYMBOL_KINDS_FOR_EDGE_ROLLUP = frozenset(
 )
 
 _METHOD_SYMBOL_KINDS_FOR_OVERRIDE_ROLLUP = frozenset({"method"})
+
+_fail_loud_counts: dict[str, int] = {}
+_fail_loud_lock = threading.Lock()
+
+
+def _log_fail_loud(category: str) -> None:
+    """Increment process-local fail-loud counter and emit one stderr line (PR-FRAME-3)."""
+    with _fail_loud_lock:
+        _fail_loud_counts[category] = _fail_loud_counts.get(category, 0) + 1
+        n = _fail_loud_counts[category]
+    print(f"[filter-frame] fail-loud category={category} count={n}", file=sys.stderr, flush=True)
+
+
+def filter_frame_counters() -> dict[str, int]:
+    """Snapshot of fail-loud counts (tests / local diagnostics; not an MCP tool)."""
+    with _fail_loud_lock:
+        return dict(_fail_loud_counts)
 
 
 def _get_sentence_transformer(model_name: str, device: str | None) -> SentenceTransformer:
@@ -529,10 +547,13 @@ def search_v2(
                 else raw_filter
             )
         except ValidationError as exc:
+            _log_fail_loud("unknown_key")
             return SearchOutput(success=False, message=_filter_validation_error_message(exc))
         if nf and (err := _nodefilter_applicability_error("symbol", nf)):
+            _log_fail_loud("applicability")
             return SearchOutput(success=False, message=err)
         if nf and (err := _validate_no_wildcards(nf)):
+            _log_fail_loud("wildcard")
             return SearchOutput(success=False, message=err)
         model_name = resolved_sbert_model_for_process_env(SBERT_MODEL)
         device = os.environ.get("SBERT_DEVICE") or None
@@ -585,10 +606,13 @@ def find_v2(
         try:
             nf = NodeFilter.model_validate(raw_filter) if not isinstance(raw_filter, NodeFilter) else raw_filter
         except ValidationError as exc:
+            _log_fail_loud("unknown_key")
             return FindOutput(success=False, message=_filter_validation_error_message(exc))
         if err := _nodefilter_applicability_error(kind, nf):
+            _log_fail_loud("applicability")
             return FindOutput(success=False, message=err)
         if err := _validate_no_wildcards(nf):
+            _log_fail_loud("wildcard")
             return FindOutput(success=False, message=err)
         if kind == "symbol":
             where, params = _symbol_where_from_filter(nf)
@@ -700,8 +724,10 @@ def neighbors_v2(
                 else raw_filter
             )
         except ValidationError as exc:
+            _log_fail_loud("unknown_key")
             return NeighborsOutput(success=False, message=_filter_validation_error_message(exc))
         if nf and (err := _validate_no_wildcards(nf)):
+            _log_fail_loud("wildcard")
             return NeighborsOutput(success=False, message=err)
         origins = [ids] if isinstance(ids, str) else list(ids)
         results: list[Edge] = []
@@ -739,6 +765,7 @@ def neighbors_v2(
                 if other_rec is None:
                     continue
                 if nf and (err := _nodefilter_applicability_error(other_kind, nf)):
+                    _log_fail_loud("applicability")
                     return NeighborsOutput(success=False, message=err)
                 if not _node_matches_filter(other_kind, other_rec, nf):
                     continue

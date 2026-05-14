@@ -139,20 +139,31 @@ Use `search` to recover the stored symbol id / FQN if you only have a simple nam
 
 Omitting them is a validation error. This is intentional: it prevents huge accidental fan-out.
 
-Optional `filter` applies to the **other** endpoint node (same `NodeFilter` keys as `find`; keys irrelevant to that node kind are ignored).
+Optional `filter` applies to the **other** endpoint node using the same `NodeFilter` schema as `find`. Populated fields must be applicable to that neighbor's kind; mixed-kind neighborhoods fail loud on the first neighbor row whose kind rejects the filter.
 
 #### E. Shared `NodeFilter` (for `find`, `search.filter`, `neighbors.filter`)
 
-One object shape everywhere. **For `find`, `filter` is required** — use at least one key (e.g. `{"microservice":"chat-core"}`) or `{}` is valid Pydantic but may be expensive at scale; prefer narrowing keys.
+One object shape everywhere. **For `find`, `filter` is required** — `{}` is valid (no predicates; returns the full kind up to pagination) but may be expensive at scale; prefer narrowing keys when you can.
 
 | Keys | Applies to |
 | ---- | ---------- |
 | `microservice`, `module`, `source_layer` | All kinds (`source_layer` mainly **client**: `builtin` / brownfield) |
-| `role`, `exclude_roles`, `annotation`, `capability`, `fqn_prefix`, `symbol_kind`, `symbol_kinds` | **symbol** (ignored for route/client) |
+| `role`, `exclude_roles`, `annotation`, `capability`, `fqn_prefix`, `symbol_kind`, `symbol_kinds` | **symbol** |
 | `http_method`, `path_prefix`, `framework` | **route** |
 | `client_kind`, `target_service`, `target_path_prefix`, `http_method` | **client** |
 
 The same `http_method` key filters HTTP verbs on **routes** (server-side declared method) and on **clients** (caller-side method on the outbound call). It is not applicable to **symbol** rows.
+
+### Strict frame contract (`find`, `search.filter`, `neighbors.filter`)
+
+- **One populated field, one stored attribute** for the evaluated kind. Inapplicable fields or `extra` keys are never silently dropped: the tool returns `success=false` with a teaching message (and applicable-field list for cross-kind mistakes).
+- **No wildcards** in `fqn_prefix`, `path_prefix`, or `target_path_prefix` (`*` / `?` rejected). Use `search(query=…)` for ranked text discovery instead.
+- **`search.query` is not a DSL** — treat it as opaque text scored against the index. Structured predicates belong in `find`.
+- **`neighbors` filters neighbor rows by kind** — the first neighbor whose kind rejects the filter fails the whole call (no per-row silent skip).
+
+### Identifier resolution (pre-`resolve`)
+
+For identifier-shaped lookups without a stable graph id or exact symbol FQN, use **`search(query=…)`** for ranked candidates, then **`describe(id=…)`** (or `describe(fqn=…)` when you have an exact FQN) on each promising row until you confirm the right node. A dedicated **`resolve`** tool is planned separately; until it ships, this multi-call pattern is the supported fallback.
 
 **`source_layer` vs `role`:** On **Client** nodes, `source_layer` records which brownfield or built-in layer produced the client declaration (`builtin`, `layer_a_meta`, `layer_b_ann`, `layer_c_source`, `layer_b_fqn`, …). On **Symbol** nodes, `role` is the inferred architectural stereotype (`CONTROLLER`, `SERVICE`, `REPO`, …). They answer different questions; names stay distinct.
 
@@ -190,7 +201,8 @@ Exact allowed values for roles, capabilities, client kinds, etc. live in `java_o
 #### `search`
 
 - **Purpose:** Locate chunk hits by NL or code fragment; use `symbol_id` when present to jump into the graph.
-- **Args:** `query`, `table` (`java`|`sql`|`yaml`|`all`, default `java`), `hybrid` (bool), `limit` (default 5), `offset`, `path_contains`, optional `filter` (`NodeFilter` — post-filters hits using symbol-oriented fields on the row).
+- **Args:** `query`, `table` (`java`|`sql`|`yaml`|`all`, default `java`), `hybrid` (bool), `limit` (default 5), `offset`, `path_contains`, optional `filter` (`NodeFilter` — post-filters hits using **symbol-applicable** fields only).
+- **Strict frame:** `query` is opaque ranked text (no structured DSL inside the string). Optional `filter` follows the same strict applicability and wildcard rules as `find` for symbols.
 - **Tip:** For behaviour questions, narrow noise with `filter.exclude_roles` or `filter.role` when you know the shape you want.
 
 #### `find`
@@ -202,7 +214,7 @@ Exact allowed values for roles, capabilities, client kinds, etc. live in `java_o
 #### `describe`
 
 - **Purpose:** Full node payload + `edge_summary`: `in` / `out` counts **per stored graph edge label** (what exists as edges in Kuzu). For **type** Symbols only (`class`, `interface`, `enum`, `record`, `annotation`), the same map may also include **describe-time composed** dot-keys — summaries of member edges, not stored labels — see the next bullets (`DECLARES.DECLARES_CLIENT`, `DECLARES.EXPOSES`); those keys are **not** valid in `neighbors(edge_types=…)`. For **method** Symbols, the map may include **override-axis** virtual keys (`OVERRIDDEN_BY`, `OVERRIDDEN_BY.DECLARES_CLIENT`, `OVERRIDDEN_BY.EXPOSES`, `OVERRIDES`); see **Override-axis keys (method Symbols)** below — also not `EdgeType` literals.
-- **Args:** `id` (symbol, route, or client id).
+- **Args:** `id` (symbol, route, or client id) or **`fqn`** (exact symbol FQN when you do not have the graph id). When both are set, `id` wins. For ambiguous identifiers without an exact id/FQN, see **Identifier resolution (pre-`resolve`)** above.
 
 **Composed `edge_summary` keys (type Symbols).** Keys use dot notation: `<parent_relation>.<projected_relation>`. Two are emitted today:
 
