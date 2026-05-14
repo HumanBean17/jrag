@@ -270,6 +270,7 @@ Edit `claude_desktop_config.json` (macOS: `~/Library/Application Support/Claude/
 
 - `filter` is a JSON object matching the `NodeFilter` schema. Wire types are `object` or, as a fallback, a JSON-encoded string for clients that flatten objects.
 - Unknown filter keys and populated fields that are not applicable to the effective node kind fail loudly with `success=false` and a teaching `message` (no silent key dropping).
+- For `neighbors`, mixed-kind neighborhoods fail on the first evaluated neighbor row whose kind makes populated filter fields inapplicable.
 - Symbol-only keys: `symbol_kind` (single value) and `symbol_kinds` (set membership) for declaration granularity (`class`, `interface`, `enum`, `record`, `annotation`, `method`, `constructor`).
 - `find(kind="symbol", ...)` results include `symbol_kind` so callers can see declaration granularity without a follow-up `describe`.
 - For `find`, an empty / whitespace-only filter string or the JSON literal `null` is treated like `{}` (match anything).

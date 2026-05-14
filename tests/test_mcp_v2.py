@@ -7,6 +7,8 @@ from pydantic import ValidationError
 from mcp.server.fastmcp.exceptions import ToolError
 
 from mcp_v2 import (
+    NodeFilter,
+    _NODEFILTER_APPLICABLE_FIELDS,
     describe_v2,
     find_v2,
     neighbors_v2,
@@ -228,6 +230,12 @@ def test_find_client_only_field_with_kind_symbol_returns_failure(kuzu_graph) -> 
     assert out.message is not None
     assert "client_kind" in out.message
     assert "kind='symbol'" in out.message
+
+
+def test_nodefilter_applicability_table_covers_all_fields() -> None:
+    declared = set(NodeFilter.model_fields.keys())
+    covered = set().union(*_NODEFILTER_APPLICABLE_FIELDS.values())
+    assert declared == covered
 
 
 async def test_find_missing_filter_rejected(mcp_server) -> None:

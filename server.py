@@ -434,7 +434,8 @@ def create_mcp_server() -> FastMCP:
             default=None,
             description=(
                 "Optional NodeFilter applied to the other endpoint of each edge. Unknown keys and populated fields not "
-                "applicable to an evaluated neighbor kind return success=false with a teaching message. "
+                "applicable to an evaluated neighbor kind return success=false with a teaching message. For mixed "
+                "neighbor kinds, evaluation fails on the first inapplicable row. "
                 "Prefer a JSON object; a JSON-encoded string is accepted as a fallback."
             ),
         ),
