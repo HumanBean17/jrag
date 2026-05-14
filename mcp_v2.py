@@ -650,7 +650,10 @@ def describe_v2(
                 return DescribeOutput(success=False, message=f"No Symbol found for fqn='{fqn_val}'")
             node_id = str(rows[0]["id"] or "")
             if len(rows) > 1:
-                hint_message = "multiple symbols share this FQN; pass microservice to disambiguate"
+                hint_message = (
+                    "multiple symbols share this FQN; narrow with find(kind='symbol', filter including "
+                    "microservice and fqn_prefix), then describe(id=...), or use search(query=...) for ranked candidates"
+                )
         kind = _resolve_node_kind(g, node_id)
         row = _load_node_record(g, node_id, kind)
         if row is None:

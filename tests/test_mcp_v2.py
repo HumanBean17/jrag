@@ -639,6 +639,38 @@ def test_wildcard_question_mark_in_fqn_prefix_rejected(kuzu_graph) -> None:
     assert "fqn_prefix" in out.message
 
 
+def test_search_wildcard_in_fqn_prefix_rejected_without_run_search(monkeypatch, kuzu_graph) -> None:
+    calls: list[int] = []
+
+    def boom(*_a, **_k):
+        calls.append(1)
+        return _fake_search_rows()
+
+    monkeypatch.setattr("mcp_v2.run_search", boom)
+    out = search_v2("anything", filter={"fqn_prefix": "com.*"}, graph=kuzu_graph)
+    assert out.success is False
+    assert out.message
+    assert "fqn_prefix" in out.message
+    assert calls == []
+
+
+def test_neighbors_wildcard_in_filter_rejected_before_graph_query(kuzu_graph) -> None:
+    class ExplodeGraph:
+        def _rows(self, *_a, **_k) -> list:
+            raise AssertionError("graph must not be queried when wildcard rejects filter")
+
+    out = neighbors_v2(
+        "sym:unused",
+        direction="out",
+        edge_types=["CALLS"],
+        filter={"fqn_prefix": "com.*"},
+        graph=ExplodeGraph(),  # type: ignore[arg-type]
+    )
+    assert out.success is False
+    assert out.message
+    assert "fqn_prefix" in out.message
+
+
 def test_describe_by_fqn_returns_symbol(kuzu_graph) -> None:
     symbol = kuzu_graph.list_by_role("SERVICE", limit=1)[0]
     out = describe_v2(fqn=symbol.fqn, graph=kuzu_graph)
@@ -663,6 +695,54 @@ def test_describe_by_fqn_id_takes_precedence(kuzu_graph) -> None:
     assert out.record is not None
     assert out.record.id == svc.id
     assert str(out.record.data.get("role") or "") == "SERVICE"
+
+
+def test_describe_by_fqn_duplicate_returns_first_with_disambiguation_hint() -> None:
+    class DupFqnGraph:
+        def _rows(self, query: str, params: dict | None = None) -> list:
+            p = params or {}
+            if "WHERE s.fqn = $fqn" in query:
+                if p.get("fqn") == "com.fixture.DupeName":
+                    return [{"id": "sym:dupe-a"}, {"id": "sym:dupe-b"}]
+            if "MATCH (n:Symbol)" in query and "WHERE n.id = $id" in query:
+                if p.get("id") == "sym:dupe-a":
+                    return [
+                        {
+                            "id": "sym:dupe-a",
+                            "kind": "file",
+                            "name": "DupeName",
+                            "fqn": "com.fixture.DupeName",
+                            "package": "com.fixture",
+                            "module": "fixture",
+                            "microservice": "svc-a",
+                            "filename": "DupeName.java",
+                            "start_line": 1,
+                            "end_line": 1,
+                            "start_byte": 0,
+                            "end_byte": 0,
+                            "modifiers": [],
+                            "annotations": [],
+                            "capabilities": [],
+                            "role": "",
+                            "signature": "",
+                            "parent_id": "",
+                            "resolved": True,
+                        }
+                    ]
+            return []
+
+        def edge_counts_for(self, node_id: str) -> dict[str, dict[str, int]]:
+            return {}
+
+    out = describe_v2(fqn="com.fixture.DupeName", graph=DupFqnGraph())  # type: ignore[arg-type]
+    assert out.success is True
+    assert out.record is not None
+    assert out.record.id == "sym:dupe-a"
+    assert out.message
+    assert "multiple symbols share this FQN" in out.message
+    assert "find(kind='symbol'" in out.message
+    assert "describe(id=..." in out.message
+    assert "search(query=..." in out.message
 
 
 def test_describe_by_fqn_requires_id_or_fqn(kuzu_graph) -> None:
