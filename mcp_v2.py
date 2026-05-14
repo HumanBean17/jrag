@@ -6,7 +6,7 @@ from pathlib import Path
 import threading
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field, TypeAdapter, ValidationError, validate_call
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, validate_call
 from sentence_transformers import SentenceTransformer
 
 from index_common import SBERT_MODEL
@@ -57,6 +57,8 @@ def _get_sentence_transformer(model_name: str, device: str | None) -> SentenceTr
 
 
 class NodeFilter(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     microservice: str | None = None
     module: str | None = None
     source_layer: str | None = None
@@ -74,6 +76,86 @@ class NodeFilter(BaseModel):
     target_service: str | None = None
     target_path_prefix: str | None = None
     client_method: str | None = None
+
+
+_NODEFILTER_FIELD_ORDER: tuple[str, ...] = tuple(NodeFilter.model_fields.keys())
+
+_NODEFILTER_APPLICABLE_FIELDS: dict[Literal["symbol", "route", "client"], tuple[str, ...]] = {
+    "symbol": (
+        "microservice",
+        "module",
+        "role",
+        "exclude_roles",
+        "annotation",
+        "capability",
+        "fqn_prefix",
+        "symbol_kind",
+        "symbol_kinds",
+    ),
+    "route": (
+        "microservice",
+        "module",
+        "http_method",
+        "path_prefix",
+        "framework",
+    ),
+    "client": (
+        "microservice",
+        "module",
+        "source_layer",
+        "client_kind",
+        "target_service",
+        "target_path_prefix",
+        "client_method",
+    ),
+}
+
+
+def _ordered_nodefilter_fields(field_names: set[str]) -> list[str]:
+    return [name for name in _NODEFILTER_FIELD_ORDER if name in field_names]
+
+
+def _populated_nodefilter_fields(nf: NodeFilter) -> set[str]:
+    populated: set[str] = set()
+    for field_name in _NODEFILTER_FIELD_ORDER:
+        value = getattr(nf, field_name)
+        if value is None:
+            continue
+        if isinstance(value, list) and not value:
+            continue
+        populated.add(field_name)
+    return populated
+
+
+def _nodefilter_inapplicable_fields(kind: Literal["symbol", "route", "client"], nf: NodeFilter) -> list[str]:
+    populated = _populated_nodefilter_fields(nf)
+    applicable = set(_NODEFILTER_APPLICABLE_FIELDS[kind])
+    return _ordered_nodefilter_fields(populated - applicable)
+
+
+def _nodefilter_applicability_error(kind: Literal["symbol", "route", "client"], nf: NodeFilter) -> str | None:
+    inapplicable = _nodefilter_inapplicable_fields(kind, nf)
+    if not inapplicable:
+        return None
+    applicable = ", ".join(_NODEFILTER_APPLICABLE_FIELDS[kind])
+    bad = ", ".join(inapplicable)
+    return (
+        f"Invalid filter for kind='{kind}': populated field(s) not applicable: [{bad}]. "
+        f"Applicable field(s): [{applicable}]"
+    )
+
+
+def _filter_validation_error_message(exc: ValidationError) -> str:
+    items: list[str] = []
+    for err in exc.errors():
+        loc = ".".join(str(part) for part in err.get("loc", ()))
+        msg = str(err.get("msg") or "invalid value")
+        if loc:
+            items.append(f"{loc}: {msg}")
+        else:
+            items.append(msg)
+    details = "; ".join(items) if items else str(exc)
+    return f"Invalid filter: {details}"
 
 
 def _coerce_filter(
@@ -432,11 +514,16 @@ def search_v2(
             model=model,
         )
         raw_filter = _coerce_filter(filter)
-        nf = (
-            NodeFilter.model_validate(raw_filter)
-            if raw_filter is not None and not isinstance(raw_filter, NodeFilter)
-            else raw_filter
-        )
+        try:
+            nf = (
+                NodeFilter.model_validate(raw_filter)
+                if raw_filter is not None and not isinstance(raw_filter, NodeFilter)
+                else raw_filter
+            )
+        except ValidationError as exc:
+            return SearchOutput(success=False, message=_filter_validation_error_message(exc))
+        if nf and (err := _nodefilter_applicability_error("symbol", nf)):
+            return SearchOutput(success=False, message=err)
         hits: list[SearchHit] = []
         for row in rows:
             if path_contains and path_contains not in str(row.get("filename") or ""):
@@ -463,7 +550,12 @@ def find_v2(
         raw_filter = _coerce_filter(filter)
         if raw_filter is None:
             raw_filter = {}
-        nf = NodeFilter.model_validate(raw_filter) if not isinstance(raw_filter, NodeFilter) else raw_filter
+        try:
+            nf = NodeFilter.model_validate(raw_filter) if not isinstance(raw_filter, NodeFilter) else raw_filter
+        except ValidationError as exc:
+            return FindOutput(success=False, message=_filter_validation_error_message(exc))
+        if err := _nodefilter_applicability_error(kind, nf):
+            return FindOutput(success=False, message=err)
         if kind == "symbol":
             where, params = _symbol_where_from_filter(nf)
             params["lim"] = int(limit) + int(offset)
@@ -539,12 +631,15 @@ def neighbors_v2(
         label_params = [f"l{i}" for i in range(len(labels))]
         label_predicate = "(" + " OR ".join(f"label(e) = ${name}" for name in label_params) + ")"
         g = graph or KuzuGraph.get()
-        raw_filter = _coerce_filter(filter)
-        nf = (
-            NodeFilter.model_validate(raw_filter)
-            if raw_filter is not None and not isinstance(raw_filter, NodeFilter)
-            else raw_filter
-        )
+        try:
+            raw_filter = _coerce_filter(filter)
+            nf = (
+                NodeFilter.model_validate(raw_filter)
+                if raw_filter is not None and not isinstance(raw_filter, NodeFilter)
+                else raw_filter
+            )
+        except ValidationError as exc:
+            return NeighborsOutput(success=False, message=_filter_validation_error_message(exc))
         origins = [ids] if isinstance(ids, str) else list(ids)
         results: list[Edge] = []
         for origin_id in origins:
@@ -580,6 +675,8 @@ def neighbors_v2(
                 other_rec = _load_node_record(g, other_id, other_kind)
                 if other_rec is None:
                     continue
+                if nf and (err := _nodefilter_applicability_error(other_kind, nf)):
+                    return NeighborsOutput(success=False, message=err)
                 if not _node_matches_filter(other_kind, other_rec, nf):
                     continue
                 attrs = {

@@ -28,6 +28,7 @@ _INSTRUCTIONS = (
     "Tools: search (NL/code locate), find (structured NodeFilter), describe (one node + edge_summary: stored edge-label counts and optional composed keys for type Symbols and override-axis virtual keys for method Symbols), "
     "neighbors (one hop; you MUST pass direction in|out AND edge_types list — no defaults). "
     "NodeFilter `filter` is a JSON object (preferred); a JSON-encoded string is also accepted as a fallback. "
+    "Unknown filter keys and populated fields not applicable to the effective node kind fail with success=false and message. "
     "Edge labels: EXTENDS, IMPLEMENTS, INJECTS, DECLARES, DECLARES_CLIENT, CALLS, EXPOSES, HTTP_CALLS, ASYNC_CALLS. "
     "Reprocess/init, meta, tables, diagnose-ignore, analyze-pr: use java-codebase-rag CLI — not MCP."
 )
@@ -348,7 +349,8 @@ def create_mcp_server() -> FastMCP:
         filter: dict[str, Any] | str | None = Field(
             default=None,
             description=(
-                "Optional NodeFilter (symbol-oriented keys) applied to each hit after search. "
+                "Optional NodeFilter (symbol applicability). Unknown keys and populated non-symbol fields return success=false "
+                "with a teaching message. "
                 "Prefer a JSON object; a JSON-encoded string is accepted as a fallback."
             ),
         ),
@@ -376,8 +378,9 @@ def create_mcp_server() -> FastMCP:
         filter: dict[str, Any] | str = Field(
             ...,
             description=(
-                "Required NodeFilter (shared schema; irrelevant keys ignored per kind). "
-                "Symbol filters also support symbol_kind and symbol_kinds. "
+                "Required NodeFilter (shared schema, strict extras). Unknown keys and populated fields not applicable to "
+                "the selected kind return success=false with a teaching message. Symbol filters also support symbol_kind "
+                "and symbol_kinds. "
                 "Prefer a JSON object; a JSON-encoded string is accepted as a fallback."
             ),
         ),
@@ -430,7 +433,8 @@ def create_mcp_server() -> FastMCP:
         filter: dict[str, Any] | str | None = Field(
             default=None,
             description=(
-                "Optional NodeFilter applied to the other endpoint of each edge. "
+                "Optional NodeFilter applied to the other endpoint of each edge. Unknown keys and populated fields not "
+                "applicable to an evaluated neighbor kind return success=false with a teaching message. "
                 "Prefer a JSON object; a JSON-encoded string is accepted as a fallback."
             ),
         ),
