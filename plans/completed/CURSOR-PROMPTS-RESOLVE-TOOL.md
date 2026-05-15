@@ -1,8 +1,8 @@
 # Cursor task prompts — `resolve` tool (PR-RESOLVE-1 → PR-RESOLVE-2)
 
-Status: **active**. Plan:
+Status: **completed** (historical handoff prompts). Plan:
 [`PLAN-RESOLVE-TOOL.md`](PLAN-RESOLVE-TOOL.md); propose:
-[`propose/RESOLVE-TOOL-PROPOSE.md`](../propose/RESOLVE-TOOL-PROPOSE.md).
+[`propose/completed/RESOLVE-TOOL-PROPOSE.md`](../propose/completed/RESOLVE-TOOL-PROPOSE.md).
 
 One prompt per PR. Copy the prompt verbatim into Cursor agent mode with the
 listed `@-files` attached.
@@ -27,13 +27,13 @@ listed `@-files` attached.
 
 **Branch:** `feat/resolve-tool` off `master`.
 **Base:** `master`.
-**Plan section:** `plans/PLAN-RESOLVE-TOOL.md` § PR-RESOLVE-1.
+**Plan section:** `plans/completed/PLAN-RESOLVE-TOOL.md` § PR-RESOLVE-1.
 **PR title:** `add resolve mcp tool for identifier-shaped lookups`
 
 **Attach (`@-files`):**
 
-- `@plans/PLAN-RESOLVE-TOOL.md` (PR-RESOLVE-1 section only)
-- `@propose/RESOLVE-TOOL-PROPOSE.md`
+- `@plans/completed/PLAN-RESOLVE-TOOL.md` (PR-RESOLVE-1 section only)
+- `@propose/completed/RESOLVE-TOOL-PROPOSE.md`
 - `@java_ontology.py`
 - `@mcp_v2.py`
 - `@server.py`
@@ -44,9 +44,9 @@ listed `@-files` attached.
 **Prompt:**
 
 ````
-You are implementing PR-RESOLVE-1 from `plans/PLAN-RESOLVE-TOOL.md`.
+You are implementing PR-RESOLVE-1 from `plans/completed/PLAN-RESOLVE-TOOL.md`.
 
-Read the **PR-RESOLVE-1** section and `propose/RESOLVE-TOOL-PROPOSE.md` §3–§6
+Read the **PR-RESOLVE-1** section and `propose/completed/RESOLVE-TOOL-PROPOSE.md` §3–§6
 before writing code. If this prompt and the plan disagree, the plan wins.
 
 ## Scope
@@ -92,7 +92,7 @@ but do not edit AGENT-GUIDE/README in this PR):
 
 ## Deliverables
 
-Match `plans/PLAN-RESOLVE-TOOL.md` § PR-RESOLVE-1 definition of done.
+Match `plans/completed/PLAN-RESOLVE-TOOL.md` § PR-RESOLVE-1 definition of done.
 
 ## Validation
 
@@ -131,14 +131,14 @@ that ontology_version is unchanged and PR-RESOLVE-2 will sweep descriptions.
 
 **Branch:** `feat/resolve-tool-docs` off `master` (after PR-RESOLVE-1 merged).
 **Base:** `master`.
-**Plan section:** `plans/PLAN-RESOLVE-TOOL.md` § PR-RESOLVE-2.
+**Plan section:** `plans/completed/PLAN-RESOLVE-TOOL.md` § PR-RESOLVE-2.
 **Blocked on:** PR-RESOLVE-1 merged to `master`.
 **PR title:** `point agent docs at resolve for identifier lookups`
 
 **Attach (`@-files`):**
 
-- `@plans/PLAN-RESOLVE-TOOL.md` (PR-RESOLVE-2 section only)
-- `@propose/RESOLVE-TOOL-PROPOSE.md` (§3.7, §6 checklist)
+- `@plans/completed/PLAN-RESOLVE-TOOL.md` (PR-RESOLVE-2 section only)
+- `@propose/completed/RESOLVE-TOOL-PROPOSE.md` (§3.7, §6 checklist)
 - `@server.py`
 - `@mcp_v2.py` (hint_message only)
 - `@docs/AGENT-GUIDE.md`
@@ -153,7 +153,7 @@ that ontology_version is unchanged and PR-RESOLVE-2 will sweep descriptions.
 **Prompt:**
 
 ````
-You are implementing PR-RESOLVE-2 from `plans/PLAN-RESOLVE-TOOL.md`.
+You are implementing PR-RESOLVE-2 from `plans/completed/PLAN-RESOLVE-TOOL.md`.
 
 PR-RESOLVE-1 (`resolve` tool) is already on master. This PR is **docs and
 agent-facing prose only** plus test expectation updates — no new resolve logic.
@@ -185,7 +185,7 @@ agent-facing prose only** plus test expectation updates — no new resolve logic
 - Changing `describe(fqn=…)` first-match behavior.
 - Adding `microservice` to `describe`.
 
-Sentinel grep — run the **canonical** command from `plans/PLAN-RESOLVE-TOOL.md`
+Sentinel grep — run the **canonical** command from `plans/completed/PLAN-RESOLVE-TOOL.md`
 § “Canonical sentinel grep (PR-RESOLVE-2)”. Review output; expect no
 identifier-resolution fallback recommendations. Allow `search` only inside
 `resolve` tool description / `status="none"` messages.

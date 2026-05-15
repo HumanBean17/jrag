@@ -1,9 +1,9 @@
 # Plan: `resolve` tool — identifier-shaped lookup primitive
 
-Status: **active (planning)**. This plan implements
-[`propose/RESOLVE-TOOL-PROPOSE.md`](../propose/RESOLVE-TOOL-PROPOSE.md).
+Status: **completed (landed)** — PR #135 (`resolve`) + PR #140 (tool-description sweep). Implements
+[`propose/completed/RESOLVE-TOOL-PROPOSE.md`](../propose/completed/RESOLVE-TOOL-PROPOSE.md).
 
-Depends on: **MCP filter frame landed** ([`plans/completed/PLAN-MCP-FILTER-FRAME.md`](completed/PLAN-MCP-FILTER-FRAME.md) — PR-FRAME-1 → PR-FRAME-3). No graph-builder or Lance work.
+Depends on: **MCP filter frame landed** ([`PLAN-MCP-FILTER-FRAME.md`](PLAN-MCP-FILTER-FRAME.md) — PR-FRAME-1 → PR-FRAME-3). No graph-builder or Lance work.
 
 Per-PR Cursor prompts: [`CURSOR-PROMPTS-RESOLVE-TOOL.md`](CURSOR-PROMPTS-RESOLVE-TOOL.md).
 
@@ -277,7 +277,7 @@ Optional MCP registration smoke (if lightweight): extend existing server tool-li
 
 ## Canonical sentinel grep (PR-RESOLVE-2)
 
-Use this exact command in PR descriptions and `CURSOR-PROMPTS-RESOLVE-TOOL.md` (allow `search` only inside `resolve` tool description / `status="none"` messages):
+Use this exact command in PR descriptions and [`CURSOR-PROMPTS-RESOLVE-TOOL.md`](CURSOR-PROMPTS-RESOLVE-TOOL.md) (allow `search` only inside `resolve` tool description / `status="none"` messages):
 
 ```bash
 grep -En 'per\.candidate|until.*resolve|promising candidates|search\(query=.*\).*describe' \
@@ -351,10 +351,10 @@ Manual evidence (PR description): run the **canonical sentinel grep** above, the
 2. No agent-facing doc or tool description recommends `search` + `describe`-per-candidate for identifier-shaped lookups.
 3. `describe` FQN-collision hint points at `resolve`.
 4. README, AGENT-GUIDE, AGENTS.md, and `project-overview.mdc` list five MCP tools with `resolve` documented.
-5. Propose moved to `propose/completed/RESOLVE-TOOL-PROPOSE.md` after both PRs merge.
-6. Plan + prompts moved to `plans/completed/` after both PRs merge.
+5. Propose lives at `propose/completed/RESOLVE-TOOL-PROPOSE.md`.
+6. Plan + prompts live in `plans/completed/` (this file and `CURSOR-PROMPTS-RESOLVE-TOOL.md`).
 
 # Tracking
 
-- `PR-RESOLVE-1`: _pending_
-- `PR-RESOLVE-2`: _pending_ (blocked on RESOLVE-1)
+- `PR-RESOLVE-1`: merged (#135)
+- `PR-RESOLVE-2`: merged (#140)
