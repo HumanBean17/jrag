@@ -2,12 +2,12 @@
 
 A graph-native code intelligence layer for Java microservice estates, exposed to LLM agents via the **Model Context Protocol (MCP)**.
 
-The system extracts a deterministic property graph from Java source (tree-sitter), stores it in **Kuzu** (graph) alongside a **LanceDB** vector index (chunks), and exposes a deliberately small MCP surface — **four tools**: `search`, `find`, `describe`, `neighbors` — that collapse onto three primitive agent operations: **locate**, **inspect**, **walk**.
+The system extracts a deterministic property graph from Java source (tree-sitter), stores it in **Kuzu** (graph) alongside a **LanceDB** vector index (chunks), and exposes a deliberately small MCP surface — **five tools**: `search`, `find`, `describe`, `neighbors`, `resolve` — that collapse onto three primitive agent operations: **locate**, **inspect**, **walk**.
 
 > **What this MCP is:** a **GPS for code navigation**, not a reasoning engine.
 > Agents use a simple loop:
 >
-> 1. **Locate** entry nodes (`search` / `find`)
+> 1. **Locate** entry nodes (`search` / `find`, or identifier-shaped **`resolve`**)
 > 2. **Inspect** what a node is (`describe`)
 > 3. **Walk** one hop at a time (`neighbors`) until enough evidence is gathered
 >
@@ -229,7 +229,7 @@ Edit `claude_desktop_config.json` (macOS: `~/Library/Application Support/Claude/
 
 ### Driving the MCP from an agent
 
-- **[`docs/AGENT-GUIDE.md`](./docs/AGENT-GUIDE.md)** — copy-paste into `QWEN.md` / `CLAUDE.md` / `AGENTS.md`. Covers the four MCP tools, the shared `NodeFilter`, the edge-type taxonomy, required `neighbors` arguments, the ontology glossary (currently **v12**), the recovery playbook, and slash-style aliases.
+- **[`docs/AGENT-GUIDE.md`](./docs/AGENT-GUIDE.md)** — copy-paste into `QWEN.md` / `CLAUDE.md` / `AGENTS.md`. Covers the five MCP tools, the shared `NodeFilter`, the edge-type taxonomy, required `neighbors` arguments, the ontology glossary (currently **v12**), the recovery playbook, and slash-style aliases.
 - **[`docs/skills/java-codebase-explore.md`](./docs/skills/java-codebase-explore.md)** — exploration **strategy** (missions, fallbacks, anti-capabilities, stopping rules); AGENT-GUIDE remains the **operating manual** for tool shapes and recovery.
 - **[`docs/MANUAL-VERIFICATION-CHECKLIST.md`](./docs/MANUAL-VERIFICATION-CHECKLIST.md)** — 7-phase agent-driven verification you run after indexing your real project. Each item has a copy-paste prompt and calibration data from `tests/bank-chat-system`.
 - **[`automation/cursor_propose_only/README.md`](./automation/cursor_propose_only/README.md)** — optional proposal orchestration workflow (single-command autopilot, planning bundles, and automated execution/review loops).
@@ -243,6 +243,7 @@ Edit `claude_desktop_config.json` (macOS: `~/Library/Application Support/Claude/
 | `search` | Locate nodes by NL/code text. | `query: str`, `table: str="java"`, `hybrid: bool=False`, `limit: int=5`, `offset: int=0`, `path_contains: str \| None`, `filter: NodeFilter \| str \| None` | `{"query":"join operator flow","limit":5}` |
 | `find` | Locate nodes by structured filter. | `kind: "symbol"\|"route"\|"client"`, `filter: NodeFilter \| str`, `limit: int=25`, `offset: int=0` | `{"kind":"symbol","filter":{"role":"CONTROLLER"}}` |
 | `describe` | Full record + edge counts for one node. For **type** symbols, `edge_summary` may include composed dot-keys (`DECLARES.DECLARES_CLIENT`, `DECLARES.EXPOSES`); for **method** symbols it may include override-axis virtual keys (`OVERRIDDEN_BY`, `OVERRIDDEN_BY.DECLARES_CLIENT`, `OVERRIDDEN_BY.EXPOSES`, `OVERRIDES`). See [`docs/AGENT-GUIDE.md`](./docs/AGENT-GUIDE.md) (`describe`). | `id: str` | `{"id":"sym:com.bank.chat.core.api.ChatController#joinOperator(JoinOperatorRequest)"}` |
+| `resolve` | Identifier-shaped node lookup (symbol / route / client). Returns `status` `one`, `many`, or `none`; prefer over `describe(fqn=…)` when an FQN may collide. See [`docs/AGENT-GUIDE.md`](./docs/AGENT-GUIDE.md) (`resolve`). | `identifier: str`, `hint_kind: "symbol"|"route"|"client" \| null` | `{"identifier":"com.bank.chat.core.api.ChatController","hint_kind":"symbol"}` |
 | `neighbors` | One-hop walk. **Required**: `direction` and `edge_types`. | `ids: str \| list[str]`, `direction: "in"\|"out"`, `edge_types: list[str]`, `limit: int=25`, `offset: int=0`, `filter: NodeFilter \| str \| None` | `{"ids":"route:chat-core:POST:/chat/joinOperator","direction":"in","edge_types":["HTTP_CALLS","ASYNC_CALLS"]}` |
 
 **`NodeFilter` notes:**

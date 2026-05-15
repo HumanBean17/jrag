@@ -19,7 +19,7 @@ when needed.
 ## Where to look
 
 - `README.md` — feature surface, env vars, ranking, capabilities,
-  MCP tools (`search` / `find` / `describe` / `neighbors`), `java-codebase-rag` CLI,
+  MCP tools (`search` / `find` / `describe` / `neighbors` / `resolve`), `java-codebase-rag` CLI,
   "Re-index required" callouts. The current
   `ontology_version` is **12** (`@CodebaseHttpClient` rename + shared `CodebaseHttpMethod` enum;
   inbound `@CodebaseHttpRoute` replaces same-method built-in HTTP rows; still

@@ -45,6 +45,8 @@ On any new estate, **enumerate before you search-hunt**:
 2. **`find(kind="client", …)`** — list outbound clients (Feign, `RestTemplate`, Kafka, etc.) and targets.
 3. Optionally **`find(kind="symbol", filter={"role":"CONTROLLER"})`** (or equivalent `NodeFilter`) to anchor web entrypoints.
 
+**Identifier-shaped** strings (FQN, `sym:` / `route:` / `client:` id, route path, client target): start with **`resolve`**, then **`describe(id=…)`**. Use **`search`** / **`find`** for discovery when you do not have a concrete identifier yet — not as the primary chain for identifier disambiguation.
+
 You cannot reason reliably about cross-service behaviour until these surfaces exist in your working mental model (or you have consciously fallen back to non-MCP discovery).
 
 ## Mission catalogue
@@ -218,8 +220,9 @@ disagreement as evidence of staleness, not as a contradiction.
 
 ## Cheat sheet (inline reference)
 
-Four MCP tools:
+Five MCP tools:
 
+- `resolve(identifier, hint_kind)` — identifier-shaped lookup (`one` / `many` / `none`).
 - `search(query, table, hybrid, limit, filter)` — fuzzy locate.
 - `find(kind, filter, limit)` — structured listing; `filter` is required.
 - `describe(id)` — full node + `edge_summary`.

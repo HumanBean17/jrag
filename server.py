@@ -337,9 +337,9 @@ def create_mcp_server() -> FastMCP:
             "results are score-ranked, not boolean-matched. Optional `filter` uses the same NodeFilter "
             "schema as `find` but only **symbol-applicable** fields apply (strict frame). Wildcards "
             "(`*`, `?`) in prefix fields are rejected—use ranked `query` text instead. There is **no** "
-            "structured DSL inside `query`; structured predicates belong in `find`. For "
-            "identifier-shaped lookups without an exact symbol id/FQN, use `search(query=…)` and "
-            "`describe` on promising candidates until a dedicated `resolve` tool exists."
+            "structured DSL inside `query`; structured predicates belong in `find`. "
+            "For identifier-shaped lookups (FQN, id prefix, route/client identifiers, …), use `resolve` first; "
+            "use `search` for natural-language or ranked fuzzy discovery."
         ),
     )
     async def search(
@@ -416,8 +416,8 @@ def create_mcp_server() -> FastMCP:
             "add override-axis virtual keys (OVERRIDDEN_BY, OVERRIDDEN_BY.DECLARES_CLIENT, OVERRIDDEN_BY.EXPOSES, "
             "OVERRIDES). Those dot-keys are read-only summaries—not valid `neighbors(edge_types=…)` values. "
             "Pass `id` for any kind, or exact `fqn` for Symbol lookup (`id` wins when both are set). "
-            "For identifier-shaped lookups without an exact id/FQN, use `search(query=…)` then `describe` per candidate "
-            "until `resolve` ships."
+            "`describe(fqn=…)` keeps the first graph row when multiple symbols share that FQN; when an FQN may collide, "
+            "prefer `resolve(identifier=…, hint_kind='symbol')` first, then `describe(id=…)` on the chosen node."
         ),
     )
     async def describe(

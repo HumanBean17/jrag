@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import re
 from collections import Counter
 from typing import Any
 
@@ -19,6 +21,22 @@ from mcp_v2 import (
     resolve_v2,
     search_v2,
 )
+
+_PR2_CHAIN_SEARCH_DESCRIBE = re.compile(r"search\(query=.*\).*describe")
+_PR2_SENTINEL_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"per\.candidate"),
+    re.compile(r"until.*resolve"),
+    re.compile(r"promising candidates"),
+    _PR2_CHAIN_SEARCH_DESCRIBE,
+)
+
+
+def _assert_no_pr2_sentinels(label: str, text: str, *, is_resolve_tool: bool) -> None:
+    for pat in _PR2_SENTINEL_PATTERNS:
+        if is_resolve_tool and pat is _PR2_CHAIN_SEARCH_DESCRIBE:
+            continue
+        match = pat.search(text)
+        assert match is None, f"{label}: forbidden pattern {pat.pattern!r} matched {match.group(0)!r}"
 
 
 def _method_id_with_calls(kuzu_graph, direction: str) -> str:
@@ -702,7 +720,7 @@ def test_describe_by_fqn_id_takes_precedence(kuzu_graph) -> None:
     assert str(out.record.data.get("role") or "") == "SERVICE"
 
 
-def test_describe_by_fqn_duplicate_returns_first_with_disambiguation_hint() -> None:
+def test_describe_by_fqn_duplicate_hint_points_to_resolve() -> None:
     class DupFqnGraph:
         def _rows(self, query: str, params: dict | None = None) -> list:
             p = params or {}
@@ -745,9 +763,22 @@ def test_describe_by_fqn_duplicate_returns_first_with_disambiguation_hint() -> N
     assert out.record.id == "sym:dupe-a"
     assert out.message
     assert "multiple symbols share this FQN" in out.message
-    assert "find(kind='symbol'" in out.message
-    assert "describe(id=..." in out.message
-    assert "search(query=..." in out.message
+    assert "resolve" in out.message
+    assert "hint_kind" in out.message
+
+
+def test_server_tool_descriptions_no_pre_resolve_fallback() -> None:
+    from server import _INSTRUCTIONS, create_mcp_server
+
+    async def _run() -> None:
+        mcp = create_mcp_server()
+        tools = await mcp.list_tools()
+        _assert_no_pr2_sentinels("_INSTRUCTIONS", _INSTRUCTIONS, is_resolve_tool=False)
+        for tool in tools:
+            desc = tool.description or ""
+            _assert_no_pr2_sentinels(f"tool {tool.name!r}", desc, is_resolve_tool=(tool.name == "resolve"))
+
+    asyncio.run(_run())
 
 
 def test_describe_by_fqn_requires_id_or_fqn(kuzu_graph) -> None:
