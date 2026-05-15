@@ -266,10 +266,11 @@ class NodeRecord(BaseModel):
             "(DECLARES to member, then that edge) — edge-row counts, not EdgeType literals; "
             "do not pass them to neighbors(edge_types=…). For method Symbols, may include "
             "override-axis virtual keys `OVERRIDDEN_BY`, `OVERRIDDEN_BY.DECLARES_CLIENT`, "
-            "`OVERRIDDEN_BY.EXPOSES`, and a same-named `OVERRIDES` **rollup** entry (dispatch-up "
-            "counts only; not the same thing as the stored `OVERRIDES` relationship label). "
-            "Those virtual / dot-keys are not valid neighbors(edge_types=…) arguments. The "
-            "stored relationship label `OVERRIDES` **is** a valid EdgeType for neighbors."
+            "`OVERRIDDEN_BY.EXPOSES`, plus an `OVERRIDES` map entry that **merges** stored "
+            "`[:OVERRIDES]` in/out counts with the describe-time dispatch-up rollup (per "
+            "direction `max`, so inbound stored overrides are not dropped). Those virtual / "
+            "dot-keys are not valid neighbors(edge_types=…) arguments. The stored relationship "
+            "label `OVERRIDES` **is** a valid EdgeType for neighbors."
         ),
     )
 
@@ -529,6 +530,33 @@ def _load_node_record(graph: KuzuGraph, node_id: str, kind: Literal["symbol", "r
     return rows[0]
 
 
+def _incident_counts(cell: dict[str, int] | None) -> dict[str, int]:
+    if not cell:
+        return {"in": 0, "out": 0}
+    return {"in": int(cell.get("in", 0)), "out": int(cell.get("out", 0))}
+
+
+def _merge_overrides_edge_summary(
+    stored_before_rollups: dict[str, int],
+    summary_after_rollups: dict[str, dict[str, int]],
+) -> None:
+    """Reconcile `OVERRIDES` with `override_axis_rollup_for` without clobbering stored `in`.
+
+    Rollup rows reuse the ``OVERRIDES`` key for dispatch-up counts only (``in`` is always
+    zero there). Stored ``[:OVERRIDES]`` edges contribute real ``in``/``out`` from Kuzu;
+    merge per direction with ``max`` so inbound override edges stay visible.
+    """
+    roll = _incident_counts(summary_after_rollups.get("OVERRIDES"))
+    if "OVERRIDES" not in summary_after_rollups and not any(stored_before_rollups.values()):
+        return
+    merged_in = max(stored_before_rollups["in"], roll["in"])
+    merged_out = max(stored_before_rollups["out"], roll["out"])
+    if merged_in == 0 and merged_out == 0:
+        summary_after_rollups.pop("OVERRIDES", None)
+    else:
+        summary_after_rollups["OVERRIDES"] = {"in": merged_in, "out": merged_out}
+
+
 def _edge_summary_for_node(
     graph: KuzuGraph, node_id: str, *, kind: str, row: dict[str, Any]
 ) -> dict[str, dict[str, int]]:
@@ -537,7 +565,9 @@ def _edge_summary_for_node(
     if kind == "symbol" and sym_kind in _TYPE_SYMBOL_KINDS_FOR_EDGE_ROLLUP:
         summary.update(graph.member_edge_rollup_for(node_id))
     elif kind == "symbol" and sym_kind in _METHOD_SYMBOL_KINDS_FOR_OVERRIDE_ROLLUP:
+        stored_overrides = _incident_counts(summary.get("OVERRIDES"))
         summary.update(graph.override_axis_rollup_for(node_id))
+        _merge_overrides_edge_summary(stored_overrides, summary)
     return summary
 
 

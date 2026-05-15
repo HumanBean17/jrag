@@ -414,7 +414,7 @@ def create_mcp_server() -> FastMCP:
             "Full node record plus `edge_summary` (in/out counts per stored edge label, plus optional describe-time keys). Type Symbols may add "
             "composed keys DECLARES.DECLARES_CLIENT and DECLARES.EXPOSES; method Symbols may add "
             "override-axis virtual keys (OVERRIDDEN_BY, OVERRIDDEN_BY.DECLARES_CLIENT, OVERRIDDEN_BY.EXPOSES, "
-            "and an `OVERRIDES` rollup entry that mirrors dispatch-up counts). Those dot-keys and virtual keys are "
+            "plus an `OVERRIDES` map entry that merges stored `[:OVERRIDES]` counts with the dispatch-up rollup per direction). Those dot-keys and virtual keys are "
             "read-only summaries—not valid `neighbors(edge_types=…)` values. The stored `OVERRIDES` relationship "
             "is a normal edge label and may be traversed via neighbors(edge_types=[..., \"OVERRIDES\", ...]). "
             "Pass `id` for any kind, or exact `fqn` for Symbol lookup (`id` wins when both are set). "

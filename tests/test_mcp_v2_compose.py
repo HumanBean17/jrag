@@ -423,6 +423,25 @@ def test_describe_abstract_method_with_route_override_emits_exposes(override_axi
     assert es.get("OVERRIDDEN_BY.EXPOSES") == {"in": 0, "out": want_ex}
 
 
+def test_describe_method_edge_summary_overrides_merges_stored_in_with_dispatch_up_out(
+    override_axis_graph: KuzuGraph,
+) -> None:
+    """Middle override: incoming [:OVERRIDES] from subclass + rollup dispatch-up must not zero `in`."""
+    rows = override_axis_graph._rows(  # noqa: SLF001
+        "MATCH (t:Symbol {fqn: $fqn})-[:DECLARES]->(m:Symbol) "
+        "WHERE m.kind = 'method' AND m.name = 'handle' "
+        "RETURN m.id AS id LIMIT 1",
+        {"fqn": "orolla.abstractroute.MiddleApi"},
+    )
+    assert rows
+    mid = str(rows[0]["id"])
+    out = describe_v2(mid, graph=override_axis_graph)
+    assert out.success is True
+    assert out.record is not None
+    assert out.record.edge_summary is not None
+    assert out.record.edge_summary.get("OVERRIDES") == {"in": 1, "out": 1}
+
+
 def test_describe_interface_method_diamond_override_counts_once_per_upstream(
     override_axis_graph: KuzuGraph,
 ) -> None:
