@@ -68,9 +68,9 @@ When you're given a per-PR task prompt from `plans/CURSOR-PROMPTS-*.md`:
   `java_ontology.py`. Don't sprinkle role / capability / client-kind /
   strategy / match string literals across other modules.
 - Schema changes that affect the Lance index or Kuzu graph need a
-  matching update to the  README "Re-index required" callout. Bump
- `ontology_version` when enrichment semantics change. The current
-  version is **12**.
+  matching update to the README "Re-index required" callout. Bump
+  `ontology_version` when enrichment semantics change. The current
+  version is **13**.
 - Brownfield is a first-class surface: any new auto-detection
   (route, role, capability, http client, async producer) must
   compose with the matching `BrownfieldOverrides` layer. Last writer

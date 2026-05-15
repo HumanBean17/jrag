@@ -4,7 +4,7 @@
 Walks a Java source tree with `tree_sitter_java`, writes a deterministic graph of:
     Symbol nodes: package, file, class, interface, enum, record, annotation, method, constructor
     Route nodes:  declaration-site routes (Spring MVC/WebFlux, Feign, Kafka, …)
-    Rel tables:   EXTENDS, IMPLEMENTS, INJECTS, DECLARES, CALLS, EXPOSES
+    Rel tables:   EXTENDS, IMPLEMENTS, INJECTS, DECLARES, OVERRIDES, CALLS, EXPOSES
 
 Pass 1 builds every node and in-memory resolution indexes.
 Pass 2 resolves each extends/implements/injection target using Java's lookup order
@@ -336,6 +336,7 @@ class GraphTables:
     async_call_rows: list[AsyncCallRow] = field(default_factory=list)
     client_rows: list[ClientRow] = field(default_factory=list)
     declares_client_rows: list[DeclaresClientRow] = field(default_factory=list)
+    overrides_rows: list[DeclaresRow] = field(default_factory=list)
     route_stats: RouteExtractionStats = field(default_factory=RouteExtractionStats)
     call_edge_stats: CallEdgeStats = field(default_factory=CallEdgeStats)
     client_stats: ClientExtractionStats = field(default_factory=ClientExtractionStats)
@@ -2186,6 +2187,7 @@ _SCHEMA_INJECTS = (
     "mechanism STRING, annotation STRING, field_or_param STRING)"
 )
 _SCHEMA_DECLARES = "CREATE REL TABLE DECLARES(FROM Symbol TO Symbol)"
+_SCHEMA_OVERRIDES = "CREATE REL TABLE OVERRIDES(FROM Symbol TO Symbol)"
 _SCHEMA_CALLS = (
     "CREATE REL TABLE CALLS(FROM Symbol TO Symbol, "
     "call_site_line INT64, call_site_byte INT64, arg_count INT64, "
@@ -2221,6 +2223,7 @@ def _drop_all(conn: kuzu.Connection) -> None:
         "DROP TABLE IF EXISTS IMPLEMENTS",
         "DROP TABLE IF EXISTS INJECTS",
         "DROP TABLE IF EXISTS CALLS",
+        "DROP TABLE IF EXISTS OVERRIDES",
         "DROP TABLE IF EXISTS DECLARES",
         "DROP TABLE IF EXISTS Symbol",
         "DROP TABLE IF EXISTS Route",
@@ -2243,6 +2246,7 @@ def _create_schema(conn: kuzu.Connection) -> None:
         _SCHEMA_IMPLEMENTS,
         _SCHEMA_INJECTS,
         _SCHEMA_DECLARES,
+        _SCHEMA_OVERRIDES,
         _SCHEMA_CALLS,
         _SCHEMA_EXPOSES,
         _SCHEMA_DECLARES_CLIENT,
@@ -2358,6 +2362,10 @@ _CREATE_DECL = (
     "MATCH (a:Symbol {id: $src}), (b:Symbol {id: $dst}) "
     "CREATE (a)-[:DECLARES]->(b)"
 )
+_CREATE_OVERRIDES = (
+    "MATCH (a:Symbol {id: $src}), (b:Symbol {id: $dst}) "
+    "CREATE (a)-[:OVERRIDES]->(b)"
+)
 _CREATE_CALL = (
     "MATCH (a:Symbol {id: $src}), (b:Symbol {id: $dst}) "
     "CREATE (a)-[:CALLS {"
@@ -2411,6 +2419,45 @@ def _populate_declares_rows(tables: GraphTables) -> None:
     ]
 
 
+def _direct_supertype_ids(tables: GraphTables, type_id: str) -> list[str]:
+    out: list[str] = []
+    for r in tables.extends_rows:
+        if r.src_id == type_id:
+            out.append(r.dst_id)
+    for r in tables.implements_rows:
+        if r.src_id == type_id:
+            out.append(r.dst_id)
+    return out
+
+
+def _populate_overrides_rows(tables: GraphTables) -> None:
+    """Materialize (subtype_method)-[:OVERRIDES]->(supertype_method) for one supertype hop.
+
+    Matches ``KuzuGraph.override_axis_rollup_for`` (direct ``IMPLEMENTS`` / ``EXTENDS``
+    only, same ``signature``, distinct method ids, non-static instance methods).
+    """
+    by_declaring_type: dict[str, list[MemberEntry]] = defaultdict(list)
+    for m in tables.members:
+        by_declaring_type[m.parent_id].append(m)
+    pairs: set[tuple[str, str]] = set()
+    for m in tables.members:
+        if m.kind != "method" or "static" in m.decl.modifiers:
+            continue
+        impl_tid = m.parent_id
+        for sup_id in _direct_supertype_ids(tables, impl_tid):
+            for other in by_declaring_type.get(sup_id, ()):
+                if other.kind != "method":
+                    continue
+                if other.decl.signature != m.decl.signature:
+                    continue
+                if other.node_id == m.node_id:
+                    continue
+                pairs.add((m.node_id, other.node_id))
+    tables.overrides_rows = [
+        DeclaresRow(src_id=a, dst_id=b) for a, b in sorted(pairs)
+    ]
+
+
 def _write_edges(conn: kuzu.Connection, tables: GraphTables) -> None:
     for r in tables.extends_rows:
         conn.execute(_CREATE_EXT, {
@@ -2432,6 +2479,9 @@ def _write_edges(conn: kuzu.Connection, tables: GraphTables) -> None:
 
     for row in tables.declares_rows:
         conn.execute(_CREATE_DECL, {"src": row.src_id, "dst": row.dst_id})
+
+    for row in tables.overrides_rows:
+        conn.execute(_CREATE_OVERRIDES, {"src": row.src_id, "dst": row.dst_id})
 
     seen_calls: set[tuple[str, str, int, int]] = set()
     unique_calls: list[CallsRow] = []
@@ -2549,6 +2599,7 @@ def _write_meta(conn: kuzu.Connection, tables: GraphTables, source_root: Path) -
         "implements": len(tables.implements_rows),
         "injects": len(tables.injects_rows),
         "declares": len(tables.declares_rows),
+        "overrides": len(tables.overrides_rows),
         "calls": calls_unique,
         "routes": len(tables.routes_rows),
         "exposes": len(tables.exposes_rows),
@@ -2642,6 +2693,7 @@ def write_kuzu(
         if verbose:
             _verbose_stderr_line(f"[write] nodes written in {time.time() - t0:.2f}s")
         _populate_declares_rows(tables)
+        _populate_overrides_rows(tables)
         t1 = time.time()
         _write_edges(conn, tables)
         if verbose:

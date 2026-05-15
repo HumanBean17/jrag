@@ -198,6 +198,7 @@ _EDGE_TYPES: tuple[str, ...] = (
     "EXTENDS",
     "IMPLEMENTS",
     "INJECTS",
+    "OVERRIDES",
     "DECLARES",
     "CALLS",
     "EXPOSES",

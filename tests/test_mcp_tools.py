@@ -72,6 +72,7 @@ async def test_tool_input_schema_includes_expected_enums(mcp_server) -> None:
         "EXTENDS",
         "IMPLEMENTS",
         "INJECTS",
+        "OVERRIDES",
         "DECLARES",
         "DECLARES_CLIENT",
         "CALLS",
