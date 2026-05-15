@@ -38,6 +38,7 @@ is merged to `master`.
 - `@tests/test_mcp_v2_compose.py`
 - `@tests/test_call_edges_e2e.py`
 - `@tests/conftest.py` (if session graph / builders need adjustment)
+- `@java_index_flow_lancedb.py` (read first — only if a hard-coded ontology `12` must become `ONTOLOGY_VERSION`-driven)
 
 **Prompt:**
 
@@ -124,10 +125,17 @@ present; server `describe` text must **not** claim stored `OVERRIDES` is unusabl
 `neighbors` (rollup/dot-key carve-out may remain for virtual keys).
 
 ```bash
-git diff master..HEAD --name-only | rg -v '^(build_ast_graph|ast_java|mcp_v2|server|README|tests)/' || true
+# Allowed paths for PR-A (see `plans/PLAN-HINTS.md` PR-A file-by-file). Anything
+# else printed here is a red flag — confirm against that list or trim scope before merge.
+git diff master..HEAD --name-only | rg -v '^(tests/|build_ast_graph\.py|ast_java\.py|java_index_flow_lancedb\.py|kuzu_queries\.py|mcp_v2\.py|server\.py|README\.md)$' || true
 ```
 
-If this prints unexpected paths, you likely violated scope — stop and trim the diff.
+Interpretation: empty output means every changed path is in the allowlist. If a path
+appears, it is **not** automatically a mistake (`kuzu_queries.py` is allowed only for
+optional hygiene called out in PLAN-HINTS PR-A; `java_index_flow_lancedb.py` only for
+hard-coded ontology wiring) — but anything **outside** the regex (for example
+`graph_enrich.py`, `search_lancedb.py`, `propose/`) needs either a plan amendment or a
+revert; do not silently expand PR-A.
 
 ## Manual evidence
 
