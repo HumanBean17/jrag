@@ -29,7 +29,7 @@ Per-PR Cursor prompts: [`CURSOR-PROMPTS-RESOLVE-TOOL.md`](CURSOR-PROMPTS-RESOLVE
 | PR | Scope | Ontology bump | Areas of concern | Test buckets | Independent of |
 | --- | --- | --- | --- | --- | --- |
 | PR-RESOLVE-1 | `resolve` models, handler, candidate generators, ranking, MCP registration, tests | none | Input-shape parsing (multi-token routes, client `target + path`); dedupe when generators overlap; reason-priority tiebreaks; namespace vs internal `_resolve_node_kind` | `tests/test_mcp_v2.py` + optional `kuzu_graph_fqn_collision_smoke` fixture | prerequisite only |
-| PR-RESOLVE-2 | Agent-facing prose sweep: `server.py`, `describe_v2` hint, `docs/AGENT-GUIDE.md`, `README.md` | none | Removing fallback wording before PR-RESOLVE-1 merges leaves agents without a documented path — **blocked on PR-RESOLVE-1** | description / hint string tests in `tests/test_mcp_v2.py` | PR-RESOLVE-1 |
+| PR-RESOLVE-2 | Agent-facing prose sweep: `server.py`, `mcp_v2` hint, `docs/AGENT-GUIDE.md`, `README.md`, `AGENTS.md`, `.cursor/rules/project-overview.mdc`, operator/skill/checklist docs | none | Removing fallback before RESOLVE-1 merges leaves agents without a path — **blocked on PR-RESOLVE-1**; keep “five tools” consistent everywhere Cursor/agents load rules | description / hint tests in `tests/test_mcp_v2.py` | PR-RESOLVE-1 |
 
 Landing order: **RESOLVE-1 → RESOLVE-2**.
 
@@ -129,7 +129,7 @@ Flow: validate identifier → run enabled generators → dedupe → rank → sli
 
 ### 3. `server.py`
 
-- Extend `_INSTRUCTIONS` tool inventory to mention `resolve` (minimal one-liner only — full prose is PR-RESOLVE-2).
+- Extend `_INSTRUCTIONS` so the tool inventory lists **five** tools (`search`, `find`, `describe`, `neighbors`, `resolve`) — one short clause for `resolve` is enough; do **not** remove the pre-`resolve` fallback from sibling tool descriptions yet (PR-RESOLVE-2).
 - Register `@mcp.tool(name="resolve", …)`:
 
 ```python
@@ -170,7 +170,7 @@ def kuzu_graph_fqn_collision_smoke(kuzu_db_path_fqn_collision_smoke: Path):
 
 Contract tests (names are binding):
 
-1. `test_resolve_exact_id_symbol_returns_one` — pick a known `sym:…` from `kuzu_graph` via `find_v2`; `resolve(that_id)` → `success`, `status=="one"`, `node.id` match, candidate with `reason=="exact_id"` (via internal check or `status=="one"` path only).
+1. `test_resolve_exact_id_symbol_returns_one` — pick a known `sym:…` from `kuzu_graph` via `find_v2`; `resolve(that_id)` → `success`, `status=="one"`, matching `node.id` (`exact_id` reason coverage is test 16).
 2. `test_resolve_exact_fqn_symbol_returns_one` — unique FQN from bank-chat; `hint_kind="symbol"` → `one`, reason coverage for `exact_fqn`.
 3. `test_resolve_fqn_collision_across_microservices_returns_many` — `resolve("com.example.SharedDto", hint_kind="symbol", graph=kuzu_graph_fqn_collision_smoke)` → `many`, ≥2 candidates, distinct `microservice`, reasons include `exact_fqn`.
 4. `test_resolve_short_name_ambiguity_returns_many` — bank-chat: resolve a common short class name (e.g. last segment of a duplicated simple name) with `hint_kind="symbol"` → `many`, reasons include `short_name`.
@@ -193,6 +193,7 @@ Optional MCP registration smoke (if lightweight): extend existing server tool-li
 ## Definition of done (PR-RESOLVE-1)
 
 - `resolve` callable via MCP and `mcp_v2.resolve_v2` directly.
+- `_INSTRUCTIONS` lists **five** tools including `resolve`.
 - All 17 tests above pass (test 8 may `pytest.skip` only with a comment pointing at FakeGraph requirement — prefer stub over skip).
 - `.venv/bin/ruff check .` clean.
 - `.venv/bin/python -m pytest tests/test_mcp_v2.py -v -k resolve` green.
@@ -237,9 +238,10 @@ Optional MCP registration smoke (if lightweight): extend existing server tool-li
 ### 3. `docs/AGENT-GUIDE.md`
 
 - MCP surface line: five tools including `resolve`.
-- Rename **Identifier resolution (pre-`resolve`)** → **Identifier resolution**; document `resolve` three-state flow and `resolve → describe` chain; demote `search` + describe-per-candidate to historical note or remove entirely.
+- Rename heading **`### Tool reference — four tools`** → **`### Tool reference — five tools`** (and any other “four tools” cardinal in this file).
+- Rename **Identifier resolution (pre-`resolve`)** → **Identifier resolution**; document `resolve` three-state flow and `resolve → describe` chain; remove the `search` + describe-per-candidate fallback entirely.
 - Decision tree row: add "Have identifier-shaped string" → `resolve` first.
-- Forced reasoning preamble: add `resolve` to Pick line examples.
+- Forced reasoning preamble: add `resolve` to Pick line examples (`Pick: <search|find|describe|neighbors|resolve>`).
 - `describe` section: point ambiguous FQN case at `resolve`.
 
 ### 4. `README.md`
@@ -248,28 +250,56 @@ Optional MCP registration smoke (if lightweight): extend existing server tool-li
 - MCP tool table: add `resolve` row with signature and example JSON.
 - Agent guide blurb: five tools.
 
-### 5. `tests/test_mcp_v2.py`
+### 5. `AGENTS.md`
 
-- Update `test_describe_by_fqn_duplicate_returns_first_with_disambiguation_hint` assertions:
-  - Drop requirement for `find(kind='symbol'` and `search(query=…)` in hint.
-  - Require `resolve` mention (substring).
+- MCP tool list and any “four tools” wording → five tools including `resolve`.
+
+### 6. `.cursor/rules/project-overview.mdc`
+
+- MCP tools line and README cross-refs → five tools including `resolve`.
+
+### 7. `docs/JAVA-CODEBASE-RAG-CLI.md`
+
+- One-line clarification: MCP navigation surface is five tools (not operator CLI).
+
+### 8. `docs/skills/java-codebase-explore.md`
+
+- Workflow / fallback prose: identifier-shaped lookups → `resolve` first; keep `search`/`find` for discovery, not as the documented identifier-resolution fallback chain.
+
+### 9. `docs/MANUAL-VERIFICATION-CHECKLIST.md`
+
+- Navigation tools list → five tools including `resolve`.
+
+### 10. `tests/test_mcp_v2.py`
+
+- **Rename** `test_describe_by_fqn_duplicate_returns_first_with_disambiguation_hint` → `test_describe_by_fqn_duplicate_hint_points_to_resolve` (binding name).
+- Update assertions: drop `find` / `search` disambiguation requirements in hint; require `resolve` substring.
+
+## Canonical sentinel grep (PR-RESOLVE-2)
+
+Use this exact command in PR descriptions and `CURSOR-PROMPTS-RESOLVE-TOOL.md` (allow `search` only inside `resolve` tool description / `status="none"` messages):
+
+```bash
+grep -En 'per\.candidate|until.*resolve|promising candidates|search\(query=.*\).*describe' \
+  server.py mcp_v2.py docs/AGENT-GUIDE.md README.md AGENTS.md \
+  docs/JAVA-CODEBASE-RAG-CLI.md docs/MANUAL-VERIFICATION-CHECKLIST.md \
+  docs/skills/java-codebase-explore.md .cursor/rules/project-overview.mdc || true
+```
 
 ## Tests for PR-RESOLVE-2
 
-1. `test_describe_by_fqn_duplicate_hint_points_to_resolve` — renamed/updated from existing test above.
-2. `test_server_tool_descriptions_no_pre_resolve_fallback` — load `create_mcp_server()`, inspect tool descriptions + `_INSTRUCTIONS`: assert no regex matches for cargo-cult phrases (`describe` per candidate`, `until.*resolve.*exists`, `search(query=…).*then.*describe` on identifier path). **Allow** `search` mentions inside `resolve` none-message docs.
+1. `test_describe_by_fqn_duplicate_hint_points_to_resolve` — replaces the old duplicate-FQN hint test (rename required).
+2. `test_server_tool_descriptions_no_pre_resolve_fallback` — load `create_mcp_server()`, inspect tool descriptions + `_INSTRUCTIONS`: assert no matches for the canonical sentinel patterns above on identifier-resolution paths. **Allow** `search` inside `resolve` tool description.
 
-Manual evidence (PR description):
+Manual evidence (PR description): run the **canonical sentinel grep** above, then:
 
 ```bash
-grep -En 'per.candidate|until.*resolve|search\(query=.*\).*describe' server.py docs/AGENT-GUIDE.md README.md mcp_v2.py || true
-# Expect: no matches on fallback patterns (reviewer judges false positives)
-.venv/bin/python -m pytest tests/test_mcp_v2.py -v -k 'resolve or describe_by_fqn_duplicate'
+.venv/bin/python -m pytest tests/test_mcp_v2.py -v -k 'resolve or describe_by_fqn_duplicate_hint_points_to_resolve or tool_descriptions_no_pre_resolve'
 ```
 
 ## Definition of done (PR-RESOLVE-2)
 
-- All agent-facing surfaces in the propose §6 checklist updated.
+- All agent-facing surfaces in the propose §6 checklist **and** §5–§9 above updated (no doc still claims four MCP navigation tools).
 - `test_describe_by_fqn_duplicate_hint_points_to_resolve` passes.
 - Sentinel grep reviewed (zero actionable fallback recommendations).
 - Full `pytest tests -v` green.
@@ -281,9 +311,12 @@ grep -En 'per.candidate|until.*resolve|search\(query=.*\).*describe' server.py d
 | - | - | - | - |
 | 1 | Sweep `server.py` tool descriptions + `_INSTRUCTIONS` | `server.py` | Grep clean |
 | 2 | Update `describe_v2` hint | `mcp_v2.py` | Test 1 updated expectations pass |
-| 3 | Rewrite identifier resolution section | `docs/AGENT-GUIDE.md` | Five-tool surface documented |
+| 3 | Rewrite identifier resolution + rename tool-reference heading | `docs/AGENT-GUIDE.md` | Five-tool surface; no “four tools” heading |
 | 4 | README MCP table + intro | `README.md` | `resolve` row present |
-| 5 | Fix tests | `tests/test_mcp_v2.py` | PR-RESOLVE-2 tests green |
+| 5 | Agent entrypoints | `AGENTS.md`, `.cursor/rules/project-overview.mdc` | Five-tool wording |
+| 6 | Operator / skill / checklist | `docs/JAVA-CODEBASE-RAG-CLI.md`, `docs/skills/java-codebase-explore.md`, `docs/MANUAL-VERIFICATION-CHECKLIST.md` | No stale four-tool lists |
+| 7 | Rename hint test + sentinel test | `tests/test_mcp_v2.py` | PR-RESOLVE-2 tests green |
+| 8 | Canonical sentinel grep | all touched files | Grep reviewed clean |
 
 ---
 
@@ -317,7 +350,7 @@ grep -En 'per.candidate|until.*resolve|search\(query=.*\).*describe' server.py d
 1. `resolve` is registered and passes all PR-RESOLVE-1 contract tests on CI.
 2. No agent-facing doc or tool description recommends `search` + `describe`-per-candidate for identifier-shaped lookups.
 3. `describe` FQN-collision hint points at `resolve`.
-4. README + AGENT-GUIDE list five MCP tools with `resolve` documented.
+4. README, AGENT-GUIDE, AGENTS.md, and `project-overview.mdc` list five MCP tools with `resolve` documented.
 5. Propose moved to `propose/completed/RESOLVE-TOOL-PROPOSE.md` after both PRs merge.
 6. Plan + prompts moved to `plans/completed/` after both PRs merge.
 

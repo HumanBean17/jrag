@@ -61,7 +61,9 @@ Ship the fifth MCP tool `resolve(identifier, hint_kind?)` end-to-end:
    `message` starts `"Invalid identifier:"`.
 3. **`server.py`** — register `@mcp.tool(name="resolve")` with a complete
    description (identifier-shaped, three statuses, search fallback on none).
-   Minimal `_INSTRUCTIONS` mention of `resolve` is OK.
+   Update `_INSTRUCTIONS` to list **five** tools (`search`, `find`, `describe`,
+   `neighbors`, `resolve`). Do **not** remove pre-`resolve` fallback wording from
+   `search`/`describe` descriptions yet (RESOLVE-2).
 4. **`tests/conftest.py`** — `kuzu_graph_fqn_collision_smoke` fixture.
 5. **`tests/test_mcp_v2.py`** — all tests named in the plan § "Tests for PR-RESOLVE-1"
    (exact function names).
@@ -100,16 +102,22 @@ Match `plans/PLAN-RESOLVE-TOOL.md` § PR-RESOLVE-1 definition of done.
 .venv/bin/python -m pytest tests -v
 ```
 
-Manual spot-check (stderr ok):
+Manual spot-check after building collision fixture (optional; pytest is the contract):
 
 ```bash
 .venv/bin/python -c "
 from kuzu_queries import KuzuGraph
-import mcp_v2
 from tests.conftest import TESTS_DIR
+import mcp_v2
+from _builders import build_kuzu_to
 from pathlib import Path
-import os
-# optional: only if you have session db path handy
+import tempfile
+db = Path(tempfile.mkdtemp()) / 'code_graph.kuzu'
+build_kuzu_to(TESTS_DIR / 'fixtures' / 'fqn_collision_smoke', db, max_pass=3)
+g = KuzuGraph(str(db))
+out = mcp_v2.resolve_v2('com.example.SharedDto', hint_kind='symbol', graph=g)
+assert out.success and out.status == 'many', (out.status, out.message)
+print('ok', len(out.candidates), 'candidates')
 "
 ```
 
@@ -135,6 +143,11 @@ that ontology_version is unchanged and PR-RESOLVE-2 will sweep descriptions.
 - `@mcp_v2.py` (hint_message only)
 - `@docs/AGENT-GUIDE.md`
 - `@README.md`
+- `@AGENTS.md`
+- `@.cursor/rules/project-overview.mdc`
+- `@docs/JAVA-CODEBASE-RAG-CLI.md`
+- `@docs/skills/java-codebase-explore.md`
+- `@docs/MANUAL-VERIFICATION-CHECKLIST.md`
 - `@tests/test_mcp_v2.py`
 
 **Prompt:**
@@ -153,13 +166,16 @@ agent-facing prose only** plus test expectation updates — no new resolve logic
 2. **`mcp_v2.py`** — Update `describe_v2` FQN-collision `hint_message` to
    recommend `resolve(identifier=..., hint_kind='symbol')` instead of
    find/search multi-call patterns.
-3. **`docs/AGENT-GUIDE.md`** — Five-tool surface; rewrite identifier resolution
-   section (drop "pre-resolve" framing).
+3. **`docs/AGENT-GUIDE.md`** — Five-tool surface; rename `### Tool reference — four tools`
+   → five tools; rewrite identifier resolution (drop pre-`resolve` fallback).
 4. **`README.md`** — Five tools in intro; add `resolve` row to MCP tool table.
-5. **`tests/test_mcp_v2.py`** —
-   - Rename/update `test_describe_by_fqn_duplicate_returns_first_with_disambiguation_hint`
-     → `test_describe_by_fqn_duplicate_hint_points_to_resolve` (or keep name but
-     update assertions per plan).
+5. **`AGENTS.md`** — Five-tool MCP list.
+6. **`.cursor/rules/project-overview.mdc`** — Five-tool MCP line.
+7. **`docs/JAVA-CODEBASE-RAG-CLI.md`**, **`docs/skills/java-codebase-explore.md`**,
+   **`docs/MANUAL-VERIFICATION-CHECKLIST.md`** — No stale four-tool navigation lists.
+8. **`tests/test_mcp_v2.py`** —
+   - **Rename** `test_describe_by_fqn_duplicate_returns_first_with_disambiguation_hint`
+     → `test_describe_by_fqn_duplicate_hint_points_to_resolve` (binding name).
    - Add `test_server_tool_descriptions_no_pre_resolve_fallback` per plan.
 
 ## Out of scope (do NOT touch)
@@ -169,24 +185,20 @@ agent-facing prose only** plus test expectation updates — no new resolve logic
 - Changing `describe(fqn=…)` first-match behavior.
 - Adding `microservice` to `describe`.
 
-Sentinel grep — must return **no matches** on `git diff master..HEAD` for:
-
-```
-until a dedicated `resolve` tool exists
-until `resolve` ships
-describe` on promising candidates
-describe` per candidate
-```
-
-(Allow `search` mentioned inside `resolve` tool description as the fallback
-for `status="none"`.)
+Sentinel grep — run the **canonical** command from `plans/PLAN-RESOLVE-TOOL.md`
+§ “Canonical sentinel grep (PR-RESOLVE-2)”. Review output; expect no
+identifier-resolution fallback recommendations. Allow `search` only inside
+`resolve` tool description / `status="none"` messages.
 
 ## Validation
 
 ```bash
 .venv/bin/ruff check .
-grep -En 'per.candidate|until.*resolve|promising candidates' server.py docs/AGENT-GUIDE.md README.md mcp_v2.py || true
-.venv/bin/python -m pytest tests/test_mcp_v2.py -v -k 'resolve or describe_by_fqn or tool_descriptions_no_pre_resolve'
+grep -En 'per\.candidate|until.*resolve|promising candidates|search\(query=.*\).*describe' \
+  server.py mcp_v2.py docs/AGENT-GUIDE.md README.md AGENTS.md \
+  docs/JAVA-CODEBASE-RAG-CLI.md docs/MANUAL-VERIFICATION-CHECKLIST.md \
+  docs/skills/java-codebase-explore.md .cursor/rules/project-overview.mdc || true
+.venv/bin/python -m pytest tests/test_mcp_v2.py -v -k 'resolve or describe_by_fqn_duplicate_hint_points_to_resolve or tool_descriptions_no_pre_resolve'
 .venv/bin/python -m pytest tests -v
 ```
 
