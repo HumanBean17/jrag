@@ -1,6 +1,9 @@
 # Cursor task prompts — MCP Filter Frame (PR-FRAME-1 → PR-FRAME-3)
 
-Status: **active**. One prompt per PR; each prompt is self-contained.
+Status: **completed** — reference template for the landed PR-FRAME-1 → PR-FRAME-3
+sequence. Plan:
+[`PLAN-MCP-FILTER-FRAME.md`](PLAN-MCP-FILTER-FRAME.md); propose:
+[`propose/completed/MCP-FILTER-FRAME-PROPOSE.md`](../../propose/completed/MCP-FILTER-FRAME-PROPOSE.md).
 
 One prompt per PR. Each is **self-contained**: copy the prompt verbatim
 into Cursor, attach the files listed in its `@-files` block, and let

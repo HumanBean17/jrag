@@ -329,7 +329,18 @@ async def run_refresh_pipeline(*, quiet: bool = False) -> RefreshIndexOutput:
 def create_mcp_server() -> FastMCP:
     mcp = FastMCP("java-codebase-rag", instructions=_INSTRUCTIONS)
 
-    @mcp.tool(name="search", description="locate nodes by NL/code text")
+    @mcp.tool(
+        name="search",
+        description=(
+            "Ranked chunk retrieval: `query` is opaque text (natural language or code fragments); "
+            "results are score-ranked, not boolean-matched. Optional `filter` uses the same NodeFilter "
+            "schema as `find` but only **symbol-applicable** fields apply (strict frame). Wildcards "
+            "(`*`, `?`) in prefix fields are rejected—use ranked `query` text instead. There is **no** "
+            "structured DSL inside `query`; structured predicates belong in `find`. For "
+            "identifier-shaped lookups without an exact symbol id/FQN, use `search(query=…)` and "
+            "`describe` on promising candidates until a dedicated `resolve` tool exists."
+        ),
+    )
     async def search(
         query: str = Field(description="Search query"),
         table: Literal["java", "sql", "yaml", "all"] = Field(
@@ -349,9 +360,8 @@ def create_mcp_server() -> FastMCP:
         filter: dict[str, Any] | str | None = Field(
             default=None,
             description=(
-                "Optional NodeFilter (symbol applicability). Unknown keys and populated non-symbol fields return success=false "
-                "with a teaching message. "
-                "Prefer a JSON object; a JSON-encoded string is accepted as a fallback."
+                "Optional NodeFilter post-filter on symbol-oriented hit rows. Unknown keys or populated fields not "
+                "applicable to symbols return success=false. Prefer a JSON object; a JSON-encoded string is accepted."
             ),
         ),
     ) -> mcp_v2.SearchOutput:
@@ -367,7 +377,17 @@ def create_mcp_server() -> FastMCP:
             None,
         )
 
-    @mcp.tool(name="find", description="locate nodes by structured filter")
+    @mcp.tool(
+        name="find",
+        description=(
+            "Exact structured listing for one node kind. Per-kind applicable fields: **symbol** — "
+            "microservice, module, role, exclude_roles, annotation, capability, fqn_prefix, symbol_kind, symbol_kinds; "
+            "**route** — microservice, module, http_method, path_prefix, framework; **client** — microservice, module, "
+            "source_layer, client_kind, target_service, target_path_prefix, http_method. "
+            "Wildcards in prefix fields are rejected. An empty filter (`{}`) or `filter=None` means no predicate (all nodes of "
+            "that kind; use pagination). Unknown keys or inapplicable populated fields return success=false."
+        ),
+    )
     async def find(
         kind: Literal["symbol", "route", "client"] = Field(
             description=(
@@ -378,10 +398,8 @@ def create_mcp_server() -> FastMCP:
         filter: dict[str, Any] | str = Field(
             ...,
             description=(
-                "Required NodeFilter (shared schema, strict extras). Unknown keys and populated fields not applicable to "
-                "the selected kind return success=false with a teaching message. Symbol filters also support symbol_kind "
-                "and symbol_kinds. "
-                "Prefer a JSON object; a JSON-encoded string is accepted as a fallback."
+                "Required NodeFilter dict (extra keys forbidden). Fields must be applicable to `kind`. "
+                "Prefer a JSON object; a JSON-encoded string is accepted."
             ),
         ),
         limit: int = Field(default=25, ge=1, le=500, description="Max nodes to return"),
@@ -392,12 +410,13 @@ def create_mcp_server() -> FastMCP:
     @mcp.tool(
         name="describe",
         description=(
-            "full record + edge_summary: in/out per stored edge label; "
-            "type Symbols may add composed keys DECLARES.DECLARES_CLIENT, DECLARES.EXPOSES "
-            "(describe-time 2-hop member summaries; not valid in neighbors edge_types); "
-            "method Symbols may add override-axis virtual keys OVERRIDDEN_BY, "
-            "OVERRIDDEN_BY.DECLARES_CLIENT, OVERRIDDEN_BY.EXPOSES, OVERRIDES (same restriction). "
-            "Pass id for any node kind, or fqn as an alternative identifier for Symbol nodes only."
+            "Full node record plus `edge_summary` (in/out counts per stored edge label). Type Symbols may add "
+            "describe-time composed keys such as DECLARES.DECLARES_CLIENT and DECLARES.EXPOSES; method Symbols may "
+            "add override-axis virtual keys (OVERRIDDEN_BY, OVERRIDDEN_BY.DECLARES_CLIENT, OVERRIDDEN_BY.EXPOSES, "
+            "OVERRIDES). Those dot-keys are read-only summaries—not valid `neighbors(edge_types=…)` values. "
+            "Pass `id` for any kind, or exact `fqn` for Symbol lookup (`id` wins when both are set). "
+            "For identifier-shaped lookups without an exact id/FQN, use `search(query=…)` then `describe` per candidate "
+            "until `resolve` ships."
         ),
     )
     async def describe(
@@ -416,7 +435,15 @@ def create_mcp_server() -> FastMCP:
     ) -> mcp_v2.DescribeOutput:
         return await asyncio.to_thread(mcp_v2.describe_v2, id, fqn, None)
 
-    @mcp.tool(name="neighbors", description="one-hop walk; REQUIRED direction + edge_types")
+    @mcp.tool(
+        name="neighbors",
+        description=(
+            "One-hop graph walk: **direction** (`in` | `out`) and non-empty **edge_types** are required. "
+            "Optional `filter` applies to each neighbor endpoint row; populated fields must be applicable to that "
+            "neighbor's kind—mixed-kind result sets fail on the first inapplicable neighbor (strict frame). "
+            "Wildcards in prefix fields are rejected. Unknown NodeFilter keys return success=false."
+        ),
+    )
     async def neighbors(
         ids: str | list[str] = Field(description="Origin symbol/route/client id, or list for batch"),
         direction: Literal["in", "out"] = Field(
@@ -440,10 +467,8 @@ def create_mcp_server() -> FastMCP:
         filter: dict[str, Any] | str | None = Field(
             default=None,
             description=(
-                "Optional NodeFilter applied to the other endpoint of each edge. Unknown keys and populated fields not "
-                "applicable to an evaluated neighbor kind return success=false with a teaching message. For mixed "
-                "neighbor kinds, evaluation fails on the first inapplicable row. "
-                "Prefer a JSON object; a JSON-encoded string is accepted as a fallback."
+                "Optional NodeFilter on the neighbor node. Same applicability rules as `find` for that node's kind. "
+                "Prefer a JSON object; a JSON-encoded string is accepted."
             ),
         ),
     ) -> mcp_v2.NeighborsOutput:

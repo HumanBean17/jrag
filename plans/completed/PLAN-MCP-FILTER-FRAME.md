@@ -1,8 +1,10 @@
 # Plan: MCP Filter Frame — typed query language migration
 
-Status: **active (planning)**. This plan implements
-[`propose/MCP-FILTER-FRAME-PROPOSE.md`](../propose/MCP-FILTER-FRAME-PROPOSE.md)
-as a 3-PR sequence. This file is plan-only and does not implement code.
+Status: **completed — shipped via PR-FRAME-1 → PR-FRAME-3** (merged 2026-05).
+This plan implemented
+[`propose/completed/MCP-FILTER-FRAME-PROPOSE.md`](../../propose/completed/MCP-FILTER-FRAME-PROPOSE.md)
+as a 3-PR sequence. Per-PR Cursor prompts:
+[`CURSOR-PROMPTS-MCP-FILTER-FRAME.md`](CURSOR-PROMPTS-MCP-FILTER-FRAME.md).
 
 Depends on: **none** (builds on already-shipped #122 — `extra="forbid"` +
 per-kind applicability validation).
@@ -395,6 +397,6 @@ Landing order: **FRAME-1 → FRAME-2 → FRAME-3**.
 
 # Tracking
 
-- `PR-FRAME-1`: _pending_
-- `PR-FRAME-2`: _pending_
-- `PR-FRAME-3`: _pending_
+- `PR-FRAME-1`: merged
+- `PR-FRAME-2`: merged
+- `PR-FRAME-3`: merged (#133)

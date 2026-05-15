@@ -10,6 +10,7 @@ from mcp_v2 import (
     NodeFilter,
     _NODEFILTER_APPLICABLE_FIELDS,
     describe_v2,
+    filter_frame_counters,
     find_v2,
     neighbors_v2,
     search_v2,
@@ -788,3 +789,33 @@ def test_empty_filter_returns_full_result_set(kuzu_graph) -> None:
     out = find_v2("client", {}, graph=kuzu_graph)
     assert out.success is True
     assert out.results
+
+
+def test_fail_loud_counter_increments_on_applicability_error(kuzu_graph) -> None:
+    before = filter_frame_counters().get("applicability", 0)
+    out = find_v2("symbol", {"path_prefix": "/api"}, graph=kuzu_graph)
+    assert out.success is False
+    assert filter_frame_counters().get("applicability", 0) == before + 1
+
+
+def test_fail_loud_counter_increments_on_wildcard_rejection(kuzu_graph) -> None:
+    before = filter_frame_counters().get("wildcard", 0)
+    out = find_v2("symbol", {"fqn_prefix": "com.foo.*"}, graph=kuzu_graph)
+    assert out.success is False
+    assert filter_frame_counters().get("wildcard", 0) == before + 1
+
+
+def test_fail_loud_counter_categories_are_distinct(kuzu_graph) -> None:
+    b_app = filter_frame_counters().get("applicability", 0)
+    b_wild = filter_frame_counters().get("wildcard", 0)
+    find_v2("symbol", {"path_prefix": "/x"}, graph=kuzu_graph)
+    find_v2("symbol", {"fqn_prefix": "com.*"}, graph=kuzu_graph)
+    assert filter_frame_counters().get("applicability", 0) == b_app + 1
+    assert filter_frame_counters().get("wildcard", 0) == b_wild + 1
+
+
+def test_fail_loud_counter_survives_multiple_calls(kuzu_graph) -> None:
+    before = filter_frame_counters().get("applicability", 0)
+    find_v2("symbol", {"http_method": "GET"}, graph=kuzu_graph)
+    find_v2("symbol", {"http_method": "GET"}, graph=kuzu_graph)
+    assert filter_frame_counters().get("applicability", 0) >= before + 2
