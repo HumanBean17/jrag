@@ -31,15 +31,15 @@ The PR body or thread must include **pasteable proof** that the author ran the f
 - A vague “ran pytest” with no file list and no exit code.
 - Substituting a different file list than the prompt declared, without explanation.
 
-If the task prompt declared **docs-only** (empty iteration list per UC15), subset evidence is: state that no test files were required for iteration, and still require **full-suite CI green** below.
+If the task prompt declared **docs-only** (empty iteration list per UC15), subset evidence is: state that no test files were required for iteration, and still require a **green `test` CI** run below (pytest may be skipped when only documentation paths changed).
 
-**Subset green does not replace the merge gate:** If full-suite CI is red, the PR is not merge-ready even when the declared subset passed locally.
+**Subset green does not replace the merge gate:** If the required `test` CI check is red (or missing), the PR is not merge-ready even when the declared subset passed locally.
 
 ## 3. Test evidence — full suite / CI (mandatory when repo CI exists)
 
-When this repository has a required GitHub Actions workflow that runs the **full** default suite (e.g. `pytest tests` with `JAVA_CODEBASE_RAG_RUN_HEAVY` unset or `0`):
+When this repository has a required GitHub Actions workflow (`.github/workflows/test.yml`):
 
-- [ ] The PR description or review comment includes a **link** to a **green** Actions run for the **full** suite on **this PR** at the **same commit** being reviewed (or the tip the reviewer approves).
+- [ ] The PR description or review comment includes a **link** to a **green** `test` Actions run on **this PR** at the **same commit** being reviewed (or the tip the reviewer approves). For code changes, the run must include `pytest tests` with `JAVA_CODEBASE_RAG_RUN_HEAVY` unset or `0`. For docs-only PRs, a green run with pytest skipped is sufficient.
 
 If CI is not yet enabled for the repo, note that in the review; once the workflow exists, **withhold approval** until both §2 and §3 are satisfied.
 

@@ -63,8 +63,8 @@ Per [`propose/completed/TEST-SUITE-FAST-LOOP-PROPOSE.md`](../../../propose/compl
 
 - Add a markdown section with the **exact heading** `## Tests to run (iteration loop)` inside the fenced **Prompt** block, **immediately after** `## Deliverables` and **before** `## Tests`.
 - Content: bullet list of `tests/test_*.py` paths, each with a **one-line rationale** tied to the PR’s code paths.
-- **Merge gate:** state that the **full** default suite (`pytest tests`, `JAVA_CODEBASE_RAG_RUN_HEAVY` unset or `0`) is enforced at merge time by CI once the repo workflow exists; the iteration list is for speed only.
-- **Docs-only (UC15):** if the PR is documentation-only with no test signal, use an explicit empty pattern, e.g. a single bullet `*(none — docs-only change; full suite still runs in CI.)*` — do not invent a fake file list.
+- **Merge gate:** state that CI enforces a green `test` check on every PR; code changes run the full default suite (`pytest tests`, `JAVA_CODEBASE_RAG_RUN_HEAVY` unset or `0`), docs-only PRs skip pytest but still need a green `test` job; the iteration list is for speed only.
+- **Docs-only (UC15):** if the PR is documentation-only with no test signal, use an explicit empty pattern, e.g. a single bullet `*(none — docs-only change; CI test job passes but pytest is skipped.)*` — do not invent a fake file list.
 
 This heading must stay verbatim so reviewers (and the repo **`pr-review`** skill in `.cursor/skills/pr-review/`) can grep for it.
 
@@ -108,12 +108,12 @@ Read the PR-XX section first. The plan is the source of truth.
 
 ## Tests to run (iteration loop)
 
-Run only these files during local iteration; full suite is the merge gate (CI on PR + `master`).
+Run only these files during local iteration; CI `test` on PR + `master` is the merge gate (full pytest when code changes).
 
 - `tests/test_<file>.py` — <one-line rationale>
 - `tests/test_<other>.py` — <one-line rationale>
 
-Docs-only PRs (UC15): use a single bullet such as *(none — docs-only change; full suite still runs in CI.)* instead of inventing paths.
+Docs-only PRs (UC15): use a single bullet such as *(none — docs-only change; CI test job passes but pytest is skipped.)* instead of inventing paths.
 
 ## Tests
 Run: `<command>`
