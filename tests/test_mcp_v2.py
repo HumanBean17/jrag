@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from collections import Counter
 from typing import Any
 
 import pytest
 from pydantic import ValidationError
 from mcp.server.fastmcp.exceptions import ToolError
+
+from java_ontology import VALID_RESOLVE_REASONS
 
 from mcp_v2 import (
     NodeFilter,
@@ -13,6 +16,7 @@ from mcp_v2 import (
     filter_frame_counters,
     find_v2,
     neighbors_v2,
+    resolve_v2,
     search_v2,
 )
 
@@ -819,3 +823,388 @@ def test_fail_loud_counter_survives_multiple_calls(kuzu_graph) -> None:
     find_v2("symbol", {"http_method": "GET"}, graph=kuzu_graph)
     find_v2("symbol", {"http_method": "GET"}, graph=kuzu_graph)
     assert filter_frame_counters().get("applicability", 0) >= before + 2
+
+
+# --- resolve (PR-RESOLVE-1) ---
+
+
+def test_resolve_exact_id_symbol_returns_one(kuzu_graph) -> None:
+    seed = find_v2("symbol", {"role": "CONTROLLER"}, graph=kuzu_graph, limit=1)
+    assert seed.success and seed.results
+    sym_id = seed.results[0].id
+    out = resolve_v2(sym_id, hint_kind="symbol", graph=kuzu_graph)
+    assert out.success is True
+    assert out.status == "one"
+    assert out.node is not None
+    assert out.node.id == sym_id
+
+
+def test_resolve_exact_fqn_symbol_returns_one(kuzu_graph) -> None:
+    controllers = find_v2("symbol", {"role": "CONTROLLER"}, graph=kuzu_graph, limit=50)
+    assert controllers.success and controllers.results
+    fqn = controllers.results[0].fqn
+    out = resolve_v2(fqn, hint_kind="symbol", graph=kuzu_graph)
+    assert out.success is True
+    assert out.status == "one"
+    assert out.node is not None
+    assert out.node.fqn == fqn
+
+
+def test_resolve_fqn_collision_across_microservices_returns_many(
+    kuzu_graph_fqn_collision_smoke,
+) -> None:
+    out = resolve_v2(
+        "com.example.SharedDto#process()",
+        hint_kind="symbol",
+        graph=kuzu_graph_fqn_collision_smoke,
+    )
+    assert out.success is True
+    assert out.status == "many"
+    assert len(out.candidates) >= 2
+    microservices = {c.node.microservice for c in out.candidates}
+    assert len(microservices) >= 2
+    assert any(c.reason == "exact_fqn" for c in out.candidates)
+
+
+def test_resolve_short_name_ambiguity_returns_many(kuzu_graph) -> None:
+    rows = kuzu_graph._rows(  # noqa: SLF001
+        "MATCH (s:Symbol) WHERE s.kind = 'method' RETURN s.name AS name"
+    )
+    counts = Counter(str(r["name"]) for r in rows if r.get("name"))
+    dup_name = next((name for name, c in counts.items() if c >= 2), None)
+    if dup_name is None:
+        pytest.skip("no duplicated method short names in bank-chat fixture")
+    out = resolve_v2(dup_name, hint_kind="symbol", graph=kuzu_graph)
+    assert out.success is True
+    assert out.status == "many"
+    assert any(c.reason == "short_name" for c in out.candidates)
+
+
+def test_resolve_status_none_returns_nonempty_message(kuzu_graph) -> None:
+    out = resolve_v2("com.nonexistent.ZzzMissing", hint_kind="symbol", graph=kuzu_graph)
+    assert out.success is True
+    assert out.status == "none"
+    assert out.message
+    assert "search" in out.message.lower()
+
+
+def test_resolve_empty_identifier_success_false(kuzu_graph) -> None:
+    out = resolve_v2("", graph=kuzu_graph)
+    assert out.success is False
+    assert out.status == "none"
+    assert out.message and out.message.startswith("Invalid identifier:")
+
+
+def test_resolve_whitespace_identifier_success_false(kuzu_graph) -> None:
+    out = resolve_v2("   ", graph=kuzu_graph)
+    assert out.success is False
+    assert out.status == "none"
+    assert out.message and out.message.startswith("Invalid identifier:")
+
+
+def test_resolve_cross_kind_without_hint_returns_mixed_kinds() -> None:
+    class CrossKindGraph:
+        def _rows(self, query: str, params: dict | None = None) -> list:
+            p = params or {}
+            if "WHERE s.name = $name" in query and p.get("name") == "customers":
+                return [
+                    {
+                        "id": "sym:customers",
+                        "fqn": "com.fixture.Customers",
+                        "microservice": "svc-a",
+                        "module": "fixture",
+                        "role": "",
+                        "symbol_kind": "class",
+                    }
+                ]
+            if "WHERE c.target_service = $target" in query and p.get("target") == "customers":
+                return [
+                    {
+                        "id": "client:customers",
+                        "client_kind": "feign_method",
+                        "target_service": "customers",
+                        "method": "GET",
+                        "path": "/api/customers",
+                        "path_template": "/api/customers",
+                        "path_regex": "",
+                        "member_fqn": "",
+                        "member_id": "",
+                        "microservice": "svc-a",
+                        "module": "fixture",
+                        "filename": "Client.java",
+                        "start_line": 1,
+                        "end_line": 1,
+                        "resolved": True,
+                        "source_layer": "builtin",
+                    }
+                ]
+            return []
+
+    out = resolve_v2("customers", graph=CrossKindGraph())  # type: ignore[arg-type]
+    assert out.success is True
+    assert out.status == "many"
+    kinds = {c.node.kind for c in out.candidates}
+    assert len(kinds) >= 2
+
+
+def test_resolve_dedupes_overlapping_generator_paths() -> None:
+    class DedupeGraph:
+        sym_row = {
+            "id": "sym:com.fixture.DedupeMe",
+            "fqn": "com.fixture.DedupeMe",
+            "microservice": "svc-a",
+            "module": "fixture",
+            "role": "",
+            "symbol_kind": "class",
+        }
+
+        def _rows(self, query: str, params: dict | None = None) -> list:
+            p = params or {}
+            if "WHERE s.fqn = $fqn" in query and p.get("fqn") == "DedupeMe":
+                return [self.sym_row]
+            if "WHERE s.fqn = $ident OR s.fqn ENDS WITH $suffix" in query:
+                return [self.sym_row]
+            if "WHERE s.name = $name" in query and p.get("name") == "DedupeMe":
+                return [self.sym_row]
+            return []
+
+    out = resolve_v2("DedupeMe", hint_kind="symbol", graph=DedupeGraph())  # type: ignore[arg-type]
+    assert out.success is True
+    assert out.status == "one"
+    assert len(out.candidates) == 0
+    assert out.node is not None
+    assert out.node.id == "sym:com.fixture.DedupeMe"
+
+
+def test_resolve_route_method_path_returns_one(kuzu_graph_route_extraction_smoke) -> None:
+    out = resolve_v2(
+        "service-a GET /api/users",
+        hint_kind="route",
+        graph=kuzu_graph_route_extraction_smoke,
+    )
+    assert out.success is True
+    assert out.status == "one"
+    assert out.node is not None
+    assert out.node.kind == "route"
+    assert out.node.microservice == "service-a"
+
+
+def test_resolve_route_template_returns_one_or_many(kuzu_graph_route_extraction_smoke) -> None:
+    out = resolve_v2(
+        "/api/users",
+        hint_kind="route",
+        graph=kuzu_graph_route_extraction_smoke,
+    )
+    assert out.success is True
+    assert out.status in {"one", "many"}
+    reasons = {c.reason for c in out.candidates}
+    if out.status == "many":
+        assert "route_template" in reasons
+    else:
+        assert out.node is not None
+
+
+def test_resolve_client_target_service(kuzu_graph, kuzu_db_path_http_caller_smoke) -> None:
+    from kuzu_queries import KuzuGraph
+
+    graph = kuzu_graph
+    rows = graph.list_clients(limit=500)
+    seed = next((r for r in rows if str(r.get("target_service") or "").strip()), None)
+    if seed is None:
+        graph = KuzuGraph(str(kuzu_db_path_http_caller_smoke))
+        rows = graph.list_clients(limit=500)
+        seed = next((r for r in rows if str(r.get("target_service") or "").strip()), None)
+    if seed is None:
+        pytest.skip("no client rows with target_service in fixture")
+    target_service = str(seed["target_service"])
+    out = resolve_v2(target_service, hint_kind="client", graph=graph)
+    assert out.success is True
+    assert out.status in {"one", "many"}
+    if out.status == "many":
+        assert any(c.reason == "client_target" for c in out.candidates)
+    else:
+        assert out.node is not None
+
+
+def test_resolve_client_target_path_pair(kuzu_graph, kuzu_db_path_http_caller_smoke) -> None:
+    from kuzu_queries import KuzuGraph
+
+    def _seed_client(g: KuzuGraph) -> dict | None:
+        rows = g.list_clients(limit=500)
+        return next(
+            (
+                r
+                for r in rows
+                if str(r.get("target_service") or "").strip()
+                and str(r.get("path") or "").startswith("/")
+            ),
+            None,
+        )
+
+    graph = kuzu_graph
+    seed = _seed_client(graph)
+    if seed is None:
+        graph = KuzuGraph(str(kuzu_db_path_http_caller_smoke))
+        seed = _seed_client(graph)
+    if seed is None:
+        pytest.skip("no client with target_service and path in fixture")
+    target = str(seed["target_service"])
+    path = str(seed["path"])
+    prefix = path[: min(len(path), 8)]
+    out = resolve_v2(f"{target} {prefix}", hint_kind="client", graph=graph)
+    assert out.success is True
+    assert out.status in {"one", "many"}
+    reasons = {c.reason for c in out.candidates}
+    if out.status == "many":
+        assert "client_target_path" in reasons
+    else:
+        assert out.node is not None
+
+
+def test_resolve_natural_language_sentence_returns_none(kuzu_graph) -> None:
+    out = resolve_v2(
+        "the client that handles smartcare assignments",
+        graph=kuzu_graph,
+    )
+    assert out.success is True
+    assert out.status == "none"
+
+
+def test_resolve_wildcard_identifier_returns_none(kuzu_graph) -> None:
+    out = resolve_v2("com.foo.*Service", hint_kind="symbol", graph=kuzu_graph)
+    assert out.success is True
+    assert out.status == "none"
+
+
+def test_resolve_every_reason_in_closed_set_appears() -> None:
+    from mcp_v2 import (
+        _resolve_client_candidates,
+        _resolve_route_candidates,
+        _resolve_symbol_candidates,
+    )
+
+    sym_row = {
+        "id": "sym:reason",
+        "fqn": "com.reason.Type",
+        "microservice": "svc",
+        "module": "mod",
+        "role": "",
+        "symbol_kind": "class",
+    }
+    route_row = {
+        "id": "route:reason",
+        "kind": "http_endpoint",
+        "framework": "spring_mvc",
+        "method": "GET",
+        "path": "/reason",
+        "path_template": "/reason",
+        "path_regex": "",
+        "topic": "",
+        "broker": "",
+        "feign_name": "",
+        "feign_url": "",
+        "microservice": "svc",
+        "module": "mod",
+        "filename": "R.java",
+        "start_line": 1,
+        "end_line": 1,
+        "resolved": True,
+    }
+    client_row = {
+        "id": "client:reason",
+        "client_kind": "feign_method",
+        "target_service": "reasonsvc",
+        "method": "GET",
+        "path": "/reason/path",
+        "path_template": "/reason/path",
+        "path_regex": "",
+        "member_fqn": "",
+        "member_id": "",
+        "microservice": "svc",
+        "module": "mod",
+        "filename": "C.java",
+        "start_line": 1,
+        "end_line": 1,
+        "resolved": True,
+        "source_layer": "builtin",
+    }
+
+    class ReasonGraph:
+        def _rows(self, query: str, params: dict | None = None) -> list:
+            if "WHERE s.id = $id" in query:
+                return [sym_row]
+            if "WHERE s.fqn = $fqn" in query:
+                return [sym_row]
+            if "ENDS WITH $suffix" in query:
+                return [sym_row]
+            if "WHERE s.name = $name" in query:
+                return [sym_row]
+            if "WHERE r.id = $id" in query:
+                return [route_row]
+            if "r.method = $method" in query:
+                return [route_row]
+            if "r.path = $path OR r.path_template = $path" in query:
+                return [route_row]
+            if "WHERE c.id = $id" in query:
+                return [client_row]
+            if "STARTS WITH $path" in query:
+                return [client_row]
+            if "WHERE c.target_service = $target" in query:
+                return [client_row]
+            return []
+
+    g = ReasonGraph()  # type: ignore[arg-type]
+    seen: set[str] = set()
+    for _node, reason, _spec in _resolve_symbol_candidates(g, "sym:reason"):
+        seen.add(reason)
+    for _node, reason, _spec in _resolve_symbol_candidates(g, "com.reason.Type"):
+        seen.add(reason)
+    for _node, reason, _spec in _resolve_symbol_candidates(g, "Type"):
+        seen.add(reason)
+    for _node, reason, _spec in _resolve_route_candidates(g, "route:reason"):
+        seen.add(reason)
+    for _node, reason, _spec in _resolve_route_candidates(g, "GET /reason"):
+        seen.add(reason)
+    for _node, reason, _spec in _resolve_route_candidates(g, "/reason"):
+        seen.add(reason)
+    for _node, reason, _spec in _resolve_client_candidates(g, "client:reason"):
+        seen.add(reason)
+    for _node, reason, _spec in _resolve_client_candidates(g, "reasonsvc"):
+        seen.add(reason)
+    for _node, reason, _spec in _resolve_client_candidates(g, "reasonsvc /reason"):
+        seen.add(reason)
+
+    assert seen == set(VALID_RESOLVE_REASONS)
+
+
+def test_resolve_success_output_invariants(kuzu_graph, kuzu_graph_fqn_collision_smoke) -> None:
+    one = resolve_v2(
+        "com.nonexistent.ZzzMissing",
+        hint_kind="symbol",
+        graph=kuzu_graph,
+    )
+    assert one.success is True
+    assert one.status == "none"
+    assert one.node is None
+    assert one.candidates == []
+    assert one.message
+
+    many = resolve_v2(
+        "com.example.SharedDto#process()",
+        hint_kind="symbol",
+        graph=kuzu_graph_fqn_collision_smoke,
+    )
+    assert many.success is True
+    assert many.status == "many"
+    assert many.node is None
+    assert len(many.candidates) >= 2
+
+    sym = find_v2("symbol", {"role": "CONTROLLER"}, graph=kuzu_graph, limit=1)
+    assert sym.success and sym.results
+    single = resolve_v2(sym.results[0].id, hint_kind="symbol", graph=kuzu_graph)
+    assert single.success is True
+    assert single.status == "one"
+    assert single.node is not None
+    assert single.candidates == []
+
+
