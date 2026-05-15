@@ -1,6 +1,6 @@
 # `resolve` tool — strict-frame identifier resolution for the MCP V2 surface
 
-**Status**: active (plan: [`plans/PLAN-RESOLVE-TOOL.md`](../plans/PLAN-RESOLVE-TOOL.md), PR #135)
+**Status**: completed (landed: PR #135 + PR #140; plan: [`plans/completed/PLAN-RESOLVE-TOOL.md`](../plans/completed/PLAN-RESOLVE-TOOL.md))
 **Author**: Dmitriy Teriaev + Computer
 **Date**: 2026-05-15
 **Builds on**: [`propose/completed/MCP-FILTER-FRAME-PROPOSE.md`](completed/MCP-FILTER-FRAME-PROPOSE.md) (locked, #117 shipped via PR-FRAME-1 → PR-FRAME-3)
