@@ -11,15 +11,48 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dorny/paths-filter@v3
+        id: changes
+        with:
+          filters: |
+            docs:
+              - '**/*.md'
+              - '**/*.mdc'
+              - 'docs/**'
+              - 'propose/**'
+              - 'plans/**'
+              - 'reports/**'
+              - '.cursor/**'
+              - 'AGENTS.md'
+              - 'README.md'
+              - 'CODEBASE_REQUIREMENTS.md'
+              - '.github/CODEOWNERS'
+            code:
+              - '**/*.py'
+              - 'requirements.txt'
+              - 'pyproject.toml'
+              - '.github/workflows/**'
+              - 'tests/**'
+              - '!tests/**/*.md'
+              - 'automation/**'
+              - '!automation/**/*.md'
       - uses: actions/setup-python@v5
+        if: steps.changes.outputs.code == 'true'
         with:
           python-version: "3.11"
       - name: Install dependencies
+        if: steps.changes.outputs.code == 'true'
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install -e .
       - name: Run tests
+        if: steps.changes.outputs.code == 'true'
         env:
           JAVA_CODEBASE_RAG_RUN_HEAVY: "0"
         run: pytest tests -v
+      - name: Skip tests (docs-only)
+        if: steps.changes.outputs.code != 'true'
+        run: echo "Docs-only change; pytest skipped."
