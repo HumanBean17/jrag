@@ -4,8 +4,8 @@ Use this **after** you've read `README.md` + `CODEBASE_REQUIREMENTS.md`,
 [`docs/AGENT-GUIDE.md`](./AGENT-GUIDE.md), applied any brownfield annotations,
 and built the index against your real project. The checklist mixes **shell**
 checks (`java-codebase-rag` CLI for graph health and Lance tables) with **MCP**
-checks (`search` / `find` / `describe` / `neighbors` — the only navigation
-tools).
+checks (`search` / `find` / `describe` / `neighbors` / `resolve` — the MCP
+navigation tools).
 
 Each item has:
 

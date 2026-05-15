@@ -3,7 +3,7 @@
 > **How to use this file.** Copy the block between the `<!-- BEGIN/END
 > java-codebase-rag MCP guide -->` markers below into your project's `QWEN.md`,
 > `CLAUDE.md`, `AGENTS.md`, or equivalent. The block is self-contained:
-> **four** MCP navigation tools, one shared **`NodeFilter`**, edge-type
+> **five** MCP navigation tools, one shared **`NodeFilter`**, edge-type
 > taxonomy, a forced reasoning preamble, a decision tree, a recovery
 > playbook, and slash-style prompt aliases. Update by re-pulling from this
 > repo when the ontology bumps.
@@ -31,7 +31,7 @@ This MCP indexes Java enterprise projects into two stores:
 - **LanceDB** — vector + optional hybrid (FTS + vector) search over Java / SQL / YAML chunks.
 - **Kuzu graph** — exact structure: **node kinds** `Symbol`, `Route`, `Client` and **nine edge types** (see *Edge taxonomy* below).
 
-**MCP surface (navigation only):** `search`, `find`, `describe`, `neighbors`.
+**MCP surface (navigation only):** `search`, `find`, `describe`, `neighbors`, `resolve`.
 
 **Operator / diagnostics (not MCP):** use the **`java-codebase-rag`** CLI — lifecycle (`init`, `increment`, `reprocess`, `erase`) plus `meta`, `tables`, `diagnose-ignore`, `analyze-pr`. Rebuilds are slow; the coding agent should not pretend it can reindex via MCP. For lifecycle commands, subprocess progress is written to **stderr** (use **`--quiet`** to suppress it); **stdout** is only the structured result payload.
 
@@ -65,7 +65,7 @@ When a method carries **`@CodebaseHttpRoute`** or **`@CodebaseHttpClient`** (inc
 
 **Workflow (GPS model):**
 
-1. **Locate** — `search` (natural language / fragment) or `find` (structured `NodeFilter`).
+1. **Locate** — `resolve` when you hold an identifier-shaped string; `search` (natural language / fragment) or `find` (structured `NodeFilter`) for discovery.
 2. **Inspect** — `describe(id)` to see the full record and `edge_summary` (per stored edge label `in`/`out` counts, plus optional composed dot-keys for type Symbols — see `describe` below).
 3. **Walk** — `neighbors` in a loop with explicit **`direction`** and **`edge_types`** until you have enough evidence. Multi-hop “trace” and “impact” are **your** reasoning, not a separate tool.
 
@@ -75,7 +75,7 @@ Before every MCP tool call, output **one short line**:
 
 ```
 Q-class: <semantic | structured | inspect | walk>
-Pick: <search|find|describe|neighbors>  Why: <≤8 words>
+Pick: <search|find|describe|neighbors|resolve>  Why: <≤8 words>
 ```
 
 Then check *Argument shapes* (real JSON arrays/objects, required `neighbors` fields). If the call returns nothing useful, do not thrash — use the **Recovery playbook**.
@@ -128,7 +128,7 @@ When reading or comparing symbols, method identity uses **FQN + signature**:
 - Simple type names in parentheses (`String`, `List`), generics erased (`List<String>` → `List`).
 - No spaces after commas. No-arg: `()`. Constructor: `#<init>(...)`.
 
-Use `search` to recover the stored symbol id / FQN if you only have a simple name.
+Use `resolve` when the simple name (or FQN fragment) is identifier-shaped; use `search` for fuzzy ranked discovery if you need chunk context before you have a stable id.
 
 #### D. `neighbors` — required arguments
 
@@ -161,9 +161,13 @@ The same `http_method` key filters HTTP verbs on **routes** (server-side declare
 - **`search.query` is not a DSL** — treat it as opaque text scored against the index. Structured predicates belong in `find`.
 - **`neighbors` filters neighbor rows by kind** — the first neighbor whose kind rejects the filter fails the whole call (no per-row silent skip).
 
-### Identifier resolution (pre-`resolve`)
+### Identifier resolution
 
-For identifier-shaped lookups without a stable graph id or exact symbol FQN, use **`search(query=…)`** for ranked candidates, then **`describe(id=…)`** (or `describe(fqn=…)` when you have an exact FQN) on each promising row until you confirm the right node. A dedicated **`resolve`** tool is planned separately; until it ships, this multi-call pattern is the supported fallback.
+Use **`resolve(identifier=…, hint_kind=…)`** for identifier-shaped inputs: canonical ids (`sym:` / `route:` / `client:`), symbol FQN or suffix, HTTP `METHOD /path`, route path template, client `target_service`, or `target_service` + path prefix pair. Omit `hint_kind` to match across all three node kinds when the string is enough to scope generators.
+
+Branch on **`status`** in the response: **`one`** → `describe(id=…)` on the returned `node`; **`many`** → inspect `candidates` (each has a closed **`reason`**, **`score`** for display only, and a **`NodeRef`** including `microservice` when the row has one), pick one, then `describe(id=…)`; **`none`** (well-formed miss) → fall back to **`search(query=…)`** for natural-language or fuzzy discovery. Malformed empty / whitespace identifiers return `success=false` first.
+
+Prefer **`resolve` → `describe(id=…)`** over **`describe(fqn=…)`** when an FQN might collide: `describe(fqn=…)` still returns the first graph row and a hint, but `resolve` makes ambiguity explicit.
 
 **`source_layer` vs `role`:** On **Client** nodes, `source_layer` records which brownfield or built-in layer produced the client declaration (`builtin`, `layer_a_meta`, `layer_b_ann`, `layer_c_source`, `layer_b_fqn`, …). On **Symbol** nodes, `role` is the inferred architectural stereotype (`CONTROLLER`, `SERVICE`, `REPO`, …). They answer different questions; names stay distinct.
 
@@ -175,12 +179,13 @@ Exact allowed values for roles, capabilities, client kinds, etc. live in `java_o
 
 | User asks… | First step | Typical follow-up |
 | ---------- | ---------- | ----------------- |
+| Identifier-shaped string (FQN, `sym:`/ `route:` / `client:` id, route path, client target, …) | `resolve` (optional `hint_kind`) | `describe` → `neighbors` |
 | Fuzzy / NL “where is X” | `search` | `describe` → `neighbors` |
 | All controllers in service S | `find(kind="symbol", filter={"microservice":S,"role":"CONTROLLER"})` | `neighbors` for `CALLS` / `EXPOSES` |
 | List interfaces in service S | `find(kind="symbol", filter={"microservice":S,"symbol_kind":"interface"})` | `neighbors` / `describe` |
 | List HTTP or Kafka entry points | `find(kind="route", filter={...})` | `describe` |
 | List Feign / HTTP clients | `find(kind="client", filter={...})` | `neighbors(..., out, ["HTTP_CALLS"])` if needed |
-| Who calls method M? | Resolve id via `search` or `find` | `neighbors(ids=sym_id, direction="in", edge_types=["CALLS"])` |
+| Who calls method M? | Stable symbol id via `resolve`, `find`, or `search` | `neighbors(ids=sym_id, direction="in", edge_types=["CALLS"])` |
 | What does M call? | Same | `neighbors(..., direction="out", edge_types=["CALLS"])` |
 | Who hits this route? | `find(kind="route", ...)` or route id from logs | `neighbors(ids=route_id, direction="in", edge_types=["HTTP_CALLS","ASYNC_CALLS","EXPOSES"])` |
 | Handler for a route | Have `route_id` | `neighbors(ids=route_id, direction="in", edge_types=["EXPOSES"])` |
@@ -193,10 +198,10 @@ Exact allowed values for roles, capabilities, client kinds, etc. live in `java_o
 
 **Rules of thumb:**
 
-1. **Graph beats vector for exact structural questions** — do not `search` for “who calls `Foo#bar`” if you can use `find` + `neighbors(in, [CALLS])`.
+1. **Graph beats vector for exact structural questions** — do not `search` for “who calls `Foo#bar`” if you can use `resolve` / `find` + `neighbors(in, [CALLS])`.
 2. **Vector beats graph for fuzzy discovery** — `search` first, then pivot to `describe` / `neighbors`.
 
-### Tool reference — four tools
+### Tool reference — five tools
 
 #### `search`
 
@@ -214,7 +219,7 @@ Exact allowed values for roles, capabilities, client kinds, etc. live in `java_o
 #### `describe`
 
 - **Purpose:** Full node payload + `edge_summary`: `in` / `out` counts **per stored graph edge label** (what exists as edges in Kuzu). For **type** Symbols only (`class`, `interface`, `enum`, `record`, `annotation`), the same map may also include **describe-time composed** dot-keys — summaries of member edges, not stored labels — see the next bullets (`DECLARES.DECLARES_CLIENT`, `DECLARES.EXPOSES`); those keys are **not** valid in `neighbors(edge_types=…)`. For **method** Symbols, the map may include **override-axis** virtual keys (`OVERRIDDEN_BY`, `OVERRIDDEN_BY.DECLARES_CLIENT`, `OVERRIDDEN_BY.EXPOSES`, `OVERRIDES`); see **Override-axis keys (method Symbols)** below — also not `EdgeType` literals.
-- **Args:** `id` (symbol, route, or client id) or **`fqn`** (exact symbol FQN when you do not have the graph id). When both are set, `id` wins. For ambiguous identifiers without an exact id/FQN, see **Identifier resolution (pre-`resolve`)** above.
+- **Args:** `id` (symbol, route, or client id) or **`fqn`** (exact symbol FQN when you do not have the graph id). When both are set, `id` wins. For identifier-shaped inputs and FQN collision handling, see **Identifier resolution** above.
 
 **Composed `edge_summary` keys (type Symbols).** Keys use dot notation: `<parent_relation>.<projected_relation>`. Two are emitted today:
 
@@ -236,6 +241,12 @@ Walk recipe (declaration side): `neighbors(ids=<method_id>, direction="in", edge
 Static methods suppress the entire override-axis rollup. Constructors do not receive these keys.
 
 These keys are **not** valid `EdgeType` literals — `neighbors(edge_types=["OVERRIDDEN_BY"])` fails at the Pydantic boundary. Use them as hop affordances only.
+
+#### `resolve`
+
+- **Purpose:** Identifier-shaped lookup across symbols, routes, and clients; returns `status` **`one`**, **`many`**, or **`none`** with optional `node` / `candidates` (see **Identifier resolution**).
+- **Args:** `identifier` (string), optional `hint_kind` (`symbol` | `route` | `client`) to constrain generators.
+- **Tip:** On **`many`**, use per-candidate `NodeRef.id` and `reason`; follow with **`describe(id=…)`**. On **`none`**, use **`search`** for fuzzy discovery.
 
 #### `neighbors`
 
@@ -264,7 +275,7 @@ Source of truth: `java_ontology.py`. Strings are case-sensitive.
 | ------- | ------------ | --- |
 | `neighbors` validation error | Missing `direction` or `edge_types` | Add both explicitly |
 | Empty `neighbors` | Wrong edge type for the node kind, or wrong direction | Check `describe.edge_summary`; `EXPOSES` is Symbol↔Route — direction matters |
-| Cannot find symbol | Wrong id or stale index | `search` with distinctive string; verify `java-codebase-rag meta` (CLI) |
+| Cannot find symbol | Wrong id or stale index | `resolve` / `search` with distinctive string; verify `java-codebase-rag meta` (CLI) |
 | `find` returns too much | Over-broad filter | Add `microservice`, `fqn_prefix`, `path_prefix`, etc. |
 | Route not found | Path mismatch | Use `path_prefix` on `find(kind="route", …)`; check README brownfield routes |
 | Need ontology / rebuild / PR analysis | Wrong layer | Use **`java-codebase-rag`** CLI, not MCP |
