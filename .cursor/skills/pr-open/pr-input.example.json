@@ -1,39 +1,35 @@
 {
-  "title": "feat: retarget pass6 hint recovery to Client declarations (PR-LC2)",
+  "title": "feat: <short scope> (PR-Xn)",
   "base": "master",
   "draft": false,
-  "scope": "Implements PR-LC2 from `plans/completed/PLAN-LIST-CLIENTS-MCP-TOOL.md` by retargeting pass6 hint recovery to caller-side `Client` declarations.",
+  "scope": "Implements PR-Xn from `plans/PLAN-<TOPIC>.md` (or `plans/completed/PLAN-<TOPIC>.md` if the plan landed) by <one-sentence outcome>.",
   "what_changed": [
-    "Updated `build_ast_graph.py` pass6 fallback hint lookup to recover Feign hints from persisted `Client` rows.",
-    "Preserved existing `HTTP_CALLS(Symbol -> Route)` semantics and match outcomes.",
-    "Added `tests/test_client_hint_recovery.py` with focused continuity regressions."
+    "Example bullet: primary code path touched.",
+    "Example bullet: tests or fixtures added."
   ],
   "semantics_non_goals": [
-    "No LC3 MCP surface changes in this PR.",
-    "No broad LC1 schema redesign beyond consuming existing `Client` rows."
+    "Explicitly out-of-scope follow-ups for this PR."
   ],
   "validation": {
     "lint": [
       "`ruff check .` ✅"
     ],
     "tests": [
-      "`pytest tests/test_client_hint_recovery.py -v` ✅ (4 passed)",
-      "`pytest tests -v` ✅ (302 passed, 4 skipped)"
+      "`pytest tests/test_<area>.py -v` ✅",
+      "`pytest tests -v` ✅"
     ],
     "additional_checks": [
-      "`pytest tests/test_feign_not_exposer.py::test_feign_caller_resolves_to_target_endpoint tests/test_client_hint_recovery.py::test_find_route_callers_still_returns_expected_feign_caller -v` ✅"
+      "Optional focused pytest or `rg` spot-checks from the plan prompt."
     ]
   },
   "sentinel_checks": [
-    "`rg \"@mcp.tool\\(name=\\\"list_clients\\\"|ClientRowDto|ClientsListOutput\" server.py kuzu_queries.py` -> no matches ✅"
+    "`rg '<scope pattern>' <paths>` -> expected matches or silence ✅"
   ],
   "manual_evidence": [
-    "`python build_ast_graph.py --source-root tests/bank-chat-system --kuzu-path /tmp/check_lc2 --verbose`",
-    "Observed pass6 behavior remains stable with expected match breakdowns."
+    "Commands from the plan prompt, with expected stdout/stderr signals."
   ],
   "out_of_scope_confirmed": [
-    "LC3 MCP tool/DTO/docs (`list_clients`).",
-    "Route tool redesign or companion tools."
+    "Items the plan marks out of scope for this PR."
   ],
   "definition_of_done": [
     "All listed deliverables for this PR are shipped.",

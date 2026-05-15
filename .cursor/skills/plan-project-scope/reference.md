@@ -1,9 +1,6 @@
 # Plan Style Reference (Repo-grounded)
 
-This reference distills what made recent plan PRs strong:
-- `#39` (`plans/completed/PLAN-LIST-CLIENTS-MCP-TOOL.md`)
-- `#11` (`plans/PLAN-TIER1B-COMPLETION.md` + prompts file)
-- `#2` (`plans/PLAN-TIER1-COMPLETION.md`)
+This reference distills patterns from **merged multi-PR plans** in this repo. **Do not cache example filenames from here** — open **`plans/completed/`** (and root **`plans/`** for in-flight work) for current `PLAN-*.md` / `CURSOR-PROMPTS-*.md` examples; match their section depth and tables, not a particular PR number.
 
 ## Non-negotiables
 

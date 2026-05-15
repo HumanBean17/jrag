@@ -15,7 +15,7 @@ The system extracts a deterministic property graph from Java source (tree-sitter
 
 For the design rationale, the GPS metaphor, and the full ontology, see [`docs/paper/paper.pdf`](./docs/paper/paper.pdf) (architecture report).
 
-> **Stability disclaimer.** This repo does **not** promise backward compatibility. MCP tool contracts, env vars, Lance/Kuzu schemas, config files, and Python APIs may change without a deprecation period. Track `main` and re-index when the docs say to.
+> **Stability disclaimer.** This repo does **not** promise backward compatibility. MCP tool contracts, env vars, Lance/Kuzu schemas, config files, and Python APIs may change without a deprecation period. Track `main` and rebuild indexes when ontology or embedding settings change (see [§6 Graph layer](#6-graph-layer)).
 
 ---
 
@@ -65,24 +65,7 @@ The operator-facing surface is **five** variables (plus MCP-only `JAVA_CODEBASE_
 
 Only the names in the table above (plus `JAVA_CODEBASE_RAG_SOURCE_ROOT` for MCP hosts) are read as configuration. Project config belongs in **`.java-codebase-rag.yml`** (or `.yaml`).
 
-### On-disk layout migration
-
-If you still have paths or files from older layout conventions:
-
-```bash
-# Default index directory (when you intend to keep the same data)
-mv lancedb_data .java-codebase-rag
-
-# Project YAML (only `.java-codebase-rag.yml` / `.yaml` are loaded)
-mv .lancedb-mcp.yml .java-codebase-rag.yml
-# or: mv .lancedb-mcp.yaml .java-codebase-rag.yaml
-
-# Layered ignore directory (same gitignore-style rules; new location only)
-mkdir -p .java-codebase-rag
-mv .lancedb-mcp/ignore .java-codebase-rag/ignore   # if you had a project-level ignore file
-```
-
-**Where things live today** (for scripts and operators):
+**Paths and conventions** (for scripts and operators):
 
 - **`JAVA_CODEBASE_RAG_INDEX_DIR`** — filesystem path to the index directory (not a URI). Lance opens this directory; Kuzu is always `<index-dir>/code_graph.kuzu`; cocoindex keeps **`cocoindex.db`** next to them.
 - **Java tree root** — CLI: `--source-root` (else cwd). MCP stdio: set `JAVA_CODEBASE_RAG_SOURCE_ROOT` when the Java repo root differs from the server process cwd.
@@ -91,13 +74,9 @@ mv .lancedb-mcp/ignore .java-codebase-rag/ignore   # if you had a project-level 
 
 Python package: **`java_codebase_rag`** (`python -m java_codebase_rag.cli`).
 
-**Operator note:** the hidden CLI verb **`refresh`** invokes **`reprocess`** and prints a one-line stderr deprecation; call **`reprocess`** in new scripts.
-
-If an old on-disk index folder is wasting space, relocate or delete it after your data lives under `.java-codebase-rag/` (some installs used a top-level directory named `lancedb_data`).
-
 ### Project YAML reference (`.java-codebase-rag.yml`)
 
-A single file at the project root (the directory you pass as `--source-root`, or cwd) holds everything that isn't an environment variable. The two accepted filenames are `.java-codebase-rag.yml` and `.java-codebase-rag.yaml`; if both exist, `.yml` wins. Legacy `.lancedb-mcp.yml` is no longer read.
+A single file at the project root (the directory you pass as `--source-root`, or cwd) holds everything that isn't an environment variable. The two accepted filenames are `.java-codebase-rag.yml` and `.java-codebase-rag.yaml`; if both exist, `.yml` wins.
 
 **All keys are optional.** A project with no YAML at all uses built-in defaults plus env vars. Add only the keys you need.
 
@@ -300,7 +279,7 @@ Shared flags on all subcommands: `--source-root`, `--index-dir`, `--embedding-mo
 | Introspection | `meta`, `tables`, `diagnose-ignore` | Health, table listing, ignore-layer diagnostics. |
 | Analysis | `analyze-pr` | Blast-radius / risk from a unified diff. |
 
-The hidden alias `refresh` → `reprocess` prints a one-line stderr deprecation; prefer `reprocess` in scripts.
+The hidden alias **`refresh`** invokes **`reprocess`** (prefer **`reprocess`** in new scripts).
 
 Examples:
 
