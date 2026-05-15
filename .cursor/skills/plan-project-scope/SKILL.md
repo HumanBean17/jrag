@@ -144,7 +144,7 @@ Each PR prompt should include:
 - pytest commands and evidence expectations (avoid hard totals that go stale)
 - definition of done and PR title convention
 
-Use `plans/completed/CURSOR-PROMPTS-TIER1B.md` as the structural reference.
+Use **any** completed **`plans/completed/CURSOR-PROMPTS-*.md`** as the structural reference (pick one that matches the effort’s shape).
 
 ## Naming and placement
 

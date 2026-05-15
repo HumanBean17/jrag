@@ -123,7 +123,7 @@ You cannot reason reliably about cross-service behaviour until these surfaces ex
 
 ### Mission: Prepare to write a propose doc
 
-**When it applies:** The user is about to author a design/propose document and needs scoped evidence from the codebase (for example a migration or cross-cutting redesign).
+**When it applies:** The user is about to author a design/propose document and needs scoped evidence from the codebase (for example a cross-cutting redesign).
 
 **Goal:** An evidence inventory: affected routes/clients/symbols, dependency direction, and known unknowns suitable for a propose’s “scope / risks / alternatives” sections.
 

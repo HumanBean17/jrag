@@ -31,24 +31,16 @@ when needed.
 - `CODEBASE_REQUIREMENTS.md` — Java-repo assumptions and per-file
   map of what to edit when a target tree doesn't match defaults.
 - `tests/README.md` — testing philosophy.
-- `propose/` and `propose/completed/` — design proposes; the active
-  ones describe in-flight scope (currently
-  `TIER2-INCREMENTAL-REBUILD-PROPOSE.md` (paired with
-  `INDEX-AUTO-MODE-PROPOSE.md` — the decision engine
-  for the Kuzu rebuild path),
-  `RANKING-MICROSERVICE-PROPOSE.md`,
-  `ENHANCED-ROLE-RECOGNITION-PROPOSE.md`,
-  `DEFERRED-REST-CLIENT-MIGRATION-PROPOSE.md`,
-  `PRODUCT-VISION.md`) and the completed ones explain *why* current
-  code looks the way it does. Tier 1 + Tier 1B proposes
-  (`TIER1-COMPLETION-PROPOSE.md`, `TIER1B-HTTP-ASYNC-EDGES-PROPOSE.md`)
-  are now under `propose/completed/` since their PR sequences merged.
-- `plans/` and `plans/completed/` — longer-form plans (e.g.
-  capabilities model, tier completions, brownfield role overrides).
-  Active plan: `PLAN-POST-TIER1B-FOLLOWUPS.md` (deferred catches from
-  Tier 1B reviews). Completed Tier 1B plans + cursor-prompts
-  (`PLAN-TIER1B-COMPLETION.md`, `CURSOR-PROMPTS-TIER1B.md`) are kept
-  under `plans/completed/` as reference templates.
+- `propose/` — design proposes. **In-flight** proposes are **`*.md`
+  at the root of `propose/`** (not under `propose/completed/`).
+  **`propose/completed/`** — landed work and rationale for current code.
+  **List or search this tree** for current filenames; do not rely on
+  enumerated copies in rules.
+- `plans/` — longer-form multi-PR plans (`PLAN-*.md`) and
+  **`CURSOR-PROMPTS-*.md`** for per-PR Cursor handoffs. Top-level `*.md`
+  here are active or in-progress efforts. **`plans/completed/`** —
+  finished plans and completed prompt sets (templates). Same rule: **open
+  the directory**, don’t cache a mental file list from here.
 - `.cursor/rules/breaking-changes.mdc` — the no-back-compat policy.
 
 ## File map (top of repo)

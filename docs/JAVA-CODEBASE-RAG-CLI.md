@@ -40,25 +40,7 @@ java-codebase-rag meta --source-root /path/to/java/repo --index-dir /path/to/.ja
 
 **Precedence** (when a knob exists in more than one place): **CLI flag > env var > YAML (`.java-codebase-rag.yml`) > built-in default**.
 
-Only the variable names in the table above are read as configuration. Rename on-disk config with:
-
-```bash
-mv .lancedb-mcp.yml .java-codebase-rag.yml
-# or: mv .lancedb-mcp.yaml .java-codebase-rag.yaml
-```
-
-If you still have data under `lancedb_data/` and want a single index dir:
-
-```bash
-mv lancedb_data .java-codebase-rag
-```
-
-Move layered ignore files the same way:
-
-```bash
-mkdir -p .java-codebase-rag
-mv .lancedb-mcp/ignore .java-codebase-rag/ignore
-```
+Only the variable names in the table above are read as configuration.
 
 ## Shared flags
 
@@ -149,7 +131,7 @@ java-codebase-rag erase --source-root /path/to/java/repo --index-dir /path/to/.j
 
 ### Hidden `refresh` alias
 
-Invoking `java-codebase-rag refresh` runs **`reprocess`** and prints a one-line **stderr** deprecation warning. Prefer **`reprocess`** in scripts.
+`java-codebase-rag refresh` runs **`reprocess`**. Prefer **`reprocess`** in scripts.
 
 ## Introspection subcommands
 
@@ -232,6 +214,6 @@ Prefer **`java-codebase-rag reprocess --graph-only`** when you only need Kuzu re
 
 ## See also
 
-- [README.md](../README.md) — env vars, MCP tool table, ignore layout, migration table.
+- [README.md](../README.md) — env vars, MCP tool table, ignore layout.
 - [CODEBASE_REQUIREMENTS.md](../CODEBASE_REQUIREMENTS.md) — repo layout, brownfield, when to rebuild.
 - [MANUAL-VERIFICATION-CHECKLIST.md](./MANUAL-VERIFICATION-CHECKLIST.md) — phased checks that mix CLI + MCP.

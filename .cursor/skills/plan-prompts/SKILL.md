@@ -1,6 +1,6 @@
 ---
 name: plan-prompts
-description: Generate per-PR Cursor execution prompts in `plans/CURSOR-PROMPTS-*.md` from an existing `plans/PLAN-*.md`. Each prompt must include `## Tests to run (iteration loop)` (pytest file subset + rationales) between Deliverables and Tests per TEST-SUITE-FAST-LOOP. Use when the user asks to split implementation into Cursor-ready PR prompts with strict in-scope/out-of-scope guardrails.
+description: Generate per-PR Cursor execution prompts in `plans/CURSOR-PROMPTS-*.md` from an existing `plans/PLAN-*.md`. Each prompt must include `## Tests to run (iteration loop)` (pytest file subset + rationales) between Deliverables and Tests per the iteration convention in `tests/README.md`. Use when the user asks to split implementation into Cursor-ready PR prompts with strict in-scope/out-of-scope guardrails.
 disable-model-invocation: true
 ---
 
@@ -29,9 +29,10 @@ If already present in the plan, do not ask again.
 ## Source references to read
 
 Always read:
-1. `plans/completed/CURSOR-PROMPTS-TIER1B.md` (primary template)
-2. The target `plans/PLAN-*.md`
-3. `README.md` for current public contract terms when prompts mention tooling/schema
+1. **One** structural template from **`plans/completed/CURSOR-PROMPTS-*.md`** (pick a completed handoff similar in size or topic; if unsure, open the directory and choose any full example).
+2. The target **`plans/PLAN-*.md`**
+3. **`tests/README.md`** for merge gate + iteration-loop expectations
+4. **`README.md`** for current public contract terms when prompts mention tooling/schema
 
 ## Output file contract
 
@@ -59,7 +60,7 @@ Each PR prompt must include all of:
 
 ### Tests to run (iteration loop) — required subsection
 
-Per [`propose/completed/TEST-SUITE-FAST-LOOP-PROPOSE.md`](../../../propose/completed/TEST-SUITE-FAST-LOOP-PROPOSE.md) and [`plans/completed/PLAN-TEST-SUITE-FAST-LOOP.md`](../../../plans/completed/PLAN-TEST-SUITE-FAST-LOOP.md) PR-2:
+Per **`tests/README.md`** (iteration subset + where the `## Tests to run (iteration loop)` block lives). Background design history for the fast loop lives under **`propose/completed/`** and **`plans/completed/`** — search basenames for `TEST-SUITE` if you need the original PR wording.
 
 - Add a markdown section with the **exact heading** `## Tests to run (iteration loop)` inside the fenced **Prompt** block, **immediately after** `## Deliverables` and **before** `## Tests`.
 - Content: bullet list of `tests/test_*.py` paths, each with a **one-line rationale** tied to the PR’s code paths.

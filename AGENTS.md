@@ -11,42 +11,17 @@ for tools that don't read `.cursor/rules/`.
  MCP tool list (now `search` / `find` / `describe` / `neighbors`),
  CLI ops (`java-codebase-rag --help`), and "Re-index required" callouts.
  **`ontology_version` is currently 12** (HTTP brownfield rename + `CodebaseHttpMethod` enum + inbound HTTP layer-C replace; see README graph section).
-- [`docs/JAVA-CODEBASE-RAG-CLI.md`](./docs/JAVA-CODEBASE-RAG-CLI.md) — operator guide for the `java-codebase-rag` CLI (`init` / `increment` / `reprocess` / `erase`, `meta`, `tables`, `diagnose-ignore`, `analyze-pr`; one-release hidden verb alias of `reprocess` with stderr deprecation only — see that doc).
+- [`docs/JAVA-CODEBASE-RAG-CLI.md`](./docs/JAVA-CODEBASE-RAG-CLI.md) — operator guide for the `java-codebase-rag` CLI (`init` / `increment` / `reprocess` / `erase`, `meta`, `tables`, `diagnose-ignore`, `analyze-pr`; hidden `refresh` alias → `reprocess` — see that doc).
 - `CODEBASE_REQUIREMENTS.md` — Java-repo assumptions and tuning map.
-- `propose/` and `plans/` (plus their `completed/` subdirs) —
-  in-flight scope and the rationale behind current design.
-  - Active proposes: `TIER2-INCREMENTAL-REBUILD-PROPOSE.md` (Kuzu
-    diff-driven rebuild), `RANKING-MICROSERVICE-PROPOSE.md`,
-    `ENHANCED-ROLE-RECOGNITION-PROPOSE.md`,
-    `INDEX-AUTO-MODE-PROPOSE.md` (paired with TIER2 — decision engine for
-    incremental vs full),
-    `DEFERRED-REST-CLIENT-MIGRATION-PROPOSE.md`, `PRODUCT-VISION.md`.
-  - Active plans: `PLAN-POST-TIER1B-FOLLOWUPS.md` (PR-E1/PR-E2 —
-    deferred catches collected from PR-D1/D2/D3 reviews).
-  - Completed (Tier 1 + Tier 1B): `propose/completed/TIER1-COMPLETION-PROPOSE.md`,
-    `propose/completed/TIER1B-HTTP-ASYNC-EDGES-PROPOSE.md`,
-    `plans/completed/PLAN-TIER1-COMPLETION.md`,
-    `plans/completed/PLAN-TIER1B-COMPLETION.md`,
-    `plans/completed/CURSOR-PROMPTS-TIER1.md`,
-    `plans/completed/CURSOR-PROMPTS-TIER1B.md`. The two CURSOR-PROMPTS
-    files are kept as reference templates for future per-PR Cursor work.
-  - Older completed: `propose/completed/CALL-GRAPH-PROPOSE.md`,
-    `propose/completed/DESCRIBE-MEMBER-EDGE-ROLLUP-PROPOSE.md`,
-    `propose/completed/DESCRIBE-OVERRIDE-ROLLUP-PROPOSE.md`,
-    `plans/completed/PLAN-DESCRIBE-MEMBER-EDGE-ROLLUP.md`,
-    `plans/completed/PLAN-DESCRIBE-OVERRIDE-ROLLUP.md`,
-    `propose/completed/MCP-API-V2-REDESIGN-PROPOSE.md` (four-tool MCP + `java-codebase-rag` CLI),
-    `plans/completed/PLAN-CALL-GRAPH.md`,
-    `plans/completed/PLAN-CAPABILITIES-MODEL.md`,
-    `plans/completed/PLAN-BROWNFIELD-ROLE-OVERRIDES.md`,
-    `plans/completed/PLAN-BROWNFIELD-ROLE-OVERRIDES-design-fixes.md`,
-    `plans/completed/PLAN-COCOINDEX-SYMLINK-FIX.md`,
-    `plans/completed/PLAN-ENUM-ANNOTATION-FIXES.md`,
-    `plans/completed/PLAN-REMOTE-PROJECT-INDEXING.md`,
-    `propose/completed/LIST-CLIENTS-MCP-TOOL-PROPOSE.md`,
-    `plans/completed/PLAN-LIST-CLIENTS-MCP-TOOL.md`,
-    `plans/completed/CURSOR-PROMPTS-LIST-CLIENTS-MCP-TOOL.md`. Read these
-    when you need the *why* behind current code.
+- **`propose/`** — design proposes. **In-flight** work is **`propose/*.md`**
+  (markdown at the root of `propose/` only, not under `completed/`).
+  **`propose/completed/`** — landed proposes and rationale. **List or search**
+  the tree for current filenames; entrypoint docs are not maintained as a
+  catalog.
+- **`plans/`** — multi-PR plans (`PLAN-*.md`) and per-PR Cursor prompts
+  (`CURSOR-PROMPTS-*.md`). Top-level files here are active or staged
+  multi-PR efforts; **`plans/completed/`** holds finished plans and
+  completed prompt sets (reference templates for future work).
 - `tests/README.md` — testing philosophy.
 
 Read these directly. Don't rely on rule files to mirror them.
@@ -118,10 +93,10 @@ When adding or editing Cypher run against Kuzu (for example in
 
 ## Per-PR Cursor task contract
 
-When picking up a per-PR Cursor task prompt (e.g. one of the entries
-under `plans/CURSOR-PROMPTS-<topic>.md`; see
-`plans/completed/CURSOR-PROMPTS-TIER1B.md` as the canonical reference
-template):
+When picking up a per-PR Cursor task prompt (from `plans/` or
+`plans/completed/`, files matching `CURSOR-PROMPTS-*.md`; use any
+completed prompt file in `plans/completed/` as a structural template
+when you need one):
 
 - Treat the prompt's **Out of scope** list as binding. Sentinel grep
   patterns in the prompt must return zero on `git diff master..HEAD`.

@@ -77,7 +77,7 @@ Add a first-class outbound declaration surface:
 
 ## PR body (proposal-only) template
 ## What
-Adds `propose/completed/LIST-CLIENTS-MCP-TOOL-PROPOSE.md` describing outbound client declarations and a new `list_clients` MCP tool.
+Adds `propose/completed/<TOPIC>-PROPOSE.md` (this sample used the list-clients topic) describing outbound client declarations and a new MCP tool surface.
 
 ## Why now
 Outbound declaration discovery needs a first-class tool after direction-honest annotation reshaping.

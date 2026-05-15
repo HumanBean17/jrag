@@ -12,13 +12,14 @@ inferring from code:
 
 - Behaviour / public surface → `README.md`.
 - Brownfield assumptions, role/capability tuning → `CODEBASE_REQUIREMENTS.md`.
+- In-flight design proposes → **`propose/*.md` at the root of `propose/`**
+  (not under `propose/completed/`). **List or search** for current names.
 - Why current design exists → `propose/completed/` and `plans/completed/`.
 - Testing philosophy → `tests/README.md`.
-- Currently-active plans → `plans/PLAN-POST-TIER1B-FOLLOWUPS.md`
-  (PR-E1 + PR-E2 — deferred catches from Tier 1B reviews). Recently
-  completed Tier 1B plans live under `plans/completed/` (see
-  `PLAN-TIER1B-COMPLETION.md` and `CURSOR-PROMPTS-TIER1B.md` as
-  reference templates).
+- In-flight multi-PR scope → **`plans/*.md` at the root of `plans/`**
+  (not under `plans/completed/`). Rule files are not a live catalog; **list
+  or search `plans/`** for active `PLAN-*.md` / `CURSOR-PROMPTS-*.md`.
+  Finished plans and prompt templates → `plans/completed/`.
 
 ## Propose-then-implement culture
 
