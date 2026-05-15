@@ -12,10 +12,12 @@
 > `neighbors` arguments, pass stringified JSON, or use vector search for
 > questions the graph answers exactly. This guide keeps them on the rails.
 >
-> Calibrated against ontology version **12** (see `ast_java.ONTOLOGY_VERSION` /
-> `java_ontology.py` valid sets): HTTP brownfield rename (`@CodebaseHttpClient`),
-> shared `CodebaseHttpMethod` enum, inbound layer-C HTTP routes replace same-method
-> built-in rows. **Design rationale:** navigation surface and tools —
+> Calibrated against ontology version **13** (see `ast_java.ONTOLOGY_VERSION` /
+> `java_ontology.py` valid sets): stored `OVERRIDES` Symbol→Symbol edges (subtype
+> override → supertype declaration, matching `signature`, one `IMPLEMENTS`/`EXTENDS`
+> hop) and `neighbors(edge_types=["OVERRIDES"])`. Still includes v12 HTTP brownfield
+> (`@CodebaseHttpClient`, shared `CodebaseHttpMethod` enum, inbound layer-C HTTP routes
+> replace same-method built-in rows). **Design rationale:** navigation surface and tools —
 > [`propose/completed/MCP-API-V2-REDESIGN-PROPOSE.md`](../propose/completed/MCP-API-V2-REDESIGN-PROPOSE.md);
 > HTTP brownfield rename, `CodebaseHttpMethod`, and exclusivity —
 > [`propose/HTTP-ROUTE-METHOD-ENUM-PROPOSE.md`](../propose/HTTP-ROUTE-METHOD-ENUM-PROPOSE.md).
@@ -29,7 +31,7 @@
 This MCP indexes Java enterprise projects into two stores:
 
 - **LanceDB** — vector + optional hybrid (FTS + vector) search over Java / SQL / YAML chunks.
-- **Kuzu graph** — exact structure: **node kinds** `Symbol`, `Route`, `Client` and **nine edge types** (see *Edge taxonomy* below).
+- **Kuzu graph** — exact structure: **node kinds** `Symbol`, `Route`, `Client` and **ten edge types** (see *Edge taxonomy* below).
 
 **MCP surface (navigation only):** `search`, `find`, `describe`, `neighbors`, `resolve`.
 
@@ -80,7 +82,7 @@ Pick: <search|find|describe|neighbors|resolve>  Why: <≤8 words>
 
 Then check *Argument shapes* (real JSON arrays/objects, required `neighbors` fields). If the call returns nothing useful, do not thrash — use the **Recovery playbook**.
 
-### Edge taxonomy (nine labels)
+### Edge taxonomy (ten labels)
 
 Use these strings **verbatim** in `neighbors(..., edge_types=[...])`:
 
@@ -88,6 +90,7 @@ Use these strings **verbatim** in `neighbors(..., edge_types=[...])`:
 | ----- | ---------- | --------- |
 | Type wiring | `EXTENDS`, `IMPLEMENTS`, `INJECTS` | `in` = who depends on this type; `out` = what this type depends on |
 | Containment | `DECLARES`, `DECLARES_CLIENT` | `in` = owner; `out` = owned member / client |
+| Method overrides | `OVERRIDES` | Subtype **method** → supertype **declaration** method (same `signature`, one `IMPLEMENTS`/`EXTENDS` hop). `in` = overriders; `out` = overridden declarations |
 | Method calls | `CALLS` | `in` = callers; `out` = callees |
 | Service boundary | `EXPOSES` | Symbol → Route (handler exposes route) |
 | Cross-service | `HTTP_CALLS`, `ASYNC_CALLS` | Symbol → Route across services |
@@ -218,7 +221,7 @@ Exact allowed values for roles, capabilities, client kinds, etc. live in `java_o
 
 #### `describe`
 
-- **Purpose:** Full node payload + `edge_summary`: `in` / `out` counts **per stored graph edge label** (what exists as edges in Kuzu). For **type** Symbols only (`class`, `interface`, `enum`, `record`, `annotation`), the same map may also include **describe-time composed** dot-keys — summaries of member edges, not stored labels — see the next bullets (`DECLARES.DECLARES_CLIENT`, `DECLARES.EXPOSES`); those keys are **not** valid in `neighbors(edge_types=…)`. For **method** Symbols, the map may include **override-axis** virtual keys (`OVERRIDDEN_BY`, `OVERRIDDEN_BY.DECLARES_CLIENT`, `OVERRIDDEN_BY.EXPOSES`, `OVERRIDES`); see **Override-axis keys (method Symbols)** below — also not `EdgeType` literals.
+- **Purpose:** Full node payload + `edge_summary`: `in` / `out` counts **per stored graph edge label** (what exists as edges in Kuzu). For **type** Symbols only (`class`, `interface`, `enum`, `record`, `annotation`), the same map may also include **describe-time composed** dot-keys — summaries of member edges, not stored labels — see the next bullets (`DECLARES.DECLARES_CLIENT`, `DECLARES.EXPOSES`); those keys are **not** valid in `neighbors(edge_types=…)`. For **method** Symbols, the map may include **override-axis virtual keys** (`OVERRIDDEN_BY`, `OVERRIDDEN_BY.DECLARES_CLIENT`, `OVERRIDDEN_BY.EXPOSES`) plus a same-named **`OVERRIDES` rollup** entry (dispatch-up counts only); see **Override-axis keys (method Symbols)** below — those virtual / rollup keys are **not** `neighbors` arguments. The **stored** relationship label **`OVERRIDES`** **is** a valid `EdgeType` for `neighbors` (do not confuse the rollup map key with the edge list literal).
 - **Args:** `id` (symbol, route, or client id) or **`fqn`** (exact symbol FQN when you do not have the graph id). When both are set, `id` wins. For identifier-shaped inputs and FQN collision handling, see **Identifier resolution** above.
 
 **Composed `edge_summary` keys (type Symbols).** Keys use dot notation: `<parent_relation>.<projected_relation>`. Two are emitted today:
@@ -230,17 +233,17 @@ Composed keys are **read-only**: they cannot be passed to `neighbors(edge_types=
 
 Note on counting semantics: composed counts measure **edge rows**, not distinct member methods. One method that declares multiple `Client` rows (e.g. a `rest_template` method with several call sites) contributes its full edge count to `DECLARES.DECLARES_CLIENT`. The "does this class have any clients?" predicate is answered by `count > 0`; the count itself is an affordance for how rich the downstream walk will be.
 
-**Override-axis keys (method Symbols).** These name dispatch-axis virtual relations (computed at describe-time from `IMPLEMENTS` / `EXTENDS` plus matching `Symbol.signature`; not stored edges):
+**Override-axis keys (method Symbols).** Dispatch-axis signals computed at describe-time from `IMPLEMENTS` / `EXTENDS` plus matching `Symbol.signature` (not stored as their own rel types):
 
 - `OVERRIDDEN_BY` — on declarations reachable from implementing / extending classes in one hop: count of **distinct** concrete override methods with the same `signature` string as the described method (not counting the declaration itself).
 - `OVERRIDDEN_BY.DECLARES_CLIENT` / `OVERRIDDEN_BY.EXPOSES` — same dispatch-down walk, then count outgoing `DECLARES_CLIENT` / `EXPOSES` edges from those override methods. Counts are **edge rows** on overrides (not distinct methods): one override with multiple client edges contributes the full row count. Omitted when zero.
-- `OVERRIDES` — on a concrete method: count of **distinct** upstream declarations (interface / superclass methods with the same `signature`) one `IMPLEMENTS`/`EXTENDS` hop from the declaring class. A class implementing two interfaces that both declare the same signature yields `out: 2` (two declaration symbols).
+- `OVERRIDES` (rollup row) — on a concrete method: count of **distinct** upstream declarations (interface / superclass methods with the same `signature`) one `IMPLEMENTS`/`EXTENDS` hop from the declaring class. A class implementing two interfaces that both declare the same signature yields `out: 2` (two declaration symbols). This is a **describe-time affordance** in the map; the graph also stores matching **`[:OVERRIDES]`** edges — prefer `neighbors(ids=<method_id>, direction="out", edge_types=["OVERRIDES"])` to list declaration ids, and `direction="in"` for overriders.
 
-Walk recipe (declaration side): `neighbors(ids=<method_id>, direction="in", edge_types=["DECLARES"])` → declaring type → `neighbors(ids=<type_id>, direction="in", edge_types=["IMPLEMENTS","EXTENDS"])` → each subtype class → `neighbors(ids=<class_id>, direction="out", edge_types=["DECLARES"])` and filter rows where `signature` matches the interface method.
+Walk recipe (manual, if you need types in the middle): `neighbors(ids=<method_id>, direction="in", edge_types=["DECLARES"])` → declaring type → `neighbors(ids=<type_id>, direction="in", edge_types=["IMPLEMENTS","EXTENDS"])` → each subtype class → `neighbors(ids=<class_id>, direction="out", edge_types=["DECLARES"])` and filter rows where `signature` matches the interface method.
 
 Static methods suppress the entire override-axis rollup. Constructors do not receive these keys.
 
-These keys are **not** valid `EdgeType` literals — `neighbors(edge_types=["OVERRIDDEN_BY"])` fails at the Pydantic boundary. Use them as hop affordances only.
+Virtual keys (`OVERRIDDEN_BY`, …) and composed dot-keys are **not** valid `EdgeType` literals — `neighbors(edge_types=["OVERRIDDEN_BY"])` fails at the Pydantic boundary. Use them as hop affordances only. **`OVERRIDES`** in `edge_types=[...]` selects the **stored** override relationship (same spelling as the rollup key — keep the two meanings straight).
 
 #### `resolve`
 
@@ -253,9 +256,9 @@ These keys are **not** valid `EdgeType` literals — `neighbors(edge_types=["OVE
 - **Purpose:** One hop over explicit edge types; returns **edges** with attributes (`confidence`, `strategy`, `match`, …) and the **`other`** node.
 - **Args:** `ids` (string or array — batch allowed), **`direction`** (`in`|`out`), **`edge_types`** (non-empty list), `limit`, `offset`, optional `filter` on the other node.
 - **Batching:** Multiple origins are expanded; pagination slices the **combined** edge list — use larger `limit` when batching many ids.
-- **Confidence:** Cross-service edges (`HTTP_CALLS`, `ASYNC_CALLS`) carry confidence, strategy, and match metadata on `edge.attrs` (`attrs.confidence`, `attrs.strategy`, `attrs.match`). Low confidence means the resolver had to guess at the route binding — treat it as a **resolver gap signal**, not a hallucination. Report low-confidence edges with their confidence value, not as facts. Intra-service edges (`CALLS`, `INJECTS`, `IMPLEMENTS`, `EXTENDS`, `DECLARES`, `DECLARES_CLIENT`, `EXPOSES`) faithfully represent the static graph; the resolved set is still a **lower bound** under reflection / dynamic dispatch (see *What this MCP is NOT*).
+- **Confidence:** Cross-service edges (`HTTP_CALLS`, `ASYNC_CALLS`) carry confidence, strategy, and match metadata on `edge.attrs` (`attrs.confidence`, `attrs.strategy`, `attrs.match`). Low confidence means the resolver had to guess at the route binding — treat it as a **resolver gap signal**, not a hallucination. Report low-confidence edges with their confidence value, not as facts. Intra-service edges (`CALLS`, `INJECTS`, `IMPLEMENTS`, `EXTENDS`, `DECLARES`, `DECLARES_CLIENT`, `EXPOSES`, `OVERRIDES`) faithfully represent the static graph; the resolved set is still a **lower bound** under reflection / dynamic dispatch (see *What this MCP is NOT*).
 
-### Ontology glossary (version 12)
+### Ontology glossary (version 13)
 
 Source of truth: `java_ontology.py`. Strings are case-sensitive.
 
@@ -274,7 +277,7 @@ Source of truth: `java_ontology.py`. Strings are case-sensitive.
 | Symptom | Likely cause | Fix |
 | ------- | ------------ | --- |
 | `neighbors` validation error | Missing `direction` or `edge_types` | Add both explicitly |
-| Empty `neighbors` | Wrong edge type for the node kind, or wrong direction | Check `describe.edge_summary`; `EXPOSES` is Symbol↔Route — direction matters |
+| Empty `neighbors` | Wrong edge type for the node kind, or wrong direction | Check `describe.edge_summary`; `EXPOSES` is Symbol↔Route — direction matters. `OVERRIDES` is method↔method only |
 | Cannot find symbol | Wrong id or stale index | `resolve` / `search` with distinctive string; verify `java-codebase-rag meta` (CLI) |
 | `find` returns too much | Over-broad filter | Add `microservice`, `fqn_prefix`, `path_prefix`, etc. |
 | Route not found | Path mismatch | Use `path_prefix` on `find(kind="route", …)`; check README brownfield routes |

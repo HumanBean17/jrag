@@ -37,10 +37,12 @@ DeclarationSymbolKind = Literal["class", "interface", "enum", "record", "annotat
 
 # Composed describe-time keys in edge_summary (e.g. DECLARES.DECLARES_CLIENT) are
 # intentionally not EdgeType literals — neighbors(edge_types=...) rejects them.
+# Virtual override-axis keys (OVERRIDDEN_BY, …) are also rejected; stored OVERRIDES is an EdgeType.
 EdgeType = Literal[
     "EXTENDS",
     "IMPLEMENTS",
     "INJECTS",
+    "OVERRIDES",
     "DECLARES",
     "DECLARES_CLIENT",
     "CALLS",
@@ -264,8 +266,10 @@ class NodeRecord(BaseModel):
             "(DECLARES to member, then that edge) — edge-row counts, not EdgeType literals; "
             "do not pass them to neighbors(edge_types=…). For method Symbols, may include "
             "override-axis virtual keys `OVERRIDDEN_BY`, `OVERRIDDEN_BY.DECLARES_CLIENT`, "
-            "`OVERRIDDEN_BY.EXPOSES`, and `OVERRIDES` (same dot convention; also not valid "
-            "EdgeType literals for neighbors)."
+            "`OVERRIDDEN_BY.EXPOSES`, and a same-named `OVERRIDES` **rollup** entry (dispatch-up "
+            "counts only; not the same thing as the stored `OVERRIDES` relationship label). "
+            "Those virtual / dot-keys are not valid neighbors(edge_types=…) arguments. The "
+            "stored relationship label `OVERRIDES` **is** a valid EdgeType for neighbors."
         ),
     )
 

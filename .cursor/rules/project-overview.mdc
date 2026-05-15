@@ -21,13 +21,15 @@ when needed.
 - `README.md` — feature surface, env vars, ranking, capabilities,
   MCP tools (`search` / `find` / `describe` / `neighbors` / `resolve`), `java-codebase-rag` CLI,
   "Re-index required" callouts. The current
-  `ontology_version` is **12** (`@CodebaseHttpClient` rename + shared `CodebaseHttpMethod` enum;
-  inbound `@CodebaseHttpRoute` replaces same-method built-in HTTP rows; still
-  `@CodebaseAsyncRoute` wins over same-method
-  `@KafkaListener`; adds `Client` nodes, `DECLARES_CLIENT`, `find(kind="client")`, plus
-  HTTP_CALLS / ASYNC_CALLS caller edges and brownfield composition from earlier
-  bumps). Earlier ontology bumps
-  are described inline in the README's callouts list.
+  `ontology_version` is **13** (material `OVERRIDES` Symbol→Symbol edges: subtype
+  instance method → supertype declaration with matching `signature`, one
+  `IMPLEMENTS`/`EXTENDS` hop; valid `neighbors` `EdgeType`). Builds on v12
+  (`@CodebaseHttpClient` rename + shared `CodebaseHttpMethod` enum; inbound
+  `@CodebaseHttpRoute` replaces same-method built-in HTTP rows; still
+  `@CodebaseAsyncRoute` wins over same-method `@KafkaListener`; `Client` nodes,
+  `DECLARES_CLIENT`, `find(kind="client")`, HTTP_CALLS / ASYNC_CALLS caller edges,
+  brownfield composition from earlier bumps). Earlier ontology bumps are described
+  inline in the README's callouts list.
 - `CODEBASE_REQUIREMENTS.md` — Java-repo assumptions and per-file
   map of what to edit when a target tree doesn't match defaults.
 - `tests/README.md` — testing philosophy.

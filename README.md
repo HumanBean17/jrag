@@ -229,7 +229,7 @@ Edit `claude_desktop_config.json` (macOS: `~/Library/Application Support/Claude/
 
 ### Driving the MCP from an agent
 
-- **[`docs/AGENT-GUIDE.md`](./docs/AGENT-GUIDE.md)** — copy-paste into `QWEN.md` / `CLAUDE.md` / `AGENTS.md`. Covers the five MCP tools, the shared `NodeFilter`, the edge-type taxonomy, required `neighbors` arguments, the ontology glossary (currently **v12**), the recovery playbook, and slash-style aliases.
+- **[`docs/AGENT-GUIDE.md`](./docs/AGENT-GUIDE.md)** — copy-paste into `QWEN.md` / `CLAUDE.md` / `AGENTS.md`. Covers the five MCP tools, the shared `NodeFilter`, the edge-type taxonomy, required `neighbors` arguments, the ontology glossary (currently **v13**), the recovery playbook, and slash-style aliases.
 - **[`docs/skills/java-codebase-explore.md`](./docs/skills/java-codebase-explore.md)** — exploration **strategy** (missions, fallbacks, anti-capabilities, stopping rules); AGENT-GUIDE remains the **operating manual** for tool shapes and recovery.
 - **[`docs/MANUAL-VERIFICATION-CHECKLIST.md`](./docs/MANUAL-VERIFICATION-CHECKLIST.md)** — 7-phase agent-driven verification you run after indexing your real project. Each item has a copy-paste prompt and calibration data from `tests/bank-chat-system`.
 - **[`automation/cursor_propose_only/README.md`](./automation/cursor_propose_only/README.md)** — optional proposal orchestration workflow (single-command autopilot, planning bundles, and automated execution/review loops).
@@ -242,7 +242,7 @@ Edit `claude_desktop_config.json` (macOS: `~/Library/Application Support/Claude/
 |---|---|---|---|
 | `search` | Locate nodes by NL/code text. | `query: str`, `table: str="java"`, `hybrid: bool=False`, `limit: int=5`, `offset: int=0`, `path_contains: str \| None`, `filter: NodeFilter \| str \| None` | `{"query":"join operator flow","limit":5}` |
 | `find` | Locate nodes by structured filter. | `kind: "symbol"\|"route"\|"client"`, `filter: NodeFilter \| str`, `limit: int=25`, `offset: int=0` | `{"kind":"symbol","filter":{"role":"CONTROLLER"}}` |
-| `describe` | Full record + edge counts for one node. For **type** symbols, `edge_summary` may include composed dot-keys (`DECLARES.DECLARES_CLIENT`, `DECLARES.EXPOSES`); for **method** symbols it may include override-axis virtual keys (`OVERRIDDEN_BY`, `OVERRIDDEN_BY.DECLARES_CLIENT`, `OVERRIDDEN_BY.EXPOSES`, `OVERRIDES`). See [`docs/AGENT-GUIDE.md`](./docs/AGENT-GUIDE.md) (`describe`). | `id: str` | `{"id":"sym:com.bank.chat.core.api.ChatController#joinOperator(JoinOperatorRequest)"}` |
+| `describe` | Full record + edge counts for one node. For **type** symbols, `edge_summary` may include composed dot-keys (`DECLARES.DECLARES_CLIENT`, `DECLARES.EXPOSES`); for **method** symbols it may include override-axis virtual keys (`OVERRIDDEN_BY`, `OVERRIDDEN_BY.DECLARES_CLIENT`, `OVERRIDDEN_BY.EXPOSES`, `OVERRIDES` rollup). Stored `OVERRIDES` edges are also counted like other rel labels. See [`docs/AGENT-GUIDE.md`](./docs/AGENT-GUIDE.md) (`describe`). | `id: str` | `{"id":"sym:com.bank.chat.core.api.ChatController#joinOperator(JoinOperatorRequest)"}` |
 | `resolve` | Identifier-shaped node lookup (symbol / route / client). Returns `status` `one`, `many`, or `none`; prefer over `describe(fqn=…)` when an FQN may collide. See [`docs/AGENT-GUIDE.md`](./docs/AGENT-GUIDE.md) (`resolve`). | `identifier: str`, `hint_kind: "symbol"|"route"|"client" \| null` | `{"identifier":"com.bank.chat.core.api.ChatController","hint_kind":"symbol"}` |
 | `neighbors` | One-hop walk. **Required**: `direction` and `edge_types`. | `ids: str \| list[str]`, `direction: "in"\|"out"`, `edge_types: list[str]`, `limit: int=25`, `offset: int=0`, `filter: NodeFilter \| str \| None` | `{"ids":"route:chat-core:POST:/chat/joinOperator","direction":"in","edge_types":["HTTP_CALLS","ASYNC_CALLS"]}` |
 
@@ -359,7 +359,7 @@ For `reprocess`, the pipeline runs `cocoindex` with `cwd` set to the bundle dire
 
 ## 6. Graph layer
 
-A deterministic property graph derived from tree-sitter Java parsing lives next to the LanceDB tables under the index directory (default `${JAVA_CODEBASE_RAG_INDEX_DIR:-./.java-codebase-rag}/code_graph.kuzu`). Current ontology version: **12**.
+A deterministic property graph derived from tree-sitter Java parsing lives next to the LanceDB tables under the index directory (default `${JAVA_CODEBASE_RAG_INDEX_DIR:-./.java-codebase-rag}/code_graph.kuzu`). Current ontology version: **13**.
 
 ### Node kinds
 
@@ -371,7 +371,7 @@ A deterministic property graph derived from tree-sitter Java parsing lives next 
 
 Unresolved targets become **phantom** nodes (`resolved=false`, FQN guessed from imports / `java.lang`).
 
-### Edge types (9)
+### Edge types (10)
 
 | Edge | Direction | Meaning |
 |---|---|---|
@@ -379,6 +379,7 @@ Unresolved targets become **phantom** nodes (`resolved=false`, FQN guessed from 
 | `IMPLEMENTS` | type → interface | Interface implementation. |
 | `INJECTS` | type → type | DI: field, constructor, or setter injection (incl. Lombok). |
 | `DECLARES` | type → method/constructor | Type declares a callable. |
+| `OVERRIDES` | method → method | Subtype instance method overrides a supertype-declared method (same `signature`, one supertype hop via `IMPLEMENTS` / `EXTENDS`). |
 | `DECLARES_CLIENT` | type → client | Type declares an outbound call site. |
 | `CALLS` | method → method | In-process call (confidence-scored, strategy-tagged). |
 | `EXPOSES` | type → route | Type exposes an HTTP/async route. |
@@ -421,7 +422,9 @@ Resolution order for `microservice`:
 
 ### Re-index required when ontology changes
 
-Current ontology version is **12**. Any index built before this version must be rebuilt via `cocoindex update ... --full-reprocess -f` or a full `java-codebase-rag reprocess` (no selective flags) so vectors and graph stay aligned. Until re-indexed, the server defensively JSON-decodes string-form list columns so nothing explodes, but filters like `array_contains` will not work.
+Current ontology version is **13**. Any index built before this version must be rebuilt via `cocoindex update ... --full-reprocess -f` or a full `java-codebase-rag reprocess` (no selective flags) so vectors and graph stay aligned. Until re-indexed, the server defensively JSON-decodes string-form list columns so nothing explodes, but filters like `array_contains` will not work.
+
+Ontology **13** materializes stored `OVERRIDES` edges between method Symbols (subtype override → supertype declaration, matching `signature` on a direct `IMPLEMENTS` / `EXTENDS` hop). `neighbors(edge_types=["OVERRIDES"])` traverses this relationship; `OVERRIDDEN_BY*` keys in `edge_summary` remain describe-time rollups only.
 
 Ontology **12** renames `@CodebaseClient` to `@CodebaseHttpClient`, types HTTP `method` as the shared `CodebaseHttpMethod` enum on both inbound and outbound stubs, and makes inbound layer-C HTTP routes **replace** same-method built-in Spring rows (no merge). Rebuild after upgrading so `meta_chain` keys and annotation simple names match the extractor.
 

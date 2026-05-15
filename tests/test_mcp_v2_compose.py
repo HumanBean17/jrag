@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from _builders import build_kuzu_to
 from kuzu_queries import KuzuGraph
 from mcp_v2 import (
+    _NEIGHBOR_EDGE_TYPES_ADAPTER,
     _TYPE_SYMBOL_KINDS_FOR_EDGE_ROLLUP,
     describe_v2,
     neighbors_v2,
@@ -27,6 +28,7 @@ _EDGE_TYPES = (
     "HTTP_CALLS",
     "IMPLEMENTS",
     "INJECTS",
+    "OVERRIDES",
 )
 
 _ROLLUP_TYPE_KINDS = sorted(_TYPE_SYMBOL_KINDS_FOR_EDGE_ROLLUP)
@@ -439,3 +441,80 @@ def test_describe_interface_method_diamond_override_counts_once_per_upstream(
     assert out.record is not None
     assert out.record.edge_summary is not None
     assert out.record.edge_summary.get("OVERRIDES") == {"in": 0, "out": 2}
+
+
+def test_overrides_stored_neighbors_in_matches_override_axis_impl_ids(override_axis_graph: KuzuGraph) -> None:
+    rows = override_axis_graph._rows(  # noqa: SLF001
+        "MATCH (t:Symbol {fqn: $fqn})-[:DECLARES]->(m:Symbol) "
+        "WHERE m.kind = 'method' AND m.name = 'handle' "
+        "RETURN m.id AS id LIMIT 1",
+        {"fqn": "orolla.abstractroute.AbstractApi"},
+    )
+    assert rows
+    mid = str(rows[0]["id"])
+    want = sorted(_dispatch_down_override_method_ids(override_axis_graph, mid))
+    out = neighbors_v2(mid, direction="in", edge_types=["OVERRIDES"], graph=override_axis_graph)
+    assert out.success is True
+    got = sorted({e.other.id for e in out.results})
+    assert got == want
+
+
+def test_overrides_stored_neighbors_out_matches_override_axis_decl_ids(override_axis_graph: KuzuGraph) -> None:
+    rows = override_axis_graph._rows(  # noqa: SLF001
+        "MATCH (t:Symbol {fqn: $fqn})-[:DECLARES]->(m:Symbol) "
+        "WHERE m.kind = 'method' AND m.name = 'shared' "
+        "RETURN m.id AS id LIMIT 1",
+        {"fqn": "orolla.diamond.DiamondC"},
+    )
+    assert rows
+    mid = str(rows[0]["id"])
+    want = sorted(_dispatch_up_declaration_method_ids(override_axis_graph, mid))
+    out = neighbors_v2(mid, direction="out", edge_types=["OVERRIDES"], graph=override_axis_graph)
+    assert out.success is True
+    got = sorted({e.other.id for e in out.results})
+    assert got == want
+
+
+def test_overrides_rel_schema_round_trips(override_axis_graph: KuzuGraph) -> None:
+    import kuzu
+
+    conn = kuzu.Connection(kuzu.Database(override_axis_graph.db_path, read_only=True))
+    tables = set()
+    r = conn.execute("CALL show_tables() RETURN *;")
+    while r.has_next():
+        row = r.get_next()
+        tables.add(str(row[1]))
+    assert "OVERRIDES" in tables
+    n = 0
+    r2 = conn.execute("MATCH ()-[e:OVERRIDES]->() RETURN count(e) AS n")
+    if r2.has_next():
+        n = int(r2.get_next()[0] or 0)
+    assert n > 0
+
+
+def test_neighbors_edge_type_adapter_accepts_overrides() -> None:
+    _NEIGHBOR_EDGE_TYPES_ADAPTER.validate_python(["OVERRIDES"])
+
+
+def test_neighbors_rejects_overridden_by_and_dot_keys(kuzu_graph: KuzuGraph) -> None:
+    node_id, _ = _controller_method_with_calls(kuzu_graph)
+    with pytest.raises(ValidationError):
+        neighbors_v2(node_id, direction="out", edge_types=["OVERRIDDEN_BY"], graph=kuzu_graph)
+    with pytest.raises(ValidationError):
+        neighbors_v2(node_id, direction="out", edge_types=["DECLARES.DECLARES_CLIENT"], graph=kuzu_graph)
+
+
+def test_overrides_edge_set_deterministic_double_build(tmp_path: Path) -> None:
+    def edge_pairs(db_path: Path) -> list[tuple[str, str]]:
+        g = KuzuGraph(str(db_path))
+        rows = g._rows(  # noqa: SLF001
+            "MATCH (a:Symbol)-[e:OVERRIDES]->(b:Symbol) "
+            "RETURN a.id AS src, b.id AS dst ORDER BY src, dst",
+        )
+        return [(str(r["src"]), str(r["dst"])) for r in rows]
+
+    p1 = tmp_path / "g1.kuzu"
+    p2 = tmp_path / "g2.kuzu"
+    build_kuzu_to(_OVERRIDE_AXIS_FIXTURE, p1, max_pass=5)
+    build_kuzu_to(_OVERRIDE_AXIS_FIXTURE, p2, max_pass=5)
+    assert edge_pairs(p1) == edge_pairs(p2)
