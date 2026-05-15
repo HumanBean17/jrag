@@ -37,10 +37,9 @@ jobs:
               - 'mcp.json.example'
               - '.gitignore'
               - '.github/workflows/**'
-              - 'tests/**'
-              - '!tests/**/*.md'
-              - 'automation/**'
-              - '!automation/**/*.md'
+              - 'tests/fixtures/**'
+              - 'tests/bank-chat-system/**'
+              - 'tests/pytest.ini'
       - uses: actions/setup-python@v5
         if: steps.changes.outputs.code == 'true'
         with:
