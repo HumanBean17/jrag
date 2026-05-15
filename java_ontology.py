@@ -4,6 +4,8 @@ Used by `ast_java` inference, brownfield config validation in `graph_enrich`,
 and resolver steps for `@CodebaseRole` / `@CodebaseCapability`."""
 from __future__ import annotations
 
+from typing import Literal
+
 from ast_java import (
     ROLE_ANNOTATIONS,
     _INJECTED_TYPES_TO_CAPABILITY,
@@ -72,6 +74,28 @@ VALID_HTTP_CALL_MATCHES: frozenset[str] = frozenset((
     "unresolved",
 ))
 
+VALID_RESOLVE_REASONS: frozenset[str] = frozenset((
+    "exact_id",
+    "exact_fqn",
+    "fqn_suffix",
+    "short_name",
+    "route_template",
+    "route_method_path",
+    "client_target",
+    "client_target_path",
+))
+
+ResolveReason = Literal[
+    "exact_id",
+    "exact_fqn",
+    "fqn_suffix",
+    "short_name",
+    "route_template",
+    "route_method_path",
+    "client_target",
+    "client_target_path",
+]
+
 __all__ = [
     "VALID_ROLES",
     "VALID_CAPABILITIES",
@@ -82,4 +106,6 @@ __all__ = [
     "VALID_HTTP_CALL_STRATEGIES",
     "VALID_ASYNC_CALL_STRATEGIES",
     "VALID_HTTP_CALL_MATCHES",
+    "VALID_RESOLVE_REASONS",
+    "ResolveReason",
 ]

@@ -158,6 +158,13 @@ def kuzu_db_path_fqn_collision_smoke(tmp_path_factory) -> Path:
 
 
 @pytest.fixture(scope="session")
+def kuzu_graph_fqn_collision_smoke(kuzu_db_path_fqn_collision_smoke: Path):
+    from kuzu_queries import KuzuGraph
+
+    return KuzuGraph(str(kuzu_db_path_fqn_collision_smoke))
+
+
+@pytest.fixture(scope="session")
 def kuzu_db_path_http_caller_smoke(tmp_path_factory) -> Path:
     from _builders import build_kuzu_to
 

@@ -24,9 +24,10 @@ async def test_registered_tool_surface_is_v2_navigation_only(mcp_server) -> None
         "find",
         "describe",
         "neighbors",
+        "resolve",
     }
     assert names == expected
-    assert len(names) == 4
+    assert len(names) == 5
 
 
 async def test_all_tools_have_non_empty_description(mcp_server) -> None:

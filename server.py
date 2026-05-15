@@ -26,7 +26,8 @@ _COCOINDEX_TARGET = "java_index_flow_lancedb.py:JavaCodeIndexLance"
 _INSTRUCTIONS = (
     "Java codebase graph navigator (LanceDB + Kuzu). "
     "Tools: search (NL/code locate), find (structured NodeFilter), describe (one node + edge_summary: stored edge-label counts and optional composed keys for type Symbols and override-axis virtual keys for method Symbols), "
-    "neighbors (one hop; you MUST pass direction in|out AND edge_types list — no defaults). "
+    "neighbors (one hop; you MUST pass direction in|out AND edge_types list — no defaults), "
+    "resolve (identifier-shaped lookup for symbol/route/client — three statuses one|many|none). "
     "NodeFilter `filter` is a JSON object (preferred); a JSON-encoded string is also accepted as a fallback. "
     "Unknown filter keys and populated fields not applicable to the effective node kind fail with success=false and message. "
     "Edge labels: EXTENDS, IMPLEMENTS, INJECTS, DECLARES, DECLARES_CLIENT, CALLS, EXPOSES, HTTP_CALLS, ASYNC_CALLS. "
@@ -482,6 +483,31 @@ def create_mcp_server() -> FastMCP:
             filter,
             None,
         )
+
+    @mcp.tool(
+        name="resolve",
+        description=(
+            "Identifier-shaped node lookup (FQN, sym:/route:/client: id, HTTP method+path, "
+            "route path template, client target_service, or target+path pair). Returns "
+            "status=one (single node), many (≥2 ranked candidates with reason), or none "
+            "(no match — fall back to search(query=...) for natural language or fuzzy text). "
+            "Optional hint_kind narrows to symbol, route, or client. "
+            "Malformed empty/whitespace identifier returns success=false. "
+            "Examples: resolve('com.foo.Bar', hint_kind='symbol'); "
+            "resolve('GET /api/v1/customers', hint_kind='route'); "
+            "resolve('the client that handles assignments') → none (use search instead)."
+        ),
+    )
+    async def resolve(
+        identifier: str = Field(
+            description="Identifier-shaped node lookup (FQN, id prefix, route path, client target, …)",
+        ),
+        hint_kind: Literal["symbol", "route", "client"] | None = Field(
+            default=None,
+            description="Optional kind constraint. Omit to search all three kinds.",
+        ),
+    ) -> mcp_v2.ResolveOutput:
+        return await asyncio.to_thread(mcp_v2.resolve_v2, identifier, hint_kind, None)
 
     return mcp
 
