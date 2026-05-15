@@ -8,7 +8,7 @@ The ``search`` tool's ``query`` parameter is the ranked-text carve-out; structur
 prefix fields (``fqn_prefix``, ``path_prefix``, ``target_path_prefix``) reject ``*``
 and ``?`` — see ``_validate_no_wildcards``.
 
-Revisit trigger (``propose/MCP-FILTER-FRAME-PROPOSE.md`` section 3.4.6)
+Revisit trigger (``propose/completed/MCP-FILTER-FRAME-PROPOSE.md`` section 3.4.6)
 --------------------------------------------------------------
 If **three** legitimate issue-tracker workflows appear within **six months** of frame
 lock where the strict frame has no clean analog under ``search``, deferred
