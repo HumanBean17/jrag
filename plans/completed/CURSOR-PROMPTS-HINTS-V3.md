@@ -22,13 +22,13 @@ One prompt: **PR-D** (= SCHEMA-V2 PR-D in sequence doc).
 
 **Branch:** `feat/hints-v3-neighbors-empty` off `master` **after PR-SCHEMA-V2-C merged**.
 **Base:** `master` at merge commit of PR-C.
-**Plan section:** [`plans/PLAN-HINTS-V3.md`](./PLAN-HINTS-V3.md) § PR-D.
+**Plan section:** [`plans/completed/PLAN-HINTS-V3.md`](./PLAN-HINTS-V3.md) § PR-D.
 **PR title:** `feat(hints): kind- and direction-aware empty-result hints driven by EDGE_SCHEMA`
 
 **Attach (`@-files`):**
 
-- `@plans/PLAN-HINTS-V3.md`
-- `@propose/HINTS-V3-PROPOSE.md` (§3–§4, §6, Decisions §7)
+- `@plans/completed/PLAN-HINTS-V3.md`
+- `@propose/completed/HINTS-V3-PROPOSE.md` (§3–§4, §6, Decisions §7)
 - `@propose/completed/SCHEMA-V2-PROPOSE.md` (§3.12 preview — read only)
 - `@java_ontology.py` (`EDGE_SCHEMA`, `FUZZY_STRATEGY_SET`)
 - `@mcp_hints.py`
