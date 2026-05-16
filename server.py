@@ -27,7 +27,7 @@ _INSTRUCTIONS = (
     "Java codebase graph navigator (LanceDB + Kuzu). "
     "Tools: search (NL/code locate), find (structured NodeFilter), describe (one node + edge_summary: stored edge-label counts and optional composed keys for type Symbols and override-axis virtual keys for method Symbols), "
     "neighbors (one hop; you MUST pass direction in|out AND edge_types list — no defaults), "
-    "resolve (identifier-shaped lookup for symbol/route/client — three statuses one|many|none). "
+    "resolve (identifier-shaped lookup for symbol/route/client/producer — three statuses one|many|none). "
     "NodeFilter `filter` is a JSON object (preferred); a JSON-encoded string is also accepted as a fallback. "
     "Unknown filter keys and populated fields not applicable to the effective node kind fail with success=false and message. "
     "Edge labels: EXTENDS, IMPLEMENTS, INJECTS, OVERRIDES, DECLARES, DECLARES_CLIENT, DECLARES_PRODUCER, CALLS, EXPOSES, HTTP_CALLS, ASYNC_CALLS. "
@@ -385,7 +385,8 @@ def create_mcp_server() -> FastMCP:
             "Exact structured listing for one node kind. Per-kind applicable fields: **symbol** — "
             "microservice, module, role, exclude_roles, annotation, capability, fqn_prefix, symbol_kind, symbol_kinds; "
             "**route** — microservice, module, http_method, path_prefix, framework; **client** — microservice, module, "
-            "source_layer, client_kind, target_service, target_path_prefix, http_method. "
+            "source_layer, client_kind, target_service, target_path_prefix, http_method; **producer** — microservice, "
+            "module, source_layer, producer_kind, topic_prefix. "
             "Wildcards in prefix fields are rejected. An empty filter (`{}`) or `filter=None` means no predicate (all nodes of "
             "that kind; use pagination). Unknown keys or inapplicable populated fields return success=false. "
             "Successful responses echo `limit`/`offset` and may include `hints` (advisory next-step strings)."
@@ -395,7 +396,8 @@ def create_mcp_server() -> FastMCP:
         kind: Literal["symbol", "route", "client", "producer"] = Field(
             description=(
                 "Which graph table to search. 'symbol' = declarations, "
-                "'route' = endpoints, 'client' = outbound clients."
+                "'route' = endpoints, 'client' = outbound HTTP clients, "
+                "'producer' = outbound async producers."
             )
         ),
         filter: dict[str, Any] | str = Field(
@@ -429,8 +431,9 @@ def create_mcp_server() -> FastMCP:
         id: str | None = Field(
             default=None,
             description=(
-                "Graph node id: sym:, route:, or client: prefix "
-                '(e.g. sym:com.bank.chat.core.api.ChatController#joinOperator(JoinOperatorRequest)). '
+                "Graph node id: sym:, route:, client:, or producer: prefix "
+                '(e.g. sym:com.bank.chat.core.api.ChatController#joinOperator(JoinOperatorRequest); '
+                "producer:svc|com.foo.Bar#send()|kafka_send|orders.created). "
                 "When set, takes precedence over fqn."
             ),
         ),
@@ -453,7 +456,9 @@ def create_mcp_server() -> FastMCP:
         ),
     )
     async def neighbors(
-        ids: str | list[str] = Field(description="Origin symbol/route/client id, or list for batch"),
+        ids: str | list[str] = Field(
+            description="Origin symbol/route/client/producer id, or list for batch",
+        ),
         direction: Literal["in", "out"] = Field(
             description="Required. 'in' = predecessors (callers), 'out' = successors (callees). No default.",
         ),
@@ -494,8 +499,8 @@ def create_mcp_server() -> FastMCP:
     @mcp.tool(
         name="resolve",
         description=(
-            "Identifier-shaped node lookup (FQN, sym:/route:/client: id, HTTP method+path, "
-            "route path template, client target_service, or target+path pair). Returns "
+            "Identifier-shaped node lookup (FQN, sym:/route:/client:/producer: id, HTTP method+path, "
+            "route path template, client target_service, target+path pair, or producer topic). Returns "
             "status=one (single node), many (≥2 ranked candidates with reason), or none "
             "(no match — fall back to search(query=...) for natural language or fuzzy text). "
             "Optional hint_kind narrows to symbol, route, client, or producer. "
@@ -508,11 +513,13 @@ def create_mcp_server() -> FastMCP:
     )
     async def resolve(
         identifier: str = Field(
-            description="Identifier-shaped node lookup (FQN, id prefix, route path, client target, …)",
+            description=(
+                "Identifier-shaped node lookup (FQN, id prefix, route path, client target, producer topic, …)"
+            ),
         ),
         hint_kind: Literal["symbol", "route", "client", "producer"] | None = Field(
             default=None,
-            description="Optional kind constraint. Omit to search all three kinds.",
+            description="Optional kind constraint. Omit to search symbol, route, client, and producer.",
         ),
     ) -> mcp_v2.ResolveOutput:
         return await asyncio.to_thread(mcp_v2.resolve_v2, identifier, hint_kind, None)

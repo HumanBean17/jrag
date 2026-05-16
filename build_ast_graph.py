@@ -2142,10 +2142,11 @@ def pass6_match_edges(
             member = member_by_id.get(producer.member_id) if producer else None
             base = row.confidence / max(1e-9, (0.3 * _micro_factor(member)))
             src_route = route_by_id.get(row.route_id)
+            async_kind = producer.producer_kind if producer else "kafka_send"
             call = OutgoingCallDecl(
                 method_fqn=f"{member.parent_fqn}#{member.decl.signature}" if member else "",
                 method_sig=member.decl.signature if member else "",
-                client_kind="kafka_send",
+                client_kind=async_kind,
                 channel="async",
                 feign_target_name="",
                 feign_target_url="",

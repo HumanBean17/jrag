@@ -15,7 +15,7 @@
 > Calibrated against ontology version **14** (see `ast_java.ONTOLOGY_VERSION` /
 > `java_ontology.EDGE_SCHEMA` + valid sets): canonical edge navigation schema in
 > `docs/EDGE-NAVIGATION.md`. v14 re-index required; `HTTP_CALLS` is `Client → Route`;
-> PR-C adds `Producer` + `DECLARES_PRODUCER` and flips `ASYNC_CALLS`.
+> `Producer` + `DECLARES_PRODUCER` and `ASYNC_CALLS` (`Producer → Route`) ship in v14.
 > Still includes stored `OVERRIDES` Symbol→Symbol edges and v12 HTTP brownfield
 > (`@CodebaseHttpClient`, shared `CodebaseHttpMethod` enum, inbound layer-C HTTP routes
 > replace same-method built-in rows). **Design rationale:** navigation surface and tools —
