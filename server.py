@@ -339,7 +339,8 @@ def create_mcp_server() -> FastMCP:
             "(`*`, `?`) in prefix fields are rejected—use ranked `query` text instead. There is **no** "
             "structured DSL inside `query`; structured predicates belong in `find`. "
             "For identifier-shaped lookups (FQN, id prefix, route/client identifiers, …), use `resolve` first; "
-            "use `search` for natural-language or ranked fuzzy discovery."
+            "use `search` for natural-language or ranked fuzzy discovery. "
+            "Successful responses echo `limit`/`offset` and may include `hints` (advisory next-step strings)."
         ),
     )
     async def search(
@@ -386,7 +387,8 @@ def create_mcp_server() -> FastMCP:
             "**route** — microservice, module, http_method, path_prefix, framework; **client** — microservice, module, "
             "source_layer, client_kind, target_service, target_path_prefix, http_method. "
             "Wildcards in prefix fields are rejected. An empty filter (`{}`) or `filter=None` means no predicate (all nodes of "
-            "that kind; use pagination). Unknown keys or inapplicable populated fields return success=false."
+            "that kind; use pagination). Unknown keys or inapplicable populated fields return success=false. "
+            "Successful responses echo `limit`/`offset` and may include `hints` (advisory next-step strings)."
         ),
     )
     async def find(
@@ -419,7 +421,8 @@ def create_mcp_server() -> FastMCP:
             "is a normal edge label and may be traversed via neighbors(edge_types=[..., \"OVERRIDES\", ...]). "
             "Pass `id` for any kind, or exact `fqn` for Symbol lookup (`id` wins when both are set). "
             "`describe(fqn=…)` keeps the first graph row when multiple symbols share that FQN; when an FQN may collide, "
-            "prefer `resolve(identifier=…, hint_kind='symbol')` first, then `describe(id=…)` on the chosen node."
+            "prefer `resolve(identifier=…, hint_kind='symbol')` first, then `describe(id=…)` on the chosen node. "
+            "Successful responses may include `hints` (advisory next-step strings)."
         ),
     )
     async def describe(
@@ -444,7 +447,8 @@ def create_mcp_server() -> FastMCP:
             "One-hop graph walk: **direction** (`in` | `out`) and non-empty **edge_types** are required. "
             "Optional `filter` applies to each neighbor endpoint row; populated fields must be applicable to that "
             "neighbor's kind—mixed-kind result sets fail on the first inapplicable neighbor (strict frame). "
-            "Wildcards in prefix fields are rejected. Unknown NodeFilter keys return success=false."
+            "Wildcards in prefix fields are rejected. Unknown NodeFilter keys return success=false. "
+            "Successful responses echo `requested_edge_types` and may include `hints` (advisory next-step strings)."
         ),
     )
     async def neighbors(
