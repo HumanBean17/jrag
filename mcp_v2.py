@@ -31,6 +31,7 @@ from index_common import SBERT_MODEL
 from java_codebase_rag.config import resolved_sbert_model_for_process_env
 from java_ontology import ResolveReason
 from kuzu_queries import KuzuGraph
+from mcp_hints import MCP_HINTS_FIELD_DESCRIPTION, generate_hints
 from search_lancedb import TABLES, run_search
 
 DeclarationSymbolKind = Literal["class", "interface", "enum", "record", "annotation", "method", "constructor"]
@@ -287,24 +288,48 @@ class SearchOutput(BaseModel):
     success: bool
     results: list[SearchHit] = Field(default_factory=list)
     message: str | None = None
+    limit: int | None = Field(
+        default=None,
+        description="Echoed from the request — the page size the server applied. None on success=False.",
+    )
+    offset: int | None = Field(
+        default=None,
+        description="Echoed from the request — the page offset the server applied. None on success=False.",
+    )
+    hints: list[str] = Field(default_factory=list, description=MCP_HINTS_FIELD_DESCRIPTION)
 
 
 class FindOutput(BaseModel):
     success: bool
     results: list[NodeRef] = Field(default_factory=list)
     message: str | None = None
+    limit: int | None = Field(
+        default=None,
+        description="Echoed from the request — the page size the server applied. None on success=False.",
+    )
+    offset: int | None = Field(
+        default=None,
+        description="Echoed from the request — the page offset the server applied. None on success=False.",
+    )
+    hints: list[str] = Field(default_factory=list, description=MCP_HINTS_FIELD_DESCRIPTION)
 
 
 class DescribeOutput(BaseModel):
     success: bool
     record: NodeRecord | None = None
     message: str | None = None
+    hints: list[str] = Field(default_factory=list, description=MCP_HINTS_FIELD_DESCRIPTION)
 
 
 class NeighborsOutput(BaseModel):
     success: bool
     results: list[Edge] = Field(default_factory=list)
     message: str | None = None
+    requested_edge_types: list[str] = Field(
+        default_factory=list,
+        description="Echo of neighbors(edge_types=...) from the request; empty when success=False.",
+    )
+    hints: list[str] = Field(default_factory=list, description=MCP_HINTS_FIELD_DESCRIPTION)
 
 
 ResolveStatus = Literal["one", "many", "none"]
@@ -641,13 +666,19 @@ def search_v2(
             )
         except ValidationError as exc:
             _log_fail_loud("unknown_key")
-            return SearchOutput(success=False, message=_filter_validation_error_message(exc))
+            return SearchOutput(
+                success=False,
+                message=_filter_validation_error_message(exc),
+                hints=[],
+                limit=None,
+                offset=None,
+            )
         if nf and (err := _nodefilter_applicability_error("symbol", nf)):
             _log_fail_loud("applicability")
-            return SearchOutput(success=False, message=err)
+            return SearchOutput(success=False, message=err, hints=[], limit=None, offset=None)
         if nf and (err := _validate_no_wildcards(nf)):
             _log_fail_loud("wildcard")
-            return SearchOutput(success=False, message=err)
+            return SearchOutput(success=False, message=err, hints=[], limit=None, offset=None)
         model_name = resolved_sbert_model_for_process_env(SBERT_MODEL)
         device = os.environ.get("SBERT_DEVICE") or None
         model = _get_sentence_transformer(model_name, device)
@@ -679,9 +710,21 @@ def search_v2(
                 if not _node_matches_filter(row_kind, row, nf):
                     continue
             hits.append(_row_to_search_hit(row))
-        return SearchOutput(success=True, results=hits)
+        hint_payload = {
+            "success": True,
+            "results": [h.model_dump() for h in hits],
+            "limit": limit,
+            "offset": offset,
+        }
+        return SearchOutput(
+            success=True,
+            results=hits,
+            limit=limit,
+            offset=offset,
+            hints=generate_hints("search", hint_payload),
+        )
     except Exception as exc:
-        return SearchOutput(success=False, message=str(exc))
+        return SearchOutput(success=False, message=str(exc), hints=[], limit=None, offset=None)
 
 
 def find_v2(
@@ -700,13 +743,19 @@ def find_v2(
             nf = NodeFilter.model_validate(raw_filter) if not isinstance(raw_filter, NodeFilter) else raw_filter
         except ValidationError as exc:
             _log_fail_loud("unknown_key")
-            return FindOutput(success=False, message=_filter_validation_error_message(exc))
+            return FindOutput(
+                success=False,
+                message=_filter_validation_error_message(exc),
+                hints=[],
+                limit=None,
+                offset=None,
+            )
         if err := _nodefilter_applicability_error(kind, nf):
             _log_fail_loud("applicability")
-            return FindOutput(success=False, message=err)
+            return FindOutput(success=False, message=err, hints=[], limit=None, offset=None)
         if err := _validate_no_wildcards(nf):
             _log_fail_loud("wildcard")
-            return FindOutput(success=False, message=err)
+            return FindOutput(success=False, message=err, hints=[], limit=None, offset=None)
         if kind == "symbol":
             where, params = _symbol_where_from_filter(nf)
             params["lim"] = int(limit) + int(offset)
@@ -737,9 +786,25 @@ def find_v2(
             )
             rows = [r for r in rows if _node_matches_filter("client", r, nf)]
             rows = rows[offset : offset + limit]
-        return FindOutput(success=True, results=[_node_ref_from_row(kind, r) for r in rows])
+        refs = [_node_ref_from_row(kind, r) for r in rows]
+        filter_dump = nf.model_dump(exclude_none=True)
+        hint_payload: dict[str, Any] = {
+            "success": True,
+            "kind": kind,
+            "results": [r.model_dump() for r in refs],
+            "limit": limit,
+            "offset": offset,
+            "filter": filter_dump,
+        }
+        return FindOutput(
+            success=True,
+            results=refs,
+            limit=limit,
+            offset=offset,
+            hints=generate_hints("find", hint_payload),
+        )
     except Exception as exc:
-        return FindOutput(success=False, message=str(exc))
+        return FindOutput(success=False, message=str(exc), hints=[], limit=None, offset=None)
 
 
 def describe_v2(
@@ -752,7 +817,7 @@ def describe_v2(
         has_id = bool(id and str(id).strip())
         has_fqn = bool(fqn and str(fqn).strip())
         if not has_id and not has_fqn:
-            return DescribeOutput(success=False, message="id or fqn required")
+            return DescribeOutput(success=False, message="id or fqn required", hints=[])
         hint_message: str | None = None
         node_id: str
         if has_id:
@@ -764,7 +829,7 @@ def describe_v2(
                 {"fqn": fqn_val},
             )
             if not rows:
-                return DescribeOutput(success=False, message=f"No Symbol found for fqn='{fqn_val}'")
+                return DescribeOutput(success=False, message=f"No Symbol found for fqn='{fqn_val}'", hints=[])
             node_id = str(rows[0]["id"] or "")
             if len(rows) > 1:
                 hint_message = (
@@ -775,18 +840,20 @@ def describe_v2(
         kind = _resolve_node_kind(g, node_id)
         row = _load_node_record(g, node_id, kind)
         if row is None:
-            return DescribeOutput(success=False, message=f"No node found for `{node_id}`")
+            return DescribeOutput(success=False, message=f"No node found for `{node_id}`", hints=[])
         ref = _node_ref_from_row(kind, row)
         edge_summary = _edge_summary_for_node(g, node_id, kind=kind, row=row)
+        record = NodeRecord(id=ref.id, kind=kind, fqn=ref.fqn, data=row, edge_summary=edge_summary)
         return DescribeOutput(
             success=True,
-            record=NodeRecord(id=ref.id, kind=kind, fqn=ref.fqn, data=row, edge_summary=edge_summary),
+            record=record,
             message=hint_message,
+            hints=generate_hints("describe", {"success": True, "record": record.model_dump()}),
         )
     except ValueError as exc:
-        return DescribeOutput(success=False, message=str(exc))
+        return DescribeOutput(success=False, message=str(exc), hints=[])
     except Exception as exc:
-        return DescribeOutput(success=False, message=str(exc))
+        return DescribeOutput(success=False, message=str(exc), hints=[])
 
 
 def _resolve_validate_identifier(raw: str) -> tuple[str | None, str | None]:
@@ -1092,10 +1159,15 @@ def neighbors_v2(
             )
         except ValidationError as exc:
             _log_fail_loud("unknown_key")
-            return NeighborsOutput(success=False, message=_filter_validation_error_message(exc))
+            return NeighborsOutput(
+                success=False,
+                message=_filter_validation_error_message(exc),
+                hints=[],
+                requested_edge_types=[],
+            )
         if nf and (err := _validate_no_wildcards(nf)):
             _log_fail_loud("wildcard")
-            return NeighborsOutput(success=False, message=err)
+            return NeighborsOutput(success=False, message=err, hints=[], requested_edge_types=[])
         origins = [ids] if isinstance(ids, str) else list(ids)
         results: list[Edge] = []
         for origin_id in origins:
@@ -1133,7 +1205,7 @@ def neighbors_v2(
                     continue
                 if nf and (err := _nodefilter_applicability_error(other_kind, nf)):
                     _log_fail_loud("applicability")
-                    return NeighborsOutput(success=False, message=err)
+                    return NeighborsOutput(success=False, message=err, hints=[], requested_edge_types=[])
                 if not _node_matches_filter(other_kind, other_rec, nf):
                     continue
                 attrs = {
@@ -1155,8 +1227,19 @@ def neighbors_v2(
                         attrs=attrs,
                     )
                 )
-        return NeighborsOutput(success=True, results=results[offset : offset + limit])
+        sliced = results[offset : offset + limit]
+        neigh_payload = {
+            "success": True,
+            "results": [e.model_dump() for e in sliced],
+            "requested_edge_types": list(labels),
+        }
+        return NeighborsOutput(
+            success=True,
+            results=sliced,
+            requested_edge_types=list(labels),
+            hints=generate_hints("neighbors", neigh_payload),
+        )
     except ValidationError:
         raise
     except Exception as exc:
-        return NeighborsOutput(success=False, message=str(exc))
+        return NeighborsOutput(success=False, message=str(exc), hints=[], requested_edge_types=[])
