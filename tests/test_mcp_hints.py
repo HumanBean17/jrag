@@ -88,6 +88,18 @@ def _method_id_without_dispatch_rollups(kuzu_graph) -> str:
     return str(rows[0]["id"])
 
 
+def _method_id_with_empty_describe_hints(kuzu_graph) -> str:
+    rows = kuzu_graph._rows(  # noqa: SLF001
+        "MATCH (m:Symbol) WHERE m.kind = 'method' RETURN m.id AS id LIMIT 100",
+    )
+    for row in rows:
+        mid = str(row["id"])
+        out = describe_v2(mid, graph=kuzu_graph)
+        if out.success and out.record and out.hints == []:
+            return mid
+    pytest.fail("no method with empty describe hints in fixture")
+
+
 def _controller_method_many_calls(kuzu_graph) -> str:
     rows = kuzu_graph._rows(  # noqa: SLF001
         "MATCH (m:Symbol)-[e:CALLS]->() WHERE m.kind = 'method' "
@@ -382,13 +394,19 @@ def test_hints_kind_gate_method_payload_ignores_type_only_rollups() -> None:
 
 
 def test_hints_clean_outputs_empty(kuzu_graph) -> None:
-    mid = _method_id_without_dispatch_rollups(kuzu_graph)
+    mid = _method_id_with_empty_describe_hints(kuzu_graph)
     out = describe_v2(mid, graph=kuzu_graph)
     assert out.success and out.record
     assert out.hints == []
 
+    count_rows = kuzu_graph._rows(  # noqa: SLF001
+        "MATCH (s:Symbol) WHERE s.role = 'CONTROLLER' RETURN count(*) AS n",
+    )
+    n_controllers = int(count_rows[0]["n"])
+    assert n_controllers > 0
+    assert n_controllers <= 500, "fixture has >500 CONTROLLER symbols; narrow filter for clean find hints"
     fout = find_v2("symbol", {"role": "CONTROLLER"}, graph=kuzu_graph, limit=500, offset=0)
-    assert fout.success and fout.results
+    assert fout.success and len(fout.results) == n_controllers
     assert fout.hints == []
 
 
