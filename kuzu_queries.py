@@ -19,7 +19,7 @@ import os
 import threading
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import kuzu
 
@@ -46,7 +46,7 @@ __all__ = [
     "CallEdge",
     "ViaEdge",
     "StageSymbol",
-    "CallerInfo",
+    "RouteCaller",
     "find_symbols_in_file_range",
 ]
 
@@ -133,11 +133,15 @@ class StageSymbol:
 
 
 @dataclass
-class CallerInfo:
-    caller_symbol_id: str
+class RouteCaller:
+    caller_node_id: str
+    caller_node_kind: Literal["client", "producer"]
     caller_microservice: str
+    declaring_symbol_id: str
     confidence: float
     match: str
+    target_service: str = ""
+    raw_uri: str = ""
 
 
 def _symbol_return_for(alias: str) -> str:
@@ -1332,19 +1336,35 @@ class KuzuGraph:
                     )
                     scrf = (" AND " + " AND ".join(scope_rf)) if scope_rf else ""
                     qrf = (
-                        "MATCH (root:Symbol)-[:DECLARES]->(m1:Symbol)-[e:HTTP_CALLS|ASYNC_CALLS]->(rt:Route)"
-                        "<-[:EXPOSES]-(handler:Symbol)<-[:DECLARES]-(n:Symbol) "
+                        "MATCH (root:Symbol)-[:DECLARES]->(m1:Symbol)-[:DECLARES_CLIENT]->(c:Client)"
+                        "-[e:HTTP_CALLS]->(rt:Route)<-[:EXPOSES]-(handler:Symbol)<-[:DECLARES]-(n:Symbol) "
                         "WHERE root.fqn IN $fqns AND n.role IN $roles "
                         "AND n.resolved AND n.kind IN ['class','interface','enum','record','annotation'] "
                         "AND e.confidence >= $mc AND root.microservice <> n.microservice "
                         f"{scrf} "
-                        f"RETURN {_symbol_return_for('n')}, label(e) AS edge_type, root.fqn AS from_fqn "
+                        f"RETURN {_symbol_return_for('n')}, 'HTTP_CALLS' AS edge_type, root.fqn AS from_fqn "
                         f"LIMIT {max(1, remaining * 4)}"
                     )
                     for row in self._rows(qrf, params_rf):
                         _ingest_flow_row(row, filter_external_fqn=True)
                         if len(stage_results) >= stage_limit:
                             break
+                    if len(stage_results) < stage_limit:
+                        remaining = stage_limit - len(stage_results)
+                        qrf_async = (
+                        "MATCH (root:Symbol)-[:DECLARES]->(m1:Symbol)-[e:ASYNC_CALLS]->(rt:Route)"
+                        "<-[:EXPOSES]-(handler:Symbol)<-[:DECLARES]-(n:Symbol) "
+                        "WHERE root.fqn IN $fqns AND n.role IN $roles "
+                        "AND n.resolved AND n.kind IN ['class','interface','enum','record','annotation'] "
+                        "AND e.confidence >= $mc AND root.microservice <> n.microservice "
+                        f"{scrf} "
+                        f"RETURN {_symbol_return_for('n')}, 'ASYNC_CALLS' AS edge_type, root.fqn AS from_fqn "
+                        f"LIMIT {max(1, remaining * 4)}"
+                        )
+                        for row in self._rows(qrf_async, params_rf):
+                            _ingest_flow_row(row, filter_external_fqn=True)
+                            if len(stage_results) >= stage_limit:
+                                break
 
                 current_frontier = next_frontier
                 if len(stage_results) >= stage_limit:
@@ -1467,7 +1487,7 @@ class KuzuGraph:
         microservice: str = "",
         path_template: str = "",
         method: str = "",
-    ) -> list[CallerInfo]:
+    ) -> list[RouteCaller]:
         rid = route_id or ""
         if not rid:
             params: dict[str, Any] = {
@@ -1486,36 +1506,73 @@ class KuzuGraph:
             rid = str(rows[0].get("id") or "")
             if not rid:
                 return []
-        rows = self._rows(
-            "MATCH (s:Symbol)-[e:HTTP_CALLS|ASYNC_CALLS]->(r:Route {id: $rid}) "
-            "RETURN s.id AS caller_symbol_id, s.microservice AS caller_microservice, "
-            "e.confidence AS confidence, e.match AS match "
-            "ORDER BY e.confidence DESC, s.id",
+        http_rows = self._rows(
+            "MATCH (s:Symbol)-[:DECLARES_CLIENT]->(c:Client)-[e:HTTP_CALLS]->(r:Route {id: $rid}) "
+            "RETURN c.id AS caller_node_id, c.microservice AS caller_microservice, "
+            "s.id AS declaring_symbol_id, e.confidence AS confidence, e.match AS match, "
+            "c.target_service AS target_service, e.raw_uri AS raw_uri "
+            "ORDER BY e.confidence DESC, c.id",
             {"rid": rid},
         )
-        out: list[CallerInfo] = []
-        for row in rows:
+        async_rows = self._rows(
+            "MATCH (s:Symbol)-[e:ASYNC_CALLS]->(r:Route {id: $rid}) "
+            "RETURN s.id AS caller_node_id, s.microservice AS caller_microservice, "
+            "s.id AS declaring_symbol_id, e.confidence AS confidence, e.match AS match",
+            {"rid": rid},
+        )
+        out: list[RouteCaller] = []
+        for row in http_rows:
             out.append(
-                CallerInfo(
-                    caller_symbol_id=str(row.get("caller_symbol_id") or ""),
+                RouteCaller(
+                    caller_node_id=str(row.get("caller_node_id") or ""),
+                    caller_node_kind="client",
                     caller_microservice=str(row.get("caller_microservice") or ""),
+                    declaring_symbol_id=str(row.get("declaring_symbol_id") or ""),
+                    confidence=float(row.get("confidence") or 0.0),
+                    match=str(row.get("match") or ""),
+                    target_service=str(row.get("target_service") or ""),
+                    raw_uri=str(row.get("raw_uri") or ""),
+                ),
+            )
+        for row in async_rows:
+            sym_id = str(row.get("caller_node_id") or "")
+            out.append(
+                RouteCaller(
+                    caller_node_id=sym_id,
+                    caller_node_kind="client",
+                    caller_microservice=str(row.get("caller_microservice") or ""),
+                    declaring_symbol_id=str(row.get("declaring_symbol_id") or ""),
                     confidence=float(row.get("confidence") or 0.0),
                     match=str(row.get("match") or ""),
                 ),
             )
+        out.sort(key=lambda c: (-c.confidence, c.caller_node_id))
         return out
 
     def trace_request_flow(self, entry_route_id: str, max_hops: int = 5) -> dict[str, Any]:
         hops = max(1, min(int(max_hops), 8))
-        inbound = self._rows(
-            f"MATCH (entry:Route {{id: $rid}})<-[e:HTTP_CALLS|ASYNC_CALLS]-(caller:Symbol) "
-            f"OPTIONAL MATCH (origin:Symbol)-[:CALLS*0..{hops}]->(caller) "
-            "RETURN DISTINCT caller.id AS caller_symbol_id, caller.fqn AS caller_fqn, "
-            "caller.microservice AS caller_microservice, e.confidence AS confidence, "
+        inbound_http = self._rows(
+            f"MATCH (entry:Route {{id: $rid}})<-[e:HTTP_CALLS]-(caller:Client)"
+            "<-[:DECLARES_CLIENT]-(decl:Symbol) "
+            f"OPTIONAL MATCH (origin:Symbol)-[:CALLS*0..{hops}]->(decl) "
+            "RETURN DISTINCT caller.id AS caller_node_id, 'client' AS caller_node_kind, "
+            "decl.id AS declaring_symbol_id, decl.fqn AS declaring_symbol_fqn, "
+            "caller.microservice AS microservice, e.confidence AS confidence, "
             "e.match AS match, origin.id AS origin_symbol_id, origin.fqn AS origin_fqn "
-            "ORDER BY confidence DESC, caller_symbol_id",
+            "ORDER BY confidence DESC, caller_node_id",
             {"rid": entry_route_id},
         )
+        inbound_async = self._rows(
+            f"MATCH (entry:Route {{id: $rid}})<-[e:ASYNC_CALLS]-(caller:Symbol) "
+            f"OPTIONAL MATCH (origin:Symbol)-[:CALLS*0..{hops}]->(caller) "
+            "RETURN DISTINCT caller.id AS caller_node_id, 'client' AS caller_node_kind, "
+            "caller.id AS declaring_symbol_id, caller.fqn AS declaring_symbol_fqn, "
+            "caller.microservice AS microservice, e.confidence AS confidence, "
+            "e.match AS match, origin.id AS origin_symbol_id, origin.fqn AS origin_fqn "
+            "ORDER BY confidence DESC, caller_node_id",
+            {"rid": entry_route_id},
+        )
+        inbound = inbound_http + inbound_async
         outbound = self._rows(
             f"MATCH (handler:Symbol)-[:EXPOSES]->(entry:Route {{id: $rid}}) "
             f"OPTIONAL MATCH (handler)-[:CALLS*0..{hops}]->(next:Symbol) "

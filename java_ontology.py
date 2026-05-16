@@ -303,7 +303,7 @@ EDGE_SCHEMA: dict[str, EdgeSpec] = {
     ),
     "HTTP_CALLS": EdgeSpec(
         name="HTTP_CALLS",
-        src="Symbol",
+        src="Client",
         dst="Route",
         cardinality="many_to_many",
         brownfield_resolver_sourced=True,
@@ -314,25 +314,24 @@ EDGE_SCHEMA: dict[str, EdgeSpec] = {
             EdgeAttr("raw_uri", "STRING", "uninterpolated URI template from the call site"),
             EdgeAttr("match", "STRING", "cross_service|intra_service|ambiguous|phantom|unresolved"),
         ),
-        purpose="resolved HTTP call from declaring method to target route (pre-flip: Symbol→Route; PR-B: Client→Route)",
+        purpose="resolved HTTP call from a declared Client to a target route",
         typical_traversals={
-            "type_subject_current": (
-                "neighbors(['{id}'],'out',['DECLARES']) "
-                "then neighbors(member_ids,'out',['HTTP_CALLS'])"
-            ),
             "type_subject": (
                 "neighbors(['{id}'],'out',['DECLARES']) "
                 "then neighbors(member_ids,'out',['DECLARES_CLIENT']) "
                 "then neighbors(client_ids,'out',['HTTP_CALLS'])"
             ),
-            "member_subject_current": "neighbors(['{id}'],'out',['HTTP_CALLS'])",
             "member_subject": (
                 "neighbors(['{id}'],'out',['DECLARES_CLIENT']) "
                 "then neighbors(client_ids,'out',['HTTP_CALLS'])"
             ),
+            "route_subject": (
+                "neighbors(['{id}'],'in',['HTTP_CALLS']) "
+                "then neighbors(client_ids,'in',['DECLARES_CLIENT']) for declaring method"
+            ),
             "alien_subject": (
-                "HTTP_CALLS is Symbol→Route until PR-B; use member_subject_current. "
-                "After PR-B (Client→Route), use member_subject via DECLARES_CLIENT"
+                "HTTP_CALLS connects Client→Route; use DECLARES_CLIENT from a method Symbol, "
+                "or neighbors(client_id,'out',['HTTP_CALLS']) from a Client id"
             ),
         },
     ),

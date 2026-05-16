@@ -41,7 +41,10 @@ def test_feign_caller_resolves_to_target_endpoint(graph_tables_cross_service_smo
         parent_fqn="smoke.a.BFeignClient",
         method_name="joinOperator",
     )
-    row = next((r for r in tables.http_call_rows if r.symbol_id == caller_id), None)
+    client_ids = {
+        e.client_id for e in tables.declares_client_rows if e.symbol_id == caller_id
+    }
+    row = next((r for r in tables.http_call_rows if r.client_id in client_ids), None)
     assert row is not None
     route = next((r for r in tables.routes_rows if r.id == row.route_id), None)
     assert route is not None

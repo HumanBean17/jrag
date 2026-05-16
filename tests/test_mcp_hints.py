@@ -56,7 +56,7 @@ def _interface_method_with_override_rollups(kuzu_graph) -> str:
 def _method_id_declares_client_and_other_out_edge(kuzu_graph) -> str | None:
     for pattern in (
         "MATCH (m:Symbol {kind: 'method'})-[:DECLARES_CLIENT]->() MATCH (m)-[:CALLS]->() RETURN m.id AS id LIMIT 1",
-        "MATCH (m:Symbol {kind: 'method'})-[:DECLARES_CLIENT]->() MATCH (m)-[:HTTP_CALLS]->() RETURN m.id AS id LIMIT 1",
+        "MATCH (m:Symbol {kind: 'method'})-[:DECLARES_CLIENT]->(:Client)-[:HTTP_CALLS]->() RETURN m.id AS id LIMIT 1",
     ):
         rows = kuzu_graph._rows(pattern)  # noqa: SLF001
         if rows:

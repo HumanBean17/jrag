@@ -433,7 +433,13 @@ def compute_risk(graph: Any, changed: list[ChangedSymbol]) -> PrRiskReport:
             if rid not in routes:
                 routes.append(rid)
             callers = graph._rows(
-                "MATCH (s:Symbol)-[e:HTTP_CALLS|ASYNC_CALLS]->(r:Route {id: $rid}) "
+                "MATCH (s:Symbol)-[:DECLARES_CLIENT]->(c:Client)-[e:HTTP_CALLS]->(r:Route {id: $rid}) "
+                "WHERE e.match = 'cross_service' "
+                "RETURN c.id AS id LIMIT 500",
+                {"rid": rid},
+            )
+            callers += graph._rows(
+                "MATCH (s:Symbol)-[e:ASYNC_CALLS]->(r:Route {id: $rid}) "
                 "WHERE e.match = 'cross_service' "
                 "RETURN s.id AS id LIMIT 500",
                 {"rid": rid},

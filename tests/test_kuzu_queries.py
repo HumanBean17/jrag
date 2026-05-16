@@ -463,3 +463,35 @@ def test_get_route_by_path_microservice_isolated(kuzu_graph_route_extraction_smo
     assert ra["microservice"] == "service-a"
     assert rb["microservice"] == "service-b"
     assert ra["id"] != rb["id"]
+
+
+def test_find_route_callers_returns_route_caller_client_node(kuzu_db_path_cross_service_smoke: Path) -> None:
+    from kuzu_queries import RouteCaller
+
+    g = KuzuGraph(str(kuzu_db_path_cross_service_smoke))
+    routes = g.list_routes(limit=50)
+    callers: list[RouteCaller] = []
+    for route in routes:
+        callers = g.find_route_callers(route["id"])
+        if callers:
+            break
+    assert callers
+    http_callers = [c for c in callers if c.match]
+    assert any(c.caller_node_kind == "client" for c in http_callers)
+    assert all(c.caller_node_id for c in http_callers)
+
+
+def test_trace_request_flow_inbound_includes_caller_node_id(kuzu_db_path_cross_service_smoke: Path) -> None:
+    g = KuzuGraph(str(kuzu_db_path_cross_service_smoke))
+    route_id = None
+    for route in g.list_routes(limit=50):
+        flow = g.trace_request_flow(route["id"], max_hops=2)
+        inbound = flow.get("inbound") or []
+        if inbound:
+            route_id = route["id"]
+            break
+    assert route_id is not None
+    flow = g.trace_request_flow(route_id, max_hops=2)
+    inbound = flow.get("inbound") or []
+    assert inbound
+    assert any(row.get("caller_node_id") for row in inbound)

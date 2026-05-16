@@ -56,9 +56,9 @@ def test_schema_consistency_all_ddl_endpoints_match_edge_schema() -> None:
         assert spec.dst == dst, f"{name}: schema dst {spec.dst!r} != DDL {dst!r}"
 
 
-def test_schema_consistency_http_calls_pre_flip_symbol_to_route() -> None:
+def test_schema_consistency_http_calls_post_flip_client_to_route() -> None:
     spec = EDGE_SCHEMA["HTTP_CALLS"]
-    assert spec.src == "Symbol"
+    assert spec.src == "Client"
     assert spec.dst == "Route"
 
 
@@ -79,12 +79,13 @@ def test_edge_schema_member_only_flags_on_method_level_edges() -> None:
 
 
 def test_http_async_typical_traversals_include_pre_flip_current_keys() -> None:
-    for edge in ("HTTP_CALLS", "ASYNC_CALLS"):
-        trav = EDGE_SCHEMA[edge].typical_traversals
-        assert "member_subject_current" in trav
-        assert "HTTP_CALLS" in trav["member_subject_current"] or "ASYNC_CALLS" in trav["member_subject_current"]
-        assert "member_subject" in trav
-        assert "DECLARES" in trav["member_subject"] or "DECLARES_PRODUCER" in trav["member_subject"]
+    http_trav = EDGE_SCHEMA["HTTP_CALLS"].typical_traversals
+    assert "member_subject" in http_trav
+    assert "DECLARES_CLIENT" in http_trav["member_subject"]
+    async_trav = EDGE_SCHEMA["ASYNC_CALLS"].typical_traversals
+    assert "member_subject_current" in async_trav
+    assert "ASYNC_CALLS" in async_trav["member_subject_current"]
+    assert "member_subject" in async_trav
 
 
 def test_brownfield_resolver_strategy_literals_emitted_in_builder_subset() -> None:

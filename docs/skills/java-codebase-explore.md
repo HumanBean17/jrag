@@ -98,8 +98,8 @@ You cannot reason reliably about cross-service behaviour until these surfaces ex
 **Sequence:**
 
 1. Cluster routes by path prefix; **`describe`** on representative `route:` ids.
-2. For each major route, **`neighbors(direction="in", edge_types=["EXPOSES"])`** (and `HTTP_CALLS` / `ASYNC_CALLS` when tracing callers) to land on handler symbols; then outbound `CALLS` as needed.
-3. Use **`find(kind="client", …)`** with the same microservice filter to list outbound integration points; follow **`HTTP_CALLS` / `ASYNC_CALLS`** edges when present.
+2. For each major route, **`neighbors(direction="in", edge_types=["EXPOSES"])`** to land on handler symbols; for inbound **`HTTP_CALLS`**, expect **Client** callers (then **`DECLARES_CLIENT` inbound** to the declaring method); **`ASYNC_CALLS`** inbound still lands on Symbol callers until PR-C.
+3. Use **`find(kind="client", …)`** with the same microservice filter to list outbound integration points; follow outbound **`HTTP_CALLS`** from each Client (or **`ASYNC_CALLS`** from methods until Producer lands).
 
 **Stopping rule:** You can summarize how traffic enters the service, what modules/controllers own key paths, and what external systems it calls—**without** claiming tests, runtime config, or unindexed siblings exist in MCP.
 
@@ -116,7 +116,7 @@ You cannot reason reliably about cross-service behaviour until these surfaces ex
 **Sequence:**
 
 1. **`neighbors(direction="in", edge_types=["EXPOSES"])`** onto the handling symbol; walk **`CALLS`** outbound method-by-method.
-2. When a method shows outbound HTTP/async, use **`neighbors`** with **`HTTP_CALLS` / `ASYNC_CALLS`** (direction per question) and follow to target routes or async targets.
+2. When a method makes outbound HTTP, **`neighbors(..., out, ["DECLARES_CLIENT"])`** then outbound **`HTTP_CALLS`** from each Client id; for async (pre-PR-C), **`ASYNC_CALLS`** may still be direct from the method Symbol.
 3. Stop at leaves, framework boundaries, or unresolved edges; read **`edge.attrs`** (`attrs.confidence`, `attrs.strategy`, `attrs.match`) and report low-confidence segments as resolver gaps, not as facts.
 
 **Stopping rule:** You reach a stable leaf (external IO, message publish, clear terminal layer) **or** you document every unresolved hop with a concrete next non-MCP check.
@@ -243,7 +243,7 @@ Ten edge types:
 | Method overrides | `OVERRIDES` |
 | Method calls | `CALLS` |
 | Service boundary | `EXPOSES` |
-| Cross-service | `HTTP_CALLS`, `ASYNC_CALLS` |
+| Cross-service | `HTTP_CALLS` (Client→Route), `ASYNC_CALLS` (Symbol→Route until Producer) |
 
 For exact argument shapes, recovery playbook, and slash aliases see
 [`docs/AGENT-GUIDE.md`](https://github.com/HumanBean17/java-codebase-rag/blob/master/docs/AGENT-GUIDE.md) in the java-codebase-rag repo.
