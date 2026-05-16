@@ -542,17 +542,6 @@ def test_neighbors_invalid_edge_type_rejected(kuzu_graph) -> None:
         neighbors_v2(mid, direction="in", edge_types=["calls"], graph=kuzu_graph)
 
 
-def test_neighbors_rejects_composed_edge_summary_key(kuzu_graph) -> None:
-    mid = _method_id_with_calls(kuzu_graph, "out")
-    with pytest.raises(ValidationError):
-        neighbors_v2(
-            mid,
-            direction="out",
-            edge_types=["DECLARES.DECLARES_CLIENT"],
-            graph=kuzu_graph,
-        )
-
-
 async def test_find_invalid_kind_rejected(mcp_server) -> None:
     with pytest.raises(ToolError, match="Input should be"):
         await mcp_server.call_tool("find", {"kind": "method", "filter": {}})

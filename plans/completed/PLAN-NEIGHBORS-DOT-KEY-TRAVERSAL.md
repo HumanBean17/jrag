@@ -1,7 +1,7 @@
 # Plan: NEIGHBORS-DOT-KEY-TRAVERSAL
 
-Status: **active (planning)**. This plan implements
-[`propose/NEIGHBORS-DOT-KEY-TRAVERSAL-PROPOSE.md`](../propose/NEIGHBORS-DOT-KEY-TRAVERSAL-PROPOSE.md)
+Status: **completed** (PR-1 landed in [#171](https://github.com/HumanBean17/java-codebase-rag/pull/171)). Source propose:
+[`propose/completed/NEIGHBORS-DOT-KEY-TRAVERSAL-PROPOSE.md`](../../propose/completed/NEIGHBORS-DOT-KEY-TRAVERSAL-PROPOSE.md)
 (issue [#162](https://github.com/HumanBean17/java-codebase-rag/issues/162)).
 
 Depends on: **none** (query-time / MCP surface only; graph schema unchanged).
@@ -178,13 +178,13 @@ Implement every name in the table above plus hint tests. Regression:
 
 ## Definition of done (PR-1)
 
-- [ ] `neighbors_v2` accepts the three `DECLARES.*` dot-keys; flat edge types unchanged.
-- [ ] Composed results: dot-key `edge_type`, terminal `other`, `via_id` in `attrs`, full attr projection aligned with flat hops.
-- [ ] Type-only origin + `out` only enforced with `success=False` messages.
-- [ ] `OVERRIDDEN_BY` / `OVERRIDDEN_BY.*` still rejected at validation.
-- [ ] `edge_summary` field description and agent docs match behavior.
-- [ ] Three describe hint templates prescribe dot-key calls; `MCP_HINTS_FIELD_DESCRIPTION` updated.
-- [ ] All named tests green; `ruff` + full `pytest tests` (non-heavy) pass.
+- [x] `neighbors_v2` accepts the three `DECLARES.*` dot-keys; flat edge types unchanged.
+- [x] Composed results: dot-key `edge_type`, terminal `other`, `via_id` in `attrs`, full attr projection aligned with flat hops.
+- [x] Type-only origin + `out` only enforced with `success=False` messages.
+- [x] `OVERRIDDEN_BY` / `OVERRIDDEN_BY.*` still rejected at validation.
+- [x] `edge_summary` field description and agent docs match behavior.
+- [x] Three describe hint templates prescribe dot-key calls; `MCP_HINTS_FIELD_DESCRIPTION` updated.
+- [x] All named tests green; `ruff` + full `pytest tests` (non-heavy) pass.
 
 ## Implementation step list
 
@@ -218,14 +218,14 @@ Implement every name in the table above plus hint tests. Regression:
 - `SearchHit` / `find` schema changes
 - HINTS-V4 success-path catalog (`propose/HINTS-V4-SUCCESS-PATH-PROPOSE.md`)
 - Ontology version bump / graph builder / re-index
-- Moving propose to `propose/completed/` (do when PR merges)
 
 # Whole-plan done definition
 
-1. PR-1 merged; propose moved to `propose/completed/` with `Status: landed`.
+1. PR-1 merged; propose in `propose/completed/` with `Status: landed`.
 2. Issue #162 acceptance criteria met for `DECLARES.*` family (not #165 / #167).
 3. `pytest tests` and `ruff check .` pass on `master` without heavy gate.
 
 # Tracking
 
-- `PR-1`: _pending_
+- `PR-1`: landed ([#171](https://github.com/HumanBean17/java-codebase-rag/pull/171))
+- Follow-up: [#172](https://github.com/HumanBean17/java-codebase-rag/issues/172) — single source of truth for composed dot-keys

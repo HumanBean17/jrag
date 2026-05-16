@@ -160,7 +160,7 @@
 
 **Typical traversals**:
 
-- `type_subject`: neighbors(['{id}'],'out',['DECLARES']) then neighbors(member_ids,'{direction}',['EXPOSES'])
+- `type_subject`: neighbors(['{id}'],'out',['DECLARES.EXPOSES']) — or neighbors(['{id}'],'out',['DECLARES']) then neighbors(member_ids,'{direction}',['EXPOSES'])
 - `member_subject`: neighbors(['{id}'],'out',['EXPOSES'])
 - `alien_subject`: EXPOSES connects method Symbol → Route; use a method Symbol id
 
@@ -180,7 +180,7 @@
 
 **Typical traversals**:
 
-- `type_subject`: neighbors(['{id}'],'out',['DECLARES']) then neighbors(member_ids,'{direction}',['DECLARES_CLIENT'])
+- `type_subject`: neighbors(['{id}'],'out',['DECLARES.DECLARES_CLIENT']) — or neighbors(['{id}'],'out',['DECLARES']) then neighbors(member_ids,'{direction}',['DECLARES_CLIENT'])
 - `member_subject`: neighbors(['{id}'],'out',['DECLARES_CLIENT'])
 - `alien_subject`: DECLARES_CLIENT connects method Symbol → Client
 
@@ -200,7 +200,7 @@
 
 **Typical traversals**:
 
-- `type_subject`: neighbors(['{id}'],'out',['DECLARES']) then neighbors(member_ids,'{direction}',['DECLARES_PRODUCER'])
+- `type_subject`: neighbors(['{id}'],'out',['DECLARES.DECLARES_PRODUCER']) — or neighbors(['{id}'],'out',['DECLARES']) then neighbors(member_ids,'{direction}',['DECLARES_PRODUCER'])
 - `member_subject`: neighbors(['{id}'],'out',['DECLARES_PRODUCER'])
 - `alien_subject`: DECLARES_PRODUCER connects method Symbol → Producer
 

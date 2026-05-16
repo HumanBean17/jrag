@@ -22,7 +22,7 @@ import os
 import sys
 from pathlib import Path
 import threading
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, validate_call
 from sentence_transformers import SentenceTransformer
@@ -36,9 +36,9 @@ from search_lancedb import TABLES, run_search
 
 DeclarationSymbolKind = Literal["class", "interface", "enum", "record", "annotation", "method", "constructor"]
 
-# Composed describe-time keys in edge_summary (e.g. DECLARES.DECLARES_CLIENT) are
-# intentionally not EdgeType literals — neighbors(edge_types=...) rejects them.
-# Virtual override-axis keys (OVERRIDDEN_BY, …) are also rejected; stored OVERRIDES is an EdgeType.
+# Stored graph edge labels for one-hop neighbors. Composed DECLARES.* dot-keys are
+# separate ComposedEdgeType literals (2-hop traversal). Virtual override-axis keys
+# (OVERRIDDEN_BY, …) are rejected by _NEIGHBOR_EDGE_TYPES_ADAPTER; stored OVERRIDES is an EdgeType.
 EdgeType = Literal[
     "EXTENDS",
     "IMPLEMENTS",
@@ -53,8 +53,21 @@ EdgeType = Literal[
     "ASYNC_CALLS",
 ]
 
+ComposedEdgeType = Literal[
+    "DECLARES.DECLARES_CLIENT",
+    "DECLARES.DECLARES_PRODUCER",
+    "DECLARES.EXPOSES",
+]
+
+NeighborEdgeType = EdgeType | ComposedEdgeType
+
+_COMPOSED_EDGE_TYPES = frozenset(get_args(ComposedEdgeType))
+
 _NEIGHBOR_EDGE_TYPES_ADAPTER = TypeAdapter(
-    Annotated[list[EdgeType], Field(min_length=1, description="At least one graph edge label")]
+    Annotated[
+        list[NeighborEdgeType],
+        Field(min_length=1, description="At least one graph edge label or DECLARES.* dot-key"),
+    ]
 )
 
 _st_lock = threading.Lock()
@@ -278,14 +291,14 @@ class NodeRecord(BaseModel):
             "Per graph edge label, in/out incident counts. For type Symbols (class, interface, "
             "enum, record, annotation), may also include composed dot-keys "
             "`DECLARES.DECLARES_CLIENT`, `DECLARES.DECLARES_PRODUCER`, and `DECLARES.EXPOSES`: 2-hop summaries "
-            "(DECLARES to member, then that edge) — edge-row counts, not EdgeType literals; "
-            "do not pass them to neighbors(edge_types=…). For method Symbols, may include "
+            "(DECLARES to member, then that edge) — edge-row counts; navigable via neighbors for type "
+            "Symbol origins (`direction=\"out\"` only). For method Symbols, may include "
             "override-axis virtual keys `OVERRIDDEN_BY`, `OVERRIDDEN_BY.DECLARES_CLIENT`, "
             "`OVERRIDDEN_BY.DECLARES_PRODUCER`, `OVERRIDDEN_BY.EXPOSES`, plus an `OVERRIDES` map entry "
             "that **merges** stored "
             "`[:OVERRIDES]` in/out counts with the describe-time dispatch-up rollup (per "
-            "direction `max`, so inbound stored overrides are not dropped). Those virtual / "
-            "dot-keys are not valid neighbors(edge_types=…) arguments. The stored relationship "
+            "direction `max`, so inbound stored overrides are not dropped). Those OVERRIDDEN_BY* "
+            "virtual keys are not valid neighbors(edge_types=…) arguments. The stored relationship "
             "label `OVERRIDES` **is** a valid EdgeType for neighbors."
         ),
     )
@@ -1292,26 +1305,32 @@ def resolve_v2(
         return out
 
 
+def _neighbor_edge_attrs(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        k: v
+        for k, v in row.items()
+        if k not in {"other_id", "edge_type", "stored_edge_type"}
+        and v not in (None, "")
+    }
+
+
 @validate_call(config={"arbitrary_types_allowed": True})
 def neighbors_v2(
     ids: str | list[str],
     # Required fields are intentional: direct Python calls and MCP-bound calls
     # share the same validation contract through @validate_call.
     direction: Literal["in", "out"] = Field(...),
-    edge_types: list[EdgeType] = Field(...),
+    edge_types: list[NeighborEdgeType] = Field(...),
     limit: int = 25,
     offset: int = 0,
     filter: NodeFilter | dict[str, Any] | str | None = None,
     graph: Any | None = None,
 ) -> NeighborsOutput:
     try:
-        _NEIGHBOR_EDGE_TYPES_ADAPTER.validate_python(edge_types)
-        # Kuzu 0.11.x can drop `label(e) IN $list` in WHERE; use OR of scalar equalities instead.
-        # Typed unions like `[e:CALLS|HTTP_CALLS]` fail the binder when RETURN references rel
-        # columns that exist on only some of the union members.
-        labels = list(dict.fromkeys(edge_types))
-        label_params = [f"l{i}" for i in range(len(labels))]
-        label_predicate = "(" + " OR ".join(f"label(e) = ${name}" for name in label_params) + ")"
+        validated_types = _NEIGHBOR_EDGE_TYPES_ADAPTER.validate_python(edge_types)
+        requested_edge_types = list(dict.fromkeys(validated_types))
+        flat_labels = [et for et in requested_edge_types if et not in _COMPOSED_EDGE_TYPES]
+        composed_keys = [et for et in requested_edge_types if et in _COMPOSED_EDGE_TYPES]
         g = graph or KuzuGraph.get()
         try:
             raw_filter = _coerce_filter(filter)
@@ -1331,75 +1350,120 @@ def neighbors_v2(
         if nf and (err := _validate_no_wildcards(nf)):
             _log_fail_loud("wildcard")
             return NeighborsOutput(success=False, message=err, hints=[], requested_edge_types=[])
+        if composed_keys and direction != "out":
+            return NeighborsOutput(
+                success=False,
+                message='Composed edge types require direction="out"',
+                hints=[],
+                requested_edge_types=requested_edge_types,
+            )
         origins = [ids] if isinstance(ids, str) else list(ids)
         results: list[Edge] = []
         for origin_id in origins:
-            _resolve_node_kind(g, origin_id)
-            q_params = {"id": origin_id, **dict(zip(label_params, labels, strict=True))}
-            if direction == "out":
-                rows = g._rows(  # noqa: SLF001
-                    "MATCH (a)-[e]->(b) WHERE a.id = $id AND "
-                    f"{label_predicate} "
-                    "RETURN b.id AS other_id, label(e) AS edge_type, e.confidence AS confidence, "
-                    "e.strategy AS strategy, e.match AS match, e.mechanism AS mechanism, "
-                    "e.annotation AS annotation, e.field_or_param AS field_or_param, "
-                    "e.source AS source, e.call_site_line AS call_site_line, "
-                    "e.call_site_byte AS call_site_byte, e.arg_count AS arg_count, "
-                    "e.resolved AS resolved",
-                    q_params,
-                )
-            else:
-                rows = g._rows(  # noqa: SLF001
-                    "MATCH (a)<-[e]-(b) WHERE a.id = $id AND "
-                    f"{label_predicate} "
-                    "RETURN b.id AS other_id, label(e) AS edge_type, e.confidence AS confidence, "
-                    "e.strategy AS strategy, e.match AS match, e.mechanism AS mechanism, "
-                    "e.annotation AS annotation, e.field_or_param AS field_or_param, "
-                    "e.source AS source, e.call_site_line AS call_site_line, "
-                    "e.call_site_byte AS call_site_byte, e.arg_count AS arg_count, "
-                    "e.resolved AS resolved",
-                    q_params,
-                )
-            for row in rows:
-                other_id = str(row.get("other_id") or "")
-                other_kind = _resolve_node_kind(g, other_id)
-                other_rec = _load_node_record(g, other_id, other_kind)
-                if other_rec is None:
-                    continue
-                if nf and (err := _nodefilter_applicability_error(other_kind, nf)):
-                    _log_fail_loud("applicability")
-                    return NeighborsOutput(success=False, message=err, hints=[], requested_edge_types=[])
-                if not _node_matches_filter(other_kind, other_rec, nf):
-                    continue
-                attrs = {
-                    k: v
-                    for k, v in row.items()
-                    if k
-                    not in {
-                        "other_id",
-                        "edge_type",
-                    }
-                    and v not in (None, "")
-                }
-                results.append(
-                    Edge(
-                        origin_id=origin_id,
-                        edge_type=str(row.get("edge_type") or ""),
-                        direction=direction,
-                        other=_node_ref_from_row(other_kind, other_rec),
-                        attrs=attrs,
+            origin_kind = _resolve_node_kind(g, origin_id)
+            if composed_keys:
+                if origin_kind != "symbol":
+                    return NeighborsOutput(
+                        success=False,
+                        message=(
+                            f"Composed edge types ({composed_keys[0]}) require a type Symbol origin"
+                        ),
+                        hints=[],
+                        requested_edge_types=requested_edge_types,
                     )
-                )
+                origin_row = _load_node_record(g, origin_id, "symbol")
+                sym_kind = str((origin_row or {}).get("kind") or "")
+                if sym_kind not in _TYPE_SYMBOL_KINDS_FOR_EDGE_ROLLUP:
+                    return NeighborsOutput(
+                        success=False,
+                        message=(
+                            f"Composed edge types ({composed_keys[0]}) require a type Symbol origin"
+                        ),
+                        hints=[],
+                        requested_edge_types=requested_edge_types,
+                    )
+            if flat_labels:
+                # Kuzu 0.11.x can drop `label(e) IN $list` in WHERE; use OR of scalar equalities.
+                label_params = [f"l{i}" for i in range(len(flat_labels))]
+                label_predicate = "(" + " OR ".join(f"label(e) = ${name}" for name in label_params) + ")"
+                q_params = {"id": origin_id, **dict(zip(label_params, flat_labels, strict=True))}
+                if direction == "out":
+                    rows = g._rows(  # noqa: SLF001
+                        "MATCH (a)-[e]->(b) WHERE a.id = $id AND "
+                        f"{label_predicate} "
+                        "RETURN b.id AS other_id, label(e) AS edge_type, e.confidence AS confidence, "
+                        "e.strategy AS strategy, e.match AS match, e.mechanism AS mechanism, "
+                        "e.annotation AS annotation, e.field_or_param AS field_or_param, "
+                        "e.source AS source, e.call_site_line AS call_site_line, "
+                        "e.call_site_byte AS call_site_byte, e.arg_count AS arg_count, "
+                        "e.resolved AS resolved",
+                        q_params,
+                    )
+                else:
+                    rows = g._rows(  # noqa: SLF001
+                        "MATCH (a)<-[e]-(b) WHERE a.id = $id AND "
+                        f"{label_predicate} "
+                        "RETURN b.id AS other_id, label(e) AS edge_type, e.confidence AS confidence, "
+                        "e.strategy AS strategy, e.match AS match, e.mechanism AS mechanism, "
+                        "e.annotation AS annotation, e.field_or_param AS field_or_param, "
+                        "e.source AS source, e.call_site_line AS call_site_line, "
+                        "e.call_site_byte AS call_site_byte, e.arg_count AS arg_count, "
+                        "e.resolved AS resolved",
+                        q_params,
+                    )
+                for row in rows:
+                    other_id = str(row.get("other_id") or "")
+                    other_kind = _resolve_node_kind(g, other_id)
+                    other_rec = _load_node_record(g, other_id, other_kind)
+                    if other_rec is None:
+                        continue
+                    if nf and (err := _nodefilter_applicability_error(other_kind, nf)):
+                        _log_fail_loud("applicability")
+                        return NeighborsOutput(
+                            success=False, message=err, hints=[], requested_edge_types=[]
+                        )
+                    if not _node_matches_filter(other_kind, other_rec, nf):
+                        continue
+                    results.append(
+                        Edge(
+                            origin_id=origin_id,
+                            edge_type=str(row.get("edge_type") or ""),
+                            direction=direction,
+                            other=_node_ref_from_row(other_kind, other_rec),
+                            attrs=_neighbor_edge_attrs(row),
+                        )
+                    )
+            for composed_key in composed_keys:
+                for row in g.member_edge_traversal_for(origin_id, composed_key):
+                    other_id = str(row.get("other_id") or "")
+                    other_kind = _resolve_node_kind(g, other_id)
+                    other_rec = _load_node_record(g, other_id, other_kind)
+                    if other_rec is None:
+                        continue
+                    if nf and (err := _nodefilter_applicability_error(other_kind, nf)):
+                        _log_fail_loud("applicability")
+                        return NeighborsOutput(
+                            success=False, message=err, hints=[], requested_edge_types=[]
+                        )
+                    if not _node_matches_filter(other_kind, other_rec, nf):
+                        continue
+                    results.append(
+                        Edge(
+                            origin_id=origin_id,
+                            edge_type=composed_key,
+                            direction="out",
+                            other=_node_ref_from_row(other_kind, other_rec),
+                            attrs=_neighbor_edge_attrs(row),
+                        )
+                    )
         sliced = results[offset : offset + limit]
         first_origin = origins[0]
         origin_kind = _resolve_node_kind(g, first_origin)
         subject_record = _load_node_record(g, first_origin, origin_kind)
-        # Empty-result hints use the sliced page only; offset>0 or strict filters can
-        # yield [] while hops exist — skip structural hints in that case.
         neigh_payload = {
             "success": True,
             "results": [e.model_dump() for e in sliced],
-            "requested_edge_types": list(labels),
+            "requested_edge_types": requested_edge_types,
             "requested_direction": direction,
             "offset": offset,
             "origin_id": first_origin,
@@ -1408,7 +1472,7 @@ def neighbors_v2(
         return NeighborsOutput(
             success=True,
             results=sliced,
-            requested_edge_types=list(labels),
+            requested_edge_types=requested_edge_types,
             hints=generate_hints("neighbors", neigh_payload),
         )
     except ValidationError:

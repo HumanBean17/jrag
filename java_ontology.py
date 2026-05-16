@@ -155,6 +155,11 @@ _SYMBOL_TYPE_TRAVERSAL = (
     "then neighbors(member_ids,'{direction}',['{edge}'])"
 )
 
+_COMPOSED_MEMBER_TYPE_TRAVERSAL = (
+    "neighbors(['{id}'],'out',['DECLARES.{edge}']) — or "
+    "neighbors(['{id}'],'out',['DECLARES']) then neighbors(member_ids,'{direction}',['{edge}'])"
+)
+
 EDGE_SCHEMA: dict[str, EdgeSpec] = {
     "EXTENDS": EdgeSpec(
         name="EXTENDS",

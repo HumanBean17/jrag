@@ -17,24 +17,22 @@ from java_ontology import EDGE_SCHEMA, FUZZY_STRATEGY_SET
 MCP_HINTS_FIELD_DESCRIPTION = (
     "Road-sign hints pointing to likely next calls. Each hint is a short string "
     "referencing one MCP V2 tool call. Hints are advisory and may be safely ignored. "
-    "Maximum 5 hints per output. Hints never recommend dot-key edge labels (composed "
-    "rollups) as neighbors() arguments. For neighbors with multiple origin ids, "
-    "empty-result structural hints describe the first origin only."
+    "Maximum 5 hints per output. Describe-time type rollup hints may recommend "
+    "DECLARES.* dot-keys for neighbors(); empty neighbors structural hints never use "
+    "dot-key edge labels. For neighbors with multiple origin ids, empty-result "
+    "structural hints describe the first origin only."
 )
 
 # --- Appendix A verbatim templates (substitute {id}, {kind}, {limit}) ---
 
 TPL_DESCRIBE_TYPE_CLIENTS_VIA_MEMBERS = (
-    "clients via members: neighbors(['{id}'],'out',['DECLARES']) "
-    "then neighbors(member_ids,'out',['DECLARES_CLIENT'])"
+    "clients via members: neighbors(['{id}'],'out',['DECLARES.DECLARES_CLIENT'])"
 )
 TPL_DESCRIBE_TYPE_ROUTES_VIA_MEMBERS = (
-    "routes via members: neighbors(['{id}'],'out',['DECLARES']) "
-    "then neighbors(member_ids,'out',['EXPOSES'])"
+    "routes via members: neighbors(['{id}'],'out',['DECLARES.EXPOSES'])"
 )
 TPL_DESCRIBE_TYPE_PRODUCERS_VIA_MEMBERS = (
-    "producers via members: neighbors(['{id}'],'out',['DECLARES']) "
-    "then neighbors(member_ids,'out',['DECLARES_PRODUCER'])"
+    "producers via members: neighbors(['{id}'],'out',['DECLARES.DECLARES_PRODUCER'])"
 )
 TPL_DESCRIBE_METHOD_OVERRIDERS = "overriders: neighbors(['{id}'],'in',['OVERRIDES'])"
 TPL_DESCRIBE_METHOD_CLIENTS_IN_OVERRIDERS = (

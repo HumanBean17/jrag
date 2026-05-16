@@ -1,8 +1,8 @@
 # Cursor task prompts — NEIGHBORS-DOT-KEY-TRAVERSAL
 
-Status: **active (planning)**. Plan:
-[`plans/PLAN-NEIGHBORS-DOT-KEY-TRAVERSAL.md`](./PLAN-NEIGHBORS-DOT-KEY-TRAVERSAL.md). Propose:
-[`propose/NEIGHBORS-DOT-KEY-TRAVERSAL-PROPOSE.md`](../propose/NEIGHBORS-DOT-KEY-TRAVERSAL-PROPOSE.md).
+Status: **completed** (landed [#171](https://github.com/HumanBean17/java-codebase-rag/pull/171)). Plan:
+[`plans/completed/PLAN-NEIGHBORS-DOT-KEY-TRAVERSAL.md`](./PLAN-NEIGHBORS-DOT-KEY-TRAVERSAL.md). Propose:
+[`propose/completed/NEIGHBORS-DOT-KEY-TRAVERSAL-PROPOSE.md`](../../propose/completed/NEIGHBORS-DOT-KEY-TRAVERSAL-PROPOSE.md).
 
 **Depends on:** none.
 
@@ -26,8 +26,8 @@ One prompt: **PR-1** (single implementation PR).
 
 **Attach (`@-files`):**
 
-- `@plans/PLAN-NEIGHBORS-DOT-KEY-TRAVERSAL.md`
-- `@propose/NEIGHBORS-DOT-KEY-TRAVERSAL-PROPOSE.md`
+- `@plans/completed/PLAN-NEIGHBORS-DOT-KEY-TRAVERSAL.md`
+- `@propose/completed/NEIGHBORS-DOT-KEY-TRAVERSAL-PROPOSE.md`
 - `@kuzu_queries.py` (`member_edge_rollup_for` — mirror for traversal)
 - `@mcp_v2.py` (`neighbors_v2`, `EdgeType`, `NodeRecord.edge_summary`, `_TYPE_SYMBOL_KINDS_FOR_EDGE_ROLLUP`)
 - `@mcp_hints.py` (`TPL_DESCRIBE_TYPE_*`, `MCP_HINTS_FIELD_DESCRIPTION`, `_filter_neighbors_dotkey_hints`)
