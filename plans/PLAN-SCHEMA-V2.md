@@ -1,6 +1,6 @@
 # Plan: SCHEMA-V2 (edge navigation schema, HTTP/ASYNC caller-side flips, Producer node)
 
-Status: **active (planning)**. This plan implements
+Status: **active (implementing)**. This plan implements
 [`propose/SCHEMA-V2-PROPOSE.md`](../propose/SCHEMA-V2-PROPOSE.md).
 
 Depends on:

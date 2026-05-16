@@ -1,6 +1,6 @@
 # Plan: HINTS-V3 (EDGE_SCHEMA-driven empty `neighbors` hints)
 
-Status: **active (planning)**. This plan implements
+Status: **active (implementing)**. This plan implements
 [`propose/HINTS-V3-PROPOSE.md`](../propose/HINTS-V3-PROPOSE.md).
 
 Depends on:

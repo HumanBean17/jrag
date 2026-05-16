@@ -1,6 +1,6 @@
 # Cursor task prompts — SCHEMA-V2
 
-Status: **active (planning)**. Plan:
+Status: **active (implementing)**. Plan:
 [`plans/PLAN-SCHEMA-V2.md`](./PLAN-SCHEMA-V2.md). Propose:
 [`propose/SCHEMA-V2-PROPOSE.md`](../propose/SCHEMA-V2-PROPOSE.md). Sequence:
 [`docs/PROPOSES-ORDER.md`](../docs/PROPOSES-ORDER.md).

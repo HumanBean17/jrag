@@ -1,6 +1,6 @@
 # SCHEMA-V2 — edges connect the nodes the edge is about (HTTP_CALLS, ASYNC_CALLS, Producer node, canonical Edge Navigation Schema)
 
-**Status**: draft
+**Status**: locked — implementing (plan: [`plans/PLAN-SCHEMA-V2.md`](../plans/PLAN-SCHEMA-V2.md); code PR-A–D in flight; move to `propose/completed/` when PR-D lands)
 **Author**: Dmitriy Teriaev + Computer
 **Date**: 2026-05-16
 

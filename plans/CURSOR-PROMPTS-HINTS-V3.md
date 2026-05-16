@@ -1,6 +1,6 @@
 # Cursor task prompts — HINTS-V3
 
-Status: **active (planning)**. Plan:
+Status: **active (implementing)**. Plan:
 [`plans/PLAN-HINTS-V3.md`](./PLAN-HINTS-V3.md). Propose:
 [`propose/HINTS-V3-PROPOSE.md`](../propose/HINTS-V3-PROPOSE.md).
 
@@ -60,7 +60,7 @@ Confirm `propose/HINTS-V3-PROPOSE.md` is **Status: locked** before merge.
 2. **`mcp_v2.py`** — Extend neighbors hint payload: `requested_direction`, `origin_id`, `subject_record` from `_load_node_record` (§3.6). Multi-id: use first origin only.
 3. **`java_ontology.py`** — Only if `member_only` missing from PR-A: add field + flags per propose §3.4.
 4. **`README.md`** / **`server.py`** — Minimal neighbors-hints documentation.
-5. **Tests** — Implement every `test_hints_hv*` name listed under **Tests for PR-D** in `plans/PLAN-HINTS-V3.md`. Update/remove `test_hints_neighbors_empty_with_edge_types_emits_kind_check` to reflect v3 (rename if needed per plan).
+5. **Tests** — Implement every `test_hints_hv*` name listed under **Tests for PR-D** in `plans/PLAN-HINTS-V3.md`, including **`test_hints_neighbors_v2_empty_post_flip_method_http_calls`** (required — session graph must be post-flip). Update/remove `test_hints_neighbors_empty_with_edge_types_emits_kind_check` to reflect v3 (rename if needed per plan).
 
 ## Out of scope (do NOT touch)
 
