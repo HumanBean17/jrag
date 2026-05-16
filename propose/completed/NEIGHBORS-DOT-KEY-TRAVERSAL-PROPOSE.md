@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposal — not yet implemented.
+**Landed** — PR [#171](https://github.com/HumanBean17/java-codebase-rag/pull/171) (PR-1).
 
 Addresses [#162](https://github.com/HumanBean17/java-codebase-rag/issues/162)
 (partially — see [Limitations](#limitations)).
@@ -10,7 +10,7 @@ Addresses [#162](https://github.com/HumanBean17/java-codebase-rag/issues/162)
 ## Decision reversal
 
 This proposal **deliberately reverses decision #11** from
-[`DESCRIBE-MEMBER-EDGE-ROLLUP-PROPOSE`](./completed/DESCRIBE-MEMBER-EDGE-ROLLUP-PROPOSE.md)
+[`DESCRIBE-MEMBER-EDGE-ROLLUP-PROPOSE`](./DESCRIBE-MEMBER-EDGE-ROLLUP-PROPOSE.md)
 (PR-89), which made composed dot-keys read-only by construction —
 Pydantic `EdgeType` rejected them at the type-system level, and
 `AGENT-GUIDE.md` documented them as hop affordances only.
@@ -290,6 +290,8 @@ Single implementation PR. Touches `mcp_v2.py` (model + handler),
 test files.
 
 Follow-up issues:
+- [#172](https://github.com/HumanBean17/java-codebase-rag/issues/172) —
+  single source of truth for composed dot-keys (`ComposedEdgeType` drift)
 - [#165](https://github.com/HumanBean17/java-codebase-rag/issues/165) —
   `OVERRIDDEN_BY.*` dot-key support
 - [#167](https://github.com/HumanBean17/java-codebase-rag/issues/167) —
