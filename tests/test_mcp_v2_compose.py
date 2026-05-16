@@ -560,12 +560,113 @@ def test_neighbors_edge_type_adapter_accepts_overrides() -> None:
     _NEIGHBOR_EDGE_TYPES_ADAPTER.validate_python(["OVERRIDES"])
 
 
-def test_neighbors_rejects_overridden_by_and_dot_keys(kuzu_graph: KuzuGraph) -> None:
+def test_neighbors_still_rejects_overridden_by(kuzu_graph: KuzuGraph) -> None:
     node_id, _ = _controller_method_with_calls(kuzu_graph)
     with pytest.raises(ValidationError):
         neighbors_v2(node_id, direction="out", edge_types=["OVERRIDDEN_BY"], graph=kuzu_graph)
     with pytest.raises(ValidationError):
-        neighbors_v2(node_id, direction="out", edge_types=["DECLARES.DECLARES_CLIENT"], graph=kuzu_graph)
+        neighbors_v2(
+            node_id, direction="out", edge_types=["OVERRIDDEN_BY.DECLARES_CLIENT"], graph=kuzu_graph
+        )
+
+
+def _type_id_with_composed_key(kuzu_graph: KuzuGraph, rel: str, composed_key: str) -> tuple[str, int]:
+    rows = kuzu_graph._rows(  # noqa: SLF001
+        f"MATCH (t:Symbol)-[:DECLARES]->(m:Symbol)-[e:{rel}]->() "
+        "WHERE t.kind IN $kinds "
+        "RETURN t.id AS id, count(e) AS n ORDER BY n DESC LIMIT 1",
+        {"kinds": _ROLLUP_TYPE_KINDS},
+    )
+    assert rows, f"no type with {composed_key} in fixture"
+    return str(rows[0]["id"]), int(rows[0]["n"] or 0)
+
+
+def test_neighbors_declares_dot_key_client(kuzu_graph: KuzuGraph) -> None:
+    tid, _ = _type_id_with_composed_key(kuzu_graph, "DECLARES_CLIENT", "DECLARES.DECLARES_CLIENT")
+    out = neighbors_v2(tid, direction="out", edge_types=["DECLARES.DECLARES_CLIENT"], graph=kuzu_graph, limit=500)
+    assert out.success is True
+    assert len(out.results) >= 1
+    assert all(e.edge_type == "DECLARES.DECLARES_CLIENT" for e in out.results)
+    assert all(e.attrs.get("via_id") for e in out.results)
+    assert all(e.other.kind == "client" for e in out.results)
+
+
+def test_neighbors_declares_dot_key_producer(kuzu_graph: KuzuGraph) -> None:
+    tid, _ = _type_id_with_composed_key(
+        kuzu_graph, "DECLARES_PRODUCER", "DECLARES.DECLARES_PRODUCER"
+    )
+    out = neighbors_v2(
+        tid, direction="out", edge_types=["DECLARES.DECLARES_PRODUCER"], graph=kuzu_graph, limit=500
+    )
+    assert out.success is True
+    assert len(out.results) >= 1
+    assert all(e.edge_type == "DECLARES.DECLARES_PRODUCER" for e in out.results)
+    assert all(e.attrs.get("via_id") for e in out.results)
+    assert all(e.other.kind == "producer" for e in out.results)
+
+
+def test_neighbors_declares_dot_key_exposes(kuzu_graph: KuzuGraph) -> None:
+    rows = kuzu_graph._rows(  # noqa: SLF001
+        "MATCH (t:Symbol)-[:DECLARES]->(m:Symbol)-[e:EXPOSES]->(:Route) "
+        "WHERE t.role = 'CONTROLLER' AND t.kind = 'class' "
+        "RETURN t.id AS id, count(e) AS n ORDER BY n DESC LIMIT 1",
+    )
+    assert rows
+    tid = str(rows[0]["id"])
+    out = neighbors_v2(tid, direction="out", edge_types=["DECLARES.EXPOSES"], graph=kuzu_graph, limit=500)
+    assert out.success is True
+    assert len(out.results) >= 1
+    assert all(e.edge_type == "DECLARES.EXPOSES" for e in out.results)
+    assert all(e.attrs.get("via_id") for e in out.results)
+    assert all(e.other.kind == "route" for e in out.results)
+
+
+def test_neighbors_dot_key_mixed_with_flat(kuzu_graph: KuzuGraph) -> None:
+    tid, _ = _type_id_with_composed_key(kuzu_graph, "DECLARES_CLIENT", "DECLARES.DECLARES_CLIENT")
+    out = neighbors_v2(
+        tid,
+        direction="out",
+        edge_types=["DECLARES", "DECLARES.DECLARES_CLIENT"],
+        graph=kuzu_graph,
+        limit=500,
+    )
+    assert out.success is True
+    edge_types_seen = {e.edge_type for e in out.results}
+    assert "DECLARES" in edge_types_seen
+    assert "DECLARES.DECLARES_CLIENT" in edge_types_seen
+    assert any(e.other.kind == "symbol" for e in out.results)
+    assert any(e.other.kind == "client" for e in out.results)
+
+
+def test_neighbors_dot_key_inbound_rejected(kuzu_graph: KuzuGraph) -> None:
+    tid, _ = _type_id_with_composed_key(kuzu_graph, "DECLARES_CLIENT", "DECLARES.DECLARES_CLIENT")
+    out = neighbors_v2(tid, direction="in", edge_types=["DECLARES.DECLARES_CLIENT"], graph=kuzu_graph)
+    assert out.success is False
+    assert out.message is not None
+    assert 'direction="out"' in out.message
+
+
+def test_neighbors_dot_key_method_origin_rejected(kuzu_graph: KuzuGraph) -> None:
+    node_id, _ = _controller_method_with_calls(kuzu_graph)
+    out = neighbors_v2(
+        node_id, direction="out", edge_types=["DECLARES.DECLARES_CLIENT"], graph=kuzu_graph
+    )
+    assert out.success is False
+    assert out.message is not None
+    assert "type Symbol origin" in out.message
+
+
+def test_neighbors_dot_key_count_matches_edge_summary(kuzu_graph: KuzuGraph) -> None:
+    tid, _ = _type_id_with_composed_key(kuzu_graph, "DECLARES_CLIENT", "DECLARES.DECLARES_CLIENT")
+    d = describe_v2(tid, graph=kuzu_graph)
+    n = neighbors_v2(
+        tid, direction="out", edge_types=["DECLARES.DECLARES_CLIENT"], graph=kuzu_graph, limit=500
+    )
+    assert d.success and d.record and d.record.edge_summary
+    summary = d.record.edge_summary.get("DECLARES.DECLARES_CLIENT")
+    assert summary is not None
+    assert n.success is True
+    assert len(n.results) == summary["out"]
 
 
 def test_overrides_edge_set_deterministic_double_build(tmp_path: Path) -> None:

@@ -544,13 +544,15 @@ def test_neighbors_invalid_edge_type_rejected(kuzu_graph) -> None:
 
 def test_neighbors_rejects_composed_edge_summary_key(kuzu_graph) -> None:
     mid = _method_id_with_calls(kuzu_graph, "out")
-    with pytest.raises(ValidationError):
-        neighbors_v2(
-            mid,
-            direction="out",
-            edge_types=["DECLARES.DECLARES_CLIENT"],
-            graph=kuzu_graph,
-        )
+    out = neighbors_v2(
+        mid,
+        direction="out",
+        edge_types=["DECLARES.DECLARES_CLIENT"],
+        graph=kuzu_graph,
+    )
+    assert out.success is False
+    assert out.message is not None
+    assert "type Symbol origin" in out.message
 
 
 async def test_find_invalid_kind_rejected(mcp_server) -> None:

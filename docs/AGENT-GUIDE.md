@@ -225,16 +225,16 @@ Exact allowed values for roles, capabilities, client kinds, etc. live in `java_o
 
 #### `describe`
 
-- **Purpose:** Full node payload + `edge_summary`: `in` / `out` counts **per stored graph edge label** (what exists as edges in Kuzu). For **type** Symbols only (`class`, `interface`, `enum`, `record`, `annotation`), the same map may also include **describe-time composed** dot-keys — summaries of member edges, not stored labels — see the next bullets (`DECLARES.DECLARES_CLIENT`, `DECLARES.DECLARES_PRODUCER`, `DECLARES.EXPOSES`); those keys are **not** valid in `neighbors(edge_types=…)`. For **method** Symbols, the map may include **override-axis virtual keys** (`OVERRIDDEN_BY`, `OVERRIDDEN_BY.DECLARES_CLIENT`, `OVERRIDDEN_BY.DECLARES_PRODUCER`, `OVERRIDDEN_BY.EXPOSES`) plus an **`OVERRIDES` row** that merges stored `[:OVERRIDES]` incident counts with the describe-time dispatch-up rollup (per direction `max`, so inbound stored overrides are preserved); see **Override-axis keys (method Symbols)** below — those virtual keys are **not** `neighbors` arguments. The **stored** relationship label **`OVERRIDES`** **is** a valid `EdgeType` for `neighbors` (same spelling as the map key; the map row is the merged view).
+- **Purpose:** Full node payload + `edge_summary`: `in` / `out` counts **per stored graph edge label** (what exists as edges in Kuzu). For **type** Symbols only (`class`, `interface`, `enum`, `record`, `annotation`), the same map may also include **describe-time composed** dot-keys — summaries of member edges, not stored labels — see the next bullets (`DECLARES.DECLARES_CLIENT`, `DECLARES.DECLARES_PRODUCER`, `DECLARES.EXPOSES`); those three keys **are** valid in `neighbors(edge_types=…)` for type Symbol origins (`direction="out"` only). For **method** Symbols, the map may include **override-axis virtual keys** (`OVERRIDDEN_BY`, `OVERRIDDEN_BY.DECLARES_CLIENT`, `OVERRIDDEN_BY.DECLARES_PRODUCER`, `OVERRIDDEN_BY.EXPOSES`) plus an **`OVERRIDES` row** that merges stored `[:OVERRIDES]` incident counts with the describe-time dispatch-up rollup (per direction `max`, so inbound stored overrides are preserved); see **Override-axis keys (method Symbols)** below — those virtual keys are **not** `neighbors` arguments. The **stored** relationship label **`OVERRIDES`** **is** a valid `EdgeType` for `neighbors` (same spelling as the map key; the map row is the merged view).
 - **Args:** `id` (symbol, route, or client id) or **`fqn`** (exact symbol FQN when you do not have the graph id). When both are set, `id` wins. For identifier-shaped inputs and FQN collision handling, see **Identifier resolution** above.
 
 **Composed `edge_summary` keys (type Symbols).** Keys use dot notation: `<parent_relation>.<projected_relation>`. Three are emitted today:
 
-- `DECLARES.DECLARES_CLIENT` — the type's methods declare brownfield HTTP clients (count is the number of `Client` rows reached through `DECLARES → DECLARES_CLIENT`). To enumerate them: `neighbors(ids=<class_id>, direction="out", edge_types=["DECLARES"])` → for each method id, `neighbors(ids=<method_id>, direction="out", edge_types=["DECLARES_CLIENT"])`.
-- `DECLARES.DECLARES_PRODUCER` — the type's methods declare async producers. Same walk shape with `DECLARES_PRODUCER`.
-- `DECLARES.EXPOSES` — the type's methods expose routes. Same walk shape with `EXPOSES`.
+- `DECLARES.DECLARES_CLIENT` — the type's methods declare brownfield HTTP clients (count is the number of `Client` rows reached through `DECLARES → DECLARES_CLIENT`). Primary recipe: `neighbors(ids=<class_id>, direction="out", edge_types=["DECLARES.DECLARES_CLIENT"])` → terminal `Client` nodes with `via_id` in `attrs`. Alternative (two hops): `neighbors(..., ["DECLARES"])` then per-method `DECLARES_CLIENT`.
+- `DECLARES.DECLARES_PRODUCER` — producers via members. Use `edge_types=["DECLARES.DECLARES_PRODUCER"]` (or the two-hop `DECLARES` → `DECLARES_PRODUCER` walk).
+- `DECLARES.EXPOSES` — routes via members. Use `edge_types=["DECLARES.EXPOSES"]` (or the two-hop `DECLARES` → `EXPOSES` walk).
 
-Composed keys are **read-only**: they cannot be passed to `neighbors(edge_types=…)` (the dot is not a valid `EdgeType` literal — the call fails with a Pydantic `ValidationError`). Use them as a hop affordance only.
+These three `DECLARES.*` dot-keys are navigable on **type** Symbol origins (`out` only). `OVERRIDDEN_BY*` virtual keys remain describe-only.
 
 Note on counting semantics: composed counts measure **edge rows**, not distinct member methods. One method that declares multiple `Client` rows (e.g. a `rest_template` method with several call sites) contributes its full edge count to `DECLARES.DECLARES_CLIENT`. The "does this class have any clients?" predicate is answered by `count > 0`; the count itself is an affordance for how rich the downstream walk will be.
 
@@ -248,7 +248,7 @@ Walk recipe (manual, if you need types in the middle): `neighbors(ids=<method_id
 
 Static methods suppress the entire override-axis rollup. Constructors do not receive these keys.
 
-Virtual keys (`OVERRIDDEN_BY`, …) and composed dot-keys are **not** valid `EdgeType` literals — `neighbors(edge_types=["OVERRIDDEN_BY"])` fails at the Pydantic boundary. Use them as hop affordances only. **`OVERRIDES`** in `edge_types=[...]` selects the **stored** override relationship (same spelling as the `OVERRIDES` map key, whose `in`/`out` merge Kuzu edges with the dispatch-up rollup).
+Virtual keys (`OVERRIDDEN_BY`, …) are **not** valid `neighbors` arguments — `neighbors(edge_types=["OVERRIDDEN_BY"])` fails at the Pydantic boundary. **`OVERRIDES`** in `edge_types=[...]` selects the **stored** override relationship (same spelling as the `OVERRIDES` map key, whose `in`/`out` merge Kuzu edges with the dispatch-up rollup).
 
 #### `resolve`
 

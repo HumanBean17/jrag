@@ -30,7 +30,8 @@ _INSTRUCTIONS = (
     "resolve (identifier-shaped lookup for symbol/route/client/producer — three statuses one|many|none). "
     "NodeFilter `filter` is a JSON object (preferred); a JSON-encoded string is also accepted as a fallback. "
     "Unknown filter keys and populated fields not applicable to the effective node kind fail with success=false and message. "
-    "Edge labels: EXTENDS, IMPLEMENTS, INJECTS, OVERRIDES, DECLARES, DECLARES_CLIENT, DECLARES_PRODUCER, CALLS, EXPOSES, HTTP_CALLS, ASYNC_CALLS. "
+    "Edge labels: EXTENDS, IMPLEMENTS, INJECTS, OVERRIDES, DECLARES, DECLARES_CLIENT, DECLARES_PRODUCER, CALLS, EXPOSES, HTTP_CALLS, ASYNC_CALLS; "
+    "type Symbols may also use composed neighbors edge_types DECLARES.DECLARES_CLIENT, DECLARES.DECLARES_PRODUCER, DECLARES.EXPOSES (out only). "
     "Reprocess/init, meta, tables, diagnose-ignore, analyze-pr: use java-codebase-rag CLI — not MCP."
 )
 
@@ -416,10 +417,10 @@ def create_mcp_server() -> FastMCP:
         name="describe",
         description=(
             "Full node record plus `edge_summary` (in/out counts per stored edge label, plus optional describe-time keys). Type Symbols may add "
-            "composed keys DECLARES.DECLARES_CLIENT, DECLARES.DECLARES_PRODUCER, and DECLARES.EXPOSES; method Symbols may add "
-            "override-axis virtual keys (OVERRIDDEN_BY, OVERRIDDEN_BY.DECLARES_CLIENT, OVERRIDDEN_BY.DECLARES_PRODUCER, OVERRIDDEN_BY.EXPOSES, "
-            "plus an `OVERRIDES` map entry that merges stored `[:OVERRIDES]` counts with the dispatch-up rollup per direction). Those dot-keys and virtual keys are "
-            "read-only summaries—not valid `neighbors(edge_types=…)` values. The stored `OVERRIDES` relationship "
+            "composed keys DECLARES.DECLARES_CLIENT, DECLARES.DECLARES_PRODUCER, and DECLARES.EXPOSES (navigable on type Symbols via neighbors, out only); "
+            "method Symbols may add override-axis virtual keys (OVERRIDDEN_BY, OVERRIDDEN_BY.DECLARES_CLIENT, OVERRIDDEN_BY.DECLARES_PRODUCER, "
+            "OVERRIDDEN_BY.EXPOSES, plus an `OVERRIDES` map entry that merges stored `[:OVERRIDES]` counts with the dispatch-up rollup per direction). "
+            "OVERRIDDEN_BY* virtual keys are not valid `neighbors(edge_types=…)` values. The stored `OVERRIDES` relationship "
             "is a normal edge label and may be traversed via neighbors(edge_types=[..., \"OVERRIDES\", ...]). "
             "Pass `id` for any kind, or exact `fqn` for Symbol lookup (`id` wins when both are set). "
             "`describe(fqn=…)` keeps the first graph row when multiple symbols share that FQN; when an FQN may collide, "
@@ -448,7 +449,9 @@ def create_mcp_server() -> FastMCP:
     @mcp.tool(
         name="neighbors",
         description=(
-            "One-hop graph walk: **direction** (`in` | `out`) and non-empty **edge_types** are required. "
+            "Graph walk: **direction** (`in` | `out`) and non-empty **edge_types** are required (stored labels for one hop; "
+            "type Symbol origins may also pass composed DECLARES.DECLARES_CLIENT, DECLARES.DECLARES_PRODUCER, or DECLARES.EXPOSES "
+            "for 2-hop member rollups — out only, with via_id in attrs). OVERRIDDEN_BY* keys are not valid edge_types. "
             "Optional `filter` applies to each neighbor endpoint row; populated fields must be applicable to that "
             "neighbor's kind—mixed-kind result sets fail on the first inapplicable neighbor (strict frame). "
             "Wildcards in prefix fields are rejected. Unknown NodeFilter keys return success=false. "
@@ -464,8 +467,12 @@ def create_mcp_server() -> FastMCP:
         direction: Literal["in", "out"] = Field(
             description="Required. 'in' = predecessors (callers), 'out' = successors (callees). No default.",
         ),
-        edge_types: list[mcp_v2.EdgeType] = Field(
-            description="Required non-empty list of edge labels (e.g. CALLS, EXPOSES, HTTP_CALLS, OVERRIDES)",
+        edge_types: list[mcp_v2.NeighborEdgeType] = Field(
+            description=(
+                "Required non-empty list of stored edge labels (e.g. CALLS, EXPOSES, HTTP_CALLS, OVERRIDES) "
+                "and/or composed DECLARES.DECLARES_CLIENT, DECLARES.DECLARES_PRODUCER, DECLARES.EXPOSES "
+                "(type Symbol origin, direction out only)"
+            ),
         ),
         limit: int = Field(
             default=25,

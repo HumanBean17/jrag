@@ -27,6 +27,14 @@ from ast_java import ONTOLOGY_VERSION as _ONTOLOGY_VERSION
 
 log = logging.getLogger(__name__)
 
+# Composed describe / neighbors dot-keys (not stored graph edge labels).
+_MEMBER_EDGE_COMPOSED_REL_MAP: tuple[tuple[str, str], ...] = (
+    ("DECLARES.DECLARES_CLIENT", "DECLARES_CLIENT"),
+    ("DECLARES.DECLARES_PRODUCER", "DECLARES_PRODUCER"),
+    ("DECLARES.EXPOSES", "EXPOSES"),
+)
+_MEMBER_EDGE_COMPOSED_REL_BY_KEY: dict[str, str] = dict(_MEMBER_EDGE_COMPOSED_REL_MAP)
+
 
 def _coerce_id_list(raw: Any) -> list[str]:
     """Normalize Kuzu ``collect(DISTINCT ...)`` list results to string ids."""
@@ -629,11 +637,7 @@ class KuzuGraph:
         """
         params = {"id": type_id}
         rollup: dict[str, dict[str, int]] = {}
-        for key, rel in (
-            ("DECLARES.DECLARES_CLIENT", "DECLARES_CLIENT"),
-            ("DECLARES.DECLARES_PRODUCER", "DECLARES_PRODUCER"),
-            ("DECLARES.EXPOSES", "EXPOSES"),
-        ):
+        for key, rel in _MEMBER_EDGE_COMPOSED_REL_MAP:
             rows = self._rows(
                 f"MATCH (t:Symbol {{id: $id}})-[:DECLARES]->(m:Symbol)-[e:{rel}]->() "
                 "RETURN count(e) AS n",
@@ -643,6 +647,25 @@ class KuzuGraph:
             if n > 0:
                 rollup[key] = {"in": 0, "out": n}
         return rollup
+
+    def member_edge_traversal_for(self, type_id: str, composed_key: str) -> list[dict[str, Any]]:
+        """2-hop DECLARES member traversal for a type Symbol (neighbors dot-key path)."""
+        rel = _MEMBER_EDGE_COMPOSED_REL_BY_KEY.get(composed_key)
+        if rel is None:
+            return []
+        # Untyped [e] + label(e) filter: typed unions fail the binder when RETURN references
+        # columns that exist on only some rel types (same pattern as flat neighbors_v2).
+        return self._rows(
+            "MATCH (t:Symbol {id: $id})-[:DECLARES]->(m:Symbol)-[e]->(term) "
+            "WHERE label(e) = $rel "
+            "RETURN m.id AS via_id, label(e) AS stored_edge_type, "
+            "term.id AS other_id, e.confidence AS confidence, e.strategy AS strategy, "
+            "e.match AS match, e.mechanism AS mechanism, e.annotation AS annotation, "
+            "e.field_or_param AS field_or_param, e.source AS source, "
+            "e.call_site_line AS call_site_line, e.call_site_byte AS call_site_byte, "
+            "e.arg_count AS arg_count, e.resolved AS resolved",
+            {"id": type_id, "rel": rel},
+        )
 
     def _edge_row_count_from_method_ids(self, method_ids: list[str], rel: str) -> int:
         """Count outgoing ``rel`` edges from method symbols (describe rollup helper)."""

@@ -10,7 +10,13 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from java_ontology import EDGE_SCHEMA, EdgeSpec  # noqa: E402
+from java_ontology import (  # noqa: E402
+    EDGE_SCHEMA,
+    EdgeSpec,
+    _COMPOSED_MEMBER_TYPE_TRAVERSAL,
+)
+
+_COMPOSED_MEMBER_EDGE_NAMES = frozenset({"EXPOSES", "DECLARES_CLIENT", "DECLARES_PRODUCER"})
 
 _DEFAULT_OUT = _REPO_ROOT / "docs" / "EDGE-NAVIGATION.md"
 _BANNER = (
@@ -49,6 +55,11 @@ def _render_edge(spec: EdgeSpec) -> list[str]:
         lines.append("**Typical traversals**:")
         lines.append("")
         for role, traversal in spec.typical_traversals.items():
+            if role == "type_subject" and spec.name in _COMPOSED_MEMBER_EDGE_NAMES:
+                composed = _COMPOSED_MEMBER_TYPE_TRAVERSAL.format(
+                    id="{id}", direction="{direction}", edge=spec.name,
+                )
+                traversal = f"{composed} — or {traversal}"
             lines.append(f"- `{role}`: {traversal}")
         lines.append("")
     return lines
