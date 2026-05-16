@@ -56,10 +56,10 @@ def _render_edge(spec: EdgeSpec) -> list[str]:
         lines.append("")
         for role, traversal in spec.typical_traversals.items():
             if role == "type_subject" and spec.name in _COMPOSED_MEMBER_EDGE_NAMES:
-                composed = _COMPOSED_MEMBER_TYPE_TRAVERSAL.format(
+                # _COMPOSED_MEMBER_TYPE_TRAVERSAL already includes the two-hop alternative.
+                traversal = _COMPOSED_MEMBER_TYPE_TRAVERSAL.format(
                     id="{id}", direction="{direction}", edge=spec.name,
                 )
-                traversal = f"{composed} — or {traversal}"
             lines.append(f"- `{role}`: {traversal}")
         lines.append("")
     return lines
