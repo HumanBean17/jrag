@@ -447,7 +447,8 @@ def create_mcp_server() -> FastMCP:
             "One-hop graph walk: **direction** (`in` | `out`) and non-empty **edge_types** are required. "
             "Optional `filter` applies to each neighbor endpoint row; populated fields must be applicable to that "
             "neighbor's kind—mixed-kind result sets fail on the first inapplicable neighbor (strict frame). "
-            "Wildcards in prefix fields are rejected. Unknown NodeFilter keys return success=false."
+            "Wildcards in prefix fields are rejected. Unknown NodeFilter keys return success=false. "
+            "Successful responses echo `requested_edge_types` and may include `hints` (advisory next-step strings)."
         ),
     )
     async def neighbors(

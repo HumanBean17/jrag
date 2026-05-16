@@ -51,17 +51,6 @@ def _interface_method_with_override_rollups(kuzu_graph) -> str:
     return str(rows[0]["id"])
 
 
-def _concrete_override_method_id(kuzu_graph) -> str:
-    rows = kuzu_graph._rows(  # noqa: SLF001
-        "MATCH (t:Symbol {fqn: $fqn})-[:DECLARES]->(m:Symbol) "
-        "WHERE m.kind = 'method' AND m.name = 'requestAssignment' "
-        "RETURN m.id AS id LIMIT 1",
-        {"fqn": "com.bank.chat.engine.assign.ConfigurableChatAssignment"},
-    )
-    assert rows
-    return str(rows[0]["id"])
-
-
 def _method_id_declares_client_and_other_out_edge(kuzu_graph) -> str | None:
     for pattern in (
         "MATCH (m:Symbol {kind: 'method'})-[:DECLARES_CLIENT]->() MATCH (m)-[:CALLS]->() RETURN m.id AS id LIMIT 1",
