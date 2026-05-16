@@ -1,8 +1,8 @@
 # Cursor task prompts — HINTS-V3
 
-Status: **active (implementing)**. Plan:
-[`plans/PLAN-HINTS-V3.md`](./PLAN-HINTS-V3.md). Propose:
-[`propose/HINTS-V3-PROPOSE.md`](../propose/HINTS-V3-PROPOSE.md).
+Status: **completed** (landed [#160](https://github.com/HumanBean17/java-codebase-rag/pull/160)). Plan:
+[`plans/completed/PLAN-HINTS-V3.md`](./PLAN-HINTS-V3.md). Propose:
+[`propose/completed/HINTS-V3-PROPOSE.md`](../propose/completed/HINTS-V3-PROPOSE.md).
 
 **Depends on:** SCHEMA-V2 **PR-A, PR-B, PR-C** merged to `master`.
 **Propose lock:** Set `HINTS-V3-PROPOSE.md` `Status: locked` before opening the code PR.
@@ -42,7 +42,7 @@ One prompt: **PR-D** (= SCHEMA-V2 PR-D in sequence doc).
 **Prompt:**
 
 ````
-You are implementing PR-HINTS-V3-D from `plans/PLAN-HINTS-V3.md` (**PR-D**).
+You are implementing PR-HINTS-V3-D from `plans/completed/PLAN-HINTS-V3.md` (**PR-D**).
 
 SCHEMA-V2 PR-A/B/C are on `master`: post-flip `HTTP_CALLS` (Client→Route), `ASYNC_CALLS` (Producer→Route), `EDGE_SCHEMA` with 11 edges.
 
@@ -60,7 +60,7 @@ Confirm `propose/HINTS-V3-PROPOSE.md` is **Status: locked** before merge.
 2. **`mcp_v2.py`** — Extend neighbors hint payload: `requested_direction`, `origin_id`, `subject_record` from `_load_node_record` (§3.6). Multi-id: use first origin only.
 3. **`java_ontology.py`** — Only if `member_only` missing from PR-A: add field + flags per propose §3.4.
 4. **`README.md`** / **`server.py`** — Minimal neighbors-hints documentation.
-5. **Tests** — Implement every `test_hints_hv*` name listed under **Tests for PR-D** in `plans/PLAN-HINTS-V3.md`, including **`test_hints_neighbors_v2_empty_post_flip_method_http_calls`** (required — session graph must be post-flip). Update/remove `test_hints_neighbors_empty_with_edge_types_emits_kind_check` to reflect v3 (rename if needed per plan).
+5. **Tests** — Implement every `test_hints_hv*` name listed under **Tests for PR-D** in `plans/completed/PLAN-HINTS-V3.md`, including **`test_hints_neighbors_v2_empty_post_flip_method_http_calls`** (required — session graph must be post-flip). Update/remove `test_hints_neighbors_empty_with_edge_types_emits_kind_check` to reflect v3 (rename if needed per plan).
 
 ## Out of scope (do NOT touch)
 

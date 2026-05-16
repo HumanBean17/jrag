@@ -1,6 +1,6 @@
 # SCHEMA-V2 — edges connect the nodes the edge is about (HTTP_CALLS, ASYNC_CALLS, Producer node, canonical Edge Navigation Schema)
 
-**Status**: **completed** — PR-A/B/C landed; PR-D (hints v3) tracked in [`plans/PLAN-HINTS-V3.md`](../../plans/PLAN-HINTS-V3.md). Plan: [`plans/completed/PLAN-SCHEMA-V2.md`](../../plans/completed/PLAN-SCHEMA-V2.md).
+**Status**: **completed** — PR-A/B/C/D landed; hints v3 in [`propose/completed/HINTS-V3-PROPOSE.md`](./HINTS-V3-PROPOSE.md) ([#160](https://github.com/HumanBean17/java-codebase-rag/pull/160)). Plan: [`plans/completed/PLAN-SCHEMA-V2.md`](../../plans/completed/PLAN-SCHEMA-V2.md).
 **Author**: Dmitriy Teriaev + Computer
 **Date**: 2026-05-16
 
@@ -256,7 +256,7 @@ This closes the internal contradiction the reviewer flagged.
 - Subject kind matches but direction is wrong → hint says so.
 - Subject is a Symbol with `symbol_kind in {class, interface, enum, record, annotation}` and the requested edge lives on methods → hint points at `DECLARES`-then-re-query.
 
-Full design in `propose/HINTS-V3-PROPOSE.md` (separate). PR-D in §6 ships the implementation once both proposes land.
+Full design in `propose/completed/HINTS-V3-PROPOSE.md` (separate). PR-D in §6 shipped the implementation ([#160](https://github.com/HumanBean17/java-codebase-rag/pull/160)).
 
 ## §4 — Use-case re-walk
 
@@ -348,7 +348,7 @@ Full design in `propose/HINTS-V3-PROPOSE.md` (separate). PR-D in §6 ships the i
 
 **Title**: `feat(hints): kind- and direction-aware empty-result hints driven by EDGE_SCHEMA`
 
-**Purpose**: Replace `TPL_NEIGHBORS_EMPTY_KIND_CHECK` (generic) with a family of templates driven by `EDGE_SCHEMA`. Detailed surface in `propose/HINTS-V3-PROPOSE.md` (separate propose).
+**Purpose**: Replace `TPL_NEIGHBORS_EMPTY_KIND_CHECK` (generic) with a family of templates driven by `EDGE_SCHEMA`. Detailed surface in `propose/completed/HINTS-V3-PROPOSE.md` (separate propose).
 
 **Gating** (Decision 30): PR-D is **blocked** until `propose/HINTS-V3-PROPOSE.md` exists as a draft PR. Shipping v2 graph shape without v3 hints would leave the wrong-subject-kind footgun (UC3: agent holds method id, asks `HTTP_CALLS` outbound, gets `[]` with no guidance to `DECLARES_CLIENT`). The hints-v3 propose must therefore land in this same review cycle, before PR-A merges.
 
