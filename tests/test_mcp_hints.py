@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import inspect
 from collections import Counter
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 import mcp_hints
+from _builders import build_kuzu_to
 from java_ontology import EDGE_SCHEMA, FUZZY_STRATEGY_SET
+from kuzu_queries import KuzuGraph
 from mcp_hints import (
     PRIORITY_DECLARES_TYPE_ROLLUP,
     PRIORITY_LEAF_FOLLOWUP,
@@ -20,6 +23,15 @@ from mcp_hints import (
 from mcp_v2 import FindOutput, SearchOutput, describe_v2, find_v2, neighbors_v2, resolve_v2, search_v2
 
 _TYPE_KINDS = frozenset({"class", "interface", "enum", "record", "annotation"})
+
+_OVERRIDE_AXIS_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "override_axis_rollup_smoke"
+
+
+@pytest.fixture
+def override_axis_graph(tmp_path: Path) -> KuzuGraph:
+    db_path = tmp_path / "code_graph.kuzu"
+    build_kuzu_to(_OVERRIDE_AXIS_FIXTURE, db_path, max_pass=5)
+    return KuzuGraph(str(db_path))
 
 
 def _type_symbol_id_with_member_clients(kuzu_graph) -> str:
@@ -40,6 +52,18 @@ def _controller_class_id_with_exposes(kuzu_graph) -> str:
         "RETURN t.id AS id LIMIT 1",
     )
     assert rows
+    return str(rows[0]["id"])
+
+
+def _type_symbol_id_with_member_producers(kuzu_graph) -> str:
+    rows = kuzu_graph._rows(  # noqa: SLF001
+        "MATCH (t:Symbol)-[:DECLARES]->(m:Symbol)-[:DECLARES_PRODUCER]->(:Producer) "
+        "WHERE t.kind IN $kinds "
+        "RETURN t.id AS id ORDER BY t.fqn LIMIT 1",
+        {"kinds": sorted(_TYPE_KINDS)},
+    )
+    if not rows:
+        pytest.skip("no type with DECLARES_PRODUCER members in fixture")
     return str(rows[0]["id"])
 
 
@@ -151,6 +175,14 @@ def test_hints_describe_type_symbol_routes_via_members_emits(kuzu_graph) -> None
     assert want in out.hints
 
 
+def test_hints_describe_type_symbol_producers_via_members_emits(kuzu_graph) -> None:
+    tid = _type_symbol_id_with_member_producers(kuzu_graph)
+    out = describe_v2(tid, graph=kuzu_graph)
+    assert out.success and out.record
+    want = mcp_hints.TPL_DESCRIBE_TYPE_PRODUCERS_VIA_MEMBERS.format(id=tid)
+    assert want in out.hints
+
+
 def test_hints_describe_method_overriders_emits(kuzu_graph) -> None:
     mid = _interface_method_with_override_rollups(kuzu_graph)
     out = describe_v2(mid, graph=kuzu_graph)
@@ -164,6 +196,36 @@ def test_hints_describe_method_clients_in_overriders_emits(kuzu_graph) -> None:
     out = describe_v2(mid, graph=kuzu_graph)
     assert out.success and out.record
     want = mcp_hints.TPL_DESCRIBE_METHOD_CLIENTS_IN_OVERRIDERS.format(id=mid)
+    assert want in out.hints
+
+
+def test_hints_describe_method_producers_in_overriders_emits(override_axis_graph: KuzuGraph) -> None:
+    rows = override_axis_graph._rows(  # noqa: SLF001
+        "MATCH (t:Symbol {fqn: $fqn})-[:DECLARES]->(m:Symbol) "
+        "WHERE m.kind = 'method' AND m.name = 'publish' "
+        "RETURN m.id AS id LIMIT 1",
+        {"fqn": "orolla.abstractproducer.AbstractProducerApi"},
+    )
+    assert rows
+    mid = str(rows[0]["id"])
+    out = describe_v2(mid, graph=override_axis_graph)
+    assert out.success and out.record
+    want = mcp_hints.TPL_DESCRIBE_METHOD_PRODUCERS_IN_OVERRIDERS.format(id=mid)
+    assert want in out.hints
+
+
+def test_hints_describe_method_routes_in_overriders_emits(override_axis_graph: KuzuGraph) -> None:
+    rows = override_axis_graph._rows(  # noqa: SLF001
+        "MATCH (t:Symbol {fqn: $fqn})-[:DECLARES]->(m:Symbol) "
+        "WHERE m.kind = 'method' AND m.name = 'handle' "
+        "RETURN m.id AS id LIMIT 1",
+        {"fqn": "orolla.abstractroute.AbstractApi"},
+    )
+    assert rows
+    mid = str(rows[0]["id"])
+    out = describe_v2(mid, graph=override_axis_graph)
+    assert out.success and out.record
+    want = mcp_hints.TPL_DESCRIBE_METHOD_ROUTES_IN_OVERRIDERS.format(id=mid)
     assert want in out.hints
 
 
@@ -187,6 +249,20 @@ def test_hints_describe_method_exposes_emits(kuzu_graph) -> None:
     assert want in out.hints
 
 
+def test_hints_describe_method_declares_producer_emits(kuzu_graph) -> None:
+    rows = kuzu_graph._rows(  # noqa: SLF001
+        "MATCH (m:Symbol)-[:DECLARES_PRODUCER]->(:Producer) WHERE m.kind = 'method' "
+        "RETURN m.id AS id LIMIT 1",
+    )
+    if not rows:
+        pytest.skip("no method with DECLARES_PRODUCER in fixture")
+    mid = str(rows[0]["id"])
+    out = describe_v2(mid, graph=kuzu_graph)
+    assert out.success and out.record
+    want = mcp_hints.TPL_DESCRIBE_METHOD_OUTBOUND_PRODUCER.format(id=mid)
+    assert want in out.hints
+
+
 def test_hints_describe_method_many_calls_emits(kuzu_graph) -> None:
     mid = _controller_method_many_calls(kuzu_graph)
     out = describe_v2(mid, graph=kuzu_graph)
@@ -207,6 +283,14 @@ def test_hints_describe_client_always_declaring_method(kuzu_graph) -> None:
     out = describe_v2(cid, graph=kuzu_graph)
     assert out.success and out.record
     want = mcp_hints.TPL_DESCRIBE_CLIENT_DECLARING.format(id=cid)
+    assert out.hints == [want]
+
+
+def test_hints_describe_producer_always_declaring_method(kuzu_graph) -> None:
+    pid = _producer_id(kuzu_graph)
+    out = describe_v2(pid, graph=kuzu_graph)
+    assert out.success and out.record
+    want = mcp_hints.TPL_DESCRIBE_PRODUCER_DECLARING.format(id=pid)
     assert out.hints == [want]
 
 
@@ -1138,13 +1222,18 @@ def test_hints_pagination_none_skips_page_derived_hints() -> None:
     [
         (mcp_hints.TPL_DESCRIBE_TYPE_CLIENTS_VIA_MEMBERS, {"id": "sym:a"}),
         (mcp_hints.TPL_DESCRIBE_TYPE_ROUTES_VIA_MEMBERS, {"id": "sym:a"}),
+        (mcp_hints.TPL_DESCRIBE_TYPE_PRODUCERS_VIA_MEMBERS, {"id": "sym:a"}),
         (mcp_hints.TPL_DESCRIBE_METHOD_OVERRIDERS, {"id": "sym:a"}),
         (mcp_hints.TPL_DESCRIBE_METHOD_CLIENTS_IN_OVERRIDERS, {"id": "sym:a"}),
+        (mcp_hints.TPL_DESCRIBE_METHOD_PRODUCERS_IN_OVERRIDERS, {"id": "a"}),
+        (mcp_hints.TPL_DESCRIBE_METHOD_ROUTES_IN_OVERRIDERS, {"id": "sym:a"}),
         (mcp_hints.TPL_DESCRIBE_METHOD_OUTBOUND_CLIENT, {"id": "sym:pkg.Type#m(int)"}),
+        (mcp_hints.TPL_DESCRIBE_METHOD_OUTBOUND_PRODUCER, {"id": "sym:pkg.Type#m(int)"}),
         (mcp_hints.TPL_DESCRIBE_METHOD_INBOUND_ROUTE, {"id": "sym:pkg.Type#m(int)"}),
         (mcp_hints.TPL_DESCRIBE_METHOD_MANY_CALLS, {}),
         (mcp_hints.TPL_DESCRIBE_ROUTE_DECLARING, {"id": "route:svc:GET:/api/v1/x"}),
         (mcp_hints.TPL_DESCRIBE_CLIENT_DECLARING, {"id": "client:svc:feign:target:GET:/p"}),
+        (mcp_hints.TPL_DESCRIBE_PRODUCER_DECLARING, {"id": "producer:svc:kafka:topic:t"}),
         (mcp_hints.TPL_FIND_EMPTY_RESOLVE, {"kind": "client"}),
         (mcp_hints.TPL_FIND_PAGE_FULL, {"limit": 500}),
         (

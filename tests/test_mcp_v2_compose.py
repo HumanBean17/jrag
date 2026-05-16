@@ -420,6 +420,31 @@ def test_describe_method_no_overrides_silent(kuzu_graph) -> None:
     assert "OVERRIDES" not in es
 
 
+def test_describe_abstract_method_with_producer_override_emits_declares_producer(
+    override_axis_graph: KuzuGraph,
+) -> None:
+    rows = override_axis_graph._rows(  # noqa: SLF001
+        "MATCH (t:Symbol {fqn: $fqn})-[:DECLARES]->(m:Symbol) "
+        "WHERE m.kind = 'method' AND m.name = 'publish' "
+        "RETURN m.id AS id LIMIT 1",
+        {"fqn": "orolla.abstractproducer.AbstractProducerApi"},
+    )
+    assert rows
+    mid = str(rows[0]["id"])
+    impl_ids = _dispatch_down_override_method_ids(override_axis_graph, mid)
+    assert impl_ids
+    want_ob = len(impl_ids)
+    want_dp = _edge_row_count_from_methods(override_axis_graph, impl_ids, "DECLARES_PRODUCER")
+    assert want_dp >= 1
+    out = describe_v2(mid, graph=override_axis_graph)
+    assert out.success is True
+    assert out.record is not None
+    assert out.record.edge_summary is not None
+    es = out.record.edge_summary
+    assert es.get("OVERRIDDEN_BY") == {"in": 0, "out": want_ob}
+    assert es.get("OVERRIDDEN_BY.DECLARES_PRODUCER") == {"in": 0, "out": want_dp}
+
+
 def test_describe_abstract_method_with_route_override_emits_exposes(override_axis_graph: KuzuGraph) -> None:
     rows = override_axis_graph._rows(  # noqa: SLF001
         "MATCH (t:Symbol {fqn: $fqn})-[:DECLARES]->(m:Symbol) "
