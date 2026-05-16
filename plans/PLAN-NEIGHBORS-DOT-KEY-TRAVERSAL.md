@@ -28,7 +28,7 @@ Depends on: **none** (query-time / MCP surface only; graph schema unchanged).
 
 | PR | Scope | Ontology bump | Areas of concern | Test buckets | Independent of |
 | --- | --- | --- | --- | --- | --- |
-| PR-1 | `mcp_v2.py`, `kuzu_queries.py`, `mcp_hints.py`, `server.py`, docs, tests | **No** | Partitioning flat vs composed in `neighbors_v2`; attr projection parity with flat hop; `requested_edge_types` echo; MCP JSON schema for `edge_types`; hint / road-signs doc drift | `test_mcp_v2_compose.py`, `test_mcp_hints.py` | — |
+| PR-1 | `mcp_v2.py`, `kuzu_queries.py`, `mcp_hints.py`, `server.py`, docs, tests | **No** | Partitioning flat vs composed in `neighbors_v2`; attr projection parity with flat hop; `requested_edge_types` echo; MCP JSON schema for `edge_types`; hint / road-signs doc drift | `test_mcp_v2_compose.py`, `test_mcp_v2.py`, `test_mcp_hints.py` | — |
 
 **Landing order:** **PR-1** only (single code PR).
 
@@ -38,7 +38,8 @@ Depends on: **none** (query-time / MCP surface only; graph schema unchanged).
 | --- | --- |
 | Implementation shape | One PR (`feat(neighbors): DECLARES.* dot-key 2-hop traversal`) |
 | `ComposedEdgeType` | New `Literal` in `mcp_v2.py` for the three keys; `_NEIGHBOR_EDGE_TYPES_ADAPTER` accepts `list[EdgeType \| ComposedEdgeType]` |
-| Cypher home | New `KuzuGraph.member_edge_traversal_for(type_id, composed_key)` in `kuzu_queries.py` (mirror `member_edge_rollup_for` rel map; `RETURN` rows instead of `count`) |
+| Cypher home | New `KuzuGraph.member_edge_traversal_for(type_id, composed_key)` in `kuzu_queries.py`; **one module-level `(composed_key → rel)` tuple** shared by `member_edge_rollup_for` and traversal (refactor rollup to use it) |
+| Merge order | Append **flat** edges first (per origin, flat label order), then **composed** edges (per origin, `composed_keys` request order); then apply `offset`/`limit` on the combined list |
 | Terminal attrs | Project the same columns flat `neighbors_v2` uses; add `via_id` from intermediate `m.id` |
 | `NodeFilter` | Applies to **terminal** node (Client / Producer / Route), same as flat hops |
 | Mixed request | `["DECLARES", "DECLARES.DECLARES_CLIENT"]` runs both paths; merge then `offset`/`limit` on combined list |
@@ -54,11 +55,8 @@ Depends on: **none** (query-time / MCP surface only; graph schema unchanged).
 
 ### 1. `kuzu_queries.py`
 
-- Add `member_edge_traversal_for(self, type_id: str, composed_key: str) -> list[dict[str, Any]]` (name may match repo style).
-- Reuse the same `(composed_key → rel)` map as `member_edge_rollup_for`:
-  - `DECLARES.DECLARES_CLIENT` → `DECLARES_CLIENT`
-  - `DECLARES.DECLARES_PRODUCER` → `DECLARES_PRODUCER`
-  - `DECLARES.EXPOSES` → `EXPOSES`
+- Extract a single module-level constant, e.g. `_MEMBER_EDGE_COMPOSED_REL_MAP: tuple[tuple[str, str], ...]`, with the three `(composed_key, rel)` pairs. Refactor `member_edge_rollup_for` to iterate this constant (no duplicated tuple literals).
+- Add `member_edge_traversal_for(self, type_id: str, composed_key: str) -> list[dict[str, Any]]` iterating the same map.
 - Cypher (per propose), parameterized `rel`:
 
 ```cypher
@@ -103,8 +101,8 @@ NeighborEdgeType = EdgeType | ComposedEdgeType  # if needed for typing
      - `edge_type` = dot-key string (not `stored_edge_type` from Cypher)
      - `attrs` = projected terminal edge attrs + `via_id`
      - `other` = terminal node via `_load_node_record` / `_node_ref_from_row` + `NodeFilter` on terminal kind
-  7. Merge flat + composed edges; apply `offset`/`limit` on merged list.
-  8. `requested_edge_types` = deduped original request (flat + composed), not relabeled.
+  7. Merge: **flat edges first**, then composed (per § Resolved design decisions); apply `offset`/`limit` on the combined list.
+  8. `requested_edge_types` = `list(dict.fromkeys(edge_types))` from the validated request — **not** `list(labels)` (today's flat-only echo). Must include dot-keys when requested.
 - Change `neighbors_v2` signature `edge_types` parameter type to `list[NeighborEdgeType]` (or keep `list[EdgeType]` only on the MCP wrapper — see `server.py`).
 
 ### 3. `server.py`
@@ -161,7 +159,11 @@ TPL_DESCRIBE_TYPE_PRODUCERS_VIA_MEMBERS =
 | 7 | `test_neighbors_dot_key_count_matches_edge_summary` | `len(results)` == `edge_summary` out count (no limit) |
 | 8 | `test_neighbors_still_rejects_overridden_by` | (if not merged with row 1) |
 
-### 9. `tests/test_mcp_hints.py`
+### 9. `tests/test_mcp_v2.py`
+
+- Update `test_neighbors_rejects_composed_edge_summary_key`: after dot-keys are valid at the adapter, a **method** origin + `DECLARES.DECLARES_CLIENT` must return `success=False` with the type-origin message (not `ValidationError`). Align with `test_neighbors_dot_key_method_origin_rejected` in compose (one test may subsume the other — keep coverage, avoid duplicate names).
+
+### 10. `tests/test_mcp_hints.py`
 
 - Update `test_hints_describe_type_symbol_clients_via_members_emits`, `_routes_…`, `_producers_…` expected strings to match new templates.
 - Ensure `test_hints_hv20_no_dotkey_edge_labels_in_rendered_neighbors_hints` still passes (neighbors empty branch only).
@@ -171,7 +173,7 @@ TPL_DESCRIBE_TYPE_PRODUCERS_VIA_MEMBERS =
 
 Implement every name in the table above plus hint tests. Regression:
 
-- Existing flat `neighbors_v2` tests in `tests/test_mcp_v2.py` / `test_mcp_v2_compose.py` unchanged behavior.
+- Existing flat `neighbors_v2` tests in `tests/test_mcp_v2.py` / `test_mcp_v2_compose.py` unchanged behavior (except `test_neighbors_rejects_composed_edge_summary_key` expectation flip above).
 - `test_neighbors_edge_type_adapter_accepts_overrides` unchanged.
 
 ## Definition of done (PR-1)
@@ -188,13 +190,13 @@ Implement every name in the table above plus hint tests. Regression:
 
 | # | Step | File(s) | Done when |
 | --- | --- | --- | --- |
-| 1 | Add `member_edge_traversal_for` | `kuzu_queries.py` | Manual Cypher on bank fixture returns rows with `via_id` |
+| 1 | Extract `_MEMBER_EDGE_COMPOSED_REL_MAP` + traversal | `kuzu_queries.py` | Rollup refactored; manual Cypher returns rows with `via_id` |
 | 2 | Add `ComposedEdgeType` + adapter | `mcp_v2.py` | Adapter accepts dot-keys; rejects `OVERRIDDEN_BY` |
-| 3 | Partition + composed dispatch in `neighbors_v2` | `mcp_v2.py` | Unit tests 1–7 pass |
+| 3 | Partition + composed dispatch; fix `requested_edge_types` echo | `mcp_v2.py` | Unit tests 1–7 pass; echo includes dot-keys |
 | 4 | Widen MCP `edge_types` + descriptions | `server.py` | Tool schema shows composed literals |
 | 5 | Update hint templates + field description | `mcp_hints.py` | Hint tests pass; HV20 still passes |
 | 6 | Docs pass | `docs/*.md`, `README.md` | AGENT-GUIDE / EDGE-NAVIGATION consistent |
-| 7 | Split/add tests | `tests/test_mcp_v2_compose.py`, `tests/test_mcp_hints.py` | Full propose test list green |
+| 7 | Split/add tests | `tests/test_mcp_v2_compose.py`, `tests/test_mcp_v2.py`, `tests/test_mcp_hints.py` | Full propose test list green |
 
 ---
 

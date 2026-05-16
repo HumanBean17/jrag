@@ -36,6 +36,7 @@ One prompt: **PR-1** (single implementation PR).
 - `@docs/EDGE-NAVIGATION.md`
 - `@README.md` (MCP tool table only)
 - `@tests/test_mcp_v2_compose.py`
+- `@tests/test_mcp_v2.py` (`test_neighbors_rejects_composed_edge_summary_key`)
 - `@tests/test_mcp_hints.py`
 
 **Prompt:**
@@ -45,12 +46,12 @@ You are implementing PR-NEIGHBORS-DOT-1 from `plans/PLAN-NEIGHBORS-DOT-KEY-TRAVE
 
 ## Scope
 
-1. **`kuzu_queries.py`** — Add `member_edge_traversal_for(type_id, composed_key)` sharing the rel map with `member_edge_rollup_for`; return traversal rows with `via_id` and the same edge attr columns flat `neighbors_v2` projects.
+1. **`kuzu_queries.py`** — Extract `_MEMBER_EDGE_COMPOSED_REL_MAP` (one tuple for all three pairs); refactor `member_edge_rollup_for` to use it; add `member_edge_traversal_for` using the same map. Return traversal rows with `via_id` and the same edge attr columns flat `neighbors_v2` projects.
 
 2. **`mcp_v2.py`**
    - Add `ComposedEdgeType` Literal (three `DECLARES.*` keys).
    - Extend `_NEIGHBOR_EDGE_TYPES_ADAPTER` to accept composed keys; still reject `OVERRIDDEN_BY` / `OVERRIDDEN_BY.*`.
-   - Refactor `neighbors_v2`: partition flat vs composed; enforce `direction="out"` and type Symbol origin for composed; merge results; echo full `requested_edge_types`.
+   - Refactor `neighbors_v2`: partition flat vs composed; enforce `direction="out"` and type Symbol origin for composed; merge flat then composed; set `requested_edge_types=list(dict.fromkeys(edge_types))` (not flat-only `labels`).
    - Composed `Edge.edge_type` = dot-key; `attrs` includes `via_id`.
    - Update `NodeRecord.edge_summary` description (DECLARES.* navigable; OVERRIDDEN_BY.* not).
 
@@ -62,6 +63,7 @@ You are implementing PR-NEIGHBORS-DOT-1 from `plans/PLAN-NEIGHBORS-DOT-KEY-TRAVE
 
 6. **Tests** — Implement every test name under **Tests for PR-1** in the plan:
    - Split `test_neighbors_rejects_overridden_by_and_dot_keys` → accept `DECLARES.*`, keep `test_neighbors_still_rejects_overridden_by` (or equivalent).
+   - Update `test_neighbors_rejects_composed_edge_summary_key` in `test_mcp_v2.py` (method origin → `success=False`, not `ValidationError`).
    - Add `test_neighbors_declares_dot_key_{client,producer,exposes}`, `test_neighbors_dot_key_mixed_with_flat`, `test_neighbors_dot_key_inbound_rejected`, `test_neighbors_dot_key_method_origin_rejected`, `test_neighbors_dot_key_count_matches_edge_summary`.
    - Update describe hint tests for new template strings; keep `test_hints_hv20_no_dotkey_edge_labels_in_rendered_neighbors_hints` passing.
 
@@ -84,8 +86,8 @@ You are implementing PR-NEIGHBORS-DOT-1 from `plans/PLAN-NEIGHBORS-DOT-KEY-TRAVE
 ## Tests to run
 
 ```bash
-.venv/bin/ruff check kuzu_queries.py mcp_v2.py mcp_hints.py server.py tests/test_mcp_v2_compose.py tests/test_mcp_hints.py
-.venv/bin/python -m pytest tests/test_mcp_v2_compose.py tests/test_mcp_hints.py -v -k "dot_key or declares_dot or overridden_by or hints_describe_type or hv20"
+.venv/bin/ruff check kuzu_queries.py mcp_v2.py mcp_hints.py server.py tests/test_mcp_v2_compose.py tests/test_mcp_v2.py tests/test_mcp_hints.py
+.venv/bin/python -m pytest tests/test_mcp_v2_compose.py tests/test_mcp_v2.py tests/test_mcp_hints.py -v -k "dot_key or declares_dot or overridden_by or composed_edge_summary or hints_describe_type or hv20"
 ```
 
 Before PR open:
@@ -110,31 +112,35 @@ Before PR open:
 
 ## Manual evidence (paste in PR)
 
+Build a one-off graph (same corpus as tests), then compare `describe` rollup count to `neighbors` dot-key rows:
+
 ```bash
-tid=$(.venv/bin/python -c "
-from kuzu_queries import KuzuGraph
-from tests.conftest import BANK_KUZU_PATH  # or query session graph path used in tests
-g = KuzuGraph(str(BANK_KUZU_PATH))
-rows = g._rows(
-    'MATCH (t:Symbol)-[:DECLARES]->(m:Symbol)-[:DECLARES_CLIENT]->() '
-    \"WHERE t.kind IN ['class','interface','enum','record','annotation'] \"
-    'RETURN t.id AS id LIMIT 1', {})
-print(rows[0]['id'] if rows else '')
-")
+KUZU=/tmp/dotkey-evidence/code_graph.kuzu
+rm -rf /tmp/dotkey-evidence
+.venv/bin/python build_ast_graph.py \
+  --source-root tests/bank-chat-system \
+  --kuzu-path "$KUZU" --verbose
 .venv/bin/python -c "
 from kuzu_queries import KuzuGraph
 from mcp_v2 import describe_v2, neighbors_v2
-from tests.conftest import BANK_KUZU_PATH
-import os
-g = KuzuGraph(os.environ.get('JAVA_CODEBASE_RAG_KUZU', str(BANK_KUZU_PATH)))
-tid = '$tid'  # substitute
+
+g = KuzuGraph('$KUZU')
+rows = g._rows(
+    \"MATCH (t:Symbol)-[:DECLARES]->(:Symbol)-[:DECLARES_CLIENT]->() \"
+    \"WHERE t.kind IN ['class','interface','enum','record','annotation'] \"
+    'RETURN t.id AS id LIMIT 1', {})
+assert rows, 'no type with DECLARES.DECLARES_CLIENT in fixture'
+tid = rows[0]['id']
 d = describe_v2(tid, graph=g)
 n = neighbors_v2(tid, direction='out', edge_types=['DECLARES.DECLARES_CLIENT'], graph=g, limit=500)
-print('summary', d.record.edge_summary.get('DECLARES.DECLARES_CLIENT'))
-print('neighbors', len(n.results), n.results[0].edge_type if n.results else None, n.results[0].attrs.get('via_id') if n.results else None)
+summary = d.record.edge_summary.get('DECLARES.DECLARES_CLIENT') if d.record and d.record.edge_summary else None
+print('type_id', tid)
+print('edge_summary', summary)
+print('neighbors_count', len(n.results))
+print('edge_type', n.results[0].edge_type if n.results else None)
+print('via_id', n.results[0].attrs.get('via_id') if n.results else None)
+assert n.success and summary and len(n.results) == summary['out']
 "
 ```
-
-(Adjust graph path to match your session fixture if the snippet differs.)
 
 ````
