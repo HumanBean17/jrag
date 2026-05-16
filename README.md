@@ -261,7 +261,7 @@ Example:
 {"kind":"symbol","filter":{"microservice":"chat-core","symbol_kind":"interface"}}
 ```
 
-**MCP v2 response extras (`hints`, pagination echo):** On success, `search`, `find`, `describe`, and `neighbors` return a `hints` field (`list[str]`, capped at five unique strings) with short, templated suggestions for likely next tool calls; hints are advisory. `hints` is always empty when `success` is false. `search` and `find` additionally echo the request’s `limit` and `offset` on success; on failure those echoed fields are omitted (`null` in JSON). `neighbors` echoes `requested_edge_types` (deduped edge labels from the request) on success for empty-result hints and diagnostics. See [`propose/HINTS-ROAD-SIGNS-PROPOSE.md`](./propose/HINTS-ROAD-SIGNS-PROPOSE.md) Appendix A for the locked v1 template catalog.
+**MCP v2 response extras (`hints`, pagination echo):** On success, `search`, `find`, `describe`, and `neighbors` return a `hints` field (`list[str]`, capped at five unique strings) with short, templated suggestions for likely next tool calls; hints are advisory. `hints` is always empty when `success` is false. `search` and `find` additionally echo the request’s `limit` and `offset` on success; on failure those echoed fields are omitted (`null` in JSON). The find page-full hint fires only when another page may exist (handler over-fetches by one row; not exposed on the output model). `neighbors` echoes `requested_edge_types` (deduped edge labels from the request) on success for empty-result hints and diagnostics. See [`propose/HINTS-ROAD-SIGNS-PROPOSE.md`](./propose/HINTS-ROAD-SIGNS-PROPOSE.md) Appendix A for the locked v1 template catalog.
 
 ---
 

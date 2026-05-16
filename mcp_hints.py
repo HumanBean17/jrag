@@ -93,15 +93,20 @@ def _find_has_identifier_shaped_filter(kind: str, flt: dict[str, Any]) -> bool:
 
 
 def finalize_hint_list(scored: list[tuple[int, str]]) -> list[str]:
-    """Dedupe identical rendered strings keeping the highest priority; cap to 5 (drop lowest)."""
-    best_pri: dict[str, int] = {}
-    for pri, text in scored:
+    """Dedupe identical rendered strings keeping the highest priority; cap to 5 (drop lowest).
+
+    Within the same priority tier, keep hints in emission order (first scored wins the cap).
+    """
+    best: dict[str, tuple[int, int]] = {}
+    for idx, (pri, text) in enumerate(scored):
         if not text:
             continue
-        prev = best_pri.get(text)
-        if prev is None or pri > prev:
-            best_pri[text] = pri
-    ordered = sorted(best_pri.items(), key=lambda kv: (-kv[1], kv[0]))
+        prev = best.get(text)
+        if prev is None or pri > prev[0]:
+            best[text] = (pri, idx)
+        elif pri == prev[0]:
+            best[text] = (pri, min(prev[1], idx))
+    ordered = sorted(best.items(), key=lambda kv: (-kv[1][0], kv[1][1]))
     return [text for text, _pri in ordered[:5]]
 
 
@@ -137,7 +142,11 @@ def generate_hints(
         lim = payload.get("limit")
         if not results and _find_has_identifier_shaped_filter(kind, flt):
             pairs.append((PRIORITY_META, TPL_FIND_EMPTY_RESOLVE.format(kind=kind)))
-        if lim is not None and len(results) >= int(lim):
+        if (
+            lim is not None
+            and len(results) >= int(lim)
+            and payload.get("has_more_results") is True
+        ):
             pairs.append((PRIORITY_META, TPL_FIND_PAGE_FULL.format(limit=int(lim))))
         return finalize_hint_list(pairs)
 

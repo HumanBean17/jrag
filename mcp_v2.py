@@ -756,25 +756,24 @@ def find_v2(
         if err := _validate_no_wildcards(nf):
             _log_fail_loud("wildcard")
             return FindOutput(success=False, message=err, hints=[], limit=None, offset=None)
+        fetch_cap = int(limit) + int(offset) + 1
         if kind == "symbol":
             where, params = _symbol_where_from_filter(nf)
-            params["lim"] = int(limit) + int(offset)
+            params["lim"] = fetch_cap
             rows = g._rows(  # noqa: SLF001
                 f"MATCH (s:Symbol) {where} RETURN s.id AS id, s.fqn AS fqn, s.microservice AS microservice, "
                 "s.module AS module, s.role AS role, s.kind AS symbol_kind ORDER BY s.fqn LIMIT $lim",
                 params,
             )
-            rows = rows[offset : offset + limit]
         elif kind == "route":
             rows = g.list_routes(
                 microservice=nf.microservice,
                 framework=nf.framework,
                 path_prefix=nf.path_prefix,
                 method=nf.http_method,
-                limit=max(500, limit + offset),
+                limit=max(500, fetch_cap),
             )
             rows = [r for r in rows if _node_matches_filter("route", r, nf)]
-            rows = rows[offset : offset + limit]
         else:
             rows = g.list_clients(
                 microservice=nf.microservice,
@@ -782,10 +781,11 @@ def find_v2(
                 target_service=nf.target_service,
                 path_prefix=nf.target_path_prefix,
                 method=nf.http_method,
-                limit=max(500, limit + offset),
+                limit=max(500, fetch_cap),
             )
             rows = [r for r in rows if _node_matches_filter("client", r, nf)]
-            rows = rows[offset : offset + limit]
+        has_more_results = len(rows) > int(offset) + int(limit)
+        rows = rows[offset : offset + limit]
         refs = [_node_ref_from_row(kind, r) for r in rows]
         filter_dump = nf.model_dump(exclude_none=True)
         hint_payload: dict[str, Any] = {
@@ -795,6 +795,7 @@ def find_v2(
             "limit": limit,
             "offset": offset,
             "filter": filter_dump,
+            "has_more_results": has_more_results,
         }
         return FindOutput(
             success=True,

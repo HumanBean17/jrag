@@ -203,11 +203,32 @@ def test_hints_find_empty_identifier_filter_suggests_resolve(kuzu_graph) -> None
     assert any("resolve(identifier" in h and "hint_kind='client'" in h for h in out.hints)
 
 
+def test_hints_find_empty_symbol_fqn_prefix_suggests_resolve(kuzu_graph) -> None:
+    out = find_v2("symbol", {"fqn_prefix": "__no_such_prefix__"}, graph=kuzu_graph)
+    assert out.success is True
+    assert out.results == []
+    assert any("resolve(identifier" in h and "hint_kind='symbol'" in h for h in out.hints)
+
+
 def test_hints_find_page_full_emits_narrow_or_paginate(kuzu_graph) -> None:
     out = find_v2("symbol", {"role": "CONTROLLER"}, graph=kuzu_graph, limit=1, offset=0)
     assert out.success is True
     assert len(out.results) >= 1
     assert mcp_hints.TPL_FIND_PAGE_FULL.format(limit=1) in out.hints
+
+
+def test_hints_find_page_full_skips_when_last_page(kuzu_graph) -> None:
+    full = find_v2("symbol", {"role": "CONTROLLER"}, graph=kuzu_graph, limit=500, offset=0)
+    assert full.success and full.results
+    last = find_v2(
+        "symbol",
+        {"role": "CONTROLLER"},
+        graph=kuzu_graph,
+        limit=1,
+        offset=len(full.results) - 1,
+    )
+    assert last.success and len(last.results) == 1
+    assert mcp_hints.TPL_FIND_PAGE_FULL.format(limit=1) not in last.hints
 
 
 def test_hints_neighbors_empty_with_edge_types_emits_kind_check(kuzu_graph) -> None:
@@ -311,6 +332,36 @@ def test_hints_cap_drops_lowest_priority_over_five() -> None:
     assert len(got) == 5
     assert "m2" not in got
     assert "d1" in got and "o1" in got
+
+
+def test_hints_cap_same_priority_keeps_emission_order() -> None:
+    scored = [
+        (PRIORITY_META, "z-meta"),
+        (PRIORITY_META, "a-meta"),
+        (PRIORITY_META, "b-meta"),
+        (PRIORITY_META, "c-meta"),
+        (PRIORITY_META, "d-meta"),
+        (PRIORITY_META, "e-meta"),
+    ]
+    got = finalize_hint_list(scored)
+    assert len(got) == 5
+    assert "z-meta" in got
+    assert "e-meta" not in got
+
+
+def test_hints_find_page_full_requires_has_more_results_flag() -> None:
+    full_page = {
+        "success": True,
+        "kind": "symbol",
+        "results": [{"id": "sym:a"}],
+        "limit": 1,
+        "offset": 0,
+        "filter": {},
+    }
+    assert mcp_hints.TPL_FIND_PAGE_FULL.format(limit=1) not in generate_hints("find", full_page)
+    assert mcp_hints.TPL_FIND_PAGE_FULL.format(limit=1) in generate_hints(
+        "find", {**full_page, "has_more_results": True}
+    )
 
 
 def test_hints_kind_gate_method_payload_ignores_type_only_rollups() -> None:
