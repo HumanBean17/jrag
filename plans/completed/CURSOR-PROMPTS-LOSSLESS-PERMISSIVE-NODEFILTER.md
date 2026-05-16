@@ -1,6 +1,6 @@
 # Cursor task prompts — Lossless-permissive `NodeFilter` (PR-N1)
 
-Status: **active**. Implements
+Status: **completed** (reference). Implements
 [`plans/PLAN-LOSSLESS-PERMISSIVE-NODEFILTER.md`](./PLAN-LOSSLESS-PERMISSIVE-NODEFILTER.md)
 and
 [`propose/LOSSLESS-PERMISSIVE-NODEFILTER-PROPOSE.md`](../propose/LOSSLESS-PERMISSIVE-NODEFILTER-PROPOSE.md).

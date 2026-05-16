@@ -1,6 +1,6 @@
 # YAML-PATH-EXPANSION — Apply `~` and `$VAR` expansion to `embedding.model` in project YAML
 
-**Status**: under review
+**Status**: completed — shipped (`maybe_expand_embedding_model_path` in `java_codebase_rag/config.py`; tests on `master`).
 **Author**: Dmitriy Teriaev + Perplexity Computer
 **Date**: 2026-05-12 (v2)
 

@@ -214,8 +214,8 @@ Use **verbatim** names below (adjust only if pytest collection would collide; if
 
 ## Tracking
 
-- `PR-A`: _pending_
-- `PR-B`: _pending_
+- `PR-A`: **merged**
+- `PR-B`: **merged**
 
 ## Cursor handoff
 

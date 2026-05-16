@@ -1,6 +1,6 @@
 # Plan: brownfield role/capability overrides — design-fix changelog
 
-Status: **applied**. Companion document to
+Status: **completed** — applied. Companion document to
 `PLAN-BROWNFIELD-ROLE-OVERRIDES.md`.
 
 ## Why this file exists

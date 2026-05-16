@@ -1,6 +1,6 @@
 # Plan: capabilities model (multi-tag annotations on Java types)
 
-Status: **agreed, ready to implement**. Self-contained: an agent picking
+Status: **completed** — shipped (`capabilities` on Symbol nodes + brownfield overrides on `master`). Self-contained: an agent picking
 this up should be able to land it without re-deriving the design.
 
 ## Goal

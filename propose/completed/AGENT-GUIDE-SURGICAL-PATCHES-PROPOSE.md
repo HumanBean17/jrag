@@ -1,6 +1,6 @@
 # AGENT-GUIDE-SURGICAL-PATCHES — three small additions to docs/AGENT-GUIDE.md
 
-**Status**: approved — locked insertion spec for PR-AGP-2 (cite §3 + Appendix A verbatim).
+**Status**: completed — shipped (PR-AGP-1 → PR-AGP-2; patches A–C in `docs/AGENT-GUIDE.md`).
 **Author**: Dmitriy Teriaev + Perplexity Computer
 **Date**: 2026-05-11
 

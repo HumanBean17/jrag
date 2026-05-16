@@ -1,5 +1,7 @@
 # Plan: Remote Project Indexing via MCP Configuration
 
+Status: **completed** — shipped (`PROJECT_ROOT` via `_cocoindex_subprocess_env`; see §Status checklist below).
+
 ## Goal
 
 Enable users to run `refresh_code_index` from any Java project root without copying Python scripts. Users should only need to provide a valid MCP configuration pointing to their project.

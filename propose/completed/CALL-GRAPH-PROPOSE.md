@@ -1,6 +1,6 @@
-# Call-graph layer — active proposal
+# Call-graph layer — completed proposal
 
-Status: **active — ready for planning**. Pairs with
+Status: **completed** — shipped (static intra-JVM `CALLS` + `DECLARES`; plan: [`plans/completed/PLAN-CALL-GRAPH.md`](../../plans/completed/PLAN-CALL-GRAPH.md)). Pairs with
 [`plans/completed/PLAN-CALL-GRAPH.md`](../../plans/completed/PLAN-CALL-GRAPH.md) for the
 step-by-step implementation.
 

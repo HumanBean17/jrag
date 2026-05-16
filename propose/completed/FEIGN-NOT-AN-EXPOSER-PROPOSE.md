@@ -1,6 +1,6 @@
 # `@FeignClient` is a caller, not an exposer
 
-Status: **draft — open for review**.
+Status: **completed** — shipped (PR-F1; `exposes_suppressed_feign` + cross-service matcher; see `tests/test_feign_not_exposer.py`).
 
 This is a **proposal**, not an implementable plan. After review and the
 §9 [TBD] decisions, an implementable plan will be derived under

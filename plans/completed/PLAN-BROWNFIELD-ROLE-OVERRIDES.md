@@ -1,6 +1,6 @@
 # Plan: brownfield role / capability overrides
 
-Status: **agreed, ready to implement**. Self-contained: an agent picking
+Status: **completed** — shipped (`BrownfieldOverrides` role/capability layers on `master`). Self-contained: an agent picking
 this up should be able to land it without re-deriving the design.
 
 ## Goal

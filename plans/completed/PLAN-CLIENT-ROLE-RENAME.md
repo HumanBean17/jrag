@@ -1,6 +1,6 @@
 # Plan: `FEIGN_CLIENT` role → `CLIENT` + `HTTP_CLIENT` capability
 
-Status: **active** — propose merged in [#28](https://github.com/HumanBean17/java-codebase-rag/pull/28).
+Status: **completed** — shipped (propose merged in [#28](https://github.com/HumanBean17/java-codebase-rag/pull/28)).
 Source: `propose/CLIENT-ROLE-RENAME-PROPOSE.md` on master.
 Sequence: ships **after** PR-F1 (#31, merged) and PR-G1 (#30, merged). Master baseline at this plan's start: `aed732b`, `ONTOLOGY_VERSION = 8`, **281 passed, 4 skipped**.
 

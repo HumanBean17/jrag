@@ -1,6 +1,6 @@
 # Cursor task prompts — CLI scenarios (PR-CLI-1 → PR-CLI-3)
 
-Status: **active**. Implements
+Status: **completed** (reference). Implements
 [`plans/completed/PLAN-CLI-SCENARIOS.md`](./PLAN-CLI-SCENARIOS.md) and
 [`propose/completed/CLI-SCENARIOS-PROPOSE.md`](../propose/completed/CLI-SCENARIOS-PROPOSE.md).
 
