@@ -6,7 +6,7 @@
 
 ## TL;DR
 
-- Replace the single generic empty-neighbors template `TPL_NEIGHBORS_EMPTY_KIND_CHECK = "0 results — check if the requested edge_types apply to this kind"` with a small family of kind- and direction-aware templates driven by `EDGE_SCHEMA` (introduced in `propose/SCHEMA-V2-PROPOSE.md` §3.4).
+- Replace the single generic empty-neighbors template `TPL_NEIGHBORS_EMPTY_KIND_CHECK = "0 results — check if the requested edge_types apply to this kind"` with a small family of kind- and direction-aware templates driven by `EDGE_SCHEMA` (introduced in `propose/completed/SCHEMA-V2-PROPOSE.md` §3.4).
 - Each template fires by inspecting the subject node kind, the requested `direction`, and the requested `edge_types` against `EDGE_SCHEMA[edge].src` / `.dst` / `.typical_traversals` — no hardcoded edge-shape literals in `mcp_hints.py`.
 - New emit-side input: hints v3 reads `EdgeSpec.brownfield_resolver_sourced` (backed by `BROWNFIELD_RESOLVER_STRATEGY_SET` from SCHEMA-V2 PR-A) to fire a distinct *"absence may mean unresolved, not absent"* hint on empty results. That complements (does not replace) the v2 `TPL_NEIGHBORS_FUZZY_STRATEGY` hint on non-empty results.
 - **Propose gate** (SCHEMA-V2 Decision 30): merged to `master` ([#154](https://github.com/HumanBean17/java-codebase-rag/pull/154)) before SCHEMA-V2 PR-A. **Code** ships in SCHEMA-V2 PR-D after PR-A–C are on `master`.
@@ -278,6 +278,6 @@ Each row references the SCHEMA-V2 use-case re-walk (§4 of that propose) where a
 
 **Cross-propose references**:
 
-- `propose/SCHEMA-V2-PROPOSE.md` §3.4, §3.11, Decision 28–30, PR-D §6 (locked via #151).
+- `propose/completed/SCHEMA-V2-PROPOSE.md` §3.4, §3.11, Decision 28–30, PR-D §6 (locked via #151).
 - `propose/completed/HINTS-V2-PROPOSE.md` — fuzzy hint, dot-key invariant (unchanged).
 - `propose/completed/HINTS-ROAD-SIGNS-PROPOSE.md` — v1 catalogue except `TPL_NEIGHBORS_EMPTY_KIND_CHECK` deleted.

@@ -1,6 +1,6 @@
 # SCHEMA-V2 — edges connect the nodes the edge is about (HTTP_CALLS, ASYNC_CALLS, Producer node, canonical Edge Navigation Schema)
 
-**Status**: locked — implementing (plan: [`plans/PLAN-SCHEMA-V2.md`](../plans/PLAN-SCHEMA-V2.md); code PR-A–D in flight; move to `propose/completed/` when PR-D lands)
+**Status**: **completed** — PR-A/B/C landed; PR-D (hints v3) tracked in [`plans/PLAN-HINTS-V3.md`](../../plans/PLAN-HINTS-V3.md). Plan: [`plans/completed/PLAN-SCHEMA-V2.md`](../../plans/completed/PLAN-SCHEMA-V2.md).
 **Author**: Dmitriy Teriaev + Computer
 **Date**: 2026-05-16
 
@@ -155,7 +155,7 @@ Each DDL string is asserted against `EDGE_SCHEMA[...]` in `tests/test_schema_con
 - **`HttpCallRow` keys by `client_id`** instead of `caller_symbol_id`; **`AsyncCallRow` keys by `producer_id`** instead of `caller_symbol_id`. Multiple clients (or producers) on the same method fan out at the caller-side node, not the Symbol.
 - **`DECLARES_CLIENT` and `DECLARES_PRODUCER` edges** emit at the same point clients/producers are materialized, from the declaring method Symbol.
 
-Plan-level details (exact field renames, fixture migration, edge-emit ordering) live in `plans/PLAN-SCHEMA-V2.md`, not here.
+Plan-level details (exact field renames, fixture migration, edge-emit ordering) live in `plans/completed/PLAN-SCHEMA-V2.md`, not here.
 
 ### §3.5 — `docs/EDGE-NAVIGATION.md` generator
 
@@ -318,7 +318,7 @@ Full design in `propose/HINTS-V3-PROPOSE.md` (separate). PR-D in §6 ships the i
 
 ## §6 — Migration plan — 4 PRs
 
-**Merge gate**: `plans/PLAN-SCHEMA-V2.md` and `plans/CURSOR-PROMPTS-SCHEMA-V2.md` must exist (separate PRs or commits) before PR-A merges. The propose answers what/why; the plan enumerates per-PR file paths, exact signatures, and grep-enumeration contracts. (Decision 29.)
+**Merge gate**: `plans/completed/PLAN-SCHEMA-V2.md` and `plans/completed/CURSOR-PROMPTS-SCHEMA-V2.md` must exist (separate PRs or commits) before PR-A merges. The propose answers what/why; the plan enumerates per-PR file paths, exact signatures, and grep-enumeration contracts. (Decision 29.)
 
 ### PR-A — `EDGE_SCHEMA` + doc generator + CI invariants + `ONTOLOGY_VERSION` bump (no DDL flips)
 
@@ -369,7 +369,7 @@ Full design in `propose/HINTS-V3-PROPOSE.md` (separate). PR-D in §6 ships the i
 11. **`typical_traversals` are rendered into both doc and hint engine.** Source of truth for "what's the right way to traverse this edge."
 12. **`@CodebaseConsumer` is out of scope.** No such annotation exists today; if one is added, it's a separate propose.
 13. **Multi-client / multi-producer methods fan out at the caller-side node.** No Symbol-level collapsing.
-14. **Pass keys `HttpCallRow` by `client_id` and `AsyncCallRow` by `producer_id`.** Plan-level details in `plans/PLAN-SCHEMA-V2.md`.
+14. **Pass keys `HttpCallRow` by `client_id` and `AsyncCallRow` by `producer_id`.** Plan-level details in `plans/completed/PLAN-SCHEMA-V2.md`.
 15. **Caller queries become two-hop for both HTTP and async.** `MATCH (s:Symbol)-[:DECLARES_CLIENT]->(c:Client)-[:HTTP_CALLS]->(r:Route)` and `MATCH (s:Symbol)-[:DECLARES_PRODUCER]->(p:Producer)-[:ASYNC_CALLS]->(r:Route)`. No convenience view in v2.
 16. **`describe(c:…)` and `describe(p:…)` `edge_summary` now show non-zero out-edges.** No `describe` code change; data just becomes accurate.
 17. **Hints v3 (PR-D) is gated on PR-A landing.** If PR-A reverts, PR-D reverts.

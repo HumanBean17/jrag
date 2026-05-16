@@ -29,7 +29,7 @@ One prompt: **PR-D** (= SCHEMA-V2 PR-D in sequence doc).
 
 - `@plans/PLAN-HINTS-V3.md`
 - `@propose/HINTS-V3-PROPOSE.md` (§3–§4, §6, Decisions §7)
-- `@propose/SCHEMA-V2-PROPOSE.md` (§3.12 preview — read only)
+- `@propose/completed/SCHEMA-V2-PROPOSE.md` (§3.12 preview — read only)
 - `@java_ontology.py` (`EDGE_SCHEMA`, `FUZZY_STRATEGY_SET`)
 - `@mcp_hints.py`
 - `@mcp_v2.py` (`neighbors_v2`, `_load_node_record`)

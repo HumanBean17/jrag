@@ -11,10 +11,10 @@ When two or more proposes touch overlapping subsystems, the order they lock and 
 
 ## Current in-flight set (as of 2026-05-16)
 
-1. **SCHEMA-V2** — `propose/SCHEMA-V2-PROPOSE.md` (`Status: locked — implementing`; propose [#151](https://github.com/HumanBean17/java-codebase-rag/pull/151), plan [#155](https://github.com/HumanBean17/java-codebase-rag/pull/155))
-   - 4 code PRs: PR-A (`EDGE_SCHEMA` + ontology v14 bump), PR-B (`HTTP_CALLS` flip + downstream API), PR-C (`Producer` node + `ASYNC_CALLS` flip + GraphMeta + MCP parity), PR-D (hints v3).
-2. **HINTS-V3** — `propose/HINTS-V3-PROPOSE.md` (`Status: locked — implementing via SCHEMA-V2 PR-D`; propose [#154](https://github.com/HumanBean17/java-codebase-rag/pull/154), plan [#155](https://github.com/HumanBean17/java-codebase-rag/pull/155))
+1. **HINTS-V3** — `propose/HINTS-V3-PROPOSE.md` (`Status: locked — implementing via SCHEMA-V2 PR-D`; propose [#154](https://github.com/HumanBean17/java-codebase-rag/pull/154), plan [#155](https://github.com/HumanBean17/java-codebase-rag/pull/155))
    - Implementation = SCHEMA-V2 PR-D (same PR).
+
+**SCHEMA-V2** (PR-A/B/C) is **completed** — artefacts in `propose/completed/SCHEMA-V2-PROPOSE.md`, `plans/completed/PLAN-SCHEMA-V2.md`, `plans/completed/CURSOR-PROMPTS-SCHEMA-V2.md`. PR-D remains under HINTS-V3.
 
 No other proposes are in flight.
 
@@ -23,7 +23,7 @@ No other proposes are in flight.
 ### Phase 1 — propose artefacts
 
 ```
-SCHEMA-V2-PROPOSE.md   [merged #151 — locked for code sequence]
+SCHEMA-V2-PROPOSE.md   [merged #151 — completed; propose/completed/]
         ↓
 HINTS-V3-PROPOSE.md    [merged #154 — implementing in PR-D]
 ```
@@ -35,13 +35,13 @@ HINTS-V3-PROPOSE.md    [merged #154 — implementing in PR-D]
 ### Phase 2 — plan + cursor-prompt artefacts
 
 ```
-plans/PLAN-SCHEMA-V2.md          [landed #155]
-plans/CURSOR-PROMPTS-SCHEMA-V2.md
+plans/completed/PLAN-SCHEMA-V2.md          [landed #155; PR-A/B/C done]
+plans/completed/CURSOR-PROMPTS-SCHEMA-V2.md
 plans/PLAN-HINTS-V3.md
 plans/CURSOR-PROMPTS-HINTS-V3.md
 ```
 
-SCHEMA-V2 Decision 29: `PLAN-SCHEMA-V2.md` + `CURSOR-PROMPTS-SCHEMA-V2.md` are merge gates for **PR-A** (satisfied when [#155](https://github.com/HumanBean17/java-codebase-rag/pull/155) is on `master`).
+SCHEMA-V2 Decision 29: plan + prompts merge gates for **PR-A** — satisfied ([#155](https://github.com/HumanBean17/java-codebase-rag/pull/155) on `master`; artefacts now under `plans/completed/`).
 
 By analogy: `PLAN-HINTS-V3.md` + `CURSOR-PROMPTS-HINTS-V3.md` are merge gates for **PR-D** (same PR).
 
@@ -76,4 +76,4 @@ No PR in this set is parallelizable.
 
 ## Maintenance
 
-Update this file when a propose enters draft, locks, or its code PRs land. After PR-D merges, collapse to "no proposes in flight" until the next effort starts.
+Update this file when a propose enters draft, locks, or its code PRs land. After PR-D merges, move HINTS-V3 artefacts to `completed/` and collapse to "no proposes in flight" until the next effort starts.

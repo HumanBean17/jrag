@@ -5,7 +5,7 @@ Status: **active (implementing)**. This plan implements
 
 Depends on:
 
-- [`propose/SCHEMA-V2-PROPOSE.md`](../propose/SCHEMA-V2-PROPOSE.md) — `EDGE_SCHEMA`, post-flip endpoints, `brownfield_resolver_sourced`, `typical_traversals`, `BROWNFIELD_RESOLVER_STRATEGY_SET` (PR-A–C on `master`).
+- [`propose/completed/SCHEMA-V2-PROPOSE.md`](../propose/completed/SCHEMA-V2-PROPOSE.md) — `EDGE_SCHEMA`, post-flip endpoints, `brownfield_resolver_sourced`, `typical_traversals`, `BROWNFIELD_RESOLVER_STRATEGY_SET` (PR-A–C on `master`).
 - **Code PR-D** runs only after SCHEMA-V2 **PR-A, PR-B, PR-C** are merged.
 - **Propose gate:** `HINTS-V3-PROPOSE.md` merged to `master` before SCHEMA-V2 **PR-A** starts (may stay GitHub `draft`).
 - **Lock gate:** `HINTS-V3-PROPOSE.md` `Status: locked` before **PR-D** merges.

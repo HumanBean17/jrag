@@ -1,12 +1,12 @@
 # Cursor task prompts — SCHEMA-V2
 
-Status: **active (implementing)**. Plan:
-[`plans/PLAN-SCHEMA-V2.md`](./PLAN-SCHEMA-V2.md). Propose:
-[`propose/SCHEMA-V2-PROPOSE.md`](../propose/SCHEMA-V2-PROPOSE.md). Sequence:
-[`docs/PROPOSES-ORDER.md`](../docs/PROPOSES-ORDER.md).
+Status: **completed** (reference template). Plan:
+[`plans/completed/PLAN-SCHEMA-V2.md`](./PLAN-SCHEMA-V2.md). Propose:
+[`propose/completed/SCHEMA-V2-PROPOSE.md`](../../propose/completed/SCHEMA-V2-PROPOSE.md). Sequence:
+[`docs/PROPOSES-ORDER.md`](../../docs/PROPOSES-ORDER.md).
 
 One prompt per code PR (**PR-A / PR-B / PR-C**). PR-D (hints) is in
-[`plans/CURSOR-PROMPTS-HINTS-V3.md`](./CURSOR-PROMPTS-HINTS-V3.md).
+[`plans/CURSOR-PROMPTS-HINTS-V3.md`](../CURSOR-PROMPTS-HINTS-V3.md).
 
 **Landing order:** PR-SCHEMA-V2-A → PR-SCHEMA-V2-B → PR-SCHEMA-V2-C. Do not start the next PR until the previous is merged to `master`.
 
@@ -24,13 +24,13 @@ One prompt per code PR (**PR-A / PR-B / PR-C**). PR-D (hints) is in
 
 **Branch:** `feat/schema-v2-edge-schema` off `master`.
 **Base:** `master` (with HINTS-V3 propose merged).
-**Plan section:** [`plans/PLAN-SCHEMA-V2.md`](./PLAN-SCHEMA-V2.md) § PR-A.
+**Plan section:** [`plans/completed/PLAN-SCHEMA-V2.md`](./PLAN-SCHEMA-V2.md) § PR-A.
 **PR title:** `feat(schema): add EDGE_SCHEMA to java_ontology, generate docs/EDGE-NAVIGATION.md, bump ontology to v14`
 
 **Attach (`@-files`):**
 
-- `@plans/PLAN-SCHEMA-V2.md` (PR-A only)
-- `@propose/SCHEMA-V2-PROPOSE.md` (§3.1, §3.5–§3.6, §6 PR-A, Appendix A, Decisions 6–9, 28–29, 31)
+- `@plans/completed/PLAN-SCHEMA-V2.md` (PR-A only)
+- `@propose/completed/SCHEMA-V2-PROPOSE.md` (§3.1, §3.5–§3.6, §6 PR-A, Appendix A, Decisions 6–9, 28–29, 31)
 - `@propose/HINTS-V3-PROPOSE.md` (§3.4–§3.5 `member_only` / `typical_traversals` — read only)
 - `@java_ontology.py`
 - `@build_ast_graph.py` (DDL constants — do not flip endpoints)
@@ -42,7 +42,7 @@ One prompt per code PR (**PR-A / PR-B / PR-C**). PR-D (hints) is in
 **Prompt:**
 
 ````
-You are implementing PR-SCHEMA-V2-A from `plans/PLAN-SCHEMA-V2.md` (the **PR-A** section).
+You are implementing PR-SCHEMA-V2-A from `plans/completed/PLAN-SCHEMA-V2.md` (the **PR-A** section).
 
 Read PR-A **File-by-file changes** and **Tests for PR-A** before coding. Plan wins over this prompt; propose supplies locked shapes.
 
@@ -107,13 +107,13 @@ Before PR open:
 
 **Branch:** `feat/schema-v2-http-calls-client-route` off `master` **after PR-A merged**.
 **Base:** `master` at merge commit of PR-A.
-**Plan section:** [`plans/PLAN-SCHEMA-V2.md`](./PLAN-SCHEMA-V2.md) § PR-B.
+**Plan section:** [`plans/completed/PLAN-SCHEMA-V2.md`](./PLAN-SCHEMA-V2.md) § PR-B.
 **PR title:** `feat(schema): HTTP_CALLS originates from Client, not Symbol`
 
 **Attach (`@-files`):**
 
-- `@plans/PLAN-SCHEMA-V2.md` (PR-B)
-- `@propose/SCHEMA-V2-PROPOSE.md` (§3.3–§3.4, §3.7, §3.10, §4 HTTP UCs, PR-B §6)
+- `@plans/completed/PLAN-SCHEMA-V2.md` (PR-B)
+- `@propose/completed/SCHEMA-V2-PROPOSE.md` (§3.3–§3.4, §3.7, §3.10, §4 HTTP UCs, PR-B §6)
 - `@java_ontology.py`
 - `@build_ast_graph.py`
 - `@kuzu_queries.py`
@@ -131,7 +131,7 @@ Before PR open:
 **Prompt:**
 
 ````
-You are implementing PR-SCHEMA-V2-B from `plans/PLAN-SCHEMA-V2.md` (**PR-B**).
+You are implementing PR-SCHEMA-V2-B from `plans/completed/PLAN-SCHEMA-V2.md` (**PR-B**).
 
 PR-A is on `master` (`EDGE_SCHEMA`, ontology 14, doc generator). Do not re-land PR-A work.
 
@@ -186,13 +186,13 @@ Before PR open: `.venv/bin/ruff check .` and `.venv/bin/python -m pytest tests -
 
 **Branch:** `feat/schema-v2-producer-async-calls` off `master` **after PR-B merged**.
 **Base:** `master` at merge commit of PR-B.
-**Plan section:** [`plans/PLAN-SCHEMA-V2.md`](./PLAN-SCHEMA-V2.md) § PR-C.
+**Plan section:** [`plans/completed/PLAN-SCHEMA-V2.md`](./PLAN-SCHEMA-V2.md) § PR-C.
 **PR title:** `feat(schema): introduce Producer node and route ASYNC_CALLS through it`
 
 **Attach (`@-files`):**
 
-- `@plans/PLAN-SCHEMA-V2.md` (PR-C)
-- `@propose/SCHEMA-V2-PROPOSE.md` (§3.2, §3.3–§3.4, §3.6–§3.9, §4 async UCs, PR-C §6)
+- `@plans/completed/PLAN-SCHEMA-V2.md` (PR-C)
+- `@propose/completed/SCHEMA-V2-PROPOSE.md` (§3.2, §3.3–§3.4, §3.6–§3.9, §4 async UCs, PR-C §6)
 - `@graph_enrich.py` (`AsyncProducerHint`)
 - `@java_ontology.py`
 - `@build_ast_graph.py`
@@ -209,7 +209,7 @@ Before PR open: `.venv/bin/ruff check .` and `.venv/bin/python -m pytest tests -
 **Prompt:**
 
 ````
-You are implementing PR-SCHEMA-V2-C from `plans/PLAN-SCHEMA-V2.md` (**PR-C**).
+You are implementing PR-SCHEMA-V2-C from `plans/completed/PLAN-SCHEMA-V2.md` (**PR-C**).
 
 PR-B is on `master` (HTTP_CALLS from Client). Do not revert HTTP shape.
 
