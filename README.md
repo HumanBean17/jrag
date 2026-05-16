@@ -386,7 +386,7 @@ Unresolved targets become **phantom** nodes (`resolved=false`, FQN guessed from 
 | `CALLS` | method → method | In-process call (confidence-scored, strategy-tagged). |
 | `EXPOSES` | type → route | Type exposes an HTTP/async route. |
 | `HTTP_CALLS` | client → route | Cross-service HTTP call (caller-side Client to target Route). |
-| `ASYNC_CALLS` | symbol → route | Cross-service async (Kafka, Rabbit, JMS, …). |
+| `ASYNC_CALLS` | producer → route | Cross-service async (Kafka, Rabbit, JMS, …). |
 
 JDK / Spring / Lombok callees are represented as **phantom** method symbols at index time. Caller/callee traversals default to `exclude_external=true` so those edges are filtered by FQN prefix without dropping them from the graph.
 
@@ -426,7 +426,7 @@ Resolution order for `microservice`:
 
 Current ontology version is **14**. Any index built before this version must be rebuilt via `cocoindex update ... --full-reprocess -f` or a full `java-codebase-rag reprocess` (no selective flags) so vectors and graph stay aligned. Until re-indexed, the server defensively JSON-decodes string-form list columns so nothing explodes, but filters like `array_contains` will not work.
 
-Ontology **14** introduces `EDGE_SCHEMA` in `java_ontology.py` as the canonical edge navigation schema (see `docs/EDGE-NAVIGATION.md`). **`HTTP_CALLS` is `Client → Route`** (SCHEMA-V2 PR-B). **`ASYNC_CALLS` remains `Symbol → Route` until PR-C**, which adds the `Producer` node, `DECLARES_PRODUCER`, and flips `ASYNC_CALLS` to `Producer → Route`. Run one full reprocess after upgrading through the SCHEMA-V2 sequence (or when you need the v14 ontology gate).
+Ontology **14** introduces `EDGE_SCHEMA` in `java_ontology.py` as the canonical edge navigation schema (see `docs/EDGE-NAVIGATION.md`). **`HTTP_CALLS` is `Client → Route`** (SCHEMA-V2 PR-B). **`ASYNC_CALLS` is `Producer → Route`** with `DECLARES_PRODUCER` (SCHEMA-V2 PR-C). Run one full reprocess after upgrading through the SCHEMA-V2 sequence (or when you need the v14 ontology gate).
 
 Ontology **13** materializes stored `OVERRIDES` edges between method Symbols (subtype override → supertype declaration, matching `signature` on a direct `IMPLEMENTS` / `EXTENDS` hop). `neighbors(edge_types=["OVERRIDES"])` traverses this relationship; `OVERRIDDEN_BY*` keys in `edge_summary` remain describe-time rollups only.
 

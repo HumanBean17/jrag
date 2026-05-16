@@ -226,6 +226,29 @@ def test_client_schema_persisted_and_queryable(tmp_path: Path) -> None:
     assert int(meta_rows[0][2] or 0) >= 1
 
 
+def test_graph_meta_counts_producers_and_declares_producer(tmp_path: Path) -> None:
+    db = _build(
+        tmp_path,
+        None,
+        {
+            "p/X.java": (
+                "package p; import com.example.rag.*; class X { "
+                "@CodebaseProducer(topic=\"meta-topic\") void m() {} }"
+            ),
+        },
+    )
+    tables = {row[1] for row in _rows(db, "CALL show_tables() RETURN *")}
+    assert "Producer" in tables
+    assert "DECLARES_PRODUCER" in tables
+    meta_rows = _rows(
+        db,
+        "MATCH (m:GraphMeta) RETURN m.producers_total, m.declares_producer_total, m.producers_by_kind",
+    )
+    assert meta_rows
+    assert int(meta_rows[0][0] or 0) >= 1
+    assert int(meta_rows[0][1] or 0) >= 1
+
+
 def teardown_module() -> None:
     _load_brownfield_overrides.cache_clear()
     collect_annotation_meta_chain.cache_clear()

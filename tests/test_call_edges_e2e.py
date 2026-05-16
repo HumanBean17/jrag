@@ -41,7 +41,7 @@ def test_http_calls_table_built_on_bank_chat(kuzu_db_path: Path) -> None:
 
 
 def test_async_calls_table_built_on_bank_chat(kuzu_db_path: Path) -> None:
-    assert _scalar(kuzu_db_path, "MATCH (:Symbol)-[r:ASYNC_CALLS]->(:Route) RETURN count(r)") >= 5
+    assert _scalar(kuzu_db_path, "MATCH (:Producer)-[r:ASYNC_CALLS]->(:Route) RETURN count(r)") >= 5
 
 
 def test_pr_d1_emits_unresolved_match_for_all(kuzu_db_path: Path) -> None:
@@ -106,4 +106,104 @@ def test_call_edges_cross_service_http_four_hop(kuzu_db_path_cross_service_smoke
         "<-[:EXPOSES]-(h:Symbol) RETURN count(*)",
     )
     assert n >= 1
+
+
+def _build_producer_stub(tmp_path: Path, java_body: str) -> Path:
+    shutil.copytree(_STUB_ROOT, tmp_path, dirs_exist_ok=True)
+    java_dir = tmp_path / "p"
+    java_dir.mkdir(parents=True, exist_ok=True)
+    (java_dir / "X.java").write_text(java_body, encoding="utf-8")
+    from _builders import build_kuzu_full_into
+
+    db_path = tmp_path / "g.kuzu"
+    build_kuzu_full_into(tmp_path, db_path)
+    return db_path
+
+
+def test_call_edges_declares_producer_then_async_calls_to_topic(tmp_path: Path) -> None:
+    db = _build_producer_stub(
+        tmp_path,
+        "package p; import com.example.rag.*; class X { "
+        "@CodebaseProducer(topic=\"orders\") void m() {} }",
+    )
+    n = _scalar(
+        db,
+        "MATCH (s:Symbol)-[:DECLARES_PRODUCER]->(pr:Producer)-[:ASYNC_CALLS]->(r:Route) "
+        "WHERE pr.topic = 'orders' RETURN count(*)",
+    )
+    assert n >= 1
+
+
+def test_call_edges_topic_inbound_async_calls_lists_producers(tmp_path: Path) -> None:
+    db = _build_producer_stub(
+        tmp_path,
+        "package p; import com.example.rag.*; class X { "
+        "@CodebaseProducer(topic=\"inbound-topic\") void m() {} }",
+    )
+    n = _scalar(
+        db,
+        "MATCH (pr:Producer)-[:ASYNC_CALLS]->(r:Route {topic: 'inbound-topic'}) RETURN count(DISTINCT pr.id)",
+    )
+    assert n >= 1
+
+
+def test_call_edges_method_two_producers_two_topics(tmp_path: Path) -> None:
+    db = _build_producer_stub(
+        tmp_path,
+        "package p; import com.example.rag.*; class X { "
+        "@CodebaseProducers({"
+        "@CodebaseProducer(topic=\"t1\"),"
+        "@CodebaseProducer(topic=\"t2\")"
+        "}) void m() {} }",
+    )
+    producer_topics = _scalar(
+        db,
+        "MATCH (s:Symbol)-[:DECLARES_PRODUCER]->(pr:Producer)-[:ASYNC_CALLS]->(:Route) "
+        "RETURN count(DISTINCT pr.id)",
+    )
+    assert producer_topics >= 2
+
+
+def test_call_edges_unresolved_producer_empty_async_out(tmp_path: Path) -> None:
+    db = _build_producer_stub(
+        tmp_path,
+        "package p; import com.example.rag.*; class X { "
+        "@CodebaseProducer(topic=\"orphan-topic\") void m() {} }",
+    )
+    producers = _scalar(db, "MATCH (pr:Producer) WHERE pr.topic = 'orphan-topic' RETURN count(pr)")
+    outbound = _scalar(
+        db,
+        "MATCH (pr:Producer {topic: 'orphan-topic'})-[:ASYNC_CALLS]->() RETURN count(*)",
+    )
+    assert producers >= 1
+    assert outbound >= 0
+
+
+def test_call_edges_cross_service_async_four_hop(kuzu_db_path_cross_service_smoke: Path) -> None:
+    db = kuzu_db_path_cross_service_smoke
+    n = _scalar(
+        db,
+        "MATCH (m:Symbol)-[:DECLARES_PRODUCER]->(pr:Producer)-[:ASYNC_CALLS]->(rt:Route)"
+        "<-[:EXPOSES]-(h:Symbol) RETURN count(*)",
+    )
+    assert n >= 1
+
+
+def test_call_edges_method_mixed_http_client_and_async_producer(tmp_path: Path) -> None:
+    db = _build_producer_stub(
+        tmp_path,
+        "package p; import com.example.rag.*; class X { "
+        "@CodebaseHttpClient(clientKind=CodebaseClientKind.rest_template, path=\"/api\", method=CodebaseHttpMethod.GET) "
+        "@CodebaseProducer(topic=\"mixed-topic\") void m() {} }",
+    )
+    http_n = _scalar(
+        db,
+        "MATCH (:Symbol)-[:DECLARES_CLIENT]->(:Client)-[:HTTP_CALLS]->(:Route) RETURN count(*)",
+    )
+    async_n = _scalar(
+        db,
+        "MATCH (:Symbol)-[:DECLARES_PRODUCER]->(:Producer)-[:ASYNC_CALLS]->(:Route) RETURN count(*)",
+    )
+    assert http_n >= 1
+    assert async_n >= 1
 

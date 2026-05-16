@@ -183,6 +183,29 @@ def test_find_route_by_path_prefix(kuzu_graph) -> None:
     assert isinstance(out.results, list)
 
 
+def test_find_kind_producer_returns_producer_nodes(kuzu_graph) -> None:
+    out = find_v2("producer", filter={}, graph=kuzu_graph)
+    if not out.results:
+        pytest.skip("no Producer nodes in session fixture")
+    assert out.success is True
+    assert all(r.kind == "producer" for r in out.results)
+
+
+def test_resolve_hint_kind_producer(kuzu_graph) -> None:
+    rows = kuzu_graph.list_producers(limit=10)
+    if not rows:
+        pytest.skip("no Producer nodes in session fixture")
+    topic = str(rows[0].get("topic") or "")
+    if not topic:
+        pytest.skip("producer row missing topic")
+    out = resolve_v2(topic, hint_kind="producer", graph=kuzu_graph)
+    assert out.success is True
+    assert out.status in {"one", "many"}
+    if out.status == "one":
+        assert out.node is not None
+        assert out.node.kind == "producer"
+
+
 def test_find_client_by_client_kind(kuzu_graph) -> None:
     out = find_v2("client", {"client_kind": "feign_method"}, graph=kuzu_graph)
     assert out.success is True
@@ -1133,6 +1156,7 @@ def test_resolve_wildcard_identifier_returns_none(kuzu_graph) -> None:
 def test_resolve_every_reason_in_closed_set_appears() -> None:
     from mcp_v2 import (
         _resolve_client_candidates,
+        _resolve_producer_candidates,
         _resolve_route_candidates,
         _resolve_symbol_candidates,
     )
@@ -1182,6 +1206,22 @@ def test_resolve_every_reason_in_closed_set_appears() -> None:
         "resolved": True,
         "source_layer": "builtin",
     }
+    producer_row = {
+        "id": "p:reasonhash000000",
+        "producer_kind": "kafka_send",
+        "topic": "orders.created",
+        "broker": "",
+        "direction": "produce",
+        "member_fqn": "com.reason.Producer#send()",
+        "member_id": "sym:reasonproducer",
+        "microservice": "svc",
+        "module": "mod",
+        "filename": "P.java",
+        "start_line": 1,
+        "end_line": 1,
+        "resolved": True,
+        "source_layer": "builtin",
+    }
 
     class ReasonGraph:
         def _rows(self, query: str, params: dict | None = None) -> list:
@@ -1205,6 +1245,12 @@ def test_resolve_every_reason_in_closed_set_appears() -> None:
                 return [client_row]
             if "WHERE c.target_service = $target" in query:
                 return [client_row]
+            if "WHERE p.id = $id" in query:
+                return [producer_row]
+            if "WHERE p.topic = $topic" in query:
+                return [producer_row]
+            if "p.topic STARTS WITH $topic" in query:
+                return [producer_row]
             return []
 
     g = ReasonGraph()  # type: ignore[arg-type]
@@ -1226,6 +1272,12 @@ def test_resolve_every_reason_in_closed_set_appears() -> None:
     for _node, reason, _spec in _resolve_client_candidates(g, "reasonsvc"):
         seen.add(reason)
     for _node, reason, _spec in _resolve_client_candidates(g, "reasonsvc /reason"):
+        seen.add(reason)
+    for _node, reason, _spec in _resolve_producer_candidates(g, "p:reasonhash000000"):
+        seen.add(reason)
+    for _node, reason, _spec in _resolve_producer_candidates(g, "orders.created"):
+        seen.add(reason)
+    for _node, reason, _spec in _resolve_producer_candidates(g, "orders"):
         seen.add(reason)
 
     assert seen == set(VALID_RESOLVE_REASONS)

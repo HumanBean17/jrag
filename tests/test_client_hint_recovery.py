@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch
 
-from build_ast_graph import GraphTables, pass6_match_edges, write_kuzu
+from build_ast_graph import GraphTables, _match_call_edge, pass6_match_edges, write_kuzu
 from kuzu_queries import KuzuGraph
 
 _FIXTURE = Path(__file__).resolve().parent / "fixtures" / "cross_service_smoke"
+_HTTP_CALLER = Path(__file__).resolve().parent / "fixtures" / "http_caller_smoke"
 
 
 def _build_tables() -> GraphTables:
@@ -82,6 +84,27 @@ def test_find_route_callers_still_returns_expected_feign_caller(tmp_path: Path) 
     )
     assert any(c.declaring_symbol_id == caller_id for c in callers)
     assert all(c.caller_node_kind == "client" for c in callers)
+
+
+def test_pass6_async_rematch_uses_producer_row_kind() -> None:
+    from _builders import build_graph_tables_to
+
+    tables = build_graph_tables_to(_HTTP_CALLER, max_pass=5)
+    producer = next(p for p in tables.producer_rows if p.producer_kind == "stream_bridge_send")
+    row = next(r for r in tables.async_call_rows if r.producer_id == producer.id)
+    assert row.match == "unresolved"
+    row.route_id = "missing:route:id"
+
+    seen_kinds: list[str] = []
+
+    def capture(call, routes, caller_microservice):
+        seen_kinds.append(call.client_kind)
+        return _match_call_edge(call, routes, caller_microservice)
+
+    with patch("build_ast_graph._match_call_edge", capture):
+        pass6_match_edges(tables, verbose=False)
+
+    assert "stream_bridge_send" in seen_kinds
 
 
 def test_missing_client_hint_falls_back_to_existing_unresolved_or_phantom_flow() -> None:

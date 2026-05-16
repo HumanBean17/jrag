@@ -23,6 +23,7 @@ _EDGE_TYPES = (
     "CALLS",
     "DECLARES",
     "DECLARES_CLIENT",
+    "DECLARES_PRODUCER",
     "EXPOSES",
     "EXTENDS",
     "HTTP_CALLS",
@@ -276,6 +277,25 @@ def test_search_describe_neighbors_chain_end_to_end(kuzu_graph, monkeypatch) -> 
     neighbors_out = neighbors_v2(top_symbol_id, direction="in", edge_types=["CALLS"], graph=kuzu_graph)
     assert neighbors_out.success is True
     assert neighbors_out.results
+
+
+def test_describe_type_rollups_include_declares_producer(kuzu_graph) -> None:
+    rows = kuzu_graph._rows(  # noqa: SLF001
+        "MATCH (t:Symbol)-[:DECLARES]->(m:Symbol)-[e:DECLARES_PRODUCER]->(:Producer) "
+        "WHERE t.kind IN $kinds "
+        "RETURN t.id AS id, count(e) AS n ORDER BY n DESC LIMIT 1",
+        {"kinds": _ROLLUP_TYPE_KINDS},
+    )
+    if not rows:
+        pytest.skip("no type with DECLARES_PRODUCER members in fixture")
+    tid = str(rows[0]["id"])
+    n = int(rows[0]["n"] or 0)
+    assert n >= 1
+    out = describe_v2(tid, graph=kuzu_graph)
+    assert out.success is True
+    assert out.record is not None
+    assert out.record.edge_summary is not None
+    assert out.record.edge_summary["DECLARES.DECLARES_PRODUCER"]["out"] == n
 
 
 def test_describe_class_with_brownfield_clients_emits_composed_key(kuzu_graph) -> None:

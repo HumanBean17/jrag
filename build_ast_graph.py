@@ -64,7 +64,7 @@ from graph_enrich import (
     symbol_id,
 )
 from path_filtering import LayeredIgnore, iter_java_source_files
-from java_ontology import VALID_CLIENT_KINDS, VALID_HTTP_CALL_MATCHES
+from java_ontology import VALID_CLIENT_KINDS, VALID_HTTP_CALL_MATCHES, VALID_PRODUCER_KINDS
 
 log = logging.getLogger(__name__)
 
@@ -255,7 +255,7 @@ class HttpCallRow:
 
 @dataclass
 class AsyncCallRow:
-    symbol_id: str
+    producer_id: str
     route_id: str
     confidence: float
     strategy: str
@@ -293,10 +293,43 @@ class DeclaresClientRow:
 
 
 @dataclass
+class ProducerRow:
+    id: str
+    producer_kind: str
+    topic: str
+    broker: str
+    direction: str
+    member_fqn: str
+    member_id: str
+    microservice: str
+    module: str
+    filename: str
+    start_line: int
+    end_line: int
+    resolved: bool
+    source_layer: str
+
+
+@dataclass
+class DeclaresProducerRow:
+    symbol_id: str
+    producer_id: str
+    confidence: float
+    strategy: str
+
+
+@dataclass
 class ClientExtractionStats:
     clients_total: int = 0
     declares_client_total: int = 0
     clients_by_kind: dict[str, int] = field(default_factory=lambda: defaultdict(int))
+
+
+@dataclass
+class ProducerExtractionStats:
+    producers_total: int = 0
+    declares_producer_total: int = 0
+    producers_by_kind: dict[str, int] = field(default_factory=lambda: defaultdict(int))
 
 
 @dataclass
@@ -336,10 +369,13 @@ class GraphTables:
     async_call_rows: list[AsyncCallRow] = field(default_factory=list)
     client_rows: list[ClientRow] = field(default_factory=list)
     declares_client_rows: list[DeclaresClientRow] = field(default_factory=list)
+    producer_rows: list[ProducerRow] = field(default_factory=list)
+    declares_producer_rows: list[DeclaresProducerRow] = field(default_factory=list)
     overrides_rows: list[DeclaresRow] = field(default_factory=list)
     route_stats: RouteExtractionStats = field(default_factory=RouteExtractionStats)
     call_edge_stats: CallEdgeStats = field(default_factory=CallEdgeStats)
     client_stats: ClientExtractionStats = field(default_factory=ClientExtractionStats)
+    producer_stats: ProducerExtractionStats = field(default_factory=ProducerExtractionStats)
     methods_by_type: dict[str, list[MemberEntry]] = field(default_factory=dict)
     parse_errors: int = 0
     skipped_files: int = 0
@@ -1377,6 +1413,19 @@ def _client_id(
     return f"c:{hashlib.sha1(key.encode()).hexdigest()[:16]}"
 
 
+def _producer_id(
+    *,
+    microservice: str,
+    member_fqn: str,
+    producer_kind: str,
+    topic: str,
+) -> str:
+    # Topic-level identity per method+kind; broker is intentionally omitted so the same
+    # resolved topic on one method shares one Producer node across call sites.
+    key = f"{microservice}|{member_fqn}|{producer_kind}|{topic}"
+    return f"p:{hashlib.sha1(key.encode()).hexdigest()[:16]}"
+
+
 def _client_source_layer(strategy: str) -> str:
     if strategy in {"layer_a_meta", "layer_b_ann", "layer_b_fqn", "layer_c_source"}:
         return strategy
@@ -1386,6 +1435,16 @@ def _client_source_layer(strategy: str) -> str:
         return "builtin"
     if strategy != "builtin":
         log.warning("unknown client source strategy %r, falling back to builtin", strategy)
+    return "builtin"
+
+
+def _producer_source_layer(strategy: str) -> str:
+    if strategy in {"layer_a_meta", "layer_b_ann", "layer_b_fqn", "layer_c_source"}:
+        return strategy
+    if strategy in VALID_PRODUCER_KINDS:
+        return "builtin"
+    if strategy != "builtin":
+        log.warning("unknown producer source strategy %r, falling back to builtin", strategy)
     return "builtin"
 
 
@@ -1562,7 +1621,9 @@ def pass5_imperative_edges(
     http_seen: set[tuple[str, str]] = set()
     async_seen: set[tuple[str, str]] = set()
     client_seen: set[str] = set()
+    producer_seen: set[str] = set()
     declares_client_seen: set[tuple[str, str]] = set()
+    declares_producer_seen: set[tuple[str, str]] = set()
     route_rows = list(tables.routes_rows)
 
     def _micro_factor(member: MemberEntry) -> float:
@@ -1710,6 +1771,44 @@ def pass5_imperative_edges(
                     tables.call_edge_stats.http_calls_by_client_kind[call.client_kind] += 1
                     tables.call_edge_stats.http_calls_by_strategy[strategy] += 1
                 elif call.channel == "async":
+                    topic_atom = (call.topic_call or "").strip()
+                    pid = _producer_id(
+                        microservice=member.microservice,
+                        member_fqn=call.method_fqn,
+                        producer_kind=call.client_kind,
+                        topic=topic_atom,
+                    )
+                    if pid not in producer_seen:
+                        producer_seen.add(pid)
+                        tables.producer_rows.append(
+                            ProducerRow(
+                                id=pid,
+                                producer_kind=call.client_kind,
+                                topic=topic_atom,
+                                broker=call.broker_call,
+                                direction="producer",
+                                member_fqn=call.method_fqn,
+                                member_id=member.node_id,
+                                microservice=member.microservice,
+                                module=member.module,
+                                filename=call.filename,
+                                start_line=call.start_line,
+                                end_line=call.end_line,
+                                resolved=call.resolved,
+                                source_layer=_producer_source_layer(call.resolution_strategy),
+                            ),
+                        )
+                    dpkey = (member.node_id, pid)
+                    if dpkey not in declares_producer_seen:
+                        declares_producer_seen.add(dpkey)
+                        tables.declares_producer_rows.append(
+                            DeclaresProducerRow(
+                                symbol_id=member.node_id,
+                                producer_id=pid,
+                                confidence=call.confidence_base,
+                                strategy=call.resolution_strategy,
+                            ),
+                        )
                     rid = _phantom_async_route_id(call)
                     _append_route(
                         RouteRow(
@@ -1733,7 +1832,7 @@ def pass5_imperative_edges(
                             source_layer="builtin",
                         )
                     )
-                    key = (member.node_id, rid)
+                    key = (pid, rid)
                     if key in async_seen:
                         continue
                     async_seen.add(key)
@@ -1741,7 +1840,7 @@ def pass5_imperative_edges(
                     strategy = call.resolution_strategy
                     tables.async_call_rows.append(
                         AsyncCallRow(
-                            symbol_id=member.node_id,
+                            producer_id=pid,
                             route_id=rid,
                             confidence=conf,
                             strategy=strategy,
@@ -1765,6 +1864,16 @@ def pass5_imperative_edges(
         tables.client_stats.clients_by_kind = defaultdict(int)
         for row in tables.client_rows:
             tables.client_stats.clients_by_kind[row.client_kind] += 1
+        tables.producer_rows = sorted(tables.producer_rows, key=lambda p: p.id)
+        tables.declares_producer_rows = sorted(
+            tables.declares_producer_rows,
+            key=lambda e: (e.symbol_id, e.producer_id),
+        )
+        tables.producer_stats.producers_total = len(tables.producer_rows)
+        tables.producer_stats.declares_producer_total = len(tables.declares_producer_rows)
+        tables.producer_stats.producers_by_kind = defaultdict(int)
+        for row in tables.producer_rows:
+            tables.producer_stats.producers_by_kind[row.producer_kind] += 1
         brownfield_strategies = frozenset(
             (
                 "layer_b_ann",
@@ -1915,6 +2024,7 @@ def pass6_match_edges(
     all_routes = [r for r in tables.routes_rows if r.microservice]
     member_by_id = {m.node_id: m for m in tables.members}
     clients_by_id = {c.id: c for c in tables.client_rows}
+    producers_by_id = {p.id: p for p in tables.producer_rows}
     client_hints_by_member: dict[str, list[ClientRow]] = defaultdict(list)
     for edge in tables.declares_client_rows:
         client = clients_by_id.get(edge.client_id)
@@ -2030,13 +2140,15 @@ def pass6_match_edges(
         for row in tables.async_call_rows:
             if row.match != "unresolved":
                 continue
-            member = member_by_id.get(row.symbol_id)
+            producer = producers_by_id.get(row.producer_id)
+            member = member_by_id.get(producer.member_id) if producer else None
             base = row.confidence / max(1e-9, (0.3 * _micro_factor(member)))
             src_route = route_by_id.get(row.route_id)
+            async_kind = producer.producer_kind if producer else "kafka_send"
             call = OutgoingCallDecl(
                 method_fqn=f"{member.parent_fqn}#{member.decl.signature}" if member else "",
                 method_sig=member.decl.signature if member else "",
-                client_kind="kafka_send",
+                client_kind=async_kind,
                 channel="async",
                 feign_target_name="",
                 feign_target_url="",
@@ -2135,6 +2247,9 @@ _SCHEMA_META = (
     "clients_total INT64, "
     "declares_client_total INT64, "
     "clients_by_kind STRING, "
+    "producers_total INT64, "
+    "declares_producer_total INT64, "
+    "producers_by_kind STRING, "
     "http_calls_total INT64, "
     "async_calls_total INT64, "
     "http_calls_by_strategy STRING, "
@@ -2174,6 +2289,15 @@ _SCHEMA_CLIENT = (
     "PRIMARY KEY(id))"
 )
 
+_SCHEMA_PRODUCER = (
+    "CREATE NODE TABLE Producer("
+    "id STRING, producer_kind STRING, topic STRING, broker STRING, direction STRING, "
+    "member_fqn STRING, member_id STRING, "
+    "microservice STRING, module STRING, filename STRING, "
+    "start_line INT64, end_line INT64, resolved BOOLEAN, source_layer STRING, "
+    "PRIMARY KEY(id))"
+)
+
 _SCHEMA_EXTENDS = (
     "CREATE REL TABLE EXTENDS(FROM Symbol TO Symbol, "
     "dst_name STRING, dst_fqn STRING, resolved BOOLEAN)"
@@ -2202,13 +2326,17 @@ _SCHEMA_DECLARES_CLIENT = (
     "CREATE REL TABLE DECLARES_CLIENT(FROM Symbol TO Client, "
     "confidence DOUBLE, strategy STRING)"
 )
+_SCHEMA_DECLARES_PRODUCER = (
+    "CREATE REL TABLE DECLARES_PRODUCER(FROM Symbol TO Producer, "
+    "confidence DOUBLE, strategy STRING)"
+)
 _SCHEMA_HTTP_CALLS = (
     "CREATE REL TABLE HTTP_CALLS(FROM Client TO Route, "
     "confidence DOUBLE, strategy STRING, "
     "method_call STRING, raw_uri STRING, match STRING)"
 )
 _SCHEMA_ASYNC_CALLS = (
-    "CREATE REL TABLE ASYNC_CALLS(FROM Symbol TO Route, "
+    "CREATE REL TABLE ASYNC_CALLS(FROM Producer TO Route, "
     "confidence DOUBLE, strategy STRING, "
     "direction STRING, raw_topic STRING, match STRING)"
 )
@@ -2217,6 +2345,7 @@ _SCHEMA_ASYNC_CALLS = (
 def _drop_all(conn: kuzu.Connection) -> None:
     for stmt in (
         "DROP TABLE IF EXISTS DECLARES_CLIENT",
+        "DROP TABLE IF EXISTS DECLARES_PRODUCER",
         "DROP TABLE IF EXISTS HTTP_CALLS",
         "DROP TABLE IF EXISTS ASYNC_CALLS",
         "DROP TABLE IF EXISTS EXPOSES",
@@ -2229,6 +2358,7 @@ def _drop_all(conn: kuzu.Connection) -> None:
         "DROP TABLE IF EXISTS Symbol",
         "DROP TABLE IF EXISTS Route",
         "DROP TABLE IF EXISTS Client",
+        "DROP TABLE IF EXISTS Producer",
         "DROP TABLE IF EXISTS GraphMeta",
     ):
         try:
@@ -2242,6 +2372,7 @@ def _create_schema(conn: kuzu.Connection) -> None:
         _SCHEMA_NODE,
         _SCHEMA_ROUTE,
         _SCHEMA_CLIENT,
+        _SCHEMA_PRODUCER,
         _SCHEMA_META,
         _SCHEMA_EXTENDS,
         _SCHEMA_IMPLEMENTS,
@@ -2251,6 +2382,7 @@ def _create_schema(conn: kuzu.Connection) -> None:
         _SCHEMA_CALLS,
         _SCHEMA_EXPOSES,
         _SCHEMA_DECLARES_CLIENT,
+        _SCHEMA_DECLARES_PRODUCER,
         _SCHEMA_HTTP_CALLS,
         _SCHEMA_ASYNC_CALLS,
     ):
@@ -2402,14 +2534,27 @@ _CREATE_DECLARES_CLIENT = (
     "MATCH (s:Symbol {id: $sid}), (c:Client {id: $cid}) "
     "CREATE (s)-[:DECLARES_CLIENT {confidence: $confidence, strategy: $strategy}]->(c)"
 )
+_CREATE_PRODUCER = (
+    "CREATE (:Producer {"
+    "id: $id, producer_kind: $producer_kind, topic: $topic, broker: $broker, "
+    "direction: $direction, member_fqn: $member_fqn, member_id: $member_id, "
+    "microservice: $microservice, module: $module, filename: $filename, "
+    "start_line: $start_line, end_line: $end_line, resolved: $resolved, "
+    "source_layer: $source_layer"
+    "})"
+)
+_CREATE_DECLARES_PRODUCER = (
+    "MATCH (s:Symbol {id: $sid}), (p:Producer {id: $pid}) "
+    "CREATE (s)-[:DECLARES_PRODUCER {confidence: $confidence, strategy: $strategy}]->(p)"
+)
 _CREATE_HTTP_CALL = (
     "MATCH (c:Client {id: $cid}), (r:Route {id: $rid}) "
     "CREATE (c)-[:HTTP_CALLS {confidence: $confidence, strategy: $strategy, "
     "method_call: $method_call, raw_uri: $raw_uri, match: $match}]->(r)"
 )
 _CREATE_ASYNC_CALL = (
-    "MATCH (s:Symbol {id: $sid}), (r:Route {id: $rid}) "
-    "CREATE (s)-[:ASYNC_CALLS {confidence: $confidence, strategy: $strategy, "
+    "MATCH (p:Producer {id: $pid}), (r:Route {id: $rid}) "
+    "CREATE (p)-[:ASYNC_CALLS {confidence: $confidence, strategy: $strategy, "
     "direction: $direction, raw_topic: $raw_topic, match: $match}]->(r)"
 )
 
@@ -2542,6 +2687,15 @@ def _write_routes_and_exposes(conn: kuzu.Connection, tables: GraphTables) -> Non
             "confidence": row.confidence,
             "strategy": row.strategy,
         })
+    for row in tables.producer_rows:
+        conn.execute(_CREATE_PRODUCER, asdict(row))
+    for row in tables.declares_producer_rows:
+        conn.execute(_CREATE_DECLARES_PRODUCER, {
+            "sid": row.symbol_id,
+            "pid": row.producer_id,
+            "confidence": row.confidence,
+            "strategy": row.strategy,
+        })
     for row in tables.http_call_rows:
         conn.execute(_CREATE_HTTP_CALL, {
             "cid": row.client_id,
@@ -2554,7 +2708,7 @@ def _write_routes_and_exposes(conn: kuzu.Connection, tables: GraphTables) -> Non
         })
     for row in tables.async_call_rows:
         conn.execute(_CREATE_ASYNC_CALL, {
-            "sid": row.symbol_id,
+            "pid": row.producer_id,
             "rid": row.route_id,
             "confidence": row.confidence,
             "strategy": row.strategy,
@@ -2576,6 +2730,7 @@ def _write_meta(conn: kuzu.Connection, tables: GraphTables, source_root: Path) -
     routes_fw = dict(sorted(st.by_framework.items()))
     call_stats = tables.call_edge_stats
     client_stats = tables.client_stats
+    producer_stats = tables.producer_stats
     http_by_strategy = dict(sorted(call_stats.http_calls_by_strategy.items()))
     async_by_strategy = dict(sorted(call_stats.async_calls_by_strategy.items()))
     http_match = dict(sorted(call_stats.http_calls_match_breakdown.items()))
@@ -2606,11 +2761,14 @@ def _write_meta(conn: kuzu.Connection, tables: GraphTables, source_root: Path) -
         "exposes": len(tables.exposes_rows),
         "clients": len(tables.client_rows),
         "declares_client": len(tables.declares_client_rows),
+        "producers": len(tables.producer_rows),
+        "declares_producer": len(tables.declares_producer_rows),
         "http_calls": len(tables.http_call_rows),
         "async_calls": len(tables.async_call_rows),
     }
     routes_layer = dict(sorted(st.routes_by_layer.items()))
     clients_by_kind = dict(sorted(client_stats.clients_by_kind.items()))
+    producers_by_kind = dict(sorted(producer_stats.producers_by_kind.items()))
     conn.execute(
         "CREATE (:GraphMeta {key: $k, ontology_version: $ov, built_at: $t, "
         "source_root: $sr, counts_json: $cj, parse_errors: $pe, "
@@ -2619,6 +2777,8 @@ def _write_meta(conn: kuzu.Connection, tables: GraphTables, source_root: Path) -
         "routes_from_brownfield_pct: $routes_from_brownfield_pct, routes_by_layer: $routes_by_layer, "
         "clients_total: $clients_total, declares_client_total: $declares_client_total, "
         "clients_by_kind: $clients_by_kind, "
+        "producers_total: $producers_total, declares_producer_total: $declares_producer_total, "
+        "producers_by_kind: $producers_by_kind, "
         "http_calls_total: $http_calls_total, async_calls_total: $async_calls_total, "
         "http_calls_by_strategy: $http_calls_by_strategy, async_calls_by_strategy: $async_calls_by_strategy, "
         "http_calls_resolved_pct: $http_calls_resolved_pct, async_calls_resolved_pct: $async_calls_resolved_pct, "
@@ -2646,6 +2806,9 @@ def _write_meta(conn: kuzu.Connection, tables: GraphTables, source_root: Path) -
             "clients_total": int(client_stats.clients_total),
             "declares_client_total": int(client_stats.declares_client_total),
             "clients_by_kind": json.dumps(clients_by_kind),
+            "producers_total": int(producer_stats.producers_total),
+            "declares_producer_total": int(producer_stats.declares_producer_total),
+            "producers_by_kind": json.dumps(producers_by_kind),
             "http_calls_total": call_stats.http_calls_total,
             "async_calls_total": call_stats.async_calls_total,
             "http_calls_by_strategy": json.dumps(http_by_strategy),

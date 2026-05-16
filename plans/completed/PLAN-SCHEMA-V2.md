@@ -1,13 +1,13 @@
 # Plan: SCHEMA-V2 (edge navigation schema, HTTP/ASYNC caller-side flips, Producer node)
 
-Status: **active (implementing)**. This plan implements
-[`propose/SCHEMA-V2-PROPOSE.md`](../propose/SCHEMA-V2-PROPOSE.md).
+Status: **completed** — PR-A/B/C landed; PR-D in [`plans/PLAN-HINTS-V3.md`](../PLAN-HINTS-V3.md). Implements
+[`propose/completed/SCHEMA-V2-PROPOSE.md`](../../propose/completed/SCHEMA-V2-PROPOSE.md).
 
 Depends on:
 
 - [`propose/HINTS-V3-PROPOSE.md`](../propose/HINTS-V3-PROPOSE.md) **merged to `master`** before **PR-A** implementation starts (SCHEMA-V2 Decision 30; GitHub PR may stay `draft`).
 - [`docs/PROPOSES-ORDER.md`](../docs/PROPOSES-ORDER.md) for lock/merge sequence across proposes and code PRs.
-- **PR-D (hints v3)** is specified in [`plans/PLAN-HINTS-V3.md`](./PLAN-HINTS-V3.md) — not repeated here beyond overview/tracking.
+- **PR-D (hints v3)** is specified in [`plans/PLAN-HINTS-V3.md`](../PLAN-HINTS-V3.md) — not repeated here beyond overview/tracking.
 
 ## Goal
 
@@ -34,7 +34,7 @@ Depends on:
 | PR-A | `EDGE_SCHEMA`, doc generator, CI invariants, `BROWNFIELD_RESOLVER_STRATEGY_SET`, v14 bump (pre-flip DDL) | **13 → 14** | `typical_traversals` map shape (hints PR-A contract); strategy-set union completeness; v13 refusal gate timing | `test_schema_consistency.py`, `test_edge_navigation_doc.py`, ontology gate | PR-B/C/D |
 | PR-B | `HTTP_CALLS` flip + downstream Cypher/API + HTTP docs | Uses v14 (no second bump) | `grep` completeness for `HTTP_CALLS`; `HttpCallRow` key change; MCP/PR-analysis two-hop queries | `test_call_edges_e2e.py`, `test_kuzu_queries.py`, `test_pr_analysis.py`, brownfield HTTP | PR-C/D |
 | PR-C | `Producer`, `DECLARES_PRODUCER`, `ASYNC_CALLS` flip, GraphMeta, MCP producer parity, describe rollups, async docs | Uses v14 | Producer field grounding vs `Client` copy-paste; pass5 materialization order; `find`/`resolve` kind union expansion | `test_call_edges_e2e.py`, `test_brownfield_clients.py`, `test_mcp_v2.py`, `test_client_node_extraction.py`, describe rollups | PR-D |
-| PR-D | Hints v3 (empty `neighbors`) | **No** (query-time) | See [`plans/PLAN-HINTS-V3.md`](./PLAN-HINTS-V3.md) | `test_mcp_hints.py` HV* | PR-A/B/C |
+| PR-D | Hints v3 (empty `neighbors`) | **No** (query-time) | See [`plans/PLAN-HINTS-V3.md`](../PLAN-HINTS-V3.md) | `test_mcp_hints.py` HV* | PR-A/B/C |
 
 **Landing order:** **PR-A → PR-B → PR-C → PR-D** (PR-D plan is separate; no parallel code PRs).
 
@@ -358,7 +358,7 @@ with every hit accounted for (fixed or justified).
 
 - `Consumer` node, `NODE_SCHEMA`, DDL codegen from `EDGE_SCHEMA`.
 - Multi-target Client/Producer nodes; materialized composite edges.
-- Hints v3 implementation (PR-D — [`plans/PLAN-HINTS-V3.md`](./PLAN-HINTS-V3.md)).
+- Hints v3 implementation (PR-D — [`plans/PLAN-HINTS-V3.md`](../PLAN-HINTS-V3.md)).
 - Ontology **15** or second re-index.
 - Ranking / incremental rebuild proposes (`RANKING-MICROSERVICE`, `TIER2-INCREMENTAL-REBUILD`).
 - Special-casing `tests/bank-chat-system/` in production code.
@@ -370,15 +370,13 @@ with every hit accounted for (fixed or justified).
 3. `find_route_callers` / `trace_request_flow` / PR-analysis / impact analysis use caller-side two-hop traversals.
 4. MCP `find`/`resolve` support `producer`; type-level `describe` exposes DECLARES_PRODUCER rollups.
 5. PR-D (hints v3) landed per HINTS plan — empty wrong-kind `neighbors` queries are guided.
-6. `propose/SCHEMA-V2-PROPOSE.md` moved to `propose/completed/` when **PR-D** merges (whole user-visible effort done).
+6. `propose/completed/SCHEMA-V2-PROPOSE.md` and this plan moved to `completed/` after PR-C (PR-D tracked separately).
 
 # Tracking
 
-- Artefacts (`PLAN-SCHEMA-V2`, `CURSOR-PROMPTS-SCHEMA-V2`, `PLAN-HINTS-V3`, `CURSOR-PROMPTS-HINTS-V3`): _pending_
-- `PR-A`: _pending_
-- `PR-B`: _pending_
-- `PR-C`: _pending_
-- `PR-D`: _see PLAN-HINTS-V3_
+- Artefacts (`PLAN-SCHEMA-V2`, `CURSOR-PROMPTS-SCHEMA-V2`): **done** (this directory)
+- `PR-A` / `PR-B` / `PR-C`: **landed**
+- `PR-D`: _see [`plans/PLAN-HINTS-V3.md`](../PLAN-HINTS-V3.md)_
 
 ## Cursor handoff
 
