@@ -229,7 +229,7 @@ Edit `claude_desktop_config.json` (macOS: `~/Library/Application Support/Claude/
 
 ### Driving the MCP from an agent
 
-- **[`docs/AGENT-GUIDE.md`](./docs/AGENT-GUIDE.md)** — copy-paste into `QWEN.md` / `CLAUDE.md` / `AGENTS.md`. Covers the five MCP tools, the shared `NodeFilter`, the edge-type taxonomy, required `neighbors` arguments, the ontology glossary (currently **v13**), the recovery playbook, and slash-style aliases.
+- **[`docs/AGENT-GUIDE.md`](./docs/AGENT-GUIDE.md)** — copy-paste into `QWEN.md` / `CLAUDE.md` / `AGENTS.md`. Covers the five MCP tools, the shared `NodeFilter`, the edge-type taxonomy, required `neighbors` arguments, the ontology glossary (currently **v14**), the recovery playbook, and slash-style aliases.
 - **[`docs/skills/java-codebase-explore.md`](./docs/skills/java-codebase-explore.md)** — exploration **strategy** (missions, fallbacks, anti-capabilities, stopping rules); AGENT-GUIDE remains the **operating manual** for tool shapes and recovery.
 - **[`docs/MANUAL-VERIFICATION-CHECKLIST.md`](./docs/MANUAL-VERIFICATION-CHECKLIST.md)** — 7-phase agent-driven verification you run after indexing your real project. Each item has a copy-paste prompt and calibration data from `tests/bank-chat-system`.
 - **[`automation/cursor_propose_only/README.md`](./automation/cursor_propose_only/README.md)** — optional proposal orchestration workflow (single-command autopilot, planning bundles, and automated execution/review loops).
@@ -361,7 +361,7 @@ For `reprocess`, the pipeline runs `cocoindex` with `cwd` set to the bundle dire
 
 ## 6. Graph layer
 
-A deterministic property graph derived from tree-sitter Java parsing lives next to the LanceDB tables under the index directory (default `${JAVA_CODEBASE_RAG_INDEX_DIR:-./.java-codebase-rag}/code_graph.kuzu`). Current ontology version: **13**.
+A deterministic property graph derived from tree-sitter Java parsing lives next to the LanceDB tables under the index directory (default `${JAVA_CODEBASE_RAG_INDEX_DIR:-./.java-codebase-rag}/code_graph.kuzu`). Current ontology version: **14** (see [`docs/EDGE-NAVIGATION.md`](./docs/EDGE-NAVIGATION.md) for edge shapes).
 
 ### Node kinds
 
@@ -424,7 +424,9 @@ Resolution order for `microservice`:
 
 ### Re-index required when ontology changes
 
-Current ontology version is **13**. Any index built before this version must be rebuilt via `cocoindex update ... --full-reprocess -f` or a full `java-codebase-rag reprocess` (no selective flags) so vectors and graph stay aligned. Until re-indexed, the server defensively JSON-decodes string-form list columns so nothing explodes, but filters like `array_contains` will not work.
+Current ontology version is **14**. Any index built before this version must be rebuilt via `cocoindex update ... --full-reprocess -f` or a full `java-codebase-rag reprocess` (no selective flags) so vectors and graph stay aligned. Until re-indexed, the server defensively JSON-decodes string-form list columns so nothing explodes, but filters like `array_contains` will not work.
+
+Ontology **14** introduces `EDGE_SCHEMA` in `java_ontology.py` as the canonical edge navigation schema (see `docs/EDGE-NAVIGATION.md`). **This PR-A bump alone does not flip `HTTP_CALLS` / `ASYNC_CALLS` endpoints** — graphs rebuilt at v14 still use `Symbol → Route` for those edges until SCHEMA-V2 PR-B/C land. **PR-B** flips `HTTP_CALLS` to `Client → Route`; **PR-C** adds the `Producer` node, `DECLARES_PRODUCER`, and flips `ASYNC_CALLS` to `Producer → Route`. Run one full reprocess after upgrading through the SCHEMA-V2 sequence (or when you need the v14 ontology gate).
 
 Ontology **13** materializes stored `OVERRIDES` edges between method Symbols (subtype override → supertype declaration, matching `signature` on a direct `IMPLEMENTS` / `EXTENDS` hop). `neighbors(edge_types=["OVERRIDES"])` traverses this relationship; `OVERRIDDEN_BY*` keys in `edge_summary` remain describe-time rollups only.
 

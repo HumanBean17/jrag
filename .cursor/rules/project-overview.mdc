@@ -22,7 +22,7 @@ when needed.
   MCP tools (`search` / `find` / `describe` / `neighbors` / `resolve`; response
   `hints` + pagination echo on locate tools — see README), `java-codebase-rag` CLI,
   "Re-index required" callouts. The current
-  `ontology_version` is **13** (material `OVERRIDES` Symbol→Symbol edges: subtype
+  `ontology_version` is **14** (`EDGE_SCHEMA` in `java_ontology.py`; material `OVERRIDES` Symbol→Symbol edges: subtype
   instance method → supertype declaration with matching `signature`, one
   `IMPLEMENTS`/`EXTENDS` hop; valid `neighbors` `EdgeType`). Builds on v12
   (`@CodebaseHttpClient` rename + shared `CodebaseHttpMethod` enum; inbound

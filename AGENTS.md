@@ -11,7 +11,7 @@ for tools that don't read `.cursor/rules/`.
  MCP tool list (`search` / `find` / `describe` / `neighbors` / `resolve`;
  response `hints` + pagination echo — see README),
  CLI ops (`java-codebase-rag --help`), and "Re-index required" callouts.
- **`ontology_version` is currently 13** (stored `OVERRIDES` method→method edges traversable via `neighbors`; plus v12 HTTP brownfield rename, `CodebaseHttpMethod` enum, inbound HTTP layer-C replace — see README graph section).
+ **`ontology_version` is currently 14** (`EDGE_SCHEMA` in `java_ontology.py`; v14 re-index required; HTTP/ASYNC caller-side endpoint flips ship in SCHEMA-V2 PR-B/C — see README graph section and `docs/EDGE-NAVIGATION.md`).
 - [`docs/JAVA-CODEBASE-RAG-CLI.md`](./docs/JAVA-CODEBASE-RAG-CLI.md) — operator guide for the `java-codebase-rag` CLI (`init` / `increment` / `reprocess` / `erase`, `meta`, `tables`, `diagnose-ignore`, `analyze-pr`; hidden `refresh` alias → `reprocess` — see that doc).
 - `CODEBASE_REQUIREMENTS.md` — Java-repo assumptions and tuning map.
 - **`propose/`** — design proposes. **In-flight** work is **`propose/*.md`**

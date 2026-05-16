@@ -12,10 +12,11 @@
 > `neighbors` arguments, pass stringified JSON, or use vector search for
 > questions the graph answers exactly. This guide keeps them on the rails.
 >
-> Calibrated against ontology version **13** (see `ast_java.ONTOLOGY_VERSION` /
-> `java_ontology.py` valid sets): stored `OVERRIDES` Symbol→Symbol edges (subtype
-> override → supertype declaration, matching `signature`, one `IMPLEMENTS`/`EXTENDS`
-> hop) and `neighbors(edge_types=["OVERRIDES"])`. Still includes v12 HTTP brownfield
+> Calibrated against ontology version **14** (see `ast_java.ONTOLOGY_VERSION` /
+> `java_ontology.EDGE_SCHEMA` + valid sets): canonical edge navigation schema in
+> `docs/EDGE-NAVIGATION.md`. v14 re-index required; PR-B flips `HTTP_CALLS` to
+> `Client → Route`; PR-C adds `Producer` + `DECLARES_PRODUCER` and flips `ASYNC_CALLS`.
+> Still includes stored `OVERRIDES` Symbol→Symbol edges and v12 HTTP brownfield
 > (`@CodebaseHttpClient`, shared `CodebaseHttpMethod` enum, inbound layer-C HTTP routes
 > replace same-method built-in rows). **Design rationale:** navigation surface and tools —
 > [`propose/completed/MCP-API-V2-REDESIGN-PROPOSE.md`](../propose/completed/MCP-API-V2-REDESIGN-PROPOSE.md);
@@ -260,9 +261,9 @@ Virtual keys (`OVERRIDDEN_BY`, …) and composed dot-keys are **not** valid `Edg
 - **Batching:** Multiple origins are expanded; pagination slices the **combined** edge list — use larger `limit` when batching many ids.
 - **Confidence:** Cross-service edges (`HTTP_CALLS`, `ASYNC_CALLS`) carry confidence, strategy, and match metadata on `edge.attrs` (`attrs.confidence`, `attrs.strategy`, `attrs.match`). Low confidence means the resolver had to guess at the route binding — treat it as a **resolver gap signal**, not a hallucination. Report low-confidence edges with their confidence value, not as facts. Intra-service edges (`CALLS`, `INJECTS`, `IMPLEMENTS`, `EXTENDS`, `DECLARES`, `DECLARES_CLIENT`, `EXPOSES`, `OVERRIDES`) faithfully represent the static graph; the resolved set is still a **lower bound** under reflection / dynamic dispatch (see *What this MCP is NOT*).
 
-### Ontology glossary (version 13)
+### Ontology glossary (version 14)
 
-Source of truth: `java_ontology.py`. Strings are case-sensitive.
+Source of truth: `java_ontology.py` (`EDGE_SCHEMA`, valid sets). Strings are case-sensitive. Edge navigation: [`docs/EDGE-NAVIGATION.md`](./EDGE-NAVIGATION.md) — use `*_current` traversal keys for `HTTP_CALLS` / `ASYNC_CALLS` until SCHEMA-V2 PR-B/C flip endpoints.
 
 **Roles:** `CONTROLLER`, `SERVICE`, `REPOSITORY`, `COMPONENT`, `CONFIG`, `ENTITY`, `CLIENT`, `MAPPER`, `DTO`, `OTHER`.
 
