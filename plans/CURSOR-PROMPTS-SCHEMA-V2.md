@@ -48,7 +48,7 @@ Read PR-A **File-by-file changes** and **Tests for PR-A** before coding. Plan wi
 
 ## Scope
 
-1. **`java_ontology.py`** — `EdgeAttr`, `EdgeSpec`, `EDGE_SCHEMA` for **10 edges** with **pre-flip** `HTTP_CALLS`/`ASYNC_CALLS` (`Symbol→Route`). Include `brownfield_resolver_sourced`, role-keyed `typical_traversals`, `member_only` per HINTS-V3 §3.4. Add `BROWNFIELD_RESOLVER_STRATEGY_SET` (union of `FUZZY_STRATEGY_SET` + resolver strategies used on edges today).
+1. **`java_ontology.py`** — `EdgeAttr`, `EdgeSpec`, `EDGE_SCHEMA` for **10 edges** with **pre-flip** `HTTP_CALLS`/`ASYNC_CALLS` (`Symbol→Route`). Include `brownfield_resolver_sourced`; **`typical_traversals: dict[str, str]`** per HINTS-V3 §3.5 (SCHEMA propose Appendix A tuples are illustrative only). **`member_only`:** set `True` on `DECLARES_CLIENT`, `EXPOSES`, `OVERRIDES`, `CALLS` only — **not** `DECLARES_PRODUCER` (PR-C). Add `BROWNFIELD_RESOLVER_STRATEGY_SET` (union of `FUZZY_STRATEGY_SET` + resolver strategies used on edges today); **enumerate every member in the PR body**.
 2. **`scripts/generate_edge_navigation.py`** + committed **`docs/EDGE-NAVIGATION.md`** with `--check` mode.
 3. **`ast_java.py`** — `ONTOLOGY_VERSION = 14`.
 4. **`README.md`** + **`docs/AGENT-GUIDE.md`** — v14 re-index callout (PR-B/C consequences one sentence each).
@@ -125,6 +125,7 @@ Before PR open:
 - `@tests/test_pr_analysis.py`
 - `@tests/test_brownfield_clients.py`
 - `@tests/test_mcp_v2.py`
+- `@tests/test_mcp_v2_compose.py`
 - `@tests/test_client_hint_recovery.py`
 
 **Prompt:**
@@ -196,6 +197,7 @@ Before PR open: `.venv/bin/ruff check .` and `.venv/bin/python -m pytest tests -
 - `@java_ontology.py`
 - `@build_ast_graph.py`
 - `@kuzu_queries.py`
+- `@pr_analysis.py`
 - `@mcp_v2.py`
 - `@server.py`
 - `@tests/test_call_edges_e2e.py`
@@ -217,10 +219,12 @@ PR-B is on `master` (HTTP_CALLS from Client). Do not revert HTTP shape.
 2. **`AsyncCallRow.producer_id`**; Producer fields from `AsyncProducerHint` / dispatch metadata (propose §3.2 table — no HTTP-only copy-paste).
 3. **`GraphMeta`**: `producers_total`, `declares_producer_total`; wire `server.py` meta output if applicable.
 4. **`kuzu_queries.py`**: async two-hop in `find_route_callers`, `trace_request_flow`, impact analysis; producer branch on `RouteCaller`.
-5. **`mcp_v2.py`**: `find(kind="producer")`, `resolve(hint_kind="producer")`, `_load_node_record` for Producer.
-6. **Type-level `describe` rollups**: `DECLARES.DECLARES_PRODUCER`, `OVERRIDDEN_BY.DECLARES_PRODUCER`.
-7. **Async doc sweep** + regenerate `docs/EDGE-NAVIGATION.md` (11 edges).
-8. **Tests** — All **Tests for PR-C** in the plan (verbatim).
+5. **`pr_analysis.py`**: async two-hop route reachability (`DECLARES_PRODUCER` + `ASYNC_CALLS`; HTTP already two-hop from PR-B).
+6. **`mcp_v2.py`**: `find(kind="producer")`, `resolve(hint_kind="producer")`, `_load_node_record` for Producer.
+7. **`java_ontology.py`**: `DECLARES_PRODUCER` in `EDGE_SCHEMA` with `member_only=True`.
+8. **Type-level `describe` rollups**: `DECLARES.DECLARES_PRODUCER`, `OVERRIDDEN_BY.DECLARES_PRODUCER`.
+9. **Async doc sweep** + regenerate `docs/EDGE-NAVIGATION.md` (11 edges).
+10. **Tests** — All **Tests for PR-C** in the plan (verbatim).
 
 ## Out of scope (do NOT touch)
 

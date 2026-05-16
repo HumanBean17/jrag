@@ -1,6 +1,6 @@
 # HINTS-V3 — kind- and direction-aware empty-result hints driven by EDGE_SCHEMA
 
-**Status**: draft
+**Status**: merged
 **Author**: Dmitriy Teriaev
 **Date**: 2026-05-16
 

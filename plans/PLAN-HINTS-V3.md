@@ -130,7 +130,7 @@ Name tests `test_hints_hv{N}_*` matching propose §6 / §4 rows:
 19. `test_hints_hv19_edge_schema_coverage_exists_trigger_per_edge`
 20. `test_hints_hv20_no_dotkey_edge_labels_in_rendered_neighbors_hints`
 21. `test_hints_neighbors_empty_kind_check_template_removed` — grep/template absent
-22. `test_hints_neighbors_v2_empty_post_flip_method_http_calls` — integration (optional if graph fixture available)
+22. `test_hints_neighbors_v2_empty_post_flip_method_http_calls` — integration round-trip on post-flip graph (**required** once SCHEMA PR-C is on `master`; fail loud if session fixture lacks Client→Route shape)
 
 **Regression:** `test_hints_neighbors_fuzzy_strategy_*` and v1 neighbors tests still pass; update `test_hints_neighbors_empty_with_edge_types_emits_kind_check` → expect new template family (rename to reflect v3 behavior).
 

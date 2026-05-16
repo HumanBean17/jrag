@@ -45,8 +45,8 @@ Depends on:
 | Topic | Decision |
 | --- | --- |
 | `EDGE_SCHEMA` size in v2 | **11** entries after PR-C (`DECLARES_PRODUCER` added); PR-A ships **10** (no Producer table yet). |
-| `typical_traversals` | Role-keyed `dict[str, str]` (`type_subject`, `member_subject`, `alien_subject`, …) finalized in PR-A; hints v3 consumes in PR-D. |
-| `member_only` on `EdgeSpec` | Prefer PR-A; if omitted, PR-D adds (hint-only field; not in DDL CI). |
+| `typical_traversals` | **PR-A contract:** role-keyed `dict[str, str]` per HINTS-V3 §3.5 (`type_subject`, `member_subject`, `alien_subject`, …). SCHEMA-V2 propose Appendix A `tuple[str, …]` examples are **illustrative only** — implementation and hints v3 use the dict shape. |
+| `member_only` on `EdgeSpec` | Hint-only (not in DDL CI). **PR-A:** `True` on `DECLARES_CLIENT`, `EXPOSES`, `OVERRIDES`, `CALLS` only (10-edge schema). **PR-C:** add `DECLARES_PRODUCER` to `EDGE_SCHEMA` and set `member_only=True` when that edge lands. If PR-A omits the field entirely, PR-D may add it. |
 | `brownfield_resolver_sourced` | Renamed from `brownfield_sourced`; True iff edge carries resolver `strategy` ∈ `BROWNFIELD_RESOLVER_STRATEGY_SET`. |
 | `BROWNFIELD_RESOLVER_STRATEGY_SET` | `FUZZY_STRATEGY_SET` ∪ non-fuzzy resolver strategies used on edges today (`codebase_route`, `codebase_client`, `codebase_producer`, `layer_*`, pass5/6 HTTP/async strategy literals — lock members in PR-A from `grep` of `strategy=` / ontology sets). |
 | `HttpCallRow` / `AsyncCallRow` | PR-B: `client_id` replaces `symbol_id` on HTTP rows. PR-C: `producer_id` replaces `symbol_id` on async rows. |
@@ -70,8 +70,8 @@ Depends on:
   - `ASYNC_CALLS`: `Symbol → Route` (pre-flip)
   - No `DECLARES_PRODUCER` entry yet (PR-C).
 - Add `brownfield_resolver_sourced: bool` on `EdgeSpec`.
-- Add `member_only: bool = False` on `EdgeSpec` (default False); set True on `DECLARES_CLIENT`, `EXPOSES`, `OVERRIDES`, `CALLS` per HINTS-V3 §3.4 (PR-D depends on this).
-- Add `typical_traversals: dict[str, str]` per edge (role keys; post-flip traversals for HTTP/ASYNC may describe **target** shape — update strings again in PR-B/C when endpoints flip).
+- Add `member_only: bool = False` on `EdgeSpec` (default False). **PR-A only:** set `True` on `DECLARES_CLIENT`, `EXPOSES`, `OVERRIDES`, `CALLS` (not `DECLARES_PRODUCER` — that edge does not exist until PR-C).
+- Add `typical_traversals: dict[str, str]` per edge (role keys per HINTS-V3 §3.5 — **not** the tuple shape in SCHEMA propose Appendix A). Post-flip traversals for HTTP/ASYNC may describe target shape; update strings again in PR-B/C when endpoints flip.
 - Add `BROWNFIELD_RESOLVER_STRATEGY_SET: frozenset[str]` (Decision 28).
 - Export new symbols in `__all__`.
 
@@ -136,7 +136,7 @@ Depends on:
 4. `test_edge_navigation_doc_matches_generator_output`
 5. `test_edge_navigation_doc_check_mode_detects_drift`
 6. `test_kuzu_graph_refuses_ontology_version_below_required`
-7. `test_edge_schema_member_only_flags_on_method_level_edges` — `DECLARES_CLIENT`, `EXPOSES`, `OVERRIDES`, `CALLS` True; `HTTP_CALLS`/`ASYNC_CALLS` False at pre-flip.
+7. `test_edge_schema_member_only_flags_on_method_level_edges` — `DECLARES_CLIENT`, `EXPOSES`, `OVERRIDES`, `CALLS` True; no `DECLARES_PRODUCER` key in PR-A schema; `HTTP_CALLS`/`ASYNC_CALLS` False at pre-flip.
 
 ## Definition of done (PR-A)
 
@@ -184,7 +184,7 @@ Depends on:
 - `find_route_callers`: two-hop Cypher
   `MATCH (s:Symbol)-[:DECLARES_CLIENT]->(c:Client)-[e:HTTP_CALLS]->(r:Route …)`.
 - `trace_request_flow` inbound: two-hop via Client; output rows include `caller_node_id`, `caller_node_kind`, `declaring_symbol_id`, `declaring_symbol_fqn`.
-- Impact-analysis expansion (~line 1335): three-hop through Client; surface caller node id on impacted route rows.
+- Impact-analysis expansion in `KuzuGraph` cross-service flow stage (Cypher using `HTTP_CALLS|ASYNC_CALLS` on changed symbols): three-hop through Client; surface caller node id on impacted route rows. Locate via `grep HTTP_CALLS|ASYNC_CALLS` in `kuzu_queries.py` — do not rely on line numbers.
 - Remove all `Symbol-[HTTP_CALLS]->Route` patterns.
 
 ### 4. `pr_analysis.py`
@@ -257,6 +257,7 @@ with every hit accounted for (fixed or justified).
 
 - Add `Producer` to `NodeKind`.
 - Add `EDGE_SCHEMA["DECLARES_PRODUCER"]`, update `ASYNC_CALLS` to `Producer → Route`.
+- Set `member_only=True` on `DECLARES_PRODUCER` (edge lands in this PR).
 - `typical_traversals` for async edges/post-flip producer traversals.
 
 ### 2. `build_ast_graph.py`
@@ -275,27 +276,31 @@ with every hit accounted for (fixed or justified).
 - `find_route_callers` / `trace_request_flow` / impact analysis: include `DECLARES_PRODUCER` + `ASYNC_CALLS` two-hop branch; `caller_node_kind="producer"` with `topic`/`broker` from node.
 - `find` producers query helper (parallel `find_clients`).
 
-### 4. `mcp_v2.py`
+### 4. `pr_analysis.py`
+
+- Extend route reachability for changed symbols: async leg uses `DECLARES_PRODUCER` + `ASYNC_CALLS` two-hop (HTTP leg already two-hop from PR-B).
+
+### 5. `mcp_v2.py`
 
 - Extend `Literal` unions: `"producer"` on `find`, `resolve`, `_node_kind_from_id`, filters.
 - `find_v2(kind="producer")`, `resolve(..., hint_kind="producer")` using `VALID_PRODUCER_KINDS`.
 - `_load_node_record` for Producer.
 
-### 5. `server.py`
+### 6. `server.py`
 
 - `GraphMetaOutput`: optional `producers_total` / `declares_producer_total` if exposed in meta tool (match `build_ast_graph` counters).
 
-### 6. `kuzu_queries.py` — `describe` rollups (~625, ~681)
+### 7. `kuzu_queries.py` — `describe` rollups (type-level `edge_summary` path)
 
 - Add `("DECLARES.DECLARES_PRODUCER", "DECLARES_PRODUCER")` to type rollup set.
 - Add `OVERRIDDEN_BY.DECLARES_PRODUCER` parallel to client axis.
 
-### 7. Docs (async sweep)
+### 8. Docs (async sweep)
 
 - `README.md`, `docs/AGENT-GUIDE.md`, exploration skill — ASYNC_CALLS / Producer navigation.
 - Regenerate `docs/EDGE-NAVIGATION.md` (11 edges).
 
-### 8. Tests / fixtures
+### 9. Tests / fixtures
 
 - `tests/test_call_edges_e2e.py`, `tests/test_brownfield_clients.py` (producer stubs), `tests/test_mcp_v2.py`, `tests/test_ast_graph_build.py`, `tests/test_client_node_extraction.py` (meta counters pattern).
 
