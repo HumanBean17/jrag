@@ -1,6 +1,7 @@
 """PR-B: unified diff parsing, hunk→symbol mapping, and risk scoring (plan §4 tests 31–37)."""
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 from kuzu_queries import find_symbols_in_file_range
@@ -193,8 +194,10 @@ def test_35a_compute_risk_cross_service_bonus_saturates_to_one(monkeypatch) -> N
                     "parent_id": "",
                     "resolved": True,
                 }]
-            if "MATCH (s:Symbol)-[e:HTTP_CALLS|ASYNC_CALLS]->(r:Route {id: $rid})" in query:
+            if "MATCH (s:Symbol)-[:DECLARES_CLIENT]->(c:Client)-[e:HTTP_CALLS]->(r:Route {id: $rid})" in query:
                 return [{"id": str(i)} for i in range(6)]
+            if "MATCH (s:Symbol)-[e:ASYNC_CALLS]->(r:Route {id: $rid})" in query:
+                return []
             return []
 
         def impact_analysis(self, name, **kwargs):
@@ -252,9 +255,11 @@ def test_35b_compute_risk_single_cross_service_bonus_is_point_two(monkeypatch) -
                     "parent_id": "",
                     "resolved": True,
                 }]
-            if "MATCH (s:Symbol)-[e:HTTP_CALLS|ASYNC_CALLS]->(r:Route {id: $rid})" in query:
+            if "MATCH (s:Symbol)-[:DECLARES_CLIENT]->(c:Client)-[e:HTTP_CALLS]->(r:Route {id: $rid})" in query:
                 if self._include_callers:
                     return [{"id": "caller-1"}]
+                return []
+            if "MATCH (s:Symbol)-[e:ASYNC_CALLS]->(r:Route {id: $rid})" in query:
                 return []
             return []
 
@@ -296,6 +301,44 @@ def test_35b_compute_risk_single_cross_service_bonus_is_point_two(monkeypatch) -
     # Keep raw terms identical in both runs; only cross-service route-callers differ.
     assert rep.routes_touched == baseline.routes_touched == ["route-1"]
     assert abs((rep.risk_score - baseline.risk_score) - 0.2) < 1e-9
+
+
+def test_pr_analysis_changed_methods_finds_routes_via_declares_client(
+    kuzu_db_path_cross_service_smoke: Path,
+) -> None:
+    from kuzu_queries import KuzuGraph
+
+    from pr_analysis import ChangedSymbol, compute_risk
+
+    g = KuzuGraph(str(kuzu_db_path_cross_service_smoke))
+    route_rows = g._rows(  # noqa: SLF001
+        "MATCH (r:Route) "
+        "WHERE r.microservice = 'svc-b' AND r.path_template = '/chat/joinOperator' "
+        "AND r.method = 'POST' RETURN r.id AS id LIMIT 1",
+        {},
+    )
+    assert route_rows
+    rid = str(route_rows[0]["id"])
+    handler_rows = g._rows(  # noqa: SLF001
+        "MATCH (s:Symbol)-[:EXPOSES]->(r:Route {id: $rid}) RETURN s.id AS id, s.fqn AS fqn LIMIT 1",
+        {"rid": rid},
+    )
+    assert handler_rows
+    rep = compute_risk(
+        g,
+        [
+            ChangedSymbol(
+                symbol_id=str(handler_rows[0]["id"]),
+                fqn=str(handler_rows[0]["fqn"]),
+                kind="method",
+                change_type="modified",
+                file="",
+                hunk_lines=[1],
+            ),
+        ],
+    )
+    assert rep.changed_symbols
+    assert rep.changed_symbols[0].cross_service_callers_count >= 1
 
 
 def test_36_removed_symbol_from_minus_only_hunk(kuzu_graph) -> None:

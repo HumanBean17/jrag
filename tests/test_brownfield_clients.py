@@ -44,8 +44,8 @@ def _http_calls(db_path: Path) -> list[dict]:
     db = kuzu.Database(str(db_path), read_only=True)
     conn = kuzu.Connection(db)
     r = conn.execute(
-        "MATCH (s:Symbol)-[c:HTTP_CALLS]->(rt:Route) "
-        "RETURN s.fqn AS fqn, c.strategy AS strategy, c.method_call AS method_call, "
+        "MATCH (c:Client)-[h:HTTP_CALLS]->(rt:Route) "
+        "RETURN c.member_fqn AS fqn, h.strategy AS strategy, h.method_call AS method_call, "
         "rt.path_template AS path_template, rt.feign_name AS feign_name ORDER BY fqn, path_template",
     )
     out: list[dict] = []

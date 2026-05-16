@@ -36,8 +36,9 @@ def _http_row_for_method(tables: GraphTables, method_name: str, *, parent_fqn: s
         mid = m.node_id
         break
     assert mid is not None
+    client_ids = {e.client_id for e in tables.declares_client_rows if e.symbol_id == mid}
     for r in tables.http_call_rows:
-        if r.symbol_id == mid:
+        if r.client_id in client_ids:
             return r
     return None
 

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import kuzu
 
 from ast_java import ONTOLOGY_VERSION
 from kuzu_queries import KuzuGraph
+
+_STUB_ROOT = Path(__file__).resolve().parent / "fixtures" / "brownfield_client_stubs"
 
 
 def _scalar(db_path: Path, query: str) -> int:
@@ -14,8 +17,27 @@ def _scalar(db_path: Path, query: str) -> int:
     return int(r.get_next()[0] or 0) if r.has_next() else 0
 
 
+def _build_repeatable_clients(tmp_path: Path) -> Path:
+    shutil.copytree(_STUB_ROOT, tmp_path, dirs_exist_ok=True)
+    java_dir = tmp_path / "p"
+    java_dir.mkdir(parents=True, exist_ok=True)
+    (java_dir / "X.java").write_text(
+        "package p; import com.example.rag.*; class X { "
+        "@CodebaseHttpClients({"
+        "@CodebaseHttpClient(clientKind=CodebaseClientKind.rest_template, path=\"/r1\", method=CodebaseHttpMethod.GET),"
+        "@CodebaseHttpClient(clientKind=CodebaseClientKind.rest_template, path=\"/r2\", method=CodebaseHttpMethod.POST)"
+        "}) void m() {} }",
+        encoding="utf-8",
+    )
+    from _builders import build_kuzu_full_into
+
+    db_path = tmp_path / "g.kuzu"
+    build_kuzu_full_into(tmp_path, db_path)
+    return db_path
+
+
 def test_http_calls_table_built_on_bank_chat(kuzu_db_path: Path) -> None:
-    assert _scalar(kuzu_db_path, "MATCH (:Symbol)-[r:HTTP_CALLS]->(:Route) RETURN count(r)") >= 2
+    assert _scalar(kuzu_db_path, "MATCH (:Client)-[r:HTTP_CALLS]->(:Route) RETURN count(r)") >= 2
 
 
 def test_async_calls_table_built_on_bank_chat(kuzu_db_path: Path) -> None:
@@ -31,12 +53,12 @@ def test_phantom_routes_dedup_across_call_sites(kuzu_db_path_http_caller_smoke: 
     db = kuzu_db_path_http_caller_smoke
     route_ids = _scalar(
         db,
-        "MATCH (s:Symbol)-[r:HTTP_CALLS]->(rt:Route) "
+        "MATCH (c:Client)-[r:HTTP_CALLS]->(rt:Route) "
         "WHERE rt.path_template='/api/users' AND rt.method='GET' AND rt.microservice='' RETURN count(DISTINCT rt.id)",
     )
     edges = _scalar(
         db,
-        "MATCH (s:Symbol)-[r:HTTP_CALLS]->(rt:Route) "
+        "MATCH (c:Client)-[r:HTTP_CALLS]->(rt:Route) "
         "WHERE rt.path_template='/api/users' AND rt.method='GET' AND rt.microservice='' RETURN count(r)",
     )
     assert route_ids == 1
@@ -55,3 +77,33 @@ def test_graph_meta_call_edge_counters(kuzu_db_path: Path) -> None:
 
 def test_ontology_version_matches_graph_meta(kuzu_db_path: Path) -> None:
     assert KuzuGraph(str(kuzu_db_path)).meta()["ontology_version"] == ONTOLOGY_VERSION
+
+
+def test_call_edges_client_outbound_http_calls_returns_routes(kuzu_db_path_http_caller_smoke: Path) -> None:
+    db = kuzu_db_path_http_caller_smoke
+    n = _scalar(
+        db,
+        "MATCH (c:Client) WHERE c.path_template='/api/users' AND c.method='GET' "
+        "MATCH (c)-[:HTTP_CALLS]->(:Route) RETURN count(*)",
+    )
+    assert n >= 1
+
+
+def test_call_edges_method_two_http_clients_two_routes(tmp_path: Path) -> None:
+    db = _build_repeatable_clients(tmp_path)
+    client_routes = _scalar(
+        db,
+        "MATCH (c:Client)-[:HTTP_CALLS]->(:Route) RETURN count(DISTINCT c.id)",
+    )
+    assert client_routes >= 2
+
+
+def test_call_edges_cross_service_http_four_hop(kuzu_db_path_cross_service_smoke: Path) -> None:
+    db = kuzu_db_path_cross_service_smoke
+    n = _scalar(
+        db,
+        "MATCH (m:Symbol)-[:DECLARES_CLIENT]->(c:Client)-[:HTTP_CALLS]->(rt:Route)"
+        "<-[:EXPOSES]-(h:Symbol) RETURN count(*)",
+    )
+    assert n >= 1
+

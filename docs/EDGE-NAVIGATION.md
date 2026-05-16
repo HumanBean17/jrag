@@ -15,7 +15,7 @@
 | CALLS | Symbol | Symbol | many_to_many | yes | yes |
 | EXPOSES | Symbol | Route | one_to_one | yes | yes |
 | DECLARES_CLIENT | Symbol | Client | one_to_many | yes | yes |
-| HTTP_CALLS | Symbol | Route | many_to_many | yes | no |
+| HTTP_CALLS | Client | Route | many_to_many | yes | no |
 | ASYNC_CALLS | Symbol | Route | many_to_many | yes | no |
 
 ## EXTENDS
@@ -185,12 +185,12 @@
 
 ## HTTP_CALLS
 
-**Endpoints**: `Symbol → Route`
+**Endpoints**: `Client → Route`
 **Cardinality**: `many_to_many`
 **Brownfield-resolver-sourced**: yes
 **Member-only** (hints): no
 
-**Purpose**: resolved HTTP call from declaring method to target route (pre-flip: Symbol→Route; PR-B: Client→Route)
+**Purpose**: resolved HTTP call from a declared Client to a target route
 
 **Attributes**:
 
@@ -202,11 +202,10 @@
 
 **Typical traversals**:
 
-- `type_subject_current`: neighbors(['{id}'],'out',['DECLARES']) then neighbors(member_ids,'out',['HTTP_CALLS'])
 - `type_subject`: neighbors(['{id}'],'out',['DECLARES']) then neighbors(member_ids,'out',['DECLARES_CLIENT']) then neighbors(client_ids,'out',['HTTP_CALLS'])
-- `member_subject_current`: neighbors(['{id}'],'out',['HTTP_CALLS'])
 - `member_subject`: neighbors(['{id}'],'out',['DECLARES_CLIENT']) then neighbors(client_ids,'out',['HTTP_CALLS'])
-- `alien_subject`: HTTP_CALLS is Symbol→Route until PR-B; use member_subject_current. After PR-B (Client→Route), use member_subject via DECLARES_CLIENT
+- `route_subject`: neighbors(['{id}'],'in',['HTTP_CALLS']) then neighbors(client_ids,'in',['DECLARES_CLIENT']) for declaring method
+- `alien_subject`: HTTP_CALLS connects Client→Route; use DECLARES_CLIENT from a method Symbol, or neighbors(client_id,'out',['HTTP_CALLS']) from a Client id
 
 ## ASYNC_CALLS
 

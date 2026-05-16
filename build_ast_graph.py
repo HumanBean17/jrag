@@ -244,7 +244,7 @@ class RouteExtractionStats:
 
 @dataclass
 class HttpCallRow:
-    symbol_id: str
+    client_id: str
     route_id: str
     confidence: float
     strategy: str
@@ -1690,14 +1690,14 @@ def pass5_imperative_edges(
                                 source_layer="builtin",
                             )
                         )
-                    key = (member.node_id, rid)
+                    key = (cid, rid)
                     if key in http_seen:
                         continue
                     http_seen.add(key)
                     conf = call.confidence_base * 0.3 * micro_factor
                     tables.http_call_rows.append(
                         HttpCallRow(
-                            symbol_id=member.node_id,
+                            client_id=cid,
                             route_id=rid,
                             confidence=conf,
                             strategy=strategy,
@@ -1947,7 +1947,8 @@ def pass6_match_edges(
         for row in tables.http_call_rows:
             if row.match != "unresolved":
                 continue
-            member = member_by_id.get(row.symbol_id)
+            client = clients_by_id.get(row.client_id)
+            member = member_by_id.get(client.member_id) if client else None
             base = row.confidence / max(1e-9, (0.3 * _micro_factor(member)))
             src_route = route_by_id.get(row.route_id)
             if src_route is None and member is not None:
@@ -2202,7 +2203,7 @@ _SCHEMA_DECLARES_CLIENT = (
     "confidence DOUBLE, strategy STRING)"
 )
 _SCHEMA_HTTP_CALLS = (
-    "CREATE REL TABLE HTTP_CALLS(FROM Symbol TO Route, "
+    "CREATE REL TABLE HTTP_CALLS(FROM Client TO Route, "
     "confidence DOUBLE, strategy STRING, "
     "method_call STRING, raw_uri STRING, match STRING)"
 )
@@ -2402,8 +2403,8 @@ _CREATE_DECLARES_CLIENT = (
     "CREATE (s)-[:DECLARES_CLIENT {confidence: $confidence, strategy: $strategy}]->(c)"
 )
 _CREATE_HTTP_CALL = (
-    "MATCH (s:Symbol {id: $sid}), (r:Route {id: $rid}) "
-    "CREATE (s)-[:HTTP_CALLS {confidence: $confidence, strategy: $strategy, "
+    "MATCH (c:Client {id: $cid}), (r:Route {id: $rid}) "
+    "CREATE (c)-[:HTTP_CALLS {confidence: $confidence, strategy: $strategy, "
     "method_call: $method_call, raw_uri: $raw_uri, match: $match}]->(r)"
 )
 _CREATE_ASYNC_CALL = (
@@ -2543,7 +2544,7 @@ def _write_routes_and_exposes(conn: kuzu.Connection, tables: GraphTables) -> Non
         })
     for row in tables.http_call_rows:
         conn.execute(_CREATE_HTTP_CALL, {
-            "sid": row.symbol_id,
+            "cid": row.client_id,
             "rid": row.route_id,
             "confidence": row.confidence,
             "strategy": row.strategy,

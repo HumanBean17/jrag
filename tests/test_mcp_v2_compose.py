@@ -537,3 +537,23 @@ def test_overrides_edge_set_deterministic_double_build(tmp_path: Path) -> None:
     build_kuzu_to(_OVERRIDE_AXIS_FIXTURE, p1, max_pass=5)
     build_kuzu_to(_OVERRIDE_AXIS_FIXTURE, p2, max_pass=5)
     assert edge_pairs(p1) == edge_pairs(p2)
+
+
+def test_describe_client_edge_summary_includes_http_calls_out(
+    kuzu_db_path_cross_service_smoke: Path,
+) -> None:
+    from kuzu_queries import KuzuGraph
+
+    g = KuzuGraph(str(kuzu_db_path_cross_service_smoke))
+    rows = g._rows(  # noqa: SLF001
+        "MATCH (c:Client)-[:HTTP_CALLS]->() RETURN c.id AS id LIMIT 1",
+        {},
+    )
+    assert rows
+    cid = str(rows[0]["id"])
+    out = describe_v2(cid, graph=g)
+    assert out.success is True
+    assert out.record is not None
+    assert out.record.edge_summary is not None
+    http_out = out.record.edge_summary.get("HTTP_CALLS", {"in": 0, "out": 0})
+    assert int(http_out.get("out", 0)) >= 1

@@ -14,8 +14,8 @@
 >
 > Calibrated against ontology version **14** (see `ast_java.ONTOLOGY_VERSION` /
 > `java_ontology.EDGE_SCHEMA` + valid sets): canonical edge navigation schema in
-> `docs/EDGE-NAVIGATION.md`. v14 re-index required; PR-B flips `HTTP_CALLS` to
-> `Client → Route`; PR-C adds `Producer` + `DECLARES_PRODUCER` and flips `ASYNC_CALLS`.
+> `docs/EDGE-NAVIGATION.md`. v14 re-index required; `HTTP_CALLS` is `Client → Route`;
+> PR-C adds `Producer` + `DECLARES_PRODUCER` and flips `ASYNC_CALLS`.
 > Still includes stored `OVERRIDES` Symbol→Symbol edges and v12 HTTP brownfield
 > (`@CodebaseHttpClient`, shared `CodebaseHttpMethod` enum, inbound layer-C HTTP routes
 > replace same-method built-in rows). **Design rationale:** navigation surface and tools —
@@ -96,7 +96,7 @@ Use these strings **verbatim** in `neighbors(..., edge_types=[...])`:
 | Method overrides | `OVERRIDES` | Subtype **method** → supertype **declaration** method (same `signature`, one `IMPLEMENTS`/`EXTENDS` hop). `in` = overriders; `out` = overridden declarations |
 | Method calls | `CALLS` | `in` = callers; `out` = callees |
 | Service boundary | `EXPOSES` | Symbol → Route (handler exposes route) |
-| Cross-service | `HTTP_CALLS`, `ASYNC_CALLS` | Symbol → Route across services |
+| Cross-service | `HTTP_CALLS`, `ASYNC_CALLS` | `HTTP_CALLS`: Client → Route; `ASYNC_CALLS`: Symbol → Route until SCHEMA-V2 PR-C (`Producer` node) |
 
 Symmetric: cross-service and intra-service questions use the **same** `neighbors` call with different `edge_types`.
 
@@ -263,7 +263,7 @@ Virtual keys (`OVERRIDDEN_BY`, …) and composed dot-keys are **not** valid `Edg
 
 ### Ontology glossary (version 14)
 
-Source of truth: `java_ontology.py` (`EDGE_SCHEMA`, valid sets). Strings are case-sensitive. Edge navigation: [`docs/EDGE-NAVIGATION.md`](./EDGE-NAVIGATION.md) — use `*_current` traversal keys for `HTTP_CALLS` / `ASYNC_CALLS` until SCHEMA-V2 PR-B/C flip endpoints.
+Source of truth: `java_ontology.py` (`EDGE_SCHEMA`, valid sets). Strings are case-sensitive. Edge navigation: [`docs/EDGE-NAVIGATION.md`](./EDGE-NAVIGATION.md) — for `HTTP_CALLS`, traverse via `DECLARES_CLIENT` from a method Symbol or `neighbors` outbound from a Client id; `ASYNC_CALLS` still uses `*_current` member traversals until SCHEMA-V2 PR-C.
 
 **Roles:** `CONTROLLER`, `SERVICE`, `REPOSITORY`, `COMPONENT`, `CONFIG`, `ENTITY`, `CLIENT`, `MAPPER`, `DTO`, `OTHER`.
 
