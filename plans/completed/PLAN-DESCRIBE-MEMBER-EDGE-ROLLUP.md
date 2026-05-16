@@ -1,6 +1,6 @@
 # Plan: describe member edge rollup (`edge_summary` composed keys)
 
-Status: **complete** (PR-1 landed). Source propose:
+Status: **completed** (PR-1 landed). Source propose:
 [`propose/completed/DESCRIBE-MEMBER-EDGE-ROLLUP-PROPOSE.md`](../../propose/completed/DESCRIBE-MEMBER-EDGE-ROLLUP-PROPOSE.md).
 
 Depends on: **none** for graph or indexer work (read-path only).

@@ -1,6 +1,6 @@
 # Plan: call-graph layer (static intra-JVM `CALLS` + `DECLARES`)
 
-Status: **ready to implement**. Self-contained: an agent picking this up
+Status: **completed** — shipped (static intra-JVM `CALLS` + `DECLARES` on `master`). Self-contained: an agent picking this up
 should be able to land it without re-deriving the design. Pairs with
 `propose/completed/CALL-GRAPH-PROPOSE.md` (scope, rationale, schema).
 

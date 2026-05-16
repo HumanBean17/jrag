@@ -1,6 +1,6 @@
 # Propose: `FEIGN_CLIENT` role → `CLIENT` role + `HTTP_CLIENT` capability
 
-**Status:** Draft (2026-05-06)
+**Status:** completed — shipped (PR #28; `FEIGN_CLIENT` → `CLIENT` + `HTTP_CLIENT` capability; see `tests/test_client_role_rename.py`)
 **Author:** Dmitry (with Computer)
 **Companion docs:**
 - `propose/FEIGN-NOT-AN-EXPOSER-PROPOSE.md` (PR #25, merged) — orthogonal

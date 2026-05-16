@@ -2,8 +2,7 @@
 
 ## Status
 
-Proposal — not yet planned. Breaking change, no migration required (no
-production users yet, per project policy).
+**Completed** — shipped (brownfield v2 annotations: `@CodebaseHttpRoute`, `@CodebaseAsyncRoute`, `@CodebaseHttpClient`, `@CodebaseProducer`; HTTP method enum addendum landed separately). Breaking change, no migration required (no production users yet, per project policy).
 
 > **Revision note.** An earlier draft of this propose split `@CodebaseRoute`
 > into `@CodebaseHttpRoute` + `@CodebaseAsyncRoute` while *keeping* the

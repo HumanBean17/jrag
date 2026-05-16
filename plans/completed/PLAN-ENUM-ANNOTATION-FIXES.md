@@ -1,6 +1,6 @@
 # Plan: Enum annotation migration fixes
 
-Status: **pending**
+Status: **completed** — shipped (`strict=True` in `graph_enrich.py`; README enum stubs without invalid `@Target` on enums).
 
 Companion fixes for commit `01ff39e1` ("from string to enums for java annotations").
 

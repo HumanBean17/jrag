@@ -1,5 +1,7 @@
 # Addendum: HTTP brownfield enum method, `@CodebaseHttpClient` rename, inbound exclusivity
 
+**Status**: completed — shipped (ontology 12; see §What landed below).
+
 This file extends **[`BROWNFIELD-ANNOTATIONS-V2-PROPOSE.md`](./BROWNFIELD-ANNOTATIONS-V2-PROPOSE.md)** without editing that document’s body (immutable parent).
 
 ## References

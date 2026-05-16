@@ -1,5 +1,7 @@
 # Plan: Fix cocoindex Binary Path Resolution in Venv
 
+Status: **completed** — shipped (`Path(sys.executable).parent / "cocoindex"` without `.resolve()` in `server.py`).
+
 ## Goal
 
 Fix `refresh_code_index` failing to find `cocoindex` binary when Python venv uses symlinks.
@@ -119,5 +121,5 @@ Then run:
 ## Status
 
 - [x] Step 1: Fix cocoindex binary path resolution
-- [ ] Step 2: Verify no similar path resolution issues exist
-- [ ] Step 3: Verify fix works in venv environment
+- [x] Step 2: Verify no similar path resolution issues exist (no other `cocoindex` path uses `.resolve()` on `sys.executable`)
+- [x] Step 3: Verify fix works in venv environment (`tests/test_mcp_tools.py::test_cocoindex_subprocess_env_sets_project_root`)

@@ -1,6 +1,6 @@
 # Propose: `cross_service_resolution` config flag
 
-**Status:** Draft (2026-05-05)
+**Status:** completed — shipped (PR-G1 / [#26](https://github.com/HumanBean17/java-codebase-rag/pull/26); see `tests/test_cross_service_resolution_flag.py`)
 **Author:** Dmitry (with Computer)
 **Companion docs:**
 - `propose/FEIGN-NOT-AN-EXPOSER-PROPOSE.md` (PR #25) — fixes a wrong-direction edge in the auto path; **must ship before this**
