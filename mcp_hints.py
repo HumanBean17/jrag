@@ -100,6 +100,10 @@ _TYPE_SYMBOL_KINDS = frozenset({"class", "interface", "enum", "record", "annotat
 _METHOD_SYMBOL_KINDS = frozenset({"method", "constructor"})
 
 _COMPOSED_DOT_KEY_PREFIXES = ("DECLARES.", "OVERRIDDEN_BY.")
+# Row 4 (brownfield absence): only when the subject is a resolver endpoint node, not a
+# structurally valid Symbol query that happens to be empty (DECLARES_CLIENT, EXPOSES, …).
+_BROWNFIELD_ABSENCE_SUBJECT_LABELS = frozenset({"Client", "Producer", "Route"})
+_REQUIRED_TRAVERSAL_ROLE_KEYS = frozenset({"type_subject", "member_subject", "alien_subject"})
 
 _IDENTIFIER_FILTER_FIELDS: dict[str, tuple[str, ...]] = {
     "symbol": ("fqn_prefix",),
@@ -231,16 +235,17 @@ def neighbors_empty_hints(
                 )
             )
 
-    for edge in requested_edge_types:
-        spec = EDGE_SCHEMA.get(edge)
-        if spec is not None and spec.brownfield_resolver_sourced:
-            pairs.append(
-                (
-                    PRIORITY_META,
-                    TPL_NEIGHBORS_BROWNFIELD_RESOLVED_MAYBE_UNRESOLVED.format(edge=edge),
+    if subject_label in _BROWNFIELD_ABSENCE_SUBJECT_LABELS:
+        for edge in requested_edge_types:
+            spec = EDGE_SCHEMA.get(edge)
+            if spec is not None and spec.brownfield_resolver_sourced:
+                pairs.append(
+                    (
+                        PRIORITY_META,
+                        TPL_NEIGHBORS_BROWNFIELD_RESOLVED_MAYBE_UNRESOLVED.format(edge=edge),
+                    )
                 )
-            )
-            break
+                break
 
     return pairs
 
@@ -376,10 +381,15 @@ def generate_hints(
         if not isinstance(req_types, list):
             req_types = []
         edge_labels = [str(x).strip() for x in req_types if str(x).strip()]
-        if not results and edge_labels:
+        offset = int(payload.get("offset") or 0)
+        if not results and edge_labels and offset == 0:
             subject_record = payload.get("subject_record")
             requested_direction = payload.get("requested_direction")
-            if isinstance(subject_record, dict) and requested_direction in ("in", "out"):
+            if (
+                isinstance(subject_record, dict)
+                and subject_record
+                and requested_direction in ("in", "out")
+            ):
                 pairs.extend(
                     neighbors_empty_hints(
                         subject_record=subject_record,

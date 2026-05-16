@@ -410,7 +410,7 @@ def test_hints_hv1_type_level_declares_client_requery() -> None:
     )
     hints = generate_hints("neighbors", payload)
     assert any("lives on methods" in h for h in hints)
-    assert "DECLARES" in hints[0]
+    assert any("DECLARES" in h for h in hints)
 
 
 def test_hints_hv2_method_http_calls_wrong_subject_kind() -> None:
@@ -478,7 +478,9 @@ def test_hints_hv8_method_exposes_empty_no_structural_hint() -> None:
         {"id": "sym:com.example.T#m()", "kind": "method"},
         ["EXPOSES"],
     )
+    hints = generate_hints("neighbors", payload)
     assert _structural_neighbors_hints(payload) == []
+    assert not any("brownfield resolver" in h for h in hints)
 
 
 def test_hints_hv9_method_declares_client_empty_no_structural_hint() -> None:
@@ -486,7 +488,9 @@ def test_hints_hv9_method_declares_client_empty_no_structural_hint() -> None:
         {"id": "sym:com.example.T#m()", "kind": "method"},
         ["DECLARES_CLIENT"],
     )
+    hints = generate_hints("neighbors", payload)
     assert _structural_neighbors_hints(payload) == []
+    assert not any("brownfield resolver" in h for h in hints)
 
 
 def test_hints_hv10_class_http_calls_wrong_subject_kind() -> None:
@@ -608,6 +612,34 @@ def _synthetic_coverage_for_edge(edge: str) -> tuple[dict[str, Any], str] | None
 def test_hints_hv19_edge_schema_coverage_exists_trigger_per_edge(edge: str) -> None:
     found = _synthetic_coverage_for_edge(edge)
     assert found is not None, f"no synthetic subject/direction triggers hints for {edge}"
+
+
+def test_hints_edge_schema_typical_traversals_required_role_keys() -> None:
+    required = mcp_hints._REQUIRED_TRAVERSAL_ROLE_KEYS
+    for edge, spec in EDGE_SCHEMA.items():
+        missing = required - set(spec.typical_traversals.keys())
+        assert not missing, f"{edge} missing typical_traversals keys {sorted(missing)}"
+
+
+def test_hints_neighbors_missing_subject_record_skips_structural() -> None:
+    payload = {
+        "success": True,
+        "results": [],
+        "requested_edge_types": ["HTTP_CALLS"],
+        "requested_direction": "out",
+        "offset": 0,
+        "subject_record": None,
+    }
+    assert generate_hints("neighbors", payload) == []
+
+
+def test_hints_neighbors_offset_suppresses_empty_structural_hints() -> None:
+    payload = _neighbors_empty_payload(
+        {"id": "sym:com.example.T#m()", "kind": "method"},
+        ["HTTP_CALLS"],
+    )
+    payload["offset"] = 3
+    assert generate_hints("neighbors", payload) == []
 
 
 def test_hints_hv20_no_dotkey_edge_labels_in_rendered_neighbors_hints() -> None:
