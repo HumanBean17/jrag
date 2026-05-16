@@ -1,7 +1,8 @@
 """Pure MCP v2 road-sign hint generation (no graph I/O, no search, no LLM).
 
 Locked v1 catalog: ``propose/completed/HINTS-ROAD-SIGNS-PROPOSE.md`` Appendix A.
-v2 resolve + neighbors fuzzy-strategy catalog: ``propose/HINTS-V2-PROPOSE.md`` Appendix A.
+v2 resolve + neighbors fuzzy-strategy catalog: ``propose/completed/HINTS-V2-PROPOSE.md`` Appendix A.
+v3 empty-neighbors structural catalog: ``propose/HINTS-V3-PROPOSE.md`` §3.1–3.3.
 Priority cap: same propose §7.12 / ``plans/completed/PLAN-HINTS.md`` principles.
 """
 
@@ -9,14 +10,15 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from java_ontology import FUZZY_STRATEGY_SET
+from java_ontology import EDGE_SCHEMA, FUZZY_STRATEGY_SET
 
 # Normative schema description (propose §3.1) — imported by ``mcp_v2`` for Field(description=...).
 MCP_HINTS_FIELD_DESCRIPTION = (
     "Road-sign hints pointing to likely next calls. Each hint is a short string "
     "referencing one MCP V2 tool call. Hints are advisory and may be safely ignored. "
     "Maximum 5 hints per output. Hints never recommend dot-key edge labels (composed "
-    "rollups) as neighbors() arguments."
+    "rollups) as neighbors() arguments. For neighbors with multiple origin ids, "
+    "empty-result structural hints describe the first origin only."
 )
 
 # --- Appendix A verbatim templates (substitute {id}, {kind}, {limit}) ---
@@ -43,8 +45,25 @@ TPL_DESCRIBE_CLIENT_DECLARING = "declaring method: neighbors(['{id}'],'in',['DEC
 TPL_FIND_EMPTY_RESOLVE = "no matches — try resolve(identifier, hint_kind='{kind}') for canonical lookup"
 TPL_FIND_PAGE_FULL = "result page full at {limit} — narrow filter or paginate"
 
-TPL_NEIGHBORS_EMPTY_KIND_CHECK = (
-    "0 results — check if the requested edge_types apply to this kind"
+TPL_NEIGHBORS_WRONG_SUBJECT_KIND = (
+    "0 results — '{edge}' connects {src_kind} → {dst_kind}; "
+    "this is a {subject_kind}. Try: {canonical_traversal}"
+)
+
+TPL_NEIGHBORS_WRONG_DIRECTION = (
+    "0 results — '{edge}' is {src_kind} → {dst_kind}; "
+    "you requested direction='{requested_dir}'. Try direction='{correct_dir}'."
+)
+
+TPL_NEIGHBORS_TYPE_LEVEL_REQUERY = (
+    "0 results — '{edge}' lives on methods, not on {subject_kind}. "
+    "Try: {canonical_traversal}"
+)
+
+TPL_NEIGHBORS_BROWNFIELD_RESOLVED_MAYBE_UNRESOLVED = (
+    "edges on '{edge}' are emitted by the brownfield resolver — "
+    "absence here may mean unresolved (no matching annotation/target), "
+    "not absent from the codebase"
 )
 
 TPL_SEARCH_WEAK = "results look weak — narrow the query or try find(role=…)"
@@ -80,6 +99,8 @@ PRIORITY_META = 1
 _TYPE_SYMBOL_KINDS = frozenset({"class", "interface", "enum", "record", "annotation"})
 _METHOD_SYMBOL_KINDS = frozenset({"method", "constructor"})
 
+_COMPOSED_DOT_KEY_PREFIXES = ("DECLARES.", "OVERRIDDEN_BY.")
+
 _IDENTIFIER_FILTER_FIELDS: dict[str, tuple[str, ...]] = {
     "symbol": ("fqn_prefix",),
     "route": ("path_prefix",),
@@ -103,6 +124,133 @@ def _symbol_declaration_kind(record: dict[str, Any]) -> str | None:
         if k is not None:
             return str(k).strip() or None
     return None
+
+
+def _subject_node_label(subject_record: dict[str, Any]) -> str:
+    if "producer_kind" in subject_record:
+        return "Producer"
+    if "client_kind" in subject_record:
+        return "Client"
+    if "framework" in subject_record:
+        return "Route"
+    return "Symbol"
+
+
+def _traversal_role_for_wrong_kind(subject_label: str, subject_record: dict[str, Any]) -> str:
+    if subject_label == "Symbol":
+        sk = str(subject_record.get("kind") or "")
+        if sk in _METHOD_SYMBOL_KINDS:
+            return "member_subject"
+        if sk in _TYPE_SYMBOL_KINDS:
+            return "alien_subject"
+    return "alien_subject"
+
+
+def typical_traversal_for(
+    edge: str,
+    role_key: str,
+    *,
+    subject_id: str,
+    direction: str,
+) -> str:
+    template = EDGE_SCHEMA[edge].typical_traversals[role_key]
+    return template.format(id=subject_id, direction=direction, edge=edge)
+
+
+def neighbors_empty_hints(
+    *,
+    subject_record: dict[str, Any],
+    requested_edge_types: list[str],
+    requested_direction: Literal["in", "out"],
+) -> list[tuple[int, str]]:
+    """Structural empty-neighbors hints from ``EDGE_SCHEMA`` (at most one row 1–3 per edge)."""
+    pairs: list[tuple[int, str]] = []
+    subject_label = _subject_node_label(subject_record)
+    subject_id = str(subject_record.get("id") or "")
+
+    for edge in requested_edge_types:
+        spec = EDGE_SCHEMA.get(edge)
+        if spec is None:
+            continue
+
+        if subject_label != spec.src and subject_label != spec.dst:
+            role = _traversal_role_for_wrong_kind(subject_label, subject_record)
+            trav = typical_traversal_for(
+                edge, role, subject_id=subject_id, direction=requested_direction,
+            )
+            pairs.append(
+                (
+                    PRIORITY_META,
+                    TPL_NEIGHBORS_WRONG_SUBJECT_KIND.format(
+                        edge=edge,
+                        src_kind=spec.src,
+                        dst_kind=spec.dst,
+                        subject_kind=subject_label,
+                        canonical_traversal=trav,
+                    ),
+                )
+            )
+            continue
+
+        wrong_direction = spec.src != spec.dst and (
+            (requested_direction == "out" and subject_label == spec.dst)
+            or (requested_direction == "in" and subject_label == spec.src)
+        )
+        if wrong_direction:
+            correct_dir = "in" if requested_direction == "out" else "out"
+            pairs.append(
+                (
+                    PRIORITY_META,
+                    TPL_NEIGHBORS_WRONG_DIRECTION.format(
+                        edge=edge,
+                        src_kind=spec.src,
+                        dst_kind=spec.dst,
+                        requested_dir=requested_direction,
+                        correct_dir=correct_dir,
+                    ),
+                )
+            )
+            continue
+
+        if (
+            subject_label == "Symbol"
+            and str(subject_record.get("kind") or "") in _TYPE_SYMBOL_KINDS
+            and spec.member_only
+        ):
+            trav = typical_traversal_for(
+                edge, "type_subject", subject_id=subject_id, direction=requested_direction,
+            )
+            pairs.append(
+                (
+                    PRIORITY_META,
+                    TPL_NEIGHBORS_TYPE_LEVEL_REQUERY.format(
+                        edge=edge,
+                        subject_kind=subject_label,
+                        canonical_traversal=trav,
+                    ),
+                )
+            )
+
+    for edge in requested_edge_types:
+        spec = EDGE_SCHEMA.get(edge)
+        if spec is not None and spec.brownfield_resolver_sourced:
+            pairs.append(
+                (
+                    PRIORITY_META,
+                    TPL_NEIGHBORS_BROWNFIELD_RESOLVED_MAYBE_UNRESOLVED.format(edge=edge),
+                )
+            )
+            break
+
+    return pairs
+
+
+def _hint_contains_composed_dotkey(hint: str) -> bool:
+    return any(prefix in hint for prefix in _COMPOSED_DOT_KEY_PREFIXES)
+
+
+def _filter_neighbors_dotkey_hints(pairs: list[tuple[int, str]]) -> list[tuple[int, str]]:
+    return [(pri, text) for pri, text in pairs if not _hint_contains_composed_dotkey(text)]
 
 
 def _any_fuzzy_strategy(edges: list[dict[str, Any]]) -> bool:
@@ -227,12 +375,21 @@ def generate_hints(
         req_types = payload.get("requested_edge_types")
         if not isinstance(req_types, list):
             req_types = []
-        n_types = len([x for x in req_types if str(x).strip()])
-        if not results and n_types > 0:
-            pairs.append((PRIORITY_META, TPL_NEIGHBORS_EMPTY_KIND_CHECK))
+        edge_labels = [str(x).strip() for x in req_types if str(x).strip()]
+        if not results and edge_labels:
+            subject_record = payload.get("subject_record")
+            requested_direction = payload.get("requested_direction")
+            if isinstance(subject_record, dict) and requested_direction in ("in", "out"):
+                pairs.extend(
+                    neighbors_empty_hints(
+                        subject_record=subject_record,
+                        requested_edge_types=edge_labels,
+                        requested_direction=requested_direction,
+                    )
+                )
         elif _any_fuzzy_strategy(results):
             pairs.append((PRIORITY_META, TPL_NEIGHBORS_FUZZY_STRATEGY))
-        return finalize_hint_list(pairs)
+        return finalize_hint_list(_filter_neighbors_dotkey_hints(pairs))
 
     if output_kind == "describe":
         rec = payload.get("record")

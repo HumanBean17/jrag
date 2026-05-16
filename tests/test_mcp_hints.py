@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 import mcp_hints
+from java_ontology import EDGE_SCHEMA, FUZZY_STRATEGY_SET
 from mcp_hints import (
     PRIORITY_DECLARES_TYPE_ROLLUP,
     PRIORITY_LEAF_FOLLOWUP,
@@ -14,8 +15,8 @@ from mcp_hints import (
     PRIORITY_OVERRIDDEN_AXIS,
     finalize_hint_list,
     generate_hints,
+    neighbors_empty_hints,
 )
-from java_ontology import FUZZY_STRATEGY_SET
 from mcp_v2 import FindOutput, SearchOutput, describe_v2, find_v2, neighbors_v2, resolve_v2, search_v2
 
 _TYPE_KINDS = frozenset({"class", "interface", "enum", "record", "annotation"})
@@ -245,25 +246,55 @@ def test_hints_find_page_full_skips_when_last_page(kuzu_graph) -> None:
     assert mcp_hints.TPL_FIND_PAGE_FULL.format(limit=1) not in last.hints
 
 
-def test_hints_neighbors_empty_with_edge_types_emits_kind_check(kuzu_graph) -> None:
-    class_id = _class_symbol_id(kuzu_graph)
-    out = neighbors_v2(class_id, direction="out", edge_types=["DECLARES_CLIENT"], graph=kuzu_graph)
-    assert out.success is True
-    assert out.results == []
-    assert out.requested_edge_types == ["DECLARES_CLIENT"]
-    assert mcp_hints.TPL_NEIGHBORS_EMPTY_KIND_CHECK in out.hints
-
-
 def _neighbors_hint_payload(
     results: list[dict[str, Any]],
     *,
     requested_edge_types: list[str] | None = None,
+    subject_record: dict[str, Any] | None = None,
+    requested_direction: str = "out",
 ) -> dict[str, Any]:
     return {
         "success": True,
         "results": results,
         "requested_edge_types": requested_edge_types or ["DECLARES_CLIENT"],
+        "requested_direction": requested_direction,
+        "subject_record": subject_record
+        if subject_record is not None
+        else {"id": "sym:com.example.T", "kind": "class"},
     }
+
+
+def _neighbors_empty_payload(
+    subject_record: dict[str, Any],
+    edge_types: list[str],
+    *,
+    direction: str = "out",
+) -> dict[str, Any]:
+    return _neighbors_hint_payload(
+        [],
+        requested_edge_types=edge_types,
+        subject_record=subject_record,
+        requested_direction=direction,
+    )
+
+
+def _structural_neighbors_hints(payload: dict[str, Any]) -> list[str]:
+    hints = generate_hints("neighbors", payload)
+    structural_markers = (
+        mcp_hints.TPL_NEIGHBORS_WRONG_SUBJECT_KIND.split("'")[0],
+        mcp_hints.TPL_NEIGHBORS_WRONG_DIRECTION.split("'")[0],
+        mcp_hints.TPL_NEIGHBORS_TYPE_LEVEL_REQUERY.split("'")[0],
+    )
+    return [h for h in hints if any(h.startswith(m) for m in structural_markers)]
+
+
+def test_hints_neighbors_empty_class_declares_client_emits_type_level_requery(kuzu_graph) -> None:
+    class_id = _class_symbol_id(kuzu_graph)
+    out = neighbors_v2(class_id, direction="out", edge_types=["DECLARES_CLIENT"], graph=kuzu_graph)
+    assert out.success is True
+    assert out.results == []
+    assert out.requested_edge_types == ["DECLARES_CLIENT"]
+    assert any("lives on methods" in h for h in out.hints)
 
 
 def _edge_result(*, strategy: str | None = None, edge_type: str = "DECLARES_CLIENT") -> dict[str, Any]:
@@ -346,6 +377,269 @@ def test_hints_neighbors_fuzzy_strategy_neighbors_v2_round_trip(kuzu_graph) -> N
     assert any(s in FUZZY_STRATEGY_SET for s in strategies if isinstance(s, str))
     assert mcp_hints.TPL_NEIGHBORS_FUZZY_STRATEGY in out.hints
     assert "brownfield/fallback strategy" in out.hints[0]
+
+
+def _producer_id(kuzu_graph) -> str:
+    rows = kuzu_graph._rows("MATCH (p:Producer) RETURN p.id AS id ORDER BY p.id LIMIT 1")  # noqa: SLF001
+    if not rows:
+        pytest.fail("session fixture lacks Producer nodes (post-flip SCHEMA required)")
+    return str(rows[0]["id"])
+
+
+def _method_id(kuzu_graph) -> str:
+    rows = kuzu_graph._rows(  # noqa: SLF001
+        "MATCH (m:Symbol) WHERE m.kind = 'method' RETURN m.id AS id LIMIT 1",
+    )
+    assert rows
+    return str(rows[0]["id"])
+
+
+def _annotation_symbol_id(kuzu_graph) -> str | None:
+    rows = kuzu_graph._rows(  # noqa: SLF001
+        "MATCH (s:Symbol) WHERE s.kind = 'annotation' RETURN s.id AS id LIMIT 1",
+    )
+    if not rows:
+        return None
+    return str(rows[0]["id"])
+
+
+def test_hints_hv1_type_level_declares_client_requery() -> None:
+    payload = _neighbors_empty_payload(
+        {"id": "sym:com.example.T", "kind": "class"},
+        ["DECLARES_CLIENT"],
+    )
+    hints = generate_hints("neighbors", payload)
+    assert any("lives on methods" in h for h in hints)
+    assert "DECLARES" in hints[0]
+
+
+def test_hints_hv2_method_http_calls_wrong_subject_kind() -> None:
+    payload = _neighbors_empty_payload(
+        {"id": "sym:com.example.T#m()", "kind": "method"},
+        ["HTTP_CALLS"],
+    )
+    hints = generate_hints("neighbors", payload)
+    assert any("Client" in h and "Route" in h for h in hints)
+    assert any("DECLARES_CLIENT" in h for h in hints)
+
+
+def test_hints_hv3_method_async_calls_wrong_subject_kind() -> None:
+    payload = _neighbors_empty_payload(
+        {"id": "sym:com.example.T#m()", "kind": "method"},
+        ["ASYNC_CALLS"],
+    )
+    hints = generate_hints("neighbors", payload)
+    assert any("Producer" in h and "Route" in h for h in hints)
+    assert any("DECLARES_PRODUCER" in h for h in hints)
+
+
+def test_hints_hv4_producer_empty_async_out_brownfield_only() -> None:
+    payload = _neighbors_empty_payload(
+        {"id": "producer:svc:kafka:t", "producer_kind": "kafka"},
+        ["ASYNC_CALLS"],
+    )
+    hints = generate_hints("neighbors", payload)
+    assert _structural_neighbors_hints(payload) == []
+    assert any("brownfield resolver" in h for h in hints)
+
+
+def test_hints_hv5_producer_async_calls_wrong_direction() -> None:
+    payload = _neighbors_empty_payload(
+        {"id": "producer:svc:kafka:t", "producer_kind": "kafka"},
+        ["ASYNC_CALLS"],
+        direction="in",
+    )
+    hints = generate_hints("neighbors", payload)
+    assert any("direction='in'" in h and "direction='out'" in h for h in hints)
+
+
+def test_hints_hv6_client_http_calls_wrong_direction() -> None:
+    payload = _neighbors_empty_payload(
+        {"id": "client:svc:feign:t:GET:/p", "client_kind": "feign_method"},
+        ["HTTP_CALLS"],
+        direction="in",
+    )
+    hints = generate_hints("neighbors", payload)
+    assert any("direction='in'" in h and "direction='out'" in h for h in hints)
+
+
+def test_hints_hv7_route_http_calls_wrong_direction() -> None:
+    payload = _neighbors_empty_payload(
+        {"id": "route:svc:GET:/api", "framework": "spring_mvc"},
+        ["HTTP_CALLS"],
+        direction="out",
+    )
+    hints = generate_hints("neighbors", payload)
+    assert any("direction='out'" in h and "direction='in'" in h for h in hints)
+
+
+def test_hints_hv8_method_exposes_empty_no_structural_hint() -> None:
+    payload = _neighbors_empty_payload(
+        {"id": "sym:com.example.T#m()", "kind": "method"},
+        ["EXPOSES"],
+    )
+    assert _structural_neighbors_hints(payload) == []
+
+
+def test_hints_hv9_method_declares_client_empty_no_structural_hint() -> None:
+    payload = _neighbors_empty_payload(
+        {"id": "sym:com.example.T#m()", "kind": "method"},
+        ["DECLARES_CLIENT"],
+    )
+    assert _structural_neighbors_hints(payload) == []
+
+
+def test_hints_hv10_class_http_calls_wrong_subject_kind() -> None:
+    payload = _neighbors_empty_payload(
+        {"id": "sym:com.example.T", "kind": "class"},
+        ["HTTP_CALLS"],
+    )
+    hints = generate_hints("neighbors", payload)
+    assert any("this is a Symbol" in h for h in hints)
+
+
+def test_hints_hv11_method_overrides_empty_no_structural_hint() -> None:
+    payload = _neighbors_empty_payload(
+        {"id": "sym:com.example.T#m()", "kind": "method"},
+        ["OVERRIDES"],
+    )
+    assert _structural_neighbors_hints(payload) == []
+
+
+def test_hints_hv12_annotation_extends_empty_no_structural_hint(kuzu_graph) -> None:
+    ann_id = _annotation_symbol_id(kuzu_graph)
+    if ann_id is None:
+        pytest.skip("no annotation Symbol in fixture")
+    assert EDGE_SCHEMA["EXTENDS"].member_only is False
+    payload = _neighbors_empty_payload({"id": ann_id, "kind": "annotation"}, ["EXTENDS"])
+    assert _structural_neighbors_hints(payload) == []
+
+
+def test_hints_hv13_client_empty_http_brownfield_only() -> None:
+    payload = _neighbors_empty_payload(
+        {"id": "client:svc:feign:t:GET:/p", "client_kind": "feign_method"},
+        ["HTTP_CALLS"],
+    )
+    hints = generate_hints("neighbors", payload)
+    assert _structural_neighbors_hints(payload) == []
+    assert any("brownfield resolver" in h for h in hints)
+
+
+def test_hints_hv14_producer_empty_async_brownfield_only() -> None:
+    payload = _neighbors_empty_payload(
+        {"id": "producer:svc:kafka:t", "producer_kind": "kafka"},
+        ["ASYNC_CALLS"],
+    )
+    hints = generate_hints("neighbors", payload)
+    assert _structural_neighbors_hints(payload) == []
+    assert any("brownfield resolver" in h for h in hints)
+
+
+def test_hints_hv15_multi_edge_http_only_wrong_kind_for_http() -> None:
+    payload = _neighbors_empty_payload(
+        {"id": "sym:com.example.T#m()", "kind": "method"},
+        ["HTTP_CALLS", "DECLARES_CLIENT"],
+    )
+    hints = generate_hints("neighbors", payload)
+    wrong_kind = [h for h in hints if "HTTP_CALLS" in h and "this is a Symbol" in h]
+    assert len(wrong_kind) == 1
+    assert not any("DECLARES_CLIENT" in h and "lives on methods" in h for h in hints)
+
+
+def test_hints_hv16_client_nonempty_http_fuzzy_hint_unchanged(kuzu_graph) -> None:
+    rows = kuzu_graph._rows(  # noqa: SLF001
+        "MATCH (c:Client)-[e:HTTP_CALLS]->() "
+        "WHERE e.strategy IN $strategies "
+        "RETURN c.id AS id LIMIT 1",
+        {"strategies": sorted(FUZZY_STRATEGY_SET)},
+    )
+    if not rows:
+        pytest.skip("no Client HTTP_CALLS edge with fuzzy strategy in fixture")
+    cid = str(rows[0]["id"])
+    out = neighbors_v2(cid, direction="out", edge_types=["HTTP_CALLS"], graph=kuzu_graph, limit=50)
+    assert out.success and out.results
+    assert mcp_hints.TPL_NEIGHBORS_FUZZY_STRATEGY in out.hints
+    assert not any("this is a" in h for h in out.hints)
+
+
+def test_hints_hv17_class_exposes_type_level_requery() -> None:
+    payload = _neighbors_empty_payload(
+        {"id": "sym:com.example.T", "kind": "class"},
+        ["EXPOSES"],
+    )
+    hints = generate_hints("neighbors", payload)
+    assert any("lives on methods" in h for h in hints)
+
+
+def test_hints_hv18_route_declares_wrong_subject_kind() -> None:
+    payload = _neighbors_empty_payload(
+        {"id": "route:svc:GET:/api", "framework": "spring_mvc"},
+        ["DECLARES"],
+    )
+    hints = generate_hints("neighbors", payload)
+    assert any("this is a Route" in h for h in hints)
+
+
+def _synthetic_coverage_for_edge(edge: str) -> tuple[dict[str, Any], str] | None:
+    candidates: list[tuple[dict[str, Any], str]] = [
+        ({"id": "sym:type", "kind": "class"}, "out"),
+        ({"id": "sym:type", "kind": "class"}, "in"),
+        ({"id": "sym:method", "kind": "method"}, "out"),
+        ({"id": "sym:method", "kind": "method"}, "in"),
+        ({"id": "sym:ann", "kind": "annotation"}, "out"),
+        ({"id": "client:x", "client_kind": "feign_method"}, "out"),
+        ({"id": "client:x", "client_kind": "feign_method"}, "in"),
+        ({"id": "route:x", "framework": "spring_mvc"}, "out"),
+        ({"id": "route:x", "framework": "spring_mvc"}, "in"),
+        ({"id": "producer:x", "producer_kind": "kafka"}, "out"),
+        ({"id": "producer:x", "producer_kind": "kafka"}, "in"),
+    ]
+    for rec, direction in candidates:
+        if neighbors_empty_hints(
+            subject_record=rec,
+            requested_edge_types=[edge],
+            requested_direction=direction,  # type: ignore[arg-type]
+        ):
+            return rec, direction
+    return None
+
+
+@pytest.mark.parametrize("edge", sorted(EDGE_SCHEMA.keys()))
+def test_hints_hv19_edge_schema_coverage_exists_trigger_per_edge(edge: str) -> None:
+    found = _synthetic_coverage_for_edge(edge)
+    assert found is not None, f"no synthetic subject/direction triggers hints for {edge}"
+
+
+def test_hints_hv20_no_dotkey_edge_labels_in_rendered_neighbors_hints() -> None:
+    payloads = [
+        _neighbors_empty_payload({"id": "sym:com.example.T", "kind": "class"}, ["DECLARES_CLIENT"]),
+        _neighbors_empty_payload({"id": "sym:com.example.T#m()", "kind": "method"}, ["HTTP_CALLS"]),
+        _neighbors_empty_payload(
+            {"id": "client:svc:feign:t:GET:/p", "client_kind": "feign_method"},
+            ["HTTP_CALLS"],
+        ),
+    ]
+    for payload in payloads:
+        for hint in generate_hints("neighbors", payload):
+            assert "DECLARES." not in hint
+            assert "OVERRIDDEN_BY." not in hint
+
+
+def test_hints_neighbors_empty_kind_check_template_removed() -> None:
+    assert not hasattr(mcp_hints, "TPL_NEIGHBORS_EMPTY_KIND_CHECK")
+
+
+def test_hints_neighbors_v2_empty_post_flip_method_http_calls(kuzu_graph) -> None:
+    mid = _method_id(kuzu_graph)
+    rows = kuzu_graph._rows(  # noqa: SLF001
+        "MATCH (:Client)-[:HTTP_CALLS]->(:Route) RETURN count(*) AS n",
+    )
+    n = int(rows[0]["n"])
+    assert n > 0, "session fixture lacks post-flip Client→Route HTTP_CALLS edges"
+    out = neighbors_v2(mid, direction="out", edge_types=["HTTP_CALLS"], graph=kuzu_graph)
+    assert out.success is True
+    assert out.results == []
+    assert any("this is a Symbol" in h and "HTTP_CALLS" in h for h in out.hints)
 
 
 def test_hints_search_weak_structural_signal_emits(monkeypatch, kuzu_graph) -> None:
@@ -821,7 +1115,34 @@ def test_hints_pagination_none_skips_page_derived_hints() -> None:
         (mcp_hints.TPL_DESCRIBE_CLIENT_DECLARING, {"id": "client:svc:feign:target:GET:/p"}),
         (mcp_hints.TPL_FIND_EMPTY_RESOLVE, {"kind": "client"}),
         (mcp_hints.TPL_FIND_PAGE_FULL, {"limit": 500}),
-        (mcp_hints.TPL_NEIGHBORS_EMPTY_KIND_CHECK, {}),
+        (
+            mcp_hints.TPL_NEIGHBORS_WRONG_SUBJECT_KIND,
+            {
+                "edge": "HTTP_CALLS",
+                "src_kind": "Client",
+                "dst_kind": "Route",
+                "subject_kind": "Symbol",
+                "canonical_traversal": "neighbors(['x'],'out',['DECLARES_CLIENT'])",
+            },
+        ),
+        (
+            mcp_hints.TPL_NEIGHBORS_WRONG_DIRECTION,
+            {
+                "edge": "HTTP_CALLS",
+                "src_kind": "Client",
+                "dst_kind": "Route",
+                "requested_dir": "in",
+                "correct_dir": "out",
+            },
+        ),
+        (
+            mcp_hints.TPL_NEIGHBORS_TYPE_LEVEL_REQUERY,
+            {
+                "edge": "DECLARES_CLIENT",
+                "subject_kind": "Symbol",
+                "canonical_traversal": "neighbors(['x'],'out',['DECLARES'])",
+            },
+        ),
         (mcp_hints.TPL_SEARCH_WEAK, {}),
         (mcp_hints.TPL_RESOLVE_NONE_TRY_SEARCH, {"identifier": "com.example.Type#m()"}),
         (

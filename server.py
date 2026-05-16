@@ -452,7 +452,8 @@ def create_mcp_server() -> FastMCP:
             "Optional `filter` applies to each neighbor endpoint row; populated fields must be applicable to that "
             "neighbor's kind—mixed-kind result sets fail on the first inapplicable neighbor (strict frame). "
             "Wildcards in prefix fields are rejected. Unknown NodeFilter keys return success=false. "
-            "Successful responses echo `requested_edge_types` and may include `hints` (advisory next-step strings). "
+            "Successful responses echo `requested_edge_types` and may include `hints` (advisory next-step strings; "
+            "empty results may include EDGE_SCHEMA-driven traversal hints). "
             "Each edge's `attrs.strategy` indicates resolution quality (brownfield/fallback vs primary paths)."
         ),
     )
