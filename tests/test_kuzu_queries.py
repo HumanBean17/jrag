@@ -465,6 +465,17 @@ def test_get_route_by_path_microservice_isolated(kuzu_graph_route_extraction_smo
     assert ra["id"] != rb["id"]
 
 
+def test_find_route_callers_includes_producer_callers(kuzu_db_path_cross_service_smoke: Path) -> None:
+    g = KuzuGraph(str(kuzu_db_path_cross_service_smoke))
+    topic_routes = [r for r in g.list_routes(limit=100) if str(r.get("topic") or "")]
+    callers: list = []
+    for route in topic_routes:
+        callers = g.find_route_callers(route["id"])
+        if any(c.caller_node_kind == "producer" for c in callers):
+            break
+    assert any(c.caller_node_kind == "producer" for c in callers)
+
+
 def test_find_route_callers_returns_route_caller_client_node(kuzu_db_path_cross_service_smoke: Path) -> None:
     from kuzu_queries import RouteCaller
 

@@ -67,8 +67,8 @@ def _async_calls(db_path: Path) -> list[dict]:
     db = kuzu.Database(str(db_path), read_only=True)
     conn = kuzu.Connection(db)
     r = conn.execute(
-        "MATCH (s:Symbol)-[c:ASYNC_CALLS]->(rt:Route) "
-        "RETURN s.fqn AS fqn, c.strategy AS strategy, rt.topic AS topic ORDER BY fqn, topic",
+        "MATCH (pr:Producer)-[c:ASYNC_CALLS]->(rt:Route) "
+        "RETURN pr.member_fqn AS fqn, c.strategy AS strategy, rt.topic AS topic ORDER BY fqn, topic",
     )
     out: list[dict] = []
     while r.has_next():

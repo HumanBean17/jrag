@@ -183,6 +183,29 @@ def test_find_route_by_path_prefix(kuzu_graph) -> None:
     assert isinstance(out.results, list)
 
 
+def test_find_kind_producer_returns_producer_nodes(kuzu_graph) -> None:
+    out = find_v2("producer", filter={}, graph=kuzu_graph)
+    if not out.results:
+        pytest.skip("no Producer nodes in session fixture")
+    assert out.success is True
+    assert all(r.kind == "producer" for r in out.results)
+
+
+def test_resolve_hint_kind_producer(kuzu_graph) -> None:
+    rows = kuzu_graph.list_producers(limit=10)
+    if not rows:
+        pytest.skip("no Producer nodes in session fixture")
+    topic = str(rows[0].get("topic") or "")
+    if not topic:
+        pytest.skip("producer row missing topic")
+    out = resolve_v2(topic, hint_kind="producer", graph=kuzu_graph)
+    assert out.success is True
+    assert out.status in {"one", "many"}
+    if out.status == "one":
+        assert out.node is not None
+        assert out.node.kind == "producer"
+
+
 def test_find_client_by_client_kind(kuzu_graph) -> None:
     out = find_v2("client", {"client_kind": "feign_method"}, graph=kuzu_graph)
     assert out.success is True

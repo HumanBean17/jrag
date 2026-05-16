@@ -196,7 +196,7 @@ def test_35a_compute_risk_cross_service_bonus_saturates_to_one(monkeypatch) -> N
                 }]
             if "MATCH (s:Symbol)-[:DECLARES_CLIENT]->(c:Client)-[e:HTTP_CALLS]->(r:Route {id: $rid})" in query:
                 return [{"id": str(i)} for i in range(6)]
-            if "MATCH (s:Symbol)-[e:ASYNC_CALLS]->(r:Route {id: $rid})" in query:
+            if "MATCH (s:Symbol)-[:DECLARES_PRODUCER]->(p:Producer)-[e:ASYNC_CALLS]->(r:Route {id: $rid})" in query:
                 return []
             return []
 
@@ -259,7 +259,7 @@ def test_35b_compute_risk_single_cross_service_bonus_is_point_two(monkeypatch) -
                 if self._include_callers:
                     return [{"id": "caller-1"}]
                 return []
-            if "MATCH (s:Symbol)-[e:ASYNC_CALLS]->(r:Route {id: $rid})" in query:
+            if "MATCH (s:Symbol)-[:DECLARES_PRODUCER]->(p:Producer)-[e:ASYNC_CALLS]->(r:Route {id: $rid})" in query:
                 return []
             return []
 

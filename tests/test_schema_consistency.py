@@ -62,30 +62,29 @@ def test_schema_consistency_http_calls_post_flip_client_to_route() -> None:
     assert spec.dst == "Route"
 
 
-def test_schema_consistency_async_calls_pre_flip_symbol_to_route() -> None:
+def test_schema_consistency_async_calls_post_flip_producer_to_route() -> None:
     spec = EDGE_SCHEMA["ASYNC_CALLS"]
-    assert spec.src == "Symbol"
+    assert spec.src == "Producer"
     assert spec.dst == "Route"
 
 
 def test_edge_schema_member_only_flags_on_method_level_edges() -> None:
     assert EDGE_SCHEMA["DECLARES_CLIENT"].member_only is True
+    assert EDGE_SCHEMA["DECLARES_PRODUCER"].member_only is True
     assert EDGE_SCHEMA["EXPOSES"].member_only is True
     assert EDGE_SCHEMA["OVERRIDES"].member_only is True
     assert EDGE_SCHEMA["CALLS"].member_only is True
-    assert "DECLARES_PRODUCER" not in EDGE_SCHEMA
     assert EDGE_SCHEMA["HTTP_CALLS"].member_only is False
     assert EDGE_SCHEMA["ASYNC_CALLS"].member_only is False
 
 
-def test_http_async_typical_traversals_include_pre_flip_current_keys() -> None:
+def test_http_async_typical_traversals_post_flip() -> None:
     http_trav = EDGE_SCHEMA["HTTP_CALLS"].typical_traversals
     assert "member_subject" in http_trav
     assert "DECLARES_CLIENT" in http_trav["member_subject"]
     async_trav = EDGE_SCHEMA["ASYNC_CALLS"].typical_traversals
-    assert "member_subject_current" in async_trav
-    assert "ASYNC_CALLS" in async_trav["member_subject_current"]
     assert "member_subject" in async_trav
+    assert "DECLARES_PRODUCER" in async_trav["member_subject"]
 
 
 def test_brownfield_resolver_strategy_literals_emitted_in_builder_subset() -> None:

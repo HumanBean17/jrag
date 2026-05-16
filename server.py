@@ -30,7 +30,7 @@ _INSTRUCTIONS = (
     "resolve (identifier-shaped lookup for symbol/route/client — three statuses one|many|none). "
     "NodeFilter `filter` is a JSON object (preferred); a JSON-encoded string is also accepted as a fallback. "
     "Unknown filter keys and populated fields not applicable to the effective node kind fail with success=false and message. "
-    "Edge labels: EXTENDS, IMPLEMENTS, INJECTS, OVERRIDES, DECLARES, DECLARES_CLIENT, CALLS, EXPOSES, HTTP_CALLS, ASYNC_CALLS. "
+    "Edge labels: EXTENDS, IMPLEMENTS, INJECTS, OVERRIDES, DECLARES, DECLARES_CLIENT, DECLARES_PRODUCER, CALLS, EXPOSES, HTTP_CALLS, ASYNC_CALLS. "
     "Reprocess/init, meta, tables, diagnose-ignore, analyze-pr: use java-codebase-rag CLI — not MCP."
 )
 
@@ -392,7 +392,7 @@ def create_mcp_server() -> FastMCP:
         ),
     )
     async def find(
-        kind: Literal["symbol", "route", "client"] = Field(
+        kind: Literal["symbol", "route", "client", "producer"] = Field(
             description=(
                 "Which graph table to search. 'symbol' = declarations, "
                 "'route' = endpoints, 'client' = outbound clients."
@@ -414,8 +414,8 @@ def create_mcp_server() -> FastMCP:
         name="describe",
         description=(
             "Full node record plus `edge_summary` (in/out counts per stored edge label, plus optional describe-time keys). Type Symbols may add "
-            "composed keys DECLARES.DECLARES_CLIENT and DECLARES.EXPOSES; method Symbols may add "
-            "override-axis virtual keys (OVERRIDDEN_BY, OVERRIDDEN_BY.DECLARES_CLIENT, OVERRIDDEN_BY.EXPOSES, "
+            "composed keys DECLARES.DECLARES_CLIENT, DECLARES.DECLARES_PRODUCER, and DECLARES.EXPOSES; method Symbols may add "
+            "override-axis virtual keys (OVERRIDDEN_BY, OVERRIDDEN_BY.DECLARES_CLIENT, OVERRIDDEN_BY.DECLARES_PRODUCER, OVERRIDDEN_BY.EXPOSES, "
             "plus an `OVERRIDES` map entry that merges stored `[:OVERRIDES]` counts with the dispatch-up rollup per direction). Those dot-keys and virtual keys are "
             "read-only summaries—not valid `neighbors(edge_types=…)` values. The stored `OVERRIDES` relationship "
             "is a normal edge label and may be traversed via neighbors(edge_types=[..., \"OVERRIDES\", ...]). "
@@ -498,7 +498,7 @@ def create_mcp_server() -> FastMCP:
             "route path template, client target_service, or target+path pair). Returns "
             "status=one (single node), many (≥2 ranked candidates with reason), or none "
             "(no match — fall back to search(query=...) for natural language or fuzzy text). "
-            "Optional hint_kind narrows to symbol, route, or client. "
+            "Optional hint_kind narrows to symbol, route, client, or producer. "
             "Successful responses may include advisory hints (same contract as other v2 tools). "
             "Malformed empty/whitespace identifier returns success=false. "
             "Examples: resolve('com.foo.Bar', hint_kind='symbol'); "
@@ -510,7 +510,7 @@ def create_mcp_server() -> FastMCP:
         identifier: str = Field(
             description="Identifier-shaped node lookup (FQN, id prefix, route path, client target, …)",
         ),
-        hint_kind: Literal["symbol", "route", "client"] | None = Field(
+        hint_kind: Literal["symbol", "route", "client", "producer"] | None = Field(
             default=None,
             description="Optional kind constraint. Omit to search all three kinds.",
         ),

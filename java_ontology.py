@@ -301,6 +301,26 @@ EDGE_SCHEMA: dict[str, EdgeSpec] = {
             "alien_subject": "DECLARES_CLIENT connects method Symbol → Client",
         },
     ),
+    "DECLARES_PRODUCER": EdgeSpec(
+        name="DECLARES_PRODUCER",
+        src="Symbol",
+        dst="Producer",
+        cardinality="one_to_many",
+        brownfield_resolver_sourced=True,
+        attrs=(
+            EdgeAttr("confidence", "DOUBLE", "producer declaration confidence in [0.0, 1.0]"),
+            EdgeAttr("strategy", "STRING", "producer resolution strategy literal"),
+        ),
+        purpose="method declares an outbound async producer call site",
+        member_only=True,
+        typical_traversals={
+            "type_subject": _SYMBOL_TYPE_TRAVERSAL.format(
+                id="{id}", direction="{direction}", edge="DECLARES_PRODUCER",
+            ),
+            "member_subject": "neighbors(['{id}'],'out',['DECLARES_PRODUCER'])",
+            "alien_subject": "DECLARES_PRODUCER connects method Symbol → Producer",
+        },
+    ),
     "HTTP_CALLS": EdgeSpec(
         name="HTTP_CALLS",
         src="Client",
@@ -337,7 +357,7 @@ EDGE_SCHEMA: dict[str, EdgeSpec] = {
     ),
     "ASYNC_CALLS": EdgeSpec(
         name="ASYNC_CALLS",
-        src="Symbol",
+        src="Producer",
         dst="Route",
         cardinality="many_to_many",
         brownfield_resolver_sourced=True,
@@ -348,25 +368,24 @@ EDGE_SCHEMA: dict[str, EdgeSpec] = {
             EdgeAttr("raw_topic", "STRING", "uninterpolated topic template from the call site"),
             EdgeAttr("match", "STRING", "cross_service|intra_service|ambiguous|phantom|unresolved"),
         ),
-        purpose="resolved async call from declaring method to topic route (pre-flip: Symbol→Route; PR-C: Producer→Route)",
+        purpose="resolved async call from a declared Producer to a topic route",
         typical_traversals={
-            "type_subject_current": (
-                "neighbors(['{id}'],'out',['DECLARES']) "
-                "then neighbors(member_ids,'out',['ASYNC_CALLS'])"
-            ),
             "type_subject": (
                 "neighbors(['{id}'],'out',['DECLARES']) "
                 "then neighbors(member_ids,'out',['DECLARES_PRODUCER']) "
                 "then neighbors(producer_ids,'out',['ASYNC_CALLS'])"
             ),
-            "member_subject_current": "neighbors(['{id}'],'out',['ASYNC_CALLS'])",
             "member_subject": (
                 "neighbors(['{id}'],'out',['DECLARES_PRODUCER']) "
                 "then neighbors(producer_ids,'out',['ASYNC_CALLS'])"
             ),
+            "route_subject": (
+                "neighbors(['{id}'],'in',['ASYNC_CALLS']) "
+                "then neighbors(producer_ids,'in',['DECLARES_PRODUCER']) for declaring method"
+            ),
             "alien_subject": (
-                "ASYNC_CALLS is Symbol→Route until PR-C; use member_subject_current. "
-                "After PR-C (Producer→Route), use member_subject via DECLARES_PRODUCER"
+                "ASYNC_CALLS connects Producer→Route; use DECLARES_PRODUCER from a method Symbol, "
+                "or neighbors(producer_id,'out',['ASYNC_CALLS']) from a Producer id"
             ),
         },
     ),

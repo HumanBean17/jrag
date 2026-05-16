@@ -143,6 +143,8 @@ class RouteCaller:
     match: str
     target_service: str = ""
     raw_uri: str = ""
+    topic: str = ""
+    broker: str = ""
 
 
 def _symbol_return_for(alias: str) -> str:
@@ -208,6 +210,7 @@ _EDGE_TYPES: tuple[str, ...] = (
     "CALLS",
     "EXPOSES",
     "DECLARES_CLIENT",
+    "DECLARES_PRODUCER",
     "HTTP_CALLS",
     "ASYNC_CALLS",
 )
@@ -628,6 +631,7 @@ class KuzuGraph:
         rollup: dict[str, dict[str, int]] = {}
         for key, rel in (
             ("DECLARES.DECLARES_CLIENT", "DECLARES_CLIENT"),
+            ("DECLARES.DECLARES_PRODUCER", "DECLARES_PRODUCER"),
             ("DECLARES.EXPOSES", "EXPOSES"),
         ):
             rows = self._rows(
@@ -687,6 +691,9 @@ class KuzuGraph:
             n_dc = self._edge_row_count_from_method_ids(distinct_impl, "DECLARES_CLIENT")
             if n_dc > 0:
                 rollup["OVERRIDDEN_BY.DECLARES_CLIENT"] = {"in": 0, "out": n_dc}
+            n_dp = self._edge_row_count_from_method_ids(distinct_impl, "DECLARES_PRODUCER")
+            if n_dp > 0:
+                rollup["OVERRIDDEN_BY.DECLARES_PRODUCER"] = {"in": 0, "out": n_dp}
             n_ex = self._edge_row_count_from_method_ids(distinct_impl, "EXPOSES")
             if n_ex > 0:
                 rollup["OVERRIDDEN_BY.EXPOSES"] = {"in": 0, "out": n_ex}
@@ -1355,13 +1362,14 @@ class KuzuGraph:
                     if len(stage_results) < stage_limit:
                         remaining = stage_limit - len(stage_results)
                         qrf_async = (
-                            "MATCH (root:Symbol)-[:DECLARES]->(m1:Symbol)-[e:ASYNC_CALLS]->(rt:Route)"
-                            "<-[:EXPOSES]-(handler:Symbol)<-[:DECLARES]-(n:Symbol) "
+                            "MATCH (root:Symbol)-[:DECLARES]->(m1:Symbol)-[:DECLARES_PRODUCER]->(pr:Producer)"
+                            "-[e:ASYNC_CALLS]->(rt:Route)<-[:EXPOSES]-(handler:Symbol)<-[:DECLARES]-(n:Symbol) "
                             "WHERE root.fqn IN $fqns AND n.role IN $roles "
                             "AND n.resolved AND n.kind IN ['class','interface','enum','record','annotation'] "
                             "AND e.confidence >= $mc AND root.microservice <> n.microservice "
                             f"{scrf} "
-                            f"RETURN {_symbol_return_for('n')}, 'ASYNC_CALLS' AS edge_type, root.fqn AS from_fqn "
+                            f"RETURN {_symbol_return_for('n')}, 'ASYNC_CALLS' AS edge_type, "
+                            f"root.fqn AS from_fqn, pr.id AS caller_producer_id "
                             f"LIMIT {max(1, remaining * 4)}"
                         )
                         for row in self._rows(qrf_async, params_rf):
@@ -1491,7 +1499,7 @@ class KuzuGraph:
         path_template: str = "",
         method: str = "",
     ) -> list[RouteCaller]:
-        """HTTP callers via Client (two-hop). Async callers omitted until PR-C (Producer)."""
+        """HTTP callers via Client; async callers via Producer (two-hop each)."""
         rid = route_id or ""
         if not rid:
             params: dict[str, Any] = {
@@ -1518,6 +1526,14 @@ class KuzuGraph:
             "ORDER BY e.confidence DESC, c.id",
             {"rid": rid},
         )
+        async_rows = self._rows(
+            "MATCH (s:Symbol)-[:DECLARES_PRODUCER]->(p:Producer)-[e:ASYNC_CALLS]->(r:Route {id: $rid}) "
+            "RETURN p.id AS caller_node_id, p.microservice AS caller_microservice, "
+            "s.id AS declaring_symbol_id, e.confidence AS confidence, e.match AS match, "
+            "p.topic AS topic, p.broker AS broker "
+            "ORDER BY e.confidence DESC, p.id",
+            {"rid": rid},
+        )
         out: list[RouteCaller] = []
         for row in http_rows:
             out.append(
@@ -1532,10 +1548,23 @@ class KuzuGraph:
                     raw_uri=str(row.get("raw_uri") or ""),
                 ),
             )
+        for row in async_rows:
+            out.append(
+                RouteCaller(
+                    caller_node_id=str(row.get("caller_node_id") or ""),
+                    caller_node_kind="producer",
+                    caller_microservice=str(row.get("caller_microservice") or ""),
+                    declaring_symbol_id=str(row.get("declaring_symbol_id") or ""),
+                    confidence=float(row.get("confidence") or 0.0),
+                    match=str(row.get("match") or ""),
+                    topic=str(row.get("topic") or ""),
+                    broker=str(row.get("broker") or ""),
+                ),
+            )
         return out
 
     def trace_request_flow(self, entry_route_id: str, max_hops: int = 5) -> dict[str, Any]:
-        """Inbound HTTP via Client two-hop. Async inbound omitted until PR-C (Producer)."""
+        """Inbound HTTP via Client; async inbound via Producer (two-hop each)."""
         hops = max(1, min(int(max_hops), 8))
         inbound_http = self._rows(
             f"MATCH (entry:Route {{id: $rid}})<-[e:HTTP_CALLS]-(caller:Client)"
@@ -1548,7 +1577,18 @@ class KuzuGraph:
             "ORDER BY confidence DESC, caller_node_id",
             {"rid": entry_route_id},
         )
-        inbound = inbound_http
+        inbound_async = self._rows(
+            f"MATCH (entry:Route {{id: $rid}})<-[e:ASYNC_CALLS]-(caller:Producer)"
+            "<-[:DECLARES_PRODUCER]-(decl:Symbol) "
+            f"OPTIONAL MATCH (origin:Symbol)-[:CALLS*0..{hops}]->(decl) "
+            "RETURN DISTINCT caller.id AS caller_node_id, 'producer' AS caller_node_kind, "
+            "decl.id AS declaring_symbol_id, decl.fqn AS declaring_symbol_fqn, "
+            "caller.microservice AS microservice, e.confidence AS confidence, "
+            "e.match AS match, origin.id AS origin_symbol_id, origin.fqn AS origin_fqn "
+            "ORDER BY confidence DESC, caller_node_id",
+            {"rid": entry_route_id},
+        )
+        inbound = inbound_http + inbound_async
         outbound = self._rows(
             f"MATCH (handler:Symbol)-[:EXPOSES]->(entry:Route {{id: $rid}}) "
             f"OPTIONAL MATCH (handler)-[:CALLS*0..{hops}]->(next:Symbol) "
@@ -1631,6 +1671,60 @@ class KuzuGraph:
             f"ORDER BY c.microservice, c.client_kind, c.path, c.method, c.id LIMIT $lim"
         )
         return [self._row_to_client_dict(r) for r in self._rows(q, params)]
+
+    _PRODUCER_RETURN = (
+        "p.id AS id, p.producer_kind AS producer_kind, p.topic AS topic, p.broker AS broker, "
+        "p.direction AS direction, p.member_fqn AS member_fqn, p.member_id AS member_id, "
+        "p.microservice AS microservice, p.module AS module, p.filename AS filename, "
+        "p.start_line AS start_line, p.end_line AS end_line, p.resolved AS resolved, "
+        "p.source_layer AS source_layer"
+    )
+
+    @staticmethod
+    def _row_to_producer_dict(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "id": str(row.get("id") or ""),
+            "producer_kind": str(row.get("producer_kind") or ""),
+            "topic": str(row.get("topic") or ""),
+            "broker": str(row.get("broker") or ""),
+            "direction": str(row.get("direction") or ""),
+            "member_fqn": str(row.get("member_fqn") or ""),
+            "member_id": str(row.get("member_id") or ""),
+            "microservice": str(row.get("microservice") or ""),
+            "module": str(row.get("module") or ""),
+            "filename": str(row.get("filename") or ""),
+            "start_line": int(row.get("start_line") or 0),
+            "end_line": int(row.get("end_line") or 0),
+            "resolved": bool(row.get("resolved", True)),
+            "source_layer": str(row.get("source_layer") or "builtin"),
+        }
+
+    def list_producers(
+        self,
+        *,
+        microservice: str | None = None,
+        producer_kind: str | None = None,
+        topic_prefix: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        lim = max(1, min(int(limit), 500))
+        params: dict[str, Any] = {"lim": lim}
+        preds: list[str] = []
+        if microservice:
+            params["microservice"] = microservice
+            preds.append("p.microservice = $microservice")
+        if producer_kind:
+            params["producer_kind"] = producer_kind
+            preds.append("p.producer_kind = $producer_kind")
+        if topic_prefix:
+            params["topic_prefix"] = topic_prefix
+            preds.append("p.topic STARTS WITH $topic_prefix")
+        where = (" WHERE " + " AND ".join(preds)) if preds else ""
+        q = (
+            f"MATCH (p:Producer){where} RETURN {self._PRODUCER_RETURN} "
+            f"ORDER BY p.microservice, p.producer_kind, p.topic, p.id LIMIT $lim"
+        )
+        return [self._row_to_producer_dict(r) for r in self._rows(q, params)]
 
     # ---- used by search_lancedb.graph_expand ----
 

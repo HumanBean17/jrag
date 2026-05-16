@@ -15,8 +15,9 @@
 | CALLS | Symbol | Symbol | many_to_many | yes | yes |
 | EXPOSES | Symbol | Route | one_to_one | yes | yes |
 | DECLARES_CLIENT | Symbol | Client | one_to_many | yes | yes |
+| DECLARES_PRODUCER | Symbol | Producer | one_to_many | yes | yes |
 | HTTP_CALLS | Client | Route | many_to_many | yes | no |
-| ASYNC_CALLS | Symbol | Route | many_to_many | yes | no |
+| ASYNC_CALLS | Producer | Route | many_to_many | yes | no |
 
 ## EXTENDS
 
@@ -183,6 +184,26 @@
 - `member_subject`: neighbors(['{id}'],'out',['DECLARES_CLIENT'])
 - `alien_subject`: DECLARES_CLIENT connects method Symbol → Client
 
+## DECLARES_PRODUCER
+
+**Endpoints**: `Symbol → Producer`
+**Cardinality**: `one_to_many`
+**Brownfield-resolver-sourced**: yes
+**Member-only** (hints): yes
+
+**Purpose**: method declares an outbound async producer call site
+
+**Attributes**:
+
+- `confidence` (`DOUBLE`) — producer declaration confidence in [0.0, 1.0]
+- `strategy` (`STRING`) — producer resolution strategy literal
+
+**Typical traversals**:
+
+- `type_subject`: neighbors(['{id}'],'out',['DECLARES']) then neighbors(member_ids,'{direction}',['DECLARES_PRODUCER'])
+- `member_subject`: neighbors(['{id}'],'out',['DECLARES_PRODUCER'])
+- `alien_subject`: DECLARES_PRODUCER connects method Symbol → Producer
+
 ## HTTP_CALLS
 
 **Endpoints**: `Client → Route`
@@ -209,12 +230,12 @@
 
 ## ASYNC_CALLS
 
-**Endpoints**: `Symbol → Route`
+**Endpoints**: `Producer → Route`
 **Cardinality**: `many_to_many`
 **Brownfield-resolver-sourced**: yes
 **Member-only** (hints): no
 
-**Purpose**: resolved async call from declaring method to topic route (pre-flip: Symbol→Route; PR-C: Producer→Route)
+**Purpose**: resolved async call from a declared Producer to a topic route
 
 **Attributes**:
 
@@ -226,8 +247,7 @@
 
 **Typical traversals**:
 
-- `type_subject_current`: neighbors(['{id}'],'out',['DECLARES']) then neighbors(member_ids,'out',['ASYNC_CALLS'])
 - `type_subject`: neighbors(['{id}'],'out',['DECLARES']) then neighbors(member_ids,'out',['DECLARES_PRODUCER']) then neighbors(producer_ids,'out',['ASYNC_CALLS'])
-- `member_subject_current`: neighbors(['{id}'],'out',['ASYNC_CALLS'])
 - `member_subject`: neighbors(['{id}'],'out',['DECLARES_PRODUCER']) then neighbors(producer_ids,'out',['ASYNC_CALLS'])
-- `alien_subject`: ASYNC_CALLS is Symbol→Route until PR-C; use member_subject_current. After PR-C (Producer→Route), use member_subject via DECLARES_PRODUCER
+- `route_subject`: neighbors(['{id}'],'in',['ASYNC_CALLS']) then neighbors(producer_ids,'in',['DECLARES_PRODUCER']) for declaring method
+- `alien_subject`: ASYNC_CALLS connects Producer→Route; use DECLARES_PRODUCER from a method Symbol, or neighbors(producer_id,'out',['ASYNC_CALLS']) from a Producer id

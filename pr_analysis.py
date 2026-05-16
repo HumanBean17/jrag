@@ -439,9 +439,9 @@ def compute_risk(graph: Any, changed: list[ChangedSymbol]) -> PrRiskReport:
                 {"rid": rid},
             )
             callers += graph._rows(
-                "MATCH (s:Symbol)-[e:ASYNC_CALLS]->(r:Route {id: $rid}) "
+                "MATCH (s:Symbol)-[:DECLARES_PRODUCER]->(p:Producer)-[e:ASYNC_CALLS]->(r:Route {id: $rid}) "
                 "WHERE e.match = 'cross_service' "
-                "RETURN s.id AS id LIMIT 500",
+                "RETURN p.id AS id LIMIT 500",
                 {"rid": rid},
             )
             cs_cross_service += len(callers)

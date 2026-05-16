@@ -46,6 +46,7 @@ EdgeType = Literal[
     "OVERRIDES",
     "DECLARES",
     "DECLARES_CLIENT",
+    "DECLARES_PRODUCER",
     "CALLS",
     "EXPOSES",
     "HTTP_CALLS",
@@ -114,11 +115,13 @@ class NodeFilter(BaseModel):
     client_kind: str | None = None
     target_service: str | None = None
     target_path_prefix: str | None = None
+    producer_kind: str | None = None
+    topic_prefix: str | None = None
 
 
 _NODEFILTER_FIELD_ORDER: tuple[str, ...] = tuple(NodeFilter.model_fields.keys())
 
-_NODEFILTER_APPLICABLE_FIELDS: dict[Literal["symbol", "route", "client"], tuple[str, ...]] = {
+_NODEFILTER_APPLICABLE_FIELDS: dict[Literal["symbol", "route", "client", "producer"], tuple[str, ...]] = {
     "symbol": (
         "microservice",
         "module",
@@ -146,6 +149,13 @@ _NODEFILTER_APPLICABLE_FIELDS: dict[Literal["symbol", "route", "client"], tuple[
         "target_path_prefix",
         "http_method",
     ),
+    "producer": (
+        "microservice",
+        "module",
+        "source_layer",
+        "producer_kind",
+        "topic_prefix",
+    ),
 }
 
 
@@ -165,13 +175,17 @@ def _populated_nodefilter_fields(nf: NodeFilter) -> set[str]:
     return populated
 
 
-def _nodefilter_inapplicable_fields(kind: Literal["symbol", "route", "client"], nf: NodeFilter) -> list[str]:
+def _nodefilter_inapplicable_fields(
+    kind: Literal["symbol", "route", "client", "producer"], nf: NodeFilter,
+) -> list[str]:
     populated = _populated_nodefilter_fields(nf)
     applicable = set(_NODEFILTER_APPLICABLE_FIELDS[kind])
     return _ordered_nodefilter_fields(populated - applicable)
 
 
-def _nodefilter_applicability_error(kind: Literal["symbol", "route", "client"], nf: NodeFilter) -> str | None:
+def _nodefilter_applicability_error(
+    kind: Literal["symbol", "route", "client", "producer"], nf: NodeFilter,
+) -> str | None:
     inapplicable = _nodefilter_inapplicable_fields(kind, nf)
     if not inapplicable:
         return None
@@ -245,7 +259,7 @@ class SearchHit(BaseModel):
 
 class NodeRef(BaseModel):
     id: str
-    kind: Literal["symbol", "route", "client"]
+    kind: Literal["symbol", "route", "client", "producer"]
     fqn: str
     symbol_kind: str | None = None
     microservice: str | None = None
@@ -255,7 +269,7 @@ class NodeRef(BaseModel):
 
 class NodeRecord(BaseModel):
     id: str
-    kind: Literal["symbol", "route", "client"]
+    kind: Literal["symbol", "route", "client", "producer"]
     fqn: str
     data: dict[str, Any] = Field(default_factory=dict)
     edge_summary: dict[str, dict[str, int]] | None = Field(
@@ -263,11 +277,12 @@ class NodeRecord(BaseModel):
         description=(
             "Per graph edge label, in/out incident counts. For type Symbols (class, interface, "
             "enum, record, annotation), may also include composed dot-keys "
-            "`DECLARES.DECLARES_CLIENT` and `DECLARES.EXPOSES`: 2-hop summaries "
+            "`DECLARES.DECLARES_CLIENT`, `DECLARES.DECLARES_PRODUCER`, and `DECLARES.EXPOSES`: 2-hop summaries "
             "(DECLARES to member, then that edge) — edge-row counts, not EdgeType literals; "
             "do not pass them to neighbors(edge_types=…). For method Symbols, may include "
             "override-axis virtual keys `OVERRIDDEN_BY`, `OVERRIDDEN_BY.DECLARES_CLIENT`, "
-            "`OVERRIDDEN_BY.EXPOSES`, plus an `OVERRIDES` map entry that **merges** stored "
+            "`OVERRIDDEN_BY.DECLARES_PRODUCER`, `OVERRIDDEN_BY.EXPOSES`, plus an `OVERRIDES` map entry "
+            "that **merges** stored "
             "`[:OVERRIDES]` in/out counts with the describe-time dispatch-up rollup (per "
             "direction `max`, so inbound stored overrides are not dropped). Those virtual / "
             "dot-keys are not valid neighbors(edge_types=…) arguments. The stored relationship "
@@ -369,6 +384,14 @@ _CLIENT_RESOLVE_RETURN = (
     "c.source_layer AS source_layer"
 )
 
+_PRODUCER_RESOLVE_RETURN = (
+    "p.id AS id, p.producer_kind AS producer_kind, p.topic AS topic, p.broker AS broker, "
+    "p.direction AS direction, p.member_fqn AS member_fqn, p.member_id AS member_id, "
+    "p.microservice AS microservice, p.module AS module, p.filename AS filename, "
+    "p.start_line AS start_line, p.end_line AS end_line, p.resolved AS resolved, "
+    "p.source_layer AS source_layer"
+)
+
 _RESOLVE_PRE_DEDUP_LIMIT = 50
 
 
@@ -392,17 +415,19 @@ class ResolveOutput(BaseModel):
     hints: list[str] = Field(default_factory=list, description=MCP_HINTS_FIELD_DESCRIPTION)
 
 
-def _node_kind_from_id(id_str: str) -> Literal["symbol", "route", "client"]:
+def _node_kind_from_id(id_str: str) -> Literal["symbol", "route", "client", "producer"]:
     if id_str.startswith("sym:"):
         return "symbol"
     if id_str.startswith("route:") or id_str.startswith("r:"):
         return "route"
     if id_str.startswith("client:") or id_str.startswith("c:"):
         return "client"
+    if id_str.startswith("producer:") or id_str.startswith("p:"):
+        return "producer"
     raise ValueError(f"Unknown id prefix for `{id_str}`")
 
 
-def _resolve_node_kind(graph: KuzuGraph, node_id: str) -> Literal["symbol", "route", "client"]:
+def _resolve_node_kind(graph: KuzuGraph, node_id: str) -> Literal["symbol", "route", "client", "producer"]:
     try:
         return _node_kind_from_id(node_id)
     except ValueError:
@@ -413,6 +438,8 @@ def _resolve_node_kind(graph: KuzuGraph, node_id: str) -> Literal["symbol", "rou
         return "route"
     if graph._rows("MATCH (n:Client) WHERE n.id = $id RETURN n.id AS id LIMIT 1", {"id": node_id}):  # noqa: SLF001
         return "client"
+    if graph._rows("MATCH (n:Producer) WHERE n.id = $id RETURN n.id AS id LIMIT 1", {"id": node_id}):  # noqa: SLF001
+        return "producer"
     raise ValueError(f"Unknown id prefix for `{node_id}`")
 
 
@@ -492,7 +519,7 @@ def _symbol_where_from_filter(f: NodeFilter) -> tuple[str, dict[str, Any]]:
     return where, params
 
 
-def _node_ref_from_row(kind: Literal["symbol", "route", "client"], row: dict[str, Any]) -> NodeRef:
+def _node_ref_from_row(kind: Literal["symbol", "route", "client", "producer"], row: dict[str, Any]) -> NodeRef:
     symbol_kind: str | None = None
     if kind == "symbol":
         fqn = str(row.get("fqn") or "")
@@ -504,11 +531,16 @@ def _node_ref_from_row(kind: Literal["symbol", "route", "client"], row: dict[str
         path = str(row.get("path_template") or row.get("path") or "")
         fqn = f"{method} {path}".strip()
         role = None
-    else:
+    elif kind == "client":
         method = str(row.get("method") or "")
         target = str(row.get("target_service") or "")
         path = str(row.get("path_template") or row.get("path") or "")
         fqn = f"{target} {method} {path}".strip()
+        role = None
+    else:
+        topic = str(row.get("topic") or "")
+        broker = str(row.get("broker") or "")
+        fqn = f"{topic} {broker}".strip()
         role = None
     return NodeRef(
         id=str(row.get("id") or ""),
@@ -521,7 +553,9 @@ def _node_ref_from_row(kind: Literal["symbol", "route", "client"], row: dict[str
     )
 
 
-def _load_node_record(graph: KuzuGraph, node_id: str, kind: Literal["symbol", "route", "client"]) -> dict[str, Any] | None:
+def _load_node_record(
+    graph: KuzuGraph, node_id: str, kind: Literal["symbol", "route", "client", "producer"],
+) -> dict[str, Any] | None:
     if kind == "symbol":
         projection = (
             "n.id AS id, n.kind AS kind, n.name AS name, n.fqn AS fqn, n.package AS package, "
@@ -541,7 +575,7 @@ def _load_node_record(graph: KuzuGraph, node_id: str, kind: Literal["symbol", "r
             "n.start_line AS start_line, n.end_line AS end_line, n.resolved AS resolved"
         )
         label = "Route"
-    else:
+    elif kind == "client":
         projection = (
             "n.id AS id, n.client_kind AS client_kind, n.target_service AS target_service, "
             "n.method AS method, n.path AS path, n.path_template AS path_template, "
@@ -551,6 +585,15 @@ def _load_node_record(graph: KuzuGraph, node_id: str, kind: Literal["symbol", "r
             "n.source_layer AS source_layer"
         )
         label = "Client"
+    else:
+        projection = (
+            "n.id AS id, n.producer_kind AS producer_kind, n.topic AS topic, n.broker AS broker, "
+            "n.direction AS direction, n.member_fqn AS member_fqn, n.member_id AS member_id, "
+            "n.microservice AS microservice, n.module AS module, n.filename AS filename, "
+            "n.start_line AS start_line, n.end_line AS end_line, n.resolved AS resolved, "
+            "n.source_layer AS source_layer"
+        )
+        label = "Producer"
     rows = graph._rows(f"MATCH (n:{label}) WHERE n.id = $id RETURN {projection}", {"id": node_id})  # noqa: SLF001
     if not rows:
         return None
@@ -598,14 +641,16 @@ def _edge_summary_for_node(
     return summary
 
 
-def _node_matches_filter(kind: Literal["symbol", "route", "client"], row: dict[str, Any], f: NodeFilter | None) -> bool:
+def _node_matches_filter(
+    kind: Literal["symbol", "route", "client", "producer"], row: dict[str, Any], f: NodeFilter | None,
+) -> bool:
     if f is None:
         return True
     if f.microservice and str(row.get("microservice") or "") != f.microservice:
         return False
     if f.module and str(row.get("module") or "") != f.module:
         return False
-    if kind == "client" and f.source_layer and str(row.get("source_layer") or "") != f.source_layer:
+    if kind in ("client", "producer") and f.source_layer and str(row.get("source_layer") or "") != f.source_layer:
         return False
     if kind == "symbol":
         role = str(row.get("role") or "")
@@ -634,7 +679,7 @@ def _node_matches_filter(kind: Literal["symbol", "route", "client"], row: dict[s
                 return False
         if f.framework and str(row.get("framework") or "") != f.framework:
             return False
-    else:
+    elif kind == "client":
         if f.client_kind and str(row.get("client_kind") or "") != f.client_kind:
             return False
         if f.target_service and str(row.get("target_service") or "") != f.target_service:
@@ -645,6 +690,13 @@ def _node_matches_filter(kind: Literal["symbol", "route", "client"], row: dict[s
                 return False
         if f.http_method and str(row.get("method") or "") != f.http_method:
             return False
+    else:
+        if f.producer_kind and str(row.get("producer_kind") or "") != f.producer_kind:
+            return False
+        if f.topic_prefix:
+            topic = str(row.get("topic") or "")
+            if not topic.startswith(f.topic_prefix):
+                return False
     return True
 
 
@@ -730,7 +782,7 @@ def search_v2(
 
 
 def find_v2(
-    kind: Literal["symbol", "route", "client"],
+    kind: Literal["symbol", "route", "client", "producer"],
     filter: NodeFilter | dict[str, Any] | str,
     limit: int = 25,
     offset: int = 0,
@@ -776,7 +828,7 @@ def find_v2(
                 limit=max(500, fetch_cap),
             )
             rows = [r for r in rows if _node_matches_filter("route", r, nf)]
-        else:
+        elif kind == "client":
             rows = g.list_clients(
                 microservice=nf.microservice,
                 client_kind=nf.client_kind,
@@ -786,6 +838,14 @@ def find_v2(
                 limit=max(500, fetch_cap),
             )
             rows = [r for r in rows if _node_matches_filter("client", r, nf)]
+        else:
+            rows = g.list_producers(
+                microservice=nf.microservice,
+                producer_kind=nf.producer_kind,
+                topic_prefix=nf.topic_prefix,
+                limit=max(500, fetch_cap),
+            )
+            rows = [r for r in rows if _node_matches_filter("producer", r, nf)]
         has_more_results = len(rows) > int(offset) + int(limit)
         rows = rows[offset : offset + limit]
         refs = [_node_ref_from_row(kind, r) for r in rows]
@@ -868,10 +928,10 @@ def _resolve_validate_identifier(raw: str) -> tuple[str | None, str | None]:
 
 
 def _resolve_kinds_to_search(
-    hint_kind: Literal["symbol", "route", "client"] | None,
-) -> list[Literal["symbol", "route", "client"]]:
+    hint_kind: Literal["symbol", "route", "client", "producer"] | None,
+) -> list[Literal["symbol", "route", "client", "producer"]]:
     if hint_kind is None:
-        return ["symbol", "route", "client"]
+        return ["symbol", "route", "client", "producer"]
     return [hint_kind]
 
 
@@ -1028,6 +1088,38 @@ def _resolve_client_candidates(
     return out
 
 
+def _resolve_producer_candidates(
+    g: KuzuGraph,
+    identifier: str,
+) -> list[tuple[NodeRef, ResolveReason, int]]:
+    out: list[tuple[NodeRef, ResolveReason, int]] = []
+    lim = _RESOLVE_PRE_DEDUP_LIMIT
+
+    rows = g._rows(  # noqa: SLF001
+        f"MATCH (p:Producer) WHERE p.id = $id RETURN {_PRODUCER_RESOLVE_RETURN} LIMIT $lim",
+        {"id": identifier, "lim": lim},
+    )
+    for row in rows:
+        out.append((_node_ref_from_row("producer", row), "exact_id", len(identifier)))
+
+    rows = g._rows(  # noqa: SLF001
+        f"MATCH (p:Producer) WHERE p.topic = $topic RETURN {_PRODUCER_RESOLVE_RETURN} LIMIT $lim",
+        {"topic": identifier, "lim": lim},
+    )
+    for row in rows:
+        out.append((_node_ref_from_row("producer", row), "client_target", len(identifier)))
+
+    if not identifier.startswith("/"):
+        rows = g._rows(  # noqa: SLF001
+            f"MATCH (p:Producer) WHERE p.topic STARTS WITH $topic RETURN {_PRODUCER_RESOLVE_RETURN} LIMIT $lim",
+            {"topic": identifier, "lim": lim},
+        )
+        for row in rows:
+            out.append((_node_ref_from_row("producer", row), "client_target_path", len(identifier)))
+
+    return out
+
+
 def _resolve_dedupe_candidates(
     raw: list[tuple[NodeRef, ResolveReason, int]],
 ) -> list[tuple[NodeRef, ResolveReason, int]]:
@@ -1107,7 +1199,7 @@ def _resolve_seeds_for_hints(identifier: str) -> tuple[str | None, str | None]:
 
 def _resolve_finalize_success(
     trimmed: str,
-    hint_kind: Literal["symbol", "route", "client"] | None,
+    hint_kind: Literal["symbol", "route", "client", "producer"] | None,
     matches: list[ResolveCandidate],
 ) -> ResolveOutput:
     if not matches:
@@ -1150,7 +1242,7 @@ def _resolve_finalize_success(
 
 def resolve_v2(
     identifier: str,
-    hint_kind: Literal["symbol", "route", "client"] | None = None,
+    hint_kind: Literal["symbol", "route", "client", "producer"] | None = None,
     graph: KuzuGraph | None = None,
 ) -> ResolveOutput:
     try:
@@ -1177,8 +1269,10 @@ def resolve_v2(
                 raw.extend(_resolve_symbol_candidates(g, trimmed))
             elif kind == "route":
                 raw.extend(_resolve_route_candidates(g, trimmed))
-            else:
+            elif kind == "client":
                 raw.extend(_resolve_client_candidates(g, trimmed))
+            else:
+                raw.extend(_resolve_producer_candidates(g, trimmed))
 
         deduped = _resolve_dedupe_candidates(raw)
         ranked = _resolve_rank_candidates(deduped)

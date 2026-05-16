@@ -96,7 +96,7 @@ Use these strings **verbatim** in `neighbors(..., edge_types=[...])`:
 | Method overrides | `OVERRIDES` | Subtype **method** → supertype **declaration** method (same `signature`, one `IMPLEMENTS`/`EXTENDS` hop). `in` = overriders; `out` = overridden declarations |
 | Method calls | `CALLS` | `in` = callers; `out` = callees |
 | Service boundary | `EXPOSES` | Symbol → Route (handler exposes route) |
-| Cross-service | `HTTP_CALLS`, `ASYNC_CALLS` | `HTTP_CALLS`: Client → Route; `ASYNC_CALLS`: Symbol → Route until SCHEMA-V2 PR-C (`Producer` node) |
+| Cross-service | `HTTP_CALLS`, `ASYNC_CALLS` | `HTTP_CALLS`: Client → Route; `ASYNC_CALLS`: Producer → Route via `DECLARES_PRODUCER` |
 
 Symmetric: cross-service and intra-service questions use the **same** `neighbors` call with different `edge_types`.
 
@@ -191,6 +191,7 @@ Exact allowed values for roles, capabilities, client kinds, etc. live in `java_o
 | List interfaces in service S | `find(kind="symbol", filter={"microservice":S,"symbol_kind":"interface"})` | `neighbors` / `describe` |
 | List HTTP or Kafka entry points | `find(kind="route", filter={...})` | `describe` |
 | List Feign / HTTP clients | `find(kind="client", filter={...})` | `neighbors(..., out, ["HTTP_CALLS"])` if needed |
+| List async producers | `find(kind="producer", filter={...})` | `neighbors(..., out, ["ASYNC_CALLS"])` if needed |
 | Who calls method M? | Stable symbol id via `resolve`, `find`, or `search` | `neighbors(ids=sym_id, direction="in", edge_types=["CALLS"])` |
 | What does M call? | Same | `neighbors(..., direction="out", edge_types=["CALLS"])` |
 | Who hits this route? | `find(kind="route", ...)` or route id from logs | `neighbors(ids=route_id, direction="in", edge_types=["HTTP_CALLS","ASYNC_CALLS","EXPOSES"])` |
@@ -263,7 +264,7 @@ Virtual keys (`OVERRIDDEN_BY`, …) and composed dot-keys are **not** valid `Edg
 
 ### Ontology glossary (version 14)
 
-Source of truth: `java_ontology.py` (`EDGE_SCHEMA`, valid sets). Strings are case-sensitive. Edge navigation: [`docs/EDGE-NAVIGATION.md`](./EDGE-NAVIGATION.md) — for `HTTP_CALLS`, traverse via `DECLARES_CLIENT` from a method Symbol or `neighbors` outbound from a Client id; `ASYNC_CALLS` still uses `*_current` member traversals until SCHEMA-V2 PR-C.
+Source of truth: `java_ontology.py` (`EDGE_SCHEMA`, valid sets). Strings are case-sensitive. Edge navigation: [`docs/EDGE-NAVIGATION.md`](./EDGE-NAVIGATION.md) — for `HTTP_CALLS`, traverse via `DECLARES_CLIENT` from a method Symbol or `neighbors` outbound from a Client id; for `ASYNC_CALLS`, traverse via `DECLARES_PRODUCER` or outbound from a Producer id.
 
 **Roles:** `CONTROLLER`, `SERVICE`, `REPOSITORY`, `COMPONENT`, `CONFIG`, `ENTITY`, `CLIENT`, `MAPPER`, `DTO`, `OTHER`.
 

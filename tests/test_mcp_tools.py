@@ -66,7 +66,7 @@ async def test_tool_input_schema_includes_expected_enums(mcp_server) -> None:
     neighbors_edge_types = ((neighbors_schema.get("properties") or {}).get("edge_types") or {})
 
     assert {"java", "sql", "yaml", "all"} in _enum_sets(search_table)
-    assert {"symbol", "route", "client"} in _enum_sets(find_kind)
+    assert {"symbol", "route", "client", "producer"} in _enum_sets(find_kind)
     assert {"in", "out"} in _enum_sets(neighbors_direction)
     assert {
         "EXTENDS",
@@ -75,6 +75,7 @@ async def test_tool_input_schema_includes_expected_enums(mcp_server) -> None:
         "OVERRIDES",
         "DECLARES",
         "DECLARES_CLIENT",
+        "DECLARES_PRODUCER",
         "CALLS",
         "EXPOSES",
         "HTTP_CALLS",
