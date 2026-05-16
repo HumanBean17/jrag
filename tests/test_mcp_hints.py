@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+from collections import Counter
 from typing import Any
 
 import pytest
@@ -422,6 +423,20 @@ def _resolve_symbol_id_status_one(kuzu_graph) -> str:
     return sym_id
 
 
+def _resolve_symbol_short_name_status_many(kuzu_graph) -> str:
+    rows = kuzu_graph._rows(  # noqa: SLF001
+        "MATCH (s:Symbol) WHERE s.kind = 'method' RETURN s.name AS name",
+    )
+    counts = Counter(str(r["name"]) for r in rows if r.get("name"))
+    dup_name = next((name for name, c in counts.items() if c >= 2), None)
+    if dup_name is None:
+        pytest.fail("no duplicated method short names in bank-chat fixture")
+    out = resolve_v2(dup_name, hint_kind="symbol", graph=kuzu_graph)
+    if not (out.success and out.status == "many" and len(out.candidates) >= 2):
+        pytest.fail(f"expected status many for short name {dup_name!r}, got {out.status!r}")
+    return dup_name
+
+
 def _resolve_symbol_identifier_status_none(kuzu_graph) -> str:
     ident = "com.nonexistent.ZzzMissing"
     out = resolve_v2(ident, hint_kind="symbol", graph=kuzu_graph)
@@ -547,6 +562,19 @@ def test_hints_resolve_status_many_truncated_cap_wording() -> None:
     assert "10 candidates" in hints[0]
 
 
+def test_hints_resolve_success_false_suppresses() -> None:
+    hints = generate_hints(
+        "resolve",
+        {
+            "success": False,
+            "status": "none",
+            "resolved_identifier": "com.foo.Bar",
+            "hint_kind": "symbol",
+        },
+    )
+    assert hints == []
+
+
 def test_hints_resolve_payload_missing_identifier_suppressed() -> None:
     hints = generate_hints(
         "resolve",
@@ -572,6 +600,29 @@ def test_hints_resolve_v2_round_trip(kuzu_graph) -> None:
     assert wildcard_out.status == "none"
     assert wildcard_out.resolved_identifier == "com.foo.*Service"
     assert wildcard_out.hints == []
+
+    many_ident = _resolve_symbol_short_name_status_many(kuzu_graph)
+    many_out = resolve_v2(many_ident, hint_kind="symbol", graph=kuzu_graph)
+    assert many_out.resolved_identifier == many_ident
+    assert many_out.hints
+    assert "candidates" in many_out.hints[0]
+    assert "tighten identifier" in many_out.hints[0]
+
+    route_ident = "POST /v1/__no_such_resolve_route__"
+    route_out = resolve_v2(route_ident, hint_kind="route", graph=kuzu_graph)
+    assert route_out.success is True
+    assert route_out.status == "none"
+    assert route_out.resolved_identifier == route_ident
+    assert route_out.hints
+    assert "find(kind='route'" in route_out.hints[0]
+
+    client_ident = "__no_such_resolve_client_target__"
+    client_out = resolve_v2(client_ident, hint_kind="client", graph=kuzu_graph)
+    assert client_out.success is True
+    assert client_out.status == "none"
+    assert client_out.resolved_identifier == client_ident
+    assert client_out.hints
+    assert "find(kind='client'" in client_out.hints[0]
 
     invalid_out = resolve_v2("", graph=kuzu_graph)
     assert invalid_out.success is False

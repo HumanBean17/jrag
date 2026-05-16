@@ -135,12 +135,18 @@ def generate_hints(
 ) -> list[str]:
     """Return up to 5 road-sign hint strings for a success-only MCP v2 payload dict.
 
-    Callers must pass ``success: True`` payloads only for hint rows; this function
-    returns ``[]`` when ``success`` is false or missing.
+    For ``search`` / ``find`` / ``describe`` / ``neighbors``, callers must pass
+    ``success: True``; this function returns ``[]`` when ``success`` is false or
+    missing. The ``resolve`` branch is **status-driven** (``status``,
+    ``resolved_identifier``, ``candidates``, optional seeds) and does not require
+    ``success`` in the payload; an explicit ``success: False`` still suppresses
+    hints (defense in depth).
     """
     pairs: list[tuple[int, str]] = []
 
     if output_kind == "resolve":
+        if payload.get("success") is False:
+            return []
         status = str(payload.get("status") or "")
         if status == "one":
             return []

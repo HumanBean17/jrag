@@ -1185,13 +1185,15 @@ def resolve_v2(
         capped = ranked[:_RESOLVE_CANDIDATE_CAP]
         return _resolve_finalize_success(trimmed, hint_kind, capped)
     except Exception as exc:
-        return ResolveOutput(
+        out = ResolveOutput(
             success=False,
             status="none",
             message=str(exc),
             hints=[],
             resolved_identifier=None,
         )
+        _resolve_assert_invariants(out)
+        return out
 
 
 @validate_call(config={"arbitrary_types_allowed": True})
