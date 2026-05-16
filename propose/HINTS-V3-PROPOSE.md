@@ -1,6 +1,6 @@
 # HINTS-V3 — kind- and direction-aware empty-result hints driven by EDGE_SCHEMA
 
-**Status**: draft
+**Status**: locked — implementing via SCHEMA-V2 PR-D (plan: [`plans/PLAN-HINTS-V3.md`](../plans/PLAN-HINTS-V3.md); move to `propose/completed/` when PR-D lands)
 **Author**: Dmitriy Teriaev
 **Date**: 2026-05-16
 
@@ -9,7 +9,7 @@
 - Replace the single generic empty-neighbors template `TPL_NEIGHBORS_EMPTY_KIND_CHECK = "0 results — check if the requested edge_types apply to this kind"` with a small family of kind- and direction-aware templates driven by `EDGE_SCHEMA` (introduced in `propose/SCHEMA-V2-PROPOSE.md` §3.4).
 - Each template fires by inspecting the subject node kind, the requested `direction`, and the requested `edge_types` against `EDGE_SCHEMA[edge].src` / `.dst` / `.typical_traversals` — no hardcoded edge-shape literals in `mcp_hints.py`.
 - New emit-side input: hints v3 reads `EdgeSpec.brownfield_resolver_sourced` (backed by `BROWNFIELD_RESOLVER_STRATEGY_SET` from SCHEMA-V2 PR-A) to fire a distinct *"absence may mean unresolved, not absent"* hint on empty results. That complements (does not replace) the v2 `TPL_NEIGHBORS_FUZZY_STRATEGY` hint on non-empty results.
-- **Propose gate** (SCHEMA-V2 Decision 30): this file must be **merged to `master`** before SCHEMA-V2 PR-A starts (GitHub PR status may stay `draft` until locked). **Implementation gate**: `Status: locked` before SCHEMA-V2 PR-D merges. PR-D runs after PR-A, PR-B, and PR-C are in `master`.
+- **Propose gate** (SCHEMA-V2 Decision 30): merged to `master` ([#154](https://github.com/HumanBean17/java-codebase-rag/pull/154)) before SCHEMA-V2 PR-A. **Code** ships in SCHEMA-V2 PR-D after PR-A–C are on `master`.
 - Re-index is already required by SCHEMA-V2 (`ONTOLOGY_VERSION` 13 → 14); HINTS-V3 does not bump it again.
 - Goes away: `TPL_NEIGHBORS_EMPTY_KIND_CHECK` (deleted). Stays: every existing v1/v2 template (DESCRIBE rollups, FIND, RESOLVE, fuzzy-strategy hint).
 - Non-obvious constraint: hints v3 must never recommend a dot-key edge label as a `neighbors()` argument (carry-over from v2 propose §7.x). All template recommendations are checked against the canonical edge list.

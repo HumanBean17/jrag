@@ -11,9 +11,9 @@ When two or more proposes touch overlapping subsystems, the order they lock and 
 
 ## Current in-flight set (as of 2026-05-16)
 
-1. **SCHEMA-V2** — `propose/SCHEMA-V2-PROPOSE.md` (propose merged via [#151](https://github.com/HumanBean17/java-codebase-rag/pull/151); treat as locked for sequencing)
+1. **SCHEMA-V2** — `propose/SCHEMA-V2-PROPOSE.md` (`Status: locked — implementing`; propose [#151](https://github.com/HumanBean17/java-codebase-rag/pull/151), plan [#155](https://github.com/HumanBean17/java-codebase-rag/pull/155))
    - 4 code PRs: PR-A (`EDGE_SCHEMA` + ontology v14 bump), PR-B (`HTTP_CALLS` flip + downstream API), PR-C (`Producer` node + `ASYNC_CALLS` flip + GraphMeta + MCP parity), PR-D (hints v3).
-2. **HINTS-V3** — `propose/HINTS-V3-PROPOSE.md` ([#154](https://github.com/HumanBean17/java-codebase-rag/pull/154), draft)
+2. **HINTS-V3** — `propose/HINTS-V3-PROPOSE.md` (`Status: locked — implementing via SCHEMA-V2 PR-D`; propose [#154](https://github.com/HumanBean17/java-codebase-rag/pull/154), plan [#155](https://github.com/HumanBean17/java-codebase-rag/pull/155))
    - Implementation = SCHEMA-V2 PR-D (same PR).
 
 No other proposes are in flight.
@@ -25,29 +25,29 @@ No other proposes are in flight.
 ```
 SCHEMA-V2-PROPOSE.md   [merged #151 — locked for code sequence]
         ↓
-HINTS-V3-PROPOSE.md    [draft PR #154 — SCHEMA-V2 Decision 30]
+HINTS-V3-PROPOSE.md    [merged #154 — implementing in PR-D]
 ```
 
 **Decision 30 (SCHEMA-V2)**: `HINTS-V3-PROPOSE.md` must exist as a **merged draft propose** before SCHEMA-V2 **PR-A** implementation starts. That unblocks the four-code-PR sequence; it does **not** require HINTS-V3 to be `Status: locked` before PR-A.
 
-**HINTS-V3 lock**: `Status: locked` is required before SCHEMA-V2 **PR-D** merges (see Phase 3).
+**HINTS-V3 lock**: `Status: locked` before SCHEMA-V2 **PR-D** code merges (satisfied while Phase 3 is in flight; see propose headers).
 
 ### Phase 2 — plan + cursor-prompt artefacts
 
 ```
-plans/PLAN-SCHEMA-V2.md          [not started]
+plans/PLAN-SCHEMA-V2.md          [landed #155]
 plans/CURSOR-PROMPTS-SCHEMA-V2.md
 plans/PLAN-HINTS-V3.md
 plans/CURSOR-PROMPTS-HINTS-V3.md
 ```
 
-SCHEMA-V2 Decision 29: `PLAN-SCHEMA-V2.md` + `CURSOR-PROMPTS-SCHEMA-V2.md` are merge gates for **PR-A**.
+SCHEMA-V2 Decision 29: `PLAN-SCHEMA-V2.md` + `CURSOR-PROMPTS-SCHEMA-V2.md` are merge gates for **PR-A** (satisfied when [#155](https://github.com/HumanBean17/java-codebase-rag/pull/155) is on `master`).
 
-By analogy: `PLAN-HINTS-V3.md` + `CURSOR-PROMPTS-HINTS-V3.md` are merge gates for **PR-D**.
+By analogy: `PLAN-HINTS-V3.md` + `CURSOR-PROMPTS-HINTS-V3.md` are merge gates for **PR-D** (same PR).
 
-Plans and prompts may be drafted in parallel with each other; each pair must land before its code PR.
+Plans and prompts may be drafted in parallel with each other; each pair must land before its code PR. **Code PRs (Phase 3) are not started** until Phase 2 is on `master`.
 
-### Phase 3 — code PRs (merge order)
+### Phase 3 — code PRs (merge order) — **implementing**
 
 ```
 PR-A   feat(schema): EDGE_SCHEMA + docs/EDGE-NAVIGATION.md + ontology v14
