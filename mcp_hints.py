@@ -31,16 +31,30 @@ TPL_DESCRIBE_TYPE_ROUTES_VIA_MEMBERS = (
     "routes via members: neighbors(['{id}'],'out',['DECLARES']) "
     "then neighbors(member_ids,'out',['EXPOSES'])"
 )
+TPL_DESCRIBE_TYPE_PRODUCERS_VIA_MEMBERS = (
+    "producers via members: neighbors(['{id}'],'out',['DECLARES']) "
+    "then neighbors(member_ids,'out',['DECLARES_PRODUCER'])"
+)
 TPL_DESCRIBE_METHOD_OVERRIDERS = "overriders: neighbors(['{id}'],'in',['OVERRIDES'])"
 TPL_DESCRIBE_METHOD_CLIENTS_IN_OVERRIDERS = (
     "clients in overriders: neighbors(['{id}'],'in',['OVERRIDES']) "
     "then neighbors(overrider_ids,'out',['DECLARES_CLIENT'])"
 )
+TPL_DESCRIBE_METHOD_PRODUCERS_IN_OVERRIDERS = (
+    "producers in overriders: neighbors(['{id}'],'in',['OVERRIDES']) "
+    "then neighbors(overrider_ids,'out',['DECLARES_PRODUCER'])"
+)
+TPL_DESCRIBE_METHOD_ROUTES_IN_OVERRIDERS = (
+    "routes in overriders: neighbors(['{id}'],'in',['OVERRIDES']) "
+    "then neighbors(overrider_ids,'out',['EXPOSES'])"
+)
 TPL_DESCRIBE_METHOD_OUTBOUND_CLIENT = "outbound client: neighbors(['{id}'],'out',['DECLARES_CLIENT'])"
+TPL_DESCRIBE_METHOD_OUTBOUND_PRODUCER = "outbound producer: neighbors(['{id}'],'out',['DECLARES_PRODUCER'])"
 TPL_DESCRIBE_METHOD_INBOUND_ROUTE = "inbound route: neighbors(['{id}'],'out',['EXPOSES'])"
 TPL_DESCRIBE_METHOD_MANY_CALLS = "many CALLS — consider filtering by target microservice"
 TPL_DESCRIBE_ROUTE_DECLARING = "declaring method: neighbors(['{id}'],'in',['EXPOSES'])"
 TPL_DESCRIBE_CLIENT_DECLARING = "declaring method: neighbors(['{id}'],'in',['DECLARES_CLIENT'])"
+TPL_DESCRIBE_PRODUCER_DECLARING = "declaring method: neighbors(['{id}'],'in',['DECLARES_PRODUCER'])"
 
 TPL_FIND_EMPTY_RESOLVE = "no matches — try resolve(identifier, hint_kind='{kind}') for canonical lookup"
 TPL_FIND_PAGE_FULL = "result page full at {limit} — narrow filter or paginate"
@@ -418,6 +432,9 @@ def generate_hints(
         if kind == "client":
             pairs.append((PRIORITY_LEAF_FOLLOWUP, TPL_DESCRIBE_CLIENT_DECLARING.format(id=node_id)))
             return finalize_hint_list(pairs)
+        if kind == "producer":
+            pairs.append((PRIORITY_LEAF_FOLLOWUP, TPL_DESCRIBE_PRODUCER_DECLARING.format(id=node_id)))
+            return finalize_hint_list(pairs)
 
         if kind != "symbol":
             return finalize_hint_list(pairs)
@@ -435,6 +452,10 @@ def generate_hints(
                 pairs.append(
                     (PRIORITY_DECLARES_TYPE_ROLLUP, TPL_DESCRIBE_TYPE_ROUTES_VIA_MEMBERS.format(id=node_id))
                 )
+            if _out_count(edge_summary, "DECLARES.DECLARES_PRODUCER") > 0:
+                pairs.append(
+                    (PRIORITY_DECLARES_TYPE_ROLLUP, TPL_DESCRIBE_TYPE_PRODUCERS_VIA_MEMBERS.format(id=node_id))
+                )
             return finalize_hint_list(pairs)
 
         if is_method:
@@ -444,8 +465,18 @@ def generate_hints(
                 pairs.append(
                     (PRIORITY_OVERRIDDEN_AXIS, TPL_DESCRIBE_METHOD_CLIENTS_IN_OVERRIDERS.format(id=node_id))
                 )
+            if _out_count(edge_summary, "OVERRIDDEN_BY.DECLARES_PRODUCER") > 0:
+                pairs.append(
+                    (PRIORITY_OVERRIDDEN_AXIS, TPL_DESCRIBE_METHOD_PRODUCERS_IN_OVERRIDERS.format(id=node_id))
+                )
+            if _out_count(edge_summary, "OVERRIDDEN_BY.EXPOSES") > 0:
+                pairs.append(
+                    (PRIORITY_OVERRIDDEN_AXIS, TPL_DESCRIBE_METHOD_ROUTES_IN_OVERRIDERS.format(id=node_id))
+                )
             if _out_count(edge_summary, "DECLARES_CLIENT") > 0:
                 pairs.append((PRIORITY_LEAF_FOLLOWUP, TPL_DESCRIBE_METHOD_OUTBOUND_CLIENT.format(id=node_id)))
+            if _out_count(edge_summary, "DECLARES_PRODUCER") > 0:
+                pairs.append((PRIORITY_LEAF_FOLLOWUP, TPL_DESCRIBE_METHOD_OUTBOUND_PRODUCER.format(id=node_id)))
             if _out_count(edge_summary, "EXPOSES") > 0:
                 pairs.append((PRIORITY_LEAF_FOLLOWUP, TPL_DESCRIBE_METHOD_INBOUND_ROUTE.format(id=node_id)))
             if _out_count(edge_summary, "CALLS") >= 10:
