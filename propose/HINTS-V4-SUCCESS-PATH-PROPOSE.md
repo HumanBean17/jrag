@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposal — not yet implemented. Tracks [issue #163](https://github.com/HumanBean17/java-codebase-rag/issues/163).
+**locked** — not yet implemented. Tracks [issue #163](https://github.com/HumanBean17/java-codebase-rag/issues/163). Implementation plan: [`plans/PLAN-HINTS-V4.md`](../plans/PLAN-HINTS-V4.md); Cursor prompts: [`plans/CURSOR-PROMPTS-HINTS-V4.md`](../plans/CURSOR-PROMPTS-HINTS-V4.md).
 
 **Depends on (landed):** [NEIGHBORS-DOT-KEY-TRAVERSAL](./completed/NEIGHBORS-DOT-KEY-TRAVERSAL-PROPOSE.md) ([#171](https://github.com/HumanBean17/java-codebase-rag/pull/171)) — `neighbors` accepts `DECLARES.DECLARES_CLIENT`, `DECLARES.DECLARES_PRODUCER`, `DECLARES.EXPOSES` on type Symbol origins; describe rollup templates already prescribe those dot-keys.
 
