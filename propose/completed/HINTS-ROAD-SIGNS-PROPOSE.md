@@ -1,6 +1,6 @@
 # HINTS-ROAD-SIGNS — machine-readable next-action signals on MCP V2 outputs
 
-**Status**: under review
+**Status**: completed (landed: stored `OVERRIDES` edges + MCP `hints` catalog; plan: [`plans/completed/PLAN-HINTS.md`](../plans/completed/PLAN-HINTS.md))
 **Author**: Dmitriy Teriaev + Perplexity Computer
 **Date**: 2026-05-14 (revised 2026-05-15)
 
@@ -269,7 +269,7 @@ results==[] and edge_types non-empty  →  "0 results — check if the requested
 len(results)==limit and (max_score - min_score) < 0.1*max_score  →  "results look weak — narrow the query or try find(role=…)"  # requires SearchOutput.limit echo, see §3.1
 ```
 
-File placement (`mcp_hints.py`), function decomposition, integration points in `mcp_v2.py`, and test file names go in `plans/PLAN-HINTS.md` — not in this propose.
+File placement (`mcp_hints.py`), function decomposition, integration points in `mcp_v2.py`, and test file names go in `plans/completed/PLAN-HINTS.md` — not in this propose.
 
 ## Appendix B — What changed (traceability)
 
@@ -291,7 +291,7 @@ File placement (`mcp_hints.py`), function decomposition, integration points in `
 7. Old decision §7.14 (no hints for `find` when no filter was passed) dropped. In the post-#117 strict-frame world, `find()` without a filter is a contract error that fails loud — the carve-out was solving a problem the strict frame already solved.
 8. New decision §7.15 added: hints are documentation-grade, not programmatic-dispatch. Locks the consumer model so future readers don't relitigate it.
 9. New decision §7.16 added: cross-tool hints allowed at v1, scoped to the one row pointing at `resolve(…)`. Other cross-tool templates need their own amendment per §7.11.
-10. Appendix A trimmed from a `mcp_hints.py` skeleton with function bodies to a verbatim template catalog. Function decomposition is plan-level work and belongs in `plans/PLAN-HINTS.md`.
+10. Appendix A trimmed from a `mcp_hints.py` skeleton with function bodies to a verbatim template catalog. Function decomposition is plan-level work and belongs in `plans/completed/PLAN-HINTS.md`.
 11. Open-links section rewritten: #117 landed, `resolve` shipped, #118 is a partial overlap (documentation-grade only) not a resolution. Misleading "locking hints here mostly resolves #118" claim removed.
 
 **What changed after the fourth review pass (2026-05-15, PR-A builder sharpening)**

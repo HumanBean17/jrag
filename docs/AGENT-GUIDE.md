@@ -20,7 +20,7 @@
 > replace same-method built-in rows). **Design rationale:** navigation surface and tools —
 > [`propose/completed/MCP-API-V2-REDESIGN-PROPOSE.md`](../propose/completed/MCP-API-V2-REDESIGN-PROPOSE.md);
 > HTTP brownfield rename, `CodebaseHttpMethod`, and exclusivity —
-> [`propose/HTTP-ROUTE-METHOD-ENUM-PROPOSE.md`](../propose/HTTP-ROUTE-METHOD-ENUM-PROPOSE.md).
+> [`propose/completed/HTTP-ROUTE-METHOD-ENUM-PROPOSE.md`](../propose/completed/HTTP-ROUTE-METHOD-ENUM-PROPOSE.md).
 
 ---
 
@@ -34,6 +34,8 @@ This MCP indexes Java enterprise projects into two stores:
 - **Kuzu graph** — exact structure: **node kinds** `Symbol`, `Route`, `Client` and **ten edge types** (see *Edge taxonomy* below).
 
 **MCP surface (navigation only):** `search`, `find`, `describe`, `neighbors`, `resolve`.
+
+**Response extras (advisory):** On success, `search`, `find`, `describe`, and `neighbors` include a top-level `hints` list (≤5 templated next-call strings). `search` and `find` also echo `limit` / `offset`. Hints are safe to ignore; they are empty when `success` is false. Locked catalog: [`propose/completed/HINTS-ROAD-SIGNS-PROPOSE.md`](../propose/completed/HINTS-ROAD-SIGNS-PROPOSE.md) Appendix A.
 
 **Operator / diagnostics (not MCP):** use the **`java-codebase-rag`** CLI — lifecycle (`init`, `increment`, `reprocess`, `erase`) plus `meta`, `tables`, `diagnose-ignore`, `analyze-pr`. Rebuilds are slow; the coding agent should not pretend it can reindex via MCP. For lifecycle commands, subprocess progress is written to **stderr** (use **`--quiet`** to suppress it); **stdout** is only the structured result payload.
 

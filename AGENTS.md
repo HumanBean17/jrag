@@ -8,7 +8,8 @@ for tools that don't read `.cursor/rules/`.
 ## Where to look
 
 - `README.md` — feature surface, env vars, ranking, capabilities,
- MCP tool list (`search` / `find` / `describe` / `neighbors` / `resolve`),
+ MCP tool list (`search` / `find` / `describe` / `neighbors` / `resolve`;
+ response `hints` + pagination echo — see README),
  CLI ops (`java-codebase-rag --help`), and "Re-index required" callouts.
  **`ontology_version` is currently 13** (stored `OVERRIDES` method→method edges traversable via `neighbors`; plus v12 HTTP brownfield rename, `CodebaseHttpMethod` enum, inbound HTTP layer-C replace — see README graph section).
 - [`docs/JAVA-CODEBASE-RAG-CLI.md`](./docs/JAVA-CODEBASE-RAG-CLI.md) — operator guide for the `java-codebase-rag` CLI (`init` / `increment` / `reprocess` / `erase`, `meta`, `tables`, `diagnose-ignore`, `analyze-pr`; hidden `refresh` alias → `reprocess` — see that doc).

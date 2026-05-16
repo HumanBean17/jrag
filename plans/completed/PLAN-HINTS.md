@@ -1,7 +1,7 @@
 # Plan: Hints (road signs) + stored `OVERRIDES` edges
 
-Status: **active (planning)**. This plan implements
-[`propose/HINTS-ROAD-SIGNS-PROPOSE.md`](../propose/HINTS-ROAD-SIGNS-PROPOSE.md).
+Status: **completed** (landed). This plan implemented
+[`propose/completed/HINTS-ROAD-SIGNS-PROPOSE.md`](../propose/completed/HINTS-ROAD-SIGNS-PROPOSE.md).
 
 Depends on: **none** (strict `find` frame and `resolve` tool are already landed per the propose open-links section).
 
@@ -219,5 +219,5 @@ Use **verbatim** names below (adjust only if pytest collection would collide; if
 
 ## Cursor handoff
 
-Per-PR execution prompts: [`plans/CURSOR-PROMPTS-HINTS.md`](CURSOR-PROMPTS-HINTS.md)
+Per-PR execution prompts: [`plans/completed/CURSOR-PROMPTS-HINTS.md`](CURSOR-PROMPTS-HINTS.md)
 (structure aligned with completed `plans/completed/CURSOR-PROMPTS-*.md` handoffs).

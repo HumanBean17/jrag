@@ -24,14 +24,16 @@
 \node[prim, walk, right=of inspect] (walk)   {WALK\\ \footnotesize\itshape where can I go?};
 
 % --- Tools above each primitive ---
-\node[tool, above=0.7cm of locate, xshift=-0.85cm] (s)  {search};
-\node[tool, above=0.7cm of locate, xshift=0.85cm]  (f)  {find};
-\node[tool, above=0.7cm of inspect]                (d)  {describe};
-\node[tool, above=0.7cm of walk]                   (n)  {neighbors};
+\node[tool, above=0.7cm of locate, xshift=-1.15cm] (s)  {search};
+\node[tool, above=0.7cm of locate, xshift=0cm]      (f)  {find};
+\node[tool, above=0.7cm of locate, xshift=1.15cm]   (r)  {resolve};
+\node[tool, above=0.7cm of inspect]                 (d)  {describe};
+\node[tool, above=0.7cm of walk]                    (n)  {neighbors};
 
 % --- Connections tools -> primitives ---
 \draw[arr] (s)  -- (locate.north -| s);
 \draw[arr] (f)  -- (locate.north -| f);
+\draw[arr] (r)  -- (locate.north -| r);
 \draw[arr] (d)  -- (inspect);
 \draw[arr] (n)  -- (walk);
 

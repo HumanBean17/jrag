@@ -13,15 +13,15 @@ Each item has:
 - a **Verification prompt** — paste verbatim into your agent (or run the
   shell snippet yourself)
 - **Expected (calibration)** — what the same prompt produces on
-  `tests/bank-chat-system` (ontology **11**). If your numbers diverge wildly,
+  `tests/bank-chat-system` (ontology **13**). If your numbers diverge wildly,
   that's a signal, not a verdict — what matters is the **shape** (proportions,
   error rates, presence of expected edges).
 - **If failing → fix** — concrete next step
 
 Calibration was captured against `tests/bank-chat-system` on
-`master @ e90cbecc` (ontology version **11**): 84 files, 92 types, 474
-members, 0 parse errors, 17 routes, 11 `EXPOSES`, 793 `CALLS`, 2 `HTTP_CALLS`,
-5 `ASYNC_CALLS`, 2 `Client` rows, microservices = `chat-core` + `chat-assign`.
+`chore/docs-sync @ 1fa1b28` (ontology version **13**): 84 files, 92 types, 474
+members, 0 parse errors, 17 routes, 11 `EXPOSES`, 793 `CALLS`, 24 `OVERRIDES`,
+2 `HTTP_CALLS`, 5 `ASYNC_CALLS`, 2 `Client` rows, microservices = `chat-core` + `chat-assign`.
 
 **Convention:** Graph ops use MCP. Index health / rebuild / PR analysis use
 **`java-codebase-rag`** (see README **CLI reference**). Example:
@@ -83,16 +83,16 @@ export JAVA_CODEBASE_RAG_INDEX_DIR=/tmp/verify_index
 
 ## Phase 1 — Index health (4 items)
 
-### 1.1 ☐ Ontology version is 11
+### 1.1 ☐ Ontology version is 13
 
 **Verification prompt:**
 
 > In a shell with `JAVA_CODEBASE_RAG_INDEX_DIR` and `JAVA_CODEBASE_RAG_SOURCE_ROOT`
 > set for your graph, run `java-codebase-rag meta` (JSON output if piped). Report
 > `ontology_version`, `built_at`, `source_root`, and `parse_errors`. Does
-> `ontology_version` equal `11`?
+> `ontology_version` equal `13`?
 
-**Expected (calibration):** `ontology_version: 11`,
+**Expected (calibration):** `ontology_version: 13`,
 `parse_errors: 0`.
 
 **If failing → fix:** older ontology means a stale graph file. Re-pull the
@@ -313,7 +313,7 @@ exact count.
 > with `{"kind":"client","filter":{},"limit":200}`. Rows should include
 > `client_kind`, `target_service`, paths, `source_layer`.
 
-**Expected (calibration):** `ontology_version=11`, `counts.clients=2`, both
+**Expected (calibration):** `ontology_version=13`, `counts.clients=2`, both
 `rest_template` in the fixture.
 
 **If failing → fix:** ontology < 10 → full rebuild. Zero clients when you
@@ -496,7 +496,7 @@ expect Feign → README §3c brownfield.
 If everything is green:
 
 - Commit `.java-codebase-rag.yml` and `@Codebase*` stubs.
-- Record **ontology 11** (or current `java-codebase-rag meta` value) in your team docs.
+- Record **ontology 13** (or current `java-codebase-rag meta` value) in your team docs.
 - Periodically diff `java-codebase-rag meta` `counts` after large refactors.
 
 If something is red:
@@ -522,4 +522,4 @@ java-codebase-rag meta --source-root tests/bank-chat-system --index-dir /tmp/cal
 
 `build_ast_graph.py` still takes `--kuzu-path` (the Kuzu file). Point it at `<index-dir>/code_graph.kuzu` so it matches the layout `java-codebase-rag meta --index-dir` expects under that directory.
 
-Current snapshot: `tests/bank-chat-system`, `master @ e90cbecc`, ontology **11**.
+Current snapshot: `tests/bank-chat-system`, `chore/docs-sync @ 1fa1b28`, ontology **13**.
