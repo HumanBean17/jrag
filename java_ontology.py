@@ -316,18 +316,23 @@ EDGE_SCHEMA: dict[str, EdgeSpec] = {
         ),
         purpose="resolved HTTP call from declaring method to target route (pre-flip: Symbol→Route; PR-B: Client→Route)",
         typical_traversals={
+            "type_subject_current": (
+                "neighbors(['{id}'],'out',['DECLARES']) "
+                "then neighbors(member_ids,'out',['HTTP_CALLS'])"
+            ),
             "type_subject": (
                 "neighbors(['{id}'],'out',['DECLARES']) "
                 "then neighbors(member_ids,'out',['DECLARES_CLIENT']) "
                 "then neighbors(client_ids,'out',['HTTP_CALLS'])"
             ),
+            "member_subject_current": "neighbors(['{id}'],'out',['HTTP_CALLS'])",
             "member_subject": (
                 "neighbors(['{id}'],'out',['DECLARES_CLIENT']) "
                 "then neighbors(client_ids,'out',['HTTP_CALLS'])"
             ),
             "alien_subject": (
-                "HTTP_CALLS will connect Client → Route (PR-B); from a method Symbol use "
-                "DECLARES_CLIENT then HTTP_CALLS via the Client node"
+                "HTTP_CALLS is Symbol→Route until PR-B; use member_subject_current. "
+                "After PR-B (Client→Route), use member_subject via DECLARES_CLIENT"
             ),
         },
     ),
@@ -346,18 +351,23 @@ EDGE_SCHEMA: dict[str, EdgeSpec] = {
         ),
         purpose="resolved async call from declaring method to topic route (pre-flip: Symbol→Route; PR-C: Producer→Route)",
         typical_traversals={
+            "type_subject_current": (
+                "neighbors(['{id}'],'out',['DECLARES']) "
+                "then neighbors(member_ids,'out',['ASYNC_CALLS'])"
+            ),
             "type_subject": (
                 "neighbors(['{id}'],'out',['DECLARES']) "
                 "then neighbors(member_ids,'out',['DECLARES_PRODUCER']) "
                 "then neighbors(producer_ids,'out',['ASYNC_CALLS'])"
             ),
+            "member_subject_current": "neighbors(['{id}'],'out',['ASYNC_CALLS'])",
             "member_subject": (
                 "neighbors(['{id}'],'out',['DECLARES_PRODUCER']) "
                 "then neighbors(producer_ids,'out',['ASYNC_CALLS'])"
             ),
             "alien_subject": (
-                "ASYNC_CALLS will connect Producer → Route (PR-C); from a method Symbol use "
-                "DECLARES_PRODUCER then ASYNC_CALLS via the Producer node"
+                "ASYNC_CALLS is Symbol→Route until PR-C; use member_subject_current. "
+                "After PR-C (Producer→Route), use member_subject via DECLARES_PRODUCER"
             ),
         },
     ),

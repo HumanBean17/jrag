@@ -1,16 +1,28 @@
-"""DDL ↔ EDGE_SCHEMA endpoint consistency (SCHEMA-V2 PR-A)."""
+"""DDL ↔ EDGE_SCHEMA consistency (SCHEMA-V2 PR-A).
+
+Endpoint (src/dst) parity only in PR-A; ``EDGE_SCHEMA.attrs`` vs DDL column lists
+is a follow-up (column parity test or codegen).
+"""
 from __future__ import annotations
 
 import re
 from pathlib import Path
 
-from java_ontology import EDGE_SCHEMA
+from java_ontology import BROWNFIELD_RESOLVER_STRATEGY_SET, EDGE_SCHEMA
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _BUILD_AST_GRAPH = _REPO_ROOT / "build_ast_graph.py"
 
 _REL_DDL_RE = re.compile(
     r'CREATE REL TABLE (\w+)\(FROM (\w+) TO (\w+)',
+)
+_STRATEGY_LITERAL_RE = re.compile(
+    r"""(?:strategy|resolution_strategy|edge_strat)\s*=\s*["']([a-z_]+)["']""",
+)
+_EMITTER_FILES = (
+    "build_ast_graph.py",
+    "graph_enrich.py",
+    "ast_java.py",
 )
 
 
@@ -21,6 +33,14 @@ def _ddl_endpoints() -> dict[str, tuple[str, str]]:
         name, src, dst = match.group(1), match.group(2), match.group(3)
         out[name] = (src, dst)
     return out
+
+
+def _strategy_literals_in_emitters() -> set[str]:
+    found: set[str] = set()
+    for rel in _EMITTER_FILES:
+        text = (_REPO_ROOT / rel).read_text(encoding="utf-8")
+        found.update(_STRATEGY_LITERAL_RE.findall(text))
+    return found
 
 
 def test_schema_consistency_all_ddl_endpoints_match_edge_schema() -> None:
@@ -56,3 +76,19 @@ def test_edge_schema_member_only_flags_on_method_level_edges() -> None:
     assert "DECLARES_PRODUCER" not in EDGE_SCHEMA
     assert EDGE_SCHEMA["HTTP_CALLS"].member_only is False
     assert EDGE_SCHEMA["ASYNC_CALLS"].member_only is False
+
+
+def test_http_async_typical_traversals_include_pre_flip_current_keys() -> None:
+    for edge in ("HTTP_CALLS", "ASYNC_CALLS"):
+        trav = EDGE_SCHEMA[edge].typical_traversals
+        assert "member_subject_current" in trav
+        assert "HTTP_CALLS" in trav["member_subject_current"] or "ASYNC_CALLS" in trav["member_subject_current"]
+        assert "member_subject" in trav
+        assert "DECLARES" in trav["member_subject"] or "DECLARES_PRODUCER" in trav["member_subject"]
+
+
+def test_brownfield_resolver_strategy_literals_emitted_in_builder_subset() -> None:
+    literals = _strategy_literals_in_emitters()
+    assert literals, "expected strategy literals from emitter modules"
+    unknown = literals - BROWNFIELD_RESOLVER_STRATEGY_SET
+    assert not unknown, f"strategy literals not in BROWNFIELD_RESOLVER_STRATEGY_SET: {sorted(unknown)}"

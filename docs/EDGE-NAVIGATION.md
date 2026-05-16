@@ -202,9 +202,11 @@
 
 **Typical traversals**:
 
+- `type_subject_current`: neighbors(['{id}'],'out',['DECLARES']) then neighbors(member_ids,'out',['HTTP_CALLS'])
 - `type_subject`: neighbors(['{id}'],'out',['DECLARES']) then neighbors(member_ids,'out',['DECLARES_CLIENT']) then neighbors(client_ids,'out',['HTTP_CALLS'])
+- `member_subject_current`: neighbors(['{id}'],'out',['HTTP_CALLS'])
 - `member_subject`: neighbors(['{id}'],'out',['DECLARES_CLIENT']) then neighbors(client_ids,'out',['HTTP_CALLS'])
-- `alien_subject`: HTTP_CALLS will connect Client → Route (PR-B); from a method Symbol use DECLARES_CLIENT then HTTP_CALLS via the Client node
+- `alien_subject`: HTTP_CALLS is Symbol→Route until PR-B; use member_subject_current. After PR-B (Client→Route), use member_subject via DECLARES_CLIENT
 
 ## ASYNC_CALLS
 
@@ -225,6 +227,8 @@
 
 **Typical traversals**:
 
+- `type_subject_current`: neighbors(['{id}'],'out',['DECLARES']) then neighbors(member_ids,'out',['ASYNC_CALLS'])
 - `type_subject`: neighbors(['{id}'],'out',['DECLARES']) then neighbors(member_ids,'out',['DECLARES_PRODUCER']) then neighbors(producer_ids,'out',['ASYNC_CALLS'])
+- `member_subject_current`: neighbors(['{id}'],'out',['ASYNC_CALLS'])
 - `member_subject`: neighbors(['{id}'],'out',['DECLARES_PRODUCER']) then neighbors(producer_ids,'out',['ASYNC_CALLS'])
-- `alien_subject`: ASYNC_CALLS will connect Producer → Route (PR-C); from a method Symbol use DECLARES_PRODUCER then ASYNC_CALLS via the Producer node
+- `alien_subject`: ASYNC_CALLS is Symbol→Route until PR-C; use member_subject_current. After PR-C (Producer→Route), use member_subject via DECLARES_PRODUCER

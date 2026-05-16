@@ -261,9 +261,9 @@ Virtual keys (`OVERRIDDEN_BY`, …) and composed dot-keys are **not** valid `Edg
 - **Batching:** Multiple origins are expanded; pagination slices the **combined** edge list — use larger `limit` when batching many ids.
 - **Confidence:** Cross-service edges (`HTTP_CALLS`, `ASYNC_CALLS`) carry confidence, strategy, and match metadata on `edge.attrs` (`attrs.confidence`, `attrs.strategy`, `attrs.match`). Low confidence means the resolver had to guess at the route binding — treat it as a **resolver gap signal**, not a hallucination. Report low-confidence edges with their confidence value, not as facts. Intra-service edges (`CALLS`, `INJECTS`, `IMPLEMENTS`, `EXTENDS`, `DECLARES`, `DECLARES_CLIENT`, `EXPOSES`, `OVERRIDES`) faithfully represent the static graph; the resolved set is still a **lower bound** under reflection / dynamic dispatch (see *What this MCP is NOT*).
 
-### Ontology glossary (version 13)
+### Ontology glossary (version 14)
 
-Source of truth: `java_ontology.py`. Strings are case-sensitive.
+Source of truth: `java_ontology.py` (`EDGE_SCHEMA`, valid sets). Strings are case-sensitive. Edge navigation: [`docs/EDGE-NAVIGATION.md`](./EDGE-NAVIGATION.md) — use `*_current` traversal keys for `HTTP_CALLS` / `ASYNC_CALLS` until SCHEMA-V2 PR-B/C flip endpoints.
 
 **Roles:** `CONTROLLER`, `SERVICE`, `REPOSITORY`, `COMPONENT`, `CONFIG`, `ENTITY`, `CLIENT`, `MAPPER`, `DTO`, `OTHER`.
 
