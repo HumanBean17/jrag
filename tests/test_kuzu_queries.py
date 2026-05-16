@@ -367,9 +367,8 @@ def test_trace_flow_empty_seeds_returns_empty(kuzu_graph) -> None:
     assert kuzu_graph.trace_flow([], depth=1) == []
 
 
-def test_kuzu_graph_get_raises_when_graph_ontology_too_old(tmp_path: Path) -> None:
-    """N4 / proposal §5.3: stale graphs must fail loudly on open."""
-    db_path = tmp_path / "stale_ontology.kuzu"
+def _open_stale_ontology_graph(tmp_path: Path, ontology_version: int) -> Path:
+    db_path = tmp_path / f"stale_ontology_{ontology_version}.kuzu"
     conn = kuzu.Connection(kuzu.Database(str(db_path)))
     conn.execute(
         "CREATE NODE TABLE GraphMeta("
@@ -377,12 +376,35 @@ def test_kuzu_graph_get_raises_when_graph_ontology_too_old(tmp_path: Path) -> No
         "ontology_version INT64, built_at INT64, source_root STRING, "
         "counts_json STRING, parse_errors INT64)"
     )
-    stale = max(0, ONTOLOGY_VERSION - 1)
     conn.execute(
         "CREATE (:GraphMeta {key: $k, ontology_version: $ov, built_at: 0, "
         "source_root: '', counts_json: '{}', parse_errors: 0})",
-        {"k": "graph", "ov": stale},
+        {"k": "graph", "ov": ontology_version},
     )
+    return db_path
+
+
+def test_kuzu_graph_refuses_ontology_version_below_required(tmp_path: Path) -> None:
+    """v13 graphs refuse to open when ONTOLOGY_VERSION is 14 (SCHEMA-V2 PR-A)."""
+    assert ONTOLOGY_VERSION >= 14
+    db_path = _open_stale_ontology_graph(tmp_path, 13)
+
+    prev_inst = KuzuGraph._instance
+    prev_path = KuzuGraph._instance_path
+    try:
+        KuzuGraph._instance = None
+        KuzuGraph._instance_path = None
+        with pytest.raises(RuntimeError, match="(?i)ontology.*14|required version 14"):
+            KuzuGraph.get(str(db_path))
+    finally:
+        KuzuGraph._instance = prev_inst
+        KuzuGraph._instance_path = prev_path
+
+
+def test_kuzu_graph_get_raises_when_graph_ontology_too_old(tmp_path: Path) -> None:
+    """N4 / proposal §5.3: stale graphs must fail loudly on open."""
+    stale = max(0, ONTOLOGY_VERSION - 1)
+    db_path = _open_stale_ontology_graph(tmp_path, stale)
 
     prev_inst = KuzuGraph._instance
     prev_path = KuzuGraph._instance_path
