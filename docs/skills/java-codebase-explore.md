@@ -205,7 +205,7 @@ disagreement as evidence of staleness, not as a contradiction.
 
 - **Wire fields:** Cross-service and resolver-heavy edges carry **`edge.attrs`** (same map surfaced as `attrs` in payloads). Treat **`attrs.confidence`**, **`attrs.strategy`**, and **`attrs.match`** as structured hints: low confidence means “resolver could not pin this cleanly,” not “definitely false.”
 - **MCP vs editor:** If the open buffer contradicts graph edges (deleted method, renamed class), **trust the file** and treat MCP as stale until **`reprocess`** (or at least acknowledge incremental lag after **`increment`**).
-- **Operational check:** Use **`java-codebase-rag meta`** to compare index health, ontology version (currently **v11** in this repo’s README), and recency signals—then decide whether to re-run **`reprocess`** before continuing a mission.
+- **Operational check:** Use **`java-codebase-rag meta`** to compare index health, ontology version (currently **13** in this repo’s README), and recency signals—then decide whether to re-run **`reprocess`** before continuing a mission.
 
 ## Anti-patterns
 
@@ -234,12 +234,13 @@ Five MCP tools:
 Three node kinds: `symbol`, `route`, `client`. Ids carry a prefix
 (`sym:`, `route:` / `r:`, `client:` / `c:`).
 
-Nine edge types:
+Ten edge types:
 
 | Group | Edges |
 | ----- | ----- |
 | Type wiring | `EXTENDS`, `IMPLEMENTS`, `INJECTS` |
 | Containment | `DECLARES`, `DECLARES_CLIENT` |
+| Method overrides | `OVERRIDES` |
 | Method calls | `CALLS` |
 | Service boundary | `EXPOSES` |
 | Cross-service | `HTTP_CALLS`, `ASYNC_CALLS` |

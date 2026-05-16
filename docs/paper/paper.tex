@@ -78,7 +78,7 @@
 % =============================================================================
 \begin{abstract}
 \noindent
-Large language model agents reason poorly about codebases the moment the codebase no longer fits in their context window. The standard remedy --- chunked retrieval-augmented generation over source files \cite{lewis2020rag} --- treats source code as prose and produces irrelevant or contradictory chunks for non-trivial questions ("who calls this method", "what HTTP routes does this microservice expose", "if I change this DTO, what breaks"). \textbf{java-codebase-rag} is a graph-native code intelligence layer that replaces chunk retrieval with deterministic graph navigation. It exposes a deliberately small Model Context Protocol (MCP) surface --- four tools: \texttt{search}, \texttt{find}, \texttt{describe}, \texttt{neighbors} --- backed by a typed property graph extracted from Java microservice source via tree-sitter \cite{treesitter}. The four tools collapse onto three primitive operations the agent actually performs: \emph{locate} a starting node (\texttt{search}, \texttt{find}); \emph{inspect} a node's full record (\texttt{describe}); \emph{walk} edges in the graph (\texttt{neighbors}). We call this metaphor \emph{a GPS for the agent}: the agent always knows where it is in the codebase, what is adjacent, and how to move. This report describes the architecture, the inspirations (GraphRAG \cite{edge2024graphrag}, context engineering \cite{karpathy2025context}, the MCP standard \cite{anthropic2024mcp}, and the broader AST-graph-RAG line), and the design principles that shaped a v2 redesign from a 9-tool surface into the current 4-tool surface plus eight operator CLI subcommands grouped as lifecycle (\texttt{init}, \texttt{increment}, \texttt{reprocess}, \texttt{erase}), introspection (\texttt{meta}, \texttt{tables}, \texttt{diagnose-ignore}), and analysis (\texttt{analyze-pr}) (Section~\ref{sec:layer3} discusses the CLI briefly; full reference in \texttt{docs/JAVA-CODEBASE-RAG-CLI.md}). We do not include empirical evaluation: testing on real legacy codebases is in progress and the data is not yet ready to publish. The contribution of this report is conceptual: it argues for a particular shape of code-intelligence layer --- minimal, typed, graph-native, agent-shaped --- and shows the architecture in enough detail that a reader could rebuild it for another language ecosystem.
+Large language model agents reason poorly about codebases the moment the codebase no longer fits in their context window. The standard remedy --- chunked retrieval-augmented generation over source files \cite{lewis2020rag} --- treats source code as prose and produces irrelevant or contradictory chunks for non-trivial questions ("who calls this method", "what HTTP routes does this microservice expose", "if I change this DTO, what breaks"). \textbf{java-codebase-rag} is a graph-native code intelligence layer that replaces chunk retrieval with deterministic graph navigation. It exposes a deliberately small Model Context Protocol (MCP) surface --- five tools: \texttt{search}, \texttt{find}, \texttt{describe}, \texttt{neighbors}, \texttt{resolve} --- backed by a typed property graph extracted from Java microservice source via tree-sitter \cite{treesitter}. The five tools collapse onto three primitive operations the agent actually performs: \emph{locate} a starting node (\texttt{search}, \texttt{find}, \texttt{resolve}); \emph{inspect} a node's full record (\texttt{describe}); \emph{walk} edges in the graph (\texttt{neighbors}). We call this metaphor \emph{a GPS for the agent}: the agent always knows where it is in the codebase, what is adjacent, and how to move. This report describes the architecture, the inspirations (GraphRAG \cite{edge2024graphrag}, the MCP standard \cite{anthropic2024mcp}, and the broader AST-graph-RAG line), and the design principles that shaped a v2 redesign from a 9-tool surface into the current 5-tool surface plus eight operator CLI subcommands grouped as lifecycle (\texttt{init}, \texttt{increment}, \texttt{reprocess}, \texttt{erase}), introspection (\texttt{meta}, \texttt{tables}, \texttt{diagnose-ignore}), and analysis (\texttt{analyze-pr}) (Section~\ref{sec:layer3} discusses the CLI briefly; full reference in \texttt{docs/JAVA-CODEBASE-RAG-CLI.md}). We do not include empirical evaluation: testing on real legacy codebases is in progress and the data is not yet ready to publish. The contribution of this report is conceptual: it argues for a particular shape of code-intelligence layer --- minimal, typed, graph-native, agent-shaped --- and shows the architecture in enough detail that a reader could rebuild it for another language ecosystem.
 \end{abstract}
 
 \vspace{0.6em}
@@ -103,11 +103,11 @@ This system is not a research artefact. The architecture stitches together ideas
 
 \paragraph{GraphRAG and AST-graph retrieval.} Microsoft's GraphRAG \cite{edge2024graphrag} demonstrated that constructing a knowledge graph from source documents and retrieving over the graph --- with community detection for global summarisation and hierarchical context for local queries --- substantially outperforms flat vector retrieval for query-focused summarisation. The lesson generalises beyond text: \emph{any} corpus with strong relational structure benefits from extracting that structure once and querying it as a graph. Source code has the strongest relational structure of any corpus we routinely retrieve over (compilers extract it for free); not exploiting it is a missed opportunity. Subsequent work in the AST-graph-RAG line \cite{guo2024lightrag} reinforces the pattern: lighter, simpler graph backends with cleaner ontologies often beat heavyweight ones for retrieval quality.
 
-\paragraph{Context engineering.} Karpathy's \cite{karpathy2025context} framing of context engineering --- the delicate art of filling the context window with the right information at the right time --- shifted our thinking on tool design. A tool that returns 5\,KB of plausibly-relevant text is not equivalent to a tool that returns 200 bytes of structured truth; the second is far more useful. Lost-in-the-middle effects \cite{liu2023lostmiddle} mean that long noisy contexts actively hurt downstream reasoning. The correct response is not "retrieve better" but "retrieve less, with type guarantees". Every tool in the java-codebase-rag surface returns small, typed, deterministic JSON. The agent never has to decide whether what it received is signal or noise.
+\paragraph{Context engineering.} Context engineering --- filling the context window with the right information at the right time --- shaped our tool design. A tool that returns 5\,KB of plausibly-relevant text is not equivalent to a tool that returns 200 bytes of structured truth; the second is far more useful. Lost-in-the-middle effects \cite{liu2023lostmiddle} mean that long noisy contexts actively hurt downstream reasoning. The correct response is not "retrieve better" but "retrieve less, with type guarantees". Every tool in the java-codebase-rag surface returns small, typed, deterministic JSON. The agent never has to decide whether what it received is signal or noise.
 
 \paragraph{Model Context Protocol.} The MCP standard \cite{anthropic2024mcp} fixed the impedance mismatch between agents and tools: a single transport, a single way to declare schemas, and a single way to bind tools to hosts (Claude Code, Cursor, Qwen Code, and others). Without MCP this report would describe a Claude-Code-only system. With MCP, a single Python server reaches every host the user already prefers. The standard does one thing well and stops.
 
-\paragraph{The agent-skills layer.} Anthropic's agent skills \cite{anthropic2025skills} provided the missing piece between raw tool calls and agent reasoning: a skill is a slash-invokable, declaratively-described chain of tool calls that encodes a recurring intent ("trace this request flow", "show me callers of this method"). Skills are how a 4-tool MCP grows into hundreds of usable agent intents without growing the tool surface. We describe the planned skills layer briefly in \S\ref{sec:future} and defer its specification to a separate document; empirical testing showed that a comprehensive prose guide (mirrored as \texttt{AGENT-GUIDE.md} and \texttt{QWEN.md}) is sufficient for current weak-model performance, so the skills layer is not yet on the critical path.
+\paragraph{The agent-skills layer.} Anthropic's agent skills \cite{anthropic2025skills} provided the missing piece between raw tool calls and agent reasoning: a skill is a slash-invokable, declaratively-described chain of tool calls that encodes a recurring intent ("trace this request flow", "show me callers of this method"). Skills are how a small fixed MCP surface grows into hundreds of usable agent intents without growing the tool count. We describe the planned skills layer briefly in \S\ref{sec:future} and defer its specification to a separate document; empirical testing showed that a comprehensive prose guide (mirrored as \texttt{docs/AGENT-GUIDE.md}) is sufficient for current weak-model performance, so the skills layer is not yet on the critical path.
 
 \paragraph{What we are not.} We do not claim novelty over GraphRAG, LightRAG, or LSP-backed tooling. We claim that a particular synthesis --- minimal MCP surface, typed property graph, three-primitive navigation model, agent-shaped affordances --- is the right shape for code intelligence at the agentic-development layer. The synthesis is the contribution.
 
@@ -120,7 +120,7 @@ The system is organised in three layers (Figure~\ref{fig:layers}). Each layer ha
 \begin{figure}[H]
 \centering
 \input{figures/layers.tex}
-\caption{Three-layer architecture. \textbf{Layer 1 (Extract \& Store)} ingests Java source via tree-sitter and emits nodes and edges into an embedded property graph. \textbf{Layer 2 (Navigate)} exposes four MCP tools collapsing onto three primitive operations: locate, inspect, walk. \textbf{Layer 3 (Reason)} is the agent host (Claude Code, Qwen Code, or any MCP-compatible runtime) plus optional skills. Each layer is replaceable: swap the extractor for another language, swap the graph backend, swap the agent host --- contracts hold.}
+\caption{Three-layer architecture. \textbf{Layer 1 (Extract \& Store)} ingests Java source via tree-sitter and emits nodes and edges into an embedded property graph. \textbf{Layer 2 (Navigate)} exposes five MCP tools collapsing onto three primitive operations: locate, inspect, walk. \textbf{Layer 3 (Reason)} is the agent host (Claude Code, Qwen Code, or any MCP-compatible runtime) plus optional skills. Each layer is replaceable: swap the extractor for another language, swap the graph backend, swap the agent host --- contracts hold.}
 \label{fig:layers}
 \end{figure}
 
@@ -131,7 +131,7 @@ The extractor walks a Java source tree using tree-sitter \cite{treesitter} gramm
 
 The graph is stored in K\`uzu \cite{kuzu2023}, an embedded property-graph database with a Cypher-style query language. K\`uzu was chosen over Neo4j for two pragmatic reasons: it embeds in-process (no separate database server to operate), and it has zero ongoing cost for a developer-side tool. Cocoindex \cite{cocoindex2024} drives the indexing pipeline (incremental rebuilds, dependency tracking, change detection on source files).
 
-The ontology is small by design (Table~\ref{tab:ontology}). Three node kinds (\textsc{symbol}, \textsc{route}, \textsc{client}) cover everything an agent realistically asks about; nine edge types cover every relation we have found load-bearing in practice. The ontology version is currently 11; the discipline is that no edge type ships unless at least three realistic agent questions in our use-case backlog require it.
+The ontology is small by design (Table~\ref{tab:ontology}). Three node kinds (\textsc{symbol}, \textsc{route}, \textsc{client}) cover everything an agent realistically asks about; ten edge types cover every relation we have found load-bearing in practice. The ontology version is currently 13; the discipline is that no edge type ships unless at least three realistic agent questions in our use-case backlog require it.
 
 \begin{table}[H]
 \centering
@@ -147,10 +147,11 @@ The ontology is small by design (Table~\ref{tab:ontology}). Three node kinds (\t
 \textsc{route}   & An HTTP-exposed endpoint (Spring \texttt{@RequestMapping}, JAX-RS \texttt{@Path}, etc.). One per HTTP method + path. \\
 \textsc{client}  & A typed reference to an external service: declared HTTP client (Feign, OpenFeign, REST clients) or messaging client. \\
 \midrule
-\multicolumn{2}{l}{\emph{Edge types (9)}} \\
+\multicolumn{2}{l}{\emph{Edge types (10)}} \\
 \textsc{extends}        & Class- or interface-inheritance edge (Java \texttt{extends}). \\
 \textsc{implements}     & Interface-implementation edge (Java \texttt{implements}). \\
 \textsc{injects}        & Dependency-injection edge: a symbol receives another via constructor, field, or setter injection. \\
+\textsc{overrides}      & Subtype method overrides a supertype declaration with the same signature. \\
 \textsc{declares}       & Container declares a member: class \textsc{declares} method, package \textsc{declares} class, etc. \\
 \textsc{declares\_client} & Module declares a typed external-service client. \\
 \textsc{calls}          & In-process method call. The work-horse edge. \\
@@ -164,12 +165,12 @@ The ontology is small by design (Table~\ref{tab:ontology}). Three node kinds (\t
 \subsection{Layer 2: navigate (the MCP)}
 \label{sec:layer2}
 
-Layer 2 is the public surface of the system. Four tools, three primitive operations (Figure~\ref{fig:gps}). Every tool returns small, typed JSON; no tool returns more than a single page of results without explicit pagination.
+Layer 2 is the public surface of the system. Five tools, three primitive operations (Figure~\ref{fig:gps}). Every tool returns small, typed JSON; no tool returns more than a single page of results without explicit pagination. Successful outputs may also carry advisory \texttt{hints} (templated next-call strings) and pagination echoes on \texttt{search} / \texttt{find}.
 
 \begin{figure}[H]
 \centering
 \input{figures/gps.tex}
-\caption{The GPS metaphor. Four MCP tools collapse onto three primitive operations: \emph{locate} (where am I?), \emph{inspect} (what is here?), \emph{walk} (where can I go?). Every realistic agent question decomposes into a chain over these three primitives. The agent supplies the reasoning; the graph supplies the geometry.}
+\caption{The GPS metaphor. Five MCP tools collapse onto three primitive operations: \emph{locate} (where am I?), \emph{inspect} (what is here?), \emph{walk} (where can I go?). Every realistic agent question decomposes into a chain over these three primitives. The agent supplies the reasoning; the graph supplies the geometry.}
 \label{fig:gps}
 \end{figure}
 
@@ -191,7 +192,7 @@ The full type signatures are listed in Appendix~\ref{app:tools}. Two design choi
 \subsection{Layer 3: reason (the agent)}
 \label{sec:layer3}
 
-Layer 3 is whatever MCP-compatible host the developer prefers --- Claude Code, Qwen Code, Cursor, or another runtime. The host loads the java-codebase-rag MCP server, sees the four tools, and the agent reasons over them. There is no logic in this layer that is specific to java-codebase-rag; the entire affordance is the four tools and a prose agent guide (\texttt{docs/AGENT-GUIDE.md}, with a Qwen-specific mirror at \texttt{QWEN.md}) that documents the canonical workflows --- forced reasoning preamble, decision tree, edge taxonomy, worked examples.
+Layer 3 is whatever MCP-compatible host the developer prefers --- Claude Code, Qwen Code, Cursor, or another runtime. The host loads the java-codebase-rag MCP server, sees the five tools, and the agent reasons over them. There is no logic in this layer that is specific to java-codebase-rag; the entire affordance is the five tools and a prose agent guide (\texttt{docs/AGENT-GUIDE.md}) that documents the canonical workflows --- forced reasoning preamble, decision tree, edge taxonomy, worked examples.
 
 A planned addition (deferred) is a thin skills layer that turns recurring intents (\texttt{/callers}, \texttt{/routes}, \texttt{/explain-feature}) into one-line slash invocations that compile to MCP-call chains. Empirical testing on the target codebase showed that the prose guide alone is sufficient for current weak-model accuracy, so the skills layer is not yet implemented.
 
@@ -208,7 +209,7 @@ Figure~\ref{fig:workflow} traces a representative interaction. The user asks "wh
 \label{fig:workflow}
 \end{figure}
 
-The workflow is general. The java-codebase-rag agent guide enumerates 15+ canonical intents, each decomposing into 2--5 tool calls over the same four tools. New intents are new chains, not new tools.
+The workflow is general. The java-codebase-rag agent guide enumerates 15+ canonical intents, each decomposing into 2--5 tool calls over the same five tools. New intents are new chains, not new tools.
 
 A subtle point worth surfacing: the agent's first move is almost always \texttt{search}, not \texttt{find}. Natural-language questions arrive fuzzy; \texttt{search} is the cheapest way to get from "fuzzy English" to "candidate node ids". Once the agent has an id, all subsequent navigation is deterministic. This shape --- semantic at the boundary, structural in the interior --- is the practical reconciliation between vector retrieval and graph navigation. We do not need hybrid retrieval (parallel vector $+$ graph fusion) for most questions; we need \emph{sequential} retrieval, with the vector step strictly outside the graph step.
 
@@ -216,13 +217,13 @@ A subtle point worth surfacing: the agent's first move is almost always \texttt{
 \section{Design principles}
 \label{sec:principles}
 
-The architecture above did not arrive in one step. It arrived after a v1 surface of nine MCP tools collapsed --- in design review --- into four. Five design principles guided the collapse, and they remain binding for any future surface change.
+The architecture above did not arrive in one step. It arrived after a v1 surface of nine MCP tools collapsed --- in design review --- into a small fixed set (currently five navigation tools). Five design principles guided the collapse, and they remain binding for any future surface change.
 
 \begin{enumerate}
 \item \textbf{The MCP is a graph navigator, not a reasoning engine.} If a tool's job is to combine results, summarise across nodes, or rank candidates, the tool belongs in the agent's reasoning, not the MCP. Move it to a skill or to a CLI subcommand.
 \item \textbf{Every tool has a single primitive operation.} If a tool does two things ("search and describe", "find and walk"), it should be two tools or one tool with a strict contract. Composite tools confuse weak models and double the failure surface.
 \item \textbf{Schemas are closed where finite.} Every parameter that takes one of $N$ known values is a \texttt{Literal}-typed enumeration. The agent gets explicit affordances; the server gets free input validation.
-\item \textbf{Operational surface is human-shaped, not agent-shaped.} {\sloppy Tools the agent does not call belong in a CLI (\texttt{java-codebase-rag} lifecycle and introspection subcommands --- \texttt{init}, \texttt{increment}, \texttt{reprocess}, \texttt{erase}, \texttt{meta}, \texttt{tables}, \texttt{diagnose-ignore}, \texttt{analyze-pr}), not the MCP. The MCP surface stays at four tools forever.\par}
+\item \textbf{Operational surface is human-shaped, not agent-shaped.} {\sloppy Tools the agent does not call belong in a CLI (\texttt{java-codebase-rag} lifecycle and introspection subcommands --- \texttt{init}, \texttt{increment}, \texttt{reprocess}, \texttt{erase}, \texttt{meta}, \texttt{tables}, \texttt{diagnose-ignore}, \texttt{analyze-pr}), not the MCP. The MCP navigation surface stays small and fixed; new agent intents are new chains over the existing tools, not new tools.\par}
 \item \textbf{Walks are explicit, not silent.} The system never multi-hops without the agent asking. Multi-hop intents become multi-call chains. The agent always knows what edges it walked, and the user always can audit.
 \end{enumerate}
 
@@ -247,10 +248,10 @@ A small system advertises its boundary. java-codebase-rag does not, and will not
 \label{sec:future}
 
 {\sloppy
-Three threads are open and prioritised. \textbf{(1) Real-codebase evaluation.} Testing on a large legacy Java microservice estate is in progress; once stable, we expect to publish accuracy numbers (intent $\to$ correct-tool-chain rate, end-to-end answer correctness against human labels) for the four-tool surface against weak (Qwen) and strong (Claude Sonnet 4.5) hosts. \textbf{(2) Skills layer.} A 13-skill set --- 10 single-call navigation skills (\texttt{/callers}, \texttt{/callees}, \texttt{/routes}, \texttt{/controllers}, \ldots) and 3 multi-step workflow skills (\texttt{/explain-feature}, \texttt{/impact-of}, \texttt{/trace-request-flow}) --- is designed and on hold until the prose-guide approach shows insufficient. \textbf{(3) Tier-2 incremental rebuilds.} Today the index rebuilds the affected modules; we want commit-level incremental rebuilds for sub-second index updates on large monorepos.
+Three threads are open and prioritised. \textbf{(1) Real-codebase evaluation.} Testing on a large legacy Java microservice estate is in progress; once stable, we expect to publish accuracy numbers (intent $\to$ correct-tool-chain rate, end-to-end answer correctness against human labels) for the five-tool surface against weak (Qwen) and strong (Claude Sonnet 4.5) hosts. \textbf{(2) Skills layer.} A 13-skill set --- 10 single-call navigation skills (\texttt{/callers}, \texttt{/callees}, \texttt{/routes}, \texttt{/controllers}, \ldots) and 3 multi-step workflow skills (\texttt{/explain-feature}, \texttt{/impact-of}, \texttt{/trace-request-flow}) --- is designed and on hold until the prose-guide approach shows insufficient. \textbf{(3) Tier-2 incremental rebuilds.} Today the index rebuilds the affected modules; we want commit-level incremental rebuilds for sub-second index updates on large monorepos.
 \par}
 
-We deliberately list \emph{no} item that would grow the MCP tool count. The four-tool surface is a load-bearing commitment; it will not be revisited without proof that it cannot accommodate a real intent.
+We deliberately list \emph{no} item that would grow the MCP tool count without proof that the existing five tools cannot accommodate a real intent.
 
 % =============================================================================
 \section*{Acknowledgements}
@@ -265,7 +266,7 @@ This system was designed and built collaboratively over a long-running design co
 \section{Tool signatures (verbatim)}
 \label{app:tools}
 
-The four MCP tools have the following Python (Pydantic) signatures, simplified for readability. The full source lives at \texttt{mcp\_v2.py} in the repository.
+The five MCP tools have the following Python (Pydantic) signatures, simplified for readability. The full source lives at \texttt{mcp\_v2.py} in the repository.
 
 \begin{lstlisting}[language=Python]
 DeclarationSymbolKind = Literal[
@@ -274,7 +275,7 @@ DeclarationSymbolKind = Literal[
 ]
 
 EdgeType = Literal[
-    "EXTENDS", "IMPLEMENTS", "INJECTS", "DECLARES",
+    "EXTENDS", "IMPLEMENTS", "INJECTS", "OVERRIDES", "DECLARES",
     "DECLARES_CLIENT", "CALLS", "EXPOSES",
     "HTTP_CALLS", "ASYNC_CALLS"
 ]
@@ -307,6 +308,8 @@ def find(
 ) -> FindOutput: ...
 
 def describe(id: str) -> DescribeOutput: ...
+
+def resolve(identifier: str, hint_kind: str | None = None) -> ResolveOutput: ...
 
 def neighbors(
     id: str,

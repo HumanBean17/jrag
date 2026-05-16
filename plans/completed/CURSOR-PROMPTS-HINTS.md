@@ -1,7 +1,7 @@
 # Cursor task prompts — Hints (road signs) + stored `OVERRIDES`
 
-Status: **active**. Plan: [`plans/PLAN-HINTS.md`](./PLAN-HINTS.md). Propose:
-[`propose/HINTS-ROAD-SIGNS-PROPOSE.md`](../propose/HINTS-ROAD-SIGNS-PROPOSE.md).
+Status: **completed** (landed). Plan: [`plans/completed/PLAN-HINTS.md`](./PLAN-HINTS.md). Propose:
+[`propose/completed/HINTS-ROAD-SIGNS-PROPOSE.md`](../propose/completed/HINTS-ROAD-SIGNS-PROPOSE.md).
 
 One prompt per PR. Copy the fenced **Prompt** block into Cursor agent mode with the
 listed `@-files` attached.
@@ -22,13 +22,13 @@ is merged to `master`.
 
 **Branch:** `feat/hints-stored-overrides` off `master`.
 **Base:** `master`.
-**Plan section:** [`plans/PLAN-HINTS.md`](./PLAN-HINTS.md) § PR-A — Stored `OVERRIDES` edges + ontology bump.
+**Plan section:** [`plans/completed/PLAN-HINTS.md`](./PLAN-HINTS.md) § PR-A — Stored `OVERRIDES` edges + ontology bump.
 **PR title:** `materialize OVERRIDES rel and bump ontology to 13`
 
 **Attach (`@-files`):**
 
-- `@plans/PLAN-HINTS.md` (PR-A section + principles + cross-PR risks)
-- `@propose/HINTS-ROAD-SIGNS-PROPOSE.md` (§6 PR-A, §7.17)
+- `@plans/completed/PLAN-HINTS.md` (PR-A section + principles + cross-PR risks)
+- `@propose/completed/HINTS-ROAD-SIGNS-PROPOSE.md` (§6 PR-A, §7.17)
 - `@build_ast_graph.py`
 - `@ast_java.py`
 - `@kuzu_queries.py` (`override_axis_rollup_for` — reference only unless optional hygiene is justified)
@@ -43,7 +43,7 @@ is merged to `master`.
 **Prompt:**
 
 ````
-You are implementing PR-HINTS-A from `plans/PLAN-HINTS.md` (the **PR-A** section).
+You are implementing PR-HINTS-A from `plans/completed/PLAN-HINTS.md` (the **PR-A** section).
 
 Read the PR-A **File-by-file changes** and **Tests for PR-A** before coding. If this
 prompt and the plan disagree, the plan wins; the propose fills background only.
@@ -125,7 +125,7 @@ present; server `describe` text must **not** claim stored `OVERRIDES` is unusabl
 `neighbors` (rollup/dot-key carve-out may remain for virtual keys).
 
 ```bash
-# Allowed paths for PR-A (see `plans/PLAN-HINTS.md` PR-A file-by-file). Anything
+# Allowed paths for PR-A (see `plans/completed/PLAN-HINTS.md` PR-A file-by-file). Anything
 # else printed here is a red flag — confirm against that list or trim scope before merge.
 git diff master..HEAD --name-only | rg -v '^(tests/|build_ast_graph\.py|ast_java\.py|java_index_flow_lancedb\.py|kuzu_queries\.py|mcp_v2\.py|server\.py|README\.md)$' || true
 ```
@@ -153,7 +153,7 @@ fixture expects overrides; paste command + key line in the PR body.
 
 ## Definition of Done
 
-- [ ] PR-A plan definition of done satisfied (`plans/PLAN-HINTS.md`).
+- [ ] PR-A plan definition of done satisfied (`plans/completed/PLAN-HINTS.md`).
 - [ ] `.venv/bin/ruff check .` and `.venv/bin/python -m pytest tests -v` green.
 - [ ] PR title: `materialize OVERRIDES rel and bump ontology to 13`
 - [ ] Branch: `feat/hints-stored-overrides`
@@ -166,13 +166,13 @@ fixture expects overrides; paste command + key line in the PR body.
 
 **Branch:** `feat/mcp-v2-hints` off `master` **after PR-HINTS-A is merged**.
 **Base:** `master` at merge commit of PR-HINTS-A.
-**Plan section:** [`plans/PLAN-HINTS.md`](./PLAN-HINTS.md) § PR-B — `hints`, pagination echo, `mcp_hints.py` catalog.
+**Plan section:** [`plans/completed/PLAN-HINTS.md`](./PLAN-HINTS.md) § PR-B — `hints`, pagination echo, `mcp_hints.py` catalog.
 **PR title:** `add MCP v2 hints and find/search pagination echo`
 
 **Attach (`@-files`):**
 
-- `@plans/PLAN-HINTS.md` (PR-B section + principles §7.12 priority)
-- `@propose/HINTS-ROAD-SIGNS-PROPOSE.md` (§3, Appendix A — canonical template strings)
+- `@plans/completed/PLAN-HINTS.md` (PR-B section + principles §7.12 priority)
+- `@propose/completed/HINTS-ROAD-SIGNS-PROPOSE.md` (§3, Appendix A — canonical template strings)
 - `@mcp_hints.py` (create)
 - `@mcp_v2.py` (outputs + handler wiring)
 - `@server.py` (optional: tool `description=` updates for `hints` / pagination — minimal)
@@ -182,12 +182,12 @@ fixture expects overrides; paste command + key line in the PR body.
 **Prompt:**
 
 ````
-You are implementing PR-HINTS-B from `plans/PLAN-HINTS.md` (the **PR-B** section).
+You are implementing PR-HINTS-B from `plans/completed/PLAN-HINTS.md` (the **PR-B** section).
 
 PR-HINTS-A is already on `master` (stored `OVERRIDES`, `EdgeType` includes it,
 ontology 13). Do not re-land builder/schema work here.
 
-Read **Appendix A** in `propose/HINTS-ROAD-SIGNS-PROPOSE.md` for verbatim v1 template
+Read **Appendix A** in `propose/completed/HINTS-ROAD-SIGNS-PROPOSE.md` for verbatim v1 template
 strings. If §3.3 and Appendix A disagree, Appendix A wins; if you change strings,
 update the propose in the same PR.
 
@@ -206,7 +206,7 @@ update the propose in the same PR.
 3. **`README.md`** — Document `hints` and pagination echo briefly under MCP v2.
 4. **`server.py`** — Only if needed for LLM-facing tool descriptions; keep stdout clean.
 5. **Tests** — Implement **all** `test_*` names listed under **Tests for PR-B** in
-   `plans/PLAN-HINTS.md` (verbatim names). Prefer crafted pydantic payloads where the
+   `plans/completed/PLAN-HINTS.md` (verbatim names). Prefer crafted pydantic payloads where the
    scenario does not need a DB; use `kuzu_graph` / fixtures where integration is
    required.
 

@@ -1,7 +1,7 @@
 """Pure MCP v2 road-sign hint generation (no graph I/O, no search, no LLM).
 
-Locked v1 catalog: ``propose/HINTS-ROAD-SIGNS-PROPOSE.md`` Appendix A.
-Priority cap: same propose §7.12 / ``plans/PLAN-HINTS.md`` principles.
+Locked v1 catalog: ``propose/completed/HINTS-ROAD-SIGNS-PROPOSE.md`` Appendix A.
+Priority cap: same propose §7.12 / ``plans/completed/PLAN-HINTS.md`` principles.
 """
 
 from __future__ import annotations

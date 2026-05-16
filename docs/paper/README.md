@@ -8,8 +8,9 @@ architecture report:
 > May 2026.
 
 The paper describes the three-layer architecture (Extract \& Store / Navigate /
-Reason), the four-tool MCP surface, the GPS metaphor (locate \-- inspect \-- walk),
-the design principles that drove a v1\->v2 collapse from 9 tools to 4, and what
+Reason), the five-tool MCP surface, the GPS metaphor (locate \-- inspect \-- walk),
+the design principles that drove a v1\->v2 collapse from 9 tools to a small fixed
+set (currently five navigation tools), and what
 the system deliberately does not do. It contains no empirical evaluation;
 testing on real legacy codebases is in progress and the data is not yet ready
 to publish.
@@ -19,7 +20,7 @@ to publish.
 | File | Purpose |
 |---|---|
 | `paper.tex` | Main LaTeX source. Single-file paper, ~320 lines. |
-| `references.bib` | BibTeX bibliography (13 entries). |
+| `references.bib` | BibTeX bibliography. |
 | `figures/layers.tex` | TikZ source: three-layer architecture diagram. |
 | `figures/gps.tex` | TikZ source: GPS-metaphor / three-primitive diagram. |
 | `figures/workflow.tex` | TikZ source: canonical agent-interaction trace. |

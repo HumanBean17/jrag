@@ -19,7 +19,8 @@ when needed.
 ## Where to look
 
 - `README.md` — feature surface, env vars, ranking, capabilities,
-  MCP tools (`search` / `find` / `describe` / `neighbors` / `resolve`), `java-codebase-rag` CLI,
+  MCP tools (`search` / `find` / `describe` / `neighbors` / `resolve`; response
+  `hints` + pagination echo on locate tools — see README), `java-codebase-rag` CLI,
   "Re-index required" callouts. The current
   `ontology_version` is **13** (material `OVERRIDES` Symbol→Symbol edges: subtype
   instance method → supertype declaration with matching `signature`, one
@@ -57,6 +58,7 @@ when needed.
 | `graph_enrich.py` | `module` / `microservice` resolution, `BrownfieldOverrides` (route + role + capability + http client + async producer), meta-annotation walk, `resolve_routes_for_method` / `resolve_http_client_for_method` / `resolve_async_producer_for_method`. |
 | `java_ontology.py` | Source of truth for `VALID_ROLES`, `VALID_CAPABILITIES`, `VALID_CLIENT_KINDS`, `VALID_HTTP_CALL_STRATEGIES`, `VALID_ASYNC_CALL_STRATEGIES`, `VALID_HTTP_CALL_MATCHES`. |
 | `chunk_heuristics.py` | Query-time chunk hints (no AST / no re-index). |
+| `mcp_hints.py` | MCP v2 road-sign `hints` catalog (`generate_hints`; locked v1 templates in `propose/completed/HINTS-ROAD-SIGNS-PROPOSE.md`). |
 | `index_common.py` | Embedding config (no CocoIndex dep). |
 | `java_index_flow_lancedb.py` | CocoIndex flow (used by `java-codebase-rag init` / `increment` / `reprocess` / `erase`). |
 | `java_index_v1_common.py` | Shared file walker / exclude patterns. |
