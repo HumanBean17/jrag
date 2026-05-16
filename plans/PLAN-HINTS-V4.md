@@ -19,7 +19,9 @@ Depends on: **NEIGHBORS-DOT-KEY-TRAVERSAL** landed ([#171](https://github.com/Hu
 - **Output-level only** — extends v2: no per-row hints on `Edge` / `NodeRef` / `SearchHit`; no confidence / `attrs.match` gates on success rows.
 - **No graph I/O** — hints are pure functions of MCP payload dicts (`.model_dump()` shapes already built in `mcp_v2.py`).
 - **Single edge type** — `len(requested_edge_types) == 1`; multi-edge requests get no v4 success hints (agent-composed queries).
-- **Homogeneous endpoints** — mixed `other.kind` (or mixed method vs type Symbols) → silence for that template row.
+- **Homogeneous endpoints** — mixed `other.kind` (or mixed method **and** type Symbols on one page) → silence for that template row. **Method + constructor** Symbols together are homogeneous (both ∈ `_METHOD_SYMBOL_KINDS`).
+- **Multi-origin `neighbors`** — success hints use echoed `origin_id` / `subject_record` for **`origins[0]` only** (v3 empty-hint parity); no v4-specific multi-origin payload field.
+- **`subject_record` is a flat Kuzu row** — `neighbors_v2` passes `_load_node_record` output (top-level `kind: "class" | …`), **not** `NodeRecord.model_dump()`. N1a/N1b type gate must match v3: `_subject_node_label == "Symbol"` and top-level `subject_record["kind"] in _TYPE_SYMBOL_KINDS`.
 - **Pagination** — success hints require `offset == 0` (mirror v3 empty suppression).
 - **Priority** — all v4 rows use `PRIORITY_LEAF_FOLLOWUP` (2); beat v2 fuzzy and v3 empty (`PRIORITY_META` 1) in cap contests; N1a + N1b may co-fire (both priority 2).
 - **Dot-key partial reversal (neighbors success only)** — N1a/N1b reuse `TPL_DESCRIBE_TYPE_CLIENTS_VIA_MEMBERS` / `TPL_DESCRIBE_TYPE_ROUTES_VIA_MEMBERS` verbatim (`{id}` = `origin_id`). N2/N3 accept flat **or** composed `DECLARES.*` triggers. **v3 empty structural hints** still never emit dot-keys — apply `_filter_neighbors_dotkey_hints` to **empty-branch pairs only**, not success-path pairs.
@@ -33,7 +35,7 @@ Depends on: **NEIGHBORS-DOT-KEY-TRAVERSAL** landed ([#171](https://github.com/Hu
 
 | PR | Scope | Ontology bump | Areas of concern | Test buckets | Independent of |
 | --- | --- | --- | --- | --- | --- |
-| PR-A | `mcp_hints.py` neighbors success + `tests/test_mcp_hints.py` N* + dot-key filter split | **No** | `_filter_neighbors_dotkey_hints` scope; N1a/N1b `subject_record` shape (`data.kind`); composed vs flat edge trigger sets; cap co-fire with fuzzy (HV16 pattern) | `test_hints_neighbors_*` (propose table) | #171 |
+| PR-A | `mcp_hints.py` neighbors success + `tests/test_mcp_hints.py` N* + dot-key filter split | **No** | `_filter_neighbors_dotkey_hints` scope; N1a/N1b flat `subject_record` gate (must match v3, not describe `data.kind`); required `neighbors_v2` round-trip; cap co-fire with fuzzy | `test_hints_neighbors_*` (propose table) | #171 |
 | PR-B | `mcp_hints.py` find (+ optional search S1); appendix note; F* (+ optional S1) tests | **No** | F1 uses `results[0].id` only when `len(results) > 1`; page-full meta vs F-row priority; HV20 must stay empty-only for dot-keys | `test_hints_find_*`, optional `test_hints_search_*` | PR-A optional |
 
 **Landing order:** **PR-A → PR-B** (PR-B may rebase on PR-A; can collapse to one PR if reviewer prefers — keep sections separable for review).
@@ -49,10 +51,12 @@ Depends on: **NEIGHBORS-DOT-KEY-TRAVERSAL** landed ([#171](https://github.com/Hu
 | Rejected N1 combined `or` line | Exceeds 120 chars; N1a + N1b only |
 | `find` multi-match | F-rows emit once with `results[0]["id"]` — not per-row |
 | Search S1 | **Defer to PR-B optional** — default skip unless traces warrant |
-| N6 test | Not in propose lock table — **recommended** symmetric `test_hints_neighbors_async_calls_in_producers_emits_declares_producer` in PR-A (low cost) |
+| N6 test | `test_hints_neighbors_async_calls_in_producers_emits_declares_producer` (locked in propose) |
+| `subject_record` shape | Flat Kuzu row from `_load_node_record` — reuse v3 type-subject gate (`subject_record.get("kind") in _TYPE_SYMBOL_KINDS`), not nested `data.kind` |
+| N1a round-trip | **Required** `test_hints_neighbors_v2_declares_success_emits_dot_key_clients` on `kuzu_graph` |
+| Propose lock | Locked in planning PR [#174](https://github.com/HumanBean17/java-codebase-rag/pull/174); must remain locked before PR-A **merge** |
 | `EDGE_SCHEMA.type_subject` / #172 | Out of scope — v3 empty hints may still show legacy two-hop strings |
 | `IMPLEMENTS` / `EXTENDS` / generic `CALLS` success | Deferred (v1 §5); N4 is the only `CALLS` success row |
-| Propose lock | Set `propose/HINTS-V4-SUCCESS-PATH-PROPOSE.md` `Status: locked` before merging PR-A |
 
 ---
 
@@ -72,8 +76,8 @@ Depends on: **NEIGHBORS-DOT-KEY-TRAVERSAL** landed ([#171](https://github.com/Hu
   - **N6:** `TPL_NEIGHBORS_SUCCESS_DECLARING_PRODUCER` = `declaring method: neighbors(producer_ids,'in',['DECLARES_PRODUCER'])`
   - **N7:** `TPL_NEIGHBORS_SUCCESS_HANDLER` = `handler: neighbors(route_ids,'in',['EXPOSES'])`
 - Add helpers (names illustrative; match repo style):
-  - `_neighbors_success_subject_is_type(subject_record) -> bool` — `kind == "symbol"` and `data.kind` in `_TYPE_SYMBOL_KINDS`.
-  - `_neighbors_results_homogeneous(results, *, endpoint_kind: str | None, symbol_kinds: frozenset[str] | None) -> bool` — every `results[i]["other"]` matches predicate.
+  - `_neighbors_success_subject_is_type(subject_record) -> bool` — same as v3 type-level detection: `_subject_node_label(subject_record) == "Symbol"` and `str(subject_record.get("kind") or "") in _TYPE_SYMBOL_KINDS` (flat Kuzu row; do **not** require nested `data.kind`).
+  - `_neighbors_results_homogeneous(results, *, endpoint_kind: str | None, symbol_kinds: frozenset[str] | None) -> bool` — every `results[i]["other"]` matches predicate; for method rows use `other["symbol_kind"] in _METHOD_SYMBOL_KINDS` when present.
   - `neighbors_success_hints(payload: dict[str, Any]) -> list[tuple[int, str]]` — evaluate N1a–N7 in fixed order; each rendered string `len <= 120` or drop; all pairs at `PRIORITY_LEAF_FOLLOWUP`.
 - **`generate_hints` `neighbors` branch:**
   1. Collect `empty_pairs` from `neighbors_empty_hints` when `not results and edge_labels and offset == 0` (unchanged).
@@ -96,15 +100,15 @@ Depends on: **NEIGHBORS-DOT-KEY-TRAVERSAL** landed ([#171](https://github.com/Hu
 ### 2. `tests/test_mcp_hints.py`
 
 - Extend `_neighbors_hint_payload` with `origin_id` and `offset` defaults (`offset=0`).
-- Add `_type_subject_record(node_id, decl_kind="class")` helper returning `NodeRecord`-shaped dict (`kind: "symbol"`, `data: {"kind": decl_kind}`).
+- Add `_type_subject_record(node_id, decl_kind="class")` helper returning a **flat Kuzu-shaped** dict (`{"id": node_id, "kind": decl_kind}` — same shape as v3 HV tests and production `subject_record`).
 - Add synthetic `results[]` builders with `other: {kind, id, symbol_kind?}` matching `Edge.model_dump()`.
 - Implement every named test from the propose § Tests table (PR-A subset).
-- **Update `test_hints_hv20_no_dotkey_edge_labels_in_rendered_neighbors_hints`** — docstring/assertion scope: **empty structural hints only**; add `test_hints_neighbors_success_may_emit_declares_dot_keys` for N1a/N1b on type + `DECLARES` + methods.
-- Optional cheap round-trip: one `neighbors_v2` success case on `kuzu_graph` for N1a (class → DECLARES → methods) if fixture lookup is stable; not required if synthetic payloads cover triggers.
+- **Required:** `test_hints_neighbors_v2_declares_success_emits_dot_key_clients` — `neighbors_v2` on session `kuzu_graph` (type Symbol → `DECLARES` out → non-empty methods); asserts N1a in output hints (guards flat vs NodeRecord test footgun).
+- **Update `test_hints_hv20_no_dotkey_edge_labels_in_rendered_neighbors_hints`** — docstring/assertion scope: **empty structural hints only**; add `test_hints_neighbors_success_may_emit_declares_dot_keys` for N1a/N1b on synthetic flat `subject_record`.
 
 ## Tests for PR-A
 
-Implement **verbatim** names from the propose (plus recommended N6):
+Implement **verbatim** names from the propose:
 
 1. `test_hints_neighbors_declares_methods_emits_dot_key_clients`
 2. `test_hints_neighbors_declares_methods_emits_dot_key_routes`
@@ -115,12 +119,13 @@ Implement **verbatim** names from the propose (plus recommended N6):
 7. `test_hints_neighbors_declares_dot_key_exposes_homogeneous_emits_handler`
 8. `test_hints_neighbors_exposes_in_methods_emits_calls`
 9. `test_hints_neighbors_http_calls_in_clients_emits_declares_client`
-10. `test_hints_neighbors_async_calls_in_producers_emits_declares_producer` *(recommended; symmetric to #9)*
+10. `test_hints_neighbors_async_calls_in_producers_emits_declares_producer`
 11. `test_hints_neighbors_mixed_endpoint_kinds_silent`
 12. `test_hints_neighbors_offset_suppresses_success_hints`
 13. `test_hints_neighbors_success_beats_fuzzy_in_cap`
-14. `test_hints_all_v4_templates_under_120_chars` — parametrize new templates + N1a/N1b via describe constants + N7; realistic id substitution
-15. `test_hints_neighbors_success_may_emit_declares_dot_keys` — HV20 complement
+14. `test_hints_neighbors_v2_declares_success_emits_dot_key_clients` — **required** `neighbors_v2` round-trip
+15. `test_hints_all_v4_templates_under_120_chars` — parametrize new templates + N1a/N1b via describe constants + N7; realistic id substitution
+16. `test_hints_neighbors_success_may_emit_declares_dot_keys` — HV20 complement
 
 **Regression:** all `test_hints_hv*`, `test_hints_neighbors_fuzzy_*`, v1 describe/find tests unchanged except HV20 scope clarification.
 
@@ -130,7 +135,8 @@ Implement **verbatim** names from the propose (plus recommended N6):
 - [ ] All named PR-A tests pass.
 - [ ] `.venv/bin/ruff check .` and `.venv/bin/python -m pytest tests -v` green.
 - [ ] No `ONTOLOGY_VERSION` / graph / `mcp_v2.py` changes.
-- [ ] Propose `Status: locked` before merge.
+- [ ] Propose remains **locked** (done in #174).
+- [ ] `test_hints_neighbors_v2_declares_success_emits_dot_key_clients` passes.
 
 ## Implementation step list
 
@@ -140,7 +146,7 @@ Implement **verbatim** names from the propose (plus recommended N6):
 | 2 | N1a/N1b via describe template aliases + type subject gate | `mcp_hints.py` | Tests 1–2 pass |
 | 3 | Wire `generate_hints` + dot-key filter split | `mcp_hints.py` | Mixed/offset/fuzzy cap tests pass |
 | 4 | Synthetic payload tests + HV20 split | `tests/test_mcp_hints.py` | Full PR-A table green |
-| 5 | Char-cap parametrization | `tests/test_mcp_hints.py` | `test_hints_all_v4_templates_under_120_chars` passes |
+| 5 | `neighbors_v2` round-trip + char-cap | `tests/test_mcp_hints.py` | Round-trip + `test_hints_all_v4_templates_under_120_chars` pass |
 
 ---
 
@@ -193,7 +199,7 @@ Implement **verbatim** names from the propose (plus recommended N6):
 | # | Risk | Severity | Mitigation |
 | --- | --- | --- | --- |
 | 1 | Success-path dot-keys filtered by `_filter_neighbors_dotkey_hints` | High | Filter empty branch only; `test_hints_neighbors_success_may_emit_declares_dot_keys` |
-| 2 | Wrong `subject_record` shape in tests vs production | Medium | Use `NodeRecord`-shaped fixtures; optional `neighbors_v2` round-trip |
+| 2 | Wrong `subject_record` shape in tests vs production | **High** | Flat Kuzu fixtures (`{"id", "kind": "class"}`); **required** `neighbors_v2` round-trip test |
 | 3 | N1a/N1b noise when type has no clients/routes | Low | Accepted lossy design (Open Q1); document in PR body |
 | 4 | N4 empty `CALLS` follow-up loops | Low | Ship advisory hint; remove only if traces show harm (Open Q2) |
 | 5 | F1 misleading when `len(results) > 1` | Medium | Document `results[0]` only in PR description (Open Q4) |

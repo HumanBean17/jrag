@@ -2,7 +2,7 @@
 
 ## Status
 
-**locked** — not yet implemented. Tracks [issue #163](https://github.com/HumanBean17/java-codebase-rag/issues/163). Implementation plan: [`plans/PLAN-HINTS-V4.md`](../plans/PLAN-HINTS-V4.md); Cursor prompts: [`plans/CURSOR-PROMPTS-HINTS-V4.md`](../plans/CURSOR-PROMPTS-HINTS-V4.md).
+**Status**: locked — not yet implemented. Tracks [issue #163](https://github.com/HumanBean17/java-codebase-rag/issues/163). Implementation plan: [`plans/PLAN-HINTS-V4.md`](../plans/PLAN-HINTS-V4.md) (planning PR [#174](https://github.com/HumanBean17/java-codebase-rag/pull/174)); Cursor prompts: [`plans/CURSOR-PROMPTS-HINTS-V4.md`](../plans/CURSOR-PROMPTS-HINTS-V4.md).
 
 **Depends on (landed):** [NEIGHBORS-DOT-KEY-TRAVERSAL](./completed/NEIGHBORS-DOT-KEY-TRAVERSAL-PROPOSE.md) ([#171](https://github.com/HumanBean17/java-codebase-rag/pull/171)) — `neighbors` accepts `DECLARES.DECLARES_CLIENT`, `DECLARES.DECLARES_PRODUCER`, `DECLARES.EXPOSES` on type Symbol origins; describe rollup templates already prescribe those dot-keys.
 
@@ -17,6 +17,7 @@ This section records deltas applied to the original #163 draft after dot-key tra
 | Success after composed traversal | Not covered | **N2/N3** triggers extended to composed `requested_edge_types`; **N7** for `DECLARES.EXPOSES` → routes |
 | HINTS-ROAD-SIGNS §2.7–2.9 | Emissions use atomic `EdgeType` only | **Second partial reversal** (after describe rollups in #171): v4 success-path emissions may recommend the three `DECLARES.*` dot-keys on type origins only; v3 **empty** structural hints still never use dot-keys (`_filter_neighbors_dotkey_hints` unchanged) |
 | `EDGE_SCHEMA.type_subject` | Assumed aligned | **Out of v4 scope** — v3 empty hints may still show the legacy two-hop `DECLARES` → `member_ids` string until [#172](https://github.com/HumanBean17/java-codebase-rag/issues/172) |
+| N1a/N1b `subject_record` gate | `NodeRecord.model_dump()` with nested `data.kind` | **Flat Kuzu row** from `_load_node_record` (same as v3 empty hints): `_subject_node_label == "Symbol"` and top-level `subject_record["kind"]` in `_TYPE_SYMBOL_KINDS` — **not** nested `data.kind` (describe-only shape) |
 
 ## Problem Statement
 
@@ -65,7 +66,7 @@ v2 (`propose/completed/HINTS-V2-PROPOSE.md` §1) ruled out **per-row** neighbors
 | `requested_direction` | `"in" \| "out"` | echoed direction |
 | `offset` | `int` | echoed page offset; success hints require `0` |
 | `origin_id` | `str` | first origin id; `{id}` for N1a/N1b |
-| `subject_record` | `dict` | `NodeRecord.model_dump()` for origin; **required for N1a/N1b** |
+| `subject_record` | `dict` | Raw Kuzu row from `_load_node_record` for first origin (flat `kind: "class" \| "method" \| …` on Symbol rows — **not** `NodeRecord.model_dump()`); **required for N1a/N1b** |
 
 **`find`** — `find_v2` builds:
 
@@ -84,9 +85,10 @@ Fire a success-path hint iff **all** of:
 
 1. `payload["success"] is True` and `len(payload["results"]) > 0` and `payload.get("offset", 0) == 0` (paginated tail pages are ambiguous — mirror v3 empty-hint suppression).
 2. `len(payload["requested_edge_types"]) == 1` (**locked** — multi-edge requests are agent-composed; no success hints).
-3. Every row’s `results[i]["other"]["kind"]` (and `symbol_kind` when `kind == "symbol"`) matches the template predicate — **mixed endpoint kinds → no hint**.
+3. Every row’s `results[i]["other"]["kind"]` (and `symbol_kind` when `kind == "symbol"`) matches the template predicate — **mixed endpoint kinds → no hint**. For N1a/N1b/N4, **method + constructor Symbols on one page are homogeneous** (both ∈ `_METHOD_SYMBOL_KINDS`); mixed method **and** type Symbols → silence.
 4. Rendered string `len <= 120` after substitution; otherwise drop that row.
-5. **N1a/N1b only:** `payload["subject_record"]` is present, `subject_record["kind"] == "symbol"`, and `subject_record["data"]["kind"]` (declaration kind) is one of `class`, `interface`, `enum`, `record`, `annotation`.
+5. **N1a/N1b only:** `payload["subject_record"]` is present and matches v3 empty-hint type-subject detection: `_subject_node_label(subject_record) == "Symbol"` **and** `str(subject_record.get("kind") or "") in _TYPE_SYMBOL_KINDS` (top-level declaration kind on the flat Kuzu row — same gate as `neighbors_empty_hints` type-level requery, **not** nested `data.kind`).
+6. **Multi-origin `neighbors`:** hints use echoed `origin_id` / `subject_record` for **`origins[0]` only** (v3 parity). No new payload field; v4 does not add multi-origin-specific rows.
 
 Priority: **`PRIORITY_LEAF_FOLLOWUP` (2)**. Fuzzy-strategy (`PRIORITY_META` 1) and v3 empty structural (`PRIORITY_META` 1) lose cap contests to success-path hints.
 
@@ -206,11 +208,14 @@ Named scenarios (implementer contract):
 | `test_hints_neighbors_declares_dot_key_exposes_homogeneous_emits_handler` | N7 |
 | `test_hints_neighbors_exposes_in_methods_emits_calls` | N4 |
 | `test_hints_neighbors_http_calls_in_clients_emits_declares_client` | N5 |
+| `test_hints_neighbors_async_calls_in_producers_emits_declares_producer` | N6 |
 | `test_hints_neighbors_mixed_endpoint_kinds_silent` | client + route in one page → no success-path hints |
 | `test_hints_neighbors_offset_suppresses_success_hints` | `offset > 0`, non-empty `results` → no N* hints (mirror v3 offset test) |
 | `test_hints_neighbors_success_beats_fuzzy_in_cap` | constructed payload with both signals → leaf hint retained |
 | `test_hints_find_route_success_emits_handler` | F1 with concrete `{id}` substitution |
 | `test_hints_find_client_success_emits_http_calls` | F2 |
+| `test_hints_find_producer_success_emits_async_calls` | F3 |
+| `test_hints_neighbors_v2_declares_success_emits_dot_key_clients` | **Required** N1a `neighbors_v2` round-trip on `kuzu_graph` (flat `subject_record` — catches NodeRecord-shaped unit-test footgun) |
 | `test_hints_all_v4_templates_under_120_chars` | rendered with realistic ids (include N1a/N1b via describe template constants + N7) |
 | Char-cap + dedupe + cap-5 | reuse existing `finalize_hint_list` tests pattern |
 
@@ -245,6 +250,6 @@ Suggested **2 PRs** (can collapse to 1 if reviewer prefers):
 | **PR-A** | N1a–N7 + neighbors tests + char-cap sweep for new templates | #171 landed |
 | **PR-B** | F1–F3 + find tests + appendix traceability note; optional S1 | PR-A optional |
 
-After land: move this file to `propose/completed/`, add `plans/PLAN-HINTS-V4.md` + `CURSOR-PROMPTS-HINTS-V4.md` if the team wants the per-PR sentinel contract (not required for a 1–2 PR effort).
+After land: move this file to `propose/completed/`; move `plans/PLAN-HINTS-V4.md` + `plans/CURSOR-PROMPTS-HINTS-V4.md` to `plans/completed/` (landed in planning PR [#174](https://github.com/HumanBean17/java-codebase-rag/pull/174)).
 
 **Related issues:** #161 (describe producer symmetry — landed); #163 (this propose); #171 (neighbors `DECLARES.*` dot-keys — landed). No ontology coordination with SCHEMA-V2.

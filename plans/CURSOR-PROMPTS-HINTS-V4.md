@@ -6,7 +6,7 @@ Status: **active**. Plan:
 
 **Depends on:** NEIGHBORS-DOT-KEY ([#171](https://github.com/HumanBean17/java-codebase-rag/pull/171)) on `master`.
 
-**Propose lock:** Set `propose/HINTS-V4-SUCCESS-PATH-PROPOSE.md` `Status: locked` before opening PR-A.
+**Propose lock:** Locked in planning PR [#174](https://github.com/HumanBean17/java-codebase-rag/pull/174); must remain locked before PR-A **merge**.
 
 **Universal rules:**
 
@@ -48,15 +48,18 @@ Confirm `propose/HINTS-V4-SUCCESS-PATH-PROPOSE.md` is **Status: locked** before 
 1. **`mcp_hints.py`**
    - Add v4 neighbors success templates N2–N7 (verbatim strings in plan).
    - N1a/N1b: reuse `TPL_DESCRIBE_TYPE_CLIENTS_VIA_MEMBERS` and `TPL_DESCRIBE_TYPE_ROUTES_VIA_MEMBERS` — do not fork wording.
-   - Implement `neighbors_success_hints(payload)` per propose trigger contract (single edge type, offset 0, homogeneous `other`, type subject for N1a/N1b, char cap 120).
+   - Implement `neighbors_success_hints(payload)` per propose trigger contract (single edge type, offset 0, homogeneous `other`, char cap 120).
+   - **N1a/N1b type gate:** flat Kuzu `subject_record` from `neighbors_v2` — `_subject_node_label == "Symbol"` and top-level `subject_record["kind"] in _TYPE_SYMBOL_KINDS` (same as v3 `neighbors_empty_hints`; **not** nested `data.kind` / `NodeRecord.model_dump()`).
+   - **Homogeneity:** method + constructor on one page = OK (both ∈ `_METHOD_SYMBOL_KINDS`); method + type Symbol = silent.
    - Wire `generate_hints("neighbors", …)`: call success helper on non-empty `results`; keep empty + fuzzy paths unchanged.
    - **Critical:** `_filter_neighbors_dotkey_hints` applies to **empty structural pairs only** — success-path N1a/N1b must retain `DECLARES.*` dot-keys.
    - Module docstring: reference HINTS-V4 propose.
 
 2. **`tests/test_mcp_hints.py`**
-   - Implement every test name under **Tests for PR-A** in `plans/PLAN-HINTS-V4.md` (propose table + recommended N6).
+   - Implement every test name under **Tests for PR-A** in `plans/PLAN-HINTS-V4.md` (including N6 and **required** `test_hints_neighbors_v2_declares_success_emits_dot_key_clients`).
+   - Synthetic `subject_record`: flat `{"id": "sym:…", "kind": "class"}` — **not** `NodeRecord.model_dump()`.
    - Narrow `test_hints_hv20_no_dotkey_edge_labels_in_rendered_neighbors_hints` to **empty** payloads only.
-   - Add `test_hints_neighbors_success_may_emit_declares_dot_keys`.
+   - Add `test_hints_neighbors_success_may_emit_declares_dot_keys` (synthetic flat subject).
    - Add `test_hints_all_v4_templates_under_120_chars` (parametrize templates + realistic ids).
 
 ## Out of scope (do NOT touch)
@@ -79,7 +82,7 @@ Confirm `propose/HINTS-V4-SUCCESS-PATH-PROPOSE.md` is **Status: locked** before 
 
 ```bash
 .venv/bin/ruff check mcp_hints.py tests/test_mcp_hints.py
-.venv/bin/python -m pytest tests/test_mcp_hints.py -v -k "hints_neighbors or hints_all_v4 or hv20"
+.venv/bin/python -m pytest tests/test_mcp_hints.py -v -k "hints_neighbors or hints_all_v4 or hv20 or v2_declares_success"
 ```
 
 Before PR open:
@@ -99,7 +102,7 @@ Before PR open:
 ## Definition of done
 
 - [ ] PR-A checklist in `plans/PLAN-HINTS-V4.md` satisfied.
-- [ ] Propose **locked**.
+- [ ] Propose still **locked**; `test_hints_neighbors_v2_declares_success_emits_dot_key_clients` passes.
 - [ ] PR body: scope, plan + propose links, note lossy N1a/N1b, **no re-index**.
 ````
 
