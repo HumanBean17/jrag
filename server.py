@@ -498,6 +498,7 @@ def create_mcp_server() -> FastMCP:
             "status=one (single node), many (≥2 ranked candidates with reason), or none "
             "(no match — fall back to search(query=...) for natural language or fuzzy text). "
             "Optional hint_kind narrows to symbol, route, or client. "
+            "Successful responses may include advisory hints (same contract as other v2 tools). "
             "Malformed empty/whitespace identifier returns success=false. "
             "Examples: resolve('com.foo.Bar', hint_kind='symbol'); "
             "resolve('GET /api/v1/customers', hint_kind='route'); "

@@ -1,6 +1,7 @@
 """Pure MCP v2 road-sign hint generation (no graph I/O, no search, no LLM).
 
 Locked v1 catalog: ``propose/completed/HINTS-ROAD-SIGNS-PROPOSE.md`` Appendix A.
+v2 resolve catalog: ``propose/HINTS-V2-PROPOSE.md`` Appendix A.
 Priority cap: same propose §7.12 / ``plans/completed/PLAN-HINTS.md`` principles.
 """
 
@@ -45,6 +46,24 @@ TPL_NEIGHBORS_EMPTY_KIND_CHECK = (
 )
 
 TPL_SEARCH_WEAK = "results look weak — narrow the query or try find(role=…)"
+
+# --- v2: resolve templates (propose/HINTS-V2-PROPOSE.md Appendix A) ---
+
+TPL_RESOLVE_NONE_TRY_SEARCH = (
+    "no match — try search(query='{identifier}') for ranked fuzzy lookup"
+)
+TPL_RESOLVE_NONE_TRY_FIND_ROUTE = (
+    "no match — try find(kind='route', filter={{path_prefix: '{seed}'}})"
+)
+TPL_RESOLVE_NONE_TRY_FIND_CLIENT = (
+    "no match — try find(kind='client', filter={{target_service: '{seed}'}})"
+)
+TPL_RESOLVE_MANY_TIGHTEN = (
+    "{n} candidates — tighten identifier or pick a candidate by id"
+)
+
+_RESOLVE_HINT_MAX_CHARS = 120
+_RESOLVE_WILDCARDS = ("*", "?")
 
 # §7.12 priority: DECLARES.* type rollups > OVERRIDDEN_BY.* > leaf follow-ups > meta.
 PRIORITY_DECLARES_TYPE_ROLLUP = 4
@@ -111,18 +130,56 @@ def finalize_hint_list(scored: list[tuple[int, str]]) -> list[str]:
 
 
 def generate_hints(
-    output_kind: Literal["search", "find", "describe", "neighbors"],
+    output_kind: Literal["search", "find", "describe", "neighbors", "resolve"],
     payload: dict[str, Any],
 ) -> list[str]:
     """Return up to 5 road-sign hint strings for a success-only MCP v2 payload dict.
 
-    Callers must pass ``success: True`` payloads only for hint rows; this function
-    returns ``[]`` when ``success`` is false or missing.
+    For ``search`` / ``find`` / ``describe`` / ``neighbors``, callers must pass
+    ``success: True``; this function returns ``[]`` when ``success`` is false or
+    missing. The ``resolve`` branch is **status-driven** (``status``,
+    ``resolved_identifier``, ``candidates``, optional seeds) and does not require
+    ``success`` in the payload; an explicit ``success: False`` still suppresses
+    hints (defense in depth).
     """
-    if not payload.get("success"):
+    pairs: list[tuple[int, str]] = []
+
+    if output_kind == "resolve":
+        if payload.get("success") is False:
+            return []
+        status = str(payload.get("status") or "")
+        if status == "one":
+            return []
+        if status == "many":
+            n = len(payload.get("candidates") or [])
+            if n > 1:
+                pairs.append((PRIORITY_META, TPL_RESOLVE_MANY_TIGHTEN.format(n=n)))
+            return finalize_hint_list(pairs)
+        if status == "none":
+            identifier = payload.get("resolved_identifier")
+            hint_kind = payload.get("hint_kind")
+            if not isinstance(identifier, str) or not identifier.strip():
+                return finalize_hint_list(pairs)
+            if any(w in identifier for w in _RESOLVE_WILDCARDS):
+                return finalize_hint_list(pairs)
+            rendered: str | None = None
+            if hint_kind == "route":
+                seed = payload.get("path_prefix_seed")
+                if isinstance(seed, str) and seed.strip():
+                    rendered = TPL_RESOLVE_NONE_TRY_FIND_ROUTE.format(seed=seed)
+            elif hint_kind == "client":
+                seed = payload.get("target_service_seed")
+                if isinstance(seed, str) and seed.strip():
+                    rendered = TPL_RESOLVE_NONE_TRY_FIND_CLIENT.format(seed=seed)
+            else:
+                rendered = TPL_RESOLVE_NONE_TRY_SEARCH.format(identifier=identifier)
+            if rendered is not None and len(rendered) <= _RESOLVE_HINT_MAX_CHARS:
+                pairs.append((PRIORITY_META, rendered))
+            return finalize_hint_list(pairs)
         return []
 
-    pairs: list[tuple[int, str]] = []
+    if not payload.get("success"):
+        return []
 
     if output_kind == "search":
         results: list[dict[str, Any]] = list(payload.get("results") or [])
