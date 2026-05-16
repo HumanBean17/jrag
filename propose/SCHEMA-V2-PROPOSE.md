@@ -199,15 +199,17 @@ This is a hard break; per repo rules "no active users" means no soft-migration p
 
 ### §3.7 — Downstream API contract decisions (`kuzu_queries.py`)
 
-Three call sites in `kuzu_queries.py` currently traverse `Symbol -[:HTTP_CALLS|ASYNC_CALLS]-> Route` directly and need explicit contract calls before PR-B:
+Three call sites in `kuzu_queries.py` currently traverse `Symbol -[:HTTP_CALLS|ASYNC_CALLS]-> Route` directly. The v2 principle ("edges connect the nodes whose data the edge is about") extends to APIs: **a tool answering "who calls this route?" must return the caller-side node, not the declaring Symbol** — because the answer's data (target_service, raw_uri, source_layer, match, confidence) lives on the Client/Producer, not on the Symbol.
 
-| Call site | Today | v2 contract |
+No active users per repo rules → these APIs are reshaped, not preserved.
+
+| Call site | Today | v2 |
 |---|---|---|
-| `find_route_callers` (`kuzu_queries.py:1463`) | `RETURN s.id AS caller_symbol_id, s.microservice, e.confidence, e.match` | **Returns declaring Symbol id, not Client/Producer id.** Query becomes `MATCH (s:Symbol)-[:DECLARES_CLIENT\|DECLARES_PRODUCER]->(n)-[e:HTTP_CALLS\|ASYNC_CALLS]->(r:Route {id: $rid})`. `CallerInfo.caller_symbol_id` stays. (Decision 22.) |
-| `trace_request_flow` (`kuzu_queries.py:1508`) | one-hop inbound from Route to Symbol | two-hop inbound: `(:Route)<-[:HTTP_CALLS\|ASYNC_CALLS]-(:Client\|:Producer)<-[:DECLARES_CLIENT\|DECLARES_PRODUCER]-(:Symbol)`. Public return shape unchanged — `caller_symbol_id` still surfaces. (Decision 23.) |
-| Impact-analysis expansion (`kuzu_queries.py:1335`) | `MATCH (root)-[:DECLARES]->(m1:Symbol)-[e:HTTP_CALLS\|ASYNC_CALLS]->(rt:Route)` | three-hop: `(root)-[:DECLARES]->(m1:Symbol)-[:DECLARES_CLIENT\|DECLARES_PRODUCER]->(n)-[e:HTTP_CALLS\|ASYNC_CALLS]->(rt:Route)`. (Decision 24.) |
+| `find_route_callers` (`kuzu_queries.py:1463`) | `RETURN s.id AS caller_symbol_id, s.microservice, e.confidence, e.match` → `CallerInfo` | Returns the **caller-side node** (Client or Producer). New `RouteCaller` shape (replaces `CallerInfo`): `caller_node_id`, `caller_node_kind` (`client`\|`producer`), `caller_microservice`, `declaring_symbol_id` (back-reference for navigation), `confidence`, `match`, plus caller-side metadata pulled from the node (`target_service` for Client, `topic`+`broker` for Producer). Query is `MATCH (s:Symbol)-[:DECLARES_CLIENT\|DECLARES_PRODUCER]->(n)-[e:HTTP_CALLS\|ASYNC_CALLS]->(r:Route {id: $rid})`. (Decision 22.) |
+| `trace_request_flow` (`kuzu_queries.py:1508`) | one-hop inbound from Route to Symbol; output is `[{caller_symbol_id, caller_fqn, …}]` | Two-hop inbound surfaced in the output: each hop is `{caller_node_id, caller_node_kind, declaring_symbol_id, declaring_symbol_fqn, microservice, confidence, match}`. Agents see the call-site node, not just the declaring method — essential for UC5 (multiple clients on one method). (Decision 23.) |
+| Impact-analysis expansion (`kuzu_queries.py:1335`) | `MATCH (root)-[:DECLARES]->(m1:Symbol)-[e:HTTP_CALLS\|ASYNC_CALLS]->(rt:Route)` → set of routes | Three-hop: `(root)-[:DECLARES]->(m1:Symbol)-[:DECLARES_CLIENT\|DECLARES_PRODUCER]->(n)-[e:HTTP_CALLS\|ASYNC_CALLS]->(rt:Route)`. Output gains the caller-side node id alongside each route, so impact rows surface which client/producer is the bridge. (Decision 24.) |
 
-**Contract**: external API surface (`CallerInfo`, `trace_request_flow` shape, impact-analysis output) is **stable across v2**. Internal Cypher queries grow one hop. No new public field is added in v2; agents continue to navigate the graph via declaring Symbols.
+**Contract**: APIs return the nodes their underlying graph traversals now traverse. `CallerInfo` is **renamed and reshaped** to `RouteCaller`; old fields drop where they no longer match the v2 graph. The MCP tool surface that wraps these queries shifts in lockstep. No back-compat aliases (per repo rules).
 
 ### §3.8 — Type-level `describe` rollups
 
@@ -332,7 +334,7 @@ Full design in `propose/HINTS-V3-PROPOSE.md` (separate). PR-D in §6 ships the i
 
 **Purpose**: Update `EDGE_SCHEMA["HTTP_CALLS"]` to `Client → Route`; update DDL; update pass6 to emit edges from Client ids; rewrite all callers in `kuzu_queries.py` (including `find_route_callers`, `trace_request_flow`, impact-analysis expansion per §3.7), `pr_analysis.py`, `mcp_v2.py`, `server.py`; update HTTP-flavored tests in `test_call_edges_e2e.py`, `test_brownfield_clients.py`, `test_pr_analysis.py`, `test_mcp_v2.py`, `test_mcp_v2_compose.py`. Sweep HTTP-related docs (`README.md`, `docs/AGENT-GUIDE.md`, exploration skill) per §3.10.
 
-**Test summary**: round-trip scenarios in `test_call_edges_e2e.py` covering UC1, UC5–UC8; `test_pr_analysis.py` covers UC9 (`HTTP_CALLS\|ASYNC_CALLS` query still works); `test_brownfield_clients.py` covers `target_service`-empty path-only matching; new scenarios in `test_kuzu_queries.py` covering the two-hop `find_route_callers` / `trace_request_flow` shapes and external-API stability.
+**Test summary**: round-trip scenarios in `test_call_edges_e2e.py` covering UC1, UC5–UC8; `test_pr_analysis.py` covers UC9 (`HTTP_CALLS\|ASYNC_CALLS` query still works); `test_brownfield_clients.py` covers `target_service`-empty path-only matching; new scenarios in `test_kuzu_queries.py` covering the reshaped `find_route_callers` (returning `RouteCaller` with `caller_node_id` + `caller_node_kind`) and `trace_request_flow` (caller-side hop surfaced in output).
 
 ### PR-C — `Producer` node + `DECLARES_PRODUCER` + flip `ASYNC_CALLS` + GraphMeta + MCP parity + async docs
 
@@ -375,9 +377,9 @@ Full design in `propose/HINTS-V3-PROPOSE.md` (separate). PR-D in §6 ships the i
 19. **`EDGE_SCHEMA` is locked at 11 entries in v2.** Adding/removing entries is a propose-level decision, not a PR.
 20. **PR ordering: A → B → C → D.** B and C are independent in principle (different edges) but C builds on A's schema infrastructure; D consumes both. Sequential reduces review surface.
 21. **No `Consumer` node — the callee-side asymmetry is real and deliberate.** `Producer` exists because `kafkaTemplate.send(...)` is a call expression inside an arbitrary method body, with no first-class identity to hang topic/target metadata on. The callee side has no equivalent problem: `@KafkaListener` annotates a method, and that method already serves as the Route's `method_fqn` with `EXPOSES(Symbol → Route)` — exactly mirroring how `@GetMapping` methods expose `http_endpoint` Routes. Splitting the listener into `Consumer` + Symbol would duplicate identity without unlocking any navigation primitive. The cross-service trace shapes in UC8 and UC16 already terminate cleanly at `EXPOSES <- (consumer_method)` for both HTTP and async.
-22. **`find_route_callers` returns declaring Symbol ids, not Client/Producer ids.** Query becomes two-hop internally (`DECLARES_CLIENT\|DECLARES_PRODUCER` then `HTTP_CALLS\|ASYNC_CALLS`). External `CallerInfo` shape preserved.
-23. **`trace_request_flow` external shape preserved.** Internal Cypher gains one hop; public output still surfaces declaring Symbol ids.
-24. **Impact-analysis expansion (`kuzu_queries.py:1335`) goes three-hop.** `(root)-[:DECLARES]->(m1:Symbol)-[:DECLARES_CLIENT\|DECLARES_PRODUCER]->(n)-[e:HTTP_CALLS\|ASYNC_CALLS]->(rt:Route)`.
+22. **`find_route_callers` returns the caller-side node (Client or Producer), not the declaring Symbol.** `CallerInfo` is renamed and reshaped to `RouteCaller` with fields `caller_node_id`, `caller_node_kind`, `caller_microservice`, `declaring_symbol_id`, `confidence`, `match`, plus caller-side metadata from the node. Old `CallerInfo` shape is removed; no back-compat alias. The principle "edges connect the nodes whose data the edge is about" extends to APIs: tools answering "who calls this route?" return the node whose data answers the question.
+23. **`trace_request_flow` output surfaces the Client/Producer hop.** Each caller record now exposes `caller_node_id` + `caller_node_kind` alongside `declaring_symbol_id` + `declaring_symbol_fqn`. UC5 visibility (which of a method's multiple clients made a given call) is now first-class in the API output, not hidden behind a join.
+24. **Impact-analysis expansion (`kuzu_queries.py:1335`) goes three-hop and surfaces the caller-side node.** Output rows pair each impacted route with the bridging Client/Producer id. `(root)-[:DECLARES]->(m1:Symbol)-[:DECLARES_CLIENT\|DECLARES_PRODUCER]->(n)-[e:HTTP_CALLS\|ASYNC_CALLS]->(rt:Route)`.
 25. **Type-level `describe` rollups gain `DECLARES.DECLARES_PRODUCER` and `OVERRIDDEN_BY.DECLARES_PRODUCER`.** Composed `DECLARES.HTTP_CALLS` / `DECLARES.ASYNC_CALLS` are deliberately not added — caller-side node rollups already tell agents to navigate down.
 26. **`find(kind="producer")` and `resolve(hint_kind="producer")` ship in PR-C.** MCP parity with existing client tooling.
 27. **Docs sweep is per-PR.** PR-B handles HTTP-flavored doc references; PR-C handles async-flavored. Grep-enumeration of `*.md` references included in each PR description.
@@ -478,7 +480,7 @@ Full population (with every attribute) lives in `java_ontology.py` after PR-A.
 - **Second-round grilling (Consumer-node question)**: reviewer asked whether the caller-side asymmetry (`Client`/`Producer` distinct, callee-side both `Symbol`) was itself a bug. Investigation confirmed it is not: `@KafkaListener` methods are already the Route's `method_fqn` and connect via `EXPOSES`, exactly mirroring `@GetMapping` methods. The `Producer` node exists only because `kafkaTemplate.send(...)` is a call expression with no first-class method identity — listener methods don't have that problem. Decision 21 locks this asymmetry as deliberate; §5 out-of-scope row was rewritten from "no annotation yet" to "no navigation gap to fill."
 - **Review-1 application** (this revision):
   - Added §3.6 (re-index requirement + ONTOLOGY_VERSION 13 → 14 + GraphMeta counters).
-  - Added §3.7 (`find_route_callers` / `trace_request_flow` / impact-analysis contract decisions). External API surfaces are stable; internal Cypher grows one hop.
+  - Added §3.7 (`find_route_callers` / `trace_request_flow` / impact-analysis contract decisions). External API surfaces **reshape** to return caller-side nodes (Client/Producer), not declaring Symbols. The principle extends to APIs: a tool answering "who calls this route?" returns the node whose data answers the question. `CallerInfo` is renamed and reshaped to `RouteCaller`. No active users → no back-compat. (See also follow-up note: review-1's "external API stable" framing was reverted once breaking-changes-allowed was reconfirmed.)
   - Added §3.8 (type-level `describe` rollups: `DECLARES.DECLARES_PRODUCER` added; composed HTTP/async rollups deliberately not added).
   - Added §3.9 (MCP `find` / `resolve` producer parity).
   - Added §3.10 (docs sweep per-PR with grep enumeration).
