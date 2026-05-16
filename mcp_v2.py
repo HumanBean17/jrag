@@ -388,6 +388,8 @@ class ResolveOutput(BaseModel):
     node: NodeRef | None = None
     candidates: list[ResolveCandidate] = Field(default_factory=list)
     message: str | None = None
+    resolved_identifier: str | None = None
+    hints: list[str] = Field(default_factory=list, description=MCP_HINTS_FIELD_DESCRIPTION)
 
 
 def _node_kind_from_id(id_str: str) -> Literal["symbol", "route", "client"]:
@@ -1079,7 +1081,35 @@ def _resolve_assert_invariants(out: ResolveOutput) -> None:
         assert out.message
 
 
-def _resolve_build_output(matches: list[ResolveCandidate]) -> ResolveOutput:
+def _resolve_seeds_for_hints(identifier: str) -> tuple[str | None, str | None]:
+    path_prefix_seed: str | None = None
+    method_path = _resolve_parse_route_method_path(identifier)
+    if method_path is not None:
+        path_prefix_seed = method_path[1]
+    else:
+        ms_route = _resolve_parse_microservice_route(identifier)
+        if ms_route is not None:
+            path_prefix_seed = ms_route[2]
+        elif identifier.startswith("/"):
+            path_prefix_seed = identifier
+
+    target_service_seed: str | None = None
+    if " " in identifier:
+        target, _path_prefix = identifier.split(" ", 1)
+        target = target.strip()
+        if target:
+            target_service_seed = target
+    elif not identifier.startswith("/"):
+        target_service_seed = identifier
+
+    return path_prefix_seed, target_service_seed
+
+
+def _resolve_finalize_success(
+    trimmed: str,
+    hint_kind: Literal["symbol", "route", "client"] | None,
+    matches: list[ResolveCandidate],
+) -> ResolveOutput:
     if not matches:
         out = ResolveOutput(
             success=True,
@@ -1087,11 +1117,33 @@ def _resolve_build_output(matches: list[ResolveCandidate]) -> ResolveOutput:
             message=(
                 "No matches for identifier; use search(query=...) for ranked fuzzy lookup."
             ),
+            resolved_identifier=trimmed,
         )
     elif len(matches) == 1:
-        out = ResolveOutput(success=True, status="one", node=matches[0].node)
+        out = ResolveOutput(
+            success=True,
+            status="one",
+            node=matches[0].node,
+            resolved_identifier=trimmed,
+        )
     else:
-        out = ResolveOutput(success=True, status="many", candidates=matches)
+        out = ResolveOutput(
+            success=True,
+            status="many",
+            candidates=matches,
+            resolved_identifier=trimmed,
+        )
+
+    path_prefix_seed, target_service_seed = _resolve_seeds_for_hints(trimmed)
+    hint_payload = {
+        "status": out.status,
+        "resolved_identifier": trimmed,
+        "candidates": out.candidates,
+        "hint_kind": hint_kind,
+        "path_prefix_seed": path_prefix_seed,
+        "target_service_seed": target_service_seed,
+    }
+    out = out.model_copy(update={"hints": generate_hints("resolve", hint_payload)})
     _resolve_assert_invariants(out)
     return out
 
@@ -1104,13 +1156,19 @@ def resolve_v2(
     try:
         trimmed, err = _resolve_validate_identifier(identifier)
         if err is not None:
-            out = ResolveOutput(success=False, status="none", message=err)
+            out = ResolveOutput(
+                success=False,
+                status="none",
+                message=err,
+                hints=[],
+                resolved_identifier=None,
+            )
             _resolve_assert_invariants(out)
             return out
 
         assert trimmed is not None
         if "*" in trimmed or "?" in trimmed:
-            return _resolve_build_output([])
+            return _resolve_finalize_success(trimmed, hint_kind, [])
 
         g = graph or KuzuGraph.get()
         raw: list[tuple[NodeRef, ResolveReason, int]] = []
@@ -1125,9 +1183,15 @@ def resolve_v2(
         deduped = _resolve_dedupe_candidates(raw)
         ranked = _resolve_rank_candidates(deduped)
         capped = ranked[:_RESOLVE_CANDIDATE_CAP]
-        return _resolve_build_output(capped)
+        return _resolve_finalize_success(trimmed, hint_kind, capped)
     except Exception as exc:
-        return ResolveOutput(success=False, status="none", message=str(exc))
+        return ResolveOutput(
+            success=False,
+            status="none",
+            message=str(exc),
+            hints=[],
+            resolved_identifier=None,
+        )
 
 
 @validate_call(config={"arbitrary_types_allowed": True})

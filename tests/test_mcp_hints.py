@@ -410,6 +410,175 @@ def test_hints_clean_outputs_empty(kuzu_graph) -> None:
     assert fout.hints == []
 
 
+def _resolve_symbol_id_status_one(kuzu_graph) -> str:
+    rows = kuzu_graph._rows(  # noqa: SLF001
+        "MATCH (s:Symbol) WHERE s.kind = 'class' RETURN s.id AS id LIMIT 1",
+    )
+    assert rows
+    sym_id = str(rows[0]["id"])
+    out = resolve_v2(sym_id, hint_kind="symbol", graph=kuzu_graph)
+    if not (out.success and out.status == "one"):
+        pytest.fail(f"expected status one for symbol id {sym_id!r}, got {out.status!r}")
+    return sym_id
+
+
+def _resolve_symbol_identifier_status_none(kuzu_graph) -> str:
+    ident = "com.nonexistent.ZzzMissing"
+    out = resolve_v2(ident, hint_kind="symbol", graph=kuzu_graph)
+    if not (out.success and out.status == "none"):
+        pytest.fail(f"expected status none for {ident!r}, got {out.status!r}")
+    return ident
+
+
+def test_hints_resolve_status_one_emits_empty() -> None:
+    assert generate_hints("resolve", {"status": "one", "resolved_identifier": "com.foo.Bar"}) == []
+
+
+def test_hints_resolve_status_none_symbol_suggests_search() -> None:
+    ident = "com.foo.Bar#nonExistent"
+    hints = generate_hints(
+        "resolve",
+        {"status": "none", "resolved_identifier": ident, "hint_kind": "symbol"},
+    )
+    assert hints
+    assert "search(query=" in hints[0]
+    assert ident in hints[0]
+
+
+def test_hints_resolve_status_none_symbol_drop_on_overflow() -> None:
+    ident = "x" * 80
+    hints = generate_hints(
+        "resolve",
+        {"status": "none", "resolved_identifier": ident, "hint_kind": "symbol"},
+    )
+    assert hints == []
+
+
+def test_hints_resolve_status_none_symbol_wildcard_suppressed() -> None:
+    hints = generate_hints(
+        "resolve",
+        {"status": "none", "resolved_identifier": "com.foo.*", "hint_kind": "symbol"},
+    )
+    assert hints == []
+
+
+def test_hints_resolve_status_none_route_suggests_find() -> None:
+    seed = "/v1/operator/session/update"
+    hints = generate_hints(
+        "resolve",
+        {
+            "status": "none",
+            "resolved_identifier": f"POST {seed}",
+            "hint_kind": "route",
+            "path_prefix_seed": seed,
+        },
+    )
+    assert hints
+    assert "find(kind='route'" in hints[0]
+    assert seed in hints[0]
+
+
+def test_hints_resolve_status_none_route_no_seed_suppressed() -> None:
+    hints = generate_hints(
+        "resolve",
+        {
+            "status": "none",
+            "resolved_identifier": "not-a-route-shape",
+            "hint_kind": "route",
+            "path_prefix_seed": None,
+        },
+    )
+    assert hints == []
+
+
+def test_hints_resolve_status_none_client_suggests_find() -> None:
+    seed = "smartcare-assign-chat"
+    hints = generate_hints(
+        "resolve",
+        {
+            "status": "none",
+            "resolved_identifier": seed,
+            "hint_kind": "client",
+            "target_service_seed": seed,
+        },
+    )
+    assert hints
+    assert "find(kind='client'" in hints[0]
+    assert seed in hints[0]
+
+
+def test_hints_resolve_status_none_client_no_seed_suppressed() -> None:
+    hints = generate_hints(
+        "resolve",
+        {
+            "status": "none",
+            "resolved_identifier": "/only/a/path",
+            "hint_kind": "client",
+            "target_service_seed": None,
+        },
+    )
+    assert hints == []
+
+
+def test_hints_resolve_status_many_emits_tighten() -> None:
+    hints = generate_hints(
+        "resolve",
+        {
+            "status": "many",
+            "resolved_identifier": "open",
+            "candidates": [{"id": "a"}, {"id": "b"}],
+        },
+    )
+    assert hints
+    assert "2 candidates" in hints[0]
+    assert "tighten identifier" in hints[0]
+
+
+def test_hints_resolve_status_many_truncated_cap_wording() -> None:
+    hints = generate_hints(
+        "resolve",
+        {
+            "status": "many",
+            "resolved_identifier": "open",
+            "candidates": [{"id": f"c{i}"} for i in range(10)],
+        },
+    )
+    assert hints
+    assert "10 candidates" in hints[0]
+
+
+def test_hints_resolve_payload_missing_identifier_suppressed() -> None:
+    hints = generate_hints(
+        "resolve",
+        {"status": "none", "resolved_identifier": "", "hint_kind": "symbol"},
+    )
+    assert hints == []
+
+
+def test_hints_resolve_v2_round_trip(kuzu_graph) -> None:
+    none_ident = _resolve_symbol_identifier_status_none(kuzu_graph)
+    none_out = resolve_v2(none_ident, hint_kind="symbol", graph=kuzu_graph)
+    assert none_out.resolved_identifier == none_ident
+    assert none_out.hints
+    assert "search(query=" in none_out.hints[0]
+
+    one_id = _resolve_symbol_id_status_one(kuzu_graph)
+    one_out = resolve_v2(one_id, hint_kind="symbol", graph=kuzu_graph)
+    assert one_out.resolved_identifier == one_id
+    assert one_out.hints == []
+
+    wildcard_out = resolve_v2("com.foo.*Service", hint_kind="symbol", graph=kuzu_graph)
+    assert wildcard_out.success is True
+    assert wildcard_out.status == "none"
+    assert wildcard_out.resolved_identifier == "com.foo.*Service"
+    assert wildcard_out.hints == []
+
+    invalid_out = resolve_v2("", graph=kuzu_graph)
+    assert invalid_out.success is False
+    assert invalid_out.resolved_identifier is None
+    assert invalid_out.hints == []
+
+
 def test_hints_error_path_success_false_empty(kuzu_graph) -> None:
     assert generate_hints("find", {"success": False, "kind": "symbol", "results": [], "filter": {}}) == []
     assert generate_hints("search", {"success": False, "results": []}) == []
@@ -508,6 +677,13 @@ def test_hints_pagination_none_skips_page_derived_hints() -> None:
         (mcp_hints.TPL_FIND_PAGE_FULL, {"limit": 500}),
         (mcp_hints.TPL_NEIGHBORS_EMPTY_KIND_CHECK, {}),
         (mcp_hints.TPL_SEARCH_WEAK, {}),
+        (mcp_hints.TPL_RESOLVE_NONE_TRY_SEARCH, {"identifier": "com.example.Type#m()"}),
+        (
+            mcp_hints.TPL_RESOLVE_NONE_TRY_FIND_ROUTE,
+            {"seed": "/v1/operator/session/update"},
+        ),
+        (mcp_hints.TPL_RESOLVE_NONE_TRY_FIND_CLIENT, {"seed": "smartcare-assign-chat"}),
+        (mcp_hints.TPL_RESOLVE_MANY_TIGHTEN, {"n": 10}),
     ],
 )
 def test_hints_template_rendered_length_leq_120(template: str, fmt: dict[str, Any]) -> None:
