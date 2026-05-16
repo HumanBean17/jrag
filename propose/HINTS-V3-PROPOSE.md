@@ -9,7 +9,7 @@
 - Replace the single generic empty-neighbors template `TPL_NEIGHBORS_EMPTY_KIND_CHECK = "0 results — check if the requested edge_types apply to this kind"` with a small family of kind- and direction-aware templates driven by `EDGE_SCHEMA` (introduced in `propose/SCHEMA-V2-PROPOSE.md` §3.4).
 - Each template fires by inspecting the subject node kind, the requested `direction`, and the requested `edge_types` against `EDGE_SCHEMA[edge].src` / `.dst` / `.typical_traversals` — no hardcoded edge-shape literals in `mcp_hints.py`.
 - New emit-side input: hints v3 reads `EdgeSpec.brownfield_resolver_sourced` (backed by `BROWNFIELD_RESOLVER_STRATEGY_SET` from SCHEMA-V2 PR-A) to fire a distinct *"absence may mean unresolved, not absent"* hint on empty results. That complements (does not replace) the v2 `TPL_NEIGHBORS_FUZZY_STRATEGY` hint on non-empty results.
-- **Propose gate** (SCHEMA-V2 Decision 30): this file must exist as a **draft PR** before SCHEMA-V2 PR-A starts. **Implementation gate**: this propose must be **locked** before SCHEMA-V2 PR-D merges. PR-D runs after PR-A, PR-B, and PR-C are in `master`.
+- **Propose gate** (SCHEMA-V2 Decision 30): this file must be **merged to `master`** before SCHEMA-V2 PR-A starts (GitHub PR status may stay `draft` until locked). **Implementation gate**: `Status: locked` before SCHEMA-V2 PR-D merges. PR-D runs after PR-A, PR-B, and PR-C are in `master`.
 - Re-index is already required by SCHEMA-V2 (`ONTOLOGY_VERSION` 13 → 14); HINTS-V3 does not bump it again.
 - Goes away: `TPL_NEIGHBORS_EMPTY_KIND_CHECK` (deleted). Stays: every existing v1/v2 template (DESCRIBE rollups, FIND, RESOLVE, fuzzy-strategy hint).
 - Non-obvious constraint: hints v3 must never recommend a dot-key edge label as a `neighbors()` argument (carry-over from v2 propose §7.x). All template recommendations are checked against the canonical edge list.
@@ -180,7 +180,7 @@ Each row references the SCHEMA-V2 use-case re-walk (§4 of that propose) where a
 | HV13 | Client subject, asks `HTTP_CALLS` outbound — resolver found no route | `Client{}` | `neighbors([client_id], 'out', ['HTTP_CALLS'])` returning `[]` | generic | `TPL_NEIGHBORS_BROWNFIELD_RESOLVED_MAYBE_UNRESOLVED` only |
 | HV14 | Producer subject, asks `ASYNC_CALLS` outbound — unresolved broker | `Producer{}` | `neighbors([producer_id], 'out', ['ASYNC_CALLS'])` returning `[]` | n/a | `TPL_NEIGHBORS_BROWNFIELD_RESOLVED_MAYBE_UNRESOLVED` only |
 | HV15 | Method subject, asks both `HTTP_CALLS` and `DECLARES_CLIENT` outbound | `Symbol{symbol_kind=method}` | `neighbors([method_id], 'out', ['HTTP_CALLS', 'DECLARES_CLIENT'])` | one generic hint | `TPL_NEIGHBORS_WRONG_SUBJECT_KIND` for `HTTP_CALLS` only; no hint for `DECLARES_CLIENT` (HV9) |
-| HV16 | Method subject, `ASYNC_CALLS` returns edges with fuzzy strategy | `Symbol{symbol_kind=method}` | non-empty `neighbors(..., ['ASYNC_CALLS'])` | v2 fuzzy hint | v2 fuzzy hint; `neighbors_empty_hints` not called |
+| HV16 | Caller-side subject, `HTTP_CALLS` returns edges with fuzzy strategy (post-flip) | `Client{}` | non-empty `neighbors([client_id], 'out', ['HTTP_CALLS'])` | v2 fuzzy hint | v2 fuzzy hint; `neighbors_empty_hints` not called |
 | HV17 | Class-level subject, asks `EXPOSES` outbound | `Symbol{symbol_kind=class}` | `neighbors([class_id], 'out', ['EXPOSES'])` | generic | `TPL_NEIGHBORS_TYPE_LEVEL_REQUERY` — row 3 |
 | HV18 | Route subject, asks `DECLARES` outbound | `Route{}` | `neighbors([route_id], 'out', ['DECLARES'])` returning `[]` | generic | `TPL_NEIGHBORS_WRONG_SUBJECT_KIND` — Route matches neither Symbol endpoint; row 1 |
 | HV19 | CI: `EDGE_SCHEMA` coverage | n/a | n/a | n/a | For **each** edge `e` in `EDGE_SCHEMA`, ∃ a `(subject_node_label, direction)` pair such that `neighbors_empty_hints` would emit **at least one** of rows 1–3 or row 4 for a synthetic empty result. Does **not** require every empty query to hint. |
@@ -244,7 +244,7 @@ Each row references the SCHEMA-V2 use-case re-walk (§4 of that propose) where a
 12. **Implementation is SCHEMA-V2 PR-D**; this propose is a separate doc PR.
 13. **`mcp_hints.py` imports `EDGE_SCHEMA` from `java_ontology`** — no copy.
 14. **No back-compat alias** for `TPL_NEIGHBORS_EMPTY_KIND_CHECK`.
-15. **Propose gate = draft PR before PR-A; lock before PR-D** — matches SCHEMA-V2 Decision 30.
+15. **Propose gate = merged to `master` before PR-A; `Status: locked` before PR-D** — matches SCHEMA-V2 Decision 30 (draft PR on GitHub is the vehicle; the file must be on `master`).
 
 ## §8 — Risks and how we mitigate
 
@@ -269,7 +269,8 @@ Each row references the SCHEMA-V2 use-case re-walk (§4 of that propose) where a
 | `TYPE_LEVEL_REQUERY` uses `{canonical_traversal}` only | Principle 1 — no `DECLARES` literal in `mcp_hints.py` |
 | `member_only` scoped to Symbol method-level edges only | Removed contradiction with post-flip HTTP/ASYNC Client/Producer endpoints |
 | §3.6 hint payload + multi-id rule | `neighbors_v2` does not pass subject/direction today |
-| Propose gate: draft before PR-A, lock before PR-D | Was stricter than SCHEMA-V2 Decision 30 |
+| Propose gate: merged before PR-A, locked before PR-D | Was stricter than SCHEMA-V2 Decision 30; TL;DR "draft PR" clarified |
+| HV16 uses `Client` + post-flip `HTTP_CALLS` | Method `Symbol` cannot have non-empty `ASYNC_CALLS` post-flip |
 | Dropped `direction='any'` / HV18 replaced | API is `in` \| `out` only |
 | HV19 clarified as ∃ coverage per edge, not ∀ empty queries | Compatible with HV8/HV9/HV11 |
 | Principle 8 for brownfield empty hints | Explicit exception to structural-only framing |
