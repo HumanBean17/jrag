@@ -1,6 +1,6 @@
 # HINTS-V2 — extend hints to `resolve` and to edge-attribute-driven `neighbors` signals
 
-**Status**: draft
+**Status**: approved (plan: [`plans/PLAN-HINTS-V2.md`](../plans/PLAN-HINTS-V2.md); move to `propose/completed/` when PR-A and PR-B land)
 **Author**: Dmitriy Teriaev + Perplexity Computer
 **Date**: 2026-05-16
 

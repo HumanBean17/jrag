@@ -49,12 +49,13 @@ template strings (Appendix A).
 ## Scope
 
 1. **`mcp_v2.py`** — Add `resolved_identifier` and `hints` to `ResolveOutput`
-   (`extra="forbid"` preserved). On every `success=True` path set
-   `resolved_identifier` to the trimmed identifier. On `success=False` set
-   `hints=[]` and `resolved_identifier=None`. After assembling success output, build
-   hint payload (`status`, `resolved_identifier`, `candidates`, plumbed `hint_kind`,
-   optional `path_prefix_seed` / `target_service_seed` from existing parsers) and set
-   `hints=generate_hints("resolve", payload)`.
+   (`extra="forbid"` preserved). **Refactor to a unified success assembler** so wildcard
+   early-return (`*` / `?`) no longer bypasses echo/hint wiring — today it calls
+   `_resolve_build_output([])` directly. Every `success=True` path must set
+   `resolved_identifier=trimmed`, build payload with `hint_kind` plus parser-derived
+   seeds (`path_prefix_seed`, `target_service_seed` when applicable), and set
+   `hints=generate_hints("resolve", payload)` (wildcard → `hints: []` via suppression,
+   UC2c). On `success=False`: `hints=[]`, `resolved_identifier=None`.
 2. **`mcp_hints.py`** — Extend `generate_hints` for `output_kind == "resolve"` with
    the four templates and rules in `propose/HINTS-V2-PROPOSE.md` Appendix A (120-char
    drop-on-overflow, wildcard suppression, seed suppression). Use `PRIORITY_META`.
@@ -62,8 +63,9 @@ template strings (Appendix A).
    response extras; link v2 propose.
 4. **`server.py`** — Minimal `resolve` tool description mention of advisory `hints`.
 5. **Tests** — Implement every `test_*` name listed under **Tests for PR-A** in
-   `plans/PLAN-HINTS-V2.md` (verbatim names). Assert hint presence via substrings, not
-   full-string equality.
+   `plans/PLAN-HINTS-V2.md` (verbatim names). Reuse graph-discovery helpers in
+   `tests/test_mcp_hints.py` for round-trip (fail loud, no unconditional skip). Assert
+   hint presence via substrings, not full-string equality.
 
 ## Out of scope (do NOT touch)
 
@@ -153,9 +155,11 @@ Read **Tests for PR-B** and propose §3.2 / Appendix A before coding.
 3. **`README.md`** — Document neighbors fuzzy-strategy hint under MCP v2 extras.
 4. **`server.py`** — Only if needed: brief mention that edge `attrs.strategy` indicates
    resolution quality.
-5. **Tests** — Implement all `test_*` names under **Tests for PR-B** in the plan
-   (verbatim). Craft payloads for unit tests; round-trip via `neighbors_v2` + graph
-   (discover fuzzy edge with Cypher — avoid unconditional skip).
+5. **Tests** — Implement all **new** `test_*` names under **Tests for PR-B** in the plan
+   (verbatim). Do **not** add a duplicate UC11 test — existing
+   `test_hints_neighbors_empty_with_edge_types_emits_kind_check` covers empty neighbors.
+   Craft payloads for unit tests; round-trip via `neighbors_v2` + graph using helpers in
+   `tests/test_mcp_hints.py` or Tier-2 `call_graph_smoke` (fail loud, no skip).
 
 ## Out of scope (do NOT touch)
 
@@ -175,7 +179,7 @@ Read **Tests for PR-B** and propose §3.2 / Appendix A before coding.
 
 ```bash
 .venv/bin/ruff check java_ontology.py mcp_hints.py tests/test_mcp_hints.py
-.venv/bin/python -m pytest tests/test_mcp_hints.py -v -k "neighbors and fuzzy or neighbors_empty"
+.venv/bin/python -m pytest tests/test_mcp_hints.py -v -k "fuzzy_strategy or neighbors_empty"
 ```
 
 Before PR open:

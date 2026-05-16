@@ -55,7 +55,7 @@ Depends on: **none** (v1 hints on `search` / `find` / `describe` / `neighbors` a
 | `resolved_identifier` | Set on every `success=True` response to post-validation trimmed identifier; `None` on `success=False`. |
 | Resolve hints fire on | `status: none` and `status: many` only; `status: one` → `hints: []`. |
 | `hint_kind` default | `None` → symbol branch (`search(query=…)` template). |
-| Wildcards in identifier | `*` / `?` in `resolved_identifier` suppress resolve hints (UC2c); do not emit `search(query='*')`. |
+| Wildcards in identifier | `*` / `?` in `resolved_identifier` suppress resolve hints (UC2c); do not emit `search(query='*')`. Unified success assembler sets echo + runs `generate_hints` on wildcard paths too. |
 | `FUZZY_STRATEGY_SET` location | `java_ontology.py`; `mcp_hints.py` imports it. Locked members per propose §3.2. |
 | `layer_b_ann` vs `layer_b_fqn` | `_ann` is primary (not in fuzzy set); `_fqn` is fuzzy. |
 | Truncated candidate cap | Hint says `{n} candidates` with `n = len(candidates)`; no `truncated` flag on output (§5 carve-out). |
@@ -75,18 +75,24 @@ Depends on: **none** (v1 hints on `search` / `find` / `describe` / `neighbors` a
     `None` when `success=False`.
   - `hints: list[str] = Field(default_factory=list, description=MCP_HINTS_FIELD_DESCRIPTION)`.
 - Preserve `extra="forbid"`.
-- Refactor success-path assembly so every `success=True` output sets
-  `resolved_identifier` to the trimmed request identifier (including `status: none`
-  from wildcards and no-match).
-- After building the success output, compute hint payload and assign `hints`:
+- **Refactor: unified success assembler** — Today `resolve_v2` wildcard identifiers
+  (`*` / `?`) early-return via `_resolve_build_output([])` and never set echo fields.
+  Replace scattered success returns with one helper (e.g.
+  `_resolve_finalize_success(trimmed, hint_kind, matches, graph) -> ResolveOutput`) that:
+  1. Builds `status` / `node` / `candidates` / `message` (same semantics as today).
+  2. Always sets `resolved_identifier=trimmed` on `success=True` (wildcard, empty-match,
+     one, many — all paths).
+  3. Builds the hint payload and sets `hints=generate_hints("resolve", payload)`.
+  Wildcard `status: none` must **not** bypass the assembler; hints stay `[]` via
+  `generate_hints` suppression (UC2c), not a separate shortcut.
+- **Hint payload on every success path** (including wildcard and empty-match):
   - Echo: `status`, `resolved_identifier`, `candidates`.
-  - Plumbed (not on model): `hint_kind`, optional `path_prefix_seed`,
-    `target_service_seed`.
-  - Seeds: reuse `_resolve_parse_route_method_path` (path from method+path identifier)
-    and `_resolve_parse_microservice_route` / client parsers consistent with
-    `_resolve_client_candidates` (microservice token or `target path` split) — match
-    propose §3.1.2 semantics; parser logic stays here, not in `mcp_hints.py`.
-  - Call `generate_hints("resolve", payload)` only when `success=True`.
+  - Plumbed (not on model): `hint_kind` (request param — today only used for search
+    routing), optional `path_prefix_seed`, `target_service_seed`.
+  - Seeds: compute on every success return using existing parsers
+    (`_resolve_parse_route_method_path`, `_resolve_parse_microservice_route`, and client
+    `target` / `target path` split consistent with `_resolve_client_candidates`) — match
+    propose §3.1.2; parser logic stays here, not in `mcp_hints.py`.
 - `success=False` paths (validation error, exceptions): `hints=[]`,
   `resolved_identifier=None` (Decision §7.15 — validation rejection gets no v2 hint).
 
@@ -135,8 +141,11 @@ Integration:
 
 12. `test_hints_resolve_v2_round_trip` — `resolve_v2` against `kuzu_graph`: assert
     `hints` present for a known `status: none` symbol identifier and empty for a known
-    `status: one`; assert `resolved_identifier` echoed on success; assert validation
-    failure yields `hints == []` and `resolved_identifier is None`.
+    `status: one`; assert `resolved_identifier` echoed on success (including wildcard
+    `status: none` with `hints == []`); assert validation failure yields `hints == []`
+    and `resolved_identifier is None`. Reuse existing discovery helpers in
+    `tests/test_mcp_hints.py` (`_route_id`, `_client_id`, symbol/route Cypher patterns)
+    — fail loud with `pytest.fail` if fixture data missing; no unconditional `skip`.
 
 Optional hygiene (same PR if quick):
 
@@ -161,7 +170,7 @@ Optional hygiene (same PR if quick):
 | --- | --- | --- | --- |
 | 1 | Add model fields | `mcp_v2.py` | Pydantic schema validates |
 | 2 | Implement resolve branch + templates | `mcp_hints.py` | Unit tests 1–11 pass |
-| 3 | Wire `resolve_v2` payload + `resolved_identifier` | `mcp_v2.py` | Round-trip test passes |
+| 3 | Add unified success assembler; thread `trimmed`, `hint_kind`, seeds into payload on every `success=True` path (wildcard included) | `mcp_v2.py` | Wildcard + lookup paths echo `resolved_identifier`; round-trip passes |
 | 4 | Docs / server description | `README.md`, `server.py` | Copy matches behavior |
 | 5 | Add tests | `tests/test_mcp_hints.py` | All PR-A tests green |
 
@@ -209,17 +218,19 @@ Pure `generate_hints("neighbors", …)` (craft `results` with `attrs.strategy`):
 4. `test_hints_neighbors_declares_no_strategy_attrs_empty` — UC9
 5. `test_hints_neighbors_multi_origin_fuzzy_emits_once` — UC10 (single hint string)
 6. `test_hints_neighbors_layer_a_meta_no_fuzzy_hint` — UC17
-7. `test_hints_neighbors_empty_with_edge_types_still_emits_kind_check` — UC11 regression
-   (may already exist as `test_hints_neighbors_empty_with_edge_types_emits_kind_check` —
-   extend or duplicate only if PR-B changes branch ordering)
+
+**UC11 regression (existing v1 test — do not add a duplicate):** after PR-B, re-run
+`test_hints_neighbors_empty_with_edge_types_emits_kind_check` unchanged; only touch it if
+branch ordering breaks the empty-result path.
 
 Integration:
 
-8. `test_hints_neighbors_fuzzy_strategy_neighbors_v2_round_trip` — call `neighbors_v2`
-   on a graph edge known to carry a fuzzy `strategy` (discover via Cypher helper over
-   `kuzu_graph` or Tier-2 `call_graph_smoke` session); assert fuzzy hint substring in
-   `out.hints`. Prefer **no** unconditional `pytest.skip` — use a helper that fails with
-   a clear message if the chosen fixture lacks fuzzy edges.
+7. `test_hints_neighbors_fuzzy_strategy_neighbors_v2_round_trip` — call `neighbors_v2`
+   on a graph edge known to carry a fuzzy `strategy`. Reuse or extend helpers in
+   `tests/test_mcp_hints.py` (`_method_declares_client`, `_class_symbol_id`, Cypher
+   discovery for `e.strategy IN FUZZY_STRATEGY_SET`) or Tier-2 `call_graph_smoke` session
+   for `phantom` / `implicit_super` on `CALLS`. Fail loud if fixture lacks a fuzzy edge;
+   no unconditional `pytest.skip`.
 
 ## Definition of done (PR-B)
 
@@ -235,8 +246,8 @@ Integration:
 | # | Step | File(s) | Done when |
 | --- | --- | --- | --- |
 | 1 | Add ontology set | `java_ontology.py` | Importable constant |
-| 2 | Template + `_any_fuzzy_strategy` + neighbors branch | `mcp_hints.py` | Unit tests 1–7 pass |
-| 3 | Round-trip neighbors test | `tests/test_mcp_hints.py` | Test 8 passes |
+| 2 | Template + `_any_fuzzy_strategy` + neighbors branch | `mcp_hints.py` | Unit tests 1–6 pass |
+| 3 | Round-trip neighbors test | `tests/test_mcp_hints.py` | Test 7 passes |
 | 4 | README / optional server | `README.md`, `server.py` | Docs match |
 
 ---
@@ -246,7 +257,8 @@ Integration:
 | # | Risk | Severity | Mitigation |
 | --- | --- | --- | --- |
 | 1 | Resolve hint duplicates generic `message` prose | Low | Intentional dual channel; hint embeds verbatim `resolved_identifier` (Decision §7.22). Tests use substrings, not full equality. |
-| 2 | Missing payload plumbing → silent `hints: []` | Medium | `test_hints_resolve_payload_missing_identifier_suppressed` + round-trip asserts `resolved_identifier` on success. |
+| 2 | Missing payload plumbing → silent `hints: []` | Medium | Unified success assembler; `test_hints_resolve_payload_missing_identifier_suppressed` + round-trip asserts `resolved_identifier` on success (wildcard included). |
+| 2b | Wildcard early-return bypasses assembler | Medium | PR-A refactor: no direct `_resolve_build_output([])` return without `resolved_identifier` + `generate_hints`. |
 | 3 | Fuzzy hint noise in brownfield-heavy repos | Low | Meta-tier drops first under cap; single terse template. |
 | 4 | `FUZZY_STRATEGY_SET` drifts from pipeline literals | Medium | Issue #147 follow-up; document locked set in ontology; code review checks new strategies. |
 | 5 | PR-B merged before PR-A | Low | Enforce landing order; PR-B does not touch `ResolveOutput`. |
@@ -272,11 +284,14 @@ Integration:
    `attrs.strategy ∈ FUZZY_STRATEGY_SET`; ontology set is the single source of truth.
 3. README documents v2 behavior; v1 hints on the original four tools are unchanged.
 4. Default test suite green without heavy env vars.
+5. `propose/HINTS-V2-PROPOSE.md` moved to `propose/completed/` (whole effort landed).
 
 # Tracking
 
 - `PR-A`: _pending_
 - `PR-B`: _pending_
+- `#147` (strategy classification CI invariant): _pending_ chore — out of PR-A/B scope;
+  file after PR-B or in parallel.
 
 ## Cursor handoff
 
