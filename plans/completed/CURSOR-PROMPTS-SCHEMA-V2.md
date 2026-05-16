@@ -6,7 +6,7 @@ Status: **completed** (reference template). Plan:
 [`docs/PROPOSES-ORDER.md`](../../docs/PROPOSES-ORDER.md).
 
 One prompt per code PR (**PR-A / PR-B / PR-C**). PR-D (hints) is in
-[`plans/CURSOR-PROMPTS-HINTS-V3.md`](../CURSOR-PROMPTS-HINTS-V3.md).
+[`plans/completed/CURSOR-PROMPTS-HINTS-V3.md`](./CURSOR-PROMPTS-HINTS-V3.md).
 
 **Landing order:** PR-SCHEMA-V2-A → PR-SCHEMA-V2-B → PR-SCHEMA-V2-C. Do not start the next PR until the previous is merged to `master`.
 
@@ -16,7 +16,7 @@ One prompt per code PR (**PR-A / PR-B / PR-C**). PR-D (hints) is in
 - Nothing reachable from MCP tool handlers may write to **stdout**.
 - If ambiguous versus the plan, stop and ask — do not expand scope.
 - Do not push git unless the user explicitly asked.
-- Confirm [`propose/HINTS-V3-PROPOSE.md`](../propose/HINTS-V3-PROPOSE.md) is on `master` before starting **PR-A** implementation.
+- Confirm [`propose/completed/HINTS-V3-PROPOSE.md`](../propose/completed/HINTS-V3-PROPOSE.md) is on `master` before starting **PR-A** implementation.
 
 ---
 
@@ -31,7 +31,7 @@ One prompt per code PR (**PR-A / PR-B / PR-C**). PR-D (hints) is in
 
 - `@plans/completed/PLAN-SCHEMA-V2.md` (PR-A only)
 - `@propose/completed/SCHEMA-V2-PROPOSE.md` (§3.1, §3.5–§3.6, §6 PR-A, Appendix A, Decisions 6–9, 28–29, 31)
-- `@propose/HINTS-V3-PROPOSE.md` (§3.4–§3.5 `member_only` / `typical_traversals` — read only)
+- `@propose/completed/HINTS-V3-PROPOSE.md` (§3.4–§3.5 `member_only` / `typical_traversals` — read only)
 - `@java_ontology.py`
 - `@build_ast_graph.py` (DDL constants — do not flip endpoints)
 - `@ast_java.py`

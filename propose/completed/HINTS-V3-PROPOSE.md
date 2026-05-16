@@ -1,6 +1,6 @@
 # HINTS-V3 — kind- and direction-aware empty-result hints driven by EDGE_SCHEMA
 
-**Status**: locked — implementing via SCHEMA-V2 PR-D (plan: [`plans/PLAN-HINTS-V3.md`](../plans/PLAN-HINTS-V3.md); move to `propose/completed/` when PR-D lands)
+**Status**: **completed** — landed in [#160](https://github.com/HumanBean17/java-codebase-rag/pull/160) (plan: [`plans/completed/PLAN-HINTS-V3.md`](../../plans/completed/PLAN-HINTS-V3.md))
 **Author**: Dmitriy Teriaev
 **Date**: 2026-05-16
 

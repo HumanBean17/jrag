@@ -1391,10 +1391,19 @@ def neighbors_v2(
                     )
                 )
         sliced = results[offset : offset + limit]
+        first_origin = origins[0]
+        origin_kind = _resolve_node_kind(g, first_origin)
+        subject_record = _load_node_record(g, first_origin, origin_kind)
+        # Empty-result hints use the sliced page only; offset>0 or strict filters can
+        # yield [] while hops exist — skip structural hints in that case.
         neigh_payload = {
             "success": True,
             "results": [e.model_dump() for e in sliced],
             "requested_edge_types": list(labels),
+            "requested_direction": direction,
+            "offset": offset,
+            "origin_id": first_origin,
+            "subject_record": subject_record,
         }
         return NeighborsOutput(
             success=True,

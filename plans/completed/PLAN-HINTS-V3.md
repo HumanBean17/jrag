@@ -1,7 +1,7 @@
 # Plan: HINTS-V3 (EDGE_SCHEMA-driven empty `neighbors` hints)
 
-Status: **active (implementing)**. This plan implements
-[`propose/HINTS-V3-PROPOSE.md`](../propose/HINTS-V3-PROPOSE.md).
+Status: **completed** (landed [#160](https://github.com/HumanBean17/java-codebase-rag/pull/160)). This plan implemented
+[`propose/completed/HINTS-V3-PROPOSE.md`](../propose/completed/HINTS-V3-PROPOSE.md).
 
 Depends on:
 
@@ -37,7 +37,7 @@ Sequence reference: [`docs/PROPOSES-ORDER.md`](../docs/PROPOSES-ORDER.md).
 
 **Landing order:** **PR-D** after SCHEMA **PR-C** on `master`.
 
-**Merge gates:** This file + [`plans/CURSOR-PROMPTS-HINTS-V3.md`](./CURSOR-PROMPTS-HINTS-V3.md) before PR-D code merges (by analogy with SCHEMA Decision 29).
+**Merge gates:** This file + [`plans/completed/CURSOR-PROMPTS-HINTS-V3.md`](./CURSOR-PROMPTS-HINTS-V3.md) before PR-D code merges (by analogy with SCHEMA Decision 29).
 
 ## Resolved design decisions
 
@@ -187,9 +187,9 @@ Name tests `test_hints_hv{N}_*` matching propose §6 / §4 rows:
 
 # Tracking
 
-- Artefacts: _pending_
-- `PR-D`: _pending_ (blocked on SCHEMA PR-C + HINTS-V3 propose **locked**)
+- Artefacts: landed ([#160](https://github.com/HumanBean17/java-codebase-rag/pull/160))
+- `PR-D`: _completed_
 
 ## Cursor handoff
 
-[`plans/CURSOR-PROMPTS-HINTS-V3.md`](./CURSOR-PROMPTS-HINTS-V3.md)
+[`plans/completed/CURSOR-PROMPTS-HINTS-V3.md`](./CURSOR-PROMPTS-HINTS-V3.md)
