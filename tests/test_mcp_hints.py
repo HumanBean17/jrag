@@ -199,18 +199,19 @@ def test_hints_describe_method_clients_in_overriders_emits(kuzu_graph) -> None:
     assert want in out.hints
 
 
-def test_hints_describe_method_producers_in_overriders_emits() -> None:
-    node_id = "sym:com.example.T#m()"
-    rec = {
-        "id": node_id,
-        "kind": "symbol",
-        "fqn": "com.example.T#m()",
-        "data": {"kind": "method"},
-        "edge_summary": {"OVERRIDDEN_BY.DECLARES_PRODUCER": {"in": 0, "out": 1}},
-    }
-    hints = generate_hints("describe", {"success": True, "record": rec})
-    want = mcp_hints.TPL_DESCRIBE_METHOD_PRODUCERS_IN_OVERRIDERS.format(id=node_id)
-    assert want in hints
+def test_hints_describe_method_producers_in_overriders_emits(override_axis_graph: KuzuGraph) -> None:
+    rows = override_axis_graph._rows(  # noqa: SLF001
+        "MATCH (t:Symbol {fqn: $fqn})-[:DECLARES]->(m:Symbol) "
+        "WHERE m.kind = 'method' AND m.name = 'publish' "
+        "RETURN m.id AS id LIMIT 1",
+        {"fqn": "orolla.abstractproducer.AbstractProducerApi"},
+    )
+    assert rows
+    mid = str(rows[0]["id"])
+    out = describe_v2(mid, graph=override_axis_graph)
+    assert out.success and out.record
+    want = mcp_hints.TPL_DESCRIBE_METHOD_PRODUCERS_IN_OVERRIDERS.format(id=mid)
+    assert want in out.hints
 
 
 def test_hints_describe_method_routes_in_overriders_emits(override_axis_graph: KuzuGraph) -> None:

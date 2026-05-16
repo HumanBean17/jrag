@@ -250,13 +250,18 @@ The §3.3 table *is* the appendix artifact — every row is a verbatim template 
 # DescribeOutput
 DECLARES.DECLARES_CLIENT.out>0  →  "clients via members: neighbors(['{id}'],'out',['DECLARES']) then neighbors(member_ids,'out',['DECLARES_CLIENT'])"
 DECLARES.EXPOSES.out>0          →  "routes via members: neighbors(['{id}'],'out',['DECLARES']) then neighbors(member_ids,'out',['EXPOSES'])"
+DECLARES.DECLARES_PRODUCER.out>0  →  "producers via members: neighbors(['{id}'],'out',['DECLARES']) then neighbors(member_ids,'out',['DECLARES_PRODUCER'])"  # amendment #161
 OVERRIDDEN_BY.out>0              →  "overriders: neighbors(['{id}'],'in',['OVERRIDES'])"  # requires PR-A; rollup stores counts on .out per override_axis_rollup_for
 OVERRIDDEN_BY.DECLARES_CLIENT.out>0  →  "clients in overriders: neighbors(['{id}'],'in',['OVERRIDES']) then neighbors(overrider_ids,'out',['DECLARES_CLIENT'])"  # requires PR-A
+OVERRIDDEN_BY.DECLARES_PRODUCER.out>0  →  "producers in overriders: neighbors(['{id}'],'in',['OVERRIDES']) then neighbors(overrider_ids,'out',['DECLARES_PRODUCER'])"  # amendment #161
+OVERRIDDEN_BY.EXPOSES.out>0  →  "routes in overriders: neighbors(['{id}'],'in',['OVERRIDES']) then neighbors(overrider_ids,'out',['EXPOSES'])"  # amendment #161
 DECLARES_CLIENT.out>0 (method)  →  "outbound client: neighbors(['{id}'],'out',['DECLARES_CLIENT'])"
+DECLARES_PRODUCER.out>0 (method)  →  "outbound producer: neighbors(['{id}'],'out',['DECLARES_PRODUCER'])"  # amendment #161
 EXPOSES.out>0 (method)          →  "inbound route: neighbors(['{id}'],'out',['EXPOSES'])"
 CALLS.out>=10 (method)          →  "many CALLS — consider filtering by target microservice"
 kind == route, always           →  "declaring method: neighbors(['{id}'],'in',['EXPOSES'])"
 kind == client, always          →  "declaring method: neighbors(['{id}'],'in',['DECLARES_CLIENT'])"
+kind == producer, always        →  "declaring method: neighbors(['{id}'],'in',['DECLARES_PRODUCER'])"  # amendment #161
 
 # FindOutput
 results==[] and filter has identifier-shaped value  →  "no matches — try resolve(identifier, hint_kind='{kind}') for canonical lookup"
@@ -272,6 +277,8 @@ len(results)==limit and (max_score - min_score) < 0.1*max_score  →  "results l
 File placement (`mcp_hints.py`), function decomposition, integration points in `mcp_v2.py`, and test file names go in `plans/completed/PLAN-HINTS.md` — not in this propose.
 
 ## Appendix B — What changed (traceability)
+
+**Amendment (2026-05-16, issue #161 / PR #164)** — five describe templates for the producer axis and override-route rollup, symmetric with the client/route rows above: `DECLARES.DECLARES_PRODUCER`, `DECLARES_PRODUCER`, `OVERRIDDEN_BY.DECLARES_PRODUCER`, `OVERRIDDEN_BY.EXPOSES`, and `kind == producer` declaring-method hint. No ontology or re-index change.
 
 **What stayed unchanged from the first draft**
 

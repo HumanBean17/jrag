@@ -1,6 +1,7 @@
 """Pure MCP v2 road-sign hint generation (no graph I/O, no search, no LLM).
 
-Locked v1 catalog: ``propose/completed/HINTS-ROAD-SIGNS-PROPOSE.md`` Appendix A.
+Locked v1 catalog: ``propose/completed/HINTS-ROAD-SIGNS-PROPOSE.md`` Appendix A
+(issue #161 producer/override-route amendments in that appendix).
 v2 resolve + neighbors fuzzy-strategy catalog: ``propose/completed/HINTS-V2-PROPOSE.md`` Appendix A.
 v3 empty-neighbors structural catalog: ``propose/completed/HINTS-V3-PROPOSE.md`` §3.1–3.3.
 Priority cap: same propose §7.12 / ``plans/completed/PLAN-HINTS.md`` principles.
