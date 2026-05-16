@@ -1420,6 +1420,8 @@ def _producer_id(
     producer_kind: str,
     topic: str,
 ) -> str:
+    # Topic-level identity per method+kind; broker is intentionally omitted so the same
+    # resolved topic on one method shares one Producer node across call sites.
     key = f"{microservice}|{member_fqn}|{producer_kind}|{topic}"
     return f"p:{hashlib.sha1(key.encode()).hexdigest()[:16]}"
 

@@ -356,10 +356,12 @@ _RESOLVE_REASON_PRIORITY: dict[ResolveReason, int] = {
     "exact_fqn": 1,
     "route_method_path": 1,
     "client_target_path": 1,
+    "producer_topic_prefix": 1,
     "fqn_suffix": 2,
     "route_template": 2,
     "short_name": 3,
     "client_target": 3,
+    "producer_topic": 3,
 }
 
 _SYMBOL_RESOLVE_RETURN = (
@@ -1107,7 +1109,7 @@ def _resolve_producer_candidates(
         {"topic": identifier, "lim": lim},
     )
     for row in rows:
-        out.append((_node_ref_from_row("producer", row), "client_target", len(identifier)))
+        out.append((_node_ref_from_row("producer", row), "producer_topic", len(identifier)))
 
     if not identifier.startswith("/"):
         rows = g._rows(  # noqa: SLF001
@@ -1115,7 +1117,7 @@ def _resolve_producer_candidates(
             {"topic": identifier, "lim": lim},
         )
         for row in rows:
-            out.append((_node_ref_from_row("producer", row), "client_target_path", len(identifier)))
+            out.append((_node_ref_from_row("producer", row), "producer_topic_prefix", len(identifier)))
 
     return out
 

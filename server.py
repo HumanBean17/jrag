@@ -433,7 +433,8 @@ def create_mcp_server() -> FastMCP:
             description=(
                 "Graph node id: sym:, route:, client:, or producer: prefix "
                 '(e.g. sym:com.bank.chat.core.api.ChatController#joinOperator(JoinOperatorRequest); '
-                "producer:svc|com.foo.Bar#send()|kafka_send|orders.created). "
+                "producer: p:a1b2c3d4e5f67890 — the stored id from the graph, not a human-readable "
+                "pipe key). For producers by topic, prefer resolve(identifier=<topic>, hint_kind='producer'). "
                 "When set, takes precedence over fqn."
             ),
         ),

@@ -1156,6 +1156,7 @@ def test_resolve_wildcard_identifier_returns_none(kuzu_graph) -> None:
 def test_resolve_every_reason_in_closed_set_appears() -> None:
     from mcp_v2 import (
         _resolve_client_candidates,
+        _resolve_producer_candidates,
         _resolve_route_candidates,
         _resolve_symbol_candidates,
     )
@@ -1205,6 +1206,22 @@ def test_resolve_every_reason_in_closed_set_appears() -> None:
         "resolved": True,
         "source_layer": "builtin",
     }
+    producer_row = {
+        "id": "p:reasonhash000000",
+        "producer_kind": "kafka_send",
+        "topic": "orders.created",
+        "broker": "",
+        "direction": "produce",
+        "member_fqn": "com.reason.Producer#send()",
+        "member_id": "sym:reasonproducer",
+        "microservice": "svc",
+        "module": "mod",
+        "filename": "P.java",
+        "start_line": 1,
+        "end_line": 1,
+        "resolved": True,
+        "source_layer": "builtin",
+    }
 
     class ReasonGraph:
         def _rows(self, query: str, params: dict | None = None) -> list:
@@ -1228,6 +1245,12 @@ def test_resolve_every_reason_in_closed_set_appears() -> None:
                 return [client_row]
             if "WHERE c.target_service = $target" in query:
                 return [client_row]
+            if "WHERE p.id = $id" in query:
+                return [producer_row]
+            if "WHERE p.topic = $topic" in query:
+                return [producer_row]
+            if "p.topic STARTS WITH $topic" in query:
+                return [producer_row]
             return []
 
     g = ReasonGraph()  # type: ignore[arg-type]
@@ -1249,6 +1272,12 @@ def test_resolve_every_reason_in_closed_set_appears() -> None:
     for _node, reason, _spec in _resolve_client_candidates(g, "reasonsvc"):
         seen.add(reason)
     for _node, reason, _spec in _resolve_client_candidates(g, "reasonsvc /reason"):
+        seen.add(reason)
+    for _node, reason, _spec in _resolve_producer_candidates(g, "p:reasonhash000000"):
+        seen.add(reason)
+    for _node, reason, _spec in _resolve_producer_candidates(g, "orders.created"):
+        seen.add(reason)
+    for _node, reason, _spec in _resolve_producer_candidates(g, "orders"):
         seen.add(reason)
 
     assert seen == set(VALID_RESOLVE_REASONS)

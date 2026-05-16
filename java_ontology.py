@@ -84,6 +84,8 @@ VALID_RESOLVE_REASONS: frozenset[str] = frozenset((
     "route_method_path",
     "client_target",
     "client_target_path",
+    "producer_topic",
+    "producer_topic_prefix",
 ))
 
 # Brownfield / fallback edge resolution strategies (hints v2 neighbors fuzzy signal).
@@ -400,6 +402,8 @@ ResolveReason = Literal[
     "route_method_path",
     "client_target",
     "client_target_path",
+    "producer_topic",
+    "producer_topic_prefix",
 ]
 
 __all__ = [
