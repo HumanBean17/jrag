@@ -420,7 +420,28 @@ def test_neighbors_route_in_http_calls_returns_callers(kuzu_graph) -> None:
                 and "WHERE a.id" in query
                 and "RETURN b.id AS other_id" in query
             ):
-                return [{"other_id": "sym:caller", "edge_type": "HTTP_CALLS", "confidence": 0.8, "match": "cross_service"}]
+                return [{"other_id": "client:caller", "edge_type": "HTTP_CALLS", "confidence": 0.8, "match": "cross_service"}]
+            if "MATCH (n:Client)" in query:
+                return [
+                    {
+                        "id": "client:caller",
+                        "client_kind": "feign_method",
+                        "target_service": "chat-core",
+                        "method": "POST",
+                        "path": "/chat/joinOperator",
+                        "path_template": "/chat/joinOperator",
+                        "path_regex": "",
+                        "member_fqn": "com.example.Caller#call()",
+                        "member_id": "sym:caller",
+                        "microservice": "chat-core",
+                        "module": "chat-app",
+                        "filename": "Caller.java",
+                        "start_line": 1,
+                        "end_line": 2,
+                        "resolved": True,
+                        "source_layer": "builtin",
+                    }
+                ]
             if "MATCH (n:Symbol)" in query:
                 return [
                     {
@@ -455,6 +476,8 @@ def test_neighbors_route_in_http_calls_returns_callers(kuzu_graph) -> None:
     )
     assert out.success is True
     assert len(out.results) == 1
+    assert out.results[0].other.id == "client:caller"
+    assert out.results[0].other.kind == "client"
 
 
 def test_neighbors_batch_ids_carries_origin_id(kuzu_graph) -> None:

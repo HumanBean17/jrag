@@ -116,9 +116,10 @@ class ViaEdge:
     in the same chain (e.g. `INJECTS` vs `IMPLEMENTS` vs `CALLS`) and at what hop
     from the frontier they were reached.
     """
-    edge_type: str  # INJECTS | EXTENDS | IMPLEMENTS | CALLS
+    edge_type: str  # INJECTS | EXTENDS | IMPLEMENTS | CALLS | HTTP_CALLS | ASYNC_CALLS
     from_fqn: str
     hop: int  # 1 = direct neighbour of previous-stage frontier
+    caller_node_id: str = ""  # Client id when edge_type is HTTP_CALLS (SCHEMA v2)
 
 
 @dataclass
@@ -1281,6 +1282,7 @@ class KuzuGraph:
                         edge_type=str(row.get("edge_type") or ""),
                         from_fqn=str(row.get("from_fqn") or ""),
                         hop=hop,
+                        caller_node_id=str(row.get("caller_client_id") or ""),
                     )
                     existing = stage_results.get(sym.fqn)
                     if existing is None:
@@ -1342,7 +1344,8 @@ class KuzuGraph:
                         "AND n.resolved AND n.kind IN ['class','interface','enum','record','annotation'] "
                         "AND e.confidence >= $mc AND root.microservice <> n.microservice "
                         f"{scrf} "
-                        f"RETURN {_symbol_return_for('n')}, 'HTTP_CALLS' AS edge_type, root.fqn AS from_fqn "
+                        f"RETURN {_symbol_return_for('n')}, 'HTTP_CALLS' AS edge_type, "
+                        f"root.fqn AS from_fqn, c.id AS caller_client_id "
                         f"LIMIT {max(1, remaining * 4)}"
                     )
                     for row in self._rows(qrf, params_rf):
@@ -1352,14 +1355,14 @@ class KuzuGraph:
                     if len(stage_results) < stage_limit:
                         remaining = stage_limit - len(stage_results)
                         qrf_async = (
-                        "MATCH (root:Symbol)-[:DECLARES]->(m1:Symbol)-[e:ASYNC_CALLS]->(rt:Route)"
-                        "<-[:EXPOSES]-(handler:Symbol)<-[:DECLARES]-(n:Symbol) "
-                        "WHERE root.fqn IN $fqns AND n.role IN $roles "
-                        "AND n.resolved AND n.kind IN ['class','interface','enum','record','annotation'] "
-                        "AND e.confidence >= $mc AND root.microservice <> n.microservice "
-                        f"{scrf} "
-                        f"RETURN {_symbol_return_for('n')}, 'ASYNC_CALLS' AS edge_type, root.fqn AS from_fqn "
-                        f"LIMIT {max(1, remaining * 4)}"
+                            "MATCH (root:Symbol)-[:DECLARES]->(m1:Symbol)-[e:ASYNC_CALLS]->(rt:Route)"
+                            "<-[:EXPOSES]-(handler:Symbol)<-[:DECLARES]-(n:Symbol) "
+                            "WHERE root.fqn IN $fqns AND n.role IN $roles "
+                            "AND n.resolved AND n.kind IN ['class','interface','enum','record','annotation'] "
+                            "AND e.confidence >= $mc AND root.microservice <> n.microservice "
+                            f"{scrf} "
+                            f"RETURN {_symbol_return_for('n')}, 'ASYNC_CALLS' AS edge_type, root.fqn AS from_fqn "
+                            f"LIMIT {max(1, remaining * 4)}"
                         )
                         for row in self._rows(qrf_async, params_rf):
                             _ingest_flow_row(row, filter_external_fqn=True)
@@ -1488,6 +1491,7 @@ class KuzuGraph:
         path_template: str = "",
         method: str = "",
     ) -> list[RouteCaller]:
+        """HTTP callers via Client (two-hop). Async callers omitted until PR-C (Producer)."""
         rid = route_id or ""
         if not rid:
             params: dict[str, Any] = {
@@ -1514,12 +1518,6 @@ class KuzuGraph:
             "ORDER BY e.confidence DESC, c.id",
             {"rid": rid},
         )
-        async_rows = self._rows(
-            "MATCH (s:Symbol)-[e:ASYNC_CALLS]->(r:Route {id: $rid}) "
-            "RETURN s.id AS caller_node_id, s.microservice AS caller_microservice, "
-            "s.id AS declaring_symbol_id, e.confidence AS confidence, e.match AS match",
-            {"rid": rid},
-        )
         out: list[RouteCaller] = []
         for row in http_rows:
             out.append(
@@ -1534,22 +1532,10 @@ class KuzuGraph:
                     raw_uri=str(row.get("raw_uri") or ""),
                 ),
             )
-        for row in async_rows:
-            sym_id = str(row.get("caller_node_id") or "")
-            out.append(
-                RouteCaller(
-                    caller_node_id=sym_id,
-                    caller_node_kind="client",
-                    caller_microservice=str(row.get("caller_microservice") or ""),
-                    declaring_symbol_id=str(row.get("declaring_symbol_id") or ""),
-                    confidence=float(row.get("confidence") or 0.0),
-                    match=str(row.get("match") or ""),
-                ),
-            )
-        out.sort(key=lambda c: (-c.confidence, c.caller_node_id))
         return out
 
     def trace_request_flow(self, entry_route_id: str, max_hops: int = 5) -> dict[str, Any]:
+        """Inbound HTTP via Client two-hop. Async inbound omitted until PR-C (Producer)."""
         hops = max(1, min(int(max_hops), 8))
         inbound_http = self._rows(
             f"MATCH (entry:Route {{id: $rid}})<-[e:HTTP_CALLS]-(caller:Client)"
@@ -1562,17 +1548,7 @@ class KuzuGraph:
             "ORDER BY confidence DESC, caller_node_id",
             {"rid": entry_route_id},
         )
-        inbound_async = self._rows(
-            f"MATCH (entry:Route {{id: $rid}})<-[e:ASYNC_CALLS]-(caller:Symbol) "
-            f"OPTIONAL MATCH (origin:Symbol)-[:CALLS*0..{hops}]->(caller) "
-            "RETURN DISTINCT caller.id AS caller_node_id, 'client' AS caller_node_kind, "
-            "caller.id AS declaring_symbol_id, caller.fqn AS declaring_symbol_fqn, "
-            "caller.microservice AS microservice, e.confidence AS confidence, "
-            "e.match AS match, origin.id AS origin_symbol_id, origin.fqn AS origin_fqn "
-            "ORDER BY confidence DESC, caller_node_id",
-            {"rid": entry_route_id},
-        )
-        inbound = inbound_http + inbound_async
+        inbound = inbound_http
         outbound = self._rows(
             f"MATCH (handler:Symbol)-[:EXPOSES]->(entry:Route {{id: $rid}}) "
             f"OPTIONAL MATCH (handler)-[:CALLS*0..{hops}]->(next:Symbol) "

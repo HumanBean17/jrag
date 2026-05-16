@@ -308,13 +308,37 @@ def test_pr_analysis_changed_methods_finds_routes_via_declares_client(
 ) -> None:
     from kuzu_queries import KuzuGraph
 
+    from pr_analysis import ChangedSymbol, compute_risk
+
     g = KuzuGraph(str(kuzu_db_path_cross_service_smoke))
-    rows = g._rows(  # noqa: SLF001
-        "MATCH (s:Symbol)-[:DECLARES_CLIENT]->(c:Client)-[e:HTTP_CALLS]->(r:Route) "
-        "WHERE e.match = 'cross_service' RETURN count(*) AS n",
+    route_rows = g._rows(  # noqa: SLF001
+        "MATCH (r:Route) "
+        "WHERE r.microservice = 'svc-b' AND r.path_template = '/chat/joinOperator' "
+        "AND r.method = 'POST' RETURN r.id AS id LIMIT 1",
         {},
     )
-    assert int(rows[0].get("n") or 0) >= 1
+    assert route_rows
+    rid = str(route_rows[0]["id"])
+    handler_rows = g._rows(  # noqa: SLF001
+        "MATCH (s:Symbol)-[:EXPOSES]->(r:Route {id: $rid}) RETURN s.id AS id, s.fqn AS fqn LIMIT 1",
+        {"rid": rid},
+    )
+    assert handler_rows
+    rep = compute_risk(
+        g,
+        [
+            ChangedSymbol(
+                symbol_id=str(handler_rows[0]["id"]),
+                fqn=str(handler_rows[0]["fqn"]),
+                kind="method",
+                change_type="modified",
+                file="",
+                hunk_lines=[1],
+            ),
+        ],
+    )
+    assert rep.changed_symbols
+    assert rep.changed_symbols[0].cross_service_callers_count >= 1
 
 
 def test_36_removed_symbol_from_minus_only_hunk(kuzu_graph) -> None:
