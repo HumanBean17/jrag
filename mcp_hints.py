@@ -1,13 +1,15 @@
 """Pure MCP v2 road-sign hint generation (no graph I/O, no search, no LLM).
 
 Locked v1 catalog: ``propose/completed/HINTS-ROAD-SIGNS-PROPOSE.md`` Appendix A.
-v2 resolve catalog: ``propose/HINTS-V2-PROPOSE.md`` Appendix A.
+v2 resolve + neighbors fuzzy-strategy catalog: ``propose/HINTS-V2-PROPOSE.md`` Appendix A.
 Priority cap: same propose §7.12 / ``plans/completed/PLAN-HINTS.md`` principles.
 """
 
 from __future__ import annotations
 
 from typing import Any, Literal
+
+from java_ontology import FUZZY_STRATEGY_SET
 
 # Normative schema description (propose §3.1) — imported by ``mcp_v2`` for Field(description=...).
 MCP_HINTS_FIELD_DESCRIPTION = (
@@ -65,6 +67,10 @@ TPL_RESOLVE_MANY_TIGHTEN = (
 _RESOLVE_HINT_MAX_CHARS = 120
 _RESOLVE_WILDCARDS = ("*", "?")
 
+TPL_NEIGHBORS_FUZZY_STRATEGY = (
+    "some edges resolved via brownfield/fallback strategy — check attrs.strategy on each row"
+)
+
 # §7.12 priority: DECLARES.* type rollups > OVERRIDDEN_BY.* > leaf follow-ups > meta.
 PRIORITY_DECLARES_TYPE_ROLLUP = 4
 PRIORITY_OVERRIDDEN_AXIS = 3
@@ -97,6 +103,15 @@ def _symbol_declaration_kind(record: dict[str, Any]) -> str | None:
         if k is not None:
             return str(k).strip() or None
     return None
+
+
+def _any_fuzzy_strategy(edges: list[dict[str, Any]]) -> bool:
+    for e in edges:
+        attrs = e.get("attrs") if isinstance(e.get("attrs"), dict) else {}
+        s = attrs.get("strategy") if isinstance(attrs, dict) else None
+        if isinstance(s, str) and s in FUZZY_STRATEGY_SET:
+            return True
+    return False
 
 
 def _find_has_identifier_shaped_filter(kind: str, flt: dict[str, Any]) -> bool:
@@ -215,6 +230,8 @@ def generate_hints(
         n_types = len([x for x in req_types if str(x).strip()])
         if not results and n_types > 0:
             pairs.append((PRIORITY_META, TPL_NEIGHBORS_EMPTY_KIND_CHECK))
+        elif _any_fuzzy_strategy(results):
+            pairs.append((PRIORITY_META, TPL_NEIGHBORS_FUZZY_STRATEGY))
         return finalize_hint_list(pairs)
 
     if output_kind == "describe":

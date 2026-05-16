@@ -15,6 +15,7 @@ from mcp_hints import (
     finalize_hint_list,
     generate_hints,
 )
+from java_ontology import FUZZY_STRATEGY_SET
 from mcp_v2 import FindOutput, SearchOutput, describe_v2, find_v2, neighbors_v2, resolve_v2, search_v2
 
 _TYPE_KINDS = frozenset({"class", "interface", "enum", "record", "annotation"})
@@ -251,6 +252,100 @@ def test_hints_neighbors_empty_with_edge_types_emits_kind_check(kuzu_graph) -> N
     assert out.results == []
     assert out.requested_edge_types == ["DECLARES_CLIENT"]
     assert mcp_hints.TPL_NEIGHBORS_EMPTY_KIND_CHECK in out.hints
+
+
+def _neighbors_hint_payload(
+    results: list[dict[str, Any]],
+    *,
+    requested_edge_types: list[str] | None = None,
+) -> dict[str, Any]:
+    return {
+        "success": True,
+        "results": results,
+        "requested_edge_types": requested_edge_types or ["DECLARES_CLIENT"],
+    }
+
+
+def _edge_result(*, strategy: str | None = None, edge_type: str = "DECLARES_CLIENT") -> dict[str, Any]:
+    attrs: dict[str, Any] = {}
+    if strategy is not None:
+        attrs["strategy"] = strategy
+    return {
+        "origin_id": "sym:pkg.Type#m()",
+        "edge_type": edge_type,
+        "direction": "out",
+        "other": {"id": "client:svc:feign:t:GET:/p", "kind": "client"},
+        "attrs": attrs,
+    }
+
+
+def _method_id_with_fuzzy_calls(kuzu_graph) -> str:
+    rows = kuzu_graph._rows(  # noqa: SLF001
+        "MATCH (m:Symbol)-[e:CALLS]->() "
+        "WHERE e.strategy IN $strategies "
+        "RETURN m.id AS id LIMIT 1",
+        {"strategies": sorted(FUZZY_STRATEGY_SET)},
+    )
+    if not rows:
+        pytest.fail("no CALLS edge with fuzzy strategy in bank fixture")
+    return str(rows[0]["id"])
+
+
+def test_hints_neighbors_fuzzy_strategy_layer_c_source_emits() -> None:
+    payload = _neighbors_hint_payload([_edge_result(strategy="layer_c_source")])
+    hints = generate_hints("neighbors", payload)
+    assert mcp_hints.TPL_NEIGHBORS_FUZZY_STRATEGY in hints
+    assert "attrs.strategy" in hints[0]
+
+
+def test_hints_neighbors_fuzzy_strategy_annotation_absent() -> None:
+    payload = _neighbors_hint_payload([_edge_result(strategy="annotation")])
+    assert generate_hints("neighbors", payload) == []
+
+
+def test_hints_neighbors_fuzzy_strategy_calls_phantom_emits() -> None:
+    payload = _neighbors_hint_payload(
+        [_edge_result(strategy="phantom", edge_type="CALLS")],
+        requested_edge_types=["CALLS"],
+    )
+    hints = generate_hints("neighbors", payload)
+    assert mcp_hints.TPL_NEIGHBORS_FUZZY_STRATEGY in hints
+
+
+def test_hints_neighbors_declares_no_strategy_attrs_empty() -> None:
+    payload = _neighbors_hint_payload(
+        [_edge_result(edge_type="DECLARES")],
+        requested_edge_types=["DECLARES"],
+    )
+    assert generate_hints("neighbors", payload) == []
+
+
+def test_hints_neighbors_multi_origin_fuzzy_emits_once() -> None:
+    payload = _neighbors_hint_payload(
+        [
+            _edge_result(strategy="phantom", edge_type="CALLS"),
+            _edge_result(strategy="annotation", edge_type="CALLS"),
+        ],
+        requested_edge_types=["CALLS"],
+    )
+    hints = generate_hints("neighbors", payload)
+    assert hints.count(mcp_hints.TPL_NEIGHBORS_FUZZY_STRATEGY) == 1
+
+
+def test_hints_neighbors_layer_a_meta_no_fuzzy_hint() -> None:
+    payload = _neighbors_hint_payload([_edge_result(strategy="layer_a_meta")])
+    assert generate_hints("neighbors", payload) == []
+
+
+def test_hints_neighbors_fuzzy_strategy_neighbors_v2_round_trip(kuzu_graph) -> None:
+    mid = _method_id_with_fuzzy_calls(kuzu_graph)
+    out = neighbors_v2(mid, direction="out", edge_types=["CALLS"], graph=kuzu_graph, limit=50)
+    assert out.success is True
+    assert out.results
+    strategies = [e.attrs.get("strategy") for e in out.results]
+    assert any(s in FUZZY_STRATEGY_SET for s in strategies if isinstance(s, str))
+    assert mcp_hints.TPL_NEIGHBORS_FUZZY_STRATEGY in out.hints
+    assert "brownfield/fallback strategy" in out.hints[0]
 
 
 def test_hints_search_weak_structural_signal_emits(monkeypatch, kuzu_graph) -> None:
@@ -735,6 +830,7 @@ def test_hints_pagination_none_skips_page_derived_hints() -> None:
         ),
         (mcp_hints.TPL_RESOLVE_NONE_TRY_FIND_CLIENT, {"seed": "smartcare-assign-chat"}),
         (mcp_hints.TPL_RESOLVE_MANY_TIGHTEN, {"n": 10}),
+        (mcp_hints.TPL_NEIGHBORS_FUZZY_STRATEGY, {}),
     ],
 )
 def test_hints_template_rendered_length_leq_120(template: str, fmt: dict[str, Any]) -> None:

@@ -85,6 +85,16 @@ VALID_RESOLVE_REASONS: frozenset[str] = frozenset((
     "client_target_path",
 ))
 
+# Brownfield / fallback edge resolution strategies (hints v2 neighbors fuzzy signal).
+FUZZY_STRATEGY_SET: frozenset[str] = frozenset({
+    "layer_c_source",
+    "layer_b_fqn",
+    "phantom",
+    "chained_receiver",
+    "overload_ambiguous",
+    "implicit_super",
+})
+
 ResolveReason = Literal[
     "exact_id",
     "exact_fqn",
@@ -107,5 +117,6 @@ __all__ = [
     "VALID_ASYNC_CALL_STRATEGIES",
     "VALID_HTTP_CALL_MATCHES",
     "VALID_RESOLVE_REASONS",
+    "FUZZY_STRATEGY_SET",
     "ResolveReason",
 ]
