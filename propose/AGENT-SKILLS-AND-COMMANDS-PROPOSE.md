@@ -10,7 +10,7 @@
 - That convenience belongs at a different layer: **agent-side skills and slash-commands**, not MCP tools and not CLI subcommands.
 - Ship a single shared skill source — `agent-skills/` — that compiles into both `.claude/skills/<name>/SKILL.md` (Claude Code) and `.qwen/skills/<name>/SKILL.md` (Qwen Code). **Same SKILL.md format on both hosts** (YAML frontmatter + markdown body); only the install path differs.
 - Tier 1 (high-leverage, low cost): 10 navigation skills covering the 10 most common query patterns from the existing `AGENT-GUIDE.md` slash-style alias section.
-- Tier 2 (polish): 3 workflow skills that chain multi-step intents (`/explain-feature`, `/impact-of`, `/trace-request-flow`).
+- Tier 2 (polish): 4 workflow skills that chain multi-step intents (`/explain-feature`, `/impact-of`, `/trace-request-flow`, `/mini-map`).
 - Tier 3 (deferred): `user-rag dump-*` CLI helpers — out of scope here.
 - Migration is **5 PRs**: (1) propose lock, (2) shared `agent-skills/` source + compile script, (3) Tier 1 skills, (4) Tier 2 workflow skills, (5) AGENT-GUIDE rewrite to point at the shipped skills instead of duplicating prose templates.
 
@@ -83,7 +83,29 @@ Before deciding to ship a skill at all, list realistic callers. If the dominant 
 | `who-changed-this`, `git-blame-via-mcp` | Interactive agent | ❌ No MCP primitive for it; out of scope until ontology covers VCS |
 | `find-similar-code` | Interactive agent | ❌ Already covered by raw `search` — adding a skill is wasted surface |
 
-Result: **13 skills total** — 10 Tier 1 + 3 Tier 2. No CLI work in this proposal.
+Result: **14 skills total** — 10 Tier 1 + 4 Tier 2. No CLI work in this proposal.
+
+## §4.5 The CALLS-edge noise problem (motivation for `/mini-map`)
+
+Real-world testing on the bank-chat-system fixture revealed that `neighbors(out, [CALLS])` on a typical service method returns a wall of edges where most are noise. Concrete example — `ChatManagementService#assign(AssignmentRequest)` returns **35 outgoing CALLS edges**:
+
+| Category | Count | % | Examples | Signal |
+|---|---|---|---|---|
+| Business-logic delegation | ~3 | ~8% | `SplitResolverService#resolveSplitName(String)`, `DistributionTriggerPublisher#publishTrigger()` | **High** |
+| Repository / persistence | ~4 | ~12% | `AssignChatRepository#findByConversationId(String)`, `AssignQueueRepository#save(?)` | **Medium** |
+| Entity accessor noise | ~15 | ~43% | `AssignChatEntity#setEpkId(String)`, `AssignmentRequest#getConversationId()` ×3 | **Low** |
+| Phantom / chained / JDK | ~13 | ~37% | `?ResponseStatusException#<init>(2)`, `?c#setId(1)`, `UUID#randomUUID(?)`, `Instant#now(?)`, `?...#orElseGet(1)` | **Zero** |
+
+**Why `NodeFilter` on `neighbors` can't help today:**
+
+- All targets (services, entities, phantoms) have `role=OTHER` — the role system doesn't distinguish "service I delegate to" from "entity I call a setter on."
+- There's no filter on **edge attributes** (`confidence`, `strategy`, `resolved`) — these exist in `attrs` on the response but can't be used as input predicates.
+- There's no `exclude_phantom` or `min_confidence` parameter.
+- Duplicate edges (same callee called N times from different call sites) aren't deduplicated.
+
+**Impact on agent exploration:** when an agent does the canonical hop pattern `neighbors(out, [CALLS])` → pick interesting target → `neighbors(out, [CALLS])` again, each hop floods the context window with ~30 noise items per ~5 signal items. After 3 hops that's ~90 tokens of noise versus ~15 of signal. The Tier 2 workflow skills (`/trace-request-flow`, `/explain-feature`) inherit this problem: their recursive walks accumulate noise at every level.
+
+This is the gap that `/mini-map` (§5 Tier 2, below) addresses — **client-side heuristic filtering at the skill layer**, not a new MCP parameter. A future MCP enhancement (edge-attr filter on `neighbors`, or a `min_confidence` parameter) would make this more efficient server-side; that's a separate propose, not in scope here.
 
 ## §5 The proposed skill set
 
@@ -106,7 +128,7 @@ Direct wraps of the slash-style aliases already documented in `docs/AGENT-GUIDE.
 
 Each skill body must include: trigger description for auto-discovery, exact MCP call(s) with required parameters, what to do when the argument is missing or the wrong shape (e.g. resolve via `find` first), worked example with the bank-chat-system fixture, expected output shape.
 
-### Tier 2 — Workflow (3 skills)
+### Tier 2 — Workflow (4 skills)
 
 Multi-step intents that compose Tier 1 with reasoning gates.
 
@@ -115,8 +137,68 @@ Multi-step intents that compose Tier 1 with reasoning gates.
 | `/explain-feature <text>` | Understand how a feature works end-to-end | `search` → pick top 1-3 → `describe` each → walk outward with `neighbors` (small `edge_types` per step) until question answered |
 | `/impact-of <id>` | What breaks if this changes | `neighbors(out, [CALLS,HTTP_CALLS,ASYNC_CALLS])` recursive depth 2 ∪ `neighbors(in, [INJECTS,EXTENDS,IMPLEMENTS])` recursive depth 2, dedupe, render impact graph |
 | `/trace-request-flow <route_or_path>` | Follow a request from entrypoint to DB | `find(route, {path}) or find(symbol, …)` → `neighbors(out, [EXPOSES,CALLS,HTTP_CALLS])` recursive depth 4 → render as ordered sequence |
+| `/mini-map <seed_id> [depth?]` | Noise-filtered call map for a method or route | `neighbors(out, [CALLS,HTTP_CALLS,ASYNC_CALLS])` per hop, client-side heuristic filter, recursive up to `depth` (default 2), render compact map |
 
 These are workflows, not single-call wrappers. Their bodies must specify: the recursion depth limit (always finite — no unbounded BFS), the dedup strategy, the stop condition, and how to render the result for the user.
+
+#### `/mini-map` — detailed design
+
+**Motivation.** The CALLS-edge noise problem (§4.5) makes every Tier 2 workflow that walks CALLS edges suffer from context-window pollution. `/mini-map` is the remedy: it absorbs the full edge set, applies heuristic classification, and returns only the business-logic-relevant skeleton.
+
+**Designed for subagent invocation.** Unlike other Tier 2 skills, `/mini-map` is intended to run in a **subagent** (Claude Code Task, Cursor subagent, etc.) rather than the main agent's context. The subagent absorbs the full 35-edge-per-hop noise in its own context, applies the filter, and returns a compact result. The main agent never sees the noise — it receives a 10–20 line map and uses `readFile` to drill into specific methods.
+
+```
+Main agent                          MiniMap subagent
+    │                                      │
+    │  "Build mini-map from               │
+    │   POST /chat/assign, depth=2"       │
+    │─────────────────────────────────────►│
+    │                                      │── find(kind=route, …)
+    │                                      │── neighbors(in, [EXPOSES])
+    │                                      │── neighbors(out, [CALLS]) → 35 edges
+    │                                      │   ↳ classify → 6 signal edges
+    │                                      │── neighbors(out, [CALLS]) on each
+    │                                      │   delegate (depth 2) → more filtering
+    │                                      │
+    │  Compact map (15-20 lines):         │
+    │◄─────────────────────────────────────│
+    │                                      │
+    │  readFile on specific methods        │
+    │  from the map                        │
+    │                                      │
+```
+
+**Classification rules** (heuristic, lives in skill body):
+
+1. **Skip phantom/chained.** `strategy in (phantom, chained_receiver)` or `confidence < 0.3` → discard.
+2. **Skip JDK/library.** `fqn` starts with `java.`, `javax.`, `org.slf4j.`, `org.apache.logging.`, `lombok.` → discard.
+3. **Skip entity accessors.** Callee is a getter (`get*`), setter (`set*`), or constructor (`<init>`) on a type whose parent has `role=DTO` or whose name matches `*Entity`, `*Request`, `*Response`, `*Event`, `*DTO` → discard.
+4. **Classify remainder:**
+   - Callee's parent has `role in (REPOSITORY, MAPPER)` → label `PERSISTS` or `READS` (heuristic: `find*`/`get*` = reads, `save*`/`delete*` = persists).
+   - Callee's parent has `role=SERVICE` or capabilities include `SCHEDULED_TASK`/`KAFKA_LISTENER` → label `DELEGATES`.
+   - Callee's parent has `role=CLIENT` or `role=COMPONENT` with publisher capabilities → label `PUBLISHES`.
+   - Everything else surviving → label `CALLS`.
+5. **Deduplicate.** Same callee FQN from multiple call sites collapses to one line with a `(×N)` count.
+6. **Recurse** on `DELEGATES` and `PUBLISHES` targets up to the depth limit.
+
+**Output shape** (worked example — `ChatManagementService#assign`):
+
+```
+ChatManagementService#assign(AssignmentRequest)
+  DELEGATES → SplitResolverService#resolveSplitName(String)
+  DELEGATES → DistributionTriggerPublisher#publishTrigger()
+  PERSISTS  → AssignChatRepository#save (×2)
+  PERSISTS  → AssignQueueRepository#save
+  READS     → AssignChatRepository#findByConversationId(String)
+  READS     → AssignQueueRepository#findByAssignChat_Id(UUID)
+  [filtered 29 edges: 15 entity accessors, 13 phantom/JDK, 1 duplicate]
+```
+
+7 lines instead of 35. The `[filtered …]` line gives the main agent a transparency signal — it can ask for the raw edges if needed.
+
+**Argument contract:** seed id (with `sym:` or `route:` prefix, or bare name to resolve) + optional `depth` (default 2, max 4) + optional `microservice` scope.
+
+**Stop condition:** depth limit reached, or no `DELEGATES`/`PUBLISHES` targets to recurse on, or all remaining callees are already in the map (cycle detection).
 
 ### Tier 3 — CLI helpers (NOT in this proposal)
 
@@ -139,6 +221,8 @@ user-rag/
     explain-feature/
       SKILL.md
     impact-of/
+      SKILL.md
+    mini-map/
       SKILL.md
     trace-request-flow/
       SKILL.md
@@ -225,8 +309,9 @@ This proposal ships **project-scoped** skills checked into the repo. Users can c
 | UC13 | Trace `POST /chat/escalate` end-to-end | `/trace-request-flow POST /chat/escalate` | `find(route, {path})` → `neighbors(out, [EXPOSES,CALLS,HTTP_CALLS])` × 4 | 5–10 |
 | UC14 | "Find authentication-related code" | `/nl authentication` | `search({query:"authentication"})` → `describe(top_hit)` | 2 |
 | UC15 | All `@Scheduled` methods in chat-core | (no skill) — raw `find(symbol, {capability:SCHEDULED_TASK, microservice:chat-core})` | 1 | 1 |
+| UC16 | "Build me a map of what ChatManagementService#assign actually does" | `/mini-map ChatManagementService#assign` | `find` to resolve → `neighbors(out, [CALLS])` → heuristic filter → recurse depth 2 | 5–10 (absorbed by subagent) |
 
-UC15 deliberately has no skill — it's a one-shot `find` call. Adding a skill for every possible `NodeFilter` combination would defeat the point. The skill set covers high-frequency intents; raw MCP covers the long tail. **No use case requires a primitive that doesn't exist.**
+UC15 deliberately has no skill — it's a one-shot `find` call. UC16 is the canonical mini-map case: 35 raw edges collapse to 6 signal lines (see §4.5 and the worked example in §5 Tier 2). Adding a skill for every possible `NodeFilter` combination would defeat the point. The skill set covers high-frequency intents; raw MCP covers the long tail. **No use case requires a primitive that doesn't exist.**
 
 ## §8 What this deliberately does NOT do
 
@@ -242,6 +327,7 @@ UC15 deliberately has no skill — it's a one-shot `find` call. Adding a skill f
 | Multi-host source generators (e.g. for VS Code, Continue) | Two hosts (Claude Code, Qwen Code) is enough to validate the shared-source model. Add hosts when there's a third real user. |
 | Skills that reach into the CLI | Skills run at the agent layer; the agent calls MCP. CLI is for humans. Don't cross the streams. |
 | Narrow `/callers-direct` / `/callees-direct` variants (CALLS-only, no HTTP/ASYNC) | Decision #13 widens `/callers`/`/callees` to `[CALLS, HTTP_CALLS, ASYNC_CALLS]` deliberately. If real usage shows users frequently want the in-process-only view, ship narrow variants in a follow-up — but the default semantics match the developer's mental model better. |
+| Server-side CALLS-edge noise filtering (`min_confidence`, `exclude_phantom`, edge-attr predicates on `neighbors`) | `/mini-map` solves this at the skill layer with client-side heuristic filtering (see §4.5). Pushing the filter server-side is a potential MCP enhancement — separate propose if real usage justifies it. |
 
 ## §9 Migration plan — 5 PRs
 
@@ -267,11 +353,11 @@ Add `agent-skills/<slash>/SKILL.md` for each of the 10 Tier 1 entries. Run compi
 
 **Test summary**: 1 frontmatter test per skill (10 total) verifying YAML frontmatter (`name` + `description`) is present and well-formed. 1 integration test that runs `compile.py` and checks both output dirs match expected file count. **Plus 1 cross-skill static MCP-call validator** (~50 lines) that parses each SKILL.md body, extracts the named MCP tool calls (`search`/`find`/`describe`/`neighbors`), and asserts: (a) every tool name resolves to one of the 4 v2 tools; (b) every `kind:` value used in `find` calls is one of the 4 known kinds (`symbol`/`route`/`client`/`text`); (c) every value in `direction:` is `in` or `out`; (d) every value in `edge_types:` is one of the 9 known edge types. This catches stale skill bodies the day a kind/direction/edge_types value changes — the lockstep enforcement promised in decision #10.
 
-### PR-S-4 — Tier 2 workflow skills (3 skills)
+### PR-S-4 — Tier 2 workflow skills (4 skills)
 
-Add `/explain-feature`, `/impact-of`, `/trace-request-flow`. These have multi-step bodies — testing focuses on schema validity (`name` + `description` present, body has the required H2 sections per template).
+Add `/explain-feature`, `/impact-of`, `/trace-request-flow`, `/mini-map`. These have multi-step bodies — testing focuses on schema validity (`name` + `description` present, body has the required H2 sections per template). `/mini-map` additionally requires `## Classification rules` and `## Output shape` sections.
 
-**Test summary**: 3 frontmatter tests + 3 body-structure tests (assert each skill body has `## Steps`, `## Worked example`, `## Out of scope`). **Extend the static MCP-call validator from PR-S-3** to also cover the workflow skill bodies — same enforcement (tool names, `kind`, `direction`, `edge_types` enum values), now over all 13 skills. +6 net behavioural tests; the validator is one extended test, not three new ones.
+**Test summary**: 4 frontmatter tests + 4 body-structure tests (assert each skill body has `## Steps`, `## Worked example`, `## Out of scope`; `/mini-map` additionally asserts `## Classification rules`). **Extend the static MCP-call validator from PR-S-3** to also cover the workflow skill bodies — same enforcement (tool names, `kind`, `direction`, `edge_types` enum values), now over all 14 skills. +8 net behavioural tests; the validator is one extended test, not four new ones.
 
 ### PR-S-5 — `AGENT-GUIDE.md` rewrite
 
@@ -279,7 +365,7 @@ The slash-style aliases section in `AGENT-GUIDE.md` becomes a *pointer* to `agen
 
 **Test summary**: no new tests; `tests/test_agent_guide_consistency.py` (if it exists, otherwise add it) gets +1 assertion that the slash-aliases section now references `agent-skills/` rather than embedding the bullet list.
 
-**5 PRs total.** No ontology bump, no schema delta, no MCP surface change. Pure additive markdown + a small compile script.
+**5 PRs total.** No ontology bump, no schema delta, no MCP surface change. Pure additive markdown + a small compile script. PR-S-4 now delivers 4 Tier 2 skills (was 3 in revision 1).
 
 ## §10 Decisions taken (no longer open)
 
@@ -291,12 +377,14 @@ The slash-style aliases section in `AGENT-GUIDE.md` becomes a *pointer* to `agen
 6. **No CLI query subcommands in this proposal.** Tier 3 deferred indefinitely.
 7. **No new MCP tools and no MCP surface changes** as part of skill rollout.
 8. **Cursor support deferred** — `.cursor/rules/*.mdc` are for standing guidance, not slash-invokable. Cursor users continue using AGENT-GUIDE.md prose.
-9. **Skill set = 10 Tier 1 + 3 Tier 2 = 13 total.** UC15 (`@Scheduled` methods) is the canonical example of "this is raw MCP, not a skill."
+9. **Skill set = 10 Tier 1 + 4 Tier 2 = 14 total.** UC15 (`@Scheduled` methods) is the canonical example of "this is raw MCP, not a skill."
 10. **Skills are versioned in lockstep with the MCP.** When `NodeFilter` keys, `edge_types`, or `kind` values change, every affected skill ships an update in the same PR.
 11. **Compile script lives in `agent-skills/compile.py`** and is invoked via `user-rag compile-skills` (new CLI subcommand). Adds one ops subcommand to the CLI; doesn't add query subcommands.
 12. **Skills are tested at three levels: schema, static MCP-call validation, NOT behavior.** (a) **Schema**: every SKILL.md has well-formed YAML frontmatter with `name` + `description`. (b) **Static MCP-call validation**: every MCP call referenced in a skill body uses real tool names (`search`/`find`/`describe`/`neighbors`), real `kind` values (`symbol`/`route`/`client`/`text`), real `direction` values (`in`/`out`), and real `edge_types` (the 9 v2 values). (c) **NOT behavior**: tests do not run the MCP chains end-to-end against a fixture graph; behavioral correctness is the human-eval loop on real codebases. Levels (a) and (b) catch the lockstep-update violations that drift between MCP and skills; level (c) is deliberately skipped because it would require host-runtime mocking that doesn't justify its maintenance cost.
 
 13. **`/callers` and `/callees` follow the broader edge set `[CALLS, HTTP_CALLS, ASYNC_CALLS]` rather than CALLS-only.** This is a deliberate semantic widening from the v1 `callers_of`/`outbound_calls` tools, which only returned in-process Java method calls. The widened set treats cross-service HTTP calls and async (Kafka/RabbitMQ) calls as first-class call edges from the developer's perspective — when someone asks "who calls X" they almost always mean "all callers, regardless of transport." Narrow variants (`/callers-direct`, `/callees-direct`) for CALLS-only are deferred to §8 out-of-scope.
+
+14. **`/mini-map` is a Tier 2 skill designed for subagent invocation; it applies client-side heuristic filtering to CALLS edges, not server-side MCP filtering.** The filtering taxonomy (phantom/chained skip, JDK skip, entity accessor skip, role-based classification of remainder) is a skill-layer heuristic, not a change to the MCP `neighbors` contract. This keeps the MCP surface at 4 tools with no new filter keys. The subagent pattern (main agent delegates to a mini-map subagent that absorbs the noise) preserves the main agent's context window — the mini-map subagent may consume 100+ raw edges across multiple hops but returns only 10–20 signal lines. See §4.5 for the motivating evidence and §5 Tier 2 for the full specification.
 
 ## §11 Risks and how we mitigate
 
@@ -308,7 +396,9 @@ The slash-style aliases section in `AGENT-GUIDE.md` becomes a *pointer* to `agen
 | Slash-name collisions across project- and user-scoped installs behave unpredictably | Verified once during PR-S-2 review via the manual collision probe (see PR-S-2 acceptance criterion); result documented in `agent-skills/README.md`. We do not ship an automated test because we don't host-mock the agent runtime |
 | Weak models pick the wrong skill | Each skill's `description` includes specific trigger words ("when the user asks 'who calls X' or 'callers of X'") to help auto-discovery; verified empirically on Qwen Code |
 | Semantic widening of `/callers`/`/callees` (CALLS+HTTP+ASYNC vs v1 CALLS-only) confuses users expecting v1 behaviour | Decision #13 documents the widening explicitly; AGENT-GUIDE.md PR-S-5 rewrite calls it out; narrow variants `/callers-direct`/`/callees-direct` are an explicit out-of-scope item (§8) so the door is open if real usage demands them |
-| Maintenance cost (13 skills × MCP changes) | Lockstep + propose §10 decision #10 — every MCP-touching PR includes the relevant skill updates. CI enforces via the static validator (decision #12) |
+| Maintenance cost (14 skills × MCP changes) | Lockstep + propose §10 decision #10 — every MCP-touching PR includes the relevant skill updates. CI enforces via the static validator (decision #12) |
+| `/mini-map` heuristic misclassifies a business-logic call as noise | The `[filtered N edges: …]` transparency line in the output lets the user (or main agent) ask for the raw edge set. Classification rules are conservative — they only skip edges with clear noise signals (phantom strategy, JDK FQN prefix, getter/setter pattern on entity-like types). False-negative rate (signal classified as noise) is expected to be <5% on well-annotated codebases; the risk is higher on codebases without role annotations, where the fallback is raw `/callees`. |
+| Subagent invocation not supported on all hosts | `/mini-map` degrades gracefully: on hosts without subagent support, it runs in the main agent's context (same filtering, just no context-window isolation). The skill body includes a note that subagent invocation is preferred but not required. |
 | Adding a new host (Cursor, VS Code) requires N×duplication | Solved by single-source design — add a new compile target, not new content |
 
 ## Appendix A — Concrete artefacts
@@ -365,11 +455,11 @@ See §6 — the `/callees` example body is the canonical template. Tier 1 skills
 
 ## Appendix B — What changed (traceability)
 
-### What stayed unchanged from the original draft
+### What stayed unchanged from the original draft (through revision 2)
 
 - The 3-layer mental model and ASCII diagram (§3 + Appendix A.2) — locked.
-- 13 skills total (10 Tier 1 + 3 Tier 2) — locked.
-- 5 PRs migration shape — locked.
+- 10 Tier 1 navigation skills — locked (skill set grew from 13 to 14 by adding 1 Tier 2 skill in revision 2).
+- 5 PRs migration shape — locked (PR-S-4 absorbs the new Tier 2 skill).
 - Single `agent-skills/` source compiling to `.claude/skills/` + `.qwen/skills/` — locked.
 - Lockstep versioning with the MCP (decision #10) — locked.
 
@@ -383,3 +473,16 @@ See §6 — the `/callees` example body is the canonical template. Tier 1 skills
 6. **§10 new decision #13** locks `/callers`/`/callees` semantics as the broader `[CALLS, HTTP_CALLS, ASYNC_CALLS]` edge set rather than v1's CALLS-only behaviour. Reason: reviewer Low finding noted this semantic widening was implicit in §5/§7 but not flagged as a deliberate change. Locking it prevents relitigation; calling out narrow variants as out-of-scope (§8) leaves the door open.
 7. **§11 risks** restructured: "slash-name collisions" row reframed around the manual verification path; new row added for the `/callers`/`/callees` semantic widening; "skills drift from MCP" row updated to credit the static validator from decision #12.
 8. **§8 out-of-scope** added a row for narrow `/callers-direct` / `/callees-direct` variants — corresponds to decision #13's deferred narrow versions.
+
+### What changed and why (revision 2, 2026-05-17)
+
+Motivated by real-world testing that exposed the CALLS-edge noise problem during agent exploration sessions.
+
+1. **New §4.5 "The CALLS-edge noise problem"** added between §4 and §5. Documents the concrete evidence: `ChatManagementService#assign(AssignmentRequest)` returns 35 outgoing CALLS edges where ~7 are signal (business-logic delegation + repository calls) and ~28 are noise (entity getters/setters, phantom/chained-receiver edges, JDK utility calls). Explains why `NodeFilter` on `neighbors` cannot address this — all targets share `role=OTHER`, and there's no edge-attribute filter. This section motivates `/mini-map`.
+2. **New Tier 2 skill: `/mini-map`** added to §5 Tier 2 table and given a full detailed-design subsection. Applies client-side heuristic classification to CALLS edges (skip phantom/chained, skip JDK/library, skip entity accessors, classify remainder as delegates/persists/reads/publishes). Designed for **subagent invocation** — the subagent absorbs the full noise in its own context and returns a compact 10–20 line map to the main agent. Worked example: 35 raw edges → 7-line map.
+3. **Skill count updated 13 → 14** (10 Tier 1 + 4 Tier 2). Updated in: TL;DR bullet, §4 result line, §5 Tier 2 heading, §6 source layout (`mini-map/` directory), §7 UC re-walk (new UC16), §9 PR-S-4 (now 4 skills), §10 decision #9.
+4. **New decision #14** locks `/mini-map` as a skill-layer heuristic, not a server-side MCP filter change. Explicitly preserves the 4-tool MCP surface.
+5. **§7 use-case re-walk** gained UC16: "Build me a map of what ChatManagementService#assign actually does" → `/mini-map` → 5–10 MCP calls absorbed by subagent → compact map returned.
+6. **§8 out-of-scope** gained a row for server-side CALLS-edge noise filtering (`min_confidence`, `exclude_phantom`, edge-attr predicates) — flagged as a potential future MCP enhancement, separate propose.
+7. **§9 PR-S-4** updated from "3 skills" to "4 skills"; test summary updated to 4 frontmatter + 4 body-structure tests; static validator now spans all 14 skills.
+8. **§11 risks** gained two rows: (a) mini-map heuristic misclassifies a business-logic call as noise — mitigated by the `[filtered N edges]` transparency line in output; (b) subagent invocation not supported on all hosts — degrades gracefully to main-agent execution.
