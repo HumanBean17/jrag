@@ -1,8 +1,9 @@
 # Agent Skills and Commands — High-level intents over the 4-tool MCP
 
-**Status**: draft
+**Status**: draft (revision 2)
 **Author**: Dmitry + Computer
-**Date**: 2026-05-08
+**Date**: 2026-05-08 (revised 2026-05-17)
+**Blocker**: [#177 — CALLS-edge noise problem](https://github.com/HumanBean17/java-codebase-rag/issues/177) — the `/mini-map` skill (Tier 2) is motivated by and depends on this problem being understood; the 13 Tier 1 + other Tier 2 skills do not.
 
 ## TL;DR
 
@@ -85,28 +86,6 @@ Before deciding to ship a skill at all, list realistic callers. If the dominant 
 
 Result: **14 skills total** — 10 Tier 1 + 4 Tier 2. No CLI work in this proposal.
 
-## §4.5 The CALLS-edge noise problem (motivation for `/mini-map`)
-
-Real-world testing on the bank-chat-system fixture revealed that `neighbors(out, [CALLS])` on a typical service method returns a wall of edges where most are noise. Concrete example — `ChatManagementService#assign(AssignmentRequest)` returns **35 outgoing CALLS edges**:
-
-| Category | Count | % | Examples | Signal |
-|---|---|---|---|---|
-| Business-logic delegation | ~3 | ~8% | `SplitResolverService#resolveSplitName(String)`, `DistributionTriggerPublisher#publishTrigger()` | **High** |
-| Repository / persistence | ~4 | ~12% | `AssignChatRepository#findByConversationId(String)`, `AssignQueueRepository#save(?)` | **Medium** |
-| Entity accessor noise | ~15 | ~43% | `AssignChatEntity#setEpkId(String)`, `AssignmentRequest#getConversationId()` ×3 | **Low** |
-| Phantom / chained / JDK | ~13 | ~37% | `?ResponseStatusException#<init>(2)`, `?c#setId(1)`, `UUID#randomUUID(?)`, `Instant#now(?)`, `?...#orElseGet(1)` | **Zero** |
-
-**Why `NodeFilter` on `neighbors` can't help today:**
-
-- All targets (services, entities, phantoms) have `role=OTHER` — the role system doesn't distinguish "service I delegate to" from "entity I call a setter on."
-- There's no filter on **edge attributes** (`confidence`, `strategy`, `resolved`) — these exist in `attrs` on the response but can't be used as input predicates.
-- There's no `exclude_phantom` or `min_confidence` parameter.
-- Duplicate edges (same callee called N times from different call sites) aren't deduplicated.
-
-**Impact on agent exploration:** when an agent does the canonical hop pattern `neighbors(out, [CALLS])` → pick interesting target → `neighbors(out, [CALLS])` again, each hop floods the context window with ~30 noise items per ~5 signal items. After 3 hops that's ~90 tokens of noise versus ~15 of signal. The Tier 2 workflow skills (`/trace-request-flow`, `/explain-feature`) inherit this problem: their recursive walks accumulate noise at every level.
-
-This is the gap that `/mini-map` (§5 Tier 2, below) addresses — **client-side heuristic filtering at the skill layer**, not a new MCP parameter. A future MCP enhancement (edge-attr filter on `neighbors`, or a `min_confidence` parameter) would make this more efficient server-side; that's a separate propose, not in scope here.
-
 ## §5 The proposed skill set
 
 ### Tier 1 — Navigation (10 skills)
@@ -143,7 +122,7 @@ These are workflows, not single-call wrappers. Their bodies must specify: the re
 
 #### `/mini-map` — detailed design
 
-**Motivation.** The CALLS-edge noise problem (§4.5) makes every Tier 2 workflow that walks CALLS edges suffer from context-window pollution. `/mini-map` is the remedy: it absorbs the full edge set, applies heuristic classification, and returns only the business-logic-relevant skeleton.
+**Motivation.** The CALLS-edge noise problem ([#177](https://github.com/HumanBean17/java-codebase-rag/issues/177)) makes every Tier 2 workflow that walks CALLS edges suffer from context-window pollution. `neighbors(out, [CALLS])` on a typical service method returns ~35 edges where ~7 are signal — the rest is entity getters/setters, phantom/chained-receiver edges, and JDK utility calls. `/mini-map` is the remedy: it absorbs the full edge set, applies heuristic classification, and returns only the business-logic-relevant skeleton.
 
 **Designed for subagent invocation.** Unlike other Tier 2 skills, `/mini-map` is intended to run in a **subagent** (Claude Code Task, Cursor subagent, etc.) rather than the main agent's context. The subagent absorbs the full 35-edge-per-hop noise in its own context, applies the filter, and returns a compact result. The main agent never sees the noise — it receives a 10–20 line map and uses `readFile` to drill into specific methods.
 
@@ -311,7 +290,7 @@ This proposal ships **project-scoped** skills checked into the repo. Users can c
 | UC15 | All `@Scheduled` methods in chat-core | (no skill) — raw `find(symbol, {capability:SCHEDULED_TASK, microservice:chat-core})` | 1 | 1 |
 | UC16 | "Build me a map of what ChatManagementService#assign actually does" | `/mini-map ChatManagementService#assign` | `find` to resolve → `neighbors(out, [CALLS])` → heuristic filter → recurse depth 2 | 5–10 (absorbed by subagent) |
 
-UC15 deliberately has no skill — it's a one-shot `find` call. UC16 is the canonical mini-map case: 35 raw edges collapse to 6 signal lines (see §4.5 and the worked example in §5 Tier 2). Adding a skill for every possible `NodeFilter` combination would defeat the point. The skill set covers high-frequency intents; raw MCP covers the long tail. **No use case requires a primitive that doesn't exist.**
+UC15 deliberately has no skill — it's a one-shot `find` call. UC16 is the canonical mini-map case: 35 raw edges collapse to 6 signal lines (see [#177](https://github.com/HumanBean17/java-codebase-rag/issues/177) for the noise evidence and §5 Tier 2 for the worked example). Adding a skill for every possible `NodeFilter` combination would defeat the point. The skill set covers high-frequency intents; raw MCP covers the long tail. **No use case requires a primitive that doesn't exist.**
 
 ## §8 What this deliberately does NOT do
 
@@ -327,7 +306,7 @@ UC15 deliberately has no skill — it's a one-shot `find` call. UC16 is the cano
 | Multi-host source generators (e.g. for VS Code, Continue) | Two hosts (Claude Code, Qwen Code) is enough to validate the shared-source model. Add hosts when there's a third real user. |
 | Skills that reach into the CLI | Skills run at the agent layer; the agent calls MCP. CLI is for humans. Don't cross the streams. |
 | Narrow `/callers-direct` / `/callees-direct` variants (CALLS-only, no HTTP/ASYNC) | Decision #13 widens `/callers`/`/callees` to `[CALLS, HTTP_CALLS, ASYNC_CALLS]` deliberately. If real usage shows users frequently want the in-process-only view, ship narrow variants in a follow-up — but the default semantics match the developer's mental model better. |
-| Server-side CALLS-edge noise filtering (`min_confidence`, `exclude_phantom`, edge-attr predicates on `neighbors`) | `/mini-map` solves this at the skill layer with client-side heuristic filtering (see §4.5). Pushing the filter server-side is a potential MCP enhancement — separate propose if real usage justifies it. |
+| Server-side CALLS-edge noise filtering (`min_confidence`, `exclude_phantom`, edge-attr predicates on `neighbors`) | `/mini-map` solves this at the skill layer with client-side heuristic filtering (see [#177](https://github.com/HumanBean17/java-codebase-rag/issues/177) for the problem). Pushing the filter server-side is a potential MCP enhancement — separate propose if real usage justifies it. |
 
 ## §9 Migration plan — 5 PRs
 
@@ -384,7 +363,7 @@ The slash-style aliases section in `AGENT-GUIDE.md` becomes a *pointer* to `agen
 
 13. **`/callers` and `/callees` follow the broader edge set `[CALLS, HTTP_CALLS, ASYNC_CALLS]` rather than CALLS-only.** This is a deliberate semantic widening from the v1 `callers_of`/`outbound_calls` tools, which only returned in-process Java method calls. The widened set treats cross-service HTTP calls and async (Kafka/RabbitMQ) calls as first-class call edges from the developer's perspective — when someone asks "who calls X" they almost always mean "all callers, regardless of transport." Narrow variants (`/callers-direct`, `/callees-direct`) for CALLS-only are deferred to §8 out-of-scope.
 
-14. **`/mini-map` is a Tier 2 skill designed for subagent invocation; it applies client-side heuristic filtering to CALLS edges, not server-side MCP filtering.** The filtering taxonomy (phantom/chained skip, JDK skip, entity accessor skip, role-based classification of remainder) is a skill-layer heuristic, not a change to the MCP `neighbors` contract. This keeps the MCP surface at 4 tools with no new filter keys. The subagent pattern (main agent delegates to a mini-map subagent that absorbs the noise) preserves the main agent's context window — the mini-map subagent may consume 100+ raw edges across multiple hops but returns only 10–20 signal lines. See §4.5 for the motivating evidence and §5 Tier 2 for the full specification.
+14. **`/mini-map` is a Tier 2 skill designed for subagent invocation; it applies client-side heuristic filtering to CALLS edges, not server-side MCP filtering.** The filtering taxonomy (phantom/chained skip, JDK skip, entity accessor skip, role-based classification of remainder) is a skill-layer heuristic, not a change to the MCP `neighbors` contract. This keeps the MCP surface at 4 tools with no new filter keys. The subagent pattern (main agent delegates to a mini-map subagent that absorbs the noise) preserves the main agent's context window — the mini-map subagent may consume 100+ raw edges across multiple hops but returns only 10–20 signal lines. See [#177](https://github.com/HumanBean17/java-codebase-rag/issues/177) for the motivating evidence and §5 Tier 2 for the full specification.
 
 ## §11 Risks and how we mitigate
 
@@ -476,9 +455,9 @@ See §6 — the `/callees` example body is the canonical template. Tier 1 skills
 
 ### What changed and why (revision 2, 2026-05-17)
 
-Motivated by real-world testing that exposed the CALLS-edge noise problem during agent exploration sessions.
+Motivated by real-world testing that exposed the CALLS-edge noise problem ([#177](https://github.com/HumanBean17/java-codebase-rag/issues/177)) during agent exploration sessions.
 
-1. **New §4.5 "The CALLS-edge noise problem"** added between §4 and §5. Documents the concrete evidence: `ChatManagementService#assign(AssignmentRequest)` returns 35 outgoing CALLS edges where ~7 are signal (business-logic delegation + repository calls) and ~28 are noise (entity getters/setters, phantom/chained-receiver edges, JDK utility calls). Explains why `NodeFilter` on `neighbors` cannot address this — all targets share `role=OTHER`, and there's no edge-attribute filter. This section motivates `/mini-map`.
+1. **CALLS-edge noise problem extracted to GitHub issue [#177](https://github.com/HumanBean17/java-codebase-rag/issues/177).** The problem statement (evidence, noise taxonomy, why `NodeFilter` can't help) lives as a standalone issue — it can motivate multiple solution directions independently. This propose references it but does not inline it.
 2. **New Tier 2 skill: `/mini-map`** added to §5 Tier 2 table and given a full detailed-design subsection. Applies client-side heuristic classification to CALLS edges (skip phantom/chained, skip JDK/library, skip entity accessors, classify remainder as delegates/persists/reads/publishes). Designed for **subagent invocation** — the subagent absorbs the full noise in its own context and returns a compact 10–20 line map to the main agent. Worked example: 35 raw edges → 7-line map.
 3. **Skill count updated 13 → 14** (10 Tier 1 + 4 Tier 2). Updated in: TL;DR bullet, §4 result line, §5 Tier 2 heading, §6 source layout (`mini-map/` directory), §7 UC re-walk (new UC16), §9 PR-S-4 (now 4 skills), §10 decision #9.
 4. **New decision #14** locks `/mini-map` as a skill-layer heuristic, not a server-side MCP filter change. Explicitly preserves the 4-tool MCP surface.
