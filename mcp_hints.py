@@ -319,6 +319,7 @@ def _neighbors_results_homogeneous(
 
 
 def _append_neighbors_success_hint(pairs: list[tuple[int, str]], text: str) -> None:
+    # v4 neighbors cap only (describe uses the same N1a/N1b templates without this gate).
     if text and len(text) <= _NEIGHBORS_SUCCESS_MAX_CHARS:
         pairs.append((PRIORITY_LEAF_FOLLOWUP, text))
 

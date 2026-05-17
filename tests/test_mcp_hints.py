@@ -911,6 +911,46 @@ def test_hints_neighbors_async_calls_in_producers_emits_declares_producer() -> N
     assert mcp_hints.TPL_NEIGHBORS_SUCCESS_DECLARING_PRODUCER in generate_hints("neighbors", payload)
 
 
+def test_hints_neighbors_multi_edge_types_suppresses_success_hints() -> None:
+    origin = "sym:com.example.T"
+    payload = _neighbors_hint_payload(
+        [_success_edge(_symbol_other("sym:com.example.T#m()"), edge_type="DECLARES")],
+        requested_edge_types=["DECLARES", "DECLARES_CLIENT"],
+        subject_record=_type_subject_record(origin),
+        origin_id=origin,
+    )
+    hints = generate_hints("neighbors", payload)
+    assert mcp_hints.TPL_DESCRIBE_TYPE_CLIENTS_VIA_MEMBERS.format(id=origin) not in hints
+    assert mcp_hints.TPL_NEIGHBORS_SUCCESS_HTTP_TARGETS not in hints
+
+
+def test_hints_neighbors_declares_from_method_origin_no_n1_rollups() -> None:
+    origin = "sym:com.example.T#m()"
+    payload = _neighbors_hint_payload(
+        [_success_edge(_symbol_other("sym:com.example.T#other()"), edge_type="DECLARES")],
+        requested_edge_types=["DECLARES"],
+        subject_record={"id": origin, "kind": "method"},
+        origin_id=origin,
+    )
+    hints = generate_hints("neighbors", payload)
+    assert mcp_hints.TPL_DESCRIBE_TYPE_CLIENTS_VIA_MEMBERS.format(id=origin) not in hints
+    assert mcp_hints.TPL_DESCRIBE_TYPE_ROUTES_VIA_MEMBERS.format(id=origin) not in hints
+
+
+def test_hints_neighbors_n1a_n1b_dropped_when_rendered_exceeds_char_cap() -> None:
+    long_origin = "sym:com." + ("x" * 100) + ".Type"
+    payload = _neighbors_hint_payload(
+        [_success_edge(_symbol_other("sym:pkg.T#m()"), edge_type="DECLARES")],
+        requested_edge_types=["DECLARES"],
+        subject_record=_type_subject_record(long_origin),
+        origin_id=long_origin,
+    )
+    rendered_n1a = mcp_hints.TPL_DESCRIBE_TYPE_CLIENTS_VIA_MEMBERS.format(id=long_origin)
+    assert len(rendered_n1a) > 120
+    hints = generate_hints("neighbors", payload)
+    assert rendered_n1a not in hints
+
+
 def test_hints_neighbors_mixed_endpoint_kinds_silent() -> None:
     payload = _neighbors_hint_payload(
         [
