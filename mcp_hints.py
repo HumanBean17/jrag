@@ -4,6 +4,7 @@ Locked v1 catalog: ``propose/completed/HINTS-ROAD-SIGNS-PROPOSE.md`` Appendix A
 (issue #161 producer/override-route amendments in that appendix).
 v2 resolve + neighbors fuzzy-strategy catalog: ``propose/completed/HINTS-V2-PROPOSE.md`` Appendix A.
 v3 empty-neighbors structural catalog: ``propose/completed/HINTS-V3-PROPOSE.md`` §3.1–3.3.
+v4 non-empty neighbors success-path catalog: ``propose/HINTS-V4-SUCCESS-PATH-PROPOSE.md``.
 Priority cap: same propose §7.12 / ``plans/completed/PLAN-HINTS.md`` principles.
 """
 
@@ -102,6 +103,22 @@ _RESOLVE_WILDCARDS = ("*", "?")
 TPL_NEIGHBORS_FUZZY_STRATEGY = (
     "some edges resolved via brownfield/fallback strategy — check attrs.strategy on each row"
 )
+
+# v4 neighbors success-path (propose/HINTS-V4-SUCCESS-PATH-PROPOSE.md); N1a/N1b alias describe templates.
+TPL_NEIGHBORS_SUCCESS_HTTP_TARGETS = "HTTP targets: neighbors(client_ids,'out',['HTTP_CALLS'])"
+TPL_NEIGHBORS_SUCCESS_ASYNC_TARGETS = "async targets: neighbors(producer_ids,'out',['ASYNC_CALLS'])"
+TPL_NEIGHBORS_SUCCESS_CALLERS = "callers: neighbors(handler_ids,'in',['CALLS'])"
+TPL_NEIGHBORS_SUCCESS_DECLARING_CLIENT = (
+    "declaring method: neighbors(client_ids,'in',['DECLARES_CLIENT'])"
+)
+TPL_NEIGHBORS_SUCCESS_DECLARING_PRODUCER = (
+    "declaring method: neighbors(producer_ids,'in',['DECLARES_PRODUCER'])"
+)
+TPL_NEIGHBORS_SUCCESS_HANDLER = "handler: neighbors(route_ids,'in',['EXPOSES'])"
+
+_NEIGHBORS_SUCCESS_MAX_CHARS = 120
+_EDGE_DECLARES_CLIENT = frozenset({"DECLARES_CLIENT", "DECLARES.DECLARES_CLIENT"})
+_EDGE_DECLARES_PRODUCER = frozenset({"DECLARES_PRODUCER", "DECLARES.DECLARES_PRODUCER"})
 
 # §7.12 priority: DECLARES.* type rollups > OVERRIDDEN_BY.* > leaf follow-ups > meta.
 PRIORITY_DECLARES_TYPE_ROLLUP = 4
@@ -271,6 +288,112 @@ def _filter_neighbors_dotkey_hints(pairs: list[tuple[int, str]]) -> list[tuple[i
     return [(pri, text) for pri, text in pairs if not _hint_contains_composed_dotkey(text)]
 
 
+def _neighbors_success_subject_is_type(subject_record: dict[str, Any]) -> bool:
+    return (
+        _subject_node_label(subject_record) == "Symbol"
+        and str(subject_record.get("kind") or "") in _TYPE_SYMBOL_KINDS
+    )
+
+
+def _neighbors_results_homogeneous(
+    results: list[dict[str, Any]],
+    *,
+    endpoint_kind: str | None = None,
+    symbol_kinds: frozenset[str] | None = None,
+) -> bool:
+    if not results:
+        return False
+    for row in results:
+        other = row.get("other")
+        if not isinstance(other, dict):
+            return False
+        ok = str(other.get("kind") or "")
+        if endpoint_kind is not None and ok != endpoint_kind:
+            return False
+        if symbol_kinds is not None:
+            if ok != "symbol":
+                return False
+            if str(other.get("symbol_kind") or "") not in symbol_kinds:
+                return False
+    return True
+
+
+def _append_neighbors_success_hint(pairs: list[tuple[int, str]], text: str) -> None:
+    # v4 neighbors cap only (describe uses the same N1a/N1b templates without this gate).
+    if text and len(text) <= _NEIGHBORS_SUCCESS_MAX_CHARS:
+        pairs.append((PRIORITY_LEAF_FOLLOWUP, text))
+
+
+def neighbors_success_hints(payload: dict[str, Any]) -> list[tuple[int, str]]:
+    """v4 non-empty neighbors follow-ups (N1a–N7); no graph I/O."""
+    if not payload.get("success"):
+        return []
+    results = list(payload.get("results") or [])
+    if not results or int(payload.get("offset") or 0) != 0:
+        return []
+    req_types = payload.get("requested_edge_types")
+    if not isinstance(req_types, list) or len(req_types) != 1:
+        return []
+    edge = str(req_types[0]).strip()
+    if not edge:
+        return []
+    direction = payload.get("requested_direction")
+    if direction not in ("in", "out"):
+        return []
+
+    pairs: list[tuple[int, str]] = []
+    origin_id = str(payload.get("origin_id") or "")
+    if not origin_id:
+        origin_id = str(results[0].get("origin_id") or "")
+    subject_record = payload.get("subject_record")
+    is_type_subject = (
+        isinstance(subject_record, dict) and _neighbors_success_subject_is_type(subject_record)
+    )
+
+    if (
+        edge == "DECLARES"
+        and direction == "out"
+        and is_type_subject
+        and _neighbors_results_homogeneous(results, symbol_kinds=_METHOD_SYMBOL_KINDS)
+    ):
+        if origin_id:
+            _append_neighbors_success_hint(
+                pairs, TPL_DESCRIBE_TYPE_CLIENTS_VIA_MEMBERS.format(id=origin_id),
+            )
+            _append_neighbors_success_hint(
+                pairs, TPL_DESCRIBE_TYPE_ROUTES_VIA_MEMBERS.format(id=origin_id),
+            )
+
+    if edge in _EDGE_DECLARES_CLIENT and direction == "out":
+        if _neighbors_results_homogeneous(results, endpoint_kind="client"):
+            _append_neighbors_success_hint(pairs, TPL_NEIGHBORS_SUCCESS_HTTP_TARGETS)
+
+    if edge in _EDGE_DECLARES_PRODUCER and direction == "out":
+        if _neighbors_results_homogeneous(results, endpoint_kind="producer"):
+            _append_neighbors_success_hint(pairs, TPL_NEIGHBORS_SUCCESS_ASYNC_TARGETS)
+
+    if (
+        edge == "EXPOSES"
+        and direction == "in"
+        and _neighbors_results_homogeneous(results, symbol_kinds=_METHOD_SYMBOL_KINDS)
+    ):
+        _append_neighbors_success_hint(pairs, TPL_NEIGHBORS_SUCCESS_CALLERS)
+
+    if edge == "HTTP_CALLS" and direction == "in":
+        if _neighbors_results_homogeneous(results, endpoint_kind="client"):
+            _append_neighbors_success_hint(pairs, TPL_NEIGHBORS_SUCCESS_DECLARING_CLIENT)
+
+    if edge == "ASYNC_CALLS" and direction == "in":
+        if _neighbors_results_homogeneous(results, endpoint_kind="producer"):
+            _append_neighbors_success_hint(pairs, TPL_NEIGHBORS_SUCCESS_DECLARING_PRODUCER)
+
+    if edge == "DECLARES.EXPOSES" and direction == "out":
+        if _neighbors_results_homogeneous(results, endpoint_kind="route"):
+            _append_neighbors_success_hint(pairs, TPL_NEIGHBORS_SUCCESS_HANDLER)
+
+    return pairs
+
+
 def _any_fuzzy_strategy(edges: list[dict[str, Any]]) -> bool:
     for e in edges:
         attrs = e.get("attrs") if isinstance(e.get("attrs"), dict) else {}
@@ -395,6 +518,9 @@ def generate_hints(
             req_types = []
         edge_labels = [str(x).strip() for x in req_types if str(x).strip()]
         offset = int(payload.get("offset") or 0)
+        empty_pairs: list[tuple[int, str]] = []
+        success_pairs: list[tuple[int, str]] = []
+        meta_pairs: list[tuple[int, str]] = []
         if not results and edge_labels and offset == 0:
             subject_record = payload.get("subject_record")
             requested_direction = payload.get("requested_direction")
@@ -403,16 +529,21 @@ def generate_hints(
                 and subject_record
                 and requested_direction in ("in", "out")
             ):
-                pairs.extend(
+                empty_pairs.extend(
                     neighbors_empty_hints(
                         subject_record=subject_record,
                         requested_edge_types=edge_labels,
                         requested_direction=requested_direction,
                     )
                 )
-        elif _any_fuzzy_strategy(results):
-            pairs.append((PRIORITY_META, TPL_NEIGHBORS_FUZZY_STRATEGY))
-        return finalize_hint_list(_filter_neighbors_dotkey_hints(pairs))
+        else:
+            if results and offset == 0:
+                success_pairs = neighbors_success_hints(payload)
+            if _any_fuzzy_strategy(results):
+                meta_pairs.append((PRIORITY_META, TPL_NEIGHBORS_FUZZY_STRATEGY))
+        return finalize_hint_list(
+            _filter_neighbors_dotkey_hints(empty_pairs) + success_pairs + meta_pairs,
+        )
 
     if output_kind == "describe":
         rec = payload.get("record")

@@ -1,6 +1,6 @@
 # Plan: HINTS-V4 (success-path road signs)
 
-Status: **active (planning)**. This plan implements
+Status: **active (PR-A in progress)**. This plan implements
 [`propose/HINTS-V4-SUCCESS-PATH-PROPOSE.md`](../propose/HINTS-V4-SUCCESS-PATH-PROPOSE.md)
 (issue [#163](https://github.com/HumanBean17/java-codebase-rag/issues/163)).
 
@@ -131,12 +131,12 @@ Implement **verbatim** names from the propose:
 
 ## Definition of done (PR-A)
 
-- [ ] N1a–N7 wired; empty vs success dot-key filter split correct.
-- [ ] All named PR-A tests pass.
-- [ ] `.venv/bin/ruff check .` and `.venv/bin/python -m pytest tests -v` green.
-- [ ] No `ONTOLOGY_VERSION` / graph / `mcp_v2.py` changes.
-- [ ] Propose remains **locked** (done in #174).
-- [ ] `test_hints_neighbors_v2_declares_success_emits_dot_key_clients` passes.
+- [x] N1a–N7 wired; empty vs success dot-key filter split correct.
+- [x] All named PR-A tests pass.
+- [x] `.venv/bin/ruff check .` and `.venv/bin/python -m pytest tests -v` green.
+- [x] No `ONTOLOGY_VERSION` / graph / `mcp_v2.py` changes.
+- [x] Propose remains **locked** (done in #174).
+- [x] `test_hints_neighbors_v2_declares_success_emits_dot_key_clients` passes.
 
 ## Implementation step list
 
@@ -227,7 +227,7 @@ Implement **verbatim** names from the propose:
 
 # Tracking
 
-- `PR-A`: _pending_
+- `PR-A`: _landed (PR open)_
 - `PR-B`: _pending_
 
 ## Cursor handoff
