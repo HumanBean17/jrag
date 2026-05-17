@@ -280,6 +280,8 @@ File placement (`mcp_hints.py`), function decomposition, integration points in `
 
 **Amendment (2026-05-16, issue #161 / PR #164)** — five describe templates for the producer axis and override-route rollup, symmetric with the client/route rows above: `DECLARES.DECLARES_PRODUCER`, `DECLARES_PRODUCER`, `OVERRIDDEN_BY.DECLARES_PRODUCER`, `OVERRIDDEN_BY.EXPOSES`, and `kind == producer` declaring-method hint. No ontology or re-index change.
 
+**Amendment (v4 success-path, issue #163)** — second partial dot-key emission reversal: non-empty `neighbors` success hints on type Symbol origins may recommend `DECLARES.DECLARES_CLIENT`, `DECLARES.DECLARES_PRODUCER`, and `DECLARES.EXPOSES` (matching describe rollups). v3 empty structural `neighbors` hints still never use dot-keys (`_filter_neighbors_dotkey_hints` applies to the empty branch only). `OVERRIDDEN_BY.*` dot-keys remain describe-only. No ontology or re-index change.
+
 **What stayed unchanged from the first draft**
 
 - §1 frame statement; §2 principles 1–8; §3.1 field shape; §3.2 generation contract; §5 "deliberately does NOT do" table; §8 risks table.

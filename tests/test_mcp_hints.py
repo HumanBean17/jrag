@@ -1026,6 +1026,9 @@ def test_hints_neighbors_v2_declares_success_emits_dot_key_clients(kuzu_graph) -
             mcp_hints.TPL_DESCRIBE_TYPE_ROUTES_VIA_MEMBERS,
             {"id": "sym:com.example.bank.chat.Controller"},
         ),
+        (mcp_hints.TPL_FIND_SUCCESS_HANDLER, {"id": "route:svc:GET:/api/v1/chat"}),
+        (mcp_hints.TPL_FIND_SUCCESS_HTTP_TARGETS, {"id": "client:svc:feign:target:GET:/p"}),
+        (mcp_hints.TPL_FIND_SUCCESS_ASYNC_TARGETS, {"id": "producer:svc:kafka:topic:t"}),
     ],
 )
 def test_hints_all_v4_templates_under_120_chars(template: str, substitutions: dict[str, str]) -> None:
@@ -1157,6 +1160,69 @@ def test_hints_cap_same_priority_keeps_emission_order() -> None:
     assert len(got) == 5
     assert "z-meta" in got
     assert "e-meta" not in got
+
+
+def _find_success_payload(
+    kind: str,
+    node_id: str,
+    *,
+    limit: int | None = None,
+    has_more_results: bool = False,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "success": True,
+        "kind": kind,
+        "results": [{"id": node_id, "kind": kind}],
+        "filter": {},
+        "offset": 0,
+    }
+    if limit is not None:
+        payload["limit"] = limit
+        payload["has_more_results"] = has_more_results
+    return payload
+
+
+def test_hints_find_route_success_emits_handler() -> None:
+    rid = "route:svc:GET:/api/v1/chat"
+    payload = _find_success_payload("route", rid)
+    want = mcp_hints.TPL_FIND_SUCCESS_HANDLER.format(id=rid)
+    assert want in generate_hints("find", payload)
+
+
+def test_hints_find_client_success_emits_http_calls() -> None:
+    cid = "client:svc:feign:target:GET:/p"
+    payload = _find_success_payload("client", cid)
+    want = mcp_hints.TPL_FIND_SUCCESS_HTTP_TARGETS.format(id=cid)
+    assert want in generate_hints("find", payload)
+
+
+def test_hints_find_producer_success_emits_async_calls() -> None:
+    pid = "producer:svc:kafka:topic:t"
+    payload = _find_success_payload("producer", pid)
+    want = mcp_hints.TPL_FIND_SUCCESS_ASYNC_TARGETS.format(id=pid)
+    assert want in generate_hints("find", payload)
+
+
+def test_hints_find_success_suppressed_when_page_full() -> None:
+    rid = "route:svc:GET:/api/v1/chat"
+    payload = _find_success_payload("route", rid, limit=1, has_more_results=True)
+    hints = generate_hints("find", payload)
+    assert mcp_hints.TPL_FIND_PAGE_FULL.format(limit=1) in hints
+    assert mcp_hints.TPL_FIND_SUCCESS_HANDLER.format(id=rid) not in hints
+
+
+def test_hints_find_success_uses_first_result_id_when_multiple() -> None:
+    first = "route:svc:GET:/first"
+    second = "route:svc:GET:/second"
+    payload = _find_success_payload("route", first)
+    payload["results"] = [
+        {"id": first, "kind": "route"},
+        {"id": second, "kind": "route"},
+    ]
+    want = mcp_hints.TPL_FIND_SUCCESS_HANDLER.format(id=first)
+    hints = generate_hints("find", payload)
+    assert want in hints
+    assert mcp_hints.TPL_FIND_SUCCESS_HANDLER.format(id=second) not in hints
 
 
 def test_hints_find_page_full_requires_has_more_results_flag() -> None:
