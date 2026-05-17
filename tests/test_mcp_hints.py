@@ -336,6 +336,8 @@ def _neighbors_hint_payload(
     requested_edge_types: list[str] | None = None,
     subject_record: dict[str, Any] | None = None,
     requested_direction: str = "out",
+    origin_id: str = "sym:com.example.T",
+    offset: int = 0,
 ) -> dict[str, Any]:
     return {
         "success": True,
@@ -344,7 +346,41 @@ def _neighbors_hint_payload(
         "requested_direction": requested_direction,
         "subject_record": subject_record
         if subject_record is not None
-        else {"id": "sym:com.example.T", "kind": "class"},
+        else {"id": origin_id, "kind": "class"},
+        "origin_id": origin_id,
+        "offset": offset,
+    }
+
+
+def _type_subject_record(node_id: str, decl_kind: str = "class") -> dict[str, Any]:
+    return {"id": node_id, "kind": decl_kind}
+
+
+def _symbol_other(
+    node_id: str,
+    *,
+    symbol_kind: str = "method",
+) -> dict[str, Any]:
+    return {"id": node_id, "kind": "symbol", "symbol_kind": symbol_kind}
+
+
+def _terminal_other(node_id: str, kind: str) -> dict[str, Any]:
+    return {"id": node_id, "kind": kind}
+
+
+def _success_edge(
+    other: dict[str, Any],
+    *,
+    edge_type: str = "DECLARES",
+    direction: str = "out",
+    origin_id: str = "sym:com.example.T",
+) -> dict[str, Any]:
+    return {
+        "origin_id": origin_id,
+        "edge_type": edge_type,
+        "direction": direction,
+        "other": other,
+        "attrs": {},
     }
 
 
@@ -407,14 +443,20 @@ def _method_id_with_fuzzy_calls(kuzu_graph) -> str:
 
 
 def test_hints_neighbors_fuzzy_strategy_layer_c_source_emits() -> None:
-    payload = _neighbors_hint_payload([_edge_result(strategy="layer_c_source")])
+    payload = _neighbors_hint_payload(
+        [_edge_result(strategy="layer_c_source", edge_type="CALLS")],
+        requested_edge_types=["CALLS"],
+    )
     hints = generate_hints("neighbors", payload)
     assert mcp_hints.TPL_NEIGHBORS_FUZZY_STRATEGY in hints
     assert "attrs.strategy" in hints[0]
 
 
 def test_hints_neighbors_fuzzy_strategy_annotation_absent() -> None:
-    payload = _neighbors_hint_payload([_edge_result(strategy="annotation")])
+    payload = _neighbors_hint_payload(
+        [_edge_result(strategy="annotation", edge_type="CALLS")],
+        requested_edge_types=["CALLS"],
+    )
     assert generate_hints("neighbors", payload) == []
 
 
@@ -448,7 +490,10 @@ def test_hints_neighbors_multi_origin_fuzzy_emits_once() -> None:
 
 
 def test_hints_neighbors_layer_a_meta_no_fuzzy_hint() -> None:
-    payload = _neighbors_hint_payload([_edge_result(strategy="layer_a_meta")])
+    payload = _neighbors_hint_payload(
+        [_edge_result(strategy="layer_a_meta", edge_type="CALLS")],
+        requested_edge_types=["CALLS"],
+    )
     assert generate_hints("neighbors", payload) == []
 
 
@@ -727,6 +772,7 @@ def test_hints_neighbors_offset_suppresses_empty_structural_hints() -> None:
 
 
 def test_hints_hv20_no_dotkey_edge_labels_in_rendered_neighbors_hints() -> None:
+    """Empty structural neighbors hints only — success-path N1a/N1b may use DECLARES.* dot-keys."""
     payloads = [
         _neighbors_empty_payload({"id": "sym:com.example.T", "kind": "class"}, ["DECLARES_CLIENT"]),
         _neighbors_empty_payload({"id": "sym:com.example.T#m()", "kind": "method"}, ["HTTP_CALLS"]),
@@ -739,6 +785,212 @@ def test_hints_hv20_no_dotkey_edge_labels_in_rendered_neighbors_hints() -> None:
         for hint in generate_hints("neighbors", payload):
             assert "DECLARES." not in hint
             assert "OVERRIDDEN_BY." not in hint
+
+
+def test_hints_neighbors_success_may_emit_declares_dot_keys() -> None:
+    origin = "sym:com.example.T"
+    payload = _neighbors_hint_payload(
+        [_success_edge(_symbol_other("sym:com.example.T#m()"), edge_type="DECLARES")],
+        requested_edge_types=["DECLARES"],
+        subject_record=_type_subject_record(origin),
+        origin_id=origin,
+    )
+    hints = generate_hints("neighbors", payload)
+    assert any("DECLARES.DECLARES_CLIENT" in h for h in hints)
+    assert any("DECLARES.EXPOSES" in h for h in hints)
+
+
+def test_hints_neighbors_declares_methods_emits_dot_key_clients() -> None:
+    origin = "sym:com.example.T"
+    payload = _neighbors_hint_payload(
+        [
+            _success_edge(_symbol_other("sym:com.example.T#m()"), edge_type="DECLARES"),
+            _success_edge(
+                _symbol_other("sym:com.example.T#c()", symbol_kind="constructor"),
+                edge_type="DECLARES",
+            ),
+        ],
+        requested_edge_types=["DECLARES"],
+        subject_record=_type_subject_record(origin),
+        origin_id=origin,
+    )
+    want = mcp_hints.TPL_DESCRIBE_TYPE_CLIENTS_VIA_MEMBERS.format(id=origin)
+    assert want in generate_hints("neighbors", payload)
+
+
+def test_hints_neighbors_declares_methods_emits_dot_key_routes() -> None:
+    origin = "sym:com.example.T"
+    payload = _neighbors_hint_payload(
+        [_success_edge(_symbol_other("sym:com.example.T#m()"), edge_type="DECLARES")],
+        requested_edge_types=["DECLARES"],
+        subject_record=_type_subject_record(origin),
+        origin_id=origin,
+    )
+    want = mcp_hints.TPL_DESCRIBE_TYPE_ROUTES_VIA_MEMBERS.format(id=origin)
+    assert want in generate_hints("neighbors", payload)
+
+
+def test_hints_neighbors_declares_client_homogeneous_emits_http_calls() -> None:
+    payload = _neighbors_hint_payload(
+        [_success_edge(_terminal_other("client:a", "client"), edge_type="DECLARES_CLIENT")],
+        requested_edge_types=["DECLARES_CLIENT"],
+    )
+    assert mcp_hints.TPL_NEIGHBORS_SUCCESS_HTTP_TARGETS in generate_hints("neighbors", payload)
+
+
+def test_hints_neighbors_declares_dot_key_client_homogeneous_emits_http_calls() -> None:
+    payload = _neighbors_hint_payload(
+        [_success_edge(_terminal_other("client:a", "client"), edge_type="DECLARES.DECLARES_CLIENT")],
+        requested_edge_types=["DECLARES.DECLARES_CLIENT"],
+    )
+    assert mcp_hints.TPL_NEIGHBORS_SUCCESS_HTTP_TARGETS in generate_hints("neighbors", payload)
+
+
+def test_hints_neighbors_declares_producer_homogeneous_emits_async_calls() -> None:
+    payload = _neighbors_hint_payload(
+        [_success_edge(_terminal_other("producer:a", "producer"), edge_type="DECLARES_PRODUCER")],
+        requested_edge_types=["DECLARES_PRODUCER"],
+    )
+    assert mcp_hints.TPL_NEIGHBORS_SUCCESS_ASYNC_TARGETS in generate_hints("neighbors", payload)
+
+
+def test_hints_neighbors_declares_dot_key_producer_homogeneous_emits_async_calls() -> None:
+    payload = _neighbors_hint_payload(
+        [
+            _success_edge(
+                _terminal_other("producer:a", "producer"),
+                edge_type="DECLARES.DECLARES_PRODUCER",
+            ),
+        ],
+        requested_edge_types=["DECLARES.DECLARES_PRODUCER"],
+    )
+    assert mcp_hints.TPL_NEIGHBORS_SUCCESS_ASYNC_TARGETS in generate_hints("neighbors", payload)
+
+
+def test_hints_neighbors_declares_dot_key_exposes_homogeneous_emits_handler() -> None:
+    payload = _neighbors_hint_payload(
+        [_success_edge(_terminal_other("route:a", "route"), edge_type="DECLARES.EXPOSES")],
+        requested_edge_types=["DECLARES.EXPOSES"],
+    )
+    assert mcp_hints.TPL_NEIGHBORS_SUCCESS_HANDLER in generate_hints("neighbors", payload)
+
+
+def test_hints_neighbors_exposes_in_methods_emits_calls() -> None:
+    payload = _neighbors_hint_payload(
+        [_success_edge(_symbol_other("sym:pkg.Handler#run()"), edge_type="EXPOSES", direction="in")],
+        requested_edge_types=["EXPOSES"],
+        requested_direction="in",
+        subject_record={"id": "route:svc:GET:/p", "framework": "spring"},
+    )
+    assert mcp_hints.TPL_NEIGHBORS_SUCCESS_CALLERS in generate_hints("neighbors", payload)
+
+
+def test_hints_neighbors_http_calls_in_clients_emits_declares_client() -> None:
+    payload = _neighbors_hint_payload(
+        [_success_edge(_terminal_other("client:a", "client"), edge_type="HTTP_CALLS", direction="in")],
+        requested_edge_types=["HTTP_CALLS"],
+        requested_direction="in",
+        subject_record={"id": "route:svc:GET:/p", "framework": "spring"},
+    )
+    assert mcp_hints.TPL_NEIGHBORS_SUCCESS_DECLARING_CLIENT in generate_hints("neighbors", payload)
+
+
+def test_hints_neighbors_async_calls_in_producers_emits_declares_producer() -> None:
+    payload = _neighbors_hint_payload(
+        [
+            _success_edge(
+                _terminal_other("producer:a", "producer"),
+                edge_type="ASYNC_CALLS",
+                direction="in",
+            ),
+        ],
+        requested_edge_types=["ASYNC_CALLS"],
+        requested_direction="in",
+        subject_record={"id": "route:svc:GET:/p", "framework": "spring"},
+    )
+    assert mcp_hints.TPL_NEIGHBORS_SUCCESS_DECLARING_PRODUCER in generate_hints("neighbors", payload)
+
+
+def test_hints_neighbors_mixed_endpoint_kinds_silent() -> None:
+    payload = _neighbors_hint_payload(
+        [
+            _success_edge(_terminal_other("client:a", "client"), edge_type="DECLARES_CLIENT"),
+            _success_edge(_terminal_other("route:a", "route"), edge_type="DECLARES_CLIENT"),
+        ],
+        requested_edge_types=["DECLARES_CLIENT"],
+    )
+    v4_markers = (
+        mcp_hints.TPL_NEIGHBORS_SUCCESS_HTTP_TARGETS,
+        mcp_hints.TPL_DESCRIBE_TYPE_CLIENTS_VIA_MEMBERS.format(id="sym:com.example.T"),
+    )
+    hints = generate_hints("neighbors", payload)
+    assert not any(m in h for h in hints for m in v4_markers)
+
+
+def test_hints_neighbors_offset_suppresses_success_hints() -> None:
+    origin = "sym:com.example.T"
+    payload = _neighbors_hint_payload(
+        [_success_edge(_symbol_other("sym:com.example.T#m()"), edge_type="DECLARES")],
+        requested_edge_types=["DECLARES"],
+        subject_record=_type_subject_record(origin),
+        origin_id=origin,
+        offset=3,
+    )
+    hints = generate_hints("neighbors", payload)
+    assert mcp_hints.TPL_DESCRIBE_TYPE_CLIENTS_VIA_MEMBERS.format(id=origin) not in hints
+    assert mcp_hints.TPL_NEIGHBORS_SUCCESS_HTTP_TARGETS not in hints
+
+
+def test_hints_neighbors_success_beats_fuzzy_in_cap() -> None:
+    payload = _neighbors_hint_payload(
+        [
+            _success_edge(
+                _terminal_other("client:a", "client"),
+                edge_type="DECLARES_CLIENT",
+            ),
+        ],
+        requested_edge_types=["DECLARES_CLIENT"],
+    )
+    payload["results"][0]["attrs"] = {"strategy": "layer_c_source"}
+    hints = generate_hints("neighbors", payload)
+    assert mcp_hints.TPL_NEIGHBORS_SUCCESS_HTTP_TARGETS in hints
+    assert mcp_hints.TPL_NEIGHBORS_FUZZY_STRATEGY in hints
+    assert hints.index(mcp_hints.TPL_NEIGHBORS_SUCCESS_HTTP_TARGETS) < hints.index(
+        mcp_hints.TPL_NEIGHBORS_FUZZY_STRATEGY,
+    )
+
+
+def test_hints_neighbors_v2_declares_success_emits_dot_key_clients(kuzu_graph) -> None:
+    class_id = _class_symbol_id(kuzu_graph)
+    out = neighbors_v2(class_id, direction="out", edge_types=["DECLARES"], graph=kuzu_graph, limit=50)
+    assert out.success is True
+    assert out.results
+    want = mcp_hints.TPL_DESCRIBE_TYPE_CLIENTS_VIA_MEMBERS.format(id=class_id)
+    assert want in out.hints
+
+
+@pytest.mark.parametrize(
+    ("template", "substitutions"),
+    [
+        (mcp_hints.TPL_NEIGHBORS_SUCCESS_HTTP_TARGETS, {}),
+        (mcp_hints.TPL_NEIGHBORS_SUCCESS_ASYNC_TARGETS, {}),
+        (mcp_hints.TPL_NEIGHBORS_SUCCESS_CALLERS, {}),
+        (mcp_hints.TPL_NEIGHBORS_SUCCESS_DECLARING_CLIENT, {}),
+        (mcp_hints.TPL_NEIGHBORS_SUCCESS_DECLARING_PRODUCER, {}),
+        (mcp_hints.TPL_NEIGHBORS_SUCCESS_HANDLER, {}),
+        (
+            mcp_hints.TPL_DESCRIBE_TYPE_CLIENTS_VIA_MEMBERS,
+            {"id": "sym:com.example.bank.chat.Controller"},
+        ),
+        (
+            mcp_hints.TPL_DESCRIBE_TYPE_ROUTES_VIA_MEMBERS,
+            {"id": "sym:com.example.bank.chat.Controller"},
+        ),
+    ],
+)
+def test_hints_all_v4_templates_under_120_chars(template: str, substitutions: dict[str, str]) -> None:
+    rendered = template.format(**substitutions)
+    assert len(rendered) <= 120
 
 
 def test_hints_neighbors_empty_kind_check_template_removed() -> None:
