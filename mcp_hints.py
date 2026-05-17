@@ -4,7 +4,7 @@ Locked v1 catalog: ``propose/completed/HINTS-ROAD-SIGNS-PROPOSE.md`` Appendix A
 (issue #161 producer/override-route amendments in that appendix).
 v2 resolve + neighbors fuzzy-strategy catalog: ``propose/completed/HINTS-V2-PROPOSE.md`` Appendix A.
 v3 empty-neighbors structural catalog: ``propose/completed/HINTS-V3-PROPOSE.md`` §3.1–3.3.
-v4 non-empty neighbors success-path catalog: ``propose/HINTS-V4-SUCCESS-PATH-PROPOSE.md``.
+v4 success-path catalog: ``propose/completed/HINTS-V4-SUCCESS-PATH-PROPOSE.md``.
 Priority cap: same propose §7.12 / ``plans/completed/PLAN-HINTS.md`` principles.
 """
 
@@ -58,6 +58,11 @@ TPL_DESCRIBE_PRODUCER_DECLARING = "declaring method: neighbors(['{id}'],'in',['D
 
 TPL_FIND_EMPTY_RESOLVE = "no matches — try resolve(identifier, hint_kind='{kind}') for canonical lookup"
 TPL_FIND_PAGE_FULL = "result page full at {limit} — narrow filter or paginate"
+TPL_FIND_SUCCESS_HANDLER = "handler: neighbors(['{id}'],'in',['EXPOSES'])"
+TPL_FIND_SUCCESS_HTTP_TARGETS = "HTTP targets: neighbors(['{id}'],'out',['HTTP_CALLS'])"
+TPL_FIND_SUCCESS_ASYNC_TARGETS = "async targets: neighbors(['{id}'],'out',['ASYNC_CALLS'])"
+
+_FIND_SUCCESS_MAX_CHARS = 120
 
 TPL_NEIGHBORS_WRONG_SUBJECT_KIND = (
     "0 results — '{edge}' connects {src_kind} → {dst_kind}; "
@@ -394,6 +399,41 @@ def neighbors_success_hints(payload: dict[str, Any]) -> list[tuple[int, str]]:
     return pairs
 
 
+def _find_is_page_full(payload: dict[str, Any], results: list[dict[str, Any]]) -> bool:
+    lim = payload.get("limit")
+    return (
+        lim is not None
+        and len(results) >= int(lim)
+        and payload.get("has_more_results") is True
+    )
+
+
+def _append_find_success_hint(pairs: list[tuple[int, str]], text: str) -> None:
+    if text and len(text) <= _FIND_SUCCESS_MAX_CHARS:
+        pairs.append((PRIORITY_LEAF_FOLLOWUP, text))
+
+
+def find_success_hints(payload: dict[str, Any]) -> list[tuple[int, str]]:
+    """v4 non-empty find follow-ups (F1–F3); no graph I/O."""
+    if not payload.get("success"):
+        return []
+    results = list(payload.get("results") or [])
+    if not results or _find_is_page_full(payload, results):
+        return []
+    node_id = str(results[0].get("id") or "")
+    if not node_id:
+        return []
+    kind = str(payload.get("kind") or "")
+    pairs: list[tuple[int, str]] = []
+    if kind == "route":
+        _append_find_success_hint(pairs, TPL_FIND_SUCCESS_HANDLER.format(id=node_id))
+    elif kind == "client":
+        _append_find_success_hint(pairs, TPL_FIND_SUCCESS_HTTP_TARGETS.format(id=node_id))
+    elif kind == "producer":
+        _append_find_success_hint(pairs, TPL_FIND_SUCCESS_ASYNC_TARGETS.format(id=node_id))
+    return pairs
+
+
 def _any_fuzzy_strategy(edges: list[dict[str, Any]]) -> bool:
     for e in edges:
         attrs = e.get("attrs") if isinstance(e.get("attrs"), dict) else {}
@@ -503,12 +543,9 @@ def generate_hints(
         lim = payload.get("limit")
         if not results and _find_has_identifier_shaped_filter(kind, flt):
             pairs.append((PRIORITY_META, TPL_FIND_EMPTY_RESOLVE.format(kind=kind)))
-        if (
-            lim is not None
-            and len(results) >= int(lim)
-            and payload.get("has_more_results") is True
-        ):
+        if _find_is_page_full(payload, results) and lim is not None:
             pairs.append((PRIORITY_META, TPL_FIND_PAGE_FULL.format(limit=int(lim))))
+        pairs.extend(find_success_hints(payload))
         return finalize_hint_list(pairs)
 
     if output_kind == "neighbors":
