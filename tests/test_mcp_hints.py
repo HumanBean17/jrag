@@ -1225,6 +1225,35 @@ def test_hints_find_success_uses_first_result_id_when_multiple() -> None:
     assert mcp_hints.TPL_FIND_SUCCESS_HANDLER.format(id=second) not in hints
 
 
+def test_hints_find_symbol_success_emits_no_v4_followup() -> None:
+    sym_id = "sym:com.example.T"
+    payload = _find_success_payload("symbol", sym_id)
+    hints = generate_hints("find", payload)
+    v4_markers = (
+        mcp_hints.TPL_FIND_SUCCESS_HANDLER,
+        mcp_hints.TPL_FIND_SUCCESS_HTTP_TARGETS,
+        mcp_hints.TPL_FIND_SUCCESS_ASYNC_TARGETS,
+    )
+    assert not any(m.format(id=sym_id) in hints for m in v4_markers)
+
+
+def test_hints_find_success_silent_when_first_result_missing_id() -> None:
+    payload = _find_success_payload("route", "route:unused")
+    payload["results"] = [{"kind": "route"}]
+    hints = generate_hints("find", payload)
+    assert not any("handler:" in h and "EXPOSES" in h for h in hints)
+
+
+def test_hints_find_v2_route_success_emits_handler(kuzu_graph) -> None:
+    out = find_v2("route", {"path_prefix": "/api"}, graph=kuzu_graph, limit=500, offset=0)
+    assert out.success is True
+    assert out.results
+    rid = out.results[0].id
+    want = mcp_hints.TPL_FIND_SUCCESS_HANDLER.format(id=rid)
+    assert want in out.hints
+    assert mcp_hints.TPL_FIND_PAGE_FULL.format(limit=500) not in out.hints
+
+
 def test_hints_find_page_full_requires_has_more_results_flag() -> None:
     full_page = {
         "success": True,

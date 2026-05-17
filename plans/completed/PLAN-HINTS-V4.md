@@ -1,7 +1,7 @@
 # Plan: HINTS-V4 (success-path road signs)
 
-Status: **active (PR-A in progress)**. This plan implements
-[`propose/HINTS-V4-SUCCESS-PATH-PROPOSE.md`](../propose/HINTS-V4-SUCCESS-PATH-PROPOSE.md)
+Status: **completed** (PR-A [#175](https://github.com/HumanBean17/java-codebase-rag/pull/175), PR-B [#176](https://github.com/HumanBean17/java-codebase-rag/pull/176)). This plan implements
+[`propose/completed/HINTS-V4-SUCCESS-PATH-PROPOSE.md`](../propose/completed/HINTS-V4-SUCCESS-PATH-PROPOSE.md)
 (issue [#163](https://github.com/HumanBean17/java-codebase-rag/issues/163)).
 
 Depends on: **NEIGHBORS-DOT-KEY-TRAVERSAL** landed ([#171](https://github.com/HumanBean17/java-codebase-rag/pull/171);
@@ -178,10 +178,10 @@ Implement **verbatim** names from the propose:
 
 ## Definition of done (PR-B)
 
-- [ ] F1–F3 wired; page-full + empty-resolve behavior unchanged.
-- [ ] Named find tests pass; optional S1 test if implemented.
-- [ ] Appendix paragraph added to `HINTS-ROAD-SIGNS-PROPOSE.md`.
-- [ ] Full test suite green; no ontology/README requirement unless reviewer asks for README mention.
+- [x] F1–F3 wired; page-full + empty-resolve behavior unchanged.
+- [x] Named find tests pass; optional S1 test if implemented (S1 deferred).
+- [x] Appendix paragraph added to `HINTS-ROAD-SIGNS-PROPOSE.md`.
+- [x] Full test suite green; no ontology/README requirement unless reviewer asks for README mention.
 
 ## Implementation step list
 
@@ -227,9 +227,9 @@ Implement **verbatim** names from the propose:
 
 # Tracking
 
-- `PR-A`: _landed (PR open)_
-- `PR-B`: _pending_
+- `PR-A`: _landed ([#175](https://github.com/HumanBean17/java-codebase-rag/pull/175))_
+- `PR-B`: _landed ([#176](https://github.com/HumanBean17/java-codebase-rag/pull/176))_
 
 ## Cursor handoff
 
-[`plans/CURSOR-PROMPTS-HINTS-V4.md`](./CURSOR-PROMPTS-HINTS-V4.md)
+[`plans/completed/CURSOR-PROMPTS-HINTS-V4.md`](./CURSOR-PROMPTS-HINTS-V4.md)

@@ -4,7 +4,7 @@ Locked v1 catalog: ``propose/completed/HINTS-ROAD-SIGNS-PROPOSE.md`` Appendix A
 (issue #161 producer/override-route amendments in that appendix).
 v2 resolve + neighbors fuzzy-strategy catalog: ``propose/completed/HINTS-V2-PROPOSE.md`` Appendix A.
 v3 empty-neighbors structural catalog: ``propose/completed/HINTS-V3-PROPOSE.md`` §3.1–3.3.
-v4 non-empty neighbors success-path catalog: ``propose/HINTS-V4-SUCCESS-PATH-PROPOSE.md``.
+v4 success-path catalog: ``propose/completed/HINTS-V4-SUCCESS-PATH-PROPOSE.md``.
 Priority cap: same propose §7.12 / ``plans/completed/PLAN-HINTS.md`` principles.
 """
 

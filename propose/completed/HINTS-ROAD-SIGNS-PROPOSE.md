@@ -108,6 +108,9 @@ The full catalog of hints emitted at v1. Each row is one template; multiple may 
 | `describe` (client node) | always | `declaring method: neighbors([{id}],'in',['DECLARES_CLIENT'])` |
 | `find` | `len(results) == 0` and filter has an identifier-shaped value (e.g. `fqn_prefix`, `target_service`) | `no matches — try resolve(identifier, hint_kind='{kind}') for canonical lookup` |
 | `find` | `len(results) >= limit` (page-full) | `result page full at {limit} — narrow filter or paginate` |
+| `find` (route) | `len(results) > 0`, not page-full | `handler: neighbors(['{id}'],'in',['EXPOSES'])` — `{id}` = `results[0].id` (#163 v4) |
+| `find` (client) | same, `kind == client` | `HTTP targets: neighbors(['{id}'],'out',['HTTP_CALLS'])` (#163 v4) |
+| `find` (producer) | same, `kind == producer` | `async targets: neighbors(['{id}'],'out',['ASYNC_CALLS'])` (#163 v4) |
 | `neighbors` | `len(results) == 0` and `len(edge_types) > 0` | `0 results — check if the requested edge_types apply to this kind` |
 | `neighbors` | rows include `edge_type='DECLARES'` to method targets, **and** any of those methods has known `DECLARES_CLIENT` out in summary | (deferred — needs second-hop awareness; not in v1) |
 | `search` | `len(results) == limit` **and** `(max_score - min_score) < 0.1 * max_score` (structural low-confidence signal — no absolute threshold). Requires `SearchOutput.limit` echo per §3.1 / §7.18. | `results look weak — narrow the query or try find(role=…)` |
@@ -138,8 +141,9 @@ This catalog is the v1 lock. Adding a new template requires a propose-doc amendm
 | UC9 | Agent does `neighbors([class_id], 'out', ['DECLARES_CLIENT'])` and gets 0 (correctly, because DECLARES_CLIENT lives on methods) | neighbors | "0 results — check if the requested edge_types apply to this kind" |
 | UC10 | Agent does `search`, gets a full page of hits all clustered within 10% of the top score (no dominant match) | search | "results look weak — narrow the query or try find(role=…)" |
 | UC11 | Agent describes a leaf method (no rollups, no override axis) | describe | (no hints — clean output, agent has all it needs) |
-| UC12 | Agent does `find` with successful match list | find | (no hints — page not full, results present) |
-| UC13 | Agent does `neighbors` with results matching all requested edge_types | neighbors | (no hints — happy path) |
+| UC12 | Agent does `find` on route, client, or producer with successful match list, not page-full | find | v4 success follow-up (F1–F3): handler / HTTP targets / async targets using `results[0].id` |
+| UC12b | Agent does `find(kind=symbol)` with successful match list | find | (no v4 find hints — symbol kind out of F1–F3 scope) |
+| UC13 | Agent does `neighbors` with homogeneous results at `offset==0`, single edge type | neighbors | v4 success follow-ups (N1a–N7) when triggers match; else fuzzy-strategy meta only |
 | UC14 | Agent describes a class with `DECLARES.DECLARES_CLIENT` and `DECLARES.EXPOSES` both non-zero, plus `OVERRIDDEN_BY` (it's an interface) | describe | up to 3 hints — clients via members, routes via members, overriders if applicable |
 
 15 realistic cases (UC6a + UC6b counted separately). The §2.5 cap is exercised by a dedicated test scenario in §6 (a hand-crafted record with > 5 firing conditions), not by a hypothetical UC — the UC re-walk is the design-validation move, the cap is a guardrail with its own test.
@@ -266,6 +270,9 @@ kind == producer, always        →  "declaring method: neighbors(['{id}'],'in',
 # FindOutput
 results==[] and filter has identifier-shaped value  →  "no matches — try resolve(identifier, hint_kind='{kind}') for canonical lookup"
 len(results) >= limit                               →  "result page full at {limit} — narrow filter or paginate"
+kind==route, len(results)>0, not page-full          →  "handler: neighbors(['{id}'],'in',['EXPOSES'])"  # v4 #163
+kind==client, len(results)>0, not page-full         →  "HTTP targets: neighbors(['{id}'],'out',['HTTP_CALLS'])"  # v4 #163
+kind==producer, len(results)>0, not page-full       →  "async targets: neighbors(['{id}'],'out',['ASYNC_CALLS'])"  # v4 #163
 
 # NeighborsOutput
 results==[] and edge_types non-empty  →  "0 results — check if the requested edge_types apply to this kind"
@@ -280,7 +287,7 @@ File placement (`mcp_hints.py`), function decomposition, integration points in `
 
 **Amendment (2026-05-16, issue #161 / PR #164)** — five describe templates for the producer axis and override-route rollup, symmetric with the client/route rows above: `DECLARES.DECLARES_PRODUCER`, `DECLARES_PRODUCER`, `OVERRIDDEN_BY.DECLARES_PRODUCER`, `OVERRIDDEN_BY.EXPOSES`, and `kind == producer` declaring-method hint. No ontology or re-index change.
 
-**Amendment (v4 success-path, issue #163)** — second partial dot-key emission reversal: non-empty `neighbors` success hints on type Symbol origins may recommend `DECLARES.DECLARES_CLIENT`, `DECLARES.DECLARES_PRODUCER`, and `DECLARES.EXPOSES` (matching describe rollups). v3 empty structural `neighbors` hints still never use dot-keys (`_filter_neighbors_dotkey_hints` applies to the empty branch only). `OVERRIDDEN_BY.*` dot-keys remain describe-only. No ontology or re-index change.
+**Amendment (v4 success-path, issue #163)** — (1) **Find:** non-page-full `find` on route/client/producer emits F1–F3 (`handler` / `HTTP targets` / `async targets`); `{id}` = `results[0].id` when multiple matches. (2) **Neighbors — second partial dot-key emission reversal:** non-empty success hints on type Symbol origins may recommend `DECLARES.DECLARES_CLIENT`, `DECLARES.DECLARES_PRODUCER`, and `DECLARES.EXPOSES` (matching describe rollups). v3 empty structural `neighbors` hints still never use dot-keys (`_filter_neighbors_dotkey_hints` applies to the empty branch only). `OVERRIDDEN_BY.*` dot-keys remain describe-only. No ontology or re-index change.
 
 **What stayed unchanged from the first draft**
 
