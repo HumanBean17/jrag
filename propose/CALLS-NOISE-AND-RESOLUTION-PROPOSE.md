@@ -12,7 +12,8 @@
   1. **`CALLS` carries only resolved invocations.** Phantom and chained-receiver call sites move to a caller-side facet (`Symbol.unresolved_call_sites`). Phantom Symbol rows disappear from the graph.
   2. **`callee_declaring_role` becomes a `CALLS` edge attribute.** `neighbors_v2` gains a typed `edge_filter` mechanism that projects the ordered stream by attribute without breaking ordering.
 - Migration: 3 sequential code PRs. Ontology bump 14 → 15 in PR-1; one re-index required across the sequence. No new MCP tool.
-- Out: `min_confidence` and `exclude_strategies` as `neighbors_v2` parameters (subsumed by the broader `edge_filter` mechanism); a `CALLS` semantic split into `DELEGATES_TO` / `PERSISTS_VIA` / `ACCESSES_STATE`; per-edge dedup as a `neighbors_v2` knob (kept as a CALLS-specific response shape decision in PR-3).
+- Two `neighbors_v2` consumption modes for CALLS: default = resolved-only clean stream; `include_unresolved=True` = interleaved transcript with `row_kind` discriminator (mutually-exclusive with `edge_filter`).
+- Out: `min_confidence` and `exclude_strategies` as `neighbors_v2` parameters (subsumed by the broader `edge_filter` mechanism); a `CALLS` semantic split into `DELEGATES_TO` / `PERSISTS_VIA` / `ACCESSES_STATE`; `callee_capability` / `callee_annotation` filter axes; `EdgeFilter` on `find_callers`; an MCP surface for "find unresolved callers"; package-relativity filters; per-edge dedup as a `neighbors_v2` knob (kept as a CALLS-specific response shape decision in PR-3).
 - Non-obvious constraint: `pass3_calls` and `find_callers` currently rely on phantom Symbol rows existing as the `dst` endpoint of every CALLS row. PR-1 changes that invariant atomically.
 
 ## §1 — Frame
@@ -135,9 +136,11 @@ Behavior:
 
 **Decision** (§7 Decision 8): `EdgeFilter` is a typed Pydantic model, not a free-form dict. The "no per-edge knob explosion" rule is enforced by keeping the model small and reviewing additions through a propose, not by making the surface dynamic.
 
-### §3.5 — `describe(method_id)` extension
+### §3.5 — `describe(method_id)` extension AND in-line `neighbors_v2` interleaving
 
-`describe` for a method-kind Symbol gains one rollup:
+**Two surfaces, not one.** The sidecar describe rollup is the *recall* surface; the agent reading a method body needs the unresolved sites *in source order*, interleaved with resolved CALLS rows. Both surfaces matter.
+
+**Surface A — `describe(method_id)` rollup.**
 
 ```
 unresolved_call_sites: 3
@@ -146,7 +149,28 @@ unresolved_call_sites: 3
   - line 102: name_only_zero_candidates  (callee_simple='process', receiver_expr='this')
 ```
 
-Capped at 5 rows in the inline display; full list available via the CLI subcommand in §3.6. Fits in the existing describe hint-rollup machinery (cf. `DECLARES.DECLARES_CLIENT` rollup pattern at `kuzu_queries.py:625`).
+Capped at 5 rows inline; full list available via the CLI in §3.6. Fits the existing rollup machinery (cf. `DECLARES.DECLARES_CLIENT` at `kuzu_queries.py:625`).
+
+**Surface B — `neighbors_v2` opt-in interleaved view.**
+
+`neighbors_v2` gains a per-call optional argument `include_unresolved: bool = False`. When `True` **and** `edge_types` includes `'CALLS'`, the response interleaves `UnresolvedCallSite` projections with resolved CALLS rows, ordered jointly by `(call_site_line, call_site_byte)`. Unresolved entries appear as a distinct row type with a discriminator field:
+
+```python
+class UnresolvedCallSiteRow(BaseModel):
+    row_kind: Literal["unresolved_call_site"] = "unresolved_call_site"
+    caller_id: str
+    call_site_line: int
+    call_site_byte: int
+    callee_simple: str
+    receiver_expr: str
+    reason: str  # 'phantom_unresolved_receiver' | 'chained_receiver' | 'name_only_zero_candidates'
+```
+
+Resolved CALLS rows continue to use the existing `CallEdgeRow` shape with `row_kind="call_edge"` added (default; back-compat at the wire level). The discriminator lets the agent distinguish at parse time without inspecting absence-of-fields.
+
+**`include_unresolved` ignores `edge_filter`.** If the agent filters resolved CALLS by `callee_declaring_role='SERVICE'`, the interleaved unresolved sites still appear — they have no `callee_declaring_role` (the resolver gave up before reaching a declaring type). Documented as locked Decision 26. The agent that wants a *clean filtered transcript* omits `include_unresolved`; the agent that wants a *complete annotated transcript* sets it and ignores `edge_filter`.
+
+**Default `False`.** Agents who don't know about the option get today's resolved-only stream. The HINTS-V4 high-fanout template (§3.10) and a new HINTS-V4 "unresolved-site presence" template (§3.10) nudge agents toward the right surface.
 
 ### §3.6 — CLI surface for graph quality
 
@@ -208,6 +232,18 @@ TPL_NEIGHBORS_CALLS_HIGH_FANOUT = (
 
 Priority `PRIORITY_LEAF_FOLLOWUP=2`. Fires only on the CALLS-on-method case; no equivalent for HTTP_CALLS, ASYNC_CALLS, etc. (their fan-outs are much smaller in practice).
 
+A second template fires when the method has any `UNRESOLVED_AT` rows and `include_unresolved=False`:
+
+```python
+TPL_NEIGHBORS_CALLS_HAS_UNRESOLVED = (
+    "{n} resolved CALLS shown; this method also has {k} unresolved call sites "
+    "(see describe(method_id).unresolved_call_sites, or call neighbors with "
+    "include_unresolved=True for a source-ordered interleaved view)."
+)
+```
+
+Priority `PRIORITY_LEAF_FOLLOWUP=2`. Fires regardless of `n` (including the 100%-unresolved case where `n=0`). Suppressed when `include_unresolved=True`.
+
 ## §4 — Use-case re-walk
 
 | # | Use case | Today (#177-symptom) | Tomorrow |
@@ -238,6 +274,36 @@ Priority `PRIORITY_LEAF_FOLLOWUP=2`. Fires only on the CALLS-on-method case; no 
 - **HV18** (100% unresolved): some methods may genuinely have all their calls resolve to dynamic/reflective paths. The empty-CALLS case used to communicate "this method has invocations we couldn't resolve"; now it communicates "this method has no resolved invocations." The describe rollup + the HINTS-V4 success-path-empty hint are what bridge that gap. PR-3 must verify both fire correctly.
 - **HV13** (filter ignored on edges where attribute doesn't exist): documented as silent no-op, not error. Reviewer pushback expected; the alternative (raise on unknown attribute) is worse because it breaks "agents add filters speculatively and let them be no-ops on edges that don't carry the attribute."
 
+### §4.5 — Pre-#177 use cases (regression-style)
+
+These rows capture the workflows that *triggered* #177 — the things an agent was trying to do when the noise wall got in the way. They stress-test the design against the question "would this propose have prevented #177?", not just "can the design be used."
+
+| # | Use case | Today (#177-trigger) | Tomorrow |
+|---|---|---|---|
+| HV21 | End-to-end "explain `OrderService.process`" | Agent calls `neighbors(out,[CALLS])` → 35 rows (18 accessor + 14 phantom/chained + 4 delegation + 11 repo) → token-window pressure → agent picks 5 random callees → explanation misses the persistence layer | Agent calls `neighbors(out,[CALLS])` → 21 resolved rows in source order, `TPL_NEIGHBORS_CALLS_HAS_UNRESOLVED` fires ("+5 unresolved sites"), `TPL_NEIGHBORS_CALLS_HIGH_FANOUT` suggests `edge_filter={callee_declaring_role:'SERVICE'}` for delegation skeleton → agent makes a 2nd call with the filter → explanation covers delegation + persistence + unresolved warning. |
+| HV22 | Two-pass exploration: skeleton then transcript | Agent gets one wall; reading order ambiguous | Pass 1: `edge_filter={callee_declaring_role:'SERVICE'}` → 4 rows (the delegation skeleton). Pass 2: no filter → 21 rows (full transcript). Two calls, both cheap; same-key results are independent (no implicit cache invalidation). |
+| HV23 | Partial-unresolution method (8 resolved + 5 unresolved interleaved) | Agent sees 13 CALLS rows in `(line,byte)` order with 5 phantom-dst rows mixed in | Agent calls `neighbors(out,[CALLS], include_unresolved=True)` → 13 rows in source order, 5 with `row_kind="unresolved_call_site"` and `reason`, 8 with `row_kind="call_edge"`. Reading-order preserved; unresolved entries carry enough metadata (callee_simple, receiver_expr) to be useful in the transcript. |
+| HV24 | Cross-microservice CALLS surprise | Today: skipped sites are logged but not graph-visible; agent thinks the method has fewer downstream hops than it does | Same as today — cross-microservice sites are *not* emitted as `UnresolvedCallSite` rows (locked Decision 25; they're cross-service policy, not resolution failures). The existing log line is kept; `pass3_skipped_cross_service` counter unchanged. Agent uses `trace_request_flow` for cross-service intent. |
+| HV25 | Re-index diff intelligibility | Pre/post-index `neighbors` row count differs, no signal to the user explaining why | PR-1 updates README + AGENT-GUIDE with the migration delta. `GraphMeta.calls_total` reflects resolved-only count post-PR-1; the new `pass3_unresolved_sites_total` + `pass3_unresolved_by_reason` counters (Decision 23) appear in `describe(graph)` output, providing pre/post-comparable telemetry. |
+| HV26 | Recall of unresolved callers ("who calls `save`, including unresolved sites?") | `find_callers("save")` returns resolved + phantom rows; the phantom rows expose the symbol_simple of the unresolved callee | `find_callers("save")` returns resolved-only. Recall path for unresolved: `pc unresolved-calls list --callee-simple save` (CLI). Locked Decision 27: no MCP surface for "find unresolved callers" — the workflow is debuggability, not agent traversal. |
+| HV27 | Filter boundary: "calls to methods in the same package as the caller" | Manual post-filter on `neighbors` output | Out of scope for `EdgeFilter` (Decision 29). Use `NodeFilter(fqn_prefix=<caller_pkg>)` if the agent already knows the caller's package; otherwise two queries. The propose explicitly does **not** expose package-relativity in `EdgeFilter`. |
+| HV28 | `cursor-pr-review` validates a PR didn't *increase* unresolved-site count | Today: review reads phantom CALLS rows | After PR-1: review reads `UnresolvedCallSite` rows via the CLI; PR-1's PR description includes a note to the `cursor-pr-review` skill maintainer. Decision 24 records the consumer; the skill update itself is out of scope for this propose. |
+| HV29 | `neighbors_v2` with `depth=2` and `edge_filter` | n/a | Filter applied **at every hop**, independently. `neighbors([m], 'out', ['CALLS'], depth=2, edge_filter={callee_declaring_role:'SERVICE'})` returns SERVICE callees of `m`, then SERVICE callees of those. (Locked Decision 21.) |
+| HV30 | `find_callers` confidence-filter parity check | `find_callers("save", min_confidence=0.5)` works today | Continues to work. **`find_callers` is not migrated to accept `EdgeFilter`** (Decision 28); the existing discrete `min_confidence` parameter is kept. The asymmetry (`neighbors_v2` uses `EdgeFilter`; `find_callers` uses discrete) is documented in the PR-2 description. |
+| HV31 | Telemetry: `GraphMeta` counters | Today: `clients_total`, `producers_total`, `declares_client_total`, `declares_producer_total`, etc. (post SCHEMA-V2) | PR-1 adds `pass3_unresolved_sites_total INT64` and `pass3_unresolved_by_reason STRING` (JSON map). Decision 23. |
+| HV32 | Interface vs concrete callee declaring role | Today: `pass3_calls` uses `_lookup_method_candidates` which walks supertypes. The declaring-type role on the returned candidate could be the interface (often `OTHER`) or the concrete class (typed). | **Locked Decision 20**: `callee_declaring_role` is sourced from the candidate's `parent_id` Symbol's `role`. `_lookup_method_candidates` already prefers same-microservice and resolved candidates; we don't change that. When resolution lands on an interface declaration (no concrete impl indexed), `callee_declaring_role` reflects the interface's role — which is typically `OTHER` for `JpaRepository`-style interfaces (no stereotype on the interface itself). PR-2 ships a `bank-chat-system` fixture validation that `JpaRepository.save` and `MyRepository extends JpaRepository<...>` both yield `callee_declaring_role='REPOSITORY'` (via the concrete `MyRepository`'s `@Repository` stereotype). The CI test HV32 locks this. |
+| HV33 | Brownfield `@CodebaseRole` on declaring type | Today: brownfield role is layered onto the type's `role` via `resolve_role_and_capabilities` (`graph_enrich.py:672`) | `callee_declaring_role` picks it up transparently (it reads `parent.role`, which already reflects the brownfield layer). No additional code. Locked Decision 30 records this. |
+| HV34 | `NodeFilter` + `EdgeFilter` composition | n/a | AND across both, ordering preserved. `NodeFilter(microservice='order-service')` + `EdgeFilter(callee_declaring_role='SERVICE')` returns CALLS edges from the queried method to methods whose declaring type role is `SERVICE` *and* whose owning microservice is `order-service`, in `(line, byte)` order. Locked Decision 22. |
+| HV35 | The `NodeFilter.role` vs `EdgeFilter.callee_declaring_role` naming-collision trap | n/a | `NodeFilter.role` filters on the **neighbor node's own role**; for a method-kind Symbol that's almost always `OTHER` (inheritance from `_node_row` default). `EdgeFilter.callee_declaring_role` filters on the **callee's declaring type's role**. Both names retained — renaming either is a worse trade. Documented as a callout in `docs/AGENT-GUIDE.md` + a HINTS-V4 hint if `NodeFilter(role=...)` is applied with `edge_types=['CALLS']` and returns zero (locked Decision 31). |
+| HV36 | Empty-filter performance | n/a | `neighbors([m],'out',['CALLS'])` with no `edge_filter` is the hot path. PR-2 includes a Kuzu predicate-pushdown sanity check: the `callee_declaring_role` column projection on resolved rows must not materially slow the empty-filter case. If profiling shows otherwise, PR-2 adds an index on `(src_id, callee_declaring_role)`. Decision 32 makes this a CI perf invariant (named scenario, not a numeric threshold). |
+| HV37 | `callee_capability` filter request from a future reviewer | n/a | **Out of scope.** Locked Decision 33: `EdgeFilter` exposes only `callee_declaring_role` from the role/capability/annotation triple; capability and annotation filters are *not* added because their cardinality is high and the agent value is unclear. Re-opens via a new propose. |
+
+### Awkward cases (§4.5)
+
+- **HV23** (interleaved view): the discriminator-field approach (`row_kind`) is verbose. The alternative (heterogeneous list without discriminator) is worse — agents would have to infer entry type from absence-of-fields, which is exactly the anti-pattern this whole propose pushes back on.
+- **HV32** (interface vs. concrete): the validation depends on `_lookup_method_candidates` returning the concrete impl when one exists. If it returns the interface for some edge cases (e.g. `JdbcTemplate.query(String, RowMapper<T>, Object...)` where there's no `@Repository` on `JdbcTemplate`), `callee_declaring_role` will be `OTHER`. Agents will not see those repository hops under a `callee_declaring_role='REPOSITORY'` filter. Mitigation in Decision 20: PR-2 adds an `OTHER`-fallback hint when `callee_declaring_role='SERVICE'`/`'REPOSITORY'` returns 0 results but the unfiltered call has ≥5 results — suggesting the agent try `exclude_callee_declaring_roles=['ENTITY','DTO']` instead.
+- **HV36** (perf): "named scenario" rather than "numeric threshold" is the right calibration because Kuzu performance varies by hardware. The test asserts the empty-filter case is within 1.5× of the today's median latency on the `bank-chat-system` fixture; if the assertion fails, PR-2 fixes before merge.
+
 ## §5 — What this deliberately does NOT do
 
 | Question / feature | Why we skip it |
@@ -252,6 +318,12 @@ Priority `PRIORITY_LEAF_FOLLOWUP=2`. Fires only on the CALLS-on-method case; no 
 | Cross-edge filter composition (e.g. "CALLS to a method whose caller is in microservice X") | Out of scope. Use two-step `neighbors` queries or a richer DSL in a future propose. |
 | Re-emit phantom CALLS rows behind a feature flag | No active users / no soft migration. |
 | Localized hint text | Out of scope — consistent with HINTS-V3/V4. |
+| `callee_capability` / `callee_annotation` filter axes | Cardinality high, agent value unclear; locked Decision 33. Re-opens via a new propose. |
+| `EdgeFilter` on `find_callers` / `find_route_callers` | Discrete `min_confidence` parameter is kept; asymmetry with `neighbors_v2` is intentional (HV30 / Decision 28). |
+| MCP surface for "find unresolved callers by callee_simple" | Debuggability path lives in `pc unresolved-calls list --callee-simple <name>`; not an agent traversal pattern (Decision 27). |
+| Cross-microservice-skipped CALLS sites becoming `UnresolvedCallSite` rows | Cross-service policy, not a resolution failure; existing log line + counter unchanged (Decision 25). |
+| Renaming `NodeFilter.role` or `EdgeFilter.callee_declaring_role` to disambiguate | Naming-collision trap mitigated by docs + HINTS-V4 hint (Decision 31); rename is a worse trade. |
+| Package-relativity filters in `EdgeFilter` (e.g. same-package callees) | Out of scope; use `NodeFilter(fqn_prefix=...)` or two queries (HV27). |
 
 ## §6 — Migration plan — 3 PRs
 
@@ -284,6 +356,10 @@ This propose locks before any code PR merges. The propose itself merges as a sep
 - Pydantic-level validation: `include_strategies` xor `exclude_strategies`.
 - Add `pc unresolved-calls list` and `pc unresolved-calls stats` CLI subcommands (in `docs/JAVA-CODEBASE-RAG-CLI.md` + the CLI binary).
 - Update `MCP_HINTS_FIELD_DESCRIPTION` and `EDGE_SCHEMA` snapshot to register `callee_declaring_role` as a known filterable attribute on CALLS.
+- Add `include_unresolved: bool = False` to `neighbors_v2`. When `True` and `'CALLS'` in `edge_types`, interleave `UnresolvedCallSite` rows (`row_kind="unresolved_call_site"`) with resolved `CallEdgeRow` (`row_kind="call_edge"`) in `(call_site_line, call_site_byte)` order. `edge_filter` is ignored when `include_unresolved=True` (Decision 26).
+- Add `OTHER`-fallback hint when role filter returns 0 but unfiltered ≥5 results (Decision 20).
+- Add `NodeFilter(role=...)` vs `EdgeFilter.callee_declaring_role` collision hint (Decision 31).
+- Add Kuzu predicate-pushdown perf named-scenario test on `bank-chat-system` (Decision 32).
 - Revisit the MCP-V2 "no per-edge filter" design rule in the PR description; record the supersession (this propose plus the locked principle 3).
 
 **Test summary**: named scenarios — filter projects ordered stream by role; filter ignored on non-CALLS edges (silent); filter xor validation raises Pydantic error; CLI `pc unresolved-calls list --method-id <id>` returns all unresolved sites for a method; `--by reason` stats aggregate correctly.
@@ -296,6 +372,7 @@ This propose locks before any code PR merges. The propose itself merges as a sep
 - Add `dedup_calls: bool = False` to `neighbors_v2`.
 - Extend `CallEdgeRow` with `call_site_count: int` and `call_site_lines: list[int] | None`.
 - Add `TPL_NEIGHBORS_CALLS_HIGH_FANOUT` template (§3.10) wired through the existing HINTS-V4 success-path generator.
+- Add `TPL_NEIGHBORS_CALLS_HAS_UNRESOLVED` template (§3.10) wired through the same generator. Suppressed when `include_unresolved=True`.
 - Add HV19 invariant test.
 
 **Test summary**: named scenarios — dedup collapses identical `(src,dst)` pairs; default `dedup_calls=False` produces today's shape; high-fanout template fires above threshold; does not fire when `edge_filter` is provided; threshold value (10) covered by named scenario.
@@ -321,6 +398,20 @@ This propose locks before any code PR merges. The propose itself merges as a sep
 17. **`pass3_calls` cross-microservice skip behavior is unchanged.** Today's same-microservice candidate preference at `build_ast_graph.py:1218-1232` continues to apply.
 18. **PR-1 is a single re-index moment.** ONTOLOGY_VERSION 14 → 15. PR-2 and PR-3 do not bump it again.
 19. **Three sub-PRs, sequential.** PR-1 → PR-2 → PR-3. No parallelization.
+20. **`callee_declaring_role` is sourced from the candidate's `parent_id` Symbol's `role`** — i.e. the role of the type that declares the resolved callee method, after `_lookup_method_candidates` has chosen between interface and concrete declarations. Today's preference order (same-microservice > resolved > supertype walk) is unchanged. When resolution lands on an interface with no stereotype, the value is `OTHER`. PR-2 validates against `bank-chat-system` that the common `Spring @Repository` case yields `REPOSITORY`, not `OTHER`. PR-2 also adds an `OTHER`-fallback hint when a role filter returns 0 but the unfiltered call has ≥5 results.
+21. **`edge_filter` is applied at every hop in `neighbors_v2(depth>1)`,** independently.
+22. **`NodeFilter` and `EdgeFilter` compose with AND;** `(call_site_line, call_site_byte)` ordering is preserved when both are applied.
+23. **`GraphMeta` gains `pass3_unresolved_sites_total INT64`** and **`pass3_unresolved_by_reason STRING`** (JSON-encoded `{reason: count}` map). Populated in PR-1.
+24. **`cursor-pr-review` is acknowledged as a downstream consumer** of `UnresolvedCallSite`. The skill update is not part of this propose; PR-1's PR description records a note for the skill maintainer.
+25. **Cross-microservice-skipped CALLS sites are not `UnresolvedCallSite` rows.** Existing log line + `pass3_skipped_cross_service` counter are kept.
+26. **`include_unresolved=True` ignores `edge_filter`.** The interleaved view is "the complete annotated transcript"; the filtered view is "the clean projection." They are different surfaces for different agent intents.
+27. **No MCP surface for "find unresolved callers by `callee_simple`."** The workflow is debuggability via `pc unresolved-calls list --callee-simple <name>`, not agent traversal.
+28. **`find_callers` / `find_route_callers` are not migrated to accept `EdgeFilter`.** Their existing discrete `min_confidence` parameter is kept. The asymmetry with `neighbors_v2` is intentional and documented.
+29. **Package-relativity / cross-edge composition filters are out of scope for `EdgeFilter`.** Use `NodeFilter(fqn_prefix=...)` or chained `neighbors` calls.
+30. **Brownfield `@CodebaseRole`-derived role is picked up transparently** by `callee_declaring_role` because it reads `parent.role`, which already reflects the brownfield layer (`graph_enrich.py:672`). No additional code.
+31. **`NodeFilter.role` and `EdgeFilter.callee_declaring_role` are intentionally not renamed.** The collision is documented in `docs/AGENT-GUIDE.md` and mitigated by a HINTS-V4 hint that fires when `NodeFilter(role=...)` is applied to `neighbors([m],'out',['CALLS'])` and returns zero rows (recommending the agent likely meant `EdgeFilter(callee_declaring_role=...)`).
+32. **PR-2 ships a Kuzu predicate-pushdown sanity test.** Named scenario: empty-filter `neighbors([m],'out',['CALLS'])` on `bank-chat-system` is within 1.5× of today's median latency. If the test fails at PR-2 review time, PR-2 adds an index on `(src_id, callee_declaring_role)` and re-validates.
+33. **`EdgeFilter` exposes only `callee_declaring_role` from the role/capability/annotation triple.** Capability and annotation filters are out of scope. Re-opens via a new propose if agent value emerges later.
 
 ## §8 — Risks and how we mitigate
 
@@ -369,9 +460,26 @@ CREATE REL TABLE UNRESOLVED_AT(FROM Symbol TO UnresolvedCallSite);
 
 ## Appendix B — Traceability
 
-First draft. If reviewers move decisions, this section grows two sub-lists:
-- **What stayed unchanged from the original draft**
-- **What changed and why**
+**Revision 1 (2026-05-18, post-author-grill)** — additions only, no decisions removed:
+
+- Added §4.5 (HV21–HV37): regression-style use cases covering the workflows that triggered #177.
+- Added Surface B (`include_unresolved`) to §3.5: in-line interleaved transcript view with `row_kind` discriminator.
+- Added `TPL_NEIGHBORS_CALLS_HAS_UNRESOLVED` template to §3.10.
+- Added §5 rows for capability/annotation, `EdgeFilter` on `find_callers`, unresolved-callers MCP, cross-microservice skip, naming-collision rename, package-relativity.
+- Added Decisions 20–33 to §7 covering: interface-vs-concrete resolution (20), depth>1 semantics (21), NodeFilter+EdgeFilter composition (22), GraphMeta telemetry (23), cursor-pr-review consumer (24), cross-microservice non-`UnresolvedCallSite` policy (25), `include_unresolved` vs `edge_filter` exclusivity (26), no-unresolved-callers MCP (27), `find_callers` discrete-parameter asymmetry (28), package-relativity scope (29), brownfield role transparency (30), NodeFilter/EdgeFilter naming collision (31), perf invariant (32), no capability/annotation filters (33).
+- Updated TL;DR and PR-2/PR-3 deliverables to match.
+
+**What stayed unchanged from the original draft**:
+- Decisions 1–19 unchanged.
+- Principles 1–8 unchanged.
+- DDL diff (Appendix A) unchanged.
+- 3-PR migration sequence unchanged.
+- HV1–HV20 use-case rows unchanged.
+
+**What changed and why** (decisions → surface):
+- Surface B (`include_unresolved`) added because HV23 (partial-unresolution method) made it clear the sidecar describe rollup wasn't enough — agents reading a method body need unresolved sites *in source order*, not five lines below the transcript.
+- HV32 (interface-vs-concrete) and Decision 20 added because the filter value's dependency on `_lookup_method_candidates` resolution was the biggest unaddressed gap from author-grill round 1. The `OTHER`-fallback hint mitigates the worst case.
+- Decision 31 (no rename of `NodeFilter.role` vs `EdgeFilter.callee_declaring_role`) added because the collision is real and a rename costs more than a docs callout + hint.
 
 **Cross-propose references**:
 - Supersedes `propose/completed/MCP-API-V2-REDESIGN-PROPOSE.md`'s "no per-edge filter on `neighbors`" rule (Decision 16).
