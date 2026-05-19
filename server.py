@@ -454,7 +454,9 @@ def create_mcp_server() -> FastMCP:
             "for 2-hop member rollups — out only, with via_id in attrs). OVERRIDDEN_BY* keys are not valid edge_types. "
             "Optional `filter` applies to each neighbor endpoint row; populated fields must be applicable to that "
             "neighbor's kind—mixed-kind result sets fail on the first inapplicable neighbor (strict frame). "
-            "Wildcards in prefix fields are rejected. Unknown NodeFilter keys return success=false. "
+            "Optional `edge_filter` (CALLS-only) projects the ordered CALLS stream by edge attributes "
+            "(min_confidence, strategies, callee_declaring_role); fail-loud when an attribute is not on every "
+            "requested edge type. Wildcards in prefix fields are rejected. Unknown filter keys return success=false. "
             "Successful responses echo `requested_edge_types` and may include `hints` (advisory next-step strings; "
             "empty results may include EDGE_SCHEMA-driven traversal hints). "
             "Each edge's `attrs.strategy` indicates resolution quality (brownfield/fallback vs primary paths)."
@@ -493,6 +495,13 @@ def create_mcp_server() -> FastMCP:
                 "Prefer a JSON object; a JSON-encoded string is accepted."
             ),
         ),
+        edge_filter: dict[str, Any] | str | None = Field(
+            default=None,
+            description=(
+                "Optional EdgeFilter on CALLS edge attributes (source-ordered). Use callee_declaring_role for "
+                "callee stereotype projection — not NodeFilter.role on method neighbors. Prefer a JSON object."
+            ),
+        ),
     ) -> mcp_v2.NeighborsOutput:
         return await asyncio.to_thread(
             mcp_v2.neighbors_v2,
@@ -502,6 +511,7 @@ def create_mcp_server() -> FastMCP:
             limit,
             offset,
             filter,
+            edge_filter,
             None,
         )
 

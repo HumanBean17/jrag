@@ -21,7 +21,10 @@ MCP_HINTS_FIELD_DESCRIPTION = (
     "Maximum 5 hints per output. Describe-time type rollup hints may recommend "
     "DECLARES.* dot-keys for neighbors(); empty neighbors structural hints never use "
     "dot-key edge labels. For neighbors with multiple origin ids, empty-result "
-    "structural hints describe the first origin only."
+    "structural hints describe the first origin only. On neighbors with "
+    "edge_types=['CALLS'], optional edge_filter projects the ordered CALLS stream "
+    "(min_confidence, strategies, callee_declaring_role axes); include_unresolved and "
+    "dedup_calls are separate knobs (mutually exclusive with edge_filter where noted)."
 )
 
 # --- Appendix A verbatim templates (substitute {id}, {kind}, {limit}) ---
@@ -107,6 +110,18 @@ _RESOLVE_WILDCARDS = ("*", "?")
 
 TPL_NEIGHBORS_FUZZY_STRATEGY = (
     "some edges resolved via brownfield/fallback strategy — check attrs.strategy on each row"
+)
+
+TPL_NEIGHBORS_CALLS_ROLE_FILTER_OTHER_FALLBACK = (
+    "0 CALLS matched callee_declaring_role filter but method has many callees — "
+    "targets may be OTHER (interface/JDK); try "
+    "edge_filter={{exclude_callee_declaring_roles: ['ENTITY','DTO']}} instead of role exact match"
+)
+
+TPL_NEIGHBORS_CALLS_NODEFILTER_ROLE_COLLISION = (
+    "NodeFilter.role filters the neighbor method's role (usually OTHER), not the callee's "
+    "declaring type — use edge_filter={{callee_declaring_role: 'SERVICE'}} (or REPOSITORY) "
+    "for CALLS stereotype projection"
 )
 
 # v4 neighbors success-path (propose/HINTS-V4-SUCCESS-PATH-PROPOSE.md); N1a/N1b alias describe templates.
@@ -327,6 +342,45 @@ def _append_neighbors_success_hint(pairs: list[tuple[int, str]], text: str) -> N
     # v4 neighbors cap only (describe uses the same N1a/N1b templates without this gate).
     if text and len(text) <= _NEIGHBORS_SUCCESS_MAX_CHARS:
         pairs.append((PRIORITY_LEAF_FOLLOWUP, text))
+
+
+def neighbors_calls_meta_hints(payload: dict[str, Any]) -> list[tuple[int, str]]:
+    """CALLS-specific hints: role-filter OTHER fallback (Decision 20) and NodeFilter.role trap (30)."""
+    pairs: list[tuple[int, str]] = []
+    req_types = payload.get("requested_edge_types")
+    if not isinstance(req_types, list) or req_types != ["CALLS"]:
+        return pairs
+    results = list(payload.get("results") or [])
+    edge_flt = payload.get("edge_filter") if isinstance(payload.get("edge_filter"), dict) else {}
+    node_flt = payload.get("node_filter") if isinstance(payload.get("node_filter"), dict) else {}
+    role_exact = edge_flt.get("callee_declaring_role")
+    if (
+        role_exact in ("SERVICE", "REPOSITORY")
+        and not results
+        and int(payload.get("unfiltered_calls_count") or 0) >= 5
+    ):
+        pairs.append((PRIORITY_META, TPL_NEIGHBORS_CALLS_ROLE_FILTER_OTHER_FALLBACK))
+    node_role = node_flt.get("role")
+    if node_role and results:
+        method_rows = [
+            r
+            for r in results
+            if str(((r.get("other") or {}) if isinstance(r.get("other"), dict) else {}).get("symbol_kind") or "")
+            == "method"
+        ]
+        if method_rows:
+            other_roles = [
+                str(
+                    ((r.get("other") or {}) if isinstance(r.get("other"), dict) else {}).get("role")
+                    or ""
+                )
+                for r in method_rows
+            ]
+            if other_roles and sum(1 for role in other_roles if role == "OTHER") >= max(
+                1, (len(other_roles) * 3) // 4
+            ):
+                pairs.append((PRIORITY_META, TPL_NEIGHBORS_CALLS_NODEFILTER_ROLE_COLLISION))
+    return pairs
 
 
 def neighbors_success_hints(payload: dict[str, Any]) -> list[tuple[int, str]]:
@@ -573,11 +627,11 @@ def generate_hints(
                         requested_direction=requested_direction,
                     )
                 )
-        else:
-            if results and offset == 0:
-                success_pairs = neighbors_success_hints(payload)
-            if _any_fuzzy_strategy(results):
-                meta_pairs.append((PRIORITY_META, TPL_NEIGHBORS_FUZZY_STRATEGY))
+        elif results and offset == 0:
+            success_pairs = neighbors_success_hints(payload)
+        meta_pairs.extend(neighbors_calls_meta_hints(payload))
+        if results and _any_fuzzy_strategy(results):
+            meta_pairs.append((PRIORITY_META, TPL_NEIGHBORS_FUZZY_STRATEGY))
         return finalize_hint_list(
             _filter_neighbors_dotkey_hints(empty_pairs) + success_pairs + meta_pairs,
         )
