@@ -12,6 +12,10 @@ Copy the block between `<!-- BEGIN` and `<!-- END` into your project's `AGENTS.m
 
 **Node kinds:** `Symbol` (types and methods), `Route` (HTTP and messaging entry points), `Client` (outbound HTTP call sites), `Producer` (outbound async call sites).
 
+**Indexed content:** Java production sources plus SQL and YAML (use `search` `table`: `java`, `sql`, `yaml`, or `all`).
+
+**Ontology: 15** — if results look structurally wrong or empty across tools, the index may be missing, stale, or built with a different `ontology_version`; you cannot re-index via MCP — ask the operator to rebuild.
+
 **Responses:** On success, `search`, `find`, `describe`, and `neighbors` may include a top-level `hints` list (≤5 suggested next calls) and, for `search`/`find`, echoed `limit`/`offset`. Hints are advisory; ignore them when `success` is false.
 
 **Use this MCP when** you need whole-codebase structure: callers/callees, route handlers, HTTP/async seams, clients/producers, or fuzzy entry points for a concept.
@@ -29,7 +33,16 @@ When MCP disagrees with the open file, **the file wins**; treat the mismatch as 
 
 ### Brownfield annotations on methods
 
-If a method has **`@CodebaseHttpRoute`** or **`@CodebaseHttpClient`** (including plural containers), that annotation is the **only** source for the facets it declares (path, HTTP verb, `targetService`, `clientKind`, etc.). Framework mapping annotations on the **same** method are **not merged** for that axis. Trust the indexed brownfield row over a framework-only reading of the source.
+If a method has any of these (including plural containers **`@CodebaseHttpRoutes`**, **`@CodebaseAsyncRoutes`**, **`@CodebaseHttpClients`**, **`@CodebaseProducers`**), that annotation is the **only** source for the facets it declares — framework inference on the **same** method is **not merged** for that axis:
+
+| Annotation | Declares | Framework rows bypassed (examples) |
+| ---------- | -------- | ------------------------------------ |
+| `@CodebaseHttpRoute` | inbound HTTP path / verb | Spring MVC/WebFlux mapping annotations |
+| `@CodebaseAsyncRoute` | inbound async topic / route | `@KafkaListener`, `@RabbitListener`, … |
+| `@CodebaseHttpClient` | outbound HTTP client call site | `@FeignClient` method mappings, RestTemplate-style inference |
+| `@CodebaseProducer` | outbound async producer call site | `KafkaTemplate` / `StreamBridge` producer inference |
+
+Trust the indexed brownfield row over a framework-only reading of the source.
 
 ### Workflow (locate → inspect → walk)
 
@@ -136,7 +149,7 @@ For **`find`**, `filter` is required — `{}` means no predicates (all nodes of 
 
 **Input:** FQN or suffix, `sym:`/`route:`/`client:`/`producer:` id, `METHOD /path`, route path template, client `target_service`, `target_service` + path prefix, or producer topic.
 
-**`hint_kind`:** optional `symbol` | `route` | `client` | `producer`.
+**`hint_kind`:** optional `symbol` | `route` | `client` | `producer`. When omitted, generators run across **all four** kinds (narrow with `hint_kind` when you know the kind).
 
 | `status` | Action |
 | -------- | ------ |
@@ -232,6 +245,7 @@ Returns **edges** with `attrs` (`confidence`, `strategy`, `match`, … on cross-
 | `find` returns too much | Broad filter | Add `microservice`, `fqn_prefix`, `path_prefix`, `topic_prefix`, … |
 | Route not found | Path mismatch | `find(kind="route", filter={"path_prefix":…})` |
 | Empty `search` | Wrong `table`, no index, or chunk miss | Try `table="all"`; `find` with `fqn_prefix`; read source files directly |
+| Empty results across several tools | Index missing, stale, or wrong project | You cannot rebuild the index via MCP — ask the operator; meanwhile use open files / `rg` |
 | Result vs open file disagree | Stale or partial index | Trust the file; say index may be stale |
 | Used virtual key in `neighbors` | `OVERRIDDEN_BY*` is describe-only | Use stored `OVERRIDES` or manual walk via `DECLARES` → type → `IMPLEMENTS`/`EXTENDS` |
 
@@ -259,3 +273,13 @@ After two failed attempts on the same intent, stop and report tool name, args, a
 4. Stop when you can answer; do not prefetch unrelated subgraphs.
 
 <!-- END java-codebase-rag MCP guide -->
+
+---
+
+## Maintenance (repo editors only — do not paste below into agent instructions)
+
+When MCP behaviour, `NodeFilter` keys, edge labels, or node kinds change:
+
+1. Update this file's copy block and bump the **Ontology:** line to match `ast_java.ONTOLOGY_VERSION`.
+2. Update the MCP tool table and "Driving the MCP from an agent" bullet in `README.md`.
+3. If enrichment semantics changed, add a "Re-index required" callout in `README.md`.
