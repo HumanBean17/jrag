@@ -385,7 +385,7 @@ def _open_stale_ontology_graph(tmp_path: Path, ontology_version: int) -> Path:
 
 
 def test_kuzu_graph_refuses_ontology_version_below_required(tmp_path: Path) -> None:
-    """v13 graphs refuse to open when ONTOLOGY_VERSION is 14 (SCHEMA-V2 PR-A).
+    """v13 graphs refuse to open when ``ONTOLOGY_VERSION`` is current (e.g. 15).
 
     Overlaps ``test_kuzu_graph_get_raises_when_graph_ontology_too_old`` when
     ``ONTOLOGY_VERSION - 1 == 13``; kept as an explicit v13 regression anchor.
@@ -398,7 +398,11 @@ def test_kuzu_graph_refuses_ontology_version_below_required(tmp_path: Path) -> N
     try:
         KuzuGraph._instance = None
         KuzuGraph._instance_path = None
-        with pytest.raises(RuntimeError, match="(?i)ontology.*14|required version 14"):
+        ver = ONTOLOGY_VERSION
+        with pytest.raises(
+            RuntimeError,
+            match=rf"(?i)ontology.*{ver}|required version {ver}",
+        ):
             KuzuGraph.get(str(db_path))
     finally:
         KuzuGraph._instance = prev_inst

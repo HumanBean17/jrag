@@ -16,7 +16,9 @@ from pathlib import Path
 import kuzu
 import pytest
 
+from _builders import build_kuzu_to
 from ast_java import ONTOLOGY_VERSION
+from graph_enrich import _load_brownfield_overrides, collect_annotation_meta_chain
 
 
 def _connect(db_path: Path) -> kuzu.Connection:
@@ -56,6 +58,96 @@ def test_schema_has_all_expected_tables(kuzu_db_path: Path) -> None:
     }
     missing = expected - tables
     assert not missing, f"missing schema tables: {missing}; saw {tables}"
+
+
+def test_graph_meta_unresolved_counters_present(kuzu_db_path: Path) -> None:
+    conn = _connect(kuzu_db_path)
+    r = conn.execute(
+        "MATCH (m:GraphMeta) RETURN m.pass3_unresolved_phantom_receiver, "
+        "m.pass3_unresolved_chained"
+    )
+    assert r.has_next(), "expected GraphMeta row"
+    row = r.get_next()
+    assert row[0] is not None and int(row[0]) >= 0
+    assert row[1] is not None and int(row[1]) >= 0
+
+
+def test_calls_callee_declaring_role_matches_parent_symbol_role_yaml_brownfield(
+    tmp_path: Path,
+) -> None:
+    """YAML role_overrides on declaring type → edge attr matches parent Symbol.role."""
+    _load_brownfield_overrides.cache_clear()
+    collect_annotation_meta_chain.cache_clear()
+    root = tmp_path / "proj"
+    java_dir = root / "src/main/java/smoke"
+    java_dir.mkdir(parents=True)
+    (java_dir / "BrownfieldCallRole.java").write_text(
+        """
+        package smoke;
+
+        @interface LegacyServiceMarker { }
+
+        @LegacyServiceMarker
+        class ConfigOnlyService {
+            void handle() { }
+        }
+
+        class Caller {
+            void run(ConfigOnlyService svc) {
+                svc.handle();
+            }
+        }
+        """.strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (root / ".java-codebase-rag.yml").write_text(
+        "role_overrides:\n"
+        "  annotations:\n"
+        "    LegacyServiceMarker: SERVICE\n",
+        encoding="utf-8",
+    )
+    db_path = build_kuzu_to(root, tmp_path / "g.kuzu", max_pass=3)
+    conn = _connect(db_path)
+    mismatches = _scalar(
+        conn,
+        "MATCH ()-[c:CALLS]->(dst:Symbol) "
+        "MATCH (parent:Symbol {id: dst.parent_id}) "
+        "WHERE c.callee_declaring_role <> parent.role "
+        "RETURN count(*)",
+    )
+    assert mismatches == 0
+    roles = _column(
+        conn,
+        "MATCH ()-[c:CALLS]->(dst:Symbol) "
+        "MATCH (parent:Symbol {id: dst.parent_id}) "
+        "WHERE parent.fqn = 'smoke.ConfigOnlyService' "
+        "RETURN DISTINCT c.callee_declaring_role",
+    )
+    assert roles == ["SERVICE"]
+
+
+def test_pass3_callee_declaring_role_bank_annotated_types(kuzu_db_path: Path) -> None:
+    """CALLS to methods on @Service declaring types carry callee_declaring_role=SERVICE."""
+    conn = _connect(kuzu_db_path)
+    rows = _column(
+        conn,
+        "MATCH (src:Symbol)-[c:CALLS]->(dst:Symbol) "
+        "MATCH (parent:Symbol {id: dst.parent_id}) "
+        "WHERE 'Service' IN parent.annotations AND parent.role = 'SERVICE' "
+        "RETURN c.callee_declaring_role LIMIT 20",
+    )
+    assert rows, "expected CALLS to @Service-declared callees on bank-chat-system"
+    assert all(str(r) == "SERVICE" for r in rows), rows
+    repo_rows = _column(
+        conn,
+        "MATCH (src:Symbol)-[c:CALLS]->(dst:Symbol) "
+        "MATCH (parent:Symbol {id: dst.parent_id}) "
+        "WHERE 'Repository' IN parent.annotations "
+        "RETURN DISTINCT c.callee_declaring_role",
+    )
+    if repo_rows:
+        assert all(str(r) == "REPOSITORY" for r in repo_rows), repo_rows
 
 
 def test_graph_meta_present_and_versioned(kuzu_db_path: Path) -> None:

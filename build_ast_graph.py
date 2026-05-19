@@ -180,6 +180,7 @@ class CallsRow:
     strategy: str = "phantom"
     source: str = "static"
     resolved: bool = True
+    callee_declaring_role: str = "OTHER"
 
 
 @dataclass
@@ -380,7 +381,11 @@ class GraphTables:
     parse_errors: int = 0
     skipped_files: int = 0
     pass3_skipped_cross_service: int = 0
+    pass3_unresolved_phantom_receiver: int = 0
+    pass3_unresolved_chained: int = 0
     cross_service_resolution: str = "auto"
+    # Populated in _write_nodes (same overrides + meta_chain as Symbol.role).
+    type_role_by_node_id: dict[str, str] = field(default_factory=dict)
 
 
 # ---------- file walk (see `path_filtering.iter_java_source_files`) ----------
@@ -1129,6 +1134,81 @@ def _phantom_method_id(
     return pid
 
 
+def _method_signature_matches_call(member: MemberEntry, call: CallSite) -> bool:
+    if call.arg_count < 0:
+        return True
+    return len(member.decl.parameters) == call.arg_count
+
+
+def _is_strict_supertype_of(tables: GraphTables, super_fqn: str, subtype_fqn: str) -> bool:
+    if super_fqn == subtype_fqn:
+        return False
+    entry = tables.types.get(subtype_fqn)
+    if entry is None:
+        return False
+    visited: set[str] = set()
+    queue = list(_direct_supertype_fqns(entry, tables))
+    while queue:
+        tfqn = queue.pop(0)
+        if tfqn == super_fqn:
+            return True
+        if tfqn in visited or tfqn not in tables.types:
+            continue
+        visited.add(tfqn)
+        queue.extend(_direct_supertype_fqns(tables.types[tfqn], tables))
+    return False
+
+
+def _callee_declaring_role_at_write(
+    tables: GraphTables,
+    dst_id: str,
+    *,
+    member_by_id: dict[str, MemberEntry],
+) -> str:
+    """Match parent declaring-type Symbol.role (brownfield + meta_chain included)."""
+    if dst_id in tables.phantoms:
+        return "OTHER"
+    member = member_by_id.get(dst_id)
+    if member is None:
+        return "OTHER"
+    return tables.type_role_by_node_id.get(member.parent_id, "OTHER")
+
+
+def _collapse_supertype_duplicates(
+    candidates: list[MemberEntry],
+    recv_type_fqn: str,
+    call: CallSite,
+    tables: GraphTables,
+) -> list[MemberEntry]:
+    """§3.3.1 supertype-walk dedup — collapse interface + concrete duplicate sites."""
+    if len(candidates) <= 1:
+        return candidates
+    concrete_on_receiver = [
+        c for c in candidates
+        if c.parent_fqn == recv_type_fqn and _method_signature_matches_call(c, call)
+    ]
+    if len(concrete_on_receiver) != 1:
+        return candidates
+    concrete = concrete_on_receiver[0]
+    supertypes = [
+        c for c in candidates
+        if c is not concrete
+        and _is_strict_supertype_of(tables, c.parent_fqn, recv_type_fqn)
+        and c.decl.signature == concrete.decl.signature
+    ]
+    if not supertypes:
+        return candidates
+    allowed_ids = {concrete.node_id, *(c.node_id for c in supertypes)}
+    if any(c.node_id not in allowed_ids for c in candidates):
+        return candidates
+    log.debug(
+        "pass3 supertype dedup %s -> %s",
+        [c.node_id for c in candidates],
+        concrete.node_id,
+    )
+    return [concrete]
+
+
 def _emit_call_edge(
     tables: GraphTables,
     stats: CallResolutionStats,
@@ -1269,6 +1349,9 @@ def _resolve_and_emit_call(
         )
         return
 
+    if len(candidates) > 1 and edge_strat != "overload_ambiguous":
+        candidates = _collapse_supertype_duplicates(candidates, recv_type, call, tables)
+
     if len(candidates) == 1:
         candidate = candidates[0]
         ref_arity: int | None = None
@@ -1334,6 +1417,8 @@ def pass3_calls(tables: GraphTables, asts: dict[str, JavaFileAst], *, verbose: b
     pct_callee_unres = 100.0 * stats.callee_unresolved / max(1, stats.total)
     pct_phantom_recv = 100.0 * stats.phantom_other / max(1, stats.total)
     tables.pass3_skipped_cross_service = int(stats.skipped_cross_service)
+    tables.pass3_unresolved_phantom_receiver = int(stats.phantom_other)
+    tables.pass3_unresolved_chained = int(stats.phantom_chained)
     msg = (
         f"Call resolution: {stats.total} sites, {stats.phantom_chained} chained phantoms "
         f"({pct_chained:.1f}%), {stats.callee_unresolved} unresolved callee "
@@ -2262,6 +2347,8 @@ _SCHEMA_META = (
     "async_calls_match_breakdown STRING, "
     "cross_service_calls_total INT64, "
     "pass3_skipped_cross_service INT64, "
+    "pass3_unresolved_phantom_receiver INT64, "
+    "pass3_unresolved_chained INT64, "
     "pass4_exposes_suppressed_feign INT64, "
     "cross_service_resolution STRING"
     ")"
@@ -2316,7 +2403,8 @@ _SCHEMA_OVERRIDES = "CREATE REL TABLE OVERRIDES(FROM Symbol TO Symbol)"
 _SCHEMA_CALLS = (
     "CREATE REL TABLE CALLS(FROM Symbol TO Symbol, "
     "call_site_line INT64, call_site_byte INT64, arg_count INT64, "
-    "confidence DOUBLE, strategy STRING, source STRING, resolved BOOLEAN)"
+    "confidence DOUBLE, strategy STRING, source STRING, resolved BOOLEAN, "
+    "callee_declaring_role STRING)"
 )
 _SCHEMA_EXPOSES = (
     "CREATE REL TABLE EXPOSES(FROM Symbol TO Route, "
@@ -2445,6 +2533,7 @@ def _write_nodes(
             overrides=overrides,
             meta_chain=mch,
         )
+        tables.type_role_by_node_id[entry.node_id] = role
         conn.execute(_CREATE_SYMBOL, _node_row(
             id=entry.node_id, kind=d.kind, name=d.name, fqn=d.fqn,
             package=entry.package,
@@ -2503,7 +2592,8 @@ _CREATE_CALL = (
     "MATCH (a:Symbol {id: $src}), (b:Symbol {id: $dst}) "
     "CREATE (a)-[:CALLS {"
     "call_site_line: $line, call_site_byte: $byte, arg_count: $argc, "
-    "confidence: $conf, strategy: $strat, source: $src_kind, resolved: $resolved"
+    "confidence: $conf, strategy: $strat, source: $src_kind, resolved: $resolved, "
+    "callee_declaring_role: $callee_declaring_role"
     "}]->(b)"
 )
 
@@ -2637,6 +2727,7 @@ def _write_edges(conn: kuzu.Connection, tables: GraphTables) -> None:
             seen_calls.add(key)
             unique_calls.append(row)
 
+    member_by_id = {m.node_id: m for m in tables.members}
     for row in unique_calls:
         conn.execute(_CREATE_CALL, {
             "src": row.src_id, "dst": row.dst_id,
@@ -2647,6 +2738,9 @@ def _write_edges(conn: kuzu.Connection, tables: GraphTables) -> None:
             "strat": row.strategy,
             "src_kind": row.source,
             "resolved": row.resolved,
+            "callee_declaring_role": _callee_declaring_role_at_write(
+                tables, row.dst_id, member_by_id=member_by_id,
+            ),
         })
 
 
@@ -2788,6 +2882,8 @@ def _write_meta(conn: kuzu.Connection, tables: GraphTables, source_root: Path) -
         "async_calls_match_breakdown: $async_calls_match_breakdown, "
         "cross_service_calls_total: $cross_service_calls_total, "
         "pass3_skipped_cross_service: $pass3_skipped_cross_service, "
+        "pass3_unresolved_phantom_receiver: $pass3_unresolved_phantom_receiver, "
+        "pass3_unresolved_chained: $pass3_unresolved_chained, "
         "pass4_exposes_suppressed_feign: $pass4_exposes_suppressed_feign, "
         "cross_service_resolution: $cross_service_resolution})",
         {
@@ -2821,6 +2917,8 @@ def _write_meta(conn: kuzu.Connection, tables: GraphTables, source_root: Path) -
             "async_calls_match_breakdown": json.dumps(async_match),
             "cross_service_calls_total": int(call_stats.cross_service_calls_total),
             "pass3_skipped_cross_service": int(tables.pass3_skipped_cross_service),
+            "pass3_unresolved_phantom_receiver": int(tables.pass3_unresolved_phantom_receiver),
+            "pass3_unresolved_chained": int(tables.pass3_unresolved_chained),
             "pass4_exposes_suppressed_feign": int(st.exposes_suppressed_feign),
             "cross_service_resolution": str(tables.cross_service_resolution),
         },

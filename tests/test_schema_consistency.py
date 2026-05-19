@@ -87,6 +87,17 @@ def test_http_async_typical_traversals_post_flip() -> None:
     assert "DECLARES_PRODUCER" in async_trav["member_subject"]
 
 
+def test_edge_schema_calls_registers_callee_declaring_role() -> None:
+    attrs = {a.name for a in EDGE_SCHEMA["CALLS"].attrs}
+    assert "callee_declaring_role" in attrs
+
+
+def test_calls_edge_has_callee_declaring_role_column() -> None:
+    text = _BUILD_AST_GRAPH.read_text(encoding="utf-8")
+    assert "callee_declaring_role STRING" in text
+    assert "callee_declaring_role: $callee_declaring_role" in text
+
+
 def test_brownfield_resolver_strategy_literals_emitted_in_builder_subset() -> None:
     literals = _strategy_literals_in_emitters()
     assert literals, "expected strategy literals from emitter modules"

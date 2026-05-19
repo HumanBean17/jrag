@@ -137,6 +137,7 @@
 - `strategy` (`STRING`) — call-graph resolution strategy literal
 - `source` (`STRING`) — call-graph source tag
 - `resolved` (`BOOLEAN`) — True iff callee Symbol was resolved in-graph
+- `callee_declaring_role` (`STRING`) — role of the Symbol that declares the callee method
 
 **Typical traversals**:
 

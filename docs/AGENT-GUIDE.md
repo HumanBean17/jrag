@@ -12,10 +12,12 @@
 > `neighbors` arguments, pass stringified JSON, or use vector search for
 > questions the graph answers exactly. This guide keeps them on the rails.
 >
-> Calibrated against ontology version **14** (see `ast_java.ONTOLOGY_VERSION` /
+> Calibrated against ontology version **15** (see `ast_java.ONTOLOGY_VERSION` /
 > `java_ontology.EDGE_SCHEMA` + valid sets): canonical edge navigation schema in
-> `docs/EDGE-NAVIGATION.md`. v14 re-index required; `HTTP_CALLS` is `Client → Route`;
-> `Producer` + `DECLARES_PRODUCER` and `ASYNC_CALLS` (`Producer → Route`) ship in v14.
+> `docs/EDGE-NAVIGATION.md`. v15 re-index required — `CALLS.callee_declaring_role`,
+> supertype-walk dedup (fewer duplicate-site rows), and `GraphMeta` pass3 unresolved
+> counters; PR-2 adds `edge_filter` on `neighbors`. v14: `HTTP_CALLS` is `Client → Route`;
+> `Producer` + `DECLARES_PRODUCER` and `ASYNC_CALLS` (`Producer → Route`).
 > Still includes stored `OVERRIDES` Symbol→Symbol edges and v12 HTTP brownfield
 > (`@CodebaseHttpClient`, shared `CodebaseHttpMethod` enum, inbound layer-C HTTP routes
 > replace same-method built-in rows). **Design rationale:** navigation surface and tools —
@@ -264,7 +266,7 @@ Virtual keys (`OVERRIDDEN_BY`, …) are **not** valid `neighbors` arguments — 
 - **Mixed flat + composed `edge_types`:** flat edges are appended before composed edges, then `limit`/`offset` apply. A small `limit` with e.g. `["DECLARES", "DECLARES.DECLARES_CLIENT"]` may return only member Symbols and no Clients — use the dot-key alone when enumerating terminals.
 - **Confidence:** Cross-service edges (`HTTP_CALLS`, `ASYNC_CALLS`) carry confidence, strategy, and match metadata on `edge.attrs` (`attrs.confidence`, `attrs.strategy`, `attrs.match`). Low confidence means the resolver had to guess at the route binding — treat it as a **resolver gap signal**, not a hallucination. Report low-confidence edges with their confidence value, not as facts. Intra-service edges (`CALLS`, `INJECTS`, `IMPLEMENTS`, `EXTENDS`, `DECLARES`, `DECLARES_CLIENT`, `EXPOSES`, `OVERRIDES`) faithfully represent the static graph; the resolved set is still a **lower bound** under reflection / dynamic dispatch (see *What this MCP is NOT*).
 
-### Ontology glossary (version 14)
+### Ontology glossary (version 15)
 
 Source of truth: `java_ontology.py` (`EDGE_SCHEMA`, valid sets). Strings are case-sensitive. Edge navigation: [`docs/EDGE-NAVIGATION.md`](./EDGE-NAVIGATION.md) — for `HTTP_CALLS`, traverse via `DECLARES_CLIENT` from a method Symbol or `neighbors` outbound from a Client id; for `ASYNC_CALLS`, traverse via `DECLARES_PRODUCER` or outbound from a Producer id.
 

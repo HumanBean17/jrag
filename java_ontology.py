@@ -261,6 +261,11 @@ EDGE_SCHEMA: dict[str, EdgeSpec] = {
             EdgeAttr("strategy", "STRING", "call-graph resolution strategy literal"),
             EdgeAttr("source", "STRING", "call-graph source tag"),
             EdgeAttr("resolved", "BOOLEAN", "True iff callee Symbol was resolved in-graph"),
+            EdgeAttr(
+                "callee_declaring_role",
+                "STRING",
+                "role of the Symbol that declares the callee method",
+            ),
         ),
         purpose="intra-codebase method call from caller method to callee method",
         member_only=True,
