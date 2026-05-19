@@ -1,0 +1,6 @@
+{
+  "neighbors_calls_empty_filter_client_message_processor": {
+    "median_sec": 0.2,
+    "notes": "Reference median (5 runs, pass5 bank-chat Kuzu, ClientMessageProcessor#process empty-filter neighbors limit=500). Test asserts observed median <= 1.5× this value. Re-capture with JAVA_CODEBASE_RAG_RUN_HEAVY=1 when the CALLS path or fixture changes materially."
+  }
+}

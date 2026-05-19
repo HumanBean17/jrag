@@ -20,7 +20,16 @@ from mcp_hints import (
     generate_hints,
     neighbors_empty_hints,
 )
-from mcp_v2 import FindOutput, SearchOutput, describe_v2, find_v2, neighbors_v2, resolve_v2, search_v2
+from mcp_v2 import (
+    FindOutput,
+    SearchOutput,
+    describe_v2,
+    find_v2,
+    neighbors_v2,
+    resolve_v2,
+    search_v2,
+)
+from pinned_ids import client_message_processor_process_id
 
 _TYPE_KINDS = frozenset({"class", "interface", "enum", "record", "annotation"})
 
@@ -1665,3 +1674,46 @@ def test_hints_pagination_none_skips_page_derived_hints() -> None:
 def test_hints_template_rendered_length_leq_120(template: str, fmt: dict[str, Any]) -> None:
     rendered = template.format(**fmt) if fmt else template
     assert len(rendered) <= 120, rendered
+
+
+def test_neighbors_calls_other_fallback_hint(kuzu_graph) -> None:
+    rows = kuzu_graph._rows(  # noqa: SLF001
+        "MATCH (m:Symbol {kind: 'method'})-[:CALLS]->() "
+        "WITH m, count(*) AS n WHERE n >= 5 "
+        "RETURN m.id AS id LIMIT 1",
+    )
+    if not rows:
+        pytest.skip("no method with >=5 outbound CALLS in bank fixture")
+    mid = str(rows[0]["id"])
+    out = neighbors_v2(
+        mid,
+        direction="out",
+        edge_types=["CALLS"],
+        edge_filter={"callee_declaring_role": "REPOSITORY"},
+        limit=25,
+        graph=kuzu_graph,
+    )
+    assert out.success is True
+    assert out.results == []
+    assert mcp_hints.TPL_NEIGHBORS_CALLS_ROLE_FILTER_OTHER_FALLBACK in out.hints
+
+
+def test_neighbors_calls_nodefilter_role_collision_hint(kuzu_graph) -> None:
+    mid = client_message_processor_process_id(kuzu_graph)
+    out = neighbors_v2(
+        mid,
+        direction="out",
+        edge_types=["CALLS"],
+        filter={"role": "OTHER"},
+        limit=50,
+        graph=kuzu_graph,
+    )
+    assert out.success is True
+    assert out.results
+    method_neighbors = [e for e in out.results if e.other.symbol_kind == "method"]
+    if len(method_neighbors) < 2:
+        pytest.skip("need multiple method-kind CALLS neighbors for collision hint")
+    other_roles = [str(e.other.role or "") for e in method_neighbors]
+    if sum(1 for r in other_roles if r == "OTHER") < max(1, (len(other_roles) * 3) // 4):
+        pytest.skip("CALLS neighbors are not dominantly OTHER for this method")
+    assert mcp_hints.TPL_NEIGHBORS_CALLS_NODEFILTER_ROLE_COLLISION in out.hints

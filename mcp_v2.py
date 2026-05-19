@@ -24,12 +24,12 @@ from pathlib import Path
 import threading
 from typing import Annotated, Any, Literal, get_args
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, validate_call
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, model_validator, validate_call
 from sentence_transformers import SentenceTransformer
 
 from index_common import SBERT_MODEL
 from java_codebase_rag.config import resolved_sbert_model_for_process_env
-from java_ontology import ResolveReason
+from java_ontology import EDGE_SCHEMA, ResolveReason
 from kuzu_queries import KuzuGraph
 from mcp_hints import MCP_HINTS_FIELD_DESCRIPTION, generate_hints
 from search_lancedb import TABLES, run_search
@@ -132,7 +132,53 @@ class NodeFilter(BaseModel):
     topic_prefix: str | None = None
 
 
+class EdgeFilter(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    min_confidence: float | None = None
+    exclude_strategies: list[str] | None = None
+    include_strategies: list[str] | None = None
+    callee_declaring_role: str | None = None
+    callee_declaring_roles: list[str] | None = None
+    exclude_callee_declaring_roles: list[str] | None = None
+
+    @model_validator(mode="after")
+    def _strategy_axes_mutually_exclusive(self) -> EdgeFilter:
+        has_include = bool(self.include_strategies)
+        has_exclude = bool(self.exclude_strategies)
+        if has_include and has_exclude:
+            raise ValueError("include_strategies and exclude_strategies are mutually exclusive")
+        return self
+
+    @model_validator(mode="after")
+    def _role_axes_mutually_exclusive(self) -> EdgeFilter:
+        role_axes = (
+            self.callee_declaring_role is not None,
+            bool(self.callee_declaring_roles),
+            bool(self.exclude_callee_declaring_roles),
+        )
+        if sum(role_axes) > 1:
+            raise ValueError(
+                "callee_declaring_role, callee_declaring_roles, and "
+                "exclude_callee_declaring_roles are mutually exclusive"
+            )
+        return self
+
+
 _NODEFILTER_FIELD_ORDER: tuple[str, ...] = tuple(NodeFilter.model_fields.keys())
+_EDGEFILTER_FIELD_ORDER: tuple[str, ...] = tuple(EdgeFilter.model_fields.keys())
+
+# Populated EdgeFilter field -> EDGE_SCHEMA attribute name used in Cypher pushdown.
+_EDGEFILTER_FIELD_TO_ATTR: dict[str, str] = {
+    "min_confidence": "confidence",
+    "exclude_strategies": "strategy",
+    "include_strategies": "strategy",
+    "callee_declaring_role": "callee_declaring_role",
+    "callee_declaring_roles": "callee_declaring_role",
+    "exclude_callee_declaring_roles": "callee_declaring_role",
+}
+
+_ROLE_FILTER_OTHER_FALLBACK_VALUES = frozenset({"SERVICE", "REPOSITORY"})
 
 _NODEFILTER_APPLICABLE_FIELDS: dict[Literal["symbol", "route", "client", "producer"], tuple[str, ...]] = {
     "symbol": (
@@ -235,6 +281,80 @@ def _filter_validation_error_message(exc: ValidationError) -> str:
             items.append(msg)
     details = "; ".join(items) if items else str(exc)
     return f"Invalid filter: {details}"
+
+
+def _populated_edgefilter_fields(ef: EdgeFilter) -> set[str]:
+    populated: set[str] = set()
+    for field_name in _EDGEFILTER_FIELD_ORDER:
+        value = getattr(ef, field_name)
+        if value is None:
+            continue
+        if isinstance(value, list) and not value:
+            continue
+        populated.add(field_name)
+    return populated
+
+
+def _edge_schema_attr_names(edge_type: str) -> set[str]:
+    spec = EDGE_SCHEMA.get(edge_type)
+    if spec is None:
+        return set()
+    return {attr.name for attr in spec.attrs}
+
+
+def _edgefilter_applicability_error(edge_types: list[str], ef: EdgeFilter) -> str | None:
+    populated = _populated_edgefilter_fields(ef)
+    if not populated:
+        return None
+    flat_types = [et for et in edge_types if et not in _COMPOSED_EDGE_TYPES]
+    composed = [et for et in edge_types if et in _COMPOSED_EDGE_TYPES]
+    if composed or flat_types != ["CALLS"]:
+        parts: list[str] = []
+        if flat_types != ["CALLS"]:
+            parts.append(f"stored labels {flat_types!r}")
+        if composed:
+            parts.append(f"composed keys {composed!r}")
+        detail = " and ".join(parts) if parts else "requested edge_types"
+        return (
+            f"edge_filter requires edge_types=['CALLS'] only; {detail} is not supported — "
+            "split into separate neighbors calls"
+        )
+    for edge_type in flat_types:
+        available = _edge_schema_attr_names(edge_type)
+        for field_name in _EDGEFILTER_FIELD_ORDER:
+            if field_name not in populated:
+                continue
+            attr = _EDGEFILTER_FIELD_TO_ATTR[field_name]
+            if attr not in available:
+                return (
+                    f"{attr} is not on {edge_type}; restrict edge_types to ['CALLS'] "
+                    "or split into two neighbors_v2 calls"
+                )
+    return None
+
+
+def _coerce_edge_filter(
+    value: EdgeFilter | dict[str, Any] | str | None,
+) -> EdgeFilter | dict[str, Any] | None:
+    """Normalize MCP tool input: weak clients sometimes pass JSON-encoded strings."""
+    if value is None or isinstance(value, EdgeFilter):
+        return value
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return None
+        try:
+            decoded = json.loads(s)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"edge_filter must be a JSON object; invalid JSON: {exc.msg}") from exc
+        if decoded is None:
+            return None
+        if not isinstance(decoded, dict):
+            raise ValueError(
+                f"edge_filter must decode to a JSON object, got {type(decoded).__name__}"
+            )
+        return decoded
+    return value
 
 
 def _coerce_filter(
@@ -1314,6 +1434,87 @@ def _neighbor_edge_attrs(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _edgefilter_pushdown_kwargs(ef: EdgeFilter | None) -> dict[str, Any]:
+    if ef is None:
+        return {}
+    return {
+        "min_confidence": ef.min_confidence,
+        "include_strategies": ef.include_strategies,
+        "exclude_strategies": ef.exclude_strategies,
+        "callee_declaring_role": ef.callee_declaring_role,
+        "callee_declaring_roles": ef.callee_declaring_roles,
+        "exclude_callee_declaring_roles": ef.exclude_callee_declaring_roles,
+    }
+
+
+def _rows_to_call_edges(
+    g: Any,
+    *,
+    origin_id: str,
+    direction: Literal["in", "out"],
+    rows: list[dict[str, Any]],
+    nf: NodeFilter | None,
+) -> list[Edge]:
+    edges: list[Edge] = []
+    for row in rows:
+        other_id = str(row.get("other_id") or "")
+        other_kind = _resolve_node_kind(g, other_id)
+        other_rec = _load_node_record(g, other_id, other_kind)
+        if other_rec is None:
+            continue
+        if nf and (err := _nodefilter_applicability_error(other_kind, nf)):
+            _log_fail_loud("applicability")
+            raise ValueError(err)
+        if not _node_matches_filter(other_kind, other_rec, nf):
+            continue
+        edges.append(
+            Edge(
+                origin_id=origin_id,
+                edge_type=str(row.get("edge_type") or "CALLS"),
+                direction=direction,
+                other=_node_ref_from_row(other_kind, other_rec),
+                attrs=_neighbor_edge_attrs(row),
+            )
+        )
+    return edges
+
+
+def _neighbors_calls_for_origin(
+    g: Any,
+    origin_id: str,
+    *,
+    direction: Literal["in", "out"],
+    nf: NodeFilter | None,
+    ef: EdgeFilter | None,
+    offset: int,
+    limit: int | None,
+) -> list[Edge]:
+    pushdown = _edgefilter_pushdown_kwargs(ef)
+    sql_pagination = nf is None and limit is not None
+    if sql_pagination:
+        rows = g.neighbor_calls_for_symbol(
+            origin_id,
+            direction=direction,
+            offset=offset,
+            limit=limit,
+            sql_pagination=True,
+            **pushdown,
+        )
+        return _rows_to_call_edges(g, origin_id=origin_id, direction=direction, rows=rows, nf=nf)
+    rows = g.neighbor_calls_for_symbol(
+        origin_id,
+        direction=direction,
+        offset=0,
+        limit=None,
+        sql_pagination=False,
+        **pushdown,
+    )
+    edges = _rows_to_call_edges(g, origin_id=origin_id, direction=direction, rows=rows, nf=nf)
+    if limit is None:
+        return edges
+    return edges[offset : offset + limit]
+
+
 @validate_call(config={"arbitrary_types_allowed": True})
 def neighbors_v2(
     ids: str | list[str],
@@ -1324,6 +1525,7 @@ def neighbors_v2(
     limit: int = 25,
     offset: int = 0,
     filter: NodeFilter | dict[str, Any] | str | None = None,
+    edge_filter: EdgeFilter | dict[str, Any] | str | None = None,
     graph: Any | None = None,
 ) -> NeighborsOutput:
     try:
@@ -1347,6 +1549,32 @@ def neighbors_v2(
                 hints=[],
                 requested_edge_types=[],
             )
+        try:
+            raw_edge_filter = _coerce_edge_filter(edge_filter)
+            ef = (
+                EdgeFilter.model_validate(raw_edge_filter)
+                if raw_edge_filter is not None and not isinstance(raw_edge_filter, EdgeFilter)
+                else raw_edge_filter
+            )
+        except ValidationError as exc:
+            _log_fail_loud("edge_filter")
+            return NeighborsOutput(
+                success=False,
+                message=_filter_validation_error_message(exc),
+                hints=[],
+                requested_edge_types=[],
+            )
+        except ValueError as exc:
+            _log_fail_loud("edge_filter")
+            return NeighborsOutput(success=False, message=str(exc), hints=[], requested_edge_types=[])
+        if ef and (err := _edgefilter_applicability_error(requested_edge_types, ef)):
+            _log_fail_loud("edge_filter")
+            return NeighborsOutput(
+                success=False,
+                message=err,
+                hints=[],
+                requested_edge_types=requested_edge_types,
+            )
         if nf and (err := _validate_no_wildcards(nf)):
             _log_fail_loud("wildcard")
             return NeighborsOutput(success=False, message=err, hints=[], requested_edge_types=[])
@@ -1357,8 +1585,10 @@ def neighbors_v2(
                 hints=[],
                 requested_edge_types=requested_edge_types,
             )
+        use_calls_path = flat_labels == ["CALLS"] and not composed_keys
         origins = [ids] if isinstance(ids, str) else list(ids)
         results: list[Edge] = []
+        unfiltered_calls_count: int | None = None
         for origin_id in origins:
             origin_kind = _resolve_node_kind(g, origin_id)
             if composed_keys:
@@ -1382,6 +1612,34 @@ def neighbors_v2(
                         hints=[],
                         requested_edge_types=requested_edge_types,
                     )
+            if use_calls_path:
+                paginate_in_sql = len(origins) == 1 and nf is None
+                try:
+                    origin_edges = _neighbors_calls_for_origin(
+                        g,
+                        origin_id,
+                        direction=direction,
+                        nf=nf,
+                        ef=ef,
+                        offset=offset if paginate_in_sql else 0,
+                        limit=limit if paginate_in_sql else None,
+                    )
+                except ValueError as exc:
+                    return NeighborsOutput(
+                        success=False,
+                        message=str(exc),
+                        hints=[],
+                        requested_edge_types=requested_edge_types,
+                    )
+                if (
+                    ef is not None
+                    and ef.callee_declaring_role in _ROLE_FILTER_OTHER_FALLBACK_VALUES
+                    and not origin_edges
+                    and unfiltered_calls_count is None
+                ):
+                    unfiltered_calls_count = g.count_calls_for_symbol(origin_id, direction=direction)
+                results.extend(origin_edges)
+                continue
             if flat_labels:
                 # Kuzu 0.11.x can drop `label(e) IN $list` in WHERE; use OR of scalar equalities.
                 label_params = [f"l{i}" for i in range(len(flat_labels))]
@@ -1456,7 +1714,10 @@ def neighbors_v2(
                             attrs=_neighbor_edge_attrs(row),
                         )
                     )
-        sliced = results[offset : offset + limit]
+        if use_calls_path and len(origins) > 1:
+            sliced = results[offset : offset + limit]
+        else:
+            sliced = results if use_calls_path else results[offset : offset + limit]
         first_origin = origins[0]
         origin_kind = _resolve_node_kind(g, first_origin)
         subject_record = _load_node_record(g, first_origin, origin_kind)
@@ -1468,6 +1729,9 @@ def neighbors_v2(
             "offset": offset,
             "origin_id": first_origin,
             "subject_record": subject_record,
+            "node_filter": nf.model_dump(exclude_none=True) if nf else None,
+            "edge_filter": ef.model_dump(exclude_none=True) if ef else None,
+            "unfiltered_calls_count": unfiltered_calls_count,
         }
         return NeighborsOutput(
             success=True,

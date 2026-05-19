@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 import re
+import statistics
+import time
 from collections import Counter
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -21,6 +26,7 @@ from mcp_v2 import (
     resolve_v2,
     search_v2,
 )
+from pinned_ids import client_message_processor_process_id
 
 _PR2_CHAIN_SEARCH_DESCRIBE = re.compile(r"search\(query=.*\).*describe")
 _PR2_SENTINEL_PATTERNS: tuple[re.Pattern[str], ...] = (
@@ -1301,5 +1307,182 @@ def test_resolve_success_output_invariants(kuzu_graph, kuzu_graph_fqn_collision_
     assert single.status == "one"
     assert single.node is not None
     assert single.candidates == []
+
+
+_PERF_BASELINES_PATH = (
+    Path(__file__).resolve().parent / "fixtures" / "perf_baselines.json"
+)
+
+
+def test_neighbors_calls_ordered_by_call_site(kuzu_graph) -> None:
+    mid = client_message_processor_process_id(kuzu_graph)
+    out = neighbors_v2(mid, direction="out", edge_types=["CALLS"], limit=500, graph=kuzu_graph)
+    assert out.success is True
+    assert len(out.results) >= 2
+    sites = [
+        (int(e.attrs.get("call_site_line") or 0), int(e.attrs.get("call_site_byte") or 0))
+        for e in out.results
+    ]
+    assert sites == sorted(sites)
+
+
+def test_neighbors_calls_edge_filter_callee_declaring_role(kuzu_graph) -> None:
+    mid = client_message_processor_process_id(kuzu_graph)
+    out = neighbors_v2(
+        mid,
+        direction="out",
+        edge_types=["CALLS"],
+        edge_filter={"callee_declaring_role": "SERVICE"},
+        limit=500,
+        graph=kuzu_graph,
+    )
+    assert out.success is True
+    assert out.results
+    for edge in out.results:
+        assert edge.attrs.get("callee_declaring_role") == "SERVICE"
+
+
+def test_neighbors_calls_edge_filter_pushdown_in_cypher(kuzu_graph, monkeypatch) -> None:
+    mid = _method_id_with_calls(kuzu_graph, "out")
+    captured: list[str] = []
+    orig_rows = kuzu_graph._rows
+
+    def _capture_rows(query: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+        captured.append(query)
+        return orig_rows(query, params)
+
+    monkeypatch.setattr(kuzu_graph, "_rows", _capture_rows)
+    out = neighbors_v2(
+        mid,
+        direction="out",
+        edge_types=["CALLS"],
+        edge_filter={"callee_declaring_role": "SERVICE", "min_confidence": 0.5},
+        graph=kuzu_graph,
+    )
+    assert out.success is True
+    calls_queries = [q for q in captured if "ORDER BY e.call_site_line" in q]
+    assert calls_queries
+    q = calls_queries[0]
+    assert "callee_declaring_role" in q
+    assert "confidence" in q
+
+
+def test_neighbors_calls_edge_filter_before_limit(kuzu_graph) -> None:
+    mid = client_message_processor_process_id(kuzu_graph)
+    unfiltered = neighbors_v2(
+        mid, direction="out", edge_types=["CALLS"], limit=500, graph=kuzu_graph
+    )
+    assert unfiltered.success is True
+    non_other_total = sum(
+        1 for e in unfiltered.results if e.attrs.get("callee_declaring_role") != "OTHER"
+    )
+    assert non_other_total >= 6
+    unfiltered_cap = neighbors_v2(
+        mid, direction="out", edge_types=["CALLS"], limit=5, graph=kuzu_graph
+    )
+    assert unfiltered_cap.success is True
+    assert len(unfiltered_cap.results) == 5
+    other_in_cap = sum(
+        1 for e in unfiltered_cap.results if e.attrs.get("callee_declaring_role") == "OTHER"
+    )
+    filtered = neighbors_v2(
+        mid,
+        direction="out",
+        edge_types=["CALLS"],
+        edge_filter={"exclude_callee_declaring_roles": ["OTHER"]},
+        limit=5,
+        graph=kuzu_graph,
+    )
+    assert filtered.success is True
+    assert len(filtered.results) == 5
+    assert all(e.attrs.get("callee_declaring_role") != "OTHER" for e in filtered.results)
+    assert other_in_cap >= 1
+
+
+def test_neighbors_calls_edge_filter_mixed_types_fail_loud(kuzu_graph) -> None:
+    mid = _method_id_with_calls(kuzu_graph, "out")
+    out = neighbors_v2(
+        mid,
+        direction="out",
+        edge_types=["CALLS", "OVERRIDES"],
+        edge_filter={"callee_declaring_role": "SERVICE"},
+        graph=kuzu_graph,
+    )
+    assert out.success is False
+    assert out.message
+    assert "edge_types=['CALLS']" in out.message
+    assert "OVERRIDES" in out.message
+
+
+def test_neighbors_calls_edge_filter_composed_types_fail_loud(kuzu_graph) -> None:
+    rows = kuzu_graph._rows(  # noqa: SLF001
+        "MATCH (t:Symbol)-[:DECLARES]->(m:Symbol)-[e:EXPOSES]->(:Route) "
+        "WHERE t.role = 'CONTROLLER' AND t.kind = 'class' "
+        "RETURN t.id AS id LIMIT 1",
+    )
+    assert rows
+    tid = str(rows[0]["id"])
+    out = neighbors_v2(
+        tid,
+        direction="out",
+        edge_types=["CALLS", "DECLARES.EXPOSES"],
+        edge_filter={"callee_declaring_role": "SERVICE"},
+        graph=kuzu_graph,
+    )
+    assert out.success is False
+    assert out.message
+    assert "edge_types=['CALLS']" in out.message
+    assert "DECLARES.EXPOSES" in out.message
+
+
+def test_neighbors_calls_edge_filter_role_axes_xor(kuzu_graph) -> None:
+    mid = _method_id_with_calls(kuzu_graph, "out")
+    out = neighbors_v2(
+        mid,
+        direction="out",
+        edge_types=["CALLS"],
+        edge_filter={
+            "callee_declaring_role": "SERVICE",
+            "exclude_callee_declaring_roles": ["OTHER"],
+        },
+        graph=kuzu_graph,
+    )
+    assert out.success is False
+    assert out.message
+    assert "mutually exclusive" in out.message.lower()
+
+
+def test_neighbors_calls_edge_filter_strategy_xor(kuzu_graph) -> None:
+    mid = _method_id_with_calls(kuzu_graph, "out")
+    out = neighbors_v2(
+        mid,
+        direction="out",
+        edge_types=["CALLS"],
+        edge_filter={"include_strategies": ["exact"], "exclude_strategies": ["phantom"]},
+        graph=kuzu_graph,
+    )
+    assert out.success is False
+    assert out.message
+    assert "mutually exclusive" in out.message.lower()
+
+
+@pytest.mark.skipif(
+    os.environ.get("JAVA_CODEBASE_RAG_RUN_HEAVY", "").strip() != "1",
+    reason="perf gate; set JAVA_CODEBASE_RAG_RUN_HEAVY=1",
+)
+def test_neighbors_calls_perf_empty_filter_client_message_processor(kuzu_graph) -> None:
+    mid = client_message_processor_process_id(kuzu_graph)
+    baseline = json.loads(_PERF_BASELINES_PATH.read_text())[
+        "neighbors_calls_empty_filter_client_message_processor"
+    ]["median_sec"]
+    times: list[float] = []
+    for _ in range(5):
+        t0 = time.perf_counter()
+        out = neighbors_v2(mid, direction="out", edge_types=["CALLS"], limit=500, graph=kuzu_graph)
+        times.append(time.perf_counter() - t0)
+        assert out.success is True
+        assert out.results
+    median_sec = statistics.median(times)
+    assert median_sec <= float(baseline) * 1.5
 
 

@@ -667,6 +667,76 @@ class KuzuGraph:
             {"id": type_id, "rel": rel},
         )
 
+    def count_calls_for_symbol(self, origin_id: str, *, direction: Literal["in", "out"]) -> int:
+        """Count CALLS edges incident on a Symbol (hints / diagnostics)."""
+        if direction == "out":
+            pattern = "MATCH (origin:Symbol {id: $id})-[e:CALLS]->() RETURN count(e) AS n"
+        else:
+            pattern = "MATCH (origin:Symbol {id: $id})<-[e:CALLS]-() RETURN count(e) AS n"
+        rows = self._rows(pattern, {"id": origin_id})
+        return int(rows[0].get("n") or 0) if rows else 0
+
+    def neighbor_calls_for_symbol(
+        self,
+        origin_id: str,
+        *,
+        direction: Literal["in", "out"],
+        offset: int = 0,
+        limit: int | None = None,
+        sql_pagination: bool = True,
+        min_confidence: float | None = None,
+        include_strategies: list[str] | None = None,
+        exclude_strategies: list[str] | None = None,
+        callee_declaring_role: str | None = None,
+        callee_declaring_roles: list[str] | None = None,
+        exclude_callee_declaring_roles: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """CALLS neighbors with source-order delivery and optional edge-attribute pushdown.
+
+        When ``sql_pagination`` is True and ``limit`` is set, ``SKIP``/``LIMIT`` apply after
+        ``ORDER BY e.call_site_line, e.call_site_byte``. Otherwise the full ordered stream is
+        returned for caller-side ``NodeFilter`` / pagination.
+        """
+        wh_parts = ["origin.id = $id"]
+        params: dict[str, Any] = {"id": origin_id}
+        if min_confidence is not None:
+            wh_parts.append("e.confidence >= $min_confidence")
+            params["min_confidence"] = min_confidence
+        if include_strategies:
+            wh_parts.append("e.strategy IN $include_strategies")
+            params["include_strategies"] = include_strategies
+        if exclude_strategies:
+            wh_parts.append("NOT (e.strategy IN $exclude_strategies)")
+            params["exclude_strategies"] = exclude_strategies
+        if callee_declaring_role is not None:
+            wh_parts.append("e.callee_declaring_role = $callee_declaring_role")
+            params["callee_declaring_role"] = callee_declaring_role
+        if callee_declaring_roles:
+            wh_parts.append("e.callee_declaring_role IN $callee_declaring_roles")
+            params["callee_declaring_roles"] = callee_declaring_roles
+        if exclude_callee_declaring_roles:
+            wh_parts.append("NOT (e.callee_declaring_role IN $exclude_callee_declaring_roles)")
+            params["exclude_callee_declaring_roles"] = exclude_callee_declaring_roles
+        where = " AND ".join(wh_parts)
+        if direction == "out":
+            match = "MATCH (origin:Symbol)-[e:CALLS]->(other:Symbol)"
+        else:
+            match = "MATCH (origin:Symbol)<-[e:CALLS]-(other:Symbol)"
+        q = (
+            f"{match} WHERE {where} "
+            "RETURN other.id AS other_id, 'CALLS' AS edge_type, "
+            "e.confidence AS confidence, e.strategy AS strategy, e.source AS source, "
+            "e.call_site_line AS call_site_line, e.call_site_byte AS call_site_byte, "
+            "e.arg_count AS arg_count, e.resolved AS resolved, "
+            "e.callee_declaring_role AS callee_declaring_role "
+            "ORDER BY e.call_site_line, e.call_site_byte"
+        )
+        if sql_pagination and limit is not None:
+            q += " SKIP $offset LIMIT $limit"
+            params["offset"] = offset
+            params["limit"] = limit
+        return self._rows(q, params)
+
     def _edge_row_count_from_method_ids(self, method_ids: list[str], rel: str) -> int:
         """Count outgoing ``rel`` edges from method symbols (describe rollup helper)."""
         total = 0
