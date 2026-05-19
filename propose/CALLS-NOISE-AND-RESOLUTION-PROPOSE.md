@@ -1,9 +1,10 @@
 # CALLS-NOISE-AND-RESOLUTION — clean the CALLS edge by removing one bucket and projecting the other
 
-**Status**: draft
+**Status**: under review
 **Author**: Dmitriy Teriaev + Perplexity Computer
 **Date**: 2026-05-18
 **Tracks**: [#177](https://github.com/HumanBean17/java-codebase-rag/issues/177)
+**Plan**: [`plans/PLAN-CALLS-NOISE.md`](../plans/PLAN-CALLS-NOISE.md) (per-PR sentinels, tests, landing order)
 
 ## TL;DR
 
@@ -15,6 +16,9 @@
 - Two `neighbors_v2` consumption modes for CALLS: default = resolved + known-external clean stream (today's shape minus phantom/chained rows after PR-3); `include_unresolved=True` = interleaved transcript with `row_kind` discriminator. **`include_unresolved=True` is mutually exclusive with `edge_filter`** (fail-loud) — composing them was reverted in revision 3 because it would re-introduce unfiltered noise.
 - `neighbors_v2` stays one-hop. Multi-hop is out of scope and would need its own propose (visited-set, cycles, fanout cap, hint behavior).
 - Out: `min_confidence` and `exclude_strategies` as `neighbors_v2` parameters (subsumed by `edge_filter`); a `CALLS` semantic split into `DELEGATES_TO` / `PERSISTS_VIA` / `ACCESSES_STATE`; `callee_capability` / `callee_annotation` / `callee_microservice` filter axes; `EdgeFilter` on `find_callers`; an MCP surface for "find unresolved callers"; package-relativity filters; multi-hop `neighbors_v2`; per-edge dedup as a `neighbors_v2` knob (kept as a CALLS-specific response shape decision in PR-3).
+- **MCP ordering contract (PR-2):** `neighbors_v2` today does not `ORDER BY` CALLS rows; PR-2 locks `ORDER BY e.call_site_line, e.call_site_byte` for every CALLS path (flat, `edge_filter`, and PR-3 `include_unresolved` interleave).
+- **`exclude_external` is not added to `neighbors_v2`.** It remains on `find_callers` / `find_callees` only (Decision 38). JDK/library noise on default `neighbors(out, ['CALLS'])` is addressed via `edge_filter` (`min_confidence`, `exclude_strategies`) after PR-2, not FQN-prefix rules.
+- **Accessor noise is only partly solved** by `callee_declaring_role`; entity getter/setter discrimination needs heuristics — see cross-link to [`propose/AGENT-SKILLS-AND-COMMANDS-PROPOSE.md`](AGENT-SKILLS-AND-COMMANDS-PROPOSE.md) `/mini-map` (Decision 39).
 - Non-obvious constraint: `pass3_calls` and `find_callers` currently rely on phantom Symbol rows existing as the `dst` endpoint of `strategy='phantom'`/`'chained_receiver'` CALLS rows. PR-3 changes that invariant atomically. Known-receiver-external phantom-FQN rows (line 1257-1271) are kept; only true receiver-failure phantoms are removed.
 
 ## §1 — Frame
@@ -28,7 +32,7 @@ The frame rules out four things:
 - **A `CALLS` semantic split** (`DELEGATES_TO` / `PERSISTS_VIA` / `ACCESSES_STATE`). It breaks the ordered-transcript property — agents reading a method body would have to 4-way fan-merge by `(line, byte)` across edge types.
 - **A new `neighbors_v2` parameter per noise dimension** (`min_confidence`, `exclude_strategies`, `callee_role`, etc). Each one is a stop-gap. We add **one** general-purpose edge-attribute filter mechanism instead.
 - **Reasoning about why a particular edge is noise at query time.** The graph builder already knows whether a call site is resolved and what role its target's declaring type has. We push that data into the graph at build time, not infer it at query time.
-- **Discarding receiver-tier metadata for known-external calls.** `build_ast_graph.py:1257-1271` already preserves `confidence`, `strategy`, `arg_count`, and a deterministic phantom FQN for "receiver resolved, callee not indexed" cases. README §"Phantom nodes" documents this. Stripping that on the basis of `resolved=False` alone loses real signal; agents who want to exclude library noise already have `exclude_external=True` (FQN-prefix-based).
+- **Discarding receiver-tier metadata for known-external calls.** `build_ast_graph.py:1257-1271` already preserves `confidence`, `strategy`, `arg_count`, and a deterministic phantom FQN for "receiver resolved, callee not indexed" cases. README §"Phantom nodes" documents this. Stripping that on the basis of `resolved=False` alone loses real signal. **`exclude_external` is not on `neighbors_v2`** — it stays on `find_callers` / `find_callees` (see §3.4.1). On `neighbors`, JDK noise is dropped via `edge_filter` after PR-2, not FQN-prefix rules.
 
 ## §2 — Design principles
 
@@ -40,6 +44,7 @@ The frame rules out four things:
 6. **`find_callers` / `find_route_callers` keep their current semantics.** They aggregate over the new ordered stream (no phantom-receiver rows); the `min_confidence` parameter that already exists on them is unchanged.
 7. **`edge_filter` is single-edge-type-scoped and fail-loud on inapplicable attributes.** `edge_types=['CALLS','OVERRIDES']` + `edge_filter={callee_declaring_role:'SERVICE'}` raises a `ValueError` with a teaching message ("`callee_declaring_role` is not on `OVERRIDES`; split into two `neighbors_v2` calls or restrict `edge_types`"). This matches the existing `_nodefilter_inapplicable_fields` fail-loud pattern at `mcp_v2.py:191-206`.
 8. **Decisions about call-site semantics live next to the data, in `pass3_calls`, not in `neighbors_v2`.** Edge attributes are computed at emission time.
+9. **`neighbors_v2` CALLS results are source-ordered at the MCP layer.** Every CALLS query path uses `ORDER BY e.call_site_line, e.call_site_byte` before `offset`/`limit` (Decision 36). Empty-filter and `edge_filter` projections share the same ordering contract.
 
 ## §3 — The proposed surface
 
@@ -116,6 +121,43 @@ PR-3 deletes only the *phantom-receiver* and *chained-receiver* code paths. `_ph
 
 Multi-candidate supertype-walk dedup evidence (interface + concrete pointing at the same source-line) is preserved as a build-time `logger.debug` line, not as graph state.
 
+#### §3.3.1 — Supertype-walk dedup pseudocode (PR-1, Decision 33)
+
+Runs **only** on the `len(candidates) > 1` branch **before** the `overload_ambiguous` emit loop (`build_ast_graph.py:1284-1289`). Never runs when `edge_strat == 'overload_ambiguous'` (name-only-fb with `len(candidates) > 1`).
+
+```
+function collapse_supertype_duplicates(candidates, recv_type_fqn):
+    if len(candidates) <= 1:
+        return candidates
+    concrete_on_receiver = [
+        c for c in candidates
+        if c.parent_fqn == recv_type_fqn
+        and c.decl.signature matches call signature
+    ]
+    if len(concrete_on_receiver) != 1:
+        return candidates   # 0 or >1 concrete on receiver — do not collapse
+    concrete = concrete_on_receiver[0]
+    supertypes = [
+        c for c in candidates
+        if c != concrete
+        and c.parent_fqn is a strict supertype of recv_type_fqn (extends walk)
+        and c.decl.signature matches concrete.decl.signature
+    ]
+    if not supertypes:
+        return candidates   # not an interface+inherited-impl duplicate pattern
+    if any(c for c in candidates if c not in {concrete, *supertypes}):
+        return candidates   # unrelated candidate at same site — do not collapse
+    log.debug("pass3 supertype dedup %s -> %s", [c.node_id for c in candidates], concrete.node_id)
+    return [concrete]
+```
+
+**Non-goals (must not collapse):**
+
+- `overload_ambiguous` (name-only-fb, multiple same-level overloads).
+- Default methods / bridge methods unless the signature match is exact on the same receiver type.
+- Multiple concrete implementations on the same receiver type.
+- Cross-microservice candidate sets (same-ms filter already ran).
+
 ### §3.4 — `neighbors_v2` `edge_filter` surface
 
 New optional argument on `neighbors_v2`:
@@ -137,13 +179,40 @@ class EdgeFilter(BaseModel):
 
 Behavior (revision 3, fail-loud):
 
-- `edge_filter` requires `edge_types` to be a single edge type whose schema declares every attribute referenced in the filter. `edge_types=['CALLS']` + `edge_filter={callee_declaring_role:'SERVICE'}` projects the ordered stream by attribute. Ordering by `(call_site_line, call_site_byte)` is unchanged.
+- `edge_filter` requires `edge_types` to be a single edge type whose schema declares every attribute referenced in the filter. `edge_types=['CALLS']` + `edge_filter={callee_declaring_role:'SERVICE'}` projects the ordered stream by attribute.
 - `edge_types=['CALLS','OVERRIDES']` + `edge_filter={callee_declaring_role:'SERVICE'}` raises a fail-loud `ValueError` with a teaching message: `"callee_declaring_role is not on OVERRIDES; restrict edge_types to ['CALLS'] or split into two neighbors_v2 calls"`. Mirrors `_nodefilter_inapplicable_fields` (`mcp_v2.py:191-206`). Increments the `[filter-frame] fail-loud category=edge_filter` counter.
 - `edge_filter` axes that touch attribute names whose semantics are CALLS-specific are documented as such and validated against `EDGE_SCHEMA` (CI test).
 
 **Decision** (§7 Decision 8): `EdgeFilter` is a typed Pydantic model, not a free-form dict. The "no per-edge knob explosion" rule is enforced by keeping the model small and reviewing additions through a propose, not by making the surface dynamic.
 
 A future "per-edge-type-keyed filter map" (e.g. `edge_filter={'CALLS': EdgeFilter(...), 'OVERRIDES': EdgeFilter(...)}`) is explicitly deferred to a separate propose; the single-edge-type fail-loud shape is the smaller commitment.
+
+#### §3.4.1 — `ORDER BY` contract and `edge_filter` pushdown (PR-2, Decisions 36–37)
+
+**Gap today:** `neighbors_v2` fetches CALLS without `ORDER BY` and slices after an in-memory list (`mcp_v2.py` ~1386–1459). The graph stores `(call_site_line, call_site_byte)` but MCP does not guarantee source-order delivery.
+
+**Locked behavior (PR-2):**
+
+1. **Ordering.** For `edge_types == ['CALLS']` (and PR-3 `include_unresolved` interleave), every path ends with `ORDER BY e.call_site_line, e.call_site_byte` (resolved CALLS) or the same tuple on the merged transcript. `offset`/`limit` apply **after** ordering.
+2. **Predicate pushdown.** When `edge_types == ['CALLS']` and `edge_filter` is set, push these into the Cypher `WHERE` clause (parameterized):
+   - `e.confidence >= $min_confidence`
+   - `e.strategy IN $include_strategies` / `e.strategy NOT IN $exclude_strategies`
+   - `e.callee_declaring_role = $role` / `IN $roles` / `NOT IN $exclude_roles`
+3. **Filter placement.** `NodeFilter` and `edge_filter` both apply **before** `offset`/`limit`. Never add a SQL/Kuzu `LIMIT` on the raw hop that runs **before** edge predicates (preserves #177 fix: filtered rows must not be truncated by an unfiltered cap).
+4. **`NodeFilter` on callee.** Terminal-node `NodeFilter` may still require a join/load of `b:Symbol`; `edge_filter` predicates stay on `e:CALLS`.
+5. **Perf (Decision 31).** HV34 asserts empty-filter `neighbors([m],'out',['CALLS'])` on `bank-chat-system` `OrderService.process` is within 1.5× pre-PR-2 median on the same hardware — with `ORDER BY` included.
+
+**Test names (committed in plan, not here):** `test_neighbors_calls_ordered_by_call_site`, `test_neighbors_calls_edge_filter_pushdown_role`, `test_neighbors_calls_edge_filter_before_limit`.
+
+#### §3.4.2 — `exclude_external` stance (PR-2 docs, Decision 38)
+
+| Surface | `exclude_external` | JDK / library noise |
+|---|---|---|
+| `find_callers` / `find_callees` | **Yes** (default `True`) | FQN-prefix filter on caller/callee `Symbol.fqn` |
+| `neighbors_v2` | **No** (not added) | `edge_filter={min_confidence: 0.5}` and/or `exclude_strategies: ['phantom', 'chained_receiver']` (pre-PR-3); after PR-3 phantom/chained strategies are gone from CALLS — use `exclude_callee_declaring_roles: ['OTHER']` heuristically or inspect `attrs.strategy` on known-external rows |
+| `/mini-map` skill | N/A (client-side) | FQN-prefix heuristic in skill body until `edge_filter` is ubiquitous |
+
+**Docs requirement (PR-2):** `docs/AGENT-GUIDE.md` must state explicitly that `exclude_external` is **not** a `neighbors` parameter. HV37 / Decision 34 must not imply FQN-prefix exclusion on `neighbors`.
 
 ### §3.5 — `describe(method_id)` extension AND in-line `neighbors_v2` interleaving
 
@@ -222,11 +291,25 @@ No signature change. Both continue to walk `CALLS` backward. After PR-3, they pi
 
 - `EDGE_SCHEMA.CALLS.src` / `.dst` / `.typical_traversals` — still `Symbol → Symbol`; ordering convention documented.
 - `HTTP_CALLS` / `ASYNC_CALLS` / any other edge — no `callee_declaring_role` added (their endpoint kinds already encode role). Principle 3 explicitly forbids the symmetry argument.
-- HINTS-V3 / HINTS-V4 templates — unchanged. The dot-key support from #171 still works as-is. PR-3 may add a new HINTS-V4-style success-path template (see §3.10) but the existing templates are not edited.
+- HINTS-V3 templates and existing HINTS-V4 success-path templates (HTTP/async/DECLARES families) — **unchanged**. PR-3 adds two new CALLS templates (§3.10) only.
 - `confidence` and `strategy` semantics for resolved-and-known-external rows — unchanged. The values stay the same; only the row set shrinks (no more `strategy='phantom'` for unresolved-receiver cases or `strategy='chained_receiver'`).
-- `FUZZY_STRATEGY_SET` / `BROWNFIELD_RESOLVER_STRATEGY_SET` — unchanged.
 - The 5-hint output cap — unchanged.
 - `neighbors_v2` is one-hop. Multi-hop is out of scope (Decision 21 deleted in revision 3).
+
+#### §3.9.1 — HINTS / ontology PR-3 checklist (mandatory)
+
+PR-3 must not claim "hints unchanged" without completing this list:
+
+| # | Item | Owner |
+|---|---|---|
+| H1 | `java_ontology.py` `EDGE_SCHEMA['CALLS'].attrs` — add `callee_declaring_role` `EdgeAttr` (PR-1 registers; PR-3 snapshot test still green) | PR-1 + PR-3 CI |
+| H2 | `FUZZY_STRATEGY_SET` — remove `phantom` and `chained_receiver` **or** document they apply only to non-CALLS edges | PR-3 |
+| H3 | `TPL_NEIGHBORS_FUZZY_STRATEGY` — stop firing on CALLS phantom/chained strategies (rows removed); optional: still fire on known-external `resolved=False` when strategy ∈ remaining fuzzy set | PR-3 |
+| H4 | Update / replace `test_hints_neighbors_fuzzy_strategy_calls_phantom_emits` and `test_hints_neighbors_multi_origin_fuzzy_emits_once` | PR-3 |
+| H5 | Wire `TPL_NEIGHBORS_CALLS_HIGH_FANOUT` + `TPL_NEIGHBORS_CALLS_HAS_UNRESOLVED` (§3.10); suppress high-fanout when `edge_filter` provided | PR-3 |
+| H6 | `generate_hints` payload for `neighbors` — pass `edge_filter_provided` + unresolved count when `include_unresolved=False` | PR-3 |
+| H7 | `MCP_HINTS_FIELD_DESCRIPTION` — document `edge_filter`, `include_unresolved`, `dedup_calls`; note mutual exclusivity | PR-2 + PR-3 |
+| H8 | High-fanout template text — mention `edge_filter` for JDK noise, **not** `exclude_external` on `neighbors` | PR-3 |
 
 ### §3.10 — Two new HINTS-V4-style templates (PR-3)
 
@@ -237,7 +320,8 @@ TPL_NEIGHBORS_CALLS_HIGH_FANOUT = (
     "{n} CALLS on this method; the noisy axes are callee_declaring_role "
     "and per-call-site multiplicity. Try edge_filter={{callee_declaring_role: 'SERVICE'}} "
     "for delegation hops, edge_filter={{exclude_callee_declaring_roles: ['ENTITY','DTO']}} "
-    "to drop accessor noise, or dedup_calls=True to collapse identical callees."
+    "to drop accessor noise, edge_filter={{min_confidence: 0.5}} to trim low-confidence rows "
+    "(exclude_external is find_callers-only, not neighbors), or dedup_calls=True to collapse identical callees."
 )
 ```
 
@@ -261,7 +345,7 @@ Priority `PRIORITY_LEAF_FOLLOWUP=2`. Fires regardless of `n` (including the 100%
 | # | Use case | Today (#177-symptom) | Tomorrow |
 |---|---|---|---|
 | HV1 | Agent asks "what does `OrderService.process` do?" — wants source-order transcript | `neighbors([m],'out',['CALLS'])` returns 47 rows: 18 entity-accessor noise, 14 phantom/chained, 4 delegation, 11 repository. Token window pressure. | After PR-3: `neighbors([m],'out',['CALLS'])` returns 33 rows (14 phantom/chained gone; known-external rows preserved). Same `(line, byte)` ordering. Hint fires (33 > 10) recommending filter axes. |
-| HV2 | Agent walks method body with `call_site_line` | Today's row shape | Identical row shape — no field removed. `call_site_count` defaults to 1. |
+| HV2 | Agent walks method body with `call_site_line` | Today's row shape; CALLS order not guaranteed in MCP | Identical row shape — no field removed. `call_site_count` defaults to 1. PR-2: rows returned in `(call_site_line, call_site_byte)` order (Decision 36). |
 | HV3 | Agent asks "does `OrderService.process` invoke the repository?" | Manual filter on `neighbors` output by FQN substring | `neighbors([m],'out',['CALLS'], edge_filter={callee_declaring_role: 'REPOSITORY'})` returns the persistence hops in source order. |
 | HV4 | Agent asks "where does `OrderService.process` delegate to other services?" | Manual filter | `edge_filter={callee_declaring_role: 'SERVICE'}` |
 | HV5 | Agent asks "drop accessor noise" | Manual filter | `edge_filter={exclude_callee_declaring_roles: ['ENTITY','DTO']}` |
@@ -309,7 +393,8 @@ These rows capture the workflows that *triggered* #177 — the things an agent w
 | HV34 | Empty-filter performance | n/a | `neighbors([m],'out',['CALLS'])` with no `edge_filter` is the hot path. PR-2 includes a Kuzu predicate-pushdown sanity check: the `callee_declaring_role` column projection on resolved rows must not materially slow the empty-filter case. If profiling shows otherwise, PR-2 adds an index on `(src_id, callee_declaring_role)`. Decision 31 makes this a CI perf invariant: the same `OrderService.process` empty-filter query on `bank-chat-system` returns within 1.5× of its pre-PR-2 median latency on the same hardware. The pytest scenario id is committed to the PR-2 plan, not this propose. |
 | HV35 | `callee_capability` filter request from a future reviewer | n/a | **Out of scope.** Locked Decision 32: `EdgeFilter` exposes only `callee_declaring_role`. `callee_capability` / `callee_annotation` / `callee_microservice` are out of scope. Re-opens via a new propose. |
 | HV36 | Multi-candidate supertype-walk dedup (`JpaRepository.save` interface + `MyRepository.save` concrete) | Today: `pass3_calls` may emit two CALLS rows for the same `(call_site_line, call_site_byte)` with different `dst_id` (interface method id vs concrete method id) and different declaring-type roles. Agent reading source order sees "line 42" twice. | **Locked Decision 33** (revision-3 scope: supertype-walk only): when `_lookup_method_candidates` returns multiple candidates because one is the declared concrete method on the receiver type and others are inherited supertype declarations, `pass3_calls` collapses to the concrete-class candidate before emit. **`overload_ambiguous` is left alone** — N rows preserved as today. PR-1 fixture test on `bank-chat-system`: (a) `myRepository.save(x)` where `MyRepository extends JpaRepository` → one CALLS row with `callee_declaring_role='REPOSITORY'`; (b) overloaded `save(Foo)` / `save(Bar)` with `arg_count=-1` → N rows with `strategy='overload_ambiguous'` (unchanged). |
-| HV37 | Known-receiver external call to JDK/Spring/Lombok (`LOG.info(...)`, `List.of(...)`) | Today: `CALLS(strategy=<receiver-tier>, resolved=False)` with deterministic phantom-FQN dst; preserved by `build_ast_graph.py:1257-1271` | **Unchanged.** PR-3 does **not** move these out of `CALLS`. They remain as CALLS rows with `resolved=False` and preserved receiver-tier metadata. PR-1 adds `callee_declaring_role` (typically `OTHER` since JDK/Spring types are not in the source tree; brownfield `@CodebaseRole` can promote). Agents who want to exclude library noise keep using `exclude_external=True` (FQN-prefix-based). Decision 34 records this. |
+| HV37 | Known-receiver external call to JDK/Spring/Lombok (`LOG.info(...)`, `List.of(...)`) | Today: `CALLS(strategy=<receiver-tier>, resolved=False)` with deterministic phantom-FQN dst; preserved by `build_ast_graph.py:1257-1271` | **Unchanged in graph.** PR-3 does **not** move these out of `CALLS`. PR-1 adds `callee_declaring_role` (typically `OTHER`). On `neighbors`, drop via `edge_filter` (e.g. `min_confidence`, `exclude_callee_declaring_roles`) — **not** `exclude_external` (Decision 38). On `find_callers`, `exclude_external=True` unchanged. |
+| HV38 | Agent expects source-order CALLS from `neighbors` | Rows may arrive in Kuzu insertion order | PR-2: `ORDER BY e.call_site_line, e.call_site_byte` on all CALLS paths before `offset`/`limit` (Decision 36). |
 
 ### Awkward cases (§4.5)
 
@@ -346,6 +431,9 @@ These rows capture the workflows that *triggered* #177 — the things an agent w
 | Erasing `overload_ambiguous` via dedup | Decision 33's scope is narrow — supertype-walk dedup only. `overload_ambiguous` rows are preserved; they are the resolver's own ambiguity signal. |
 | Moving known-receiver-external rows (`build_ast_graph.py:1257-1271`) out of `CALLS` | Reviewer-flagged data-loss bug in revision 2. These rows carry preserved receiver-tier `strategy`/`confidence`/`arg_count` and a deterministic phantom FQN — real signal, not noise. README §"Phantom nodes" documents the existing contract. Decision 34 records this. |
 | Silent-no-op `edge_filter` on edges that don't carry the attribute | Contradicts `mcp_v2.py:6,82-91,191-206` fail-loud-on-inapplicable-fields contract. Reverted in revision 3 — Principle 7 + Decision 10 now fail-loud (HV13). |
+| `exclude_external` on `neighbors_v2` | Duplicates `find_callers` FQN-prefix logic on a different surface; use `edge_filter` on `neighbors` instead (Decision 38). Document asymmetry in AGENT-GUIDE. |
+| Method-level accessor labels (`ACCESSOR` vs business logic on same `ENTITY` type) | `callee_declaring_role` alone cannot split getters from real entity methods. Use [`propose/AGENT-SKILLS-AND-COMMANDS-PROPOSE.md`](AGENT-SKILLS-AND-COMMANDS-PROPOSE.md) `/mini-map` heuristics or a future propose (Decision 39). |
+| Porting `/mini-map` classification into the indexer | Skill-side remedy is intentional; server-side role projection closes phantom/chained + stereotype buckets only. |
 
 ## §6 — Migration plan — 3 PRs
 
@@ -372,12 +460,13 @@ This propose locks before any code PR merges. The propose itself merges as a sep
 
 **Purpose**:
 - Add `EdgeFilter` Pydantic model in `mcp_v2.py`.
-- Wire it through `neighbors_v2` and the underlying Kuzu query (`kuzu_queries.py` neighbors path).
+- Wire it through `neighbors_v2` and the underlying Kuzu query (`kuzu_queries.py` neighbors path) with **Cypher predicate pushdown** (§3.4.1) and **`ORDER BY e.call_site_line, e.call_site_byte`** for CALLS (Decision 36–37).
 - Add `min_confidence`, `exclude_strategies`, `include_strategies`, `callee_declaring_role`, `callee_declaring_roles`, `exclude_callee_declaring_roles` as fields.
 - **Fail-loud single-edge-type validation** (Principle 7 + Decision 35): raise `ValueError` with teaching message when `edge_filter` references an attribute not on every edge type in `edge_types`. Mirrors `_nodefilter_inapplicable_fields` (`mcp_v2.py:191-206`). Increments the fail-loud counter.
 - Pydantic-level validation: `include_strategies` xor `exclude_strategies`.
-- Add `java-codebase-rag unresolved-calls list` and `java-codebase-rag unresolved-calls stats` CLI subcommands. Stub-emit empty results pre-PR-3 (the underlying `UnresolvedCallSite` table doesn't exist yet); PR-3 wires the real data.
+- Add `java-codebase-rag unresolved-calls list` and `java-codebase-rag unresolved-calls stats` CLI subcommands. Stub-emit empty results pre-PR-3 (the underlying `UnresolvedCallSite` table doesn't exist yet); PR-3 wires the real data. *(Optional: defer CLI entirely to PR-3 if stub UX is too confusing.)*
 - Update `MCP_HINTS_FIELD_DESCRIPTION` and `EDGE_SCHEMA` snapshot to register `callee_declaring_role` as a known filterable attribute on CALLS.
+- `docs/AGENT-GUIDE.md`: `exclude_external` is **not** on `neighbors` (Decision 38); document `NodeFilter.role` vs `EdgeFilter.callee_declaring_role` trap; cross-link `/mini-map` for accessor noise.
 - Add `OTHER`-fallback hint when role filter returns 0 but unfiltered ≥5 results (Decision 20).
 - Add `NodeFilter(role=...)` vs `EdgeFilter.callee_declaring_role` collision hint (Decision 30): fires when `NodeFilter(role=...)` is applied to `neighbors([m],'out',['CALLS'])` and the returned rows are dominantly method-kind symbols with `role='OTHER'`.
 - Add Kuzu predicate-pushdown perf named-scenario test on `bank-chat-system` (Decision 31).
@@ -385,7 +474,7 @@ This propose locks before any code PR merges. The propose itself merges as a sep
 
 **Still no `CALLS` row deletions.** Existing readers see the same rows as today; PR-2 only adds a filter projection surface.
 
-**Test summary**: named scenarios — filter projects ordered stream by role; mixed-edge-type filter raises fail-loud `ValueError` with teaching message (HV13); filter xor validation raises Pydantic error; CLI `java-codebase-rag unresolved-calls list --method-id <id>` returns empty pre-PR-3 with a "PR-3 not yet merged" footer; perf-named-scenario passes.
+**Test summary**: named scenarios — filter projects ordered stream by role; mixed-edge-type filter raises fail-loud `ValueError` with teaching message (HV13); filter xor validation raises Pydantic error; `test_neighbors_calls_ordered_by_call_site` (HV38); edge_filter predicates in Cypher (grep `callee_declaring_role` in `WHERE`); filter-before-limit invariant; CLI stub or deferred; perf-named-scenario passes.
 
 ### PR-3 — Move true receiver-failure rows out of CALLS + interleaved view + dedup hint
 
@@ -405,6 +494,7 @@ This propose locks before any code PR merges. The propose itself merges as a sep
 - Add `TPL_NEIGHBORS_CALLS_HIGH_FANOUT` template (§3.10) wired through the existing HINTS-V4 success-path generator.
 - Add `TPL_NEIGHBORS_CALLS_HAS_UNRESOLVED` template (§3.10) wired through the same generator. Suppressed when `include_unresolved=True`.
 - Add HV19 invariant test: no `strategy='phantom'` or `strategy='chained_receiver'` rows remain in `CALLS`.
+- Complete §3.9.1 HINTS / ontology checklist (H1–H8).
 
 **This is the only breaking PR.** Documented in the PR description as a breaking change; sentinel grep checks in the cursor task prompt enumerate every reference.
 
@@ -445,8 +535,12 @@ This propose locks before any code PR merges. The propose itself merges as a sep
 31. **PR-2 ships a Kuzu predicate-pushdown sanity test.** Named scenario: the same `OrderService.process` empty-filter `neighbors([m],'out',['CALLS'])` query on `bank-chat-system` is within 1.5× of its pre-PR-2 median latency on the same hardware. If the test fails at PR-2 review time, PR-2 adds an index on `(src_id, callee_declaring_role)` and re-validates. The pytest scenario id is committed in the PR-2 plan, not in this propose.
 32. **`EdgeFilter` exposes only `callee_declaring_role` from the role/capability/annotation/microservice quadruple.** Capability, annotation, and microservice filters are out of scope. Re-opens via a new propose if agent value emerges later. `callee_microservice` is specifically out — use `NodeFilter(microservice=...)` which already composes.
 33. **Supertype-walk dedup only** (revision 3 scope-narrow): when `_lookup_method_candidates` returns multiple candidates because one is the declared concrete method on the receiver type and others are inherited supertype declarations of the same signature, `pass3_calls` collapses to the concrete-class candidate before emit. **`overload_ambiguous` rows are not touched.** Multi-candidate dedup evidence is preserved as a build-time debuggability log line, not as graph state. HV36 locks this in PR-1's `bank-chat-system` fixture test.
-34. **Known-receiver-external `CALLS` rows are preserved** (`build_ast_graph.py:1257-1271`). These rows carry `resolved=False` with preserved receiver-tier `strategy`/`confidence`/`arg_count` and a deterministic phantom FQN. They are not noise — they are honest "we know where this goes but the callee body isn't in scope" rows. README §"Phantom nodes" documents the existing contract. PR-3 does not move them; agents who want to exclude library noise keep using `exclude_external=True` (FQN-prefix-based).
+34. **Known-receiver-external `CALLS` rows are preserved** (`build_ast_graph.py:1257-1271`). These rows carry `resolved=False` with preserved receiver-tier `strategy`/`confidence`/`arg_count` and a deterministic phantom FQN. They are not noise — they are honest "we know where this goes but the callee body isn't in scope" rows. README §"Phantom nodes" documents the existing contract. PR-3 does not move them. **`exclude_external` is not added to `neighbors_v2`** — JDK noise on `neighbors` uses `edge_filter`; `find_callers` keeps `exclude_external`.
 35. **`edge_filter` validation is per-call, fail-loud on inapplicable attributes** (revision 3 — supersedes the original silent-no-op decision). The validator runs against `EDGE_SCHEMA` and raises `ValueError` with a teaching message when any attribute referenced in the filter is not present on every edge type in `edge_types`. Increments `[filter-frame] fail-loud category=edge_filter` counter.
+36. **`neighbors_v2` CALLS paths use `ORDER BY e.call_site_line, e.call_site_byte` before `offset`/`limit`.** PR-2. Applies to empty-filter, `edge_filter`, and (PR-3) `include_unresolved` interleave.
+37. **`edge_filter` predicates are pushed into Cypher `WHERE` for `edge_types=['CALLS']`**, then `NodeFilter` on terminal nodes, then slice. No pre-filter SQL `LIMIT`. PR-2.
+38. **`exclude_external` is not added to `neighbors_v2`.** Document asymmetry with `find_callers` / `find_callees` in AGENT-GUIDE. PR-2.
+39. **Accessor / getter noise is out of scope for the indexer** — partially addressed by `exclude_callee_declaring_roles`; full remedy is client-side via [`propose/AGENT-SKILLS-AND-COMMANDS-PROPOSE.md`](AGENT-SKILLS-AND-COMMANDS-PROPOSE.md) `/mini-map` until a future method-level label propose.
 
 ## §8 — Risks and how we mitigate
 
@@ -464,6 +558,10 @@ This propose locks before any code PR merges. The propose itself merges as a sep
 | `java-codebase-rag unresolved-calls stats --by caller_role` requires joining `UnresolvedCallSite` → `UNRESOLVED_AT` → caller Symbol → declaring type | One extra hop; acceptable for a CLI debuggability surface. Not on a hot path. |
 | Supertype-walk dedup misidentifies an `overload_ambiguous` case and erases a candidate | Dedup is scoped strictly to "one candidate is the receiver-type's own concrete declaration AND the others are inherited supertype declarations of the same signature" — does not fire on name-only-fb multi-candidate cases. PR-1 fixture test asserts both scenarios. |
 | Known-external rows confuse agents reading `resolved=False` as "unresolved" | README §"Phantom nodes" already documents this; PR-3 description re-states. The `TPL_NEIGHBORS_CALLS_HAS_UNRESOLVED` hint refers specifically to `UnresolvedCallSite` rows (chained + phantom-receiver), not known-external. |
+| Agents assume `neighbors` returns CALLS in source order | PR-2 adds explicit `ORDER BY`; `test_neighbors_calls_ordered_by_call_site` on `bank-chat-system` (HV38). |
+| `edge_filter` applied after `LIMIT` truncates signal | Pushdown + filter-before-slice locked in §3.4.1; sentinel grep in plan forbids early `LIMIT` on unfiltered CALLS hop. |
+| HINTS still reference phantom CALLS strategies after PR-3 | §3.9.1 checklist (H2–H4); tests must be updated in PR-3, not left stale. |
+| `/mini-map` and `edge_filter` overlap confuses product direction | Decision 39 + §5 cross-link: server closes phantom/chained + stereotype; skill closes accessor heuristics. |
 
 ## Appendix A — Concrete DDL diff
 
@@ -501,6 +599,17 @@ ALTER NODE TABLE GraphMeta ADD COLUMN pass3_unresolved_chained INT64;
 ```
 
 ## Appendix B — Traceability
+
+**Revision 4 (2026-05-19, post-critical-review implementation contract)** — propose patches before code PRs:
+
+- **Status → under review.** Plan file added: [`plans/PLAN-CALLS-NOISE.md`](../plans/PLAN-CALLS-NOISE.md).
+- **ORDER BY contract (Decision 36, §3.4.1, HV38):** PR-2 locks `ORDER BY e.call_site_line, e.call_site_byte` on all CALLS `neighbors_v2` paths.
+- **`edge_filter` pushdown (Decision 37, §3.4.1):** Cypher `WHERE` predicates before `offset`/`limit`; no pre-filter `LIMIT`.
+- **`exclude_external` stance (Decision 38, §3.4.2):** not added to `neighbors_v2`; HV37 corrected; AGENT-GUIDE requirement in PR-2.
+- **Supertype dedup pseudocode (§3.3.1):** implementable algorithm for Decision 33.
+- **HINTS / ontology PR-3 checklist (§3.9.1):** replaces "hints unchanged" bullet; H1–H8 mandatory in PR-3.
+- **Mini-map cross-link (Decision 39, §5):** accessor noise partially out of scope; coordinates with `AGENT-SKILLS-AND-COMMANDS-PROPOSE.md`.
+- **Counts:** 39 decisions; 38 use cases (HV1–HV38).
 
 **Revision 3 (2026-05-19, post-PR-#178-review)** — major restructure after reviewer flagged six blockers:
 
@@ -542,6 +651,7 @@ ALTER NODE TABLE GraphMeta ADD COLUMN pass3_unresolved_chained INT64;
 **Cross-propose references**:
 - Supersedes `propose/completed/MCP-API-V2-REDESIGN-PROPOSE.md`'s "no per-edge filter on `neighbors`" rule (Decision 16).
 - Builds on `propose/completed/SCHEMA-V2-PROPOSE.md` §3.4 (`EDGE_SCHEMA`) — extends with `callee_declaring_role` registration.
-- Builds on `propose/completed/HINTS-V3-PROPOSE.md` (kind/direction templates) — no template edited, two new templates added in §3.10.
+- Builds on `propose/completed/HINTS-V3-PROPOSE.md` (kind/direction templates) — existing templates unchanged; PR-3 adds §3.10 templates per §3.9.1.
 - Builds on `propose/completed/HINTS-V4-SUCCESS-PATH-PROPOSE.md` — high-fanout and unresolved-presence templates plug into the existing success-path generator.
+- Complements [`propose/AGENT-SKILLS-AND-COMMANDS-PROPOSE.md`](AGENT-SKILLS-AND-COMMANDS-PROPOSE.md) `/mini-map` for accessor/getter noise (Decision 39) — server-side `edge_filter` does not replace skill heuristics.
 - Resolves [#177](https://github.com/HumanBean17/java-codebase-rag/issues/177).
