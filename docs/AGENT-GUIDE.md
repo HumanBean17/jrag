@@ -213,7 +213,7 @@ Identifier lookup; three statuses above. Args: `identifier`, optional `hint_kind
 
 One hop. Args: `ids` (string or array), **`direction`**, **`edge_types`**, `limit` (default 25), `offset`, optional `filter` on the other node, optional **`edge_filter`** (`edge_types` must be exactly `['CALLS']` — no composed dot-keys or second stored label; fail-loud otherwise).
 
-**Multiple origin ids:** each id loads the full CALLS stream (or generic hop) before a shared `offset`/`limit` slice — high fan-out lists can be slow; prefer one id per call or a smaller `limit`.
+**Multiple origin ids:** each id loads the full CALLS stream (or generic hop) in list order; `offset`/`limit` apply to the **concatenated** edge list (`ids[0]` edges first, then `ids[1]`, …), not global source order across origins — a large first origin can leave no rows for later ids within the same page. High fan-out methods are slow; prefer one id per call or a smaller `limit`.
 
 Returns **edges** with `attrs` (`confidence`, `strategy`, `match`, … on cross-service edges) and **`other`** node.
 

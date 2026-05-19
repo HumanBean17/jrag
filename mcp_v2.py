@@ -109,11 +109,6 @@ def _get_sentence_transformer(model_name: str, device: str | None) -> SentenceTr
         return _st_model
 
 
-_CLIENT_MESSAGE_PROCESSOR_PROCESS_FQN = (
-    "com.bank.chat.engine.processors.ClientMessageProcessor#process(ProcessingContext,InternalEvent)"
-)
-
-
 class NodeFilter(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
