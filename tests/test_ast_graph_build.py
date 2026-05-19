@@ -16,7 +16,9 @@ from pathlib import Path
 import kuzu
 import pytest
 
+from _builders import build_kuzu_to
 from ast_java import ONTOLOGY_VERSION
+from graph_enrich import _load_brownfield_overrides, collect_annotation_meta_chain
 
 
 def _connect(db_path: Path) -> kuzu.Connection:
@@ -68,6 +70,61 @@ def test_graph_meta_unresolved_counters_present(kuzu_db_path: Path) -> None:
     row = r.get_next()
     assert row[0] is not None and int(row[0]) >= 0
     assert row[1] is not None and int(row[1]) >= 0
+
+
+def test_calls_callee_declaring_role_matches_parent_symbol_role_yaml_brownfield(
+    tmp_path: Path,
+) -> None:
+    """YAML role_overrides on declaring type → edge attr matches parent Symbol.role."""
+    _load_brownfield_overrides.cache_clear()
+    collect_annotation_meta_chain.cache_clear()
+    root = tmp_path / "proj"
+    java_dir = root / "src/main/java/smoke"
+    java_dir.mkdir(parents=True)
+    (java_dir / "BrownfieldCallRole.java").write_text(
+        """
+        package smoke;
+
+        @interface LegacyServiceMarker { }
+
+        @LegacyServiceMarker
+        class ConfigOnlyService {
+            void handle() { }
+        }
+
+        class Caller {
+            void run(ConfigOnlyService svc) {
+                svc.handle();
+            }
+        }
+        """.strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (root / ".java-codebase-rag.yml").write_text(
+        "role_overrides:\n"
+        "  annotations:\n"
+        "    LegacyServiceMarker: SERVICE\n",
+        encoding="utf-8",
+    )
+    db_path = build_kuzu_to(root, tmp_path / "g.kuzu", max_pass=3)
+    conn = _connect(db_path)
+    mismatches = _scalar(
+        conn,
+        "MATCH ()-[c:CALLS]->(dst:Symbol) "
+        "MATCH (parent:Symbol {id: dst.parent_id}) "
+        "WHERE c.callee_declaring_role <> parent.role "
+        "RETURN count(*)",
+    )
+    assert mismatches == 0
+    roles = _column(
+        conn,
+        "MATCH ()-[c:CALLS]->(dst:Symbol) "
+        "MATCH (parent:Symbol {id: dst.parent_id}) "
+        "WHERE parent.fqn = 'smoke.ConfigOnlyService' "
+        "RETURN DISTINCT c.callee_declaring_role",
+    )
+    assert roles == ["SERVICE"]
 
 
 def test_pass3_callee_declaring_role_bank_annotated_types(kuzu_db_path: Path) -> None:

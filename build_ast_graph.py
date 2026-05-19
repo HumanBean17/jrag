@@ -51,7 +51,6 @@ from ast_java import (
     parse_java,
 )
 from graph_enrich import (
-    BrownfieldOverrides,
     _load_config_cross_service_resolution,
     collect_annotation_meta_chain,
     load_brownfield_overrides,
@@ -68,8 +67,6 @@ from path_filtering import LayeredIgnore, iter_java_source_files
 from java_ontology import VALID_CLIENT_KINDS, VALID_HTTP_CALL_MATCHES, VALID_PRODUCER_KINDS
 
 log = logging.getLogger(__name__)
-
-_PASS3_ROLE_OVERRIDES = BrownfieldOverrides({}, {}, {}, {}, {}, {}, {}, {}, {}, {})
 
 _VERBOSE_STDERR_LOCK = threading.Lock()
 
@@ -387,6 +384,8 @@ class GraphTables:
     pass3_unresolved_phantom_receiver: int = 0
     pass3_unresolved_chained: int = 0
     cross_service_resolution: str = "auto"
+    # Populated in _write_nodes (same overrides + meta_chain as Symbol.role).
+    type_role_by_node_id: dict[str, str] = field(default_factory=dict)
 
 
 # ---------- file walk (see `path_filtering.iter_java_source_files`) ----------
@@ -1160,20 +1159,19 @@ def _is_strict_supertype_of(tables: GraphTables, super_fqn: str, subtype_fqn: st
     return False
 
 
-def _callee_declaring_role_for_dst(tables: GraphTables, dst_id: str) -> str:
+def _callee_declaring_role_at_write(
+    tables: GraphTables,
+    dst_id: str,
+    *,
+    member_by_id: dict[str, MemberEntry],
+) -> str:
+    """Match parent declaring-type Symbol.role (brownfield + meta_chain included)."""
     if dst_id in tables.phantoms:
         return "OTHER"
-    for m in tables.members:
-        if m.node_id != dst_id:
-            continue
-        parent = tables.types.get(m.parent_fqn)
-        if parent is None:
-            return "OTHER"
-        role, _ = resolve_role_and_capabilities(
-            parent.decl, overrides=_PASS3_ROLE_OVERRIDES,
-        )
-        return role
-    return "OTHER"
+    member = member_by_id.get(dst_id)
+    if member is None:
+        return "OTHER"
+    return tables.type_role_by_node_id.get(member.parent_id, "OTHER")
 
 
 def _collapse_supertype_duplicates(
@@ -1234,7 +1232,6 @@ def _emit_call_edge(
         strategy=strategy,
         source="static",
         resolved=resolved,
-        callee_declaring_role=_callee_declaring_role_for_dst(tables, dst_id),
     ))
     stats.total += 1
     stats.by_strategy[strategy] += 1
@@ -2536,6 +2533,7 @@ def _write_nodes(
             overrides=overrides,
             meta_chain=mch,
         )
+        tables.type_role_by_node_id[entry.node_id] = role
         conn.execute(_CREATE_SYMBOL, _node_row(
             id=entry.node_id, kind=d.kind, name=d.name, fqn=d.fqn,
             package=entry.package,
@@ -2729,6 +2727,7 @@ def _write_edges(conn: kuzu.Connection, tables: GraphTables) -> None:
             seen_calls.add(key)
             unique_calls.append(row)
 
+    member_by_id = {m.node_id: m for m in tables.members}
     for row in unique_calls:
         conn.execute(_CREATE_CALL, {
             "src": row.src_id, "dst": row.dst_id,
@@ -2739,7 +2738,9 @@ def _write_edges(conn: kuzu.Connection, tables: GraphTables) -> None:
             "strat": row.strategy,
             "src_kind": row.source,
             "resolved": row.resolved,
-            "callee_declaring_role": row.callee_declaring_role,
+            "callee_declaring_role": _callee_declaring_role_at_write(
+                tables, row.dst_id, member_by_id=member_by_id,
+            ),
         })
 
 
