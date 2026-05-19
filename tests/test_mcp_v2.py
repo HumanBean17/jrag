@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 import statistics
 import time
 from collections import Counter
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -16,7 +18,6 @@ from java_ontology import VALID_RESOLVE_REASONS
 
 from mcp_v2 import (
     NodeFilter,
-    _CLIENT_MESSAGE_PROCESSOR_PROCESS_FQN,
     _NODEFILTER_APPLICABLE_FIELDS,
     describe_v2,
     filter_frame_counters,
@@ -25,6 +26,7 @@ from mcp_v2 import (
     resolve_v2,
     search_v2,
 )
+from pinned_ids import client_message_processor_process_id
 
 _PR2_CHAIN_SEARCH_DESCRIBE = re.compile(r"search\(query=.*\).*describe")
 _PR2_SENTINEL_PATTERNS: tuple[re.Pattern[str], ...] = (
@@ -1307,17 +1309,13 @@ def test_resolve_success_output_invariants(kuzu_graph, kuzu_graph_fqn_collision_
     assert single.candidates == []
 
 
-def _client_message_processor_process_id(kuzu_graph) -> str:
-    rows = kuzu_graph._rows(  # noqa: SLF001
-        "MATCH (m:Symbol {fqn: $fqn}) RETURN m.id AS id LIMIT 1",
-        {"fqn": _CLIENT_MESSAGE_PROCESSOR_PROCESS_FQN},
-    )
-    assert rows, f"missing pinned method {_CLIENT_MESSAGE_PROCESSOR_PROCESS_FQN}"
-    return str(rows[0]["id"])
+_PERF_BASELINES_PATH = (
+    Path(__file__).resolve().parent / "fixtures" / "perf_baselines.json"
+)
 
 
 def test_neighbors_calls_ordered_by_call_site(kuzu_graph) -> None:
-    mid = _client_message_processor_process_id(kuzu_graph)
+    mid = client_message_processor_process_id(kuzu_graph)
     out = neighbors_v2(mid, direction="out", edge_types=["CALLS"], limit=500, graph=kuzu_graph)
     assert out.success is True
     assert len(out.results) >= 2
@@ -1329,7 +1327,7 @@ def test_neighbors_calls_ordered_by_call_site(kuzu_graph) -> None:
 
 
 def test_neighbors_calls_edge_filter_callee_declaring_role(kuzu_graph) -> None:
-    mid = _client_message_processor_process_id(kuzu_graph)
+    mid = client_message_processor_process_id(kuzu_graph)
     out = neighbors_v2(
         mid,
         direction="out",
@@ -1370,7 +1368,7 @@ def test_neighbors_calls_edge_filter_pushdown_in_cypher(kuzu_graph, monkeypatch)
 
 
 def test_neighbors_calls_edge_filter_before_limit(kuzu_graph) -> None:
-    mid = _client_message_processor_process_id(kuzu_graph)
+    mid = client_message_processor_process_id(kuzu_graph)
     unfiltered = neighbors_v2(
         mid, direction="out", edge_types=["CALLS"], limit=500, graph=kuzu_graph
     )
@@ -1412,8 +1410,46 @@ def test_neighbors_calls_edge_filter_mixed_types_fail_loud(kuzu_graph) -> None:
     )
     assert out.success is False
     assert out.message
-    assert "callee_declaring_role" in out.message
+    assert "edge_types=['CALLS']" in out.message
     assert "OVERRIDES" in out.message
+
+
+def test_neighbors_calls_edge_filter_composed_types_fail_loud(kuzu_graph) -> None:
+    rows = kuzu_graph._rows(  # noqa: SLF001
+        "MATCH (t:Symbol)-[:DECLARES]->(m:Symbol)-[e:EXPOSES]->(:Route) "
+        "WHERE t.role = 'CONTROLLER' AND t.kind = 'class' "
+        "RETURN t.id AS id LIMIT 1",
+    )
+    assert rows
+    tid = str(rows[0]["id"])
+    out = neighbors_v2(
+        tid,
+        direction="out",
+        edge_types=["CALLS", "DECLARES.EXPOSES"],
+        edge_filter={"callee_declaring_role": "SERVICE"},
+        graph=kuzu_graph,
+    )
+    assert out.success is False
+    assert out.message
+    assert "edge_types=['CALLS']" in out.message
+    assert "DECLARES.EXPOSES" in out.message
+
+
+def test_neighbors_calls_edge_filter_role_axes_xor(kuzu_graph) -> None:
+    mid = _method_id_with_calls(kuzu_graph, "out")
+    out = neighbors_v2(
+        mid,
+        direction="out",
+        edge_types=["CALLS"],
+        edge_filter={
+            "callee_declaring_role": "SERVICE",
+            "exclude_callee_declaring_roles": ["OTHER"],
+        },
+        graph=kuzu_graph,
+    )
+    assert out.success is False
+    assert out.message
+    assert "mutually exclusive" in out.message.lower()
 
 
 def test_neighbors_calls_edge_filter_strategy_xor(kuzu_graph) -> None:
@@ -1435,7 +1471,10 @@ def test_neighbors_calls_edge_filter_strategy_xor(kuzu_graph) -> None:
     reason="perf gate; set JAVA_CODEBASE_RAG_RUN_HEAVY=1",
 )
 def test_neighbors_calls_perf_empty_filter_client_message_processor(kuzu_graph) -> None:
-    mid = _client_message_processor_process_id(kuzu_graph)
+    mid = client_message_processor_process_id(kuzu_graph)
+    baseline = json.loads(_PERF_BASELINES_PATH.read_text())[
+        "neighbors_calls_empty_filter_client_message_processor"
+    ]["median_sec"]
     times: list[float] = []
     for _ in range(5):
         t0 = time.perf_counter()
@@ -1444,6 +1483,6 @@ def test_neighbors_calls_perf_empty_filter_client_message_processor(kuzu_graph) 
         assert out.success is True
         assert out.results
     median_sec = statistics.median(times)
-    assert median_sec < 3.0 * 1.5
+    assert median_sec <= float(baseline) * 1.5
 
 

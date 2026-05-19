@@ -211,13 +211,15 @@ Identifier lookup; three statuses above. Args: `identifier`, optional `hint_kind
 
 #### `neighbors`
 
-One hop. Args: `ids` (string or array), **`direction`**, **`edge_types`**, `limit` (default 25), `offset`, optional `filter` on the other node, optional **`edge_filter`** (CALLS only — single label in `edge_types`; fail-loud when a filter field is not on that label).
+One hop. Args: `ids` (string or array), **`direction`**, **`edge_types`**, `limit` (default 25), `offset`, optional `filter` on the other node, optional **`edge_filter`** (`edge_types` must be exactly `['CALLS']` — no composed dot-keys or second stored label; fail-loud otherwise).
+
+**Multiple origin ids:** each id loads the full CALLS stream (or generic hop) before a shared `offset`/`limit` slice — high fan-out lists can be slow; prefer one id per call or a smaller `limit`.
 
 Returns **edges** with `attrs` (`confidence`, `strategy`, `match`, … on cross-service edges) and **`other`** node.
 
 **Cross-service edges** (`HTTP_CALLS`, `ASYNC_CALLS`): read `attrs.confidence` and `attrs.match` — low confidence or `unresolved`/`phantom`/`ambiguous` means treat as a resolver signal, not ground truth.
 
-**`CALLS` edges:** source-ordered (`call_site_line`, `call_site_byte`). `attrs.resolved=false` or low `attrs.confidence` may be JDK/external or unresolved static sites — still a lower bound, not exhaustive runtime behaviour. Optional **`edge_filter`** projects before pagination: `min_confidence`; `include_strategies` / `exclude_strategies` (mutually exclusive); `callee_declaring_role`, `callee_declaring_roles`, `exclude_callee_declaring_roles` (`["OTHER"]` also drops known-external rows). **`filter.role` filters the neighbor method (usually `OTHER`), not the callee stereotype** — use `edge_filter.callee_declaring_role` for repository/service hops. **`exclude_external` applies to `find_callers` / `find_callees` only** (FQN-prefix); trim JDK noise on CALLS via `edge_filter`. Accessor noise: role excludes help; getter/setter heuristics in [`propose/AGENT-SKILLS-AND-COMMANDS-PROPOSE.md`](../propose/AGENT-SKILLS-AND-COMMANDS-PROPOSE.md) `/mini-map`.
+**`CALLS` edges:** source-ordered (`call_site_line`, `call_site_byte`). `attrs.resolved=false` or low `attrs.confidence` may be JDK/external or unresolved static sites — still a lower bound, not exhaustive runtime behaviour. **`filter` + `edge_filter` together** load the ordered CALLS stream then apply callee `NodeFilter` in Python — expect higher latency on hot methods than `edge_filter` alone. Optional **`edge_filter`** projects before pagination: `min_confidence`; `include_strategies` / `exclude_strategies` (mutually exclusive); `callee_declaring_role`, `callee_declaring_roles`, `exclude_callee_declaring_roles` (`["OTHER"]` also drops known-external rows). **`filter.role` filters the neighbor method (usually `OTHER`), not the callee stereotype** — use `edge_filter.callee_declaring_role` for repository/service hops. **`exclude_external` applies to `find_callers` / `find_callees` only** (FQN-prefix); trim JDK noise on CALLS via `edge_filter`. Accessor noise: role excludes help; getter/setter heuristics in [`propose/AGENT-SKILLS-AND-COMMANDS-PROPOSE.md`](../propose/AGENT-SKILLS-AND-COMMANDS-PROPOSE.md) `/mini-map`.
 
 ### Ontology glossary
 

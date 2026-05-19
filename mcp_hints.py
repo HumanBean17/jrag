@@ -22,9 +22,9 @@ MCP_HINTS_FIELD_DESCRIPTION = (
     "DECLARES.* dot-keys for neighbors(); empty neighbors structural hints never use "
     "dot-key edge labels. For neighbors with multiple origin ids, empty-result "
     "structural hints describe the first origin only. On neighbors with "
-    "edge_types=['CALLS'], optional edge_filter projects the ordered CALLS stream "
-    "(min_confidence, strategies, callee_declaring_role axes); include_unresolved and "
-    "dedup_calls are separate knobs (mutually exclusive with edge_filter where noted)."
+    "edge_types=['CALLS'] only, optional edge_filter projects the ordered CALLS stream "
+    "(min_confidence, strategies, callee_declaring_role axes); fail-loud with composed "
+    "dot-keys or additional stored labels."
 )
 
 # --- Appendix A verbatim templates (substitute {id}, {kind}, {limit}) ---

@@ -155,6 +155,20 @@ class EdgeFilter(BaseModel):
             raise ValueError("include_strategies and exclude_strategies are mutually exclusive")
         return self
 
+    @model_validator(mode="after")
+    def _role_axes_mutually_exclusive(self) -> EdgeFilter:
+        role_axes = (
+            self.callee_declaring_role is not None,
+            bool(self.callee_declaring_roles),
+            bool(self.exclude_callee_declaring_roles),
+        )
+        if sum(role_axes) > 1:
+            raise ValueError(
+                "callee_declaring_role, callee_declaring_roles, and "
+                "exclude_callee_declaring_roles are mutually exclusive"
+            )
+        return self
+
 
 _NODEFILTER_FIELD_ORDER: tuple[str, ...] = tuple(NodeFilter.model_fields.keys())
 _EDGEFILTER_FIELD_ORDER: tuple[str, ...] = tuple(EdgeFilter.model_fields.keys())
@@ -298,10 +312,17 @@ def _edgefilter_applicability_error(edge_types: list[str], ef: EdgeFilter) -> st
     if not populated:
         return None
     flat_types = [et for et in edge_types if et not in _COMPOSED_EDGE_TYPES]
-    if not flat_types:
+    composed = [et for et in edge_types if et in _COMPOSED_EDGE_TYPES]
+    if composed or flat_types != ["CALLS"]:
+        parts: list[str] = []
+        if flat_types != ["CALLS"]:
+            parts.append(f"stored labels {flat_types!r}")
+        if composed:
+            parts.append(f"composed keys {composed!r}")
+        detail = " and ".join(parts) if parts else "requested edge_types"
         return (
-            "edge_filter is not supported for composed edge types only; "
-            "use a stored graph edge label such as 'CALLS'."
+            f"edge_filter requires edge_types=['CALLS'] only; {detail} is not supported — "
+            "split into separate neighbors calls"
         )
     for edge_type in flat_types:
         available = _edge_schema_attr_names(edge_type)
@@ -1541,7 +1562,7 @@ def neighbors_v2(
                 else raw_edge_filter
             )
         except ValidationError as exc:
-            _log_fail_loud("unknown_key")
+            _log_fail_loud("edge_filter")
             return NeighborsOutput(
                 success=False,
                 message=_filter_validation_error_message(exc),
@@ -1549,7 +1570,7 @@ def neighbors_v2(
                 requested_edge_types=[],
             )
         except ValueError as exc:
-            _log_fail_loud("unknown_key")
+            _log_fail_loud("edge_filter")
             return NeighborsOutput(success=False, message=str(exc), hints=[], requested_edge_types=[])
         if ef and (err := _edgefilter_applicability_error(requested_edge_types, ef)):
             _log_fail_loud("edge_filter")

@@ -23,13 +23,13 @@ from mcp_hints import (
 from mcp_v2 import (
     FindOutput,
     SearchOutput,
-    _CLIENT_MESSAGE_PROCESSOR_PROCESS_FQN,
     describe_v2,
     find_v2,
     neighbors_v2,
     resolve_v2,
     search_v2,
 )
+from pinned_ids import client_message_processor_process_id
 
 _TYPE_KINDS = frozenset({"class", "interface", "enum", "record", "annotation"})
 
@@ -1699,7 +1699,7 @@ def test_neighbors_calls_other_fallback_hint(kuzu_graph) -> None:
 
 
 def test_neighbors_calls_nodefilter_role_collision_hint(kuzu_graph) -> None:
-    mid = _client_message_processor_process_id(kuzu_graph)
+    mid = client_message_processor_process_id(kuzu_graph)
     out = neighbors_v2(
         mid,
         direction="out",
@@ -1717,12 +1717,3 @@ def test_neighbors_calls_nodefilter_role_collision_hint(kuzu_graph) -> None:
     if sum(1 for r in other_roles if r == "OTHER") < max(1, (len(other_roles) * 3) // 4):
         pytest.skip("CALLS neighbors are not dominantly OTHER for this method")
     assert mcp_hints.TPL_NEIGHBORS_CALLS_NODEFILTER_ROLE_COLLISION in out.hints
-
-
-def _client_message_processor_process_id(kuzu_graph) -> str:
-    rows = kuzu_graph._rows(  # noqa: SLF001
-        "MATCH (m:Symbol {fqn: $fqn}) RETURN m.id AS id LIMIT 1",
-        {"fqn": _CLIENT_MESSAGE_PROCESSOR_PROCESS_FQN},
-    )
-    assert rows
-    return str(rows[0]["id"])
