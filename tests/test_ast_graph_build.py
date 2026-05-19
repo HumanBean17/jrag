@@ -58,6 +58,41 @@ def test_schema_has_all_expected_tables(kuzu_db_path: Path) -> None:
     assert not missing, f"missing schema tables: {missing}; saw {tables}"
 
 
+def test_graph_meta_unresolved_counters_present(kuzu_db_path: Path) -> None:
+    conn = _connect(kuzu_db_path)
+    r = conn.execute(
+        "MATCH (m:GraphMeta) RETURN m.pass3_unresolved_phantom_receiver, "
+        "m.pass3_unresolved_chained"
+    )
+    assert r.has_next(), "expected GraphMeta row"
+    row = r.get_next()
+    assert row[0] is not None and int(row[0]) >= 0
+    assert row[1] is not None and int(row[1]) >= 0
+
+
+def test_pass3_callee_declaring_role_bank_annotated_types(kuzu_db_path: Path) -> None:
+    """CALLS to methods on @Service declaring types carry callee_declaring_role=SERVICE."""
+    conn = _connect(kuzu_db_path)
+    rows = _column(
+        conn,
+        "MATCH (src:Symbol)-[c:CALLS]->(dst:Symbol) "
+        "MATCH (parent:Symbol {id: dst.parent_id}) "
+        "WHERE 'Service' IN parent.annotations AND parent.role = 'SERVICE' "
+        "RETURN c.callee_declaring_role LIMIT 20",
+    )
+    assert rows, "expected CALLS to @Service-declared callees on bank-chat-system"
+    assert all(str(r) == "SERVICE" for r in rows), rows
+    repo_rows = _column(
+        conn,
+        "MATCH (src:Symbol)-[c:CALLS]->(dst:Symbol) "
+        "MATCH (parent:Symbol {id: dst.parent_id}) "
+        "WHERE 'Repository' IN parent.annotations "
+        "RETURN DISTINCT c.callee_declaring_role",
+    )
+    if repo_rows:
+        assert all(str(r) == "REPOSITORY" for r in repo_rows), repo_rows
+
+
 def test_graph_meta_present_and_versioned(kuzu_db_path: Path) -> None:
     conn = _connect(kuzu_db_path)
     r = conn.execute(

@@ -81,8 +81,9 @@ _DTO_LOMBOK_ANNOTATIONS: frozenset[str] = frozenset({
 # Phase 9: `@CodebaseAsyncRoute` replaces same-method built-in `@KafkaListener` routes in graph composition.
 # Phase 10: `@CodebaseHttpClient` rename + `CodebaseHttpMethod` enum; inbound HTTP layer-C replaces built-in rows.
 # Phase 11: `EDGE_SCHEMA` in `java_ontology.py` (canonical edge navigation schema; v14 re-index).
+# Phase 12: CALLS `callee_declaring_role`, supertype-walk dedup, pass3 unresolved counters (v15 re-index).
 # Bumps whenever extraction / enrichment semantics change.
-ONTOLOGY_VERSION = 14
+ONTOLOGY_VERSION = 15
 
 ROLE_ANNOTATIONS: dict[str, str] = {
     # Spring Web

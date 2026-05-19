@@ -424,7 +424,9 @@ Resolution order for `microservice`:
 
 ### Re-index required when ontology changes
 
-Current ontology version is **14**. Any index built before this version must be rebuilt via `cocoindex update ... --full-reprocess -f` or a full `java-codebase-rag reprocess` (no selective flags) so vectors and graph stay aligned. Until re-indexed, the server defensively JSON-decodes string-form list columns so nothing explodes, but filters like `array_contains` will not work.
+Current ontology version is **15**. Any index built before this version must be rebuilt via `cocoindex update ... --full-reprocess -f` or a full `java-codebase-rag reprocess` (no selective flags) so vectors and graph stay aligned. Until re-indexed, the server defensively JSON-decodes string-form list columns so nothing explodes, but filters like `array_contains` will not work.
+
+Ontology **15** (CALLS-NOISE PR-1) adds `CALLS.callee_declaring_role`, `GraphMeta.pass3_unresolved_phantom_receiver` / `pass3_unresolved_chained`, and **supertype-walk dedup** at build time: duplicate interface + concrete candidates at the same call site collapse to one `CALLS` row (row counts per method may drop after re-index, not only a new column). PR-2 adds `edge_filter` on `neighbors`; PR-3 moves true receiver-failure rows off `CALLS`.
 
 Ontology **14** introduces `EDGE_SCHEMA` in `java_ontology.py` as the canonical edge navigation schema (see `docs/EDGE-NAVIGATION.md`). **`HTTP_CALLS` is `Client → Route`** (SCHEMA-V2 PR-B). **`ASYNC_CALLS` is `Producer → Route`** with `DECLARES_PRODUCER` (SCHEMA-V2 PR-C). Run one full reprocess after upgrading through the SCHEMA-V2 sequence (or when you need the v14 ontology gate).
 

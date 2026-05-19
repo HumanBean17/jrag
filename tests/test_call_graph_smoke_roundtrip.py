@@ -96,6 +96,38 @@ def test_wildcard_static_import_strategy(kuzu_db_path_call_graph_smoke: Path) ->
     assert "static_import_wildcard" in strats, strats
 
 
+def test_pass3_supertype_dedup_jpa_repository_save_one_row(
+    kuzu_db_path_call_graph_smoke: Path,
+) -> None:
+    """SupertypeDedupPatterns: interface + concrete save → one CALLS row, REPOSITORY role."""
+    db = kuzu_db_path_call_graph_smoke
+    conn = _connect(db)
+    rows = _rows(
+        conn,
+        "MATCH (src:Symbol)-[c:CALLS]->(dst:Symbol) "
+        "WHERE src.fqn STARTS WITH 'smoke.SupertypeDedupPatterns#persist' "
+        "AND dst.name = 'save' "
+        "RETURN count(*) AS n, c.callee_declaring_role AS role",
+    )
+    assert rows, "expected save call from SupertypeDedupPatterns#persist"
+    assert int(rows[0][0]) == 1, rows
+    assert str(rows[0][1]) == "REPOSITORY", rows
+
+
+def test_pass3_overload_ambiguous_still_n_rows(kuzu_db_path_call_graph_smoke: Path) -> None:
+    """overload_ambiguous sites keep N rows after supertype dedup (OverloadPatterns#sameArity)."""
+    db = kuzu_db_path_call_graph_smoke
+    conn = _connect(db)
+    rows = _rows(
+        conn,
+        "MATCH (src:Symbol)-[c:CALLS]->(dst:Symbol) "
+        "WHERE src.fqn STARTS WITH 'smoke.OverloadPatterns#sameArity' "
+        "AND dst.name = 'amb' AND c.strategy = 'overload_ambiguous' "
+        "RETURN dst.fqn AS fqn",
+    )
+    assert len(rows) == 2, f"expected 2 overload_ambiguous targets, got {rows}"
+
+
 def test_overload_sameArity_emits_two_overload_ambiguous_edges(kuzu_db_path_call_graph_smoke: Path) -> None:
     """§7.1 #13: two one-arg overloads → two resolved edges tagged overload_ambiguous."""
     db = kuzu_db_path_call_graph_smoke
