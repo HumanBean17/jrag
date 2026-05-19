@@ -5,6 +5,7 @@
 **Date**: 2026-05-18
 **Tracks**: [#177](https://github.com/HumanBean17/java-codebase-rag/issues/177)
 **Plan**: [`plans/PLAN-CALLS-NOISE.md`](../plans/PLAN-CALLS-NOISE.md) (per-PR sentinels, tests, landing order)
+**Prompts**: [`plans/CURSOR-PROMPTS-CALLS-NOISE.md`](../plans/CURSOR-PROMPTS-CALLS-NOISE.md) (PR-1 → PR-3 handoffs)
 
 ## TL;DR
 
@@ -613,7 +614,7 @@ ALTER NODE TABLE GraphMeta ADD COLUMN pass3_unresolved_chained INT64;
 
 ## Appendix B — Traceability
 
-**Revision 5 (2026-05-19, PR #179 review doc pass)** — fixture anchors + plan alignment (no code, no CURSOR-PROMPTS yet):
+**Revision 5 (2026-05-19, PR [#179](https://github.com/HumanBean17/java-codebase-rag/pull/179))** — fixture anchors, plan alignment, Cursor prompts (docs only; no code):
 
 - **Pinned bank method:** `ClientMessageProcessor#process` (57 outbound CALLS; ~49 after PR-3) replaces fictional `OrderService.process` in HV/perf rows.
 - **Tests:** supertype dedup + `overload_ambiguous` on `call_graph_smoke` (PR-1 adds `SupertypeDedupPatterns`); bank for role-column population only.
@@ -621,7 +622,7 @@ ALTER NODE TABLE GraphMeta ADD COLUMN pass3_unresolved_chained INT64;
 - **Test name:** `test_neighbors_calls_edge_filter_pushdown_in_cypher` unified; perf test renamed to `..._client_message_processor` (heavy-gated).
 - **PR-2:** CLI deferred to PR-3; PR-1 README notes row-count delta from dedup.
 - **PR-3:** interleave tie-break + `dedup_calls` canonical line locked in plan.
-- **Merge gate:** `CURSOR-PROMPTS-CALLS-NOISE.md` required before PR-1 code (not in this PR).
+- **Cursor prompts:** [`plans/CURSOR-PROMPTS-CALLS-NOISE.md`](../plans/CURSOR-PROMPTS-CALLS-NOISE.md) added — merge gate for PR-1 **code** is satisfied once [#179](https://github.com/HumanBean17/java-codebase-rag/pull/179) lands on `master`.
 
 **Revision 4 (2026-05-19, post-critical-review implementation contract)** — propose patches before code PRs:
 
