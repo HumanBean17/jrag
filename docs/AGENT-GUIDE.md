@@ -1,112 +1,94 @@
 # Agent Guide — `java-codebase-rag` MCP
 
-> **How to use this file.** Copy the block between the `<!-- BEGIN/END
-> java-codebase-rag MCP guide -->` markers below into your project's `QWEN.md`,
-> `CLAUDE.md`, `AGENTS.md`, or equivalent. The block is self-contained:
-> **five** MCP navigation tools, one shared **`NodeFilter`**, edge-type
-> taxonomy, a forced reasoning preamble, a decision tree, a recovery
-> playbook, and slash-style prompt aliases. Update by re-pulling from this
-> repo when the ontology bumps.
->
-> Why this exists: weak / mid models pick the wrong tool, omit required
-> `neighbors` arguments, pass stringified JSON, or use vector search for
-> questions the graph answers exactly. This guide keeps them on the rails.
->
-> Calibrated against ontology version **15** (see `ast_java.ONTOLOGY_VERSION` /
-> `java_ontology.EDGE_SCHEMA` + valid sets): canonical edge navigation schema in
-> `docs/EDGE-NAVIGATION.md`. v15 re-index required — `CALLS.callee_declaring_role`,
-> supertype-walk dedup (fewer duplicate-site rows), and `GraphMeta` pass3 unresolved
-> counters; PR-2 adds `edge_filter` on `neighbors`. v14: `HTTP_CALLS` is `Client → Route`;
-> `Producer` + `DECLARES_PRODUCER` and `ASYNC_CALLS` (`Producer → Route`).
-> Still includes stored `OVERRIDES` Symbol→Symbol edges and v12 HTTP brownfield
-> (`@CodebaseHttpClient`, shared `CodebaseHttpMethod` enum, inbound layer-C HTTP routes
-> replace same-method built-in rows). **Design rationale:** navigation surface and tools —
-> [`propose/completed/MCP-API-V2-REDESIGN-PROPOSE.md`](../propose/completed/MCP-API-V2-REDESIGN-PROPOSE.md);
-> HTTP brownfield rename, `CodebaseHttpMethod`, and exclusivity —
-> [`propose/completed/HTTP-ROUTE-METHOD-ENUM-PROPOSE.md`](../propose/completed/HTTP-ROUTE-METHOD-ENUM-PROPOSE.md).
+Copy the block between `<!-- BEGIN` and `<!-- END` into your project's `AGENTS.md`, `CLAUDE.md`, or equivalent. It is self-contained: five MCP tools, shared `NodeFilter`, edge taxonomy, tool-selection rules, and recovery moves.
 
 ---
 
 <!-- BEGIN java-codebase-rag MCP guide -->
 
-## java-codebase-rag MCP — agent operating manual
+## java-codebase-rag MCP — operating manual
 
-This MCP indexes Java enterprise projects into two stores:
+**Tools:** `search`, `find`, `describe`, `neighbors`, `resolve`.
 
-- **LanceDB** — vector + optional hybrid (FTS + vector) search over Java / SQL / YAML chunks.
-- **Kuzu graph** — exact structure: **node kinds** `Symbol`, `Route`, `Client` and **ten edge types** (see *Edge taxonomy* below).
+**Node kinds:** `Symbol` (types and methods), `Route` (HTTP and messaging entry points), `Client` (outbound HTTP call sites), `Producer` (outbound async call sites).
 
-**MCP surface (navigation only):** `search`, `find`, `describe`, `neighbors`, `resolve`.
+**Indexed content:** Java production sources plus SQL and YAML (use `search` `table`: `java`, `sql`, `yaml`, or `all`).
 
-**Response extras (advisory):** On success, `search`, `find`, `describe`, and `neighbors` include a top-level `hints` list (≤5 templated next-call strings). `search` and `find` also echo `limit` / `offset`. Hints are safe to ignore; they are empty when `success` is false. Locked catalog: [`propose/completed/HINTS-ROAD-SIGNS-PROPOSE.md`](../propose/completed/HINTS-ROAD-SIGNS-PROPOSE.md) Appendix A.
+**Ontology: 15** — if results look structurally wrong or empty across tools, the index may be missing, stale, or built with a different `ontology_version`; you cannot re-index via MCP — ask the operator to rebuild.
 
-**Operator / diagnostics (not MCP):** use the **`java-codebase-rag`** CLI — lifecycle (`init`, `increment`, `reprocess`, `erase`) plus `meta`, `tables`, `diagnose-ignore`, `analyze-pr`. Rebuilds are slow; the coding agent should not pretend it can reindex via MCP. For lifecycle commands, subprocess progress is written to **stderr** (use **`--quiet`** to suppress it); **stdout** is only the structured result payload.
+**Responses:** On success, `search`, `find`, `describe`, and `neighbors` may include a top-level `hints` list (≤5 suggested next calls) and, for `search`/`find`, echoed `limit`/`offset`. Hints are advisory; ignore them when `success` is false.
 
-**Use this MCP when** you need whole-codebase context: who calls what, what handles a route, what a method invokes, where clients point, or fuzzy “where is concept X” entry points.
+**Use this MCP when** you need whole-codebase structure: callers/callees, route handlers, HTTP/async seams, clients/producers, or fuzzy entry points for a concept.
 
-**Do NOT use this MCP when** the answer is already in the open file, or for third-party library trivia from training data alone. Prefer the smallest call that answers the question.
+**Do not use this MCP when** the answer is already in the open file, or for third-party library trivia from training data alone. Prefer the smallest call that answers the question.
 
-### What this MCP is NOT
+### What this MCP is not
 
-The MCP indexes Java production code, SQL, and YAML — nothing else.
-Treat the following as out of frame:
+- **Test files, build files, CI/deploy** — read those files directly in the repo.
+- **Reflection and dynamic dispatch** — `CALLS` is static analysis only; the resolved set is a **lower bound**.
+- **Proof of absence** — an empty result may mean the project was not indexed, the wrong `table`, or a filter that matches nothing.
+- **Git history** — use `git log` / `git blame` for "who changed" / "when".
 
-- **Test files, build files, deploy / runtime story** — read `pom.xml`,
-  `build.gradle`, `Dockerfile`, `.github/workflows/`, README directly.
-- **Reflection, dynamic dispatch, SPI lookups** — `CALLS` resolves
-  static method calls only; the resolved caller set is a **lower bound**.
-- **Unindexed services / repos** — verify with `java-codebase-rag meta`
-  before treating an empty `search` result as proof of absence.
-- **"When did X change", "who changed X"** — use `git log` / `git blame`.
+When MCP disagrees with the open file, **the file wins**; treat the mismatch as a likely stale or incomplete index.
 
-When MCP disagrees with the open file, the file wins; report the
-disagreement as evidence of staleness, not as a contradiction.
+### Brownfield annotations on methods
 
-### Brownfield HTTP annotations (exclusivity)
+If a method has any of these (including plural containers **`@CodebaseHttpRoutes`**, **`@CodebaseAsyncRoutes`**, **`@CodebaseHttpClients`**, **`@CodebaseProducers`**), that annotation is the **only** source for the facets it declares — framework inference on the **same** method is **not merged** for that axis:
 
-When a method carries **`@CodebaseHttpRoute`** or **`@CodebaseHttpClient`** (including plural containers), the extractor treats that annotation as the **only** source of truth for the facets it declares (`path`, HTTP verb, `targetService`, `clientKind`, etc.). Framework annotations on the **same** method that would normally drive route or client inference—Spring MVC/WebFlux mapping annotations, **`@FeignClient`**-scoped method mappings, JAX-RS verb annotations, and the like—are **bypassed** for that axis. Do not assume the graph “merges” brownfield with the framework row; for inbound HTTP, layer-C brownfield routes **replace** same-method built-in Spring rows in the graph.
+| Annotation | Declares | Framework rows bypassed (examples) |
+| ---------- | -------- | ------------------------------------ |
+| `@CodebaseHttpRoute` | inbound HTTP path / verb | Spring MVC/WebFlux mapping annotations |
+| `@CodebaseAsyncRoute` | inbound async topic / route | `@KafkaListener`, `@RabbitListener`, … |
+| `@CodebaseHttpClient` | outbound HTTP client call site | `@FeignClient` method mappings, RestTemplate-style inference |
+| `@CodebaseProducer` | outbound async producer call site | `KafkaTemplate` / `StreamBridge` producer inference |
 
-**Observability:** If brownfield and shadowable framework annotations **co-exist** on a method, a **verbose** graph build emits a structured stderr line with **`event=brownfield-exclusivity-shadowing`** (severity INFO), listing which framework annotation simple names were skipped. Typical operator invocation: `.venv/bin/python build_ast_graph.py --source-root … --kuzu-path … --verbose`. Non-verbose builds may omit this traffic.
+Trust the indexed brownfield row over a framework-only reading of the source.
 
-**UC10 (silent disagreement):** The brownfield annotation wins even when its HTTP verb or path disagrees with what Spring or Feign shows on the method (for example Feign **`@GetMapping`** vs brownfield **`CodebaseHttpMethod.POST`**). There is **no** merge-time warning for that mismatch—wrong assumptions surface at runtime (for example HTTP 405) or through code review. When auditing, prefer the indexed brownfield row and, if needed, the verbose shadowing log over the framework-only reading.
+### Workflow (locate → inspect → walk)
 
-**Workflow (GPS model):**
-
-1. **Locate** — `resolve` when you hold an identifier-shaped string; `search` (natural language / fragment) or `find` (structured `NodeFilter`) for discovery.
-2. **Inspect** — `describe(id)` to see the full record and `edge_summary` (per stored edge label `in`/`out` counts, plus optional composed dot-keys for type Symbols — see `describe` below).
-3. **Walk** — `neighbors` in a loop with explicit **`direction`** and **`edge_types`** until you have enough evidence. Multi-hop “trace” and “impact” are **your** reasoning, not a separate tool.
+1. **Locate** — `resolve` for identifier-shaped strings; `search` for natural language or code fragments; `find` for structured `NodeFilter` discovery.
+2. **Inspect** — `describe(id)` for the full record and `edge_summary` (per-label `in`/`out` counts).
+3. **Walk** — `neighbors` in a loop with explicit **`direction`** and **`edge_types`**. Multi-hop traces are **your** reasoning, not a separate tool.
 
 ### Forced reasoning preamble (every tool call)
 
-Before every MCP tool call, output **one short line**:
+Before each MCP call, output one short line:
 
 ```
 Q-class: <semantic | structured | inspect | walk>
 Pick: <search|find|describe|neighbors|resolve>  Why: <≤8 words>
 ```
 
-Then check *Argument shapes* (real JSON arrays/objects, required `neighbors` fields). If the call returns nothing useful, do not thrash — use the **Recovery playbook**.
+Then use real JSON shapes (see below). If the call fails or returns nothing useful, use the **Recovery playbook** — do not thrash.
 
-### Edge taxonomy (ten labels)
+### Edge taxonomy
 
-Use these strings **verbatim** in `neighbors(..., edge_types=[...])`:
+Use these strings **verbatim** in `neighbors(..., edge_types=[...])`.
+
+**Stored edges (one hop):**
 
 | Group | Edge types | Semantics |
 | ----- | ---------- | --------- |
 | Type wiring | `EXTENDS`, `IMPLEMENTS`, `INJECTS` | `in` = who depends on this type; `out` = what this type depends on |
-| Containment | `DECLARES`, `DECLARES_CLIENT` | `in` = owner; `out` = owned member / client |
-| Method overrides | `OVERRIDES` | Subtype **method** → supertype **declaration** method (same `signature`, one `IMPLEMENTS`/`EXTENDS` hop). `in` = overriders; `out` = overridden declarations |
-| Method calls | `CALLS` | `in` = callers; `out` = callees |
-| Service boundary | `EXPOSES` | Symbol → Route (handler exposes route) |
-| Cross-service | `HTTP_CALLS`, `ASYNC_CALLS` | `HTTP_CALLS`: Client → Route; `ASYNC_CALLS`: Producer → Route via `DECLARES_PRODUCER` |
+| Containment | `DECLARES`, `DECLARES_CLIENT`, `DECLARES_PRODUCER` | `in` = owner; `out` = owned member, client, or producer |
+| Method overrides | `OVERRIDES` | Subtype **method** → supertype **declaration** (same `signature`, one `IMPLEMENTS`/`EXTENDS` hop) |
+| Method calls | `CALLS` | `in` = callers; `out` = callees (method Symbol → method Symbol only) |
+| Service boundary | `EXPOSES` | method Symbol → Route (handler exposes route) |
+| Cross-service | `HTTP_CALLS`, `ASYNC_CALLS` | `HTTP_CALLS`: Client → Route; `ASYNC_CALLS`: Producer → Route |
 
-Symmetric: cross-service and intra-service questions use the **same** `neighbors` call with different `edge_types`.
+**Composed edges (type Symbol origin, `direction="out"` only):**
 
-### Argument shapes — what the parser actually wants
+| Edge type | Meaning |
+| --------- | ------- |
+| `DECLARES.DECLARES_CLIENT` | Members' HTTP clients in one hop |
+| `DECLARES.DECLARES_PRODUCER` | Members' async producers in one hop |
+| `DECLARES.EXPOSES` | Members' exposed routes in one hop |
 
-#### A. JSON, not stringified JSON
+**Not valid in `edge_types`:** `OVERRIDDEN_BY`, `OVERRIDDEN_BY.DECLARES_CLIENT`, `OVERRIDDEN_BY.DECLARES_PRODUCER`, `OVERRIDDEN_BY.EXPOSES` (describe-only virtual keys).
 
-Pass **real** JSON types. Never pass a string containing JSON for arrays or objects.
+### Argument shapes
+
+#### JSON, not stringified JSON
 
 | Param | Right | Wrong |
 | ----- | ----- | ----- |
@@ -115,215 +97,189 @@ Pass **real** JSON types. Never pass a string containing JSON for arrays or obje
 | `filter` | `{"role":"CONTROLLER"}` | nested string JSON |
 | `ids` (batch) | `["sym:…","sym:…"]` | comma-joined string |
 
-**Rule:** `list[str]` → `["a","b"]`. `str` → `"a"`. Omit keys you do not need; empty string `""` is often a **real filter** that matches nothing.
+Omit keys you do not need. Empty string `""` is often a **real filter** that matches nothing.
 
-#### B. Node ids
+#### Node ids
 
-- **Symbol:** prefix `sym:` (stable graph id from `search.symbol_id`, `find`, `describe`, or `neighbors.other.id`).
-- **Route:** `route:` or `r:` prefix (use the exact id from `find` / `describe`).
-- **Client:** `client:` or `c:` prefix.
+| Kind | Prefixes |
+| ---- | -------- |
+| Symbol | `sym:` |
+| Route | `route:` or `r:` |
+| Client | `client:` or `c:` |
+| Producer | `producer:` or `p:` |
 
-`describe` and `neighbors` accept these ids and dispatch by prefix.
+Use exact ids from `search.symbol_id`, `find`, `describe`, or `neighbors.other.id`.
 
-#### C. Method / type needles (for interpreting `Symbol` FQNs)
-
-When reading or comparing symbols, method identity uses **FQN + signature**:
+#### Method / type identity (Symbol FQNs)
 
 ```
 <package>.<Type>[.<NestedType>]#<methodName>(<SimpleType1>,<SimpleType2>,…)
 ```
 
-- Simple type names in parentheses (`String`, `List`), generics erased (`List<String>` → `List`).
-- No spaces after commas. No-arg: `()`. Constructor: `#<init>(...)`.
+Simple types in parentheses; generics erased (`List<String>` → `List`). No spaces after commas. No-arg: `()`. Constructor: `#<init>(…)`.
 
-Use `resolve` when the simple name (or FQN fragment) is identifier-shaped; use `search` for fuzzy ranked discovery if you need chunk context before you have a stable id.
+#### `neighbors` — required every time
 
-#### D. `neighbors` — required arguments
+- `direction`: `"in"` or `"out"` (no default).
+- `edge_types`: non-empty list from the taxonomy above.
 
-**There are no defaults.** Every call must include:
+Optional `filter` applies to each **other** endpoint; populated fields must match that neighbor's kind (strict frame).
 
-- `direction`: `"in"` or `"out"`.
-- `edge_types`: non-empty list of edge labels from the taxonomy table.
+**Batching:** multiple `ids` expand first; `limit`/`offset` slice the **merged** edge list — raise `limit` when batching.
 
-Omitting them is a validation error. This is intentional: it prevents huge accidental fan-out.
+**Mixed flat + composed `edge_types`:** flat edges are listed before composed edges, then pagination applies. A small `limit` with e.g. `["DECLARES","DECLARES.DECLARES_CLIENT"]` may return only member Symbols and no Clients — use the dot-key alone to list terminals.
 
-Optional `filter` applies to the **other** endpoint node using the same `NodeFilter` schema as `find`. Populated fields must be applicable to that neighbor's kind; mixed-kind neighborhoods fail loud on the first neighbor row whose kind rejects the filter.
+#### Shared `NodeFilter` (`find`, `search.filter`, `neighbors.filter`)
 
-#### E. Shared `NodeFilter` (for `find`, `search.filter`, `neighbors.filter`)
-
-One object shape everywhere. **For `find`, `filter` is required** — `{}` is valid (no predicates; returns the full kind up to pagination) but may be expensive at scale; prefer narrowing keys when you can.
+For **`find`**, `filter` is required — `{}` means no predicates (all nodes of that kind, subject to pagination).
 
 | Keys | Applies to |
 | ---- | ---------- |
-| `microservice`, `module`, `source_layer` | All kinds (`source_layer` mainly **client**: `builtin` / brownfield) |
+| `microservice`, `module`, `source_layer` | All kinds (`source_layer` mainly **client** / **producer**) |
 | `role`, `exclude_roles`, `annotation`, `capability`, `fqn_prefix`, `symbol_kind`, `symbol_kinds` | **symbol** |
 | `http_method`, `path_prefix`, `framework` | **route** |
 | `client_kind`, `target_service`, `target_path_prefix`, `http_method` | **client** |
+| `producer_kind`, `topic_prefix` | **producer** |
 
-The same `http_method` key filters HTTP verbs on **routes** (server-side declared method) and on **clients** (caller-side method on the outbound call). It is not applicable to **symbol** rows.
+`http_method` filters HTTP verbs on **routes** (declared method) and on **clients** (outbound call method). Not applicable to **symbol** rows.
 
-### Strict frame contract (`find`, `search.filter`, `neighbors.filter`)
+**Strict frame:** one populated field → one stored attribute for that kind. Unknown keys or inapplicable populated fields → `success=false` with a teaching `message`. No wildcards in `fqn_prefix`, `path_prefix`, or `target_path_prefix` (`*` / `?` rejected) — use `search(query=…)` for ranked text instead. `search.query` is opaque text, not a DSL.
 
-- **One populated field, one stored attribute** for the evaluated kind. Inapplicable fields or `extra` keys are never silently dropped: the tool returns `success=false` with a teaching message (and applicable-field list for cross-kind mistakes).
-- **No wildcards** in `fqn_prefix`, `path_prefix`, or `target_path_prefix` (`*` / `?` rejected). Use `search(query=…)` for ranked text discovery instead.
-- **`search.query` is not a DSL** — treat it as opaque text scored against the index. Structured predicates belong in `find`.
-- **`neighbors` filters neighbor rows by kind** — the first neighbor whose kind rejects the filter fails the whole call (no per-row silent skip).
+### Identifier resolution (`resolve`)
 
-### Identifier resolution
+**Input:** FQN or suffix, `sym:`/`route:`/`client:`/`producer:` id, `METHOD /path`, route path template, client `target_service`, `target_service` + path prefix, or producer topic.
 
-Use **`resolve(identifier=…, hint_kind=…)`** for identifier-shaped inputs: canonical ids (`sym:` / `route:` / `client:`), symbol FQN or suffix, HTTP `METHOD /path`, route path template, client `target_service`, or `target_service` + path prefix pair. Omit `hint_kind` to match across all three node kinds when the string is enough to scope generators.
+**`hint_kind`:** optional `symbol` | `route` | `client` | `producer`. When omitted, generators run across **all four** kinds (narrow with `hint_kind` when you know the kind).
 
-Branch on **`status`** in the response: **`one`** → `describe(id=…)` on the returned `node`; **`many`** → inspect `candidates` (each has a closed **`reason`**, **`score`** for display only, and a **`NodeRef`** including `microservice` when the row has one), pick one, then `describe(id=…)`; **`none`** (well-formed miss) → fall back to **`search(query=…)`** for natural-language or fuzzy discovery. Malformed empty / whitespace identifiers return `success=false` first.
+| `status` | Action |
+| -------- | ------ |
+| `one` | `describe(id=node.id)` |
+| `many` | pick from `candidates` (`reason`, `score`, `NodeRef`), then `describe` |
+| `none` | fall back to `search(query=…)` for NL/fuzzy discovery |
 
-Prefer **`resolve` → `describe(id=…)`** over **`describe(fqn=…)`** when an FQN might collide: `describe(fqn=…)` still returns the first graph row and a hint, but `resolve` makes ambiguity explicit.
+Prefer **`resolve` → `describe(id=…)`** over **`describe(fqn=…)`** when an FQN may collide (`describe(fqn=…)` returns the first row).
 
-**`source_layer` vs `role`:** On **Client** nodes, `source_layer` records which brownfield or built-in layer produced the client declaration (`builtin`, `layer_a_meta`, `layer_b_ann`, `layer_c_source`, `layer_b_fqn`, …). On **Symbol** nodes, `role` is the inferred architectural stereotype (`CONTROLLER`, `SERVICE`, `REPO`, …). They answer different questions; names stay distinct.
-
-**`target_service` vs `microservice`:** `microservice` is the service **where the node lives** (home service / owning module). `target_service` (clients only) is the **remote service being called**. A client in `operator-api` may list `partner-api` as `target_service`.
-
-Exact allowed values for roles, capabilities, client kinds, etc. live in `java_ontology.py`.
+**`microservice`** — service where the node lives. **`target_service`** (clients only) — remote service being called. **`source_layer`** (clients/producers) — which extraction layer produced the row (`builtin`, `layer_a_meta`, `layer_b_ann`, `layer_c_source`, `layer_b_fqn`, …). **`role`** (symbols only) — architectural stereotype (`CONTROLLER`, `SERVICE`, …).
 
 ### Decision tree
 
 | User asks… | First step | Typical follow-up |
 | ---------- | ---------- | ----------------- |
-| Identifier-shaped string (FQN, `sym:`/ `route:` / `client:` id, route path, client target, …) | `resolve` (optional `hint_kind`) | `describe` → `neighbors` |
-| Fuzzy / NL “where is X” | `search` | `describe` → `neighbors` |
-| All controllers in service S | `find(kind="symbol", filter={"microservice":S,"role":"CONTROLLER"})` | `neighbors` for `CALLS` / `EXPOSES` |
-| List interfaces in service S | `find(kind="symbol", filter={"microservice":S,"symbol_kind":"interface"})` | `neighbors` / `describe` |
-| List HTTP or Kafka entry points | `find(kind="route", filter={...})` | `describe` |
-| List Feign / HTTP clients | `find(kind="client", filter={...})` | `neighbors(..., out, ["HTTP_CALLS"])` if needed |
-| List async producers | `find(kind="producer", filter={...})` | `neighbors(..., out, ["ASYNC_CALLS"])` if needed |
-| Who calls method M? | Stable symbol id via `resolve`, `find`, or `search` | `neighbors(ids=sym_id, direction="in", edge_types=["CALLS"])` |
-| What does M call? | Same | `neighbors(..., direction="out", edge_types=["CALLS"])` |
-| Who hits this route? | `find(kind="route", ...)` or route id from logs | `neighbors(ids=route_id, direction="in", edge_types=["HTTP_CALLS","ASYNC_CALLS","EXPOSES"])` |
-| Handler for a route | Have `route_id` | `neighbors(ids=route_id, direction="in", edge_types=["EXPOSES"])` |
-| Who implements interface T? | `find` symbol for T, or `search` | `neighbors(..., direction="in", edge_types=["IMPLEMENTS"])` |
-| Who injects type T? | Symbol id for T | `neighbors(..., direction="in", edge_types=["INJECTS"])` |
-| Impact / “what breaks if I change X”? | **No magic tool** — you loop | `neighbors` with `in` + relevant edge types (`CALLS`, `INJECTS`, …), repeat until bounded |
-| Index health / ontology / counts | Not MCP | Shell: `java-codebase-rag meta` |
-| Rebuild index | Not MCP | `java-codebase-rag reprocess` (full rebuild) or `java-codebase-rag increment` (Lance catch-up; graph may stay stale until `reprocess`) |
-| PR blast radius | Not MCP | `java-codebase-rag analyze-pr --diff-file …` |
+| Identifier-shaped string | `resolve` (+ optional `hint_kind`) | `describe` → `neighbors` |
+| Fuzzy / NL "where is X" | `search` | `describe` → `neighbors` |
+| All controllers in service S | `find(kind="symbol", filter={"microservice":"S","role":"CONTROLLER"})` | `neighbors` `CALLS` / `EXPOSES` |
+| Interfaces in service S | `find(..., filter={"microservice":"S","symbol_kind":"interface"})` | `neighbors` / `describe` |
+| HTTP / messaging entry points | `find(kind="route", filter={…})` | `describe` |
+| Outbound HTTP clients | `find(kind="client", filter={…})` | `neighbors(..., "out", ["HTTP_CALLS"])` from client id |
+| Outbound async producers | `find(kind="producer", filter={…})` | `neighbors(..., "out", ["ASYNC_CALLS"])` from producer id |
+| Who calls method M? | id via `resolve` / `find` / `search` | `neighbors(ids, "in", ["CALLS"])` |
+| What does M call? | same | `neighbors(ids, "out", ["CALLS"])` |
+| Who hits this route? | route id | `neighbors(ids, "in", ["HTTP_CALLS","ASYNC_CALLS","EXPOSES"])` |
+| Handler for route | route id | `neighbors(ids, "in", ["EXPOSES"])` |
+| Who implements interface T? | type symbol id | `neighbors(ids, "in", ["IMPLEMENTS"])` |
+| Who injects type T? | type symbol id | `neighbors(ids, "in", ["INJECTS"])` |
+| Impact / "what breaks if I change X"? | no magic tool | loop `neighbors` `in` with `CALLS`, `INJECTS`, … until bounded |
 
 **Rules of thumb:**
 
-1. **Graph beats vector for exact structural questions** — do not `search` for “who calls `Foo#bar`” if you can use `resolve` / `find` + `neighbors(in, [CALLS])`.
-2. **Vector beats graph for fuzzy discovery** — `search` first, then pivot to `describe` / `neighbors`.
+1. **Structure beats vector** for exact questions — use `resolve` / `find` + `neighbors`, not `search`, for "who calls …".
+2. **Vector beats structure** for fuzzy discovery — `search` first, then pivot to `describe` / `neighbors`.
 
-### Tool reference — five tools
+### Tool reference
 
 #### `search`
 
-- **Purpose:** Locate chunk hits by NL or code fragment; use `symbol_id` when present to jump into the graph.
-- **Args:** `query`, `table` (`java`|`sql`|`yaml`|`all`, default `java`), `hybrid` (bool), `limit` (default 5), `offset`, `path_contains`, optional `filter` (`NodeFilter` — post-filters hits using **symbol-applicable** fields only).
-- **Strict frame:** `query` is opaque ranked text (no structured DSL inside the string). Optional `filter` follows the same strict applicability and wildcard rules as `find` for symbols.
-- **Tip:** For behaviour questions, narrow noise with `filter.exclude_roles` or `filter.role` when you know the shape you want.
+Ranked chunk retrieval. Args: `query`, `table` (`java`|`sql`|`yaml`|`all`, default `java`), `hybrid` (bool), `limit` (default 5), `offset`, `path_contains`, optional `filter` (symbol-applicable `NodeFilter` only).
 
 #### `find`
 
-- **Purpose:** List nodes of one kind matching structured filters.
-- **Args:** `kind` (`symbol`|`route`|`client`), **`filter`** (object, required), `limit`, `offset`.
-- **Returns:** `NodeRef` rows with `id`, `kind`, `fqn`, `microservice`, `module`, `role` (symbols only).
+Exact listing for one kind. Args: `kind` (`symbol`|`route`|`client`|`producer`), **`filter`** (required object), `limit` (default 25), `offset`. Returns `NodeRef` rows (`id`, `kind`, `fqn`, `microservice`, `module`, `role` on symbols, `symbol_kind` on symbols).
 
 #### `describe`
 
-- **Purpose:** Full node payload + `edge_summary`: `in` / `out` counts **per stored graph edge label** (what exists as edges in Kuzu). For **type** Symbols only (`class`, `interface`, `enum`, `record`, `annotation`), the same map may also include **describe-time composed** dot-keys — summaries of member edges, not stored labels — see the next bullets (`DECLARES.DECLARES_CLIENT`, `DECLARES.DECLARES_PRODUCER`, `DECLARES.EXPOSES`); those three keys **are** valid in `neighbors(edge_types=…)` for type Symbol origins (`direction="out"` only). For **method** Symbols, the map may include **override-axis virtual keys** (`OVERRIDDEN_BY`, `OVERRIDDEN_BY.DECLARES_CLIENT`, `OVERRIDDEN_BY.DECLARES_PRODUCER`, `OVERRIDDEN_BY.EXPOSES`) plus an **`OVERRIDES` row** that merges stored `[:OVERRIDES]` incident counts with the describe-time dispatch-up rollup (per direction `max`, so inbound stored overrides are preserved); see **Override-axis keys (method Symbols)** below — those virtual keys are **not** `neighbors` arguments. The **stored** relationship label **`OVERRIDES`** **is** a valid `EdgeType` for `neighbors` (same spelling as the map key; the map row is the merged view).
-- **Args:** `id` (symbol, route, or client id) or **`fqn`** (exact symbol FQN when you do not have the graph id). When both are set, `id` wins. For identifier-shaped inputs and FQN collision handling, see **Identifier resolution** above.
+Full node + `edge_summary`. Args: `id` (any kind) or `fqn` (symbol only; `id` wins).
 
-**Composed `edge_summary` keys (type Symbols).** Keys use dot notation: `<parent_relation>.<projected_relation>`. Three are emitted today:
+- **Stored keys** — counts for edges that exist in the graph.
+- **Type symbols** (`class`, `interface`, `enum`, `record`, `annotation`) may add composed keys `DECLARES.DECLARES_CLIENT`, `DECLARES.DECLARES_PRODUCER`, `DECLARES.EXPOSES` — navigable via `neighbors` with those dot-keys (`out` only).
+- **Method symbols** may add virtual keys `OVERRIDDEN_BY`, `OVERRIDDEN_BY.DECLARES_*`, `OVERRIDDEN_BY.EXPOSES` (describe only), plus an **`OVERRIDES`** row merging stored `[:OVERRIDES]` counts with a dispatch-up rollup (`in`/`out` per direction uses `max` of stored vs rollup). Use `neighbors(..., ["OVERRIDES"])` to list override edges. Static methods and constructors do not get override-axis keys.
 
-- `DECLARES.DECLARES_CLIENT` — the type's methods declare brownfield HTTP clients (count is the number of `Client` rows reached through `DECLARES → DECLARES_CLIENT`). Primary recipe: `neighbors(ids=<class_id>, direction="out", edge_types=["DECLARES.DECLARES_CLIENT"])` → terminal `Client` nodes with `via_id` in `attrs`. Alternative (two hops): `neighbors(..., ["DECLARES"])` then per-method `DECLARES_CLIENT`.
-- `DECLARES.DECLARES_PRODUCER` — producers via members. Use `edge_types=["DECLARES.DECLARES_PRODUCER"]` (or the two-hop `DECLARES` → `DECLARES_PRODUCER` walk).
-- `DECLARES.EXPOSES` — routes via members. Use `edge_types=["DECLARES.EXPOSES"]` (or the two-hop `DECLARES` → `EXPOSES` walk).
-
-These three `DECLARES.*` dot-keys are navigable on **type** Symbol origins (`out` only). `OVERRIDDEN_BY*` virtual keys remain describe-only.
-
-Note on counting semantics: composed counts measure **edge rows**, not distinct member methods. One method that declares multiple `Client` rows (e.g. a `rest_template` method with several call sites) contributes its full edge count to `DECLARES.DECLARES_CLIENT`. The "does this class have any clients?" predicate is answered by `count > 0`; the count itself is an affordance for how rich the downstream walk will be.
-
-**Override-axis keys (method Symbols).** Dispatch-axis signals computed at describe-time from `IMPLEMENTS` / `EXTENDS` plus matching `Symbol.signature` (not stored as their own rel types):
-
-- `OVERRIDDEN_BY` — on declarations reachable from implementing / extending classes in one hop: count of **distinct** concrete override methods with the same `signature` string as the described method (not counting the declaration itself).
-- `OVERRIDDEN_BY.DECLARES_CLIENT` / `OVERRIDDEN_BY.DECLARES_PRODUCER` / `OVERRIDDEN_BY.EXPOSES` — same dispatch-down walk, then count outgoing `DECLARES_CLIENT` / `DECLARES_PRODUCER` / `EXPOSES` edges from those override methods. Counts are **edge rows** on overrides (not distinct methods): one override with multiple client edges contributes the full row count. Omitted when zero.
-- `OVERRIDES` (map row) — merges **stored** `[:OVERRIDES]` `in`/`out` (subtype→supertype edges in Kuzu) with the dispatch-up rollup (distinct upstream declarations one `IMPLEMENTS`/`EXTENDS` hop away, same `signature`). The rollup alone always reported `in: 0`; merging fixes `in` when this method is also a super declaration with incoming override edges. A class implementing two interfaces that both declare the same signature yields `out: 2` on the rollup arm (and matches stored outbound edges when materialization aligns). Prefer `neighbors(ids=<method_id>, direction="out", edge_types=["OVERRIDES"])` to list declaration ids, and `direction="in"` for overriders.
-
-Walk recipe (manual, if you need types in the middle): `neighbors(ids=<method_id>, direction="in", edge_types=["DECLARES"])` → declaring type → `neighbors(ids=<type_id>, direction="in", edge_types=["IMPLEMENTS","EXTENDS"])` → each subtype class → `neighbors(ids=<class_id>, direction="out", edge_types=["DECLARES"])` and filter rows where `signature` matches the interface method.
-
-Static methods suppress the entire override-axis rollup. Constructors do not receive these keys.
-
-Virtual keys (`OVERRIDDEN_BY`, …) are **not** valid `neighbors` arguments — `neighbors(edge_types=["OVERRIDDEN_BY"])` fails at the Pydantic boundary. **`OVERRIDES`** in `edge_types=[...]` selects the **stored** override relationship (same spelling as the `OVERRIDES` map key, whose `in`/`out` merge Kuzu edges with the dispatch-up rollup).
+Composed counts are **edge rows**, not distinct methods; `count > 0` means "there is something to walk".
 
 #### `resolve`
 
-- **Purpose:** Identifier-shaped lookup across symbols, routes, and clients; returns `status` **`one`**, **`many`**, or **`none`** with optional `node` / `candidates` (see **Identifier resolution**).
-- **Args:** `identifier` (string), optional `hint_kind` (`symbol` | `route` | `client`) to constrain generators.
-- **Tip:** On **`many`**, use per-candidate `NodeRef.id` and `reason`; follow with **`describe(id=…)`**. On **`none`**, use **`search`** for fuzzy discovery.
+Identifier lookup; three statuses above. Args: `identifier`, optional `hint_kind`.
 
 #### `neighbors`
 
-- **Purpose:** One hop over explicit edge types; returns **edges** with attributes (`confidence`, `strategy`, `match`, …) and the **`other`** node.
-- **Args:** `ids` (string or array — batch allowed), **`direction`** (`in`|`out`), **`edge_types`** (non-empty list), `limit`, `offset`, optional `filter` on the other node.
-- **Batching:** Multiple origins are expanded; pagination slices the **combined** edge list — use larger `limit` when batching many ids.
-- **Mixed flat + composed `edge_types`:** flat edges are appended before composed edges, then `limit`/`offset` apply. A small `limit` with e.g. `["DECLARES", "DECLARES.DECLARES_CLIENT"]` may return only member Symbols and no Clients — use the dot-key alone when enumerating terminals.
-- **Confidence:** Cross-service edges (`HTTP_CALLS`, `ASYNC_CALLS`) carry confidence, strategy, and match metadata on `edge.attrs` (`attrs.confidence`, `attrs.strategy`, `attrs.match`). Low confidence means the resolver had to guess at the route binding — treat it as a **resolver gap signal**, not a hallucination. Report low-confidence edges with their confidence value, not as facts. Intra-service edges (`CALLS`, `INJECTS`, `IMPLEMENTS`, `EXTENDS`, `DECLARES`, `DECLARES_CLIENT`, `EXPOSES`, `OVERRIDES`) faithfully represent the static graph; the resolved set is still a **lower bound** under reflection / dynamic dispatch (see *What this MCP is NOT*).
+One hop. Args: `ids` (string or array), **`direction`**, **`edge_types`**, `limit` (default 25), `offset`, optional `filter` on the other node.
 
-### Ontology glossary (version 15)
+Returns **edges** with `attrs` (`confidence`, `strategy`, `match`, … on cross-service edges) and **`other`** node.
 
-Source of truth: `java_ontology.py` (`EDGE_SCHEMA`, valid sets). Strings are case-sensitive. Edge navigation: [`docs/EDGE-NAVIGATION.md`](./EDGE-NAVIGATION.md) — for `HTTP_CALLS`, traverse via `DECLARES_CLIENT` from a method Symbol or `neighbors` outbound from a Client id; for `ASYNC_CALLS`, traverse via `DECLARES_PRODUCER` or outbound from a Producer id.
+**Cross-service edges** (`HTTP_CALLS`, `ASYNC_CALLS`): read `attrs.confidence` and `attrs.match` — low confidence or `unresolved`/`phantom`/`ambiguous` means treat as a resolver signal, not ground truth.
 
-**Roles:** `CONTROLLER`, `SERVICE`, `REPOSITORY`, `COMPONENT`, `CONFIG`, `ENTITY`, `CLIENT`, `MAPPER`, `DTO`, `OTHER`.
+**`CALLS` edges:** `attrs.resolved=false` or low `attrs.confidence` may be JDK/external or unresolved static sites — still a lower bound, not exhaustive runtime behaviour.
 
-**Capabilities:** `MESSAGE_LISTENER`, `MESSAGE_PRODUCER`, `HTTP_CLIENT`, `SCHEDULED_TASK`, `EXCEPTION_HANDLER`.
+### Ontology glossary
 
-**Route `framework` (examples):** `spring_mvc`, `webflux`, `kafka`, `codebase_async_route`, … — see graph / README for full set.
+**Roles (`filter.role` / `exclude_roles`):** `CONTROLLER`, `SERVICE`, `REPOSITORY`, `COMPONENT`, `CONFIG`, `ENTITY`, `CLIENT`, `MAPPER`, `DTO`, `OTHER`.
 
-**Client kinds (`Client` nodes):** `feign_method`, `rest_template`, `web_client` (`VALID_CLIENT_KINDS`).
+**Capabilities (`filter.capability`):** `MESSAGE_LISTENER`, `MESSAGE_PRODUCER`, `HTTP_CLIENT`, `SCHEDULED_TASK`, `EXCEPTION_HANDLER`.
 
-**Cross-service edge client/strategy metadata** on neighbor results uses the same vocabulary as `java_ontology` (`VALID_HTTP_CALL_STRATEGIES`, `VALID_ASYNC_CALL_STRATEGIES`, `VALID_HTTP_CALL_MATCHES`).
+**Symbol kinds (`symbol_kind` / `symbol_kinds`):** `class`, `interface`, `enum`, `record`, `annotation`, `method`, `constructor`.
+
+**Route `framework` (examples on stored routes):** `spring_mvc`, `webflux`, `kafka`, `rabbitmq`, `jms`, `stream`, `codebase_async_route`, …
+
+**Client kinds:** `feign_method`, `rest_template`, `web_client`.
+
+**Producer kinds:** `kafka_send`, `stream_bridge_send`.
+
+**HTTP call `attrs.match` / async `attrs.match`:** `cross_service`, `intra_service`, `ambiguous`, `phantom`, `unresolved`.
 
 ### Recovery playbook
 
 | Symptom | Likely cause | Fix |
 | ------- | ------------ | --- |
 | `neighbors` validation error | Missing `direction` or `edge_types` | Add both explicitly |
-| Empty `neighbors` | Wrong edge type for the node kind, or wrong direction | Check `describe.edge_summary`; `EXPOSES` is Symbol↔Route — direction matters. `OVERRIDES` is method↔method only |
-| Cannot find symbol | Wrong id or stale index | `resolve` / `search` with distinctive string; verify `java-codebase-rag meta` (CLI) |
-| `find` returns too much | Over-broad filter | Add `microservice`, `fqn_prefix`, `path_prefix`, etc. |
-| Route not found | Path mismatch | Use `path_prefix` on `find(kind="route", …)`; check README brownfield routes |
-| Need ontology / rebuild / PR analysis | Wrong layer | Use **`java-codebase-rag`** CLI, not MCP |
-| Result disagrees with the open file | Index is stale (typical after `increment`-only catch-up) | Trust the file. Confirm staleness with `java-codebase-rag meta` (last `reprocess` time). Report as staleness, not contradiction. |
-| Empty `search` result on a string you can read in the open file | Project not indexed, wrong `table` (try `all`), or chunking missed it | Try `find(kind=symbol, filter={"fqn_prefix": …})`. Fall back to `rg` in the project tree if still empty. |
+| Empty `neighbors` | Wrong edge type or direction | Read `describe.edge_summary`; `EXPOSES` is Symbol→Route; `OVERRIDES` is method↔method only; `HTTP_CALLS` starts from **Client** ids |
+| Cannot find symbol | Wrong id or empty index | `resolve` / `search`; try `find` with `fqn_prefix` |
+| `find` returns too much | Broad filter | Add `microservice`, `fqn_prefix`, `path_prefix`, `topic_prefix`, … |
+| Route not found | Path mismatch | `find(kind="route", filter={"path_prefix":…})` |
+| Empty `search` | Wrong `table`, no index, or chunk miss | Try `table="all"`; `find` with `fqn_prefix`; read source files directly |
+| Empty results across several tools | Index missing, stale, or wrong project | You cannot rebuild the index via MCP — ask the operator; meanwhile use open files / `rg` |
+| Result vs open file disagree | Stale or partial index | Trust the file; say index may be stale |
+| Used virtual key in `neighbors` | `OVERRIDDEN_BY*` is describe-only | Use stored `OVERRIDES` or manual walk via `DECLARES` → type → `IMPLEMENTS`/`EXTENDS` |
 
-After two failed attempts on the same intent, stop and report tool name, args, and response.
+After two failed attempts on the same intent, stop and report tool name, args, and response snippet.
 
-**Staleness rule:** after `java-codebase-rag increment`, Lance is fresh but Kuzu may be stale (see https://github.com/HumanBean17/java-codebase-rag/blob/master/propose/TIER2-INCREMENTAL-REBUILD-PROPOSE.md). A graph older than the source tree is normal mid-development. When in doubt, run `meta` and compare against your working tree.
-
-### Slash-style aliases (prompt templates)
+### Slash-style aliases
 
 - `/nl <text>` → `search({"query":"<text>","limit":8})` then `describe` on best `symbol_id`.
 - `/controllers <ms>` → `find({"kind":"symbol","filter":{"microservice":"<ms>","role":"CONTROLLER"}})`.
 - `/routes <ms>` → `find({"kind":"route","filter":{"microservice":"<ms>"}})`.
-- `/clients <ms>` → `find({"kind":"client","filter":{"microservice":"<ms>"},"limit":100})` — narrow with `client_kind`, `target_service`.
+- `/clients <ms>` → `find({"kind":"client","filter":{"microservice":"<ms>"},"limit":100})`.
+- `/producers <ms>` → `find({"kind":"producer","filter":{"microservice":"<ms>"},"limit":100})`.
 - `/callers <sym_id>` → `neighbors({"ids":"<sym_id>","direction":"in","edge_types":["CALLS"]})`.
 - `/callees <sym_id>` → `neighbors({"ids":"<sym_id>","direction":"out","edge_types":["CALLS"]})`.
 - `/handlers <route_id>` → `neighbors({"ids":"<route_id>","direction":"in","edge_types":["EXPOSES"]})`.
 - `/who-hits-route <route_id>` → `neighbors({"ids":"<route_id>","direction":"in","edge_types":["HTTP_CALLS","ASYNC_CALLS","EXPOSES"]})`.
 - `/implements <type_sym_id>` → `neighbors({"ids":"<type_sym_id>","direction":"in","edge_types":["IMPLEMENTS"]})`.
 - `/injects <type_sym_id>` → `neighbors({"ids":"<type_sym_id>","direction":"in","edge_types":["INJECTS"]})`.
-- `/health` → (CLI) `java-codebase-rag meta` — not an MCP call.
 
-### Canonical workflow: “explain feature X”
+### Canonical workflow: "explain feature X"
 
-1. `search` with a short NL query; pick 1–3 hits with strong `symbol_id` / role fit.
+1. `search` with a short query; pick 1–3 hits with strong `symbol_id` / role fit.
 2. `describe` on the chosen id; read `edge_summary`.
-3. Walk outward with `neighbors` using **small** `edge_types` sets (e.g. start `CALLS` out, or `EXPOSES` / cross-service edges for boundaries).
+3. Walk with `neighbors` using **small** `edge_types` sets (e.g. `CALLS` out, or `EXPOSES` / cross-service edges for boundaries).
 4. Stop when you can answer; do not prefetch unrelated subgraphs.
 
 <!-- END java-codebase-rag MCP guide -->
 
 ---
 
-## Maintenance notes (for the repo, not the agent)
+## Maintenance (repo editors only — do not paste below into agent instructions)
 
-- Bump the ontology version sentence when `ONTOLOGY_VERSION` changes in `ast_java.py`.
-- When MCP behaviour or `NodeFilter` keys change, update this guide and `README.md` in lockstep.
-- New edge types require taxonomy table + `java_ontology.py` + README “Re-index required” if schema changes.
+When MCP behaviour, `NodeFilter` keys, edge labels, or node kinds change:
+
+1. Update this file's copy block and bump the **Ontology:** line to match `ast_java.ONTOLOGY_VERSION`.
+2. Update the MCP tool table and "Driving the MCP from an agent" bullet in `README.md`.
+3. If enrichment semantics changed, add a "Re-index required" callout in `README.md`.
