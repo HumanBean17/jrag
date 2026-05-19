@@ -737,6 +737,114 @@ class KuzuGraph:
             params["limit"] = limit
         return self._rows(q, params)
 
+    def count_unresolved_for_caller(self, caller_id: str) -> int:
+        rows = self._rows(
+            "MATCH (:Symbol {id: $id})-[:UNRESOLVED_AT]->(u:UnresolvedCallSite) "
+            "RETURN count(u) AS n",
+            {"id": caller_id},
+        )
+        return int(rows[0].get("n") or 0) if rows else 0
+
+    def unresolved_sites_for_caller(
+        self,
+        caller_id: str,
+        *,
+        direction: Literal["in", "out"] = "out",
+    ) -> list[dict[str, Any]]:
+        if direction != "out":
+            return []
+        return self._rows(
+            "MATCH (:Symbol {id: $id})-[:UNRESOLVED_AT]->(u:UnresolvedCallSite) "
+            "RETURN u.id AS id, u.caller_id AS caller_id, u.call_site_line AS call_site_line, "
+            "u.call_site_byte AS call_site_byte, u.arg_count AS arg_count, "
+            "u.callee_simple AS callee_simple, u.receiver_expr AS receiver_expr, "
+            "u.reason AS reason "
+            "ORDER BY u.call_site_line, u.call_site_byte",
+            {"id": caller_id},
+        )
+
+    def unresolved_sites_for_describe(
+        self,
+        method_id: str,
+        *,
+        inline_limit: int = 5,
+    ) -> tuple[list[dict[str, Any]], int]:
+        total_rows = self._rows(
+            "MATCH (:Symbol {id: $id})-[:UNRESOLVED_AT]->(u:UnresolvedCallSite) "
+            "RETURN count(u) AS n",
+            {"id": method_id},
+        )
+        total = int(total_rows[0].get("n") or 0) if total_rows else 0
+        if total == 0:
+            return [], 0
+        rows = self._rows(
+            "MATCH (:Symbol {id: $id})-[:UNRESOLVED_AT]->(u:UnresolvedCallSite) "
+            "RETURN u.call_site_line AS line, u.reason AS reason, "
+            "u.callee_simple AS callee_simple, u.receiver_expr AS receiver_expr "
+            "ORDER BY u.call_site_line, u.call_site_byte "
+            f"LIMIT {int(inline_limit)}",
+            {"id": method_id},
+        )
+        return rows, total
+
+    def list_unresolved_call_sites(
+        self,
+        *,
+        method_id: str | None = None,
+        reason: str | None = None,
+        microservice: str | None = None,
+        callee_simple: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        wh_parts: list[str] = []
+        params: dict[str, Any] = {"lim": int(limit)}
+        if method_id:
+            wh_parts.append("caller.id = $method_id")
+            params["method_id"] = method_id
+        if reason:
+            wh_parts.append("u.reason = $reason")
+            params["reason"] = reason
+        if microservice:
+            wh_parts.append("caller.microservice = $microservice")
+            params["microservice"] = microservice
+        if callee_simple:
+            wh_parts.append("u.callee_simple = $callee_simple")
+            params["callee_simple"] = callee_simple
+        where = ("WHERE " + " AND ".join(wh_parts)) if wh_parts else ""
+        return self._rows(
+            "MATCH (caller:Symbol)-[:UNRESOLVED_AT]->(u:UnresolvedCallSite) "
+            f"{where} "
+            "RETURN u.id AS id, caller.id AS caller_id, caller.fqn AS caller_fqn, "
+            "caller.microservice AS microservice, u.call_site_line AS call_site_line, "
+            "u.call_site_byte AS call_site_byte, u.arg_count AS arg_count, "
+            "u.callee_simple AS callee_simple, u.receiver_expr AS receiver_expr, "
+            "u.reason AS reason "
+            "ORDER BY u.call_site_line, u.call_site_byte "
+            "LIMIT $lim",
+            params,
+        )
+
+    def stats_unresolved_call_sites(
+        self,
+        *,
+        by: Literal["reason", "microservice", "caller_role"],
+    ) -> list[dict[str, Any]]:
+        if by == "reason":
+            return self._rows(
+                "MATCH (:Symbol)-[:UNRESOLVED_AT]->(u:UnresolvedCallSite) "
+                "RETURN u.reason AS bucket, count(*) AS n ORDER BY n DESC",
+            )
+        if by == "microservice":
+            return self._rows(
+                "MATCH (caller:Symbol)-[:UNRESOLVED_AT]->(:UnresolvedCallSite) "
+                "RETURN caller.microservice AS bucket, count(*) AS n ORDER BY n DESC",
+            )
+        return self._rows(
+            "MATCH (caller:Symbol)-[:UNRESOLVED_AT]->(:UnresolvedCallSite) "
+            "MATCH (parent:Symbol)-[:DECLARES]->(caller) "
+            "RETURN parent.role AS bucket, count(*) AS n ORDER BY n DESC",
+        )
+
     def _edge_row_count_from_method_ids(self, method_ids: list[str], rel: str) -> int:
         """Count outgoing ``rel`` edges from method symbols (describe rollup helper)."""
         total = 0

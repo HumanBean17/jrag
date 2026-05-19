@@ -1486,3 +1486,77 @@ def test_neighbors_calls_perf_empty_filter_client_message_processor(kuzu_graph) 
     assert median_sec <= float(baseline) * 1.5
 
 
+def test_neighbors_include_unresolved_interleaved_order(kuzu_graph) -> None:
+    mid = client_message_processor_process_id(kuzu_graph)
+    out = neighbors_v2(
+        mid,
+        direction="out",
+        edge_types=["CALLS"],
+        include_unresolved=True,
+        limit=500,
+        graph=kuzu_graph,
+    )
+    assert out.success is True
+    assert out.results
+    kinds = [e.attrs.get("row_kind") for e in out.results]
+    assert "unresolved_call_site" in kinds
+    assert "resolved" in kinds
+    keys = [
+        (
+            int(e.attrs.get("call_site_line") or 0),
+            int(e.attrs.get("call_site_byte") or 0),
+            0 if e.attrs.get("row_kind") == "resolved" else 1,
+        )
+        for e in out.results
+    ]
+    assert keys == sorted(keys)
+
+
+def test_neighbors_include_unresolved_edge_filter_mutex(kuzu_graph) -> None:
+    mid = client_message_processor_process_id(kuzu_graph)
+    out = neighbors_v2(
+        mid,
+        direction="out",
+        edge_types=["CALLS"],
+        include_unresolved=True,
+        edge_filter={"min_confidence": 0.0},
+        graph=kuzu_graph,
+    )
+    assert out.success is False
+    assert "incompatible" in (out.message or "").lower()
+
+
+def test_neighbors_dedup_calls_collapses_identical_dst(kuzu_graph) -> None:
+    rows = kuzu_graph._rows(  # noqa: SLF001
+        "MATCH (m:Symbol)-[c:CALLS]->(dst:Symbol) "
+        "WITH m, dst, collect(c.call_site_line) AS lines "
+        "WHERE size(lines) > 1 "
+        "RETURN m.id AS mid, dst.id AS did LIMIT 1",
+    )
+    if not rows:
+        pytest.skip("no duplicate (caller,callee) CALLS pair in bank fixture")
+    mid = str(rows[0]["mid"])
+    flat = neighbors_v2(
+        mid, direction="out", edge_types=["CALLS"], limit=500, graph=kuzu_graph,
+    )
+    deduped = neighbors_v2(
+        mid,
+        direction="out",
+        edge_types=["CALLS"],
+        dedup_calls=True,
+        limit=500,
+        graph=kuzu_graph,
+    )
+    assert flat.success and deduped.success
+    assert len(deduped.results) < len(flat.results)
+    multi = [e for e in deduped.results if int((e.attrs or {}).get("call_site_count") or 0) > 1]
+    assert multi, "dedup_calls should emit call_site_count on collapsed rows"
+
+
+def test_find_callers_no_phantom_chained_strategy(kuzu_graph) -> None:
+    edges = kuzu_graph.find_callers("process", depth=1, limit=200)
+    strategies = {e.strategy for e in edges}
+    assert "phantom" not in strategies
+    assert "chained_receiver" not in strategies
+
+

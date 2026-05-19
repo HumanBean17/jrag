@@ -470,8 +470,9 @@ def test_hints_neighbors_fuzzy_strategy_annotation_absent() -> None:
 
 
 def test_hints_neighbors_fuzzy_strategy_calls_phantom_emits() -> None:
+    """CALLS fuzzy hint uses remaining strategies (overload_ambiguous), not removed phantom/chained."""
     payload = _neighbors_hint_payload(
-        [_edge_result(strategy="phantom", edge_type="CALLS")],
+        [_edge_result(strategy="overload_ambiguous", edge_type="CALLS")],
         requested_edge_types=["CALLS"],
     )
     hints = generate_hints("neighbors", payload)
@@ -489,13 +490,44 @@ def test_hints_neighbors_declares_no_strategy_attrs_empty() -> None:
 def test_hints_neighbors_multi_origin_fuzzy_emits_once() -> None:
     payload = _neighbors_hint_payload(
         [
-            _edge_result(strategy="phantom", edge_type="CALLS"),
+            _edge_result(strategy="overload_ambiguous", edge_type="CALLS"),
             _edge_result(strategy="annotation", edge_type="CALLS"),
         ],
         requested_edge_types=["CALLS"],
     )
     hints = generate_hints("neighbors", payload)
     assert hints.count(mcp_hints.TPL_NEIGHBORS_FUZZY_STRATEGY) == 1
+
+
+def test_hints_neighbors_calls_high_fanout(kuzu_graph) -> None:
+    mid = client_message_processor_process_id(kuzu_graph)
+    out = neighbors_v2(mid, direction="out", edge_types=["CALLS"], limit=500, graph=kuzu_graph)
+    assert out.success is True
+    assert len(out.results) >= 10
+    assert mcp_hints.TPL_NEIGHBORS_CALLS_HIGH_FANOUT.format(n=len(out.results)) in out.hints
+
+
+def test_hints_neighbors_calls_has_unresolved(kuzu_graph) -> None:
+    mid = client_message_processor_process_id(kuzu_graph)
+    out = neighbors_v2(mid, direction="out", edge_types=["CALLS"], limit=5, graph=kuzu_graph)
+    assert out.success is True
+    assert any(
+        mcp_hints.TPL_NEIGHBORS_CALLS_HAS_UNRESOLVED.split("{")[0] in h for h in out.hints
+    )
+
+
+def test_hints_neighbors_calls_high_fanout_suppressed_with_edge_filter(kuzu_graph) -> None:
+    mid = client_message_processor_process_id(kuzu_graph)
+    out = neighbors_v2(
+        mid,
+        direction="out",
+        edge_types=["CALLS"],
+        edge_filter={"callee_declaring_role": "SERVICE"},
+        limit=500,
+        graph=kuzu_graph,
+    )
+    assert out.success is True
+    assert not any("CALLS on this method" in h for h in out.hints)
 
 
 def test_hints_neighbors_layer_a_meta_no_fuzzy_hint() -> None:

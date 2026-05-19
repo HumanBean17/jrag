@@ -514,6 +514,43 @@ def _read_diff_text(args: argparse.Namespace) -> str:
     raise ValueError("Provide exactly one of --diff-file or --diff-stdin")
 
 
+def _cmd_unresolved_calls_list(args: argparse.Namespace) -> int:
+    cfg = _resolved_from_ns(args)
+    _startup_hints(cfg)
+    cfg.apply_to_os_environ()
+    from kuzu_queries import KuzuGraph  # lazy
+
+    if not KuzuGraph.exists():
+        _emit({"success": False, "message": "Kuzu graph not found"})
+        return 1
+    graph = KuzuGraph.get()
+    rows = graph.list_unresolved_call_sites(
+        method_id=args.method_id,
+        reason=args.reason,
+        microservice=args.microservice,
+        callee_simple=args.callee_simple,
+        limit=int(args.limit),
+    )
+    _emit({"success": True, "count": len(rows), "sites": rows})
+    return 0
+
+
+def _cmd_unresolved_calls_stats(args: argparse.Namespace) -> int:
+    cfg = _resolved_from_ns(args)
+    _startup_hints(cfg)
+    cfg.apply_to_os_environ()
+    from kuzu_queries import KuzuGraph  # lazy
+
+    if not KuzuGraph.exists():
+        _emit({"success": False, "message": "Kuzu graph not found"})
+        return 1
+    graph = KuzuGraph.get()
+    buckets = graph.stats_unresolved_call_sites(by=args.by)
+    total = sum(int(r.get("n") or 0) for r in buckets)
+    _emit({"success": True, "total": total, "by": args.by, "buckets": buckets})
+    return 0
+
+
 def _cmd_analyze_pr(args: argparse.Namespace) -> int:
     cfg = _resolved_from_ns(args)
     _startup_hints(cfg)
@@ -551,7 +588,8 @@ def build_parser() -> argparse.ArgumentParser:
         "Introspection (inspect the index):\n"
         "  meta            Print ontology version, edge counts, and table summary.\n"
         "  tables          List Lance tables and row counts.\n"
-        "  diagnose-ignore Show which ignore-pattern layer decided a path's fate.\n\n"
+        "  diagnose-ignore Show which ignore-pattern layer decided a path's fate.\n"
+        "  unresolved-calls  List or aggregate receiver-failure call sites (not in CALLS).\n\n"
         "Analysis (work with code changes):\n"
         "  analyze-pr      Compute blast-radius + risk score for a unified diff.\n\n"
         "Run `java-codebase-rag <command> --help` for command-specific options."
@@ -656,6 +694,33 @@ def build_parser() -> argparse.ArgumentParser:
     group.add_argument("--diff-file", type=str)
     group.add_argument("--diff-stdin", action="store_true")
     analyze.set_defaults(handler=_cmd_analyze_pr)
+
+    unresolved = subparsers.add_parser(
+        "unresolved-calls",
+        help="List or aggregate UnresolvedCallSite rows (receiver-failure call sites).",
+    )
+    _add_index_embedding_flags(unresolved)
+    unresolved_sub = unresolved.add_subparsers(dest="unresolved_command", required=True)
+
+    uc_list = unresolved_sub.add_parser("list", help="List unresolved call sites.")
+    _add_index_embedding_flags(uc_list)
+    uc_list.add_argument("--method-id", type=str, default=None, help="Caller Symbol id")
+    uc_list.add_argument("--reason", type=str, default=None, help="phantom_unresolved_receiver or chained_receiver")
+    uc_list.add_argument("--microservice", type=str, default=None)
+    uc_list.add_argument("--callee-simple", type=str, default=None, dest="callee_simple")
+    uc_list.add_argument("--limit", type=int, default=100)
+    uc_list.set_defaults(handler=_cmd_unresolved_calls_list)
+
+    uc_stats = unresolved_sub.add_parser("stats", help="Aggregate unresolved call site counts.")
+    _add_index_embedding_flags(uc_stats)
+    uc_stats.add_argument(
+        "--by",
+        type=str,
+        choices=("reason", "microservice", "caller_role"),
+        default="reason",
+    )
+    uc_stats.set_defaults(handler=_cmd_unresolved_calls_stats)
+
     return parser
 
 

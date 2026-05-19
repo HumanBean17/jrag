@@ -167,17 +167,24 @@ def test_overload_distinct_arities_single_targets(kuzu_db_path_call_graph_smoke:
 
 
 def test_expr_qualified_method_ref_chained_receiver(kuzu_db_path_call_graph_smoke: Path) -> None:
-    """§7.1 #18 (graph): expression-qualified `getX()::trim` → chained_receiver phantom."""
+    """§7.1 #18 (graph): expression-qualified `getX()::trim` → chained_receiver UnresolvedCallSite."""
     db = kuzu_db_path_call_graph_smoke
     conn = _connect(db)
-    rows = _rows(
+    calls = _rows(
         conn,
         "MATCH (src:Symbol)-[c:CALLS]->(dst:Symbol) "
         "WHERE src.fqn STARTS WITH 'smoke.NestedCalls#m' AND dst.name = 'trim' "
-        "RETURN c.strategy AS s, c.resolved AS r LIMIT 5",
+        "RETURN count(*) AS n",
     )
-    assert rows, "expected a trim call site from NestedCalls.m"
-    assert any(str(r[0]) == "chained_receiver" and r[1] is False for r in rows), rows
+    assert int(calls[0][0]) == 0, "trim chained-receiver site must not be a CALLS row"
+    ucs = _rows(
+        conn,
+        "MATCH (src:Symbol)-[:UNRESOLVED_AT]->(u:UnresolvedCallSite) "
+        "WHERE src.fqn STARTS WITH 'smoke.NestedCalls#m' AND u.callee_simple = 'trim' "
+        "RETURN u.reason AS reason LIMIT 5",
+    )
+    assert ucs, "expected trim unresolved site from NestedCalls.m"
+    assert any(str(r[0]) == "chained_receiver" for r in ucs), ucs
 
 
 def test_anonymous_class_calls_attributed_to_synthetic_member(kuzu_db_path_call_graph_smoke: Path) -> None:

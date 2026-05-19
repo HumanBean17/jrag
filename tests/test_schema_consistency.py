@@ -25,6 +25,9 @@ _EMITTER_FILES = (
     "ast_java.py",
 )
 
+# Stored graph rels that are not MCP ``EdgeType`` / ``EDGE_SCHEMA`` entries.
+_DDL_EDGES_EXCLUDED_FROM_EDGE_SCHEMA = frozenset({"UNRESOLVED_AT"})
+
 
 def _ddl_endpoints() -> dict[str, tuple[str, str]]:
     text = _BUILD_AST_GRAPH.read_text(encoding="utf-8")
@@ -46,7 +49,7 @@ def _strategy_literals_in_emitters() -> set[str]:
 def test_schema_consistency_all_ddl_endpoints_match_edge_schema() -> None:
     ddl = _ddl_endpoints()
     schema_names = set(EDGE_SCHEMA)
-    ddl_names = set(ddl)
+    ddl_names = set(ddl) - _DDL_EDGES_EXCLUDED_FROM_EDGE_SCHEMA
     assert schema_names == ddl_names, (
         f"EDGE_SCHEMA keys {sorted(schema_names)} != DDL edges {sorted(ddl_names)}"
     )

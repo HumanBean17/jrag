@@ -184,6 +184,18 @@ class CallsRow:
 
 
 @dataclass
+class UnresolvedCallSiteRow:
+    id: str
+    caller_id: str
+    call_site_line: int
+    call_site_byte: int
+    arg_count: int
+    callee_simple: str
+    receiver_expr: str
+    reason: str
+
+
+@dataclass
 class DeclaresRow:
     src_id: str
     dst_id: str
@@ -363,6 +375,7 @@ class GraphTables:
     implements_rows: list[EdgeRow] = field(default_factory=list)
     injects_rows: list[InjectsRow] = field(default_factory=list)
     calls_rows: list[CallsRow] = field(default_factory=list)
+    unresolved_call_site_rows: list[UnresolvedCallSiteRow] = field(default_factory=list)
     declares_rows: list[DeclaresRow] = field(default_factory=list)
     routes_rows: list[RouteRow] = field(default_factory=list)
     exposes_rows: list[ExposesRow] = field(default_factory=list)
@@ -1209,6 +1222,34 @@ def _collapse_supertype_duplicates(
     return [concrete]
 
 
+def _unresolved_call_site_id(caller_id: str, call: CallSite) -> str:
+    return f"{caller_id}:{call.line}:{call.byte}"
+
+
+def _emit_unresolved_call_site(
+    tables: GraphTables,
+    stats: CallResolutionStats,
+    *,
+    caller_id: str,
+    call: CallSite,
+    reason: str,
+) -> None:
+    tables.unresolved_call_site_rows.append(UnresolvedCallSiteRow(
+        id=_unresolved_call_site_id(caller_id, call),
+        caller_id=caller_id,
+        call_site_line=call.line,
+        call_site_byte=call.byte,
+        arg_count=call.arg_count,
+        callee_simple=call.callee_simple,
+        receiver_expr=call.receiver_expr or "",
+        reason=reason,
+    ))
+    if reason == "chained_receiver":
+        stats.phantom_chained += 1
+    else:
+        stats.phantom_other += 1
+
+
 def _emit_call_edge(
     tables: GraphTables,
     stats: CallResolutionStats,
@@ -1235,14 +1276,7 @@ def _emit_call_edge(
     ))
     stats.total += 1
     stats.by_strategy[strategy] += 1
-    if strategy == "chained_receiver":
-        stats.phantom_chained += 1
-    elif strategy == "phantom":
-        # Only count as phantom_other when the receiver itself was unresolvable.
-        # High-confidence edges with phantom callees (resolved=False, strategy!=phantom)
-        # are not noise — they are known external calls with good receiver resolution.
-        stats.phantom_other += 1
-    if not resolved and strategy != "chained_receiver":
+    if not resolved:
         stats.callee_unresolved += 1
 
 
@@ -1268,26 +1302,17 @@ def _resolve_and_emit_call(
     recv_type, strat, conf = _resolve_receiver_type(call, scope=scope, member=member, ast=ast, tables=tables)
 
     if strat == "chained_receiver":
-        # Chained-receiver phantoms have no microservice attribution, so they cannot violate cross-service CALLS invariants.
-        pid = _phantom_method_id(
-            tables, receiver_fqn=None, receiver_expr=call.receiver_expr,
-            callee=call.callee_simple, arg_count=call.arg_count,
-        )
-        _emit_call_edge(
-            tables, stats, src_id=member.node_id, dst_id=pid, call=call,
-            confidence=0.0, strategy="chained_receiver", resolved=False,
+        _emit_unresolved_call_site(
+            tables, stats, caller_id=member.node_id, call=call, reason="chained_receiver",
         )
         return
 
     if recv_type is None:
-        # Unresolved-receiver phantoms also carry empty microservice attribution.
-        pid = _phantom_method_id(
-            tables, receiver_fqn=None, receiver_expr=call.receiver_expr,
-            callee=call.callee_simple, arg_count=call.arg_count,
-        )
-        _emit_call_edge(
-            tables, stats, src_id=member.node_id, dst_id=pid, call=call,
-            confidence=0.0, strategy="phantom", resolved=False,
+        _emit_unresolved_call_site(
+            tables, stats,
+            caller_id=member.node_id,
+            call=call,
+            reason="phantom_unresolved_receiver",
         )
         return
 
@@ -1420,9 +1445,9 @@ def pass3_calls(tables: GraphTables, asts: dict[str, JavaFileAst], *, verbose: b
     tables.pass3_unresolved_phantom_receiver = int(stats.phantom_other)
     tables.pass3_unresolved_chained = int(stats.phantom_chained)
     msg = (
-        f"Call resolution: {stats.total} sites, {stats.phantom_chained} chained phantoms "
-        f"({pct_chained:.1f}%), {stats.callee_unresolved} unresolved callee "
-        f"({pct_callee_unres:.1f}%), {stats.phantom_other} phantom receiver "
+        f"Call resolution: {stats.total} CALLS rows, {stats.phantom_chained} chained unresolved "
+        f"({pct_chained:.1f}%), {stats.callee_unresolved} unresolved callee on CALLS "
+        f"({pct_callee_unres:.1f}%), {stats.phantom_other} phantom-receiver unresolved "
         f"({pct_phantom_recv:.1f}%), {stats.skipped_cross_service} skipped cross-service, "
         f"strategies: {dict(stats.by_strategy)}"
     )
@@ -2406,6 +2431,13 @@ _SCHEMA_CALLS = (
     "confidence DOUBLE, strategy STRING, source STRING, resolved BOOLEAN, "
     "callee_declaring_role STRING)"
 )
+_SCHEMA_UNRESOLVED_CALL_SITE = (
+    "CREATE NODE TABLE UnresolvedCallSite("
+    "id STRING, caller_id STRING, call_site_line INT64, call_site_byte INT64, "
+    "arg_count INT64, callee_simple STRING, receiver_expr STRING, reason STRING, "
+    "PRIMARY KEY(id))"
+)
+_SCHEMA_UNRESOLVED_AT = "CREATE REL TABLE UNRESOLVED_AT(FROM Symbol TO UnresolvedCallSite)"
 _SCHEMA_EXPOSES = (
     "CREATE REL TABLE EXPOSES(FROM Symbol TO Route, "
     "confidence DOUBLE, strategy STRING)"
@@ -2437,12 +2469,14 @@ def _drop_all(conn: kuzu.Connection) -> None:
         "DROP TABLE IF EXISTS HTTP_CALLS",
         "DROP TABLE IF EXISTS ASYNC_CALLS",
         "DROP TABLE IF EXISTS EXPOSES",
+        "DROP TABLE IF EXISTS UNRESOLVED_AT",
         "DROP TABLE IF EXISTS EXTENDS",
         "DROP TABLE IF EXISTS IMPLEMENTS",
         "DROP TABLE IF EXISTS INJECTS",
         "DROP TABLE IF EXISTS CALLS",
         "DROP TABLE IF EXISTS OVERRIDES",
         "DROP TABLE IF EXISTS DECLARES",
+        "DROP TABLE IF EXISTS UnresolvedCallSite",
         "DROP TABLE IF EXISTS Symbol",
         "DROP TABLE IF EXISTS Route",
         "DROP TABLE IF EXISTS Client",
@@ -2458,6 +2492,7 @@ def _drop_all(conn: kuzu.Connection) -> None:
 def _create_schema(conn: kuzu.Connection) -> None:
     for stmt in (
         _SCHEMA_NODE,
+        _SCHEMA_UNRESOLVED_CALL_SITE,
         _SCHEMA_ROUTE,
         _SCHEMA_CLIENT,
         _SCHEMA_PRODUCER,
@@ -2468,6 +2503,7 @@ def _create_schema(conn: kuzu.Connection) -> None:
         _SCHEMA_DECLARES,
         _SCHEMA_OVERRIDES,
         _SCHEMA_CALLS,
+        _SCHEMA_UNRESOLVED_AT,
         _SCHEMA_EXPOSES,
         _SCHEMA_DECLARES_CLIENT,
         _SCHEMA_DECLARES_PRODUCER,
@@ -2742,6 +2778,33 @@ def _write_edges(conn: kuzu.Connection, tables: GraphTables) -> None:
                 tables, row.dst_id, member_by_id=member_by_id,
             ),
         })
+
+    _CREATE_UNRESOLVED = (
+        "CREATE (:UnresolvedCallSite {"
+        "id: $id, caller_id: $caller_id, call_site_line: $line, call_site_byte: $byte, "
+        "arg_count: $argc, callee_simple: $callee, receiver_expr: $recv, reason: $reason"
+        "})"
+    )
+    _CREATE_UNRESOLVED_AT = (
+        "MATCH (a:Symbol {id: $caller}), (u:UnresolvedCallSite {id: $ucs}) "
+        "CREATE (a)-[:UNRESOLVED_AT]->(u)"
+    )
+    seen_ucs: set[str] = set()
+    for row in tables.unresolved_call_site_rows:
+        if row.id in seen_ucs:
+            continue
+        seen_ucs.add(row.id)
+        conn.execute(_CREATE_UNRESOLVED, {
+            "id": row.id,
+            "caller_id": row.caller_id,
+            "line": row.call_site_line,
+            "byte": row.call_site_byte,
+            "argc": row.arg_count,
+            "callee": row.callee_simple,
+            "recv": row.receiver_expr,
+            "reason": row.reason,
+        })
+        conn.execute(_CREATE_UNRESOLVED_AT, {"caller": row.caller_id, "ucs": row.id})
 
 
 def _write_routes_and_exposes(conn: kuzu.Connection, tables: GraphTables) -> None:

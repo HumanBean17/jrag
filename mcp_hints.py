@@ -24,7 +24,9 @@ MCP_HINTS_FIELD_DESCRIPTION = (
     "structural hints describe the first origin only. On neighbors with "
     "edge_types=['CALLS'] only, optional edge_filter projects the ordered CALLS stream "
     "(min_confidence, strategies, callee_declaring_role axes); fail-loud with composed "
-    "dot-keys or additional stored labels."
+    "dot-keys or additional stored labels. include_unresolved interleaves "
+    "UnresolvedCallSite rows (mutually exclusive with edge_filter). dedup_calls collapses "
+    "identical (origin, callee) CALLS rows."
 )
 
 # --- Appendix A verbatim templates (substitute {id}, {kind}, {limit}) ---
@@ -122,6 +124,24 @@ TPL_NEIGHBORS_CALLS_NODEFILTER_ROLE_COLLISION = (
     "NodeFilter.role filters the neighbor method's role (usually OTHER), not the callee's "
     "declaring type — use edge_filter={{callee_declaring_role: 'SERVICE'}} (or REPOSITORY) "
     "for CALLS stereotype projection"
+)
+
+_CALLS_HIGH_FANOUT_THRESHOLD = 10
+
+TPL_NEIGHBORS_CALLS_HIGH_FANOUT = (
+    "{n} CALLS on this method; the noisy axes are callee_declaring_role "
+    "and per-call-site multiplicity. Try edge_filter={{callee_declaring_role: 'SERVICE'}} "
+    "for delegation hops, edge_filter={{exclude_callee_declaring_roles: ['ENTITY','DTO']}} "
+    "to drop accessor noise, edge_filter={{min_confidence: 0.5}} to trim low-confidence rows "
+    "(exclude_external is find_callers-only, not neighbors), or dedup_calls=True to collapse "
+    "identical callees."
+)
+
+TPL_NEIGHBORS_CALLS_HAS_UNRESOLVED = (
+    "{n} CALLS shown; this method also has {k} unresolved call sites "
+    "(see describe(method_id).unresolved_call_sites, or call neighbors with "
+    "include_unresolved=True for a source-ordered interleaved view — note "
+    "include_unresolved is mutually exclusive with edge_filter)."
 )
 
 # v4 neighbors success-path (propose/HINTS-V4-SUCCESS-PATH-PROPOSE.md); N1a/N1b alias describe templates.
@@ -342,6 +362,25 @@ def _append_neighbors_success_hint(pairs: list[tuple[int, str]], text: str) -> N
     # v4 neighbors cap only (describe uses the same N1a/N1b templates without this gate).
     if text and len(text) <= _NEIGHBORS_SUCCESS_MAX_CHARS:
         pairs.append((PRIORITY_LEAF_FOLLOWUP, text))
+
+
+def neighbors_calls_fanout_hints(payload: dict[str, Any]) -> list[tuple[int, str]]:
+    """High-fanout and unresolved-site nudges for CALLS-on-method neighbors (PR-3)."""
+    pairs: list[tuple[int, str]] = []
+    req_types = payload.get("requested_edge_types")
+    if not isinstance(req_types, list) or req_types != ["CALLS"]:
+        return pairs
+    if payload.get("include_unresolved"):
+        return pairs
+    n = len(list(payload.get("results") or []))
+    unresolved = int(payload.get("unresolved_count") or 0)
+    if not payload.get("edge_filter_provided") and n >= _CALLS_HIGH_FANOUT_THRESHOLD:
+        pairs.append((PRIORITY_LEAF_FOLLOWUP, TPL_NEIGHBORS_CALLS_HIGH_FANOUT.format(n=n)))
+    if unresolved > 0:
+        pairs.append(
+            (PRIORITY_LEAF_FOLLOWUP, TPL_NEIGHBORS_CALLS_HAS_UNRESOLVED.format(n=n, k=unresolved))
+        )
+    return pairs
 
 
 def neighbors_calls_meta_hints(payload: dict[str, Any]) -> list[tuple[int, str]]:
@@ -630,6 +669,7 @@ def generate_hints(
         elif results and offset == 0:
             success_pairs = neighbors_success_hints(payload)
         meta_pairs.extend(neighbors_calls_meta_hints(payload))
+        meta_pairs.extend(neighbors_calls_fanout_hints(payload))
         if results and _any_fuzzy_strategy(results):
             meta_pairs.append((PRIORITY_META, TPL_NEIGHBORS_FUZZY_STRATEGY))
         return finalize_hint_list(
