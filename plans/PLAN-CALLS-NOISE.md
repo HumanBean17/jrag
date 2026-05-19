@@ -1,15 +1,25 @@
 # Plan: CALLS-NOISE-AND-RESOLUTION
 
-Status: **active** (propose under review). Source propose:
+Status: **active** (propose rev5 under review on [#179](https://github.com/HumanBean17/java-codebase-rag/pull/179)).
+Source propose:
 [`propose/CALLS-NOISE-AND-RESOLUTION-PROPOSE.md`](../propose/CALLS-NOISE-AND-RESOLUTION-PROPOSE.md)
-(tracks [#177](https://github.com/HumanBean17/java-codebase-rag/issues/177), propose PR [#178](https://github.com/HumanBean17/java-codebase-rag/pull/178)).
+(tracks [#177](https://github.com/HumanBean17/java-codebase-rag/issues/177); merged on `master` via [#178](https://github.com/HumanBean17/java-codebase-rag/pull/178)).
 
 Depends on: **SCHEMA-V2 landed** (`EDGE_SCHEMA`, MCP v2 tools). Complements
 [`propose/AGENT-SKILLS-AND-COMMANDS-PROPOSE.md`](../propose/AGENT-SKILLS-AND-COMMANDS-PROPOSE.md)
 `/mini-map` for accessor noise (Decision 39) — not a blocker.
 
-Per-PR Cursor prompts: add `plans/CURSOR-PROMPTS-CALLS-NOISE.md` when PR-1 starts
-(structural template: any file in `plans/completed/CURSOR-PROMPTS-*.md`).
+**Cursor prompts:** [`plans/CURSOR-PROMPTS-CALLS-NOISE.md`](./CURSOR-PROMPTS-CALLS-NOISE.md)
+(per-PR handoffs). Do **not** open PR-1 code until that file is on `master`.
+
+## Fixture anchors (pinned — do not use fictional types)
+
+| Anchor | Where | Notes |
+| --- | --- | --- |
+| High-fanout bank method | `com.bank.chat.engine.processors.ClientMessageProcessor#process(ProcessingContext,InternalEvent)` | **57** outbound `CALLS` on fresh `bank-chat-system` index; **5** `phantom` + **3** `chained_receiver` → **~49** default rows after PR-3. HV1/HV21/HV34/perf tests use this FQN. |
+| Supertype-walk dedup | `tests/fixtures/call_graph_smoke/` | PR-1 adds minimal `SupertypeDedupPatterns` stub (interface + concrete same-site). **Not** `bank-chat-system` — bank has no interface+concrete duplicate `save` sites today. |
+| `overload_ambiguous` | `tests/fixtures/call_graph_smoke/` `smoke.OverloadPatterns#sameArity` | Bank graph has **zero** `overload_ambiguous` rows; extend or mirror `test_overload_sameArity_emits_two_overload_ambiguous_edges`. |
+| `callee_declaring_role` on annotated types | `bank-chat-system` | e.g. `@Repository` / `@Service` declaring types — column population only; not dedup/overload scenarios. |
 
 ## Goal
 
@@ -27,8 +37,9 @@ Per-PR Cursor prompts: add `plans/CURSOR-PROMPTS-CALLS-NOISE.md` when PR-1 start
 ## Principles (do not relitigate in review)
 
 - **`CALLS` stays one edge type** — ordered transcript; no `DELEGATES_TO` / `PERSISTS_VIA` split.
-- **PR-1 and PR-2 are strictly additive** for existing readers; **PR-3 only** breaks
-  phantom/chained CALLS rows.
+- **PR-2 and PR-3 MCP shapes are additive** for readers who ignore new knobs; **PR-3**
+  breaks phantom/chained `CALLS` rows. **PR-1 supertype dedup changes row cardinality**
+  at duplicate sites (re-index), not MCP signatures.
 - **`edge_filter` is single-edge-type, fail-loud** — matches `NodeFilter` applicability pattern.
 - **`include_unresolved=True` ⊥ `edge_filter`** — fail-loud mutual exclusivity.
 - **`exclude_external` stays on `find_callers` / `find_callees` only** — not on `neighbors`.
@@ -56,14 +67,18 @@ Per-PR Cursor prompts: add `plans/CURSOR-PROMPTS-CALLS-NOISE.md` when PR-1 start
 3. `collapse_supertype_duplicates` per propose §3.3.1 — **before** `overload_ambiguous` loop only.
 4. `GraphMeta`: `pass3_unresolved_phantom_receiver`, `pass3_unresolved_chained` (count today's phantom/chained CALLS).
 5. `java_ontology.py` `EDGE_SCHEMA['CALLS'].attrs` += `callee_declaring_role`.
-6. README + AGENT-GUIDE: new column + dedup behavior; re-index callout.
+6. README + AGENT-GUIDE: new column + dedup behavior; re-index callout (**include row-count
+   delta** from supertype dedup, not only the new column).
+7. PR-1 adds `tests/fixtures/call_graph_smoke/.../SupertypeDedupPatterns.java` (minimal
+   interface+concrete same-site stub per fixture anchors above).
 
 ## Tests (exact names)
 
 | Test | Asserts |
 | --- | --- |
-| `test_pass3_supertype_dedup_jpa_repository_save_one_row` | `MyRepository extends JpaRepository` → one CALLS row, `callee_declaring_role='REPOSITORY'` |
-| `test_pass3_overload_ambiguous_still_n_rows` | Name-only-fb overloads → N rows, `strategy='overload_ambiguous'` |
+| `test_pass3_supertype_dedup_jpa_repository_save_one_row` | `call_graph_smoke` `SupertypeDedupPatterns` → one CALLS row per site, `callee_declaring_role='REPOSITORY'` |
+| `test_pass3_overload_ambiguous_still_n_rows` | `call_graph_smoke` `OverloadPatterns#sameArity` → N rows, `strategy='overload_ambiguous'` |
+| `test_pass3_callee_declaring_role_bank_annotated_types` | `bank-chat-system` — `@Repository` / `@Service` callees get expected roles |
 | `test_calls_edge_has_callee_declaring_role_column` | DDL / meta introspection |
 | `test_graph_meta_unresolved_counters_present` | Counters in `describe(graph)` / meta output |
 | `test_edge_schema_calls_registers_callee_declaring_role` | Snapshot / attrs list |
@@ -105,11 +120,15 @@ rm -rf /tmp/calls-pr1 && .venv/bin/python build_ast_graph.py \
    - `WHERE` pushdown for `min_confidence`, strategies, `callee_declaring_role`
    - `ORDER BY e.call_site_line, e.call_site_byte`
    - Filter **before** `offset`/`limit` slice
-4. `docs/AGENT-GUIDE.md`: `exclude_external` not on `neighbors`; role-filter trap; `/mini-map` cross-link.
+4. `docs/AGENT-GUIDE.md`: `exclude_external` not on `neighbors`; role-filter trap;
+   **`exclude_callee_declaring_roles: ['OTHER']` also drops known-external rows** (HV37);
+   `/mini-map` cross-link.
 5. `MCP_HINTS_FIELD_DESCRIPTION` updated for `edge_filter`.
-6. Optional: `java-codebase-rag unresolved-calls` CLI stub (empty until PR-3) — or defer CLI to PR-3.
+6. **`java-codebase-rag unresolved-calls` CLI deferred to PR-3** (no empty stub in PR-2).
 7. HINTS: `OTHER`-fallback + `NodeFilter.role` collision hints (Decisions 20, 30).
-8. Perf: `test_neighbors_calls_perf_empty_filter_order_service` (1.5× median, same hardware).
+8. Perf (heavy-gated): `test_neighbors_calls_perf_empty_filter_client_message_processor`
+   — `ClientMessageProcessor#process` empty-filter query within 1.5× pre-PR-2 median;
+   skip unless `JAVA_CODEBASE_RAG_RUN_HEAVY=1`.
 
 ## Tests (exact names)
 
@@ -122,7 +141,7 @@ rm -rf /tmp/calls-pr1 && .venv/bin/python build_ast_graph.py \
 | `test_neighbors_calls_edge_filter_mixed_types_fail_loud` | HV13 |
 | `test_neighbors_calls_edge_filter_strategy_xor` | HV14 |
 | `test_neighbors_calls_nodefilter_role_collision_hint` | Decision 30 |
-| `test_neighbors_calls_perf_empty_filter_order_service` | Decision 31 (optional heavy; document skip) |
+| `test_neighbors_calls_perf_empty_filter_client_message_processor` | Decision 31 — skip unless `JAVA_CODEBASE_RAG_RUN_HEAVY=1` |
 
 ## Sentinel checks (`git diff master..HEAD`)
 
@@ -141,8 +160,8 @@ git diff master..HEAD -- mcp_v2.py | rg "include_unresolved|dedup_calls" && exit
 git diff master..HEAD -- mcp_v2.py kuzu_queries.py | rg "ORDER BY.*call_site_line" || \
   { echo "missing ORDER BY call_site_line"; exit 1; }
 
-# Forbid early LIMIT on unfiltered CALLS hop (before WHERE edge predicates)
-git diff master..HEAD -- mcp_v2.py kuzu_queries.py | rg "LIMIT.*call_site" && exit 1 || true
+# Advisory only — named tests are the real pushdown gate (LIMIT patterns vary)
+git diff master..HEAD -- mcp_v2.py kuzu_queries.py | rg "LIMIT.*call_site" || true
 ```
 
 **Docs sentinel — zero stale `exclude_external` on neighbors claims:**
@@ -168,7 +187,11 @@ git diff master..HEAD -- docs/AGENT-GUIDE.md README.md | \
 2. `pass3_calls`: lines 1192–1211 → UCS; **preserve** 1257–1271 known-external CALLS.
 3. `_phantom_method_id` / `tables.phantoms` restricted to known-external only.
 4. `include_unresolved`, `dedup_calls`, `row_kind` on edge rows.
-5. `describe` unresolved rollup (cap 5); CLI wired to real data.
+   - **Interleave order:** global `(call_site_line, call_site_byte)`; at equal `(line, byte)`,
+     `row_kind='resolved'` before `row_kind='unresolved_call_site'`.
+   - **`dedup_calls=True`:** one row per `(src_id, dst_id)`; canonical site =
+     minimum `(call_site_line, call_site_byte)`; `call_site_lines` sorted ascending.
+5. `describe` unresolved rollup (cap 5); **`java-codebase-rag unresolved-calls` CLI** (first landing).
 6. HINTS §3.9.1 checklist H1–H8 (templates, fuzzy set, tests).
 7. README breaking change + re-index note (ontology stays 15).
 
