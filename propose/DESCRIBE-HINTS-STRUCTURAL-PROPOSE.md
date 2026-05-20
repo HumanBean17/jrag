@@ -8,6 +8,8 @@
 
 **Amends:** [`propose/completed/HINTS-ROAD-SIGNS-PROPOSE.md`](./completed/HINTS-ROAD-SIGNS-PROPOSE.md) §5 deferred rows (`IMPLEMENTS` / `EXTENDS` on describe; partial — this propose lands **IMPLEMENTS** only on describe, not `EXTENDS`).
 
+**Partially amends:** same propose §4 **UC11** (leaf method → no hints) — method Symbols with real `edge_summary` / `data` signal may now emit tier-2 **E** / **G** / **H** when gated; not accidental scope creep.
+
 **Depends on (landed):** describe rollups (`DECLARES.*`, `OVERRIDDEN_BY.*`), stored `OVERRIDES`, v4 `TPL_FIND_SUCCESS_HTTP_TARGETS` / `TPL_FIND_SUCCESS_ASYNC_TARGETS` strings.
 
 ## TL;DR
@@ -79,7 +81,8 @@ All tier-1 rows require:
 
 **Notes:**
 
-- **E** closes the gap between “leaf method” (UC11) and `CALLS.out >= 10` meta; does not duplicate the meta row.
+- **E** / **G** / **H** intentionally narrow **UC11**: methods with only trivial `DECLARES` still get `hints == []`; methods with `CALLS`, `OVERRIDES`, or unresolved sites get a road sign when gated.
+- **E** also sits below the `CALLS.out >= 10` meta row; does not duplicate it.
 - **G** covers **override implementation** methods (`RegexComplianceScanner#scan`) where rollups exist only on the **declaration** (`ChatAssignmentPort#requestAssignment` already gets `OVERRIDDEN_BY*` hints).
 - **H** points at the mutually exclusive `include_unresolved` path (see `TPL_NEIGHBORS_CALLS_HAS_UNRESOLVED` wording in `mcp_hints.py`).
 - **I/J** bring **describe** parity with find/neighbors v4 second hops; **additive** alongside existing declaring-method hints (cap may drop lowest-priority meta).
