@@ -15,7 +15,8 @@ Follow-up from [#162](https://github.com/HumanBean17/java-codebase-rag/issues/16
 [`NEIGHBORS-DOT-KEY-TRAVERSAL-PROPOSE`](./completed/NEIGHBORS-DOT-KEY-TRAVERSAL-PROPOSE.md) deliberately left
 `OVERRIDDEN_BY.*` describe-only because the dispatch hop is not a single stored
 2-hop `DECLARES` pattern. That remains true for the **first** hop, but the graph
-now materializes `[:OVERRIDES]` between method Symbols (ontology 13+), and
+now materializes `[:OVERRIDES]` between method Symbols (ontology 14; edges
+landed at 13), and
 builder tests prove stored `neighbors(..., ['OVERRIDES'])` matches
 `override_axis_rollup_for` dispatch-down ids. The composed terminal hops
 (`DECLARES_CLIENT`, `DECLARES_PRODUCER`, `EXPOSES`) are stored and identical to
@@ -120,8 +121,25 @@ Override-axis dot-keys require a **non-static method** Symbol origin
   prefer explicit error for consistency with `DECLARES.*` type-origin rejection)
 - Route / Client / Producer origins → existing kind resolution failures
 
-`DECLARES.*` and `OVERRIDDEN_BY.*` may appear in one `edge_types` list; handler
-partitions by prefix / registry and applies the correct origin gate per family.
+`DECLARES.*` and `OVERRIDDEN_BY.*` may appear in one `edge_types` list on the
+**same** `ids` value, but only one axis can apply per origin node. Handler
+partitions requested composed keys into `declares_composed` vs `override_composed`
+(by registry prefix) **before** Cypher and validates each non-empty partition
+against the origin kind.
+
+**Fail-fast (locked):** if **any** requested composed key fails its axis origin
+gate, reject the **entire** `neighbors` request (`success=False`) — do not run
+Cypher for keys that would have been valid on the same origin. Examples:
+
+| Origin | `edge_types` (excerpt) | Result |
+|---|---|---|
+| type Symbol | `["DECLARES.DECLARES_CLIENT"]` | OK |
+| method Symbol | `["OVERRIDDEN_BY.DECLARES_CLIENT"]` | OK |
+| type Symbol | `["DECLARES.DECLARES_CLIENT", "OVERRIDDEN_BY.DECLARES_CLIENT"]` | Fail — override keys need method origin |
+| method Symbol | `["DECLARES.DECLARES_CLIENT"]` | Fail — DECLARES.* keys need type origin |
+
+Error messages must name the failing axis (method vs type), not reuse the
+DECLARES-only string for override-key failures.
 
 ### Direction constraint
 
@@ -132,6 +150,10 @@ from the concrete method, or `OVERRIDDEN_BY` is not the right key.
 
 `direction="in"` with an override dot-key → `success=False` with a clear message
 (mirror `DECLARES.*` inbound rejection).
+
+**Stored vs virtual direction:** virtual `OVERRIDDEN_BY` uses `direction="out"`;
+the same overrider set is reachable as `neighbors(decl_id, 'in', ['OVERRIDES'])`
+(stored edge direction). Document this equivalence in `docs/AGENT-GUIDE.md`.
 
 ### ComposedEdgeType validation
 
@@ -189,12 +211,57 @@ _OVERRIDE_AXIS_COMPOSED_REL_MAP: tuple[tuple[str, str | None], ...] = (
 `mcp_v2.py` imports composed key allowlists from `kuzu_queries` (or a tiny shared
 `composed_edge_keys.py`) so `ComposedEdgeType` and traversal maps cannot drift.
 
-**Equivalence guard:** keep (or add) tests that
-`override_axis_traversal_for` row counts match `override_axis_rollup_for` out
-counts for the same `method_id` on `tests/fixtures/override_axis_rollup_smoke/`
-and bank-chat `requestAssignment` scenarios. Do **not** re-embed the
-`IMPLEMENTS|EXTENDS` + `signature` walk in the traversal path unless a fixture
-proves `[:OVERRIDES]` gaps.
+**Rollup ↔ traversal parity (merge-blocking invariant):** see
+[Rollup ↔ traversal parity](#rollup--traversal-parity-merge-blocking-invariant).
+Do **not** re-embed the `IMPLEMENTS|EXTENDS` + `signature` walk in the
+traversal path unless a fixture proves `[:OVERRIDES]` gaps.
+
+### Rollup ↔ traversal parity (merge-blocking invariant)
+
+`describe` and `neighbors` are two views of the same affordance. For a fixed
+method origin `m`, no `limit` / `offset` / `filter`, and each override-axis key
+`K`:
+
+```text
+len(neighbors(m, direction="out", edge_types=[K]).results)
+  ==
+edge_summary[K]["out"]   # from describe(m), i.e. override_axis_rollup_for
+```
+
+Both sides count **graph edge rows**, not distinct terminal node ids. The
+implementation PR must not merge unless parity holds on:
+
+- bank-chat `ChatAssignmentPort.requestAssignment` (interface method with
+  `OVERRIDDEN_BY` + `OVERRIDDEN_BY.DECLARES_CLIENT` rollups), and
+- `tests/fixtures/override_axis_rollup_smoke/` (producer, route, diamond,
+  middle-override / stored `in` on `OVERRIDES` where useful).
+
+Existing `test_overrides_stored_neighbors_in_matches_override_axis_impl_ids`
+proves stored `OVERRIDES` ids match rollup **for the base dispatch hop only**;
+composed keys still need explicit count + id parity tests.
+
+**Example (bank-chat):** After `describe(mid)` on
+`ChatAssignmentPort.requestAssignment`:
+
+```json
+"OVERRIDDEN_BY": {"in": 0, "out": 2},
+"OVERRIDDEN_BY.DECLARES_CLIENT": {"in": 0, "out": 3}
+```
+
+then unfiltered:
+
+```python
+neighbors_v2(mid, direction="out", edge_types=["OVERRIDDEN_BY"], ...)
+# len(results) == 2  — one row per incoming [:OVERRIDES] / distinct overrider
+
+neighbors_v2(mid, direction="out", edge_types=["OVERRIDDEN_BY.DECLARES_CLIENT"], ...)
+# len(results) == 3  — sum of DECLARES_CLIENT edge rows on all overriders
+# (two overriders sharing one Client still yields 3 rows if both declare edges)
+```
+
+If traversal returned 2 Clients but `edge_summary` said `out: 3`, agents that
+trusted `describe` would paginate wrong, skip rows, or distrust the tool. Parity
+failures are **product bugs**, not test nitpicks.
 
 ### Counting semantics alignment
 
@@ -242,12 +309,27 @@ Pagination applies to the combined flat + composed result list (same as #162).
 - `test_neighbors_overridden_by_dot_key_count_matches_edge_summary` — unfiltered
   len vs `edge_summary` for bank-chat interface method + smoke fixture
 - `test_neighbors_overridden_by_dot_key_type_origin_rejected` — class id + dot-key
-- `test_neighbors_overridden_by_dot_key_static_method_rejected` — if applicable
+- `test_neighbors_mixed_composed_families_on_type_rejected` — type id +
+  `["DECLARES.DECLARES_CLIENT", "OVERRIDDEN_BY.DECLARES_CLIENT"]` → whole request fails
+- `test_neighbors_mixed_composed_families_on_method_rejected` — method id +
+  `["DECLARES.DECLARES_CLIENT", "OVERRIDDEN_BY.DECLARES_CLIENT"]` → whole request fails
+- `test_neighbors_overridden_by_dot_key_static_method_rejected` — method with
+  `static` modifier on `override_axis_rollup_smoke` or bank-chat; explicit
+  `success=False` (not silent empty)
 - `test_neighbors_overridden_by_dot_key_inbound_rejected` — `direction="in"`
 - `test_neighbors_accepts_overridden_by_dot_keys` — replaces
   `test_neighbors_still_rejects_overridden_by`
-- Hint regression — `test_hints_*` prescribe dot-key recipe, not two-hop OVERRIDES
-  chain (grep `then neighbors(overrider_ids`)
+- `test_neighbors_overridden_by_rollup_traversal_parity_blocking` — for each key in
+  `{OVERRIDDEN_BY, OVERRIDDEN_BY.DECLARES_CLIENT, …}` on fixtures above,
+  `len(neighbors)` == `describe.edge_summary[key].out` (merge-blocking)
+- Hint regression — grep must not find `then neighbors(overrider_ids` in
+  `TPL_DESCRIBE_METHOD_*_IN_OVERRIDERS` templates
+- `test_hints_describe_method_overridden_by_declares_client_emits_dot_key` —
+  positive describe hint prescribes
+  `neighbors(['{id}'],'out',['OVERRIDDEN_BY.DECLARES_CLIENT'])` (mirror #171
+  `test_hints_neighbors_declares_methods_emits_dot_key_clients`). Note:
+  `test_hints_hv20_no_dotkey_edge_labels_in_rendered_neighbors_hints` applies only
+  to **empty structural** neighbors hints, not describe success-path emissions.
 
 Manual:
 
@@ -276,6 +358,22 @@ Manual:
 6. **Flat `OVERRIDES` stays** in `EdgeType`; agents may still use one-hop
    `neighbors(..., ['OVERRIDES'])` when they only need overrider methods.
 
+7. **`edge_filter` is incompatible** with any composed key (including
+   `OVERRIDDEN_BY.*`), same as `DECLARES.*` — terminal shaping uses `NodeFilter`
+   only; split calls if CALLS edge attributes are needed.
+
+8. **Base `OVERRIDDEN_BY` attrs** mirror flat `neighbors(..., ['OVERRIDES'])` on
+   the same declaration method (`direction='in'` stored hop): minimal / empty
+   edge attrs (`OVERRIDES` has no `EDGE_SCHEMA` attrs). Composed keys use full
+   terminal `e.*` projection plus `via_id`.
+
+9. **Composed origin gates are axis-specific; fail-fast.** See
+   [Origin kind constraint](#origin-kind-constraint). Implementation must not
+   reuse the type-only gate for all composed keys.
+
+10. **Rollup ↔ traversal parity is merge-blocking** — see dedicated section;
+    not optional regression.
+
 ## Limitations
 
 - Does not add per-method edge-presence on `NodeRef`s returned by
@@ -299,11 +397,14 @@ Manual:
 Single implementation PR after propose approval:
 
 1. `kuzu_queries.py` — traversal + registry
-2. `mcp_v2.py` — types + handler
-3. Tests (`test_mcp_v2_compose.py`, hints)
+2. `mcp_v2.py` — types + handler (axis-split composed gates)
+3. Tests (`test_mcp_v2_compose.py`, hints) — **parity tests must pass before merge**
 4. Docs + `server.py` + hints templates
+5. Link this propose from [#165](https://github.com/HumanBean17/java-codebase-rag/issues/165)
+   and update the issue body (stored `[:OVERRIDES]` traversal — not signature Cypher
+   in `neighbors`) so reviewers do not re-litigate the pre–ontology-13 framing.
 
-Move this file to `propose/completed/` when the PR merges.
+Move this file to `propose/completed/` when the implementation PR merges.
 
 Optional follow-up: `plans/PLAN-OVERRIDDEN-BY-DOT-KEY-TRAVERSAL.md` +
 `plans/CURSOR-PROMPTS-OVERRIDDEN-BY-DOT-KEY-TRAVERSAL.md` if splitting review
