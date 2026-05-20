@@ -18,6 +18,21 @@ from java_ontology import (  # noqa: E402
 
 _COMPOSED_MEMBER_EDGE_NAMES = frozenset({"EXPOSES", "DECLARES_CLIENT", "DECLARES_PRODUCER"})
 
+_OVERRIDE_AXIS_APPENDIX = """
+## Override-axis composed keys (method Symbol, `direction="out"` only)
+
+Virtual `edge_summary` / `neighbors` dot-keys (not stored graph edge labels). The dispatch hop uses materialized `[:OVERRIDES]`; terminal hops use stored `DECLARES_CLIENT`, `DECLARES_PRODUCER`, or `EXPOSES`.
+
+| Dot-key | Recipe |
+| --- | --- |
+| `OVERRIDDEN_BY` | `neighbors(['{id}'],'out',['OVERRIDDEN_BY'])` — same overrider method ids as `neighbors(['{id}'],'in',['OVERRIDES'])` on a declaration method |
+| `OVERRIDDEN_BY.DECLARES_CLIENT` | `neighbors(['{id}'],'out',['OVERRIDDEN_BY.DECLARES_CLIENT'])` — clients on all overriders (`via_id` = overrider method in attrs) |
+| `OVERRIDDEN_BY.DECLARES_PRODUCER` | `neighbors(['{id}'],'out',['OVERRIDDEN_BY.DECLARES_PRODUCER'])` |
+| `OVERRIDDEN_BY.EXPOSES` | `neighbors(['{id}'],'out',['OVERRIDDEN_BY.EXPOSES'])` |
+
+Do not mix `DECLARES.*` and `OVERRIDDEN_BY.*` in one `edge_types` list on a single origin id.
+"""
+
 _GRAPH_STORAGE_APPENDIX = """
 ## Graph storage (not MCP `neighbors` edge_types)
 
@@ -93,6 +108,7 @@ def generate_markdown() -> str:
     parts.append("")
     for spec in EDGE_SCHEMA.values():
         parts.extend(_render_edge(spec))
+    parts.append(_OVERRIDE_AXIS_APPENDIX.rstrip())
     parts.append(_GRAPH_STORAGE_APPENDIX.rstrip())
     return "\n".join(parts).rstrip() + "\n"
 

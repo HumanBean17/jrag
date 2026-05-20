@@ -76,7 +76,7 @@ Use these strings **verbatim** in `neighbors(..., edge_types=[...])`.
 | Service boundary | `EXPOSES` | method Symbol → Route (handler exposes route) |
 | Cross-service | `HTTP_CALLS`, `ASYNC_CALLS` | `HTTP_CALLS`: Client → Route; `ASYNC_CALLS`: Producer → Route |
 
-**Composed edges (type Symbol origin, `direction="out"` only):**
+**Composed edges — type Symbol origin (`direction="out"` only):**
 
 | Edge type | Meaning |
 | --------- | ------- |
@@ -84,7 +84,18 @@ Use these strings **verbatim** in `neighbors(..., edge_types=[...])`.
 | `DECLARES.DECLARES_PRODUCER` | Members' async producers in one hop |
 | `DECLARES.EXPOSES` | Members' exposed routes in one hop |
 
-**Not valid in `edge_types`:** `OVERRIDDEN_BY`, `OVERRIDDEN_BY.DECLARES_CLIENT`, `OVERRIDDEN_BY.DECLARES_PRODUCER`, `OVERRIDDEN_BY.EXPOSES` (describe-only virtual keys).
+**Composed edges — non-static method Symbol origin (`direction="out"` only):**
+
+| Edge type | Meaning |
+| --------- | ------- |
+| `OVERRIDDEN_BY` | Concrete overrider methods (stored `[:OVERRIDES]` dispatch hop) |
+| `OVERRIDDEN_BY.DECLARES_CLIENT` | Clients declared on overriders (`via_id` = overrider method) |
+| `OVERRIDDEN_BY.DECLARES_PRODUCER` | Producers on overriders |
+| `OVERRIDDEN_BY.EXPOSES` | Routes exposed by overriders |
+
+**Stored vs virtual direction (base override axis):** `neighbors(decl_id, "out", ["OVERRIDDEN_BY"])` returns the same overrider method ids as `neighbors(decl_id, "in", ["OVERRIDES"])` on the same declaration method. Prefer the dot-key when `describe.edge_summary` advertises `OVERRIDDEN_BY`.
+
+Do not mix `DECLARES.*` and `OVERRIDDEN_BY.*` in one `edge_types` list on a single origin id — the handler rejects the whole request (only one axis applies per node).
 
 ### Argument shapes
 
@@ -201,7 +212,7 @@ Full node + `edge_summary`. Args: `id` (any kind) or `fqn` (symbol only; `id` wi
 
 - **Stored keys** — counts for edges that exist in the graph.
 - **Type symbols** (`class`, `interface`, `enum`, `record`, `annotation`) may add composed keys `DECLARES.DECLARES_CLIENT`, `DECLARES.DECLARES_PRODUCER`, `DECLARES.EXPOSES` — navigable via `neighbors` with those dot-keys (`out` only).
-- **Method symbols** may add virtual keys `OVERRIDDEN_BY`, `OVERRIDDEN_BY.DECLARES_*`, `OVERRIDDEN_BY.EXPOSES` (describe only), plus an **`OVERRIDES`** row merging stored `[:OVERRIDES]` counts with a dispatch-up rollup (`in`/`out` per direction uses `max` of stored vs rollup). Use `neighbors(..., ["OVERRIDES"])` to list override edges. Static methods and constructors do not get override-axis keys.
+- **Method symbols** may add virtual keys `OVERRIDDEN_BY`, `OVERRIDDEN_BY.DECLARES_*`, `OVERRIDDEN_BY.EXPOSES` (navigable via `neighbors` on method origins, `out` only), plus an **`OVERRIDES`** row merging stored `[:OVERRIDES]` counts with a dispatch-up rollup (`in`/`out` per direction uses `max` of stored vs rollup). Use `neighbors(..., ["OVERRIDDEN_BY.DECLARES_CLIENT"])` (etc.) or one-hop `neighbors(..., ["OVERRIDES"])`. Static methods and constructors do not get override-axis keys.
 
 Composed counts are **edge rows**, not distinct methods; `count > 0` means "there is something to walk".
 
@@ -249,7 +260,8 @@ Returns **edges** with `attrs` (`confidence`, `strategy`, `match`, … on cross-
 | Empty `search` | Wrong `table`, no index, or chunk miss | Try `table="all"`; `find` with `fqn_prefix`; read source files directly |
 | Empty results across several tools | Index missing, stale, or wrong project | You cannot rebuild the index via MCP — ask the operator; meanwhile use open files / `rg` |
 | Result vs open file disagree | Stale or partial index | Trust the file; say index may be stale |
-| Used virtual key in `neighbors` | `OVERRIDDEN_BY*` is describe-only | Use stored `OVERRIDES` or manual walk via `DECLARES` → type → `IMPLEMENTS`/`EXTENDS` |
+| Mixed composed families on one id | `DECLARES.*` + `OVERRIDDEN_BY.*` together | Split calls — type keys need a type id; override keys need a method id |
+| Override dot-key on type / DECLARES on method | Wrong Symbol origin for axis | Read `describe.edge_summary`; use the axis that matches the node kind |
 
 After two failed attempts on the same intent, stop and report tool name, args, and response snippet.
 

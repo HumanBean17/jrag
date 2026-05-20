@@ -420,8 +420,9 @@ def create_mcp_server() -> FastMCP:
             "composed keys DECLARES.DECLARES_CLIENT, DECLARES.DECLARES_PRODUCER, and DECLARES.EXPOSES (navigable on type Symbols via neighbors, out only); "
             "method Symbols may add override-axis virtual keys (OVERRIDDEN_BY, OVERRIDDEN_BY.DECLARES_CLIENT, OVERRIDDEN_BY.DECLARES_PRODUCER, "
             "OVERRIDDEN_BY.EXPOSES, plus an `OVERRIDES` map entry that merges stored `[:OVERRIDES]` counts with the dispatch-up rollup per direction). "
-            "OVERRIDDEN_BY* virtual keys are not valid `neighbors(edge_types=…)` values. The stored `OVERRIDES` relationship "
-            "is a normal edge label and may be traversed via neighbors(edge_types=[..., \"OVERRIDES\", ...]). "
+            "Override-axis virtual keys are navigable via neighbors on non-static method Symbol origins "
+            "(out only; composed keys include via_id in attrs). The stored `OVERRIDES` relationship "
+            "is also a normal edge label (e.g. direction in from declaration toward overriders). "
             "Pass `id` for any kind, or exact `fqn` for Symbol lookup (`id` wins when both are set). "
             "`describe(fqn=…)` keeps the first graph row when multiple symbols share that FQN; when an FQN may collide, "
             "prefer `resolve(identifier=…, hint_kind='symbol')` first, then `describe(id=…)` on the chosen node. "
@@ -451,7 +452,9 @@ def create_mcp_server() -> FastMCP:
         description=(
             "Graph walk: **direction** (`in` | `out`) and non-empty **edge_types** are required (stored labels for one hop; "
             "type Symbol origins may also pass composed DECLARES.DECLARES_CLIENT, DECLARES.DECLARES_PRODUCER, or DECLARES.EXPOSES "
-            "for 2-hop member rollups — out only, with via_id in attrs). OVERRIDDEN_BY* keys are not valid edge_types. "
+            "for 2-hop member rollups; method Symbol origins may pass OVERRIDDEN_BY, OVERRIDDEN_BY.DECLARES_CLIENT, "
+            "OVERRIDDEN_BY.DECLARES_PRODUCER, OVERRIDDEN_BY.EXPOSES for override-axis rollups — out only, via_id in "
+            "attrs on composed keys). "
             "Optional `filter` applies to each neighbor endpoint row; populated fields must be applicable to that "
             "neighbor's kind—mixed-kind result sets fail on the first inapplicable neighbor (strict frame). "
             "Optional `edge_filter` requires edge_types=['CALLS'] only (no composed dot-keys or extra stored "
@@ -472,8 +475,8 @@ def create_mcp_server() -> FastMCP:
         edge_types: list[mcp_v2.NeighborEdgeType] = Field(
             description=(
                 "Required non-empty list of stored edge labels (e.g. CALLS, EXPOSES, HTTP_CALLS, OVERRIDES) "
-                "and/or composed DECLARES.DECLARES_CLIENT, DECLARES.DECLARES_PRODUCER, DECLARES.EXPOSES "
-                "(type Symbol origin, direction out only)"
+                "and/or composed DECLARES.DECLARES_* (type Symbol origin, out only) or OVERRIDDEN_BY* "
+                "(non-static method Symbol origin, out only)"
             ),
         ),
         limit: int = Field(

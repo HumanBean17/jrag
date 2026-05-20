@@ -208,6 +208,15 @@ def test_hints_describe_method_clients_in_overriders_emits(kuzu_graph) -> None:
     assert want in out.hints
 
 
+def test_hints_describe_method_overridden_by_declares_client_emits_dot_key(kuzu_graph) -> None:
+    mid = _interface_method_with_override_rollups(kuzu_graph)
+    out = describe_v2(mid, graph=kuzu_graph)
+    assert out.success and out.record
+    want = mcp_hints.TPL_DESCRIBE_METHOD_CLIENTS_IN_OVERRIDERS.format(id=mid)
+    assert want in out.hints
+    assert "OVERRIDDEN_BY.DECLARES_CLIENT" in want
+
+
 def test_hints_describe_method_producers_in_overriders_emits(override_axis_graph: KuzuGraph) -> None:
     rows = override_axis_graph._rows(  # noqa: SLF001
         "MATCH (t:Symbol {fqn: $fqn})-[:DECLARES]->(m:Symbol) "

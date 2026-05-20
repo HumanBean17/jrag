@@ -35,6 +35,15 @@ _MEMBER_EDGE_COMPOSED_REL_MAP: tuple[tuple[str, str], ...] = (
 )
 _MEMBER_EDGE_COMPOSED_REL_BY_KEY: dict[str, str] = dict(_MEMBER_EDGE_COMPOSED_REL_MAP)
 
+_OVERRIDE_AXIS_COMPOSED_REL_MAP: tuple[tuple[str, str | None], ...] = (
+    ("OVERRIDDEN_BY", None),
+    ("OVERRIDDEN_BY.DECLARES_CLIENT", "DECLARES_CLIENT"),
+    ("OVERRIDDEN_BY.DECLARES_PRODUCER", "DECLARES_PRODUCER"),
+    ("OVERRIDDEN_BY.EXPOSES", "EXPOSES"),
+)
+_OVERRIDE_AXIS_COMPOSED_REL_BY_KEY: dict[str, str | None] = dict(_OVERRIDE_AXIS_COMPOSED_REL_MAP)
+OVERRIDE_AXIS_COMPOSED_EDGE_TYPES: frozenset[str] = frozenset(_OVERRIDE_AXIS_COMPOSED_REL_BY_KEY)
+
 
 def _coerce_id_list(raw: Any) -> list[str]:
     """Normalize Kuzu ``collect(DISTINCT ...)`` list results to string ids."""
@@ -665,6 +674,34 @@ class KuzuGraph:
             "e.call_site_line AS call_site_line, e.call_site_byte AS call_site_byte, "
             "e.arg_count AS arg_count, e.resolved AS resolved",
             {"id": type_id, "rel": rel},
+        )
+
+    def override_axis_traversal_for(self, method_id: str, composed_key: str) -> list[dict[str, Any]]:
+        """Override-axis composed traversal for a method Symbol (neighbors dot-key path).
+
+        Uses stored ``[:OVERRIDES]`` for the dispatch hop (aligned with ``override_axis_rollup_for``
+        overrider ids). Base key returns overrider method ids only; composed keys return terminal
+        rows with full edge attr projection plus ``via_id`` (overrider method id).
+        """
+        rel = _OVERRIDE_AXIS_COMPOSED_REL_BY_KEY.get(composed_key)
+        if rel is None and composed_key != "OVERRIDDEN_BY":
+            return []
+        if rel is None:
+            return self._rows(
+                "MATCH (decl:Symbol {id: $id})<-[:OVERRIDES]-(mover:Symbol) "
+                "RETURN mover.id AS other_id",
+                {"id": method_id},
+            )
+        return self._rows(
+            "MATCH (decl:Symbol {id: $id})<-[:OVERRIDES]-(mover:Symbol)-[e]->(term) "
+            "WHERE label(e) = $rel "
+            "RETURN mover.id AS via_id, label(e) AS stored_edge_type, "
+            "term.id AS other_id, e.confidence AS confidence, e.strategy AS strategy, "
+            "e.match AS match, e.mechanism AS mechanism, e.annotation AS annotation, "
+            "e.field_or_param AS field_or_param, e.source AS source, "
+            "e.call_site_line AS call_site_line, e.call_site_byte AS call_site_byte, "
+            "e.arg_count AS arg_count, e.resolved AS resolved",
+            {"id": method_id, "rel": rel},
         )
 
     def count_calls_for_symbol(self, origin_id: str, *, direction: Literal["in", "out"]) -> int:
