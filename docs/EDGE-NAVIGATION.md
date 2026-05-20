@@ -254,6 +254,21 @@
 - `alien_subject`: ASYNC_CALLS connects Producer→Route; use DECLARES_PRODUCER from a method Symbol, or neighbors(producer_id,'out',['ASYNC_CALLS']) from a Producer id
 
 
+## Override-axis composed keys (method Symbol, `direction="out"` only)
+
+Virtual `edge_summary` / `neighbors` dot-keys (not stored graph edge labels). The dispatch hop uses materialized `[:OVERRIDES]`; terminal hops use stored `DECLARES_CLIENT`, `DECLARES_PRODUCER`, or `EXPOSES`.
+
+| Dot-key | Recipe |
+| --- | --- |
+| `OVERRIDDEN_BY` | `neighbors(['{id}'],'out',['OVERRIDDEN_BY'])` — same overrider method ids as `neighbors(['{id}'],'in',['OVERRIDES'])` on a declaration method |
+| `OVERRIDDEN_BY.DECLARES_CLIENT` | `neighbors(['{id}'],'out',['OVERRIDDEN_BY.DECLARES_CLIENT'])` — clients on all overriders (`via_id` = overrider method in attrs) |
+| `OVERRIDDEN_BY.DECLARES_PRODUCER` | `neighbors(['{id}'],'out',['OVERRIDDEN_BY.DECLARES_PRODUCER'])` |
+| `OVERRIDDEN_BY.EXPOSES` | `neighbors(['{id}'],'out',['OVERRIDDEN_BY.EXPOSES'])` |
+
+Do not mix `DECLARES.*` and `OVERRIDDEN_BY.*` in one `edge_types` list on a single origin id.
+
+`describe` `edge_summary` and `neighbors` share the stored `[:OVERRIDES]` dispatch hop (requires ontology **13+** materialized edges). Default `limit=25` may truncate large composed result sets — raise `limit` when `out` counts are high.
+
 ## Graph storage (not MCP `neighbors` edge_types)
 
 ### `UnresolvedCallSite` + `UNRESOLVED_AT` (ontology 15 / CALLS-NOISE PR-3)

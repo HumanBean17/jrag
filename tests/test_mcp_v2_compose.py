@@ -4,7 +4,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from pydantic import ValidationError
 
 from _builders import build_kuzu_to
 from kuzu_queries import KuzuGraph
@@ -384,8 +383,8 @@ def test_describe_interface_method_with_annotated_impl_emits_rollup(kuzu_graph) 
     es = out.record.edge_summary
     assert es.get("OVERRIDDEN_BY") == {"in": 0, "out": want_ob}
     assert es.get("OVERRIDDEN_BY.DECLARES_CLIENT") == {"in": 0, "out": want_dc}
-    with pytest.raises(ValidationError):
-        neighbors_v2(mid, direction="out", edge_types=["OVERRIDDEN_BY"], graph=kuzu_graph)
+    out_ob = neighbors_v2(mid, direction="out", edge_types=["OVERRIDDEN_BY"], graph=kuzu_graph)
+    assert out_ob.success is True
 
 
 def test_describe_concrete_override_emits_overrides_rollup(kuzu_graph) -> None:
@@ -560,14 +559,287 @@ def test_neighbors_edge_type_adapter_accepts_overrides() -> None:
     _NEIGHBOR_EDGE_TYPES_ADAPTER.validate_python(["OVERRIDES"])
 
 
-def test_neighbors_still_rejects_overridden_by(kuzu_graph: KuzuGraph) -> None:
-    node_id, _ = _controller_method_with_calls(kuzu_graph)
-    with pytest.raises(ValidationError):
-        neighbors_v2(node_id, direction="out", edge_types=["OVERRIDDEN_BY"], graph=kuzu_graph)
-    with pytest.raises(ValidationError):
-        neighbors_v2(
-            node_id, direction="out", edge_types=["OVERRIDDEN_BY.DECLARES_CLIENT"], graph=kuzu_graph
+_OVERRIDE_AXIS_COMPOSED_KEYS = (
+    "OVERRIDDEN_BY",
+    "OVERRIDDEN_BY.DECLARES_CLIENT",
+    "OVERRIDDEN_BY.DECLARES_PRODUCER",
+    "OVERRIDDEN_BY.EXPOSES",
+)
+
+
+def _request_assignment_method_id(graph: KuzuGraph) -> str:
+    rows = graph._rows(  # noqa: SLF001
+        "MATCH (iface:Symbol {fqn: $fqn})-[:DECLARES]->(m:Symbol) "
+        "WHERE m.kind = 'method' AND m.name = 'requestAssignment' "
+        "RETURN m.id AS id LIMIT 1",
+        {"fqn": "com.bank.chat.engine.assign.ChatAssignmentPort"},
+    )
+    assert rows
+    return str(rows[0]["id"])
+
+
+def test_override_axis_rollup_dispatch_matches_signature_walk_on_fixtures(
+    kuzu_graph: KuzuGraph,
+    override_axis_graph: KuzuGraph,
+) -> None:
+    """Guard: stored [:OVERRIDES] dispatch ids stay aligned with legacy signature walk on fixtures."""
+    cases = [
+        (kuzu_graph, _request_assignment_method_id(kuzu_graph)),
+        (
+            override_axis_graph,
+            _override_axis_smoke_method_id(
+                override_axis_graph,
+                fqn="orolla.abstractroute.AbstractApi",
+                method_name="handle",
+            ),
+        ),
+    ]
+    for graph, mid in cases:
+        stored = sorted(graph._override_impl_ids_from_stored(mid))  # noqa: SLF001
+        signature = sorted(_dispatch_down_override_method_ids(graph, mid))
+        assert stored == signature
+
+
+def test_neighbors_accepts_overridden_by_dot_keys() -> None:
+    for key in _OVERRIDE_AXIS_COMPOSED_KEYS:
+        _NEIGHBOR_EDGE_TYPES_ADAPTER.validate_python([key])
+
+
+def test_neighbors_overridden_by_dot_key_returns_overriders(kuzu_graph: KuzuGraph) -> None:
+    mid = _request_assignment_method_id(kuzu_graph)
+    want = sorted(_dispatch_down_override_method_ids(kuzu_graph, mid))
+    assert want
+    out_virtual = neighbors_v2(mid, direction="out", edge_types=["OVERRIDDEN_BY"], graph=kuzu_graph)
+    out_stored = neighbors_v2(mid, direction="in", edge_types=["OVERRIDES"], graph=kuzu_graph)
+    assert out_virtual.success is True
+    assert out_stored.success is True
+    got_virtual = sorted({e.other.id for e in out_virtual.results})
+    got_stored = sorted({e.other.id for e in out_stored.results})
+    assert got_virtual == want
+    assert got_stored == want
+    assert all(e.edge_type == "OVERRIDDEN_BY" for e in out_virtual.results)
+    assert all(e.other.kind == "symbol" for e in out_virtual.results)
+    assert all("via_id" not in e.attrs for e in out_virtual.results)
+
+
+def test_neighbors_overridden_by_dot_key_declares_client(kuzu_graph: KuzuGraph) -> None:
+    mid = _request_assignment_method_id(kuzu_graph)
+    out = neighbors_v2(
+        mid, direction="out", edge_types=["OVERRIDDEN_BY.DECLARES_CLIENT"], graph=kuzu_graph, limit=500
+    )
+    assert out.success is True
+    assert len(out.results) >= 1
+    assert all(e.edge_type == "OVERRIDDEN_BY.DECLARES_CLIENT" for e in out.results)
+    assert all(e.attrs.get("via_id") for e in out.results)
+    assert all(e.other.kind == "client" for e in out.results)
+
+
+def test_neighbors_overridden_by_dot_key_declares_producer(override_axis_graph: KuzuGraph) -> None:
+    rows = override_axis_graph._rows(  # noqa: SLF001
+        "MATCH (t:Symbol {fqn: $fqn})-[:DECLARES]->(m:Symbol) "
+        "WHERE m.kind = 'method' AND m.name = 'publish' "
+        "RETURN m.id AS id LIMIT 1",
+        {"fqn": "orolla.abstractproducer.AbstractProducerApi"},
+    )
+    assert rows
+    mid = str(rows[0]["id"])
+    out = neighbors_v2(
+        mid,
+        direction="out",
+        edge_types=["OVERRIDDEN_BY.DECLARES_PRODUCER"],
+        graph=override_axis_graph,
+        limit=500,
+    )
+    assert out.success is True
+    assert len(out.results) >= 1
+    assert all(e.edge_type == "OVERRIDDEN_BY.DECLARES_PRODUCER" for e in out.results)
+    assert all(e.attrs.get("via_id") for e in out.results)
+    assert all(e.other.kind == "producer" for e in out.results)
+
+
+def test_neighbors_overridden_by_dot_key_exposes(override_axis_graph: KuzuGraph) -> None:
+    rows = override_axis_graph._rows(  # noqa: SLF001
+        "MATCH (t:Symbol {fqn: $fqn})-[:DECLARES]->(m:Symbol) "
+        "WHERE m.kind = 'method' AND m.name = 'handle' "
+        "RETURN m.id AS id LIMIT 1",
+        {"fqn": "orolla.abstractroute.AbstractApi"},
+    )
+    assert rows
+    mid = str(rows[0]["id"])
+    out = neighbors_v2(
+        mid,
+        direction="out",
+        edge_types=["OVERRIDDEN_BY.EXPOSES"],
+        graph=override_axis_graph,
+        limit=500,
+    )
+    assert out.success is True
+    assert len(out.results) >= 1
+    assert all(e.edge_type == "OVERRIDDEN_BY.EXPOSES" for e in out.results)
+    assert all(e.attrs.get("via_id") for e in out.results)
+    assert all(e.other.kind == "route" for e in out.results)
+
+
+def test_neighbors_overridden_by_dot_key_count_matches_edge_summary(kuzu_graph: KuzuGraph) -> None:
+    mid = _request_assignment_method_id(kuzu_graph)
+    d = describe_v2(mid, graph=kuzu_graph)
+    n = neighbors_v2(
+        mid,
+        direction="out",
+        edge_types=["OVERRIDDEN_BY.DECLARES_CLIENT"],
+        graph=kuzu_graph,
+        limit=500,
+    )
+    assert d.success and d.record and d.record.edge_summary
+    summary = d.record.edge_summary.get("OVERRIDDEN_BY.DECLARES_CLIENT")
+    assert summary is not None
+    assert n.success is True
+    assert len(n.results) == summary["out"]
+
+
+def test_neighbors_overridden_by_dot_key_type_origin_rejected(kuzu_graph: KuzuGraph) -> None:
+    tid, _ = _type_id_with_composed_key(kuzu_graph, "DECLARES_CLIENT", "DECLARES.DECLARES_CLIENT")
+    out = neighbors_v2(
+        tid, direction="out", edge_types=["OVERRIDDEN_BY.DECLARES_CLIENT"], graph=kuzu_graph
+    )
+    assert out.success is False
+    assert out.message is not None
+    assert "method Symbol origin" in out.message
+
+
+def test_neighbors_mixed_composed_families_on_type_rejected(kuzu_graph: KuzuGraph) -> None:
+    tid, _ = _type_id_with_composed_key(kuzu_graph, "DECLARES_CLIENT", "DECLARES.DECLARES_CLIENT")
+    out = neighbors_v2(
+        tid,
+        direction="out",
+        edge_types=["DECLARES.DECLARES_CLIENT", "OVERRIDDEN_BY.DECLARES_CLIENT"],
+        graph=kuzu_graph,
+    )
+    assert out.success is False
+    assert out.message is not None
+    assert "method Symbol origin" in out.message
+
+
+def test_neighbors_mixed_composed_families_on_method_rejected(kuzu_graph: KuzuGraph) -> None:
+    mid = _request_assignment_method_id(kuzu_graph)
+    out = neighbors_v2(
+        mid,
+        direction="out",
+        edge_types=["DECLARES.DECLARES_CLIENT", "OVERRIDDEN_BY.DECLARES_CLIENT"],
+        graph=kuzu_graph,
+    )
+    assert out.success is False
+    assert out.message is not None
+    assert "type Symbol origin" in out.message
+
+
+def test_neighbors_overridden_by_dot_key_static_method_rejected(kuzu_graph: KuzuGraph) -> None:
+    rows = kuzu_graph._rows(  # noqa: SLF001
+        "MATCH (m:Symbol) "
+        "WHERE m.kind = 'method' AND list_contains(COALESCE(m.modifiers, []), 'static') "
+        "RETURN m.id AS id LIMIT 1",
+    )
+    assert rows
+    mid = str(rows[0]["id"])
+    out = neighbors_v2(
+        mid, direction="out", edge_types=["OVERRIDDEN_BY.DECLARES_CLIENT"], graph=kuzu_graph
+    )
+    assert out.success is False
+    assert out.message is not None
+    assert "non-static" in out.message
+
+
+def test_neighbors_overridden_by_dot_key_constructor_rejected(kuzu_graph: KuzuGraph) -> None:
+    rows = kuzu_graph._rows(  # noqa: SLF001
+        "MATCH (t:Symbol)-[:DECLARES]->(c:Symbol) "
+        "WHERE c.kind = 'constructor' "
+        "RETURN c.id AS id LIMIT 1",
+    )
+    assert rows
+    cid = str(rows[0]["id"])
+    out = neighbors_v2(
+        cid, direction="out", edge_types=["OVERRIDDEN_BY.DECLARES_CLIENT"], graph=kuzu_graph
+    )
+    assert out.success is False
+    assert out.message is not None
+    assert "constructor" in out.message
+
+
+def test_neighbors_overridden_by_dot_key_inbound_rejected(kuzu_graph: KuzuGraph) -> None:
+    mid = _request_assignment_method_id(kuzu_graph)
+    out = neighbors_v2(
+        mid, direction="in", edge_types=["OVERRIDDEN_BY.DECLARES_CLIENT"], graph=kuzu_graph
+    )
+    assert out.success is False
+    assert out.message is not None
+    assert 'direction="out"' in out.message
+
+
+def _override_axis_smoke_method_id(graph: KuzuGraph, *, fqn: str, method_name: str) -> str:
+    rows = graph._rows(  # noqa: SLF001
+        "MATCH (t:Symbol {fqn: $fqn})-[:DECLARES]->(m:Symbol) "
+        "WHERE m.kind = 'method' AND m.name = $name "
+        "RETURN m.id AS id LIMIT 1",
+        {"fqn": fqn, "name": method_name},
+    )
+    assert rows
+    return str(rows[0]["id"])
+
+
+def _override_parity_graph_method_pairs(
+    composed_key: str,
+    kuzu_graph: KuzuGraph,
+    override_axis_graph: KuzuGraph,
+) -> list[tuple[KuzuGraph, str]]:
+    # OVERRIDDEN_BY.DECLARES_CLIENT: bank-chat only — smoke corpus has no DECLARES_CLIENT on overriders.
+    pairs: list[tuple[KuzuGraph, str]] = [(kuzu_graph, _request_assignment_method_id(kuzu_graph))]
+    if composed_key in ("OVERRIDDEN_BY", "OVERRIDDEN_BY.EXPOSES"):
+        pairs.append(
+            (
+                override_axis_graph,
+                _override_axis_smoke_method_id(
+                    override_axis_graph,
+                    fqn="orolla.abstractroute.AbstractApi",
+                    method_name="handle",
+                ),
+            )
         )
+    if composed_key == "OVERRIDDEN_BY.DECLARES_PRODUCER":
+        pairs.append(
+            (
+                override_axis_graph,
+                _override_axis_smoke_method_id(
+                    override_axis_graph,
+                    fqn="orolla.abstractproducer.AbstractProducerApi",
+                    method_name="publish",
+                ),
+            )
+        )
+    return pairs
+
+
+@pytest.mark.parametrize("composed_key", _OVERRIDE_AXIS_COMPOSED_KEYS)
+def test_neighbors_overridden_by_rollup_traversal_parity_blocking(
+    kuzu_graph: KuzuGraph,
+    override_axis_graph: KuzuGraph,
+    composed_key: str,
+) -> None:
+    checked = False
+    for graph, mid in _override_parity_graph_method_pairs(
+        composed_key, kuzu_graph, override_axis_graph
+    ):
+        d = describe_v2(mid, graph=graph)
+        n = neighbors_v2(
+            mid, direction="out", edge_types=[composed_key], graph=graph, limit=5000
+        )
+        assert d.success and d.record and d.record.edge_summary
+        summary = d.record.edge_summary.get(composed_key)
+        if summary is None or int(summary.get("out", 0) or 0) == 0:
+            continue
+        checked = True
+        assert n.success is True
+        assert len(n.results) == summary["out"]
+    assert checked, f"no fixture method with non-zero {composed_key} rollup"
 
 
 def _type_id_with_composed_key(kuzu_graph: KuzuGraph, rel: str, composed_key: str) -> tuple[str, int]:

@@ -19,7 +19,8 @@ MCP_HINTS_FIELD_DESCRIPTION = (
     "Road-sign hints pointing to likely next calls. Each hint is a short string "
     "referencing one MCP V2 tool call. Hints are advisory and may be safely ignored. "
     "Maximum 5 hints per output. Describe-time type rollup hints may recommend "
-    "DECLARES.* dot-keys for neighbors(); empty neighbors structural hints never use "
+    "DECLARES.* and OVERRIDDEN_BY.* dot-keys for neighbors() on matching Symbol origins; "
+    "empty neighbors structural hints never use "
     "dot-key edge labels. For neighbors with multiple origin ids, empty-result "
     "structural hints describe the first origin only. On neighbors with "
     "edge_types=['CALLS'] only, optional edge_filter projects the ordered CALLS stream "
@@ -40,18 +41,15 @@ TPL_DESCRIBE_TYPE_ROUTES_VIA_MEMBERS = (
 TPL_DESCRIBE_TYPE_PRODUCERS_VIA_MEMBERS = (
     "producers via members: neighbors(['{id}'],'out',['DECLARES.DECLARES_PRODUCER'])"
 )
-TPL_DESCRIBE_METHOD_OVERRIDERS = "overriders: neighbors(['{id}'],'in',['OVERRIDES'])"
+TPL_DESCRIBE_METHOD_OVERRIDERS = "overriders: neighbors(['{id}'],'out',['OVERRIDDEN_BY'])"
 TPL_DESCRIBE_METHOD_CLIENTS_IN_OVERRIDERS = (
-    "clients in overriders: neighbors(['{id}'],'in',['OVERRIDES']) "
-    "then neighbors(overrider_ids,'out',['DECLARES_CLIENT'])"
+    "clients in overriders: neighbors(['{id}'],'out',['OVERRIDDEN_BY.DECLARES_CLIENT'])"
 )
 TPL_DESCRIBE_METHOD_PRODUCERS_IN_OVERRIDERS = (
-    "producers in overriders: neighbors(['{id}'],'in',['OVERRIDES']) "
-    "then neighbors(overrider_ids,'out',['DECLARES_PRODUCER'])"
+    "producers in overriders: neighbors(['{id}'],'out',['OVERRIDDEN_BY.DECLARES_PRODUCER'])"
 )
 TPL_DESCRIBE_METHOD_ROUTES_IN_OVERRIDERS = (
-    "routes in overriders: neighbors(['{id}'],'in',['OVERRIDES']) "
-    "then neighbors(overrider_ids,'out',['EXPOSES'])"
+    "routes in overriders: neighbors(['{id}'],'out',['OVERRIDDEN_BY.EXPOSES'])"
 )
 TPL_DESCRIBE_METHOD_OUTBOUND_CLIENT = "outbound client: neighbors(['{id}'],'out',['DECLARES_CLIENT'])"
 TPL_DESCRIBE_METHOD_OUTBOUND_PRODUCER = "outbound producer: neighbors(['{id}'],'out',['DECLARES_PRODUCER'])"

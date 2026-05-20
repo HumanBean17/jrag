@@ -30,15 +30,14 @@ from sentence_transformers import SentenceTransformer
 from index_common import SBERT_MODEL
 from java_codebase_rag.config import resolved_sbert_model_for_process_env
 from java_ontology import EDGE_SCHEMA, ResolveReason
-from kuzu_queries import KuzuGraph
+from kuzu_queries import KuzuGraph, OVERRIDE_AXIS_COMPOSED_EDGE_TYPES
 from mcp_hints import MCP_HINTS_FIELD_DESCRIPTION, generate_hints
 from search_lancedb import TABLES, run_search
 
 DeclarationSymbolKind = Literal["class", "interface", "enum", "record", "annotation", "method", "constructor"]
 
-# Stored graph edge labels for one-hop neighbors. Composed DECLARES.* dot-keys are
-# separate ComposedEdgeType literals (2-hop traversal). Virtual override-axis keys
-# (OVERRIDDEN_BY, …) are rejected by _NEIGHBOR_EDGE_TYPES_ADAPTER; stored OVERRIDES is an EdgeType.
+# Stored graph edge labels for one-hop neighbors. Composed DECLARES.* and OVERRIDDEN_BY.*
+# dot-keys are separate ComposedEdgeType literals (2-hop traversal). Stored OVERRIDES is an EdgeType.
 EdgeType = Literal[
     "EXTENDS",
     "IMPLEMENTS",
@@ -57,11 +56,19 @@ ComposedEdgeType = Literal[
     "DECLARES.DECLARES_CLIENT",
     "DECLARES.DECLARES_PRODUCER",
     "DECLARES.EXPOSES",
+    "OVERRIDDEN_BY",
+    "OVERRIDDEN_BY.DECLARES_CLIENT",
+    "OVERRIDDEN_BY.DECLARES_PRODUCER",
+    "OVERRIDDEN_BY.EXPOSES",
 ]
 
 NeighborEdgeType = EdgeType | ComposedEdgeType
 
 _COMPOSED_EDGE_TYPES = frozenset(get_args(ComposedEdgeType))
+_MEMBER_COMPOSED_EDGE_TYPES = frozenset(
+    k for k in _COMPOSED_EDGE_TYPES if k.startswith("DECLARES.")
+)
+_OVERRIDE_COMPOSED_EDGE_TYPES = OVERRIDE_AXIS_COMPOSED_EDGE_TYPES
 
 _NEIGHBOR_EDGE_TYPES_ADAPTER = TypeAdapter(
     Annotated[
@@ -412,14 +419,15 @@ class NodeRecord(BaseModel):
             "enum, record, annotation), may also include composed dot-keys "
             "`DECLARES.DECLARES_CLIENT`, `DECLARES.DECLARES_PRODUCER`, and `DECLARES.EXPOSES`: 2-hop summaries "
             "(DECLARES to member, then that edge) — edge-row counts; navigable via neighbors for type "
-            "Symbol origins (`direction=\"out\"` only). For method Symbols, may include "
+            "Symbol origins (`direction=\"out\"` only). For non-static method Symbols, may include "
             "override-axis virtual keys `OVERRIDDEN_BY`, `OVERRIDDEN_BY.DECLARES_CLIENT`, "
-            "`OVERRIDDEN_BY.DECLARES_PRODUCER`, `OVERRIDDEN_BY.EXPOSES`, plus an `OVERRIDES` map entry "
-            "that **merges** stored "
-            "`[:OVERRIDES]` in/out counts with the describe-time dispatch-up rollup (per "
-            "direction `max`, so inbound stored overrides are not dropped). Those OVERRIDDEN_BY* "
-            "virtual keys are not valid neighbors(edge_types=…) arguments. The stored relationship "
-            "label `OVERRIDES` **is** a valid EdgeType for neighbors."
+            "`OVERRIDDEN_BY.DECLARES_PRODUCER`, `OVERRIDDEN_BY.EXPOSES` (stored `[:OVERRIDES]` "
+            "dispatch hop, then terminal edges; navigable via neighbors for method Symbol origins, "
+            "`direction=\"out\"` only; composed results include `via_id` in attrs). Plus an "
+            "`OVERRIDES` map entry that **merges** stored `[:OVERRIDES]` in/out counts with the "
+            "describe-time dispatch-up rollup (per direction `max`, so inbound stored overrides "
+            "are not dropped). The stored relationship label `OVERRIDES` **is** also a valid "
+            "EdgeType for one-hop neighbors (`direction=\"in\"` from declaration toward overriders)."
         ),
     )
 
@@ -1628,6 +1636,34 @@ def _neighbors_calls_for_origin(
     return edges[offset : offset + limit]
 
 
+def _composed_axis_origin_error(
+    *,
+    symbol_kind: str,
+    modifiers: list[str] | None,
+    declares_composed: list[str],
+    override_composed: list[str],
+) -> str | None:
+    """Fail-fast origin gate for composed DECLARES.* vs OVERRIDDEN_BY.* families."""
+    if declares_composed and symbol_kind not in _TYPE_SYMBOL_KINDS_FOR_EDGE_ROLLUP:
+        return f"Composed edge types ({declares_composed[0]}) require a type Symbol origin"
+    if override_composed:
+        key = override_composed[0]
+        mods = modifiers or []
+        if symbol_kind == "constructor":
+            return (
+                f"Composed edge types ({key}) require a non-static method Symbol origin "
+                "(constructors are not supported)"
+            )
+        if symbol_kind not in _METHOD_SYMBOL_KINDS_FOR_OVERRIDE_ROLLUP:
+            return f"Composed edge types ({key}) require a method Symbol origin"
+        if "static" in mods:
+            return (
+                f"Composed edge types ({key}) require a non-static method Symbol origin "
+                "(static methods are not supported)"
+            )
+    return None
+
+
 @validate_call(config={"arbitrary_types_allowed": True})
 def neighbors_v2(
     ids: str | list[str],
@@ -1648,6 +1684,9 @@ def neighbors_v2(
         requested_edge_types = list(dict.fromkeys(validated_types))
         flat_labels = [et for et in requested_edge_types if et not in _COMPOSED_EDGE_TYPES]
         composed_keys = [et for et in requested_edge_types if et in _COMPOSED_EDGE_TYPES]
+        declares_composed = [k for k in composed_keys if k in _MEMBER_COMPOSED_EDGE_TYPES]
+        override_composed = [k for k in composed_keys if k in _OVERRIDE_COMPOSED_EDGE_TYPES]
+        ordered_composed = declares_composed + override_composed
         g = graph or KuzuGraph.get()
         try:
             raw_filter = _coerce_filter(filter)
@@ -1735,24 +1774,33 @@ def neighbors_v2(
             calls_row_count = g.count_calls_for_symbol(origins[0], direction=direction)
         for origin_id in origins:
             origin_kind = _resolve_node_kind(g, origin_id)
-            if composed_keys:
+            if ordered_composed:
                 if origin_kind != "symbol":
+                    first_key = ordered_composed[0]
+                    axis_msg = (
+                        f"Composed edge types ({first_key}) require a method Symbol origin"
+                        if first_key in _OVERRIDE_COMPOSED_EDGE_TYPES
+                        else f"Composed edge types ({first_key}) require a type Symbol origin"
+                    )
                     return NeighborsOutput(
                         success=False,
-                        message=(
-                            f"Composed edge types ({composed_keys[0]}) require a type Symbol origin"
-                        ),
+                        message=axis_msg,
                         hints=[],
                         requested_edge_types=requested_edge_types,
                     )
                 origin_row = _load_node_record(g, origin_id, "symbol")
                 sym_kind = str((origin_row or {}).get("kind") or "")
-                if sym_kind not in _TYPE_SYMBOL_KINDS_FOR_EDGE_ROLLUP:
+                mods_raw = (origin_row or {}).get("modifiers")
+                mods = mods_raw if isinstance(mods_raw, list) else None
+                if err := _composed_axis_origin_error(
+                    symbol_kind=sym_kind,
+                    modifiers=mods,
+                    declares_composed=declares_composed,
+                    override_composed=override_composed,
+                ):
                     return NeighborsOutput(
                         success=False,
-                        message=(
-                            f"Composed edge types ({composed_keys[0]}) require a type Symbol origin"
-                        ),
+                        message=err,
                         hints=[],
                         requested_edge_types=requested_edge_types,
                     )
@@ -1842,8 +1890,12 @@ def neighbors_v2(
                             attrs=_neighbor_edge_attrs(row),
                         )
                     )
-            for composed_key in composed_keys:
-                for row in g.member_edge_traversal_for(origin_id, composed_key):
+            for composed_key in ordered_composed:
+                if composed_key in _MEMBER_COMPOSED_EDGE_TYPES:
+                    traversal_rows = g.member_edge_traversal_for(origin_id, composed_key)
+                else:
+                    traversal_rows = g.override_axis_traversal_for(origin_id, composed_key)
+                for row in traversal_rows:
                     other_id = str(row.get("other_id") or "")
                     other_kind = _resolve_node_kind(g, other_id)
                     other_rec = _load_node_record(g, other_id, other_kind)
@@ -1856,13 +1908,17 @@ def neighbors_v2(
                         )
                     if not _node_matches_filter(other_kind, other_rec, nf):
                         continue
+                    if composed_key == "OVERRIDDEN_BY":
+                        edge_attrs: dict[str, Any] = {}
+                    else:
+                        edge_attrs = _neighbor_edge_attrs(row)
                     results.append(
                         Edge(
                             origin_id=origin_id,
                             edge_type=composed_key,
                             direction="out",
                             other=_node_ref_from_row(other_kind, other_rec),
-                            attrs=_neighbor_edge_attrs(row),
+                            attrs=edge_attrs,
                         )
                     )
         if use_calls_path and len(origins) > 1:
