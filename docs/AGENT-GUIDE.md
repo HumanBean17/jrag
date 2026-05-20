@@ -97,6 +97,10 @@ Use these strings **verbatim** in `neighbors(..., edge_types=[...])`.
 
 Do not mix `DECLARES.*` and `OVERRIDDEN_BY.*` in one `edge_types` list on a single origin id — the handler rejects the whole request (only one axis applies per node).
 
+`describe` `edge_summary` counts for `OVERRIDDEN_BY*` use the same stored `[:OVERRIDES]` dispatch hop as `neighbors` (ontology **13+** graphs with materialized override edges). Rebuild the index if counts look wrong or dot-key walks return fewer rows than advertised.
+
+**Pagination:** default `neighbors` `limit=25` slices the merged flat + composed edge list. When `edge_summary` shows a large `out` count for a composed key, raise `limit` (and use `offset`) or issue separate calls per key.
+
 ### Argument shapes
 
 #### JSON, not stringified JSON
@@ -212,7 +216,7 @@ Full node + `edge_summary`. Args: `id` (any kind) or `fqn` (symbol only; `id` wi
 
 - **Stored keys** — counts for edges that exist in the graph.
 - **Type symbols** (`class`, `interface`, `enum`, `record`, `annotation`) may add composed keys `DECLARES.DECLARES_CLIENT`, `DECLARES.DECLARES_PRODUCER`, `DECLARES.EXPOSES` — navigable via `neighbors` with those dot-keys (`out` only).
-- **Method symbols** may add virtual keys `OVERRIDDEN_BY`, `OVERRIDDEN_BY.DECLARES_*`, `OVERRIDDEN_BY.EXPOSES` (navigable via `neighbors` on method origins, `out` only), plus an **`OVERRIDES`** row merging stored `[:OVERRIDES]` counts with a dispatch-up rollup (`in`/`out` per direction uses `max` of stored vs rollup). Use `neighbors(..., ["OVERRIDDEN_BY.DECLARES_CLIENT"])` (etc.) or one-hop `neighbors(..., ["OVERRIDES"])`. Static methods and constructors do not get override-axis keys.
+- **Method symbols** may add virtual keys `OVERRIDDEN_BY`, `OVERRIDDEN_BY.DECLARES_*`, `OVERRIDDEN_BY.EXPOSES` (navigable via `neighbors` on non-static method origins, `out` only), plus an **`OVERRIDES`** row merging stored `[:OVERRIDES]` incident counts with the rollup dispatch-up count (`max` per direction). Rollup and dot-key traversal both use stored `[:OVERRIDES]` for the dispatch hop. Static methods and constructors do not get override-axis keys.
 
 Composed counts are **edge rows**, not distinct methods; `count > 0` means "there is something to walk".
 

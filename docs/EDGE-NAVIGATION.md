@@ -267,6 +267,8 @@ Virtual `edge_summary` / `neighbors` dot-keys (not stored graph edge labels). Th
 
 Do not mix `DECLARES.*` and `OVERRIDDEN_BY.*` in one `edge_types` list on a single origin id.
 
+`describe` `edge_summary` and `neighbors` share the stored `[:OVERRIDES]` dispatch hop (requires ontology **13+** materialized edges). Default `limit=25` may truncate large composed result sets — raise `limit` when `out` counts are high.
+
 ## Graph storage (not MCP `neighbors` edge_types)
 
 ### `UnresolvedCallSite` + `UNRESOLVED_AT` (ontology 15 / CALLS-NOISE PR-3)

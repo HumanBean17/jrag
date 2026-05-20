@@ -31,6 +31,8 @@ Virtual `edge_summary` / `neighbors` dot-keys (not stored graph edge labels). Th
 | `OVERRIDDEN_BY.EXPOSES` | `neighbors(['{id}'],'out',['OVERRIDDEN_BY.EXPOSES'])` |
 
 Do not mix `DECLARES.*` and `OVERRIDDEN_BY.*` in one `edge_types` list on a single origin id.
+
+`describe` `edge_summary` and `neighbors` share the stored `[:OVERRIDES]` dispatch hop (requires ontology **13+** materialized edges). Default `limit=25` may truncate large composed result sets — raise `limit` when `out` counts are high.
 """
 
 _GRAPH_STORAGE_APPENDIX = """

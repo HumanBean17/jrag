@@ -893,12 +893,31 @@ class KuzuGraph:
             total += int(rows[0].get("n") or 0) if rows else 0
         return total
 
+    def _override_impl_ids_from_stored(self, method_id: str) -> list[str]:
+        """Overrider method ids for a declaration method (stored ``[:OVERRIDES]`` in-hop)."""
+        rows = self._rows(
+            "MATCH (decl:Symbol {id: $id})<-[:OVERRIDES]-(mover:Symbol) "
+            "RETURN collect(DISTINCT mover.id) AS ids",
+            {"id": method_id},
+        )
+        return list(dict.fromkeys(_coerce_id_list(rows[0].get("ids") if rows else None)))
+
+    def _override_decl_ids_from_stored(self, method_id: str) -> list[str]:
+        """Declaration method ids overridden by a concrete method (stored ``[:OVERRIDES]`` out-hop)."""
+        rows = self._rows(
+            "MATCH (m:Symbol {id: $id})-[:OVERRIDES]->(decl:Symbol) "
+            "RETURN collect(DISTINCT decl.id) AS ids",
+            {"id": method_id},
+        )
+        return list(dict.fromkeys(_coerce_id_list(rows[0].get("ids") if rows else None)))
+
     def override_axis_rollup_for(self, method_id: str) -> dict[str, dict[str, int]]:
         """Dispatch-axis composed keys for method Symbols (describe-time only).
 
-        Uses one-hop ``IMPLEMENTS`` / ``EXTENDS`` class edges plus ``Symbol.signature``
-        equality. Omits keys with zero counts (same convention as ``edge_counts_for``).
-        Returns ``{}`` for non-methods, constructors (caller should skip), and static methods.
+        Dispatch hop uses materialized ``[:OVERRIDES]`` (same as ``override_axis_traversal_for`` /
+        ``neighbors`` dot-keys). Terminal composed counts sum outgoing edges from overrider
+        methods. Omits keys with zero counts. Returns ``{}`` for non-methods, constructors,
+        and static methods.
         """
         params = {"id": method_id}
         gate = self._rows(
@@ -913,41 +932,22 @@ class KuzuGraph:
 
         rollup: dict[str, dict[str, int]] = {}
 
-        down_rows = self._rows(
-            "MATCH (m:Symbol {id: $id})<-[:DECLARES]-(t:Symbol) "
-            "MATCH (impl:Symbol)-[:IMPLEMENTS|EXTENDS]->(t) "
-            "MATCH (impl)-[:DECLARES]->(mover:Symbol) "
-            "WHERE mover.signature = m.signature AND mover.id <> m.id "
-            "RETURN collect(DISTINCT mover.id) AS ids",
-            params,
-        )
-        impl_ids = _coerce_id_list(down_rows[0].get("ids") if down_rows else None)
-
+        impl_ids = self._override_impl_ids_from_stored(method_id)
         if impl_ids:
-            distinct_impl = list(dict.fromkeys(impl_ids))
-            rollup["OVERRIDDEN_BY"] = {"in": 0, "out": len(distinct_impl)}
-            n_dc = self._edge_row_count_from_method_ids(distinct_impl, "DECLARES_CLIENT")
+            rollup["OVERRIDDEN_BY"] = {"in": 0, "out": len(impl_ids)}
+            n_dc = self._edge_row_count_from_method_ids(impl_ids, "DECLARES_CLIENT")
             if n_dc > 0:
                 rollup["OVERRIDDEN_BY.DECLARES_CLIENT"] = {"in": 0, "out": n_dc}
-            n_dp = self._edge_row_count_from_method_ids(distinct_impl, "DECLARES_PRODUCER")
+            n_dp = self._edge_row_count_from_method_ids(impl_ids, "DECLARES_PRODUCER")
             if n_dp > 0:
                 rollup["OVERRIDDEN_BY.DECLARES_PRODUCER"] = {"in": 0, "out": n_dp}
-            n_ex = self._edge_row_count_from_method_ids(distinct_impl, "EXPOSES")
+            n_ex = self._edge_row_count_from_method_ids(impl_ids, "EXPOSES")
             if n_ex > 0:
                 rollup["OVERRIDDEN_BY.EXPOSES"] = {"in": 0, "out": n_ex}
 
-        up_rows = self._rows(
-            "MATCH (m:Symbol {id: $id})<-[:DECLARES]-(impl:Symbol) "
-            "MATCH (impl)-[:IMPLEMENTS|EXTENDS]->(parent:Symbol) "
-            "MATCH (parent)-[:DECLARES]->(decl_m:Symbol) "
-            "WHERE decl_m.signature = m.signature AND decl_m.id <> m.id "
-            "RETURN collect(DISTINCT decl_m.id) AS ids",
-            params,
-        )
-        decl_ids = _coerce_id_list(up_rows[0].get("ids") if up_rows else None)
+        decl_ids = self._override_decl_ids_from_stored(method_id)
         if decl_ids:
-            distinct_decl = list(dict.fromkeys(decl_ids))
-            rollup["OVERRIDES"] = {"in": 0, "out": len(distinct_decl)}
+            rollup["OVERRIDES"] = {"in": 0, "out": len(decl_ids)}
 
         return rollup
 

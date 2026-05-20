@@ -578,6 +578,28 @@ def _request_assignment_method_id(graph: KuzuGraph) -> str:
     return str(rows[0]["id"])
 
 
+def test_override_axis_rollup_dispatch_matches_signature_walk_on_fixtures(
+    kuzu_graph: KuzuGraph,
+    override_axis_graph: KuzuGraph,
+) -> None:
+    """Guard: stored [:OVERRIDES] dispatch ids stay aligned with legacy signature walk on fixtures."""
+    cases = [
+        (kuzu_graph, _request_assignment_method_id(kuzu_graph)),
+        (
+            override_axis_graph,
+            _override_axis_smoke_method_id(
+                override_axis_graph,
+                fqn="orolla.abstractroute.AbstractApi",
+                method_name="handle",
+            ),
+        ),
+    ]
+    for graph, mid in cases:
+        stored = sorted(graph._override_impl_ids_from_stored(mid))  # noqa: SLF001
+        signature = sorted(_dispatch_down_override_method_ids(graph, mid))
+        assert stored == signature
+
+
 def test_neighbors_accepts_overridden_by_dot_keys() -> None:
     for key in _OVERRIDE_AXIS_COMPOSED_KEYS:
         _NEIGHBOR_EDGE_TYPES_ADAPTER.validate_python([key])
@@ -724,7 +746,23 @@ def test_neighbors_overridden_by_dot_key_static_method_rejected(kuzu_graph: Kuzu
     )
     assert out.success is False
     assert out.message is not None
-    assert "method Symbol origin" in out.message
+    assert "non-static" in out.message
+
+
+def test_neighbors_overridden_by_dot_key_constructor_rejected(kuzu_graph: KuzuGraph) -> None:
+    rows = kuzu_graph._rows(  # noqa: SLF001
+        "MATCH (t:Symbol)-[:DECLARES]->(c:Symbol) "
+        "WHERE c.kind = 'constructor' "
+        "RETURN c.id AS id LIMIT 1",
+    )
+    assert rows
+    cid = str(rows[0]["id"])
+    out = neighbors_v2(
+        cid, direction="out", edge_types=["OVERRIDDEN_BY.DECLARES_CLIENT"], graph=kuzu_graph
+    )
+    assert out.success is False
+    assert out.message is not None
+    assert "constructor" in out.message
 
 
 def test_neighbors_overridden_by_dot_key_inbound_rejected(kuzu_graph: KuzuGraph) -> None:
@@ -753,6 +791,7 @@ def _override_parity_graph_method_pairs(
     kuzu_graph: KuzuGraph,
     override_axis_graph: KuzuGraph,
 ) -> list[tuple[KuzuGraph, str]]:
+    # OVERRIDDEN_BY.DECLARES_CLIENT: bank-chat only — smoke corpus has no DECLARES_CLIENT on overriders.
     pairs: list[tuple[KuzuGraph, str]] = [(kuzu_graph, _request_assignment_method_id(kuzu_graph))]
     if composed_key in ("OVERRIDDEN_BY", "OVERRIDDEN_BY.EXPOSES"):
         pairs.append(

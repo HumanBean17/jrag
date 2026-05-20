@@ -1647,9 +1647,20 @@ def _composed_axis_origin_error(
     if declares_composed and symbol_kind not in _TYPE_SYMBOL_KINDS_FOR_EDGE_ROLLUP:
         return f"Composed edge types ({declares_composed[0]}) require a type Symbol origin"
     if override_composed:
+        key = override_composed[0]
         mods = modifiers or []
-        if symbol_kind not in _METHOD_SYMBOL_KINDS_FOR_OVERRIDE_ROLLUP or "static" in mods:
-            return f"Composed edge types ({override_composed[0]}) require a method Symbol origin"
+        if symbol_kind == "constructor":
+            return (
+                f"Composed edge types ({key}) require a non-static method Symbol origin "
+                "(constructors are not supported)"
+            )
+        if symbol_kind not in _METHOD_SYMBOL_KINDS_FOR_OVERRIDE_ROLLUP:
+            return f"Composed edge types ({key}) require a method Symbol origin"
+        if "static" in mods:
+            return (
+                f"Composed edge types ({key}) require a non-static method Symbol origin "
+                "(static methods are not supported)"
+            )
     return None
 
 
