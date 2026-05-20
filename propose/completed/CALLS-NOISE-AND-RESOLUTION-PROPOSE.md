@@ -4,8 +4,8 @@
 **Author**: Dmitriy Teriaev + Perplexity Computer
 **Date**: 2026-05-18
 **Tracks**: [#177](https://github.com/HumanBean17/java-codebase-rag/issues/177)
-**Plan**: [`plans/PLAN-CALLS-NOISE.md`](../plans/PLAN-CALLS-NOISE.md) (per-PR sentinels, tests, landing order)
-**Prompts**: [`plans/CURSOR-PROMPTS-CALLS-NOISE.md`](../plans/CURSOR-PROMPTS-CALLS-NOISE.md) (PR-1 → PR-3 handoffs)
+**Plan**: [`plans/completed/PLAN-CALLS-NOISE.md`](../plans/completed/PLAN-CALLS-NOISE.md) (per-PR sentinels, tests, landing order)
+**Prompts**: [`plans/completed/CURSOR-PROMPTS-CALLS-NOISE.md`](../plans/completed/CURSOR-PROMPTS-CALLS-NOISE.md) (PR-1 → PR-3 handoffs)
 
 ## TL;DR
 
@@ -25,7 +25,7 @@
 ### Fixture anchors (pinned for tests and HV rows)
 
 Do **not** use fictional types (`OrderService`, `MyRepository`) in committed test names or
-perf scenarios. See [`plans/PLAN-CALLS-NOISE.md`](../plans/PLAN-CALLS-NOISE.md) § Fixture anchors.
+perf scenarios. See [`plans/completed/PLAN-CALLS-NOISE.md`](../plans/completed/PLAN-CALLS-NOISE.md) § Fixture anchors.
 
 | Anchor | FQN / path | Measured on fresh `bank-chat-system` (2026-05-19) |
 | --- | --- | --- |
@@ -622,11 +622,11 @@ ALTER NODE TABLE GraphMeta ADD COLUMN pass3_unresolved_chained INT64;
 - **Test name:** `test_neighbors_calls_edge_filter_pushdown_in_cypher` unified; perf test renamed to `..._client_message_processor` (heavy-gated).
 - **PR-2:** CLI deferred to PR-3; PR-1 README notes row-count delta from dedup.
 - **PR-3:** interleave tie-break + `dedup_calls` canonical line locked in plan.
-- **Cursor prompts:** [`plans/CURSOR-PROMPTS-CALLS-NOISE.md`](../plans/CURSOR-PROMPTS-CALLS-NOISE.md) added — merge gate for PR-1 **code** is satisfied once [#179](https://github.com/HumanBean17/java-codebase-rag/pull/179) lands on `master`.
+- **Cursor prompts:** [`plans/completed/CURSOR-PROMPTS-CALLS-NOISE.md`](../plans/completed/CURSOR-PROMPTS-CALLS-NOISE.md) added — merge gate for PR-1 **code** is satisfied once [#179](https://github.com/HumanBean17/java-codebase-rag/pull/179) lands on `master`.
 
 **Revision 4 (2026-05-19, post-critical-review implementation contract)** — propose patches before code PRs:
 
-- **Status → under review.** Plan file added: [`plans/PLAN-CALLS-NOISE.md`](../plans/PLAN-CALLS-NOISE.md).
+- **Status → under review.** Plan file added: [`plans/completed/PLAN-CALLS-NOISE.md`](../plans/completed/PLAN-CALLS-NOISE.md).
 - **ORDER BY contract (Decision 36, §3.4.1, HV38):** PR-2 locks `ORDER BY e.call_site_line, e.call_site_byte` on all CALLS `neighbors_v2` paths.
 - **`edge_filter` pushdown (Decision 37, §3.4.1):** Cypher `WHERE` predicates before `offset`/`limit`; no pre-filter `LIMIT`.
 - **`exclude_external` stance (Decision 38, §3.4.2):** not added to `neighbors_v2`; HV37 corrected; AGENT-GUIDE requirement in PR-2.

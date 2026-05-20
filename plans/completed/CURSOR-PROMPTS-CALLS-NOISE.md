@@ -1,8 +1,8 @@
 # Cursor task prompts — CALLS-NOISE-AND-RESOLUTION (PR-1 → PR-3)
 
-Status: **active**. Plan:
-[`plans/PLAN-CALLS-NOISE.md`](./PLAN-CALLS-NOISE.md). Propose:
-[`propose/CALLS-NOISE-AND-RESOLUTION-PROPOSE.md`](../propose/CALLS-NOISE-AND-RESOLUTION-PROPOSE.md)
+Status: **completed** (reference template). Plan:
+[`plans/completed/PLAN-CALLS-NOISE.md`](./PLAN-CALLS-NOISE.md). Propose:
+[`propose/completed/CALLS-NOISE-AND-RESOLUTION-PROPOSE.md`](../../propose/completed/CALLS-NOISE-AND-RESOLUTION-PROPOSE.md)
 (tracks [#177](https://github.com/HumanBean17/java-codebase-rag/issues/177)).
 
 One prompt per code PR. **Landing order:** PR-1 → PR-2 → PR-3. Do not start the next PR until the previous is merged to `master`.
@@ -398,6 +398,6 @@ rm -rf /tmp/calls-pr3 && .venv/bin/python build_ast_graph.py \
 
 ## After all PRs land
 
-- Move `plans/PLAN-CALLS-NOISE.md` and this file to `plans/completed/`.
-- Move `propose/CALLS-NOISE-AND-RESOLUTION-PROPOSE.md` to `propose/completed/`.
-- Close [#177](https://github.com/HumanBean17/java-codebase-rag/issues/177).
+- [x] Plan + prompts archived under `plans/completed/`.
+- [x] Propose archived under `propose/completed/`.
+- [ ] Close [#177](https://github.com/HumanBean17/java-codebase-rag/issues/177) if still open.
