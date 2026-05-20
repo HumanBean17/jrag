@@ -1,16 +1,16 @@
 # Plan: CALLS-NOISE-AND-RESOLUTION
 
-Status: **active** (propose rev5 under review on [#179](https://github.com/HumanBean17/java-codebase-rag/pull/179)).
+Status: **completed** — PR-1 → PR-3 landed on `master` (ontology 15).
 Source propose:
-[`propose/CALLS-NOISE-AND-RESOLUTION-PROPOSE.md`](../propose/CALLS-NOISE-AND-RESOLUTION-PROPOSE.md)
-(tracks [#177](https://github.com/HumanBean17/java-codebase-rag/issues/177); merged on `master` via [#178](https://github.com/HumanBean17/java-codebase-rag/pull/178)).
+[`propose/completed/CALLS-NOISE-AND-RESOLUTION-PROPOSE.md`](../../propose/completed/CALLS-NOISE-AND-RESOLUTION-PROPOSE.md)
+(tracks [#177](https://github.com/HumanBean17/java-codebase-rag/issues/177)).
 
 Depends on: **SCHEMA-V2 landed** (`EDGE_SCHEMA`, MCP v2 tools). Complements
 [`propose/AGENT-SKILLS-AND-COMMANDS-PROPOSE.md`](../propose/AGENT-SKILLS-AND-COMMANDS-PROPOSE.md)
 `/mini-map` for accessor noise (Decision 39) — not a blocker.
 
-**Cursor prompts:** [`plans/CURSOR-PROMPTS-CALLS-NOISE.md`](./CURSOR-PROMPTS-CALLS-NOISE.md)
-(per-PR handoffs). Do **not** open PR-1 code until that file is on `master`.
+**Cursor prompts:** [`plans/completed/CURSOR-PROMPTS-CALLS-NOISE.md`](./CURSOR-PROMPTS-CALLS-NOISE.md)
+(per-PR handoffs; reference template).
 
 ## Fixture anchors (pinned — do not use fictional types)
 
@@ -255,8 +255,8 @@ rm -rf /tmp/calls-pr3 && .venv/bin/python build_ast_graph.py \
 
 ## Definition of done (whole effort)
 
-- [ ] Propose merged; moved to `propose/completed/` when PR-3 lands.
-- [ ] All three PRs merged to `master` in order.
-- [ ] `CURSOR-PROMPTS-CALLS-NOISE.md` archived under `plans/completed/` with final sentinels.
-- [ ] README ontology 15 + re-index callout accurate.
+- [x] Propose merged; moved to `propose/completed/` when PR-3 lands.
+- [x] All three PRs merged to `master` in order.
+- [x] `CURSOR-PROMPTS-CALLS-NOISE.md` archived under `plans/completed/` with final sentinels.
+- [x] README ontology 15 + re-index callout accurate.
 - [ ] `/mini-map` skill doc mentions `edge_filter` when PR-2 ships (optional doc-only follow-up on agent-skills branch).
