@@ -12,7 +12,7 @@
 
 ## TL;DR
 
-- Extend the **`describe` success-path** hint catalog in `mcp_hints.py` with **10 new templates** (tiers 1–2).
+- Extend the **`describe` success-path** hint catalog in `mcp_hints.py` with **10 hint rows** (tiers 1–2; **7** new `TPL_DESCRIBE_*` constants, reuse find v4 strings for **I/J**).
 - Triggers read **`edge_summary` in/out counts** and **`record.data`** only — no graph re-query, no `ontology_version` bump, **no re-index**.
 - **Suppression:** tier-1 structural hints fire only when **no type rollup** hints (`DECLARES.DECLARES_CLIENT` / `DECLARES.EXPOSES` / `DECLARES.DECLARES_PRODUCER`) would emit; tier-2 rows have per-row gates below.
 - **Tier 3** (callers, members-only, `EXTENDS`) stays in [#191](https://github.com/HumanBean17/java-enterprise-codebase-rag/issues/191).
@@ -41,6 +41,7 @@ Pure amendment to `generate_hints("describe", …)` in `mcp_hints.py`:
 2. Add `_type_rollup_would_emit(edge_summary) -> bool` (any of the three `DECLARES.*` composed keys with `out > 0`).
 3. Register templates below; priority **`PRIORITY_LEAF_FOLLOWUP` (2)** for all new rows (below rollups **4** and override axis **3**, above meta **1**).
 4. Reuse v4 strings for client/producer second hops (`TPL_FIND_SUCCESS_HTTP_TARGETS`, `TPL_FIND_SUCCESS_ASYNC_TARGETS`).
+5. **Refactor `generate_hints("describe")` control flow** — today `client` / `producer` / type symbols **early-return** after the first hint block (`mcp_hints.py` ~689–719). Implementation must **append** tier-1 rows (when not suppressed) and **I/J** on endpoints **before** `finalize_hint_list`, not only add branches at the bottom of the file.
 
 ### Suppression (tier 1)
 
@@ -71,7 +72,7 @@ All tier-1 rows require:
 | ID | Trigger | Template | Emission |
 |----|---------|----------|----------|
 | **E** | method/constructor; `1 <= CALLS.out <= 9`; no tier-1 rollup on parent (N/A here); **gate:** `role != "OTHER"` OR `CALLS.out >= 3` | `TPL_DESCRIBE_METHOD_OUTBOUND_CALLS` | `outbound calls: neighbors(['{id}'],'out',['CALLS'])` |
-| **G** | method; `OVERRIDES.out > 0`; **no** `OVERRIDDEN_BY*` key with `out > 0` | `TPL_DESCRIBE_METHOD_SUPER_DECL` | `super declaration: neighbors(['{id}'],'out',['OVERRIDES'])` |
+| **G** | method; `OVERRIDES.out > 0`; **`not _override_axis_would_emit(edge_summary)`** — true when any key `k` with `k == "OVERRIDDEN_BY"` or `k.startswith("OVERRIDDEN_BY.")` has `out > 0` (same keys as override rollups today) | `TPL_DESCRIBE_METHOD_SUPER_DECL` | `super declaration: neighbors(['{id}'],'out',['OVERRIDES'])` |
 | **H** | method; `int(record.data.unresolved_call_sites_total or 0) > 0` | `TPL_DESCRIBE_METHOD_UNRESOLVED` | `unresolved: neighbors(['{id}'],'out',['CALLS'],include_unresolved=True)` |
 | **I** | `kind == "client"` and `HTTP_CALLS.out > 0` | `TPL_FIND_SUCCESS_HTTP_TARGETS` (existing) | same as find v4 |
 | **J** | `kind == "producer"` and `ASYNC_CALLS.out > 0` | `TPL_FIND_SUCCESS_ASYNC_TARGETS` (existing) | same as find v4 |
@@ -104,7 +105,7 @@ All tier-1 rows require:
 |------|--------|
 | `ontology_version` | unchanged |
 | Re-index | not required |
-| PR count | **1 PR** (`mcp_hints.py` + tests + optional `docs/AGENT-GUIDE.md` § describe row) |
+| PR count | **Two PRs total:** (1) this propose ([#192](https://github.com/HumanBean17/java-enterprise-codebase-rag/pull/192)); (2) implementation (`mcp_hints.py` + tests + optional `docs/AGENT-GUIDE.md`) |
 
 ## Test plan (`tests/test_mcp_hints.py`)
 
@@ -116,8 +117,9 @@ Use `tests/bank-chat-system` session `kuzu_graph` fixture unless noted.
 | `test_hints_describe_class_implements_emits` | **B** on `RegexComplianceScanner` (class, `IMPLEMENTS.out > 0`, no rollups) |
 | `test_hints_describe_service_dependencies_emits` | **C** on a `SERVICE` with `INJECTS.out > 0`, no rollups |
 | `test_hints_describe_type_injectors_emits` | **D** on `ChatAssignmentPort` |
-| `test_hints_describe_controller_skips_implementors_when_rollups` | **A** absent when `DECLARES.EXPOSES` rollup would fire (controller class) |
-| `test_hints_describe_method_outbound_calls_mid_fanout_emits` | **E** on method with `3 <= CALLS.out <= 9`, gated role |
+| `test_hints_describe_type_skips_tier1_when_rollups` | On `_controller_class_id_with_exposes` (or any type with a firing rollup): **no** tier-1 substring (`implementors:`, `implements:`, `dependencies:`, `injectors:`) in `hints` — **not** “**A** absent” (row **A** is interface-only; controllers never emit **A**) |
+| `test_hints_describe_method_outbound_calls_mid_fanout_emits` | **E** on `RegexComplianceScanner#scan` (`CALLS.out=4`, non-OTHER) or any method with `3 <= CALLS.out <= 9` |
+| `test_hints_describe_method_outbound_calls_low_fanout_non_other_emits` | (optional) **E** with `CALLS.out` in `1..2` and `role != "OTHER"` |
 | `test_hints_describe_method_super_declaration_emits` | **G** on `RegexComplianceScanner#scan` |
 | `test_hints_describe_method_unresolved_emits` | **H** on method with `unresolved_call_sites_total > 0` |
 | `test_hints_describe_client_http_targets_emits` | **I** on client with `HTTP_CALLS.out > 0` |
@@ -125,6 +127,8 @@ Use `tests/bank-chat-system` session `kuzu_graph` fixture unless noted.
 | `test_hints_describe_structural_templates_char_cap` | all new templates render ≤120 chars with realistic ids |
 
 Update `test_all_hint_templates_char_cap` tuple list with new `(template, kwargs)` pairs.
+
+**Regression (implementation PR):** relax `test_hints_describe_client_always_declaring_method` and `test_hints_describe_producer_always_declaring_method` from `out.hints == [want]` to `want in out.hints` (bank fixture: first `Client` / `Producer` already have `HTTP_CALLS.out` / `ASYNC_CALLS.out` while **I/J** are additive).
 
 ## Docs (same PR, optional but recommended)
 
@@ -149,4 +153,6 @@ Update `test_all_hint_templates_char_cap` tuple list with new `(template, kwargs
 
 ## After landing
 
-Move this file to `propose/completed/` when the PR merges. Close [#191](https://github.com/HumanBean17/java-enterprise-codebase-rag/issues/191) only when tier 3 is implemented or explicitly wont-fixed.
+- **This propose PR ([#192](https://github.com/HumanBean17/java-enterprise-codebase-rag/pull/192)):** merge only updates `propose/DESCRIBE-HINTS-STRUCTURAL-PROPOSE.md`; file **stays** in `propose/` (per `agent-workflow.mdc`).
+- **Implementation PR:** move this file to `propose/completed/` when `mcp_hints.py` + tests land.
+- [#191](https://github.com/HumanBean17/java-enterprise-codebase-rag/issues/191): close only when tier 3 is implemented or explicitly wont-fixed.
