@@ -512,11 +512,12 @@ def test_hints_neighbors_calls_high_fanout(kuzu_graph) -> None:
 
 def test_hints_neighbors_calls_has_unresolved(kuzu_graph) -> None:
     mid = client_message_processor_process_id(kuzu_graph)
+    unresolved = kuzu_graph.count_unresolved_for_caller(mid)
+    assert unresolved >= 1
     out = neighbors_v2(mid, direction="out", edge_types=["CALLS"], limit=5, graph=kuzu_graph)
     assert out.success is True
-    assert any(
-        mcp_hints.TPL_NEIGHBORS_CALLS_HAS_UNRESOLVED.split("{")[0] in h for h in out.hints
-    )
+    want = mcp_hints.TPL_NEIGHBORS_CALLS_HAS_UNRESOLVED.format(n=len(out.results), k=unresolved)
+    assert want in out.hints
 
 
 def test_hints_neighbors_calls_high_fanout_suppressed_with_edge_filter(kuzu_graph) -> None:

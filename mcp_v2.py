@@ -1012,6 +1012,13 @@ def find_v2(
         return FindOutput(success=False, message=str(exc), hints=[], limit=None, offset=None)
 
 
+_DESCRIBE_UCS_ID_MESSAGE = (
+    "UnresolvedCallSite ids (ucs:…) are not describable — use describe(caller_method_id) "
+    "for record.data.unresolved_call_sites, neighbors(..., include_unresolved=True), "
+    "or java-codebase-rag unresolved-calls list --method-id <caller_id>"
+)
+
+
 def describe_v2(
     id: str | None = None,
     fqn: str | None = None,
@@ -1023,6 +1030,8 @@ def describe_v2(
         has_fqn = bool(fqn and str(fqn).strip())
         if not has_id and not has_fqn:
             return DescribeOutput(success=False, message="id or fqn required", hints=[])
+        if has_id and str(id).strip().startswith("ucs:"):
+            return DescribeOutput(success=False, message=_DESCRIBE_UCS_ID_MESSAGE, hints=[])
         hint_message: str | None = None
         node_id: str
         if has_id:
@@ -1043,6 +1052,8 @@ def describe_v2(
                     "then describe(id=...) on the chosen node"
                 )
         kind = _resolve_node_kind(g, node_id)
+        if kind == "unresolved_call_site":
+            return DescribeOutput(success=False, message=_DESCRIBE_UCS_ID_MESSAGE, hints=[])
         row = _load_node_record(g, node_id, kind)
         if row is None:
             return DescribeOutput(success=False, message=f"No node found for `{node_id}`", hints=[])

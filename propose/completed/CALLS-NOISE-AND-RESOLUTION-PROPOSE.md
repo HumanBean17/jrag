@@ -1,6 +1,6 @@
 # CALLS-NOISE-AND-RESOLUTION — clean the CALLS edge by removing one bucket and projecting the other
 
-**Status**: under review
+**Status**: landed (PR-3)
 **Author**: Dmitriy Teriaev + Perplexity Computer
 **Date**: 2026-05-18
 **Tracks**: [#177](https://github.com/HumanBean17/java-codebase-rag/issues/177)

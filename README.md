@@ -372,7 +372,7 @@ A deterministic property graph derived from tree-sitter Java parsing lives next 
 | `Client` | Outbound HTTP / messaging call site |
 | `UnresolvedCallSite` | Receiver-failure call site (`chained_receiver`, `phantom_unresolved_receiver`) — not a `Symbol`; ids use the `ucs:` prefix |
 
-Known-receiver-external JDK / Spring / Lombok callees stay on **`CALLS`** as phantom **method** symbols (`resolved=false`). Receiver-failure sites (unresolved receiver or chained receiver) are **`UnresolvedCallSite`** nodes linked by **`UNRESOLVED_AT`** (not in `EDGE_SCHEMA`; use `describe`, `neighbors(..., include_unresolved=True)`, or `java-codebase-rag unresolved-calls`).
+Known-receiver-external JDK / Spring / Lombok callees stay on **`CALLS`** as phantom **method** symbols (`resolved=false`). Receiver-failure sites (unresolved receiver or chained receiver) are **`UnresolvedCallSite`** nodes linked by **`UNRESOLVED_AT`** (not in `EDGE_SCHEMA`; use `describe(method_id).unresolved_call_sites`, `neighbors(..., include_unresolved=True)`, or `java-codebase-rag unresolved-calls`).
 
 ### Edge types (MCP-traversable)
 

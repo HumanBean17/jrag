@@ -17,6 +17,7 @@ from mcp.server.fastmcp.exceptions import ToolError
 from java_ontology import VALID_RESOLVE_REASONS
 
 from mcp_v2 import (
+    Edge,
     NodeFilter,
     _NODEFILTER_APPLICABLE_FIELDS,
     describe_v2,
@@ -1557,6 +1558,49 @@ def test_neighbors_dedup_calls_collapses_identical_dst(kuzu_graph) -> None:
     assert len(deduped.results) < len(flat.results)
     multi = [e for e in deduped.results if int((e.attrs or {}).get("call_site_count") or 0) > 1]
     assert multi, "dedup_calls should emit call_site_count on collapsed rows"
+
+
+def test_describe_ucs_id_not_describable(kuzu_graph) -> None:
+    rows = kuzu_graph._rows(  # noqa: SLF001
+        "MATCH (u:UnresolvedCallSite) RETURN u.id AS id LIMIT 1",
+    )
+    assert rows
+    ucs_id = str(rows[0]["id"])
+    assert ucs_id.startswith("ucs:")
+    out = describe_v2(ucs_id, graph=kuzu_graph)
+    assert out.success is False
+    assert out.record is None
+    assert "not describable" in (out.message or "").lower()
+    assert "unresolved-calls" in (out.message or "").lower()
+
+
+def test_neighbors_dedup_calls_include_unresolved(kuzu_graph) -> None:
+    mid = client_message_processor_process_id(kuzu_graph)
+    out = neighbors_v2(
+        mid,
+        direction="out",
+        edge_types=["CALLS"],
+        include_unresolved=True,
+        dedup_calls=True,
+        limit=500,
+        graph=kuzu_graph,
+    )
+    assert out.success is True
+    kinds = {str((e.attrs or {}).get("row_kind") or "resolved") for e in out.results}
+    assert "resolved" in kinds
+    assert "unresolved_call_site" in kinds
+    keys = [_calls_transcript_sort_key_from_edge(e) for e in out.results]
+    assert keys == sorted(keys)
+    resolved = [e for e in out.results if (e.attrs or {}).get("row_kind") == "resolved"]
+    assert any(int((e.attrs or {}).get("call_site_count") or 0) > 1 for e in resolved)
+
+
+def _calls_transcript_sort_key_from_edge(edge: Edge) -> tuple[int, int, int]:
+    attrs = edge.attrs or {}
+    line = int(attrs.get("call_site_line") or 0)
+    byte = int(attrs.get("call_site_byte") or 0)
+    kind_rank = 0 if str(attrs.get("row_kind") or "resolved") == "resolved" else 1
+    return (line, byte, kind_rank)
 
 
 def test_describe_unresolved_call_sites_rollup_cap_footer_and_total(kuzu_graph) -> None:

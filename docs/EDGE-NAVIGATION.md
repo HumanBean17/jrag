@@ -252,3 +252,20 @@
 - `member_subject`: neighbors(['{id}'],'out',['DECLARES_PRODUCER']) then neighbors(producer_ids,'out',['ASYNC_CALLS'])
 - `route_subject`: neighbors(['{id}'],'in',['ASYNC_CALLS']) then neighbors(producer_ids,'in',['DECLARES_PRODUCER']) for declaring method
 - `alien_subject`: ASYNC_CALLS connects Producer→Route; use DECLARES_PRODUCER from a method Symbol, or neighbors(producer_id,'out',['ASYNC_CALLS']) from a Producer id
+
+
+## Graph storage (not MCP `neighbors` edge_types)
+
+### `UnresolvedCallSite` + `UNRESOLVED_AT` (ontology 15 / CALLS-NOISE PR-3)
+
+Receiver-failure call sites (`chained_receiver`, `phantom_unresolved_receiver`) are **not** `CALLS` rows. They are `UnresolvedCallSite` nodes (`id` prefix `ucs:`) linked from the caller method Symbol via `UNRESOLVED_AT`.
+
+| Surface | How to read them |
+| --- | --- |
+| `describe(method_id)` | `record.data.unresolved_call_sites` (capped at 5) + footer when more exist |
+| `neighbors(..., ['CALLS'], include_unresolved=True)` | Interleaved transcript; `row_kind='unresolved_call_site'`; `other.kind=unresolved_call_site` |
+| CLI | `java-codebase-rag unresolved-calls list|stats` |
+
+- **Not** in `EDGE_SCHEMA` — do not pass `UNRESOLVED_AT` to `neighbors(edge_types=…)`.
+- **`describe(ucs:…)`** is invalid (fail-loud); describe the **caller method** instead.
+- Fresh graphs: `CALLS.strategy` no longer includes `phantom` or `chained_receiver` for receiver failure (those literals remain on HTTP/ASYNC `match` and brownfield resolver sets).
