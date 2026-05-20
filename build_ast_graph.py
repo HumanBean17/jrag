@@ -1223,7 +1223,7 @@ def _collapse_supertype_duplicates(
 
 
 def _unresolved_call_site_id(caller_id: str, call: CallSite) -> str:
-    return f"{caller_id}:{call.line}:{call.byte}"
+    return f"ucs:{caller_id}:{call.line}:{call.byte}"
 
 
 def _emit_unresolved_call_site(
@@ -1438,9 +1438,11 @@ def pass3_calls(tables: GraphTables, asts: dict[str, JavaFileAst], *, verbose: b
                 _process_file_calls(file_ast, rel_path, tables, stats)
             except Exception as e:
                 log.error("Call extraction failed for %s: %s", rel_path, e)
-    pct_chained = 100.0 * stats.phantom_chained / max(1, stats.total)
-    pct_callee_unres = 100.0 * stats.callee_unresolved / max(1, stats.total)
-    pct_phantom_recv = 100.0 * stats.phantom_other / max(1, stats.total)
+    denom_calls = max(1, stats.total)
+    denom_sites = max(1, stats.total + stats.phantom_chained + stats.phantom_other)
+    pct_chained = 100.0 * stats.phantom_chained / denom_sites
+    pct_callee_unres = 100.0 * stats.callee_unresolved / denom_calls
+    pct_phantom_recv = 100.0 * stats.phantom_other / denom_sites
     tables.pass3_skipped_cross_service = int(stats.skipped_cross_service)
     tables.pass3_unresolved_phantom_receiver = int(stats.phantom_other)
     tables.pass3_unresolved_chained = int(stats.phantom_chained)

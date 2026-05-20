@@ -361,7 +361,7 @@ For `reprocess`, the pipeline runs `cocoindex` with `cwd` set to the bundle dire
 
 ## 6. Graph layer
 
-A deterministic property graph derived from tree-sitter Java parsing lives next to the LanceDB tables under the index directory (default `${JAVA_CODEBASE_RAG_INDEX_DIR:-./.java-codebase-rag}/code_graph.kuzu`). Current ontology version: **14** (see [`docs/EDGE-NAVIGATION.md`](./docs/EDGE-NAVIGATION.md) for edge shapes).
+A deterministic property graph derived from tree-sitter Java parsing lives next to the LanceDB tables under the index directory (default `${JAVA_CODEBASE_RAG_INDEX_DIR:-./.java-codebase-rag}/code_graph.kuzu`). Current ontology version: **15** (see [`docs/EDGE-NAVIGATION.md`](./docs/EDGE-NAVIGATION.md) for MCP-traversable edge shapes).
 
 ### Node kinds
 
@@ -370,10 +370,11 @@ A deterministic property graph derived from tree-sitter Java parsing lives next 
 | `Symbol` | `package`, `file`, `class`, `interface`, `enum`, `record`, `annotation`, `method`, `constructor` |
 | `Route` | HTTP endpoint or async listener (one row per declared route) |
 | `Client` | Outbound HTTP / messaging call site |
+| `UnresolvedCallSite` | Receiver-failure call site (`chained_receiver`, `phantom_unresolved_receiver`) — not a `Symbol`; ids use the `ucs:` prefix |
 
-Unresolved targets become **phantom** nodes (`resolved=false`, FQN guessed from imports / `java.lang`).
+Known-receiver-external JDK / Spring / Lombok callees stay on **`CALLS`** as phantom **method** symbols (`resolved=false`). Receiver-failure sites (unresolved receiver or chained receiver) are **`UnresolvedCallSite`** nodes linked by **`UNRESOLVED_AT`** (not in `EDGE_SCHEMA`; use `describe`, `neighbors(..., include_unresolved=True)`, or `java-codebase-rag unresolved-calls`).
 
-### Edge types (10)
+### Edge types (MCP-traversable)
 
 | Edge | Direction | Meaning |
 |---|---|---|
@@ -388,7 +389,7 @@ Unresolved targets become **phantom** nodes (`resolved=false`, FQN guessed from 
 | `HTTP_CALLS` | client → route | Cross-service HTTP call (caller-side Client to target Route). |
 | `ASYNC_CALLS` | producer → route | Cross-service async (Kafka, Rabbit, JMS, …). |
 
-JDK / Spring / Lombok callees are represented as **phantom** method symbols at index time. Caller/callee traversals default to `exclude_external=true` so those edges are filtered by FQN prefix without dropping them from the graph.
+Caller/callee traversals default to `exclude_external=true` on **`find_callers`** so library FQN prefixes are filtered without dropping edges from the graph.
 
 ### Call-graph notes
 

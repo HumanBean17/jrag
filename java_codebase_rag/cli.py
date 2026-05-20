@@ -22,6 +22,7 @@ from java_codebase_rag.config import (
     resolve_operator_config,
 )
 from java_codebase_rag.pipeline import clip, run_build_ast_graph, run_cocoindex_drop, run_cocoindex_update
+from java_ontology import VALID_UNRESOLVED_CALL_REASONS
 
 KUZU_INCREMENTAL_TRACKING_ISSUE_URL = "https://github.com/HumanBean17/java-codebase-rag/issues/73"
 
@@ -705,7 +706,13 @@ def build_parser() -> argparse.ArgumentParser:
     uc_list = unresolved_sub.add_parser("list", help="List unresolved call sites.")
     _add_index_embedding_flags(uc_list)
     uc_list.add_argument("--method-id", type=str, default=None, help="Caller Symbol id")
-    uc_list.add_argument("--reason", type=str, default=None, help="phantom_unresolved_receiver or chained_receiver")
+    uc_list.add_argument(
+        "--reason",
+        type=str,
+        default=None,
+        choices=sorted(VALID_UNRESOLVED_CALL_REASONS),
+        help="Filter by UnresolvedCallSite.reason",
+    )
     uc_list.add_argument("--microservice", type=str, default=None)
     uc_list.add_argument("--callee-simple", type=str, default=None, dest="callee_simple")
     uc_list.add_argument("--limit", type=int, default=100)

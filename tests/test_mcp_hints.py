@@ -501,10 +501,13 @@ def test_hints_neighbors_multi_origin_fuzzy_emits_once() -> None:
 
 def test_hints_neighbors_calls_high_fanout(kuzu_graph) -> None:
     mid = client_message_processor_process_id(kuzu_graph)
-    out = neighbors_v2(mid, direction="out", edge_types=["CALLS"], limit=500, graph=kuzu_graph)
+    out = neighbors_v2(mid, direction="out", edge_types=["CALLS"], limit=25, graph=kuzu_graph)
     assert out.success is True
-    assert len(out.results) >= 10
-    assert mcp_hints.TPL_NEIGHBORS_CALLS_HIGH_FANOUT.format(n=len(out.results)) in out.hints
+    assert len(out.results) == 25
+    total_calls = kuzu_graph.count_calls_for_symbol(mid, direction="out")
+    assert total_calls >= 10
+    assert mcp_hints.TPL_NEIGHBORS_CALLS_HIGH_FANOUT.format(n=total_calls) in out.hints
+    assert mcp_hints.TPL_NEIGHBORS_CALLS_HIGH_FANOUT.format(n=len(out.results)) not in out.hints
 
 
 def test_hints_neighbors_calls_has_unresolved(kuzu_graph) -> None:

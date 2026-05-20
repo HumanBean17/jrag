@@ -1501,6 +1501,12 @@ def test_neighbors_include_unresolved_interleaved_order(kuzu_graph) -> None:
     kinds = [e.attrs.get("row_kind") for e in out.results]
     assert "unresolved_call_site" in kinds
     assert "resolved" in kinds
+    ucs_edges = [e for e in out.results if (e.attrs or {}).get("row_kind") == "unresolved_call_site"]
+    assert ucs_edges
+    for e in ucs_edges:
+        assert e.other.kind == "unresolved_call_site"
+        assert e.other.id.startswith("ucs:")
+        assert not e.other.id.startswith("sym:")
     keys = [
         (
             int(e.attrs.get("call_site_line") or 0),
@@ -1553,10 +1559,18 @@ def test_neighbors_dedup_calls_collapses_identical_dst(kuzu_graph) -> None:
     assert multi, "dedup_calls should emit call_site_count on collapsed rows"
 
 
-def test_find_callers_no_phantom_chained_strategy(kuzu_graph) -> None:
-    edges = kuzu_graph.find_callers("process", depth=1, limit=200)
-    strategies = {e.strategy for e in edges}
-    assert "phantom" not in strategies
-    assert "chained_receiver" not in strategies
+def test_describe_unresolved_call_sites_rollup_cap_footer_and_total(kuzu_graph) -> None:
+    mid = client_message_processor_process_id(kuzu_graph)
+    out = describe_v2(mid, graph=kuzu_graph)
+    assert out.success and out.record
+    data = out.record.data
+    total = int(data.get("unresolved_call_sites_total") or 0)
+    assert total >= 6, "ClientMessageProcessor#process should have multiple unresolved sites"
+    inline = data.get("unresolved_call_sites") or []
+    assert 1 <= len(inline) <= 5
+    if total > len(inline):
+        footer = str(data.get("unresolved_call_sites_footer") or "")
+        assert "unresolved-calls list" in footer
+        assert mid in footer
 
 

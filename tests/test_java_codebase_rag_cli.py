@@ -42,9 +42,17 @@ def _base_env(corpus_root: Path, kuzu_db_path: Path | None = None) -> dict[str, 
     return env
 
 
-def _run_cli(args: list[str], *, env: dict[str, str], stdin: str | None = None) -> subprocess.CompletedProcess:
+def _java_codebase_rag_exe() -> str:
+    venv_exe = Path(sys.executable).parent / "java-codebase-rag"
+    if venv_exe.is_file():
+        return str(venv_exe)
     exe = shutil.which("java-codebase-rag")
     assert exe is not None, "expected installed java-codebase-rag entrypoint"
+    return exe
+
+
+def _run_cli(args: list[str], *, env: dict[str, str], stdin: str | None = None) -> subprocess.CompletedProcess:
+    exe = _java_codebase_rag_exe()
     return subprocess.run(
         [exe, *args],
         capture_output=True,
@@ -76,7 +84,7 @@ def test_cli_erase_refuses_non_tty_without_yes(tmp_path: Path) -> None:
     env["JAVA_CODEBASE_RAG_INDEX_DIR"] = str(idx)
     env["JAVA_CODEBASE_RAG_SOURCE_ROOT"] = str(tmp_path)
     proc = subprocess.run(
-        [shutil.which("java-codebase-rag"), "erase", "--source-root", str(tmp_path), "--index-dir", str(idx)],
+        [_java_codebase_rag_exe(), "erase", "--source-root", str(tmp_path), "--index-dir", str(idx)],
         capture_output=True,
         text=True,
         env=env,
@@ -437,6 +445,53 @@ def test_cli_tables_lists_known_table(corpus_root, kuzu_db_path) -> None:
     payload = json.loads(proc.stdout)
     assert "java" in payload["tables"]
     assert "graph" in payload
+
+
+def test_cli_unresolved_calls_list_and_stats(corpus_root, kuzu_db_path) -> None:
+    env = _base_env(corpus_root, kuzu_db_path)
+    stats_proc = _run_cli(
+        ["unresolved-calls", "stats", "--source-root", str(corpus_root), "--by", "reason"],
+        env=env,
+    )
+    assert stats_proc.returncode == 0, stats_proc.stderr
+    stats = json.loads(stats_proc.stdout)
+    assert stats.get("success") is True
+    assert int(stats.get("total") or 0) >= 1
+    assert stats.get("buckets")
+
+    list_proc = _run_cli(
+        [
+            "unresolved-calls",
+            "list",
+            "--source-root",
+            str(corpus_root),
+            "--reason",
+            "chained_receiver",
+            "--limit",
+            "5",
+        ],
+        env=env,
+    )
+    assert list_proc.returncode == 0, list_proc.stderr
+    listed = json.loads(list_proc.stdout)
+    assert listed.get("success") is True
+    sites = listed.get("sites") or []
+    assert sites
+    assert all(str(s.get("id") or "").startswith("ucs:") for s in sites)
+    assert all(s.get("reason") == "chained_receiver" for s in sites)
+
+    bad_reason = _run_cli(
+        [
+            "unresolved-calls",
+            "list",
+            "--source-root",
+            str(corpus_root),
+            "--reason",
+            "phantom",
+        ],
+        env=env,
+    )
+    assert bad_reason.returncode != 0
 
 
 def test_cli_diagnose_ignore_walked_path(corpus_root, kuzu_db_path) -> None:

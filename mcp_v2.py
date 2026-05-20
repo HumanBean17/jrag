@@ -392,7 +392,7 @@ class SearchHit(BaseModel):
 
 class NodeRef(BaseModel):
     id: str
-    kind: Literal["symbol", "route", "client", "producer"]
+    kind: Literal["symbol", "route", "client", "producer", "unresolved_call_site"]
     fqn: str
     symbol_kind: str | None = None
     microservice: str | None = None
@@ -550,7 +550,11 @@ class ResolveOutput(BaseModel):
     hints: list[str] = Field(default_factory=list, description=MCP_HINTS_FIELD_DESCRIPTION)
 
 
-def _node_kind_from_id(id_str: str) -> Literal["symbol", "route", "client", "producer"]:
+def _node_kind_from_id(
+    id_str: str,
+) -> Literal["symbol", "route", "client", "producer", "unresolved_call_site"]:
+    if id_str.startswith("ucs:"):
+        return "unresolved_call_site"
     if id_str.startswith("sym:"):
         return "symbol"
     if id_str.startswith("route:") or id_str.startswith("r:"):
@@ -562,7 +566,10 @@ def _node_kind_from_id(id_str: str) -> Literal["symbol", "route", "client", "pro
     raise ValueError(f"Unknown id prefix for `{id_str}`")
 
 
-def _resolve_node_kind(graph: KuzuGraph, node_id: str) -> Literal["symbol", "route", "client", "producer"]:
+def _resolve_node_kind(
+    graph: KuzuGraph,
+    node_id: str,
+) -> Literal["symbol", "route", "client", "producer", "unresolved_call_site"]:
     try:
         return _node_kind_from_id(node_id)
     except ValueError:
@@ -1464,7 +1471,7 @@ def _unresolved_site_to_edge(origin_id: str, row: dict[str, Any]) -> Edge:
         origin_id=origin_id,
         edge_type="CALLS",
         direction="out",
-        other=NodeRef(id=ucs_id, kind="symbol", fqn=ucs_id, name=callee),
+        other=NodeRef(id=ucs_id, kind="unresolved_call_site", fqn="", name=callee),
         attrs={
             "row_kind": "unresolved_call_site",
             "unresolved_call_site_id": ucs_id,
@@ -1711,8 +1718,10 @@ def neighbors_v2(
         results: list[Edge] = []
         unfiltered_calls_count: int | None = None
         unresolved_count: int | None = None
+        calls_row_count: int | None = None
         if use_calls_path and len(origins) == 1 and direction == "out":
             unresolved_count = g.count_unresolved_for_caller(origins[0])
+            calls_row_count = g.count_calls_for_symbol(origins[0], direction=direction)
         for origin_id in origins:
             origin_kind = _resolve_node_kind(g, origin_id)
             if composed_keys:
@@ -1867,6 +1876,7 @@ def neighbors_v2(
             "dedup_calls": dedup_calls,
             "unfiltered_calls_count": unfiltered_calls_count,
             "unresolved_count": unresolved_count,
+            "calls_row_count": calls_row_count,
         }
         return NeighborsOutput(
             success=True,

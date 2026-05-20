@@ -372,13 +372,14 @@ def neighbors_calls_fanout_hints(payload: dict[str, Any]) -> list[tuple[int, str
         return pairs
     if payload.get("include_unresolved"):
         return pairs
-    n = len(list(payload.get("results") or []))
+    page_n = len(list(payload.get("results") or []))
+    calls_n = int(payload.get("calls_row_count") or 0) or page_n
     unresolved = int(payload.get("unresolved_count") or 0)
-    if not payload.get("edge_filter_provided") and n >= _CALLS_HIGH_FANOUT_THRESHOLD:
-        pairs.append((PRIORITY_LEAF_FOLLOWUP, TPL_NEIGHBORS_CALLS_HIGH_FANOUT.format(n=n)))
+    if not payload.get("edge_filter_provided") and calls_n >= _CALLS_HIGH_FANOUT_THRESHOLD:
+        pairs.append((PRIORITY_LEAF_FOLLOWUP, TPL_NEIGHBORS_CALLS_HIGH_FANOUT.format(n=calls_n)))
     if unresolved > 0:
         pairs.append(
-            (PRIORITY_LEAF_FOLLOWUP, TPL_NEIGHBORS_CALLS_HAS_UNRESOLVED.format(n=n, k=unresolved))
+            (PRIORITY_LEAF_FOLLOWUP, TPL_NEIGHBORS_CALLS_HAS_UNRESOLVED.format(n=page_n, k=unresolved))
         )
     return pairs
 
