@@ -25,6 +25,8 @@ jobs:
               - 'plans/**'
               - 'reports/**'
               - '.cursor/**'
+              - '.claude/**'
+              - 'CLAUDE.md'
               - 'AGENTS.md'
               - 'README.md'
               - 'CODEBASE_REQUIREMENTS.md'

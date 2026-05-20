@@ -1,0 +1,72 @@
+# Project overview
+
+This repo is a **self-contained stdio MCP server** that serves
+semantic + structural search over a Java codebase. It is a Python
+project (the indexer and server). It is **not** a Java project —
+the `tests/bank-chat-system/` tree is fixture data, not code to
+modify.
+
+Treat README and the markdown docs as the source of truth for
+behaviour, schemas, env vars, ranking, edges, tool defaults, and
+ontology. **Do not copy that content into rules** — read it directly
+when needed.
+
+## Where to look
+
+- `README.md` — feature surface, env vars, ranking, capabilities,
+  MCP tools (`search` / `find` / `describe` / `neighbors` / `resolve`; response
+  `hints` + pagination echo on locate tools — see README), `java-codebase-rag` CLI,
+  "Re-index required" callouts. The current
+  `ontology_version` is **14** (`EDGE_SCHEMA` in `java_ontology.py`; material `OVERRIDES` Symbol→Symbol edges: subtype
+  instance method → supertype declaration with matching `signature`, one
+  `IMPLEMENTS`/`EXTENDS` hop; valid `neighbors` `EdgeType`). Builds on v12
+  (`@CodebaseHttpClient` rename + shared `CodebaseHttpMethod` enum; inbound
+  `@CodebaseHttpRoute` replaces same-method built-in HTTP rows; still
+  `@CodebaseAsyncRoute` wins over same-method `@KafkaListener`; `Client` nodes,
+  `DECLARES_CLIENT`, `find(kind="client")`, HTTP_CALLS / ASYNC_CALLS caller edges,
+  brownfield composition from earlier bumps). Earlier ontology bumps are described
+  inline in the README's callouts list.
+- `CODEBASE_REQUIREMENTS.md` — Java-repo assumptions and per-file
+  map of what to edit when a target tree doesn't match defaults.
+- `tests/README.md` — testing philosophy.
+- `propose/` — design proposes. **In-flight** proposes are **`*.md`
+  at the root of `propose/`** (not under `propose/completed/`).
+  **`propose/completed/`** — landed work and rationale for current code.
+  **List or search this tree** for current filenames; do not rely on
+  enumerated copies in rules.
+- `plans/` — longer-form multi-PR plans (`PLAN-*.md`) and
+  **`CURSOR-PROMPTS-*.md`** for per-PR agent handoffs (Cursor and Claude Code).
+  Top-level `*.md` here are active or in-progress efforts. **`plans/completed/`** —
+  finished plans and completed prompt sets (templates). Same rule: **open
+  the directory**, don't cache a mental file list from here.
+- `.claude/rules/breaking-changes.md` — the no-back-compat policy.
+
+## File map (top of repo)
+
+| File | Role |
+|------|------|
+| `server.py` | MCP stdio server. Every `@mcp.tool` lives here. |
+| `search_lancedb.py` | Vector / hybrid / graph-expanded search; ranking. |
+| `build_ast_graph.py` | Tree-sitter → Kuzu graph builder (full rebuild). Owns `pass1`–`pass6` (`pass5` emits `HTTP_CALLS` / `ASYNC_CALLS` caller edges; `pass6_match_edges` resolves cross-service / intra-service / ambiguous / phantom / unresolved match outcomes — ontology 7). |
+| `kuzu_queries.py` | Read-only Cypher helpers used by the server. Includes `meta()` decoder for the Kuzu MAP-as-STRING JSON-blob columns. |
+| `ast_java.py` | Tree-sitter Java parsing, role/capability inference, `_string_value_atoms` helper (shared by route/client/producer extractors), `_collect_outgoing_calls` for caller-side detection. |
+| `graph_enrich.py` | `module` / `microservice` resolution, `BrownfieldOverrides` (route + role + capability + http client + async producer), meta-annotation walk, `resolve_routes_for_method` / `resolve_http_client_for_method` / `resolve_async_producer_for_method`. |
+| `java_ontology.py` | Source of truth for `VALID_ROLES`, `VALID_CAPABILITIES`, `VALID_CLIENT_KINDS`, `VALID_HTTP_CALL_STRATEGIES`, `VALID_ASYNC_CALL_STRATEGIES`, `VALID_HTTP_CALL_MATCHES`. |
+| `chunk_heuristics.py` | Query-time chunk hints (no AST / no re-index). |
+| `mcp_hints.py` | MCP v2 road-sign `hints` catalog (`generate_hints`; locked v1 templates in `propose/completed/HINTS-ROAD-SIGNS-PROPOSE.md`). |
+| `index_common.py` | Embedding config (no CocoIndex dep). |
+| `java_index_flow_lancedb.py` | CocoIndex flow (used by `java-codebase-rag init` / `increment` / `reprocess` / `erase`). |
+| `java_index_v1_common.py` | Shared file walker / exclude patterns. |
+| `path_filtering.py` | Layered ignore patterns (`.gitignore`-style; PR-C / B5). Reused by indexer + graph build. |
+| `pr_analysis.py` | `java-codebase-rag analyze-pr` helpers (PR-B / B4) — diff parsing, hunk-to-symbol mapping. |
+| `mcp.json.example` | Template for `.mcp.json`. |
+
+## Test layout
+
+- `tests/conftest.py` — session-scoped Kuzu graph fixture.
+- `tests/bank-chat-system/` — deterministic Java corpus (fixture, not production model).
+- `tests/fixtures/call_graph_smoke/` — mini Maven tree calibrated against the call-graph resolver.
+- `tests/fixtures/brownfield_route_stubs/` — `@CodebaseRoute` / `@CodebaseRoutes` source stubs (PR-A3).
+- `tests/fixtures/brownfield_client_stubs/` — `@CodebaseHttpClient` / `@CodebaseHttpClients` / `@CodebaseProducer` / `@CodebaseProducers` source stubs (PR-D2).
+- `tests/fixtures/http_caller_smoke/` — Feign + RestTemplate + KafkaTemplate + WebClient + StreamBridge fixture for caller-side detection (PR-D1).
+- Heavy e2e tests gated behind `JAVA_CODEBASE_RAG_RUN_HEAVY=1`.

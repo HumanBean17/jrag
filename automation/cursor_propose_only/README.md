@@ -1,8 +1,12 @@
-# Cursor propose-only automation
+# Propose-only automation (Cursor and Claude Code)
 
 This workflow is intentionally isolated under `automation/cursor_propose_only/`
 so orchestration sources are not mixed with production runtime code, main docs,
 or the primary test suite.
+
+Command templates are **host-specific** (`cursor-agent` vs `claude -p`). The Python
+orchestration (`prepare`, `evaluate`, `execute`, `autopilot`) is host-agnostic;
+only the `--*-command` strings change.
 
 ## Commands
 
@@ -90,6 +94,33 @@ tasks as `ready_to_merge` / `merged`.
   --review-command 'cursor-agent run --model auto --prompt-file {review_prompt_file}' \
   --merge-command 'gh pr merge {pr_url} --squash --delete-branch' \
   --run
+```
+
+### Claude Code equivalents
+
+Use non-interactive Claude Code with the staged prompt files (from repo root; requires
+[`.claude/settings.json`](../../.claude/settings.json) or your user permissions):
+
+```bash
+.venv/bin/python automation/cursor_propose_only/execute.py \
+  --repo-root . \
+  --workflow reports/propose_automation/workflow.json \
+  --rounds 3 \
+  --min-severity medium \
+  --implementation-command 'claude -p "$(cat {task_prompt_file})" --output-format json' \
+  --review-command 'claude -p "$(cat {review_prompt_file})" --output-format json' \
+  --merge-command 'gh pr merge {pr_url} --squash --delete-branch' \
+  --run
+```
+
+Planning / autopilot: substitute the same pattern for `{planner_prompt_file}`,
+`{review_prompt_file}`, and `{task_prompt_file}` on `autopilot.py` (`--planner-command`,
+`--planning-review-command`, `--implementation-command`, `--implementation-review-command`).
+
+Example planner line:
+
+```bash
+--planner-command 'claude -p "$(cat {planner_prompt_file})" --output-format json'
 ```
 
 Notes:

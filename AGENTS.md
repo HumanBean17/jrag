@@ -1,17 +1,21 @@
 # AGENTS.md
 
-Entry point for Cursor CLI agents (and other agentic tools) working
-on this repo. Detailed guidance lives in `.cursor/rules/*.mdc` —
-those files are auto-loaded by Cursor. This file is a flat summary
-for tools that don't read `.cursor/rules/`.
+Entry point for **agentic tools** working on this repo (Cursor CLI, Claude Code, and others).
+
+| Host | Primary entry | Rules | Skills |
+|------|---------------|-------|--------|
+| **Claude Code** | [`CLAUDE.md`](CLAUDE.md) | [`.claude/rules/`](.claude/rules/) | [`.claude/skills/`](.claude/skills/) (canonical) |
+| **Cursor** | This file | [`.cursor/rules/*.mdc`](.cursor/rules/) | [`.cursor/skills/`](.cursor/skills/) (mirror; copy to `~/.cursor/skills/` if needed) |
+
+Detailed guidance for Cursor also lives in `.cursor/rules/*.mdc` (auto-loaded by Cursor). Claude Code loads `CLAUDE.md`, `.claude/rules/`, and `.claude/skills/` automatically. **Canonical skill prose** is under `.claude/skills/`; keep `.cursor/skills/` in sync when editing workflow skills.
 
 ## Where to look
 
 - `README.md` — feature surface, env vars, ranking, capabilities,
- MCP tool list (`search` / `find` / `describe` / `neighbors` / `resolve`;
- response `hints` + pagination echo — see README),
- CLI ops (`java-codebase-rag --help`), and "Re-index required" callouts.
- **`ontology_version` is currently 14** (`EDGE_SCHEMA` in `java_ontology.py`; v14 re-index required; HTTP/ASYNC caller-side endpoint flips ship in SCHEMA-V2 PR-B/C — see README graph section and `docs/EDGE-NAVIGATION.md`).
+  MCP tool list (`search` / `find` / `describe` / `neighbors` / `resolve`;
+  response `hints` + pagination echo — see README),
+  CLI ops (`java-codebase-rag --help`), and "Re-index required" callouts.
+  **`ontology_version` is currently 14** (`EDGE_SCHEMA` in `java_ontology.py`; v14 re-index required; HTTP/ASYNC caller-side endpoint flips ship in SCHEMA-V2 PR-B/C — see README graph section and `docs/EDGE-NAVIGATION.md`).
 - [`docs/JAVA-CODEBASE-RAG-CLI.md`](./docs/JAVA-CODEBASE-RAG-CLI.md) — operator guide for the `java-codebase-rag` CLI (`init` / `increment` / `reprocess` / `erase`, `meta`, `tables`, `diagnose-ignore`, `analyze-pr`; hidden `refresh` alias → `reprocess` — see that doc).
 - `CODEBASE_REQUIREMENTS.md` — Java-repo assumptions and tuning map.
 - **`propose/`** — design proposes. **In-flight** work is **`propose/*.md`**
@@ -19,10 +23,10 @@ for tools that don't read `.cursor/rules/`.
   **`propose/completed/`** — landed proposes and rationale. **List or search**
   the tree for current filenames; entrypoint docs are not maintained as a
   catalog.
-- **`plans/`** — multi-PR plans (`PLAN-*.md`) and per-PR Cursor prompts
-  (`CURSOR-PROMPTS-*.md`). Top-level files here are active or staged
-  multi-PR efforts; **`plans/completed/`** holds finished plans and
-  completed prompt sets (reference templates for future work).
+- **`plans/`** — multi-PR plans (`PLAN-*.md`) and per-PR agent execution prompts
+  (`CURSOR-PROMPTS-*.md` — used by Cursor and Claude Code). Top-level files here
+  are active or staged multi-PR efforts; **`plans/completed/`** holds finished plans
+  and completed prompt sets (reference templates for future work).
 - `tests/README.md` — testing philosophy.
 
 Read these directly. Don't rely on rule files to mirror them.
@@ -30,8 +34,8 @@ Read these directly. Don't rely on rule files to mirror them.
 ## Hard rules
 
 1. **No backward-compatibility obligation** —
-   `.cursor/rules/breaking-changes.mdc`. Prefer removals and schema
-   updates over shims.
+   `.claude/rules/breaking-changes.md` (Cursor: `.cursor/rules/breaking-changes.mdc`).
+   Prefer removals and schema updates over shims.
 2. **Propose-then-implement** for non-trivial features. Drop a short
    markdown propose under `propose/`, reference it from the PR, move
    it to `propose/completed/` once landed.
@@ -79,22 +83,22 @@ When adding or editing Cypher run against Kuzu (for example in
 
 ## Workflow
 
-- Branch from `master`. Branch names: `cursor/<topic>` (CLI work),
+- Branch from `master`. Branch names: `cursor/<topic>` (Cursor-agent work),
   `plan/<name>` (in-progress propose), `feat/<topic>` and
   `chore/<topic>` for landed-feature work.
 - Commit messages: present tense, imperative, lowercase first word.
 - Always open a PR; never push to `master`.
 - Run `.venv/bin/ruff check .` and `.venv/bin/python -m pytest tests -v` before pushing.
 - Exception for isolated automation-only changes: if edits are limited to
-  `automation/cursor_propose_only/**` (plus optional references to that workflow
-  in docs), full `tests -v` is not required. Run:
+  `automation/cursor_propose_only/**` (plus optional docs references to that
+  workflow), full `tests -v` is not required. Run:
   - `.venv/bin/ruff check .`
   - `.venv/bin/python -m pytest automation/cursor_propose_only/tests -q`
 - Heavy indexer tests: `JAVA_CODEBASE_RAG_RUN_HEAVY=1` (see `tests/README.md`).
 
-## Per-PR Cursor task contract
+## Per-PR agent task contract
 
-When picking up a per-PR Cursor task prompt (from `plans/` or
+When picking up a per-PR task prompt (from `plans/` or
 `plans/completed/`, files matching `CURSOR-PROMPTS-*.md`; use any
 completed prompt file in `plans/completed/` as a structural template
 when you need one):
@@ -111,27 +115,19 @@ when you need one):
   unrelated files). They violate the per-PR scope contract even when
   they look harmless.
 
-## Cursor Cloud specific instructions
+## Environment
 
 This is a self-contained Python project — no external services
 (no Postgres, Kafka, Docker) are needed. All storage (Kuzu, LanceDB,
 CocoIndex state) is embedded/file-based.
 
-### Environment
+### Setup
 
-- Python 3.11+ with `.venv` at repo root. The update script creates
-  the venv and installs deps if missing.
-- `.venv/bin` must be on `PATH` for CLI tests
-  (`test_java_codebase_rag_cli.py` uses
-  `shutil.which("java-codebase-rag")`). The update script handles
-  this via `~/.bashrc`.
-- The package must be installed in **editable mode**
-  (`pip install -e .`) so the `java-codebase-rag` CLI entry point
-  is registered. The update script handles this.
+- Python 3.11+ with `.venv` at repo root.
+- Use only `.venv/bin/python`, `.venv/bin/pip`, `.venv/bin/ruff`.
+- Install editable: `pip install -e .` so `java-codebase-rag` is on `PATH`.
 
 ### Running checks
-
-Standard commands per `README.md` § 1 and `AGENTS.md` § Workflow:
 
 ```bash
 .venv/bin/ruff check .
@@ -156,4 +152,4 @@ rm -rf /tmp/check && .venv/bin/python build_ast_graph.py \
 
 The MCP server (`server.py`) is stdio-based and is not started as a
 long-running dev server — it is invoked by MCP hosts (Claude Desktop,
-Claude Code) directly.
+Claude Code, Cursor) directly.

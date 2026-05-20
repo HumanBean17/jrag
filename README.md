@@ -223,6 +223,17 @@ claude mcp add --transport stdio java-codebase-rag -- \
 
 Set env vars (`JAVA_CODEBASE_RAG_INDEX_DIR`, `JAVA_CODEBASE_RAG_SOURCE_ROOT`, `SBERT_MODEL`, …) in `.mcp.json` or your shell profile. Official docs: [Claude Code settings](https://docs.anthropic.com/en/docs/claude-code/settings).
 
+#### Claude Code (maintaining this repo)
+
+When you work **on** `java-codebase-rag` itself (not a downstream Java project), Claude Code loads:
+
+- [`CLAUDE.md`](./CLAUDE.md) — entrypoint and hard rules
+- [`.claude/rules/`](./.claude/rules/) — modular always-on instructions
+- [`.claude/skills/`](./.claude/skills/) — `propose`, `plan-project-scope`, `plan-prompts`, `pr-review`, `pr-open`, `java-codebase-explore`
+- [`.claude/settings.json`](./.claude/settings.json) — allowlisted `.venv/bin/python`, `ruff`, `pytest`, `gh`
+
+Cursor contributors use the same workflow via [`AGENTS.md`](./AGENTS.md) and [`.cursor/skills/`](./.cursor/skills/) (mirrors of `.claude/skills/`). Per-PR implementation handoffs live in [`plans/CURSOR-PROMPTS-*.md`](./plans/) (host-neutral prompt bodies).
+
 ### Claude Desktop
 
 Edit `claude_desktop_config.json` (macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`) and add an entry under `mcpServers` with the same `command`, `args`, and `env` as in `mcp.json.example`.
