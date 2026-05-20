@@ -361,7 +361,7 @@ For `reprocess`, the pipeline runs `cocoindex` with `cwd` set to the bundle dire
 
 ## 6. Graph layer
 
-A deterministic property graph derived from tree-sitter Java parsing lives next to the LanceDB tables under the index directory (default `${JAVA_CODEBASE_RAG_INDEX_DIR:-./.java-codebase-rag}/code_graph.kuzu`). Current ontology version: **14** (see [`docs/EDGE-NAVIGATION.md`](./docs/EDGE-NAVIGATION.md) for edge shapes).
+A deterministic property graph derived from tree-sitter Java parsing lives next to the LanceDB tables under the index directory (default `${JAVA_CODEBASE_RAG_INDEX_DIR:-./.java-codebase-rag}/code_graph.kuzu`). Current ontology version: **15** (see [`docs/EDGE-NAVIGATION.md`](./docs/EDGE-NAVIGATION.md) for MCP-traversable edge shapes).
 
 ### Node kinds
 
@@ -370,10 +370,11 @@ A deterministic property graph derived from tree-sitter Java parsing lives next 
 | `Symbol` | `package`, `file`, `class`, `interface`, `enum`, `record`, `annotation`, `method`, `constructor` |
 | `Route` | HTTP endpoint or async listener (one row per declared route) |
 | `Client` | Outbound HTTP / messaging call site |
+| `UnresolvedCallSite` | Receiver-failure call site (`chained_receiver`, `phantom_unresolved_receiver`) — not a `Symbol`; ids use the `ucs:` prefix |
 
-Unresolved targets become **phantom** nodes (`resolved=false`, FQN guessed from imports / `java.lang`).
+Known-receiver-external JDK / Spring / Lombok callees stay on **`CALLS`** as phantom **method** symbols (`resolved=false`). Receiver-failure sites (unresolved receiver or chained receiver) are **`UnresolvedCallSite`** nodes linked by **`UNRESOLVED_AT`** (not in `EDGE_SCHEMA`; use `describe(method_id).unresolved_call_sites`, `neighbors(..., include_unresolved=True)`, or `java-codebase-rag unresolved-calls`).
 
-### Edge types (10)
+### Edge types (MCP-traversable)
 
 | Edge | Direction | Meaning |
 |---|---|---|
@@ -388,7 +389,7 @@ Unresolved targets become **phantom** nodes (`resolved=false`, FQN guessed from 
 | `HTTP_CALLS` | client → route | Cross-service HTTP call (caller-side Client to target Route). |
 | `ASYNC_CALLS` | producer → route | Cross-service async (Kafka, Rabbit, JMS, …). |
 
-JDK / Spring / Lombok callees are represented as **phantom** method symbols at index time. Caller/callee traversals default to `exclude_external=true` so those edges are filtered by FQN prefix without dropping them from the graph.
+Caller/callee traversals default to `exclude_external=true` on **`find_callers`** so library FQN prefixes are filtered without dropping edges from the graph.
 
 ### Call-graph notes
 
@@ -426,7 +427,7 @@ Resolution order for `microservice`:
 
 Current ontology version is **15**. Any index built before this version must be rebuilt via `cocoindex update ... --full-reprocess -f` or a full `java-codebase-rag reprocess` (no selective flags) so vectors and graph stay aligned. Until re-indexed, the server defensively JSON-decodes string-form list columns so nothing explodes, but filters like `array_contains` will not work.
 
-Ontology **15** (CALLS-NOISE PR-1) adds `CALLS.callee_declaring_role`, `GraphMeta.pass3_unresolved_phantom_receiver` / `pass3_unresolved_chained`, and **supertype-walk dedup** at build time: duplicate interface + concrete candidates at the same call site collapse to one `CALLS` row (row counts per method may drop after re-index, not only a new column). PR-2 adds `edge_filter` on `neighbors`; PR-3 moves true receiver-failure rows off `CALLS`.
+Ontology **15** (CALLS-NOISE) adds `CALLS.callee_declaring_role`, `GraphMeta.pass3_unresolved_phantom_receiver` / `pass3_unresolved_chained`, and **supertype-walk dedup** at build time. PR-2 adds `edge_filter` on `neighbors`. **PR-3 (breaking):** receiver-failure sites (`chained_receiver`, unresolved-receiver `phantom`) are no longer `CALLS` rows — they live on `UnresolvedCallSite` + `UNRESOLVED_AT`. Default `neighbors(..., ['CALLS'])` returns fewer rows; use `include_unresolved=True` for a source-ordered interleaved transcript (`row_kind`), `describe(method_id).unresolved_call_sites` (capped), or `java-codebase-rag unresolved-calls list|stats`. Known-receiver-external JDK rows stay on `CALLS` with `resolved=false`.
 
 Ontology **14** introduces `EDGE_SCHEMA` in `java_ontology.py` as the canonical edge navigation schema (see `docs/EDGE-NAVIGATION.md`). **`HTTP_CALLS` is `Client → Route`** (SCHEMA-V2 PR-B). **`ASYNC_CALLS` is `Producer → Route`** with `DECLARES_PRODUCER` (SCHEMA-V2 PR-C). Run one full reprocess after upgrading through the SCHEMA-V2 sequence (or when you need the v14 ontology gate).
 

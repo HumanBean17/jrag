@@ -294,6 +294,12 @@ def test_trace_flow_structural_edges_not_starved_by_calls(kuzu_graph) -> None:
     ]
 
 
+def test_find_callers_no_phantom_chained_strategy(kuzu_graph) -> None:
+    edges = kuzu_graph.find_callers("save", depth=1, limit=100)
+    for e in edges:
+        assert e.strategy not in ("phantom", "chained_receiver")
+
+
 def test_find_callers_assign_method(kuzu_graph) -> None:
     needle = "com.bank.chat.assign.service.ChatManagementService#assign(AssignmentRequest)"
     edges = kuzu_graph.find_callers(needle, depth=1, limit=50)

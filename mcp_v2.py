@@ -392,7 +392,7 @@ class SearchHit(BaseModel):
 
 class NodeRef(BaseModel):
     id: str
-    kind: Literal["symbol", "route", "client", "producer"]
+    kind: Literal["symbol", "route", "client", "producer", "unresolved_call_site"]
     fqn: str
     symbol_kind: str | None = None
     microservice: str | None = None
@@ -550,7 +550,11 @@ class ResolveOutput(BaseModel):
     hints: list[str] = Field(default_factory=list, description=MCP_HINTS_FIELD_DESCRIPTION)
 
 
-def _node_kind_from_id(id_str: str) -> Literal["symbol", "route", "client", "producer"]:
+def _node_kind_from_id(
+    id_str: str,
+) -> Literal["symbol", "route", "client", "producer", "unresolved_call_site"]:
+    if id_str.startswith("ucs:"):
+        return "unresolved_call_site"
     if id_str.startswith("sym:"):
         return "symbol"
     if id_str.startswith("route:") or id_str.startswith("r:"):
@@ -562,7 +566,10 @@ def _node_kind_from_id(id_str: str) -> Literal["symbol", "route", "client", "pro
     raise ValueError(f"Unknown id prefix for `{id_str}`")
 
 
-def _resolve_node_kind(graph: KuzuGraph, node_id: str) -> Literal["symbol", "route", "client", "producer"]:
+def _resolve_node_kind(
+    graph: KuzuGraph,
+    node_id: str,
+) -> Literal["symbol", "route", "client", "producer", "unresolved_call_site"]:
     try:
         return _node_kind_from_id(node_id)
     except ValueError:
@@ -1005,6 +1012,13 @@ def find_v2(
         return FindOutput(success=False, message=str(exc), hints=[], limit=None, offset=None)
 
 
+_DESCRIBE_UCS_ID_MESSAGE = (
+    "UnresolvedCallSite ids (ucs:…) are not describable — use describe(caller_method_id) "
+    "for record.data.unresolved_call_sites, neighbors(..., include_unresolved=True), "
+    "or java-codebase-rag unresolved-calls list --method-id <caller_id>"
+)
+
+
 def describe_v2(
     id: str | None = None,
     fqn: str | None = None,
@@ -1016,6 +1030,8 @@ def describe_v2(
         has_fqn = bool(fqn and str(fqn).strip())
         if not has_id and not has_fqn:
             return DescribeOutput(success=False, message="id or fqn required", hints=[])
+        if has_id and str(id).strip().startswith("ucs:"):
+            return DescribeOutput(success=False, message=_DESCRIBE_UCS_ID_MESSAGE, hints=[])
         hint_message: str | None = None
         node_id: str
         if has_id:
@@ -1036,12 +1052,33 @@ def describe_v2(
                     "then describe(id=...) on the chosen node"
                 )
         kind = _resolve_node_kind(g, node_id)
+        if kind == "unresolved_call_site":
+            return DescribeOutput(success=False, message=_DESCRIBE_UCS_ID_MESSAGE, hints=[])
         row = _load_node_record(g, node_id, kind)
         if row is None:
             return DescribeOutput(success=False, message=f"No node found for `{node_id}`", hints=[])
         ref = _node_ref_from_row(kind, row)
         edge_summary = _edge_summary_for_node(g, node_id, kind=kind, row=row)
-        record = NodeRecord(id=ref.id, kind=kind, fqn=ref.fqn, data=row, edge_summary=edge_summary)
+        data = dict(row)
+        if kind == "symbol" and str(row.get("kind") or "") in _METHOD_SYMBOL_KINDS_FOR_OVERRIDE_ROLLUP:
+            inline, total = g.unresolved_sites_for_describe(node_id)
+            if total > 0:
+                data["unresolved_call_sites_total"] = total
+                data["unresolved_call_sites"] = [
+                    {
+                        "line": int(r.get("line") or 0),
+                        "reason": str(r.get("reason") or ""),
+                        "callee_simple": str(r.get("callee_simple") or ""),
+                        "receiver_expr": str(r.get("receiver_expr") or ""),
+                    }
+                    for r in inline
+                ]
+                if total > len(inline):
+                    data["unresolved_call_sites_footer"] = (
+                        f"{total} unresolved call sites — see "
+                        f"java-codebase-rag unresolved-calls list --method-id {node_id} for the full list"
+                    )
+        record = NodeRecord(id=ref.id, kind=kind, fqn=ref.fqn, data=data, edge_summary=edge_summary)
         return DescribeOutput(
             success=True,
             record=record,
@@ -1426,12 +1463,74 @@ def resolve_v2(
 
 
 def _neighbor_edge_attrs(row: dict[str, Any]) -> dict[str, Any]:
-    return {
+    attrs = {
         k: v
         for k, v in row.items()
         if k not in {"other_id", "edge_type", "stored_edge_type"}
         and v not in (None, "")
     }
+    attrs.setdefault("row_kind", "resolved")
+    return attrs
+
+
+def _unresolved_site_to_edge(origin_id: str, row: dict[str, Any]) -> Edge:
+    ucs_id = str(row.get("id") or "")
+    callee = str(row.get("callee_simple") or "")
+    line = int(row.get("call_site_line") or 0)
+    byte = int(row.get("call_site_byte") or 0)
+    return Edge(
+        origin_id=origin_id,
+        edge_type="CALLS",
+        direction="out",
+        other=NodeRef(id=ucs_id, kind="unresolved_call_site", fqn="", name=callee),
+        attrs={
+            "row_kind": "unresolved_call_site",
+            "unresolved_call_site_id": ucs_id,
+            "reason": str(row.get("reason") or ""),
+            "call_site_line": line,
+            "call_site_byte": byte,
+            "arg_count": int(row.get("arg_count") or 0),
+            "callee_simple": callee,
+            "receiver_expr": str(row.get("receiver_expr") or ""),
+        },
+    )
+
+
+def _calls_transcript_sort_key(edge: Edge) -> tuple[int, int, int]:
+    attrs = edge.attrs or {}
+    line = int(attrs.get("call_site_line") or 0)
+    byte = int(attrs.get("call_site_byte") or 0)
+    kind_rank = 0 if str(attrs.get("row_kind") or "resolved") == "resolved" else 1
+    return (line, byte, kind_rank)
+
+
+def _dedup_call_edges(edges: list[Edge]) -> list[Edge]:
+    """Collapse resolved CALLS rows sharing (origin_id, other.id); unresolved rows pass through."""
+    resolved: list[Edge] = []
+    unresolved: list[Edge] = []
+    for e in edges:
+        if str((e.attrs or {}).get("row_kind") or "resolved") == "unresolved_call_site":
+            unresolved.append(e)
+        else:
+            resolved.append(e)
+    groups: dict[tuple[str, str], list[Edge]] = {}
+    for e in resolved:
+        key = (e.origin_id, e.other.id)
+        groups.setdefault(key, []).append(e)
+    collapsed: list[Edge] = []
+    for group in groups.values():
+        ordered = sorted(group, key=_calls_transcript_sort_key)
+        canonical = ordered[0]
+        lines = sorted(
+            {int((x.attrs or {}).get("call_site_line") or 0) for x in group},
+        )
+        attrs = dict(canonical.attrs or {})
+        attrs["call_site_count"] = len(group)
+        attrs["call_site_lines"] = lines
+        collapsed.append(canonical.model_copy(update={"attrs": attrs}))
+    merged = collapsed + unresolved
+    merged.sort(key=_calls_transcript_sort_key)
+    return merged
 
 
 def _edgefilter_pushdown_kwargs(ef: EdgeFilter | None) -> dict[str, Any]:
@@ -1488,9 +1587,17 @@ def _neighbors_calls_for_origin(
     ef: EdgeFilter | None,
     offset: int,
     limit: int | None,
+    include_unresolved: bool = False,
+    dedup_calls: bool = False,
 ) -> list[Edge]:
     pushdown = _edgefilter_pushdown_kwargs(ef)
-    sql_pagination = nf is None and limit is not None
+    needs_full_stream = (
+        nf is not None
+        or dedup_calls
+        or include_unresolved
+        or limit is None
+    )
+    sql_pagination = not needs_full_stream and limit is not None
     if sql_pagination:
         rows = g.neighbor_calls_for_symbol(
             origin_id,
@@ -1510,6 +1617,12 @@ def _neighbors_calls_for_origin(
         **pushdown,
     )
     edges = _rows_to_call_edges(g, origin_id=origin_id, direction=direction, rows=rows, nf=nf)
+    if include_unresolved and direction == "out":
+        ucs_rows = g.unresolved_sites_for_caller(origin_id, direction=direction)
+        edges.extend(_unresolved_site_to_edge(origin_id, r) for r in ucs_rows)
+        edges.sort(key=_calls_transcript_sort_key)
+    if dedup_calls:
+        edges = _dedup_call_edges(edges)
     if limit is None:
         return edges
     return edges[offset : offset + limit]
@@ -1526,6 +1639,8 @@ def neighbors_v2(
     offset: int = 0,
     filter: NodeFilter | dict[str, Any] | str | None = None,
     edge_filter: EdgeFilter | dict[str, Any] | str | None = None,
+    include_unresolved: bool = False,
+    dedup_calls: bool = False,
     graph: Any | None = None,
 ) -> NeighborsOutput:
     try:
@@ -1567,6 +1682,30 @@ def neighbors_v2(
         except ValueError as exc:
             _log_fail_loud("edge_filter")
             return NeighborsOutput(success=False, message=str(exc), hints=[], requested_edge_types=[])
+        if include_unresolved and ef is not None:
+            return NeighborsOutput(
+                success=False,
+                message=(
+                    "include_unresolved=True is incompatible with edge_filter; "
+                    "UnresolvedCallSite rows have no edge attributes to filter on"
+                ),
+                hints=[],
+                requested_edge_types=requested_edge_types,
+            )
+        if include_unresolved and requested_edge_types != ["CALLS"]:
+            return NeighborsOutput(
+                success=False,
+                message="include_unresolved requires edge_types=['CALLS']",
+                hints=[],
+                requested_edge_types=requested_edge_types,
+            )
+        if include_unresolved and direction != "out":
+            return NeighborsOutput(
+                success=False,
+                message='include_unresolved requires direction="out"',
+                hints=[],
+                requested_edge_types=requested_edge_types,
+            )
         if ef and (err := _edgefilter_applicability_error(requested_edge_types, ef)):
             _log_fail_loud("edge_filter")
             return NeighborsOutput(
@@ -1589,6 +1728,11 @@ def neighbors_v2(
         origins = [ids] if isinstance(ids, str) else list(ids)
         results: list[Edge] = []
         unfiltered_calls_count: int | None = None
+        unresolved_count: int | None = None
+        calls_row_count: int | None = None
+        if use_calls_path and len(origins) == 1 and direction == "out":
+            unresolved_count = g.count_unresolved_for_caller(origins[0])
+            calls_row_count = g.count_calls_for_symbol(origins[0], direction=direction)
         for origin_id in origins:
             origin_kind = _resolve_node_kind(g, origin_id)
             if composed_keys:
@@ -1613,7 +1757,12 @@ def neighbors_v2(
                         requested_edge_types=requested_edge_types,
                     )
             if use_calls_path:
-                paginate_in_sql = len(origins) == 1 and nf is None
+                paginate_in_sql = (
+                    len(origins) == 1
+                    and nf is None
+                    and not include_unresolved
+                    and not dedup_calls
+                )
                 try:
                     origin_edges = _neighbors_calls_for_origin(
                         g,
@@ -1623,6 +1772,8 @@ def neighbors_v2(
                         ef=ef,
                         offset=offset if paginate_in_sql else 0,
                         limit=limit if paginate_in_sql else None,
+                        include_unresolved=include_unresolved,
+                        dedup_calls=dedup_calls,
                     )
                 except ValueError as exc:
                     return NeighborsOutput(
@@ -1731,7 +1882,12 @@ def neighbors_v2(
             "subject_record": subject_record,
             "node_filter": nf.model_dump(exclude_none=True) if nf else None,
             "edge_filter": ef.model_dump(exclude_none=True) if ef else None,
+            "edge_filter_provided": ef is not None,
+            "include_unresolved": include_unresolved,
+            "dedup_calls": dedup_calls,
             "unfiltered_calls_count": unfiltered_calls_count,
+            "unresolved_count": unresolved_count,
+            "calls_row_count": calls_row_count,
         }
         return NeighborsOutput(
             success=True,

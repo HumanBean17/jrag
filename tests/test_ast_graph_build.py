@@ -52,9 +52,9 @@ def test_schema_has_all_expected_tables(kuzu_db_path: Path) -> None:
     # We only assert the tables we depend on are present. The builder is
     # free to add more (e.g. CALLS later) without breaking this test.
     expected = {
-        "Symbol", "Route", "Client", "GraphMeta",
-        "EXTENDS", "IMPLEMENTS", "INJECTS", "DECLARES", "OVERRIDES", "CALLS", "EXPOSES",
-        "DECLARES_CLIENT", "DECLARES_PRODUCER",
+        "Symbol", "UnresolvedCallSite", "Route", "Client", "GraphMeta",
+        "EXTENDS", "IMPLEMENTS", "INJECTS", "DECLARES", "OVERRIDES", "CALLS", "UNRESOLVED_AT",
+        "EXPOSES", "DECLARES_CLIENT", "DECLARES_PRODUCER",
     }
     missing = expected - tables
     assert not missing, f"missing schema tables: {missing}; saw {tables}"
@@ -347,3 +347,43 @@ def test_cli_entrypoint_runs(tmp_path: Path, corpus_root: Path) -> None:
     assert target.exists()
     conn = _connect(target)
     assert _scalar(conn, "MATCH (s:Symbol) RETURN count(s)") > 0
+
+
+def test_pass3_no_phantom_chained_calls_rows(kuzu_db_path: Path) -> None:
+    """HV19 — receiver-failure strategies must not appear on CALLS after PR-3."""
+    conn = _connect(kuzu_db_path)
+    n = _scalar(
+        conn,
+        "MATCH ()-[c:CALLS]->() "
+        "WHERE c.strategy IN ['phantom','chained_receiver'] RETURN count(c)",
+    )
+    assert n == 0, f"expected zero phantom/chained_receiver CALLS rows, got {n}"
+
+
+def test_pass3_unresolved_call_site_emitted(kuzu_db_path: Path) -> None:
+    conn = _connect(kuzu_db_path)
+    n_ucs = _scalar(conn, "MATCH (u:UnresolvedCallSite) RETURN count(u)")
+    n_rel = _scalar(conn, "MATCH ()-[:UNRESOLVED_AT]->() RETURN count(*)")
+    assert n_ucs >= 1, "bank fixture should emit UnresolvedCallSite rows"
+    assert n_rel == n_ucs
+    reasons = {
+        r[0]
+        for r in conn.execute(
+            "MATCH (u:UnresolvedCallSite) RETURN DISTINCT u.reason"
+        )
+    }
+    assert reasons <= {"phantom_unresolved_receiver", "chained_receiver"}
+    assert len(reasons) >= 1
+
+
+def test_pass3_known_external_calls_preserved(kuzu_db_path: Path) -> None:
+    """HV37 — JDK/external callee stays on CALLS with resolved=False, not phantom strategy."""
+    conn = _connect(kuzu_db_path)
+    rows = conn.execute(
+        "MATCH (src:Symbol)-[c:CALLS]->(dst:Symbol) "
+        "WHERE c.resolved = false AND c.strategy <> 'overload_ambiguous' "
+        "RETURN c.strategy AS s LIMIT 20"
+    )
+    found = [str(r[0]) for r in rows]
+    assert found, "bank fixture should have known-external CALLS rows"
+    assert all(s not in ("phantom", "chained_receiver") for s in found), found

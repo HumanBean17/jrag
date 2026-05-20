@@ -18,6 +18,24 @@ from java_ontology import (  # noqa: E402
 
 _COMPOSED_MEMBER_EDGE_NAMES = frozenset({"EXPOSES", "DECLARES_CLIENT", "DECLARES_PRODUCER"})
 
+_GRAPH_STORAGE_APPENDIX = """
+## Graph storage (not MCP `neighbors` edge_types)
+
+### `UnresolvedCallSite` + `UNRESOLVED_AT` (ontology 15 / CALLS-NOISE PR-3)
+
+Receiver-failure call sites (`chained_receiver`, `phantom_unresolved_receiver`) are **not** `CALLS` rows. They are `UnresolvedCallSite` nodes (`id` prefix `ucs:`) linked from the caller method Symbol via `UNRESOLVED_AT`.
+
+| Surface | How to read them |
+| --- | --- |
+| `describe(method_id)` | `record.data.unresolved_call_sites` (capped at 5) + footer when more exist |
+| `neighbors(..., ['CALLS'], include_unresolved=True)` | Interleaved transcript; `row_kind='unresolved_call_site'`; `other.kind=unresolved_call_site` |
+| CLI | `java-codebase-rag unresolved-calls list|stats` |
+
+- **Not** in `EDGE_SCHEMA` — do not pass `UNRESOLVED_AT` to `neighbors(edge_types=…)`.
+- **`describe(ucs:…)`** is invalid (fail-loud); describe the **caller method** instead.
+- Fresh graphs: `CALLS.strategy` no longer includes `phantom` or `chained_receiver` for receiver failure (those literals remain on HTTP/ASYNC `match` and brownfield resolver sets).
+"""
+
 _DEFAULT_OUT = _REPO_ROOT / "docs" / "EDGE-NAVIGATION.md"
 _BANNER = (
     "# Edge Navigation Schema\n\n"
@@ -75,6 +93,7 @@ def generate_markdown() -> str:
     parts.append("")
     for spec in EDGE_SCHEMA.values():
         parts.extend(_render_edge(spec))
+    parts.append(_GRAPH_STORAGE_APPENDIX.rstrip())
     return "\n".join(parts).rstrip() + "\n"
 
 

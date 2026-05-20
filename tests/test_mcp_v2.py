@@ -17,6 +17,7 @@ from mcp.server.fastmcp.exceptions import ToolError
 from java_ontology import VALID_RESOLVE_REASONS
 
 from mcp_v2 import (
+    Edge,
     NodeFilter,
     _NODEFILTER_APPLICABLE_FIELDS,
     describe_v2,
@@ -1484,5 +1485,136 @@ def test_neighbors_calls_perf_empty_filter_client_message_processor(kuzu_graph) 
         assert out.results
     median_sec = statistics.median(times)
     assert median_sec <= float(baseline) * 1.5
+
+
+def test_neighbors_include_unresolved_interleaved_order(kuzu_graph) -> None:
+    mid = client_message_processor_process_id(kuzu_graph)
+    out = neighbors_v2(
+        mid,
+        direction="out",
+        edge_types=["CALLS"],
+        include_unresolved=True,
+        limit=500,
+        graph=kuzu_graph,
+    )
+    assert out.success is True
+    assert out.results
+    kinds = [e.attrs.get("row_kind") for e in out.results]
+    assert "unresolved_call_site" in kinds
+    assert "resolved" in kinds
+    ucs_edges = [e for e in out.results if (e.attrs or {}).get("row_kind") == "unresolved_call_site"]
+    assert ucs_edges
+    for e in ucs_edges:
+        assert e.other.kind == "unresolved_call_site"
+        assert e.other.id.startswith("ucs:")
+        assert not e.other.id.startswith("sym:")
+    keys = [
+        (
+            int(e.attrs.get("call_site_line") or 0),
+            int(e.attrs.get("call_site_byte") or 0),
+            0 if e.attrs.get("row_kind") == "resolved" else 1,
+        )
+        for e in out.results
+    ]
+    assert keys == sorted(keys)
+
+
+def test_neighbors_include_unresolved_edge_filter_mutex(kuzu_graph) -> None:
+    mid = client_message_processor_process_id(kuzu_graph)
+    out = neighbors_v2(
+        mid,
+        direction="out",
+        edge_types=["CALLS"],
+        include_unresolved=True,
+        edge_filter={"min_confidence": 0.0},
+        graph=kuzu_graph,
+    )
+    assert out.success is False
+    assert "incompatible" in (out.message or "").lower()
+
+
+def test_neighbors_dedup_calls_collapses_identical_dst(kuzu_graph) -> None:
+    rows = kuzu_graph._rows(  # noqa: SLF001
+        "MATCH (m:Symbol)-[c:CALLS]->(dst:Symbol) "
+        "WITH m, dst, collect(c.call_site_line) AS lines "
+        "WHERE size(lines) > 1 "
+        "RETURN m.id AS mid, dst.id AS did LIMIT 1",
+    )
+    if not rows:
+        pytest.skip("no duplicate (caller,callee) CALLS pair in bank fixture")
+    mid = str(rows[0]["mid"])
+    flat = neighbors_v2(
+        mid, direction="out", edge_types=["CALLS"], limit=500, graph=kuzu_graph,
+    )
+    deduped = neighbors_v2(
+        mid,
+        direction="out",
+        edge_types=["CALLS"],
+        dedup_calls=True,
+        limit=500,
+        graph=kuzu_graph,
+    )
+    assert flat.success and deduped.success
+    assert len(deduped.results) < len(flat.results)
+    multi = [e for e in deduped.results if int((e.attrs or {}).get("call_site_count") or 0) > 1]
+    assert multi, "dedup_calls should emit call_site_count on collapsed rows"
+
+
+def test_describe_ucs_id_not_describable(kuzu_graph) -> None:
+    rows = kuzu_graph._rows(  # noqa: SLF001
+        "MATCH (u:UnresolvedCallSite) RETURN u.id AS id LIMIT 1",
+    )
+    assert rows
+    ucs_id = str(rows[0]["id"])
+    assert ucs_id.startswith("ucs:")
+    out = describe_v2(ucs_id, graph=kuzu_graph)
+    assert out.success is False
+    assert out.record is None
+    assert "not describable" in (out.message or "").lower()
+    assert "unresolved-calls" in (out.message or "").lower()
+
+
+def test_neighbors_dedup_calls_include_unresolved(kuzu_graph) -> None:
+    mid = client_message_processor_process_id(kuzu_graph)
+    out = neighbors_v2(
+        mid,
+        direction="out",
+        edge_types=["CALLS"],
+        include_unresolved=True,
+        dedup_calls=True,
+        limit=500,
+        graph=kuzu_graph,
+    )
+    assert out.success is True
+    kinds = {str((e.attrs or {}).get("row_kind") or "resolved") for e in out.results}
+    assert "resolved" in kinds
+    assert "unresolved_call_site" in kinds
+    keys = [_calls_transcript_sort_key_from_edge(e) for e in out.results]
+    assert keys == sorted(keys)
+    resolved = [e for e in out.results if (e.attrs or {}).get("row_kind") == "resolved"]
+    assert any(int((e.attrs or {}).get("call_site_count") or 0) > 1 for e in resolved)
+
+
+def _calls_transcript_sort_key_from_edge(edge: Edge) -> tuple[int, int, int]:
+    attrs = edge.attrs or {}
+    line = int(attrs.get("call_site_line") or 0)
+    byte = int(attrs.get("call_site_byte") or 0)
+    kind_rank = 0 if str(attrs.get("row_kind") or "resolved") == "resolved" else 1
+    return (line, byte, kind_rank)
+
+
+def test_describe_unresolved_call_sites_rollup_cap_footer_and_total(kuzu_graph) -> None:
+    mid = client_message_processor_process_id(kuzu_graph)
+    out = describe_v2(mid, graph=kuzu_graph)
+    assert out.success and out.record
+    data = out.record.data
+    total = int(data.get("unresolved_call_sites_total") or 0)
+    assert total >= 6, "ClientMessageProcessor#process should have multiple unresolved sites"
+    inline = data.get("unresolved_call_sites") or []
+    assert 1 <= len(inline) <= 5
+    if total > len(inline):
+        footer = str(data.get("unresolved_call_sites_footer") or "")
+        assert "unresolved-calls list" in footer
+        assert mid in footer
 
 

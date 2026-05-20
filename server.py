@@ -502,7 +502,22 @@ def create_mcp_server() -> FastMCP:
             description=(
                 "Optional EdgeFilter on CALLS edge attributes (edge_types=['CALLS'] only). Use "
                 "callee_declaring_role for callee stereotype projection — not NodeFilter.role on method neighbors. "
-                "Prefer a JSON object; a JSON-encoded string is accepted."
+                "Mutually exclusive with include_unresolved. Prefer a JSON object; a JSON-encoded string is accepted."
+            ),
+        ),
+        include_unresolved: bool = Field(
+            default=False,
+            description=(
+                "When true with edge_types=['CALLS'] and direction='out', interleave UnresolvedCallSite "
+                "rows (row_kind='unresolved_call_site') with resolved CALLS in source order. "
+                "Mutually exclusive with edge_filter."
+            ),
+        ),
+        dedup_calls: bool = Field(
+            default=False,
+            description=(
+                "When true with edge_types=['CALLS'], collapse identical (origin, callee) CALLS to one row "
+                "with call_site_count and call_site_lines; unresolved sites are not deduped."
             ),
         ),
     ) -> mcp_v2.NeighborsOutput:
@@ -515,6 +530,8 @@ def create_mcp_server() -> FastMCP:
             offset,
             filter,
             edge_filter,
+            include_unresolved,
+            dedup_calls,
             None,
         )
 

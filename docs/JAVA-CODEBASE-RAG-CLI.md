@@ -159,6 +159,17 @@ Explains **why a path** is ignored or not ignored by the layered ignore rules (b
 java-codebase-rag diagnose-ignore src/main/generated/Foo.java --source-root /path/to/java/repo
 ```
 
+### `unresolved-calls`
+
+Lists or aggregates **receiver-failure** call sites stored as `UnresolvedCallSite` (not on `CALLS` after ontology 15 PR-3). Reasons: `phantom_unresolved_receiver`, `chained_receiver`.
+
+```bash
+java-codebase-rag unresolved-calls stats --by microservice --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-rag
+java-codebase-rag unresolved-calls list --method-id sym:... --limit 100 --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-rag
+```
+
+`stats --by` accepts `reason`, `microservice`, or `caller_role` (declaring type role of the caller method).
+
 ## Analysis: `analyze-pr`
 
 Maps a **unified diff** to changed symbols, blast radius, routes touched, and risk band. Requires a **built Kuzu graph** at `<index-dir>/code_graph.kuzu`.

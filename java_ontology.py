@@ -89,13 +89,18 @@ VALID_RESOLVE_REASONS: frozenset[str] = frozenset((
 ))
 
 # Brownfield / fallback edge resolution strategies (hints v2 neighbors fuzzy signal).
+# ``phantom`` / ``chained_receiver`` are not CALLS edge strategies after PR-3 (receiver
+# failures live on ``UnresolvedCallSite``); they remain on HTTP/ASYNC match literals only.
 FUZZY_STRATEGY_SET: frozenset[str] = frozenset({
     "layer_c_source",
     "layer_b_fqn",
-    "phantom",
-    "chained_receiver",
     "overload_ambiguous",
     "implicit_super",
+})
+
+VALID_UNRESOLVED_CALL_REASONS: frozenset[str] = frozenset({
+    "phantom_unresolved_receiver",
+    "chained_receiver",
 })
 
 # Union of fuzzy + non-fuzzy resolver strategies that may appear on graph edges
@@ -103,6 +108,9 @@ FUZZY_STRATEGY_SET: frozenset[str] = frozenset({
 # HTTP/async dispatch literals). Used by `EdgeSpec.brownfield_resolver_sourced`.
 BROWNFIELD_RESOLVER_STRATEGY_SET: frozenset[str] = frozenset({
     *FUZZY_STRATEGY_SET,
+    # Receiver-tier / HTTP match literals — not CALLS edge strategies after PR-3 UCS facet.
+    "phantom",
+    "chained_receiver",
     "layer_b_ann",
     "layer_a_meta",
     "codebase_route",
