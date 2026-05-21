@@ -150,30 +150,26 @@ Correct the public docs so examples match what the graph and tools return.
 
 1. **`.venv/bin/ruff check .`**
 2. **`.venv/bin/python -m pytest tests/test_mcp_hints.py -v`** — existing template equality tests follow `mcp_hints.TPL_*` constants; update expectations when constants change.
-3. **New regression (recommended name):** `test_hint_templates_never_use_python_list_ids` — assert no rendered catalog template contains `(['` or `"['"` (after format with a realistic 40-char hex id).
-4. **Char-cap sweep:** `test_hints_template_rendered_length_leq_500` (and v4 parametrized sibling) — every catalog template renders to **≤ 500** chars with a realistic 40-char hex `{id}` (and realistic long FQN for resolve/search templates).
-5. **Manual smoke (PR evidence):**
+3. **`test_hint_templates_never_use_python_list_ids`** — assert no rendered catalog template contains `(['` or `"['"` (after format with a realistic 40-char hex id).
+4. **`test_hint_source_no_python_bracket_ids`** — source-level sentinel: no `neighbors(['` in `mcp_hints.py` or `java_ontology.py` (decision §5).
+5. **Char-cap sweep:** `test_hints_template_rendered_length_leq_500` (and v4 parametrized sibling) — every catalog template renders to **≤ 500** chars with a realistic 40-char hex `{id}` (and realistic long FQN for resolve/search templates).
+6. **Manual smoke (PR evidence):**
    - `describe` on a controller from `tests/bank-chat-system` → copy `record.id` into `neighbors(ids="<id>", direction="out", edge_types=["DECLARES.EXPOSES"])` via MCP host or `mcp_v2.neighbors_v2` with `list[str]` / bare string — success.
    - Confirm copying the **old** hint shape `"ids": "['<id>']"` still fails (documents why we changed hints; optional post-implementation note in PR).
 
 Heavy / graph rebuild tests not required.
 
-## Open questions ([TBD])
+## Decisions (resolved)
 
-1. **Hint sketch vs strict JSON object** — Use `neighbors(ids="…", direction="out", …)` (named sketch, matches issue #195) or `neighbors({"ids":"…","direction":"out",…})` (matches slash aliases exactly)?  
-   **Recommended:** named-parameter sketch in hint **text**; slash-alias table in AGENT-GUIDE keeps JSON objects for hosts that prefer a single blob.
+All former open questions — **chosen** 2026-05-21 (align with issue #195 recommendations).
 
-2. **Single PR vs docs-first PR** — Land templates and docs together or docs in PR-1?  
-   **Recommended:** **one PR** — agents reading updated docs while old hints still emit Python lists recreates the same failure mode.
-
-3. **DESCRIBE-HINTS-STRUCTURAL sequencing** — Merge structural templates before or after this PR?  
-   **Recommended:** if #191 lands first, rebase structural templates onto the new dialect in the same week; if this lands first, structural propose author copies §1 rules. Avoid merging new `TPL_DESCRIBE_*` with old `['{id}']` syntax.
-
-4. **Whether to add a mechanical lint in CI** — grep `neighbors\(\['` in `mcp_hints.py` / `java_ontology.py`?  
-   **Recommended:** yes, as a small `test_hint_source_no_python_bracket_ids` alongside rendered-output test.
-
-5. **Re-merge HINTS-V4 N1a+N1b into one combined hint** — v4 dropped a single dot-key `or` line at ~194 chars under the 120 cap.  
-   **Recommended:** **optional, out of #195 MVP** — keep N1a + N1b separate unless a follow-up wants fewer hints on the `DECLARES` success path; 500 chars makes a combined row *possible*, not mandatory.
+| # | Question | **Chosen** |
+|---|----------|------------|
+| 1 | Hint sketch vs strict JSON object | **Named-parameter sketch** in hint text (`neighbors(ids="…", direction="out", edge_types=[…])`). AGENT-GUIDE slash-alias table keeps JSON objects for hosts that prefer a single blob. |
+| 2 | Single PR vs docs-first | **One implementation PR** — templates, docs, and tests land together (no docs-only lead). |
+| 3 | DESCRIBE-HINTS-STRUCTURAL sequencing | Whichever lands first wins; the other rebases within the same week onto §1 rules + 500-char cap. **Never** merge new `TPL_DESCRIBE_*` using `['{id}']` syntax. |
+| 4 | Mechanical CI lint | **Yes** — `test_hint_source_no_python_bracket_ids` (no `neighbors(['` in `mcp_hints.py` / `java_ontology.py`) plus rendered-output sentinels. |
+| 5 | Re-merge HINTS-V4 N1a+N1b | **Out of #195 MVP** — keep N1a + N1b separate; combined dot-key line remains optional follow-up only. |
 
 ## Out of scope
 
@@ -187,7 +183,7 @@ Heavy / graph rebuild tests not required.
 
 | Step | Deliverable |
 |------|-------------|
-| **PR-1 (this propose)** | Templates + `EDGE_SCHEMA` traversals + EDGE-NAVIGATION regen + AGENT-GUIDE/README/server descriptions + tests |
+| **Implementation PR (one)** | Templates + `EDGE_SCHEMA` traversals + EDGE-NAVIGATION regen + AGENT-GUIDE/README/server descriptions + tests (decision §2) |
 | **Follow-up (optional)** | Coercion / fail-loud hybrid (issue #195 options 4–5) if telemetry still shows `['…` id strings |
 
 **Suggested branch:** `cursor/hints-mcp-call-shape-195` or `feat/hints-mcp-call-shape-195`.
