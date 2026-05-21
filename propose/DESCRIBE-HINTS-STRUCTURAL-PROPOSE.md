@@ -12,6 +12,8 @@
 
 **Depends on (landed):** describe rollups (`DECLARES.*`, `OVERRIDDEN_BY.*`), stored `OVERRIDES`, v4 `TPL_FIND_SUCCESS_HTTP_TARGETS` / `TPL_FIND_SUCCESS_ASYNC_TARGETS` strings.
 
+**Depends on (implementation):** [`HINTS-MCP-JSON-IDS-PROPOSE.md`](./HINTS-MCP-JSON-IDS-PROPOSE.md) — tier A–H emissions use JSON `neighbors` fragments and **40-char hex** `id` in char-cap tests, not `neighbors(['{id}'],…)` / `sym:…`.
+
 ## TL;DR
 
 - Extend the **`describe` success-path** hint catalog in `mcp_hints.py` with **10 hint rows** (tiers 1–2; **7** new `TPL_DESCRIBE_*` constants, reuse find v4 strings for **I/J**).
@@ -55,12 +57,12 @@ All tier-1 rows require:
 
 ### Tier 1 — type wiring (P0)
 
-| ID | Trigger | Template constant | Emission (≤120 chars with realistic `sym:…` id) |
-|----|---------|-------------------|--------------------------------------------------|
-| **A** | `decl_kind == "interface"` and `IMPLEMENTS.in > 0` | `TPL_DESCRIBE_TYPE_IMPLEMENTORS` | `implementors: neighbors(['{id}'],'in',['IMPLEMENTS'])` |
-| **B** | `decl_kind == "class"` and `IMPLEMENTS.out > 0` | `TPL_DESCRIBE_TYPE_IMPLEMENTS` | `implements: neighbors(['{id}'],'out',['IMPLEMENTS'])` |
-| **C** | `decl_kind == "class"` and `role == "SERVICE"` and `INJECTS.out > 0` | `TPL_DESCRIBE_TYPE_DEPENDENCIES` | `dependencies: neighbors(['{id}'],'out',['INJECTS'])` |
-| **D** | `decl_kind in {interface, class}` and `INJECTS.in > 0` | `TPL_DESCRIBE_TYPE_INJECTORS` | `injectors: neighbors(['{id}'],'in',['INJECTS'])` |
+| ID | Trigger | Template constant | Emission (≤120 chars; `id` = 40-char hex; see HINTS-MCP-JSON-IDS fallout) |
+|----|---------|-------------------|-------------------------------------------------------------------------------------|
+| **A** | `decl_kind == "interface"` and `IMPLEMENTS.in > 0` | `TPL_DESCRIBE_TYPE_IMPLEMENTORS` | `{"ids":"{id}","direction":"in","edge_types":["IMPLEMENTS"]}` |
+| **B** | `decl_kind == "class"` and `IMPLEMENTS.out > 0` | `TPL_DESCRIBE_TYPE_IMPLEMENTS` | `{"ids":"{id}","direction":"out","edge_types":["IMPLEMENTS"]}` |
+| **C** | `decl_kind == "class"` and `role == "SERVICE"` and `INJECTS.out > 0` | `TPL_DESCRIBE_TYPE_DEPENDENCIES` | `{"ids":"{id}","direction":"out","edge_types":["INJECTS"]}` |
+| **D** | `decl_kind in {interface, class}` and `INJECTS.in > 0` | `TPL_DESCRIBE_TYPE_INJECTORS` | `{"ids":"{id}","direction":"in","edge_types":["INJECTS"]}` |
 
 **Notes:**
 
@@ -73,9 +75,9 @@ All tier-1 rows require:
 
 | ID | Trigger | Template | Emission |
 |----|---------|----------|----------|
-| **E** | method/constructor; `1 <= CALLS.out <= 9`; no tier-1 rollup on parent (N/A here); **gate:** `role != "OTHER"` OR `CALLS.out >= 3` | `TPL_DESCRIBE_METHOD_OUTBOUND_CALLS` | `outbound calls: neighbors(['{id}'],'out',['CALLS'])` |
-| **G** | method; `OVERRIDES.out > 0`; **`not _override_axis_would_emit(edge_summary)`** — true when any key `k` with `k == "OVERRIDDEN_BY"` or `k.startswith("OVERRIDDEN_BY.")` has `out > 0` (same keys as override rollups today) | `TPL_DESCRIBE_METHOD_SUPER_DECL` | `super declaration: neighbors(['{id}'],'out',['OVERRIDES'])` |
-| **H** | method; `int(record.data.unresolved_call_sites_total or 0) > 0` | `TPL_DESCRIBE_METHOD_UNRESOLVED` | `unresolved: neighbors(['{id}'],'out',['CALLS'],include_unresolved=True)` |
+| **E** | method/constructor; `1 <= CALLS.out <= 9`; no tier-1 rollup on parent (N/A here); **gate:** `role != "OTHER"` OR `CALLS.out >= 3` | `TPL_DESCRIBE_METHOD_OUTBOUND_CALLS` | `{"ids":"{id}","direction":"out","edge_types":["CALLS"]}` |
+| **G** | method; `OVERRIDES.out > 0`; **`not _override_axis_would_emit(edge_summary)`** — true when any key `k` with `k == "OVERRIDDEN_BY"` or `k.startswith("OVERRIDDEN_BY.")` has `out > 0` (same keys as override rollups today) | `TPL_DESCRIBE_METHOD_SUPER_DECL` | `{"ids":"{id}","direction":"out","edge_types":["OVERRIDES"]}` |
+| **H** | method; `int(record.data.unresolved_call_sites_total or 0) > 0` | `TPL_DESCRIBE_METHOD_UNRESOLVED` | `{"ids":"{id}","direction":"out","edge_types":["CALLS"],"include_unresolved":true}` |
 | **I** | `kind == "client"` and `HTTP_CALLS.out > 0` | `TPL_FIND_SUCCESS_HTTP_TARGETS` (existing) | same as find v4 |
 | **J** | `kind == "producer"` and `ASYNC_CALLS.out > 0` | `TPL_FIND_SUCCESS_ASYNC_TARGETS` (existing) | same as find v4 |
 

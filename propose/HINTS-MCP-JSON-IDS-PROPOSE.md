@@ -8,7 +8,9 @@ Proposal — not yet implemented.
 
 **Chosen fix combo (issue table):** **1** (hint templates) + **2** (agent guide + tool descriptions) + **6** (align docs with live graph id shape). **Explicitly not** runtime coercion (issue options 3–5, 9) or structured hints (7) in this effort.
 
-**Amends (when implemented):** locked hint catalogs in `propose/completed/HINTS-ROAD-SIGNS-PROPOSE.md` Appendix A and downstream v2/v3/v4 appendices — emission strings only, not trigger logic. **Blocks or lands with:** in-flight [`DESCRIBE-HINTS-STRUCTURAL-PROPOSE.md`](./DESCRIBE-HINTS-STRUCTURAL-PROPOSE.md) tier-1/2 templates (still drafted with `neighbors(['{id}'],…)`); implementation PR must not merge structural hints on the old shape.
+**Amends (when implemented):** locked hint catalogs in `propose/completed/HINTS-ROAD-SIGNS-PROPOSE.md` Appendix A and downstream v2/v3/v4 appendices — emission strings only, not trigger logic. **Blocks or lands with:** in-flight [`DESCRIBE-HINTS-STRUCTURAL-PROPOSE.md`](./DESCRIBE-HINTS-STRUCTURAL-PROPOSE.md) tier-1/2 templates; implementation PR must not merge structural hints on the old shape.
+
+**Handoff:** add `plans/PLAN-HINTS-MCP-JSON-IDS.md` + `plans/CURSOR-PROMPTS-HINTS-MCP-JSON-IDS.md` when opening the implementation PR (~23 `neighbors(` templates + ontology traversals + EDGE-NAVIGATION regen).
 
 ## Problem Statement
 
@@ -31,11 +33,15 @@ This is **hint-format / documentation drift**, not broken graph data or wrong id
 
 Secondary failure mode (**#6**): README and `docs/AGENT-GUIDE.md` still show `sym:…FQN…` as the canonical `describe` / `neighbors` example id. **Stored** symbol ids are SHA1 hex from `graph_enrich.symbol_id` (no `sym:` prefix). `sym:` is recognized in `_node_kind_from_id` for kind detection only; passing `sym:<fqn>` as `describe(id=…)` does not hit the graph unless that exact string is stored (it is not). Agents that learn id shape from docs copy the wrong form.
 
+**Related copy-risk (deferred):** `resolve` / `find` / `search` hints use Python kwargs and dict literals (`resolve(identifier, hint_kind='…')`, `filter={{path_prefix: '…'}}`). Same failure class for MCP JSON paste, but **out of scope** for this propose (see §1 scope boundary).
+
 ## Proposed Solution
 
-### 1 — Hint emission contract (baseline)
+### 1 — Hint emission contract (neighbors-shaped)
 
-Replace pseudo-Python `neighbors(['{id}'], 'out', ['EDGE'])` across the **entire** hint surface with **JSON-shaped** next-step fragments agents can paste into MCP tool calls.
+Replace pseudo-Python `neighbors(['{id}'], 'out', ['EDGE'])` in **neighbors-shaped** templates and `EDGE_SCHEMA.typical_traversals` with **JSON-shaped** fragments agents can paste into MCP tool calls.
+
+**Scope boundary (locked):** In scope: every `mcp_hints.py` constant that embeds `neighbors(`, all `java_ontology.py` `typical_traversals` values, and v4 neighbors success strings that today use fake `client_ids` / `handler_ids` / `route_ids`. **Out of scope for #195 implementation:** `TPL_FIND_EMPTY_RESOLVE`, `TPL_RESOLVE_NONE_TRY_*`, `TPL_RESOLVE_MANY_TIGHTEN`, `TPL_SEARCH_WEAK` — follow-up propose or same epic second PR if battle-testing shows paste failures on `filter` / `identifier`.
 
 **Canonical single-origin shape (locked):**
 
@@ -43,55 +49,70 @@ Replace pseudo-Python `neighbors(['{id}'], 'out', ['EDGE'])` across the **entire
 <label>: {"ids":"<id>","direction":"<in|out>","edge_types":["<EDGE>"]}
 ```
 
-Rules:
+When the label prefix would push the rendered string over 120 chars with a 40-char hex id, emit **JSON only** (no label prefix).
+
+**Rules:**
 
 | Rule | Detail |
 |------|--------|
 | **`ids` for one origin** | Always a **JSON string** value `"<id>"`, not a one-element array, not Python `['…']`. Matches the simplest working wire shape from #195. |
 | **Placeholder** | `{id}` is substituted with the **exact** `record.id` / `origin_id` already in the payload (typically 40-char hex for symbols). |
-| **Batch / peer ids** | Hints that today say `client_ids`, `handler_ids`, `member_ids`, etc. must **not** invent a literal placeholder string agents will pass to `ids`. Replace with explicit prose inside the 120-char budget, e.g. `HTTP targets: {"ids":"<each client id>","direction":"out","edge_types":["HTTP_CALLS"]}` or shorten to `next: neighbors on each result.id (out, HTTP_CALLS)` — pick one style in implementation and apply consistently (see Open Questions). |
-| **Optional params** | Only when the locked catalog already mentions them (`include_unresolved=True`, `edge_filter={…}`). Use JSON object syntax inside the hint string; no Python `True`/`False`. |
-| **Multi-hop teaching** | Where Appendix A used `then neighbors(…)`, either (a) two compact JSON objects separated by ` → `, or (b) one hint that names the first hop only and relies on `edge_summary` for the second — prefer (a) only when both hops still fit ≤120 chars after substitution with a realistic 40-char id; otherwise drop the second hop from v1 emission (road-sign discipline). |
-| **Char cap** | Still ≤120 chars **after** substitution with a realistic 40-char symbol id (existing HINTS discipline). Templates that cannot fit are shortened (drop redundant label prefix) or dropped from the catalog with a propose amendment note. |
-| **Triggers unchanged** | `generate_hints` conditions, priorities, caps, and dedupe logic stay as-is; only template **strings** and `EDGE_SCHEMA.typical_traversals` values change. |
+| **Batch / peer ids (normative)** | Never emit literal tokens `client_ids`, `handler_ids`, `route_ids`, `member_ids`, or `producer_ids` as `ids` values. **Locked emission:** `HTTP: per result.id → {"ids":"<id>","direction":"out","edge_types":["HTTP_CALLS"]}` (same pattern for async targets, callers, declaring-method hints). Agent substitutes each concrete `id` from `neighbors.results[].other.id` or the prior `find` row. |
+| **Optional params** | Only when the locked catalog already mentions them. Use JSON: `"include_unresolved":true`, `"edge_filter":{"callee_declaring_role":"SERVICE"}` — no Python `True`/`False` or single-quoted dicts. |
+| **Multi-hop teaching** | Where Appendix A used `then neighbors(…)`, use two JSON objects separated by ` → ` only when both fit ≤120 chars with a 40-char id; otherwise **first hop only** (see fallout table). |
+| **Char cap** | ≤120 chars **after** substitution with `id = "a" * 40` (lowercase hex). Tests must use this fixture, not `sym:a` (see Tests). |
+| **Triggers unchanged** | `generate_hints` conditions, priorities, caps, and dedupe logic stay as-is; only template **strings** and `typical_traversals` values change. |
+| **Existing cap exemptions** | `TPL_NEIGHBORS_CALLS_HIGH_FANOUT` / `TPL_NEIGHBORS_CALLS_HAS_UNRESOLVED` already exceed 120 chars and are appended without the v4 success gate. This effort does **not** require shortening them unless a drive-by fits the PR; if touched, convert optional params to JSON but do not block #195 on rewriting fanout prose. |
 
-**Inventory (grep-driven; implementer refreshes counts in PR):**
+### Template fallout table (40-char hex `id`)
 
-- `mcp_hints.py` — all `TPL_*` constants that embed `neighbors(` (~30+ templates including describe/find/neighbors success and v2 resolve/find filter shapes).
-- `java_ontology.py` — every `typical_traversals` value containing `neighbors(['{id}']` (empty-neighbors structural hints embed these via `typical_traversal_for`).
-- `scripts/generate_edge_navigation.py` — if it mirrors ontology traversal strings for `docs/EDGE-NAVIGATION.md`, regenerate in the same PR.
-- `tests/test_mcp_hints.py` — locked emission assertions and any `canonical_traversal` expected strings.
-- `tests/test_mcp_hints.py` / `tests/test_java_ontology.py` (if present) — char-cap tests per template.
+Measured on `id = "a" * 40`. Implementer copies **locked resolution** column verbatim unless a propose amendment is filed.
 
-Update module header in `mcp_hints.py` to reference this propose (not only completed HINTS-ROAD-SIGNS).
+| Template / family | Current len | JSON + label len | Locked resolution |
+|-------------------|------------|------------------|-------------------|
+| `TPL_DESCRIBE_TYPE_ROUTES_VIA_MEMBERS` | 102 | 122 | Drop label; emit JSON only (102 chars). |
+| `TPL_DESCRIBE_TYPE_CLIENTS_VIA_MEMBERS` | ~102 | ~125 | Same as routes. |
+| `TPL_DESCRIBE_TYPE_PRODUCERS_VIA_MEMBERS` | ~105 | ~128 | Same as routes. |
+| `TPL_DESCRIBE_METHOD_*_IN_OVERRIDERS` (×3) | 118–118 | 129–138 | Short label (`clients:` / `routes:` / `producers:`) + JSON, or JSON only if still >120. |
+| `TPL_DESCRIBE_METHOD_OVERRIDERS` | ~95 | ~115 | JSON with optional short `overriders:` label. |
+| `TPL_DESCRIBE_METHOD_OUTBOUND_*` / `INBOUND_ROUTE` | ~90–98 | ~100–110 | JSON + short label; fits cap. |
+| `TPL_FIND_SUCCESS_*` (handler / HTTP / async) | ~80–95 | ~90–105 | JSON only or minimal label; fits cap. |
+| `TPL_NEIGHBORS_SUCCESS_*` (fake `*_ids`) | ~56 | N/A | **Batch rule** (normative); no fake id token. |
+| `TPL_NEIGHBORS_*` structural (`canonical_traversal` from ontology) | varies | varies | Migrate `java_ontology.py` strings; same JSON-only rule when >120. |
+| `DESCRIBE-HINTS-STRUCTURAL` rows A–H (not on `master`) | ≤120 with `sym:…` in draft | re-measure with hex | Amend structural propose table to JSON + hex id before merge. |
+| `TPL_NEIGHBORS_CALLS_HIGH_FANOUT` | ~400+ | worse if JSON-ified | **Exempt** from 120 cap in this PR; optional JSON for `edge_filter` snippets only if edited. |
 
-Extend `MCP_HINTS_FIELD_DESCRIPTION` (and thus all output `hints` field descriptions) with one sentence: hints show **JSON argument objects**; copy **`record.id`** (or `neighbors.other.id`) verbatim — never Python list literals inside `ids`.
+**Inventory (grep `neighbors(` in `mcp_hints.py`; expect ~23 templates):**
+
+- All `TPL_DESCRIBE_*` / `TPL_FIND_SUCCESS_*` with `neighbors(`.
+- All `TPL_NEIGHBORS_SUCCESS_*` (batch rule rewrite).
+- `java_ontology.py` — every `typical_traversals` value containing `neighbors(['{id}']`.
+- `scripts/generate_edge_navigation.py` — regenerate `docs/EDGE-NAVIGATION.md` in the same PR if generated from ontology.
+- `tests/test_mcp_hints.py` — locked emissions, char-cap parametrization, `canonical_traversal` expectations.
+
+Update `mcp_hints.py` module header to reference this propose.
+
+Extend `MCP_HINTS_FIELD_DESCRIPTION`: hints show **JSON argument objects** for `neighbors`; copy **`record.id`** (or `neighbors.other.id`) verbatim — never Python list literals inside `ids`.
 
 ### 2 — Documentation and tool descriptions
 
 **`docs/AGENT-GUIDE.md`** (inside `<!-- BEGIN … END -->` markers):
 
-- New subsection under **Argument shapes** (or expand **JSON, not stringified JSON**): **Hints vs MCP calls**.
-  - Hints are advisory strings showing JSON-shaped `neighbors` / `find` / `resolve` fragments.
+- New subsection **Hints vs MCP calls** under **Argument shapes**:
+  - Neighbors hints use JSON objects; copy ids from tool outputs.
   - **Wrong:** `"ids": "['abc…']"` (Python-style list as string).
   - **Right:** `"ids": "abc…"` or `"ids": ["abc…"]`.
-  - Always take ids from the latest tool output (`describe.record.id`, `find.results[].id`, `neighbors.other.id`, `resolve.node.id`).
+  - Resolve/find hints may still show Python-shaped fragments until the follow-up PR; always prefer constructing calls from the tool schema, not pasting hint punctuation literally.
 - Revise **Node ids** table and examples:
   - **Symbol:** primary form is **40-char lowercase hex** (SHA1 of kind|fqn|file|byte).
-  - **Route / Client / Producer:** `r:` / `c:` / `p:` or long prefixes `route:` / `client:` / `producer:` + short hash (see graph builder).
-  - **`sym:` / FQN-shaped ids:** not stored on Symbol nodes; use `resolve(identifier=<fqn>)` or `describe(fqn=…)` then `describe(id=record.id)`. Do not fabricate `sym:…` for `neighbors`.
-- Update workflow table rows and slash-command examples (`/callers`, …) to use hex id placeholders, not `sym:…`.
-- Keep existing “JSON, not stringified JSON” table; add `ids` row if missing: wrong = `"['id']"` or `"[\"id\"]"` when a bare string suffices.
+  - **Route / Client / Producer:** `r:` / `c:` / `p:` or long prefixes + short hash.
+  - **`sym:` / FQN-shaped ids:** not stored on Symbol nodes; use `resolve(identifier=<fqn>)` or `describe(fqn=…)` then `describe(id=record.id)`.
+- Update workflow table rows and slash-command examples to hex / terminal prefixes, not `sym:…`.
+- Extend **JSON, not stringified JSON** table: add `ids` row (wrong = `"['id']"` when a bare string suffices).
 
-**`server.py`:**
+**`server.py`:** `neighbors` `ids` `Field(description=…)` — accepted shapes, reject Python-style quoted lists, point to `record.id`.
 
-- `neighbors` tool `ids` `Field(description=…)` — state accepted shapes (string or list of strings), warn that Python-style quoted lists are rejected, point to `record.id` from prior tools.
-- Optional one line in top-level `_INSTRUCTIONS` if agents read it before tool choice.
-
-**`README.md` §4 tool table:**
-
-- Replace `describe` / `neighbors` example ids with realistic hex / `r:` samples from fixture meta or documented placeholders (`<40-char-symbol-id>`).
-- Add one-line callout under the table: symbol ids in responses are hex, not `sym:` FQN.
+**`README.md` §4:** Replace `sym:…` examples with hex / `r:` placeholders; one-line callout that symbol ids in responses are hex.
 
 No change to MCP tool **names**, parameters, or response **schemas** beyond description strings.
 
@@ -101,67 +122,64 @@ Same PR as §2; no graph or resolver code change.
 
 | Surface | Today | After |
 |---------|-------|--------|
-| README `describe` example | `sym:com.bank…#method(…)` | `{"id":"<40-char-hex>"}` or `describe(fqn=…)` example |
+| README `describe` example | `sym:com.bank…#method(…)` | `{"id":"<40-char-hex>"}` or `describe(fqn=…)` |
 | README `neighbors` example | `sym:…ChatController` | hex id + composed `edge_types` |
-| AGENT-GUIDE Node ids | implies `sym:` is normal for Symbol | hex primary; `sym:` explained as non-stored legacy prefix |
-| Hints `{id}` substitution | already uses real `origin_id` from payload | unchanged mechanism; emissions show JSON so copied id is visible |
+| AGENT-GUIDE Node ids | implies `sym:` is normal for Symbol | hex primary; `sym:` as non-stored legacy prefix |
+| Char-cap tests | `sym:a` placeholders | **`"a" * 40`** hex fixture |
 
-Confirm with one manual check on `tests/bank-chat-system` index: `describe` on a known controller returns hex `record.id`; document that shape in examples.
+Confirm on `tests/bank-chat-system`: `describe` on a known controller returns hex `record.id`.
 
 ## Scope
 
-- Template string migration in `mcp_hints.py`.
-- `EDGE_SCHEMA.typical_traversals` string migration in `java_ontology.py`.
-- `MCP_HINTS_FIELD_DESCRIPTION` wording.
-- `docs/AGENT-GUIDE.md`, `README.md` §4, `server.py` field descriptions / `_INSTRUCTIONS`.
-- Tests that lock hint emissions and char caps.
-- Regenerated `docs/EDGE-NAVIGATION.md` **only if** the generator script is the source of truth for traversal examples (verify in PR; do not hand-edit if generated).
+**Implementation checklist:**
+
+- [ ] `mcp_hints.py` — neighbors-shaped templates per fallout table + batch rule.
+- [ ] `java_ontology.py` — `typical_traversals` JSON migration.
+- [ ] `MCP_HINTS_FIELD_DESCRIPTION` + `server.py` / `README.md` / `docs/AGENT-GUIDE.md`.
+- [ ] `tests/test_mcp_hints.py` — emissions, char-cap with 40-char hex, no `['{id}']` in rendered neighbors hints.
+- [ ] Regenerate `docs/EDGE-NAVIGATION.md` if script-driven.
+- [ ] Amend [`DESCRIBE-HINTS-STRUCTURAL-PROPOSE.md`](./DESCRIBE-HINTS-STRUCTURAL-PROPOSE.md) tier table (rows A–H): JSON emissions + **hex** id in char-cap column (not `sym:…`).
+- [ ] Rebase before editing if a branch touches the same `TPL_DESCRIBE_METHOD_*` strings (e.g. completed dot-key work on `master`).
 
 ## Schema / Ontology / Re-index impact
 
-- **Ontology bump:** not required (teaching strings only; no edge semantics or enrichment change).
+- **Ontology bump:** not required (teaching strings only).
 - **Re-index required:** no.
-- **Config / tool surface changes:** none (same tools and parameters; hint **text** and doc examples only).
+- **Config / tool surface changes:** none.
 
 ## Tests / Validation
 
-- `tests/test_mcp_hints.py` — update expected strings for every affected template; keep char-cap and dedupe scenarios.
-- Add or extend one test that documents the #195 failure mode as **documentation of intent** (optional): assert new route-via-members template does **not** contain `['{id}']` or `"['"`.
-- `tests/test_mcp_v2.py` — only if any test asserts hint substrings (grep in PR).
-- Manual (PR evidence): on bank fixture, `describe` → copy hint JSON with returned `record.id` → `neighbors` succeeds; paste `"ids":"['<id>']"` still fails (proves we did not add coercion).
-- `.venv/bin/ruff check .` and `.venv/bin/python -m pytest tests -v` (no heavy gate).
+- `tests/test_mcp_hints.py` — update expected strings; **char-cap parametrization must use `id = "a" * 40`** (fixes false green with `sym:a`).
+- Assert rendered neighbors hints do not contain `['` or `"['"` after substitution.
+- `test_hints_all_v4_templates_under_120_chars` — same 40-char hex fixture for describe/find success templates.
+- Optional: table-driven test mirroring §1 fallout rows (template → rendered len ≤120).
+- Manual: bank fixture `describe` → paste hint JSON with `record.id` → `neighbors` succeeds; `"ids":"['<id>']"` still fails (no coercion).
+- `.venv/bin/ruff check .` and `.venv/bin/python -m pytest tests -v`.
 
 ## Open Questions ([TBD])
 
-1. **Batch-id hint phrasing** — For `TPL_NEIGHBORS_SUCCESS_*` using `client_ids` / `handler_ids`, which style?
-   - **Recommended:** `{"ids":"<id>","direction":"out","edge_types":["HTTP_CALLS"]}` with label text “repeat per client id from results” when multiple rows exist; drop fake `client_ids` token entirely.
-2. **Label prefix vs raw JSON** — Keep `routes via members: {…}` or emit only `{…}`?
-   - **Recommended:** keep short label prefix for scanability in `hints[]`; raw JSON alone is allowed if char cap forces it.
-3. **Two-hop hints that exceed 120 chars** — Split into two hints, shorten to first hop only, or abbreviate keys?
-   - **Recommended:** first hop only in hint; second hop remains discoverable via `edge_summary` / AGENT-GUIDE composed-edge table (matches road-sign discipline when cap bites).
-4. **DESCRIBE-HINTS-STRUCTURAL landing order** — Land JSON hint migration first, then structural rows, or one PR?
-   - **Recommended:** one PR if structural work is not yet on `master`; otherwise JSON migration PR first, structural follow-up amends templates before merge.
+1. **Label prefix when JSON-only fits** — Prefer dropping label entirely vs ultra-short `routes:` prefix when both are ≤120?
+   - **Recommended:** drop label when JSON-only is ≤120; use `routes:` only when it saves agent scanning and still fits.
+2. **DESCRIBE-HINTS-STRUCTURAL landing order** — One implementation PR vs JSON migration first?
+   - **Recommended:** one PR if structural is not on `master`; else JSON migration PR first, structural amended before merge.
+3. **Resolve/find/search JSON hints** — Separate PR?
+   - **Recommended:** yes (follow-up); document in AGENT-GUIDE that those hints may remain Python-shaped until then.
 
 ## Out of scope
 
-- `_coerce_ids()` / `ast.literal_eval` / teaching-only fail-loud for `['…` strings (issue options 3–5, 9).
-- Structured `hints_structured` / Shape 2 (option 7).
-- Shorter hints with no embedded call syntax (option 8) — may be a follow-up if JSON hints still confuse models.
-- Cursor host rules-only guidance (option 10).
-- FastMCP upstream changes.
-- Changing `neighbors_v2` id resolution or graph id generation.
-- Bumping `ontology_version`.
+- `_coerce_ids()` / teaching-only fail-loud for `['…` strings (issue options 3–5, 9).
+- **JSON migration for** `TPL_FIND_EMPTY_RESOLVE`, `TPL_RESOLVE_NONE_TRY_*`, `TPL_SEARCH_WEAK` (follow-up).
+- Structured `hints_structured` (option 7).
+- Rewriting `TPL_NEIGHBORS_CALLS_HIGH_FANOUT` length (unless drive-by).
+- FastMCP upstream, `neighbors_v2` id generation changes, `ontology_version` bump.
 
 ## Sequencing / Follow-ups
 
-**Single PR** recommended (docs + templates + ontology teaching strings + tests).
+1. Land this propose; add `plans/PLAN-HINTS-MCP-JSON-IDS.md` + `CURSOR-PROMPTS-…` for implementation PR.
+2. Implementation PR: templates + ontology + tests + docs + structural propose amendment.
+3. **Follow-up PR:** resolve/find/search hint JSON + coercion (**1+5**) only if battle-testing still shows paste failures.
 
-1. Lock emission format in `mcp_hints.py` + `java_ontology.py`.
-2. Update tests.
-3. Patch AGENT-GUIDE, README, server descriptions; regenerate EDGE-NAVIGATION if applicable.
-4. Amend `DESCRIBE-HINTS-STRUCTURAL-PROPOSE.md` template table to JSON shape before or in the same implementation PR.
-
-**Follow-up (separate issue/propose if battle-testing still fails):** issue combo **1 + 5** (JSON hints + light coercion for `['single-id']` strings) — only if metrics show agents still stringify Python lists after this lands.
+Implementation PR must not close #195 until templates, tests, and README/AGENT-GUIDE/server descriptions land.
 
 ## PR body template (proposal-only)
 
@@ -173,14 +191,14 @@ Adds `propose/HINTS-MCP-JSON-IDS-PROPOSE.md` for #195 (combo 1+2+6).
 Agents copy Python-style hint syntax into MCP `ids` and get `Unknown id prefix`; docs teach misleading `sym:` ids.
 
 ## Highlights
-- JSON-shaped hint emissions; single-origin `ids` as string
-- AGENT-GUIDE + README + server `ids` description alignment
-- 40-char hex symbol ids documented; `sym:` examples removed
-- No ontology bump / no re-index / no runtime coercion
+- JSON neighbors hints; 40-char hex char-cap table with per-template resolutions
+- Normative batch-id rule (no fake `client_ids`)
+- Narrow scope: neighbors-shaped templates; resolve/find deferred
+- AGENT-GUIDE + README + server `ids` alignment
 
 ## Tests
-Docs-only PR; baseline unchanged.
+Docs-only; baseline unchanged.
 
 ## Out of scope
-Implementation deferred to follow-up PR(s).
+Implementation deferred.
 ```
