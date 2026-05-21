@@ -8,7 +8,7 @@
 
 **Implements fix combo:** **1** (hint templates) + **2** (agent docs + `server.py` field descriptions) + **6** (align id-shape documentation with live graph ids). Does **not** implement runtime coercion (options 3–5), structured hints (7), or host-only rules (10).
 
-**Amends (catalog lock):** [`propose/completed/HINTS-ROAD-SIGNS-PROPOSE.md`](./completed/HINTS-ROAD-SIGNS-PROPOSE.md) Appendix A, **§7.6 rendered-length cap (120 → 500)**, and follow-on hint proposes (v2/v3/v4, CALLS high-fanout strings). In-flight [`propose/DESCRIBE-HINTS-STRUCTURAL-PROPOSE.md`](./DESCRIBE-HINTS-STRUCTURAL-PROPOSE.md) must adopt the same call-shape convention and **500-char** cap for any **new** `TPL_DESCRIBE_*` rows landed after this work (or land structural templates in the same PR as this propose).
+**Amends (catalog lock):** [`propose/completed/HINTS-ROAD-SIGNS-PROPOSE.md`](./completed/HINTS-ROAD-SIGNS-PROPOSE.md) Appendix A, **§7.6 rendered-length cap (120 → 250)**, and follow-on hint proposes (v2/v3/v4, CALLS high-fanout strings). In-flight [`propose/DESCRIBE-HINTS-STRUCTURAL-PROPOSE.md`](./DESCRIBE-HINTS-STRUCTURAL-PROPOSE.md) must adopt the same call-shape convention and **250-char** cap for any **new** `TPL_DESCRIBE_*` rows landed after this work (or land structural templates in the same PR as this propose).
 
 ## Problem statement
 
@@ -47,39 +47,45 @@ routes via members: neighbors(ids="{id}", direction="out", edge_types=["DECLARES
 | **Single origin** | `ids="{id}"` (string), never `ids=['{id}']` or `ids="['{id}']"`. |
 | **Batch / placeholder lists** | `ids=member_ids` or `ids=client_ids` (bare placeholder token), not bracket-wrapped pseudo-lists. |
 | **`direction` / `edge_types`** | Always named; `edge_types` uses JSON double-quoted strings inside the sketch. |
-| **Two-hop chains** | Keep ` then ` between two `neighbors(…)` sketches when the catalog already uses a chain; each hop obeys the same rules. Prefer **dot-key** shortcuts where they are clearer; with the 500-char cap, re-expanding a two-hop chain is allowed when it improves copy clarity (see §1b). |
+| **Two-hop chains** | Keep ` then ` between two `neighbors(…)` sketches when the catalog already uses a chain; each hop obeys the same rules. Prefer **dot-key** shortcuts where they are clearer; with the 250-char cap, re-expanding a two-hop chain is allowed when it improves copy clarity (see §1b). |
 | **`edge_filter` / `filter` in meta hints** | Use JSON object literals with double quotes, e.g. `edge_filter={"callee_declaring_role":"SERVICE"}`, not Python `{{…}}` / single-quoted dicts. |
 | **`resolve` / `find` / `search` sketches** | Same convention: `resolve(identifier="{identifier}", hint_kind="{kind}")`, `search(query="{q}")` — no Python-only quoting. |
-| **Rendered length** | See §1b (500 chars, not 120). |
+| **Rendered length** | See §1b (250 chars, not 120). |
 
-Update `MCP_HINTS_FIELD_DESCRIPTION` in `mcp_hints.py` to state explicitly: *hints use MCP-copyable named-parameter sketches; copy `record.id` (or `results[i].id`) into `ids`, not Python list literals; each hint is at most 500 characters after placeholder substitution.*
+Update `MCP_HINTS_FIELD_DESCRIPTION` in `mcp_hints.py` to state explicitly: *hints use MCP-copyable named-parameter sketches; copy `record.id` (or `results[i].id`) into `ids`, not Python list literals; each hint is at most 250 characters after placeholder substitution.*
 
-### 1b — Hint length cap: 120 → 500
+### 1b — Hint length cap: 120 → 250
 
-Road-sign discipline keeps **≤ 5 hints per output** and **no prose tutorials** (HINTS-ROAD-SIGNS §2–§3). The **per-hint rendered length** limit moves from **120** to **500** characters (measured on the string **after** `{id}`, `{identifier}`, and other placeholders are substituted with realistic values — same rule as v1 §7.6, new numeric cap).
+Road-sign discipline keeps **≤ 5 hints per output** and **no prose tutorials** (HINTS-ROAD-SIGNS §2–§3). The **per-hint rendered length** limit moves from **120** to **250** characters (measured on the string **after** `{id}`, `{identifier}`, and other placeholders are substituted with realistic values — same rule as v1 §7.6, new numeric cap).
 
-**Why raise it now**
+**Why 250 (not 120 or 500)**
+
+- **120** is too tight once hints use named MCP parameters and JSON `edge_filter` literals.
+- **500** was rejected as excessive for road-sign discipline (~1.25k chars if all five hints fire).
+- **250** fits one copyable `neighbors(…)` call plus a short filter example; HINTS-V4’s ~194-char combined N1 row still fits.
+
+**Why raise from 120**
 
 - MCP-copyable named-parameter sketches are longer than pseudo-Python `neighbors(['{id}'],…)`.
-- CALLS meta hints (`TPL_NEIGHBORS_CALLS_HIGH_FANOUT`, role-collision, unresolved) were written against the 120 cap with compressed grammar; 500 allows full `edge_filter={…}` examples without drop-on-overflow.
-- HINTS-V4 **rejected** a combined N1 dot-key line at ~194 chars (v4 propose); that row fits under 500 if we choose to emit it (optional, not required for #195).
+- CALLS meta hints (`TPL_NEIGHBORS_CALLS_HIGH_FANOUT`, role-collision, unresolved) were written against the 120 cap with compressed grammar; 250 allows full `edge_filter={…}` examples without drop-on-overflow.
+- HINTS-V4 **rejected** a combined N1 dot-key line at ~194 chars (v4 propose); that row fits under 250 if we choose to emit it (optional, not required for #195).
 
 **Implementation**
 
 | Item | Change |
 |------|--------|
-| `mcp_hints.py` | Replace `_FIND_SUCCESS_MAX_CHARS`, `_RESOLVE_HINT_MAX_CHARS`, `_NEIGHBORS_SUCCESS_MAX_CHARS` (all `120`) with one module constant **`HINT_MAX_RENDERED_CHARS = 500`** used by every drop-on-overflow check. |
-| `MCP_HINTS_FIELD_DESCRIPTION` | Mention **500** chars per hint (still max **5** hints per output). |
-| `tests/test_mcp_hints.py` | Rename/update `test_hints_*_under_120_chars` → **`test_hints_*_under_500_chars`**; assert `len(rendered) <= 500`. Remove or rewrite tests that **require** overflow past the cap (e.g. N1a rendered length `> 120` used only to justify split hints). |
+| `mcp_hints.py` | Replace `_FIND_SUCCESS_MAX_CHARS`, `_RESOLVE_HINT_MAX_CHARS`, `_NEIGHBORS_SUCCESS_MAX_CHARS` (all `120`) with one module constant **`HINT_MAX_RENDERED_CHARS = 250`** used by every drop-on-overflow check. |
+| `MCP_HINTS_FIELD_DESCRIPTION` | Mention **250** chars per hint (still max **5** hints per output). |
+| `tests/test_mcp_hints.py` | Rename/update `test_hints_*_under_120_chars` → **`test_hints_*_under_250_chars`**; assert `len(rendered) <= 250`. Remove or rewrite tests that **require** overflow past the cap (e.g. N1a rendered length `> 120` used only to justify split hints). |
 | Completed proposes | Not edited on disk; this file is the amendment for §7.6. |
 
-**Drop-on-overflow unchanged:** if substitution still exceeds 500 chars, the hint is **not** emitted (no truncation, no ellipsis) — same policy as v2 §7.18.
+**Drop-on-overflow unchanged:** if substitution still exceeds 250 chars, the hint is **not** emitted (no truncation, no ellipsis) — same policy as v2 §7.18.
 
 **Files — template source of truth**
 
 | File | Change |
 |------|--------|
-| `mcp_hints.py` | All `TPL_*` constants with `neighbors(['{id}']` or positional `neighbors(…)`; v4 success templates (`client_ids`, `route_ids`, …); CALLS meta hints with `edge_filter=`; **`HINT_MAX_RENDERED_CHARS = 500`**. |
+| `mcp_hints.py` | All `TPL_*` constants with `neighbors(['{id}']` or positional `neighbors(…)`; v4 success templates (`client_ids`, `route_ids`, …); CALLS meta hints with `edge_filter=`; **`HINT_MAX_RENDERED_CHARS = 250`**. |
 | `java_ontology.py` | `EDGE_SCHEMA[*].typical_traversals` strings (feed empty-`neighbors` structural hints via `canonical_traversal`). |
 | `scripts/generate_edge_navigation.py` + regenerate `docs/EDGE-NAVIGATION.md` | Keep generated doc aligned with `EDGE_SCHEMA` (same PR). |
 
@@ -133,7 +139,7 @@ Correct the public docs so examples match what the graph and tools return.
 | In scope | Out of scope (issue #195 options) |
 |----------|-----------------------------------|
 | Rewrite hint + `EDGE_SCHEMA` traversal strings to MCP-copyable form | `_coerce_ids()` / Python-bracket unwrap (3, 5) |
-| **500-char** rendered hint cap (replaces 120) + unified `HINT_MAX_RENDERED_CHARS` | Raising **5 hints/output** cap |
+| **250-char** rendered hint cap (replaces 120) + unified `HINT_MAX_RENDERED_CHARS` | Raising **5 hints/output** cap |
 | AGENT-GUIDE + README id-shape + hint-copy section | Fail-loud-only teaching error (4) without coercion |
 | `server.py` `Field(description=…)` updates | `hints_structured` (7) |
 | Regenerate `docs/EDGE-NAVIGATION.md` | Shorter hints-only labels (8) |
@@ -152,7 +158,7 @@ Correct the public docs so examples match what the graph and tools return.
 2. **`.venv/bin/python -m pytest tests/test_mcp_hints.py -v`** — existing template equality tests follow `mcp_hints.TPL_*` constants; update expectations when constants change.
 3. **`test_hint_templates_never_use_python_list_ids`** — assert no rendered catalog template contains `(['` or `"['"` (after format with a realistic 40-char hex id).
 4. **`test_hint_source_no_python_bracket_ids`** — source-level sentinel: no `neighbors(['` in `mcp_hints.py` or `java_ontology.py` (decision §5).
-5. **Char-cap sweep:** `test_hints_template_rendered_length_leq_500` (and v4 parametrized sibling) — every catalog template renders to **≤ 500** chars with a realistic 40-char hex `{id}` (and realistic long FQN for resolve/search templates).
+5. **Char-cap sweep:** `test_hints_template_rendered_length_leq_250` (and v4 parametrized sibling) — every catalog template renders to **≤ 250** chars with a realistic 40-char hex `{id}` (and realistic long FQN for resolve/search templates).
 6. **Manual smoke (PR evidence):**
    - `describe` on a controller from `tests/bank-chat-system` → copy `record.id` into `neighbors(ids="<id>", direction="out", edge_types=["DECLARES.EXPOSES"])` via MCP host or `mcp_v2.neighbors_v2` with `list[str]` / bare string — success.
    - Confirm copying the **old** hint shape `"ids": "['<id>']"` still fails (documents why we changed hints; optional post-implementation note in PR).
@@ -167,7 +173,7 @@ All former open questions — **chosen** 2026-05-21 (align with issue #195 recom
 |---|----------|------------|
 | 1 | Hint sketch vs strict JSON object | **Named-parameter sketch** in hint text (`neighbors(ids="…", direction="out", edge_types=[…])`). AGENT-GUIDE slash-alias table keeps JSON objects for hosts that prefer a single blob. |
 | 2 | Single PR vs docs-first | **One implementation PR** — templates, docs, and tests land together (no docs-only lead). |
-| 3 | DESCRIBE-HINTS-STRUCTURAL sequencing | Whichever lands first wins; the other rebases within the same week onto §1 rules + 500-char cap. **Never** merge new `TPL_DESCRIBE_*` using `['{id}']` syntax. |
+| 3 | DESCRIBE-HINTS-STRUCTURAL sequencing | Whichever lands first wins; the other rebases within the same week onto §1 rules + 250-char cap. **Never** merge new `TPL_DESCRIBE_*` using `['{id}']` syntax. |
 | 4 | Mechanical CI lint | **Yes** — `test_hint_source_no_python_bracket_ids` (no `neighbors(['` in `mcp_hints.py` / `java_ontology.py`) plus rendered-output sentinels. |
 | 5 | Re-merge HINTS-V4 N1a+N1b | **Out of #195 MVP** — keep N1a + N1b separate; combined dot-key line remains optional follow-up only. |
 
@@ -197,7 +203,7 @@ All former open questions — **chosen** 2026-05-21 (align with issue #195 recom
 
 ## Highlights
 - Hint templates use `ids="{id}"`, named `direction` / `edge_types` (no `['{id}']`).
-- Per-hint rendered cap **500** chars (`HINT_MAX_RENDERED_CHARS`; was 120).
+- Per-hint rendered cap **250** chars (`HINT_MAX_RENDERED_CHARS`; was 120).
 - AGENT-GUIDE + README + server Field descriptions aligned with live id shapes.
 - EDGE_SCHEMA / EDGE-NAVIGATION traversal strings updated to match.
 
