@@ -1,8 +1,8 @@
 # Cursor task prompts — OVERRIDDEN-BY-DOT-KEY-TRAVERSAL
 
-Status: **active**. Plan:
-[`plans/PLAN-OVERRIDDEN-BY-DOT-KEY-TRAVERSAL.md`](./PLAN-OVERRIDDEN-BY-DOT-KEY-TRAVERSAL.md). Propose:
-[`propose/OVERRIDDEN-BY-DOT-KEY-TRAVERSAL-PROPOSE.md`](../propose/OVERRIDDEN-BY-DOT-KEY-TRAVERSAL-PROPOSE.md).
+Status: **completed** (landed [#189](https://github.com/HumanBean17/java-codebase-rag/pull/189)). Plan:
+[`plans/completed/PLAN-OVERRIDDEN-BY-DOT-KEY-TRAVERSAL.md`](./PLAN-OVERRIDDEN-BY-DOT-KEY-TRAVERSAL.md). Propose:
+[`propose/completed/OVERRIDDEN-BY-DOT-KEY-TRAVERSAL-PROPOSE.md`](../../propose/completed/OVERRIDDEN-BY-DOT-KEY-TRAVERSAL-PROPOSE.md).
 
 **Depends on:** landed `DECLARES.*` dot-key traversal ([#171](https://github.com/HumanBean17/java-codebase-rag/pull/171)); stored `[:OVERRIDES]` edges.
 
@@ -21,13 +21,13 @@ One prompt: **PR-1** (single implementation PR).
 
 **Branch:** `feat/overridden-by-dot-key-traversal` off `master`.
 **Base:** `master`.
-**Plan section:** [`plans/PLAN-OVERRIDDEN-BY-DOT-KEY-TRAVERSAL.md`](./PLAN-OVERRIDDEN-BY-DOT-KEY-TRAVERSAL.md) § PR-1.
+**Plan section:** [`plans/completed/PLAN-OVERRIDDEN-BY-DOT-KEY-TRAVERSAL.md`](./PLAN-OVERRIDDEN-BY-DOT-KEY-TRAVERSAL.md) § PR-1.
 **PR title:** `feat(neighbors): navigate OVERRIDDEN_BY.* composed edge types in one call`
 
 **Attach (`@-files`):**
 
-- `@plans/PLAN-OVERRIDDEN-BY-DOT-KEY-TRAVERSAL.md`
-- `@propose/OVERRIDDEN-BY-DOT-KEY-TRAVERSAL-PROPOSE.md`
+- `@plans/completed/PLAN-OVERRIDDEN-BY-DOT-KEY-TRAVERSAL.md`
+- `@propose/completed/OVERRIDDEN-BY-DOT-KEY-TRAVERSAL-PROPOSE.md`
 - `@kuzu_queries.py` (`override_axis_rollup_for`, `member_edge_traversal_for` — mirror for override traversal)
 - `@mcp_v2.py` (`neighbors_v2`, `ComposedEdgeType`, `NodeRecord.edge_summary`)
 - `@mcp_hints.py` (`TPL_DESCRIBE_METHOD_*_IN_OVERRIDERS`, `MCP_HINTS_FIELD_DESCRIPTION`)
@@ -42,7 +42,7 @@ One prompt: **PR-1** (single implementation PR).
 **Prompt:**
 
 ````
-You are implementing PR-OVERRIDDEN-BY-1 from `plans/PLAN-OVERRIDDEN-BY-DOT-KEY-TRAVERSAL.md`.
+You are implementing PR-OVERRIDDEN-BY-1 from `plans/completed/PLAN-OVERRIDDEN-BY-DOT-KEY-TRAVERSAL.md`.
 
 ## Scope
 
