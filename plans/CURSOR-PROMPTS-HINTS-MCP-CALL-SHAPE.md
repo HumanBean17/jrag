@@ -15,9 +15,9 @@ Status: **active**. Plan:
 
 ---
 
-## PR-HINTS-MCP-CALL-SHAPE-1 — copy-safe hints + honest id docs
+## PR-1 — copy-safe hints + honest id docs
 
-**Branch:** `plan/hints-mcp-call-shape` off `master`.  
+**Branch:** `feat/hints-mcp-call-shape-195` off `master` (planning landed on `plan/hints-mcp-call-shape`; do not implement on that branch).  
 **Base:** `master`.  
 **Plan section:** [`plans/PLAN-HINTS-MCP-CALL-SHAPE.md`](./PLAN-HINTS-MCP-CALL-SHAPE.md) § PR-1.  
 **PR title:** `fix(hints): MCP-copyable call sketches and honest symbol id docs (#195)`
@@ -38,7 +38,7 @@ Status: **active**. Plan:
 **Prompt:**
 
 ````
-You are implementing PR-HINTS-MCP-CALL-SHAPE-1 from `plans/PLAN-HINTS-MCP-CALL-SHAPE.md`.
+You are implementing PR-1 from `plans/PLAN-HINTS-MCP-CALL-SHAPE.md`.
 Implements `propose/HINTS-MCP-CALL-SHAPE-PROPOSE.md` (issue #195 combo 1+2+6).
 
 ## Scope
@@ -94,7 +94,7 @@ Implements `propose/HINTS-MCP-CALL-SHAPE-PROPOSE.md` (issue #195 combo 1+2+6).
 ## Sentinel (must be zero on `git diff master..HEAD`)
 
 ```bash
-rg "neighbors\(\['" mcp_hints.py java_ontology.py
+rg "neighbors\(\['" mcp_hints.py java_ontology.py scripts/generate_edge_navigation.py
 ```
 
 ## Deliverables
@@ -129,7 +129,7 @@ with `ids` as a **bare string** — must succeed. Note in PR that copying `"ids"
 
 ## Definition of done
 
-- [ ] Sentinel `rg` clean on `mcp_hints.py` and `java_ontology.py`
+- [ ] Sentinel `rg` clean on `mcp_hints.py`, `java_ontology.py`, and `scripts/generate_edge_navigation.py`
 - [ ] `test_hint_templates_never_use_python_list_ids` and `test_hint_source_no_python_bracket_ids` pass
 - [ ] Char-cap tests use `_250` naming and realistic 40-char hex ids
 - [ ] `pytest tests/test_mcp_hints.py -v` green

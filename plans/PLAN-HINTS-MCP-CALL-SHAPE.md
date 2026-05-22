@@ -35,6 +35,8 @@ Depends on: **none** (all landed hint catalogs v1–v4, NEIGHBORS-DOT-KEY, OVERR
 
 **Landing order:** **PR-1** only (single implementation PR per propose decision §2).
 
+**Branches:** **Planning** (this effort’s plan PR): `plan/hints-mcp-call-shape`. **Implementation** (code/docs PR-1): `feat/hints-mcp-call-shape-195` off `master` — do not reuse the planning branch name.
+
 ## Resolved design decisions
 
 | Topic | Decision |
@@ -42,7 +44,7 @@ Depends on: **none** (all landed hint catalogs v1–v4, NEIGHBORS-DOT-KEY, OVERR
 | Hint sketch format | Named-parameter MCP sketch in hint text; AGENT-GUIDE slash-alias table keeps JSON blobs for hosts that prefer one object |
 | PR split | **One PR** — templates, docs, tests land together |
 | DESCRIBE-HINTS-STRUCTURAL | Rebase whichever is second; never merge new `TPL_DESCRIBE_*` with `['{id}']` |
-| CI guard | `test_hint_source_no_python_bracket_ids` + rendered sentinels (`test_hint_templates_never_use_python_list_ids`) |
+| CI guard | `test_hint_source_no_python_bracket_ids` (sources: `mcp_hints.py`, `java_ontology.py`, `scripts/generate_edge_navigation.py`) + rendered sentinels (`test_hint_templates_never_use_python_list_ids`) |
 | Char cap | `HINT_MAX_RENDERED_CHARS = 250` replaces `_FIND_SUCCESS_MAX_CHARS`, `_RESOLVE_HINT_MAX_CHARS`, `_NEIGHBORS_SUCCESS_MAX_CHARS` |
 | N1 combined line | Out of MVP — keep N1a + N1b separate |
 | `hints_structured` / coercion / FastMCP changes | Out of scope |
@@ -51,7 +53,7 @@ Depends on: **none** (all landed hint catalogs v1–v4, NEIGHBORS-DOT-KEY, OVERR
 
 # PR-1 — MCP-copyable hints, 250-char cap, honest id docs
 
-**Branch:** `plan/hints-mcp-call-shape` off `master`.  
+**Branch:** `feat/hints-mcp-call-shape-195` off `master` (not `plan/hints-mcp-call-shape`).  
 **PR title:** `fix(hints): MCP-copyable call sketches and honest symbol id docs (#195)`
 
 ## File-by-file changes
@@ -124,7 +126,7 @@ Depends on: **none** (all landed hint catalogs v1–v4, NEIGHBORS-DOT-KEY, OVERR
 - **Rewrite** `test_hints_neighbors_n1a_n1b_dropped_when_rendered_exceeds_char_cap`: either use an origin id long enough to exceed **250** after substitution, or replace with a direct unit test that `_append_neighbors_success_hint` / describe rollup respects `HINT_MAX_RENDERED_CHARS` (do not keep a test whose only purpose was proving N1 split due to 120-char limit).
 - **Add** new tests (verbatim names from propose):
   1. `test_hint_templates_never_use_python_list_ids`
-  2. `test_hint_source_no_python_bracket_ids`
+  2. `test_hint_source_no_python_bracket_ids` — assert no `neighbors(['` in `mcp_hints.py`, `java_ontology.py`, and `scripts/generate_edge_navigation.py`
 - Extend parametrized catalog sweep to cover CALLS meta templates and resolve templates if not already in `test_hints_template_rendered_length_leq_250`.
 
 ## Tests for PR-1
@@ -161,7 +163,7 @@ Depends on: **none** (all landed hint catalogs v1–v4, NEIGHBORS-DOT-KEY, OVERR
 
 ## Definition of done (PR-1)
 
-- [ ] `rg "neighbors\\(\\['" mcp_hints.py java_ontology.py` returns **no matches**
+- [ ] `rg "neighbors\\(\\['" mcp_hints.py java_ontology.py scripts/generate_edge_navigation.py` returns **no matches**
 - [ ] `HINT_MAX_RENDERED_CHARS = 250` is the only rendered-length constant for hint drop-on-overflow
 - [ ] `MCP_HINTS_FIELD_DESCRIPTION` documents 250-char cap and copy-safe `ids` semantics
 - [ ] `docs/EDGE-NAVIGATION.md` regenerated and matches `EDGE_SCHEMA`
@@ -181,7 +183,7 @@ Depends on: **none** (all landed hint catalogs v1–v4, NEIGHBORS-DOT-KEY, OVERR
 | 3 | Rewrite v4 batch `TPL_NEIGHBORS_SUCCESS_*` | `mcp_hints.py` | Batch placeholders use `ids=client_ids` form |
 | 4 | Update `MCP_HINTS_FIELD_DESCRIPTION` + module docstring | `mcp_hints.py` | Describes 250 cap + copy rules |
 | 5 | Rewrite `EDGE_SCHEMA` traversal strings | `java_ontology.py` | `rg "neighbors\\(\\['" java_ontology.py` empty |
-| 6 | Fix generator preamble strings | `scripts/generate_edge_navigation.py` | No old syntax in script |
+| 6 | Fix generator preamble strings | `scripts/generate_edge_navigation.py` | `rg "neighbors\\(\\['" scripts/generate_edge_navigation.py` empty |
 | 7 | Regenerate edge navigation doc | `docs/EDGE-NAVIGATION.md` | `git diff` shows only schema-driven updates |
 | 8 | AGENT-GUIDE node ids + hint-copy section | `docs/AGENT-GUIDE.md` | Symbol = bare hex; copy section present |
 | 9 | README MCP examples | `README.md` | No misleading `sym:` symbol emit examples |
