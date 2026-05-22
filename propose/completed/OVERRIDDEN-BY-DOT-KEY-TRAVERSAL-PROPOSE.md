@@ -2,7 +2,7 @@
 
 ## Status
 
-**Draft** — in-flight under `plan/overridden-by-dot-key-traversal`.
+**Landed** — PR [#189](https://github.com/HumanBean17/java-codebase-rag/pull/189) (PR-1).
 
 Addresses [#165](https://github.com/HumanBean17/java-codebase-rag/issues/165).
 
@@ -392,20 +392,15 @@ Manual:
   beyond sharing the override-axis composed map with `mcp_v2` (DECLARES map
   consolidation can land in the same PR or immediately after)
 
-## Sequencing
+## Sequencing (landed)
 
-Single implementation PR after propose approval:
+Single implementation PR ([#189](https://github.com/HumanBean17/java-codebase-rag/pull/189)):
 
 1. `kuzu_queries.py` — traversal + registry
 2. `mcp_v2.py` — types + handler (axis-split composed gates)
-3. Tests (`test_mcp_v2_compose.py`, hints) — **parity tests must pass before merge**
+3. Tests (`test_mcp_v2_compose.py`, hints) — parity tests
 4. Docs + `server.py` + hints templates
-5. Link this propose from [#165](https://github.com/HumanBean17/java-codebase-rag/issues/165)
-   and update the issue body (stored `[:OVERRIDES]` traversal — not signature Cypher
-   in `neighbors`) so reviewers do not re-litigate the pre–ontology-13 framing.
 
-Move this file to `propose/completed/` when the implementation PR merges.
-
-Optional follow-up: `plans/PLAN-OVERRIDDEN-BY-DOT-KEY-TRAVERSAL.md` +
-`plans/CURSOR-PROMPTS-OVERRIDDEN-BY-DOT-KEY-TRAVERSAL.md` if splitting review
-steps is useful (not required for a single PR).
+Plan and cursor prompts:
+[`plans/completed/PLAN-OVERRIDDEN-BY-DOT-KEY-TRAVERSAL.md`](../../plans/completed/PLAN-OVERRIDDEN-BY-DOT-KEY-TRAVERSAL.md),
+[`plans/completed/CURSOR-PROMPTS-OVERRIDDEN-BY-DOT-KEY-TRAVERSAL.md`](../../plans/completed/CURSOR-PROMPTS-OVERRIDDEN-BY-DOT-KEY-TRAVERSAL.md).
