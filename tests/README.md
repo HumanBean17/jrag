@@ -14,12 +14,20 @@ realistic two-service Spring Boot project:
 ```
 bank-chat-system/
   chat-assign/                       single-module Maven service
+                                     (RestTemplate + @FeignClient to chat-core)
   chat-core/                         multi-module Maven service
-    chat-app/                        @SpringBootApplication, REST controllers
-    chat-contracts/                  request/response DTOs, EventType enum
+    chat-app/                        @SpringBootApplication, REST controllers, reporting
+    chat-contracts/                  DTOs, ChatTopics, brownfield @Codebase* annotations
     chat-domain/                     JPA entities + Spring Data repositories
-    chat-engine/                     orchestration + EventProcessor strategies
+    chat-engine/                     EventProcessor strategies, kafka, notification, audit
 ```
+
+**Brownfield on bank-chat (Tier-1):** The corpus embeds `@CodebaseHttpRoute` /
+`@CodebaseHttpClient` / `@CodebaseProducer` / `@CodebaseAsyncRoute` definitions
+under `chat-contracts/.../brownfield/` and uses them from assign/app/engine.
+Session-graph assertions for that layout live in
+[`test_bank_chat_brownfield_integration.py`](./test_bank_chat_brownfield_integration.py).
+Minimal single-purpose stubs remain under `tests/fixtures/brownfield_*`.
 
 ## Running
 
@@ -56,6 +64,11 @@ cd /path/to/java-codebase-rag
 **Tier-3 on copied `cross_service_smoke`:** `test_cross_service_resolution_flag.py` and `test_client_role_rename.py` copy the fixture into `tmp_path`, edit YAML/Java, then build. They **cannot** use the read-only session graph or shared `graph_tables_cross_service_smoke`; they call `build_graph_tables_to` / `build_kuzu_to` from `_builders.py` on each **mutable** copy so pass chains stay centralized.
 
 **`test_mcp_v2.test_find_client_by_target_service`:** The seed row must come from `list_clients()` rows with a real `target_service` column. Using the first token of the display `fqn` was incorrect when `target_service` is empty (more client rows after pass5). That is a test bugfix, not a fixture-speed change — call it out in the PR.
+
+**`test_mcp_v2.test_find_client_by_client_kind`:** Client display `fqn` is
+`{target_service} {method} {path}` — it does not embed `client_kind`. After
+Feign clients were added to bank-chat, verify `client_kind` via `list_clients()`
+(or graph columns), not via substring checks on `fqn`.
 
 **Timing:** Large fixture refactors should note rough wall-time before and after in the PR body (see the plan propose).
 
@@ -117,11 +130,13 @@ When adding tests, please follow these rules:
    that case rather than enlarging the existing services.
 
 6. **The fixture is "real-shaped", not exhaustive.** Examples of things that
-   are *deliberately* not present and should not be added without thought:
-   reactive (`Mono`/`Flux`) controllers, gRPC stubs, MapStruct generated
-   sources, `@FeignClient` bridges. If your change to the MCP needs one of
-   those to be tested, add a small dedicated module — don't graft it onto
-   `chat-core`.
+   are still *uncommon* in the corpus and should not be added to `chat-core`
+   without thought: reactive (`Mono`/`Flux`) controllers, gRPC stubs, MapStruct
+   generated sources. **`chat-assign` includes a `@FeignClient`** (
+   `ChatCoreFeignClient`) for cross-service reads; keep new Feign/gRPC experiments
+   in assign or a tiny `tests/fixtures/` tree rather than enlarging engine modules.
+   If the MCP needs an isolated edge case, prefer `tests/fixtures/` over growing
+   `chat-engine` further.
 
 7. **Call graph proposal §7.1 vs tests.** The checklist in
    `propose/completed/CALL-GRAPH-PROPOSE.md` §7.1 is distributed across

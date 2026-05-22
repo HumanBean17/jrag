@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import com.bank.chat.contracts.brownfield.CodebaseHttpRoute;
 import org.springframework.web.bind.annotation.RestController;
 
 import javax.validation.Valid;
@@ -33,6 +34,7 @@ public class ChatIngressController {
     }
 
     @PostMapping("/events")
+    @CodebaseHttpRoute(path = "/api/v1/chat/events", method = "POST")
     public ResponseEntity<InboundAcceptedResponse> accept(
             @Valid @RequestBody InboundChatEventRequest body,
             @RequestHeader(value = "X-Correlation-Id", required = false) String correlationId

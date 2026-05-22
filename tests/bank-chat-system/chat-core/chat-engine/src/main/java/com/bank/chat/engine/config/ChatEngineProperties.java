@@ -15,6 +15,8 @@ public class ChatEngineProperties {
     private BusinessHours businessHours = new BusinessHours();
     private ChatAssign chatAssign = new ChatAssign();
     private JoinOperator joinOperator = new JoinOperator();
+    private PushGateway pushGateway = new PushGateway();
+    private Crm crm = new Crm();
 
     private static Map<String, Long> defaultSla() {
         Map<String, Long> m = new HashMap<>();
@@ -80,6 +82,22 @@ public class ChatEngineProperties {
         this.joinOperator = joinOperator;
     }
 
+    public PushGateway getPushGateway() {
+        return pushGateway;
+    }
+
+    public void setPushGateway(PushGateway pushGateway) {
+        this.pushGateway = pushGateway;
+    }
+
+    public Crm getCrm() {
+        return crm;
+    }
+
+    public void setCrm(Crm crm) {
+        this.crm = crm;
+    }
+
     public static class BusinessHours {
         private String zoneId = "UTC";
         private String weekdayStart = "09:00";
@@ -135,6 +153,30 @@ public class ChatEngineProperties {
 
         public void setInternalToken(String internalToken) {
             this.internalToken = internalToken;
+        }
+    }
+
+    public static class PushGateway {
+        private String baseUrl = "";
+
+        public String getBaseUrl() {
+            return baseUrl;
+        }
+
+        public void setBaseUrl(String baseUrl) {
+            this.baseUrl = baseUrl;
+        }
+    }
+
+    public static class Crm {
+        private String baseUrl = "";
+
+        public String getBaseUrl() {
+            return baseUrl;
+        }
+
+        public void setBaseUrl(String baseUrl) {
+            this.baseUrl = baseUrl;
         }
     }
 }
