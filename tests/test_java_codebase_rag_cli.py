@@ -415,8 +415,20 @@ def test_increment_updates_lance_after_touch_java_file(corpus_root: Path, tmp_pa
         env=env,
     )
     assert init.returncode == 0, init.stderr
-    marker = "class CliScenariosTouchMarker { int x; }\n"
-    touch_path = work / "cli_scenarios_touch_marker.java"
+    marker = "package com.bank.chat.assign;\n\nclass CliScenariosTouchMarker { int x; }\n"
+    touch_path = (
+        work
+        / "chat-assign"
+        / "src"
+        / "main"
+        / "java"
+        / "com"
+        / "bank"
+        / "chat"
+        / "assign"
+        / "CliScenariosTouchMarker.java"
+    )
+    touch_path.parent.mkdir(parents=True, exist_ok=True)
     touch_path.write_text(marker, encoding="utf-8")
     inc = _run_cli(
         ["increment", "--source-root", str(work), "--index-dir", str(idx), "--quiet"],

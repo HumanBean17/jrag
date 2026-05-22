@@ -1,6 +1,7 @@
 package com.bank.chat.assign.integration;
 
 import com.bank.chat.assign.config.AssignProperties;
+import com.bank.chat.contracts.brownfield.CodebaseHttpClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpEntity;
@@ -26,6 +27,7 @@ public class ChatCoreJoinClient {
         this.restTemplate = assignRestTemplate;
     }
 
+    @CodebaseHttpClient(targetService = "chat-core", path = "/chat/joinOperator", method = "POST", clientKind = "rest_template")
     public void joinOperator(String conversationId, String operatorId, String epkId) {
         String base = assignProperties.getChatCore().getBaseUrl().replaceAll("/$", "");
         String url = base + "/chat/joinOperator";

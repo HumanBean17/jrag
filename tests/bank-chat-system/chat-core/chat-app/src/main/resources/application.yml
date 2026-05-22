@@ -41,6 +41,12 @@ chat:
   join-operator:
     # When set, chat-assign must send the same value in X-Chat-Internal-Token
     internal-token: ""
+  push-gateway:
+    base-url: ""
+  crm:
+    base-url: ""
+  compliance-report-cron: "0 0 6 * * MON-FRI"
+  metrics-flush-ms: 30000
 
 management:
   endpoints:
