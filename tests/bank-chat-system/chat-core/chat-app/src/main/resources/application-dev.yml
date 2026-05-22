@@ -1,0 +1,34 @@
+spring:
+  profiles: dev
+  datasource:
+    url: jdbc:postgresql://localhost:5432/banking_chat_dev
+chat:
+  rate-limit-per-minute: 200
+  business-hours:
+    weekday-start: "00:00"
+    weekday-end: "23:59"
+---
+spring:
+  profiles: staging
+  datasource:
+    url: jdbc:postgresql://staging-db:5432/banking_chat
+chat:
+  rate-limit-per-minute: 100
+  sla-first-response-seconds:
+    VIP: 30
+    PRIVATE: 90
+    RETAIL: 180
+---
+spring:
+  profiles: prod
+  datasource:
+    url: jdbc:postgresql://prod-db:5432/banking_chat
+chat:
+  rate-limit-per-minute: 60
+  sla-first-response-seconds:
+    VIP: 60
+    PRIVATE: 120
+    RETAIL: 300
+  business-hours:
+    weekday-start: "09:00"
+    weekday-end: "18:00"

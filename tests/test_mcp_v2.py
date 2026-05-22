@@ -214,11 +214,17 @@ def test_resolve_hint_kind_producer(kuzu_graph) -> None:
 
 
 def test_find_client_by_client_kind(kuzu_graph) -> None:
+    rows = kuzu_graph.list_clients(client_kind="feign_method", limit=500)
+    if not rows:
+        pytest.skip("fixture has no feign_method client rows")
+    by_id = {str(r["id"]): r for r in rows}
     out = find_v2("client", {"client_kind": "feign_method"}, graph=kuzu_graph)
     assert out.success is True
-    if not out.results:
-        pytest.skip("fixture has no feign_method client rows")
-    assert all("feign_method" in r.fqn for r in out.results)
+    assert out.results
+    for ref in out.results:
+        row = by_id.get(ref.id)
+        assert row is not None, f"unexpected client id {ref.id!r}"
+        assert str(row.get("client_kind") or "") == "feign_method"
 
 
 def test_find_client_by_target_service(kuzu_graph) -> None:

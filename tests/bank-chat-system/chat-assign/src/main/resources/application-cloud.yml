@@ -1,0 +1,22 @@
+spring:
+  cloud:
+    stream:
+      function:
+        definition: distributionConsumer
+      bindings:
+        distributionConsumer-in-0:
+          destination: chat.assign.distribution
+          group: chat-assign-distribution
+      kafka:
+        binder:
+          brokers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+---
+spring:
+  profiles: k8s
+  datasource:
+    url: jdbc:postgresql://${DB_HOST}:${DB_PORT}/banking_chat
+assign:
+  chat-core:
+    base-url: http://chat-core:8080
+  distribution:
+    max-chats-per-operator: 3

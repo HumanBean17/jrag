@@ -2,6 +2,7 @@ package com.bank.chat.engine.kafka;
 
 import com.bank.chat.contracts.ChatTopics;
 import com.bank.chat.contracts.InternalEvent;
+import com.bank.chat.contracts.brownfield.CodebaseProducer;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Component;
 
@@ -14,6 +15,7 @@ public class FollowUpKafkaPublisher {
         this.kafkaTemplate = kafkaTemplate;
     }
 
+    @CodebaseProducer(topic = "banking.chat.incoming", producerKind = "kafka_send")
     public void publishIncoming(InternalEvent event) {
         kafkaTemplate.send(ChatTopics.INCOMING, event.getConversationId(), event);
     }
