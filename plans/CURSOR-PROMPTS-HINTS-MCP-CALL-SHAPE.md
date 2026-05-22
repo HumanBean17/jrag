@@ -17,7 +17,7 @@ Status: **active**. Plan:
 
 ## PR-HINTS-MCP-CALL-SHAPE-1 — copy-safe hints + honest id docs
 
-**Branch:** `cursor/hints-mcp-call-shape-195` or `feat/hints-mcp-call-shape-195` off `master`.  
+**Branch:** `plan/hints-mcp-call-shape` off `master`.  
 **Base:** `master`.  
 **Plan section:** [`plans/PLAN-HINTS-MCP-CALL-SHAPE.md`](./PLAN-HINTS-MCP-CALL-SHAPE.md) § PR-1.  
 **PR title:** `fix(hints): MCP-copyable call sketches and honest symbol id docs (#195)`

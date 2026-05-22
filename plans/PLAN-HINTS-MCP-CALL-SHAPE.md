@@ -51,7 +51,7 @@ Depends on: **none** (all landed hint catalogs v1–v4, NEIGHBORS-DOT-KEY, OVERR
 
 # PR-1 — MCP-copyable hints, 250-char cap, honest id docs
 
-**Branch:** `cursor/hints-mcp-call-shape-195` or `feat/hints-mcp-call-shape-195` off `master`.  
+**Branch:** `plan/hints-mcp-call-shape` off `master`.  
 **PR title:** `fix(hints): MCP-copyable call sketches and honest symbol id docs (#195)`
 
 ## File-by-file changes
