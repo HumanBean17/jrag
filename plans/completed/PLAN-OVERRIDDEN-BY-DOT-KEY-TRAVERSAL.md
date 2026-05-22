@@ -1,10 +1,10 @@
 # Plan: OVERRIDDEN-BY-DOT-KEY-TRAVERSAL
 
-Status: **active (planning)**. This plan implements
-[`propose/OVERRIDDEN-BY-DOT-KEY-TRAVERSAL-PROPOSE.md`](../propose/OVERRIDDEN-BY-DOT-KEY-TRAVERSAL-PROPOSE.md)
+Status: **completed** (PR-1 landed in [#189](https://github.com/HumanBean17/java-codebase-rag/pull/189)). Source propose:
+[`propose/completed/OVERRIDDEN-BY-DOT-KEY-TRAVERSAL-PROPOSE.md`](../../propose/completed/OVERRIDDEN-BY-DOT-KEY-TRAVERSAL-PROPOSE.md)
 (issue [#165](https://github.com/HumanBean17/java-codebase-rag/issues/165)).
 
-Depends on: **landed** [`plans/completed/PLAN-NEIGHBORS-DOT-KEY-TRAVERSAL.md`](./completed/PLAN-NEIGHBORS-DOT-KEY-TRAVERSAL.md)
+Depends on: **landed** [`plans/completed/PLAN-NEIGHBORS-DOT-KEY-TRAVERSAL.md`](./PLAN-NEIGHBORS-DOT-KEY-TRAVERSAL.md)
 (PR [#171](https://github.com/HumanBean17/java-codebase-rag/pull/171)) and stored `[:OVERRIDES]`
 materialization (ontology 13+). No further graph-builder prerequisite.
 
