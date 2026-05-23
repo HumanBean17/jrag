@@ -45,9 +45,9 @@ You are implementing PR-HINTS-STRUCTURED-1 from `plans/PLAN-HINTS-STRUCTURED.md`
      - describe: type rollups (clients/routes/producers via members), method override axis, method leaf follow-ups, route/client/producer declaring, many CALLS (actionable=False)
      - find: empty→resolve, page full (actionable=False), success F1/F2/F3
      - resolve: none→search, none→find route, none→find client, many tighten (actionable=False)
-     - neighbors: empty structural (actionable=False, build args from EDGE_SCHEMA data not string parsing), success N1a–N7, fuzzy strategy (actionable=False), CALLS fanout/meta (actionable=False)
+     - neighbors: empty structural (actionable=False, build args from `EDGE_SCHEMA` data — NOT string parsing; e.g. wrong-kind → `{"ids": [subject_id], "direction": correct_dir, "edge_types": [canonical_edge]}`, type-level requery → `{"ids": [subject_id], "direction": direction, "edge_types": [dot_key_edge]}`), success N1a–N7, fuzzy strategy (actionable=False), CALLS fanout/meta (actionable=False)
      - search: weak score (actionable=False)
-   - Add `finalize_structured_hints` — dedupe by `(tool, frozenset(args.items()))`, keep highest priority, cap to 5.
+   - Add `finalize_structured_hints` — dedupe by `(tool, json.dumps(args, sort_keys=True))` (NOT `frozenset(args.items())` — breaks on nested dicts like `{"filter": {"path_prefix": …}}`), keep highest priority, cap to 5.
    - Batch-placeholder hints (N2–N7): populate `args.ids` from payload result ids when available → `actionable=True`; empty `[]` → `actionable=False`.
    - All `args` values must be JSON-serializable primitives. Use `list` not `tuple`. No `set`.
 
@@ -60,7 +60,12 @@ You are implementing PR-HINTS-STRUCTURED-1 from `plans/PLAN-HINTS-STRUCTURED.md`
      str_hints, raw_struct = generate_hints("search", hint_payload)
      struct_hints = [StructuredHint(**h._asdict()) for h in raw_struct]  # or similar conversion
      ```
-   - Update `resolve_v2`'s `model_copy(update=…)` to include both `hints` and `hints_structured`.
+   - Update `resolve_v2`'s `model_copy(update=…)`. Before: `model_copy(update={"hints": generate_hints(...)}).` After:
+     ```python
+     str_hints, raw_struct = generate_hints("resolve", hint_payload)
+     struct_hints = [StructuredHint(tool=h.tool, args=h.args, actionable=h.actionable) for h in raw_struct]
+     out = out.model_copy(update={"hints": str_hints, "hints_structured": struct_hints})
+     ```
    - Ensure all error-path returns that pass `hints=[]` also pass `hints_structured=[]` (or rely on `default_factory=list`).
 
 3. **`tests/test_mcp_hints.py`**
@@ -118,7 +123,7 @@ Before PR open:
 ## Definition of done
 
 - [ ] PR-1 checklist in `plans/PLAN-HINTS-STRUCTURED.md` satisfied.
-- [ ] Propose status updated to **locked**.
+- [ ] Propose status updated to **locked** (happens when plan PR merges — plan approval = propose lock; do NOT lock in implementation PR).
 - [ ] PR body: scope, plan + propose links, **no re-index**, **backward compatible**.
 - [ ] Round-trip `neighbors_v2` integration test passes.
 ````

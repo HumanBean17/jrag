@@ -46,7 +46,9 @@ Depends on: v1–v4 hint catalogs (all landed). No open PR dependencies.
 | `hints_structured` field description | Own field description, referencing `hints` for human-readable form |
 | String template independence | Kept independent in v1; no DRY derivation |
 | `args` validation | No validation against MCP tool schemas in v1 |
-| `resolve_v2` call site | Uses `model_copy(update={"hints": str_hints, "hints_structured": struct_hints})` to match existing pattern |
+| `resolve_v2` call site | Before: `model_copy(update={"hints": generate_hints(...)})`. After: `str_hints, struct_hints = generate_hints(...)` then `model_copy(update={"hints": str_hints, "hints_structured": [StructuredHint(...) for h in struct_hints]})` |
+| Structured dedup key | `json.dumps(args, sort_keys=True)` — not `frozenset(args.items())` which breaks on nested dicts (`{"filter": {"path_prefix": …}}`) |
+| Proposal lock timing | Proposal locks when this **plan PR** merges (plan-approved = propose locked). Implementation PR must not change propose scope without reopening. |
 
 ---
 
@@ -74,7 +76,7 @@ Depends on: v1–v4 hint catalogs (all landed). No open PR dependencies.
   - `search_v2` (line ~928): `str_hints, struct_hints = generate_hints("search", hint_payload)`
   - `find_v2` (line ~1017): `str_hints, struct_hints = generate_hints("find", hint_payload)`
   - `describe_v2` (line ~1094): `str_hints, struct_hints = generate_hints("describe", {"success": True, "record": record.model_dump()})`
-  - `resolve_v2` (line ~1418): `str_hints, struct_hints = generate_hints("resolve", hint_payload)`; update `model_copy` to include `hints_structured`
+  - `resolve_v2` (line ~1418): Before: `out = out.model_copy(update={"hints": generate_hints("resolve", hint_payload)})`. After: `str_hints, struct_hints = generate_hints("resolve", hint_payload); out = out.model_copy(update={"hints": str_hints, "hints_structured": [StructuredHint(tool=h.tool, args=h.args, actionable=h.actionable) for h in struct_hints]})`.
   - `neighbors_v2` (line ~1952): `str_hints, struct_hints = generate_hints("neighbors", neigh_payload)`
 - All error-path returns that pass `hints=[]` must also pass `hints_structured=[]` (no change needed — `default_factory=list` covers new field, but explicit `hints_structured=[]` is clearer for readability on error returns).
 
@@ -96,14 +98,17 @@ Depends on: v1–v4 hint catalogs (all landed). No open PR dependencies.
   - **Resolve none → find route:** `StructuredHint(tool="find", args={"kind": "route", "filter": {"path_prefix": seed}})`.
   - **Resolve none → find client:** `StructuredHint(tool="find", args={"kind": "client", "filter": {"target_service": seed}})`.
   - **Resolve many tighten:** `StructuredHint(tool="resolve", args={"identifier": "", "hint_kind": ""}, actionable=False)`.
-  - **Neighbors empty structural (v3):** `StructuredHint(tool="neighbors", args from `typical_traversal_for` fields}, actionable=False)` — parse the canonical traversal template to extract structured args.
+  - **Neighbors empty structural (v3):** Build structured args directly from `EDGE_SCHEMA` data (not string parsing). Examples:
+    - Row 1 wrong subject kind: `StructuredHint(tool="neighbors", args={"ids": [subject_id], "direction": correct_dir, "edge_types": [canonical_edge]}, actionable=True)` — `typical_traversals[role_key]` provides the canonical edge and direction from `EDGE_SCHEMA`.
+    - Row 2 wrong direction: `StructuredHint(tool="neighbors", args={"ids": [subject_id], "direction": correct_dir, "edge_types": [edge]}, actionable=True)`.
+    - Row 3 type-level requery: `StructuredHint(tool="neighbors", args={"ids": [subject_id], "direction": direction, "edge_types": [dot_key_edge]}, actionable=True)` — dot-key from `EDGE_SCHEMA` type_subject traversal.
   - **Neighbors success N1a/N1b:** `StructuredHint(tool="neighbors", args={"ids": [origin_id], "direction": "out", "edge_types": ["DECLARES.DECLARES_CLIENT"]})` (and routes).
   - **Neighbors success N2/N3:** `StructuredHint(tool="neighbors", args={"ids": result_ids, "direction": "out", "edge_types": ["HTTP_CALLS"|"ASYNC_CALLS"]}, actionable=populated)` — populate `args.ids` from results when available.
   - **Neighbors success N4/N5/N6/N7:** Similar structured mapping with appropriate args and `actionable` flag.
   - **Neighbors fuzzy strategy:** `StructuredHint(tool="neighbors", args={}, actionable=False)`.
   - **Neighbors CALLS fanout/meta:** `StructuredHint(tool="neighbors", args={"ids": [id], "direction": "out", "edge_types": ["CALLS"], "edge_filter": {}}, actionable=False)`.
   - **Search weak score:** `StructuredHint(tool="find", args={"kind": "symbol", "filter": {"role": "SERVICE"}}, actionable=False)`.
-- Add `finalize_structured_hints` mirroring `finalize_hint_list` — dedupe by `(tool, frozenset(args.items()))` key, keep highest priority, cap to 5.
+- Add `finalize_structured_hints` mirroring `finalize_hint_list` — dedupe by `(tool, json.dumps(args, sort_keys=True))` key (handles nested dicts like `{"filter": {"path_prefix": "…"}}`), keep highest priority, cap to 5.
 - Internal `StructuredHint` representation: use a lightweight dataclass or `NamedTuple` with `tool: str`, `args: dict[str, Any]`, `actionable: bool`, `priority: int`.
 
 ### 3. `tests/test_mcp_hints.py`
@@ -165,7 +170,7 @@ Depends on: v1–v4 hint catalogs (all landed). No open PR dependencies.
 - [ ] `.venv/bin/ruff check .` and `.venv/bin/python -m pytest tests -v` green.
 - [ ] No `ONTOLOGY_VERSION` change; no re-index required.
 - [ ] README mentions `hints_structured` under MCP tool reference `hints` paragraph.
-- [ ] Propose status updated to **locked**.
+- [ ] Propose status updated to **locked** (happens when this plan PR merges — plan approval = propose lock). Implementation PR must not change propose scope without reopening.
 
 ## Implementation step list
 
@@ -199,7 +204,7 @@ Depends on: v1–v4 hint catalogs (all landed). No open PR dependencies.
 | 3 | Error-path returns missing `hints_structured=[]` | Medium | `default_factory=list` covers it, but audit all `hints=[]` returns for explicit parity. |
 | 4 | Structured args contain non-JSON-serializable values | Medium | Validate in `_StructuredHint` constructor; use `list` not `tuple`; no `set`. |
 | 5 | Parity invariant violation (structured count > string count) | Low | `test_structured_hints_parity_with_string_hints` enforced. |
-| 6 | Neighbors v3 empty structural hints hard to parse into structured args | Medium | Parse `typical_traversal_for` output format or build structured args directly from `EDGE_SCHEMA` data (preferred — avoid string parsing). |
+| 6 | Neighbors v3 empty structural hints — structured args ambiguity | Medium | Build args from `EDGE_SCHEMA` data directly (not string parsing); concrete examples added in file-by-file changes. |
 | 7 | Batch-placeholder N2–N7 `args.ids` population inconsistent | Low | Document when `actionable=True` (ids populated from results) vs `actionable=False` (ids empty placeholder). |
 
 # Out of scope
