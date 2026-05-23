@@ -5,7 +5,7 @@ Proposal — not yet implemented.
 
 **Tracks:** [#195](https://github.com/HumanBean17/java-codebase-rag/issues/195) (item 7).
 
-**Depends on (landed):** v1–v4 hint catalogs (`propose/completed/HINTS-ROAD-SIGNS-PROPOSE.md`, `HINTS-V2`, `HINTS-V3`, `HINTS-V4-SUCCESS-PATH-PROPOSE.md`), `mcp_hints.py` `generate_hints`, response models in `mcp_v2.py`.
+**Depends on (landed):** v1–v4 hint catalogs (`propose/completed/HINTS-ROAD-SIGNS-PROPOSE.md`, `propose/completed/HINTS-V2-PROPOSE.md`, `propose/completed/HINTS-V3-PROPOSE.md`, `propose/completed/HINTS-V4-SUCCESS-PATH-PROPOSE.md`), `mcp_hints.py` `generate_hints`, response models in `mcp_v2.py`.
 
 ## Problem Statement
 
@@ -33,8 +33,11 @@ Add an optional `hints_structured` field to all five MCP output models. Each ele
 ```python
 class StructuredHint(BaseModel):
     tool: Literal["search", "find", "describe", "neighbors", "resolve"]
-    args: dict[str, Any]
+    args: dict[str, Any]  # values must be JSON-serializable (str, int, list[str], etc.)
+    actionable: bool = True
 ```
+
+`args` values are constrained to **JSON-serializable primitives** (`str`, `int`, `float`, `bool`, `None`, `list`, `dict`). Python `set`, `tuple`, or custom objects must not appear — they break MCP serialization silently. Implementers should use `list` (not `tuple`) for array values.
 
 All five `*Output` models gain:
 
@@ -98,7 +101,12 @@ class StructuredHint(BaseModel):
 
 When `actionable=False`, the hint is a recommendation (e.g. "consider filtering by role"), not a direct call. Agents can skip or use as guidance. Direct-call hints (`neighbors(['id'],'out',['EXPOSES'])`) always set `actionable=True` with complete args.
 
-This avoids over-engineering prose-only hints into fake tool calls while still giving agents structured data for every hint slot.
+**`actionable=False` has two distinct flavors** that implementers must distinguish:
+
+1. **Incomplete args** — batch-placeholder hints (v4 N2–N7) where `args.ids` is empty because the agent must fill ids from the previous result. These have a concrete `tool` and mostly-complete `args`; only one field (typically `ids`) is a placeholder.
+2. **Advisory recommendation** — prose-only hints (weak-score spread, high-fanout nudge, wrong-kind/direction recovery) where `args` is partial or schematic. These suggest a *kind* of follow-up rather than a specific call.
+
+Agents that only want ready-to-execute calls should filter to `actionable=True`. Agents that want navigational guidance can inspect `actionable=False` hints but should not treat `args` as a complete call.
 
 ### Batch-placeholder hints (N2, N3, N4, N5, N6, N7 from v4)
 
@@ -144,7 +152,7 @@ Alternatively, the structured hint could carry `args.ids` populated from the pay
 | `test_structured_hint_prose_only_not_actionable` | weak-score / high-fanout hints have `actionable=False` |
 | `test_structured_hints_cap_5` | `len(hints_structured) <= 5` on payloads that generate many triggers |
 | `test_structured_hints_dedup` | Identical `(tool, args)` deduped like string hints |
-| `test_structured_hints_parity_with_string_hints` | For every output where `hints != []`, `len(hints_structured) == len(hints)` (1:1 mapping) |
+| `test_structured_hints_parity_with_string_hints` | For every output where `hints != []`, `len(hints_structured) <= len(hints)` — structured hints may omit entries that have no meaningful tool reference (v1 aims for parity but the invariant allows omission) |
 | `test_structured_hint_round_trip` | Building structured hint args into an actual MCP call succeeds (integration with `neighbors_v2`) |
 
 Regression: all existing string-hint tests continue passing unchanged.
