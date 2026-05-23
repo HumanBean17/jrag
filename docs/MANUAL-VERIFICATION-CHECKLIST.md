@@ -24,7 +24,7 @@ members, 0 parse errors, 17 routes, 11 `EXPOSES`, 793 `CALLS`, 24 `OVERRIDES`,
 2 `HTTP_CALLS`, 5 `ASYNC_CALLS`, 2 `Client` rows, microservices = `chat-core` + `chat-assign`.
 
 **Convention:** Graph ops use MCP. Index health / rebuild / PR analysis use
-**`java-codebase-rag`** (see README **CLI reference**). Example:
+**`java-codebase-rag`** (see [`JAVA-CODEBASE-RAG-CLI.md`](./JAVA-CODEBASE-RAG-CLI.md)). Example:
 
 ```bash
 export JAVA_CODEBASE_RAG_INDEX_DIR=/tmp/verify_index

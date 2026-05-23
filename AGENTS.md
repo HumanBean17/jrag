@@ -21,16 +21,20 @@ when needed.
 
 ## Where to look
 
-- `README.md` — feature surface, env vars, ranking, capabilities,
-  MCP tools (`search` / `find` / `describe` / `neighbors` / `resolve`;
-  response `hints` + pagination echo on locate tools — see README),
-  `java-codebase-rag` CLI, "Re-index required" callouts. The current
+- `README.md` — pip-first landing page: install, 5-minute walkthrough on the
+  bank-chat fixture, MCP host wiring (Claude Code / Claude Desktop), the
+  five-tool cheat sheet (`search` / `find` / `describe` / `neighbors` / `resolve`),
+  and the CLI cheat sheet. Pointers out to other docs for depth.
+- [`docs/CONFIGURATION.md`](./docs/CONFIGURATION.md) — environment
+  variables, full `.java-codebase-rag.yml` reference, **graph layer**
+  (node kinds, edges, capabilities, ranking, "Re-index required"
+  callouts), brownfield overrides, ignore patterns. The current
   `ontology_version` is **15** (`EDGE_SCHEMA` in `java_ontology.py`;
   material `OVERRIDES` Symbol→Symbol edges: subtype instance method →
   supertype declaration with matching `signature`, one
   `IMPLEMENTS`/`EXTENDS` hop; valid `neighbors` `EdgeType`).
-  Earlier ontology bumps are described inline in the README's callouts
-  list.
+  Earlier ontology bumps are described inline in that doc's §3
+  callouts list.
 - [`docs/JAVA-CODEBASE-RAG-CLI.md`](./docs/JAVA-CODEBASE-RAG-CLI.md) —
   operator guide for the `java-codebase-rag` CLI (`init` / `increment` /
   `reprocess` / `erase`, `meta`, `tables`, `diagnose-ignore`,
