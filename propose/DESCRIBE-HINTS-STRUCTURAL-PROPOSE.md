@@ -10,7 +10,7 @@
 
 **Partially amends:** same propose §4 **UC11** (leaf method → no hints) — method Symbols with real `edge_summary` / `data` signal may now emit tier-2 **E** / **G** / **H** when gated; not accidental scope creep.
 
-**Depends on (landed):** describe rollups (`DECLARES.*`, `OVERRIDDEN_BY.*`), stored `OVERRIDES`, v4 `TPL_FIND_SUCCESS_HTTP_TARGETS` / `TPL_FIND_SUCCESS_ASYNC_TARGETS` strings.
+**Depends on (landed):** describe rollups (`DECLARES.*`, `OVERRIDDEN_BY.*`), stored `OVERRIDES`, v4 `TPL_FIND_SUCCESS_HTTP_TARGETS` / `TPL_FIND_SUCCESS_ASYNC_TARGETS` strings, [`hints_structured` dual-output pattern](./completed/HINTS-STRUCTURED-PROPOSE.md) — `generate_hints` returns `(list[str], list[_StructuredHint])`; every new row must append to both `pairs` and `struct_pairs`.
 
 ## TL;DR
 
@@ -41,9 +41,9 @@ Pure amendment to `generate_hints("describe", …)` in `mcp_hints.py`:
 
 1. Add `_in_count(edge_summary, key)` (symmetric to `_out_count`).
 2. Add `_type_rollup_would_emit(edge_summary) -> bool` (any of the three `DECLARES.*` composed keys with `out > 0`).
-3. Register templates below; priority **`PRIORITY_LEAF_FOLLOWUP` (2)** for all new rows (below rollups **4** and override axis **3**, above meta **1**).
-4. Reuse v4 strings for client/producer second hops (`TPL_FIND_SUCCESS_HTTP_TARGETS`, `TPL_FIND_SUCCESS_ASYNC_TARGETS`).
-5. **Refactor `generate_hints("describe")` control flow** — today `client` / `producer` / type symbols **early-return** after the first hint block (`mcp_hints.py` ~689–719). Implementation must **append** tier-1 rows (when not suppressed) and **I/J** on endpoints **before** `finalize_hint_list`, not only add branches at the bottom of the file.
+3. Register string templates **and** `_StructuredHint` counterparts below; priority **`PRIORITY_LEAF_FOLLOWUP` (2)** for all new rows (below rollups **4** and override axis **3**, above meta **1**). Each row appends to both `pairs` (string) and `struct_pairs` (structured) — mirroring the dual-list pattern established by [`HINTS-STRUCTURED`](./completed/HINTS-STRUCTURED-PROPOSE.md).
+4. Reuse v4 strings **and their structured equivalents** for client/producer second hops (`TPL_FIND_SUCCESS_HTTP_TARGETS` / `TPL_FIND_SUCCESS_ASYNC_TARGETS`). Structured hints for **I/J** use the same `args` dict as find-success counterparts.
+5. **Refactor `generate_hints("describe")` control flow** — today `client` / `producer` / type symbols **early-return** after the first hint block (`mcp_hints.py` ~1027–1081). Implementation must **append** tier-1 rows (when not suppressed) and **I/J** on endpoints **before** `(finalize_hint_list(pairs), finalize_structured_hints(struct_pairs))`, not only add branches at the bottom of the file. Both `pairs` and `struct_pairs` lists are maintained in parallel throughout.
 
 ### Suppression (tier 1)
 
@@ -86,6 +86,22 @@ All tier-1 rows require:
 - **G** covers **override implementation** methods (`RegexComplianceScanner#scan`) where rollups exist only on the **declaration** (`ChatAssignmentPort#requestAssignment` already gets `OVERRIDDEN_BY*` hints).
 - **H** points at the mutually exclusive `include_unresolved` path (see `TPL_NEIGHBORS_CALLS_HAS_UNRESOLVED` wording in `mcp_hints.py`).
 - **I/J** bring **describe** parity with find/neighbors v4 second hops; **additive** alongside existing declaring-method hints (cap may drop lowest-priority meta).
+
+### Structured hint mapping (post-HINTS-STRUCTURED)
+
+All new rows append to both `pairs` and `struct_pairs` using the established dual-list pattern. Every structured hint is `_StructuredHint(tool="neighbors", args={…}, actionable=True, priority=PRIORITY_LEAF_FOLLOWUP)`.
+
+| ID | Structured `args` |
+|----|-------------------|
+| **A** | `{"ids": [id], "direction": "in", "edge_types": ["IMPLEMENTS"]}` |
+| **B** | `{"ids": [id], "direction": "out", "edge_types": ["IMPLEMENTS"]}` |
+| **C** | `{"ids": [id], "direction": "out", "edge_types": ["INJECTS"]}` |
+| **D** | `{"ids": [id], "direction": "in", "edge_types": ["INJECTS"]}` |
+| **E** | `{"ids": [id], "direction": "out", "edge_types": ["CALLS"]}` |
+| **G** | `{"ids": [id], "direction": "out", "edge_types": ["OVERRIDES"]}` |
+| **H** | `{"ids": [id], "direction": "out", "edge_types": ["CALLS"], "include_unresolved": True}` |
+| **I** | `{"ids": [id], "direction": "out", "edge_types": ["HTTP_CALLS"]}` (reuse find-success) |
+| **J** | `{"ids": [id], "direction": "out", "edge_types": ["ASYNC_CALLS"]}` (reuse find-success) |
 
 ### Tier 3 — deferred ([#191](https://github.com/HumanBean17/java-enterprise-codebase-rag/issues/191))
 
@@ -131,7 +147,23 @@ Use `tests/bank-chat-system` session `kuzu_graph` fixture unless noted.
 
 Update `test_all_hint_templates_char_cap` tuple list with new `(template, kwargs)` pairs.
 
-**Regression (implementation PR):** relax `test_hints_describe_client_always_declaring_method` and `test_hints_describe_producer_always_declaring_method` from `out.hints == [want]` to `want in out.hints` (bank fixture: first `Client` / `Producer` already have `HTTP_CALLS.out` / `ASYNC_CALLS.out` while **I/J** are additive).
+### Structured hint tests
+
+Each row asserts `hints_structured` contains the expected `_StructuredHint` alongside the string `hints` entry.
+
+| Test name | Asserts |
+|-----------|---------|
+| `test_structured_hints_describe_interface_implementors` | **A** — `hints_structured` contains `StructuredHint(tool="neighbors", args={"ids": [id], "direction": "in", "edge_types": ["IMPLEMENTS"]})` |
+| `test_structured_hints_describe_class_implements` | **B** — structured parity |
+| `test_structured_hints_describe_service_dependencies` | **C** — structured parity |
+| `test_structured_hints_describe_type_injectors` | **D** — structured parity |
+| `test_structured_hints_describe_method_outbound_calls` | **E** — structured parity |
+| `test_structured_hints_describe_method_super_declaration` | **G** — structured parity |
+| `test_structured_hints_describe_method_unresolved` | **H** — `args` includes `"include_unresolved": True` |
+| `test_structured_hints_describe_client_http_targets` | **I** — structured parity with find-success |
+| `test_structured_hints_describe_producer_async_targets` | **J** — structured parity with find-success |
+
+**Regression (implementation PR):** relax `test_hints_describe_client_always_declaring_method` and `test_hints_describe_producer_always_declaring_method` from `out.hints == [want]` to `want in out.hints` (bank fixture: first `Client` / `Producer` already have `HTTP_CALLS.out` / `ASYNC_CALLS.out` while **I/J** are additive). Same relaxation for `hints_structured` — asserting the new structured hint is `in` the list, not the sole entry.
 
 ## Docs (same PR, optional but recommended)
 
@@ -149,9 +181,10 @@ Update `test_all_hint_templates_char_cap` tuple list with new `(template, kwargs
 
 ## Acceptance
 
-- [ ] All tier 1–2 templates implemented in `mcp_hints.py`
+- [ ] All tier 1–2 string templates **and** structured hint counterparts implemented in `mcp_hints.py`
 - [ ] Named tests above pass; `.venv/bin/ruff check .` clean
 - [ ] `.venv/bin/python -m pytest tests/test_mcp_hints.py -v -k describe` green
+- [ ] `hints_structured` parity: every new string hint has a corresponding `StructuredHint` in `hints_structured`
 - [ ] [#191](https://github.com/HumanBean17/java-enterprise-codebase-rag/issues/191) references this propose for tier 3
 
 ## After landing
