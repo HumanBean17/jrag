@@ -46,9 +46,9 @@ def test_run_autopilot_run_mode_completes_single_task(tmp_path: Path) -> None:
     def fake_runner(template: str, variables: dict[str, str], _cwd: Path) -> CommandResult:
         command = template.format(**variables)
         if template == "planner":
-            cursor_prompt_path = repo_root / variables["cursor_prompts_path"]
-            cursor_prompt_path.parent.mkdir(parents=True, exist_ok=True)
-            cursor_prompt_path.write_text(
+            agent_prompt_path = repo_root / variables["agent_prompts_path"]
+            agent_prompt_path.parent.mkdir(parents=True, exist_ok=True)
+            agent_prompt_path.write_text(
                 """# Demo
 
 ## PR-A1 — demo

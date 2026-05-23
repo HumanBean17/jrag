@@ -5,7 +5,7 @@ Moved to `propose/completed/` once the 3-PR migration landed. The
 implementable plan lives at
 [`plans/completed/PLAN-MCP-FILTER-FRAME.md`](../../plans/completed/PLAN-MCP-FILTER-FRAME.md);
 per-PR Cursor prompts at
-[`plans/completed/CURSOR-PROMPTS-MCP-FILTER-FRAME.md`](../../plans/completed/CURSOR-PROMPTS-MCP-FILTER-FRAME.md).
+[`plans/completed/AGENT-PROMPTS-MCP-FILTER-FRAME.md`](../../plans/completed/AGENT-PROMPTS-MCP-FILTER-FRAME.md).
 
 **Author**: Dmitriy Teriaev + Computer
 **Date**: 2026-05-14

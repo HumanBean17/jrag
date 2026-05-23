@@ -37,7 +37,7 @@ Sequence reference: [`docs/PROPOSES-ORDER.md`](../docs/PROPOSES-ORDER.md).
 
 **Landing order:** **PR-D** after SCHEMA **PR-C** on `master`.
 
-**Merge gates:** This file + [`plans/completed/CURSOR-PROMPTS-HINTS-V3.md`](./CURSOR-PROMPTS-HINTS-V3.md) before PR-D code merges (by analogy with SCHEMA Decision 29).
+**Merge gates:** This file + [`plans/completed/AGENT-PROMPTS-HINTS-V3.md`](./AGENT-PROMPTS-HINTS-V3.md) before PR-D code merges (by analogy with SCHEMA Decision 29).
 
 ## Resolved design decisions
 
@@ -192,4 +192,4 @@ Name tests `test_hints_hv{N}_*` matching propose §6 / §4 rows:
 
 ## Cursor handoff
 
-[`plans/completed/CURSOR-PROMPTS-HINTS-V3.md`](./CURSOR-PROMPTS-HINTS-V3.md)
+[`plans/completed/AGENT-PROMPTS-HINTS-V3.md`](./AGENT-PROMPTS-HINTS-V3.md)

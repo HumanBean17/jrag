@@ -2,7 +2,7 @@
 
 ## Status
 
-**Status**: completed (landed PRs [#175](https://github.com/HumanBean17/java-codebase-rag/pull/175) neighbors, [#176](https://github.com/HumanBean17/java-codebase-rag/pull/176) find). Tracks [issue #163](https://github.com/HumanBean17/java-codebase-rag/issues/163). Plan: [`plans/completed/PLAN-HINTS-V4.md`](../plans/completed/PLAN-HINTS-V4.md); Cursor prompts: [`plans/completed/CURSOR-PROMPTS-HINTS-V4.md`](../plans/completed/CURSOR-PROMPTS-HINTS-V4.md).
+**Status**: completed (landed PRs [#175](https://github.com/HumanBean17/java-codebase-rag/pull/175) neighbors, [#176](https://github.com/HumanBean17/java-codebase-rag/pull/176) find). Tracks [issue #163](https://github.com/HumanBean17/java-codebase-rag/issues/163). Plan: [`plans/completed/PLAN-HINTS-V4.md`](../plans/completed/PLAN-HINTS-V4.md); Cursor prompts: [`plans/completed/AGENT-PROMPTS-HINTS-V4.md`](../plans/completed/AGENT-PROMPTS-HINTS-V4.md).
 
 **Depends on (landed):** [NEIGHBORS-DOT-KEY-TRAVERSAL](./completed/NEIGHBORS-DOT-KEY-TRAVERSAL-PROPOSE.md) ([#171](https://github.com/HumanBean17/java-codebase-rag/pull/171)) — `neighbors` accepts `DECLARES.DECLARES_CLIENT`, `DECLARES.DECLARES_PRODUCER`, `DECLARES.EXPOSES` on type Symbol origins; describe rollup templates already prescribe those dot-keys.
 
@@ -250,6 +250,6 @@ Suggested **2 PRs** (can collapse to 1 if reviewer prefers):
 | **PR-A** | N1a–N7 + neighbors tests + char-cap sweep for new templates | #171 landed |
 | **PR-B** | F1–F3 + find tests + appendix traceability note; optional S1 | PR-A optional |
 
-After land: move this file to `propose/completed/`; move `plans/PLAN-HINTS-V4.md` + `plans/CURSOR-PROMPTS-HINTS-V4.md` to `plans/completed/` (landed in planning PR [#174](https://github.com/HumanBean17/java-codebase-rag/pull/174)).
+After land: move this file to `propose/completed/`; move `plans/PLAN-HINTS-V4.md` + `plans/AGENT-PROMPTS-HINTS-V4.md` to `plans/completed/` (landed in planning PR [#174](https://github.com/HumanBean17/java-codebase-rag/pull/174)).
 
 **Related issues:** #161 (describe producer symmetry — landed); #163 (this propose); #171 (neighbors `DECLARES.*` dot-keys — landed). No ontology coordination with SCHEMA-V2.

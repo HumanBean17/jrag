@@ -352,8 +352,8 @@ Add **Migration from legacy names** sections with explicit `mv` commands
    acceptance grep clean per propose §6 (including rules directory).
 4. Tracking issue exists and the URL in `cli.py` matches it.
 5. Per-PR agent prompts live in
-   [`plans/CURSOR-PROMPTS-CLI-SCENARIOS.md`](./CURSOR-PROMPTS-CLI-SCENARIOS.md)
-   (template: `plans/completed/CURSOR-PROMPTS-TIER1B.md`).
+   [`plans/AGENT-PROMPTS-CLI-SCENARIOS.md`](./AGENT-PROMPTS-CLI-SCENARIOS.md)
+   (template: `plans/completed/AGENT-PROMPTS-TIER1B.md`).
 
 # Tracking
 

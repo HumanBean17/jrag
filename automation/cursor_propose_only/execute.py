@@ -63,7 +63,7 @@ def _safe_name(value: str) -> str:
     return re.sub(r"[^a-zA-Z0-9._-]+", "-", value).strip("-") or "task"
 
 
-def parse_cursor_prompts(markdown_text: str) -> list[PromptTask]:
+def parse_agent_prompts(markdown_text: str) -> list[PromptTask]:
     matches = list(_PR_SECTION_RE.finditer(markdown_text))
     if not matches:
         return []
@@ -201,12 +201,12 @@ def execute_workflow(
             else:
                 job["execution_status"] = "skipped_planning_pending"
             continue
-        cursor_prompts_path = repo_root / str(job.get("cursor_prompts_path", ""))
-        if not cursor_prompts_path.is_file():
-            job["execution_status"] = "blocked_missing_cursor_prompts"
+        agent_prompts_path = repo_root / str(job.get("agent_prompts_path", ""))
+        if not agent_prompts_path.is_file():
+            job["execution_status"] = "blocked_missing_agent_prompts"
             continue
 
-        tasks = parse_cursor_prompts(cursor_prompts_path.read_text(encoding="utf-8"))
+        tasks = parse_agent_prompts(agent_prompts_path.read_text(encoding="utf-8"))
         _ensure_job_execution_state(job, tasks)
         task_map = {task.task_id: task for task in tasks}
 
@@ -227,7 +227,7 @@ def execute_workflow(
                 "branch": task.branch,
                 "base": task.base,
                 "plan_section": task.plan_section,
-                "cursor_prompts_path": str(cursor_prompts_path),
+                "agent_prompts_path": str(agent_prompts_path),
                 "propose_path": str(job.get("propose_path", "")),
                 "plan_path": str(job.get("plan_path", "")),
                 "task_prompt_file": str(impl_prompt_path),
@@ -422,7 +422,7 @@ def _load_command_file(path: Path) -> str:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Execute per-PR implementation + review loops from CURSOR-PROMPTS plans."
+        description="Execute per-PR implementation + review loops from AGENT-PROMPTS plans."
     )
     parser.add_argument("--repo-root", default=".", help="Repository root.")
     parser.add_argument(

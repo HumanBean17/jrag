@@ -139,7 +139,7 @@ If the session graph ever lacks a row for scenario (1) or (4), **do not** relax 
 - `member_predicates` / `member_role_summary` fields.
 - Filtering by `confidence` / `strategy` on composed counts.
 - Making composed keys valid for `neighbors(edge_types=…)`.
-- `plans/CURSOR-PROMPTS-*` companion file (single small PR — add only if a human asks for Cursor handoff prompts).
+- `plans/AGENT-PROMPTS-*` companion file (single small PR — add only if a human asks for Cursor handoff prompts).
 
 ## Whole-plan done definition
 

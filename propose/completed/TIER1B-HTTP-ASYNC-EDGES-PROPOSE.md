@@ -5,7 +5,7 @@ Moved to `propose/completed/` once Tier 1B was complete. The
 implementable plan derived from this proposal lives at
 [`plans/PLAN-TIER1B-COMPLETION.md`](../../plans/completed/PLAN-TIER1B-COMPLETION.md);
 per-PR Sonnet/Cursor prompts at
-[`plans/CURSOR-PROMPTS-TIER1B.md`](../../plans/completed/CURSOR-PROMPTS-TIER1B.md).
+[`plans/AGENT-PROMPTS-TIER1B.md`](../../plans/completed/AGENT-PROMPTS-TIER1B.md).
 
 This document is now the **rationale + interface contract** that the
 plan implements. Section 11 lists the open questions that have been

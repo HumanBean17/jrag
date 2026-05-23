@@ -38,7 +38,7 @@ Depends on:
 
 **Landing order:** **PR-A → PR-B → PR-C → PR-D** (PR-D plan is separate; no parallel code PRs).
 
-**Merge gates (artefacts):** This file + [`plans/CURSOR-PROMPTS-SCHEMA-V2.md`](./CURSOR-PROMPTS-SCHEMA-V2.md) must land before **PR-A** code merges (SCHEMA-V2 Decision 29).
+**Merge gates (artefacts):** This file + [`plans/AGENT-PROMPTS-SCHEMA-V2.md`](./AGENT-PROMPTS-SCHEMA-V2.md) must land before **PR-A** code merges (SCHEMA-V2 Decision 29).
 
 ## Resolved design decisions
 
@@ -374,12 +374,12 @@ with every hit accounted for (fixed or justified).
 
 # Tracking
 
-- Artefacts (`PLAN-SCHEMA-V2`, `CURSOR-PROMPTS-SCHEMA-V2`): **done** (this directory)
+- Artefacts (`PLAN-SCHEMA-V2`, `AGENT-PROMPTS-SCHEMA-V2`): **done** (this directory)
 - `PR-A` / `PR-B` / `PR-C`: **landed**
 - `PR-D`: _completed — [`plans/completed/PLAN-HINTS-V3.md`](./PLAN-HINTS-V3.md) ([#160](https://github.com/HumanBean17/java-codebase-rag/pull/160))_
 
 ## Cursor handoff
 
-[`plans/CURSOR-PROMPTS-SCHEMA-V2.md`](./CURSOR-PROMPTS-SCHEMA-V2.md) — PR-A/B/C only.
+[`plans/AGENT-PROMPTS-SCHEMA-V2.md`](./AGENT-PROMPTS-SCHEMA-V2.md) — PR-A/B/C only.
 
-[`plans/completed/CURSOR-PROMPTS-HINTS-V3.md`](./CURSOR-PROMPTS-HINTS-V3.md) — PR-D after PR-C on `master`.
+[`plans/completed/AGENT-PROMPTS-HINTS-V3.md`](./AGENT-PROMPTS-HINTS-V3.md) — PR-D after PR-C on `master`.

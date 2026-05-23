@@ -5,7 +5,7 @@
 **Date**: 2026-05-18
 **Tracks**: [#177](https://github.com/HumanBean17/java-codebase-rag/issues/177)
 **Plan**: [`plans/completed/PLAN-CALLS-NOISE.md`](../plans/completed/PLAN-CALLS-NOISE.md) (per-PR sentinels, tests, landing order)
-**Prompts**: [`plans/completed/CURSOR-PROMPTS-CALLS-NOISE.md`](../plans/completed/CURSOR-PROMPTS-CALLS-NOISE.md) (PR-1 → PR-3 handoffs)
+**Prompts**: [`plans/completed/AGENT-PROMPTS-CALLS-NOISE.md`](../plans/completed/AGENT-PROMPTS-CALLS-NOISE.md) (PR-1 → PR-3 handoffs)
 
 ## TL;DR
 
@@ -622,7 +622,7 @@ ALTER NODE TABLE GraphMeta ADD COLUMN pass3_unresolved_chained INT64;
 - **Test name:** `test_neighbors_calls_edge_filter_pushdown_in_cypher` unified; perf test renamed to `..._client_message_processor` (heavy-gated).
 - **PR-2:** CLI deferred to PR-3; PR-1 README notes row-count delta from dedup.
 - **PR-3:** interleave tie-break + `dedup_calls` canonical line locked in plan.
-- **Cursor prompts:** [`plans/completed/CURSOR-PROMPTS-CALLS-NOISE.md`](../plans/completed/CURSOR-PROMPTS-CALLS-NOISE.md) added — merge gate for PR-1 **code** is satisfied once [#179](https://github.com/HumanBean17/java-codebase-rag/pull/179) lands on `master`.
+- **Cursor prompts:** [`plans/completed/AGENT-PROMPTS-CALLS-NOISE.md`](../plans/completed/AGENT-PROMPTS-CALLS-NOISE.md) added — merge gate for PR-1 **code** is satisfied once [#179](https://github.com/HumanBean17/java-codebase-rag/pull/179) lands on `master`.
 
 **Revision 4 (2026-05-19, post-critical-review implementation contract)** — propose patches before code PRs:
 

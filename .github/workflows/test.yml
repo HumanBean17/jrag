@@ -24,7 +24,7 @@ jobs:
               - 'propose/**'
               - 'plans/**'
               - 'reports/**'
-              - '.cursor/**'
+              - '.agents/**'
               - 'AGENTS.md'
               - 'README.md'
               - 'CODEBASE_REQUIREMENTS.md'

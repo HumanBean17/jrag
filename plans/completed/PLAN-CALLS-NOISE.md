@@ -9,7 +9,7 @@ Depends on: **SCHEMA-V2 landed** (`EDGE_SCHEMA`, MCP v2 tools). Complements
 [`propose/AGENT-SKILLS-AND-COMMANDS-PROPOSE.md`](../propose/AGENT-SKILLS-AND-COMMANDS-PROPOSE.md)
 `/mini-map` for accessor noise (Decision 39) — not a blocker.
 
-**Cursor prompts:** [`plans/completed/CURSOR-PROMPTS-CALLS-NOISE.md`](./CURSOR-PROMPTS-CALLS-NOISE.md)
+**Cursor prompts:** [`plans/completed/AGENT-PROMPTS-CALLS-NOISE.md`](./AGENT-PROMPTS-CALLS-NOISE.md)
 (per-PR handoffs; reference template).
 
 ## Fixture anchors (pinned — do not use fictional types)
@@ -257,6 +257,6 @@ rm -rf /tmp/calls-pr3 && .venv/bin/python build_ast_graph.py \
 
 - [x] Propose merged; moved to `propose/completed/` when PR-3 lands.
 - [x] All three PRs merged to `master` in order.
-- [x] `CURSOR-PROMPTS-CALLS-NOISE.md` archived under `plans/completed/` with final sentinels.
+- [x] `AGENT-PROMPTS-CALLS-NOISE.md` archived under `plans/completed/` with final sentinels.
 - [x] README ontology 15 + re-index callout accurate.
 - [ ] `/mini-map` skill doc mentions `edge_filter` when PR-2 ships (optional doc-only follow-up on agent-skills branch).

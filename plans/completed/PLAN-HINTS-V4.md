@@ -232,4 +232,4 @@ Implement **verbatim** names from the propose:
 
 ## Cursor handoff
 
-[`plans/completed/CURSOR-PROMPTS-HINTS-V4.md`](./CURSOR-PROMPTS-HINTS-V4.md)
+[`plans/completed/AGENT-PROMPTS-HINTS-V4.md`](./AGENT-PROMPTS-HINTS-V4.md)

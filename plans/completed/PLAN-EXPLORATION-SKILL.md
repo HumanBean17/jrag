@@ -242,9 +242,9 @@ frontmatter if the host requires it) so Perplexity manifest stays aligned.
 
 - `PR-EXPLORE-1`: **merged**
 - `PR-EXPLORE-2`: **merged**
-- Handoff doc: [`plans/completed/CURSOR-PROMPTS-EXPLORATION-SKILL.md`](./CURSOR-PROMPTS-EXPLORATION-SKILL.md)
+- Handoff doc: [`plans/completed/AGENT-PROMPTS-EXPLORATION-SKILL.md`](./AGENT-PROMPTS-EXPLORATION-SKILL.md)
   (per-PR Cursor prompts; mirrors
-  [`plans/completed/CURSOR-PROMPTS-TIER1B.md`](./CURSOR-PROMPTS-TIER1B.md)
+  [`plans/completed/AGENT-PROMPTS-TIER1B.md`](./AGENT-PROMPTS-TIER1B.md)
   style).
 
 ## Plan authoring checklist

@@ -4,7 +4,7 @@ Status: **completed — shipped via PR-FRAME-1 → PR-FRAME-3** (merged 2026-05)
 This plan implemented
 [`propose/completed/MCP-FILTER-FRAME-PROPOSE.md`](../../propose/completed/MCP-FILTER-FRAME-PROPOSE.md)
 as a 3-PR sequence. Per-PR Cursor prompts:
-[`CURSOR-PROMPTS-MCP-FILTER-FRAME.md`](CURSOR-PROMPTS-MCP-FILTER-FRAME.md).
+[`AGENT-PROMPTS-MCP-FILTER-FRAME.md`](AGENT-PROMPTS-MCP-FILTER-FRAME.md).
 
 Depends on: **none** (builds on already-shipped #122 — `extra="forbid"` +
 per-kind applicability validation).
