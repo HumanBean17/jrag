@@ -16,7 +16,9 @@ from mcp_hints import (
     PRIORITY_LEAF_FOLLOWUP,
     PRIORITY_META,
     PRIORITY_OVERRIDDEN_AXIS,
+    _StructuredHint,
     finalize_hint_list,
+    finalize_structured_hints,
     generate_hints,
     neighbors_empty_hints,
 )
@@ -34,6 +36,11 @@ from pinned_ids import client_message_processor_process_id
 _TYPE_KINDS = frozenset({"class", "interface", "enum", "record", "annotation"})
 
 _OVERRIDE_AXIS_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "override_axis_rollup_smoke"
+
+
+def _hints(output_kind, payload):
+    """Convenience wrapper — returns string hints only (backward compat for existing tests)."""
+    return generate_hints(output_kind, payload)[0]
 
 
 @pytest.fixture
@@ -417,7 +424,7 @@ def _neighbors_empty_payload(
 
 
 def _structural_neighbors_hints(payload: dict[str, Any]) -> list[str]:
-    hints = generate_hints("neighbors", payload)
+    hints = _hints("neighbors", payload)
     structural_markers = (
         mcp_hints.TPL_NEIGHBORS_WRONG_SUBJECT_KIND.split("'")[0],
         mcp_hints.TPL_NEIGHBORS_WRONG_DIRECTION.split("'")[0],
@@ -465,7 +472,7 @@ def test_hints_neighbors_fuzzy_strategy_layer_c_source_emits() -> None:
         [_edge_result(strategy="layer_c_source", edge_type="CALLS")],
         requested_edge_types=["CALLS"],
     )
-    hints = generate_hints("neighbors", payload)
+    hints = _hints("neighbors", payload)
     assert mcp_hints.TPL_NEIGHBORS_FUZZY_STRATEGY in hints
     assert "attrs.strategy" in hints[0]
 
@@ -475,7 +482,7 @@ def test_hints_neighbors_fuzzy_strategy_annotation_absent() -> None:
         [_edge_result(strategy="annotation", edge_type="CALLS")],
         requested_edge_types=["CALLS"],
     )
-    assert generate_hints("neighbors", payload) == []
+    assert _hints("neighbors", payload) == []
 
 
 def test_hints_neighbors_fuzzy_strategy_calls_phantom_emits() -> None:
@@ -484,7 +491,7 @@ def test_hints_neighbors_fuzzy_strategy_calls_phantom_emits() -> None:
         [_edge_result(strategy="overload_ambiguous", edge_type="CALLS")],
         requested_edge_types=["CALLS"],
     )
-    hints = generate_hints("neighbors", payload)
+    hints = _hints("neighbors", payload)
     assert mcp_hints.TPL_NEIGHBORS_FUZZY_STRATEGY in hints
 
 
@@ -493,7 +500,7 @@ def test_hints_neighbors_declares_no_strategy_attrs_empty() -> None:
         [_edge_result(edge_type="DECLARES")],
         requested_edge_types=["DECLARES"],
     )
-    assert generate_hints("neighbors", payload) == []
+    assert _hints("neighbors", payload) == []
 
 
 def test_hints_neighbors_multi_origin_fuzzy_emits_once() -> None:
@@ -504,7 +511,7 @@ def test_hints_neighbors_multi_origin_fuzzy_emits_once() -> None:
         ],
         requested_edge_types=["CALLS"],
     )
-    hints = generate_hints("neighbors", payload)
+    hints = _hints("neighbors", payload)
     assert hints.count(mcp_hints.TPL_NEIGHBORS_FUZZY_STRATEGY) == 1
 
 
@@ -548,7 +555,7 @@ def test_hints_neighbors_layer_a_meta_no_fuzzy_hint() -> None:
         [_edge_result(strategy="layer_a_meta", edge_type="CALLS")],
         requested_edge_types=["CALLS"],
     )
-    assert generate_hints("neighbors", payload) == []
+    assert _hints("neighbors", payload) == []
 
 
 def test_hints_neighbors_fuzzy_strategy_neighbors_v2_round_trip(kuzu_graph) -> None:
@@ -591,7 +598,7 @@ def test_hints_hv1_type_level_declares_client_requery() -> None:
         {"id": "sym:com.example.T", "kind": "class"},
         ["DECLARES_CLIENT"],
     )
-    hints = generate_hints("neighbors", payload)
+    hints = _hints("neighbors", payload)
     assert any("lives on methods" in h for h in hints)
     assert any("DECLARES" in h for h in hints)
 
@@ -601,7 +608,7 @@ def test_hints_hv2_method_http_calls_wrong_subject_kind() -> None:
         {"id": "sym:com.example.T#m()", "kind": "method"},
         ["HTTP_CALLS"],
     )
-    hints = generate_hints("neighbors", payload)
+    hints = _hints("neighbors", payload)
     assert any("Client" in h and "Route" in h for h in hints)
     assert any("DECLARES_CLIENT" in h for h in hints)
 
@@ -611,7 +618,7 @@ def test_hints_hv3_method_async_calls_wrong_subject_kind() -> None:
         {"id": "sym:com.example.T#m()", "kind": "method"},
         ["ASYNC_CALLS"],
     )
-    hints = generate_hints("neighbors", payload)
+    hints = _hints("neighbors", payload)
     assert any("Producer" in h and "Route" in h for h in hints)
     assert any("DECLARES_PRODUCER" in h for h in hints)
 
@@ -621,7 +628,7 @@ def test_hints_hv4_producer_empty_async_out_brownfield_only() -> None:
         {"id": "producer:svc:kafka:t", "producer_kind": "kafka"},
         ["ASYNC_CALLS"],
     )
-    hints = generate_hints("neighbors", payload)
+    hints = _hints("neighbors", payload)
     assert _structural_neighbors_hints(payload) == []
     assert any("brownfield resolver" in h for h in hints)
 
@@ -632,7 +639,7 @@ def test_hints_hv5_producer_async_calls_wrong_direction() -> None:
         ["ASYNC_CALLS"],
         direction="in",
     )
-    hints = generate_hints("neighbors", payload)
+    hints = _hints("neighbors", payload)
     assert any("direction='in'" in h and "direction='out'" in h for h in hints)
 
 
@@ -642,7 +649,7 @@ def test_hints_hv6_client_http_calls_wrong_direction() -> None:
         ["HTTP_CALLS"],
         direction="in",
     )
-    hints = generate_hints("neighbors", payload)
+    hints = _hints("neighbors", payload)
     assert any("direction='in'" in h and "direction='out'" in h for h in hints)
 
 
@@ -652,7 +659,7 @@ def test_hints_hv7_route_http_calls_wrong_direction() -> None:
         ["HTTP_CALLS"],
         direction="out",
     )
-    hints = generate_hints("neighbors", payload)
+    hints = _hints("neighbors", payload)
     assert any("direction='out'" in h and "direction='in'" in h for h in hints)
 
 
@@ -661,7 +668,7 @@ def test_hints_hv8_method_exposes_empty_no_structural_hint() -> None:
         {"id": "sym:com.example.T#m()", "kind": "method"},
         ["EXPOSES"],
     )
-    hints = generate_hints("neighbors", payload)
+    hints = _hints("neighbors", payload)
     assert _structural_neighbors_hints(payload) == []
     assert not any("brownfield resolver" in h for h in hints)
 
@@ -671,7 +678,7 @@ def test_hints_hv9_method_declares_client_empty_no_structural_hint() -> None:
         {"id": "sym:com.example.T#m()", "kind": "method"},
         ["DECLARES_CLIENT"],
     )
-    hints = generate_hints("neighbors", payload)
+    hints = _hints("neighbors", payload)
     assert _structural_neighbors_hints(payload) == []
     assert not any("brownfield resolver" in h for h in hints)
 
@@ -681,7 +688,7 @@ def test_hints_hv10_class_http_calls_wrong_subject_kind() -> None:
         {"id": "sym:com.example.T", "kind": "class"},
         ["HTTP_CALLS"],
     )
-    hints = generate_hints("neighbors", payload)
+    hints = _hints("neighbors", payload)
     assert any("this is a Symbol" in h for h in hints)
 
 
@@ -707,7 +714,7 @@ def test_hints_hv13_client_empty_http_brownfield_only() -> None:
         {"id": "client:svc:feign:t:GET:/p", "client_kind": "feign_method"},
         ["HTTP_CALLS"],
     )
-    hints = generate_hints("neighbors", payload)
+    hints = _hints("neighbors", payload)
     assert _structural_neighbors_hints(payload) == []
     assert any("brownfield resolver" in h for h in hints)
 
@@ -717,7 +724,7 @@ def test_hints_hv14_producer_empty_async_brownfield_only() -> None:
         {"id": "producer:svc:kafka:t", "producer_kind": "kafka"},
         ["ASYNC_CALLS"],
     )
-    hints = generate_hints("neighbors", payload)
+    hints = _hints("neighbors", payload)
     assert _structural_neighbors_hints(payload) == []
     assert any("brownfield resolver" in h for h in hints)
 
@@ -727,7 +734,7 @@ def test_hints_hv15_multi_edge_http_only_wrong_kind_for_http() -> None:
         {"id": "sym:com.example.T#m()", "kind": "method"},
         ["HTTP_CALLS", "DECLARES_CLIENT"],
     )
-    hints = generate_hints("neighbors", payload)
+    hints = _hints("neighbors", payload)
     wrong_kind = [h for h in hints if "HTTP_CALLS" in h and "this is a Symbol" in h]
     assert len(wrong_kind) == 1
     assert not any("DECLARES_CLIENT" in h and "lives on methods" in h for h in hints)
@@ -754,7 +761,7 @@ def test_hints_hv17_class_exposes_type_level_requery() -> None:
         {"id": "sym:com.example.T", "kind": "class"},
         ["EXPOSES"],
     )
-    hints = generate_hints("neighbors", payload)
+    hints = _hints("neighbors", payload)
     assert any("lives on methods" in h for h in hints)
 
 
@@ -763,7 +770,7 @@ def test_hints_hv18_route_declares_wrong_subject_kind() -> None:
         {"id": "route:svc:GET:/api", "framework": "spring_mvc"},
         ["DECLARES"],
     )
-    hints = generate_hints("neighbors", payload)
+    hints = _hints("neighbors", payload)
     assert any("this is a Route" in h for h in hints)
 
 
@@ -813,7 +820,7 @@ def test_hints_neighbors_missing_subject_record_skips_structural() -> None:
         "offset": 0,
         "subject_record": None,
     }
-    assert generate_hints("neighbors", payload) == []
+    assert _hints("neighbors", payload) == []
 
 
 def test_hints_neighbors_offset_suppresses_empty_structural_hints() -> None:
@@ -822,7 +829,7 @@ def test_hints_neighbors_offset_suppresses_empty_structural_hints() -> None:
         ["HTTP_CALLS"],
     )
     payload["offset"] = 3
-    assert generate_hints("neighbors", payload) == []
+    assert _hints("neighbors", payload) == []
 
 
 def test_hints_hv20_no_dotkey_edge_labels_in_rendered_neighbors_hints() -> None:
@@ -836,7 +843,7 @@ def test_hints_hv20_no_dotkey_edge_labels_in_rendered_neighbors_hints() -> None:
         ),
     ]
     for payload in payloads:
-        for hint in generate_hints("neighbors", payload):
+        for hint in _hints("neighbors", payload):
             assert "DECLARES." not in hint
             assert "OVERRIDDEN_BY." not in hint
 
@@ -849,7 +856,7 @@ def test_hints_neighbors_success_may_emit_declares_dot_keys() -> None:
         subject_record=_type_subject_record(origin),
         origin_id=origin,
     )
-    hints = generate_hints("neighbors", payload)
+    hints = _hints("neighbors", payload)
     assert any("DECLARES.DECLARES_CLIENT" in h for h in hints)
     assert any("DECLARES.EXPOSES" in h for h in hints)
 
@@ -869,7 +876,7 @@ def test_hints_neighbors_declares_methods_emits_dot_key_clients() -> None:
         origin_id=origin,
     )
     want = mcp_hints.TPL_DESCRIBE_TYPE_CLIENTS_VIA_MEMBERS.format(id=origin)
-    assert want in generate_hints("neighbors", payload)
+    assert want in _hints("neighbors", payload)
 
 
 def test_hints_neighbors_declares_methods_emits_dot_key_routes() -> None:
@@ -881,7 +888,7 @@ def test_hints_neighbors_declares_methods_emits_dot_key_routes() -> None:
         origin_id=origin,
     )
     want = mcp_hints.TPL_DESCRIBE_TYPE_ROUTES_VIA_MEMBERS.format(id=origin)
-    assert want in generate_hints("neighbors", payload)
+    assert want in _hints("neighbors", payload)
 
 
 def test_hints_neighbors_declares_client_homogeneous_emits_http_calls() -> None:
@@ -889,7 +896,7 @@ def test_hints_neighbors_declares_client_homogeneous_emits_http_calls() -> None:
         [_success_edge(_terminal_other("client:a", "client"), edge_type="DECLARES_CLIENT")],
         requested_edge_types=["DECLARES_CLIENT"],
     )
-    assert mcp_hints.TPL_NEIGHBORS_SUCCESS_HTTP_TARGETS in generate_hints("neighbors", payload)
+    assert mcp_hints.TPL_NEIGHBORS_SUCCESS_HTTP_TARGETS in _hints("neighbors", payload)
 
 
 def test_hints_neighbors_declares_dot_key_client_homogeneous_emits_http_calls() -> None:
@@ -897,7 +904,7 @@ def test_hints_neighbors_declares_dot_key_client_homogeneous_emits_http_calls() 
         [_success_edge(_terminal_other("client:a", "client"), edge_type="DECLARES.DECLARES_CLIENT")],
         requested_edge_types=["DECLARES.DECLARES_CLIENT"],
     )
-    assert mcp_hints.TPL_NEIGHBORS_SUCCESS_HTTP_TARGETS in generate_hints("neighbors", payload)
+    assert mcp_hints.TPL_NEIGHBORS_SUCCESS_HTTP_TARGETS in _hints("neighbors", payload)
 
 
 def test_hints_neighbors_declares_producer_homogeneous_emits_async_calls() -> None:
@@ -905,7 +912,7 @@ def test_hints_neighbors_declares_producer_homogeneous_emits_async_calls() -> No
         [_success_edge(_terminal_other("producer:a", "producer"), edge_type="DECLARES_PRODUCER")],
         requested_edge_types=["DECLARES_PRODUCER"],
     )
-    assert mcp_hints.TPL_NEIGHBORS_SUCCESS_ASYNC_TARGETS in generate_hints("neighbors", payload)
+    assert mcp_hints.TPL_NEIGHBORS_SUCCESS_ASYNC_TARGETS in _hints("neighbors", payload)
 
 
 def test_hints_neighbors_declares_dot_key_producer_homogeneous_emits_async_calls() -> None:
@@ -918,7 +925,7 @@ def test_hints_neighbors_declares_dot_key_producer_homogeneous_emits_async_calls
         ],
         requested_edge_types=["DECLARES.DECLARES_PRODUCER"],
     )
-    assert mcp_hints.TPL_NEIGHBORS_SUCCESS_ASYNC_TARGETS in generate_hints("neighbors", payload)
+    assert mcp_hints.TPL_NEIGHBORS_SUCCESS_ASYNC_TARGETS in _hints("neighbors", payload)
 
 
 def test_hints_neighbors_declares_dot_key_exposes_homogeneous_emits_handler() -> None:
@@ -926,7 +933,7 @@ def test_hints_neighbors_declares_dot_key_exposes_homogeneous_emits_handler() ->
         [_success_edge(_terminal_other("route:a", "route"), edge_type="DECLARES.EXPOSES")],
         requested_edge_types=["DECLARES.EXPOSES"],
     )
-    assert mcp_hints.TPL_NEIGHBORS_SUCCESS_HANDLER in generate_hints("neighbors", payload)
+    assert mcp_hints.TPL_NEIGHBORS_SUCCESS_HANDLER in _hints("neighbors", payload)
 
 
 def test_hints_neighbors_exposes_in_methods_emits_calls() -> None:
@@ -936,7 +943,7 @@ def test_hints_neighbors_exposes_in_methods_emits_calls() -> None:
         requested_direction="in",
         subject_record={"id": "route:svc:GET:/p", "framework": "spring"},
     )
-    assert mcp_hints.TPL_NEIGHBORS_SUCCESS_CALLERS in generate_hints("neighbors", payload)
+    assert mcp_hints.TPL_NEIGHBORS_SUCCESS_CALLERS in _hints("neighbors", payload)
 
 
 def test_hints_neighbors_http_calls_in_clients_emits_declares_client() -> None:
@@ -946,7 +953,7 @@ def test_hints_neighbors_http_calls_in_clients_emits_declares_client() -> None:
         requested_direction="in",
         subject_record={"id": "route:svc:GET:/p", "framework": "spring"},
     )
-    assert mcp_hints.TPL_NEIGHBORS_SUCCESS_DECLARING_CLIENT in generate_hints("neighbors", payload)
+    assert mcp_hints.TPL_NEIGHBORS_SUCCESS_DECLARING_CLIENT in _hints("neighbors", payload)
 
 
 def test_hints_neighbors_async_calls_in_producers_emits_declares_producer() -> None:
@@ -962,7 +969,7 @@ def test_hints_neighbors_async_calls_in_producers_emits_declares_producer() -> N
         requested_direction="in",
         subject_record={"id": "route:svc:GET:/p", "framework": "spring"},
     )
-    assert mcp_hints.TPL_NEIGHBORS_SUCCESS_DECLARING_PRODUCER in generate_hints("neighbors", payload)
+    assert mcp_hints.TPL_NEIGHBORS_SUCCESS_DECLARING_PRODUCER in _hints("neighbors", payload)
 
 
 def test_hints_neighbors_multi_edge_types_suppresses_success_hints() -> None:
@@ -973,7 +980,7 @@ def test_hints_neighbors_multi_edge_types_suppresses_success_hints() -> None:
         subject_record=_type_subject_record(origin),
         origin_id=origin,
     )
-    hints = generate_hints("neighbors", payload)
+    hints = _hints("neighbors", payload)
     assert mcp_hints.TPL_DESCRIBE_TYPE_CLIENTS_VIA_MEMBERS.format(id=origin) not in hints
     assert mcp_hints.TPL_NEIGHBORS_SUCCESS_HTTP_TARGETS not in hints
 
@@ -986,7 +993,7 @@ def test_hints_neighbors_declares_from_method_origin_no_n1_rollups() -> None:
         subject_record={"id": origin, "kind": "method"},
         origin_id=origin,
     )
-    hints = generate_hints("neighbors", payload)
+    hints = _hints("neighbors", payload)
     assert mcp_hints.TPL_DESCRIBE_TYPE_CLIENTS_VIA_MEMBERS.format(id=origin) not in hints
     assert mcp_hints.TPL_DESCRIBE_TYPE_ROUTES_VIA_MEMBERS.format(id=origin) not in hints
 
@@ -1001,7 +1008,7 @@ def test_hints_neighbors_n1a_n1b_dropped_when_rendered_exceeds_char_cap() -> Non
     )
     rendered_n1a = mcp_hints.TPL_DESCRIBE_TYPE_CLIENTS_VIA_MEMBERS.format(id=long_origin)
     assert len(rendered_n1a) > 120
-    hints = generate_hints("neighbors", payload)
+    hints = _hints("neighbors", payload)
     assert rendered_n1a not in hints
 
 
@@ -1017,7 +1024,7 @@ def test_hints_neighbors_mixed_endpoint_kinds_silent() -> None:
         mcp_hints.TPL_NEIGHBORS_SUCCESS_HTTP_TARGETS,
         mcp_hints.TPL_DESCRIBE_TYPE_CLIENTS_VIA_MEMBERS.format(id="sym:com.example.T"),
     )
-    hints = generate_hints("neighbors", payload)
+    hints = _hints("neighbors", payload)
     assert not any(m in h for h in hints for m in v4_markers)
 
 
@@ -1030,7 +1037,7 @@ def test_hints_neighbors_offset_suppresses_success_hints() -> None:
         origin_id=origin,
         offset=3,
     )
-    hints = generate_hints("neighbors", payload)
+    hints = _hints("neighbors", payload)
     assert mcp_hints.TPL_DESCRIBE_TYPE_CLIENTS_VIA_MEMBERS.format(id=origin) not in hints
     assert mcp_hints.TPL_NEIGHBORS_SUCCESS_HTTP_TARGETS not in hints
 
@@ -1046,7 +1053,7 @@ def test_hints_neighbors_success_beats_fuzzy_in_cap() -> None:
         requested_edge_types=["DECLARES_CLIENT"],
     )
     payload["results"][0]["attrs"] = {"strategy": "layer_c_source"}
-    hints = generate_hints("neighbors", payload)
+    hints = _hints("neighbors", payload)
     assert mcp_hints.TPL_NEIGHBORS_SUCCESS_HTTP_TARGETS in hints
     assert mcp_hints.TPL_NEIGHBORS_FUZZY_STRATEGY in hints
     assert hints.index(mcp_hints.TPL_NEIGHBORS_SUCCESS_HTTP_TARGETS) < hints.index(
@@ -1173,7 +1180,7 @@ def test_hints_search_limit_none_never_emits_weak_hint() -> None:
             {"chunk_id": "b", "symbol_id": "s", "fqn": "F", "score": 0.99, "snippet": ""},
         ],
     }
-    assert generate_hints("search", payload) == []
+    assert _hints("search", payload) == []
 
 
 def test_hints_dedupe_collapses_identical_rendered_strings() -> None:
@@ -1240,27 +1247,27 @@ def test_hints_find_route_success_emits_handler() -> None:
     rid = "route:svc:GET:/api/v1/chat"
     payload = _find_success_payload("route", rid)
     want = mcp_hints.TPL_FIND_SUCCESS_HANDLER.format(id=rid)
-    assert want in generate_hints("find", payload)
+    assert want in _hints("find", payload)
 
 
 def test_hints_find_client_success_emits_http_calls() -> None:
     cid = "client:svc:feign:target:GET:/p"
     payload = _find_success_payload("client", cid)
     want = mcp_hints.TPL_FIND_SUCCESS_HTTP_TARGETS.format(id=cid)
-    assert want in generate_hints("find", payload)
+    assert want in _hints("find", payload)
 
 
 def test_hints_find_producer_success_emits_async_calls() -> None:
     pid = "producer:svc:kafka:topic:t"
     payload = _find_success_payload("producer", pid)
     want = mcp_hints.TPL_FIND_SUCCESS_ASYNC_TARGETS.format(id=pid)
-    assert want in generate_hints("find", payload)
+    assert want in _hints("find", payload)
 
 
 def test_hints_find_success_suppressed_when_page_full() -> None:
     rid = "route:svc:GET:/api/v1/chat"
     payload = _find_success_payload("route", rid, limit=1, has_more_results=True)
-    hints = generate_hints("find", payload)
+    hints = _hints("find", payload)
     assert mcp_hints.TPL_FIND_PAGE_FULL.format(limit=1) in hints
     assert mcp_hints.TPL_FIND_SUCCESS_HANDLER.format(id=rid) not in hints
 
@@ -1274,7 +1281,7 @@ def test_hints_find_success_uses_first_result_id_when_multiple() -> None:
         {"id": second, "kind": "route"},
     ]
     want = mcp_hints.TPL_FIND_SUCCESS_HANDLER.format(id=first)
-    hints = generate_hints("find", payload)
+    hints = _hints("find", payload)
     assert want in hints
     assert mcp_hints.TPL_FIND_SUCCESS_HANDLER.format(id=second) not in hints
 
@@ -1282,7 +1289,7 @@ def test_hints_find_success_uses_first_result_id_when_multiple() -> None:
 def test_hints_find_symbol_success_emits_no_v4_followup() -> None:
     sym_id = "sym:com.example.T"
     payload = _find_success_payload("symbol", sym_id)
-    hints = generate_hints("find", payload)
+    hints = _hints("find", payload)
     v4_markers = (
         mcp_hints.TPL_FIND_SUCCESS_HANDLER,
         mcp_hints.TPL_FIND_SUCCESS_HTTP_TARGETS,
@@ -1294,7 +1301,7 @@ def test_hints_find_symbol_success_emits_no_v4_followup() -> None:
 def test_hints_find_success_silent_when_first_result_missing_id() -> None:
     payload = _find_success_payload("route", "route:unused")
     payload["results"] = [{"kind": "route"}]
-    hints = generate_hints("find", payload)
+    hints = _hints("find", payload)
     assert not any("handler:" in h and "EXPOSES" in h for h in hints)
 
 
@@ -1317,8 +1324,8 @@ def test_hints_find_page_full_requires_has_more_results_flag() -> None:
         "offset": 0,
         "filter": {},
     }
-    assert mcp_hints.TPL_FIND_PAGE_FULL.format(limit=1) not in generate_hints("find", full_page)
-    assert mcp_hints.TPL_FIND_PAGE_FULL.format(limit=1) in generate_hints(
+    assert mcp_hints.TPL_FIND_PAGE_FULL.format(limit=1) not in _hints("find", full_page)
+    assert mcp_hints.TPL_FIND_PAGE_FULL.format(limit=1) in _hints(
         "find", {**full_page, "has_more_results": True}
     )
 
@@ -1335,7 +1342,7 @@ def test_hints_kind_gate_method_payload_ignores_type_only_rollups() -> None:
             "DECLARES.EXPOSES": {"in": 0, "out": 2},
         },
     }
-    hints = generate_hints("describe", {"success": True, "record": rec})
+    hints = _hints("describe", {"success": True, "record": rec})
     for h in hints:
         assert "via members" not in h
 
@@ -1392,12 +1399,12 @@ def _resolve_symbol_identifier_status_none(kuzu_graph) -> str:
 
 
 def test_hints_resolve_status_one_emits_empty() -> None:
-    assert generate_hints("resolve", {"status": "one", "resolved_identifier": "com.foo.Bar"}) == []
+    assert _hints("resolve", {"status": "one", "resolved_identifier": "com.foo.Bar"}) == []
 
 
 def test_hints_resolve_status_none_symbol_suggests_search() -> None:
     ident = "com.foo.Bar#nonExistent"
-    hints = generate_hints(
+    hints = _hints(
         "resolve",
         {"status": "none", "resolved_identifier": ident, "hint_kind": "symbol"},
     )
@@ -1408,7 +1415,7 @@ def test_hints_resolve_status_none_symbol_suggests_search() -> None:
 
 def test_hints_resolve_status_none_symbol_drop_on_overflow() -> None:
     ident = "x" * 80
-    hints = generate_hints(
+    hints = _hints(
         "resolve",
         {"status": "none", "resolved_identifier": ident, "hint_kind": "symbol"},
     )
@@ -1416,7 +1423,7 @@ def test_hints_resolve_status_none_symbol_drop_on_overflow() -> None:
 
 
 def test_hints_resolve_status_none_symbol_wildcard_suppressed() -> None:
-    hints = generate_hints(
+    hints = _hints(
         "resolve",
         {"status": "none", "resolved_identifier": "com.foo.*", "hint_kind": "symbol"},
     )
@@ -1425,7 +1432,7 @@ def test_hints_resolve_status_none_symbol_wildcard_suppressed() -> None:
 
 def test_hints_resolve_status_none_route_suggests_find() -> None:
     seed = "/v1/operator/session/update"
-    hints = generate_hints(
+    hints = _hints(
         "resolve",
         {
             "status": "none",
@@ -1440,7 +1447,7 @@ def test_hints_resolve_status_none_route_suggests_find() -> None:
 
 
 def test_hints_resolve_status_none_route_no_seed_suppressed() -> None:
-    hints = generate_hints(
+    hints = _hints(
         "resolve",
         {
             "status": "none",
@@ -1454,7 +1461,7 @@ def test_hints_resolve_status_none_route_no_seed_suppressed() -> None:
 
 def test_hints_resolve_status_none_client_suggests_find() -> None:
     seed = "smartcare-assign-chat"
-    hints = generate_hints(
+    hints = _hints(
         "resolve",
         {
             "status": "none",
@@ -1469,7 +1476,7 @@ def test_hints_resolve_status_none_client_suggests_find() -> None:
 
 
 def test_hints_resolve_status_none_client_no_seed_suppressed() -> None:
-    hints = generate_hints(
+    hints = _hints(
         "resolve",
         {
             "status": "none",
@@ -1482,7 +1489,7 @@ def test_hints_resolve_status_none_client_no_seed_suppressed() -> None:
 
 
 def test_hints_resolve_status_many_emits_tighten() -> None:
-    hints = generate_hints(
+    hints = _hints(
         "resolve",
         {
             "status": "many",
@@ -1496,7 +1503,7 @@ def test_hints_resolve_status_many_emits_tighten() -> None:
 
 
 def test_hints_resolve_status_many_truncated_cap_wording() -> None:
-    hints = generate_hints(
+    hints = _hints(
         "resolve",
         {
             "status": "many",
@@ -1509,7 +1516,7 @@ def test_hints_resolve_status_many_truncated_cap_wording() -> None:
 
 
 def test_hints_resolve_success_false_suppresses() -> None:
-    hints = generate_hints(
+    hints = _hints(
         "resolve",
         {
             "success": False,
@@ -1522,7 +1529,7 @@ def test_hints_resolve_success_false_suppresses() -> None:
 
 
 def test_hints_resolve_payload_missing_identifier_suppressed() -> None:
-    hints = generate_hints(
+    hints = _hints(
         "resolve",
         {"status": "none", "resolved_identifier": "", "hint_kind": "symbol"},
     )
@@ -1577,10 +1584,10 @@ def test_hints_resolve_v2_round_trip(kuzu_graph) -> None:
 
 
 def test_hints_error_path_success_false_empty(kuzu_graph) -> None:
-    assert generate_hints("find", {"success": False, "kind": "symbol", "results": [], "filter": {}}) == []
-    assert generate_hints("search", {"success": False, "results": []}) == []
-    assert generate_hints("describe", {"success": False, "record": {}}) == []
-    assert generate_hints("neighbors", {"success": False, "results": [], "requested_edge_types": ["CALLS"]}) == []
+    assert _hints("find", {"success": False, "kind": "symbol", "results": [], "filter": {}}) == []
+    assert _hints("search", {"success": False, "results": []}) == []
+    assert _hints("describe", {"success": False, "record": {}}) == []
+    assert _hints("neighbors", {"success": False, "results": [], "requested_edge_types": ["CALLS"]}) == []
     serr = search_v2("q", filter={"bad_key": 1}, graph=kuzu_graph)
     assert serr.success is False and serr.hints == [] and serr.limit is None and serr.offset is None
     ferr = find_v2("symbol", {"path_prefix": "/api"}, graph=kuzu_graph)
@@ -1629,7 +1636,7 @@ def test_search_output_pagination_echo_round_trip(monkeypatch, kuzu_graph) -> No
 
 def test_hints_pagination_none_skips_page_derived_hints() -> None:
     assert (
-        generate_hints(
+        _hints(
             "find",
             {
                 "success": True,
@@ -1644,7 +1651,7 @@ def test_hints_pagination_none_skips_page_derived_hints() -> None:
     )
     assert (
         mcp_hints.TPL_FIND_PAGE_FULL.format(limit=1)
-        not in generate_hints(
+        not in _hints(
             "find",
             {
                 "success": True,
@@ -1762,3 +1769,555 @@ def test_neighbors_calls_nodefilter_role_collision_hint(kuzu_graph) -> None:
     if sum(1 for r in other_roles if r == "OTHER") < max(1, (len(other_roles) * 3) // 4):
         pytest.skip("CALLS neighbors are not dominantly OTHER for this method")
     assert mcp_hints.TPL_NEIGHBORS_CALLS_NODEFILTER_ROLE_COLLISION in out.hints
+
+
+# ---------------------------------------------------------------------------
+# Structured hint tests (PR-1)
+# ---------------------------------------------------------------------------
+
+def _assert_structured_hint(
+    hints: list[_StructuredHint],
+    *,
+    tool: str,
+    args_subset: dict[str, Any] | None = None,
+    actionable: bool = True,
+) -> _StructuredHint:
+    """Find and return a structured hint matching tool, actionable, and args subset."""
+    for h in hints:
+        if h.tool != tool or h.actionable != actionable:
+            continue
+        if args_subset is not None:
+            if not all(h.args.get(k) == v for k, v in args_subset.items()):
+                continue
+        return h
+    pytest.fail(
+        f"no structured hint with tool={tool!r} actionable={actionable} "
+        f"args_subset={args_subset!r} in {[h._asdict() for h in hints]}"
+    )
+
+
+def _struct(output_kind, payload) -> list[_StructuredHint]:
+    return generate_hints(output_kind, payload)[1]
+
+
+# --- Describe structured hints ---
+
+
+def test_structured_hint_describe_type_rollup_clients(kuzu_graph) -> None:
+    tid = _type_symbol_id_with_member_clients(kuzu_graph)
+    out = describe_v2(tid, graph=kuzu_graph)
+    assert out.success and out.record
+    _assert_structured_hint(
+        out.hints_structured,
+        tool="neighbors",
+        args_subset={"ids": [tid], "direction": "out", "edge_types": ["DECLARES.DECLARES_CLIENT"]},
+        actionable=True,
+    )
+
+
+def test_structured_hint_describe_type_rollup_routes(kuzu_graph) -> None:
+    tid = _controller_class_id_with_exposes(kuzu_graph)
+    out = describe_v2(tid, graph=kuzu_graph)
+    assert out.success and out.record
+    _assert_structured_hint(
+        out.hints_structured,
+        tool="neighbors",
+        args_subset={"ids": [tid], "direction": "out", "edge_types": ["DECLARES.EXPOSES"]},
+        actionable=True,
+    )
+
+
+def test_structured_hint_describe_type_rollup_producers(kuzu_graph) -> None:
+    tid = _type_symbol_id_with_member_producers(kuzu_graph)
+    out = describe_v2(tid, graph=kuzu_graph)
+    assert out.success and out.record
+    _assert_structured_hint(
+        out.hints_structured,
+        tool="neighbors",
+        args_subset={"ids": [tid], "direction": "out", "edge_types": ["DECLARES.DECLARES_PRODUCER"]},
+        actionable=True,
+    )
+
+
+def test_structured_hint_describe_method_overriders(kuzu_graph) -> None:
+    mid = _interface_method_with_override_rollups(kuzu_graph)
+    out = describe_v2(mid, graph=kuzu_graph)
+    assert out.success and out.record
+    _assert_structured_hint(
+        out.hints_structured,
+        tool="neighbors",
+        args_subset={"ids": [mid], "direction": "out", "edge_types": ["OVERRIDDEN_BY"]},
+        actionable=True,
+    )
+
+
+def test_structured_hint_describe_method_clients_in_overriders(kuzu_graph) -> None:
+    mid = _interface_method_with_override_rollups(kuzu_graph)
+    out = describe_v2(mid, graph=kuzu_graph)
+    assert out.success and out.record
+    _assert_structured_hint(
+        out.hints_structured,
+        tool="neighbors",
+        args_subset={"ids": [mid], "direction": "out", "edge_types": ["OVERRIDDEN_BY.DECLARES_CLIENT"]},
+        actionable=True,
+    )
+
+
+def test_structured_hint_describe_method_producers_in_overriders(override_axis_graph: KuzuGraph) -> None:
+    rows = override_axis_graph._rows(  # noqa: SLF001
+        "MATCH (t:Symbol {fqn: $fqn})-[:DECLARES]->(m:Symbol) "
+        "WHERE m.kind = 'method' AND m.name = 'publish' "
+        "RETURN m.id AS id LIMIT 1",
+        {"fqn": "orolla.abstractproducer.AbstractProducerApi"},
+    )
+    assert rows
+    mid = str(rows[0]["id"])
+    out = describe_v2(mid, graph=override_axis_graph)
+    assert out.success and out.record
+    _assert_structured_hint(
+        out.hints_structured,
+        tool="neighbors",
+        args_subset={"ids": [mid], "direction": "out", "edge_types": ["OVERRIDDEN_BY.DECLARES_PRODUCER"]},
+        actionable=True,
+    )
+
+
+def test_structured_hint_describe_method_routes_in_overriders(override_axis_graph: KuzuGraph) -> None:
+    rows = override_axis_graph._rows(  # noqa: SLF001
+        "MATCH (t:Symbol {fqn: $fqn})-[:DECLARES]->(m:Symbol) "
+        "WHERE m.kind = 'method' AND m.name = 'handle' "
+        "RETURN m.id AS id LIMIT 1",
+        {"fqn": "orolla.abstractroute.AbstractApi"},
+    )
+    assert rows
+    mid = str(rows[0]["id"])
+    out = describe_v2(mid, graph=override_axis_graph)
+    assert out.success and out.record
+    _assert_structured_hint(
+        out.hints_structured,
+        tool="neighbors",
+        args_subset={"ids": [mid], "direction": "out", "edge_types": ["OVERRIDDEN_BY.EXPOSES"]},
+        actionable=True,
+    )
+
+
+def test_structured_hint_describe_method_outbound_client(kuzu_graph) -> None:
+    mid = _method_declares_client(kuzu_graph)
+    out = describe_v2(mid, graph=kuzu_graph)
+    assert out.success and out.record
+    _assert_structured_hint(
+        out.hints_structured,
+        tool="neighbors",
+        args_subset={"ids": [mid], "direction": "out", "edge_types": ["DECLARES_CLIENT"]},
+        actionable=True,
+    )
+
+
+def test_structured_hint_describe_method_outbound_producer(kuzu_graph) -> None:
+    rows = kuzu_graph._rows(  # noqa: SLF001
+        "MATCH (m:Symbol)-[:DECLARES_PRODUCER]->(:Producer) WHERE m.kind = 'method' "
+        "RETURN m.id AS id LIMIT 1",
+    )
+    if not rows:
+        pytest.skip("no method with DECLARES_PRODUCER in fixture")
+    mid = str(rows[0]["id"])
+    out = describe_v2(mid, graph=kuzu_graph)
+    assert out.success and out.record
+    _assert_structured_hint(
+        out.hints_structured,
+        tool="neighbors",
+        args_subset={"ids": [mid], "direction": "out", "edge_types": ["DECLARES_PRODUCER"]},
+        actionable=True,
+    )
+
+
+def test_structured_hint_describe_method_inbound_route(kuzu_graph) -> None:
+    rows = kuzu_graph._rows(  # noqa: SLF001
+        "MATCH (m:Symbol)-[:EXPOSES]->(:Route) WHERE m.kind = 'method' RETURN m.id AS id LIMIT 1",
+    )
+    assert rows
+    mid = str(rows[0]["id"])
+    out = describe_v2(mid, graph=kuzu_graph)
+    assert out.success and out.record
+    _assert_structured_hint(
+        out.hints_structured,
+        tool="neighbors",
+        args_subset={"ids": [mid], "direction": "out", "edge_types": ["EXPOSES"]},
+        actionable=True,
+    )
+
+
+def test_structured_hint_describe_route_declaring(kuzu_graph) -> None:
+    rid = _route_id(kuzu_graph)
+    out = describe_v2(rid, graph=kuzu_graph)
+    assert out.success and out.record
+    _assert_structured_hint(
+        out.hints_structured,
+        tool="neighbors",
+        args_subset={"ids": [rid], "direction": "in", "edge_types": ["EXPOSES"]},
+        actionable=True,
+    )
+
+
+def test_structured_hint_describe_client_declaring(kuzu_graph) -> None:
+    cid = _client_id(kuzu_graph)
+    out = describe_v2(cid, graph=kuzu_graph)
+    assert out.success and out.record
+    _assert_structured_hint(
+        out.hints_structured,
+        tool="neighbors",
+        args_subset={"ids": [cid], "direction": "in", "edge_types": ["DECLARES_CLIENT"]},
+        actionable=True,
+    )
+
+
+def test_structured_hint_describe_producer_declaring(kuzu_graph) -> None:
+    pid = _producer_id(kuzu_graph)
+    out = describe_v2(pid, graph=kuzu_graph)
+    assert out.success and out.record
+    _assert_structured_hint(
+        out.hints_structured,
+        tool="neighbors",
+        args_subset={"ids": [pid], "direction": "in", "edge_types": ["DECLARES_PRODUCER"]},
+        actionable=True,
+    )
+
+
+# --- Find structured hints ---
+
+
+def test_structured_hint_find_route_handler(kuzu_graph) -> None:
+    out = find_v2("route", {"path_prefix": "/api"}, graph=kuzu_graph, limit=500, offset=0)
+    assert out.success and out.results
+    rid = out.results[0].id
+    _assert_structured_hint(
+        out.hints_structured,
+        tool="neighbors",
+        args_subset={"ids": [rid], "direction": "in", "edge_types": ["EXPOSES"]},
+        actionable=True,
+    )
+
+
+def test_structured_hint_find_client_http_targets(kuzu_graph) -> None:
+    out = find_v2("client", {"target_service": "smartcare-assign-chat"}, graph=kuzu_graph, limit=500)
+    if not out.results:
+        pytest.skip("no client with that target in fixture")
+    cid = out.results[0].id
+    _assert_structured_hint(
+        out.hints_structured,
+        tool="neighbors",
+        args_subset={"ids": [cid], "direction": "out", "edge_types": ["HTTP_CALLS"]},
+        actionable=True,
+    )
+
+
+def test_structured_hint_find_producer_async_targets(kuzu_graph) -> None:
+    out = find_v2("producer", {}, graph=kuzu_graph, limit=500)
+    if not out.results:
+        pytest.skip("no producers in fixture")
+    pid = out.results[0].id
+    _assert_structured_hint(
+        out.hints_structured,
+        tool="neighbors",
+        args_subset={"ids": [pid], "direction": "out", "edge_types": ["ASYNC_CALLS"]},
+        actionable=True,
+    )
+
+
+def test_structured_hint_find_empty_resolve(kuzu_graph) -> None:
+    out = find_v2("client", {"target_service": "__no_such_target_service__"}, graph=kuzu_graph)
+    assert out.success is True
+    assert out.results == []
+    _assert_structured_hint(
+        out.hints_structured,
+        tool="resolve",
+        args_subset={"hint_kind": "client"},
+        actionable=True,
+    )
+
+
+# --- Resolve structured hints ---
+
+
+def test_structured_hint_resolve_none_search() -> None:
+    _, struct = generate_hints(
+        "resolve",
+        {"status": "none", "resolved_identifier": "com.foo.Bar", "hint_kind": "symbol"},
+    )
+    _assert_structured_hint(struct, tool="search", args_subset={"query": "com.foo.Bar"})
+
+
+def test_structured_hint_resolve_none_find_route() -> None:
+    _, struct = generate_hints(
+        "resolve",
+        {
+            "status": "none",
+            "resolved_identifier": "POST /v1/test",
+            "hint_kind": "route",
+            "path_prefix_seed": "/v1/test",
+        },
+    )
+    _assert_structured_hint(
+        struct, tool="find", args_subset={"kind": "route", "filter": {"path_prefix": "/v1/test"}},
+    )
+
+
+def test_structured_hint_resolve_none_find_client() -> None:
+    _, struct = generate_hints(
+        "resolve",
+        {
+            "status": "none",
+            "resolved_identifier": "smartcare-assign-chat",
+            "hint_kind": "client",
+            "target_service_seed": "smartcare-assign-chat",
+        },
+    )
+    _assert_structured_hint(
+        struct, tool="find", args_subset={"kind": "client", "filter": {"target_service": "smartcare-assign-chat"}},
+    )
+
+
+def test_structured_hint_resolve_many_tighten() -> None:
+    _, struct = generate_hints(
+        "resolve",
+        {"status": "many", "resolved_identifier": "open", "candidates": [{"id": "a"}, {"id": "b"}]},
+    )
+    _assert_structured_hint(struct, tool="resolve", actionable=False)
+
+
+# --- Neighbors structured hints ---
+
+
+def test_structured_hint_neighbors_empty_wrong_kind() -> None:
+    payload = _neighbors_empty_payload(
+        {"id": "sym:com.example.T#m()", "kind": "method"},
+        ["HTTP_CALLS"],
+    )
+    _, struct = generate_hints("neighbors", payload)
+    if struct:
+        for h in struct:
+            assert h.actionable is False
+
+
+def test_structured_hint_neighbors_success_declares_dot_key_clients(kuzu_graph) -> None:
+    class_id = _class_symbol_id(kuzu_graph)
+    out = neighbors_v2(class_id, direction="out", edge_types=["DECLARES"], graph=kuzu_graph, limit=50)
+    assert out.success and out.results
+    _assert_structured_hint(
+        out.hints_structured,
+        tool="neighbors",
+        args_subset={"ids": [class_id], "edge_types": ["DECLARES.DECLARES_CLIENT"]},
+        actionable=True,
+    )
+
+
+def test_structured_hint_neighbors_success_declares_dot_key_routes(kuzu_graph) -> None:
+    class_id = _class_symbol_id(kuzu_graph)
+    out = neighbors_v2(class_id, direction="out", edge_types=["DECLARES"], graph=kuzu_graph, limit=50)
+    assert out.success and out.results
+    _assert_structured_hint(
+        out.hints_structured,
+        tool="neighbors",
+        args_subset={"ids": [class_id], "edge_types": ["DECLARES.EXPOSES"]},
+        actionable=True,
+    )
+
+
+def test_structured_hint_neighbors_success_http_targets() -> None:
+    payload = _neighbors_hint_payload(
+        [_success_edge(_terminal_other("client:a", "client"), edge_type="DECLARES_CLIENT")],
+        requested_edge_types=["DECLARES_CLIENT"],
+    )
+    _, struct = generate_hints("neighbors", payload)
+    h = _assert_structured_hint(struct, tool="neighbors", args_subset={"edge_types": ["HTTP_CALLS"]})
+    assert h.args["ids"] == ["client:a"]
+    assert h.actionable is True
+
+
+def test_structured_hint_neighbors_success_async_targets() -> None:
+    payload = _neighbors_hint_payload(
+        [_success_edge(_terminal_other("producer:a", "producer"), edge_type="DECLARES_PRODUCER")],
+        requested_edge_types=["DECLARES_PRODUCER"],
+    )
+    _, struct = generate_hints("neighbors", payload)
+    h = _assert_structured_hint(struct, tool="neighbors", args_subset={"edge_types": ["ASYNC_CALLS"]})
+    assert h.args["ids"] == ["producer:a"]
+
+
+def test_structured_hint_neighbors_success_callers() -> None:
+    payload = _neighbors_hint_payload(
+        [_success_edge(_symbol_other("sym:pkg.Handler#run()"), edge_type="EXPOSES", direction="in")],
+        requested_edge_types=["EXPOSES"],
+        requested_direction="in",
+    )
+    _, struct = generate_hints("neighbors", payload)
+    h = _assert_structured_hint(struct, tool="neighbors", args_subset={"edge_types": ["CALLS"]})
+    assert h.args["direction"] == "in"
+
+
+def test_structured_hint_neighbors_success_declaring_client() -> None:
+    payload = _neighbors_hint_payload(
+        [_success_edge(_terminal_other("client:a", "client"), edge_type="HTTP_CALLS", direction="in")],
+        requested_edge_types=["HTTP_CALLS"],
+        requested_direction="in",
+    )
+    _, struct = generate_hints("neighbors", payload)
+    h = _assert_structured_hint(struct, tool="neighbors", args_subset={"edge_types": ["DECLARES_CLIENT"]})
+    assert h.args["ids"] == ["client:a"]
+
+
+def test_structured_hint_neighbors_success_declaring_producer() -> None:
+    payload = _neighbors_hint_payload(
+        [_success_edge(_terminal_other("producer:a", "producer"), edge_type="ASYNC_CALLS", direction="in")],
+        requested_edge_types=["ASYNC_CALLS"],
+        requested_direction="in",
+    )
+    _, struct = generate_hints("neighbors", payload)
+    h = _assert_structured_hint(struct, tool="neighbors", args_subset={"edge_types": ["DECLARES_PRODUCER"]})
+    assert h.args["ids"] == ["producer:a"]
+
+
+def test_structured_hint_neighbors_success_handler() -> None:
+    payload = _neighbors_hint_payload(
+        [_success_edge(_terminal_other("route:a", "route"), edge_type="DECLARES.EXPOSES")],
+        requested_edge_types=["DECLARES.EXPOSES"],
+    )
+    _, struct = generate_hints("neighbors", payload)
+    h = _assert_structured_hint(struct, tool="neighbors", args_subset={"edge_types": ["EXPOSES"]})
+    assert h.args["ids"] == ["route:a"]
+    assert h.args["direction"] == "in"
+
+
+# --- Prose-only / meta structured hints ---
+
+
+def test_structured_hint_prose_only_not_actionable() -> None:
+    # weak search score
+    _, struct = generate_hints("search", {
+        "success": True, "limit": 2, "offset": 0,
+        "results": [{"score": 1.0}, {"score": 0.95}],
+    })
+    weak = [h for h in struct if h.tool == "find" and not h.actionable]
+    assert weak, "expected actionable=False find hint for weak search"
+
+    # CALLS fanout
+    payload = _neighbors_hint_payload(
+        [_success_edge(_symbol_other("sym:a"), edge_type="CALLS")] * 12,
+        requested_edge_types=["CALLS"],
+    )
+    payload["calls_row_count"] = 12
+    _, struct = generate_hints("neighbors", payload)
+    fanout = [h for h in struct if h.args.get("edge_types") == ["CALLS"] and not h.actionable]
+    assert fanout, "expected actionable=False CALLS fanout hint"
+
+
+def test_structured_hint_describe_many_calls_not_actionable(kuzu_graph) -> None:
+    mid = _controller_method_many_calls(kuzu_graph)
+    out = describe_v2(mid, graph=kuzu_graph)
+    assert out.success and out.record
+    _assert_structured_hint(
+        out.hints_structured,
+        tool="neighbors",
+        args_subset={"ids": [mid], "edge_types": ["CALLS"]},
+        actionable=False,
+    )
+
+
+# --- Cap / dedup / parity ---
+
+
+def test_structured_hints_cap_5() -> None:
+    # Build a payload that generates many triggers
+    node_id = "sym:com.example.T"
+    rec = {
+        "id": node_id,
+        "kind": "symbol",
+        "fqn": "com.example.T",
+        "data": {"kind": "method"},
+        "edge_summary": {
+            "OVERRIDDEN_BY": {"in": 0, "out": 1},
+            "OVERRIDDEN_BY.DECLARES_CLIENT": {"in": 0, "out": 1},
+            "OVERRIDDEN_BY.DECLARES_PRODUCER": {"in": 0, "out": 1},
+            "OVERRIDDEN_BY.EXPOSES": {"in": 0, "out": 1},
+            "DECLARES_CLIENT": {"in": 0, "out": 1},
+            "DECLARES_PRODUCER": {"in": 0, "out": 1},
+            "EXPOSES": {"in": 0, "out": 1},
+            "CALLS": {"in": 0, "out": 12},
+        },
+    }
+    _, struct = generate_hints("describe", {"success": True, "record": rec})
+    assert len(struct) <= 5
+
+
+def test_structured_hints_dedup() -> None:
+    scored = [
+        _StructuredHint("neighbors", {"ids": ["a"], "direction": "out", "edge_types": ["CALLS"]}, True, 1),
+        _StructuredHint("neighbors", {"ids": ["a"], "direction": "out", "edge_types": ["CALLS"]}, True, 4),
+    ]
+    result = finalize_structured_hints(scored)
+    assert len(result) == 1
+    assert result[0].priority == 4
+
+
+def test_structured_hints_parity_with_string_hints() -> None:
+    """For every output where hints != [], len(hints_structured) <= len(hints)."""
+    payloads = [
+        # describe type
+        ("describe", {"success": True, "record": {
+            "id": "sym:a", "kind": "symbol", "fqn": "T", "data": {"kind": "class"},
+            "edge_summary": {"DECLARES.DECLARES_CLIENT": {"in": 0, "out": 3}},
+        }}),
+        # describe method
+        ("describe", {"success": True, "record": {
+            "id": "sym:a", "kind": "symbol", "fqn": "T#m()", "data": {"kind": "method"},
+            "edge_summary": {"OVERRIDDEN_BY": {"in": 0, "out": 1}, "CALLS": {"in": 0, "out": 12}},
+        }}),
+        # describe route
+        ("describe", {"success": True, "record": {"id": "route:a", "kind": "route", "fqn": "GET /"}}),
+        # find empty
+        ("find", {"success": True, "kind": "client", "results": [], "filter": {"target_service": "x"}, "offset": 0}),
+        # find success
+        ("find", {"success": True, "kind": "route", "results": [{"id": "route:a", "kind": "route"}], "filter": {}, "offset": 0}),
+        # resolve none
+        ("resolve", {"status": "none", "resolved_identifier": "com.foo.Bar", "hint_kind": "symbol"}),
+        # resolve many
+        ("resolve", {"status": "many", "resolved_identifier": "x", "candidates": [{"id": "a"}, {"id": "b"}]}),
+        # neighbors empty structural
+        ("neighbors", {
+            "success": True, "results": [], "requested_edge_types": ["HTTP_CALLS"],
+            "requested_direction": "out", "offset": 0,
+            "subject_record": {"id": "sym:a", "kind": "method"},
+        }),
+        # neighbors success
+        ("neighbors", {
+            "success": True,
+            "results": [{"origin_id": "sym:T", "edge_type": "DECLARES", "direction": "out",
+                         "other": {"id": "sym:m", "kind": "symbol", "symbol_kind": "method"}, "attrs": {}}],
+            "requested_edge_types": ["DECLARES"], "requested_direction": "out", "offset": 0,
+            "subject_record": {"id": "sym:T", "kind": "class"}, "origin_id": "sym:T",
+        }),
+    ]
+    for output_kind, payload in payloads:
+        str_hints, struct = generate_hints(output_kind, payload)
+        if str_hints:
+            assert len(struct) <= len(str_hints), (
+                f"parity violation for {output_kind}: {len(struct)} structured > {len(str_hints)} string"
+            )
+
+
+def test_structured_hint_round_trip(kuzu_graph) -> None:
+    """Integration: build structured hint args into an actual neighbors_v2 call."""
+    rid = _route_id(kuzu_graph)
+    out = describe_v2(rid, graph=kuzu_graph)
+    assert out.success and out.record
+    assert out.hints_structured
+    h = out.hints_structured[0]
+    assert h.tool == "neighbors"
+    # Actually call neighbors_v2 with the structured hint args
+    nout = neighbors_v2(
+        ids=h.args["ids"],
+        direction=h.args["direction"],
+        edge_types=h.args["edge_types"],
+        graph=kuzu_graph,
+    )
+    assert nout.success

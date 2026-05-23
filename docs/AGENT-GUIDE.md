@@ -16,7 +16,7 @@ Copy the block between `<!-- BEGIN` and `<!-- END` into your project's `AGENTS.m
 
 **Ontology: 15** — if results look structurally wrong or empty across tools, the index may be missing, stale, or built with a different `ontology_version`; you cannot re-index via MCP — ask the operator to rebuild.
 
-**Responses:** On success, `search`, `find`, `describe`, and `neighbors` may include a top-level `hints` list (≤5 suggested next calls) and, for `search`/`find`, echoed `limit`/`offset`. Hints are advisory; ignore them when `success` is false.
+**Responses:** On success, `search`, `find`, `describe`, `neighbors`, and `resolve` may include a top-level `hints` list (≤5 suggested next calls) and a companion `hints_structured` list of `{tool, args, actionable}` objects — machine-parseable equivalents with ready-to-use parameters (`actionable=true`) or advisory signals (`actionable=false`). For `search`/`find`, echoed `limit`/`offset`. Hints are advisory; ignore them when `success` is false.
 
 **Use this MCP when** you need whole-codebase structure: callers/callees, route handlers, HTTP/async seams, clients/producers, or fuzzy entry points for a concept.
 

@@ -31,7 +31,7 @@ from index_common import SBERT_MODEL
 from java_codebase_rag.config import resolved_sbert_model_for_process_env
 from java_ontology import EDGE_SCHEMA, ResolveReason
 from kuzu_queries import KuzuGraph, OVERRIDE_AXIS_COMPOSED_EDGE_TYPES
-from mcp_hints import MCP_HINTS_FIELD_DESCRIPTION, generate_hints
+from mcp_hints import MCP_HINTS_FIELD_DESCRIPTION, MCP_HINTS_STRUCTURED_FIELD_DESCRIPTION, generate_hints
 from search_lancedb import TABLES, run_search
 
 DeclarationSymbolKind = Literal["class", "interface", "enum", "record", "annotation", "method", "constructor"]
@@ -174,6 +174,12 @@ class EdgeFilter(BaseModel):
 
 _NODEFILTER_FIELD_ORDER: tuple[str, ...] = tuple(NodeFilter.model_fields.keys())
 _EDGEFILTER_FIELD_ORDER: tuple[str, ...] = tuple(EdgeFilter.model_fields.keys())
+
+
+class StructuredHint(BaseModel):
+    tool: Literal["search", "find", "describe", "neighbors", "resolve"]
+    args: dict[str, Any]
+    actionable: bool = True
 
 # Populated EdgeFilter field -> EDGE_SCHEMA attribute name used in Cypher pushdown.
 _EDGEFILTER_FIELD_TO_ATTR: dict[str, str] = {
@@ -340,6 +346,10 @@ def _edgefilter_applicability_error(edge_types: list[str], ef: EdgeFilter) -> st
     return None
 
 
+def _to_structured_hints(raw: list[Any]) -> list[StructuredHint]:
+    return [StructuredHint(tool=h.tool, args=h.args, actionable=h.actionable) for h in raw]
+
+
 def _coerce_edge_filter(
     value: EdgeFilter | dict[str, Any] | str | None,
 ) -> EdgeFilter | dict[str, Any] | None:
@@ -453,6 +463,7 @@ class SearchOutput(BaseModel):
         description="Echoed from the request — the page offset the server applied. None on success=False.",
     )
     hints: list[str] = Field(default_factory=list, description=MCP_HINTS_FIELD_DESCRIPTION)
+    hints_structured: list[StructuredHint] = Field(default_factory=list, description=MCP_HINTS_STRUCTURED_FIELD_DESCRIPTION)
 
 
 class FindOutput(BaseModel):
@@ -468,6 +479,7 @@ class FindOutput(BaseModel):
         description="Echoed from the request — the page offset the server applied. None on success=False.",
     )
     hints: list[str] = Field(default_factory=list, description=MCP_HINTS_FIELD_DESCRIPTION)
+    hints_structured: list[StructuredHint] = Field(default_factory=list, description=MCP_HINTS_STRUCTURED_FIELD_DESCRIPTION)
 
 
 class DescribeOutput(BaseModel):
@@ -475,6 +487,7 @@ class DescribeOutput(BaseModel):
     record: NodeRecord | None = None
     message: str | None = None
     hints: list[str] = Field(default_factory=list, description=MCP_HINTS_FIELD_DESCRIPTION)
+    hints_structured: list[StructuredHint] = Field(default_factory=list, description=MCP_HINTS_STRUCTURED_FIELD_DESCRIPTION)
 
 
 class NeighborsOutput(BaseModel):
@@ -486,6 +499,7 @@ class NeighborsOutput(BaseModel):
         description="Echo of neighbors(edge_types=...) from the request; empty when success=False.",
     )
     hints: list[str] = Field(default_factory=list, description=MCP_HINTS_FIELD_DESCRIPTION)
+    hints_structured: list[StructuredHint] = Field(default_factory=list, description=MCP_HINTS_STRUCTURED_FIELD_DESCRIPTION)
 
 
 ResolveStatus = Literal["one", "many", "none"]
@@ -556,6 +570,7 @@ class ResolveOutput(BaseModel):
     message: str | None = None
     resolved_identifier: str | None = None
     hints: list[str] = Field(default_factory=list, description=MCP_HINTS_FIELD_DESCRIPTION)
+    hints_structured: list[StructuredHint] = Field(default_factory=list, description=MCP_HINTS_STRUCTURED_FIELD_DESCRIPTION)
 
 
 def _node_kind_from_id(
@@ -920,12 +935,14 @@ def search_v2(
             "limit": limit,
             "offset": offset,
         }
+        str_hints, raw_struct = generate_hints("search", hint_payload)
         return SearchOutput(
             success=True,
             results=hits,
             limit=limit,
             offset=offset,
-            hints=generate_hints("search", hint_payload),
+            hints=str_hints,
+            hints_structured=_to_structured_hints(raw_struct),
         )
     except Exception as exc:
         return SearchOutput(success=False, message=str(exc), hints=[], limit=None, offset=None)
@@ -1009,12 +1026,14 @@ def find_v2(
             "filter": filter_dump,
             "has_more_results": has_more_results,
         }
+        str_hints, raw_struct = generate_hints("find", hint_payload)
         return FindOutput(
             success=True,
             results=refs,
             limit=limit,
             offset=offset,
-            hints=generate_hints("find", hint_payload),
+            hints=str_hints,
+            hints_structured=_to_structured_hints(raw_struct),
         )
     except Exception as exc:
         return FindOutput(success=False, message=str(exc), hints=[], limit=None, offset=None)
@@ -1087,11 +1106,13 @@ def describe_v2(
                         f"java-codebase-rag unresolved-calls list --method-id {node_id} for the full list"
                     )
         record = NodeRecord(id=ref.id, kind=kind, fqn=ref.fqn, data=data, edge_summary=edge_summary)
+        str_hints, raw_struct = generate_hints("describe", {"success": True, "record": record.model_dump()})
         return DescribeOutput(
             success=True,
             record=record,
             message=hint_message,
-            hints=generate_hints("describe", {"success": True, "record": record.model_dump()}),
+            hints=str_hints,
+            hints_structured=_to_structured_hints(raw_struct),
         )
     except ValueError as exc:
         return DescribeOutput(success=False, message=str(exc), hints=[])
@@ -1415,7 +1436,11 @@ def _resolve_finalize_success(
         "path_prefix_seed": path_prefix_seed,
         "target_service_seed": target_service_seed,
     }
-    out = out.model_copy(update={"hints": generate_hints("resolve", hint_payload)})
+    str_hints, raw_struct = generate_hints("resolve", hint_payload)
+    out = out.model_copy(update={
+        "hints": str_hints,
+        "hints_structured": _to_structured_hints(raw_struct),
+    })
     _resolve_assert_invariants(out)
     return out
 
@@ -1945,11 +1970,13 @@ def neighbors_v2(
             "unresolved_count": unresolved_count,
             "calls_row_count": calls_row_count,
         }
+        str_hints, raw_struct = generate_hints("neighbors", neigh_payload)
         return NeighborsOutput(
             success=True,
             results=sliced,
             requested_edge_types=requested_edge_types,
-            hints=generate_hints("neighbors", neigh_payload),
+            hints=str_hints,
+            hints_structured=_to_structured_hints(raw_struct),
         )
     except ValidationError:
         raise
