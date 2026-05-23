@@ -308,7 +308,7 @@ def test_hints_describe_client_always_declaring_method(kuzu_graph) -> None:
     out = describe_v2(cid, graph=kuzu_graph)
     assert out.success and out.record
     want = mcp_hints.TPL_DESCRIBE_CLIENT_DECLARING.format(id=cid)
-    assert out.hints == [want]
+    assert want in out.hints
 
 
 def test_hints_describe_producer_always_declaring_method(kuzu_graph) -> None:
@@ -316,7 +316,7 @@ def test_hints_describe_producer_always_declaring_method(kuzu_graph) -> None:
     out = describe_v2(pid, graph=kuzu_graph)
     assert out.success and out.record
     want = mcp_hints.TPL_DESCRIBE_PRODUCER_DECLARING.format(id=pid)
-    assert out.hints == [want]
+    assert want in out.hints
 
 
 def test_hints_find_empty_identifier_filter_suggests_resolve(kuzu_graph) -> None:
@@ -1090,6 +1090,13 @@ def test_hints_neighbors_v2_declares_success_emits_dot_key_clients(kuzu_graph) -
         (mcp_hints.TPL_FIND_SUCCESS_HANDLER, {"id": "route:svc:GET:/api/v1/chat"}),
         (mcp_hints.TPL_FIND_SUCCESS_HTTP_TARGETS, {"id": "client:svc:feign:target:GET:/p"}),
         (mcp_hints.TPL_FIND_SUCCESS_ASYNC_TARGETS, {"id": "producer:svc:kafka:topic:t"}),
+        (mcp_hints.TPL_DESCRIBE_TYPE_IMPLEMENTORS, {"id": "sym:com.example.RegexComplianceScanner#scan(String)"}),
+        (mcp_hints.TPL_DESCRIBE_TYPE_IMPLEMENTS, {"id": "sym:com.example.RegexComplianceScanner#scan(String)"}),
+        (mcp_hints.TPL_DESCRIBE_TYPE_DEPENDENCIES, {"id": "sym:com.example.RegexComplianceScanner#scan(String)"}),
+        (mcp_hints.TPL_DESCRIBE_TYPE_INJECTORS, {"id": "sym:com.example.RegexComplianceScanner#scan(String)"}),
+        (mcp_hints.TPL_DESCRIBE_METHOD_OUTBOUND_CALLS, {"id": "sym:com.example.RegexComplianceScanner#scan(String)"}),
+        (mcp_hints.TPL_DESCRIBE_METHOD_SUPER_DECL, {"id": "sym:com.example.RegexComplianceScanner#scan(String)"}),
+        (mcp_hints.TPL_DESCRIBE_METHOD_UNRESOLVED, {"id": "sym:com.example.RegexComplianceScanner#scan(String)"}),
     ],
 )
 def test_hints_all_v4_templates_under_120_chars(template: str, substitutions: dict[str, str]) -> None:
@@ -1772,6 +1779,227 @@ def test_neighbors_calls_nodefilter_role_collision_hint(kuzu_graph) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Describe structural hints — helpers + tests (PR-DESCRIBE-STRUCTURAL-1)
+# ---------------------------------------------------------------------------
+
+
+def _interface_with_implements_in(kuzu_graph) -> str:
+    rows = kuzu_graph._rows(  # noqa: SLF001
+        "MATCH (iface:Symbol)<-[:IMPLEMENTS]-(impl:Symbol) "
+        "WHERE iface.kind = 'interface' "
+        "WITH iface, count(impl) AS nin WHERE nin > 0 "
+        "RETURN iface.id AS id LIMIT 1",
+    )
+    if not rows:
+        pytest.skip("no interface with IMPLEMENTS.in > 0 in fixture")
+    return str(rows[0]["id"])
+
+
+def _class_with_implements_out(kuzu_graph) -> str:
+    rows = kuzu_graph._rows(  # noqa: SLF001
+        "MATCH (cls:Symbol)-[:IMPLEMENTS]->(iface:Symbol) "
+        "WHERE cls.kind = 'class' "
+        "WITH cls, count(iface) AS nout WHERE nout > 0 "
+        "RETURN cls.id AS id LIMIT 1",
+    )
+    if not rows:
+        pytest.skip("no class with IMPLEMENTS.out > 0 in fixture")
+    return str(rows[0]["id"])
+
+
+def _service_with_injects_out(kuzu_graph) -> str:
+    rows = kuzu_graph._rows(  # noqa: SLF001
+        "MATCH (cls:Symbol)-[:INJECTS]->(dep:Symbol) "
+        "WHERE cls.kind = 'class' AND cls.role = 'SERVICE' "
+        "RETURN cls.id AS id LIMIT 1",
+    )
+    if not rows:
+        pytest.skip("no SERVICE class with INJECTS.out > 0 in fixture")
+    return str(rows[0]["id"])
+
+
+def _type_with_injects_in(kuzu_graph) -> str:
+    rows = kuzu_graph._rows(  # noqa: SLF001
+        "MATCH (dep:Symbol)<-[:INJECTS]-(cls:Symbol) "
+        "WHERE dep.kind IN ['interface', 'class'] "
+        "RETURN DISTINCT dep.id AS id LIMIT 1",
+    )
+    if not rows:
+        pytest.skip("no type with INJECTS.in > 0 in fixture")
+    return str(rows[0]["id"])
+
+
+def _method_with_mid_calls_out(kuzu_graph) -> str:
+    rows = kuzu_graph._rows(  # noqa: SLF001
+        "MATCH (m:Symbol)-[c:CALLS]->() WHERE m.kind = 'method' "
+        "WITH m, count(c) AS nout WHERE nout >= 3 AND nout <= 9 "
+        "RETURN m.id AS id LIMIT 1",
+    )
+    if not rows:
+        pytest.skip("no method with 3 <= CALLS.out <= 9 in fixture")
+    return str(rows[0]["id"])
+
+
+def _method_with_overrides_out(kuzu_graph) -> str:
+    rows = kuzu_graph._rows(  # noqa: SLF001
+        "MATCH (m:Symbol)-[:OVERRIDES]->() WHERE m.kind = 'method' "
+        "RETURN m.id AS id LIMIT 1",
+    )
+    if not rows:
+        pytest.skip("no method with OVERRIDES.out > 0 in fixture")
+    return str(rows[0]["id"])
+
+
+def _method_with_unresolved(kuzu_graph) -> str:
+    rows = kuzu_graph._rows(  # noqa: SLF001
+        "MATCH (m:Symbol)-[c:CALLS]->() WHERE m.kind = 'method' "
+        "WITH m, count(c) AS nout WHERE nout >= 1 "
+        "RETURN m.id AS id, m.fqn AS fqn LIMIT 200",
+    )
+    for r in rows:
+        mid = str(r["id"])
+        out = describe_v2(mid, graph=kuzu_graph)
+        if out.record and isinstance(out.record.data, dict):
+            unc = int(out.record.data.get("unresolved_call_sites_total") or 0)
+            if unc > 0:
+                return mid
+    pytest.skip("no method with unresolved_call_sites_total > 0 in fixture")
+
+
+def _client_with_http_calls_out(kuzu_graph) -> str:
+    rows = kuzu_graph._rows(  # noqa: SLF001
+        "MATCH (c:Client)-[:HTTP_CALLS]->() RETURN DISTINCT c.id AS id LIMIT 1",
+    )
+    if not rows:
+        pytest.skip("no client with HTTP_CALLS.out > 0 in fixture")
+    return str(rows[0]["id"])
+
+
+def _producer_with_async_calls_out(kuzu_graph) -> str:
+    rows = kuzu_graph._rows(  # noqa: SLF001
+        "MATCH (p:Producer)-[:ASYNC_CALLS]->() RETURN DISTINCT p.id AS id LIMIT 1",
+    )
+    if not rows:
+        pytest.skip("no producer with ASYNC_CALLS.out > 0 in fixture")
+    return str(rows[0]["id"])
+
+
+# --- String hint tests ---
+
+
+def test_hints_describe_interface_implementors_emits(kuzu_graph) -> None:
+    tid = _interface_with_implements_in(kuzu_graph)
+    out = describe_v2(tid, graph=kuzu_graph)
+    assert out.success and out.record
+    want = mcp_hints.TPL_DESCRIBE_TYPE_IMPLEMENTORS.format(id=tid)
+    assert want in out.hints
+
+
+def test_hints_describe_class_implements_emits(kuzu_graph) -> None:
+    tid = _class_with_implements_out(kuzu_graph)
+    out = describe_v2(tid, graph=kuzu_graph)
+    assert out.success and out.record
+    want = mcp_hints.TPL_DESCRIBE_TYPE_IMPLEMENTS.format(id=tid)
+    assert want in out.hints
+
+
+def test_hints_describe_service_dependencies_emits(kuzu_graph) -> None:
+    tid = _service_with_injects_out(kuzu_graph)
+    out = describe_v2(tid, graph=kuzu_graph)
+    assert out.success and out.record
+    want = mcp_hints.TPL_DESCRIBE_TYPE_DEPENDENCIES.format(id=tid)
+    assert want in out.hints
+
+
+def test_hints_describe_type_injectors_emits(kuzu_graph) -> None:
+    tid = _type_with_injects_in(kuzu_graph)
+    out = describe_v2(tid, graph=kuzu_graph)
+    assert out.success and out.record
+    want = mcp_hints.TPL_DESCRIBE_TYPE_INJECTORS.format(id=tid)
+    assert want in out.hints
+
+
+def test_hints_describe_type_skips_tier1_when_rollups(kuzu_graph) -> None:
+    tid = _controller_class_id_with_exposes(kuzu_graph)
+    out = describe_v2(tid, graph=kuzu_graph)
+    assert out.success and out.record
+    assert out.hints
+    tier1_markers = ("implementors:", "implements:", "dependencies:", "injectors:")
+    for h in out.hints:
+        assert not any(h.startswith(m) for m in tier1_markers)
+
+
+def test_hints_describe_method_outbound_calls_mid_fanout_emits(kuzu_graph) -> None:
+    mid = _method_with_mid_calls_out(kuzu_graph)
+    out = describe_v2(mid, graph=kuzu_graph)
+    assert out.success and out.record
+    want = mcp_hints.TPL_DESCRIBE_METHOD_OUTBOUND_CALLS.format(id=mid)
+    assert want in out.hints
+
+
+def test_hints_describe_method_outbound_calls_low_fanout_non_other_emits(kuzu_graph) -> None:
+    rows = kuzu_graph._rows(  # noqa: SLF001
+        "MATCH (m:Symbol)-[c:CALLS]->() WHERE m.kind = 'method' AND m.role <> 'OTHER' "
+        "WITH m, count(c) AS nout WHERE nout >= 1 AND nout <= 2 "
+        "RETURN m.id AS id LIMIT 1",
+    )
+    if not rows:
+        pytest.skip("no non-OTHER method with 1-2 CALLS.out in fixture")
+    mid = str(rows[0]["id"])
+    out = describe_v2(mid, graph=kuzu_graph)
+    assert out.success and out.record
+    want = mcp_hints.TPL_DESCRIBE_METHOD_OUTBOUND_CALLS.format(id=mid)
+    assert want in out.hints
+
+
+def test_hints_describe_method_super_declaration_emits(kuzu_graph) -> None:
+    mid = _method_with_overrides_out(kuzu_graph)
+    out = describe_v2(mid, graph=kuzu_graph)
+    assert out.success and out.record
+    want = mcp_hints.TPL_DESCRIBE_METHOD_SUPER_DECL.format(id=mid)
+    assert want in out.hints
+
+
+def test_hints_describe_method_unresolved_emits(kuzu_graph) -> None:
+    mid = _method_with_unresolved(kuzu_graph)
+    out = describe_v2(mid, graph=kuzu_graph)
+    assert out.success and out.record
+    want = mcp_hints.TPL_DESCRIBE_METHOD_UNRESOLVED.format(id=mid)
+    assert want in out.hints
+
+
+def test_hints_describe_client_http_targets_emits(kuzu_graph) -> None:
+    cid = _client_with_http_calls_out(kuzu_graph)
+    out = describe_v2(cid, graph=kuzu_graph)
+    assert out.success and out.record
+    want = mcp_hints.TPL_FIND_SUCCESS_HTTP_TARGETS.format(id=cid)
+    assert want in out.hints
+
+
+def test_hints_describe_producer_async_targets_emits(kuzu_graph) -> None:
+    pid = _producer_with_async_calls_out(kuzu_graph)
+    out = describe_v2(pid, graph=kuzu_graph)
+    assert out.success and out.record
+    want = mcp_hints.TPL_FIND_SUCCESS_ASYNC_TARGETS.format(id=pid)
+    assert want in out.hints
+
+
+def test_hints_describe_structural_templates_char_cap() -> None:
+    templates = [
+        (mcp_hints.TPL_DESCRIBE_TYPE_IMPLEMENTORS, {"id": "sym:com.example.RegexComplianceScanner#scan(String)"}),
+        (mcp_hints.TPL_DESCRIBE_TYPE_IMPLEMENTS, {"id": "sym:com.example.RegexComplianceScanner#scan(String)"}),
+        (mcp_hints.TPL_DESCRIBE_TYPE_DEPENDENCIES, {"id": "sym:com.example.RegexComplianceScanner#scan(String)"}),
+        (mcp_hints.TPL_DESCRIBE_TYPE_INJECTORS, {"id": "sym:com.example.RegexComplianceScanner#scan(String)"}),
+        (mcp_hints.TPL_DESCRIBE_METHOD_OUTBOUND_CALLS, {"id": "sym:com.example.RegexComplianceScanner#scan(String)"}),
+        (mcp_hints.TPL_DESCRIBE_METHOD_SUPER_DECL, {"id": "sym:com.example.RegexComplianceScanner#scan(String)"}),
+        (mcp_hints.TPL_DESCRIBE_METHOD_UNRESOLVED, {"id": "sym:com.example.RegexComplianceScanner#scan(String)"}),
+    ]
+    for template, kwargs in templates:
+        rendered = template.format(**kwargs)
+        assert len(rendered) <= 120, f"{template!r} rendered to {len(rendered)} chars: {rendered!r}"
+
+
+# ---------------------------------------------------------------------------
 # Structured hint tests (PR-1)
 # ---------------------------------------------------------------------------
 
@@ -1979,6 +2207,117 @@ def test_structured_hint_describe_producer_declaring(kuzu_graph) -> None:
         out.hints_structured,
         tool="neighbors",
         args_subset={"ids": [pid], "direction": "in", "edge_types": ["DECLARES_PRODUCER"]},
+        actionable=True,
+    )
+
+
+# --- Describe structural structured hints ---
+
+
+def test_structured_hints_describe_interface_implementors(kuzu_graph) -> None:
+    tid = _interface_with_implements_in(kuzu_graph)
+    out = describe_v2(tid, graph=kuzu_graph)
+    assert out.success and out.record
+    _assert_structured_hint(
+        out.hints_structured,
+        tool="neighbors",
+        args_subset={"ids": [tid], "direction": "in", "edge_types": ["IMPLEMENTS"]},
+        actionable=True,
+    )
+
+
+def test_structured_hints_describe_class_implements(kuzu_graph) -> None:
+    tid = _class_with_implements_out(kuzu_graph)
+    out = describe_v2(tid, graph=kuzu_graph)
+    assert out.success and out.record
+    _assert_structured_hint(
+        out.hints_structured,
+        tool="neighbors",
+        args_subset={"ids": [tid], "direction": "out", "edge_types": ["IMPLEMENTS"]},
+        actionable=True,
+    )
+
+
+def test_structured_hints_describe_service_dependencies(kuzu_graph) -> None:
+    tid = _service_with_injects_out(kuzu_graph)
+    out = describe_v2(tid, graph=kuzu_graph)
+    assert out.success and out.record
+    _assert_structured_hint(
+        out.hints_structured,
+        tool="neighbors",
+        args_subset={"ids": [tid], "direction": "out", "edge_types": ["INJECTS"]},
+        actionable=True,
+    )
+
+
+def test_structured_hints_describe_type_injectors(kuzu_graph) -> None:
+    tid = _type_with_injects_in(kuzu_graph)
+    out = describe_v2(tid, graph=kuzu_graph)
+    assert out.success and out.record
+    _assert_structured_hint(
+        out.hints_structured,
+        tool="neighbors",
+        args_subset={"ids": [tid], "direction": "in", "edge_types": ["INJECTS"]},
+        actionable=True,
+    )
+
+
+def test_structured_hints_describe_method_outbound_calls(kuzu_graph) -> None:
+    mid = _method_with_mid_calls_out(kuzu_graph)
+    out = describe_v2(mid, graph=kuzu_graph)
+    assert out.success and out.record
+    _assert_structured_hint(
+        out.hints_structured,
+        tool="neighbors",
+        args_subset={"ids": [mid], "direction": "out", "edge_types": ["CALLS"]},
+        actionable=True,
+    )
+
+
+def test_structured_hints_describe_method_super_declaration(kuzu_graph) -> None:
+    mid = _method_with_overrides_out(kuzu_graph)
+    out = describe_v2(mid, graph=kuzu_graph)
+    assert out.success and out.record
+    _assert_structured_hint(
+        out.hints_structured,
+        tool="neighbors",
+        args_subset={"ids": [mid], "direction": "out", "edge_types": ["OVERRIDES"]},
+        actionable=True,
+    )
+
+
+def test_structured_hints_describe_method_unresolved(kuzu_graph) -> None:
+    mid = _method_with_unresolved(kuzu_graph)
+    out = describe_v2(mid, graph=kuzu_graph)
+    assert out.success and out.record
+    _assert_structured_hint(
+        out.hints_structured,
+        tool="neighbors",
+        args_subset={"ids": [mid], "direction": "out", "edge_types": ["CALLS"], "include_unresolved": True},
+        actionable=True,
+    )
+
+
+def test_structured_hints_describe_client_http_targets(kuzu_graph) -> None:
+    cid = _client_with_http_calls_out(kuzu_graph)
+    out = describe_v2(cid, graph=kuzu_graph)
+    assert out.success and out.record
+    _assert_structured_hint(
+        out.hints_structured,
+        tool="neighbors",
+        args_subset={"ids": [cid], "direction": "out", "edge_types": ["HTTP_CALLS"]},
+        actionable=True,
+    )
+
+
+def test_structured_hints_describe_producer_async_targets(kuzu_graph) -> None:
+    pid = _producer_with_async_calls_out(kuzu_graph)
+    out = describe_v2(pid, graph=kuzu_graph)
+    assert out.success and out.record
+    _assert_structured_hint(
+        out.hints_structured,
+        tool="neighbors",
+        args_subset={"ids": [pid], "direction": "out", "edge_types": ["ASYNC_CALLS"]},
         actionable=True,
     )
 
