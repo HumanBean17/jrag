@@ -1,6 +1,6 @@
 # Plan: HINTS-STRUCTURED (machine-parseable next-action objects)
 
-Status: **active (planning)**. This plan implements
+Status: **completed**. This plan implemented
 [`propose/HINTS-STRUCTURED-PROPOSE.md`](../propose/HINTS-STRUCTURED-PROPOSE.md)
 (issue [#195](https://github.com/HumanBean17/java-codebase-rag/issues/195) item 7).
 

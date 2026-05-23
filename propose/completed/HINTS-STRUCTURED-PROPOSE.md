@@ -1,7 +1,7 @@
 # HINTS-STRUCTURED — machine-parseable next-action objects alongside road-sign strings
 
 ## Status
-Proposal — not yet implemented.
+Completed — landed in [#209](https://github.com/HumanBean17/java-codebase-rag/pull/209).
 
 **Tracks:** [#195](https://github.com/HumanBean17/java-codebase-rag/issues/195) (item 7).
 
