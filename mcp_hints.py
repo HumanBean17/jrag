@@ -855,7 +855,9 @@ def generate_hints(
             if n > 1:
                 pairs.append((PRIORITY_META, TPL_RESOLVE_MANY_TIGHTEN.format(n=n)))
                 struct_pairs.append(_StructuredHint(
-                    "resolve", {"identifier": "", "hint_kind": ""}, False, PRIORITY_META,
+                    "resolve",
+                    {"identifier": str(payload.get("resolved_identifier") or ""), "hint_kind": str(payload.get("hint_kind") or "")},
+                    False, PRIORITY_META,
                 ))
             return (finalize_hint_list(pairs), finalize_structured_hints(struct_pairs))
         if status == "none":
@@ -926,7 +928,7 @@ def generate_hints(
         if _find_is_page_full(payload, results) and lim is not None:
             pairs.append((PRIORITY_META, TPL_FIND_PAGE_FULL.format(limit=int(lim))))
             struct_pairs.append(_StructuredHint(
-                "find", {"kind": kind, "filter": {}, "limit": int(lim)}, False, PRIORITY_META,
+                "find", {"kind": kind, "filter": flt, "limit": int(lim)}, False, PRIORITY_META,
             ))
         pairs.extend(find_success_hints(payload))
         if results and not _find_is_page_full(payload, results):

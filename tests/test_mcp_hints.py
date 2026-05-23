@@ -2278,8 +2278,12 @@ def test_structured_hints_parity_with_string_hints() -> None:
         ("find", {"success": True, "kind": "client", "results": [], "filter": {"target_service": "x"}, "offset": 0}),
         # find success
         ("find", {"success": True, "kind": "route", "results": [{"id": "route:a", "kind": "route"}], "filter": {}, "offset": 0}),
-        # resolve none
+        # resolve none — symbol (else branch)
         ("resolve", {"status": "none", "resolved_identifier": "com.foo.Bar", "hint_kind": "symbol"}),
+        # resolve none — route (find branch)
+        ("resolve", {"status": "none", "resolved_identifier": "com.foo.Bar", "hint_kind": "route", "path_prefix_seed": "/api"}),
+        # resolve none — client (find branch)
+        ("resolve", {"status": "none", "resolved_identifier": "com.foo.Bar", "hint_kind": "client", "target_service_seed": "svc"}),
         # resolve many
         ("resolve", {"status": "many", "resolved_identifier": "x", "candidates": [{"id": "a"}, {"id": "b"}]}),
         # neighbors empty structural
