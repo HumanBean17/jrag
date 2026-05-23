@@ -9,7 +9,7 @@ Depends on: **none** (first landing is CI so later fixture work is mechanically 
 
 - Establish a **mechanical merge gate**: GitHub Actions runs the full default test suite on every PR and on pushes to `master`, with branch protection requiring the workflow check before merge (`JAVA_CODEBASE_RAG_RUN_HEAVY=0` in CI).
 - **Collapse redundant graph builds** in pytest: one session build per static corpus (bank-chat-system + each small fixture tree used read-only), plus a shared test-layer builder for per-`tmp_path` corpora.
-- **Codify iteration discipline**: authors declare a `Tests to run (iteration loop)` subset in each per-PR execution prompt (`plans/CURSOR-PROMPTS-*.md` and ad hoc prompts that follow the same scaffold). The repo **[`plan-prompts`](../.cursor/skills/plan-prompts/SKILL.md)** skill defines that scaffold. Reviewers require **pasteable** evidence (subset command + exit code, and link to green CI after the gate exists) per the repo **[`pr-review`](../.cursor/skills/pr-review/SKILL.md)** skill. Both skills are versioned under **`.cursor/skills/`** in this repository (optionally copied to a personal `~/.cursor/skills/` tree). `tests/README.md` documents both.
+- **Codify iteration discipline**: authors declare a `Tests to run (iteration loop)` subset in each per-PR execution prompt (`plans/AGENT-PROMPTS-*.md` and ad hoc prompts that follow the same scaffold). The repo **[`plan-prompts`](../.cursor/skills/plan-prompts/SKILL.md)** skill defines that scaffold. Reviewers require **pasteable** evidence (subset command + exit code, and link to green CI after the gate exists) per the repo **[`pr-review`](../.cursor/skills/pr-review/SKILL.md)** skill. Both skills are versioned under **`.cursor/skills/`** in this repository (optionally copied to a personal `~/.cursor/skills/` tree). `tests/README.md` documents both.
 
 ## Principles (do not relitigate in review)
 
@@ -194,7 +194,7 @@ Representative high-signal modules to re-run locally during implementation (not 
 
 ### In this repository (`plan-prompts`)
 
-1. **[`.cursor/skills/plan-prompts/`](../.cursor/skills/plan-prompts/)** — each generated **`plans/CURSOR-PROMPTS-*.md`** per-PR **Prompt** block includes **`## Tests to run (iteration loop)`** between **Deliverables** and **Tests**: bullet list of `tests/test_*.py` paths + one-line rationale; allow **empty / docs-only** pattern (UC15). Skill text, scaffold, and examples stay aligned with [`propose/completed/TEST-SUITE-FAST-LOOP-PROPOSE.md`](../../propose/completed/TEST-SUITE-FAST-LOOP-PROPOSE.md) §5.
+1. **[`.cursor/skills/plan-prompts/`](../.cursor/skills/plan-prompts/)** — each generated **`plans/AGENT-PROMPTS-*.md`** per-PR **Prompt** block includes **`## Tests to run (iteration loop)`** between **Deliverables** and **Tests**: bullet list of `tests/test_*.py` paths + one-line rationale; allow **empty / docs-only** pattern (UC15). Skill text, scaffold, and examples stay aligned with [`propose/completed/TEST-SUITE-FAST-LOOP-PROPOSE.md`](../../propose/completed/TEST-SUITE-FAST-LOOP-PROPOSE.md) §5.
 
 ### In this repository (`pr-review`)
 

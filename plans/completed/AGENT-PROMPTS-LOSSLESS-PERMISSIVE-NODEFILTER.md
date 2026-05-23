@@ -1,4 +1,4 @@
-# Cursor task prompts — Lossless-permissive `NodeFilter` (PR-N1)
+# Agent task prompts — Lossless-permissive `NodeFilter` (PR-N1)
 
 Status: **completed** (reference). Implements
 [`plans/PLAN-LOSSLESS-PERMISSIVE-NODEFILTER.md`](./PLAN-LOSSLESS-PERMISSIVE-NODEFILTER.md)

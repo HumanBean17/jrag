@@ -1,4 +1,4 @@
-# Cursor task prompts — AGENT-GUIDE surgical patches (PR-AGP-1 → PR-AGP-2)
+# Agent task prompts — AGENT-GUIDE surgical patches (PR-AGP-1 → PR-AGP-2)
 
 Status: **completed** (reference). Companion to
 [`plans/completed/PLAN-AGENT-GUIDE-SURGICAL-PATCHES.md`](./PLAN-AGENT-GUIDE-SURGICAL-PATCHES.md)

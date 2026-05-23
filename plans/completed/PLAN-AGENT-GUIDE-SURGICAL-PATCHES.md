@@ -6,9 +6,9 @@ Status: **completed** (landed). This plan implemented
 Depends on: **none** (documentation only; no code or schema).
 
 Companion prompts:
-[`plans/completed/CURSOR-PROMPTS-AGENT-GUIDE-SURGICAL-PATCHES.md`](./CURSOR-PROMPTS-AGENT-GUIDE-SURGICAL-PATCHES.md)
+[`plans/completed/AGENT-PROMPTS-AGENT-GUIDE-SURGICAL-PATCHES.md`](./AGENT-PROMPTS-AGENT-GUIDE-SURGICAL-PATCHES.md)
 (Cursor-ready per-PR contracts; structural reference
-`plans/completed/CURSOR-PROMPTS-TIER1B.md`).
+`plans/completed/AGENT-PROMPTS-TIER1B.md`).
 
 ## Goal
 
@@ -131,7 +131,7 @@ Landing order: **PR-AGP-1 → PR-AGP-2**.
 
   1. `rg -n "What this MCP is NOT" docs/AGENT-GUIDE.md` — one hit inside markers.
   2. `rg -n "After two failed attempts|Staleness rule" docs/AGENT-GUIDE.md` — the line matching **Staleness rule** must appear **below** the line matching **After two failed attempts** (staleness paragraph follows that sentence, not the table).
-  3. `rg -n '^- \*\*Confidence:\*\*' docs/AGENT-GUIDE.md` — present under `neighbors` (same pattern as `CURSOR-PROMPTS`).
+  3. `rg -n '^- \*\*Confidence:\*\*' docs/AGENT-GUIDE.md` — present under `neighbors` (same pattern as `AGENT-PROMPTS`).
   4. `rg -n "<!-- BEGIN java-codebase-rag MCP guide -->|<!-- END java-codebase-rag MCP guide -->" docs/AGENT-GUIDE.md` — both present, unchanged strings.
   5. Load-bearing cardinals (stable substrings; adjust only if copy moves):
      - `rg -n "Tool reference — four tools" docs/AGENT-GUIDE.md`
@@ -190,4 +190,4 @@ Landing order: **PR-AGP-1 → PR-AGP-2**.
 
 - `PR-AGP-1`: **merged**
 - `PR-AGP-2`: **merged**
-- [`plans/completed/CURSOR-PROMPTS-AGENT-GUIDE-SURGICAL-PATCHES.md`](./CURSOR-PROMPTS-AGENT-GUIDE-SURGICAL-PATCHES.md): **completed** (reference prompts)
+- [`plans/completed/AGENT-PROMPTS-AGENT-GUIDE-SURGICAL-PATCHES.md`](./AGENT-PROMPTS-AGENT-GUIDE-SURGICAL-PATCHES.md): **completed** (reference prompts)

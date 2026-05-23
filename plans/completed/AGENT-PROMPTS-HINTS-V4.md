@@ -1,4 +1,4 @@
-# Cursor task prompts — HINTS-V4
+# Agent task prompts — HINTS-V4
 
 Status: **active**. Plan:
 [`plans/PLAN-HINTS-V4.md`](./PLAN-HINTS-V4.md). Propose:

@@ -1,4 +1,4 @@
-# Cursor task prompts — MCP Filter Frame (PR-FRAME-1 → PR-FRAME-3)
+# Agent task prompts — MCP Filter Frame (PR-FRAME-1 → PR-FRAME-3)
 
 Status: **completed** — reference template for the landed PR-FRAME-1 → PR-FRAME-3
 sequence. Plan:

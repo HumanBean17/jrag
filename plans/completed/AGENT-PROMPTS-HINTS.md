@@ -1,4 +1,4 @@
-# Cursor task prompts — Hints (road signs) + stored `OVERRIDES`
+# Agent task prompts — Hints (road signs) + stored `OVERRIDES`
 
 Status: **completed** (landed). Plan: [`plans/completed/PLAN-HINTS.md`](./PLAN-HINTS.md). Propose:
 [`propose/completed/HINTS-ROAD-SIGNS-PROPOSE.md`](../propose/completed/HINTS-ROAD-SIGNS-PROPOSE.md).

@@ -255,4 +255,4 @@ These criteria are met on `master` after PR-3.
 
 # Optional companion
 
-For Cursor per-PR handoffs mirroring `plans/completed/CURSOR-PROMPTS-TIER1B.md`, add `plans/CURSOR-PROMPTS-HTTP-ROUTE-METHOD-ENUM.md` with branch naming, sentinel greps, and exact pytest invocations once PR-1 lands.
+For Cursor per-PR handoffs mirroring `plans/completed/AGENT-PROMPTS-TIER1B.md`, add `plans/AGENT-PROMPTS-HTTP-ROUTE-METHOD-ENUM.md` with branch naming, sentinel greps, and exact pytest invocations once PR-1 lands.

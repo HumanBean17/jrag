@@ -64,7 +64,7 @@ Tier 1 and Tier 2 are the bulk of the win. Tier 3 stays per-test because the tes
 
 ### B. Per-PR test selection convention
 
-Each propose-derived PR carries a `Tests to run (iteration loop)` block in its execution prompt (typically inside `plans/CURSOR-PROMPTS-*.md`), naming the test subset relevant to the change. Three additions:
+Each propose-derived PR carries a `Tests to run (iteration loop)` block in its execution prompt (typically inside `plans/AGENT-PROMPTS-*.md`), naming the test subset relevant to the change. Three additions:
 
 1. **Repo `plan-prompts` skill** (`.cursor/skills/plan-prompts/`) — when generating or auditing prompts, require the **`## Tests to run (iteration loop)`** section between **Deliverables** and **Tests** so authors name the subset whenever work is delegated from a plan.
 2. **Repo `pr-review` skill** (`.cursor/skills/pr-review/`) — verification requires *evidence*, not a checkbox: the reviewer must include the actual `pytest <files>` command + exit code, and (after PR-3) a link to the green CI run of the full suite. This decouples "subset ran during iteration" from "full suite passed before merge" — two evidences, two purposes.
@@ -152,7 +152,7 @@ Five test files stop redefining their local `_build()` and import `build_kuzu_in
 
 ### `plan-prompts` skill (repo) — iteration section
 
-The **plan-prompts** skill governs `plans/CURSOR-PROMPTS-*.md`. Its per-PR **Prompt** scaffold has sections: scope, deliverables, sentinel greps, tests, definition-of-done, out-of-scope. Insert a new section **between *deliverables* and *tests***:
+The **plan-prompts** skill governs `plans/AGENT-PROMPTS-*.md`. Its per-PR **Prompt** scaffold has sections: scope, deliverables, sentinel greps, tests, definition-of-done, out-of-scope. Insert a new section **between *deliverables* and *tests***:
 
 ```markdown
 ## Tests to run (iteration loop)
@@ -272,7 +272,7 @@ No use case requires a primitive that's missing.
 **Purpose**: codify the `Tests to run` convention in **plan-prompts** and the evidence checklist in **pr-review**, both under **`.cursor/skills/`** in this repository. Ships last because the **pr-review** full-suite evidence requirement references the CI status check from PR-3.
 
 **Changes (in-repo):**
-1. **`.cursor/skills/plan-prompts/`** — `SKILL.md` / `reference.md` / `examples.md` require the `## Tests to run (iteration loop)` template between **Deliverables** and **Tests** in every generated per-PR prompt (`plans/CURSOR-PROMPTS-*.md`).
+1. **`.cursor/skills/plan-prompts/`** — `SKILL.md` / `reference.md` / `examples.md` require the `## Tests to run (iteration loop)` template between **Deliverables** and **Tests** in every generated per-PR prompt (`plans/AGENT-PROMPTS-*.md`).
 2. **`.cursor/skills/pr-review/`** — `SKILL.md` requires (a) pasted `pytest <files>` command + exit code (subset evidence) and (b) a link to the green CI run on the PR (full-suite enforcement). The two evidences serve two different purposes.
 
 **Cross-reference:** `tests/README.md` (PR-1) links both skill paths so contributors open the canonical copies in git.

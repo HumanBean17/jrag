@@ -219,5 +219,5 @@ Use **verbatim** names below (adjust only if pytest collection would collide; if
 
 ## Cursor handoff
 
-Per-PR execution prompts: [`plans/completed/CURSOR-PROMPTS-HINTS.md`](CURSOR-PROMPTS-HINTS.md)
-(structure aligned with completed `plans/completed/CURSOR-PROMPTS-*.md` handoffs).
+Per-PR execution prompts: [`plans/completed/AGENT-PROMPTS-HINTS.md`](AGENT-PROMPTS-HINTS.md)
+(structure aligned with completed `plans/completed/AGENT-PROMPTS-*.md` handoffs).

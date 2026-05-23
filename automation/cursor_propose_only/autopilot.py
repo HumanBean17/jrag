@@ -147,7 +147,7 @@ def run_autopilot(
             "round": "0",
             "propose_path": str(job.get("propose_path", "")),
             "plan_path": str(job.get("plan_path", "")),
-            "cursor_prompts_path": str(job.get("cursor_prompts_path", "")),
+            "agent_prompts_path": str(job.get("agent_prompts_path", "")),
             "planner_prompt_file": str(planner_prompt_file),
             "review_prompt_file": "",
             "review_output_file": "",

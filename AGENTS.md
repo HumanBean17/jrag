@@ -44,7 +44,7 @@ when needed.
   this tree** for current filenames; do not rely on enumerated copies
   here.
 - **`plans/`** — longer-form multi-PR plans (`PLAN-*.md`) and
-  **`CURSOR-PROMPTS-*.md`** for per-PR Cursor handoffs. Top-level `*.md`
+  **`AGENT-PROMPTS-*.md`** for per-PR agent handoffs. Top-level `*.md`
   here are active or in-progress efforts. **`plans/completed/`** —
   finished plans and completed prompt sets (templates). **Open the
   directory**; don't cache a mental file list from here.
@@ -115,7 +115,7 @@ inferring from code:
 - Testing philosophy → `tests/README.md`.
 - In-flight multi-PR scope → **`plans/*.md` at the root of `plans/`**
   (not under `plans/completed/`). **List or search `plans/`** for active
-  `PLAN-*.md` / `CURSOR-PROMPTS-*.md`. Finished plans and prompt
+  `PLAN-*.md` / `AGENT-PROMPTS-*.md`. Finished plans and prompt
   templates → `plans/completed/`.
 
 ## Propose-then-implement culture
@@ -126,8 +126,8 @@ The repo has a strong "propose then implement" culture (`propose/`,
 1. Drop a short markdown propose under `propose/` describing scope,
    schema impact, reindex requirement, and tests touched.
 2. For multi-PR efforts, add a matching `plans/PLAN-<topic>.md` with
-   per-PR sections, then `plans/CURSOR-PROMPTS-<topic>.md` with the
-   per-PR Cursor task prompts.
+   per-PR sections, then `plans/AGENT-PROMPTS-<topic>.md` with the
+   per-PR agent task prompts.
 3. Reference the propose / plan from the PR description.
 4. Move propose into `propose/completed/` (or plan into
    `plans/completed/`) once the *whole* effort is landed — not after
@@ -136,9 +136,9 @@ The repo has a strong "propose then implement" culture (`propose/`,
 Skip this for clearly-bounded fixes (one-file bugs, doc edits, test
 loosening). Use judgement.
 
-## Per-PR Cursor task contract
+## Per-PR agent task contract
 
-When you're given a per-PR task prompt from `plans/CURSOR-PROMPTS-*.md`
+When you're given a per-PR task prompt from `plans/AGENT-PROMPTS-*.md`
 (or a completed prompt file in `plans/completed/` as a structural
 template):
 

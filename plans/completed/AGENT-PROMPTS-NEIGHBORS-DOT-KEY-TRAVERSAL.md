@@ -1,4 +1,4 @@
-# Cursor task prompts — NEIGHBORS-DOT-KEY-TRAVERSAL
+# Agent task prompts — NEIGHBORS-DOT-KEY-TRAVERSAL
 
 Status: **completed** (landed [#171](https://github.com/HumanBean17/java-codebase-rag/pull/171)). Plan:
 [`plans/completed/PLAN-NEIGHBORS-DOT-KEY-TRAVERSAL.md`](./PLAN-NEIGHBORS-DOT-KEY-TRAVERSAL.md). Propose:

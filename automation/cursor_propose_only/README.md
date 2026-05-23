@@ -76,7 +76,7 @@ Status transitions:
 
 ## Automate implementation after plans are ready
 
-When `plans/CURSOR-PROMPTS-<TOPIC>.md` exists, run `execute.py` to iterate PR
+When `plans/AGENT-PROMPTS-<TOPIC>.md` exists, run `execute.py` to iterate PR
 sections in order, run implementation command(s), run review loops, and mark
 tasks as `ready_to_merge` / `merged`.
 
@@ -127,7 +127,7 @@ Behavior:
 1. Generates workflow bundle (`prepare` equivalent)
 2. Runs planner command for each selected proposal
 3. Runs planning review rounds with severity gating and planner-fix loops
-4. Parses generated `plans/CURSOR-PROMPTS-*.md`
+4. Parses generated `plans/AGENT-PROMPTS-*.md`
 5. Runs implementation and implementation-review loops per PR section
 6. Marks tasks `ready_to_merge` or `merged` (if merge command is provided)
 

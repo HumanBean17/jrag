@@ -1,4 +1,4 @@
-# Cursor task prompts — SCHEMA-V2
+# Agent task prompts — SCHEMA-V2
 
 Status: **completed** (reference template). Plan:
 [`plans/completed/PLAN-SCHEMA-V2.md`](./PLAN-SCHEMA-V2.md). Propose:
@@ -6,7 +6,7 @@ Status: **completed** (reference template). Plan:
 [`docs/PROPOSES-ORDER.md`](../../docs/PROPOSES-ORDER.md).
 
 One prompt per code PR (**PR-A / PR-B / PR-C**). PR-D (hints) is in
-[`plans/completed/CURSOR-PROMPTS-HINTS-V3.md`](./CURSOR-PROMPTS-HINTS-V3.md).
+[`plans/completed/AGENT-PROMPTS-HINTS-V3.md`](./AGENT-PROMPTS-HINTS-V3.md).
 
 **Landing order:** PR-SCHEMA-V2-A → PR-SCHEMA-V2-B → PR-SCHEMA-V2-C. Do not start the next PR until the previous is merged to `master`.
 

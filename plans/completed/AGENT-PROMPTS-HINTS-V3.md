@@ -1,4 +1,4 @@
-# Cursor task prompts — HINTS-V3
+# Agent task prompts — HINTS-V3
 
 Status: **completed** (landed [#160](https://github.com/HumanBean17/java-codebase-rag/pull/160)). Plan:
 [`plans/completed/PLAN-HINTS-V3.md`](./PLAN-HINTS-V3.md). Propose:

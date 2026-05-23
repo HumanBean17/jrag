@@ -403,4 +403,4 @@ Single implementation PR ([#189](https://github.com/HumanBean17/java-codebase-ra
 
 Plan and cursor prompts:
 [`plans/completed/PLAN-OVERRIDDEN-BY-DOT-KEY-TRAVERSAL.md`](../../plans/completed/PLAN-OVERRIDDEN-BY-DOT-KEY-TRAVERSAL.md),
-[`plans/completed/CURSOR-PROMPTS-OVERRIDDEN-BY-DOT-KEY-TRAVERSAL.md`](../../plans/completed/CURSOR-PROMPTS-OVERRIDDEN-BY-DOT-KEY-TRAVERSAL.md).
+[`plans/completed/AGENT-PROMPTS-OVERRIDDEN-BY-DOT-KEY-TRAVERSAL.md`](../../plans/completed/AGENT-PROMPTS-OVERRIDDEN-BY-DOT-KEY-TRAVERSAL.md).

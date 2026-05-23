@@ -1,6 +1,6 @@
 # Plan Prompts Reference
 
-Use this when converting `PLAN-*` into `CURSOR-PROMPTS-*`.
+Use this when converting `PLAN-*` into `AGENT-PROMPTS-*`.
 
 ## Core quality bar
 

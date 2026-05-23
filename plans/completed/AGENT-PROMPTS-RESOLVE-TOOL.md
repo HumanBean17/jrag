@@ -1,4 +1,4 @@
-# Cursor task prompts — `resolve` tool (PR-RESOLVE-1 → PR-RESOLVE-2)
+# Agent task prompts — `resolve` tool (PR-RESOLVE-1 → PR-RESOLVE-2)
 
 Status: **completed** (historical handoff prompts). Plan:
 [`PLAN-RESOLVE-TOOL.md`](PLAN-RESOLVE-TOOL.md); propose:

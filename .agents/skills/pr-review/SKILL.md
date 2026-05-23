@@ -9,7 +9,7 @@ disable-model-invocation: true
 
 # PR review
 
-Use this checklist when reviewing a PR that was driven by a written plan or a **`plan-prompts`** / `CURSOR-PROMPTS-*` task handoff.
+Use this checklist when reviewing a PR that was driven by a written plan or a **`plan-prompts`** / `AGENT-PROMPTS-*` task handoff.
 
 ## 1. Scope and diff hygiene
 

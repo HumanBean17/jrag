@@ -1,17 +1,17 @@
 ---
 name: plan-prompts
-description: Generate per-PR Cursor execution prompts in `plans/CURSOR-PROMPTS-*.md` from an existing `plans/PLAN-*.md`. Each prompt must include `## Tests to run (iteration loop)` (pytest file subset + rationales) between Deliverables and Tests per the iteration convention in `tests/README.md`. Use when the user asks to split implementation into Cursor-ready PR prompts with strict in-scope/out-of-scope guardrails.
+description: Generate per-PR agent execution prompts in `plans/AGENT-PROMPTS-*.md` from an existing `plans/PLAN-*.md`. Each prompt must include `## Tests to run (iteration loop)` (pytest file subset + rationales) between Deliverables and Tests per the iteration convention in `tests/README.md`. Use when the user asks to split implementation into agent-ready PR prompts with strict in-scope/out-of-scope guardrails.
 disable-model-invocation: true
 ---
 
 # Plan Prompts Skill
 
-Create execution-ready Cursor prompts for each PR defined in a plan.
+Create execution-ready agent prompts for each PR defined in a plan.
 
 ## When to use
 
 Use this skill when:
-- the user asks for `plans/CURSOR-PROMPTS-*.md`
+- the user asks for `plans/AGENT-PROMPTS-*.md`
 - a `PLAN-*.md` exists and needs per-PR executable prompts
 - implementation should be delegated PR-by-PR with tight scope control
 
@@ -29,7 +29,7 @@ If already present in the plan, do not ask again.
 ## Source references to read
 
 Always read:
-1. **One** structural template from **`plans/completed/CURSOR-PROMPTS-*.md`** (pick a completed handoff similar in size or topic; if unsure, open the directory and choose any full example).
+1. **One** structural template from **`plans/completed/AGENT-PROMPTS-*.md`** (pick a completed handoff similar in size or topic; if unsure, open the directory and choose any full example).
 2. The target **`plans/PLAN-*.md`**
 3. **`tests/README.md`** for merge gate + iteration-loop expectations
 4. **`README.md`** for current public contract terms when prompts mention tooling/schema
@@ -37,7 +37,7 @@ Always read:
 ## Output file contract
 
 Write one file:
-- `plans/CURSOR-PROMPTS-<TOPIC>.md`
+- `plans/AGENT-PROMPTS-<TOPIC>.md`
 
 Include:
 - status line

@@ -124,15 +124,15 @@ def resolve_selected_proposals(
     return sorted(set(resolved))
 
 
-def render_planner_prompt(propose_path: str, plan_path: str, cursor_prompt_path: str) -> str:
+def render_planner_prompt(propose_path: str, plan_path: str, agent_prompt_path: str) -> str:
     return (
         f"# Planner prompt — {Path(propose_path).name}\n\n"
         "You are a planning agent for this repository.\n\n"
         "## Task\n"
-        "Use the proposal below to generate/update the implementation plan and per-PR Cursor prompts.\n\n"
+        "Use the proposal below to generate/update the implementation plan and per-PR agent prompts.\n\n"
         f"- Proposal input: `{propose_path}`\n"
         f"- Plan output: `{plan_path}`\n"
-        f"- Prompt output: `{cursor_prompt_path}`\n\n"
+        f"- Prompt output: `{agent_prompt_path}`\n\n"
         "## Requirements\n"
         "1. Produce plan + prompt files only.\n"
         "2. Do not implement production code.\n"
@@ -144,7 +144,7 @@ def render_planner_prompt(propose_path: str, plan_path: str, cursor_prompt_path:
 def render_reviewer_prompt(
     propose_path: str,
     plan_path: str,
-    cursor_prompt_path: str,
+    agent_prompt_path: str,
     *,
     round_number: int,
     min_severity: str,
@@ -155,7 +155,7 @@ def render_reviewer_prompt(
         "## Review scope\n"
         f"- `{propose_path}`\n"
         f"- `{plan_path}`\n"
-        f"- `{cursor_prompt_path}`\n\n"
+        f"- `{agent_prompt_path}`\n\n"
         "## Rules\n"
         f"1. Report only issues with severity `{min_severity}` or higher.\n"
         "2. Ignore low/trivial style nits.\n"
@@ -243,14 +243,14 @@ def prepare_bundle(
         job_dir.mkdir(parents=True, exist_ok=True)
 
         plan_path = repo_root / "plans" / f"PLAN-{topic}.md"
-        cursor_prompt_path = repo_root / "plans" / f"CURSOR-PROMPTS-{topic}.md"
+        agent_prompt_path = repo_root / "plans" / f"AGENT-PROMPTS-{topic}.md"
 
         planner_prompt_path = job_dir / "planner_prompt.md"
         planner_prompt_path.write_text(
             render_planner_prompt(
                 _relpath(proposal, repo_root),
                 _relpath(plan_path, repo_root),
-                _relpath(cursor_prompt_path, repo_root),
+                _relpath(agent_prompt_path, repo_root),
             ),
             encoding="utf-8",
         )
@@ -262,7 +262,7 @@ def prepare_bundle(
                 render_reviewer_prompt(
                     _relpath(proposal, repo_root),
                     _relpath(plan_path, repo_root),
-                    _relpath(cursor_prompt_path, repo_root),
+                    _relpath(agent_prompt_path, repo_root),
                     round_number=round_index,
                     min_severity=threshold,
                 ),
@@ -276,7 +276,7 @@ def prepare_bundle(
                 "status": "pending_planner",
                 "propose_path": _relpath(proposal, repo_root),
                 "plan_path": _relpath(plan_path, repo_root),
-                "cursor_prompts_path": _relpath(cursor_prompt_path, repo_root),
+                "agent_prompts_path": _relpath(agent_prompt_path, repo_root),
                 "planner_prompt_path": _relpath(planner_prompt_path, repo_root),
                 "reviewer_prompt_paths": reviewer_prompts,
                 "reviews": [],

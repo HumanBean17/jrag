@@ -5,7 +5,7 @@ Status: **completed (landed)** — PR #135 (`resolve`) + PR #140 (tool-descripti
 
 Depends on: **MCP filter frame landed** ([`PLAN-MCP-FILTER-FRAME.md`](PLAN-MCP-FILTER-FRAME.md) — PR-FRAME-1 → PR-FRAME-3). No graph-builder or Lance work.
 
-Per-PR Cursor prompts: [`CURSOR-PROMPTS-RESOLVE-TOOL.md`](CURSOR-PROMPTS-RESOLVE-TOOL.md).
+Per-PR Cursor prompts: [`AGENT-PROMPTS-RESOLVE-TOOL.md`](AGENT-PROMPTS-RESOLVE-TOOL.md).
 
 ## Goal
 
@@ -277,7 +277,7 @@ Optional MCP registration smoke (if lightweight): extend existing server tool-li
 
 ## Canonical sentinel grep (PR-RESOLVE-2)
 
-Use this exact command in PR descriptions and [`CURSOR-PROMPTS-RESOLVE-TOOL.md`](CURSOR-PROMPTS-RESOLVE-TOOL.md) (allow `search` only inside `resolve` tool description / `status="none"` messages):
+Use this exact command in PR descriptions and [`AGENT-PROMPTS-RESOLVE-TOOL.md`](AGENT-PROMPTS-RESOLVE-TOOL.md) (allow `search` only inside `resolve` tool description / `status="none"` messages):
 
 ```bash
 grep -En 'per\.candidate|until.*resolve|promising candidates|search\(query=.*\).*describe' \
@@ -352,7 +352,7 @@ Manual evidence (PR description): run the **canonical sentinel grep** above, the
 3. `describe` FQN-collision hint points at `resolve`.
 4. README, AGENT-GUIDE, AGENTS.md, and `project-overview.mdc` list five MCP tools with `resolve` documented.
 5. Propose lives at `propose/completed/RESOLVE-TOOL-PROPOSE.md`.
-6. Plan + prompts live in `plans/completed/` (this file and `CURSOR-PROMPTS-RESOLVE-TOOL.md`).
+6. Plan + prompts live in `plans/completed/` (this file and `AGENT-PROMPTS-RESOLVE-TOOL.md`).
 
 # Tracking
 

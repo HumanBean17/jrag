@@ -1,4 +1,4 @@
-# Cursor task prompts: MCP API v2 redesign
+# Agent task prompts: MCP API v2 redesign
 
 Per-PR delegation prompts derived from
 [`plans/PLAN-MCP-API-V2.md`](./PLAN-MCP-API-V2.md). Each prompt below is one
@@ -475,6 +475,6 @@ loop by:
 2. Move [`plans/PLAN-MCP-API-V2.md`](./PLAN-MCP-API-V2.md) to
    `plans/completed/PLAN-MCP-API-V2.md` (mirrors `PLAN-LIST-CLIENTS-MCP-TOOL.md`
    convention).
-3. This file (`plans/CURSOR-PROMPTS-MCP-API-V2.md`) can stay in `plans/` or
+3. This file (`plans/AGENT-PROMPTS-MCP-API-V2.md`) can stay in `plans/` or
    move alongside the plan — convention is yours; mirror what the previous
    completed plan did.

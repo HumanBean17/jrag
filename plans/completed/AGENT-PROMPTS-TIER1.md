@@ -1,4 +1,4 @@
-# Cursor task prompts — Tier 1 completion (PR-A1 → PR-C)
+# Agent task prompts — Tier 1 completion (PR-A1 → PR-C)
 
 Status: **completed — all PRs merged**. Kept as a reference template for
 future per-PR Cursor delegation work.

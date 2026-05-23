@@ -318,7 +318,7 @@ Full design in `propose/completed/HINTS-V3-PROPOSE.md` (separate). PR-D in §6 s
 
 ## §6 — Migration plan — 4 PRs
 
-**Merge gate**: `plans/completed/PLAN-SCHEMA-V2.md` and `plans/completed/CURSOR-PROMPTS-SCHEMA-V2.md` must exist (separate PRs or commits) before PR-A merges. The propose answers what/why; the plan enumerates per-PR file paths, exact signatures, and grep-enumeration contracts. (Decision 29.)
+**Merge gate**: `plans/completed/PLAN-SCHEMA-V2.md` and `plans/completed/AGENT-PROMPTS-SCHEMA-V2.md` must exist (separate PRs or commits) before PR-A merges. The propose answers what/why; the plan enumerates per-PR file paths, exact signatures, and grep-enumeration contracts. (Decision 29.)
 
 ### PR-A — `EDGE_SCHEMA` + doc generator + CI invariants + `ONTOLOGY_VERSION` bump (no DDL flips)
 
@@ -384,7 +384,7 @@ Full design in `propose/completed/HINTS-V3-PROPOSE.md` (separate). PR-D in §6 s
 26. **`find(kind="producer")` and `resolve(hint_kind="producer")` ship in PR-C.** MCP parity with existing client tooling.
 27. **Docs sweep is per-PR.** PR-B handles HTTP-flavored doc references; PR-C handles async-flavored. Grep-enumeration of `*.md` references included in each PR description.
 28. **`brownfield_sourced` is renamed to `brownfield_resolver_sourced`** with semantics anchored to a new `BROWNFIELD_RESOLVER_STRATEGY_SET` constant (union of `FUZZY_STRATEGY_SET` + annotation/primary-path strategies). Closes the contradiction with hints-v2 strategy semantics.
-29. **PLAN-SCHEMA-V2 + CURSOR-PROMPTS-SCHEMA-V2 are merge gates for PR-A.** No code PRs merge before the plan and prompts exist.
+29. **PLAN-SCHEMA-V2 + AGENT-PROMPTS-SCHEMA-V2 are merge gates for PR-A.** No code PRs merge before the plan and prompts exist.
 30. **PR-D is gated on `HINTS-V3-PROPOSE.md` existing as a draft PR in the same review cycle.** Shipping v2 graph shape without v3 hints is a UC3 footgun and the propose refuses to enable it.
 31. **`ONTOLOGY_VERSION` bumps 13 → 14 in PR-A.** Legacy v13 indexes refuse to mount via `kuzu_queries.py:326` once PR-B / PR-C ship. README + AGENT-GUIDE updated in PR-A.
 32. **`GraphMeta` gains `producers_total` and `declares_producer_total` in PR-C.** Parallel to existing `clients_total` / `declares_client_total`.

@@ -1,4 +1,4 @@
-# Cursor task prompts — CALLS-NOISE-AND-RESOLUTION (PR-1 → PR-3)
+# Agent task prompts — CALLS-NOISE-AND-RESOLUTION (PR-1 → PR-3)
 
 Status: **completed** (reference template). Plan:
 [`plans/completed/PLAN-CALLS-NOISE.md`](./PLAN-CALLS-NOISE.md). Propose:

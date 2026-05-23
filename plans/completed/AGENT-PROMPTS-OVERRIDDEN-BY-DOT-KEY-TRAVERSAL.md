@@ -1,4 +1,4 @@
-# Cursor task prompts — OVERRIDDEN-BY-DOT-KEY-TRAVERSAL
+# Agent task prompts — OVERRIDDEN-BY-DOT-KEY-TRAVERSAL
 
 Status: **completed** (landed [#189](https://github.com/HumanBean17/java-codebase-rag/pull/189)). Plan:
 [`plans/completed/PLAN-OVERRIDDEN-BY-DOT-KEY-TRAVERSAL.md`](./PLAN-OVERRIDDEN-BY-DOT-KEY-TRAVERSAL.md). Propose:

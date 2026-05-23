@@ -1,4 +1,4 @@
-# Cursor task prompts — CLI scenarios (PR-CLI-1 → PR-CLI-3)
+# Agent task prompts — CLI scenarios (PR-CLI-1 → PR-CLI-3)
 
 Status: **completed** (reference). Implements
 [`plans/completed/PLAN-CLI-SCENARIOS.md`](./PLAN-CLI-SCENARIOS.md) and

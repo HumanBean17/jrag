@@ -134,8 +134,8 @@ Landing order: **X1 -> X2 -> X3**.
 
 ## Per-PR execution prompt option
 
-If the user wants Cursor-ready per-PR prompts, add a companion file:
-- `plans/CURSOR-PROMPTS-<TOPIC>.md`
+If the user wants agent-ready per-PR prompts, add a companion file:
+- `plans/AGENT-PROMPTS-<TOPIC>.md`
 
 Each PR prompt should include:
 - branch/base
@@ -144,7 +144,7 @@ Each PR prompt should include:
 - pytest commands and evidence expectations (avoid hard totals that go stale)
 - definition of done and PR title convention
 
-Use **any** completed **`plans/completed/CURSOR-PROMPTS-*.md`** as the structural reference (pick one that matches the effort’s shape).
+Use **any** completed **`plans/completed/AGENT-PROMPTS-*.md`** as the structural reference (pick one that matches the effort’s shape).
 
 ## Naming and placement
 

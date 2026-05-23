@@ -1,6 +1,6 @@
 ---
 name: pr-open
-description: Open a pull request to `master` with a comprehensive, review-ready description using this repo's plan-driven format. Use when the user asks to create/open a PR, especially from `plans/PLAN-*.md` or `plans/CURSOR-PROMPTS-*.md`, and include a Definition of Done checklist in the PR body.
+description: Open a pull request to `master` with a comprehensive, review-ready description using this repo's plan-driven format. Use when the user asks to create/open a PR, especially from `plans/PLAN-*.md` or `plans/AGENT-PROMPTS-*.md`, and include a Definition of Done checklist in the PR body.
 disable-model-invocation: true
 ---
 
@@ -118,7 +118,7 @@ Did not implement:
 
 ## Plan-prompt mapping rule
 
-When working from `plans/CURSOR-PROMPTS-*.md`, map sections directly:
+When working from `plans/AGENT-PROMPTS-*.md`, map sections directly:
 - Prompt `Scope` -> PR `Scope`
 - Prompt `Deliverables` -> PR `What Changed`
 - Prompt `Tests` -> PR `Validation`

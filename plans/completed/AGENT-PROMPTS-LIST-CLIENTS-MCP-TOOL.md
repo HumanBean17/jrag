@@ -1,4 +1,4 @@
-# Cursor task prompts — list_clients MCP tool (PR-LC1 → PR-LC3)
+# Agent task prompts — list_clients MCP tool (PR-LC1 → PR-LC3)
 
 Status: **completed** (LC1–LC3 landed). Source plan:
 `plans/completed/PLAN-LIST-CLIENTS-MCP-TOOL.md`.

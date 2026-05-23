@@ -3,7 +3,7 @@
 ## Example status header
 
 ```markdown
-# Cursor task prompts — <topic> (PR-X1 -> PR-X3)
+# Agent task prompts — <topic> (PR-X1 -> PR-X3)
 
 Status: **active**. One prompt per PR; each prompt is self-contained.
 ```

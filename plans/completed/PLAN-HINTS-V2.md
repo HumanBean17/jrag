@@ -296,4 +296,4 @@ Integration:
 ## Cursor handoff
 
 Per-PR execution prompts:
-[`plans/CURSOR-PROMPTS-HINTS-V2.md`](CURSOR-PROMPTS-HINTS-V2.md).
+[`plans/AGENT-PROMPTS-HINTS-V2.md`](AGENT-PROMPTS-HINTS-V2.md).

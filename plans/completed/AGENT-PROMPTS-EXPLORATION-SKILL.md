@@ -1,4 +1,4 @@
-# Cursor task prompts — java-codebase-explore skill (PR-EXPLORE-1 → PR-EXPLORE-2)
+# Agent task prompts — java-codebase-explore skill (PR-EXPLORE-1 → PR-EXPLORE-2)
 
 Status: **completed** (reference). Implements [`plans/completed/PLAN-EXPLORATION-SKILL.md`](./PLAN-EXPLORATION-SKILL.md)
 and [`propose/completed/EXPLORATION-SKILL-PROPOSE.md`](../../propose/completed/EXPLORATION-SKILL-PROPOSE.md).

@@ -209,4 +209,4 @@ Use `tests/test_cli_quiet_parity.py` for quiet regression (propose §8 / §6).
 - `PR-2` (stream + wrap): _done_
 - `PR-3` (heartbeats + docs): _done_
 
-Optional follow-up: add `plans/CURSOR-PROMPTS-CLI-PROGRESS-OUTPUT.md` using `plans/completed/CURSOR-PROMPTS-TIER1B.md` as the structural template for per-PR Cursor handoffs.
+Optional follow-up: add `plans/AGENT-PROMPTS-CLI-PROGRESS-OUTPUT.md` using `plans/completed/AGENT-PROMPTS-TIER1B.md` as the structural template for per-PR Cursor handoffs.
