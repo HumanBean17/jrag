@@ -173,16 +173,16 @@ and `capabilities`, register inbound routes, and register outbound
 clients/producers for a given repo via `.java-codebase-rag.yml` at the project
 root (`role_overrides:`, `route_overrides:`, `http_client_overrides:`,
 `async_producer_overrides:`) and/or by copying the in-source stubs from
-`README.md` into your sources:
+[`docs/CONFIGURATION.md`](./docs/CONFIGURATION.md) into your sources:
 
 - `@CodebaseRole` / `@CodebaseCapability` / `@CodebaseCapabilities`
-  (class-level role + capabilities) — see README §3a.
+  (class-level role + capabilities) — see `docs/CONFIGURATION.md` §4.3.
 - `@CodebaseHttpRoute` / `@CodebaseHttpRoutes` and
   `@CodebaseAsyncRoute` / `@CodebaseAsyncRoutes` (method-level inbound routes)
-  — see README §3b.
+  — see `docs/CONFIGURATION.md` §4.3.
 - `@CodebaseHttpClient` / `@CodebaseHttpClients` and `@CodebaseProducer` /
   `@CodebaseProducers` (method-level outbound HTTP / messaging) — see
-  README §3c.
+  `docs/CONFIGURATION.md` §4.3.
 
 **MCP discovery:** after indexing, use MCP `find` with `kind="route"` for
 inbound HTTP and async routes and `kind="client"` for outbound HTTP `Client`
@@ -321,7 +321,7 @@ The CocoIndex flow indexes only:
   but very large files with complex nesting may produce noisy chunk
   boundaries.
 - **Kuzu graph sidecar location.** The graph defaults to
-  `<JAVA_CODEBASE_RAG_INDEX_DIR>/code_graph.kuzu` (see README for the
+  `<JAVA_CODEBASE_RAG_INDEX_DIR>/code_graph.kuzu` (see `docs/CONFIGURATION.md` §1 for the
   default index dir). If Lance tables and Kuzu are split across directories
   by mistake, the MCP can silently operate in vector-only mode (no graph-backed
   `find` / `describe` / `neighbors`). Verify `java-codebase-rag meta` reports the
@@ -585,9 +585,9 @@ the same conventions.
 | Wrong class wins for "what does X do?" | A.5 (naming) → B.2 (verbs / caps) |
 | Important `.properties` / `.xml` configs missing | A.6 → B.5 |
 | Recently re-indexed but search is stale | Restart the MCP server; re-run `java-codebase-rag reprocess` |
-| `context_before` / `context_after` empty | Set `JAVA_CODEBASE_RAG_DEBUG_CONTEXT=1` (see README graph section) |
+| `context_before` / `context_after` empty | Set `JAVA_CODEBASE_RAG_DEBUG_CONTEXT=1` (see `docs/CONFIGURATION.md` §3) |
 | Graph has lots of phantom nodes | Expected for external libs; inspect via `java-codebase-rag meta` — only worry if domain types are phantoms (means resolution is failing; check imports). Use `find` / `neighbors` and filter or interpret `resolved` flags on symbols as needed. |
-| Graph tools unavailable / silent failures | Kuzu DB missing or wrong path — verify `<index-dir>/code_graph.kuzu` exists and `JAVA_CODEBASE_RAG_INDEX_DIR` matches (see README graph layer). |
+| Graph tools unavailable / silent failures | Kuzu DB missing or wrong path — verify `<index-dir>/code_graph.kuzu` exists and `JAVA_CODEBASE_RAG_INDEX_DIR` matches (see `docs/CONFIGURATION.md` §3). |
 
 ---
 
