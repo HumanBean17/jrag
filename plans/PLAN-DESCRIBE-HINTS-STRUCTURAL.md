@@ -204,7 +204,7 @@ Each helper uses a Cypher query on `kuzu_graph` to find a matching node, with `p
 4. `test_hints_describe_type_injectors_emits` — row D
 5. `test_hints_describe_type_skips_tier1_when_rollups` — suppression on type with rollups
 6. `test_hints_describe_method_outbound_calls_mid_fanout_emits` — row E
-7. `test_hints_describe_method_outbound_calls_low_fanout_non_other_emits` — row E variant (optional)
+7. `test_hints_describe_method_outbound_calls_low_fanout_non_other_emits` — row E variant
 8. `test_hints_describe_method_super_declaration_emits` — row G
 9. `test_hints_describe_method_unresolved_emits` — row H
 10. `test_hints_describe_client_http_targets_emits` — row I
