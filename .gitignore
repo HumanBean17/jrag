@@ -32,6 +32,13 @@ htmlcov/
 .idea/
 .vscode/
 
+# Tool-specific symlinks → canonical `.agents/` tree (see AGENTS.md)
+.cursor
+.claude
+
+# Local tool settings (may live under `.agents/` when `.claude` is a symlink)
+.agents/settings.local.json
+
 # OS files
 .DS_Store
 

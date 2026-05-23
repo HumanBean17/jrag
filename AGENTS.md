@@ -1,65 +1,202 @@
 # AGENTS.md
 
-Entry point for Cursor CLI agents (and other agentic tools) working
-on this repo. Detailed guidance lives in `.cursor/rules/*.mdc` —
-those files are auto-loaded by Cursor. This file is a flat summary
-for tools that don't read `.cursor/rules/`.
+Canonical agent instructions for Cursor, Claude Code, and other
+agentic tools working on this repo. Cursor reads this file at the project
+root (and nested `AGENTS.md` in subdirectories when working there).
+
+Project skills and tooling live under **`.agents/`** (tracked in git).
+Create local symlinks if your editor expects the legacy paths:
+`ln -s .agents .cursor` and `ln -s .agents .claude` (both are
+gitignored).
+
+This repo is a **self-contained stdio MCP server** that serves semantic
++ structural search over a Java codebase. It is a Python project (the
+indexer and server). It is **not** a Java project — the
+`tests/bank-chat-system/` tree is fixture data, not code to modify.
+
+Treat README and the markdown docs as the source of truth for
+behaviour, schemas, env vars, ranking, edges, tool defaults, and
+ontology. **Do not copy that content here** — read those files directly
+when needed.
 
 ## Where to look
 
 - `README.md` — feature surface, env vars, ranking, capabilities,
- MCP tool list (`search` / `find` / `describe` / `neighbors` / `resolve`;
- response `hints` + pagination echo — see README),
- CLI ops (`java-codebase-rag --help`), and "Re-index required" callouts.
- **`ontology_version` is currently 14** (`EDGE_SCHEMA` in `java_ontology.py`; v14 re-index required; HTTP/ASYNC caller-side endpoint flips ship in SCHEMA-V2 PR-B/C — see README graph section and `docs/EDGE-NAVIGATION.md`).
-- [`docs/JAVA-CODEBASE-RAG-CLI.md`](./docs/JAVA-CODEBASE-RAG-CLI.md) — operator guide for the `java-codebase-rag` CLI (`init` / `increment` / `reprocess` / `erase`, `meta`, `tables`, `diagnose-ignore`, `analyze-pr`; hidden `refresh` alias → `reprocess` — see that doc).
-- `CODEBASE_REQUIREMENTS.md` — Java-repo assumptions and tuning map.
-- **`propose/`** — design proposes. **In-flight** work is **`propose/*.md`**
-  (markdown at the root of `propose/` only, not under `completed/`).
-  **`propose/completed/`** — landed proposes and rationale. **List or search**
-  the tree for current filenames; entrypoint docs are not maintained as a
-  catalog.
-- **`plans/`** — multi-PR plans (`PLAN-*.md`) and per-PR Cursor prompts
-  (`CURSOR-PROMPTS-*.md`). Top-level files here are active or staged
-  multi-PR efforts; **`plans/completed/`** holds finished plans and
-  completed prompt sets (reference templates for future work).
+  MCP tools (`search` / `find` / `describe` / `neighbors` / `resolve`;
+  response `hints` + pagination echo on locate tools — see README),
+  `java-codebase-rag` CLI, "Re-index required" callouts. The current
+  `ontology_version` is **15** (`EDGE_SCHEMA` in `java_ontology.py`;
+  material `OVERRIDES` Symbol→Symbol edges: subtype instance method →
+  supertype declaration with matching `signature`, one
+  `IMPLEMENTS`/`EXTENDS` hop; valid `neighbors` `EdgeType`).
+  Earlier ontology bumps are described inline in the README's callouts
+  list.
+- [`docs/JAVA-CODEBASE-RAG-CLI.md`](./docs/JAVA-CODEBASE-RAG-CLI.md) —
+  operator guide for the `java-codebase-rag` CLI (`init` / `increment` /
+  `reprocess` / `erase`, `meta`, `tables`, `diagnose-ignore`,
+  `analyze-pr`; hidden `refresh` alias → `reprocess` — see that doc).
+- `CODEBASE_REQUIREMENTS.md` — Java-repo assumptions and per-file map of
+  what to edit when a target tree doesn't match defaults.
 - `tests/README.md` — testing philosophy.
+- **`propose/`** — design proposes. **In-flight** proposes are **`*.md`
+  at the root of `propose/`** (not under `propose/completed/`).
+  **`propose/completed/`** — landed work and rationale. **List or search
+  this tree** for current filenames; do not rely on enumerated copies
+  here.
+- **`plans/`** — longer-form multi-PR plans (`PLAN-*.md`) and
+  **`CURSOR-PROMPTS-*.md`** for per-PR Cursor handoffs. Top-level `*.md`
+  here are active or in-progress efforts. **`plans/completed/`** —
+  finished plans and completed prompt sets (templates). **Open the
+  directory**; don't cache a mental file list from here.
 
-Read these directly. Don't rely on rule files to mirror them.
+## File map (top of repo)
 
-## Hard rules
+| File | Role |
+|------|------|
+| `server.py` | MCP stdio server. Every `@mcp.tool` lives here. |
+| `search_lancedb.py` | Vector / hybrid / graph-expanded search; ranking. |
+| `build_ast_graph.py` | Tree-sitter → Kuzu graph builder (full rebuild). Owns `pass1`–`pass6` (`pass5` emits `HTTP_CALLS` / `ASYNC_CALLS` caller edges; `pass6_match_edges` resolves cross-service / intra-service / ambiguous / phantom / unresolved match outcomes — ontology 7). |
+| `kuzu_queries.py` | Read-only Cypher helpers used by the server. Includes `meta()` decoder for the Kuzu MAP-as-STRING JSON-blob columns. |
+| `ast_java.py` | Tree-sitter Java parsing, role/capability inference, `_string_value_atoms` helper (shared by route/client/producer extractors), `_collect_outgoing_calls` for caller-side detection. |
+| `graph_enrich.py` | `module` / `microservice` resolution, `BrownfieldOverrides` (route + role + capability + http client + async producer), meta-annotation walk, `resolve_routes_for_method` / `resolve_http_client_for_method` / `resolve_async_producer_for_method`. |
+| `java_ontology.py` | Source of truth for `VALID_ROLES`, `VALID_CAPABILITIES`, `VALID_CLIENT_KINDS`, `VALID_HTTP_CALL_STRATEGIES`, `VALID_ASYNC_CALL_STRATEGIES`, `VALID_HTTP_CALL_MATCHES`. |
+| `chunk_heuristics.py` | Query-time chunk hints (no AST / no re-index). |
+| `mcp_hints.py` | MCP v2 road-sign `hints` catalog (`generate_hints`; locked v1 templates in `propose/completed/HINTS-ROAD-SIGNS-PROPOSE.md`). |
+| `index_common.py` | Embedding config (no CocoIndex dep). |
+| `java_index_flow_lancedb.py` | CocoIndex flow (used by `java-codebase-rag init` / `increment` / `reprocess` / `erase`). |
+| `java_index_v1_common.py` | Shared file walker / exclude patterns. |
+| `path_filtering.py` | Layered ignore patterns (`.gitignore`-style; PR-C / B5). Reused by indexer + graph build. |
+| `pr_analysis.py` | `java-codebase-rag analyze-pr` helpers (PR-B / B4) — diff parsing, hunk-to-symbol mapping. |
+| `mcp.json.example` | Template for `.mcp.json`. |
 
-1. **No backward-compatibility obligation** —
-   `.cursor/rules/breaking-changes.mdc`. Prefer removals and schema
-   updates over shims.
-2. **Propose-then-implement** for non-trivial features. Drop a short
-   markdown propose under `propose/`, reference it from the PR, move
-   it to `propose/completed/` once landed.
-3. **Don't overfit to the `tests/bank-chat-system/` fixture.** It is
-   a deterministic corpus, not a model of production. Assert on
-   invariants, not exact counts. Don't special-case the fixture in
-   production code.
-4. **`server.py` is stdio MCP.** Nothing reachable from a tool
-   handler may write to stdout. Diagnostics go to stderr.
-5. **Single source of truth** for roles, capabilities, client kinds,
-   call strategies, and call match outcomes is `java_ontology.py`.
-   No string literals sprinkled elsewhere. Current valid sets:
-   `VALID_ROLES`, `VALID_CAPABILITIES`, `VALID_CLIENT_KINDS`,
-   `VALID_HTTP_CALL_STRATEGIES`, `VALID_ASYNC_CALL_STRATEGIES`,
-   `VALID_HTTP_CALL_MATCHES`.
-6. **Brownfield overrides are first-class.** Annotation-driven
-   `BrownfieldOverrides` (route, role, capability, http client, async
-   producer) plus their `@CodebaseRoute` / `@CodebaseHttpClient` /
-   `@CodebaseProducer` source-stub equivalents must keep working — they
-   are the only path to making this tool usable on legacy codebases.
-   New auto-detection logic must compose with brownfield (last layer
-   wins), never replace it. See
-   `plans/completed/PLAN-TIER1B-COMPLETION.md` § "Caller-side composition
-   divergence" for the one intentional exception (caller-side option-b
-   replacement rule for HTTP_CALLS / ASYNC_CALLS).
-7. **Schema changes require a reindex** — update the README
-   "Re-index required" callout and bump `ontology_version` when
-   enrichment semantics change.
+## Test layout
+
+- `tests/conftest.py` — session-scoped Kuzu graph fixture.
+- `tests/bank-chat-system/` — deterministic Java corpus (fixture, not production model).
+- `tests/fixtures/call_graph_smoke/` — mini Maven tree calibrated against the call-graph resolver.
+- `tests/fixtures/brownfield_route_stubs/` — `@CodebaseRoute` / `@CodebaseRoutes` source stubs (PR-A3).
+- `tests/fixtures/brownfield_client_stubs/` — `@CodebaseHttpClient` / `@CodebaseHttpClients` / `@CodebaseProducer` / `@CodebaseProducers` source stubs (PR-D2).
+- `tests/fixtures/http_caller_smoke/` — Feign + RestTemplate + KafkaTemplate + WebClient + StreamBridge fixture for caller-side detection (PR-D1).
+- Heavy e2e tests gated behind `JAVA_CODEBASE_RAG_RUN_HEAVY=1`.
+
+## Breaking changes and compatibility
+
+- **Breaking changes are always allowed.** Do not keep compatibility with
+  prior versions, external consumers, or hypothetical “users” of this
+  repo unless the current task explicitly asks for a compatibility layer.
+- Prefer straightforward removals and schema or API updates over
+  deprecation periods, dual code paths, shims, or version branching unless
+  there is a clear, stated need in the task at hand.
+
+## Python environment
+
+- Use only the repository `.venv/bin/python` for Python commands (repo root).
+- Use only `.venv/bin/pip` for package install and dependency commands.
+- Do not use system `python`, `python3`, `pip`, or `pip3` for this repo
+  unless you have explicitly activated `.venv` and that is what those
+  resolve to.
+- When running tests, linters, or scripts, invoke the `.venv/bin`
+  executables directly.
+- Examples:
+  - `.venv/bin/python -m pytest tests -q`
+  - `.venv/bin/ruff check .`
+  - `.venv/bin/pip install -r requirements.txt`
+
+## Investigate before editing
+
+For any non-trivial change, read the relevant doc first instead of
+inferring from code:
+
+- Behaviour / public surface → `README.md`.
+- Brownfield assumptions, role/capability tuning → `CODEBASE_REQUIREMENTS.md`.
+- In-flight design proposes → **`propose/*.md` at the root of `propose/`**
+  (not under `propose/completed/`). **List or search** for current names.
+- Why current design exists → `propose/completed/` and `plans/completed/`.
+- Testing philosophy → `tests/README.md`.
+- In-flight multi-PR scope → **`plans/*.md` at the root of `plans/`**
+  (not under `plans/completed/`). **List or search `plans/`** for active
+  `PLAN-*.md` / `CURSOR-PROMPTS-*.md`. Finished plans and prompt
+  templates → `plans/completed/`.
+
+## Propose-then-implement culture
+
+The repo has a strong "propose then implement" culture (`propose/`,
+`plans/`). For non-trivial features:
+
+1. Drop a short markdown propose under `propose/` describing scope,
+   schema impact, reindex requirement, and tests touched.
+2. For multi-PR efforts, add a matching `plans/PLAN-<topic>.md` with
+   per-PR sections, then `plans/CURSOR-PROMPTS-<topic>.md` with the
+   per-PR Cursor task prompts.
+3. Reference the propose / plan from the PR description.
+4. Move propose into `propose/completed/` (or plan into
+   `plans/completed/`) once the *whole* effort is landed — not after
+   each PR.
+
+Skip this for clearly-bounded fixes (one-file bugs, doc edits, test
+loosening). Use judgement.
+
+## Per-PR Cursor task contract
+
+When you're given a per-PR task prompt from `plans/CURSOR-PROMPTS-*.md`
+(or a completed prompt file in `plans/completed/` as a structural
+template):
+
+- **Scope is binding.** The "Out of scope (do NOT touch)" list is a
+  hard constraint, not a guideline. Sentinel grep patterns the prompt
+  lists must return zero on `git diff master..HEAD`.
+- **Implement in the listed order.** Do not reshape the PR or roll
+  multiple PRs together.
+- **Match named tests verbatim.** When the plan lists
+  `test_<scenario>_<expected>`, that is the exact name to use. If you
+  add, drop, or rename tests, update the plan/prompt text in the same
+  change so reviewers are not chasing a stale list.
+- **No drive-by lint fixes.** Removing an unused `import` in a file
+  the PR doesn't otherwise touch is still a scope leak. If a file
+  isn't in the deliverables list, don't touch it.
+- **PR description must include**: scope statement, manual evidence
+  (with the exact command from the prompt), and any intentional design
+  divergences from sibling PRs called out explicitly so the reviewer
+  doesn't flag them as bugs.
+
+## Editing rules
+
+- No compatibility shims or deprecation cycles (see **Breaking changes**
+  above).
+- One source of truth for ontology values lives in `java_ontology.py`.
+  Don't sprinkle role / capability / client-kind / strategy / match
+  string literals across other modules. Current valid sets: `VALID_ROLES`,
+  `VALID_CAPABILITIES`, `VALID_CLIENT_KINDS`, `VALID_HTTP_CALL_STRATEGIES`,
+  `VALID_ASYNC_CALL_STRATEGIES`, `VALID_HTTP_CALL_MATCHES`,
+  `VALID_ROUTE_FRAMEWORKS`, `VALID_ROUTE_KINDS`, `VALID_PRODUCER_KINDS`,
+  `VALID_RESOLVE_REASONS`, `VALID_UNRESOLVED_CALL_REASONS`.
+- Schema changes that affect the Lance index or Kuzu graph need a
+  matching update to the README "Re-index required" callout. Bump
+  `ontology_version` when enrichment semantics change (currently **15**).
+- Brownfield is a first-class surface: any new auto-detection (route,
+  role, capability, http client, async producer) must compose with the
+  matching `BrownfieldOverrides` layer. Last writer wins (outermost layer
+  overrides earlier ones), with one explicit exception: caller-side
+  `HTTP_CALLS` / `ASYNC_CALLS` use option-(b) *replacement* rather than
+  union when any brownfield layer fires on a method (single network packet
+  → single edge). See `plans/completed/PLAN-TIER1B-COMPLETION.md` §
+  "Caller-side composition divergence".
+- Kuzu's Python binder rejects `dict` for `MAP` columns. Store all
+  map-shaped graph_meta data (`routes_by_framework`, `routes_by_layer`,
+  `http_calls_by_strategy`, `async_calls_by_strategy`, etc.) as `STRING`
+  JSON blobs and decode in `kuzu_queries.meta()`.
+- `server.py` is a stdio MCP server: anything reachable from a tool
+  handler must not write to **stdout** (that's the JSON-RPC transport).
+  Diagnostics go to stderr.
+- Tool `description=` strings and `_INSTRUCTIONS` in `server.py` are
+  read by LLM clients to choose tools — treat them as part of the
+  contract, not freeform docs.
+- Don't overfit to the `tests/bank-chat-system/` fixture. It is a
+  deterministic corpus, not a model of production. Assert on invariants,
+  not exact counts. Don't special-case the fixture in production code.
+- Don't introduce a parallel `*Overrides` class when extending brownfield
+  support. `BrownfieldOverrides` already holds route, role, capability,
+  http client, and async producer dicts — extend it in place.
 
 ## Kuzu Cypher pitfalls
 
@@ -77,39 +214,59 @@ When adding or editing Cypher run against Kuzu (for example in
   relationship types in the graph schema. Otherwise prefer untyped `[e]`
   plus explicit label filtering, or split queries.
 
-## Workflow
+## Validate
 
-- Branch from `master`. Branch names: `cursor/<topic>` (CLI work),
-  `plan/<name>` (in-progress propose), `feat/<topic>` and
-  `chore/<topic>` for landed-feature work.
-- Commit messages: present tense, imperative, lowercase first word.
-- Always open a PR; never push to `master`.
-- Run `.venv/bin/ruff check .` and `.venv/bin/python -m pytest tests -v` before pushing.
-- Exception for isolated automation-only changes: if edits are limited to
-  `automation/cursor_propose_only/**` (plus optional references to that workflow
-  in docs), full `tests -v` is not required. Run:
+- `.venv/bin/ruff check .` — fix or justify warnings.
+- `.venv/bin/python -m pytest tests -v` — must pass without
+  `JAVA_CODEBASE_RAG_RUN_HEAVY`. Expect skips only where tests document
+  env gating (see `tests/README.md`). Each plan may add tests; match the
+  active plan if it cites a count.
+- Exception for isolated automation workflow changes: if edits are limited to
+  `automation/cursor_propose_only/**` (plus optional docs references to that
+  workflow), targeted validation is enough:
   - `.venv/bin/ruff check .`
   - `.venv/bin/python -m pytest automation/cursor_propose_only/tests -q`
-- Heavy indexer tests: `JAVA_CODEBASE_RAG_RUN_HEAVY=1` (see `tests/README.md`).
+- For schema or ranking work, also run with
+  `JAVA_CODEBASE_RAG_RUN_HEAVY=1` locally (slow; downloads models).
+- For graph builder changes, also rebuild a fixture and inspect
+  `java-codebase-rag meta` (or `GraphMetaOutput` from the same helper) to
+  confirm new counters wire up:
+  ```bash
+  rm -rf /tmp/check && .venv/bin/python build_ast_graph.py \
+    --source-root tests/bank-chat-system \
+    --kuzu-path /tmp/check/code_graph.kuzu --verbose
+  ```
 
-## Per-PR Cursor task contract
+## Commit and PR
 
-When picking up a per-PR Cursor task prompt (from `plans/` or
-`plans/completed/`, files matching `CURSOR-PROMPTS-*.md`; use any
-completed prompt file in `plans/completed/` as a structural template
-when you need one):
+- Branch from `master`. Branch names:
+  - `cursor/<topic>` — cursor-agent work
+  - `feat/<topic>` — landed-feature work (e.g. `feat/b2b-http-async-edges`)
+  - `plan/<name>` — in-progress plan / propose drafts
+  - `chore/<topic>` — repo hygiene (docs, tooling, deps)
+- Commit messages: present tense, imperative, lowercase first word,
+  matching existing style (e.g. `fixed call graph review D6`,
+  `applied fixes for call graph layer`).
+- One logical change per commit when feasible.
+- Always open a PR; never push directly to `master`.
+- PR body should reference any propose / plan it implements, list
+  user-visible behaviour changes, and call out reindex / env-var /
+  ontology bumps explicitly.
 
-- Treat the prompt's **Out of scope** list as binding. Sentinel grep
-  patterns in the prompt must return zero on `git diff master..HEAD`.
-- Implement deliverables in the listed order; don't reshape the PR.
-- Match named tests verbatim when the prompt lists `test_*` names; if
-  the test set changes, update the prompt/plan text in the same change.
-- PR description must include: scope statement, manual evidence (with
-  the exact command from the prompt), and intentional design
-  divergences flagged.
-- No drive-by lint fixes (unused imports, formatting nits in
-  unrelated files). They violate the per-PR scope contract even when
-  they look harmless.
+## Don't
+
+- Don't run `gh auth status` or otherwise inspect credentials.
+- Don't widen the public surface "just in case" — every new tool,
+  env var, or schema column adds a re-index burden on users.
+- Don't special-case the `tests/bank-chat-system/` fixture in
+  production code. If a test needs it, the test is wrong (see
+  `tests/README.md`).
+- Don't tighten loose test assertions (`>= 1`, `len(...) >= N`,
+  `key in result`) into exact counts to chase a number — they are
+  intentionally loose.
+- Don't add a hard dependency on `cocoindex` outside
+  `java_index_flow_lancedb.py` / the `java-codebase-rag` lifecycle (`init` /
+  `increment` / `reprocess` / `erase`) path.
 
 ## Cursor Cloud specific instructions
 
@@ -130,8 +287,6 @@ CocoIndex state) is embedded/file-based.
   is registered. The update script handles this.
 
 ### Running checks
-
-Standard commands per `README.md` § 1 and `AGENTS.md` § Workflow:
 
 ```bash
 .venv/bin/ruff check .
