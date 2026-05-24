@@ -11,11 +11,13 @@ Depends on: none (all prerequisite work — `hints_structured` with `label` — 
 - Remove the redundant `hints: list[str]` field from all five MCP tool output models.
 - Consolidate advisory text into a new `reason: str` field on `StructuredHint`.
 - Eliminate dual-emission maintenance burden and the parity test.
+- Preserve all currently emitted advisory information — including string-only hints that lack a structured counterpart.
 
 ## Principles (do not relitigate in review)
 
 - **Single hint mechanism**: `hints_structured` is the only hint field after this change.
 - **`reason` defaults to `""`**: backward-compatible; actionable hints may have an empty reason (they already carry `tool` + `args`). Non-actionable hints **should** carry a reason — enforced at test time, not by schema.
+- **`actionable=False` is the advisory subtype**: non-actionable hints with empty or partial `args` are legitimate entries in `hints_structured`. The `actionable` flag already distinguishes "call this tool next" from "here's something to know." Adding `reason` enriches both subtypes without creating a new field.
 - **Breaking change is allowed**: AGENTS.md and the proposal explicitly state breaking changes are always allowed; no deprecation cycle.
 - **No re-index, no ontology bump**: this is an output-only change.
 
@@ -23,7 +25,7 @@ Depends on: none (all prerequisite work — `hints_structured` with `label` — 
 
 | PR | Scope | Ontology bump | Areas of concern | Test buckets | Independent of |
 | --- | --- | --- | --- | --- | --- |
-| PR-1 | Remove `hints` field, add `reason` to `StructuredHint`, remove string templates and parity test, update docs | none | `generate_hints` return type change ripples to all five tool handlers; test assertions migrating from `out.hints` to `out.hints_structured[i].reason`; `server.py` tool descriptions referencing `hints` | hint unit tests, parity removal, round-trip integration, docs consistency | n/a |
+| PR-1 | Remove `hints` field, add `reason` to `StructuredHint`, create structured equivalents for string-only hints, remove string templates and parity test, update docs | none | `generate_hints` return type change ripples to all five tool handlers; string-only hints (`neighbors_calls_fanout_hints`, `neighbors_calls_meta_hints`, brownfield absence Row 4) gain structured equivalents for the first time; test assertions migrating from `out.hints` to `out.hints_structured[i].reason`; `server.py` tool descriptions referencing `hints` | hint unit tests, parity removal, round-trip integration, new reason-content tests, new string-only-equivalence tests, docs consistency | n/a |
 
 Landing order: **PR-1 only** (single PR).
 
@@ -36,6 +38,11 @@ Landing order: **PR-1 only** (single PR).
 | `generate_hints` return type | `list[_StructuredHint]` — no tuple wrapper. |
 | `_to_structured_hints` conversion | Must forward `reason` from internal `_StructuredHint` to public `StructuredHint`. |
 | `finalize_hint_list` | Delete — no longer needed. |
+| String-only advisory hints | Add structured equivalents with `actionable=False` and `reason` carrying the advisory text. No separate `advisories` field — `actionable=False` already serves as the advisory subtype discriminator. |
+| Brownfield absence (Row 4) | Add to `_neighbors_empty_structured_hints` with `tool="neighbors"`, empty `args`, `actionable=False`, `reason` carrying the brownfield text. |
+| Fanout unresolved sites | Add structured hint: `tool="neighbors"`, `args={"ids": [...], "direction": "out", "edge_types": ["CALLS"], "include_unresolved": True}`, `actionable=True`, `reason` carrying the count text. |
+| Role-filter OTHER fallback | Add structured hint: `tool="neighbors"`, `args` echoing original query with suggested `edge_filter`, `actionable=False`, `reason` carrying the fallback explanation. |
+| NodeFilter.role collision | Add structured hint: `tool="neighbors"`, empty `args`, `actionable=False`, `reason` carrying the collision explanation. This is the most "pure advisory" case — no meaningful tool call to suggest, just educational text. |
 
 ---
 
@@ -60,9 +67,60 @@ Landing order: **PR-1 only** (single PR).
 - Remove `find_success_hints` function (string-only); keep the structured-hint emission logic inline in `generate_hints`.
 - Remove `neighbors_success_hints` function (string-only); keep `_neighbors_success_structured_hints`.
 - Remove `neighbors_empty_hints` function (string-only); keep `_neighbors_empty_structured_hints`.
-- Remove `neighbors_calls_fanout_hints` and `neighbors_calls_meta_hints` (string-only); keep the structured meta hint logic inline in `generate_hints`.
+- Remove `neighbors_calls_fanout_hints` and `neighbors_calls_meta_hints` (string-only); integrate their logic as structured equivalents inline in `generate_hints` (see new structured equivalents below).
 - Remove `_FIRST_NEIGHBORS_CALL_RE`, `_parse_first_traversal` — these were used to parse string templates into structured hint args; now unnecessary.
 - Keep all `LABEL_*` constants — they are still used for `_StructuredHint.label`.
+
+**New structured equivalents for string-only hints:**
+
+These currently emit to string `pairs` only and have zero structured output. The plan adds structured counterparts:
+
+1. **Brownfield absence (Row 4)** — add to `_neighbors_empty_structured_hints`:
+   ```python
+   _StructuredHint("neighbors", {}, False, PRIORITY_META, LABEL_BROWNFIELD_ABSENCE,
+       reason="edges on '{edge}' are emitted by the brownfield resolver — absence may mean unresolved")
+   ```
+   - New label constant: `LABEL_BROWNFIELD_ABSENCE = "brownfield absence"`.
+
+2. **Fanout: high CALLS count** — inline in `generate_hints` neighbors branch, replacing the old `neighbors_calls_fanout_hints` string call:
+   ```python
+   _StructuredHint("neighbors",
+       {"ids": [origin_id], "direction": "out", "edge_types": ["CALLS"], "edge_filter": {}},
+       False, PRIORITY_LEAF_FOLLOWUP, LABEL_HIGH_FANOUT,
+       reason="{n} CALLS — noisy axes are callee_declaring_role and per-call-site multiplicity")
+   ```
+   - This partially overlaps the existing describe-method high-fanout hint (line 1311). Both use `LABEL_HIGH_FANOUT`; the reason text differs slightly (neighbors includes the count, describe says "many CALLS").
+
+3. **Fanout: unresolved call sites** — inline in `generate_hints` neighbors branch:
+   ```python
+   _StructuredHint("neighbors",
+       {"ids": [origin_id], "direction": "out", "edge_types": ["CALLS"], "include_unresolved": True},
+       True, PRIORITY_LEAF_FOLLOWUP, LABEL_UNRESOLVED,
+       reason="{n} CALLS shown; {k} unresolved call sites also exist")
+   ```
+   - `actionable=True` because `include_unresolved=True` is a concrete, ready-to-use parameter.
+
+4. **Role-filter OTHER fallback** — inline in `generate_hints` neighbors branch:
+   ```python
+   _StructuredHint("neighbors", {}, False, PRIORITY_META, LABEL_ROLE_FILTER_FALLBACK,
+       reason="0 CALLS matched callee_declaring_role filter but method has many callees — targets may be OTHER")
+   ```
+   - New label constant: `LABEL_ROLE_FILTER_FALLBACK = "role filter fallback"`.
+   - Empty `args` because the fallback advice is "try a different edge_filter" — not a single concrete call.
+
+5. **NodeFilter.role collision** — inline in `generate_hints` neighbors branch:
+   ```python
+   _StructuredHint("neighbors", {}, False, PRIORITY_META, LABEL_ROLE_COLLISION,
+       reason="NodeFilter.role filters the neighbor method's role, not the callee's declaring type")
+   ```
+   - New label constant: `LABEL_ROLE_COLLISION = "role filter collision"`.
+   - Empty `args` — pure educational text, no tool call to suggest.
+
+6. **Fuzzy strategy** — already has a structured hint (`args={}`); just add `reason`:
+   ```python
+   _StructuredHint("neighbors", {}, False, PRIORITY_META, LABEL_FUZZY_STRATEGY,
+       reason="some edges resolved via brownfield/fallback strategy — check attrs.strategy on each row")
+   ```
 
 ### 2. `mcp_v2.py`
 
@@ -118,6 +176,8 @@ Landing order: **PR-1 only** (single PR).
 6. `test_structured_hints_reason_content` — **new test**: verify `reason` field carries expected text for key scenarios (describe type rollup, describe method overriders, search weak, find empty, resolve none, neighbors empty structural).
 7. `test_structured_hints_reason_char_cap` — **new test**: verify all emitted `reason` strings are ≤ 120 chars.
 8. `test_no_string_hints_field` — **new test**: verify `SearchOutput`, `FindOutput`, `DescribeOutput`, `NeighborsOutput`, `ResolveOutput` have no `hints` field.
+9. `test_string_only_hints_now_structured` — **new test**: verify that the four previously string-only advisory hints (fanout count, unresolved sites, role-filter fallback, role collision) now appear in `hints_structured` with `actionable=False` and non-empty `reason`.
+10. `test_brownfield_absence_structured` — **new test**: verify brownfield absence hint appears in `hints_structured` for Client/Producer/Route subjects with brownfield-resolver-sourced edges, with `actionable=False` and non-empty `reason`.
 
 ## Definition of done (PR-1)
 
@@ -125,6 +185,7 @@ Landing order: **PR-1 only** (single PR).
 - `reason: str` field present on `StructuredHint` and `_StructuredHint`.
 - `generate_hints` returns `list[_StructuredHint]`, not a tuple.
 - `MCP_HINTS_FIELD_DESCRIPTION`, all `TPL_*` constants, `finalize_hint_list` removed from `mcp_hints.py`.
+- Previously string-only hints (fanout, unresolved sites, role-filter fallback, role collision, brownfield absence) now have structured equivalents with non-empty `reason`.
 - `server.py` tool descriptions reference `hints_structured`, not `hints`.
 - Full test suite passes: `.venv/bin/python -m pytest tests -v`.
 - Ruff clean: `.venv/bin/ruff check .`.
@@ -136,13 +197,15 @@ Landing order: **PR-1 only** (single PR).
 | - | - | - | - |
 | 1 | Add `reason` to `_StructuredHint`, change `generate_hints` return type | `mcp_hints.py` | `generate_hints` returns `list[_StructuredHint]`; all callers updated in same step |
 | 2 | Remove `MCP_HINTS_FIELD_DESCRIPTION`, all `TPL_*`, `finalize_hint_list`, string-only helpers | `mcp_hints.py` | No string template constants or string-only functions remain |
-| 3 | Add `reason` to public `StructuredHint`, remove `hints` from all 5 output models | `mcp_v2.py` | All `*Output` models lack `hints` field; `_to_structured_hints` forwards `reason` |
-| 4 | Update all 5 tool functions to use new `generate_hints` signature | `mcp_v2.py` | No `str_hints` variable; no `hints=str_hints` in any constructor |
-| 5 | Update `server.py` tool descriptions | `server.py` | All descriptions say `hints_structured` |
-| 6 | Migrate test assertions from `out.hints` to `out.hints_structured` | `tests/test_mcp_hints.py` | All tests pass |
-| 7 | Remove parity test, string-only test helpers | `tests/test_mcp_hints.py` | `test_structured_hints_parity_with_string_hints` removed; `_hints` helper removed |
-| 8 | Update `docs/AGENT-GUIDE.md` | `docs/AGENT-GUIDE.md` | No `hints` list reference; `hints_structured` documented with `reason` |
-| 9 | Run full validation | all | `ruff check .` clean; `pytest tests -v` passes |
+| 3 | Add structured equivalents for string-only hints (fanout, unresolved, role-filter fallback, role collision, brownfield absence) | `mcp_hints.py` | All previously string-only advisory content appears in structured hints with `reason` |
+| 4 | Add `reason` to public `StructuredHint`, remove `hints` from all 5 output models | `mcp_v2.py` | All `*Output` models lack `hints` field; `_to_structured_hints` forwards `reason` |
+| 5 | Update all 5 tool functions to use new `generate_hints` signature | `mcp_v2.py` | No `str_hints` variable; no `hints=str_hints` in any constructor |
+| 6 | Update `server.py` tool descriptions | `server.py` | All descriptions say `hints_structured` |
+| 7 | Migrate test assertions from `out.hints` to `out.hints_structured` | `tests/test_mcp_hints.py` | All tests pass |
+| 8 | Remove parity test, string-only test helpers | `tests/test_mcp_hints.py` | `test_structured_hints_parity_with_string_hints` removed; `_hints` helper removed |
+| 9 | Add new tests (reason content, reason char cap, no string hints field, string-only equivalence, brownfield absence structured) | `tests/test_mcp_hints.py` | All new tests pass |
+| 10 | Update `docs/AGENT-GUIDE.md` | `docs/AGENT-GUIDE.md` | No `hints` list reference; `hints_structured` documented with `reason` |
+| 11 | Run full validation | all | `ruff check .` clean; `pytest tests -v` passes |
 
 ---
 
@@ -152,6 +215,8 @@ Landing order: **PR-1 only** (single PR).
 | --- | --- | --- | --- |
 | 1 | Downstream consumers expecting `hints` field | low | Breaking changes are always allowed per AGENTS.md; `hints_structured` has been present since #209 |
 | 2 | Reason text divergence from former templates | medium | Derive reason strings from the same template renderings at authoring time; verify via new `reason` content tests |
+| 3 | String-only hints lost during migration | medium | New `test_string_only_hints_now_structured` and `test_brownfield_absence_structured` tests guarantee the advisory content survives in structured form |
+| 4 | `reason` text length exceeding consumer expectations | low | New `test_structured_hints_reason_char_cap` enforces ≤ 120 chars |
 
 # Out of scope
 
@@ -166,8 +231,9 @@ Landing order: **PR-1 only** (single PR).
 
 1. `hints: list[str]` no longer exists on any output model.
 2. All advisory text lives in `reason` on `StructuredHint`.
-3. Test suite passes with zero references to the old `hints` field.
-4. `ruff check .` clean.
+3. Previously string-only advisory hints (fanout, unresolved, role-filter fallback, role collision, brownfield absence) have structured equivalents.
+4. Test suite passes with zero references to the old `hints` field.
+5. `ruff check .` clean.
 
 # Tracking
 

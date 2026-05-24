@@ -1,7 +1,7 @@
 # HINTS-STRING-REMOVAL-PROPOSE
 
 ## Status
-Proposal — not yet implemented.
+Proposal — **revised** after implementation attempt revealed a category-mismatch gap (see below).
 
 ## Problem Statement
 Two parallel hint fields (`hints: list[str]` and `hints_structured: list[StructuredHint]`) coexist on all five MCP tool outputs, carrying largely the same information in different formats.
@@ -125,10 +125,58 @@ After:
 - Full test suite must pass — confirms no regressions in hint generation logic
 - Agent-facing behavior unchanged: structured hints already carry all tool-call information; `reason` adds advisory context
 
+## Discovered Gap: Category Mismatch Between Structured Hints and Pure Advisories
+
+During implementation of this proposal, a category mismatch was discovered that the original proposal did not account for.
+
+### The core tension
+
+Structured hints are designed as **next actions** — they carry `tool`, `args`, and `actionable` to tell the caller "call this tool with these parameters next." But some current string hints are **pure advisories** — informational context about query quality, strategy, or edge-case conditions that do not correspond to any meaningful tool call.
+
+Forcing these advisories into `reason` on a `_StructuredHint` with placeholder `tool/args` and `actionable=False` creates semantically awkward objects: "structured hints that aren't really structured."
+
+### Three categories of current hints
+
+**1. Cleanly mappable (~90%)** — String text maps to a structured hint with meaningful tool+args. The `reason` field would carry advisory text, and `tool/args` carry the real next-action. Examples: empty-result fallbacks (search→find, describe→neighbors), success-path follow-ups (handler→EXPOSES, implementors→IMPLEMENTS), resolve tighten/ambiguous. No issue here.
+
+**2. Pure advisory, pseudo-structured** — The structured hint exists but with `actionable=False` and either empty or weak `args`. The string carries real context that doesn't translate to a tool call. Examples:
+- Search weak results: `"results look weak — narrow the query or try find(role=…)"` → structured has `tool="find", args={"role": "service"}, actionable=False`. The tool+args are a suggestion, not a direct action — the caller may need to do something entirely different.
+- Page full: `"result page full at N — narrow filter or paginate"` → structured has the same query re-stated as args, `actionable=False`. Not a real "call this tool" hint.
+- Fuzzy strategy: `"some edges resolved via brownfield/fallback strategy — check attrs.strategy on each row"` → structured has `args={}, actionable=False`. Empty args — this is pure informational text wearing a structured-hint costume.
+- High fanout warning: structured has the neighbors query re-stated as args, `actionable=False` — but the real value is the advisory text about noise axes.
+
+**3. String-only, no structured counterpart** — Two functions emit string hints that are **entirely lost** in structured mode:
+- `neighbors_calls_fanout_hints()` — warns about high CALLS fanout and unresolved call sites. No structured equivalent.
+- `neighbors_calls_meta_hints()` — warns about role-filter OTHER fallback and NodeFilter.role collision semantics. No structured equivalent.
+
+These carry genuine meta-advisory content about query patterns and edge-case behavior that would disappear entirely if string hints are removed.
+
+### Why this matters
+
+The original proposal assumed all string hints have a structured counterpart and that `reason` is a simple text migration. In reality:
+- Adding `reason` to pseudo-structured hints with empty `args` conflates two different signal types in one list.
+- String-only advisories would be silently lost, reducing the information available to callers in edge cases (high fanout, strategy ambiguity, filter collision).
+
+### Open design questions
+
+1. **Where should pure advisory text live?** Options include (a) a separate `advisories: list[str]` field on output models, (b) pseudo-structured hints with empty tool/args carrying `reason`, (c) a dedicated advisory type within `hints_structured`, (d) dropping them entirely. Each option has different trade-offs in schema simplicity vs. information preservation.
+2. **Should string-only meta-advisories be preserved?** The fanout and meta hints (`neighbors_calls_fanout_hints`, `neighbors_calls_meta_hints`) currently reach only string-hint consumers. Removing string hints loses them. Is this acceptable, or should they gain structured equivalents?
+3. **What is `hints_structured` for?** If it includes non-actionable, no-tool-call entries, the list becomes a mix of "next actions" and "informational notes," which may confuse consumers expecting actionable tool-call suggestions.
+
+## Resolved design decisions
+
+| Topic | Decision |
+| --- | --- |
+| `reason` default | `reason: str = ""` — avoids forcing a reason on every hint |
+| String template deletion | Delete entirely; git history preserves them |
+| `generate_hints` return type | `list[_StructuredHint]` — no tuple wrapper |
+
 ## Open Questions ([TBD])
 1. Should `reason` default to `""` or be required (`str` without default)? — Recommended: default `""` for backward compatibility during transition and to avoid forcing a reason on every hint.
 2. Should non-actionable hints always carry a `reason`? — Recommended: yes, non-actionable hints without a reason are noise and should be reconsidered at authoring time.
 3. Should string hint templates be deleted entirely or archived for reference? — Recommended: delete entirely; git history preserves them.
+4. How to handle pure advisory text that does not map to a tool call? — See "Discovered Gap" section above.
+5. Should the two string-only advisory functions (`neighbors_calls_fanout_hints`, `neighbors_calls_meta_hints`) gain structured equivalents, or is losing them acceptable?
 
 ## Out of scope
 - Changing hint trigger logic or priority tiers
