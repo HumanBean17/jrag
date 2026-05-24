@@ -8,6 +8,13 @@ hand-maintained lists. Validates:
   - direction values
   - edge_types values
   - Tier 2 body structure (stop conditions, recursion limit)
+
+Known gap (intentional — see AGENT-SKILLS-AND-COMMANDS-PROPOSE §11):
+  - edge_filter parameters (callee_declaring_role, min_confidence,
+    exclude_callee_declaring_roles, dedup_calls, include_unresolved)
+    referenced in /mini-map are NOT validated against mcp_v2 parameter
+    definitions. The static validator does not parse edge_filter dicts.
+    On re-index, manually verify /mini-map against the MCP surface.
 """
 
 from __future__ import annotations
@@ -40,7 +47,7 @@ _ALL_EDGE_TYPES: frozenset[str] = frozenset(get_args(EdgeType)) | frozenset(get_
 SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"
 
 TIER1_NAMES = [
-    "nl", "controllers", "routes", "clients",
+    "nl", "controllers", "routes", "clients", "producers",
     "callers", "callees", "handlers", "who-hits-route",
     "implements", "injects",
 ]
@@ -270,7 +277,11 @@ class TestAgentGuideConsistency:
         text = guide.read_text(encoding="utf-8")
         # The old format had lines like: /nl <text> → search({"query":...})
         # After rewrite, these should be gone (replaced by skills/ pointers)
-        old_pattern = re.compile(r'^\- `/(nl|controllers|routes|clients|callers|callees|handlers|who-hits-route|implements|injects)\s+.*→\s*`(search|find|describe|neighbors)', re.MULTILINE)
+        skill_names_pattern = "|".join(re.escape(n) for n in ALL_SKILL_NAMES)
+        old_pattern = re.compile(
+            rf"^- `/(?:{skill_names_pattern})\s+.*→\s*`(?:search|find|describe|neighbors)",
+            re.MULTILINE,
+        )
         assert not old_pattern.search(text), (
             "docs/AGENT-GUIDE.md still contains old embedded slash-alias MCP chains — "
             "should reference skills/ instead"

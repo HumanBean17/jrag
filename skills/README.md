@@ -32,6 +32,7 @@ High-level intents over the 5-tool MCP (`search` / `find` / `describe` / `neighb
 | [`/controllers`](controllers/SKILL.md) | List controller classes |
 | [`/routes`](routes/SKILL.md) | List HTTP and messaging routes |
 | [`/clients`](clients/SKILL.md) | List outbound HTTP clients |
+| [`/producers`](producers/SKILL.md) | List outbound async producers |
 | [`/callers`](callers/SKILL.md) | Who calls this method (in-process CALLS) |
 | [`/callees`](callees/SKILL.md) | What this method calls (in-process CALLS) |
 | [`/handlers`](handlers/SKILL.md) | Method that handles a route |
