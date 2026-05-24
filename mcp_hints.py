@@ -313,6 +313,9 @@ def _neighbors_empty_structured_hints(
             if role != "alien_subject":
                 template = spec.typical_traversals.get(role, "")
                 # Parse template like "neighbors(['{id}'],'out',['DECLARES_CLIENT'])"
+                # Intentionally removed regex fallback — the schema-controlled format
+                # is stable; silence on format mismatch is acceptable for this low-risk
+                # requery hint (main users are search→neighbors divergences, not edge types).
                 parts = template.split("'")
                 if len(parts) >= 6:
                     direction = parts[3]
@@ -607,7 +610,7 @@ def generate_hints(
                 LABEL_PAGE_FULL,
                 f"result page full at {lim}",
             ))
-        if results and lim is not None and len(results) < int(lim):
+        if results and (lim is None or len(results) < int(lim)):
             node_id = str(results[0].get("id") or "")
             if node_id:
                 if kind == "route":
@@ -686,7 +689,8 @@ def generate_hints(
             unresolved = int(payload.get("unresolved_count") or 0)
             if unresolved > 0:
                 page_n = len(results)
-                advisories.append((PRIORITY_LEAF_FOLLOWUP, f"{page_n} CALLS shown; this method also has {unresolved} unresolved call sites (see describe(method_id).unresolved_call_sites, or call neighbors with include_unresolved=True for a source-ordered interleaved view — note include_unresolved is mutually exclusive with edge_filter)"))
+                # Advisory shortened to stay under 200 char cap (test_advisories_char_cap)
+                advisories.append((PRIORITY_LEAF_FOLLOWUP, f"{page_n} CALLS shown; {unresolved} unresolved — see describe().unresolved_call_sites or neighbors(include_unresolved=True)"))
             # Fuzzy strategy advisory
             if results and _any_fuzzy_strategy(results):
                 advisories.append((PRIORITY_META, "some edges resolved via brownfield/fallback strategy — check attrs.strategy on each row"))
