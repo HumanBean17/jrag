@@ -123,6 +123,13 @@ TPL_DESCRIBE_METHOD_MANY_CALLS = "many CALLS — consider filtering by target mi
 TPL_DESCRIBE_ROUTE_DECLARING = "declaring method: neighbors(['{id}'],'in',['EXPOSES'])"
 TPL_DESCRIBE_CLIENT_DECLARING = "declaring method: neighbors(['{id}'],'in',['DECLARES_CLIENT'])"
 TPL_DESCRIBE_PRODUCER_DECLARING = "declaring method: neighbors(['{id}'],'in',['DECLARES_PRODUCER'])"
+TPL_DESCRIBE_TYPE_IMPLEMENTORS = "implementors: neighbors(['{id}'],'in',['IMPLEMENTS'])"
+TPL_DESCRIBE_TYPE_IMPLEMENTS = "implements: neighbors(['{id}'],'out',['IMPLEMENTS'])"
+TPL_DESCRIBE_TYPE_DEPENDENCIES = "dependencies: neighbors(['{id}'],'out',['INJECTS'])"
+TPL_DESCRIBE_TYPE_INJECTORS = "injectors: neighbors(['{id}'],'in',['INJECTS'])"
+TPL_DESCRIBE_METHOD_OUTBOUND_CALLS = "outbound calls: neighbors(['{id}'],'out',['CALLS'])"
+TPL_DESCRIBE_METHOD_SUPER_DECL = "super declaration: neighbors(['{id}'],'out',['OVERRIDES'])"
+TPL_DESCRIBE_METHOD_UNRESOLVED = "unresolved: neighbors(['{id}'],'out',['CALLS'],include_unresolved=True)"
 
 TPL_FIND_EMPTY_RESOLVE = "no matches — try resolve(identifier, hint_kind='{kind}') for canonical lookup"
 TPL_FIND_PAGE_FULL = "result page full at {limit} — narrow filter or paginate"
@@ -252,6 +259,27 @@ def _out_count(edge_summary: dict[str, Any] | None, key: str) -> int:
     if not isinstance(cell, dict):
         return 0
     return int(cell.get("out", 0) or 0)
+
+
+def _in_count(edge_summary: dict[str, Any] | None, key: str) -> int:
+    if not edge_summary or key not in edge_summary:
+        return 0
+    cell = edge_summary[key]
+    if not isinstance(cell, dict):
+        return 0
+    return int(cell.get("in", 0) or 0)
+
+
+def _record_role(rec: dict[str, Any]) -> str:
+    return str((rec.get("data") or {}).get("role") or rec.get("role") or "")
+
+
+def _type_rollup_would_emit(edge_summary: dict[str, Any] | None) -> bool:
+    return (
+        _out_count(edge_summary, "DECLARES.DECLARES_CLIENT") > 0
+        or _out_count(edge_summary, "DECLARES.EXPOSES") > 0
+        or _out_count(edge_summary, "DECLARES.DECLARES_PRODUCER") > 0
+    )
 
 
 def _symbol_declaration_kind(record: dict[str, Any]) -> str | None:
@@ -1037,6 +1065,12 @@ def generate_hints(
                 "neighbors", {"ids": [node_id], "direction": "in", "edge_types": ["DECLARES_CLIENT"]},
                 True, PRIORITY_LEAF_FOLLOWUP,
             ))
+            if _out_count(edge_summary, "HTTP_CALLS") > 0:
+                pairs.append((PRIORITY_LEAF_FOLLOWUP, TPL_FIND_SUCCESS_HTTP_TARGETS.format(id=node_id)))
+                struct_pairs.append(_StructuredHint(
+                    "neighbors", {"ids": [node_id], "direction": "out", "edge_types": ["HTTP_CALLS"]},
+                    True, PRIORITY_LEAF_FOLLOWUP,
+                ))
             return (finalize_hint_list(pairs), finalize_structured_hints(struct_pairs))
         if kind == "producer":
             pairs.append((PRIORITY_LEAF_FOLLOWUP, TPL_DESCRIBE_PRODUCER_DECLARING.format(id=node_id)))
@@ -1044,6 +1078,12 @@ def generate_hints(
                 "neighbors", {"ids": [node_id], "direction": "in", "edge_types": ["DECLARES_PRODUCER"]},
                 True, PRIORITY_LEAF_FOLLOWUP,
             ))
+            if _out_count(edge_summary, "ASYNC_CALLS") > 0:
+                pairs.append((PRIORITY_LEAF_FOLLOWUP, TPL_FIND_SUCCESS_ASYNC_TARGETS.format(id=node_id)))
+                struct_pairs.append(_StructuredHint(
+                    "neighbors", {"ids": [node_id], "direction": "out", "edge_types": ["ASYNC_CALLS"]},
+                    True, PRIORITY_LEAF_FOLLOWUP,
+                ))
             return (finalize_hint_list(pairs), finalize_structured_hints(struct_pairs))
 
         if kind != "symbol":
@@ -1078,6 +1118,33 @@ def generate_hints(
                     "neighbors", {"ids": [node_id], "direction": "out", "edge_types": ["DECLARES.DECLARES_PRODUCER"]},
                     True, PRIORITY_DECLARES_TYPE_ROLLUP,
                 ))
+
+            if not _type_rollup_would_emit(edge_summary):
+                if decl_kind == "interface" and _in_count(edge_summary, "IMPLEMENTS") > 0:
+                    pairs.append((PRIORITY_LEAF_FOLLOWUP, TPL_DESCRIBE_TYPE_IMPLEMENTORS.format(id=node_id)))
+                    struct_pairs.append(_StructuredHint(
+                        "neighbors", {"ids": [node_id], "direction": "in", "edge_types": ["IMPLEMENTS"]},
+                        True, PRIORITY_LEAF_FOLLOWUP,
+                    ))
+                if decl_kind == "class" and _out_count(edge_summary, "IMPLEMENTS") > 0:
+                    pairs.append((PRIORITY_LEAF_FOLLOWUP, TPL_DESCRIBE_TYPE_IMPLEMENTS.format(id=node_id)))
+                    struct_pairs.append(_StructuredHint(
+                        "neighbors", {"ids": [node_id], "direction": "out", "edge_types": ["IMPLEMENTS"]},
+                        True, PRIORITY_LEAF_FOLLOWUP,
+                    ))
+                if decl_kind == "class" and _record_role(rec) == "SERVICE" and _out_count(edge_summary, "INJECTS") > 0:
+                    pairs.append((PRIORITY_LEAF_FOLLOWUP, TPL_DESCRIBE_TYPE_DEPENDENCIES.format(id=node_id)))
+                    struct_pairs.append(_StructuredHint(
+                        "neighbors", {"ids": [node_id], "direction": "out", "edge_types": ["INJECTS"]},
+                        True, PRIORITY_LEAF_FOLLOWUP,
+                    ))
+                if decl_kind in {"interface", "class"} and _in_count(edge_summary, "INJECTS") > 0:
+                    pairs.append((PRIORITY_LEAF_FOLLOWUP, TPL_DESCRIBE_TYPE_INJECTORS.format(id=node_id)))
+                    struct_pairs.append(_StructuredHint(
+                        "neighbors", {"ids": [node_id], "direction": "in", "edge_types": ["INJECTS"]},
+                        True, PRIORITY_LEAF_FOLLOWUP,
+                    ))
+
             return (finalize_hint_list(pairs), finalize_structured_hints(struct_pairs))
 
         if is_method:
@@ -1127,6 +1194,32 @@ def generate_hints(
                 pairs.append((PRIORITY_LEAF_FOLLOWUP, TPL_DESCRIBE_METHOD_INBOUND_ROUTE.format(id=node_id)))
                 struct_pairs.append(_StructuredHint(
                     "neighbors", {"ids": [node_id], "direction": "out", "edge_types": ["EXPOSES"]},
+                    True, PRIORITY_LEAF_FOLLOWUP,
+                ))
+            calls_out = _out_count(edge_summary, "CALLS")
+            if 1 <= calls_out <= 9:
+                method_role = _record_role(rec)
+                if method_role != "OTHER" or calls_out >= 3:
+                    pairs.append((PRIORITY_LEAF_FOLLOWUP, TPL_DESCRIBE_METHOD_OUTBOUND_CALLS.format(id=node_id)))
+                    struct_pairs.append(_StructuredHint(
+                        "neighbors", {"ids": [node_id], "direction": "out", "edge_types": ["CALLS"]},
+                        True, PRIORITY_LEAF_FOLLOWUP,
+                    ))
+            if _out_count(edge_summary, "OVERRIDES") > 0:
+                if _out_count(edge_summary, "OVERRIDDEN_BY") == 0:
+                    pairs.append((PRIORITY_LEAF_FOLLOWUP, TPL_DESCRIBE_METHOD_SUPER_DECL.format(id=node_id)))
+                    struct_pairs.append(_StructuredHint(
+                        "neighbors", {"ids": [node_id], "direction": "out", "edge_types": ["OVERRIDES"]},
+                        True, PRIORITY_LEAF_FOLLOWUP,
+                    ))
+            data = rec.get("data")
+            unresolved = 0
+            if isinstance(data, dict):
+                unresolved = int(data.get("unresolved_call_sites_total") or 0)
+            if unresolved > 0:
+                pairs.append((PRIORITY_LEAF_FOLLOWUP, TPL_DESCRIBE_METHOD_UNRESOLVED.format(id=node_id)))
+                struct_pairs.append(_StructuredHint(
+                    "neighbors", {"ids": [node_id], "direction": "out", "edge_types": ["CALLS"], "include_unresolved": True},
                     True, PRIORITY_LEAF_FOLLOWUP,
                 ))
             if _out_count(edge_summary, "CALLS") >= 10:
