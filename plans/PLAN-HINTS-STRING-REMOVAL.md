@@ -1,6 +1,6 @@
 # Plan: HINTS-STRING-REMOVAL
 
-Status: **active (planning)**. This plan implements
+Status: **active**. This plan implements
 [`propose/HINTS-STRING-REMOVAL-PROPOSE.md`](../propose/HINTS-STRING-REMOVAL-PROPOSE.md)
 as a single PR.
 
@@ -54,7 +54,7 @@ Landing order: **PR-1 only** (single PR).
 - For each hint that previously appended to `pairs`, extract the advisory text into a `reason=` kwarg on the corresponding `_StructuredHint`.
   - Example: the search weak-results hint currently does `pairs.append((PRIORITY_META, TPL_SEARCH_WEAK))` and `struct_pairs.append(_StructuredHint("find", ..., LABEL_WEAK_RESULTS))`. After change: `struct_pairs.append(_StructuredHint("find", ..., LABEL_WEAK_RESULTS, reason="results look weak — narrow the query or try find with a role filter"))`.
   - The `reason` text should be derived from the former template rendering (substitute any format variables as needed).
-- Remove `_hints` helper and `_filter_neighbors_dotkey_hints` function (both were string-hint-specific).
+- Remove `_filter_neighbors_dotkey_hints` function (string-hint-specific).
 - Remove `_FIND_SUCCESS_MAX_CHARS`, `_RESOLVE_HINT_MAX_CHARS`, `_NEIGHBORS_SUCCESS_MAX_CHARS` cap constants (they applied to rendered string length; structured hints use the cap from `finalize_structured_hints`).
 - Remove `_append_find_success_hint` and `_append_neighbors_success_hint` helpers.
 - Remove `find_success_hints` function (string-only); keep the structured-hint emission logic inline in `generate_hints`.
@@ -62,7 +62,7 @@ Landing order: **PR-1 only** (single PR).
 - Remove `neighbors_empty_hints` function (string-only); keep `_neighbors_empty_structured_hints`.
 - Remove `neighbors_calls_fanout_hints` and `neighbors_calls_meta_hints` (string-only); keep the structured meta hint logic inline in `generate_hints`.
 - Remove `_FIRST_NEIGHBORS_CALL_RE`, `_parse_first_traversal` — these were used to parse string templates into structured hint args; now unnecessary.
-- Remove `LABEL_*` constants that were only used in structured hints — keep them (they're still used for `_StructuredHint.label`).
+- Keep all `LABEL_*` constants — they are still used for `_StructuredHint.label`.
 
 ### 2. `mcp_v2.py`
 
@@ -115,9 +115,9 @@ Landing order: **PR-1 only** (single PR).
 3. `test_structured_hint_round_trip` — existing, updated to remove `out.hints` assertions.
 4. `test_structured_hint_label_values` — existing, unchanged.
 5. All `test_hints_*` tests — migrated from `out.hints` to `out.hints_structured[*].reason`.
-6. `test_structured_hints_reason_content` — new: verify `reason` field carries expected text for key scenarios (describe type rollup, describe method overriders, search weak, find empty, resolve none, neighbors empty structural).
-7. `test_structured_hints_reason_char_cap` — new: verify all emitted `reason` strings are ≤ 120 chars.
-8. `test_no_string_hints_field` — new: verify `SearchOutput`, `FindOutput`, `DescribeOutput`, `NeighborsOutput`, `ResolveOutput` have no `hints` field.
+6. `test_structured_hints_reason_content` — **new test**: verify `reason` field carries expected text for key scenarios (describe type rollup, describe method overriders, search weak, find empty, resolve none, neighbors empty structural).
+7. `test_structured_hints_reason_char_cap` — **new test**: verify all emitted `reason` strings are ≤ 120 chars.
+8. `test_no_string_hints_field` — **new test**: verify `SearchOutput`, `FindOutput`, `DescribeOutput`, `NeighborsOutput`, `ResolveOutput` have no `hints` field.
 
 ## Definition of done (PR-1)
 
