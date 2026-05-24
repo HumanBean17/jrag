@@ -8,7 +8,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import kuzu
-import pytest
 
 from kuzu_queries import KuzuGraph
 
