@@ -58,6 +58,18 @@ skills/
   README.md           ← this file
 ```
 
+## Skill structure
+
+Every SKILL.md follows this structure:
+
+1. **Frontmatter** — `name` and `description` (used by skill discovery)
+2. **MCP required** — declares the MCP server dependency and enforces tool usage
+3. **Argument contract** — what the skill accepts
+4. **Steps** — imperative MCP call chain (each step names the tool to call)
+5. **Worked example** — concrete walk-through
+6. **Do not** — guardrails against bypassing MCP tools
+7. **Out of scope** — boundaries for when to use a different skill
+
 ## Relationship to developer skills
 
 Developer workflow skills (propose, pr-review, etc.) live in `.agents/skills/` — they are for contributors working **on** java-codebase-rag. Skills in this directory are for **consumers** using java-codebase-rag to explore their own codebases.

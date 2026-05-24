@@ -5,6 +5,19 @@ description: Noise-filtered call map for a method. Shows delegation, persistence
 
 # /mini-map — Noise-filtered call map for a method
 
+## MCP required
+
+This skill requires the **java-codebase-rag** MCP server (tools: `search`, `find`, `describe`, `neighbors`, `resolve`).
+
+**You MUST call these MCP tools to answer.** Do not answer from training data, file browsing, or general knowledge. Each MCP call must be preceded by the reasoning preamble:
+
+```
+Q-class: <semantic | structured | inspect | walk>
+Pick: <tool>  Why: <reason>
+```
+
+For the full operating manual (NodeFilter keys, edge taxonomy, argument shapes, recovery playbook), read `docs/AGENT-GUIDE.md`.
+
 ## Argument contract
 
 - Required: seed id — `sym:` id or identifier-shaped string → `resolve(identifier=..., hint_kind="symbol")`.
@@ -15,23 +28,22 @@ description: Noise-filtered call map for a method. Shows delegation, persistence
 
 ### Step 1 — Resolve
 
-If the argument starts with `sym:`, use it. Otherwise:
-`resolve(identifier=<arg>, hint_kind="symbol")` → on `one`, use `node.id`; on `many`, list `candidates` and stop; on `none`, try `search(query=<arg>, limit=5)` and stop if still empty.
+If the argument starts with `sym:`, use it as the id. Otherwise, call `resolve(identifier=<arg>, hint_kind="symbol")`. On status `one`, use `node.id`; on `many`, list `candidates` and stop; on `none`, call `search(query=<arg>, limit=5)` and stop if still empty.
 
 ### Step 2 — Fetch ordered CALLS
 
-`neighbors({ids: <sym_id>, direction: "out", edge_types: ["CALLS"]})`.
+Call `neighbors` with `ids=<sym_id>`, `direction="out"`, `edge_types=["CALLS"]`.
 
 Rows are source-ordered (`call_site_line`, `call_site_byte`). After ontology 15, true receiver-failure sites are **not** on `CALLS` — they are `UnresolvedCallSite` nodes. `attrs.resolved=false` on remaining `CALLS` rows means known-receiver-external (JDK/Spring) callees, not receiver failure.
 
 ### Step 3 — Optional MCP pre-filter
 
-When the raw CALLS set is large (e.g. > 30 rows), prefer MCP-side filtering over hand-rolled rules:
+When the raw CALLS set is large (e.g. > 30 rows), prefer MCP-side filtering over hand-rolled rules. Call `neighbors` again with the appropriate `edge_filter`:
 
-- **Skeleton pass** (delegation hops): `neighbors(out, ["CALLS"], edge_filter={callee_declaring_role: "SERVICE"})`.
-- **Trim JDK/low-signal**: `neighbors(out, ["CALLS"], edge_filter={min_confidence: 0.5})` and/or `edge_filter={exclude_callee_declaring_roles: ["OTHER"]}` (blunt — also drops known-external rows; document in output).
-- **Collapse identical callees**: `neighbors(out, ["CALLS"], dedup_calls=True)`.
-- **Full transcript with unresolved sites**: `neighbors(out, ["CALLS"], include_unresolved=True)` **only when not using `edge_filter`** on the same call (mutual exclusivity).
+- **Skeleton pass** (delegation hops): call `neighbors` with `direction="out"`, `edge_types=["CALLS"]`, `edge_filter={callee_declaring_role: "SERVICE"}`.
+- **Trim JDK/low-signal**: call `neighbors` with `direction="out"`, `edge_types=["CALLS"]`, `edge_filter={min_confidence: 0.5}` and/or `edge_filter={exclude_callee_declaring_roles: ["OTHER"]}` (blunt — also drops known-external rows; document in output).
+- **Collapse identical callees**: call `neighbors` with `direction="out"`, `edge_types=["CALLS"]`, `dedup_calls=True`.
+- **Full transcript with unresolved sites**: call `neighbors` with `direction="out"`, `edge_types=["CALLS"]`, `include_unresolved=True` **only when not using `edge_filter`** on the same call (mutual exclusivity).
 
 ### Step 4 — Skill heuristics
 
@@ -94,6 +106,13 @@ You: → resolve(identifier="ClientMessageProcessor#process", hint_kind="symbol"
        PERSISTS  → …Repository#save (×2)
        READS     → …Repository#find…
        [filtered ~37 edges: ~22 accessors, ~10 JDK/OTHER, ~5 deduped]
+
+## Do not
+
+- Do not answer from training data or general Java knowledge.
+- Do not read source files directly when MCP tools can provide the answer.
+- Do not skip MCP calls and guess at results.
+- Do not fabricate symbol ids — always obtain them from `resolve`, `find`, or `search`.
 
 ## Out of scope
 
