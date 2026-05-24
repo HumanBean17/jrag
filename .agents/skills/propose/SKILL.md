@@ -11,7 +11,7 @@ Create proposal docs that match this repository's accepted style and workflow.
 ## When to use
 
 Use this skill when:
-- the user asks for a new proposal in `propose/`
+- the user asks for a new proposal in `propose/active/`
 - the user asks to refine an existing proposal
 - work is non-trivial and should be proposed before implementation
 
@@ -28,7 +28,7 @@ the proposal here first, then hand off plan authoring to
 Before drafting, read:
 1. `README.md` (public surface, env vars, ontology/reindex implications)
 2. `CODEBASE_REQUIREMENTS.md` (brownfield assumptions and source mapping)
-3. Relevant active plan/propose docs under `plans/` and `propose/`
+3. Relevant active plan/propose docs under `plans/active/` and `propose/active/`
 4. The target area's implementation files (only as needed)
 
 ## Proposal quality bar (based on merged PR patterns)
@@ -121,7 +121,7 @@ Docs-only; baseline unchanged.
 
 ## Final checklist
 
-- [ ] Proposal file lives under `propose/`
+- [ ] Proposal file lives under `propose/active/`
 - [ ] Problem statement includes concrete examples
 - [ ] Schema/ontology/re-index impact is explicit
 - [ ] Open questions include `[TBD]` with recommendations

@@ -11,7 +11,7 @@ Author implementation plans that match this repo's merged style (`PLAN-*`) and s
 ## When to use
 
 Use this skill when:
-- the user asks for a new plan file in `plans/`
+- the user asks for a new plan file in `plans/active/`
 - an existing plan needs restructuring or deeper execution detail
 - a proposal is approved and now needs a multi-PR delivery split
 - the user asks to create per-PR execution prompts/contracts
@@ -32,7 +32,7 @@ If the user already provided these, proceed without extra questions.
 Read before writing:
 1. `README.md` (public surface, env vars, ontology/reindex impact)
 2. `CODEBASE_REQUIREMENTS.md` (brownfield and source assumptions)
-3. Relevant active/completed docs under `plans/` and `propose/`
+3. Relevant active/completed docs under `plans/active/` and `propose/active/`
 4. Target implementation files only as needed
 
 ## Quality bar from merged plan PRs
@@ -60,7 +60,7 @@ Use this structure unless the user requests a different format:
 # Plan: <topic>
 
 Status: **active (planning)**. This plan implements
-[`propose/<TOPIC>-PROPOSE.md`](../propose/<TOPIC>-PROPOSE.md).
+[`propose/active/<TOPIC>-PROPOSE.md`](../../propose/active/<TOPIC>-PROPOSE.md).
 
 Depends on: <dependency or "none">.
 
@@ -148,7 +148,7 @@ Use **any** completed **`plans/completed/AGENT-PROMPTS-*.md`** as the structural
 
 ## Naming and placement
 
-- Plan files live in `plans/` as `PLAN-<TOPIC>.md` (uppercase topic).
+- Active plan files live in `plans/active/` as `PLAN-<TOPIC>.md` (uppercase topic).
 - Move completed plans to `plans/completed/` after full rollout lands.
 
 ## Final checklist

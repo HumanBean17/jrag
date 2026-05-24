@@ -1,6 +1,6 @@
 # Plan Style Reference (Repo-grounded)
 
-This reference distills patterns from **merged multi-PR plans** in this repo. **Do not cache example filenames from here** — open **`plans/completed/`** (and root **`plans/`** for in-flight work) for current `PLAN-*.md` / `AGENT-PROMPTS-*.md` examples; match their section depth and tables, not a particular PR number.
+This reference distills patterns from **merged multi-PR plans** in this repo. **Do not cache example filenames from here** — open **`plans/completed/`** (and **`plans/active/`** for in-flight work) for current `PLAN-*.md` / `AGENT-PROMPTS-*.md` examples; match their section depth and tables, not a particular PR number.
 
 ## Non-negotiables
 

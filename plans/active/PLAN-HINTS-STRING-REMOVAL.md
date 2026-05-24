@@ -1,7 +1,7 @@
 # Plan: HINTS-STRING-REMOVAL
 
 Status: **active**. This plan implements
-[`propose/HINTS-STRING-REMOVAL-PROPOSE.md`](../propose/HINTS-STRING-REMOVAL-PROPOSE.md)
+[`propose/active/HINTS-STRING-REMOVAL-PROPOSE.md`](../../propose/active/HINTS-STRING-REMOVAL-PROPOSE.md)
 as a single PR.
 
 Depends on: none (all prerequisite work — `hints_structured` with `label` — is landed).
