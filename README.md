@@ -97,8 +97,8 @@ See [`mcp.json.example`](./mcp.json.example) for the same shape in `.mcp.json` (
 
 ### Driving the MCP from an agent
 
-- **[`docs/AGENT-GUIDE.md`](./docs/AGENT-GUIDE.md)** — standalone MCP operating manual (copy-paste into `QWEN.md` / `CLAUDE.md` / `AGENTS.md`): five tools, `NodeFilter`, edge taxonomy, required `neighbors` arguments, ontology glossary, recovery playbook, slash-style aliases.
-- **[`skills/`](./skills/)** — user-facing navigation and workflow skills for java-codebase-rag consumers. Skills are `SKILL.md` files; agents discover them via slash-names (`/callees`, `/routes`, etc.). See [`propose/active/AGENT-SKILLS-AND-COMMANDS-PROPOSE.md`](./propose/active/AGENT-SKILLS-AND-COMMANDS-PROPOSE.md) for the full Tier 1 + Tier 2 skill set.
+- **[`docs/AGENT-GUIDE.md`](./docs/AGENT-GUIDE.md)** — standalone MCP operating manual (copy-paste into `QWEN.md` / `CLAUDE.md` / `AGENTS.md`): five tools, `NodeFilter`, edge taxonomy, required `neighbors` arguments, ontology glossary, recovery playbook, navigation skill pointers.
+- **[`skills/`](./skills/)** — 14 shipped navigation and workflow skills (`SKILL.md` files) for java-codebase-rag consumers. Tier 1 = deterministic MCP chains (`/callers`, `/callees`, `/routes`, `/controllers`, `/clients`, `/handlers`, `/who-hits-route`, `/implements`, `/injects`, `/nl`). Tier 2 = bounded workflows (`/explain-feature`, `/impact-of`, `/trace-request-flow`, `/mini-map`). See [`skills/README.md`](./skills/README.md) for the full index.
 - **[`docs/MANUAL-VERIFICATION-CHECKLIST.md`](./docs/MANUAL-VERIFICATION-CHECKLIST.md)** — 7-phase agent-driven verification you run after indexing your real project.
 
 ---
@@ -114,6 +114,26 @@ See [`mcp.json.example`](./mcp.json.example) for the same shape in `.mcp.json` (
 | `neighbors` | Graph walk, one hop. | `ids`, `direction`, `edge_types` |
 
 Full schemas, `NodeFilter` / `EdgeFilter` semantics, and the hints contract live in [`docs/AGENT-GUIDE.md`](./docs/AGENT-GUIDE.md). Edge types and traversal directions are listed in [`docs/EDGE-NAVIGATION.md`](./docs/EDGE-NAVIGATION.md).
+
+### Three-layer architecture
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│ Layer 3 — High-level intents (what the user actually thinks) │
+│   /trace-request-flow, /callees, /controllers, /routes,      │
+│   /impact-of, /mini-map                                      │
+│   ─────────────────────────────────────────────────────────  │
+│   Implementation: SKILL.md in skills/ at project root.       │
+│   Tier 1 = deterministic chains; Tier 2 = bounded workflows │
+│   + /mini-map heuristics.                                    │
+├──────────────────────────────────────────────────────────────┤
+│ Layer 2 — Composable primitives (the MCP API)                │
+│   search, find, describe, neighbors, resolve                 │
+├──────────────────────────────────────────────────────────────┤
+│ Layer 1 — Storage primitives                                 │
+│   Kuzu Cypher + LanceDB tables                               │
+└──────────────────────────────────────────────────────────────┘
+```
 
 ---
 
@@ -156,7 +176,7 @@ Run `java-codebase-rag --help` to list grouped subcommands. Operator playbook wi
 | [`docs/CONFIGURATION.md`](./docs/CONFIGURATION.md) | Environment variables, project YAML, graph ontology, brownfield overrides, ignore patterns. |
 | [`docs/JAVA-CODEBASE-RAG-CLI.md`](./docs/JAVA-CODEBASE-RAG-CLI.md) | CLI operator playbook: workflows, exit codes, env alignment. |
 | [`docs/EDGE-NAVIGATION.md`](./docs/EDGE-NAVIGATION.md) | MCP-traversable edges, directions, dot-key composition. |
-| [`skills/`](./skills/) | User-facing skills for java-codebase-rag consumers. Navigation and workflow skills (Tier 1 + Tier 2) planned — see [`propose/active/AGENT-SKILLS-AND-COMMANDS-PROPOSE.md`](./propose/active/AGENT-SKILLS-AND-COMMANDS-PROPOSE.md). |
+| [`skills/`](./skills/) | 14 shipped navigation and workflow skills for java-codebase-rag consumers. Tier 1 = deterministic MCP chains; Tier 2 = bounded workflows. See [`skills/README.md`](./skills/README.md). |
 | [`docs/MANUAL-VERIFICATION-CHECKLIST.md`](./docs/MANUAL-VERIFICATION-CHECKLIST.md) | 7-phase agent-driven verification after indexing your project. |
 | [`docs/CODEBASE_REQUIREMENTS.md`](./docs/CODEBASE_REQUIREMENTS.md) | Assumptions about your Java repo + per-file edit map for non-conforming codebases. |
 | [`automation/cursor_propose_only/README.md`](./automation/cursor_propose_only/README.md) | Optional proposal orchestration workflow (single-command autopilot, planning bundles, automated execution/review loops). |
