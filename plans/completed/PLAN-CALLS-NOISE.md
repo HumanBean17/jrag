@@ -6,7 +6,7 @@ Source propose:
 (tracks [#177](https://github.com/HumanBean17/java-codebase-rag/issues/177)).
 
 Depends on: **SCHEMA-V2 landed** (`EDGE_SCHEMA`, MCP v2 tools). Complements
-[`propose/AGENT-SKILLS-AND-COMMANDS-PROPOSE.md`](../propose/AGENT-SKILLS-AND-COMMANDS-PROPOSE.md)
+[`propose/completed/AGENT-SKILLS-AND-COMMANDS-PROPOSE.md`](../propose/completed/AGENT-SKILLS-AND-COMMANDS-PROPOSE.md)
 `/mini-map` for accessor noise (Decision 39) — not a blocker.
 
 **Cursor prompts:** [`plans/completed/AGENT-PROMPTS-CALLS-NOISE.md`](./AGENT-PROMPTS-CALLS-NOISE.md)
