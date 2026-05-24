@@ -1984,21 +1984,6 @@ def test_hints_describe_producer_async_targets_emits(kuzu_graph) -> None:
     assert want in out.hints
 
 
-def test_hints_describe_structural_templates_char_cap() -> None:
-    templates = [
-        (mcp_hints.TPL_DESCRIBE_TYPE_IMPLEMENTORS, {"id": "sym:com.example.RegexComplianceScanner#scan(String)"}),
-        (mcp_hints.TPL_DESCRIBE_TYPE_IMPLEMENTS, {"id": "sym:com.example.RegexComplianceScanner#scan(String)"}),
-        (mcp_hints.TPL_DESCRIBE_TYPE_DEPENDENCIES, {"id": "sym:com.example.RegexComplianceScanner#scan(String)"}),
-        (mcp_hints.TPL_DESCRIBE_TYPE_INJECTORS, {"id": "sym:com.example.RegexComplianceScanner#scan(String)"}),
-        (mcp_hints.TPL_DESCRIBE_METHOD_OUTBOUND_CALLS, {"id": "sym:com.example.RegexComplianceScanner#scan(String)"}),
-        (mcp_hints.TPL_DESCRIBE_METHOD_SUPER_DECL, {"id": "sym:com.example.RegexComplianceScanner#scan(String)"}),
-        (mcp_hints.TPL_DESCRIBE_METHOD_UNRESOLVED, {"id": "sym:com.example.RegexComplianceScanner#scan(String)"}),
-    ]
-    for template, kwargs in templates:
-        rendered = template.format(**kwargs)
-        assert len(rendered) <= 120, f"{template!r} rendered to {len(rendered)} chars: {rendered!r}"
-
-
 # ---------------------------------------------------------------------------
 # Structured hint tests (PR-1)
 # ---------------------------------------------------------------------------

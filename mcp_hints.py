@@ -270,6 +270,10 @@ def _in_count(edge_summary: dict[str, Any] | None, key: str) -> int:
     return int(cell.get("in", 0) or 0)
 
 
+def _record_role(rec: dict[str, Any]) -> str:
+    return str((rec.get("data") or {}).get("role") or rec.get("role") or "")
+
+
 def _type_rollup_would_emit(edge_summary: dict[str, Any] | None) -> bool:
     return (
         _out_count(edge_summary, "DECLARES.DECLARES_CLIENT") > 0
@@ -1128,7 +1132,7 @@ def generate_hints(
                         "neighbors", {"ids": [node_id], "direction": "out", "edge_types": ["IMPLEMENTS"]},
                         True, PRIORITY_LEAF_FOLLOWUP,
                     ))
-                if decl_kind == "class" and str(rec.get("data", {}).get("role") or rec.get("role") or "") == "SERVICE" and _out_count(edge_summary, "INJECTS") > 0:
+                if decl_kind == "class" and _record_role(rec) == "SERVICE" and _out_count(edge_summary, "INJECTS") > 0:
                     pairs.append((PRIORITY_LEAF_FOLLOWUP, TPL_DESCRIBE_TYPE_DEPENDENCIES.format(id=node_id)))
                     struct_pairs.append(_StructuredHint(
                         "neighbors", {"ids": [node_id], "direction": "out", "edge_types": ["INJECTS"]},
@@ -1194,7 +1198,7 @@ def generate_hints(
                 ))
             calls_out = _out_count(edge_summary, "CALLS")
             if 1 <= calls_out <= 9:
-                method_role = str((rec.get("data") or {}).get("role") or rec.get("role") or "")
+                method_role = _record_role(rec)
                 if method_role != "OTHER" or calls_out >= 3:
                     pairs.append((PRIORITY_LEAF_FOLLOWUP, TPL_DESCRIBE_METHOD_OUTBOUND_CALLS.format(id=node_id)))
                     struct_pairs.append(_StructuredHint(
@@ -1202,11 +1206,7 @@ def generate_hints(
                         True, PRIORITY_LEAF_FOLLOWUP,
                     ))
             if _out_count(edge_summary, "OVERRIDES") > 0:
-                override_axis_emits = any(
-                    _out_count(edge_summary, k) > 0
-                    for k in ["OVERRIDDEN_BY"] + [k for k in (edge_summary or {}) if k == "OVERRIDDEN_BY" or k.startswith("OVERRIDDEN_BY.")]
-                )
-                if not override_axis_emits:
+                if _out_count(edge_summary, "OVERRIDDEN_BY") == 0:
                     pairs.append((PRIORITY_LEAF_FOLLOWUP, TPL_DESCRIBE_METHOD_SUPER_DECL.format(id=node_id)))
                     struct_pairs.append(_StructuredHint(
                         "neighbors", {"ids": [node_id], "direction": "out", "edge_types": ["OVERRIDES"]},
