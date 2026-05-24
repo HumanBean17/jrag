@@ -21,9 +21,9 @@ Before working on this proposal, read in order:
 
 1. [`TIER1-COMPLETION-PROPOSE.md`](TIER1-COMPLETION-PROPOSE.md) §4
    (B2a `Route` + `EXPOSES`) — defines every join key used here.
-2. [`reports/what-to-borrow-from-cmm.md`](../../reports/what-to-borrow-from-cmm.md)
+2. [`docs/reports/what-to-borrow-from-cmm.md`](../../docs/reports/what-to-borrow-from-cmm.md)
    §B2 (Route shape) and §B6 (cross-service edges).
-3. [`reports/call-graph-review.md`](../../reports/call-graph-review.md)
+3. [`docs/reports/call-graph-review.md`](../../docs/reports/call-graph-review.md)
    — same correctness invariants apply (microservice scoping,
    confidence semantics, phantom-id collisions).
 4. [`plans/completed/PLAN-BROWNFIELD-ROLE-OVERRIDES-design-fixes.md`](../../plans/completed/PLAN-BROWNFIELD-ROLE-OVERRIDES-design-fixes.md)
@@ -466,7 +466,7 @@ but conservative.
 ## 12. References
 
 - [`TIER1-COMPLETION-PROPOSE.md`](TIER1-COMPLETION-PROPOSE.md) — B2a, B4, B5 (active).
-- [`reports/what-to-borrow-from-cmm.md`](../../reports/what-to-borrow-from-cmm.md) §B2, §B6.
-- [`reports/call-graph-review.md`](../../reports/call-graph-review.md) — invariants this proposal must not regress.
+- [`docs/reports/what-to-borrow-from-cmm.md`](../../docs/reports/what-to-borrow-from-cmm.md) §B2, §B6.
+- [`docs/reports/call-graph-review.md`](../../docs/reports/call-graph-review.md) — invariants this proposal must not regress.
 - [`plans/completed/PLAN-BROWNFIELD-ROLE-OVERRIDES-design-fixes.md`](../../plans/completed/PLAN-BROWNFIELD-ROLE-OVERRIDES-design-fixes.md) — mandatory reading for §6.
-- [`propose/PRODUCT-VISION.md`](PRODUCT-VISION.md) §3 — `HTTP_CALLS` / `ASYNC_CALLS` are listed as *planned*; this proposal flips them to *shipped*.
+- [`docs/PRODUCT-VISION.md`](../docs/PRODUCT-VISION.md) §3 — `HTTP_CALLS` / `ASYNC_CALLS` are listed as *planned*; this proposal flips them to *shipped*.

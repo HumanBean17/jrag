@@ -5,7 +5,7 @@ User-facing tracking for graph-side incremental work: GitHub issue **#73** (link
 Pairs with the focused MCP-tool proposal
 [`propose/INDEX-AUTO-MODE-PROPOSE.md`](INDEX-AUTO-MODE-PROPOSE.md)
 (decision engine for `refresh_code_index`) and supersedes its
-"future Kuzu work" footnote in [`propose/PRODUCT-VISION.md`](PRODUCT-VISION.md) §99.
+"future Kuzu work" footnote in [`docs/PRODUCT-VISION.md`](../docs/PRODUCT-VISION.md) §99.
 
 This is a **proposal**, not an implementable plan. After review and
 scoping decisions (the §11 [TBD] list), an implementable

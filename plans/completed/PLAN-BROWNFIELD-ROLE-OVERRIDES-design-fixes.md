@@ -6,7 +6,7 @@ Status: **completed** — applied. Companion document to
 ## Why this file exists
 
 The brownfield plan grew through two review rounds; the second review
-(`reports/review/active/PLAN-BROWNFIELD-ROLE-OVERRIDES-design-issues.md`)
+(`docs/reports/review/completed/PLAN-BROWNFIELD-ROLE-OVERRIDES-design-issues.md`)
 flagged design issues that were folded back into the plan in-place.
 Once they're inlined, they stop standing out — but they are exactly
 the parts an implementer is most likely to skim past or get wrong,

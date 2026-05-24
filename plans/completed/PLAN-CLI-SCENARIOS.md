@@ -73,7 +73,7 @@ before PR-CLI-2 so contributors exercising new subcommands do not pay multi-seco
 | --- | --- | --- | --- | --- | --- |
 | **PR-CLI-1** | Land / freeze propose (doc-only merge of `CLI-SCENARIOS-PROPOSE.md` if not already on `master`) | none | `propose/completed/CLI-SCENARIOS-PROPOSE.md` (status bump); `plans/completed/PLAN-CLI-SCENARIOS.md` (tracking) | n/a | none |
 | **PR-CLI-2** | Full implementation: lifecycle handlers, env + YAML + index layout, package rename, `server.py` / indexer / path helpers, **`mcp_v2.py`**, **`path_filtering.py`** (`.lancedb-mcp/ignore` → `.java-codebase-rag/ignore`), help redesign, tracking issue constant, user-visible stderr hints; **`mcp.json.example`** env keys = source of truth | none | `pyproject.toml`, package dir rename, `server.py`, `mcp_v2.py`, `java_codebase_rag/cli.py`, `java_index_flow_lancedb.py`, `graph_enrich.py`, `path_filtering.py`, `search_lancedb.py`, `kuzu_queries.py`, `build_ast_graph.py`, tests, `mcp.json.example`, `.gitignore`, any other `user_rag` / env / path references in Python | unit + integration + help-structure test (see below) | PR-CLI-1 merged |
-| **PR-CLI-3** | Doc and example sweep + **`.cursor/rules/`** + migration sections + acceptance grep; **`mcp.json.example`** comment/example polish only (keys already correct from PR-CLI-2) | none | `README.md`, `docs/*`, `AGENTS.md`, `.cursor/rules/*.mdc`, `CODEBASE_REQUIREMENTS.md`, `mcp.json.example` (prose only if needed), selected `propose/*.md`, `.gitignore` notes | manual grep audit; `ruff` / `pytest` unchanged by docs | PR-CLI-2 merged |
+| **PR-CLI-3** | Doc and example sweep + **`.cursor/rules/`** + migration sections + acceptance grep; **`mcp.json.example`** comment/example polish only (keys already correct from PR-CLI-2) | none | `README.md`, `docs/*`, `AGENTS.md`, `.cursor/rules/*.mdc`, `docs/CODEBASE_REQUIREMENTS.md`, `mcp.json.example` (prose only if needed), selected `propose/*.md`, `.gitignore` notes | manual grep audit; `ruff` / `pytest` unchanged by docs | PR-CLI-2 merged |
 
 Landing order: **PR-CLI-1 → PR-CLI-2 → PR-CLI-3**.
 
@@ -284,7 +284,7 @@ Follow the **explicit file list** in propose §6 (`README.md`,
 `paper.pdf`, `AGENTS.md`, **`.cursor/rules/*.mdc`** (agent rules audit),
 `CODEBASE_REQUIREMENTS.md`, `mcp.json.example` (comments only — keys from PR-CLI-2),
 `propose/INDEX-AUTO-MODE-PROPOSE.md`,
-`propose/TIER2-INCREMENTAL-REBUILD-PROPOSE.md`, `propose/PRODUCT-VISION.md`,
+`propose/TIER2-INCREMENTAL-REBUILD-PROPOSE.md`, `docs/PRODUCT-VISION.md`,
 `.gitignore`).
 
 Add **Migration from legacy names** sections with explicit `mv` commands
@@ -314,7 +314,7 @@ Add **Migration from legacy names** sections with explicit `mv` commands
 | # | Step | File(s) | Done when |
 | --- | --- | --- | --- |
 | 1 | README + CLI operator guide | `README.md`, `docs/JAVA-CODEBASE-RAG-CLI.md` | New subcommand table + 5 env vars + migration |
-| 2 | Agent + checklist + requirements | `docs/*`, `CODEBASE_REQUIREMENTS.md` | No stale operator paths |
+| 2 | Agent + checklist + requirements | `docs/*`, `docs/CODEBASE_REQUIREMENTS.md` | No stale operator paths |
 | 3 | Paper + proposes + example MCP JSON | `docs/paper/`, `propose/*`, `mcp.json.example` | PDF rebuilt; examples updated |
 | 4 | Acceptance grep | repo root | Reviewer sign-off |
 

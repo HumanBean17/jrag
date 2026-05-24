@@ -173,7 +173,7 @@ and `capabilities`, register inbound routes, and register outbound
 clients/producers for a given repo via `.java-codebase-rag.yml` at the project
 root (`role_overrides:`, `route_overrides:`, `http_client_overrides:`,
 `async_producer_overrides:`) and/or by copying the in-source stubs from
-[`docs/CONFIGURATION.md`](./docs/CONFIGURATION.md) into your sources:
+[`docs/CONFIGURATION.md`](./CONFIGURATION.md) into your sources:
 
 - `@CodebaseRole` / `@CodebaseCapability` / `@CodebaseCapabilities`
   (class-level role + capabilities) — see `docs/CONFIGURATION.md` §4.3.

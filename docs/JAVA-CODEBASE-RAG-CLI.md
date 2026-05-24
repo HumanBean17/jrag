@@ -226,5 +226,5 @@ Prefer **`java-codebase-rag reprocess --graph-only`** when you only need Kuzu re
 ## See also
 
 - [README.md](../README.md) — env vars, MCP tool table, ignore layout.
-- [CODEBASE_REQUIREMENTS.md](../CODEBASE_REQUIREMENTS.md) — repo layout, brownfield, when to rebuild.
+- [CODEBASE_REQUIREMENTS.md](./CODEBASE_REQUIREMENTS.md) — repo layout, brownfield, when to rebuild.
 - [MANUAL-VERIFICATION-CHECKLIST.md](./MANUAL-VERIFICATION-CHECKLIST.md) — phased checks that mix CLI + MCP.

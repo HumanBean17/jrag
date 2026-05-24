@@ -356,7 +356,7 @@ For each, also delete:
   "operational — moving to `user-rag` CLI in next release". This is a one-PR
   transition state.
 
-### 3. `propose/PRODUCT-VISION.md` — agent-recipe examples
+### 3. `docs/PRODUCT-VISION.md` — agent-recipe examples
 
 - Update any example invocations from v1 to v2. Search for `find_callers`,
   `list_routes`, `list_clients`, `find_route_*`, `trace_*`, `impact_*` and
@@ -551,7 +551,7 @@ DoD is the delta + suite-green, not an absolute total.
 | v2 handlers diverge in behaviour from v1 | V2-1 | Equivalence tests (14 of them) compare returned id sets directly. Drift is caught at PR review. |
 | `direction`/`edge_types` required-field change breaks existing clients | V2-1 | No existing clients — confirmed by Dmitry ("nobody uses this MCP bundle yet"). Tests assert `ValidationError` is raised, which is the contract. |
 | `describe.edge_summary` adds N round-trips per call | V2-2 | Single grouped count query, not 9 round-trips. Test asserts call count via Kuzu connection mock. |
-| Removing v1 tools breaks the agent system prompt | V2-3 | `propose/PRODUCT-VISION.md` and README are updated in the same PR. Agent prompt is separate (not in this repo). |
+| Removing v1 tools breaks the agent system prompt | V2-3 | `docs/PRODUCT-VISION.md` and README are updated in the same PR. Agent prompt is separate (not in this repo). |
 | CLI subprocess tests are slow / flaky | V2-4 | Each subprocess invocation hits a pre-built fixture under `/tmp`; no rebuilds inside tests. Targeted at < 5s total. |
 | `pyproject.toml` package layout breaks the existing flat-script bundle | V2-4 | Today's `packages = []` is intentional; we promote it to `packages = ["user_rag"]` only — root scripts (`server.py`, `build_ast_graph.py`, etc.) stay outside the package. Tested by `pip install .` succeeding. |
 | `pr-review` skill under `.cursor/skills/pr-review/` still calls `analyze_pr` MCP after V2-4 | V2-4 | PR description includes a manual TODO to update that skill. CLI version of the call is documented in README's "Migration from v1" subsection. |

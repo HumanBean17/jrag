@@ -188,7 +188,7 @@ Six references at `server.py:49, 689, 1141, 1338, 1342, 1418`:
 - Line 1342: docstring `"...FEIGN_CLIENT/REPOSITORY/MAPPER..."` → `"...CLIENT/REPOSITORY/MAPPER..."`
 - Line 1418: `entry_roles = ["CONTROLLER", "COMPONENT", "SERVICE", "FEIGN_CLIENT"]` → `[..., "CLIENT"]`
 
-#### Change 6: Update `README.md` and `CODEBASE_REQUIREMENTS.md`
+#### Change 6: Update `README.md` and `docs/CODEBASE_REQUIREMENTS.md`
 
 `README.md`:
 - Line 137: `trace_flow` description's stage chain `FEIGN_CLIENT/REPOSITORY/MAPPER` → `CLIENT/REPOSITORY/MAPPER`
@@ -338,7 +338,7 @@ description.
 - [ ] `_ROLE_SCORE_WEIGHTS["CLIENT"] = 0.06` (was `FEIGN_CLIENT`) (`search_lancedb.py:188`)
 - [ ] Six `server.py` literal references updated (lines 49, 689, 1141, 1338, 1342, 1418)
 - [ ] `README.md` updated (3 lines + brownfield note)
-- [ ] `CODEBASE_REQUIREMENTS.md` updated (lines 146, 162, 346-347)
+- [ ] `docs/CODEBASE_REQUIREMENTS.md` updated (lines 146, 162, 346-347)
 - [ ] `tests/test_lancedb_e2e.py:342` allow-list updated
 - [ ] `ONTOLOGY_VERSION` bumped 8 → 9 with phase-comment update
 - [ ] All 9 new tests in `tests/test_client_role_rename.py` pass

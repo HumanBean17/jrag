@@ -279,7 +279,7 @@ Headline items:
 2. `README.md`: delete v1 tool reference; promote "v2 navigation tools
    (preview)" to primary `### Tool reference`. Keep ops tools listed as
    "operational — moving to `user-rag` CLI in next release".
-3. `propose/PRODUCT-VISION.md`: rewrite v1 example invocations to v2 (per
+3. `docs/PRODUCT-VISION.md`: rewrite v1 example invocations to v2 (per
    propose §11 mapping).
 4. Delete `tests/test_mcp_v2_equivalence.py` entirely — v1 no longer exists.
 5. Update `tests/test_server.py` (or add if missing) tool-count assertion to:
@@ -322,9 +322,9 @@ grep -nE "^### Tool reference" README.md
 - [ ] `tests/test_mcp_v2_equivalence.py` does not exist.
 - [ ] README §"Tool reference" lists exactly the 4 v2 tools as primary; ops
       tools noted as transitional.
-- [ ] `propose/PRODUCT-VISION.md` example invocations updated to v2.
+- [ ] `docs/PRODUCT-VISION.md` example invocations updated to v2.
 - [ ] Diff is confined to deliverables in this prompt (`server.py`, `README.md`,
-      `propose/PRODUCT-VISION.md`, deleted `tests/test_mcp_v2_equivalence.py`,
+      `docs/PRODUCT-VISION.md`, deleted `tests/test_mcp_v2_equivalence.py`,
       `tests/test_server.py` or equivalent surface-assertion test), plus
       narrowly-related test harness/import updates required to make those
       changes pass.
@@ -337,7 +337,7 @@ grep -nE "^### Tool reference" README.md
 - [`plans/PLAN-MCP-API-V2.md` § PR-V2-3](./PLAN-MCP-API-V2.md#pr-v2-3--delete-v1-navigation-tools)
   — list of the 18 tools to delete.
 - [`propose/completed/MCP-API-V2-REDESIGN-PROPOSE.md`](../../propose/completed/MCP-API-V2-REDESIGN-PROPOSE.md)
-  §11 mapping table — for rewriting `propose/PRODUCT-VISION.md` examples.
+  §11 mapping table — for rewriting `docs/PRODUCT-VISION.md` examples.
 - `server.py` history (git log) — to identify each tool's helper-function
   graveyard.
 

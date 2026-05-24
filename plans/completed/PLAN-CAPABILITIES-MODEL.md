@@ -453,7 +453,7 @@ callers see them in results.
 - `README.md` — add a section "Capabilities" describing the multi-tag
   axis, the initial capability set, and `list_by_capability`. Keep the
   existing "Roles" section intact.
-- `CODEBASE_REQUIREMENTS.md` — note the type-level granularity choice
+- `docs/CODEBASE_REQUIREMENTS.md` — note the type-level granularity choice
   and the deferred per-method storage (link to this plan).
 - MCP server `instructions` string in `server.py` — one extra sentence
   pointing at `list_by_capability` for behavioural questions about

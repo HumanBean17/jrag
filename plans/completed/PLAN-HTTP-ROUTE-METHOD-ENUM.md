@@ -31,7 +31,7 @@ Depends on: **none** (lands on current `master`).
 | PR | Scope | Ontology bump | Files touched (approx) | Test buckets | Independent of |
 | --- | --- | --- | --- | --- | --- |
 | **PR-1** | `CodebaseHttpMethod.java` stub under route fixtures; **parameterized** structured stderr emitter (new small module and/or `build_ast_graph.py`) — **no production call sites** | **none** | `tests/fixtures/brownfield_route_stubs/...`, emitter module, **1** new test | Unit test exercises emitter directly (INFO + WARN shapes as needed) | none |
-| **PR-2** | Rename stubs + route stub field type; `ast_java.py` recognition + client `method` enum parse + **extractor-time** INFO shadowing + WARN on string `method`; `graph_enrich.py` HTTP branch replace **without** merge-time shadowing + `meta_chain` / log strings; tighten `test_23`; **new** inbound exclusivity test; README + `CODEBASE_REQUIREMENTS.md` + any other doc hits for examples | **11 → 12** (`ast_java.ONTOLOGY_VERSION`; README / `AGENTS.md` callouts) | `ast_java.py`, `graph_enrich.py`, structured-log module (see PR-2 §4), stubs, `tests/test_*.py` listed below, `README.md`, `CODEBASE_REQUIREMENTS.md`, `build_ast_graph.py` if comment at ~1904 | Full `pytest tests`; new exclusivity + optional shadowing log test | PR-1 merged |
+| **PR-2** | Rename stubs + route stub field type; `ast_java.py` recognition + client `method` enum parse + **extractor-time** INFO shadowing + WARN on string `method`; `graph_enrich.py` HTTP branch replace **without** merge-time shadowing + `meta_chain` / log strings; tighten `test_23`; **new** inbound exclusivity test; README + `docs/CODEBASE_REQUIREMENTS.md` + any other doc hits for examples | **11 → 12** (`ast_java.ONTOLOGY_VERSION`; README / `AGENTS.md` callouts) | `ast_java.py`, `graph_enrich.py`, structured-log module (see PR-2 §4), stubs, `tests/test_*.py` listed below, `README.md`, `docs/CODEBASE_REQUIREMENTS.md`, `build_ast_graph.py` if comment at ~1904 | Full `pytest tests`; new exclusivity + optional shadowing log test | PR-1 merged |
 | **PR-3** | Agent docs + v2 addendum only | **none** | `docs/AGENT-GUIDE.md`, `docs/skills/java-codebase-explore.md` (if needed), `propose/completed/BROWNFIELD-ANNOTATIONS-V2-ADDENDUM-HTTP-METHOD-ENUM.md` | Docs-only CI | PR-2 merged |
 
 Landing order: **PR-1 → PR-2 → PR-3**.
@@ -136,7 +136,7 @@ Landing order: **PR-1 → PR-2 → PR-3**.
 - `tests/test_assign_endpoint_client_extraction.py` — Feign + JAX-RS mirror; `method = HttpMethod.POST` may need alignment with **`CodebaseHttpMethod.POST`** on brownfield annotation per surface rules.
 - `tests/test_cross_service_resolution_flag.py` — generated Java strings.
 
-### 8. `README.md` and `CODEBASE_REQUIREMENTS.md`
+### 8. `README.md` and `docs/CODEBASE_REQUIREMENTS.md`
 
 - Replace annotation names and examples with `@CodebaseHttpClient` / enum `method`; add **Re-index required** callout for PR-2 + ontology **12**.
 
@@ -185,7 +185,7 @@ Landing order: **PR-1 → PR-2 → PR-3**.
 | 3 | Merge HTTP replace (behaviour only) | `graph_enrich.py` | Replace pattern; **zero** shadowing logs from this file |
 | 4 | Verbose plumbing if needed | `build_ast_graph.py` → parse entry | Shadowing INFO respects volume gate |
 | 5 | `meta_chain` + log strings | `graph_enrich.py` | Grep clean for old simple names |
-| 6 | Tests + docs | `tests/*`, `README.md`, `CODEBASE_REQUIREMENTS.md` | Full pytest; doc examples match stubs |
+| 6 | Tests + docs | `tests/*`, `README.md`, `docs/CODEBASE_REQUIREMENTS.md` | Full pytest; doc examples match stubs |
 | 7 | Ontology + meta test | `ast_java.py`, `tests/test_call_edges_e2e.py` | `meta()` reports 12 |
 
 ---

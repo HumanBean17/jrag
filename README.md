@@ -128,7 +128,7 @@ The operator-facing surface is small: pick an index dir, pick an embedding model
 | Understand the graph (nodes, edges, capabilities, ranking) | [`docs/CONFIGURATION.md`](./docs/CONFIGURATION.md) §3 |
 | Steer a brownfield Java tree (custom stereotypes, non-Spring stacks) | [`docs/CONFIGURATION.md`](./docs/CONFIGURATION.md) §4 |
 | Control which files the indexer walks | [`docs/CONFIGURATION.md`](./docs/CONFIGURATION.md) §5 |
-| Check whether your repo fits this tool's assumptions | [`CODEBASE_REQUIREMENTS.md`](./CODEBASE_REQUIREMENTS.md) |
+| Check whether your repo fits this tool's assumptions | [`docs/CODEBASE_REQUIREMENTS.md`](./docs/CODEBASE_REQUIREMENTS.md) |
 
 ---
 
@@ -158,9 +158,9 @@ Run `java-codebase-rag --help` to list grouped subcommands. Operator playbook wi
 | [`docs/EDGE-NAVIGATION.md`](./docs/EDGE-NAVIGATION.md) | MCP-traversable edges, directions, dot-key composition. |
 | [`docs/skills/java-codebase-explore.md`](./docs/skills/java-codebase-explore.md) | Agent exploration skill (strategy, missions, fallbacks); packaged zip [`docs/skills/java-codebase-explore.zip`](./docs/skills/java-codebase-explore.zip) for Perplexity-style hosts. |
 | [`docs/MANUAL-VERIFICATION-CHECKLIST.md`](./docs/MANUAL-VERIFICATION-CHECKLIST.md) | 7-phase agent-driven verification after indexing your project. |
-| [`CODEBASE_REQUIREMENTS.md`](./CODEBASE_REQUIREMENTS.md) | Assumptions about your Java repo + per-file edit map for non-conforming codebases. |
+| [`docs/CODEBASE_REQUIREMENTS.md`](./docs/CODEBASE_REQUIREMENTS.md) | Assumptions about your Java repo + per-file edit map for non-conforming codebases. |
 | [`automation/cursor_propose_only/README.md`](./automation/cursor_propose_only/README.md) | Optional proposal orchestration workflow (single-command autopilot, planning bundles, automated execution/review loops). |
-| [`propose/PRODUCT-VISION.md`](./propose/PRODUCT-VISION.md) | Long-term product direction. |
+| [`docs/PRODUCT-VISION.md`](./docs/PRODUCT-VISION.md) | Long-term product direction. |
 
 ---
 

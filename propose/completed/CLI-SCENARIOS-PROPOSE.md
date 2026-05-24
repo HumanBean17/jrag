@@ -312,11 +312,11 @@ Open a GitHub issue titled **"AST graph (Kuzu) incremental rebuild"** referencin
 - `docs/paper/paper.tex` — architecture paper updated for new CLI verbs / env vars / file paths; rebuild `paper.pdf` (Russian translation `paper_ru.tex` is a standalone artifact outside the repo and is not in scope).
 - `AGENTS.md` — CLI doc reference + any `refresh` mention.
 - `.cursor/rules/*.mdc` — agent workflow / env / CLI contract; see **Agent rules audit** below (must match post-rename surface).
-- `CODEBASE_REQUIREMENTS.md` — every `.lancedb-mcp.yml` / `LANCEDB_MCP_*` / `lancedb_data` reference updated.
+- `docs/CODEBASE_REQUIREMENTS.md` — every `.lancedb-mcp.yml` / `LANCEDB_MCP_*` / `lancedb_data` reference updated.
 - `mcp.json.example` — **PR-CLI-3 is a second pass only:** PR-CLI-2 updates this file so **env keys match the live server**; PR-CLI-3 reconciles comments, examples, and any doc drift — **no conflicting edits**; if both PRs touch it, **PR-CLI-2 wins** for structure, PR-CLI-3 for prose polish.
 - `propose/INDEX-AUTO-MODE-PROPOSE.md` — one-line note that `refresh` is being renamed to `reprocess`.
 - `propose/TIER2-INCREMENTAL-REBUILD-PROPOSE.md` — one-line note that the new tracking issue (created in PR-CLI-2) is the user-facing handle.
-- `propose/PRODUCT-VISION.md` — update `lancedb_data` mention (§ about Kuzu's on-disk footprint) and any `refresh` reference.
+- `docs/PRODUCT-VISION.md` — update `lancedb_data` mention (§ about Kuzu's on-disk footprint) and any `refresh` reference.
 - `.gitignore` — add `.java-codebase-rag/`, keep `lancedb_data/` for grace-period cleanup, or remove if PR-CLI-2 drops that grace-period entry.
 
 **Agent rules audit (PR-CLI-3, manual checklist — use together with acceptance grep below):**
@@ -342,7 +342,7 @@ Expected output after PR-CLI-3 (docs + rules):
 
 The startup-slowness fix (deferred imports in `cli.py`) is a **separate, prior PR** outside this migration; it does not change the surface and should land before PR-CLI-2 so contributors testing the new subcommands aren't taxed by the multi-second startup.
 
-**PR-CLI-3 (docs sweep):** README, `docs/*`, `AGENTS.md`, `.cursor/rules/*.mdc`, `CODEBASE_REQUIREMENTS.md`, `mcp.json.example` path placeholders, selected `propose/*.md` one-line notes, `docs/paper/paper.tex` + rebuilt `paper.pdf`, migration `mv` sections, and acceptance grep per the command in this section.
+**PR-CLI-3 (docs sweep):** README, `docs/*`, `AGENTS.md`, `.cursor/rules/*.mdc`, `docs/CODEBASE_REQUIREMENTS.md`, `mcp.json.example` path placeholders, selected `propose/*.md` one-line notes, `docs/paper/paper.tex` + rebuilt `paper.pdf`, migration `mv` sections, and acceptance grep per the command in this section.
 
 ---
 
