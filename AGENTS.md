@@ -42,6 +42,7 @@ when needed.
 - `docs/CODEBASE_REQUIREMENTS.md` — Java-repo assumptions and per-file map of
   what to edit when a target tree doesn't match defaults.
 - `tests/README.md` — testing philosophy.
+- **`skills/`** — user-facing skills shipped to java-codebase-rag consumers (navigation, workflow). Developer workflow skills live in **`.agents/skills/`**, not here.
 - **`propose/`** — design proposes. **In-flight** proposes live in
   **`propose/active/`**. **`propose/completed/`** — landed work and rationale.
   **List or search this tree** for current filenames; do not rely on enumerated

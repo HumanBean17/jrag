@@ -98,7 +98,7 @@ See [`mcp.json.example`](./mcp.json.example) for the same shape in `.mcp.json` (
 ### Driving the MCP from an agent
 
 - **[`docs/AGENT-GUIDE.md`](./docs/AGENT-GUIDE.md)** — standalone MCP operating manual (copy-paste into `QWEN.md` / `CLAUDE.md` / `AGENTS.md`): five tools, `NodeFilter`, edge taxonomy, required `neighbors` arguments, ontology glossary, recovery playbook, slash-style aliases.
-- **[`docs/skills/java-codebase-explore.md`](./docs/skills/java-codebase-explore.md)** — exploration **strategy** (missions, fallbacks, anti-capabilities, stopping rules); `AGENT-GUIDE.md` remains the **operating manual** for tool shapes and recovery.
+- **[`skills/`](./skills/)** — user-facing navigation and workflow skills for java-codebase-rag consumers. Skills are `SKILL.md` files; agents discover them via slash-names (`/callees`, `/routes`, etc.). See [`propose/active/AGENT-SKILLS-AND-COMMANDS-PROPOSE.md`](./propose/active/AGENT-SKILLS-AND-COMMANDS-PROPOSE.md) for the full Tier 1 + Tier 2 skill set.
 - **[`docs/MANUAL-VERIFICATION-CHECKLIST.md`](./docs/MANUAL-VERIFICATION-CHECKLIST.md)** — 7-phase agent-driven verification you run after indexing your real project.
 
 ---
@@ -156,7 +156,7 @@ Run `java-codebase-rag --help` to list grouped subcommands. Operator playbook wi
 | [`docs/CONFIGURATION.md`](./docs/CONFIGURATION.md) | Environment variables, project YAML, graph ontology, brownfield overrides, ignore patterns. |
 | [`docs/JAVA-CODEBASE-RAG-CLI.md`](./docs/JAVA-CODEBASE-RAG-CLI.md) | CLI operator playbook: workflows, exit codes, env alignment. |
 | [`docs/EDGE-NAVIGATION.md`](./docs/EDGE-NAVIGATION.md) | MCP-traversable edges, directions, dot-key composition. |
-| [`docs/skills/java-codebase-explore.md`](./docs/skills/java-codebase-explore.md) | Agent exploration skill (strategy, missions, fallbacks); packaged zip [`docs/skills/java-codebase-explore.zip`](./docs/skills/java-codebase-explore.zip) for Perplexity-style hosts. |
+| [`skills/`](./skills/) | User-facing skills for java-codebase-rag consumers. Navigation and workflow skills (Tier 1 + Tier 2) planned — see [`propose/active/AGENT-SKILLS-AND-COMMANDS-PROPOSE.md`](./propose/active/AGENT-SKILLS-AND-COMMANDS-PROPOSE.md). |
 | [`docs/MANUAL-VERIFICATION-CHECKLIST.md`](./docs/MANUAL-VERIFICATION-CHECKLIST.md) | 7-phase agent-driven verification after indexing your project. |
 | [`docs/CODEBASE_REQUIREMENTS.md`](./docs/CODEBASE_REQUIREMENTS.md) | Assumptions about your Java repo + per-file edit map for non-conforming codebases. |
 | [`automation/cursor_propose_only/README.md`](./automation/cursor_propose_only/README.md) | Optional proposal orchestration workflow (single-command autopilot, planning bundles, automated execution/review loops). |
