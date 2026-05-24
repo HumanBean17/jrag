@@ -1994,6 +1994,7 @@ def _assert_structured_hint(
     tool: str,
     args_subset: dict[str, Any] | None = None,
     actionable: bool = True,
+    label: str | None = None,
 ) -> _StructuredHint:
     """Find and return a structured hint matching tool, actionable, and args subset."""
     for h in hints:
@@ -2002,6 +2003,8 @@ def _assert_structured_hint(
         if args_subset is not None:
             if not all(h.args.get(k) == v for k, v in args_subset.items()):
                 continue
+        if label is not None and h.label != label:
+            continue
         return h
     pytest.fail(
         f"no structured hint with tool={tool!r} actionable={actionable} "
@@ -2631,6 +2634,8 @@ def test_structured_hints_parity_with_string_hints() -> None:
             assert len(struct) <= len(str_hints), (
                 f"parity violation for {output_kind}: {len(struct)} structured > {len(str_hints)} string"
             )
+        for h in struct:
+            assert h.label, f"struct hint missing label: {h}"
 
 
 def test_structured_hint_round_trip(kuzu_graph) -> None:
@@ -2641,6 +2646,7 @@ def test_structured_hint_round_trip(kuzu_graph) -> None:
     assert out.hints_structured
     h = out.hints_structured[0]
     assert h.tool == "neighbors"
+    assert h.label, "structured hint should have a non-empty label"
     # Actually call neighbors_v2 with the structured hint args
     nout = neighbors_v2(
         ids=h.args["ids"],
@@ -2649,3 +2655,81 @@ def test_structured_hint_round_trip(kuzu_graph) -> None:
         graph=kuzu_graph,
     )
     assert nout.success
+
+
+def test_structured_hint_label_values() -> None:
+    """Verify label values match expected semantic names for key hint scenarios."""
+    # describe type with clients via members
+    struct = _struct("describe", {"success": True, "record": {
+        "id": "sym:a", "kind": "symbol", "fqn": "T", "data": {"kind": "class"},
+        "edge_summary": {"DECLARES.DECLARES_CLIENT": {"in": 0, "out": 3}},
+    }})
+    assert any(h.label == "clients via members" for h in struct)
+
+    # describe type with routes via members
+    struct = _struct("describe", {"success": True, "record": {
+        "id": "sym:a", "kind": "symbol", "fqn": "T", "data": {"kind": "class"},
+        "edge_summary": {"DECLARES.EXPOSES": {"in": 0, "out": 2}},
+    }})
+    assert any(h.label == "routes via members" for h in struct)
+
+    # describe route → declaring method
+    struct = _struct("describe", {"success": True, "record": {"id": "route:a", "kind": "route", "fqn": "GET /"}})
+    assert any(h.label == "declaring method" for h in struct)
+
+    # resolve none → try search
+    struct = _struct("resolve", {"status": "none", "resolved_identifier": "com.foo.Bar", "hint_kind": "symbol"})
+    assert any(h.label == "try search" for h in struct)
+
+    # resolve none route → try find route
+    struct = _struct("resolve", {"status": "none", "resolved_identifier": "x", "hint_kind": "route", "path_prefix_seed": "/api"})
+    assert any(h.label == "try find route" for h in struct)
+
+    # resolve many → tighten identifier
+    struct = _struct("resolve", {"status": "many", "resolved_identifier": "x", "candidates": [{"id": "a"}, {"id": "b"}]})
+    assert any(h.label == "tighten identifier" for h in struct)
+
+    # find empty → try resolve
+    struct = _struct("find", {"success": True, "kind": "client", "results": [], "filter": {"target_service": "x"}, "offset": 0})
+    assert any(h.label == "try resolve" for h in struct)
+
+    # find page full
+    struct = _struct("find", {"success": True, "kind": "symbol", "results": [{"id": "a"}], "filter": {}, "limit": 1, "has_more_results": True, "offset": 0})
+    assert any(h.label == "page full" for h in struct)
+
+    # search weak
+    struct = _struct("search", {"success": True, "results": [
+        {"score": 1.0}, {"score": 0.95},
+    ], "limit": 2})
+    assert any(h.label == "weak results" for h in struct)
+
+    # describe method with overriders
+    struct = _struct("describe", {"success": True, "record": {
+        "id": "sym:a", "kind": "symbol", "fqn": "T#m()", "data": {"kind": "method"},
+        "edge_summary": {"OVERRIDDEN_BY": {"in": 0, "out": 1}},
+    }})
+    assert any(h.label == "overriders" for h in struct)
+
+    # describe method with outbound calls
+    struct = _struct("describe", {"success": True, "record": {
+        "id": "sym:a", "kind": "symbol", "fqn": "T#m()", "data": {"kind": "method", "role": "SERVICE"},
+        "edge_summary": {"CALLS": {"in": 0, "out": 3}},
+    }})
+    assert any(h.label == "outbound calls" for h in struct)
+
+    # describe method with many calls (≥10) → not actionable
+    struct = _struct("describe", {"success": True, "record": {
+        "id": "sym:a", "kind": "symbol", "fqn": "T#m()", "data": {"kind": "method", "role": "OTHER"},
+        "edge_summary": {"CALLS": {"in": 0, "out": 12}},
+    }})
+    assert any(h.label == "high fanout" and not h.actionable for h in struct)
+
+    # neighbors success callers (N4)
+    struct = _struct("neighbors", {
+        "success": True,
+        "results": [{"origin_id": "sym:T", "edge_type": "EXPOSES", "direction": "in",
+                     "other": {"id": "sym:m", "kind": "symbol", "symbol_kind": "method"}, "attrs": {}}],
+        "requested_edge_types": ["EXPOSES"], "requested_direction": "in", "offset": 0,
+        "subject_record": {"id": "route:a", "kind": "route"}, "origin_id": "route:a",
+    })
+    assert any(h.label == "callers" for h in struct)

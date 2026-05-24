@@ -177,6 +177,7 @@ _EDGEFILTER_FIELD_ORDER: tuple[str, ...] = tuple(EdgeFilter.model_fields.keys())
 
 
 class StructuredHint(BaseModel):
+    label: str = ""
     tool: Literal["search", "find", "describe", "neighbors", "resolve"]
     args: dict[str, Any]
     actionable: bool = True
@@ -347,7 +348,7 @@ def _edgefilter_applicability_error(edge_types: list[str], ef: EdgeFilter) -> st
 
 
 def _to_structured_hints(raw: list[Any]) -> list[StructuredHint]:
-    return [StructuredHint(tool=h.tool, args=h.args, actionable=h.actionable) for h in raw]
+    return [StructuredHint(label=h.label, tool=h.tool, args=h.args, actionable=h.actionable) for h in raw]
 
 
 def _coerce_edge_filter(

@@ -34,6 +34,7 @@ MCP_HINTS_FIELD_DESCRIPTION = (
 
 MCP_HINTS_STRUCTURED_FIELD_DESCRIPTION = (
     "Machine-parseable next-action objects alongside hints. Each element has "
+    "label (short semantic name, e.g. 'routes via members', 'implementors'), "
     "tool (MCP tool name), args (ready-to-use parameters), and actionable "
     "(True = direct call with complete args; False = advisory/partial — agent "
     "fills missing values or uses as guidance). Same trigger logic, priority, "
@@ -48,6 +49,7 @@ class _StructuredHint(NamedTuple):
     args: dict[str, Any]
     actionable: bool
     priority: int
+    label: str = ""
 
 
 def finalize_structured_hints(scored: list[_StructuredHint]) -> list[_StructuredHint]:
@@ -229,6 +231,43 @@ TPL_NEIGHBORS_SUCCESS_HANDLER = "handler: neighbors(route_ids,'in',['EXPOSES'])"
 _NEIGHBORS_SUCCESS_MAX_CHARS = 120
 _EDGE_DECLARES_CLIENT = frozenset({"DECLARES_CLIENT", "DECLARES.DECLARES_CLIENT"})
 _EDGE_DECLARES_PRODUCER = frozenset({"DECLARES_PRODUCER", "DECLARES.DECLARES_PRODUCER"})
+
+# --- Labels for structured hints (semantic name of each hint) ---
+
+LABEL_CLIENTS_VIA_MEMBERS = "clients via members"
+LABEL_ROUTES_VIA_MEMBERS = "routes via members"
+LABEL_PRODUCERS_VIA_MEMBERS = "producers via members"
+LABEL_OVERRIDERS = "overriders"
+LABEL_CLIENTS_IN_OVERRIDERS = "clients in overriders"
+LABEL_PRODUCERS_IN_OVERRIDERS = "producers in overriders"
+LABEL_ROUTES_IN_OVERRIDERS = "routes in overriders"
+LABEL_OUTBOUND_CLIENT = "outbound client"
+LABEL_OUTBOUND_PRODUCER = "outbound producer"
+LABEL_INBOUND_ROUTE = "inbound route"
+LABEL_HIGH_FANOUT = "high fanout"
+LABEL_DECLARING_METHOD = "declaring method"
+LABEL_IMPLEMENTORS = "implementors"
+LABEL_IMPLEMENTS = "implements"
+LABEL_DEPENDENCIES = "dependencies"
+LABEL_INJECTORS = "injectors"
+LABEL_OUTBOUND_CALLS = "outbound calls"
+LABEL_SUPER_DECLARATION = "super declaration"
+LABEL_UNRESOLVED = "unresolved"
+LABEL_TRY_RESOLVE = "try resolve"
+LABEL_PAGE_FULL = "page full"
+LABEL_HANDLER = "handler"
+LABEL_HTTP_TARGETS = "HTTP targets"
+LABEL_ASYNC_TARGETS = "async targets"
+LABEL_WEAK_RESULTS = "weak results"
+LABEL_TRY_SEARCH = "try search"
+LABEL_TRY_FIND_ROUTE = "try find route"
+LABEL_TRY_FIND_CLIENT = "try find client"
+LABEL_TIGHTEN_IDENTIFIER = "tighten identifier"
+LABEL_FUZZY_STRATEGY = "fuzzy strategy"
+LABEL_CALLERS = "callers"
+LABEL_WRONG_SUBJECT_KIND = "wrong subject kind"
+LABEL_WRONG_DIRECTION = "wrong direction"
+LABEL_TYPE_LEVEL_REQUERY = "type-level requery"
 
 # §7.12 priority: DECLARES.* type rollups > OVERRIDDEN_BY.* > leaf follow-ups > meta.
 PRIORITY_DECLARES_TYPE_ROLLUP = 4
@@ -687,6 +726,7 @@ def _neighbors_empty_structured_hints(
                         {"ids": [subject_id], "direction": direction, "edge_types": edge_types},
                         False,
                         PRIORITY_META,
+                        LABEL_WRONG_SUBJECT_KIND,
                     ))
             continue
 
@@ -702,6 +742,7 @@ def _neighbors_empty_structured_hints(
                 {"ids": [subject_id], "direction": correct_dir, "edge_types": [edge]},
                 False,
                 PRIORITY_META,
+                LABEL_WRONG_DIRECTION,
             ))
             continue
 
@@ -718,6 +759,7 @@ def _neighbors_empty_structured_hints(
                     {"ids": [subject_id], "direction": requested_direction, "edge_types": [dot_key]},
                     False,
                     PRIORITY_META,
+                    LABEL_TYPE_LEVEL_REQUERY,
                 ))
             else:
                 template = spec.typical_traversals.get("type_subject", "")
@@ -729,6 +771,7 @@ def _neighbors_empty_structured_hints(
                         {"ids": [subject_id], "direction": direction, "edge_types": edge_types},
                         False,
                         PRIORITY_META,
+                        LABEL_TYPE_LEVEL_REQUERY,
                     ))
     return out
 
@@ -775,6 +818,7 @@ def _neighbors_success_structured_hints(payload: dict[str, Any]) -> list[_Struct
                     {"ids": [origin_id], "direction": "out", "edge_types": ["DECLARES.DECLARES_CLIENT"]},
                     True,
                     PRIORITY_LEAF_FOLLOWUP,
+                    LABEL_CLIENTS_VIA_MEMBERS,
                 ))
             if len(n1b) <= _NEIGHBORS_SUCCESS_MAX_CHARS:
                 out.append(_StructuredHint(
@@ -782,6 +826,7 @@ def _neighbors_success_structured_hints(payload: dict[str, Any]) -> list[_Struct
                     {"ids": [origin_id], "direction": "out", "edge_types": ["DECLARES.EXPOSES"]},
                     True,
                     PRIORITY_LEAF_FOLLOWUP,
+                    LABEL_ROUTES_VIA_MEMBERS,
                 ))
 
     # N2: DECLARES_CLIENT / DECLARES.DECLARES_CLIENT out → HTTP_CALLS
@@ -793,6 +838,7 @@ def _neighbors_success_structured_hints(payload: dict[str, Any]) -> list[_Struct
                 {"ids": other_ids, "direction": "out", "edge_types": ["HTTP_CALLS"]},
                 bool(other_ids),
                 PRIORITY_LEAF_FOLLOWUP,
+                LABEL_HTTP_TARGETS,
             ))
 
     # N3: DECLARES_PRODUCER / DECLARES.DECLARES_PRODUCER out → ASYNC_CALLS
@@ -804,6 +850,7 @@ def _neighbors_success_structured_hints(payload: dict[str, Any]) -> list[_Struct
                 {"ids": other_ids, "direction": "out", "edge_types": ["ASYNC_CALLS"]},
                 bool(other_ids),
                 PRIORITY_LEAF_FOLLOWUP,
+                LABEL_ASYNC_TARGETS,
             ))
 
     # N4: EXPOSES in → CALLS (callers)
@@ -818,6 +865,7 @@ def _neighbors_success_structured_hints(payload: dict[str, Any]) -> list[_Struct
             {"ids": other_ids, "direction": "in", "edge_types": ["CALLS"]},
             bool(other_ids),
             PRIORITY_LEAF_FOLLOWUP,
+            LABEL_CALLERS,
         ))
 
     # N5: HTTP_CALLS in → DECLARES_CLIENT
@@ -829,6 +877,7 @@ def _neighbors_success_structured_hints(payload: dict[str, Any]) -> list[_Struct
                 {"ids": other_ids, "direction": "in", "edge_types": ["DECLARES_CLIENT"]},
                 bool(other_ids),
                 PRIORITY_LEAF_FOLLOWUP,
+                LABEL_DECLARING_METHOD,
             ))
 
     # N6: ASYNC_CALLS in → DECLARES_PRODUCER
@@ -840,6 +889,7 @@ def _neighbors_success_structured_hints(payload: dict[str, Any]) -> list[_Struct
                 {"ids": other_ids, "direction": "in", "edge_types": ["DECLARES_PRODUCER"]},
                 bool(other_ids),
                 PRIORITY_LEAF_FOLLOWUP,
+                LABEL_DECLARING_METHOD,
             ))
 
     # N7: DECLARES.EXPOSES out → EXPOSES (handler)
@@ -851,6 +901,7 @@ def _neighbors_success_structured_hints(payload: dict[str, Any]) -> list[_Struct
                 {"ids": other_ids, "direction": "in", "edge_types": ["EXPOSES"]},
                 bool(other_ids),
                 PRIORITY_LEAF_FOLLOWUP,
+                LABEL_HANDLER,
             ))
 
     return out
@@ -886,6 +937,7 @@ def generate_hints(
                     "resolve",
                     {"identifier": str(payload.get("resolved_identifier") or ""), "hint_kind": str(payload.get("hint_kind") or "")},
                     False, PRIORITY_META,
+                    LABEL_TIGHTEN_IDENTIFIER,
                 ))
             return (finalize_hint_list(pairs), finalize_structured_hints(struct_pairs))
         if status == "none":
@@ -902,6 +954,7 @@ def generate_hints(
                     rendered = TPL_RESOLVE_NONE_TRY_FIND_ROUTE.format(seed=seed)
                     struct_pairs.append(_StructuredHint(
                         "find", {"kind": "route", "filter": {"path_prefix": seed}}, True, PRIORITY_META,
+                        LABEL_TRY_FIND_ROUTE,
                     ))
             elif hint_kind == "client":
                 seed = payload.get("target_service_seed")
@@ -909,11 +962,13 @@ def generate_hints(
                     rendered = TPL_RESOLVE_NONE_TRY_FIND_CLIENT.format(seed=seed)
                     struct_pairs.append(_StructuredHint(
                         "find", {"kind": "client", "filter": {"target_service": seed}}, True, PRIORITY_META,
+                        LABEL_TRY_FIND_CLIENT,
                     ))
             else:
                 rendered = TPL_RESOLVE_NONE_TRY_SEARCH.format(identifier=identifier)
                 struct_pairs.append(_StructuredHint(
                     "search", {"query": identifier}, True, PRIORITY_META,
+                    LABEL_TRY_SEARCH,
                 ))
             if rendered is not None and len(rendered) <= _RESOLVE_HINT_MAX_CHARS:
                 pairs.append((PRIORITY_META, rendered))
@@ -934,6 +989,7 @@ def generate_hints(
                 pairs.append((PRIORITY_META, TPL_SEARCH_WEAK))
                 struct_pairs.append(_StructuredHint(
                     "find", {"kind": "symbol", "filter": {"role": "SERVICE"}}, False, PRIORITY_META,
+                    LABEL_WEAK_RESULTS,
                 ))
         return (finalize_hint_list(pairs), finalize_structured_hints(struct_pairs))
 
@@ -952,11 +1008,13 @@ def generate_hints(
                     break
             struct_pairs.append(_StructuredHint(
                 "resolve", {"identifier": identifier, "hint_kind": kind}, True, PRIORITY_META,
+                LABEL_TRY_RESOLVE,
             ))
         if _find_is_page_full(payload, results) and lim is not None:
             pairs.append((PRIORITY_META, TPL_FIND_PAGE_FULL.format(limit=int(lim))))
             struct_pairs.append(_StructuredHint(
                 "find", {"kind": kind, "filter": flt, "limit": int(lim)}, False, PRIORITY_META,
+                LABEL_PAGE_FULL,
             ))
         pairs.extend(find_success_hints(payload))
         if results and not _find_is_page_full(payload, results):
@@ -966,16 +1024,19 @@ def generate_hints(
                     struct_pairs.append(_StructuredHint(
                         "neighbors", {"ids": [node_id], "direction": "in", "edge_types": ["EXPOSES"]},
                         True, PRIORITY_LEAF_FOLLOWUP,
+                        LABEL_HANDLER,
                     ))
                 elif kind == "client":
                     struct_pairs.append(_StructuredHint(
                         "neighbors", {"ids": [node_id], "direction": "out", "edge_types": ["HTTP_CALLS"]},
                         True, PRIORITY_LEAF_FOLLOWUP,
+                        LABEL_HTTP_TARGETS,
                     ))
                 elif kind == "producer":
                     struct_pairs.append(_StructuredHint(
                         "neighbors", {"ids": [node_id], "direction": "out", "edge_types": ["ASYNC_CALLS"]},
                         True, PRIORITY_LEAF_FOLLOWUP,
+                        LABEL_ASYNC_TARGETS,
                     ))
         return (finalize_hint_list(pairs), finalize_structured_hints(struct_pairs))
 
@@ -1030,10 +1091,11 @@ def generate_hints(
                             "neighbors",
                             {"ids": [origin_id], "direction": "out", "edge_types": ["CALLS"], "edge_filter": {}},
                             False, PRIORITY_LEAF_FOLLOWUP,
+                            LABEL_HIGH_FANOUT,
                         ))
         if results and _any_fuzzy_strategy(results):
             meta_pairs.append((PRIORITY_META, TPL_NEIGHBORS_FUZZY_STRATEGY))
-            struct_meta.append(_StructuredHint("neighbors", {}, False, PRIORITY_META))
+            struct_meta.append(_StructuredHint("neighbors", {}, False, PRIORITY_META, LABEL_FUZZY_STRATEGY))
         return (
             finalize_hint_list(
                 _filter_neighbors_dotkey_hints(empty_pairs) + success_pairs + meta_pairs,
@@ -1057,6 +1119,7 @@ def generate_hints(
             struct_pairs.append(_StructuredHint(
                 "neighbors", {"ids": [node_id], "direction": "in", "edge_types": ["EXPOSES"]},
                 True, PRIORITY_LEAF_FOLLOWUP,
+                LABEL_DECLARING_METHOD,
             ))
             return (finalize_hint_list(pairs), finalize_structured_hints(struct_pairs))
         if kind == "client":
@@ -1064,12 +1127,14 @@ def generate_hints(
             struct_pairs.append(_StructuredHint(
                 "neighbors", {"ids": [node_id], "direction": "in", "edge_types": ["DECLARES_CLIENT"]},
                 True, PRIORITY_LEAF_FOLLOWUP,
+                LABEL_DECLARING_METHOD,
             ))
             if _out_count(edge_summary, "HTTP_CALLS") > 0:
                 pairs.append((PRIORITY_LEAF_FOLLOWUP, TPL_FIND_SUCCESS_HTTP_TARGETS.format(id=node_id)))
                 struct_pairs.append(_StructuredHint(
                     "neighbors", {"ids": [node_id], "direction": "out", "edge_types": ["HTTP_CALLS"]},
                     True, PRIORITY_LEAF_FOLLOWUP,
+                    LABEL_HTTP_TARGETS,
                 ))
             return (finalize_hint_list(pairs), finalize_structured_hints(struct_pairs))
         if kind == "producer":
@@ -1077,12 +1142,14 @@ def generate_hints(
             struct_pairs.append(_StructuredHint(
                 "neighbors", {"ids": [node_id], "direction": "in", "edge_types": ["DECLARES_PRODUCER"]},
                 True, PRIORITY_LEAF_FOLLOWUP,
+                LABEL_DECLARING_METHOD,
             ))
             if _out_count(edge_summary, "ASYNC_CALLS") > 0:
                 pairs.append((PRIORITY_LEAF_FOLLOWUP, TPL_FIND_SUCCESS_ASYNC_TARGETS.format(id=node_id)))
                 struct_pairs.append(_StructuredHint(
                     "neighbors", {"ids": [node_id], "direction": "out", "edge_types": ["ASYNC_CALLS"]},
                     True, PRIORITY_LEAF_FOLLOWUP,
+                    LABEL_ASYNC_TARGETS,
                 ))
             return (finalize_hint_list(pairs), finalize_structured_hints(struct_pairs))
 
@@ -1101,6 +1168,7 @@ def generate_hints(
                 struct_pairs.append(_StructuredHint(
                     "neighbors", {"ids": [node_id], "direction": "out", "edge_types": ["DECLARES.DECLARES_CLIENT"]},
                     True, PRIORITY_DECLARES_TYPE_ROLLUP,
+                    LABEL_CLIENTS_VIA_MEMBERS,
                 ))
             if _out_count(edge_summary, "DECLARES.EXPOSES") > 0:
                 pairs.append(
@@ -1109,6 +1177,7 @@ def generate_hints(
                 struct_pairs.append(_StructuredHint(
                     "neighbors", {"ids": [node_id], "direction": "out", "edge_types": ["DECLARES.EXPOSES"]},
                     True, PRIORITY_DECLARES_TYPE_ROLLUP,
+                    LABEL_ROUTES_VIA_MEMBERS,
                 ))
             if _out_count(edge_summary, "DECLARES.DECLARES_PRODUCER") > 0:
                 pairs.append(
@@ -1117,6 +1186,7 @@ def generate_hints(
                 struct_pairs.append(_StructuredHint(
                     "neighbors", {"ids": [node_id], "direction": "out", "edge_types": ["DECLARES.DECLARES_PRODUCER"]},
                     True, PRIORITY_DECLARES_TYPE_ROLLUP,
+                    LABEL_PRODUCERS_VIA_MEMBERS,
                 ))
 
             if not _type_rollup_would_emit(edge_summary):
@@ -1125,24 +1195,28 @@ def generate_hints(
                     struct_pairs.append(_StructuredHint(
                         "neighbors", {"ids": [node_id], "direction": "in", "edge_types": ["IMPLEMENTS"]},
                         True, PRIORITY_LEAF_FOLLOWUP,
+                        LABEL_IMPLEMENTORS,
                     ))
                 if decl_kind == "class" and _out_count(edge_summary, "IMPLEMENTS") > 0:
                     pairs.append((PRIORITY_LEAF_FOLLOWUP, TPL_DESCRIBE_TYPE_IMPLEMENTS.format(id=node_id)))
                     struct_pairs.append(_StructuredHint(
                         "neighbors", {"ids": [node_id], "direction": "out", "edge_types": ["IMPLEMENTS"]},
                         True, PRIORITY_LEAF_FOLLOWUP,
+                        LABEL_IMPLEMENTS,
                     ))
                 if decl_kind == "class" and _record_role(rec) == "SERVICE" and _out_count(edge_summary, "INJECTS") > 0:
                     pairs.append((PRIORITY_LEAF_FOLLOWUP, TPL_DESCRIBE_TYPE_DEPENDENCIES.format(id=node_id)))
                     struct_pairs.append(_StructuredHint(
                         "neighbors", {"ids": [node_id], "direction": "out", "edge_types": ["INJECTS"]},
                         True, PRIORITY_LEAF_FOLLOWUP,
+                        LABEL_DEPENDENCIES,
                     ))
                 if decl_kind in {"interface", "class"} and _in_count(edge_summary, "INJECTS") > 0:
                     pairs.append((PRIORITY_LEAF_FOLLOWUP, TPL_DESCRIBE_TYPE_INJECTORS.format(id=node_id)))
                     struct_pairs.append(_StructuredHint(
                         "neighbors", {"ids": [node_id], "direction": "in", "edge_types": ["INJECTS"]},
                         True, PRIORITY_LEAF_FOLLOWUP,
+                        LABEL_INJECTORS,
                     ))
 
             return (finalize_hint_list(pairs), finalize_structured_hints(struct_pairs))
@@ -1153,6 +1227,7 @@ def generate_hints(
                 struct_pairs.append(_StructuredHint(
                     "neighbors", {"ids": [node_id], "direction": "out", "edge_types": ["OVERRIDDEN_BY"]},
                     True, PRIORITY_OVERRIDDEN_AXIS,
+                    LABEL_OVERRIDERS,
                 ))
             if _out_count(edge_summary, "OVERRIDDEN_BY.DECLARES_CLIENT") > 0:
                 pairs.append(
@@ -1161,6 +1236,7 @@ def generate_hints(
                 struct_pairs.append(_StructuredHint(
                     "neighbors", {"ids": [node_id], "direction": "out", "edge_types": ["OVERRIDDEN_BY.DECLARES_CLIENT"]},
                     True, PRIORITY_OVERRIDDEN_AXIS,
+                    LABEL_CLIENTS_IN_OVERRIDERS,
                 ))
             if _out_count(edge_summary, "OVERRIDDEN_BY.DECLARES_PRODUCER") > 0:
                 pairs.append(
@@ -1169,6 +1245,7 @@ def generate_hints(
                 struct_pairs.append(_StructuredHint(
                     "neighbors", {"ids": [node_id], "direction": "out", "edge_types": ["OVERRIDDEN_BY.DECLARES_PRODUCER"]},
                     True, PRIORITY_OVERRIDDEN_AXIS,
+                    LABEL_PRODUCERS_IN_OVERRIDERS,
                 ))
             if _out_count(edge_summary, "OVERRIDDEN_BY.EXPOSES") > 0:
                 pairs.append(
@@ -1177,24 +1254,28 @@ def generate_hints(
                 struct_pairs.append(_StructuredHint(
                     "neighbors", {"ids": [node_id], "direction": "out", "edge_types": ["OVERRIDDEN_BY.EXPOSES"]},
                     True, PRIORITY_OVERRIDDEN_AXIS,
+                    LABEL_ROUTES_IN_OVERRIDERS,
                 ))
             if _out_count(edge_summary, "DECLARES_CLIENT") > 0:
                 pairs.append((PRIORITY_LEAF_FOLLOWUP, TPL_DESCRIBE_METHOD_OUTBOUND_CLIENT.format(id=node_id)))
                 struct_pairs.append(_StructuredHint(
                     "neighbors", {"ids": [node_id], "direction": "out", "edge_types": ["DECLARES_CLIENT"]},
                     True, PRIORITY_LEAF_FOLLOWUP,
+                    LABEL_OUTBOUND_CLIENT,
                 ))
             if _out_count(edge_summary, "DECLARES_PRODUCER") > 0:
                 pairs.append((PRIORITY_LEAF_FOLLOWUP, TPL_DESCRIBE_METHOD_OUTBOUND_PRODUCER.format(id=node_id)))
                 struct_pairs.append(_StructuredHint(
                     "neighbors", {"ids": [node_id], "direction": "out", "edge_types": ["DECLARES_PRODUCER"]},
                     True, PRIORITY_LEAF_FOLLOWUP,
+                    LABEL_OUTBOUND_PRODUCER,
                 ))
             if _out_count(edge_summary, "EXPOSES") > 0:
                 pairs.append((PRIORITY_LEAF_FOLLOWUP, TPL_DESCRIBE_METHOD_INBOUND_ROUTE.format(id=node_id)))
                 struct_pairs.append(_StructuredHint(
                     "neighbors", {"ids": [node_id], "direction": "out", "edge_types": ["EXPOSES"]},
                     True, PRIORITY_LEAF_FOLLOWUP,
+                    LABEL_INBOUND_ROUTE,
                 ))
             calls_out = _out_count(edge_summary, "CALLS")
             if 1 <= calls_out <= 9:
@@ -1204,6 +1285,7 @@ def generate_hints(
                     struct_pairs.append(_StructuredHint(
                         "neighbors", {"ids": [node_id], "direction": "out", "edge_types": ["CALLS"]},
                         True, PRIORITY_LEAF_FOLLOWUP,
+                        LABEL_OUTBOUND_CALLS,
                     ))
             if _out_count(edge_summary, "OVERRIDES") > 0:
                 if _out_count(edge_summary, "OVERRIDDEN_BY") == 0:
@@ -1211,6 +1293,7 @@ def generate_hints(
                     struct_pairs.append(_StructuredHint(
                         "neighbors", {"ids": [node_id], "direction": "out", "edge_types": ["OVERRIDES"]},
                         True, PRIORITY_LEAF_FOLLOWUP,
+                        LABEL_SUPER_DECLARATION,
                     ))
             data = rec.get("data")
             unresolved = 0
@@ -1221,12 +1304,14 @@ def generate_hints(
                 struct_pairs.append(_StructuredHint(
                     "neighbors", {"ids": [node_id], "direction": "out", "edge_types": ["CALLS"], "include_unresolved": True},
                     True, PRIORITY_LEAF_FOLLOWUP,
+                    LABEL_UNRESOLVED,
                 ))
             if _out_count(edge_summary, "CALLS") >= 10:
                 pairs.append((PRIORITY_LEAF_FOLLOWUP, TPL_DESCRIBE_METHOD_MANY_CALLS))
                 struct_pairs.append(_StructuredHint(
                     "neighbors", {"ids": [node_id], "direction": "out", "edge_types": ["CALLS"]},
                     False, PRIORITY_LEAF_FOLLOWUP,
+                    LABEL_HIGH_FANOUT,
                 ))
             return (finalize_hint_list(pairs), finalize_structured_hints(struct_pairs))
 
