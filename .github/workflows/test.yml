@@ -23,7 +23,7 @@ jobs:
               - 'docs/**'
               - 'propose/**'
               - 'plans/**'
-              - 'reports/**'
+              - 'skills/**'
               - '.agents/**'
               - 'AGENTS.md'
               - 'README.md'

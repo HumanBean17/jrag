@@ -21,7 +21,7 @@ If you only want a subset, pass `--proposal` multiple times:
 .venv/bin/python automation/cursor_propose_only/cli.py prepare \
   --repo-root . \
   --proposal-dir propose \
-  --output-dir reports/propose_automation_selected \
+  --output-dir .agents/reports/propose_automation_selected \
   --proposal HTTP-ROUTE-METHOD-ENUM-PROPOSE.md \
   --proposal ENHANCED-ROLE-RECOGNITION-PROPOSE.md \
   --rounds 3 \
@@ -40,18 +40,18 @@ Notes:
 .venv/bin/python automation/cursor_propose_only/cli.py prepare \
   --repo-root . \
   --proposal-dir propose \
-  --output-dir reports/propose_automation \
+  --output-dir .agents/reports/propose_automation \
   --rounds 3 \
   --min-severity medium
 ```
 
 Generated artifacts:
 
-- `reports/propose_automation/workflow.json`
-- `reports/propose_automation/jobs/<job-id>/planner_prompt.md`
-- `reports/propose_automation/jobs/<job-id>/reviewer_prompt_round1.md`
-- `reports/propose_automation/jobs/<job-id>/reviewer_prompt_round2.md`
-- `reports/propose_automation/jobs/<job-id>/reviewer_prompt_round3.md`
+- `.agents/reports/propose_automation/workflow.json`
+- `.agents/reports/propose_automation/jobs/<job-id>/planner_prompt.md`
+- `.agents/reports/propose_automation/jobs/<job-id>/reviewer_prompt_round1.md`
+- `.agents/reports/propose_automation/jobs/<job-id>/reviewer_prompt_round2.md`
+- `.agents/reports/propose_automation/jobs/<job-id>/reviewer_prompt_round3.md`
 
 ## Evaluate each reviewer response
 
@@ -60,7 +60,7 @@ then evaluate it with severity gating.
 
 ```bash
 .venv/bin/python automation/cursor_propose_only/cli.py evaluate \
-  --workflow reports/propose_automation/workflow.json \
+  --workflow .agents/reports/propose_automation/workflow.json \
   --job-id <job-id> \
   --round 1 \
   --review-file /path/to/review_round1.md \
@@ -83,7 +83,7 @@ tasks as `ready_to_merge` / `merged`.
 ```bash
 .venv/bin/python automation/cursor_propose_only/execute.py \
   --repo-root . \
-  --workflow reports/propose_automation/workflow.json \
+  --workflow .agents/reports/propose_automation/workflow.json \
   --rounds 3 \
   --min-severity medium \
   --implementation-command 'cursor-agent run --model auto --prompt-file {task_prompt_file}' \
@@ -97,7 +97,7 @@ Notes:
 - without `--run`, `execute.py` performs a dry-run and only stages prompts/state
 - command templates support placeholders such as `{task_prompt_file}`,
   `{review_prompt_file}`, `{pr_url}`, `{branch}`, `{base}`, `{round}`
-- workflow state is persisted in `reports/propose_automation/workflow.json`
+- workflow state is persisted in `.agents/reports/propose_automation/workflow.json`
 
 ## Fully automated (single command)
 
@@ -108,7 +108,7 @@ use `autopilot.py`.
 .venv/bin/python automation/cursor_propose_only/autopilot.py \
   --repo-root . \
   --proposal-dir propose \
-  --output-dir reports/propose_automation_selected \
+  --output-dir .agents/reports/propose_automation_selected \
   --proposal TIER2-INCREMENTAL-REBUILD-PROPOSE.md \
   --planning-rounds 2 \
   --planning-min-severity medium \
