@@ -165,7 +165,6 @@ Every entry has meaningful `tool` + `args`:
 | Find page full | Same query re-stated | "result page full at N — narrow filter" |
 | Neighbors empty structural | Correct traversal with proper direction/edge_types | Explains what went wrong |
 | Describe type/method rollups | Concrete dot-key traversal | Explains what's behind the edge |
-| High fanout (describe) | `neighbors(ids, "out", ["CALLS"])` | "many CALLS — consider filtering" |
 | Unresolved sites (neighbors) | `neighbors(..., include_unresolved=True)` | "N CALLS shown; K unresolved call sites" |
 | High fanout (neighbors) | `neighbors(ids, "out", ["CALLS"], edge_filter={})` | "N CALLS — noisy axes are …" |
 

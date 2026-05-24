@@ -37,7 +37,7 @@ Landing order: **PR-1 only** (single PR).
 | --- | --- |
 | `reason` default | `reason: str = ""` — avoids forcing a reason on every hint; non-actionable hints are expected to carry one (test-enforced). |
 | String template deletion | Delete entirely; git history preserves them. |
-| `generate_hints` return type | `tuple[list[_StructuredHint], list[str]]` — first element is structured hints, second is advisories. Not a plain `list[_StructuredHint]` because advisories are a separate stream. |
+| `generate_hints` return type | `tuple[list[_StructuredHint], list[str]]` — first element is structured hints, second is advisories. **Note:** tuple order swaps from the current `tuple[list[str], list[_StructuredHint]]` (string first) to structured first. All callers must unpack accordingly. |
 | `_to_structured_hints` conversion | Must forward `reason` from internal `_StructuredHint` to public `StructuredHint`. |
 | `finalize_hint_list` | Delete — no longer needed. |
 | Pure advisory text location | `advisories: list[str]` — separate field. Not forced into `hints_structured` with empty `args`. |
@@ -98,7 +98,7 @@ Hints that move to `advisories` (pure informational text):
 | --- | --- |
 | Fuzzy strategy | "some edges resolved via brownfield/fallback strategy — check attrs.strategy on each row" |
 | Brownfield absence (Row 4) | "edges on '{edge}' are emitted by the brownfield resolver — absence may mean unresolved" |
-| Role-filter OTHER fallback | "0 CALLS matched callee_declaring_role filter but method has many callees — targets may be OTHER; try edge_filter={exclude_callee_declaring_roles: ['ENTITY','DTO']}" |
+| Role-filter OTHER fallback | "0 CALLS matched callee_declaring_role filter but method has many callees — callee targets may be OTHER (interface/JDK); check target roles and adjust edge_filter" |
 | NodeFilter.role collision | "NodeFilter.role filters the neighbor method's role (usually OTHER), not the callee's declaring type — use edge_filter={callee_declaring_role: 'SERVICE'} for CALLS stereotype projection" |
 | Describe "many CALLS" | "many CALLS — consider filtering by target microservice" |
 
