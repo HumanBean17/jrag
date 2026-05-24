@@ -262,8 +262,8 @@ class TestDirectoryIntegrity:
 class TestAgentGuideConsistency:
     """AGENT-GUIDE.md copy-paste block must be self-contained."""
 
-    def test_guide_has_inline_slash_aliases(self):
-        """The copy-paste block must include inline slash-alias bullets
+    def test_guide_has_navigation_patterns_table(self):
+        """The copy-paste block must include a navigation patterns section
         (it's standalone — no external file references work in a consumer project)."""
         guide = Path(__file__).resolve().parent.parent / "docs" / "AGENT-GUIDE.md"
         text = guide.read_text(encoding="utf-8")
@@ -272,12 +272,12 @@ class TestAgentGuideConsistency:
         end = text.find("<!-- END java-codebase-rag MCP guide -->")
         assert begin != -1 and end != -1, "AGENT-GUIDE.md missing BEGIN/END markers"
         block = text[begin:end]
-        assert "### Slash-style aliases" in block, (
-            "AGENT-GUIDE.md copy-paste block missing '### Slash-style aliases'"
+        assert "### Common navigation patterns" in block, (
+            "AGENT-GUIDE.md copy-paste block missing '### Common navigation patterns'"
         )
-        # Verify key aliases are present inline
-        for alias in ["/nl", "/callers", "/callees", "/routes", "/controllers"]:
-            assert alias in block, f"AGENT-GUIDE.md copy-paste block missing {alias} alias"
+        # Verify key patterns are present
+        for pattern in ["CALLS", "EXPOSES", "IMPLEMENTS", "INJECTS"]:
+            assert pattern in block, f"AGENT-GUIDE.md copy-paste block missing {pattern} pattern"
 
     def test_guide_copy_block_does_not_reference_skills_dir(self):
         """The copy-paste block must not reference skills/ — it won't exist
@@ -292,4 +292,27 @@ class TestAgentGuideConsistency:
             "AGENT-GUIDE.md copy-paste block references skills/ — "
             "this path won't resolve in a consumer project. "
             "Keep skills/ references outside the copy-paste block."
+        )
+
+    def test_guide_copy_block_has_no_slash_command_aliases(self):
+        """The copy-paste block must not contain slash-command alias bullets
+        like `/nl <text>` → ... — these imply commands that don't exist
+        and will mislead the agent. Incidental mentions (e.g. cross-references
+        in prose) are fine."""
+        guide = Path(__file__).resolve().parent.parent / "docs" / "AGENT-GUIDE.md"
+        text = guide.read_text(encoding="utf-8")
+        begin = text.find("<!-- BEGIN java-codebase-rag MCP guide -->")
+        end = text.find("<!-- END java-codebase-rag MCP guide -->")
+        block = text[begin:end]
+        # Match alias definition lines: - `/skillname ...` → tool(...)
+        skill_names_pattern = "|".join(re.escape(n) for n in ALL_SKILL_NAMES)
+        alias_pattern = re.compile(
+            rf"^- `/(?:{skill_names_pattern})\s",
+            re.MULTILINE,
+        )
+        matches = alias_pattern.findall(block)
+        assert not matches, (
+            f"AGENT-GUIDE.md copy-paste block contains slash-command alias bullets: "
+            f"{alias_pattern.findall(block)}. "
+            "These are not real commands and will mislead the agent."
         )
