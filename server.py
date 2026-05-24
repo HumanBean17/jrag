@@ -341,7 +341,7 @@ def create_mcp_server() -> FastMCP:
             "structured DSL inside `query`; structured predicates belong in `find`. "
             "For identifier-shaped lookups (FQN, id prefix, route/client identifiers, …), use `resolve` first; "
             "use `search` for natural-language or ranked fuzzy discovery. "
-            "Successful responses echo `limit`/`offset` and may include `hints` (advisory next-step strings)."
+            "Successful responses echo `limit`/`offset` and may include `hints_structured` (advisory next-step objects with tool, args, actionable, label, reason)."
         ),
     )
     async def search(
@@ -390,7 +390,7 @@ def create_mcp_server() -> FastMCP:
             "module, source_layer, producer_kind, topic_prefix. "
             "Wildcards in prefix fields are rejected. An empty filter (`{}`) or `filter=None` means no predicate (all nodes of "
             "that kind; use pagination). Unknown keys or inapplicable populated fields return success=false. "
-            "Successful responses echo `limit`/`offset` and may include `hints` (advisory next-step strings)."
+            "Successful responses echo `limit`/`offset` and may include `hints_structured` (advisory next-step objects with tool, args, actionable, label, reason)."
         ),
     )
     async def find(
@@ -426,7 +426,7 @@ def create_mcp_server() -> FastMCP:
             "Pass `id` for any kind, or exact `fqn` for Symbol lookup (`id` wins when both are set). "
             "`describe(fqn=…)` keeps the first graph row when multiple symbols share that FQN; when an FQN may collide, "
             "prefer `resolve(identifier=…, hint_kind='symbol')` first, then `describe(id=…)` on the chosen node. "
-            "Successful responses may include `hints` (advisory next-step strings)."
+            "Successful responses may include `hints_structured` (advisory next-step objects with tool, args, actionable, label, reason)."
         ),
     )
     async def describe(
@@ -460,7 +460,7 @@ def create_mcp_server() -> FastMCP:
             "Optional `edge_filter` requires edge_types=['CALLS'] only (no composed dot-keys or extra stored "
             "labels); projects the ordered CALLS stream by edge attributes (min_confidence, strategies, "
             "callee_declaring_role). Wildcards in prefix fields are rejected. Unknown filter keys return success=false. "
-            "Successful responses echo `requested_edge_types` and may include `hints` (advisory next-step strings; "
+            "Successful responses echo `requested_edge_types` and may include `hints_structured` (advisory next-step objects with tool, args, actionable, label, reason; "
             "empty results may include EDGE_SCHEMA-driven traversal hints). "
             "Each edge's `attrs.strategy` indicates resolution quality (brownfield/fallback vs primary paths)."
         ),
@@ -546,7 +546,7 @@ def create_mcp_server() -> FastMCP:
             "status=one (single node), many (≥2 ranked candidates with reason), or none "
             "(no match — fall back to search(query=...) for natural language or fuzzy text). "
             "Optional hint_kind narrows to symbol, route, client, or producer. "
-            "Successful responses may include advisory hints (same contract as other v2 tools). "
+            "Successful responses may include `hints_structured` (advisory next-step objects with tool, args, actionable, label, reason). "
             "Malformed empty/whitespace identifier returns success=false. "
             "Examples: resolve('com.foo.Bar', hint_kind='symbol'); "
             "resolve('GET /api/v1/customers', hint_kind='route'); "

@@ -31,7 +31,7 @@ from index_common import SBERT_MODEL
 from java_codebase_rag.config import resolved_sbert_model_for_process_env
 from java_ontology import EDGE_SCHEMA, ResolveReason
 from kuzu_queries import KuzuGraph, OVERRIDE_AXIS_COMPOSED_EDGE_TYPES
-from mcp_hints import MCP_HINTS_FIELD_DESCRIPTION, MCP_HINTS_STRUCTURED_FIELD_DESCRIPTION, generate_hints
+from mcp_hints import MCP_HINTS_STRUCTURED_FIELD_DESCRIPTION, generate_hints
 from search_lancedb import TABLES, run_search
 
 DeclarationSymbolKind = Literal["class", "interface", "enum", "record", "annotation", "method", "constructor"]
@@ -181,6 +181,7 @@ class StructuredHint(BaseModel):
     tool: Literal["search", "find", "describe", "neighbors", "resolve"]
     args: dict[str, Any]
     actionable: bool = True
+    reason: str = ""
 
 # Populated EdgeFilter field -> EDGE_SCHEMA attribute name used in Cypher pushdown.
 _EDGEFILTER_FIELD_TO_ATTR: dict[str, str] = {
@@ -348,7 +349,7 @@ def _edgefilter_applicability_error(edge_types: list[str], ef: EdgeFilter) -> st
 
 
 def _to_structured_hints(raw: list[Any]) -> list[StructuredHint]:
-    return [StructuredHint(label=h.label, tool=h.tool, args=h.args, actionable=h.actionable) for h in raw]
+    return [StructuredHint(label=h.label, tool=h.tool, args=h.args, actionable=h.actionable, reason=h.reason) for h in raw]
 
 
 def _coerce_edge_filter(
@@ -463,7 +464,6 @@ class SearchOutput(BaseModel):
         default=None,
         description="Echoed from the request — the page offset the server applied. None on success=False.",
     )
-    hints: list[str] = Field(default_factory=list, description=MCP_HINTS_FIELD_DESCRIPTION)
     hints_structured: list[StructuredHint] = Field(default_factory=list, description=MCP_HINTS_STRUCTURED_FIELD_DESCRIPTION)
 
 
@@ -479,7 +479,6 @@ class FindOutput(BaseModel):
         default=None,
         description="Echoed from the request — the page offset the server applied. None on success=False.",
     )
-    hints: list[str] = Field(default_factory=list, description=MCP_HINTS_FIELD_DESCRIPTION)
     hints_structured: list[StructuredHint] = Field(default_factory=list, description=MCP_HINTS_STRUCTURED_FIELD_DESCRIPTION)
 
 
@@ -487,7 +486,6 @@ class DescribeOutput(BaseModel):
     success: bool
     record: NodeRecord | None = None
     message: str | None = None
-    hints: list[str] = Field(default_factory=list, description=MCP_HINTS_FIELD_DESCRIPTION)
     hints_structured: list[StructuredHint] = Field(default_factory=list, description=MCP_HINTS_STRUCTURED_FIELD_DESCRIPTION)
 
 
@@ -499,7 +497,6 @@ class NeighborsOutput(BaseModel):
         default_factory=list,
         description="Echo of neighbors(edge_types=...) from the request; empty when success=False.",
     )
-    hints: list[str] = Field(default_factory=list, description=MCP_HINTS_FIELD_DESCRIPTION)
     hints_structured: list[StructuredHint] = Field(default_factory=list, description=MCP_HINTS_STRUCTURED_FIELD_DESCRIPTION)
 
 
@@ -570,7 +567,6 @@ class ResolveOutput(BaseModel):
     candidates: list[ResolveCandidate] = Field(default_factory=list)
     message: str | None = None
     resolved_identifier: str | None = None
-    hints: list[str] = Field(default_factory=list, description=MCP_HINTS_FIELD_DESCRIPTION)
     hints_structured: list[StructuredHint] = Field(default_factory=list, description=MCP_HINTS_STRUCTURED_FIELD_DESCRIPTION)
 
 
@@ -889,16 +885,15 @@ def search_v2(
             return SearchOutput(
                 success=False,
                 message=_filter_validation_error_message(exc),
-                hints=[],
                 limit=None,
                 offset=None,
             )
         if nf and (err := _nodefilter_applicability_error("symbol", nf)):
             _log_fail_loud("applicability")
-            return SearchOutput(success=False, message=err, hints=[], limit=None, offset=None)
+            return SearchOutput(success=False, message=err, limit=None, offset=None)
         if nf and (err := _validate_no_wildcards(nf)):
             _log_fail_loud("wildcard")
-            return SearchOutput(success=False, message=err, hints=[], limit=None, offset=None)
+            return SearchOutput(success=False, message=err, limit=None, offset=None)
         model_name = resolved_sbert_model_for_process_env(SBERT_MODEL)
         device = os.environ.get("SBERT_DEVICE") or None
         model = _get_sentence_transformer(model_name, device)
@@ -936,17 +931,16 @@ def search_v2(
             "limit": limit,
             "offset": offset,
         }
-        str_hints, raw_struct = generate_hints("search", hint_payload)
+        raw_struct = generate_hints("search", hint_payload)
         return SearchOutput(
             success=True,
             results=hits,
             limit=limit,
             offset=offset,
-            hints=str_hints,
             hints_structured=_to_structured_hints(raw_struct),
         )
     except Exception as exc:
-        return SearchOutput(success=False, message=str(exc), hints=[], limit=None, offset=None)
+        return SearchOutput(success=False, message=str(exc), limit=None, offset=None)
 
 
 def find_v2(
@@ -968,16 +962,15 @@ def find_v2(
             return FindOutput(
                 success=False,
                 message=_filter_validation_error_message(exc),
-                hints=[],
                 limit=None,
                 offset=None,
             )
         if err := _nodefilter_applicability_error(kind, nf):
             _log_fail_loud("applicability")
-            return FindOutput(success=False, message=err, hints=[], limit=None, offset=None)
+            return FindOutput(success=False, message=err, limit=None, offset=None)
         if err := _validate_no_wildcards(nf):
             _log_fail_loud("wildcard")
-            return FindOutput(success=False, message=err, hints=[], limit=None, offset=None)
+            return FindOutput(success=False, message=err, limit=None, offset=None)
         fetch_cap = int(limit) + int(offset) + 1
         if kind == "symbol":
             where, params = _symbol_where_from_filter(nf)
@@ -1027,17 +1020,16 @@ def find_v2(
             "filter": filter_dump,
             "has_more_results": has_more_results,
         }
-        str_hints, raw_struct = generate_hints("find", hint_payload)
+        raw_struct = generate_hints("find", hint_payload)
         return FindOutput(
             success=True,
             results=refs,
             limit=limit,
             offset=offset,
-            hints=str_hints,
             hints_structured=_to_structured_hints(raw_struct),
         )
     except Exception as exc:
-        return FindOutput(success=False, message=str(exc), hints=[], limit=None, offset=None)
+        return FindOutput(success=False, message=str(exc), limit=None, offset=None)
 
 
 _DESCRIBE_UCS_ID_MESSAGE = (
@@ -1057,9 +1049,9 @@ def describe_v2(
         has_id = bool(id and str(id).strip())
         has_fqn = bool(fqn and str(fqn).strip())
         if not has_id and not has_fqn:
-            return DescribeOutput(success=False, message="id or fqn required", hints=[])
+            return DescribeOutput(success=False, message="id or fqn required")
         if has_id and str(id).strip().startswith("ucs:"):
-            return DescribeOutput(success=False, message=_DESCRIBE_UCS_ID_MESSAGE, hints=[])
+            return DescribeOutput(success=False, message=_DESCRIBE_UCS_ID_MESSAGE)
         hint_message: str | None = None
         node_id: str
         if has_id:
@@ -1071,7 +1063,7 @@ def describe_v2(
                 {"fqn": fqn_val},
             )
             if not rows:
-                return DescribeOutput(success=False, message=f"No Symbol found for fqn='{fqn_val}'", hints=[])
+                return DescribeOutput(success=False, message=f"No Symbol found for fqn='{fqn_val}'")
             node_id = str(rows[0]["id"] or "")
             if len(rows) > 1:
                 hint_message = (
@@ -1081,10 +1073,10 @@ def describe_v2(
                 )
         kind = _resolve_node_kind(g, node_id)
         if kind == "unresolved_call_site":
-            return DescribeOutput(success=False, message=_DESCRIBE_UCS_ID_MESSAGE, hints=[])
+            return DescribeOutput(success=False, message=_DESCRIBE_UCS_ID_MESSAGE)
         row = _load_node_record(g, node_id, kind)
         if row is None:
-            return DescribeOutput(success=False, message=f"No node found for `{node_id}`", hints=[])
+            return DescribeOutput(success=False, message=f"No node found for `{node_id}`")
         ref = _node_ref_from_row(kind, row)
         edge_summary = _edge_summary_for_node(g, node_id, kind=kind, row=row)
         data = dict(row)
@@ -1107,18 +1099,17 @@ def describe_v2(
                         f"java-codebase-rag unresolved-calls list --method-id {node_id} for the full list"
                     )
         record = NodeRecord(id=ref.id, kind=kind, fqn=ref.fqn, data=data, edge_summary=edge_summary)
-        str_hints, raw_struct = generate_hints("describe", {"success": True, "record": record.model_dump()})
+        raw_struct = generate_hints("describe", {"success": True, "record": record.model_dump()})
         return DescribeOutput(
             success=True,
             record=record,
             message=hint_message,
-            hints=str_hints,
             hints_structured=_to_structured_hints(raw_struct),
         )
     except ValueError as exc:
-        return DescribeOutput(success=False, message=str(exc), hints=[])
+        return DescribeOutput(success=False, message=str(exc))
     except Exception as exc:
-        return DescribeOutput(success=False, message=str(exc), hints=[])
+        return DescribeOutput(success=False, message=str(exc))
 
 
 def _resolve_validate_identifier(raw: str) -> tuple[str | None, str | None]:
@@ -1437,9 +1428,8 @@ def _resolve_finalize_success(
         "path_prefix_seed": path_prefix_seed,
         "target_service_seed": target_service_seed,
     }
-    str_hints, raw_struct = generate_hints("resolve", hint_payload)
+    raw_struct = generate_hints("resolve", hint_payload)
     out = out.model_copy(update={
-        "hints": str_hints,
         "hints_structured": _to_structured_hints(raw_struct),
     })
     _resolve_assert_invariants(out)
@@ -1458,7 +1448,6 @@ def resolve_v2(
                 success=False,
                 status="none",
                 message=err,
-                hints=[],
                 resolved_identifier=None,
             )
             _resolve_assert_invariants(out)
@@ -1489,7 +1478,6 @@ def resolve_v2(
             success=False,
             status="none",
             message=str(exc),
-            hints=[],
             resolved_identifier=None,
         )
         _resolve_assert_invariants(out)
@@ -1726,7 +1714,6 @@ def neighbors_v2(
             return NeighborsOutput(
                 success=False,
                 message=_filter_validation_error_message(exc),
-                hints=[],
                 requested_edge_types=[],
             )
         try:
@@ -1741,12 +1728,11 @@ def neighbors_v2(
             return NeighborsOutput(
                 success=False,
                 message=_filter_validation_error_message(exc),
-                hints=[],
                 requested_edge_types=[],
             )
         except ValueError as exc:
             _log_fail_loud("edge_filter")
-            return NeighborsOutput(success=False, message=str(exc), hints=[], requested_edge_types=[])
+            return NeighborsOutput(success=False, message=str(exc), requested_edge_types=[])
         if include_unresolved and ef is not None:
             return NeighborsOutput(
                 success=False,
@@ -1754,21 +1740,18 @@ def neighbors_v2(
                     "include_unresolved=True is incompatible with edge_filter; "
                     "UnresolvedCallSite rows have no edge attributes to filter on"
                 ),
-                hints=[],
                 requested_edge_types=requested_edge_types,
             )
         if include_unresolved and requested_edge_types != ["CALLS"]:
             return NeighborsOutput(
                 success=False,
                 message="include_unresolved requires edge_types=['CALLS']",
-                hints=[],
                 requested_edge_types=requested_edge_types,
             )
         if include_unresolved and direction != "out":
             return NeighborsOutput(
                 success=False,
                 message='include_unresolved requires direction="out"',
-                hints=[],
                 requested_edge_types=requested_edge_types,
             )
         if ef and (err := _edgefilter_applicability_error(requested_edge_types, ef)):
@@ -1776,17 +1759,15 @@ def neighbors_v2(
             return NeighborsOutput(
                 success=False,
                 message=err,
-                hints=[],
                 requested_edge_types=requested_edge_types,
             )
         if nf and (err := _validate_no_wildcards(nf)):
             _log_fail_loud("wildcard")
-            return NeighborsOutput(success=False, message=err, hints=[], requested_edge_types=[])
+            return NeighborsOutput(success=False, message=err, requested_edge_types=[])
         if composed_keys and direction != "out":
             return NeighborsOutput(
                 success=False,
                 message='Composed edge types require direction="out"',
-                hints=[],
                 requested_edge_types=requested_edge_types,
             )
         use_calls_path = flat_labels == ["CALLS"] and not composed_keys
@@ -1811,7 +1792,6 @@ def neighbors_v2(
                     return NeighborsOutput(
                         success=False,
                         message=axis_msg,
-                        hints=[],
                         requested_edge_types=requested_edge_types,
                     )
                 origin_row = _load_node_record(g, origin_id, "symbol")
@@ -1827,7 +1807,6 @@ def neighbors_v2(
                     return NeighborsOutput(
                         success=False,
                         message=err,
-                        hints=[],
                         requested_edge_types=requested_edge_types,
                     )
             if use_calls_path:
@@ -1853,7 +1832,6 @@ def neighbors_v2(
                     return NeighborsOutput(
                         success=False,
                         message=str(exc),
-                        hints=[],
                         requested_edge_types=requested_edge_types,
                     )
                 if (
@@ -1903,7 +1881,7 @@ def neighbors_v2(
                     if nf and (err := _nodefilter_applicability_error(other_kind, nf)):
                         _log_fail_loud("applicability")
                         return NeighborsOutput(
-                            success=False, message=err, hints=[], requested_edge_types=[]
+                            success=False, message=err, requested_edge_types=[]
                         )
                     if not _node_matches_filter(other_kind, other_rec, nf):
                         continue
@@ -1930,7 +1908,7 @@ def neighbors_v2(
                     if nf and (err := _nodefilter_applicability_error(other_kind, nf)):
                         _log_fail_loud("applicability")
                         return NeighborsOutput(
-                            success=False, message=err, hints=[], requested_edge_types=[]
+                            success=False, message=err, requested_edge_types=[]
                         )
                     if not _node_matches_filter(other_kind, other_rec, nf):
                         continue
@@ -1971,15 +1949,14 @@ def neighbors_v2(
             "unresolved_count": unresolved_count,
             "calls_row_count": calls_row_count,
         }
-        str_hints, raw_struct = generate_hints("neighbors", neigh_payload)
+        raw_struct = generate_hints("neighbors", neigh_payload)
         return NeighborsOutput(
             success=True,
             results=sliced,
             requested_edge_types=requested_edge_types,
-            hints=str_hints,
             hints_structured=_to_structured_hints(raw_struct),
         )
     except ValidationError:
         raise
     except Exception as exc:
-        return NeighborsOutput(success=False, message=str(exc), hints=[], requested_edge_types=[])
+        return NeighborsOutput(success=False, message=str(exc), requested_edge_types=[])
