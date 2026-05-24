@@ -269,19 +269,24 @@ Returns **edges** with `attrs` (`confidence`, `strategy`, `match`, … on cross-
 
 After two failed attempts on the same intent, stop and report tool name, args, and response snippet.
 
-### Slash-style aliases
+### Common navigation patterns
 
-- `/nl <text>` → `search({"query":"<text>","limit":8})` then `describe` on best `symbol_id`.
-- `/controllers <ms>` → `find({"kind":"symbol","filter":{"microservice":"<ms>","role":"CONTROLLER"}})`.
-- `/routes <ms>` → `find({"kind":"route","filter":{"microservice":"<ms>"}})`.
-- `/clients <ms>` → `find({"kind":"client","filter":{"microservice":"<ms>"},"limit":100})`.
-- `/producers <ms>` → `find({"kind":"producer","filter":{"microservice":"<ms>"},"limit":100})`.
-- `/callers <sym_id>` → `neighbors({"ids":"<sym_id>","direction":"in","edge_types":["CALLS"]})`.
-- `/callees <sym_id>` → `neighbors({"ids":"<sym_id>","direction":"out","edge_types":["CALLS"]})`.
-- `/handlers <route_id>` → `neighbors({"ids":"<route_id>","direction":"in","edge_types":["EXPOSES"]})`.
-- `/who-hits-route <route_id>` → `neighbors({"ids":"<route_id>","direction":"in","edge_types":["HTTP_CALLS","ASYNC_CALLS","EXPOSES"]})`.
-- `/implements <type_sym_id>` → `neighbors({"ids":"<type_sym_id>","direction":"in","edge_types":["IMPLEMENTS"]})`.
-- `/injects <type_sym_id>` → `neighbors({"ids":"<type_sym_id>","direction":"in","edge_types":["INJECTS"]})`.
+These patterns combine the five tools above. Use the decision tree to pick the right starting tool.
+
+| Intent | Tool chain |
+| ------ | ---------- |
+| Natural-language "find X" | `search(query=…, limit=8)` → `describe(top_hit.symbol_id)` |
+| List controllers in service S | `find(kind="symbol", filter={microservice:"S", role:"CONTROLLER"})` |
+| List routes in service S | `find(kind="route", filter={microservice:"S"})` |
+| List clients in service S | `find(kind="client", filter={microservice:"S"}, limit=100)` |
+| List producers in service S | `find(kind="producer", filter={microservice:"S"}, limit=100)` |
+| Who calls method M | `resolve` → `neighbors(ids, "in", ["CALLS"])` |
+| What does M call | `resolve` → `neighbors(ids, "out", ["CALLS"])` |
+| Handler for route R | `neighbors(route_id, "in", ["EXPOSES"])` |
+| All inbound to route R | `neighbors(route_id, "in", ["HTTP_CALLS","ASYNC_CALLS","EXPOSES"])` |
+| Implementors of interface T | `neighbors(type_id, "in", ["IMPLEMENTS"])` |
+| Where is T injected | `neighbors(type_id, "in", ["INJECTS"])` |
+| Impact of changing X | `resolve` → `describe` → bounded `neighbors(in, ["CALLS","INJECTS","IMPLEMENTS","EXTENDS"])` depth ≤2 |
 
 ### Canonical workflow: "explain feature X"
 

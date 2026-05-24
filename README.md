@@ -97,9 +97,13 @@ See [`mcp.json.example`](./mcp.json.example) for the same shape in `.mcp.json` (
 
 ### Driving the MCP from an agent
 
-- **[`docs/AGENT-GUIDE.md`](./docs/AGENT-GUIDE.md)** — standalone MCP operating manual (copy-paste into `QWEN.md` / `CLAUDE.md` / `AGENTS.md`): five tools, `NodeFilter`, edge taxonomy, required `neighbors` arguments, ontology glossary, recovery playbook, slash-style aliases.
-- **[`skills/`](./skills/)** — user-facing navigation and workflow skills for java-codebase-rag consumers. Skills are `SKILL.md` files; agents discover them via slash-names (`/callees`, `/routes`, etc.). See [`propose/active/AGENT-SKILLS-AND-COMMANDS-PROPOSE.md`](./propose/active/AGENT-SKILLS-AND-COMMANDS-PROPOSE.md) for the full Tier 1 + Tier 2 skill set.
-- **[`docs/MANUAL-VERIFICATION-CHECKLIST.md`](./docs/MANUAL-VERIFICATION-CHECKLIST.md)** — 7-phase agent-driven verification you run after indexing your real project.
+Pick **one** of two options (not both — they cover the same navigation intents):
+
+1. **[`docs/AGENT-GUIDE.md`](./docs/AGENT-GUIDE.md)** (recommended for most) — standalone MCP operating manual. Copy-paste the `BEGIN`/`END` block into your project's `QWEN.md`, `CLAUDE.md`, or `AGENTS.md`. Contains: five-tool reference, `NodeFilter` / edge taxonomy, ontology glossary, recovery playbook, and inline slash-style aliases (`/callers`, `/callees`, `/routes`, etc.) as prompt templates. Self-contained — no external file dependencies.
+
+2. **[`skills/`](./skills/)** (for hosts with skill discovery) — 15 shipped `SKILL.md` files. If your MCP host supports skill discovery (Claude Code, Qwen Code, Cursor), the same navigation intents are available as discoverable `/` commands. Tier 1 = deterministic MCP chains (`/callers`, `/callees`, `/routes`, `/controllers`, `/clients`, `/producers`, `/handlers`, `/who-hits-route`, `/implements`, `/injects`, `/nl`). Tier 2 = bounded workflows (`/explain-feature`, `/impact-of`, `/trace-request-flow`, `/mini-map`). See [`skills/README.md`](./skills/README.md) for the full index.
+
+Also: **[`docs/MANUAL-VERIFICATION-CHECKLIST.md`](./docs/MANUAL-VERIFICATION-CHECKLIST.md)** — 7-phase agent-driven verification you run after indexing your real project.
 
 ---
 
@@ -114,6 +118,10 @@ See [`mcp.json.example`](./mcp.json.example) for the same shape in `.mcp.json` (
 | `neighbors` | Graph walk, one hop. | `ids`, `direction`, `edge_types` |
 
 Full schemas, `NodeFilter` / `EdgeFilter` semantics, and the hints contract live in [`docs/AGENT-GUIDE.md`](./docs/AGENT-GUIDE.md). Edge types and traversal directions are listed in [`docs/EDGE-NAVIGATION.md`](./docs/EDGE-NAVIGATION.md).
+
+### Three-layer architecture
+
+Layer 1 (storage) → Layer 2 (5 MCP tools) → Layer 3 (skills). Navigation skills in [`skills/`](./skills/) wrap the MCP tools into deterministic chains (Tier 1) and bounded workflows (Tier 2). See the [architecture diagram in `skills/README.md`](./skills/README.md#three-layer-architecture).
 
 ---
 
@@ -156,7 +164,7 @@ Run `java-codebase-rag --help` to list grouped subcommands. Operator playbook wi
 | [`docs/CONFIGURATION.md`](./docs/CONFIGURATION.md) | Environment variables, project YAML, graph ontology, brownfield overrides, ignore patterns. |
 | [`docs/JAVA-CODEBASE-RAG-CLI.md`](./docs/JAVA-CODEBASE-RAG-CLI.md) | CLI operator playbook: workflows, exit codes, env alignment. |
 | [`docs/EDGE-NAVIGATION.md`](./docs/EDGE-NAVIGATION.md) | MCP-traversable edges, directions, dot-key composition. |
-| [`skills/`](./skills/) | User-facing skills for java-codebase-rag consumers. Navigation and workflow skills (Tier 1 + Tier 2) planned — see [`propose/active/AGENT-SKILLS-AND-COMMANDS-PROPOSE.md`](./propose/active/AGENT-SKILLS-AND-COMMANDS-PROPOSE.md). |
+| [`skills/`](./skills/) | 15 navigation and workflow skills for hosts with skill discovery (alternative to copy-pasting AGENT-GUIDE). See [`skills/README.md`](./skills/README.md). |
 | [`docs/MANUAL-VERIFICATION-CHECKLIST.md`](./docs/MANUAL-VERIFICATION-CHECKLIST.md) | 7-phase agent-driven verification after indexing your project. |
 | [`docs/CODEBASE_REQUIREMENTS.md`](./docs/CODEBASE_REQUIREMENTS.md) | Assumptions about your Java repo + per-file edit map for non-conforming codebases. |
 | [`automation/cursor_propose_only/README.md`](./automation/cursor_propose_only/README.md) | Optional proposal orchestration workflow (single-command autopilot, planning bundles, automated execution/review loops). |
