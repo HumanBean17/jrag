@@ -269,15 +269,26 @@ Returns **edges** with `attrs` (`confidence`, `strategy`, `match`, … on cross-
 
 After two failed attempts on the same intent, stop and report tool name, args, and response snippet.
 
-### Navigation skills (`/` commands)
+### Slash-style aliases
 
-Navigation intents (`/callees`, `/callers`, `/routes`, etc.) are shipped as SKILL.md files in [`skills/`](../skills/) at the project root. Each skill defines a deterministic MCP chain (Tier 1) or bounded workflow (Tier 2). See [`skills/README.md`](../skills/README.md) for the full index.
-
-When the user types a `/` intent matching a shipped skill, execute the chain from the corresponding `skills/<name>/SKILL.md`. For intents not covered by a skill, use the decision tree and raw MCP tools above.
+- `/nl <text>` → `search({"query":"<text>","limit":8})` then `describe` on best `symbol_id`.
+- `/controllers <ms>` → `find({"kind":"symbol","filter":{"microservice":"<ms>","role":"CONTROLLER"}})`.
+- `/routes <ms>` → `find({"kind":"route","filter":{"microservice":"<ms>"}})`.
+- `/clients <ms>` → `find({"kind":"client","filter":{"microservice":"<ms>"},"limit":100})`.
+- `/producers <ms>` → `find({"kind":"producer","filter":{"microservice":"<ms>"},"limit":100})`.
+- `/callers <sym_id>` → `neighbors({"ids":"<sym_id>","direction":"in","edge_types":["CALLS"]})`.
+- `/callees <sym_id>` → `neighbors({"ids":"<sym_id>","direction":"out","edge_types":["CALLS"]})`.
+- `/handlers <route_id>` → `neighbors({"ids":"<route_id>","direction":"in","edge_types":["EXPOSES"]})`.
+- `/who-hits-route <route_id>` → `neighbors({"ids":"<route_id>","direction":"in","edge_types":["HTTP_CALLS","ASYNC_CALLS","EXPOSES"]})`.
+- `/implements <type_sym_id>` → `neighbors({"ids":"<type_sym_id>","direction":"in","edge_types":["IMPLEMENTS"]})`.
+- `/injects <type_sym_id>` → `neighbors({"ids":"<type_sym_id>","direction":"in","edge_types":["INJECTS"]})`.
 
 ### Canonical workflow: "explain feature X"
 
-Use the `/explain-feature` skill (Tier 2). The chain is: `search` → pick 1–3 hits → `describe` each → bounded `neighbors` walk until the question is answered.
+1. `search` with a short query; pick 1–3 hits with strong `symbol_id` / role fit.
+2. `describe` on the chosen id; read `edge_summary`.
+3. Walk with `neighbors` using **small** `edge_types` sets (e.g. `CALLS` out, or `EXPOSES` / cross-service edges for boundaries).
+4. Stop when you can answer; do not prefetch unrelated subgraphs.
 
 <!-- END java-codebase-rag MCP guide -->
 

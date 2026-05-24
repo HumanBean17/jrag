@@ -260,29 +260,36 @@ class TestDirectoryIntegrity:
 
 
 class TestAgentGuideConsistency:
-    """AGENT-GUIDE.md slash-aliases must point at skills/, not embed chains."""
+    """AGENT-GUIDE.md copy-paste block must be self-contained."""
 
-    def test_guide_references_skills_directory(self):
+    def test_guide_has_inline_slash_aliases(self):
+        """The copy-paste block must include inline slash-alias bullets
+        (it's standalone — no external file references work in a consumer project)."""
         guide = Path(__file__).resolve().parent.parent / "docs" / "AGENT-GUIDE.md"
         text = guide.read_text(encoding="utf-8")
-        assert "skills/" in text, "docs/AGENT-GUIDE.md must reference skills/ directory"
-        assert "skills/README.md" in text or "skills/" in text, (
-            "docs/AGENT-GUIDE.md must point to skills/ for navigation commands"
+        # Extract the copy-paste block (marker on its own line)
+        begin = text.find("<!-- BEGIN java-codebase-rag MCP guide -->")
+        end = text.find("<!-- END java-codebase-rag MCP guide -->")
+        assert begin != -1 and end != -1, "AGENT-GUIDE.md missing BEGIN/END markers"
+        block = text[begin:end]
+        assert "### Slash-style aliases" in block, (
+            "AGENT-GUIDE.md copy-paste block missing '### Slash-style aliases'"
         )
+        # Verify key aliases are present inline
+        for alias in ["/nl", "/callers", "/callees", "/routes", "/controllers"]:
+            assert alias in block, f"AGENT-GUIDE.md copy-paste block missing {alias} alias"
 
-    def test_guide_does_not_embed_full_slash_alias_bullets(self):
-        """The old slash-style aliases section embedded full MCP chains.
-        After the rewrite, it must reference skills/ instead."""
+    def test_guide_copy_block_does_not_reference_skills_dir(self):
+        """The copy-paste block must not reference skills/ — it won't exist
+        in the consumer's project."""
         guide = Path(__file__).resolve().parent.parent / "docs" / "AGENT-GUIDE.md"
         text = guide.read_text(encoding="utf-8")
-        # The old format had lines like: /nl <text> → search({"query":...})
-        # After rewrite, these should be gone (replaced by skills/ pointers)
-        skill_names_pattern = "|".join(re.escape(n) for n in ALL_SKILL_NAMES)
-        old_pattern = re.compile(
-            rf"^- `/(?:{skill_names_pattern})\s+.*→\s*`(?:search|find|describe|neighbors)",
-            re.MULTILINE,
-        )
-        assert not old_pattern.search(text), (
-            "docs/AGENT-GUIDE.md still contains old embedded slash-alias MCP chains — "
-            "should reference skills/ instead"
+        begin = text.find("<!-- BEGIN java-codebase-rag MCP guide -->")
+        end = text.find("<!-- END java-codebase-rag MCP guide -->")
+        assert begin != -1 and end != -1, "AGENT-GUIDE.md missing BEGIN/END markers"
+        block = text[begin:end]
+        assert "skills/" not in block, (
+            "AGENT-GUIDE.md copy-paste block references skills/ — "
+            "this path won't resolve in a consumer project. "
+            "Keep skills/ references outside the copy-paste block."
         )
