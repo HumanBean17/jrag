@@ -9,6 +9,19 @@ Create local symlinks if your editor expects the legacy paths:
 `ln -s .agents .cursor` and `ln -s .agents .claude` (both are
 gitignored).
 
+### Two audiences, two skill trees
+
+| Directory | Audience | Purpose |
+|-----------|----------|---------|
+| **`.agents/skills/`** (`.claude/skills/`, `.cursor/skills/`) | Agents **developing** this repo | propose, plan-prompts, pr-open, pr-review |
+| **`skills/`** (project root) | Agents **using** this tool on their own codebase | /callers, /routes, /explain-feature, /impact-of, etc. |
+
+`.agents/` skills are loaded by the agent working *on* java-codebase-rag source
+code. `skills/` are shipped to consumers — they instruct an agent to call the
+MCP tools (`search`, `find`, `describe`, `neighbors`, `resolve`) against an
+indexed Java codebase. Do not mix the two: never import consumer skills into
+`.agents/skills/` or vice versa.
+
 This repo is a **self-contained stdio MCP server** that serves semantic
 + structural search over a Java codebase. It is a Python project (the
 indexer and server). It is **not** a Java project — the
