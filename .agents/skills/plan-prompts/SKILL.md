@@ -20,7 +20,7 @@ Do not use this skill if there is no plan yet. Write/update the plan first.
 ## Required inputs
 
 Before writing prompts, confirm:
-1. Source plan file path (for example `plans/PLAN-XYZ.md`).
+1. Source plan file path (for example `plans/active/PLAN-XYZ.md`).
 2. PR list and landing order from the plan.
 3. Any fixed constraints (branch naming, files or areas not to touch).
 
@@ -30,14 +30,14 @@ If already present in the plan, do not ask again.
 
 Always read:
 1. **One** structural template from **`plans/completed/AGENT-PROMPTS-*.md`** (pick a completed handoff similar in size or topic; if unsure, open the directory and choose any full example).
-2. The target **`plans/PLAN-*.md`**
+2. The target **`plans/active/PLAN-*.md`**
 3. **`tests/README.md`** for merge gate + iteration-loop expectations
 4. **`README.md`** for current public contract terms when prompts mention tooling/schema
 
 ## Output file contract
 
 Write one file:
-- `plans/AGENT-PROMPTS-<TOPIC>.md`
+- `plans/active/AGENT-PROMPTS-<TOPIC>.md`
 
 Include:
 - status line
@@ -84,16 +84,16 @@ This heading must stay verbatim so reviewers (and the repo **`pr-review`** skill
 
 **Branch:** `feat/<topic>` off `<base>`.
 **Base:** `<base branch or predecessor PR branch>`.
-**Plan section:** `plans/PLAN-<TOPIC>.md` § <section>.
+**Plan section:** `plans/active/PLAN-<TOPIC>.md` § <section>.
 
 **Attach (`@-files`):**
-- `@plans/PLAN-<TOPIC>.md`
+- `@plans/active/PLAN-<TOPIC>.md`
 - `@<key implementation files>`
 
 **Prompt:**
 
 ````
-You are implementing PR-XX from `plans/PLAN-<TOPIC>.md`.
+You are implementing PR-XX from `plans/active/PLAN-<TOPIC>.md`.
 
 Read the PR-XX section first. The plan is the source of truth.
 

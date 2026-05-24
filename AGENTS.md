@@ -42,16 +42,15 @@ when needed.
 - `docs/CODEBASE_REQUIREMENTS.md` — Java-repo assumptions and per-file map of
   what to edit when a target tree doesn't match defaults.
 - `tests/README.md` — testing philosophy.
-- **`propose/`** — design proposes. **In-flight** proposes are **`*.md`
-  at the root of `propose/`** (not under `propose/completed/`).
-  **`propose/completed/`** — landed work and rationale. **List or search
-  this tree** for current filenames; do not rely on enumerated copies
-  here.
+- **`propose/`** — design proposes. **In-flight** proposes live in
+  **`propose/active/`**. **`propose/completed/`** — landed work and rationale.
+  **List or search this tree** for current filenames; do not rely on enumerated
+  copies here.
 - **`plans/`** — longer-form multi-PR plans (`PLAN-*.md`) and
-  **`AGENT-PROMPTS-*.md`** for per-PR agent handoffs. Top-level `*.md`
-  here are active or in-progress efforts. **`plans/completed/`** —
-  finished plans and completed prompt sets (templates). **Open the
-  directory**; don't cache a mental file list from here.
+  **`AGENT-PROMPTS-*.md`** for per-PR agent handoffs. Active plans live in
+  **`plans/active/`**. **`plans/completed/`** — finished plans and completed
+  prompt sets (templates). **Open the directory**; don't cache a mental file
+  list from here.
 
 ## File map (top of repo)
 
@@ -113,24 +112,23 @@ inferring from code:
 
 - Behaviour / public surface → `README.md`.
 - Brownfield assumptions, role/capability tuning → `docs/CODEBASE_REQUIREMENTS.md`.
-- In-flight design proposes → **`propose/*.md` at the root of `propose/`**
-  (not under `propose/completed/`). **List or search** for current names.
+- In-flight design proposes → **`propose/active/`**.
+  **List or search** for current names.
 - Why current design exists → `propose/completed/` and `plans/completed/`.
 - Testing philosophy → `tests/README.md`.
-- In-flight multi-PR scope → **`plans/*.md` at the root of `plans/`**
-  (not under `plans/completed/`). **List or search `plans/`** for active
-  `PLAN-*.md` / `AGENT-PROMPTS-*.md`. Finished plans and prompt
-  templates → `plans/completed/`.
+- In-flight multi-PR scope → **`plans/active/`**.
+  **List or search** for active `PLAN-*.md` / `AGENT-PROMPTS-*.md`.
+  Finished plans and prompt templates → `plans/completed/`.
 
 ## Propose-then-implement culture
 
 The repo has a strong "propose then implement" culture (`propose/`,
 `plans/`). For non-trivial features:
 
-1. Drop a short markdown propose under `propose/` describing scope,
+1. Drop a short markdown propose under `propose/active/` describing scope,
    schema impact, reindex requirement, and tests touched.
-2. For multi-PR efforts, add a matching `plans/PLAN-<topic>.md` with
-   per-PR sections, then `plans/AGENT-PROMPTS-<topic>.md` with the
+2. For multi-PR efforts, add a matching `plans/active/PLAN-<topic>.md` with
+   per-PR sections, then `plans/active/AGENT-PROMPTS-<topic>.md` with the
    per-PR agent task prompts.
 3. Reference the propose / plan from the PR description.
 4. Move propose into `propose/completed/` (or plan into
