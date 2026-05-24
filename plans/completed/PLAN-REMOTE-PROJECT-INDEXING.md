@@ -163,7 +163,7 @@ Users will configure their MCP client (Cursor, Claude Code, etc.) like this:
 | `server.py` | `_cocoindex_subprocess_env(root)` + pass `env=` to CocoIndex subprocess |
 | `README.md` | Env table + `refresh_code_index` subprocess note |
 | `mcp.json.example` | Example `LANCEDB_MCP_PROJECT_ROOT` path |
-| `CODEBASE_REQUIREMENTS.md` | Project root / CocoIndex / MCP consistency |
+| `docs/CODEBASE_REQUIREMENTS.md` | Project root / CocoIndex / MCP consistency |
 | `tests/test_mcp_tools.py` | `test_cocoindex_subprocess_env_sets_project_root` |
 
 ---
@@ -172,5 +172,5 @@ Users will configure their MCP client (Cursor, Claude Code, etc.) like this:
 
 - [x] Step 1: Modify `java_index_flow_lancedb.py`
 - [x] Step 2: Modify `server.py` (including `_cocoindex_subprocess_env` helper + unit test)
-- [x] Step 3: Update documentation (`README.md`, `mcp.json.example`, `CODEBASE_REQUIREMENTS.md`, flow docstring)
+- [x] Step 3: Update documentation (`README.md`, `mcp.json.example`, `docs/CODEBASE_REQUIREMENTS.md`, flow docstring)
 - [x] Testing: `test_cocoindex_subprocess_env_sets_project_root`; heavy e2e unchanged (`cwd` + no env → `.` root)

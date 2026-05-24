@@ -805,7 +805,7 @@ order in this list is the only correct interleaving; do not reorder.
 - `README.md` — new section "Brownfield overrides" walking through Layer
   B (config), with a complete example block. Mention Layer C as the last
   resort, with the four interface declarations to copy-paste.
-- `CODEBASE_REQUIREMENTS.md` — expand the role-inference section to note
+- `docs/CODEBASE_REQUIREMENTS.md` — expand the role-inference section to note
   the override layers exist.
 - MCP server `instructions` string in `server.py` — one extra sentence
   noting that "role and capability inference can be customised per-project

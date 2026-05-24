@@ -239,7 +239,7 @@ Verified count: **5 production files, ~12 references**:
 | `server.py` | 49, 687, 1138, 1335, 1339, 1415 | MCP tool docstrings, `role` enum strings, entry-role filter |
 | `tests/test_lancedb_e2e.py` | 342 | One assertion |
 
-Plus docs: `README.md`, `CODEBASE_REQUIREMENTS.md`. Doc sweep is
+Plus docs: `README.md`, `docs/CODEBASE_REQUIREMENTS.md`. Doc sweep is
 straightforward.
 
 ### 4.4 Brownfield input today
@@ -398,7 +398,7 @@ story as every other graph-shape change).
 - README: rename role table; mention `CLIENT` + `HTTP_CLIENT` capability;
   document the `MESSAGE_PRODUCER` capability that already exists for
   symmetry.
-- `CODEBASE_REQUIREMENTS.md`: rename references.
+- `docs/CODEBASE_REQUIREMENTS.md`: rename references.
 - `propose/DEFERRED-REST-CLIENT-MIGRATION-PROPOSE.md`: **delete** (this
   proposal supersedes it; the rename-vs-capability decision is
   reversed by current architecture).

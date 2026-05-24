@@ -938,7 +938,7 @@ path in both services. Used by tests 32, 34, 37.
 | 10 | Extend `analyze_pr`: `cross_service_callers_count` per changed symbol  | `server.py`, `pr_analysis.py` | test 47 passes                    |
 | 11 | Risk-score weight bump in `pr_analysis.py`                             | `pr_analysis.py`         | docstring + unit test                  |
 | 12 | Create `tests/fixtures/cross_service_smoke/`                           | `tests/fixtures/...`     | fixture files in place                 |
-| 13 | Update `README.md` MCP tools section + `propose/PRODUCT-VISION.md` (`HTTP_CALLS` planned → shipped) | `README.md`, `propose/PRODUCT-VISION.md` | manual review            |
+| 13 | Update `README.md` MCP tools section + `docs/PRODUCT-VISION.md` (`HTTP_CALLS` planned → shipped) | `README.md`, `docs/PRODUCT-VISION.md` | manual review            |
 
 ---
 
@@ -988,7 +988,7 @@ path in both services. Used by tests 32, 34, 37.
 6. Existing MCP tools extended (`impact_analysis`, `trace_flow`,
    `analyze_pr`).
 7. `README.md` updated for caller-side edges, brownfield clients,
-   match outcomes; `propose/PRODUCT-VISION.md` flips
+   match outcomes; `docs/PRODUCT-VISION.md` flips
    `HTTP_CALLS` / `ASYNC_CALLS` from *planned* to *shipped*.
 8. Each PR's description quotes the relevant stats from a manual run
    on bank-chat-system as evidence.

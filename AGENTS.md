@@ -39,7 +39,7 @@ when needed.
   operator guide for the `java-codebase-rag` CLI (`init` / `increment` /
   `reprocess` / `erase`, `meta`, `tables`, `diagnose-ignore`,
   `analyze-pr`; hidden `refresh` alias → `reprocess` — see that doc).
-- `CODEBASE_REQUIREMENTS.md` — Java-repo assumptions and per-file map of
+- `docs/CODEBASE_REQUIREMENTS.md` — Java-repo assumptions and per-file map of
   what to edit when a target tree doesn't match defaults.
 - `tests/README.md` — testing philosophy.
 - **`propose/`** — design proposes. **In-flight** proposes are **`*.md`
@@ -112,7 +112,7 @@ For any non-trivial change, read the relevant doc first instead of
 inferring from code:
 
 - Behaviour / public surface → `README.md`.
-- Brownfield assumptions, role/capability tuning → `CODEBASE_REQUIREMENTS.md`.
+- Brownfield assumptions, role/capability tuning → `docs/CODEBASE_REQUIREMENTS.md`.
 - In-flight design proposes → **`propose/*.md` at the root of `propose/`**
   (not under `propose/completed/`). **List or search** for current names.
 - Why current design exists → `propose/completed/` and `plans/completed/`.

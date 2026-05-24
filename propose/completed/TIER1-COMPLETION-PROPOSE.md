@@ -1,7 +1,7 @@
 # Tier 1 completion — proposal (shipped)
 
 Status: **completed — shipped via PR-A1 → PR-C** (merged 2026-04 → 2026-05). Moved to `propose/completed/` after PR-D3 (Tier 1B) landed. Pairs with the borrow guide
-[`reports/what-to-borrow-from-cmm.md`](../../reports/what-to-borrow-from-cmm.md)
+[`docs/reports/what-to-borrow-from-cmm.md`](../../docs/reports/what-to-borrow-from-cmm.md)
 and follows on from the completed
 [`propose/completed/CALL-GRAPH-PROPOSE.md`](CALL-GRAPH-PROPOSE.md).
 
@@ -859,10 +859,10 @@ Independent PRs, but a sensible review order:
   section with `route_overrides` examples and `@CodebaseRoute`
   source stub** — same shape as the existing `role_overrides` /
   `@CodebaseRole` material.
-- `CODEBASE_REQUIREMENTS.md`: update the schema diagram and the env-var
+- `docs/CODEBASE_REQUIREMENTS.md`: update the schema diagram and the env-var
   table (`.lancedb-mcp-ignore` mention). Document the route resolver
   five-layer composition table from §4.6.4.
-- `propose/PRODUCT-VISION.md`: tick B2a / B4 / B5 off the roadmap; note
+- `docs/PRODUCT-VISION.md`: tick B2a / B4 / B5 off the roadmap; note
   B2b + B6 as the next proposal.
 
 ---
@@ -902,7 +902,7 @@ Open questions to settle during implementation, not now:
 - [ ] `ONTOLOGY_VERSION` bumped 4 → 5; stale-graph guard test added.
 - [ ] README brownfield section extended with `route_overrides` and
   `@CodebaseRoute` examples.
-- [ ] `CODEBASE_REQUIREMENTS.md` documents the §4.6.4 five-layer
+- [ ] `docs/CODEBASE_REQUIREMENTS.md` documents the §4.6.4 five-layer
   composition table.
 - [ ] No regressions in existing role / capability resolution
   (run the existing brownfield test suite).
@@ -918,7 +918,7 @@ Open questions to settle during implementation, not now:
 - [ ] Old `compile_excluded_glob_patterns` call sites replaced (3 of
   them).
 - [ ] `graph_meta` exposes `ignore_layers`.
-- [ ] `CODEBASE_REQUIREMENTS.md` documents the layer order.
+- [ ] `docs/CODEBASE_REQUIREMENTS.md` documents the layer order.
 
 ---
 
@@ -947,9 +947,9 @@ follow-ups, in order of leverage:
 ## 11. References
 
 - [`TIER1B-HTTP-ASYNC-EDGES-PROPOSE.md`](TIER1B-HTTP-ASYNC-EDGES-PROPOSE.md) - B2b + B6 propose
-- [`reports/what-to-borrow-from-cmm.md`](../../reports/what-to-borrow-from-cmm.md) — original borrow guide (Tier 1 §B1–B5).
+- [`docs/reports/what-to-borrow-from-cmm.md`](../../docs/reports/what-to-borrow-from-cmm.md) — original borrow guide (Tier 1 §B1–B5).
 - [`propose/completed/CALL-GRAPH-PROPOSE.md`](CALL-GRAPH-PROPOSE.md) — completed call-graph proposal; same shape & style.
-- [`reports/call-graph-review.md`](../../reports/call-graph-review.md) — review that surfaced the resolver / extractor invariants.
+- [`docs/reports/call-graph-review.md`](../../docs/reports/call-graph-review.md) — review that surfaced the resolver / extractor invariants.
 - [`plans/completed/PLAN-BROWNFIELD-ROLE-OVERRIDES-design-fixes.md`](../../plans/completed/PLAN-BROWNFIELD-ROLE-OVERRIDES-design-fixes.md) — **mandatory reading** for the implementer of §4.6 (brownfield route resolver mirrors this design).
 - `graph_enrich.py` §"brownfield role / capability overrides" — the
   existing implementation B2a extends.

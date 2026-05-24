@@ -460,7 +460,7 @@ Additions (~80 lines, no removals):
    - How to filter by `min_confidence`.
    - Why phantoms aren't dropped at index time.
 
-### 8. `CODEBASE_REQUIREMENTS.md`
+### 8. `docs/CODEBASE_REQUIREMENTS.md`
 
 Add a "Call graph" note listing the tree-sitter node types the extractor
 depends on:
@@ -585,7 +585,7 @@ Single PR. Breaking changes:
 | 8 | Augment `_graph_expand_merge` to also call `expand_methods`. | `search_lancedb.py` | Graph-expand results include method-reachable chunks on the smoke corpus. |
 | 9 | Add MCP tools (`find_callers`, `find_callees`), `follow_calls` param on `trace_flow`, update `_INSTRUCTIONS`. | `server.py` | `test_mcp_tools.py` additions pass. |
 | 10 | Update tests: new files + extend `test_ast_graph_build.py` / `test_kuzu_queries.py` / `test_mcp_tools.py`. | `tests/` | `pytest` green. |
-| 11 | Update `README.md` + `CODEBASE_REQUIREMENTS.md`. | docs | Manual review. |
+| 11 | Update `README.md` + `docs/CODEBASE_REQUIREMENTS.md`. | docs | Manual review. |
 | 12 | Confirm `propose/completed/CALL-GRAPH-PROPOSE.md` is the only active call-graph proposal (old deferred draft already removed; git history retains it). | `propose/` | Directory listing shows a single call-graph proposal. |
 
 ## Out of scope (for this plan, tracked elsewhere)

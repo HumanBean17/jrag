@@ -575,7 +575,7 @@ Concretely:
   plan §5.3) — two services + a third "ambiguous" controller.
 - Create `tests/test_call_edge_matching.py` with cases 32–40.
 - Extend `tests/test_mcp_tools.py` with cases 41–48.
-- Flip `propose/PRODUCT-VISION.md` `HTTP_CALLS` / `ASYNC_CALLS` rows
+- Flip `docs/PRODUCT-VISION.md` `HTTP_CALLS` / `ASYNC_CALLS` rows
   from *planned* to *shipped*.
 
 ## Out of scope (do NOT touch)
@@ -620,7 +620,7 @@ don't ship it.
 11. New fixture `tests/fixtures/cross_service_smoke/`.
 12. New test file `tests/test_call_edge_matching.py` with cases 32–40.
 13. Cases 41–48 added to `tests/test_mcp_tools.py`.
-14. `propose/PRODUCT-VISION.md` flipped (planned → shipped).
+14. `docs/PRODUCT-VISION.md` flipped (planned → shipped).
 15. `README.md` MCP tools section updated.
 
 ## Tests
@@ -681,7 +681,7 @@ Expected: at least one caller from `chat-assign` with `match='cross_service'`.
 - [ ] Sentinel greps return expected results.
 - [ ] No file outside `build_ast_graph.py`, `kuzu_queries.py`,
       `server.py`, `pr_analysis.py`, `README.md`,
-      `propose/PRODUCT-VISION.md`, and the new `tests/` paths is
+      `docs/PRODUCT-VISION.md`, and the new `tests/` paths is
       modified.
 - [ ] PR description includes the scope statement, the manual evidence
       output (pass6 log + meta() snippet + find_route_callers output),

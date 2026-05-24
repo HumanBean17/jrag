@@ -4,7 +4,7 @@ Status: **completed** — shipped (static intra-JVM `CALLS` + `DECLARES`; plan: 
 [`plans/completed/PLAN-CALL-GRAPH.md`](../../plans/completed/PLAN-CALL-GRAPH.md) for the
 step-by-step implementation.
 
-This proposal realises **point 4 of `PRODUCT-VISION.md`** ("Adding a Call
+This proposal realises **point 4 of `docs/PRODUCT-VISION.md`** ("Adding a Call
 Graph Layer") with a deliberately narrow scope: **static, intra-JVM
 method-to-method edges**. Cross-service HTTP/async, AOP-proxy resolution,
 and runtime-trace ingestion are explicit non-goals of this phase.
@@ -535,7 +535,7 @@ round-trip test.
   0.5 day: server surface + search-side expansion).
 - Validation on `bank-chat-system` + micro-fixture: **1 day**
   (unit + integration + regression run; manual trace_flow spot-checks).
-- Documentation update (`README.md`, `CODEBASE_REQUIREMENTS.md`, MCP
+- Documentation update (`README.md`, `docs/CODEBASE_REQUIREMENTS.md`, MCP
   instructions): **2 hours**.
 
 Total: **3–4 working days** including tests and docs.
