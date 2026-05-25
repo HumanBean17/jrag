@@ -1,0 +1,353 @@
+# TRACE-TOOL -- Multi-hop navigation shortcut
+
+**Status**: active
+**Author**: Dmitry + Computer
+**Date**: 2026-05-25
+
+---
+
+## TL;DR
+
+The v2 design locked in `neighbors` as the sole multi-hop primitive, requiring the agent to call it in a loop. In practice, agents drown during tracing: fan-out explosion (each CALLS hop produces 5-10 edges), no visited set (LLMs revisit nodes, follow cycles), low-signal edges dominate (getters, logging, framework plumbing), and context is consumed on traversal mechanics rather than understanding. The proposed `trace` tool is a **batched navigation shortcut** -- it does multi-hop BFS server-side in one call and returns paths/structure, not answers. The agent still interprets results. It is a sixth tool on the MCP surface, composing with the existing five.
+
+## Problem Statement
+
+### The drowning problem
+
+The v2 use-case validation (MCP-API-V2-REDESIGN-PROPOSE.md section 7) identified 5 of 20 use cases as "agent-driven MCP loop" -- exactly the questions that *should* require multi-hop reasoning. The design principle was correct: the GPS returns adjacency, the agent navigates. But in production, agents fail on these loops for four structural reasons:
+
+**1. Fan-out explosion.** A typical `CONTROLLER` method calls 5-8 `SERVICE` methods. Each of those calls 3-6 more. By depth 2, the frontier is 15-48 nodes. The agent must issue 15-48 `neighbors` calls, each returning up to 25 edges. A "trace from this route to the database" query can require 20+ tool calls before the agent sees a `REPOSITORY`.
+
+**2. No visited set.** LLMs do not maintain a visited set in working memory. They revisit nodes, follow cycles (A calls B calls A via callback/interface), and re-traverse already-explored branches. A 4-hop trace degrades into 10-15 redundant calls.
+
+**3. Low-signal edges dominate.** A `SERVICE` method's CALLS include getters (`getName()`), logging (`log.info()`), framework plumbing (`validate()`), and DTO construction alongside the one meaningful delegation to a `REPOSITORY`. The agent must issue a `describe` or inspect FQNs for each neighbor to filter noise, multiplying calls further.
+
+**4. Context consumed on mechanics.** Each `neighbors` call returns `Edge` objects with full `NodeRef` payloads. After 8 calls, the agent has spent 4,000+ tokens on edge lists and has not yet started reasoning about the flow. The agent's context budget is dominated by graph-walking bookkeeping.
+
+### Concrete example
+
+Question: "What happens when POST /api/orders is called?"
+
+Ideal agent behavior: 2-3 tool calls, get the full path from controller to repository.
+
+Actual agent behavior today:
+1. `find(kind="route", filter={path_prefix: "/api/orders", http_method: "POST"})` -- 1 call
+2. `neighbors(route_id, "in", ["EXPOSES"])` -- get handler method -- 1 call
+3. `neighbors(handler_id, "out", ["CALLS"])` -- returns 8 edges, 3 are noise -- 1 call
+4. Agent inspects each callee, describes 3 noise nodes, re-calls neighbors on the real service -- 3-4 calls
+5. `neighbors(service_id, "out", ["CALLS"])` -- returns 6 edges, 2 are noise -- 1 call
+6. Agent continues filtering... -- 2-3 more calls
+7. Total: 10-13 calls, agent is confused about which path matters
+
+With `trace`:
+1. `find(kind="route", filter={...})` -- 1 call
+2. `trace(route_id, "out", ["EXPOSES", "CALLS"], max_depth=4)` -- 1 call, returns pruned path tree
+3. Total: 2 calls, agent sees the full path structure and reasons about it
+
+## Proposed Solution
+
+### Signature
+
+```yaml
+trace(
+  ids: str | list[str],              # seed node ids (batch-capable, same as neighbors)
+  direction: Literal["in", "out"],   # REQUIRED -- no default (same discipline as neighbors)
+  edge_types: list[EdgeType],        # REQUIRED -- stored edge labels only (no composed dot-keys)
+  max_depth: int = 3,                # max BFS hops (clamped to 1..5)
+  max_paths: int = 20,               # max paths/edges to return (hard cap on result size)
+  filter?: NodeFilter,               # filter on discovered nodes (same schema as neighbors)
+  edge_filter?: EdgeFilter,          # edge attribute filtering (CALLS only, same as neighbors)
+  prune_roles?: list[str],           # roles to prune from traversal (e.g. ["DTO", "EXCEPTION", "UTILITY"])
+  fan_out_cap?: int = 5,             # per-node fan-out limit: if a node has >N edges, keep only top-K
+  collapse_trivial?: bool = True,    # collapse wrapper chains (A.calls(B).calls(C) where B is trivial)
+  include_unresolved?: bool = False,  # include UnresolvedCallSite edges (CALLS out only)
+) -> TraceOutput
+```
+
+### Result format
+
+```yaml
+TraceOutput:
+  success: bool
+  seed_ids: list[str]                  # echoed from request
+  direction: str                       # echoed
+  edge_types: list[str]                # echoed
+  actual_depth: int                    # depth actually traversed (may be < max_depth if frontier exhausted)
+  nodes: dict[str, NodeRef]            # id -> NodeRef for all discovered nodes
+  edges: list[TraceEdge]               # the filtered edge set
+  paths: list[TracePath]               # ranked root-to-leaf paths (up to max_paths)
+  stats: TraceStats                    # traversal statistics
+  message: str | None
+  advisories: list[str]
+  hints_structured: list[StructuredHint]
+
+TraceEdge:
+  from_id: str
+  to_id: str
+  edge_type: str
+  hop: int                             # BFS depth where discovered (0-indexed from seeds)
+  attrs: dict[str, Any]               # edge attributes (confidence, strategy, match, etc.)
+
+TracePath:
+  edges: list[TraceEdge]               # ordered root-to-leaf edges
+  leaf: NodeRef                        # terminal node
+  leaf_role: str | None                # leaf node role (for quick filtering)
+
+TraceStats:
+  total_nodes_discovered: int          # before pruning
+  total_edges_discovered: int          # before pruning
+  nodes_pruned_role: int               # nodes dropped by prune_roles
+  nodes_pruned_fan_out: int            # nodes dropped by fan_out_cap
+  edges_collapsed_trivial: int         # edges merged by collapse_trivial
+  nodes_after_pruning: int             # final count in result
+  edges_after_pruning: int             # final count in result
+```
+
+### Core algorithm
+
+The trace engine is a **BFS traversal** that reuses the same Cypher query infrastructure as `neighbors_v2` (via `KuzuGraph.neighbor_calls_for_symbol` and the generic label-predicate match in `mcp_v2.py`). It runs server-side as a single blocking call.
+
+```
+1. Initialize frontier = seed_ids, visited = {seed_ids}
+2. For hop in range(max_depth):
+   a. For each node in frontier:
+      - Query neighbors via existing KuzuGraph methods
+      - Apply edge_filter pushdown (min_confidence, strategies, callee_declaring_role)
+      - Apply NodeFilter on discovered nodes
+      - Apply prune_roles: skip nodes whose role is in prune_roles
+      - Apply fan_out_cap: if node has >fan_out_cap edges, keep top-K by:
+        - For CALLS: highest confidence, then fewest unresolved (prefer resolved)
+        - For cross-service: highest confidence
+        - For structural edges: alphabetically by FQN (deterministic)
+      - Record TraceEdge(from=node, to=neighbor, hop=hop, attrs=...)
+   b. new_frontier = {neighbor.id for each discovered neighbor not in visited}
+   c. visited |= new_frontier
+   d. frontier = new_frontier
+3. If collapse_trivial:
+   - Identify chains where intermediate node B has exactly 1 inbound and 1 outbound CALLS edge,
+     and B's role is OTHER or its declaring class role is SERVICE/COMPONENT
+   - Merge: edge A->B->C becomes A->C with attrs from the lower-confidence edge
+   - Record stats.edges_collapsed_trivial
+4. Build paths: enumerate root-to-leaf paths through the DAG
+   - Rank by: (a) leaf role priority (CONTROLLER > SERVICE > REPOSITORY > ...),
+     (b) path confidence (min edge confidence), (c) path length (shorter first)
+   - Cap at max_paths
+5. Collect nodes dict, edges list, paths list, stats
+6. Return TraceOutput
+```
+
+### Server-side pruning: the key differentiator
+
+The `trace` tool's value is not "do what the agent could do but faster" -- it is **server-side pruning** that the agent cannot replicate without issuing dozens of tool calls.
+
+**Role-based pruning (`prune_roles`)**: Nodes with roles like `DTO`, `EXCEPTION`, `UTILITY`, `OTHER` rarely carry meaningful traversal signal. A `SERVICE` method that calls `OrderDto#setTotal()` followed by `OrderRepository#save()` has one high-signal edge and one low-signal edge. Pruning DTOs at traversal time means the agent never sees the noise.
+
+**Fan-out throttling (`fan_out_cap`)**: When a node has 30 outgoing CALLS edges, the agent would have to inspect all 30 to find the 3 that matter. Fan-out cap keeps only the top-K by confidence and role priority, so the traversal stays focused. The `stats` object reports how many edges were cut so the agent knows the cap fired.
+
+**Trivial chain collapsing (`collapse_trivial`)**: Wrapper/delegate patterns are common in Spring microservices. `OrderServiceImpl#createOrder` calls `orderValidator#validate` calls `ValidationHelper#doValidate` calls `RulesEngine#check`. The intermediate wrapper and helper add no semantic value. Collapsing these into `OrderServiceImpl -> RulesEngine` shortens paths and keeps the agent focused on the real flow.
+
+**Cross-service seamless traversal**: When BFS encounters a `Symbol` with outgoing `DECLARES_CLIENT` or `DECLARES_PRODUCER`, and `HTTP_CALLS`/`ASYNC_CALLS` is in the requested `edge_types`, the engine follows through: `method -> Client -> HTTP_CALLS -> Route -> EXPOSES <- handler method`. This is a 4-hop traversal across service boundaries that would require 4 separate `neighbors` calls today. The engine follows it in one step because it has the full graph in Kuzu. Cross-service edges carry `confidence`, `strategy`, and `match` attributes so the agent can assess reliability.
+
+### Edge type handling
+
+`trace` accepts only **stored edge labels** (the 11 labels in `_EDGE_TYPES`). No composed dot-keys -- the engine handles multi-hop traversal internally. If the agent wants to trace from a type Symbol through its members, it passes `["DECLARES", "CALLS"]` and the engine does the 2-hop traversal automatically.
+
+The engine expands `edge_types` into traversal predicates using the same OR-of-scalar-equalities pattern as `neighbors_v2`:
+
+```python
+# Same pattern as mcp_v2.py line 1872
+label_params = [f"l{i}" for i in range(len(flat_labels))]
+label_predicate = "(" + " OR ".join(f"label(e) = ${name}" for name in label_params) + ")"
+```
+
+Cross-service traversal is implicit: when `HTTP_CALLS` or `ASYNC_CALLS` is in `edge_types`, the engine follows the full chain through Client/Producer nodes and Route nodes, collecting the intermediate edges as part of the same BFS.
+
+### Composability
+
+`trace` composes with the existing tools:
+
+1. **locate** via `search` or `find` (same as today)
+2. **trace** via `trace` (new -- gets the multi-hop structure)
+3. **inspect** via `describe` on any node in the trace result (follow-up detail)
+4. **drill** via `neighbors` on any node in the trace result (one-hop detail the trace skipped or pruned)
+5. **resolve** for identifier-shaped lookups before tracing
+
+The `nodes` dict in `TraceOutput` contains lightweight `NodeRef` objects (id, kind, fqn, role). For deeper inspection, the agent calls `describe(id)` on specific nodes. This preserves the GPS metaphor: `trace` maps the route, `describe` and `neighbors` provide street-level detail.
+
+### Depth control
+
+- `max_depth` defaults to **3** and is clamped to 1..5.
+- Depth 1 is equivalent to `neighbors` (no multi-hop benefit, but allows the pruning engine).
+- Depth 3 covers most practical traces: controller -> service -> repository, or route -> handler -> client -> downstream route.
+- Depth 5 is available for deep impact analysis but produces large results; the `max_paths` cap prevents runaway output.
+- The engine stops early if the frontier is exhausted before `max_depth`.
+
+### Cross-service traversal
+
+When `HTTP_CALLS` or `ASYNC_CALLS` is in `edge_types`, the BFS engine follows cross-service edges seamlessly:
+
+1. At a `Symbol` node with `DECLARES_CLIENT` -> `Client` -> `HTTP_CALLS` -> `Route`, the engine records:
+   - `Symbol --DECLARES_CLIENT--> Client` (hop N)
+   - `Client --HTTP_CALLS--> Route` (hop N+1)
+   - The Route's `EXPOSES` handler is discovered at hop N+2 (if `EXPOSES` is in `edge_types`)
+2. Cross-service edges carry their full attribute set: `confidence`, `strategy`, `match`, `raw_uri`/`raw_topic`.
+3. The `stats` object reports cross-service hops separately so the agent knows when it crossed a service boundary.
+
+This is the highest-value feature of `trace`: a 4-hop cross-service trace that would require 8-12 `neighbors` calls today is a single `trace` call.
+
+## Scope
+
+### What this proposal changes
+
+1. **New MCP tool**: `trace` registered in `server.py` alongside `search`, `find`, `describe`, `neighbors`, `resolve`.
+2. **New module**: `mcp_trace.py` containing the BFS engine, pruning logic, and output types.
+3. **No graph schema changes**: The engine reads the existing Kuzu graph. No new node kinds, edge types, or edge attributes.
+4. **No re-index required**: The tool operates on the existing graph structure.
+5. **No ontology bump**: No changes to `java_ontology.py`.
+
+### What this proposal does NOT change
+
+- `neighbors` remains the one-hop primitive. `trace` is optional; agents that reason well over multi-hop can still use `neighbors` loops.
+- `search`, `find`, `describe`, `resolve` are untouched.
+- `kuzu_queries.py` is not modified (trace reuses its existing query methods).
+- `mcp_v2.py` is not modified (trace reuses `NodeFilter`, `EdgeFilter`, `Edge`, `NodeRef` types).
+- No changes to the indexer, graph builder, or CLI.
+
+## Schema / Ontology / Re-index impact
+
+- **Ontology bump**: None. No new edge types or node kinds.
+- **Re-index required**: No. The tool reads the existing graph.
+- **Config/tool surface changes**: One new `trace` tool registration in `server.py`. The `mcp_trace.py` module is additive.
+- **MCP surface**: 6 tools total (was 5).
+
+## Tests / Validation
+
+### Unit tests (`tests/test_mcp_trace.py`)
+
+| Test name | Asserts |
+|-----------|---------|
+| `test_trace_outbound_calls_depth_2` | Traces from a controller method via CALLS out, depth 2, returns edges at hop 0 and hop 1 |
+| `test_trace_inbound_callers_depth_2` | Traces from a repository method via CALLS in, depth 2, returns caller chain |
+| `test_trace_prune_roles` | With `prune_roles=["DTO"]`, DTO nodes are excluded from traversal |
+| `test_trace_fan_out_cap` | With `fan_out_cap=2`, a node with 8 outbound CALLS returns at most 2 edges |
+| `test_trace_collapse_trivial` | Wrapper chain A->B->C where B has degree 2 is collapsed to A->C |
+| `test_trace_cross_service_http` | Traces from a method through DECLARES_CLIENT -> HTTP_CALLS -> Route -> EXPOSES handler across services |
+| `test_trace_cross_service_async` | Same for ASYNC_CALLS through Producer |
+| `test_trace_max_paths_cap` | Result paths list does not exceed `max_paths` |
+| `test_trace_depth_1_equivalent_to_neighbors` | Depth 1 trace with no pruning returns same nodes as `neighbors` |
+| `test_trace_stats_counts` | `stats.total_nodes_discovered`, `stats.nodes_pruned_role`, etc. are consistent with the edge set |
+| `test_trace_empty_seed` | Empty seed ids returns `success=True, nodes={}, edges=[], paths=[]` |
+| `test_trace_invalid_edge_type` | Unknown edge type returns `success=False` with teaching message |
+| `test_trace_direction_required` | Missing direction returns `success=False` |
+| `test_trace_edge_types_required` | Empty edge_types returns `success=False` |
+| `test_trace_visited_set_no_cycles` | BFS does not revisit nodes even if cycles exist in the graph |
+| `test_trace_filter_applied` | NodeFilter restricts discovered nodes |
+| `test_trace_edge_filter_calls` | EdgeFilter with `min_confidence` filters CALLS edges during traversal |
+| `test_trace_include_unresolved` | UnresolvedCallSite edges are interleaved when `include_unresolved=True, edge_types=["CALLS"], direction="out"` |
+| `test_trace_paths_root_to_leaf` | Each path starts at a seed and ends at a leaf with no further outbound edges in the result |
+| `test_trace_cross_service_edge_attrs` | Cross-service edges include `confidence`, `strategy`, `match` attributes |
+
+### Integration validation
+
+- Run `trace` against `tests/bank-chat-system` fixture for representative flows.
+- Compare `trace` output against equivalent `neighbors` loop results to verify structural correctness.
+- Verify `trace` call latency is under 500ms for depth 3 on the fixture graph.
+
+### Regression
+
+- Existing tool tests (`test_mcp_v2.py`, `test_server.py`) must pass unchanged.
+- `ruff check` clean on all new code.
+
+## Open Questions
+
+1. **Should `collapse_trivial` use degree-1 or a richer heuristic?** The current proposal uses "exactly 1 in-edge and 1 out-edge in the result set, role is OTHER or declaring-class role is SERVICE/COMPONENT." This may be too aggressive for some codebases. Should it be configurable? Should there be a `trivial_chain_min_length` parameter?
+
+2. **Should `fan_out_cap` ranking use callee_declaring_role priority?** The current proposal ranks by confidence. An alternative: rank by role priority (CONTROLLER > SERVICE > REPOSITORY > CLIENT > OTHER) then by confidence. This biases toward "interesting" paths but may miss legitimate cross-cutting concerns.
+
+3. **Should `trace` support bidirectional traversal?** The current proposal is unidirectional (same as `neighbors`). Some impact analysis questions benefit from mixed traversal (follow CALLS out, then INJECTS in). Should `direction` accept `"both"` for trace? Or should the agent issue two trace calls?
+
+4. **Path ranking strategy.** The current proposal ranks by (leaf role priority, min path confidence, path length). Is this the right ranking for all use cases? Should it be configurable (e.g., "shortest path first" vs. "highest confidence first")?
+
+5. **Memory/cost budget.** A depth-5 trace on a large codebase could discover thousands of nodes before pruning kicks in. Should there be a hard `max_nodes_discovered` budget (e.g., 500) that stops BFS early? The `max_paths` cap limits the output but not the intermediate computation.
+
+6. **Relationship to `find_callers`/`find_callees` in `kuzu_queries.py`.** These legacy methods already implement multi-hop BFS. Should `trace` replace them, or coexist? The proposal keeps them untouched (trace is additive), but they could be deprecated if trace subsumes them.
+
+## Out of scope
+
+- **Answer engine.** `trace` returns paths and structure. It does not synthesize natural-language answers or recommendations.
+- **Semantic ranking.** `trace` does not rank paths by semantic similarity to a query. It ranks by structural metrics (confidence, role, length).
+- **Graph schema changes.** No new node kinds, edge types, or edge attributes.
+- **Indexer changes.** No changes to `build_ast_graph.py` or the indexing pipeline.
+- **Replacing `neighbors`.** `neighbors` remains the one-hop primitive. `trace` is a higher-level convenience for multi-hop patterns.
+- **Visualization.** `trace` returns structured data. Rendering as a diagram, tree, or flowchart is the agent's job.
+- **Composed edge types as input.** `trace` accepts only stored edge labels. Composed traversal (e.g., DECLARES.DECLARES_CLIENT) is handled internally by the BFS engine when the agent passes `["DECLARES", "DECLARES_CLIENT"]`.
+
+## Sequencing / Follow-ups
+
+### PR-TRACE-1 -- `mcp_trace.py` core engine
+
+- Implement `TraceOutput`, `TraceEdge`, `TracePath`, `TraceStats` models.
+- Implement BFS traversal with visited set, edge type expansion, NodeFilter/EdgeFilter integration.
+- Implement role-based pruning (`prune_roles`).
+- Implement fan-out throttling (`fan_out_cap`) with confidence-based ranking.
+- Implement trivial chain collapsing (`collapse_trivial`).
+- Implement cross-service traversal (HTTP_CALLS, ASYNC_CALLS seamless hop-through).
+- Implement path enumeration and ranking.
+- **Tests**: unit tests listed above, minus cross-service integration.
+
+### PR-TRACE-2 -- `server.py` tool registration
+
+- Register `trace` tool in `create_mcp_server()` with description and parameter schema.
+- Wire to `mcp_trace.trace_v2()` via `asyncio.to_thread`.
+- Update `_INSTRUCTIONS` string to mention the sixth tool.
+- **Tests**: tool registration test, end-to-end trace call through MCP.
+
+### PR-TRACE-3 -- cross-service integration + hints
+
+- Cross-service integration tests against `tests/bank-chat-system`.
+- Add `generate_hints("trace", ...)` road signs in `mcp_hints.py`:
+  - When trace discovers cross-service edges, hint to `describe` the downstream route.
+  - When trace hits the fan-out cap, advisory text noting pruning occurred and suggesting `neighbors` for full detail.
+- Update `skills/explore-codebase/` to document the `trace` tool.
+- **Tests**: cross-service tests, hint generation tests.
+
+### PR-TRACE-4 -- README and documentation
+
+- Update `README.md` tool reference with `trace` description and examples.
+- Update `docs/CONFIGURATION.md` if any config surface changes.
+- Move this proposal to `propose/completed/`.
+
+---
+
+## Appendix A -- Justification for overriding the v2 "no trace tools" decision
+
+The v2 design (section 2, decision 2) states: "No `trace_*` tools. The agent walks via `neighbors` in a loop and decides its own stop condition." This was the correct design at the time given the constraints. The `trace` tool proposed here does **not** violate the v2 design principles. Here is the point-by-point justification:
+
+| v2 Principle | How `trace` Respects It |
+|---|---|
+| "The GPS does not tell you where to go." | `trace` returns **paths** (structure), not answers. It tells you "these roads exist between here and there." The agent still decides what the path means. |
+| "Edges over nodes." | `trace` returns edges with full attributes, same contract as `neighbors`. Cross-service edges carry `confidence`, `strategy`, `match`. |
+| "Required-by-default for hot params." | `direction` and `edge_types` are required on `trace`, same discipline as `neighbors`. |
+| "Small defaults." | `max_paths=20`, `max_depth=3`, `fan_out_cap=5`. Every parameter has a conservative default. |
+| "No magic." | `trace` does not "figure out the strategy." The agent specifies direction, edge types, depth, and pruning. The engine does BFS, not reasoning. |
+| "Optional." | `trace` is additive. `neighbors` loops still work. Agents that can do multi-hop reasoning are not forced to use `trace`. |
+
+The key difference from the rejected v1 `trace_flow` tool: `trace_flow` was a **stage-based role waterfall** with hardcoded CONTROLLER -> SERVICE -> REPOSITORY progression. It encoded the agent's intent into the tool. The proposed `trace` is a **generic BFS shortcut** with the same edge-type-aware contract as `neighbors`. It does not encode intent; it batches mechanics.
+
+What changed between v2 design (2026-05-07) and now (2026-05-25): production experience with the 5-tool surface on real microservice codebases showed that the `neighbors` loop approach works for 80% of queries (1-2 hop) but degrades severely for the remaining 20% (3+ hops, cross-service). The agent drowning pattern is consistent and reproducible. A batched shortcut that preserves the GPS metaphor is the right fix.
+
+## Appendix B -- Comparison with `neighbors` loop
+
+| Aspect | `neighbors` loop | `trace` |
+|---|---|---|
+| Calls for a 3-hop trace | 3-8 tool calls | 1 tool call |
+| Visited set | Agent's responsibility (LLMs are bad at this) | Server-side (deterministic) |
+| Fan-out control | Agent must filter manually | `fan_out_cap`, `prune_roles` |
+| Cross-service | Multiple calls per boundary | Seamless in one call |
+| Trivial chain collapsing | Agent must detect and skip | `collapse_trivial` |
+| Result structure | Flat edge lists per call | Structured paths + nodes dict |
+| Context budget | High (each call returns full payloads) | Low (pruned, deduplicated) |
+| Granularity | Full control per hop | Pruning may hide edges agent wants |
+| Flexibility | Can change strategy per hop | Fixed strategy for entire trace |
+
+The trade-off is clear: `trace` sacrifices per-hop control for efficiency. Agents that need per-hop reasoning should use `neighbors`. Agents that need a multi-hop overview should use `trace`.
