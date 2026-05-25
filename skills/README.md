@@ -1,18 +1,41 @@
-# skills/ — Layer 3 navigation and workflow skills
+# skills/ — RAG navigation skill for the java-codebase-rag MCP
 
-High-level intents over the 5-tool MCP (`search` / `find` / `describe` / `neighbors` / `resolve`). Skills are agent-side prompt scaffolding — they are NOT a second MCP API and NOT CLI subcommands.
+A single self-contained skill (`explore-codebase`) that provides the complete operating manual for the 5-tool MCP (`search` / `find` / `describe` / `neighbors` / `resolve`). Skills are agent-side prompt scaffolding — they are **not** a second MCP API and **not** CLI subcommands.
+
+## When to use
+
+Load this skill when your agent needs to explore an indexed Java codebase: locate symbols, trace call chains, find HTTP/messaging routes, walk cross-service boundaries, or answer any structural question.
+
+## Layout
+
+```
+skills/
+  README.md                        ← this file
+  explore-codebase/SKILL.md        ← complete MCP operating manual (standalone)
+```
+
+## What's inside `explore-codebase`
+
+The skill is a single comprehensive prompt that includes:
+
+- **Five-tool reference** — `search`, `find`, `describe`, `neighbors`, `resolve` with full argument shapes
+- **Node kinds** — Symbol, Route, Client, Producer
+- **Edge taxonomy** — stored edges, composed dot-keys, direction semantics
+- **NodeFilter reference** — all filter keys by node kind, strict frame rules
+- **Decision tree** — "user asks X → start with tool Y → follow up with Z"
+- **Recovery playbook** — common failure modes and fixes
+- **Navigation patterns** — 12 common intent-to-tool-chain mappings
+- **Ontology glossary** — roles, capabilities, symbol kinds, frameworks, match types
+- **Worked example** — end-to-end feature exploration
 
 ## Three-layer architecture
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │ Layer 3 — High-level intents (what the user actually thinks) │
-│   /trace-request-flow, /callees, /controllers, /routes,      │
-│   /impact-of, /mini-map                                      │
+│   "who calls X", "trace this route", "explain feature Y"     │
 │   ─────────────────────────────────────────────────────────  │
-│   Implementation: SKILL.md in skills/ at project root.       │
-│   Tier 1 = deterministic chains; Tier 2 = bounded workflows │
-│   + /mini-map heuristics.                                    │
+│   Implementation: explore-codebase SKILL.md                  │
 ├──────────────────────────────────────────────────────────────┤
 │ Layer 2 — Composable primitives (the MCP API)                │
 │   search, find, describe, neighbors, resolve                 │
@@ -22,58 +45,15 @@ High-level intents over the 5-tool MCP (`search` / `find` / `describe` / `neighb
 └──────────────────────────────────────────────────────────────┘
 ```
 
-## Skill index
+## Relationship to `docs/AGENT-GUIDE.md`
 
-### Tier 1 — Navigation (deterministic MCP chains)
+`explore-codebase` and `docs/AGENT-GUIDE.md` are **alternatives** covering the same ground. Pick one:
 
-| Skill | Purpose |
-| ----- | ------- |
-| [`/nl`](nl/SKILL.md) | Natural-language search into the graph |
-| [`/controllers`](controllers/SKILL.md) | List controller classes |
-| [`/routes`](routes/SKILL.md) | List HTTP and messaging routes |
-| [`/clients`](clients/SKILL.md) | List outbound HTTP clients |
-| [`/producers`](producers/SKILL.md) | List outbound async producers |
-| [`/callers`](callers/SKILL.md) | Who calls this method (in-process CALLS) |
-| [`/callees`](callees/SKILL.md) | What this method calls (in-process CALLS) |
-| [`/handlers`](handlers/SKILL.md) | Method that handles a route |
-| [`/who-hits-route`](who-hits-route/SKILL.md) | All inbound paths to a route |
-| [`/implements`](implements/SKILL.md) | Concrete classes implementing an interface |
-| [`/injects`](injects/SKILL.md) | Where a type is injected |
+- **`explore-codebase` skill** — loaded on demand by hosts with skill discovery (Claude Code, Qwen Code, Cursor). One skill to rule them all.
+- **AGENT-GUIDE block** — paste the `BEGIN`/`END` copy-paste block into your project's `AGENTS.md` / `CLAUDE.md`. Always-on. Best for hosts without skill loading.
 
-### Tier 2 — Workflow (bounded multi-step)
-
-| Skill | Purpose |
-| ----- | ------- |
-| [`/explain-feature`](explain-feature/SKILL.md) | Understand how a feature works end-to-end |
-| [`/impact-of`](impact-of/SKILL.md) | What breaks if a symbol changes |
-| [`/trace-request-flow`](trace-request-flow/SKILL.md) | Follow a request from entry to persistence |
-| [`/mini-map`](mini-map/SKILL.md) | Noise-filtered call map for a method |
-
-## Layout
-
-```
-skills/
-  <skill-name>/
-    SKILL.md          ← frontmatter (name + description) + markdown body
-  README.md           ← this file
-```
-
-## Skill structure
-
-Every SKILL.md follows this structure:
-
-1. **Frontmatter** — `name` and `description` (used by skill discovery)
-2. **MCP required** — declares the MCP server dependency and enforces tool usage
-3. **Argument contract** — what the skill accepts
-4. **Steps** — imperative MCP call chain (each step names the tool to call)
-5. **Worked example** — concrete walk-through
-6. **Do not** — guardrails against bypassing MCP tools
-7. **Out of scope** — boundaries for when to use a different skill
+Do not mix the two — duplicate context confuses tool selection.
 
 ## Relationship to developer skills
 
-Developer workflow skills (propose, pr-review, etc.) live in `.agents/skills/` — they are for contributors working **on** java-codebase-rag. Skills in this directory are for **consumers** using java-codebase-rag to explore their own codebases.
-
-## Versioning
-
-Skills are versioned lockstep with the MCP. When `NodeFilter` keys, `edge_filter` axes, `edge_types`, or `kind` values change, skills are updated in the same PR.
+Developer workflow skills (propose-doc-author, cursor-task-prompt, cursor-pr-review, etc.) live in `.agents/skills/` — they are for contributors working **on** java-codebase-rag. Skills under `skills/` are for **consumers** using java-codebase-rag to explore their own codebases.

@@ -17,6 +17,24 @@ For the design rationale, the GPS metaphor, and the full ontology, see [`docs/pa
 
 ---
 
+## Why this exists
+
+Generic code-search tools (grep, ctags, vector-only RAG) hit a ceiling on real Java microservice estates: they find files but lose the structure that makes a Spring/JAX-RS system navigable. This project is built around five choices that target that gap.
+
+- **Hybrid RAG + GraphRAG, not either-or.** Semantic recall (LanceDB chunk vectors) and structural navigation (Kuzu property graph) are composed in one surface. `search` finds candidate nodes by meaning; `neighbors` walks the exact edge you care about (`CALLS`, `IMPLEMENTS`, `INJECTS`, `DECLARES_ROUTE`, …). The agent picks the right primitive per step instead of being forced into pure-vector or pure-symbol search.
+
+- **A Java-tuned role model.** Symbols are labelled with stereotypes inferred from Spring and JAX-RS conventions — `CONTROLLER`, `SERVICE`, `REPOSITORY`, `CLIENT`, `PRODUCER`, `MAPPER`, `DTO`. Agents can ask "list controllers" or "who injects this repository" directly, instead of grep-ing for `@RestController` and hoping for the best. Roles drive both filtering (`find` with a `NodeFilter`) and ranking.
+
+- **Ranking specialized for Java codebases.** The composite ranker is aware of role, microservice, and FQN structure — not a generic BM25. A search for `"chat ingress"` surfaces controllers before utility classes; a search scoped to one microservice doesn't drown in matches from the other 19. Defaults are tuned on the bank-chat fixture and exposed in `docs/CONFIGURATION.md` for per-repo overrides.
+
+- **Cross-service resolution + system-level navigation.** `HTTP_CALLS` and `ASYNC_CALLS` edges connect Clients and Producers in one microservice to Routes and Handlers in another, resolved at index time from URL/topic strings + Spring `@FeignClient` / `RestTemplate` conventions. `/who-hits-route`, `/trace-request-flow`, and `/impact-of` use these to answer questions a single-service tool fundamentally can't — "who calls this REST endpoint from outside this service", "trace this Kafka message end-to-end", "if I change this DTO, which services break".
+
+- **Brownfield annotations as a first-class override.** Real Java estates have hand-rolled HTTP clients, dynamic topic names, reflection-heavy routing. `@CodebaseHttpRoute`, `@CodebaseAsyncRoute`, `@CodebaseHttpClient`, and `@CodebaseProducer` let you pin the truth in source. They have **exclusive priority** — when a symbol is annotated, framework-convention inference is skipped entirely. You get a correct graph on legacy code without rewriting it.
+
+The rest of this README is the install, walkthrough, and tool cheat sheet for putting that to work.
+
+---
+
 ## Install
 
 ```bash
@@ -99,9 +117,9 @@ See [`mcp.json.example`](./mcp.json.example) for the same shape in `.mcp.json` (
 
 Pick **one** of two options (not both — they cover the same navigation intents):
 
-1. **[`docs/AGENT-GUIDE.md`](./docs/AGENT-GUIDE.md)** (recommended for most) — standalone MCP operating manual. Copy-paste the `BEGIN`/`END` block into your project's `QWEN.md`, `CLAUDE.md`, or `AGENTS.md`. Contains: five-tool reference, `NodeFilter` / edge taxonomy, ontology glossary, recovery playbook, and inline slash-style aliases (`/callers`, `/callees`, `/routes`, etc.) as prompt templates. Self-contained — no external file dependencies.
+1. **[`docs/AGENT-GUIDE.md`](./docs/AGENT-GUIDE.md)** (recommended for most) — standalone MCP operating manual. Copy-paste the `BEGIN`/`END` block into your project's `QWEN.md`, `CLAUDE.md`, or `AGENTS.md`. Contains: five-tool reference, `NodeFilter` / edge taxonomy, ontology glossary, recovery playbook, and navigation patterns. Self-contained — no external file dependencies.
 
-2. **[`skills/`](./skills/)** (for hosts with skill discovery) — 15 shipped `SKILL.md` files. If your MCP host supports skill discovery (Claude Code, Qwen Code, Cursor), the same navigation intents are available as discoverable `/` commands. Tier 1 = deterministic MCP chains (`/callers`, `/callees`, `/routes`, `/controllers`, `/clients`, `/producers`, `/handlers`, `/who-hits-route`, `/implements`, `/injects`, `/nl`). Tier 2 = bounded workflows (`/explain-feature`, `/impact-of`, `/trace-request-flow`, `/mini-map`). See [`skills/README.md`](./skills/README.md) for the full index.
+2. **[`/explore-codebase`](./skills/explore-codebase/SKILL.md)** (for hosts with skill discovery) — single self-contained skill with the complete operating manual. If your MCP host supports skill discovery (Claude Code, Qwen Code, Cursor), load `/explore-codebase` to get the full tool reference, edge taxonomy, decision tree, and recovery playbook in one shot.
 
 Also: **[`docs/MANUAL-VERIFICATION-CHECKLIST.md`](./docs/MANUAL-VERIFICATION-CHECKLIST.md)** — 7-phase agent-driven verification you run after indexing your real project.
 
@@ -121,7 +139,7 @@ Full schemas, `NodeFilter` / `EdgeFilter` semantics, and the hints contract live
 
 ### Three-layer architecture
 
-Layer 1 (storage) → Layer 2 (5 MCP tools) → Layer 3 (skills). Navigation skills in [`skills/`](./skills/) wrap the MCP tools into deterministic chains (Tier 1) and bounded workflows (Tier 2). See the [architecture diagram in `skills/README.md`](./skills/README.md#three-layer-architecture).
+Layer 1 (storage) → Layer 2 (5 MCP tools) → Layer 3 (skill). The [`/explore-codebase`](./skills/explore-codebase/SKILL.md) skill provides the full operating manual for Layer 2. See the [architecture diagram in `skills/README.md`](./skills/README.md#three-layer-architecture).
 
 ---
 
@@ -164,7 +182,7 @@ Run `java-codebase-rag --help` to list grouped subcommands. Operator playbook wi
 | [`docs/CONFIGURATION.md`](./docs/CONFIGURATION.md) | Environment variables, project YAML, graph ontology, brownfield overrides, ignore patterns. |
 | [`docs/JAVA-CODEBASE-RAG-CLI.md`](./docs/JAVA-CODEBASE-RAG-CLI.md) | CLI operator playbook: workflows, exit codes, env alignment. |
 | [`docs/EDGE-NAVIGATION.md`](./docs/EDGE-NAVIGATION.md) | MCP-traversable edges, directions, dot-key composition. |
-| [`skills/`](./skills/) | 15 navigation and workflow skills for hosts with skill discovery (alternative to copy-pasting AGENT-GUIDE). See [`skills/README.md`](./skills/README.md). |
+| [`skills/`](./skills/) | Single `/explore-codebase` skill — complete MCP operating manual for hosts with skill discovery (alternative to copy-pasting AGENT-GUIDE). See [`skills/README.md`](./skills/README.md). |
 | [`docs/MANUAL-VERIFICATION-CHECKLIST.md`](./docs/MANUAL-VERIFICATION-CHECKLIST.md) | 7-phase agent-driven verification after indexing your project. |
 | [`docs/CODEBASE_REQUIREMENTS.md`](./docs/CODEBASE_REQUIREMENTS.md) | Assumptions about your Java repo + per-file edit map for non-conforming codebases. |
 | [`automation/cursor_propose_only/README.md`](./automation/cursor_propose_only/README.md) | Optional proposal orchestration workflow (single-command autopilot, planning bundles, automated execution/review loops). |

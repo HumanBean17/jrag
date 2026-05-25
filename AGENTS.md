@@ -14,10 +14,10 @@ gitignored).
 | Directory | Audience | Purpose |
 |-----------|----------|---------|
 | **`.agents/skills/`** (`.claude/skills/`, `.cursor/skills/`) | Agents **developing** this repo | propose, plan-prompts, pr-open, pr-review |
-| **`skills/`** (project root) | Agents **using** this tool on their own codebase | /callers, /routes, /explain-feature, /impact-of, etc. |
+| **`skills/explore-codebase/`** (project root) | Agents **using** this tool on their own codebase | /explore-codebase — complete MCP operating manual |
 
 `.agents/` skills are loaded by the agent working *on* java-codebase-rag source
-code. `skills/` are shipped to consumers — they instruct an agent to call the
+code. `skills/` is shipped to consumers — it instructs an agent to call the
 MCP tools (`search`, `find`, `describe`, `neighbors`, `resolve`) against an
 indexed Java codebase. Do not mix the two: never import consumer skills into
 `.agents/skills/` or vice versa.
@@ -55,7 +55,7 @@ when needed.
 - `docs/CODEBASE_REQUIREMENTS.md` — Java-repo assumptions and per-file map of
   what to edit when a target tree doesn't match defaults.
 - `tests/README.md` — testing philosophy.
-- **`skills/`** — user-facing skills shipped to java-codebase-rag consumers (navigation, workflow). Developer workflow skills live in **`.agents/skills/`**, not here.
+- **`skills/explore-codebase/`** — user-facing skill shipped to java-codebase-rag consumers. Single self-contained operating manual for the 5-tool MCP. Developer workflow skills live in **`.agents/skills/`**, not here.
 - **`propose/`** — design proposes. **In-flight** proposes live in
   **`propose/active/`**. **`propose/completed/`** — landed work and rationale.
   **List or search this tree** for current filenames; do not rely on enumerated

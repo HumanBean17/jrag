@@ -19,7 +19,7 @@
 - Out: `min_confidence` and `exclude_strategies` as `neighbors_v2` parameters (subsumed by `edge_filter`); a `CALLS` semantic split into `DELEGATES_TO` / `PERSISTS_VIA` / `ACCESSES_STATE`; `callee_capability` / `callee_annotation` / `callee_microservice` filter axes; `EdgeFilter` on `find_callers`; an MCP surface for "find unresolved callers"; package-relativity filters; multi-hop `neighbors_v2`; per-edge dedup as a `neighbors_v2` knob (kept as a CALLS-specific response shape decision in PR-3).
 - **MCP ordering contract (PR-2):** `neighbors_v2` today does not `ORDER BY` CALLS rows; PR-2 locks `ORDER BY e.call_site_line, e.call_site_byte` for every CALLS path (flat, `edge_filter`, and PR-3 `include_unresolved` interleave).
 - **`exclude_external` is not added to `neighbors_v2`.** It remains on `find_callers` / `find_callees` only (Decision 38). JDK/library noise on default `neighbors(out, ['CALLS'])` is addressed via `edge_filter` (`min_confidence`, `exclude_strategies`) after PR-2, not FQN-prefix rules.
-- **Accessor noise is only partly solved** by `callee_declaring_role`; entity getter/setter discrimination needs heuristics — see cross-link to [`propose/AGENT-SKILLS-AND-COMMANDS-PROPOSE.md`](AGENT-SKILLS-AND-COMMANDS-PROPOSE.md) `/mini-map` (Decision 39).
+- **Accessor noise is only partly solved** by `callee_declaring_role`; entity getter/setter discrimination needs heuristics — see cross-link to [`propose/completed/AGENT-SKILLS-AND-COMMANDS-PROPOSE.md`](../propose/completed/AGENT-SKILLS-AND-COMMANDS-PROPOSE.md) `/mini-map` (Decision 39).
 - Non-obvious constraint: `pass3_calls` and `find_callers` currently rely on phantom Symbol rows existing as the `dst` endpoint of `strategy='phantom'`/`'chained_receiver'` CALLS rows. PR-3 changes that invariant atomically. Known-receiver-external phantom-FQN rows (line 1257-1271) are kept; only true receiver-failure phantoms are removed.
 
 ### Fixture anchors (pinned for tests and HV rows)
@@ -446,7 +446,7 @@ These rows capture the workflows that *triggered* #177 — the things an agent w
 | Moving known-receiver-external rows (`build_ast_graph.py:1257-1271`) out of `CALLS` | Reviewer-flagged data-loss bug in revision 2. These rows carry preserved receiver-tier `strategy`/`confidence`/`arg_count` and a deterministic phantom FQN — real signal, not noise. README §"Phantom nodes" documents the existing contract. Decision 34 records this. |
 | Silent-no-op `edge_filter` on edges that don't carry the attribute | Contradicts `mcp_v2.py:6,82-91,191-206` fail-loud-on-inapplicable-fields contract. Reverted in revision 3 — Principle 7 + Decision 10 now fail-loud (HV13). |
 | `exclude_external` on `neighbors_v2` | Duplicates `find_callers` FQN-prefix logic on a different surface; use `edge_filter` on `neighbors` instead (Decision 38). Document asymmetry in AGENT-GUIDE. |
-| Method-level accessor labels (`ACCESSOR` vs business logic on same `ENTITY` type) | `callee_declaring_role` alone cannot split getters from real entity methods. Use [`propose/AGENT-SKILLS-AND-COMMANDS-PROPOSE.md`](AGENT-SKILLS-AND-COMMANDS-PROPOSE.md) `/mini-map` heuristics or a future propose (Decision 39). |
+| Method-level accessor labels (`ACCESSOR` vs business logic on same `ENTITY` type) | `callee_declaring_role` alone cannot split getters from real entity methods. Use [`propose/completed/AGENT-SKILLS-AND-COMMANDS-PROPOSE.md`](../propose/completed/AGENT-SKILLS-AND-COMMANDS-PROPOSE.md) `/mini-map` heuristics or a future propose (Decision 39). |
 | Porting `/mini-map` classification into the indexer | Skill-side remedy is intentional; server-side role projection closes phantom/chained + stereotype buckets only. |
 
 ## §6 — Migration plan — 3 PRs
@@ -554,7 +554,7 @@ This propose locks before any code PR merges. The propose itself merges as a sep
 36. **`neighbors_v2` CALLS paths use `ORDER BY e.call_site_line, e.call_site_byte` before `offset`/`limit`.** PR-2. Applies to empty-filter, `edge_filter`, and (PR-3) `include_unresolved` interleave.
 37. **`edge_filter` predicates are pushed into Cypher `WHERE` for `edge_types=['CALLS']`**, then `NodeFilter` on terminal nodes, then slice. No pre-filter SQL `LIMIT`. PR-2.
 38. **`exclude_external` is not added to `neighbors_v2`.** Document asymmetry with `find_callers` / `find_callees` in AGENT-GUIDE. PR-2.
-39. **Accessor / getter noise is out of scope for the indexer** — partially addressed by `exclude_callee_declaring_roles`; full remedy is client-side via [`propose/AGENT-SKILLS-AND-COMMANDS-PROPOSE.md`](AGENT-SKILLS-AND-COMMANDS-PROPOSE.md) `/mini-map` until a future method-level label propose.
+39. **Accessor / getter noise is out of scope for the indexer** — partially addressed by `exclude_callee_declaring_roles`; full remedy is client-side via [`propose/completed/AGENT-SKILLS-AND-COMMANDS-PROPOSE.md`](../propose/completed/AGENT-SKILLS-AND-COMMANDS-PROPOSE.md) `/mini-map` until a future method-level label propose.
 
 ## §8 — Risks and how we mitigate
 
@@ -677,5 +677,5 @@ ALTER NODE TABLE GraphMeta ADD COLUMN pass3_unresolved_chained INT64;
 - Builds on `propose/completed/SCHEMA-V2-PROPOSE.md` §3.4 (`EDGE_SCHEMA`) — extends with `callee_declaring_role` registration.
 - Builds on `propose/completed/HINTS-V3-PROPOSE.md` (kind/direction templates) — existing templates unchanged; PR-3 adds §3.10 templates per §3.9.1.
 - Builds on `propose/completed/HINTS-V4-SUCCESS-PATH-PROPOSE.md` — high-fanout and unresolved-presence templates plug into the existing success-path generator.
-- Complements [`propose/AGENT-SKILLS-AND-COMMANDS-PROPOSE.md`](AGENT-SKILLS-AND-COMMANDS-PROPOSE.md) `/mini-map` for accessor/getter noise (Decision 39) — server-side `edge_filter` does not replace skill heuristics.
+- Complements [`propose/completed/AGENT-SKILLS-AND-COMMANDS-PROPOSE.md`](../propose/completed/AGENT-SKILLS-AND-COMMANDS-PROPOSE.md) `/mini-map` for accessor/getter noise (Decision 39) — server-side `edge_filter` does not replace skill heuristics.
 - Resolves [#177](https://github.com/HumanBean17/java-codebase-rag/issues/177).
