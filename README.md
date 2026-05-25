@@ -17,6 +17,24 @@ For the design rationale, the GPS metaphor, and the full ontology, see [`docs/pa
 
 ---
 
+## Why this exists
+
+Generic code-search tools (grep, ctags, vector-only RAG) hit a ceiling on real Java microservice estates: they find files but lose the structure that makes a Spring/JAX-RS system navigable. This project is built around five choices that target that gap.
+
+- **Hybrid RAG + GraphRAG, not either-or.** Semantic recall (LanceDB chunk vectors) and structural navigation (Kuzu property graph) are composed in one surface. `search` finds candidate nodes by meaning; `neighbors` walks the exact edge you care about (`CALLS`, `IMPLEMENTS`, `INJECTS`, `DECLARES_ROUTE`, …). The agent picks the right primitive per step instead of being forced into pure-vector or pure-symbol search.
+
+- **A Java-tuned role model.** Symbols are labelled with stereotypes inferred from Spring and JAX-RS conventions — `CONTROLLER`, `SERVICE`, `REPOSITORY`, `CLIENT`, `PRODUCER`, `MAPPER`, `DTO`. Agents can ask "list controllers" or "who injects this repository" directly, instead of grep-ing for `@RestController` and hoping for the best. Roles drive both filtering (`find` with a `NodeFilter`) and ranking.
+
+- **Ranking specialized for Java codebases.** The composite ranker is aware of role, microservice, and FQN structure — not a generic BM25. A search for `"chat ingress"` surfaces controllers before utility classes; a search scoped to one microservice doesn't drown in matches from the other 19. Defaults are tuned on the bank-chat fixture and exposed in `docs/CONFIGURATION.md` for per-repo overrides.
+
+- **Cross-service resolution + system-level navigation.** `HTTP_CALLS` and `ASYNC_CALLS` edges connect Clients and Producers in one microservice to Routes and Handlers in another, resolved at index time from URL/topic strings + Spring `@FeignClient` / `RestTemplate` conventions. `/who-hits-route`, `/trace-request-flow`, and `/impact-of` use these to answer questions a single-service tool fundamentally can't — "who calls this REST endpoint from outside this service", "trace this Kafka message end-to-end", "if I change this DTO, which services break".
+
+- **Brownfield annotations as a first-class override.** Real Java estates have hand-rolled HTTP clients, dynamic topic names, reflection-heavy routing. `@CodebaseHttpRoute`, `@CodebaseAsyncRoute`, `@CodebaseHttpClient`, and `@CodebaseProducer` let you pin the truth in source. They have **exclusive priority** — when a symbol is annotated, framework-convention inference is skipped entirely. You get a correct graph on legacy code without rewriting it.
+
+The rest of this README is the install, walkthrough, and tool cheat sheet for putting that to work.
+
+---
+
 ## Install
 
 ```bash

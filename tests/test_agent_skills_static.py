@@ -45,6 +45,8 @@ _ALL_EDGE_TYPES: frozenset[str] = frozenset(get_args(EdgeType)) | frozenset(get_
 # ---------------------------------------------------------------------------
 
 SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"
+TIER1_DIR = SKILLS_DIR / "tier-1"
+TIER2_DIR = SKILLS_DIR / "tier-2"
 
 TIER1_NAMES = [
     "nl", "controllers", "routes", "clients", "producers",
@@ -57,6 +59,15 @@ TIER2_NAMES = [
 ]
 
 ALL_SKILL_NAMES = TIER1_NAMES + TIER2_NAMES
+
+
+def _skill_dir(name: str) -> Path:
+    """Return the tier directory for a skill name."""
+    if name in TIER1_NAMES:
+        return TIER1_DIR / name
+    if name in TIER2_NAMES:
+        return TIER2_DIR / name
+    raise ValueError(f"Unknown skill name: {name}")
 
 
 def _parse_frontmatter(text: str) -> dict[str, str]:
@@ -122,7 +133,7 @@ def _extract_edge_type_refs(body: str) -> set[str]:
 
 def _read_skill(name: str) -> tuple[dict[str, str], str]:
     """Read a skill's SKILL.md and return (frontmatter, body)."""
-    path = SKILLS_DIR / name / "SKILL.md"
+    path = _skill_dir(name) / "SKILL.md"
     text = path.read_text(encoding="utf-8")
     fm = _parse_frontmatter(text)
     # Body is everything after the closing ---
@@ -150,17 +161,18 @@ class TestSkillFrontmatter:
     @pytest.mark.parametrize("name", ALL_SKILL_NAMES)
     def test_frontmatter_has_name_and_description(self, name: str):
         fm, _ = _read_skill(name)
-        assert "name" in fm, f"skills/{name}/SKILL.md missing frontmatter 'name'"
-        assert fm["name"] == name, f"skills/{name}/SKILL.md: name={fm['name']!r}, expected {name!r}"
-        assert "description" in fm, f"skills/{name}/SKILL.md missing frontmatter 'description'"
+        rel = _skill_dir(name).relative_to(SKILLS_DIR.parent)
+        assert "name" in fm, f"{rel}/SKILL.md missing frontmatter 'name'"
+        assert fm["name"] == name, f"{rel}/SKILL.md: name={fm['name']!r}, expected {name!r}"
+        assert "description" in fm, f"{rel}/SKILL.md missing frontmatter 'description'"
         assert len(fm["description"]) >= 20, (
-            f"skills/{name}/SKILL.md description too short ({len(fm['description'])} chars)"
+            f"{rel}/SKILL.md description too short ({len(fm['description'])} chars)"
         )
 
     @pytest.mark.parametrize("name", ALL_SKILL_NAMES)
     def test_skill_file_exists(self, name: str):
-        path = SKILLS_DIR / name / "SKILL.md"
-        assert path.is_file(), f"Missing skills/{name}/SKILL.md"
+        path = _skill_dir(name) / "SKILL.md"
+        assert path.is_file(), f"Missing {path.relative_to(SKILLS_DIR.parent)}"
 
 
 class TestMCPToolReferences:
@@ -169,15 +181,17 @@ class TestMCPToolReferences:
     @pytest.mark.parametrize("name", ALL_SKILL_NAMES)
     def test_tool_refs_are_valid(self, name: str):
         _, body = _read_skill(name)
+        rel = _skill_dir(name).relative_to(SKILLS_DIR.parent)
         refs = _extract_tool_refs(body)
         invalid = refs - _VALID_TOOLS
-        assert not invalid, f"skills/{name}/SKILL.md references invalid tools: {invalid}"
+        assert not invalid, f"{rel}/SKILL.md references invalid tools: {invalid}"
 
     @pytest.mark.parametrize("name", ALL_SKILL_NAMES)
     def test_skill_references_at_least_one_tool(self, name: str):
         _, body = _read_skill(name)
+        rel = _skill_dir(name).relative_to(SKILLS_DIR.parent)
         refs = _extract_tool_refs(body)
-        assert refs, f"skills/{name}/SKILL.md references no MCP tools"
+        assert refs, f"{rel}/SKILL.md references no MCP tools"
 
 
 class TestKindAndEdgeReferences:
@@ -186,23 +200,27 @@ class TestKindAndEdgeReferences:
     @pytest.mark.parametrize("name", ALL_SKILL_NAMES)
     def test_kind_refs_are_valid(self, name: str):
         _, body = _read_skill(name)
+        rel = _skill_dir(name).relative_to(SKILLS_DIR.parent)
         refs = _extract_kind_refs(body)
         invalid = refs - _VALID_KINDS
-        assert not invalid, f"skills/{name}/SKILL.md references invalid find kinds: {invalid}"
+        assert not invalid, f"{rel}/SKILL.md references invalid find kinds: {invalid}"
 
     @pytest.mark.parametrize("name", ALL_SKILL_NAMES)
     def test_direction_refs_are_valid(self, name: str):
         _, body = _read_skill(name)
+        rel = _skill_dir(name).relative_to(SKILLS_DIR.parent)
         refs = _extract_direction_refs(body)
         invalid = refs - _VALID_DIRECTIONS
-        assert not invalid, f"skills/{name}/SKILL.md references invalid directions: {invalid}"
+        assert not invalid, f"{rel}/SKILL.md references invalid directions: {invalid}"
 
     @pytest.mark.parametrize("name", ALL_SKILL_NAMES)
     def test_edge_type_refs_are_valid(self, name: str):
         _, body = _read_skill(name)
+        rel = _skill_dir(name).relative_to(SKILLS_DIR.parent)
         refs = _extract_edge_type_refs(body)
         invalid = refs - _ALL_EDGE_TYPES
-        assert not invalid, f"skills/{name}/SKILL.md references invalid edge_types: {invalid}"
+        assert not invalid, f"{rel}/SKILL.md references invalid edge_types: {invalid}"
+
 
 
 class TestTier2BodyStructure:
@@ -211,23 +229,25 @@ class TestTier2BodyStructure:
     @pytest.mark.parametrize("name", TIER2_NAMES)
     def test_has_stop_conditions(self, name: str):
         _, body = _read_skill(name)
-        assert "## Stop conditions" in body, f"skills/{name}/SKILL.md missing '## Stop conditions'"
+        rel = _skill_dir(name).relative_to(SKILLS_DIR.parent)
+        assert "## Stop conditions" in body, f"{rel}/SKILL.md missing '## Stop conditions'"
 
     @pytest.mark.parametrize("name", TIER2_NAMES)
     def test_has_recursion_limit(self, name: str):
         _, body = _read_skill(name)
-        assert "## Recursion limit" in body, f"skills/{name}/SKILL.md missing '## Recursion limit'"
+        rel = _skill_dir(name).relative_to(SKILLS_DIR.parent)
+        assert "## Recursion limit" in body, f"{rel}/SKILL.md missing '## Recursion limit'"
 
     def test_mini_map_has_classification_rules(self):
         _, body = _read_skill("mini-map")
         assert "### Step 4 — Skill heuristics" in body or "Classification" in body, (
-            "skills/mini-map/SKILL.md missing classification rules"
+            "skills/tier-2/mini-map/SKILL.md missing classification rules"
         )
 
     def test_mini_map_has_output_shape(self):
         _, body = _read_skill("mini-map")
         assert "PERSISTS" in body and "DELEGATES" in body, (
-            "skills/mini-map/SKILL.md missing output shape (PERSISTS/DELEGATES labels)"
+            "skills/tier-2/mini-map/SKILL.md missing output shape (PERSISTS/DELEGATES labels)"
         )
 
 
@@ -237,23 +257,50 @@ class TestWorkedExamples:
     @pytest.mark.parametrize("name", ALL_SKILL_NAMES)
     def test_has_worked_example(self, name: str):
         _, body = _read_skill(name)
-        assert "## Worked example" in body, f"skills/{name}/SKILL.md missing '## Worked example'"
+        rel = _skill_dir(name).relative_to(SKILLS_DIR.parent)
+        assert "## Worked example" in body, f"{rel}/SKILL.md missing '## Worked example'"
 
 
 class TestDirectoryIntegrity:
-    """skills/ directory must contain exactly the expected skills."""
+    """skills/ must split into tier-1/ and tier-2/ with the expected skills."""
 
-    def test_no_extra_skill_dirs(self):
-        actual = {p.name for p in SKILLS_DIR.iterdir() if p.is_dir() and (p / "SKILL.md").exists()}
-        expected = set(ALL_SKILL_NAMES)
+    def test_tier_dirs_exist(self):
+        assert TIER1_DIR.is_dir(), "skills/tier-1/ missing"
+        assert TIER2_DIR.is_dir(), "skills/tier-2/ missing"
+
+    def test_tier1_no_extra_dirs(self):
+        actual = {p.name for p in TIER1_DIR.iterdir() if p.is_dir() and (p / "SKILL.md").exists()}
+        expected = set(TIER1_NAMES)
         extra = actual - expected
-        assert not extra, f"Unexpected skill directories: {extra}"
+        assert not extra, f"Unexpected skills under skills/tier-1/: {extra}"
 
-    def test_no_missing_skill_dirs(self):
-        actual = {p.name for p in SKILLS_DIR.iterdir() if p.is_dir() and (p / "SKILL.md").exists()}
-        expected = set(ALL_SKILL_NAMES)
+    def test_tier1_no_missing_dirs(self):
+        actual = {p.name for p in TIER1_DIR.iterdir() if p.is_dir() and (p / "SKILL.md").exists()}
+        expected = set(TIER1_NAMES)
         missing = expected - actual
-        assert not missing, f"Missing skill directories: {missing}"
+        assert not missing, f"Missing skills under skills/tier-1/: {missing}"
+
+    def test_tier2_no_extra_dirs(self):
+        actual = {p.name for p in TIER2_DIR.iterdir() if p.is_dir() and (p / "SKILL.md").exists()}
+        expected = set(TIER2_NAMES)
+        extra = actual - expected
+        assert not extra, f"Unexpected skills under skills/tier-2/: {extra}"
+
+    def test_tier2_no_missing_dirs(self):
+        actual = {p.name for p in TIER2_DIR.iterdir() if p.is_dir() and (p / "SKILL.md").exists()}
+        expected = set(TIER2_NAMES)
+        missing = expected - actual
+        assert not missing, f"Missing skills under skills/tier-2/: {missing}"
+
+    def test_no_skills_at_root(self):
+        """Skills must live under tier-1/ or tier-2/, not at the root of skills/."""
+        root_skill_dirs = {
+            p.name for p in SKILLS_DIR.iterdir()
+            if p.is_dir() and p.name not in ("tier-1", "tier-2") and (p / "SKILL.md").exists()
+        }
+        assert not root_skill_dirs, (
+            f"Found skills at skills/ root (must be moved into tier-1/ or tier-2/): {root_skill_dirs}"
+        )
 
     def test_readme_exists(self):
         assert (SKILLS_DIR / "README.md").is_file(), "skills/README.md missing"
