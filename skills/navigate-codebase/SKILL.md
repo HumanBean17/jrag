@@ -19,7 +19,29 @@ The graph exists to confirm structure you already have a hypothesis about — no
 
 ## Tools
 
-`search`, `find`, `describe`, `neighbors`, `resolve`. See `/explore-codebase` for full tool reference, argument shapes, and edge taxonomy.
+`search`, `find`, `describe`, `neighbors`, `resolve`.
+
+- **`search(query, table?, hybrid?, limit?, filter?)`** — ranked chunk retrieval. `table`: `java`|`sql`|`yaml`|`all` (default `java`). `limit` default 5.
+- **`find(kind, filter, limit?)`** — structured listing. `kind`: `symbol`|`route`|`client`|`producer`. `filter` is required.
+- **`describe(id)`** — full node record + `edge_summary` (per-label in/out counts). 1 arg.
+- **`neighbors(ids, direction, edge_types, filter?, edge_filter?, limit?)`** — one hop. `direction` and `edge_types` required. `filter` applies to the other node. `edge_filter` (CALLS only) applies to edges before pagination.
+- **`resolve(identifier, hint_kind?)`** — identifier lookup. Returns `one`, `many`, or `none`.
+
+### NodeFilter keys (for `find`, `search.filter`, `neighbors.filter`)
+
+| Keys | Applies to |
+| ---- | ---------- |
+| `microservice`, `module`, `source_layer` | All kinds |
+| `role`, `exclude_roles`, `annotation`, `capability`, `fqn_prefix`, `symbol_kind`, `symbol_kinds` | **symbol** |
+| `http_method`, `path_prefix`, `framework` | **route** |
+| `client_kind`, `target_service`, `target_path_prefix`, `http_method` | **client** |
+| `producer_kind`, `topic_prefix` | **producer** |
+
+`edge_types` and `exclude_roles` must be real JSON arrays: `["CALLS"]`, not `"CALLS"`.
+
+### Node id prefixes
+
+`sym:` (Symbol), `route:` / `r:` (Route), `client:` / `c:` (Client), `producer:` / `p:` (Producer).
 
 ## Forced reasoning preamble (every tool call)
 
@@ -30,7 +52,18 @@ Q-class: <semantic | structured | inspect | walk>
 Pick: <search|find|describe|neighbors|resolve>  Why: <≤8 words>
 ```
 
-Then use real JSON shapes. If the call fails or returns nothing useful, use the recovery playbook in `/explore-codebase`.
+Then use real JSON shapes.
+
+## Recovery (quick reference)
+
+| Symptom | Fix |
+| ------- | --- |
+| `neighbors` validation error | Add `direction` and `edge_types` explicitly |
+| Empty `neighbors` | Read `describe.edge_summary`; `EXPOSES` is Symbol→Route; `HTTP_CALLS` starts from **Client** ids |
+| Cannot find symbol | Try `resolve`, then `search`, then `find` with `fqn_prefix` |
+| `find` returns too much | Add `microservice`, `fqn_prefix`, or `role` to filter |
+| Empty `search` | Try `table="all"`; fall back to `rg` or file reads |
+| Result vs open file disagree | Trust the file; index may be stale |
 
 ## The 4 navigation rules
 
@@ -56,7 +89,7 @@ Every `neighbors` call must include either `edge_types` (always required), a `fi
 neighbors(ids, direction="out", edge_types=["CALLS"], filter={"exclude_roles": ["DTO","OTHER","MAPPER"]})
 ```
 
-On `CALLS` `out` edges, also consider `edge_filter` with `exclude_callee_declaring_roles=["OTHER"]` to drop JDK/Spring calls.
+On `CALLS` `out` edges, also consider passing `edge_filter={"exclude_callee_declaring_roles": ["OTHER"]}` (separate parameter from `filter`) to drop JDK/Spring calls.
 
 ### Rule 3: Depth discipline
 
@@ -116,18 +149,11 @@ After 2 hops of `CALLS`, you often land in repository methods, mappers, or frame
 | `ASYNC_CALLS` | Cross-service async calls | `out` on Producer -> Route |
 | `IMPLEMENTS` | Finding concrete implementations | `in` on interface -> implementors |
 | `INJECTS` | Finding where a type is injected | `in` on type -> injection sites |
+| `OVERRIDDEN_BY` | Finding concrete method implementations | `out` on non-static method -> overriders |
 
 ### Roles (for filtering)
 
 `CONTROLLER`, `SERVICE`, `REPOSITORY`, `COMPONENT`, `CONFIG`, `ENTITY`, `CLIENT`, `MAPPER`, `DTO`, `OTHER`.
-
-### Node id prefixes
-
-`sym:` (Symbol), `route:` / `r:` (Route), `client:` / `c:` (Client), `producer:` / `p:` (Producer).
-
-### Key argument rule
-
-`edge_types` must be a real JSON array `["CALLS"]`, not a string. Same for `exclude_roles`, `filter`, and `ids`.
 
 ## Worked example
 

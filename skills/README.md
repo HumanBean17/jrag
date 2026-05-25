@@ -1,22 +1,30 @@
-# skills/ — RAG navigation skill for the java-codebase-rag MCP
+# skills/ — RAG navigation skills for the java-codebase-rag MCP
 
-A single self-contained skill (`explore-codebase`) that provides the complete operating manual for the 5-tool MCP (`search` / `find` / `describe` / `neighbors` / `resolve`). Skills are agent-side prompt scaffolding — they are **not** a second MCP API and **not** CLI subcommands.
+Two self-contained skills for navigating indexed Java codebases via the 5-tool MCP (`search` / `find` / `describe` / `neighbors` / `resolve`). Skills are agent-side prompt scaffolding — they are **not** a second MCP API and **not** CLI subcommands.
 
-## When to use
+## Which skill to use
 
-Load this skill when your agent needs to explore an indexed Java codebase: locate symbols, trace call chains, find HTTP/messaging routes, walk cross-service boundaries, or answer any structural question.
+| Skill | When to use | Size |
+| ----- | ----------- | ---- |
+| **`explore-codebase`** | Full operating manual: complete tool reference, edge taxonomy, argument shapes, recovery playbook, broad exploratory analysis | ~320 lines |
+| **`navigate-codebase`** | Targeted tracing: "how does X flow", "trace the call chain for Y", "what happens when Z is called". Uses RAG-first strategy with depth discipline to prevent drowning during multi-hop walks | ~230 lines |
+
+Both skills are standalone — an agent can load either one without the other. For a broad exploration session (onboarding onto a service, understanding a feature end-to-end), use `explore-codebase`. For a focused trace question where the agent already knows roughly what it's looking for, use `navigate-codebase`.
 
 ## Layout
 
 ```
 skills/
   README.md                        ← this file
-  explore-codebase/SKILL.md        ← complete MCP operating manual (standalone)
+  explore-codebase/SKILL.md        ← complete MCP operating manual
+  navigate-codebase/SKILL.md       ← RAG-first tracing skill
 ```
 
-## What's inside `explore-codebase`
+## What's inside each skill
 
-The skill is a single comprehensive prompt that includes:
+### `explore-codebase`
+
+The comprehensive operating manual. Includes:
 
 - **Five-tool reference** — `search`, `find`, `describe`, `neighbors`, `resolve` with full argument shapes
 - **Node kinds** — Symbol, Route, Client, Producer
@@ -28,6 +36,16 @@ The skill is a single comprehensive prompt that includes:
 - **Ontology glossary** — roles, capabilities, symbol kinds, frameworks, match types
 - **Worked example** — end-to-end feature exploration
 
+### `navigate-codebase`
+
+The tactical tracing skill. Includes:
+
+- **Core strategy** — RAG-first, graph-for-precision
+- **4 navigation rules** — search before walking, always filter, depth discipline, hypothesis-driven hops
+- **Anti-patterns** — the drowning patterns to avoid (open-ended loops, bare walks, ignoring edge_summary)
+- **Quick reference** — essential tool args, NodeFilter keys, recovery table
+- **Worked example** — side-by-side correct vs drowning approach
+
 ## Three-layer architecture
 
 ```
@@ -35,7 +53,7 @@ The skill is a single comprehensive prompt that includes:
 │ Layer 3 — High-level intents (what the user actually thinks) │
 │   "who calls X", "trace this route", "explain feature Y"     │
 │   ─────────────────────────────────────────────────────────  │
-│   Implementation: explore-codebase SKILL.md                  │
+│   Implementation: explore-codebase / navigate-codebase       │
 ├──────────────────────────────────────────────────────────────┤
 │ Layer 2 — Composable primitives (the MCP API)                │
 │   search, find, describe, neighbors, resolve                 │
