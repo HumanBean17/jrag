@@ -14,7 +14,7 @@ gitignored).
 | Directory | Audience | Purpose |
 |-----------|----------|---------|
 | **`.agents/skills/`** (`.claude/skills/`, `.cursor/skills/`) | Agents **developing** this repo | propose, plan-prompts, pr-open, pr-review |
-| **`skills/`** (project root) | Agents **using** this tool on their own codebase | /callers, /routes, /explain-feature, /impact-of, etc. |
+| **`skills/tier-1/`** + **`skills/tier-2/`** (project root) | Agents **using** this tool on their own codebase | /callers, /routes, /explain-feature, /impact-of, etc. |
 
 `.agents/` skills are loaded by the agent working *on* java-codebase-rag source
 code. `skills/` are shipped to consumers — they instruct an agent to call the
@@ -55,7 +55,7 @@ when needed.
 - `docs/CODEBASE_REQUIREMENTS.md` — Java-repo assumptions and per-file map of
   what to edit when a target tree doesn't match defaults.
 - `tests/README.md` — testing philosophy.
-- **`skills/`** — user-facing skills shipped to java-codebase-rag consumers (navigation, workflow). Developer workflow skills live in **`.agents/skills/`**, not here.
+- **`skills/tier-1/`** + **`skills/tier-2/`** — user-facing skills shipped to java-codebase-rag consumers. Tier 1 are single-intent listings (`/callers`, `/routes`, `/clients`, …); Tier 2 are multi-step workflows (`/explain-feature`, `/impact-of`, `/trace-request-flow`, `/mini-map`). Users opt in per tier. Developer workflow skills live in **`.agents/skills/`**, not here.
 - **`propose/`** — design proposes. **In-flight** proposes live in
   **`propose/active/`**. **`propose/completed/`** — landed work and rationale.
   **List or search this tree** for current filenames; do not rely on enumerated
