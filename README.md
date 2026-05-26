@@ -42,6 +42,7 @@ pip install java-codebase-rag
 ```
 
 Python **3.11+** required. After install, `java-codebase-rag --help` should print the CLI groups.
+The package includes the CocoIndex lifecycle dependency used by `init`, `increment`, `reprocess`, and `erase`.
 
 > **Stability disclaimer.** This package does **not** promise backward compatibility. MCP tool contracts, env vars, Lance/Kuzu schemas, config files, and Python APIs may change without a deprecation period. Track `main` and rebuild indexes when ontology or embedding settings change.
 
@@ -199,7 +200,7 @@ python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
 
-The `cocoindex` package is **only** needed for lifecycle commands that run the indexer (`init`, `increment`, `reprocess`, `erase`). Search and MCP navigation work without it.
+The `cocoindex` package powers lifecycle commands that run the indexer (`init`, `increment`, `reprocess`, `erase`). Search and MCP navigation do not invoke it directly.
 
 The default embedding model is `sentence-transformers/all-MiniLM-L6-v2` (downloaded on first `init`). Override via the `EMBEDDING_MODEL` env var — see [`docs/CONFIGURATION.md` §1](./docs/CONFIGURATION.md#1-environment-variables).
 
