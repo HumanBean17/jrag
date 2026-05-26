@@ -16,8 +16,6 @@ import re
 from pathlib import Path
 from typing import get_args
 
-import pytest
-
 from java_ontology import NodeKind
 from mcp_v2 import ComposedEdgeType, EdgeType
 
@@ -39,6 +37,7 @@ _ALL_EDGE_TYPES: frozenset[str] = frozenset(get_args(EdgeType)) | frozenset(get_
 
 SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"
 SKILL_NAME = "explore-codebase"
+EXPECTED_SKILL_DIRS = {"explore-codebase", "navigate-codebase"}
 SKILL_PATH = SKILLS_DIR / SKILL_NAME / "SKILL.md"
 
 
@@ -208,13 +207,13 @@ class TestDirectoryIntegrity:
         assert (SKILLS_DIR / "README.md").is_file(), "skills/README.md missing"
 
     def test_no_other_skill_dirs(self):
-        """Only explore-codebase/ should exist as a skill directory."""
+        """Only documented consumer skill directories should exist."""
         skill_dirs = {
             p.name for p in SKILLS_DIR.iterdir()
             if p.is_dir() and (p / "SKILL.md").exists()
         }
-        assert skill_dirs == {SKILL_NAME}, (
-            f"Expected only skills/{SKILL_NAME}/, found: {skill_dirs}"
+        assert skill_dirs == EXPECTED_SKILL_DIRS, (
+            f"Expected only documented skills {EXPECTED_SKILL_DIRS}, found: {skill_dirs}"
         )
 
 
