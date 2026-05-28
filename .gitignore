@@ -44,6 +44,7 @@ htmlcov/
 
 # Local runtime / data artifacts
 .java-codebase-rag/
+tests/bank-chat-system/.java-codebase-rag
 # Track layered-ignore fixtures under tests/ (blanket rule above would hide them).
 !tests/**/.java-codebase-rag/
 !tests/**/.java-codebase-rag/**
@@ -56,3 +57,4 @@ cocoindex_java_lance.db/
 .env
 .env.*
 tmp/
+tests/bank-chat-system/.venv
