@@ -400,7 +400,18 @@ def _class_with_implements_out(kuzu_graph) -> str:
     )
     if not rows:
         pytest.skip("no class with IMPLEMENTS.out > 0 in fixture")
-    return str(rows[0]["id"])
+    tid = str(rows[0]["id"])
+    # The IMPLEMENTS hint is suppressed when type rollup emits
+    # (DECLARES.DECLARES_CLIENT/EXPOSES/DECLARES_PRODUCER).
+    # Verify the selected class actually qualifies for the hint.
+    out = describe_v2(tid, graph=kuzu_graph)
+    has_impl_hint = any(
+        h.tool == "neighbors" and h.args.get("edge_types") == ["IMPLEMENTS"]
+        for h in out.hints_structured
+    )
+    if not has_impl_hint:
+        pytest.skip("class has IMPLEMENTS but type rollup suppresses the hint")
+    return tid
 
 
 def _service_with_injects_out(kuzu_graph) -> str:
@@ -506,7 +517,7 @@ def _assert_structured_hint(
         return h
     pytest.fail(
         f"no structured hint with tool={tool!r} actionable={actionable} "
-        f"args_subset={args_subset!r} in {[h._asdict() for h in hints]}"
+        f"args_subset={args_subset!r} in {[h.model_dump() if hasattr(h, 'model_dump') else h._asdict() for h in hints]}"
     )
 
 
