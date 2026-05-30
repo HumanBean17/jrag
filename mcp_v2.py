@@ -190,7 +190,7 @@ _EDGEFILTER_FIELD_ORDER: tuple[str, ...] = tuple(EdgeFilter.model_fields.keys())
 
 class StructuredHint(BaseModel):
     label: str = ""
-    tool: Literal["search", "find", "describe", "neighbors", "resolve"]
+    tool: Literal["search", "find", "describe", "neighbors", "trace", "resolve"]
     args: dict[str, Any]
     actionable: bool = True
     reason: str = ""
