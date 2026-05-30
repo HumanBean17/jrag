@@ -55,6 +55,7 @@ trace(
   edge_types: list[EdgeType],        # REQUIRED -- stored edge labels only (no composed dot-keys)
   max_depth: int = 3,                # max BFS hops (clamped to 1..5)
   max_paths: int = 20,               # max paths/edges to return (hard cap on result size)
+  max_nodes_discovered: int = 500,   # hard budget on nodes discovered before pruning (clamped 100..2000)
   filter?: NodeFilter,               # filter on discovered nodes (same schema as neighbors)
   edge_filter?: EdgeFilter,          # edge attribute filtering (CALLS only, same as neighbors)
   prune_roles?: list[str],           # roles to prune from traversal (e.g. ["DTO", "EXCEPTION", "UTILITY"])
@@ -96,6 +97,8 @@ TracePath:
 TraceStats:
   total_nodes_discovered: int          # before pruning
   total_edges_discovered: int          # before pruning
+  budget_hit: bool                     # true if BFS stopped early due to max_nodes_discovered
+  budget_limit: int                    # the max_nodes_discovered value used
   nodes_pruned_role: int               # nodes dropped by prune_roles
   nodes_pruned_fan_out: int            # nodes dropped by fan_out_cap
   edges_collapsed_trivial: int         # edges merged by collapse_trivial
@@ -108,21 +111,25 @@ TraceStats:
 The trace engine is a **BFS traversal** that reuses the same Cypher query infrastructure as `neighbors_v2` (via `KuzuGraph.neighbor_calls_for_symbol` and the generic label-predicate match in `mcp_v2.py`). It runs server-side as a single blocking call.
 
 ```
-1. Initialize frontier = seed_ids, visited = {seed_ids}
+1. Initialize frontier = seed_ids, visited = {seed_ids}, total_discovered = 0
 2. For hop in range(max_depth):
-   a. For each node in frontier:
+   a. If total_discovered >= max_nodes_discovered:
+      - Set stats.budget_hit = True, add advisory to result
+      - Break loop
+   b. For each node in frontier:
       - Query neighbors via existing KuzuGraph methods
       - Apply edge_filter pushdown (min_confidence, strategies, callee_declaring_role)
       - Apply NodeFilter on discovered nodes
       - Apply prune_roles: skip nodes whose role is in prune_roles
       - Apply fan_out_cap: if node has >fan_out_cap edges, keep top-K by:
-        - For CALLS: highest confidence, then fewest unresolved (prefer resolved)
-        - For cross-service: highest confidence
-        - For structural edges: alphabetically by FQN (deterministic)
+        - Primary sort: confidence (highest first)
+        - Tiebreaker: role priority (CONTROLLER > SERVICE > REPOSITORY > CLIENT > OTHER)
+        - For structural edges without confidence: alphabetically by FQN (deterministic)
+      - total_discovered += len(discovered neighbors)
       - Record TraceEdge(from=node, to=neighbor, hop=hop, attrs=...)
-   b. new_frontier = {neighbor.id for each discovered neighbor not in visited}
-   c. visited |= new_frontier
-   d. frontier = new_frontier
+   c. new_frontier = {neighbor.id for each discovered neighbor not in visited}
+   d. visited |= new_frontier
+   e. frontier = new_frontier
 3. If collapse_trivial:
    - Identify chains where intermediate node B has exactly 1 inbound and 1 outbound CALLS edge,
      and B's role is OTHER or its declaring class role is SERVICE/COMPONENT
@@ -142,7 +149,7 @@ The `trace` tool's value is not "do what the agent could do but faster" -- it is
 
 **Role-based pruning (`prune_roles`)**: Nodes with roles like `DTO`, `EXCEPTION`, `UTILITY`, `OTHER` rarely carry meaningful traversal signal. A `SERVICE` method that calls `OrderDto#setTotal()` followed by `OrderRepository#save()` has one high-signal edge and one low-signal edge. Pruning DTOs at traversal time means the agent never sees the noise.
 
-**Fan-out throttling (`fan_out_cap`)**: When a node has 30 outgoing CALLS edges, the agent would have to inspect all 30 to find the 3 that matter. Fan-out cap keeps only the top-K by confidence and role priority, so the traversal stays focused. The `stats` object reports how many edges were cut so the agent knows the cap fired.
+**Fan-out throttling (`fan_out_cap`)**: When a node has 30 outgoing CALLS edges, the agent would have to inspect all 30 to find the 3 that matter. Fan-out cap keeps only the top-K — sorted by confidence (primary) with role priority as tiebreaker (CONTROLLER > SERVICE > REPOSITORY > CLIENT > OTHER) — so the traversal stays focused. The existing `EdgeFilter.callee_declaring_role` already lets agents pre-filter by role; the ranking does not duplicate that filter. The `stats` object reports how many edges were cut so the agent knows the cap fired.
 
 **Trivial chain collapsing (`collapse_trivial`)**: Wrapper/delegate patterns are common in Spring microservices. `OrderServiceImpl#createOrder` calls `orderValidator#validate` calls `ValidationHelper#doValidate` calls `RulesEngine#check`. The intermediate wrapper and helper add no semantic value. Collapsing these into `OrderServiceImpl -> RulesEngine` shortens paths and keeps the agent focused on the real flow.
 
@@ -174,13 +181,14 @@ Cross-service traversal is implicit: when `HTTP_CALLS` or `ASYNC_CALLS` is in `e
 
 The `nodes` dict in `TraceOutput` contains lightweight `NodeRef` objects (id, kind, fqn, role). For deeper inspection, the agent calls `describe(id)` on specific nodes. This preserves the GPS metaphor: `trace` maps the route, `describe` and `neighbors` provide street-level detail.
 
-### Depth control
+### Depth and budget control
 
 - `max_depth` defaults to **3** and is clamped to 1..5.
 - Depth 1 is equivalent to `neighbors` (no multi-hop benefit, but allows the pruning engine).
 - Depth 3 covers most practical traces: controller -> service -> repository, or route -> handler -> client -> downstream route.
 - Depth 5 is available for deep impact analysis but produces large results; the `max_paths` cap prevents runaway output.
 - The engine stops early if the frontier is exhausted before `max_depth`.
+- `max_nodes_discovered` defaults to **500** and is clamped to 100..2000. This is a hard budget on nodes discovered (before pruning) per trace call. When hit, BFS stops mid-traversal and reports `stats.budget_hit = True` plus an advisory: `"trace stopped early: discovered {N} of ~{M} nodes before budget. Reduce max_depth or add prune_roles to focus."`
 
 ### Cross-service traversal
 
@@ -234,6 +242,7 @@ This is the highest-value feature of `trace`: a 4-hop cross-service trace that w
 | `test_trace_cross_service_http` | Traces from a method through DECLARES_CLIENT -> HTTP_CALLS -> Route -> EXPOSES handler across services |
 | `test_trace_cross_service_async` | Same for ASYNC_CALLS through Producer |
 | `test_trace_max_paths_cap` | Result paths list does not exceed `max_paths` |
+| `test_trace_budget_stops_early` | BFS stops when `max_nodes_discovered` is hit; `stats.budget_hit=True`; advisory message present |
 | `test_trace_depth_1_equivalent_to_neighbors` | Depth 1 trace with no pruning returns same nodes as `neighbors` |
 | `test_trace_stats_counts` | `stats.total_nodes_discovered`, `stats.nodes_pruned_role`, etc. are consistent with the edge set |
 | `test_trace_empty_seed` | Empty seed ids returns `success=True, nodes={}, edges=[], paths=[]` |
@@ -258,19 +267,26 @@ This is the highest-value feature of `trace`: a 4-hop cross-service trace that w
 - Existing tool tests (`test_mcp_v2.py`, `test_server.py`) must pass unchanged.
 - `ruff check` clean on all new code.
 
-## Open Questions
+## Resolved Decisions
 
-1. **Should `collapse_trivial` use degree-1 or a richer heuristic?** The current proposal uses "exactly 1 in-edge and 1 out-edge in the result set, role is OTHER or declaring-class role is SERVICE/COMPONENT." This may be too aggressive for some codebases. Should it be configurable? Should there be a `trivial_chain_min_length` parameter?
+These questions were resolved during review (PR #234). Deferred items are tracked as follow-up issues.
 
-2. **Should `fan_out_cap` ranking use callee_declaring_role priority?** The current proposal ranks by confidence. An alternative: rank by role priority (CONTROLLER > SERVICE > REPOSITORY > CLIENT > OTHER) then by confidence. This biases toward "interesting" paths but may miss legitimate cross-cutting concerns.
+1. **`collapse_trivial` heuristic** — **Degree-1, no configurability.** The heuristic (1 in + 1 out in the result set, role is OTHER or declaring-class role is SERVICE/COMPONENT) is conservative enough for v1. No `trivial_chain_min_length` parameter. If production data shows false positives or missed chains, a richer heuristic will be proposed in #240.
 
-3. **Should `trace` support bidirectional traversal?** The current proposal is unidirectional (same as `neighbors`). Some impact analysis questions benefit from mixed traversal (follow CALLS out, then INJECTS in). Should `direction` accept `"both"` for trace? Or should the agent issue two trace calls?
+2. **`fan_out_cap` ranking** — **Confidence primary, role as tiebreaker.** Pure role-based ranking would deprioritize cross-cutting concerns (logging, security, metrics) that have low-confidence edges but are architecturally important. The existing `EdgeFilter.callee_declaring_role` already provides role filtering; the ranking should not duplicate it. Tiebreaker: role priority (CONTROLLER > SERVICE > REPOSITORY > CLIENT > OTHER).
 
-4. **Path ranking strategy.** The current proposal ranks by (leaf role priority, min path confidence, path length). Is this the right ranking for all use cases? Should it be configurable (e.g., "shortest path first" vs. "highest confidence first")?
+3. **Bidirectional traversal** — **No for v1. Agent issues two calls.** Bidirectional BFS would require specifying which edge types follow which direction, turning the signature into a mini query language. Two unidirectional `trace` calls + client-side merge is simpler and composable. If the two-call pattern proves pervasive in production, add `"both"` direction — tracked in #240.
 
-5. **Memory/cost budget.** A depth-5 trace on a large codebase could discover thousands of nodes before pruning kicks in. Should there be a hard `max_nodes_discovered` budget (e.g., 500) that stops BFS early? The `max_paths` cap limits the output but not the intermediate computation.
+4. **Path ranking** — **Fixed ranking for v1.** Leaf role priority > min path confidence > path length (shorter first). The `max_paths` cap and full `edges` list in the output let agents re-rank client-side. If real usage shows consistent client-side re-ranking, a `rank_by` parameter can be added — tracked in #240.
 
-6. **Relationship to `find_callers`/`find_callees` in `kuzu_queries.py`.** These legacy methods already implement multi-hop BFS. Should `trace` replace them, or coexist? The proposal keeps them untouched (trace is additive), but they could be deprecated if trace subsumes them.
+5. **Memory/cost budget** — **Hard `max_nodes_discovered` budget.** Default 500, clamped to 100–2000. A depth-5 trace on a large codebase can discover thousands of nodes before pruning. The BFS stops early when the budget is hit and reports it via `stats.budget_hit` + an advisory message. The `max_paths` cap limits output but not computation — the budget is the safety net.
+
+6. **Legacy `find_callers`/`find_callees`** — **Coexist for v1.** These methods serve the CLI, not the MCP surface — different consumers. Once the trace engine is proven on MCP, add a `java-codebase-rag trace` CLI command reusing the engine, then deprecate legacy methods — tracked in #241.
+
+### Follow-up issues
+
+- **#240** — trace tool: v2 enhancements (bidirectional traversal, richer collapse_trivial heuristic, configurable path ranking, configurable fan_out_cap ranking)
+- **#241** — trace tool: CLI integration and legacy method deprecation
 
 ## Out of scope
 
@@ -328,7 +344,7 @@ The v2 design (section 2, decision 2) states: "No `trace_*` tools. The agent wal
 | "The GPS does not tell you where to go." | `trace` returns **paths** (structure), not answers. It tells you "these roads exist between here and there." The agent still decides what the path means. |
 | "Edges over nodes." | `trace` returns edges with full attributes, same contract as `neighbors`. Cross-service edges carry `confidence`, `strategy`, `match`. |
 | "Required-by-default for hot params." | `direction` and `edge_types` are required on `trace`, same discipline as `neighbors`. |
-| "Small defaults." | `max_paths=20`, `max_depth=3`, `fan_out_cap=5`. Every parameter has a conservative default. |
+| "Small defaults." | `max_paths=20`, `max_depth=3`, `fan_out_cap=5`, `max_nodes_discovered=500`. Every parameter has a conservative default. |
 | "No magic." | `trace` does not "figure out the strategy." The agent specifies direction, edge types, depth, and pruning. The engine does BFS, not reasoning. |
 | "Optional." | `trace` is additive. `neighbors` loops still work. Agents that can do multi-hop reasoning are not forced to use `trace`. |
 
