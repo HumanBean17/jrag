@@ -24,9 +24,9 @@ Depends on: none (additive MCP tool; reads existing graph).
 
 ## PR breakdown — overview
 
-| PR | Scope | Ontology bump | Areas of concern | Test buckets | Independent of |
+| PR | Scope | Ontology bump | Areas of concern | Test buckets | Depends on |
 | --- | --- | --- | --- | --- | --- |
-| PR-TRACE-1a | Core BFS engine: `mcp_trace.py` models, batched query, BFS with visited set, budget, path enumeration | none | BFS correctness (visited set, cycle handling, budget early-stop); batched Cypher query parity with existing per-node query; `parent_edge_id` consistency; path enumeration cap | `tests/test_mcp_trace.py` (new file) | prerequisite only |
+| PR-TRACE-1a | Core BFS engine: `mcp_trace.py` models, batched query, BFS with visited set, budget, path enumeration | none | BFS correctness (visited set, cycle handling, budget early-stop); batched Cypher query parity with existing per-node query; `parent_edge_id` consistency; path enumeration cap | `tests/test_mcp_trace.py` (new file) | — |
 | PR-TRACE-1b | Pruning, collapsing, cross-service: `prune_roles`, `fan_out_cap`, `collapse_trivial`, cross-service boundary detection | none | Soft-gate vs hard-gate semantics; fan-out ranking stability; trivial-chain heuristic false positives; scaffolding edge exemption; post-collapse `parent_edge_id` recomputation | `tests/test_mcp_trace.py` (extends) | PR-TRACE-1a |
 | PR-TRACE-2 | MCP registration: `server.py` tool wiring, `_INSTRUCTIONS` update | none | Tool description contract (LLM reads this); parameter schema accuracy; `asyncio.to_thread` wiring; import path | `tests/test_server.py` (extends) + `tests/test_mcp_trace.py` (e2e) | PR-TRACE-1b |
 | PR-TRACE-3 | Cross-service integration + hints + skill: `mcp_hints.py`, `skills/explore-codebase/SKILL.md` | none | Hint text quality (LLM-parseable); skill decision tree ambiguity; cross-service fixture coverage | `tests/test_mcp_hints.py` (extends) + `tests/test_mcp_trace.py` (integration) | PR-TRACE-1b |
@@ -52,6 +52,7 @@ experimental ← 1a ← 1b ← 2
 | `collapsed` marker | Yes — `collapsed: True` + `collapsed_intermediates: [node_ids]` on `TraceEdge`. |
 | Flat edge hierarchy | `parent_edge_id` on `TraceEdge`, not a full `tree` field. Enables O(1) tree reconstruction per edge. |
 | PR split | 1a (core BFS + budget + paths) then 1b (pruning + collapsing + cross-service). Different review surfaces. |
+| Import contract | Trace imports `NodeFilter`, `EdgeFilter`, `NodeRef`, `_node_ref_from_row`, `_node_kind_from_id` from `mcp_v2.py` — not the propose's `Edge` type. `TraceEdge` is a new model defined in `mcp_trace.py` (different shape: includes `hop`, `parent_edge_id`, `collapsed`, `cross_service_boundary`). The propose's `Edge` is the `neighbors` result type and does not apply to trace. |
 
 ---
 
@@ -99,7 +100,7 @@ experimental ← 1a ← 1b ← 2
 14. `test_trace_budget_clamped` — `max_nodes_discovered` values <100 clamped to 100, >2000 clamped to 2000.
 15. `test_trace_visited_set_no_cycles` — BFS does not revisit nodes even if cycles exist in the graph.
 16. `test_trace_filter_applied` — `NodeFilter` restricts discovered nodes (hard gate — excluded entirely from nodes dict and edges).
-17. `test_trace_filter_vs_prune_roles` — `NodeFilter` exclude_roles is harder than `prune_roles`: NodeFilter excludes nodes and edges; `prune_roles` records edges but stops frontier (soft gate validation — prune_roles is a no-op at this PR's depth since full pruning lands in 1b; test that `prune_roles=[]` is accepted and produces full result).
+17. `test_trace_prune_roles_param_accepted_noop` — `prune_roles=[]` is accepted and produces a full unpruned result (soft-gate parameter wired but no-op until pruning logic lands in 1b).
 18. `test_trace_edge_filter_calls` — `EdgeFilter` with `min_confidence` filters CALLS edges during traversal.
 19. `test_trace_include_unresolved` — `UnresolvedCallSite` edges are interleaved when `include_unresolved=True, edge_types=["CALLS"], direction="out"`.
 20. `test_trace_paths_root_to_leaf` — each path starts at a seed and ends at a leaf with no further outbound edges in the result.
@@ -168,7 +169,7 @@ experimental ← 1a ← 1b ← 2
 - All pruning features work: `prune_roles` soft gate, `fan_out_cap` with ranking, `collapse_trivial` with intermediates, cross-service boundary-stop.
 - `stats` object reports accurate pruning/collapsing counts.
 - `parent_edge_id` is consistent after collapsing.
-- All 11 new tests pass + all 23 tests from PR-TRACE-1a still pass.
+- All 11 new tests pass + all 23 tests from PR-TRACE-1a still pass (33 unique total: 1a's `test_trace_prune_roles_param_accepted_noop` is replaced by 1b's `test_trace_filter_vs_prune_roles`).
 - `.venv/bin/ruff check .` clean.
 - Full `pytest tests -v` green.
 - No changes to `mcp_v2.py`, `kuzu_queries.py`, `server.py`.
@@ -254,12 +255,12 @@ async def trace(
 ### 1. `mcp_hints.py`
 
 - Extend `generate_hints` `output_kind` Literal to include `"trace"`.
-- Add `generate_hints("trace", payload)` with five new hint templates:
+- Add `generate_hints("trace", payload)` with four server-side hint templates:
   1. **Neighbors high fan-out hint**: when `neighbors` returns >8 CALLS edges, emit `"High fan-out (N CALLS edges). Consider trace(id, 'out', ['CALLS'], prune_roles=['DTO','EXCEPTION','UTILITY'], fan_out_cap=5) for a pruned multi-hop view."`
   2. **Trace result drill-down hint**: when `trace` returns edges with `collapsed=True` or `stats` shows pruning fired, emit `"trace pruned N edges. Use neighbors(id, direction, edge_types) on specific nodes for full detail."`
   3. **Trace budget hit hint**: when `stats.budget_hit=True`, emit `"trace hit the node discovery budget (N nodes). Results are partial. Increase max_depth or add prune_roles and re-run."`
   4. **Cross-service boundary hint**: when `trace` discovers edges with `cross_service_boundary=True`, emit `"Cross-service boundary: Client X calls Route Y (confidence=N). Use trace(route_id, 'out', ['EXPOSES','CALLS'], max_depth=4) to continue in the downstream service."`
-  5. **Neighbors loop escalation hint**: client-side only (requires session tracking the MCP server doesn't have) — document in skill, not in `mcp_hints.py`.
+  - **Neighbors loop escalation hint** (5th from propose): client-side only (requires session tracking the MCP server doesn't have) — document in skill, not in `mcp_hints.py`.
 - Add corresponding `_trace_*_structured_hints` helper functions following the existing `_neighbors_*_structured_hints` pattern.
 
 ### 2. `skills/explore-codebase/SKILL.md`
@@ -391,7 +392,7 @@ Pick: <search|find|describe|neighbors|trace|resolve>  Why: <≤8 words>
 
 1. `trace` is registered as the sixth MCP tool and callable via MCP protocol.
 2. BFS engine with visited set, budget, path enumeration works correctly (23 core tests pass).
-3. Pruning (role-based, fan-out, trivial chain) and cross-service boundary detection work correctly (11 additional tests pass).
+3. Pruning (role-based, fan-out, trivial chain) and cross-service boundary detection work correctly (11 additional tests pass; 33 unique total).
 4. Hint system produces trace-aware hints for budget hit, pruning, cross-service boundary, and neighbors high-fan-out.
 5. Skill decision tree and preamble include `trace` as a first-class tool choice.
 6. All agent-facing docs list six MCP tools.

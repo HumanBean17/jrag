@@ -84,7 +84,7 @@ Create `mcp_trace.py` (new file) with the core BFS traversal engine:
    `NodeFilter`, `EdgeFilter`, `NodeRef`, `_node_ref_from_row`, `_node_kind_from_id`.
    Never import handler functions. Never modify `mcp_v2.py`.
 
-Create `tests/test_mcp_trace.py` (new file) with all 23 tests named in the plan.
+Create `tests/test_mcp_trace.py` (new file) with all 23 tests named in the plan. Test #17 is `test_trace_prune_roles_param_accepted_noop` (confirms `prune_roles=[]` is accepted and produces an unpruned result; the full soft-gate vs hard-gate comparison test lands in PR-TRACE-1b as `test_trace_filter_vs_prune_roles`).
 
 ## Out of scope (do NOT touch)
 
@@ -259,7 +259,9 @@ Extend `mcp_trace.py` with four features:
    `edges_collapsed_trivial` in `TraceStats`.
 
 Extend `tests/test_mcp_trace.py` with all 11 new tests from the plan. All 23
-existing tests must still pass.
+existing tests must still pass. Note: 1a's `test_trace_prune_roles_param_accepted_noop`
+is replaced by 1b's `test_trace_filter_vs_prune_roles` (the 1a stub becomes obsolete
+once real pruning logic exists). Total unique tests after both PRs: 33.
 
 ## Out of scope (do NOT touch)
 
@@ -278,7 +280,7 @@ If you need to touch any of these, stop and ask.
 3. `collapse_trivial` heuristic with `parent_edge_id` recomputation.
 4. Cross-service boundary detection with scaffolding edge following.
 5. `TraceStats` pruning/collapsing counters populated.
-6. 11 new tests in `tests/test_mcp_trace.py`; all 34 tests pass.
+6. 11 new tests in `tests/test_mcp_trace.py`; all 33 unique tests pass.
 7. Ruff clean; no regression.
 
 ## Tests to run (iteration loop)
@@ -296,7 +298,7 @@ Run:
 .venv/bin/python -m pytest tests -v
 ```
 
-Expected: all 34 tests pass (23 from 1a + 11 from 1b); existing suite unchanged.
+Expected: all 33 unique tests pass (23 from 1a — with `test_trace_prune_roles_param_accepted_noop` replaced by `test_trace_filter_vs_prune_roles` — plus 10 other new from 1b); existing suite unchanged.
 
 ## Sentinel checks
 
@@ -338,7 +340,7 @@ print('collapsed:', out.stats.edges_collapsed_trivial, 'trivial chains collapsed
 - [ ] `collapse_trivial`: degree-1 chains collapsed with `collapsed=True` marker
 - [ ] `parent_edge_id` consistent after collapsing
 - [ ] Cross-service boundary: `cross_service_boundary=True`, downstream in `nodes`, not in frontier
-- [ ] All 34 tests pass (23 + 11)
+- [ ] All 33 unique tests pass (23 from 1a minus 1 replaced + 11 from 1b)
 - [ ] `.venv/bin/ruff check .` clean
 - [ ] `.venv/bin/python -m pytest tests -v` green
 - [ ] No modifications to `mcp_v2.py`, `kuzu_queries.py`, `server.py`
@@ -531,11 +533,13 @@ hint generation and skill decision tree updates.
    Add `trace` tool reference section with parameters, result structure, and
    when to use vs `neighbors` guidance.
 
-3. **`tests/test_mcp_trace.py`** — Add 5 tests:
+3. **`tests/test_mcp_hints.py`** — Add 4 hint unit tests:
    - `test_hint_trace_budget_hit`
    - `test_hint_trace_pruned_edges`
    - `test_hint_trace_cross_service_boundary`
    - `test_hint_neighbors_high_fanout_mentions_trace`
+
+4. **`tests/test_mcp_trace.py`** — Add 1 integration test:
    - `test_trace_bank_chat_cross_service_http_flow`
 
 ## Out of scope (do NOT touch)
@@ -568,7 +572,7 @@ Run only these files during local iteration; full suite is the merge gate (CI on
 
 Run:
 ```bash
-.venv/bin/ruff check mcp_hints.py skills/explore-codebase/SKILL.md
+.venv/bin/ruff check mcp_hints.py
 .venv/bin/python -m pytest tests/test_mcp_trace.py tests/test_mcp_hints.py -v
 .venv/bin/python -m pytest tests -v
 ```
