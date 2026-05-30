@@ -31,19 +31,6 @@ Copy the block between `<!-- BEGIN` and `<!-- END` into your project's `AGENTS.m
 
 When MCP disagrees with the open file, **the file wins**; treat the mismatch as a likely stale or incomplete index.
 
-### Brownfield annotations on methods
-
-If a method has any of these (including plural containers **`@CodebaseHttpRoutes`**, **`@CodebaseAsyncRoutes`**, **`@CodebaseHttpClients`**, **`@CodebaseProducers`**), that annotation is the **only** source for the facets it declares — framework inference on the **same** method is **not merged** for that axis:
-
-| Annotation | Declares | Framework rows bypassed (examples) |
-| ---------- | -------- | ------------------------------------ |
-| `@CodebaseHttpRoute` | inbound HTTP path / verb | Spring MVC/WebFlux mapping annotations |
-| `@CodebaseAsyncRoute` | inbound async topic / route | `@KafkaListener`, `@RabbitListener`, … |
-| `@CodebaseHttpClient` | outbound HTTP client call site | `@FeignClient` method mappings, RestTemplate-style inference |
-| `@CodebaseProducer` | outbound async producer call site | `KafkaTemplate` / `StreamBridge` producer inference |
-
-Trust the indexed brownfield row over a framework-only reading of the source.
-
 ### Workflow (locate → inspect → walk)
 
 1. **Locate** — `resolve` for identifier-shaped strings; `search` for natural language or code fragments; `find` for structured `NodeFilter` discovery.
@@ -88,16 +75,14 @@ Use these strings **verbatim** in `neighbors(..., edge_types=[...])`.
 
 | Edge type | Meaning |
 | --------- | ------- |
-| `OVERRIDDEN_BY` | Concrete overrider methods (stored `[:OVERRIDES]` dispatch hop) |
-| `OVERRIDDEN_BY.DECLARES_CLIENT` | Clients declared on overriders (`via_id` = overrider method) |
+| `OVERRIDDEN_BY` | Concrete overrider methods |
+| `OVERRIDDEN_BY.DECLARES_CLIENT` | Clients declared on overriders |
 | `OVERRIDDEN_BY.DECLARES_PRODUCER` | Producers on overriders |
 | `OVERRIDDEN_BY.EXPOSES` | Routes exposed by overriders |
 
-**Stored vs virtual direction (base override axis):** `neighbors(decl_id, "out", ["OVERRIDDEN_BY"])` returns the same overrider method ids as `neighbors(decl_id, "in", ["OVERRIDES"])` on the same declaration method. Prefer the dot-key when `describe.edge_summary` advertises `OVERRIDDEN_BY`.
+`neighbors(decl_id, "out", ["OVERRIDDEN_BY"])` returns the same overrider methods as `neighbors(decl_id, "in", ["OVERRIDES"])` — prefer the dot-key when `edge_summary` advertises it.
 
 Do not mix `DECLARES.*` and `OVERRIDDEN_BY.*` in one `edge_types` list on a single origin id — the handler rejects the whole request (only one axis applies per node).
-
-`describe` `edge_summary` counts for `OVERRIDDEN_BY*` use the same stored `[:OVERRIDES]` dispatch hop as `neighbors` (ontology **13+** graphs with materialized override edges). Rebuild the index if counts look wrong or dot-key walks return fewer rows than advertised.
 
 **Pagination:** default `neighbors` `limit=25` slices the merged flat + composed edge list. When `edge_summary` shows a large `out` count for a composed key, raise `limit` (and use `offset`) or issue separate calls per key.
 
@@ -150,7 +135,7 @@ For **`find`**, `filter` is required — `{}` means no predicates (all nodes of 
 
 | Keys | Applies to |
 | ---- | ---------- |
-| `microservice`, `module`, `source_layer` | All kinds (`source_layer` mainly **client** / **producer**) |
+| `microservice`, `module` | All kinds |
 | `role`, `exclude_roles`, `annotation`, `capability`, `fqn_prefix`, `symbol_kind`, `symbol_kinds` | **symbol** |
 | `http_method`, `path_prefix`, `framework` | **route** |
 | `client_kind`, `target_service`, `target_path_prefix`, `http_method` | **client** |
@@ -174,7 +159,7 @@ For **`find`**, `filter` is required — `{}` means no predicates (all nodes of 
 
 Prefer **`resolve` → `describe(id=…)`** over **`describe(fqn=…)`** when an FQN may collide (`describe(fqn=…)` returns the first row).
 
-**`microservice`** — service where the node lives. **`target_service`** (clients only) — remote service being called. **`source_layer`** (clients/producers) — which extraction layer produced the row (`builtin`, `layer_a_meta`, `layer_b_ann`, `layer_c_source`, `layer_b_fqn`, …). **`role`** (symbols only) — architectural stereotype (`CONTROLLER`, `SERVICE`, …).
+**`microservice`** — service where the node lives. **`target_service`** (clients only) — remote service being called. **`role`** (symbols only) — architectural stereotype (`CONTROLLER`, `SERVICE`, …).
 
 ### Decision tree
 
@@ -199,6 +184,7 @@ Prefer **`resolve` → `describe(id=…)`** over **`describe(fqn=…)`** when an
 
 1. **Structure beats vector** for exact questions — use `resolve` / `find` + `neighbors`, not `search`, for "who calls …".
 2. **Vector beats structure** for fuzzy discovery — `search` first, then pivot to `describe` / `neighbors`.
+3. **Filter by role** to keep traces focused — exclude `DTO`, `OTHER`, `MAPPER` for business logic; target `SERVICE` for orchestration, `REPOSITORY` for data access.
 
 ### Tool reference
 
@@ -216,7 +202,7 @@ Full node + `edge_summary`. Args: `id` (any kind) or `fqn` (symbol only; `id` wi
 
 - **Stored keys** — counts for edges that exist in the graph.
 - **Type symbols** (`class`, `interface`, `enum`, `record`, `annotation`) may add composed keys `DECLARES.DECLARES_CLIENT`, `DECLARES.DECLARES_PRODUCER`, `DECLARES.EXPOSES` — navigable via `neighbors` with those dot-keys (`out` only).
-- **Method symbols** may add virtual keys `OVERRIDDEN_BY`, `OVERRIDDEN_BY.DECLARES_*`, `OVERRIDDEN_BY.EXPOSES` (navigable via `neighbors` on non-static method origins, `out` only), plus an **`OVERRIDES`** row merging stored `[:OVERRIDES]` incident counts with the rollup dispatch-up count (`max` per direction). Rollup and dot-key traversal both use stored `[:OVERRIDES]` for the dispatch hop. Static methods and constructors do not get override-axis keys.
+- **Method symbols** may add virtual keys `OVERRIDDEN_BY`, `OVERRIDDEN_BY.DECLARES_*`, `OVERRIDDEN_BY.EXPOSES` (navigable via `neighbors` on non-static method origins, `out` only), plus an **`OVERRIDES`** row with incident counts. Static methods and constructors do not get override-axis keys.
 
 Composed counts are **edge rows**, not distinct methods; `count > 0` means "there is something to walk".
 
@@ -228,17 +214,32 @@ Identifier lookup; three statuses above. Args: `identifier`, optional `hint_kind
 
 One hop. Args: `ids` (string or array), **`direction`**, **`edge_types`**, `limit` (default 25), `offset`, optional `filter` on the other node, optional **`edge_filter`** (`edge_types` must be exactly `['CALLS']` — no composed dot-keys or second stored label; fail-loud otherwise).
 
-**Multiple origin ids:** each id loads the full CALLS stream (or generic hop) in list order; `offset`/`limit` apply to the **concatenated** edge list (`ids[0]` edges first, then `ids[1]`, …), not global source order across origins — a large first origin can leave no rows for later ids within the same page. High fan-out methods are slow; prefer one id per call or a smaller `limit`. **Hints:** `TPL_NEIGHBORS_CALLS_HIGH_FANOUT` / `TPL_NEIGHBORS_CALLS_HAS_UNRESOLVED` fire only for a **single** origin id (multi-origin CALLS skips those nudges).
+**Multiple origin ids:** `offset`/`limit` apply to the **concatenated** edge list (`ids[0]` edges first, then `ids[1]`, …). A large first origin can leave no rows for later ids within the same page. Prefer one id per call or raise `limit`.
 
 Returns **edges** with `attrs` (`confidence`, `strategy`, `match`, … on cross-service edges) and **`other`** node.
 
 **Cross-service edges** (`HTTP_CALLS`, `ASYNC_CALLS`): read `attrs.confidence` and `attrs.match` — low confidence or `unresolved`/`phantom`/`ambiguous` means treat as a resolver signal, not ground truth.
 
-**`CALLS` edges:** source-ordered (`call_site_line`, `call_site_byte`). After ontology 15 PR-3, true receiver-failure sites are **not** on `CALLS` — they are `UnresolvedCallSite` nodes (`reason`: `chained_receiver` or `phantom_unresolved_receiver`; ids use the `ucs:` prefix, `other.kind=unresolved_call_site` — **not** describable via `describe(id=…)`). `UNRESOLVED_AT` is graph storage only (not in `EDGE_SCHEMA` / `neighbors` edge_types). `attrs.resolved=false` on remaining `CALLS` rows means known-receiver-external (JDK/Spring) callees, not receiver failure. **`include_unresolved=True`** (CALLS + `direction=out` only) interleaves unresolved sites with resolved `CALLS` (`row_kind` discriminator); **mutually exclusive with `edge_filter`**. **`dedup_calls=True`** collapses identical `(origin, callee)` `CALLS` to one row with `call_site_lines`. **`filter` + `edge_filter` together** load the ordered CALLS stream then apply callee `NodeFilter` in Python — expect higher latency on hot methods than `edge_filter` alone. Optional **`edge_filter`** projects before pagination: `min_confidence`; `include_strategies` / `exclude_strategies` (mutually exclusive); `callee_declaring_role`, `callee_declaring_roles`, `exclude_callee_declaring_roles` (`["OTHER"]` also drops known-external rows). **`filter.role` filters the neighbor method (usually `OTHER`), not the callee stereotype** — use `edge_filter.callee_declaring_role` for repository/service hops. **`exclude_external` applies to `find_callers` / `find_callees` only** (FQN-prefix); trim JDK noise on `neighbors` CALLS via `edge_filter`. Accessor noise: role excludes help; getter/setter heuristics in [`propose/completed/AGENT-SKILLS-AND-COMMANDS-PROPOSE.md`](../propose/completed/AGENT-SKILLS-AND-COMMANDS-PROPOSE.md) `/mini-map`.
+**`CALLS` edges:** source-ordered (`call_site_line`, `call_site_byte`). `attrs.resolved=false` means the callee is external (JDK/Spring) — not a missing symbol. **`include_unresolved=True`** (CALLS + `direction=out` only) interleaves unresolved call sites with resolved `CALLS` (`row_kind` discriminator); **mutually exclusive with `edge_filter`**. **`dedup_calls=True`** collapses identical `(origin, callee)` pairs to one row with `call_site_lines`. Optional **`edge_filter`** projects before pagination: `min_confidence`; `include_strategies` / `exclude_strategies` (mutually exclusive); `callee_declaring_role`, `callee_declaring_roles`, `exclude_callee_declaring_roles` (`["OTHER"]` also drops known-external rows). **Note:** `filter.role` filters the neighbor node, not the callee's declaring type — use `edge_filter.callee_declaring_role` for callee stereotype filtering.
 
 ### Ontology glossary
 
-**Roles (`filter.role` / `exclude_roles`):** `CONTROLLER`, `SERVICE`, `REPOSITORY`, `COMPONENT`, `CONFIG`, `ENTITY`, `CLIENT`, `MAPPER`, `DTO`, `OTHER`.
+**Roles** (`filter.role` / `exclude_roles`):
+
+| Role | Meaning |
+| ---- | ------- |
+| `CONTROLLER` | HTTP / messaging entry point |
+| `SERVICE` | Business logic orchestration |
+| `REPOSITORY` | Data access (JPA, JDBC) |
+| `COMPONENT` | General Spring component |
+| `CONFIG` | `@Configuration` class |
+| `ENTITY` | JPA / persistence entity |
+| `CLIENT` | Outbound HTTP call wrapper (Feign, RestTemplate, WebClient) |
+| `MAPPER` | Data mapper / converter |
+| `DTO` | Data transfer object — data carrier, no logic |
+| `OTHER` | Infrastructure / utility / framework / JDK / unclassified |
+
+**Filtering with roles:** `DTO`, `OTHER`, and `MAPPER` are data carriers and infrastructure — exclude them with `exclude_roles` or `edge_filter.exclude_callee_declaring_roles` when tracing business logic. On `CALLS` `out` edges, use `edge_filter={"exclude_callee_declaring_roles": ["OTHER"]}` to drop JDK/Spring/framework calls. Use `filter.role` to target a specific layer (e.g. `role=SERVICE` for business logic, `role=REPOSITORY` for data access).
 
 **Capabilities (`filter.capability`):** `MESSAGE_LISTENER`, `MESSAGE_PRODUCER`, `HTTP_CLIENT`, `SCHEDULED_TASK`, `EXCEPTION_HANDLER`.
 
