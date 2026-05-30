@@ -921,3 +921,30 @@ def test_trace_cross_service_boundary_stops(kuzu_graph: KuzuGraph) -> None:
         # No edges FROM the downstream node (frontier stops at boundary).
         downstream_edges = [e for e in out.edges if e.from_id == xe.to_id]
         assert len(downstream_edges) == 0
+
+
+# ---------------------------------------------------------------------------
+# PR-TRACE-2 tests: MCP tool registration
+# ---------------------------------------------------------------------------
+
+
+async def test_trace_registered_as_mcp_tool(mcp_server) -> None:
+    """create_mcp_server() tool list includes 'trace'."""
+    tools = await mcp_server.list_tools()
+    names = {tool.name for tool in tools}
+    assert "trace" in names
+
+
+async def test_trace_tool_description_mentions_six_tools(mcp_server) -> None:
+    """_INSTRUCTIONS contains 'trace' and lists six tools."""
+    import server
+
+    instructions = server._INSTRUCTIONS
+    assert "trace" in instructions
+    assert instructions.count("trace") >= 1
+    # Six tools mentioned: search, find, describe, neighbors, trace, resolve.
+    assert "search" in instructions
+    assert "find" in instructions
+    assert "describe" in instructions
+    assert "neighbors" in instructions
+    assert "resolve" in instructions
