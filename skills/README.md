@@ -1,6 +1,6 @@
 # skills/ — RAG navigation skills for the java-codebase-rag MCP
 
-Two self-contained skills for navigating indexed Java codebases via the 5-tool MCP (`search` / `find` / `describe` / `neighbors` / `resolve`). Skills are agent-side prompt scaffolding — they are **not** a second MCP API and **not** CLI subcommands.
+Two self-contained skills for navigating indexed Java codebases via the 6-tool MCP (`search` / `find` / `describe` / `neighbors` / `resolve` / `trace`). Skills are agent-side prompt scaffolding — they are **not** a second MCP API and **not** CLI subcommands.
 
 ## Which skill to use
 
@@ -26,7 +26,7 @@ skills/
 
 The comprehensive operating manual. Includes:
 
-- **Five-tool reference** — `search`, `find`, `describe`, `neighbors`, `resolve` with full argument shapes
+- **Six-tool reference** — `search`, `find`, `describe`, `neighbors`, `resolve`, `trace` with full argument shapes
 - **Node kinds** — Symbol, Route, Client, Producer
 - **Edge taxonomy** — stored edges, composed dot-keys, direction semantics
 - **NodeFilter reference** — all filter keys by node kind, strict frame rules
@@ -56,7 +56,7 @@ The tactical tracing skill. Includes:
 │   Implementation: explore-codebase / navigate-codebase       │
 ├──────────────────────────────────────────────────────────────┤
 │ Layer 2 — Composable primitives (the MCP API)                │
-│   search, find, describe, neighbors, resolve                 │
+│   search, find, describe, neighbors, resolve, trace          │
 ├──────────────────────────────────────────────────────────────┤
 │ Layer 1 — Storage primitives                                 │
 │   Kuzu Cypher + LanceDB tables                               │

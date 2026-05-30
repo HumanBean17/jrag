@@ -2,7 +2,7 @@
 
 A graph-native code intelligence layer for Java microservice estates, exposed to LLM agents via the **Model Context Protocol (MCP)**.
 
-The system extracts a deterministic property graph from Java source (tree-sitter), stores it in **Kuzu** (graph) alongside a **LanceDB** vector index (chunks), and exposes a deliberately small MCP surface — **five tools**: `search`, `find`, `describe`, `neighbors`, `resolve` — that collapse onto three primitive agent operations: **locate**, **inspect**, **walk**.
+The system extracts a deterministic property graph from Java source (tree-sitter), stores it in **Kuzu** (graph) alongside a **LanceDB** vector index (chunks), and exposes a deliberately small MCP surface — **six tools**: `search`, `find`, `describe`, `neighbors`, `resolve`, `trace` — that collapse onto three primitive agent operations: **locate**, **inspect**, **walk**.
 
 > **What this MCP is:** a **GPS for code navigation**, not a reasoning engine.
 > Agents use a simple loop:
@@ -78,7 +78,7 @@ JAVA_CODEBASE_RAG_INDEX_DIR=/tmp/bank-chat-index \
     --graph-expand --expand-depth 2
 ```
 
-If vector hits come back and graph expansion adds neighbor symbols, the install works end-to-end. Wire it into your agent next — the five MCP tools (`search`, `find`, `describe`, `neighbors`, `resolve`) are reachable over stdio.
+If vector hits come back and graph expansion adds neighbor symbols, the install works end-to-end. Wire it into your agent next — the six MCP tools (`search`, `find`, `describe`, `neighbors`, `resolve`, `trace`) are reachable over stdio.
 
 ---
 
@@ -118,7 +118,7 @@ See [`mcp.json.example`](./mcp.json.example) for the same shape in `.mcp.json` (
 
 Pick **one** of two options (not both — they cover the same navigation intents):
 
-1. **[`docs/AGENT-GUIDE.md`](./docs/AGENT-GUIDE.md)** (recommended for most) — standalone MCP operating manual. Copy-paste the `BEGIN`/`END` block into your project's `QWEN.md`, `CLAUDE.md`, or `AGENTS.md`. Contains: five-tool reference, `NodeFilter` / edge taxonomy, ontology glossary, recovery playbook, and navigation patterns. Self-contained — no external file dependencies.
+1. **[`docs/AGENT-GUIDE.md`](./docs/AGENT-GUIDE.md)** (recommended for most) — standalone MCP operating manual. Copy-paste the `BEGIN`/`END` block into your project's `QWEN.md`, `CLAUDE.md`, or `AGENTS.md`. Contains: six-tool reference, `NodeFilter` / edge taxonomy, ontology glossary, recovery playbook, and navigation patterns. Self-contained — no external file dependencies.
 
 2. **[`/explore-codebase`](./skills/explore-codebase/SKILL.md)** (for hosts with skill discovery) — single self-contained skill with the complete operating manual. If your MCP host supports skill discovery (Claude Code, Qwen Code, Cursor), load `/explore-codebase` to get the full tool reference, edge taxonomy, decision tree, and recovery playbook in one shot.
 
@@ -126,7 +126,7 @@ Also: **[`docs/MANUAL-VERIFICATION-CHECKLIST.md`](./docs/MANUAL-VERIFICATION-CHE
 
 ---
 
-## The five tools, at a glance
+## The six tools, at a glance
 
 | Tool | Purpose | Required args |
 |---|---|---|
@@ -135,12 +135,13 @@ Also: **[`docs/MANUAL-VERIFICATION-CHECKLIST.md`](./docs/MANUAL-VERIFICATION-CHE
 | `describe` | Full record + edge counts for one node. | `id` |
 | `resolve` | Identifier-shaped lookup (FQN-collision-safe). Returns `one` / `many` / `none`. | `identifier` |
 | `neighbors` | Graph walk, one hop. | `ids`, `direction`, `edge_types` |
+| `trace` | Multi-hop BFS traversal with pruning. | `ids`, `direction`, `edge_types` |
 
 Full schemas, `NodeFilter` / `EdgeFilter` semantics, and the hints contract live in [`docs/AGENT-GUIDE.md`](./docs/AGENT-GUIDE.md). Edge types and traversal directions are listed in [`docs/EDGE-NAVIGATION.md`](./docs/EDGE-NAVIGATION.md).
 
 ### Three-layer architecture
 
-Layer 1 (storage) → Layer 2 (5 MCP tools) → Layer 3 (skill). The [`/explore-codebase`](./skills/explore-codebase/SKILL.md) skill provides the full operating manual for Layer 2. See the [architecture diagram in `skills/README.md`](./skills/README.md#three-layer-architecture).
+Layer 1 (storage) → Layer 2 (6 MCP tools) → Layer 3 (skill). The [`/explore-codebase`](./skills/explore-codebase/SKILL.md) skill provides the full operating manual for Layer 2. See the [architecture diagram in `skills/README.md`](./skills/README.md#three-layer-architecture).
 
 ---
 
