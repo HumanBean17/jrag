@@ -19,7 +19,7 @@ YAML_CONFIG_FILENAMES = (".java-codebase-rag.yml", ".java-codebase-rag.yaml")
 LEGACY_YAML_FILENAMES = (".lancedb-mcp.yml", ".lancedb-mcp.yaml")
 
 ENV_INDEX_DIR = "JAVA_CODEBASE_RAG_INDEX_DIR"
-# Public operator contract is five names: INDEX_DIR, DEBUG_CONTEXT, RUN_HEAVY, SBERT_MODEL, SBERT_DEVICE.
+# Public operator contract is six names: INDEX_DIR, DEBUG_CONTEXT, RUN_HEAVY, SBERT_MODEL, SBERT_DEVICE, HINTS_ENABLED.
 # SOURCE_ROOT is still required for MCP / subprocess Java tree resolution (see mcp.json.example); it is not folded into the headline "5".
 ENV_SOURCE_ROOT = "JAVA_CODEBASE_RAG_SOURCE_ROOT"
 ENV_DEBUG_CONTEXT = "JAVA_CODEBASE_RAG_DEBUG_CONTEXT"
@@ -146,9 +146,11 @@ class ResolvedOperatorConfig:
     cocoindex_db: Path
     embedding_model: str
     embedding_device: str | None
+    hints_enabled: bool
     index_dir_source: SettingSource
     embedding_model_source: SettingSource
     embedding_device_source: SettingSource
+    hints_enabled_source: SettingSource
 
     def apply_to_os_environ(self) -> None:
         """Make downstream modules (server, kuzu_queries, flows) see a consistent environment.
@@ -218,6 +220,29 @@ def _pick_optional_device(
     return None, "default"
 
 
+def _pick_bool(
+    *,
+    env_key: str,
+    yaml_dict: dict[str, Any],
+    yaml_path: tuple[str, ...],
+    default: bool,
+) -> tuple[bool, SettingSource]:
+    env_raw = os.environ.get(env_key, "").strip().lower()
+    if env_raw in ("1", "true", "yes"):
+        return True, "env"
+    if env_raw in ("0", "false", "no"):
+        return False, "env"
+    cur: Any = yaml_dict
+    for part in yaml_path:
+        if not isinstance(cur, dict) or part not in cur:
+            cur = None
+            break
+        cur = cur.get(part)
+    if isinstance(cur, bool):
+        return cur, "yaml"
+    return default, "default"
+
+
 def _resolve_index_dir_path(
     *,
     source_root: Path,
@@ -270,6 +295,12 @@ def resolve_operator_config(
         env_key="SBERT_DEVICE",
         yaml_dict=yaml_dict,
     )
+    hints, hints_src = _pick_bool(
+        env_key="JAVA_CODEBASE_RAG_HINTS_ENABLED",
+        yaml_dict=yaml_dict,
+        yaml_path=("hints", "enabled"),
+        default=True,
+    )
     ku = index_dir / "code_graph.kuzu"
     coco = index_dir / "cocoindex.db"
     return ResolvedOperatorConfig(
@@ -279,9 +310,11 @@ def resolve_operator_config(
         cocoindex_db=coco,
         embedding_model=model,
         embedding_device=device,
+        hints_enabled=hints,
         index_dir_source=index_src,
         embedding_model_source=model_src,
         embedding_device_source=device_src,
+        hints_enabled_source=hints_src,
     )
 
 

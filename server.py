@@ -576,6 +576,7 @@ def main() -> None:
     # before any tool handler runs (same behavior as CLI path)
     cfg = resolve_operator_config(source_root=_project_root())
     cfg.apply_to_os_environ()
+    mcp_v2.set_hints_enabled(cfg.hints_enabled)
 
     asyncio.run(create_mcp_server().run_stdio_async())
 

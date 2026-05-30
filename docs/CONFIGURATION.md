@@ -20,7 +20,7 @@ For the architecture rationale (the GPS metaphor, three-layer design, future wor
 
 ## 1. Environment variables
 
-The operator-facing surface is **five** variables (plus MCP-only `JAVA_CODEBASE_RAG_SOURCE_ROOT` below). Precedence for knobs that also exist as CLI flags or YAML entries is **CLI flag > env var > YAML > built-in default** (see [`JAVA-CODEBASE-RAG-CLI.md`](./JAVA-CODEBASE-RAG-CLI.md)).
+The operator-facing surface is **six** variables (plus MCP-only `JAVA_CODEBASE_RAG_SOURCE_ROOT` below). Precedence for knobs that also exist as CLI flags or YAML entries is **CLI flag > env var > YAML > built-in default** (see [`JAVA-CODEBASE-RAG-CLI.md`](./JAVA-CODEBASE-RAG-CLI.md)).
 
 | Variable | Purpose |
 |---|---|
@@ -29,6 +29,7 @@ The operator-facing surface is **five** variables (plus MCP-only `JAVA_CODEBASE_
 | `SBERT_DEVICE` | Optional: `cpu`, `cuda`, `mps`. Overridable via YAML `embedding.device` and `--embedding-device`. |
 | `JAVA_CODEBASE_RAG_DEBUG_CONTEXT` | When truthy, verbose stderr logging for chunk context expansion (diagnostics only). |
 | `JAVA_CODEBASE_RAG_RUN_HEAVY` | Test gate: set to `1` / `true` / `yes` to run the slow cocoindex + Lance end-to-end test (`pytest`); not used in normal operator workflows. |
+| `JAVA_CODEBASE_RAG_HINTS_ENABLED` | When `0` / `false` / `no`, suppress `hints_structured` and `advisories` from all MCP tool responses. Overridable via `.java-codebase-rag.yml` `hints.enabled`. Default: enabled. |
 
 **MCP host launchers** also set `JAVA_CODEBASE_RAG_SOURCE_ROOT` to the Java repository root when it differs from the server process cwd (see `mcp.json.example` in the repo root).
 
@@ -101,6 +102,16 @@ microservice_roots:
 # - brownfield_only           : only edges where both ends come from brownfield annotations or YAML
 #                               stay cross_service; everything else becomes `unresolved`.
 cross_service_resolution: auto
+
+# -------- Hints (tool-call suggestions in MCP responses) --------
+
+# When enabled (default), successful tool responses include `hints_structured`
+# (next-action suggestions with ready-to-use tool args) and `advisories`
+# (informational text). Disable to save tokens for capable models that don't
+# need navigation guidance.
+# Env: JAVA_CODEBASE_RAG_HINTS_ENABLED (1/true/yes or 0/false/no).
+hints:
+  enabled: true  # set to false to suppress hints and advisories
 
 # -------- Brownfield overrides (see §4 for full schema and semantics) --------
 
