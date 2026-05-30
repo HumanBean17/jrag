@@ -80,7 +80,7 @@ Use these strings **verbatim** in `neighbors(..., edge_types=[...])`.
 | `OVERRIDDEN_BY.DECLARES_PRODUCER` | Producers on overriders |
 | `OVERRIDDEN_BY.EXPOSES` | Routes exposed by overriders |
 
-Prefer `OVERRIDDEN_BY` dot-keys when `describe.edge_summary` advertises them.
+`neighbors(decl_id, "out", ["OVERRIDDEN_BY"])` returns the same overrider methods as `neighbors(decl_id, "in", ["OVERRIDES"])` — prefer the dot-key when `edge_summary` advertises it.
 
 Do not mix `DECLARES.*` and `OVERRIDDEN_BY.*` in one `edge_types` list on a single origin id — the handler rejects the whole request (only one axis applies per node).
 
@@ -135,7 +135,7 @@ For **`find`**, `filter` is required — `{}` means no predicates (all nodes of 
 
 | Keys | Applies to |
 | ---- | ---------- |
-| `microservice`, `module`, `source_layer` | All kinds (`source_layer` mainly **client** / **producer**) |
+| `microservice`, `module` | All kinds |
 | `role`, `exclude_roles`, `annotation`, `capability`, `fqn_prefix`, `symbol_kind`, `symbol_kinds` | **symbol** |
 | `http_method`, `path_prefix`, `framework` | **route** |
 | `client_kind`, `target_service`, `target_path_prefix`, `http_method` | **client** |
@@ -220,7 +220,7 @@ Returns **edges** with `attrs` (`confidence`, `strategy`, `match`, … on cross-
 
 **Cross-service edges** (`HTTP_CALLS`, `ASYNC_CALLS`): read `attrs.confidence` and `attrs.match` — low confidence or `unresolved`/`phantom`/`ambiguous` means treat as a resolver signal, not ground truth.
 
-**`CALLS` edges:** source-ordered (`call_site_line`, `call_site_byte`). **`include_unresolved=True`** (CALLS + `direction=out` only) interleaves unresolved call sites with resolved `CALLS` (`row_kind` discriminator); **mutually exclusive with `edge_filter`**. **`dedup_calls=True`** collapses identical `(origin, callee)` pairs to one row with `call_site_lines`. Optional **`edge_filter`** projects before pagination: `min_confidence`; `include_strategies` / `exclude_strategies` (mutually exclusive); `callee_declaring_role`, `callee_declaring_roles`, `exclude_callee_declaring_roles` (`["OTHER"]` also drops known-external rows). **Note:** `filter.role` filters the neighbor node, not the callee's declaring type — use `edge_filter.callee_declaring_role` for callee stereotype filtering.
+**`CALLS` edges:** source-ordered (`call_site_line`, `call_site_byte`). `attrs.resolved=false` means the callee is external (JDK/Spring) — not a missing symbol. **`include_unresolved=True`** (CALLS + `direction=out` only) interleaves unresolved call sites with resolved `CALLS` (`row_kind` discriminator); **mutually exclusive with `edge_filter`**. **`dedup_calls=True`** collapses identical `(origin, callee)` pairs to one row with `call_site_lines`. Optional **`edge_filter`** projects before pagination: `min_confidence`; `include_strategies` / `exclude_strategies` (mutually exclusive); `callee_declaring_role`, `callee_declaring_roles`, `exclude_callee_declaring_roles` (`["OTHER"]` also drops known-external rows). **Note:** `filter.role` filters the neighbor node, not the callee's declaring type — use `edge_filter.callee_declaring_role` for callee stereotype filtering.
 
 ### Ontology glossary
 
