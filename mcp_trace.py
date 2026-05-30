@@ -714,7 +714,6 @@ def trace_v2(
                     except Exception:
                         print(f"[trace] cross-service: failed to resolve {other_id}", file=sys.stderr)
                         continue
-                        continue
 
                     # Check budget.
                     if total_discovered >= max_nodes_discovered:
