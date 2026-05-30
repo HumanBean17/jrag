@@ -1,6 +1,6 @@
 ---
 name: explore-codebase
-description: Complete operating manual for the java-codebase-rag MCP tools (search, find, describe, neighbors, resolve). Use this skill whenever you need to explore a Java codebase — locate symbols, trace call chains, find routes, walk cross-service boundaries, or answer any "where is X", "who calls Y", "what does Z depend on" question. Self-contained: includes edge taxonomy, NodeFilter reference, decision tree, argument shapes, recovery playbook, and navigation patterns. No external files needed.
+description: Complete operating manual for the java-codebase-rag MCP tools (search, find, describe, neighbors, trace, resolve). Use this skill whenever you need to explore a Java codebase — locate symbols, trace call chains, find routes, walk cross-service boundaries, or answer any "where is X", "who calls Y", "what does Z depend on" question. Self-contained: includes edge taxonomy, NodeFilter reference, decision tree, argument shapes, recovery playbook, and navigation patterns. No external files needed.
 ---
 
 # /explore-codebase — Codebase navigation via the java-codebase-rag MCP
@@ -11,7 +11,7 @@ Any time you need to understand structure in an indexed Java codebase: locating 
 
 ## Tools
 
-`search`, `find`, `describe`, `neighbors`, `resolve`.
+`search`, `find`, `describe`, `neighbors`, `trace`, `resolve`.
 
 ## Node kinds
 
@@ -47,15 +47,15 @@ Trust the indexed brownfield row over a framework-only reading of the source.
 
 1. **Locate** — `resolve` for identifier-shaped strings; `search` for natural language or code fragments; `find` for structured `NodeFilter` discovery.
 2. **Inspect** — `describe(id)` for the full record and `edge_summary` (per-label `in`/`out` counts).
-3. **Walk** — `neighbors` in a loop with explicit **`direction`** and **`edge_types`**. Multi-hop traces are **your** reasoning, not a separate tool.
+3. **Walk** — `neighbors` for single-hop adjacency; `trace` for multi-hop BFS with pruning (fan-out control, role-based pruning, cross-service boundaries).
 
 ## Forced reasoning preamble (every tool call)
 
 Before each MCP call, output one short line:
 
 ```
-Q-class: <semantic | structured | inspect | walk>
-Pick: <search|find|describe|neighbors|resolve>  Why: <≤8 words>
+Q-class: <semantic | structured | inspect | walk | trace>
+Pick: <search|find|describe|neighbors|trace|resolve>  Why: <≤8 words>
 ```
 
 Then use real JSON shapes (see below). If the call fails or returns nothing useful, use the **Recovery playbook** — do not thrash.
@@ -189,6 +189,10 @@ Prefer **`resolve` -> `describe(id=...)`** over **`describe(fqn=...)`** when an 
 | Who implements interface T? | type symbol id | `neighbors(ids, "in", ["IMPLEMENTS"])` |
 | Where is T injected | type symbol id | `neighbors(ids, "in", ["INJECTS"])` |
 | Impact / "what breaks if I change X"? | no magic tool | loop `neighbors` `in` with `CALLS`, `INJECTS`, ... until bounded |
+| "What happens when route R is called?" | `find(kind="route")` then `trace(route_id, "out", ["EXPOSES","CALLS"], max_depth=4)` | `describe` on key nodes |
+| "Impact of changing method M" | `resolve` / `find` then `trace(id, "in", ["CALLS","OVERRIDES"], max_depth=3)` | `describe` on callers |
+| "Trace from X to database" | `trace(id, "out", ["CALLS"], max_depth=4, prune_roles=["DTO","EXCEPTION"])` | `neighbors` for pruned detail |
+| "What calls this across services?" | `trace(id, "out", ["CALLS","HTTP_CALLS","ASYNC_CALLS"], max_depth=5)` | `trace` on downstream route_id if needed |
 
 **Rules of thumb:**
 
@@ -228,6 +232,19 @@ Returns **edges** with `attrs` (`confidence`, `strategy`, `match`, ... on cross-
 **Cross-service edges** (`HTTP_CALLS`, `ASYNC_CALLS`): read `attrs.confidence` and `attrs.match` — low confidence or `unresolved`/`phantom`/`ambiguous` means treat as a resolver signal, not ground truth.
 
 **`CALLS` edges:** source-ordered (`call_site_line`, `call_site_byte`). `attrs.resolved=false` on `CALLS` rows means known-receiver-external (JDK/Spring) callees. **`include_unresolved=True`** (CALLS + `direction=out` only) interleaves unresolved sites with resolved `CALLS`. **`dedup_calls=True`** collapses identical `(origin, callee)` `CALLS` to one row with `call_site_lines`. Optional **`edge_filter`** projects before pagination: `min_confidence`; `include_strategies` / `exclude_strategies` (mutually exclusive); `callee_declaring_role`, `callee_declaring_roles`, `exclude_callee_declaring_roles` (`["OTHER"]` also drops known-external rows).
+
+### `trace`
+
+Multi-hop BFS with pruning. Args: `ids` (string or list), **`direction`**, **`edge_types`** (stored labels only — no composed dot-keys), `max_depth` (default 3, clamped 1–5), `max_paths` (default 20), `max_nodes_discovered` (default 500, clamped 100–2000), optional `filter` (NodeFilter), optional `edge_filter` (CALLS only), optional `prune_roles` (soft gate — edges recorded, frontier stops), `fan_out_cap` (default 5, scaffolding edges exempt), `collapse_trivial` (default true), `include_unresolved` (default false).
+
+Returns `TraceOutput`: `success`, `seed_ids`, `direction`, `edge_types`, `actual_depth`, `nodes` (dict of id→NodeRef), `edges` (list of `TraceEdge`), `paths` (list of `TracePath`), `stats` (`TraceStats`), `advisories`.
+
+**`TraceEdge`**: `from_id`, `to_id`, `edge_type`, `hop` (BFS depth), `parent_edge_id` (nullable), `collapsed` (bool), `collapsed_intermediates` (list of node ids), `cross_service_boundary` (bool), `attrs`.
+
+**When to use `trace` vs `neighbors`:**
+- Use `neighbors` for single-hop adjacency where you want the full unfiltered result.
+- Use `trace` for multi-hop path questions (3+ hops), impact analysis, cross-service boundary discovery, or when `neighbors` returns high fan-out (>8 CALLS edges).
+- After `trace`, use `neighbors` or `describe` on specific nodes for detail the trace pruned or collapsed.
 
 ## Ontology glossary
 

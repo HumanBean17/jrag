@@ -1307,3 +1307,97 @@ def test_advisories_char_cap() -> None:
     _, advisories = generate_hints("neighbors", payload)
     for a in advisories:
         assert len(a) <= 200, f"advisory too long: {a!r}"
+
+
+# ---------------------------------------------------------------------------
+# PR-TRACE-3 tests: trace hints + neighbors high-fanout trace mention
+# ---------------------------------------------------------------------------
+
+
+def test_hint_trace_budget_hit() -> None:
+    """generate_hints('trace', {stats.budget_hit=True}) returns budget hit advisory."""
+    struct, advisories = generate_hints("trace", {
+        "success": True,
+        "stats": {
+            "budget_hit": True,
+            "total_nodes_discovered": 500,
+            "nodes_after_pruning": 120,
+        },
+        "edges": [],
+        "nodes": {},
+        "seed_ids": ["sym:com.example.Svc#run()"],
+        "direction": "out",
+        "edge_types": ["CALLS"],
+    })
+    assert any("budget" in a.lower() for a in advisories), f"no budget advisory in {advisories}"
+    budget_hints = [h for h in struct if h.label == "budget hit"]
+    assert budget_hints, f"no budget hit structured hint in {[h.label for h in struct]}"
+
+
+def test_hint_trace_pruned_edges() -> None:
+    """generate_hints('trace', {stats with pruning}) returns drill-down hint."""
+    struct, advisories = generate_hints("trace", {
+        "success": True,
+        "stats": {
+            "budget_hit": False,
+            "nodes_pruned_role": 5,
+            "nodes_pruned_fan_out": 3,
+            "edges_collapsed_trivial": 2,
+            "total_nodes_discovered": 100,
+        },
+        "edges": [],
+        "nodes": {},
+        "seed_ids": ["sym:a"],
+        "direction": "out",
+        "edge_types": ["CALLS"],
+    })
+    assert any("pruned" in a.lower() for a in advisories), f"no pruned advisory in {advisories}"
+    drilldown = [h for h in struct if h.label == "pruned drilldown"]
+    assert drilldown, f"no pruned drilldown hint in {[h.label for h in struct]}"
+
+
+def test_hint_trace_cross_service_boundary() -> None:
+    """generate_hints('trace', {edges with cross_service_boundary=True}) returns cross-service hint."""
+    struct, advisories = generate_hints("trace", {
+        "success": True,
+        "stats": {
+            "budget_hit": False,
+            "total_nodes_discovered": 10,
+            "nodes_pruned_role": 0,
+            "nodes_pruned_fan_out": 0,
+            "edges_collapsed_trivial": 0,
+        },
+        "edges": [
+            {
+                "from_id": "client:svc:PaymentClient",
+                "to_id": "route:payment-service:/api/payments:POST",
+                "cross_service_boundary": True,
+                "attrs": {"confidence": 0.85, "strategy": "URI_PATH_MATCH"},
+            },
+        ],
+        "nodes": {
+            "route:payment-service:/api/payments:POST": {"id": "route:payment-service:/api/payments:POST", "kind": "route"},
+        },
+        "seed_ids": ["sym:a"],
+        "direction": "out",
+        "edge_types": ["CALLS", "HTTP_CALLS"],
+    })
+    assert any("cross-service" in a.lower() for a in advisories), f"no cross-service advisory in {advisories}"
+    xs_hints = [h for h in struct if h.label == "cross-service boundary"]
+    assert xs_hints, f"no cross-service boundary hint in {[h.label for h in struct]}"
+    assert xs_hints[0].tool == "trace"
+    assert xs_hints[0].actionable is True
+
+
+def test_hint_neighbors_high_fanout_mentions_trace() -> None:
+    """generate_hints('neighbors', {many CALLS}) includes a trace recommendation."""
+    payload = _neighbors_hint_payload(
+        [_success_edge(_symbol_other(f"sym:callee{i}"), edge_type="CALLS") for i in range(12)],
+        requested_edge_types=["CALLS"],
+    )
+    payload["calls_row_count"] = 12
+    struct, _ = generate_hints("neighbors", payload)
+    trace_hints = [h for h in struct if h.tool == "trace" and h.label == "high fanout trace"]
+    assert trace_hints, f"no trace fanout hint in {[(h.tool, h.label) for h in struct]}"
+    assert trace_hints[0].actionable is True
+    assert "prune_roles" in trace_hints[0].args
