@@ -891,8 +891,8 @@ def test_trace_cross_service_edge_attrs(kuzu_graph: KuzuGraph) -> None:
     xs_edges = [e for e in out.edges if e.cross_service_boundary]
     for xe in xs_edges:
         assert xe.cross_service_boundary is True
-        # Should have at least some attributes from the cross-service edge.
-        assert len(xe.attrs) >= 0  # attrs may be empty but field exists
+        # Cross-service edges should carry key attributes from the graph edge.
+        assert any(k in xe.attrs for k in ("confidence", "strategy", "match"))
 
 
 def test_trace_cross_service_boundary_stops(kuzu_graph: KuzuGraph) -> None:

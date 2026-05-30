@@ -8,6 +8,7 @@ This module implements PR-TRACE-1a (core BFS engine) + PR-TRACE-1b
 """
 from __future__ import annotations
 
+import sys
 from collections import defaultdict
 from typing import Any, Literal
 
@@ -317,6 +318,8 @@ def _collapse_trivial_chains(
 ) -> int:
     """Post-BFS pass: collapse trivial chains (degree-1 intermediates).
 
+    Mutates ``nodes``, ``edges``, and ``edge_id_map`` in-place. Single-pass —
+    if A→B→C→D has both B and C trivial, only one level collapses per call.
     Returns the number of edges collapsed.
     """
     if not edges:
@@ -709,9 +712,8 @@ def trace_v2(
                         if other_rec is None:
                             continue
                     except Exception:
+                        print(f"[trace] cross-service: failed to resolve {other_id}", file=sys.stderr)
                         continue
-
-                    if not _node_matches_filter(other_kind, other_rec, nf):
                         continue
 
                     # Check budget.
@@ -772,9 +774,8 @@ def trace_v2(
                             if cross_rec is None:
                                 continue
                         except Exception:
+                            print(f"[trace] cross-service: failed to resolve {cross_target_id}", file=sys.stderr)
                             continue
-
-                        # Record cross-service node.
                         if cross_target_id not in nodes:
                             nodes[cross_target_id] = _node_ref_from_row(cross_kind, cross_rec)
 
