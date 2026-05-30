@@ -13,10 +13,23 @@ _GREEN = "\033[32m"
 _RED = "\033[31m"
 _CYAN = "\033[36m"
 
-CHECK = "✓"  # ✓
-CROSS = "✗"  # ✗
+CHECK = "✓"
+CROSS = "✗"
 
 _SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+_NOISE_CONTAINS: tuple[bytes, ...] = (
+    b"lance::",
+    b"FutureWarning",
+    b"Loading weights:",
+    b'"event": "brownfield-',
+    b"unknown producer source strategy",
+    b"unknown client source strategy",
+)
+
+
+def is_noise_line(line: bytes) -> bool:
+    return any(p in line for p in _NOISE_CONTAINS)
 
 
 def stderr_is_tty() -> bool:
@@ -61,10 +74,6 @@ def bold_cyan(text: str) -> str:
     return _styled(text, _BOLD, _CYAN)
 
 
-def styled_tag(tag: str) -> str:
-    return bold_cyan(tag)
-
-
 def styled_check() -> str:
     return green(CHECK) if stderr_is_tty() else CHECK
 
@@ -89,7 +98,7 @@ class Spinner:
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=2.0)
-        sys.stderr.buffer.write(b"\r" + b" " * 72 + b"\r")
+        sys.stderr.buffer.write(b"\r\x1b[2K")
         sys.stderr.buffer.flush()
 
     def _run(self) -> None:

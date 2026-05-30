@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import sys
 
-from java_codebase_rag.cli_format import bold_cyan, styled_check, styled_cross
+from java_codebase_rag.cli_format import bold_cyan, is_noise_line, styled_check, styled_cross
 
 
 def emit_vectors_start() -> None:
@@ -28,16 +28,6 @@ def emit_vectors_finish(*, elapsed_s: float, exit_code: int) -> None:
 class _AsyncLineFilter:
     """Buffers byte chunks and relays only non-noise lines to stderr (async drain path)."""
 
-    _NOISE_PREFIXES: tuple[bytes, ...] = ()
-    _NOISE_CONTAINS: tuple[bytes, ...] = (
-        b"lance::",
-        b"FutureWarning",
-        b"Loading weights:",
-        b'"event": "brownfield-',
-        b"unknown producer source strategy",
-        b"unknown client source strategy",
-    )
-
     def __init__(self) -> None:
         self._buf = bytearray()
         self._suppress_next = False
@@ -47,7 +37,7 @@ class _AsyncLineFilter:
         while b"\n" in self._buf:
             line, self._buf = self._buf.split(b"\n", 1)
             line += b"\n"
-            noise = self._is_noise(line)
+            noise = is_noise_line(line)
             if noise:
                 self._suppress_next = True
                 continue
@@ -59,18 +49,11 @@ class _AsyncLineFilter:
 
     def flush(self) -> None:
         if self._buf:
-            if not self._is_noise(self._buf):
+            if not is_noise_line(self._buf):
                 sys.stderr.buffer.write(bytes(self._buf))
                 sys.stderr.buffer.flush()
             self._buf.clear()
         self._suppress_next = False
-
-    @classmethod
-    def _is_noise(cls, line: bytes) -> bool:
-        return (
-            any(line.startswith(p) for p in cls._NOISE_PREFIXES)
-            or any(p in line for p in cls._NOISE_CONTAINS)
-        )
 
 
 async def accumulate_and_relay_subprocess_streams(

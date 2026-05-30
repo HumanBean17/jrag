@@ -686,7 +686,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_index_embedding_flags(erase)
     erase.add_argument("--yes", action="store_true", help="Confirm destructive deletion (required in CI)")
-    _add_verbosity_flags(erase)
+    erase.add_argument(
+        "--quiet", "-q",
+        action="store_true",
+        dest="quiet",
+        help="Suppress stderr progress relay; stdout payload unchanged.",
+    )
     erase.set_defaults(handler=_cmd_erase)
 
     meta = subparsers.add_parser("meta", help="Print graph meta and embedding resolution.")

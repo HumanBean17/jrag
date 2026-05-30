@@ -8,7 +8,7 @@ import threading
 import time
 from pathlib import Path
 
-from java_codebase_rag.cli_format import Spinner, stderr_is_tty
+from java_codebase_rag.cli_format import Spinner, is_noise_line, stderr_is_tty
 from java_codebase_rag.cli_progress import emit_vectors_finish, emit_vectors_start
 
 COCOINDEX_TARGET = "java_index_flow_lancedb.py:JavaCodeIndexLance"
@@ -25,16 +25,6 @@ def cocoindex_bin() -> Path:
 class _LineFilter:
     """Buffer byte chunks and relay only non-noise lines to stderr."""
 
-    _NOISE_PREFIXES: tuple[bytes, ...] = ()
-    _NOISE_CONTAINS: tuple[bytes, ...] = (
-        b"lance::",
-        b"FutureWarning",
-        b"Loading weights:",
-        b'"event": "brownfield-',
-        b"unknown producer source strategy",
-        b"unknown client source strategy",
-    )
-
     def __init__(self) -> None:
         self._buf = bytearray()
         self._suppress_next = False
@@ -44,7 +34,7 @@ class _LineFilter:
         while b"\n" in self._buf:
             line, self._buf = self._buf.split(b"\n", 1)
             line += b"\n"
-            noise = self._is_noise(line)
+            noise = is_noise_line(line)
             if noise:
                 self._suppress_next = True
                 continue
@@ -56,25 +46,19 @@ class _LineFilter:
 
     def flush(self) -> None:
         if self._buf:
-            if not self._is_noise(self._buf):
+            if not is_noise_line(self._buf):
                 sys.stderr.buffer.write(bytes(self._buf))
                 sys.stderr.buffer.flush()
             self._buf.clear()
         self._suppress_next = False
 
-    @classmethod
-    def _is_noise(cls, line: bytes) -> bool:
-        return (
-            any(line.startswith(p) for p in cls._NOISE_PREFIXES)
-            or any(p in line for p in cls._NOISE_CONTAINS)
-        )
 
-
-def _popen_stream_to_stderr(
+def _popen_capturing_stderr(
     proc: subprocess.Popen[bytes],
     *,
     verbose: bool = True,
 ) -> tuple[str, str, int]:
+    """Capture stdout/stderr; relay stderr through noise filter (or verbatim in verbose mode)."""
     out_buf = bytearray()
     err_buf = bytearray()
     filt = _LineFilter() if not verbose else None
@@ -172,7 +156,7 @@ def run_cocoindex_update(
             stderr=subprocess.PIPE,
             bufsize=0,
         )
-        out_s, err_s, code = _popen_stream_to_stderr(proc, verbose=verbose)
+        out_s, err_s, code = _popen_capturing_stderr(proc, verbose=verbose)
     finally:
         if spinner is not None:
             spinner.stop()
@@ -227,6 +211,9 @@ def run_build_ast_graph(
         "--kuzu-path",
         str(kuzu_path),
     ]
+    # Three-tier: --quiet (silent) / default (filtered progress) / --verbose (raw).
+    # Default passes --verbose so the builder emits per-pass progress lines,
+    # which the parent filters via _LineFilter.  --verbose bypasses the filter.
     if verbose or not quiet:
         cmd.append("--verbose")
     if quiet:
@@ -245,9 +232,9 @@ def run_build_ast_graph(
         stderr=subprocess.PIPE,
         bufsize=0,
     )
-    out_s, err_s, code = _popen_stream_to_stderr(proc, verbose=verbose)
+    out_s, err_s, code = _popen_capturing_stderr(proc, verbose=verbose)
     if not verbose:
-        from java_codebase_rag.cli_format import bold_cyan, styled_check
+        from java_codebase_rag.cli_format import bold_cyan, styled_check, styled_cross
         marker = styled_check() if code == 0 else styled_cross()
         print(f"{marker} {bold_cyan('[graph]')} done", file=sys.stderr, flush=True)
     return subprocess.CompletedProcess(args=cmd, returncode=code, stdout=out_s, stderr=err_s)
