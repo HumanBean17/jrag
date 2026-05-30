@@ -90,6 +90,7 @@ TraceEdge:
   to_id: str
   edge_type: str
   hop: int                             # BFS depth where discovered (0-indexed from seeds)
+  parent_edge_id: str | None           # ID of the incoming edge to from_id; null for seed edges. Enables tree reconstruction.
   collapsed: bool = False              # true if this edge was produced by collapsing a trivial chain
   collapsed_intermediates: list[str]   # node IDs of collapsed intermediates (empty if not collapsed)
   cross_service_boundary: bool = False # true if this edge crosses into another microservice (BFS stops here)
@@ -138,7 +139,9 @@ The trace engine is a **BFS traversal** that reuses the same Cypher query infras
         - Only followed when HTTP_CALLS/ASYNC_CALLS is in edge_types
         - Add Client/Producer node to frontier (needed to reach cross-service edge)
       - total_discovered += len(discovered neighbors)
-      - Record TraceEdge(from=node, to=neighbor, hop=hop, attrs=...)
+      - Record TraceEdge(from=node, to=neighbor, hop=hop, parent_edge_id=incoming_edge_id_for_node or None, attrs=...)
+        - parent_edge_id: the ID of the edge that brought BFS to `node` (null for seed nodes at hop 0)
+        - Enables O(1) tree reconstruction from flat edges without duplicating node payloads
    c. new_frontier = {neighbor.id for each discovered neighbor not in visited,
                       excluding cross-service boundary downstream nodes}
    d. visited |= new_frontier
@@ -304,6 +307,7 @@ edges:
     to_id: "sym:OrderRepository#save"
     edge_type: "CALLS"
     hop: 1
+    parent_edge_id: null               # seed edge (or edge that reached OrderServiceImpl)
     cross_service_boundary: false
     attrs: {confidence: 1.0}
 
@@ -311,6 +315,7 @@ edges:
     to_id: "client:PaymentClient"
     edge_type: "DECLARES_CLIENT"        # auto-followed to reach HTTP_CALLS
     hop: 2
+    parent_edge_id: null               # same seed edge
     cross_service_boundary: false
     attrs: {}
 
@@ -318,6 +323,7 @@ edges:
     to_id: "route:payment-service:/api/payments:POST"
     edge_type: "HTTP_CALLS"
     hop: 3
+    parent_edge_id: "DECLARES_CLIENT:OrderServiceImpl->PaymentClient"  # edge that reached PaymentClient
     cross_service_boundary: true         # BFS stops here
     attrs: {confidence: 0.85, strategy: "URI_PATH_MATCH", match: "exact", raw_uri: "/api/payments"}
 
@@ -429,6 +435,8 @@ These questions were resolved during review (PR #234). Deferred items are tracke
 9. **`max_nodes_discovered` counts pre-pruning** — **Intentional.** The budget is a compute guardrail limiting Cypher queries and BFS traversal cost, not an output size guarantee. The intent is documented explicitly in the Depth and budget control section.
 
 10. **PR-TRACE-1 split** — **Split into PR-TRACE-1a (core BFS + budget + paths) and PR-TRACE-1b (pruning + collapsing + cross-service).** Core BFS correctness and pruning heuristics are different review surfaces.
+
+11. **Flat edge list hierarchy** — **`parent_edge_id` on TraceEdge, not a full `tree` field.** A flat `edges` list requires agents to reconstruct the call tree from `from_id`/`to_id` pairs, which is cognitively expensive for 30+ edges. However, a full `tree` field duplicates structural data (tree nodes reference IDs in `nodes` dict, but the nesting itself is redundant with `from_id`/`to_id`). The lighter approach: each `TraceEdge` carries `parent_edge_id` (nullable, references the incoming edge to its `from_id`; null for seed edges). This is O(1) per edge, enables tree reconstruction when needed, and doesn't duplicate node payloads. A full nested `tree` field is deferred to v2 if agents demonstrate they need it — tracked in #240.
 
 ### Follow-up issues
 
