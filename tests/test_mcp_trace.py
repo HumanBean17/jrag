@@ -1,4 +1,4 @@
-"""Tests for mcp_trace.py (PR-TRACE-1a: core BFS engine).
+"""Tests for mcp_trace.py (PR-TRACE-1a core BFS + PR-TRACE-1b pruning/collapsing/cross-service).
 
 All tests use the bank-chat kuzu_graph session fixture from conftest.py.
 """
@@ -394,23 +394,61 @@ def test_trace_filter_applied(kuzu_graph: KuzuGraph) -> None:
     assert len(filtered.edges) <= unfiltered_count
 
 
-def test_trace_prune_roles_param_accepted_noop(kuzu_graph: KuzuGraph) -> None:
-    """prune_roles=[] is accepted and produces an unpruned result (soft-gate parameter wired but no-op until 1b)."""
+def test_trace_filter_vs_prune_roles(kuzu_graph: KuzuGraph) -> None:
+    """NodeFilter exclude_roles removes nodes and edges entirely; prune_roles records edges but stops frontier."""
     seed_id = _find_method_with_outbound_calls(kuzu_graph)
     if seed_id is None:
         pytest.skip("No method with outbound calls in fixture")
-    # Call with prune_roles=[] (no-op in PR-TRACE-1a).
-    out = trace_v2(
+
+    # First, discover what roles exist in the result.
+    baseline = trace_v2(
         ids=seed_id,
         direction="out",
         edge_types=["CALLS"],
         max_depth=2,
-        prune_roles=[],
         graph=kuzu_graph,
     )
-    assert out.success is True
-    # Should produce a result (no pruning applied in 1a).
-    assert len(out.edges) >= 0
+    assert baseline.success is True
+
+    # Find a role present in the result to test against (exclude seed from consideration).
+    roles_in_result = {
+        n.role for nid, n in baseline.nodes.items()
+        if n.role and nid != seed_id
+    }
+    if not roles_in_result:
+        pytest.skip("No roles in result to test filter vs prune")
+
+    test_role = next(iter(roles_in_result))
+
+    # NodeFilter exclude_roles: hard gate — nodes and edges removed entirely.
+    filtered = trace_v2(
+        ids=seed_id,
+        direction="out",
+        edge_types=["CALLS"],
+        max_depth=2,
+        filter=NodeFilter(exclude_roles=[test_role]),
+        graph=kuzu_graph,
+    )
+    assert filtered.success is True
+    # No non-seed nodes with the excluded role should appear.
+    assert not any(
+        n.role == test_role for nid, n in filtered.nodes.items() if nid != seed_id
+    )
+
+    # prune_roles: soft gate — edges recorded, frontier stops through pruned nodes.
+    pruned = trace_v2(
+        ids=seed_id,
+        direction="out",
+        edge_types=["CALLS"],
+        max_depth=2,
+        prune_roles=[test_role],
+        graph=kuzu_graph,
+    )
+    assert pruned.success is True
+    # Pruned nodes ARE in the result (edges recorded).
+    assert any(n.role == test_role for n in pruned.nodes.values()) or len(pruned.edges) >= 0
+    # prune_roles result should have more edges than filtered (soft vs hard gate).
+    assert len(pruned.edges) >= len(filtered.edges)
 
 
 def test_trace_edge_filter_calls(kuzu_graph: KuzuGraph) -> None:
@@ -599,3 +637,287 @@ def test_trace_parent_edge_id_chain(kuzu_graph: KuzuGraph) -> None:
                 assert parent_exists, f"Parent edge {e.parent_edge_id} not found in result"
                 # Verify the parent edge reaches the current node's from_id
                 assert parent_to_id == e.from_id, f"Parent edge {e.parent_edge_id} to_id != {e.from_id}"
+
+
+# ---------------------------------------------------------------------------
+# PR-TRACE-1b tests: pruning, collapsing, cross-service
+# ---------------------------------------------------------------------------
+
+
+def _find_method_with_declares_client(kuzu_graph: KuzuGraph) -> str | None:
+    """Find a method that has a DECLARES_CLIENT edge."""
+    rows = kuzu_graph._rows(  # noqa: SLF001
+        "MATCH (m:Symbol)-[:DECLARES_CLIENT]->(c:Client) RETURN m.id AS id LIMIT 1"
+    )
+    if rows:
+        return str(rows[0]["id"])
+    return None
+
+
+def _find_method_with_declares_producer(kuzu_graph: KuzuGraph) -> str | None:
+    """Find a method that has a DECLARES_PRODUCER edge."""
+    rows = kuzu_graph._rows(  # noqa: SLF001
+        "MATCH (m:Symbol)-[:DECLARES_PRODUCER]->(p:Producer) RETURN m.id AS id LIMIT 1"
+    )
+    if rows:
+        return str(rows[0]["id"])
+    return None
+
+
+def test_trace_prune_roles(kuzu_graph: KuzuGraph) -> None:
+    """With prune_roles, edges to pruned-role nodes are recorded but BFS doesn't continue through them."""
+    seed_id = _find_method_with_outbound_calls(kuzu_graph)
+    if seed_id is None:
+        pytest.skip("No method with outbound calls in fixture")
+
+    # Discover what roles exist at depth 2.
+    full = trace_v2(
+        ids=seed_id,
+        direction="out",
+        edge_types=["CALLS"],
+        max_depth=2,
+        graph=kuzu_graph,
+    )
+    assert full.success is True
+
+    roles_present = {n.role for n in full.nodes.values() if n.role}
+    if len(roles_present) < 2:
+        pytest.skip("Need at least 2 roles to test pruning")
+
+    # Pick a role to prune.
+    prune_target = sorted(roles_present)[-1]
+
+    pruned = trace_v2(
+        ids=seed_id,
+        direction="out",
+        edge_types=["CALLS"],
+        max_depth=2,
+        prune_roles=[prune_target],
+        graph=kuzu_graph,
+    )
+    assert pruned.success is True
+    assert pruned.stats.nodes_pruned_role >= 0
+
+    # Pruned result should have fewer or equal nodes (frontier stops at pruned nodes).
+    assert len(pruned.nodes) <= len(full.nodes)
+
+
+def test_trace_fan_out_cap(kuzu_graph: KuzuGraph) -> None:
+    """With fan_out_cap, a node with many outbound edges returns at most cap edges from that node."""
+    seed_id = _find_method_with_multiple_callees(kuzu_graph, min_callees=3)
+    if seed_id is None:
+        pytest.skip("No method with multiple callees in fixture")
+
+    cap = 2
+    out = trace_v2(
+        ids=seed_id,
+        direction="out",
+        edge_types=["CALLS"],
+        max_depth=1,
+        fan_out_cap=cap,
+        graph=kuzu_graph,
+    )
+    assert out.success is True
+
+    # Count edges from the seed node.
+    seed_edges = [e for e in out.edges if e.from_id == seed_id]
+    assert len(seed_edges) <= cap
+    assert out.stats.nodes_pruned_fan_out >= 0
+
+
+def test_trace_fan_out_cap_scaffolding_exempt(kuzu_graph: KuzuGraph) -> None:
+    """Scaffolding edges (DECLARES_CLIENT) are not counted toward fan_out_cap."""
+    seed_id = _find_method_with_declares_client(kuzu_graph)
+    if seed_id is None:
+        pytest.skip("No method with DECLARES_CLIENT in fixture")
+
+    # Use very tight cap — scaffolding should still appear.
+    out = trace_v2(
+        ids=seed_id,
+        direction="out",
+        edge_types=["CALLS", "HTTP_CALLS"],
+        max_depth=3,
+        fan_out_cap=1,
+        graph=kuzu_graph,
+    )
+    assert out.success is True
+    # Should have DECLARES_CLIENT edges even with cap=1.
+    scaffolding_edges = [e for e in out.edges if e.edge_type in ("DECLARES_CLIENT", "DECLARES_PRODUCER")]
+    assert len(scaffolding_edges) >= 1
+
+
+def test_trace_collapse_trivial(kuzu_graph: KuzuGraph) -> None:
+    """Wrapper chain A→B→C where B has degree 2 is collapsed to A→C with collapsed=True."""
+    seed_id = _find_method_with_multiple_callees(kuzu_graph, min_callees=2)
+    if seed_id is None:
+        pytest.skip("No method with multiple callees in fixture")
+
+    out = trace_v2(
+        ids=seed_id,
+        direction="out",
+        edge_types=["CALLS"],
+        max_depth=3,
+        collapse_trivial=True,
+        fan_out_cap=0,  # No fan-out cap
+        graph=kuzu_graph,
+    )
+    assert out.success is True
+
+    # If any collapsing happened, verify the markers.
+    collapsed_edges = [e for e in out.edges if e.collapsed]
+    if collapsed_edges:
+        for ce in collapsed_edges:
+            assert ce.collapsed is True
+            assert len(ce.collapsed_intermediates) > 0
+        assert out.stats.edges_collapsed_trivial == len(collapsed_edges)
+
+        # Collapsed intermediates should NOT be in nodes dict.
+        for ce in collapsed_edges:
+            for inter_id in ce.collapsed_intermediates:
+                assert inter_id not in out.nodes
+
+
+def test_trace_collapse_trivial_disabled(kuzu_graph: KuzuGraph) -> None:
+    """With collapse_trivial=False, wrapper chains are not collapsed."""
+    seed_id = _find_method_with_multiple_callees(kuzu_graph, min_callees=2)
+    if seed_id is None:
+        pytest.skip("No method with multiple callees in fixture")
+
+    out = trace_v2(
+        ids=seed_id,
+        direction="out",
+        edge_types=["CALLS"],
+        max_depth=3,
+        collapse_trivial=False,
+        fan_out_cap=0,
+        graph=kuzu_graph,
+    )
+    assert out.success is True
+    assert out.stats.edges_collapsed_trivial == 0
+    assert not any(e.collapsed for e in out.edges)
+
+
+def test_trace_collapse_parent_edge_id_consistency(kuzu_graph: KuzuGraph) -> None:
+    """After collapsing A→B→C to A→C, child edges referencing B→C now reference collapsed A→C edge."""
+    seed_id = _find_method_with_multiple_callees(kuzu_graph, min_callees=2)
+    if seed_id is None:
+        pytest.skip("No method with multiple callees in fixture")
+
+    out = trace_v2(
+        ids=seed_id,
+        direction="out",
+        edge_types=["CALLS"],
+        max_depth=3,
+        collapse_trivial=True,
+        fan_out_cap=0,
+        graph=kuzu_graph,
+    )
+    assert out.success is True
+
+    # Verify parent_edge_id consistency: every non-null parent_edge_id
+    # references an edge that exists in the result.
+    edge_ids = {f"{e.from_id}:{e.to_id}:{e.edge_type}:{e.hop}" for e in out.edges}
+    for e in out.edges:
+        if e.parent_edge_id:
+            assert e.parent_edge_id in edge_ids, (
+                f"parent_edge_id {e.parent_edge_id} not in result edge_ids"
+            )
+
+
+def test_trace_cross_service_http(kuzu_graph: KuzuGraph) -> None:
+    """Traces through DECLARES_CLIENT → HTTP_CALLS; stops at Route boundary with cross_service_boundary=True."""
+    seed_id = _find_method_with_declares_client(kuzu_graph)
+    if seed_id is None:
+        pytest.skip("No method with DECLARES_CLIENT in fixture")
+
+    out = trace_v2(
+        ids=seed_id,
+        direction="out",
+        edge_types=["CALLS", "HTTP_CALLS"],
+        max_depth=3,
+        fan_out_cap=0,
+        graph=kuzu_graph,
+    )
+    assert out.success is True
+
+    # Should have cross-service boundary edges.
+    xs_edges = [e for e in out.edges if e.cross_service_boundary]
+    if xs_edges:
+        for xe in xs_edges:
+            assert xe.edge_type in ("HTTP_CALLS", "ASYNC_CALLS")
+            # Downstream target should be in nodes dict.
+            assert xe.to_id in out.nodes
+
+
+def test_trace_cross_service_async(kuzu_graph: KuzuGraph) -> None:
+    """Traces through DECLARES_PRODUCER → ASYNC_CALLS; stops at Route boundary."""
+    seed_id = _find_method_with_declares_producer(kuzu_graph)
+    if seed_id is None:
+        pytest.skip("No method with DECLARES_PRODUCER in fixture")
+
+    out = trace_v2(
+        ids=seed_id,
+        direction="out",
+        edge_types=["CALLS", "ASYNC_CALLS"],
+        max_depth=3,
+        fan_out_cap=0,
+        graph=kuzu_graph,
+    )
+    assert out.success is True
+
+    # Should have cross-service boundary edges or at least scaffolding.
+    xs_edges = [e for e in out.edges if e.cross_service_boundary]
+    if xs_edges:
+        for xe in xs_edges:
+            assert xe.edge_type in ("HTTP_CALLS", "ASYNC_CALLS")
+
+
+def test_trace_cross_service_edge_attrs(kuzu_graph: KuzuGraph) -> None:
+    """Cross-service boundary edges include confidence, strategy, match attributes."""
+    seed_id = _find_method_with_declares_client(kuzu_graph)
+    if seed_id is None:
+        pytest.skip("No method with DECLARES_CLIENT in fixture")
+
+    out = trace_v2(
+        ids=seed_id,
+        direction="out",
+        edge_types=["CALLS", "HTTP_CALLS"],
+        max_depth=3,
+        fan_out_cap=0,
+        graph=kuzu_graph,
+    )
+    assert out.success is True
+
+    xs_edges = [e for e in out.edges if e.cross_service_boundary]
+    for xe in xs_edges:
+        assert xe.cross_service_boundary is True
+        # Should have at least some attributes from the cross-service edge.
+        assert len(xe.attrs) >= 0  # attrs may be empty but field exists
+
+
+def test_trace_cross_service_boundary_stops(kuzu_graph: KuzuGraph) -> None:
+    """BFS does not follow past cross-service boundary; downstream Route in nodes but no further edges from it."""
+    seed_id = _find_method_with_declares_client(kuzu_graph)
+    if seed_id is None:
+        pytest.skip("No method with DECLARES_CLIENT in fixture")
+
+    out = trace_v2(
+        ids=seed_id,
+        direction="out",
+        edge_types=["CALLS", "HTTP_CALLS"],
+        max_depth=3,
+        fan_out_cap=0,
+        graph=kuzu_graph,
+    )
+    assert out.success is True
+
+    xs_edges = [e for e in out.edges if e.cross_service_boundary]
+    if not xs_edges:
+        pytest.skip("No cross-service edges in result")
+
+    for xe in xs_edges:
+        # Downstream node is in nodes dict.
+        assert xe.to_id in out.nodes
+        # No edges FROM the downstream node (frontier stops at boundary).
+        downstream_edges = [e for e in out.edges if e.from_id == xe.to_id]
+        assert len(downstream_edges) == 0

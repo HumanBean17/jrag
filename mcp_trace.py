@@ -3,9 +3,8 @@
 Imports stable types from mcp_v2.py but does not modify them:
 - NodeFilter, EdgeFilter, NodeRef, _node_ref_from_row, _node_kind_from_id
 
-This module is additive (PR-TRACE-1a: core BFS engine + budget + paths).
-Pruning features (prune_roles, fan_out_cap, collapse_trivial, cross-service)
-land in PR-TRACE-1b.
+This module implements PR-TRACE-1a (core BFS engine) + PR-TRACE-1b
+(pruning, collapsing, cross-service boundary detection).
 """
 from __future__ import annotations
 
@@ -36,6 +35,12 @@ _ROLE_PRIORITY: dict[str, int] = {
     "CLIENT": 2,
     "OTHER": 1,
 }
+
+# Scaffolding edges exempt from fan_out_cap.
+_SCAFFOLDING_EDGE_TYPES = frozenset({"DECLARES_CLIENT", "DECLARES_PRODUCER"})
+
+# Cross-service edge types that trigger scaffolding follow.
+_CROSS_SERVICE_EDGE_TYPES = frozenset({"HTTP_CALLS", "ASYNC_CALLS"})
 
 
 def _role_priority(role: str | None) -> int:
@@ -292,6 +297,129 @@ def _node_matches_filter(
     return True
 
 
+def _fan_out_sort_key(
+    row: dict[str, Any],
+    nodes: dict[str, NodeRef],
+) -> tuple[float, int, str]:
+    """Sort key for fan_out_cap ranking: confidence desc, role priority desc, fqn asc."""
+    conf = float(row.get("confidence") or 0.0)
+    other_id = str(row.get("other_id") or "")
+    node_ref = nodes.get(other_id)
+    role_prio = _role_priority(node_ref.role if node_ref else None)
+    fqn = node_ref.fqn if node_ref else other_id
+    return (-conf, -role_prio, fqn)
+
+
+def _collapse_trivial_chains(
+    nodes: dict[str, NodeRef],
+    edges: list[TraceEdge],
+    edge_id_map: dict[str, TraceEdge],
+) -> int:
+    """Post-BFS pass: collapse trivial chains (degree-1 intermediates).
+
+    Returns the number of edges collapsed.
+    """
+    if not edges:
+        return 0
+
+    # Build adjacency for degree counting.
+    in_edges: dict[str, list[TraceEdge]] = defaultdict(list)
+    out_edges: dict[str, list[TraceEdge]] = defaultdict(list)
+    for e in edges:
+        if e.collapsed:
+            continue
+        if e.edge_type == "CALLS":
+            in_edges[e.to_id].append(e)
+            out_edges[e.from_id].append(e)
+
+    collapsed_count = 0
+    # Track which edge IDs got replaced (so we can update parent_edge_id later).
+    old_to_new_edge_id: dict[str, str] = {}
+
+    # Identify collapsible intermediates: B where exactly 1 inbound CALLS and 1 outbound CALLS.
+    all_node_ids = set(nodes.keys())
+    intermediates_to_collapse: list[tuple[str, TraceEdge, TraceEdge]] = []
+
+    for node_id in all_node_ids:
+        node_in = [e for e in in_edges.get(node_id, []) if not e.collapsed]
+        node_out = [e for e in out_edges.get(node_id, []) if not e.collapsed]
+        if len(node_in) != 1 or len(node_out) != 1:
+            continue
+
+        node_ref = nodes.get(node_id)
+        if node_ref is None:
+            continue
+
+        # Role check: OTHER, or declaring-class role is SERVICE/COMPONENT.
+        role = node_ref.role
+        if role not in ("OTHER", None):
+            continue
+
+        in_edge = node_in[0]
+        out_edge = node_out[0]
+        intermediates_to_collapse.append((node_id, in_edge, out_edge))
+
+    # Process collapses.
+    edges_to_remove: set[str] = set()
+    edges_to_add: list[TraceEdge] = []
+
+    for node_id, in_edge, out_edge in intermediates_to_collapse:
+        # Merge A→B→C into A→C.
+        merged_attrs = in_edge.attrs if (
+            float(in_edge.attrs.get("confidence", 1.0))
+            <= float(out_edge.attrs.get("confidence", 1.0))
+        ) else out_edge.attrs
+
+        merged_edge = TraceEdge(
+            from_id=in_edge.from_id,
+            to_id=out_edge.to_id,
+            edge_type="CALLS",
+            hop=in_edge.hop,
+            parent_edge_id=in_edge.parent_edge_id,
+            collapsed=True,
+            collapsed_intermediates=[node_id],
+            attrs=merged_attrs,
+        )
+
+        edges_to_remove.add(f"{in_edge.from_id}:{in_edge.to_id}:{in_edge.edge_type}:{in_edge.hop}")
+        edges_to_remove.add(f"{out_edge.from_id}:{out_edge.to_id}:{out_edge.edge_type}:{out_edge.hop}")
+
+        old_to_new_edge_id[
+            f"{out_edge.from_id}:{out_edge.to_id}:{out_edge.edge_type}:{out_edge.hop}"
+        ] = f"{merged_edge.from_id}:{merged_edge.to_id}:{merged_edge.edge_type}:{merged_edge.hop}"
+
+        edges_to_add.append(merged_edge)
+        collapsed_count += 1
+
+    if collapsed_count == 0:
+        return 0
+
+    # Remove collapsed edges and add merged ones.
+    new_edges = [e for e in edges if f"{e.from_id}:{e.to_id}:{e.edge_type}:{e.hop}" not in edges_to_remove]
+    new_edges.extend(edges_to_add)
+
+    # Remove intermediate nodes.
+    for node_id, _, _ in intermediates_to_collapse:
+        nodes.pop(node_id, None)
+
+    # Rebuild edge_id_map.
+    edge_id_map.clear()
+    for e in new_edges:
+        eid = f"{e.from_id}:{e.to_id}:{e.edge_type}:{e.hop}"
+        edge_id_map[eid] = e
+
+    # Recompute parent_edge_id: any edge referencing a removed edge should point to the collapsed replacement.
+    for e in new_edges:
+        if e.parent_edge_id and e.parent_edge_id in old_to_new_edge_id:
+            e.parent_edge_id = old_to_new_edge_id[e.parent_edge_id]
+
+    # Replace edges list in place (caller holds the reference).
+    edges.clear()
+    edges.extend(new_edges)
+
+    return collapsed_count
+
+
 def _enumerate_paths(
     nodes: dict[str, NodeRef],
     edges: list[TraceEdge],
@@ -369,12 +497,7 @@ def trace_v2(
     include_unresolved: bool = False,
     graph: KuzuGraph | None = None,
 ) -> TraceOutput:
-    """Multi-hop BFS traversal with pruning.
-
-    This is PR-TRACE-1a (core BFS engine). Pruning features (prune_roles, fan_out_cap,
-    collapse_trivial, include_unresolved) are wired but treated as no-ops until
-    PR-TRACE-1b implementation.
-    """
+    """Multi-hop BFS traversal with pruning."""
     # Validate required parameters.
     if not direction:
         return TraceOutput(
@@ -469,6 +592,12 @@ def trace_v2(
     # Get graph instance.
     g = graph or KuzuGraph.get()
 
+    # Normalized prune_roles set.
+    prune_role_set = set(prune_roles) if prune_roles else set()
+
+    # Determine if cross-service detection is active.
+    cross_service_active = bool(set(edge_types) & _CROSS_SERVICE_EDGE_TYPES)
+
     # BFS state.
     visited: set[str] = set(seed_ids)
     frontier: list[str] = list(seed_ids)
@@ -478,6 +607,8 @@ def trace_v2(
     total_discovered = len(seed_ids)  # Count seeds as discovered
     actual_depth = 0
     budget_hit = False
+    nodes_pruned_role = 0
+    nodes_pruned_fan_out = 0
 
     # Track incoming edge ID for each node (for parent_edge_id).
     node_to_incoming_edge_id: dict[str, str] = {}
@@ -501,12 +632,20 @@ def trace_v2(
 
         actual_depth = hop + 1
 
+        # Determine which edge types to query in this hop.
+        query_edge_types = list(edge_types)
+        # Cross-service: also query scaffolding edges when cross-service is active.
+        if cross_service_active:
+            for scaffold_et in _SCAFFOLDING_EDGE_TYPES:
+                if scaffold_et not in query_edge_types:
+                    query_edge_types.append(scaffold_et)
+
         # Batch query for all frontier nodes.
         rows = _neighbors_batched(
             g,
             node_ids=frontier,
             direction=direction,
-            edge_types=edge_types,
+            edge_types=query_edge_types,
             edge_filter=ef,
         )
 
@@ -515,18 +654,42 @@ def trace_v2(
         for row in rows:
             src_id = str(row.get("source_id") or "")
             if not src_id:
-                # Infer source from frontier context (same pattern as neighbors_v2).
                 continue
             by_source[src_id].append(row)
 
         # Process discovered edges.
         new_frontier: set[str] = set()
-        edges_by_parent: dict[str, list[TraceEdge]] = defaultdict(list)
 
         for src_id, src_rows in by_source.items():
             parent_edge_id = node_to_incoming_edge_id.get(src_id)
 
+            # --- Fan-out cap: separate scaffolding from signal edges ---
+            scaffolding_rows: list[dict[str, Any]] = []
+            signal_rows: list[dict[str, Any]] = []
+
             for row in src_rows:
+                et = str(row.get("edge_type") or "")
+                if et in _SCAFFOLDING_EDGE_TYPES:
+                    scaffolding_rows.append(row)
+                else:
+                    signal_rows.append(row)
+
+            # Sort signal rows by ranking key for fan-out cap.
+            signal_rows.sort(key=lambda r: _fan_out_sort_key(r, nodes))
+
+            # Apply fan_out_cap to signal edges only.
+            if fan_out_cap > 0 and len(signal_rows) > fan_out_cap:
+                # Count pruned nodes (those we're dropping).
+                for dropped_row in signal_rows[fan_out_cap:]:
+                    dropped_id = str(dropped_row.get("other_id") or "")
+                    if dropped_id and dropped_id not in visited:
+                        nodes_pruned_fan_out += 1
+                signal_rows = signal_rows[:fan_out_cap]
+
+            # Combine: scaffolding always included, then capped signal.
+            capped_rows = scaffolding_rows + signal_rows
+
+            for row in capped_rows:
                 other_id = str(row.get("other_id") or "")
                 if not other_id:
                     continue
@@ -534,6 +697,106 @@ def trace_v2(
                 if other_id in visited:
                     continue
 
+                edge_type = str(row.get("edge_type") or "")
+
+                # --- Cross-service boundary detection ---
+                if edge_type in _SCAFFOLDING_EDGE_TYPES and cross_service_active:
+                    # Follow scaffolding edge to Client/Producer node.
+                    # Record the scaffolding edge and include the node.
+                    try:
+                        other_kind = _resolve_node_kind(g, other_id)
+                        other_rec = _load_node_record(g, other_id, other_kind)
+                        if other_rec is None:
+                            continue
+                    except Exception:
+                        continue
+
+                    if not _node_matches_filter(other_kind, other_rec, nf):
+                        continue
+
+                    # Check budget.
+                    if total_discovered >= max_nodes_discovered:
+                        budget_hit = True
+                        break
+
+                    total_discovered += 1
+                    if other_id not in nodes:
+                        nodes[other_id] = _node_ref_from_row(other_kind, other_rec)
+
+                    edge_id = f"{src_id}:{other_id}:{edge_type}:{hop}"
+                    edge = TraceEdge(
+                        from_id=src_id,
+                        to_id=other_id,
+                        edge_type=edge_type,
+                        hop=hop,
+                        parent_edge_id=parent_edge_id,
+                        attrs=_edge_attrs_for_row(row),
+                    )
+                    edges.append(edge)
+                    edge_id_map[edge_id] = edge
+                    visited.add(other_id)
+
+                    # Now follow HTTP_CALLS/ASYNC_CALLS from Client/Producer.
+                    # Determine which cross-service edge types to follow.
+                    active_cross_types = list(set(edge_types) & _CROSS_SERVICE_EDGE_TYPES)
+                    if not active_cross_types:
+                        continue
+
+                    cross_rows = _neighbors_batched(
+                        g,
+                        node_ids=[other_id],
+                        direction=direction,
+                        edge_types=active_cross_types,
+                        edge_filter=None,
+                    )
+
+                    for cross_row in cross_rows:
+                        cross_target_id = str(cross_row.get("other_id") or "")
+                        if not cross_target_id or cross_target_id in visited:
+                            continue
+
+                        cross_et = str(cross_row.get("edge_type") or "")
+                        if cross_et not in _CROSS_SERVICE_EDGE_TYPES:
+                            continue
+
+                        # Check budget.
+                        if total_discovered >= max_nodes_discovered:
+                            budget_hit = True
+                            break
+
+                        total_discovered += 1
+
+                        try:
+                            cross_kind = _resolve_node_kind(g, cross_target_id)
+                            cross_rec = _load_node_record(g, cross_target_id, cross_kind)
+                            if cross_rec is None:
+                                continue
+                        except Exception:
+                            continue
+
+                        # Record cross-service node.
+                        if cross_target_id not in nodes:
+                            nodes[cross_target_id] = _node_ref_from_row(cross_kind, cross_rec)
+
+                        cross_edge_id = f"{other_id}:{cross_target_id}:{cross_et}:{hop + 1}"
+                        cross_edge = TraceEdge(
+                            from_id=other_id,
+                            to_id=cross_target_id,
+                            edge_type=cross_et,
+                            hop=hop + 1,
+                            parent_edge_id=edge_id,
+                            cross_service_boundary=True,
+                            attrs=_edge_attrs_for_row(cross_row),
+                        )
+                        edges.append(cross_edge)
+                        edge_id_map[cross_edge_id] = cross_edge
+                        visited.add(cross_target_id)
+                        # Do NOT add downstream node to frontier — boundary-stop.
+
+                    # Do NOT add Client/Producer to frontier either.
+                    continue
+
+                # --- Standard edge processing ---
                 # Check budget BEFORE counting (only counts newly discovered nodes).
                 if total_discovered >= max_nodes_discovered:
                     budget_hit = True
@@ -558,8 +821,15 @@ def trace_v2(
                 if other_id not in nodes:
                     nodes[other_id] = _node_ref_from_row(other_kind, other_rec)
 
+                # Check prune_roles (soft gate).
+                is_pruned = False
+                if prune_role_set:
+                    node_ref = nodes.get(other_id)
+                    if node_ref and node_ref.role in prune_role_set:
+                        is_pruned = True
+                        nodes_pruned_role += 1
+
                 # Record edge.
-                edge_type = str(row.get("edge_type") or "")
                 edge_id = f"{src_id}:{other_id}:{edge_type}:{hop}"
                 edge = TraceEdge(
                     from_id=src_id,
@@ -571,15 +841,14 @@ def trace_v2(
                 )
                 edges.append(edge)
                 edge_id_map[edge_id] = edge
-                edges_by_parent[src_id].append(edge)
 
                 # Track incoming edge ID for this node (for parent_edge_id of children).
                 if other_id not in node_to_incoming_edge_id:
                     node_to_incoming_edge_id[other_id] = edge_id
 
-                # PR-TRACE-1b: prune_roles, fan_out_cap, cross_service are no-ops here.
-                # For now, add all discovered nodes to frontier.
-                new_frontier.add(other_id)
+                # Pruned nodes: edge recorded but NOT added to frontier.
+                if not is_pruned:
+                    new_frontier.add(other_id)
 
         visited.update(new_frontier)
         frontier = list(new_frontier)
@@ -587,12 +856,20 @@ def trace_v2(
         if budget_hit:
             break
 
+    # Post-BFS: collapse trivial chains.
+    edges_collapsed = 0
+    if collapse_trivial:
+        edges_collapsed = _collapse_trivial_chains(nodes, edges, edge_id_map)
+
     # Build stats.
     stats = TraceStats(
         total_nodes_discovered=total_discovered,
         total_edges_discovered=len(edges),
         budget_hit=budget_hit,
         budget_limit=max_nodes_discovered,
+        nodes_pruned_role=nodes_pruned_role,
+        nodes_pruned_fan_out=nodes_pruned_fan_out,
+        edges_collapsed_trivial=edges_collapsed,
         nodes_after_pruning=len(nodes),
         edges_after_pruning=len(edges),
     )
