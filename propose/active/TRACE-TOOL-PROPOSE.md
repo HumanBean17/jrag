@@ -50,7 +50,7 @@ With `trace`:
 
 ```yaml
 trace(
-  ids: str | list[str],              # seed node ids (batch-capable, same as neighbors)
+  ids: str | list[str],              # seed node ids (single string normalized to list; echoed as seed_ids)
   direction: Literal["in", "out"],   # REQUIRED -- no default (same discipline as neighbors)
   edge_types: list[EdgeType],        # REQUIRED -- stored edge labels only (no composed dot-keys)
   max_depth: int = 3,                # max BFS hops (clamped to 1..5)
@@ -87,6 +87,8 @@ TraceEdge:
   to_id: str
   edge_type: str
   hop: int                             # BFS depth where discovered (0-indexed from seeds)
+  collapsed: bool = False              # true if this edge was produced by collapsing a trivial chain
+  collapsed_intermediates: list[str]   # node IDs of collapsed intermediates (empty if not collapsed)
   attrs: dict[str, Any]               # edge attributes (confidence, strategy, match, etc.)
 
 TracePath:
@@ -134,6 +136,8 @@ The trace engine is a **BFS traversal** that reuses the same Cypher query infras
    - Identify chains where intermediate node B has exactly 1 inbound and 1 outbound CALLS edge,
      and B's role is OTHER or its declaring class role is SERVICE/COMPONENT
    - Merge: edge A->B->C becomes A->C with attrs from the lower-confidence edge
+   - Set collapsed=True and collapsed_intermediates=[B.id] on the merged edge
+   - Remove intermediate nodes from nodes dict
    - Record stats.edges_collapsed_trivial
 4. Build paths: enumerate root-to-leaf paths through the DAG
    - Rank by: (a) leaf role priority (CONTROLLER > SERVICE > REPOSITORY > ...),
@@ -149,7 +153,7 @@ The `trace` tool's value is not "do what the agent could do but faster" -- it is
 
 **Role-based pruning (`prune_roles`)**: Nodes with roles like `DTO`, `EXCEPTION`, `UTILITY`, `OTHER` rarely carry meaningful traversal signal. A `SERVICE` method that calls `OrderDto#setTotal()` followed by `OrderRepository#save()` has one high-signal edge and one low-signal edge. Pruning DTOs at traversal time means the agent never sees the noise.
 
-**Fan-out throttling (`fan_out_cap`)**: When a node has 30 outgoing CALLS edges, the agent would have to inspect all 30 to find the 3 that matter. Fan-out cap keeps only the top-K — sorted by confidence (primary) with role priority as tiebreaker (CONTROLLER > SERVICE > REPOSITORY > CLIENT > OTHER) — so the traversal stays focused. The existing `EdgeFilter.callee_declaring_role` already lets agents pre-filter by role; the ranking does not duplicate that filter. The `stats` object reports how many edges were cut so the agent knows the cap fired.
+**Fan-out throttling (`fan_out_cap`)**: When a node has 30 outgoing CALLS edges, the agent would have to inspect all 30 to find the 3 that matter. Fan-out cap keeps only the top-K — sorted by confidence (primary) with role priority as tiebreaker (CONTROLLER > SERVICE > REPOSITORY > CLIENT > OTHER) — so the traversal stays focused. The existing `EdgeFilter.callee_declaring_role` already lets agents pre-filter by role; the ranking does not duplicate that filter. The `stats` object reports how many edges were cut so the agent knows the cap fired. **Known v1 trade-off**: the static role tiebreaker can produce counterintuitive results — e.g., from a SERVICE node, a CONTROLLER callee ties ahead of a REPOSITORY callee at equal confidence. The full `edges` list is available for client-side re-ranking. Making priority relative to the source node's role is deferred to #240.
 
 **Trivial chain collapsing (`collapse_trivial`)**: Wrapper/delegate patterns are common in Spring microservices. `OrderServiceImpl#createOrder` calls `orderValidator#validate` calls `ValidationHelper#doValidate` calls `RulesEngine#check`. The intermediate wrapper and helper add no semantic value. Collapsing these into `OrderServiceImpl -> RulesEngine` shortens paths and keeps the agent focused on the real flow.
 
@@ -188,7 +192,7 @@ The `nodes` dict in `TraceOutput` contains lightweight `NodeRef` objects (id, ki
 - Depth 3 covers most practical traces: controller -> service -> repository, or route -> handler -> client -> downstream route.
 - Depth 5 is available for deep impact analysis but produces large results; the `max_paths` cap prevents runaway output.
 - The engine stops early if the frontier is exhausted before `max_depth`.
-- `max_nodes_discovered` defaults to **500** and is clamped to 100..2000. This is a hard budget on nodes discovered (before pruning) per trace call. When hit, BFS stops mid-traversal and reports `stats.budget_hit = True` plus an advisory: `"trace stopped early: discovered {N} of ~{M} nodes before budget. Reduce max_depth or add prune_roles to focus."`
+- `max_nodes_discovered` defaults to **500** and is clamped to 100..2000. This is a **compute guardrail**, not an output guarantee. It counts nodes discovered *before* pruning — this is intentional because the cost is in the Cypher queries and BFS traversal, not in the output serialization. Aggressive `prune_roles` may result in fewer output nodes for the same budget. When the budget is hit, BFS stops mid-traversal and reports `stats.budget_hit = True` plus an advisory: `"trace stopped early: discovered {N} of ~{M} nodes before budget. Reduce max_depth or add prune_roles to focus."`
 
 ### Cross-service traversal
 
@@ -202,6 +206,28 @@ When `HTTP_CALLS` or `ASYNC_CALLS` is in `edge_types`, the BFS engine follows cr
 3. The `stats` object reports cross-service hops separately so the agent knows when it crossed a service boundary.
 
 This is the highest-value feature of `trace`: a 4-hop cross-service trace that would require 8-12 `neighbors` calls today is a single `trace` call.
+
+#### Cross-service edge-following rules
+
+The engine follows cross-service edges when `HTTP_CALLS` or `ASYNC_CALLS` is in the user's `edge_types`. Internally, it also follows **scaffolding edges** that connect the user's edge types across node kinds. These scaffolding edges are *not* required to be in `edge_types` — the engine follows them automatically:
+
+| Trigger (user-specified `edge_types` includes) | Scaffolding edges followed internally | Target node kind |
+|---|---|---|
+| `HTTP_CALLS` | `DECLARES_CLIENT` (outbound from Symbol to Client) | `client` |
+| `HTTP_CALLS` | `EXPOSES` (inbound from Route to handler Symbol) | `symbol` |
+| `ASYNC_CALLS` | `DECLARES_PRODUCER` (outbound from Symbol to Producer) | `producer` |
+| `ASYNC_CALLS` | `EXPOSES` (inbound from Route to handler Symbol) | `symbol` |
+
+**All scaffolding edges appear in the result's `edges` list** with their actual edge type (e.g., `DECLARES_CLIENT`, `EXPOSES`). They are not hidden from the agent. They count toward `max_nodes_discovered` and `stats.total_edges_discovered` like any other edge.
+
+**`hop` numbering**: Scaffolding edges consume hop slots. A `Symbol --DECLARES_CLIENT(hop 2)--> Client --HTTP_CALLS(hop 3)--> Route` sequence uses two hops, not one. This means cross-service traces reach `max_depth` faster — the agent should account for this when choosing depth. The advisory system warns when a cross-service boundary was detected but `max_depth` was exhausted before the downstream handler was reached.
+
+**Example**: Agent calls `trace(id, "out", ["CALLS", "HTTP_CALLS"], max_depth=4)`:
+- Hop 0: seed Symbol —CALLS--> callee Symbols
+- Hop 1: callee Symbols —CALLS--> deeper Symbols (some have DECLARES_CLIENT)
+- Hop 2: Symbol —DECLARES_CLIENT--> Client (scaffolding, auto-followed)
+- Hop 3: Client —HTTP_CALLS--> Route (user-requested edge type)
+- Hop 4 would be needed for Route —EXPOSES--> handler, but `max_depth=4` is exhausted. Advisory: `"cross-service boundary detected at hop 3 but max_depth=4 exhausted before downstream handler. Increase max_depth to 5 or use neighbors on the discovered Route."`
 
 ## Scope
 
@@ -283,6 +309,14 @@ These questions were resolved during review (PR #234). Deferred items are tracke
 
 6. **Legacy `find_callers`/`find_callees`** — **Coexist for v1.** These methods serve the CLI, not the MCP surface — different consumers. Once the trace engine is proven on MCP, add a `java-codebase-rag trace` CLI command reusing the engine, then deprecate legacy methods — tracked in #241.
 
+7. **Cross-service scaffolding edges** — **Always followed when `HTTP_CALLS`/`ASYNC_CALLS` is in `edge_types`, always visible in output.** Scaffolding edges (`DECLARES_CLIENT`, `DECLARES_PRODUCER`, `EXPOSES`) do not need to be in the user's `edge_types`. They appear in the `edges` list with their actual edge type. They consume `hop` slots. Advisories fire when `max_depth` is exhausted mid-cross-service traversal.
+
+8. **`collapsed` marker on TraceEdge** — **Yes.** Collapsed edges carry `collapsed: True` and `collapsed_intermediates: [node_ids]` so agents can detect shortcuts and drill down via `neighbors`.
+
+9. **`max_nodes_discovered` counts pre-pruning** — **Intentional.** The budget is a compute guardrail limiting Cypher queries and BFS traversal cost, not an output size guarantee. The intent is documented explicitly in the Depth and budget control section.
+
+10. **PR-TRACE-1 split** — **Split into PR-TRACE-1a (core BFS + budget + paths) and PR-TRACE-1b (pruning + collapsing + cross-service).** Core BFS correctness and pruning heuristics are different review surfaces.
+
 ### Follow-up issues
 
 - **#240** — trace tool: v2 enhancements (bidirectional traversal, richer collapse_trivial heuristic, configurable path ranking, configurable fan_out_cap ranking)
@@ -300,16 +334,21 @@ These questions were resolved during review (PR #234). Deferred items are tracke
 
 ## Sequencing / Follow-ups
 
-### PR-TRACE-1 -- `mcp_trace.py` core engine
+### PR-TRACE-1a -- `mcp_trace.py` core BFS engine
 
 - Implement `TraceOutput`, `TraceEdge`, `TracePath`, `TraceStats` models.
 - Implement BFS traversal with visited set, edge type expansion, NodeFilter/EdgeFilter integration.
-- Implement role-based pruning (`prune_roles`).
-- Implement fan-out throttling (`fan_out_cap`) with confidence-based ranking.
-- Implement trivial chain collapsing (`collapse_trivial`).
-- Implement cross-service traversal (HTTP_CALLS, ASYNC_CALLS seamless hop-through).
+- Implement `max_nodes_discovered` budget with early-stop and advisory.
 - Implement path enumeration and ranking.
-- **Tests**: unit tests listed above, minus cross-service integration.
+- **Tests**: `test_trace_outbound_calls_depth_2`, `test_trace_inbound_callers_depth_2`, `test_trace_max_paths_cap`, `test_trace_budget_stops_early`, `test_trace_depth_1_equivalent_to_neighbors`, `test_trace_stats_counts`, `test_trace_empty_seed`, `test_trace_invalid_edge_type`, `test_trace_direction_required`, `test_trace_edge_types_required`, `test_trace_visited_set_no_cycles`, `test_trace_filter_applied`, `test_trace_edge_filter_calls`, `test_trace_include_unresolved`, `test_trace_paths_root_to_leaf`.
+
+### PR-TRACE-1b -- pruning, collapsing, and cross-service
+
+- Implement role-based pruning (`prune_roles`).
+- Implement fan-out throttling (`fan_out_cap`) with confidence-based ranking + role tiebreaker.
+- Implement trivial chain collapsing (`collapse_trivial`) with `collapsed`/`collapsed_intermediates` markers on TraceEdge.
+- Implement cross-service traversal (HTTP_CALLS, ASYNC_CALLS seamless hop-through) per the scaffolding edge rules.
+- **Tests**: `test_trace_prune_roles`, `test_trace_fan_out_cap`, `test_trace_collapse_trivial`, `test_trace_cross_service_http`, `test_trace_cross_service_async`, `test_trace_cross_service_edge_attrs`.
 
 ### PR-TRACE-2 -- `server.py` tool registration
 
