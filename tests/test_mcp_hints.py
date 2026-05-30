@@ -17,6 +17,8 @@ from mcp_hints import (
 from mcp_v2 import (
     FindOutput,
     SearchOutput,
+    _hints_or_skip,
+    set_hints_enabled,
     describe_v2,
     find_v2,
     neighbors_v2,
@@ -1307,3 +1309,14 @@ def test_advisories_char_cap() -> None:
     _, advisories = generate_hints("neighbors", payload)
     for a in advisories:
         assert len(a) <= 200, f"advisory too long: {a!r}"
+
+
+def test_hints_or_skip_skips_when_disabled() -> None:
+    """_hints_or_skip returns empty lists and never calls generate_hints when disabled."""
+    set_hints_enabled(False)
+    try:
+        struct, advisories = _hints_or_skip("search", {"success": True, "results": []})
+        assert struct == []
+        assert advisories == []
+    finally:
+        set_hints_enabled(True)  # restore default for other tests

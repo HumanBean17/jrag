@@ -473,6 +473,8 @@ def _cmd_meta(args: argparse.Namespace) -> int:
     payload["index_dir"] = str(cfg.index_dir.resolve())
     payload["kuzu_path"] = str(cfg.kuzu_path.resolve())
     payload["index_dir_source"] = cfg.index_dir_source
+    payload["hints_enabled"] = cfg.hints_enabled
+    payload["hints_enabled_source"] = cfg.hints_enabled_source
     _emit(payload)
     return 0 if payload.get("success") else 2
 
