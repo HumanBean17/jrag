@@ -909,3 +909,65 @@ def test_cli_unknown_subcommand_returns_error(tmp_path, monkeypatch) -> None:
     env = _base_env(tmp_path)
     proc = _run_cli(["bogus"], env=env)
     assert proc.returncode == 2
+
+
+def test_mcp_server_loads_yaml_config_at_startup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MCP server main() loads YAML config and applies to os.environ (issue #238).
+
+    Verifies that main() calls resolve_operator_config with the correct source_root
+    and applies the result to os.environ. Uses mocks to avoid loading real models
+    or leaking env state (e.g. SBERT_DEVICE=cuda) to subsequent tests.
+    """
+    import server as server_mod
+    from unittest.mock import MagicMock
+
+    fake_cfg = MagicMock()
+    fake_cfg.apply_to_os_environ = MagicMock()
+
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", str(tmp_path))
+    monkeypatch.setattr(server_mod, "resolve_operator_config", MagicMock(return_value=fake_cfg))
+
+    def fake_asyncio_run(awaitable, *, debug=None):
+        return None
+
+    monkeypatch.setattr("asyncio.run", fake_asyncio_run)
+
+    server_mod.main()
+
+    # resolve_operator_config should have been called with the project root
+    server_mod.resolve_operator_config.assert_called_once_with(source_root=server_mod._project_root())
+    # apply_to_os_environ should have been called to set env vars
+    fake_cfg.apply_to_os_environ.assert_called_once()
+
+
+def test_mcp_server_yaml_config_precedence_env_over_yaml(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MCP server passes _project_root() to resolve_operator_config (issue #238).
+
+    Precedence (env > YAML > default) is already tested by
+    test_embedding_model_precedence_cli_over_env_over_yaml_over_default.
+    This test verifies that main() delegates to resolve_operator_config
+    with the correct source root, which handles precedence internally.
+    """
+    import server as server_mod
+    from unittest.mock import MagicMock
+
+    fake_cfg = MagicMock()
+    fake_cfg.apply_to_os_environ = MagicMock()
+
+    # Set source root so _project_root() returns it
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", str(tmp_path))
+    monkeypatch.setattr(server_mod, "resolve_operator_config", MagicMock(return_value=fake_cfg))
+
+    def fake_asyncio_run(awaitable, *, debug=None):
+        return None
+
+    monkeypatch.setattr("asyncio.run", fake_asyncio_run)
+
+    server_mod.main()
+
+    server_mod.resolve_operator_config.assert_called_once()
+    assert server_mod.resolve_operator_config.call_args.kwargs["source_root"] == server_mod._project_root()

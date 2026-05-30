@@ -16,7 +16,7 @@ from java_codebase_rag.cli_progress import (
     emit_lance_cocoindex_finish,
     emit_lance_cocoindex_start,
 )
-from java_codebase_rag.config import emit_legacy_env_hints_if_present, resolved_sbert_model_for_process_env
+from java_codebase_rag.config import emit_legacy_env_hints_if_present, resolved_sbert_model_for_process_env, resolve_operator_config
 from kuzu_queries import KuzuGraph, resolve_kuzu_path
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
@@ -570,6 +570,13 @@ def create_mcp_server() -> FastMCP:
 
 def main() -> None:
     emit_legacy_env_hints_if_present()
+
+    # Load YAML config and apply embedding settings to environment
+    # This ensures SBERT_MODEL and SBERT_DEVICE from .java-codebase-rag.yml are available
+    # before any tool handler runs (same behavior as CLI path)
+    cfg = resolve_operator_config(source_root=_project_root())
+    cfg.apply_to_os_environ()
+
     asyncio.run(create_mcp_server().run_stdio_async())
 
 
