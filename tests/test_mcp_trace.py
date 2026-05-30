@@ -967,7 +967,7 @@ def test_trace_bank_chat_cross_service_http_flow(kuzu_graph: KuzuGraph) -> None:
         direction="out",
         edge_types=["CALLS", "HTTP_CALLS"],
         max_depth=4,
-        fan_out_cap=0,
+        fan_out_cap=0,  # No cap — include all edges for cross-service verification.
         graph=kuzu_graph,
     )
     assert out.success is True
