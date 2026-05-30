@@ -16,7 +16,7 @@ from java_codebase_rag import cli as cli_mod
 REPO = Path(__file__).resolve().parent.parent
 BUILDER = REPO / "build_ast_graph.py"
 FIXTURE_ROOT = REPO / "tests" / "fixtures" / "call_graph_smoke"
-_PASS1_START = "[pass1] starting · parsing Java files under source root"
+_PASS1_START = "[graph] pass 1 · parsing Java files"
 
 
 def _cocoindex_available() -> bool:
@@ -24,7 +24,7 @@ def _cocoindex_available() -> bool:
 
 
 def _assert_quiet_stderr_no_progress_markers(stderr: str) -> None:
-    assert "[lance]" not in stderr
+    assert "[vectors]" not in stderr
     assert "] starting ·" not in stderr
     assert "] running …" not in stderr
     assert " · source=" not in stderr, stderr
@@ -52,9 +52,9 @@ def test_pass_heartbeat_fires_when_pass_slowed(tmp_path: Path) -> None:
     )
     assert proc.returncode == 0, proc.stderr + proc.stdout
     err = proc.stderr
-    assert "[pass1] running …" in err
-    hb_pos = err.index("[pass1] running …")
-    summary_pos = err.index("[pass1] parsed")
+    assert "[graph] pass 1 ·" in err and "elapsed" in err
+    hb_pos = err.index("[graph] pass 1 ·")
+    summary_pos = err.index("[graph] pass 1 · parsed")
     assert hb_pos < summary_pos
 
 
@@ -78,7 +78,7 @@ def test_pass_start_before_pass_body(tmp_path: Path) -> None:
     )
     assert proc.returncode == 0, proc.stderr
     err = proc.stderr
-    assert err.find(_PASS1_START) < err.find("[pass1] parsed")
+    assert err.find(_PASS1_START) < err.find("[graph] pass 1 · parsed")
 
 
 def test_pipeline_header_footer_present(tmp_path: Path) -> None:
@@ -100,7 +100,7 @@ def test_pipeline_header_footer_present(tmp_path: Path) -> None:
     assert proc.returncode == 0, proc.stderr + proc.stdout
     err = proc.stderr
     assert re.search(r"java-codebase-rag erase · source=.* · index=", err)
-    assert re.search(r"java-codebase-rag erase · finished in [0-9]+\.[0-9]{2}s \(exit=0\)", err)
+    assert re.search(r"java-codebase-rag erase · finished in [0-9]+\.[0-9]{2}s", err)
 
 
 def test_cli_quiet_stderr_baseline_per_subcommand(tmp_path: Path, corpus_root: Path) -> None:

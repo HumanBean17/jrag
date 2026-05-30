@@ -155,7 +155,9 @@ Prefer **`resolve` -> `describe(id=...)`** over **`describe(fqn=...)`** when an 
 
 **`microservice`** — service where the node lives. **`target_service`** (clients only) — remote service being called. **`role`** (symbols only) — architectural stereotype (`CONTROLLER`, `SERVICE`, ...).
 
-## Decision tree
+## Common navigation patterns
+
+### Decision tree
 
 | User asks... | First step | Typical follow-up |
 | ------------ | ---------- | ----------------- |

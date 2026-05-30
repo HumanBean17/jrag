@@ -70,13 +70,13 @@ log = logging.getLogger(__name__)
 
 _VERBOSE_STDERR_LOCK = threading.Lock()
 
-_PASS1_START = "[pass1] starting · parsing Java files under source root"
-_PASS2_START = "[pass2] starting · emitting EXTENDS / IMPLEMENTS / DECLARES rows"
-_PASS3_START = "[pass3] starting · call resolution (outgoing calls per site)"
-_PASS4_START = "[pass4] starting · route and EXPOSES extraction"
-_PASS5_START = "[pass5] starting · imperative HTTP_CALLS / ASYNC_CALLS edges"
-_PASS6_START = "[pass6] starting · cross-service call-edge matching"
-_WRITE_START = "[write] starting · writing Kuzu graph to disk"
+_PASS1_START = "[graph] pass 1 · parsing Java files"
+_PASS2_START = "[graph] pass 2 · emitting EXTENDS / IMPLEMENTS / DECLARES rows"
+_PASS3_START = "[graph] pass 3 · call resolution (outgoing calls per site)"
+_PASS4_START = "[graph] pass 4 · route and EXPOSES extraction"
+_PASS5_START = "[graph] pass 5 · imperative HTTP_CALLS / ASYNC_CALLS edges"
+_PASS6_START = "[graph] pass 6 · cross-service call-edge matching"
+_WRITE_START = "[graph] writing · Kuzu graph to disk"
 
 
 def _verbose_stderr_line(content: str) -> None:
@@ -104,7 +104,7 @@ class _VerbosePassHeartbeats:
             t0 = time.monotonic()
             while not stop.wait(timeout=5.0):
                 elapsed = int(time.monotonic() - t0)
-                _verbose_stderr_line(f"{tag} running … {elapsed}s elapsed")
+                _verbose_stderr_line(f"{tag} · {elapsed}s elapsed")
 
         self._thr = threading.Thread(target=worker, name=f"hb-{tag}", daemon=True)
         self._thr.start()
@@ -476,7 +476,7 @@ def pass1_parse(root: Path, tables: GraphTables, *, verbose: bool) -> dict[str, 
             slow_sec = float(raw_slow)
         except ValueError:
             slow_sec = 0.0
-    with _VerbosePassHeartbeats("[pass1]", verbose=verbose):
+    with _VerbosePassHeartbeats("[graph] pass 1", verbose=verbose):
         if verbose and slow_sec > 0:
             time.sleep(slow_sec)
         for p in iter_java_source_files(root, ignore=ignore):
@@ -521,7 +521,7 @@ def pass1_parse(root: Path, tables: GraphTables, *, verbose: bool) -> dict[str, 
     if verbose:
         elapsed = time.time() - t0
         _verbose_stderr_line(
-            f"[pass1] parsed {n_files} files in {elapsed:.2f}s: "
+            f"[graph] pass 1 · parsed {n_files} files in {elapsed:.2f}s: "
             f"{len(tables.types)} types, {len(tables.members)} members, "
             f"{tables.parse_errors} parse errors, {tables.skipped_files} skipped",
         )
@@ -759,7 +759,7 @@ def pass2_edges(tables: GraphTables, asts: dict[str, JavaFileAst], *, verbose: b
     seen_inj: set[tuple[str, str, str, str]] = set()
     if verbose:
         _verbose_stderr_line(_PASS2_START)
-    with _VerbosePassHeartbeats("[pass2]", verbose=verbose):
+    with _VerbosePassHeartbeats("[graph] pass 2", verbose=verbose):
         for fqn, entry in tables.types.items():
             ast = asts.get(entry.file_path)
             if ast is None:
@@ -769,7 +769,7 @@ def pass2_edges(tables: GraphTables, asts: dict[str, JavaFileAst], *, verbose: b
     if verbose:
         elapsed = time.time() - t0
         _verbose_stderr_line(
-            f"[pass2] emitted {len(tables.extends_rows)} EXTENDS, "
+            f"[graph] pass 2 · emitted {len(tables.extends_rows)} EXTENDS, "
             f"{len(tables.implements_rows)} IMPLEMENTS, "
             f"{len(tables.injects_rows)} INJECTS, "
             f"{len(tables.phantoms)} phantoms in {elapsed:.2f}s",
@@ -1432,7 +1432,7 @@ def pass3_calls(tables: GraphTables, asts: dict[str, JavaFileAst], *, verbose: b
         _verbose_stderr_line(_PASS3_START)
     _build_member_indexes(tables)
     stats = CallResolutionStats()
-    with _VerbosePassHeartbeats("[pass3]", verbose=verbose):
+    with _VerbosePassHeartbeats("[graph] pass 3", verbose=verbose):
         for rel_path, file_ast in asts.items():
             try:
                 _process_file_calls(file_ast, rel_path, tables, stats)
@@ -1455,7 +1455,7 @@ def pass3_calls(tables: GraphTables, asts: dict[str, JavaFileAst], *, verbose: b
     )
     log.info(msg)
     if verbose:
-        _verbose_stderr_line(f"[pass3] {msg}")
+        _verbose_stderr_line(f"[graph] pass 3 · {msg}")
 
 
 _PATH_VAR_SEG = re.compile(r"^\{([^:{}]+)(?::([^}]*))?\}$")  # whole path segment
@@ -1586,7 +1586,7 @@ def pass4_routes(
     meta_chain = collect_annotation_meta_chain(prs)
     if verbose:
         _verbose_stderr_line(_PASS4_START)
-    with _VerbosePassHeartbeats("[pass4]", verbose=verbose):
+    with _VerbosePassHeartbeats("[graph] pass 4", verbose=verbose):
 
         for ast in asts.values():
             stats.routes_skipped_unresolved += ast.routes_skipped_unresolved
@@ -1710,7 +1710,7 @@ def pass4_routes(
     )
     log.info(msg)
     if verbose:
-        _verbose_stderr_line(f"[pass4] {msg}")
+        _verbose_stderr_line(f"[graph] pass 4 · {msg}")
 
 
 def pass5_imperative_edges(
@@ -1763,7 +1763,7 @@ def pass5_imperative_edges(
 
     if verbose:
         _verbose_stderr_line(_PASS5_START)
-    with _VerbosePassHeartbeats("[pass5]", verbose=verbose):
+    with _VerbosePassHeartbeats("[graph] pass 5", verbose=verbose):
         for member in sorted(tables.members, key=lambda x: x.node_id):
             if member.decl.is_constructor:
                 continue
@@ -2018,7 +2018,7 @@ def pass5_imperative_edges(
         http_strategy = dict(sorted(tables.call_edge_stats.http_calls_by_strategy.items()))
         async_strategy = dict(sorted(tables.call_edge_stats.async_calls_by_strategy.items()))
         _verbose_stderr_line(
-            f"[pass5] HTTP_CALLS: {len(tables.http_call_rows)} edges, "
+            f"[graph] pass 5 · HTTP_CALLS: {len(tables.http_call_rows)} edges, "
             f"ASYNC_CALLS: {len(tables.async_call_rows)} edges; "
             f"http_by_client_kind={http_client}, async_by_client_kind={async_client}, "
             f"http_by_strategy={http_strategy}, async_by_strategy={async_strategy}",
@@ -2165,7 +2165,7 @@ def pass6_match_edges(
 
     if verbose:
         _verbose_stderr_line(_PASS6_START)
-    with _VerbosePassHeartbeats("[pass6]", verbose=verbose):
+    with _VerbosePassHeartbeats("[graph] pass 6", verbose=verbose):
         for row in tables.http_call_rows:
             if row.match != "unresolved":
                 continue
@@ -2317,14 +2317,14 @@ def pass6_match_edges(
             first_http = ", ".join(suppressed_auto_cross_http)
             first_async = ", ".join(suppressed_auto_cross_async)
             _verbose_stderr_line(
-                f"[pass6] cross_service_resolution=brownfield_only:\n"
+                f"[graph] pass 6 · cross_service_resolution=brownfield_only:\n"
                 f"        {n_bf} cross_service edges from brownfield layers,\n"
                 f"        {suppressed_auto_cross_count} auto-cross-service candidates suppressed -> unresolved\n"
                 f"        (first 5 http: {first_http})\n"
                 f"        (first 5 async: {first_async})",
             )
         _verbose_stderr_line(
-            f"[pass6] http_match={dict(sorted(tables.call_edge_stats.http_calls_match_breakdown.items()))}, "
+            f"[graph] pass 6 · http_match={dict(sorted(tables.call_edge_stats.http_calls_match_breakdown.items()))}, "
             f"async_match={dict(sorted(tables.call_edge_stats.async_calls_match_breakdown.items()))}, "
             f"cross_service_calls_total={tables.call_edge_stats.cross_service_calls_total}",
         )
@@ -3004,7 +3004,7 @@ def write_kuzu(
         )
     if verbose:
         _verbose_stderr_line(_WRITE_START)
-    with _VerbosePassHeartbeats("[write]", verbose=verbose):
+    with _VerbosePassHeartbeats("[graph] writing", verbose=verbose):
         db_path.parent.mkdir(parents=True, exist_ok=True)
         db = kuzu.Database(str(db_path))
         conn = kuzu.Connection(db)
@@ -3018,17 +3018,17 @@ def write_kuzu(
             meta_chain=meta_chain,
         )
         if verbose:
-            _verbose_stderr_line(f"[write] nodes written in {time.time() - t0:.2f}s")
+            _verbose_stderr_line(f"[graph] writing · nodes written in {time.time() - t0:.2f}s")
         _populate_declares_rows(tables)
         _populate_overrides_rows(tables)
         t1 = time.time()
         _write_edges(conn, tables)
         if verbose:
-            _verbose_stderr_line(f"[write] edges written in {time.time() - t1:.2f}s")
+            _verbose_stderr_line(f"[graph] writing · edges written in {time.time() - t1:.2f}s")
         t2 = time.time()
         _write_routes_and_exposes(conn, tables)
         if verbose:
-            _verbose_stderr_line(f"[write] routes/exposes written in {time.time() - t2:.2f}s")
+            _verbose_stderr_line(f"[graph] writing · routes/exposes written in {time.time() - t2:.2f}s")
         _write_meta(conn, tables, source_root)
         conn.close()
 
@@ -3073,7 +3073,7 @@ def main() -> int:
     pass6_match_edges(tables, verbose=args.verbose)
     write_kuzu(kuzu_path, tables, source_root=root, verbose=args.verbose)
     if args.verbose:
-        _verbose_stderr_line(f"[done] kuzu at {kuzu_path}")
+        _verbose_stderr_line(f"[graph] done · kuzu at {kuzu_path}")
     return 0
 
 

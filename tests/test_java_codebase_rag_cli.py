@@ -839,7 +839,7 @@ def test_reprocess_no_flag_cocoindex_failure_records_vectors_only(
     monkeypatch.setenv("JAVA_CODEBASE_RAG_INDEX_DIR", str(idx))
     monkeypatch.setenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", str(tmp_path))
 
-    async def fake_refresh(*, quiet: bool = False) -> server_mod.RefreshIndexOutput:
+    async def fake_refresh(*, quiet: bool = False, verbose: bool = True) -> server_mod.RefreshIndexOutput:
         return server_mod.RefreshIndexOutput(
             success=False,
             exit_code=1,

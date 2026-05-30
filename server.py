@@ -13,8 +13,8 @@ import mcp_v2
 from index_common import SBERT_MODEL
 from java_codebase_rag.cli_progress import (
     accumulate_and_relay_subprocess_streams,
-    emit_lance_cocoindex_finish,
-    emit_lance_cocoindex_start,
+    emit_vectors_finish,
+    emit_vectors_start,
 )
 from java_codebase_rag.config import emit_legacy_env_hints_if_present, resolved_sbert_model_for_process_env, resolve_operator_config
 from kuzu_queries import KuzuGraph, resolve_kuzu_path
@@ -201,7 +201,7 @@ def list_code_index_tables_payload() -> IndexInfoOutput:
     )
 
 
-async def run_refresh_pipeline(*, quiet: bool = False) -> RefreshIndexOutput:
+async def run_refresh_pipeline(*, quiet: bool = False, verbose: bool = True) -> RefreshIndexOutput:
     root = _project_root()
     cocoindex_bin = Path(sys.executable).parent / "cocoindex"
     if not cocoindex_bin.is_file():
@@ -245,7 +245,7 @@ async def run_refresh_pipeline(*, quiet: bool = False) -> RefreshIndexOutput:
                 phases_run=[],
             )
     else:
-        emit_lance_cocoindex_start(root)
+        emit_vectors_start()
         t0 = time.perf_counter()
         code_c = -1
         try:
@@ -260,7 +260,7 @@ async def run_refresh_pipeline(*, quiet: bool = False) -> RefreshIndexOutput:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            out_b, err_b = await accumulate_and_relay_subprocess_streams(proc, relay=True)
+            out_b, err_b = await accumulate_and_relay_subprocess_streams(proc, relay=True, verbose=verbose)
             code_c = proc.returncode if proc.returncode is not None else -1
         except Exception as exc:
             return RefreshIndexOutput(
@@ -269,7 +269,7 @@ async def run_refresh_pipeline(*, quiet: bool = False) -> RefreshIndexOutput:
                 phases_run=[],
             )
         finally:
-            emit_lance_cocoindex_finish(elapsed_s=time.perf_counter() - t0, exit_code=code_c)
+            emit_vectors_finish(elapsed_s=time.perf_counter() - t0, exit_code=code_c)
     assert proc is not None
     out = out_b.decode(errors="replace")
     err = err_b.decode(errors="replace")
@@ -279,6 +279,8 @@ async def run_refresh_pipeline(*, quiet: bool = False) -> RefreshIndexOutput:
     graph_out = ""
     graph_err = ""
     if ok:
+        if not quiet:
+            print(file=sys.stderr, flush=True)
         builder = Path(__file__).resolve().parent / "build_ast_graph.py"
         if builder.is_file():
             try:
@@ -303,7 +305,7 @@ async def run_refresh_pipeline(*, quiet: bool = False) -> RefreshIndexOutput:
                 if quiet:
                     gout_b, gerr_b = await gproc.communicate()
                 else:
-                    gout_b, gerr_b = await accumulate_and_relay_subprocess_streams(gproc, relay=True)
+                    gout_b, gerr_b = await accumulate_and_relay_subprocess_streams(gproc, relay=True, verbose=verbose)
                 graph_code = gproc.returncode
                 graph_out = gout_b.decode(errors="replace")
                 graph_err = gerr_b.decode(errors="replace")

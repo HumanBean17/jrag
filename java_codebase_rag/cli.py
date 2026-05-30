@@ -100,19 +100,25 @@ _PIPELINE_SEP = "\u00b7"
 
 
 def _pipeline_header(subcommand: str, cfg: ResolvedOperatorConfig) -> None:
+    from java_codebase_rag.cli_format import bold
+
     root = cfg.source_root.resolve()
     idx = cfg.index_dir.resolve()
     print(
-        f"java-codebase-rag {subcommand} {_PIPELINE_SEP} source={root} {_PIPELINE_SEP} index={idx}",
+        bold(f"java-codebase-rag {subcommand} {_PIPELINE_SEP} source={root} {_PIPELINE_SEP} index={idx}"),
         file=sys.stderr,
         flush=True,
     )
 
 
 def _pipeline_footer(subcommand: str, started: float, exit_code: int) -> None:
+    from java_codebase_rag.cli_format import bold, styled_check, styled_cross
+
     elapsed = time.perf_counter() - started
+    marker = styled_check() if exit_code == 0 else styled_cross()
     print(
-        f"java-codebase-rag {subcommand} {_PIPELINE_SEP} finished in {elapsed:.2f}s (exit={exit_code})",
+        f"{marker} {bold(f'java-codebase-rag {subcommand} {_PIPELINE_SEP} finished in {elapsed:.2f}s')}"
+        + (f" (exit={exit_code})" if exit_code != 0 else ""),
         file=sys.stderr,
         flush=True,
     )
@@ -205,6 +211,22 @@ def _add_index_embedding_flags(p: argparse.ArgumentParser) -> None:
     p.add_argument("--embedding-device", type=str, default=None, help="Override SBERT_DEVICE / YAML embedding.device")
 
 
+def _add_verbosity_flags(p: argparse.ArgumentParser) -> None:
+    g = p.add_mutually_exclusive_group()
+    g.add_argument(
+        "--quiet", "-q",
+        action="store_true",
+        dest="quiet",
+        help="Suppress stderr progress relay; stdout payload unchanged.",
+    )
+    g.add_argument(
+        "--verbose", "-v",
+        action="store_true",
+        dest="verbose",
+        help="Show full subprocess output (Lance warnings, brownfield events, progress bars).",
+    )
+
+
 def _cmd_init(args: argparse.Namespace) -> int:
     cfg = _resolved_from_ns(args)
     _startup_hints(cfg)
@@ -227,10 +249,12 @@ def _cmd_init(args: argparse.Namespace) -> int:
 
     def work() -> int:
         env = cfg.subprocess_env()
+        verbose = bool(args.verbose)
         coco = run_cocoindex_update(
             env,
             full_reprocess=False,
             quiet=bool(args.quiet),
+            verbose=verbose,
             lance_project_root=None if args.quiet else cfg.source_root,
         )
         if coco.returncode != 0:
@@ -244,10 +268,13 @@ def _cmd_init(args: argparse.Namespace) -> int:
                 }
             )
             return 1
+        if not args.quiet:
+            print(file=sys.stderr, flush=True)
         g = run_build_ast_graph(
             source_root=cfg.source_root,
             kuzu_path=cfg.kuzu_path,
-            verbose=not args.quiet,
+            verbose=verbose,
+            quiet=bool(args.quiet),
             env=env,
         )
         if g.returncode != 0:
@@ -279,6 +306,7 @@ def _cmd_increment(args: argparse.Namespace) -> int:
             env,
             full_reprocess=False,
             quiet=bool(args.quiet),
+            verbose=bool(args.verbose),
             lance_project_root=None if args.quiet else cfg.source_root,
         )
         if coco.returncode != 0:
@@ -305,11 +333,12 @@ def _cmd_reprocess(args: argparse.Namespace) -> int:
 
     def work() -> int:
         env = cfg.subprocess_env()
+        verbose = bool(args.verbose)
         vectors_only = bool(getattr(args, "vectors_only", False))
         graph_only = bool(getattr(args, "graph_only", False))
 
         if vectors_only:
-            coco = run_cocoindex_update(env, full_reprocess=True, quiet=bool(args.quiet))
+            coco = run_cocoindex_update(env, full_reprocess=True, quiet=bool(args.quiet), verbose=verbose)
             if _is_cocoindex_preflight_blocker(coco):
                 payload: dict[str, Any] = {
                     "success": False,
@@ -345,7 +374,8 @@ def _cmd_reprocess(args: argparse.Namespace) -> int:
             g = run_build_ast_graph(
                 source_root=cfg.source_root,
                 kuzu_path=cfg.kuzu_path,
-                verbose=not args.quiet,
+                verbose=verbose,
+                quiet=bool(args.quiet),
                 env=env,
             )
             if _is_graph_preflight_blocker(g):
@@ -381,7 +411,7 @@ def _cmd_reprocess(args: argparse.Namespace) -> int:
 
         import server  # lazy: pulls sentence_transformers/torch/lancedb/kuzu
 
-        result = asyncio.run(server.run_refresh_pipeline(quiet=bool(args.quiet)))
+        result = asyncio.run(server.run_refresh_pipeline(quiet=bool(args.quiet), verbose=verbose))
         payload = result.model_dump()
         _emit_reprocess_outcome(payload)
         return _reprocess_exit_code(payload)
@@ -614,11 +644,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     _add_index_embedding_flags(init)
-    init.add_argument(
-        "--quiet",
-        action="store_true",
-        help="Suppress stderr progress relay; stdout payload unchanged.",
-    )
+    _add_verbosity_flags(init)
     init.set_defaults(handler=_cmd_init)
 
     increment = subparsers.add_parser(
@@ -627,11 +653,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Runs cocoindex catch-up (no full reprocess). Does not rebuild Kuzu; see stderr warning.",
     )
     _add_index_embedding_flags(increment)
-    increment.add_argument(
-        "--quiet",
-        action="store_true",
-        help="Suppress stderr progress relay; stdout payload unchanged.",
-    )
+    _add_verbosity_flags(increment)
     increment.set_defaults(handler=_cmd_increment)
 
     reprocess = subparsers.add_parser(
@@ -643,11 +665,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     _add_index_embedding_flags(reprocess)
-    reprocess.add_argument(
-        "--quiet",
-        action="store_true",
-        help="Suppress stderr progress relay; stdout payload unchanged.",
-    )
+    _add_verbosity_flags(reprocess)
     _rex = reprocess.add_mutually_exclusive_group()
     _rex.add_argument(
         "--vectors-only",
@@ -669,8 +687,9 @@ def build_parser() -> argparse.ArgumentParser:
     _add_index_embedding_flags(erase)
     erase.add_argument("--yes", action="store_true", help="Confirm destructive deletion (required in CI)")
     erase.add_argument(
-        "--quiet",
+        "--quiet", "-q",
         action="store_true",
+        dest="quiet",
         help="Suppress stderr progress relay; stdout payload unchanged.",
     )
     erase.set_defaults(handler=_cmd_erase)
