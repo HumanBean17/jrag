@@ -1,7 +1,7 @@
 # Agent task prompts — `trace` tool (PR-TRACE-1a → PR-TRACE-4)
 
-Status: **active**. Plan:
-[`plans/active/PLAN-TRACE-TOOL.md`](PLAN-TRACE-TOOL.md); propose:
+Status: **completed**. Plan:
+[`plans/completed/PLAN-TRACE-TOOL.md`](PLAN-TRACE-TOOL.md); propose:
 [`propose/active/TRACE-TOOL-PROPOSE.md`](../../propose/active/TRACE-TOOL-PROPOSE.md).
 
 One prompt per PR. Copy the prompt verbatim into Cursor agent mode with the
@@ -28,12 +28,12 @@ listed `@-files` attached.
 
 **Branch:** `feat/trace-core-bfs` off `experimental`.
 **Base:** `experimental`.
-**Plan section:** `plans/active/PLAN-TRACE-TOOL.md` § PR-TRACE-1a.
+**Plan section:** `plans/completed/PLAN-TRACE-TOOL.md` § PR-TRACE-1a.
 **PR title:** `add trace tool core BFS engine (PR-TRACE-1a)`
 
 **Attach (`@-files`):**
 
-- `@plans/active/PLAN-TRACE-TOOL.md` (PR-TRACE-1a section only)
+- `@plans/completed/PLAN-TRACE-TOOL.md` (PR-TRACE-1a section only)
 - `@propose/active/TRACE-TOOL-PROPOSE.md` (§ "Signature", § "Result format", § "Core algorithm")
 - `@mcp_v2.py` (read-only — import types only: `NodeFilter`, `EdgeFilter`, `NodeRef`, `_node_ref_from_row`, `_node_kind_from_id`)
 - `@kuzu_queries.py` (read-only — reuse `g._rows` query pattern; do not modify)
@@ -44,7 +44,7 @@ listed `@-files` attached.
 **Prompt:**
 
 ````
-You are implementing PR-TRACE-1a from `plans/active/PLAN-TRACE-TOOL.md`.
+You are implementing PR-TRACE-1a from `plans/completed/PLAN-TRACE-TOOL.md`.
 
 Read the **PR-TRACE-1a** section and the propose § "Signature", "Result format", and
 "Core algorithm" sections before writing code. If this prompt and the plan disagree,
@@ -186,12 +186,12 @@ for e in out.edges[:5]:
 **Branch:** `feat/trace-pruning` off `experimental` (after PR-TRACE-1a merged).
 **Base:** `experimental` (with PR-TRACE-1a merged).
 **Blocked on:** PR-TRACE-1a merged to `experimental`.
-**Plan section:** `plans/active/PLAN-TRACE-TOOL.md` § PR-TRACE-1b.
+**Plan section:** `plans/completed/PLAN-TRACE-TOOL.md` § PR-TRACE-1b.
 **PR title:** `add trace pruning collapsing cross-service (PR-TRACE-1b)`
 
 **Attach (`@-files`):**
 
-- `@plans/active/PLAN-TRACE-TOOL.md` (PR-TRACE-1b section only)
+- `@plans/completed/PLAN-TRACE-TOOL.md` (PR-TRACE-1b section only)
 - `@propose/active/TRACE-TOOL-PROPOSE.md` (§ "Server-side pruning", § "Cross-service traversal")
 - `@mcp_trace.py` (from PR-TRACE-1a — this is the file you are extending)
 - `@mcp_v2.py` (read-only — reference for `NodeFilter`, `EdgeFilter` semantics)
@@ -201,7 +201,7 @@ for e in out.edges[:5]:
 **Prompt:**
 
 ````
-You are implementing PR-TRACE-1b from `plans/active/PLAN-TRACE-TOOL.md`.
+You are implementing PR-TRACE-1b from `plans/completed/PLAN-TRACE-TOOL.md`.
 
 PR-TRACE-1a (core BFS engine) is already merged to `experimental`. This PR extends
 `mcp_trace.py` with pruning, collapsing, and cross-service features. Read the
@@ -355,12 +355,12 @@ print('collapsed:', out.stats.edges_collapsed_trivial, 'trivial chains collapsed
 **Branch:** `feat/trace-mcp-registration` off `experimental` (after PR-TRACE-1b merged).
 **Base:** `experimental` (with PR-TRACE-1b merged).
 **Blocked on:** PR-TRACE-1b merged to `experimental`.
-**Plan section:** `plans/active/PLAN-TRACE-TOOL.md` § PR-TRACE-2.
+**Plan section:** `plans/completed/PLAN-TRACE-TOOL.md` § PR-TRACE-2.
 **PR title:** `register trace as sixth MCP tool (PR-TRACE-2)`
 
 **Attach (`@-files`):**
 
-- `@plans/active/PLAN-TRACE-TOOL.md` (PR-TRACE-2 section only)
+- `@plans/completed/PLAN-TRACE-TOOL.md` (PR-TRACE-2 section only)
 - `@propose/active/TRACE-TOOL-PROPOSE.md` (§ "Agent tool selection" for description guidance)
 - `@server.py`
 - `@mcp_trace.py` (read-only — already shipped via PR-TRACE-1a/1b)
@@ -371,7 +371,7 @@ print('collapsed:', out.stats.edges_collapsed_trivial, 'trivial chains collapsed
 **Prompt:**
 
 ````
-You are implementing PR-TRACE-2 from `plans/active/PLAN-TRACE-TOOL.md`.
+You are implementing PR-TRACE-2 from `plans/completed/PLAN-TRACE-TOOL.md`.
 
 PR-TRACE-1a + 1b (`mcp_trace.py` with full BFS + pruning) is already merged to
 `experimental`. This PR wires `trace` into the MCP surface in `server.py`.
@@ -476,12 +476,12 @@ print('ok: trace registered as 6th tool')
 **Branch:** `feat/trace-hints-skill` off `experimental` (after PR-TRACE-1b merged).
 **Base:** `experimental` (with PR-TRACE-1b merged).
 **Blocked on:** PR-TRACE-1b merged to `experimental`. Independent of PR-TRACE-2.
-**Plan section:** `plans/active/PLAN-TRACE-TOOL.md` § PR-TRACE-3.
+**Plan section:** `plans/completed/PLAN-TRACE-TOOL.md` § PR-TRACE-3.
 **PR title:** `add trace hints and skill integration (PR-TRACE-3)`
 
 **Attach (`@-files`):**
 
-- `@plans/active/PLAN-TRACE-TOOL.md` (PR-TRACE-3 section only)
+- `@plans/completed/PLAN-TRACE-TOOL.md` (PR-TRACE-3 section only)
 - `@propose/active/TRACE-TOOL-PROPOSE.md` (§ "Hint system updates", § "Skill decision tree update")
 - `@mcp_hints.py`
 - `@mcp_trace.py` (read-only — reference for `TraceOutput` shape)
@@ -492,7 +492,7 @@ print('ok: trace registered as 6th tool')
 **Prompt:**
 
 ````
-You are implementing PR-TRACE-3 from `plans/active/PLAN-TRACE-TOOL.md`.
+You are implementing PR-TRACE-3 from `plans/completed/PLAN-TRACE-TOOL.md`.
 
 PR-TRACE-1a + 1b (`mcp_trace.py`) is merged to `experimental`. PR-TRACE-2 (server
 registration) may or may not be merged — this PR is independent of it. This PR adds
@@ -635,12 +635,12 @@ print('ok')
 **Branch:** `feat/trace-docs` off `experimental` (after PR-TRACE-3 merged).
 **Base:** `experimental` (with PR-TRACE-3 merged).
 **Blocked on:** PR-TRACE-3 merged to `experimental`.
-**Plan section:** `plans/active/PLAN-TRACE-TOOL.md` § PR-TRACE-4.
+**Plan section:** `plans/completed/PLAN-TRACE-TOOL.md` § PR-TRACE-4.
 **PR title:** `update docs for trace tool (PR-TRACE-4)`
 
 **Attach (`@-files`):**
 
-- `@plans/active/PLAN-TRACE-TOOL.md` (PR-TRACE-4 section only)
+- `@plans/completed/PLAN-TRACE-TOOL.md` (PR-TRACE-4 section only)
 - `@README.md`
 - `@docs/AGENT-GUIDE.md`
 - `@AGENTS.md`
@@ -649,7 +649,7 @@ print('ok')
 **Prompt:**
 
 ````
-You are implementing PR-TRACE-4 from `plans/active/PLAN-TRACE-TOOL.md`.
+You are implementing PR-TRACE-4 from `plans/completed/PLAN-TRACE-TOOL.md`.
 
 PR-TRACE-1a, 1b, 2, and 3 are merged to `experimental`. This PR is documentation-only.
 
