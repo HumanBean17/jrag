@@ -1,6 +1,7 @@
 # TRACE-TOOL -- Multi-hop navigation shortcut
 
-**Status**: active
+**Status**: active (experimental)
+**Target branch**: `experimental` — not `master`. `trace` is an experiment; it ships on a dedicated branch and is not merged to `master` until validated in production.
 **Author**: Dmitry + Computer
 **Date**: 2026-05-25
 
@@ -9,6 +10,8 @@
 ## TL;DR
 
 The v2 design locked in `neighbors` as the sole multi-hop primitive, requiring the agent to call it in a loop. In practice, agents drown during tracing: fan-out explosion (each CALLS hop produces 5-10 edges), no visited set (LLMs revisit nodes, follow cycles), low-signal edges dominate (getters, logging, framework plumbing), and context is consumed on traversal mechanics rather than understanding. The proposed `trace` tool is a **batched navigation shortcut** -- it does multi-hop BFS server-side in one call and returns paths/structure, not answers. The agent still interprets results. It is a sixth tool on the MCP surface, composing with the existing five.
+
+**This is an experiment.** The tool ships on the `experimental` branch, not `master`. It will be merged to `master` only after validation: agents using `trace` must produce measurably better results on multi-hop questions than agents using `neighbors` loops, with no regression on single-hop queries. The validation criteria are defined in the "Experimental validation" section below.
 
 ## Problem Statement
 
@@ -185,6 +188,69 @@ Cross-service traversal is implicit: when `HTTP_CALLS` or `ASYNC_CALLS` is in `e
 
 The `nodes` dict in `TraceOutput` contains lightweight `NodeRef` objects (id, kind, fqn, role). For deeper inspection, the agent calls `describe(id)` on specific nodes. This preserves the GPS metaphor: `trace` maps the route, `describe` and `neighbors` provide street-level detail.
 
+### Agent tool selection: `trace` vs `neighbors`
+
+When the agent has a node ID and needs to navigate, it chooses between `neighbors` (one-hop) and `trace` (multi-hop with pruning). The decision is driven by **question intent**, not hop count. The following heuristics must be reflected in `_INSTRUCTIONS`, `skills/explore-codebase/SKILL.md`, and `mcp_hints.py`.
+
+#### Decision table
+
+| Agent intent | Tool | Rationale |
+|---|---|---|
+| "What does M call?" / "Who calls M?" | `neighbors` | 1-hop adjacency, agent wants full unfiltered result |
+| "What implements T?" / "Where is T injected?" | `neighbors` | 1-hop structural exploration, single edge type |
+| "List all routes/controllers/clients" | `find` + `neighbors` | Enumerate + one-hop detail |
+| "What happens when POST /api/orders is called?" | `trace` | Multi-hop path question: route -> handler -> service -> repository |
+| "Impact of changing X" | `trace` | Multi-hop breadth-first, needs pruning to stay focused |
+| "Trace from controller to database" | `trace` | Named start/end implies multi-hop path |
+| "What crosses service boundaries from X?" | `trace` | Cross-service is `trace`'s highest-value feature |
+| "What's the call chain from A to B?" | `trace` | Multi-hop path with named endpoints |
+| After `trace` returns pruned result | `neighbors` on specific nodes | Drill into edges that `trace` collapsed or pruned |
+| After `neighbors` returns high fan-out (>8 CALLS edges) | `trace` with `prune_roles` + `fan_out_cap` | Switch strategy when `neighbors` result is too noisy |
+| Agent is 3+ hops into a `neighbors` loop | `trace` from original seed | Escalation: stop drowning, batch the remaining traversal |
+
+#### Reasoning preamble update
+
+The current forced reasoning preamble in `SKILL.md` is:
+```
+Q-class: <semantic | structured | inspect | walk>
+Pick: <search|find|describe|neighbors|resolve>  Why: <≤8 words>
+```
+
+With `trace`, the preamble becomes:
+```
+Q-class: <semantic | structured | inspect | walk | trace>
+Pick: <search|find|describe|neighbors|trace|resolve>  Why: <≤8 words>
+```
+
+The `trace` Q-class applies when: (a) the question implies a path or chain, (b) the agent needs to cross a service boundary, or (c) a `neighbors` loop has exceeded 2 hops without converging.
+
+#### Hint system updates (`mcp_hints.py`)
+
+PR-TRACE-3 must add the following `trace`-aware hints:
+
+1. **Neighbors high fan-out hint**: When `neighbors` returns >8 CALLS edges for a single node, emit a hint: `"High fan-out (N CALLS edges). Consider trace(id, 'out', ['CALLS'], prune_roles=['DTO','EXCEPTION','UTILITY'], fan_out_cap=5) for a pruned multi-hop view."`
+
+2. **Neighbors loop escalation hint**: When the same session issues 3+ consecutive `neighbors` calls with the same `edge_types` and direction, emit: `"You've issued N neighbors calls with the same edge type. Consider trace(seed_id, direction, edge_types, max_depth=4) to batch the traversal."` (This requires session-level call tracking, which the MCP server does not currently have. This may need to be a client-side hint in the skill rather than server-side.)
+
+3. **Trace result drill-down hint**: When `trace` returns edges with `collapsed=True` or `stats` shows pruning fired, emit: `"trace pruned N edges. Use neighbors(id, direction, edge_types) on specific nodes for full detail."`
+
+4. **Trace budget hit hint**: When `stats.budget_hit=True`, emit: `"trace hit the node discovery budget (N nodes). Results are partial. Increase max_depth or add prune_roles and re-run."`
+
+5. **Cross-service boundary hint**: When `trace` discovers cross-service edges, emit: `"Cross-service boundary detected. Use describe(route_id) on downstream routes for handler details."`
+
+#### Skill decision tree update
+
+The decision tree in `skills/explore-codebase/SKILL.md` must be updated to include `trace` rows:
+
+| User asks... | First step | Typical follow-up |
+|---|---|---|
+| "What happens when route R is called?" | `find(kind="route")` then `trace(route_id, "out", ["EXPOSES","CALLS"], max_depth=4)` | `describe` on key nodes |
+| "Impact of changing method M" | `resolve` / `find` then `trace(id, "in", ["CALLS","OVERRIDES"], max_depth=3)` | `describe` on callers |
+| "Trace from X to database" | `trace(id, "out", ["CALLS"], max_depth=4, prune_roles=["DTO","EXCEPTION"])` | `neighbors` for pruned detail |
+| "What calls this across services?" | `trace(id, "out", ["CALLS","HTTP_CALLS","ASYNC_CALLS"], max_depth=5)` | `describe` on downstream routes |
+
+The existing `neighbors` rows remain unchanged. `trace` rows are additive — they cover the cases where the current table says "loop neighbors" or "no magic tool."
+
 ### Depth and budget control
 
 - `max_depth` defaults to **3** and is clamped to 1..5.
@@ -322,6 +388,40 @@ These questions were resolved during review (PR #234). Deferred items are tracke
 - **#240** — trace tool: v2 enhancements (bidirectional traversal, richer collapse_trivial heuristic, configurable path ranking, configurable fan_out_cap ranking)
 - **#241** — trace tool: CLI integration and legacy method deprecation
 
+## Experimental validation
+
+`trace` ships on the `experimental` branch. It is merged to `master` only when the following criteria are met:
+
+### Quantitative criteria
+
+1. **Multi-hop accuracy**: For a set of 10 multi-hop questions (3+ hops, mixed intra/cross-service), agents using `trace` produce correct answers in ≥80% of cases. The baseline is agents using `neighbors` loops on the same questions (currently ~40% based on production observation).
+
+2. **Tool call reduction**: `trace` reduces tool calls by ≥50% for multi-hop questions compared to `neighbors` loops (measured on the same question set).
+
+3. **No regression on single-hop**: For a set of 10 single-hop questions where agents currently use `neighbors`, introducing `trace` as an option does not degrade accuracy or increase tool calls. Agents must still pick `neighbors` for single-hop questions.
+
+4. **Latency**: `trace` call latency is under 500ms for depth 3 on the `bank-chat-system` fixture, and under 2s for depth 5 on a large codebase (10K+ methods).
+
+### Qualitative criteria
+
+5. **Agent tool selection**: In ≥70% of multi-hop questions, the agent picks `trace` over a `neighbors` loop without manual prompting. This validates that the `_INSTRUCTIONS` and skill guidance are effective.
+
+6. **Pruning quality**: In post-trace inspection, ≥80% of pruned edges (those cut by `prune_roles`, `fan_out_cap`, or `collapse_trivial`) are genuinely low-signal. Measured by human review of a random sample.
+
+### Graduation process
+
+1. All PR-TRACE PRs merge to `experimental`.
+2. Run validation suite against `tests/bank-chat-system` and at least one real codebase.
+3. If all criteria pass, open a PR to merge `experimental` into `master`.
+4. If criteria fail, iterate on pruning heuristics and agent guidance, then re-run.
+
+### Rollback plan
+
+If `trace` causes regressions in production after merging to `master`:
+- Remove the `trace` tool registration from `server.py` (one-line revert).
+- `mcp_trace.py` remains in the tree but is no longer reachable.
+- No re-index required.
+
 ## Out of scope
 
 - **Answer engine.** `trace` returns paths and structure. It does not synthesize natural-language answers or recommendations.
@@ -333,6 +433,8 @@ These questions were resolved during review (PR #234). Deferred items are tracke
 - **Composed edge types as input.** `trace` accepts only stored edge labels. Composed traversal (e.g., DECLARES.DECLARES_CLIENT) is handled internally by the BFS engine when the agent passes `["DECLARES", "DECLARES_CLIENT"]`.
 
 ## Sequencing / Follow-ups
+
+All PR-TRACE PRs target the `experimental` branch. They do not merge to `master` until the experimental validation criteria are met.
 
 ### PR-TRACE-1a -- `mcp_trace.py` core BFS engine
 
@@ -390,6 +492,8 @@ The v2 design (section 2, decision 2) states: "No `trace_*` tools. The agent wal
 The key difference from the rejected v1 `trace_flow` tool: `trace_flow` was a **stage-based role waterfall** with hardcoded CONTROLLER -> SERVICE -> REPOSITORY progression. It encoded the agent's intent into the tool. The proposed `trace` is a **generic BFS shortcut** with the same edge-type-aware contract as `neighbors`. It does not encode intent; it batches mechanics.
 
 What changed between v2 design (2026-05-07) and now (2026-05-25): production experience with the 5-tool surface on real microservice codebases showed that the `neighbors` loop approach works for 80% of queries (1-2 hop) but degrades severely for the remaining 20% (3+ hops, cross-service). The agent drowning pattern is consistent and reproducible. A batched shortcut that preserves the GPS metaphor is the right fix.
+
+The v2 "no trace tools" decision was made with good reason. `trace` ships as an **experiment** on the `experimental` branch to validate the hypothesis that server-side pruning helps agents without violating the GPS contract. If the experiment fails, the rollback is trivial: remove one tool registration, no re-index.
 
 ## Appendix B -- Comparison with `neighbors` loop
 
