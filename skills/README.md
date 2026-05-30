@@ -1,6 +1,6 @@
 # skills/ — RAG navigation skill for the java-codebase-rag MCP
 
-One self-contained skill for navigating indexed Java codebases via the 5-tool MCP (`search` / `find` / `describe` / `neighbors` / `resolve`). Skills are agent-side prompt scaffolding — they are **not** a second MCP API and **not** CLI subcommands.
+One self-contained skill for navigating indexed Java codebases via the 6-tool MCP (`search` / `find` / `describe` / `neighbors` / `resolve` / `trace`). Skills are agent-side prompt scaffolding — they are **not** a second MCP API and **not** CLI subcommands.
 
 ## Layout
 
@@ -14,7 +14,7 @@ skills/
 
 The comprehensive operating manual. Includes:
 
-- **Five-tool reference** — `search`, `find`, `describe`, `neighbors`, `resolve` with full argument shapes
+- **Six-tool reference** — `search`, `find`, `describe`, `neighbors`, `resolve`, `trace` with full argument shapes
 - **Node kinds** — Symbol, Route, Client, Producer
 - **Edge taxonomy** — stored edges, composed dot-keys, direction semantics
 - **NodeFilter reference** — all filter keys by node kind, strict frame rules
