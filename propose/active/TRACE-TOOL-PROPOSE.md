@@ -53,16 +53,18 @@ With `trace`:
 
 ```yaml
 trace(
-  ids: str | list[str],              # seed node ids (single string normalized to list; echoed as seed_ids)
+  ids: str | list[str],              # seed node ids (single string normalized to list; echoed as seed_ids).
+                                     # Differs from neighbors (single ID) — trace supports multi-seed for impact analysis.
   direction: Literal["in", "out"],   # REQUIRED -- no default (same discipline as neighbors)
   edge_types: list[EdgeType],        # REQUIRED -- stored edge labels only (no composed dot-keys)
   max_depth: int = 3,                # max BFS hops (clamped to 1..5)
   max_paths: int = 20,               # max paths/edges to return (hard cap on result size)
   max_nodes_discovered: int = 500,   # hard budget on nodes discovered before pruning (clamped 100..2000)
-  filter?: NodeFilter,               # filter on discovered nodes (same schema as neighbors)
+  filter?: NodeFilter,               # hard gate on discovered nodes (excluded entirely if failing)
   edge_filter?: EdgeFilter,          # edge attribute filtering (CALLS only, same as neighbors)
-  prune_roles?: list[str],           # roles to prune from traversal (e.g. ["DTO", "EXCEPTION", "UTILITY"])
+  prune_roles?: list[str],           # soft gate: edges recorded but frontier stops through these roles
   fan_out_cap?: int = 5,             # per-node fan-out limit: if a node has >N edges, keep only top-K
+                                     # scaffolding edges (DECLARES_CLIENT/PRODUCER) are exempt from cap
   collapse_trivial?: bool = True,    # collapse wrapper chains (A.calls(B).calls(C) where B is trivial)
   include_unresolved?: bool = False,  # include UnresolvedCallSite edges (CALLS out only)
 ) -> TraceOutput
@@ -98,8 +100,7 @@ TraceEdge:
 
 TracePath:
   edges: list[TraceEdge]               # ordered root-to-leaf edges
-  leaf: NodeRef                        # terminal node
-  leaf_role: str | None                # leaf node role (for quick filtering)
+  leaf: NodeRef                        # terminal node (role available via leaf.role)
 
 TraceStats:
   total_nodes_discovered: int          # before pruning
@@ -115,37 +116,66 @@ TraceStats:
 
 ### Core algorithm
 
-The trace engine is a **BFS traversal** that reuses the same Cypher query infrastructure as `neighbors_v2` (via `KuzuGraph.neighbor_calls_for_symbol` and the generic label-predicate match in `mcp_v2.py`). It runs server-side as a single blocking call.
+The trace engine is a **BFS traversal** that reuses the same Cypher query infrastructure as `neighbors_v2` (imports but does not modify types from `mcp_v2.py`). It runs server-side as a single blocking call.
+
+**Query strategy: batched per hop.** The engine does NOT issue one Cypher query per frontier node — that would be O(frontier_size) queries per hop, blowing the latency target. Instead, it issues a single batched query per hop:
+
+```cypher
+MATCH (n)-[e]-(m)
+WHERE n.id IN $frontier_ids
+  AND (<edge label OR-predicate>)
+RETURN n.id, e, m
+```
+
+This is one round-trip to Kuzu per hop, regardless of frontier size. The batched query is a new method on `KuzuGraph` (e.g., `neighbors_batched`), not a modification to existing `neighbors_v2` code. Frontier IDs are bound as a list parameter.
 
 ```
-1. Initialize frontier = seed_ids, visited = {seed_ids}, total_discovered = 0
+1. Initialize frontier = seed_ids, visited = {seed_ids}, total_discovered = 0,
+   edge_id_map = {}  # maps edge_id -> TraceEdge (for parent_edge_id lookup)
 2. For hop in range(max_depth):
    a. If total_discovered >= max_nodes_discovered:
       - Set stats.budget_hit = True, add advisory to result
       - Break loop
-   b. For each node in frontier:
-      - Query neighbors via existing KuzuGraph methods
+   b. Issue single batched Cypher query for all frontier nodes
       - Apply edge_filter pushdown (min_confidence, strategies, callee_declaring_role)
-      - Apply NodeFilter on discovered nodes
-      - Apply prune_roles: skip nodes whose role is in prune_roles
-      - Apply fan_out_cap: if node has >fan_out_cap edges, keep top-K by:
+      - Group results by source node
+   c. For each source node's discovered edges:
+      - Apply NodeFilter (hard gate): nodes failing NodeFilter are excluded entirely
+        (not in nodes dict, no edges recorded). NodeFilter is structural — kind, fqn,
+        microservice, include/exclude roles.
+      - Apply prune_roles (soft gate): nodes whose role is in prune_roles are NOT added
+        to the next frontier (BFS doesn't traverse through them), but their edges ARE
+        recorded in the result. The agent can see that a DTO was called but the trace
+        doesn't continue through it.
+      - Apply fan_out_cap: if node has >fan_out_cap candidate edges, keep top-K by:
         - Primary sort: confidence (highest first)
         - Tiebreaker: role priority (CONTROLLER > SERVICE > REPOSITORY > CLIENT > OTHER)
         - For structural edges without confidence: alphabetically by FQN (deterministic)
+        - Scaffolding edges (DECLARES_CLIENT, DECLARES_PRODUCER) are EXEMPT from
+          fan_out_cap — they are traversal infrastructure, not signal
       - For cross-service edges (HTTP_CALLS, ASYNC_CALLS):
         - Mark cross_service_boundary = True
         - Do NOT add downstream node to frontier (BFS stops at boundary)
       - For scaffolding edges (DECLARES_CLIENT, DECLARES_PRODUCER):
         - Only followed when HTTP_CALLS/ASYNC_CALLS is in edge_types
         - Add Client/Producer node to frontier (needed to reach cross-service edge)
+        - Exempt from fan_out_cap (see above)
+      - For multi-edge-type traversal (e.g., ["DECLARES", "CALLS"]):
+        - Each edge type is queried in the same batched query
+        - DECLARES from a type Symbol reaches its member methods; CALLS from those
+          methods continues the trace. The engine handles 2-hop expansion internally
+          — the agent does not need to issue separate calls per edge type.
       - total_discovered += len(discovered neighbors)
-      - Record TraceEdge(from=node, to=neighbor, hop=hop, parent_edge_id=incoming_edge_id_for_node or None, attrs=...)
-        - parent_edge_id: the ID of the edge that brought BFS to `node` (null for seed nodes at hop 0)
-        - Enables O(1) tree reconstruction from flat edges without duplicating node payloads
-   c. new_frontier = {neighbor.id for each discovered neighbor not in visited,
-                      excluding cross-service boundary downstream nodes}
-   d. visited |= new_frontier
-   e. frontier = new_frontier
+      - Record TraceEdge(from=node, to=neighbor, hop=hop,
+        parent_edge_id=incoming_edge_id_for_node or None, attrs=...)
+        - parent_edge_id: the ID of the edge that brought BFS to `node`
+          (null for seed nodes at hop 0)
+        - Store in edge_id_map for post-collapse consistency
+   d. new_frontier = {neighbor.id for each discovered neighbor not in visited,
+                      excluding cross-service boundary downstream nodes,
+                      excluding prune_roles nodes}
+   e. visited |= new_frontier
+   f. frontier = new_frontier
 3. If collapse_trivial:
    - Identify chains where intermediate node B has exactly 1 inbound and 1 outbound CALLS edge,
      and B's role is OTHER or its declaring class role is SERVICE/COMPONENT
@@ -153,7 +183,12 @@ The trace engine is a **BFS traversal** that reuses the same Cypher query infras
    - Set collapsed=True and collapsed_intermediates=[B.id] on the merged edge
    - Remove intermediate nodes from nodes dict
    - Record stats.edges_collapsed_trivial
+   - Recompute parent_edge_ids: any edge whose parent_edge_id referenced a removed edge
+     is updated to reference the collapsed replacement edge. The edge_id_map is updated
+     accordingly so subsequent lookups resolve correctly.
 4. Build paths: enumerate root-to-leaf paths through the DAG
+   - Stop enumeration after 10 × max_paths candidates (prevents exponential blowup
+     on reconvergent DAGs with multiple seeds). Rank the candidates, return top max_paths.
    - Rank by: (a) leaf role priority (CONTROLLER > SERVICE > REPOSITORY > ...),
      (b) path confidence (min edge confidence), (c) path length (shorter first)
    - Cap at max_paths
@@ -165,7 +200,7 @@ The trace engine is a **BFS traversal** that reuses the same Cypher query infras
 
 The `trace` tool's value is not "do what the agent could do but faster" -- it is **server-side pruning** that the agent cannot replicate without issuing dozens of tool calls.
 
-**Role-based pruning (`prune_roles`)**: Nodes with roles like `DTO`, `EXCEPTION`, `UTILITY`, `OTHER` rarely carry meaningful traversal signal. A `SERVICE` method that calls `OrderDto#setTotal()` followed by `OrderRepository#save()` has one high-signal edge and one low-signal edge. Pruning DTOs at traversal time means the agent never sees the noise.
+**Role-based pruning (`prune_roles`)**: Nodes with roles like `DTO`, `EXCEPTION`, `UTILITY`, `OTHER` rarely carry meaningful traversal signal. A `SERVICE` method that calls `OrderDto#setTotal()` followed by `OrderRepository#save()` has one high-signal edge and one low-signal edge. Pruning DTOs means the agent sees the edge (the DTO was called) but the trace doesn't continue through it — the agent can still `neighbors` into the DTO if needed. This is the "soft gate" distinction from `NodeFilter`: `NodeFilter` is a hard gate (failing nodes are excluded entirely), `prune_roles` is a soft gate (failing nodes' edges are recorded but BFS doesn't traverse further through them).
 
 **Fan-out throttling (`fan_out_cap`)**: When a node has 30 outgoing CALLS edges, the agent would have to inspect all 30 to find the 3 that matter. Fan-out cap keeps only the top-K — sorted by confidence (primary) with role priority as tiebreaker (CONTROLLER > SERVICE > REPOSITORY > CLIENT > OTHER) — so the traversal stays focused. The existing `EdgeFilter.callee_declaring_role` already lets agents pre-filter by role; the ranking does not duplicate that filter. The `stats` object reports how many edges were cut so the agent knows the cap fired. **Known v1 trade-off**: the static role tiebreaker can produce counterintuitive results — e.g., from a SERVICE node, a CONTROLLER callee ties ahead of a REPOSITORY callee at equal confidence. The full `edges` list is available for client-side re-ranking. Making priority relative to the source node's role is deferred to #240.
 
@@ -361,8 +396,8 @@ This is the only case where the engine follows edge types not in `edge_types`: t
 
 - `neighbors` remains the one-hop primitive. `trace` is optional; agents that reason well over multi-hop can still use `neighbors` loops.
 - `search`, `find`, `describe`, `resolve` are untouched.
-- `kuzu_queries.py` is not modified (trace reuses its existing query methods).
-- `mcp_v2.py` is not modified (trace reuses `NodeFilter`, `EdgeFilter`, `Edge`, `NodeRef` types).
+- `kuzu_queries.py` is not modified (trace uses a new batched query method, not the per-node query).
+- `mcp_v2.py` is not modified (trace imports `NodeFilter`, `EdgeFilter`, `Edge`, `NodeRef` types but does not change them).
 - No changes to the indexer, graph builder, or CLI.
 
 ## Schema / Ontology / Re-index impact
@@ -380,9 +415,12 @@ This is the only case where the engine follows edge types not in `edge_types`: t
 |-----------|---------|
 | `test_trace_outbound_calls_depth_2` | Traces from a controller method via CALLS out, depth 2, returns edges at hop 0 and hop 1 |
 | `test_trace_inbound_callers_depth_2` | Traces from a repository method via CALLS in, depth 2, returns caller chain |
-| `test_trace_prune_roles` | With `prune_roles=["DTO"]`, DTO nodes are excluded from traversal |
+| `test_trace_prune_roles` | With `prune_roles=["DTO"]`, DTO nodes' edges are recorded but DTO is not in frontier; BFS doesn't continue through DTO |
 | `test_trace_fan_out_cap` | With `fan_out_cap=2`, a node with 8 outbound CALLS returns at most 2 edges |
+| `test_trace_fan_out_cap_scaffolding_exempt` | Scaffolding edges (DECLARES_CLIENT) are not counted toward fan_out_cap; cross-service path preserved even when cap is tight |
 | `test_trace_collapse_trivial` | Wrapper chain A->B->C where B has degree 2 is collapsed to A->C |
+| `test_trace_collapse_trivial_disabled` | With `collapse_trivial=False`, wrapper chains are not collapsed |
+| `test_trace_collapse_parent_edge_id_consistency` | After collapsing A->B->C to A->C, child edges of C that referenced B->C as parent_edge_id now reference the collapsed A->C edge |
 | `test_trace_cross_service_http` | Traces from a method through DECLARES_CLIENT -> HTTP_CALLS; stops at Route boundary with `cross_service_boundary=True`; Route in nodes dict but not in frontier |
 | `test_trace_cross_service_async` | Same for ASYNC_CALLS through Producer |
 | `test_trace_max_paths_cap` | Result paths list does not exceed `max_paths` |
@@ -390,16 +428,24 @@ This is the only case where the engine follows edge types not in `edge_types`: t
 | `test_trace_depth_1_equivalent_to_neighbors` | Depth 1 trace with no pruning returns same nodes as `neighbors` |
 | `test_trace_stats_counts` | `stats.total_nodes_discovered`, `stats.nodes_pruned_role`, etc. are consistent with the edge set |
 | `test_trace_empty_seed` | Empty seed ids returns `success=True, nodes={}, edges=[], paths=[]` |
+| `test_trace_single_string_seed` | Single string `ids` is normalized to list; `seed_ids` echoed as list of one |
+| `test_trace_multiple_seeds` | Multiple seed IDs produce a union of traces with shared visited set |
 | `test_trace_invalid_edge_type` | Unknown edge type returns `success=False` with teaching message |
 | `test_trace_direction_required` | Missing direction returns `success=False` |
 | `test_trace_edge_types_required` | Empty edge_types returns `success=False` |
+| `test_trace_max_depth_clamped` | `max_depth` values <1 clamped to 1, >5 clamped to 5 |
+| `test_trace_budget_clamped` | `max_nodes_discovered` values <100 clamped to 100, >2000 clamped to 2000 |
 | `test_trace_visited_set_no_cycles` | BFS does not revisit nodes even if cycles exist in the graph |
-| `test_trace_filter_applied` | NodeFilter restricts discovered nodes |
+| `test_trace_filter_applied` | NodeFilter restricts discovered nodes (hard gate — excluded entirely) |
+| `test_trace_filter_vs_prune_roles` | NodeFilter exclude_roles is harder than prune_roles: NodeFilter excludes nodes and edges; prune_roles records edges but stops frontier |
 | `test_trace_edge_filter_calls` | EdgeFilter with `min_confidence` filters CALLS edges during traversal |
 | `test_trace_include_unresolved` | UnresolvedCallSite edges are interleaved when `include_unresolved=True, edge_types=["CALLS"], direction="out"` |
 | `test_trace_paths_root_to_leaf` | Each path starts at a seed and ends at a leaf with no further outbound edges in the result |
+| `test_trace_overrides_interface_resolution` | Traces from interface method via OVERRIDES out, reaches implementation method; OVERRIDES works as standard edge type |
 | `test_trace_cross_service_edge_attrs` | Cross-service boundary edges include `confidence`, `strategy`, `match` attributes and `cross_service_boundary=True` |
 | `test_trace_cross_service_boundary_stops` | BFS does not follow past cross-service boundary; downstream Route appears in nodes but no EXPOSES/CALLS edges from it |
+| `test_trace_parent_edge_id_seed_null` | Seed edges (hop 0) have `parent_edge_id: null` |
+| `test_trace_parent_edge_id_chain` | Non-seed edges have `parent_edge_id` pointing to a valid edge in the result |
 
 ### Integration validation
 
@@ -491,21 +537,30 @@ If `trace` causes regressions in production after merging to `master`:
 
 All PR-TRACE PRs target the `experimental` branch. They do not merge to `master` until the experimental validation criteria are met.
 
+**Branch topology:** PR-TRACE-1a is the base. 1b stacks on 1a (sequential — 1b extends the engine 1a builds). PR-TRACE-2 and PR-TRACE-3 each branch from 1b (parallel after the engine is complete). PR-TRACE-4 branches from 3 (needs hints and integration tests to be stable before documenting).
+
+```
+experimental ← 1a ← 1b ← 2
+                    ← 3 ← 4
+```
+
 ### PR-TRACE-1a -- `mcp_trace.py` core BFS engine
 
 - Implement `TraceOutput`, `TraceEdge`, `TracePath`, `TraceStats` models.
+- Implement `neighbors_batched` on `KuzuGraph` (single Cypher query per hop for all frontier nodes).
 - Implement BFS traversal with visited set, edge type expansion, NodeFilter/EdgeFilter integration.
 - Implement `max_nodes_discovered` budget with early-stop and advisory.
-- Implement path enumeration and ranking.
-- **Tests**: `test_trace_outbound_calls_depth_2`, `test_trace_inbound_callers_depth_2`, `test_trace_max_paths_cap`, `test_trace_budget_stops_early`, `test_trace_depth_1_equivalent_to_neighbors`, `test_trace_stats_counts`, `test_trace_empty_seed`, `test_trace_invalid_edge_type`, `test_trace_direction_required`, `test_trace_edge_types_required`, `test_trace_visited_set_no_cycles`, `test_trace_filter_applied`, `test_trace_edge_filter_calls`, `test_trace_include_unresolved`, `test_trace_paths_root_to_leaf`.
+- Implement path enumeration with 10× `max_paths` enumeration cap and ranking.
+- **Tests**: `test_trace_outbound_calls_depth_2`, `test_trace_inbound_callers_depth_2`, `test_trace_max_paths_cap`, `test_trace_budget_stops_early`, `test_trace_depth_1_equivalent_to_neighbors`, `test_trace_stats_counts`, `test_trace_empty_seed`, `test_trace_single_string_seed`, `test_trace_multiple_seeds`, `test_trace_invalid_edge_type`, `test_trace_direction_required`, `test_trace_edge_types_required`, `test_trace_max_depth_clamped`, `test_trace_budget_clamped`, `test_trace_visited_set_no_cycles`, `test_trace_filter_applied`, `test_trace_filter_vs_prune_roles`, `test_trace_edge_filter_calls`, `test_trace_include_unresolved`, `test_trace_paths_root_to_leaf`, `test_trace_overrides_interface_resolution`, `test_trace_parent_edge_id_seed_null`, `test_trace_parent_edge_id_chain`.
 
 ### PR-TRACE-1b -- pruning, collapsing, and cross-service
 
-- Implement role-based pruning (`prune_roles`).
-- Implement fan-out throttling (`fan_out_cap`) with confidence-based ranking + role tiebreaker.
+- Implement role-based pruning (`prune_roles`) as soft gate (edges recorded, frontier stops).
+- Implement fan-out throttling (`fan_out_cap`) with confidence-based ranking + role tiebreaker; scaffolding edges exempt.
 - Implement trivial chain collapsing (`collapse_trivial`) with `collapsed`/`collapsed_intermediates` markers on TraceEdge.
+- Implement post-collapse `parent_edge_id` recomputation.
 - Implement cross-service boundary detection (HTTP_CALLS, ASYNC_CALLS boundary-stop with `cross_service_boundary` marker) per the scaffolding edge rules.
-- **Tests**: `test_trace_prune_roles`, `test_trace_fan_out_cap`, `test_trace_collapse_trivial`, `test_trace_cross_service_http`, `test_trace_cross_service_async`, `test_trace_cross_service_edge_attrs`.
+- **Tests**: `test_trace_prune_roles`, `test_trace_fan_out_cap`, `test_trace_fan_out_cap_scaffolding_exempt`, `test_trace_collapse_trivial`, `test_trace_collapse_trivial_disabled`, `test_trace_collapse_parent_edge_id_consistency`, `test_trace_cross_service_http`, `test_trace_cross_service_async`, `test_trace_cross_service_edge_attrs`, `test_trace_cross_service_boundary_stops`.
 
 ### PR-TRACE-2 -- `server.py` tool registration
 
