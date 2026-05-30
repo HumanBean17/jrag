@@ -42,6 +42,10 @@ def set_hints_enabled(enabled: bool) -> None:
     global _hints_enabled
     _hints_enabled = enabled
 
+
+def _hints_or_skip(tool: str, payload: dict) -> tuple[list, list]:
+    return generate_hints(tool, payload) if _hints_enabled else ([], [])
+
 DeclarationSymbolKind = Literal["class", "interface", "enum", "record", "annotation", "method", "constructor"]
 
 # Stored graph edge labels for one-hop neighbors. Composed DECLARES.* and OVERRIDDEN_BY.*
@@ -945,9 +949,7 @@ def search_v2(
             "limit": limit,
             "offset": offset,
         }
-        raw_struct, raw_advisories = (
-            generate_hints("search", hint_payload) if _hints_enabled else ([], [])
-        )
+        raw_struct, raw_advisories = _hints_or_skip("search", hint_payload)
         return SearchOutput(
             success=True,
             results=hits,
@@ -1038,9 +1040,7 @@ def find_v2(
             "filter": filter_dump,
             "has_more_results": has_more_results,
         }
-        raw_struct, raw_advisories = (
-            generate_hints("find", hint_payload) if _hints_enabled else ([], [])
-        )
+        raw_struct, raw_advisories = _hints_or_skip("find", hint_payload)
         return FindOutput(
             success=True,
             results=refs,
@@ -1120,10 +1120,7 @@ def describe_v2(
                         f"java-codebase-rag unresolved-calls list --method-id {node_id} for the full list"
                     )
         record = NodeRecord(id=ref.id, kind=kind, fqn=ref.fqn, data=data, edge_summary=edge_summary)
-        raw_struct, raw_advisories = (
-            generate_hints("describe", {"success": True, "record": record.model_dump()})
-            if _hints_enabled else ([], [])
-        )
+        raw_struct, raw_advisories = _hints_or_skip("describe", {"success": True, "record": record.model_dump()})
         return DescribeOutput(
             success=True,
             record=record,
@@ -1453,9 +1450,7 @@ def _resolve_finalize_success(
         "path_prefix_seed": path_prefix_seed,
         "target_service_seed": target_service_seed,
     }
-    raw_struct, raw_advisories = (
-        generate_hints("resolve", hint_payload) if _hints_enabled else ([], [])
-    )
+    raw_struct, raw_advisories = _hints_or_skip("resolve", hint_payload)
     out = out.model_copy(update={
         "advisories": raw_advisories,
         "hints_structured": _to_structured_hints(raw_struct),
@@ -1989,9 +1984,7 @@ def neighbors_v2(
             "unresolved_count": unresolved_count,
             "calls_row_count": calls_row_count,
         }
-        raw_struct, raw_advisories = (
-            generate_hints("neighbors", neigh_payload) if _hints_enabled else ([], [])
-        )
+        raw_struct, raw_advisories = _hints_or_skip("neighbors", neigh_payload)
         return NeighborsOutput(
             success=True,
             results=sliced,

@@ -223,6 +223,31 @@ def test_embedding_device_precedence_cli_over_env_over_yaml_over_default(
     assert r3.embedding_device == "cpu"
 
 
+def test_hints_enabled_defaults_to_true(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("JAVA_CODEBASE_RAG_HINTS_ENABLED", raising=False)
+    r = resolve_operator_config(source_root=tmp_path)
+    assert r.hints_enabled is True
+    assert r.hints_enabled_source == "default"
+
+
+def test_hints_enabled_env_over_yaml_over_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("JAVA_CODEBASE_RAG_HINTS_ENABLED", raising=False)
+    (tmp_path / ".java-codebase-rag.yml").write_text(
+        "hints:\n  enabled: false\n", encoding="utf-8",
+    )
+    r = resolve_operator_config(source_root=tmp_path)
+    assert r.hints_enabled is False
+    assert r.hints_enabled_source == "yaml"
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_HINTS_ENABLED", "1")
+    r2 = resolve_operator_config(source_root=tmp_path)
+    assert r2.hints_enabled is True
+    assert r2.hints_enabled_source == "env"
+
+
 def test_yaml_config_ignores_legacy_filename_reads_new_filename(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
