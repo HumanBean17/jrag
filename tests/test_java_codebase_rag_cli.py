@@ -953,7 +953,7 @@ def test_mcp_server_yaml_config_precedence_env_over_yaml(
     with the correct source root, which handles precedence internally.
     """
     import server as server_mod
-    from unittest.mock import MagicMock, call
+    from unittest.mock import MagicMock
 
     fake_cfg = MagicMock()
     fake_cfg.apply_to_os_environ = MagicMock()

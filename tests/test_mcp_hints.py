@@ -396,22 +396,21 @@ def _class_with_implements_out(kuzu_graph) -> str:
         "MATCH (cls:Symbol)-[:IMPLEMENTS]->(iface:Symbol) "
         "WHERE cls.kind = 'class' "
         "WITH cls, count(iface) AS nout WHERE nout > 0 "
-        "RETURN cls.id AS id LIMIT 1",
+        "RETURN cls.id AS id",
     )
     if not rows:
         pytest.skip("no class with IMPLEMENTS.out > 0 in fixture")
-    tid = str(rows[0]["id"])
-    # The IMPLEMENTS hint is suppressed when type rollup emits
-    # (DECLARES.DECLARES_CLIENT/EXPOSES/DECLARES_PRODUCER).
-    # Verify the selected class actually qualifies for the hint.
-    out = describe_v2(tid, graph=kuzu_graph)
-    has_impl_hint = any(
-        h.tool == "neighbors" and h.args.get("edge_types") == ["IMPLEMENTS"]
-        for h in out.hints_structured
-    )
-    if not has_impl_hint:
-        pytest.skip("class has IMPLEMENTS but type rollup suppresses the hint")
-    return tid
+    # Find a class whose IMPLEMENTS hint is not suppressed by type rollup
+    # (DECLARES_CLIENT/EXPOSES/DECLARES_PRODUCER suppresses IMPLEMENTS).
+    for row in rows:
+        tid = str(row["id"])
+        out = describe_v2(tid, graph=kuzu_graph)
+        if any(
+            h.tool == "neighbors" and h.args.get("edge_types") == ["IMPLEMENTS"]
+            for h in out.hints_structured
+        ):
+            return tid
+    pytest.skip("no class with unsuppressed IMPLEMENTS hint in fixture")
 
 
 def _service_with_injects_out(kuzu_graph) -> str:
@@ -517,7 +516,7 @@ def _assert_structured_hint(
         return h
     pytest.fail(
         f"no structured hint with tool={tool!r} actionable={actionable} "
-        f"args_subset={args_subset!r} in {[h.model_dump() if hasattr(h, 'model_dump') else h._asdict() for h in hints]}"
+        f"args_subset={args_subset!r} in {[h.model_dump() for h in hints]}"
     )
 
 
