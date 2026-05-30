@@ -8,7 +8,8 @@ import threading
 import time
 from pathlib import Path
 
-from java_codebase_rag.cli_progress import emit_lance_cocoindex_finish, emit_lance_cocoindex_start
+from java_codebase_rag.cli_format import Spinner, stderr_is_tty
+from java_codebase_rag.cli_progress import emit_vectors_finish, emit_vectors_start
 
 COCOINDEX_TARGET = "java_index_flow_lancedb.py:JavaCodeIndexLance"
 
@@ -21,11 +22,62 @@ def cocoindex_bin() -> Path:
     return Path(sys.executable).parent / "cocoindex"
 
 
+class _LineFilter:
+    """Buffer byte chunks and relay only non-noise lines to stderr."""
+
+    _NOISE_PREFIXES: tuple[bytes, ...] = ()
+    _NOISE_CONTAINS: tuple[bytes, ...] = (
+        b"lance::",
+        b"FutureWarning",
+        b"Loading weights:",
+        b'"event": "brownfield-',
+        b"unknown producer source strategy",
+        b"unknown client source strategy",
+    )
+
+    def __init__(self) -> None:
+        self._buf = bytearray()
+        self._suppress_next = False
+
+    def feed(self, chunk: bytes) -> None:
+        self._buf.extend(chunk)
+        while b"\n" in self._buf:
+            line, self._buf = self._buf.split(b"\n", 1)
+            line += b"\n"
+            noise = self._is_noise(line)
+            if noise:
+                self._suppress_next = True
+                continue
+            if self._suppress_next and line[:1] in (b" ", b"\t"):
+                continue
+            self._suppress_next = False
+            sys.stderr.buffer.write(line)
+            sys.stderr.buffer.flush()
+
+    def flush(self) -> None:
+        if self._buf:
+            if not self._is_noise(self._buf):
+                sys.stderr.buffer.write(bytes(self._buf))
+                sys.stderr.buffer.flush()
+            self._buf.clear()
+        self._suppress_next = False
+
+    @classmethod
+    def _is_noise(cls, line: bytes) -> bool:
+        return (
+            any(line.startswith(p) for p in cls._NOISE_PREFIXES)
+            or any(p in line for p in cls._NOISE_CONTAINS)
+        )
+
+
 def _popen_stream_to_stderr(
     proc: subprocess.Popen[bytes],
+    *,
+    verbose: bool = True,
 ) -> tuple[str, str, int]:
     out_buf = bytearray()
     err_buf = bytearray()
+    filt = _LineFilter() if not verbose else None
 
     def drain_out() -> None:
         assert proc.stdout is not None
@@ -34,8 +86,6 @@ def _popen_stream_to_stderr(
             if not chunk:
                 break
             out_buf.extend(chunk)
-            sys.stderr.buffer.write(chunk)
-            sys.stderr.buffer.flush()
 
     def drain_err() -> None:
         assert proc.stderr is not None
@@ -44,8 +94,11 @@ def _popen_stream_to_stderr(
             if not chunk:
                 break
             err_buf.extend(chunk)
-            sys.stderr.buffer.write(chunk)
-            sys.stderr.buffer.flush()
+            if filt is not None:
+                filt.feed(chunk)
+            else:
+                sys.stderr.buffer.write(chunk)
+                sys.stderr.buffer.flush()
 
     t_out = threading.Thread(target=drain_out, name="stream-stdout", daemon=True)
     t_err = threading.Thread(target=drain_err, name="stream-stderr", daemon=True)
@@ -53,6 +106,8 @@ def _popen_stream_to_stderr(
     t_err.start()
     t_out.join()
     t_err.join()
+    if filt is not None:
+        filt.flush()
     code = proc.wait()
     return out_buf.decode(errors="replace"), err_buf.decode(errors="replace"), code
 
@@ -62,6 +117,7 @@ def run_cocoindex_update(
     *,
     full_reprocess: bool,
     quiet: bool,
+    verbose: bool = True,
     lance_project_root: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     exe = cocoindex_bin()
@@ -96,9 +152,14 @@ def run_cocoindex_update(
             text=True,
         )
 
-    emit_lance = lance_project_root is not None
-    if emit_lance:
-        emit_lance_cocoindex_start(lance_project_root)
+    emit_progress = lance_project_root is not None
+    use_spinner = emit_progress and stderr_is_tty()
+    if emit_progress and not use_spinner:
+        emit_vectors_start()
+    spinner: Spinner | None = None
+    if use_spinner:
+        spinner = Spinner("[vectors] running · cocoindex update")
+        spinner.start()
     t0 = time.perf_counter()
     code = -1
     out_s, err_s = "", ""
@@ -111,10 +172,12 @@ def run_cocoindex_update(
             stderr=subprocess.PIPE,
             bufsize=0,
         )
-        out_s, err_s, code = _popen_stream_to_stderr(proc)
+        out_s, err_s, code = _popen_stream_to_stderr(proc, verbose=verbose)
     finally:
-        if emit_lance:
-            emit_lance_cocoindex_finish(elapsed_s=time.perf_counter() - t0, exit_code=code)
+        if spinner is not None:
+            spinner.stop()
+        if emit_progress:
+            emit_vectors_finish(elapsed_s=time.perf_counter() - t0, exit_code=code)
     return subprocess.CompletedProcess(args=cmd, returncode=code, stdout=out_s, stderr=err_s)
 
 
@@ -145,6 +208,7 @@ def run_build_ast_graph(
     source_root: Path,
     kuzu_path: Path,
     verbose: bool,
+    quiet: bool = False,
     env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     builder = bundle_dir() / "build_ast_graph.py"
@@ -163,9 +227,9 @@ def run_build_ast_graph(
         "--kuzu-path",
         str(kuzu_path),
     ]
-    if verbose:
+    if verbose or not quiet:
         cmd.append("--verbose")
-    if not verbose:
+    if quiet:
         return subprocess.run(
             cmd,
             cwd=str(source_root),
@@ -181,7 +245,11 @@ def run_build_ast_graph(
         stderr=subprocess.PIPE,
         bufsize=0,
     )
-    out_s, err_s, code = _popen_stream_to_stderr(proc)
+    out_s, err_s, code = _popen_stream_to_stderr(proc, verbose=verbose)
+    if not verbose:
+        from java_codebase_rag.cli_format import bold_cyan, styled_check
+        marker = styled_check() if code == 0 else styled_cross()
+        print(f"{marker} {bold_cyan('[graph]')} done", file=sys.stderr, flush=True)
     return subprocess.CompletedProcess(args=cmd, returncode=code, stdout=out_s, stderr=err_s)
 
 

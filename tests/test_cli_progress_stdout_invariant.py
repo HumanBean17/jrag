@@ -43,12 +43,17 @@ async def test_stream_relay_arrives_before_wait(monkeypatch: pytest.MonkeyPatch)
 
     monkeypatch.setattr(sys.stderr.buffer, "write", capture_write)
 
+    # Subprocess writes to both stdout and stderr; only stderr should be relayed.
     code = (
         "import sys, time\n"
-        "sys.stdout.buffer.write(b'EARLY\\n')\n"
+        "sys.stderr.buffer.write(b'ERR_EARLY\\n')\n"
+        "sys.stderr.buffer.flush()\n"
+        "sys.stdout.buffer.write(b'OUT_EARLY\\n')\n"
         "sys.stdout.buffer.flush()\n"
         "time.sleep(0.35)\n"
-        "sys.stdout.buffer.write(b'LATE\\n')\n"
+        "sys.stderr.buffer.write(b'ERR_LATE\\n')\n"
+        "sys.stderr.buffer.flush()\n"
+        "sys.stdout.buffer.write(b'OUT_LATE\\n')\n"
         "sys.stdout.buffer.flush()\n"
     )
     proc = await asyncio.create_subprocess_exec(
@@ -63,13 +68,22 @@ async def test_stream_relay_arrives_before_wait(monkeypatch: pytest.MonkeyPatch)
     joined = b""
     for _ in range(200):
         joined = b"".join(recorded)
-        if b"EARLY" in joined:
+        if b"ERR_EARLY" in joined:
             break
         await asyncio.sleep(0.02)
-    assert b"EARLY" in joined, joined
+    assert b"ERR_EARLY" in joined, joined
+    # stdout content must NOT be relayed to stderr
+    assert b"OUT_EARLY" not in joined, joined
     await acc_task
     final = b"".join(recorded)
-    assert b"LATE" in final
+    assert b"ERR_LATE" in final
+    assert b"OUT_LATE" not in final
+    # stdout is still captured in the returned buffer
+    out_buf, err_buf = acc_task.result()
+    assert b"OUT_EARLY" in out_buf
+    assert b"OUT_LATE" in out_buf
+    assert b"ERR_EARLY" in err_buf
+    assert b"ERR_LATE" in err_buf
 
 
 def test_refresh_pipeline_quiet_stderr_baseline(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -108,7 +122,7 @@ def test_refresh_pipeline_quiet_stderr_baseline(monkeypatch: pytest.MonkeyPatch,
     with redirect_stderr(buf):
         out = asyncio.run(server.run_refresh_pipeline(quiet=True))
     err = buf.getvalue()
-    assert "[lance]" not in err
+    assert "[vectors]" not in err
     assert b"idx_out".decode() not in err
     assert b"idx_err".decode() not in err
     assert out.success is True
@@ -146,8 +160,9 @@ def test_cli_lifecycle_stdout_invariant_reprocess(
 
     baseline = (_FIXTURE_DIR / "reprocess_quiet_success.stdout.txt").read_text(encoding="utf-8")
 
-    async def fake_refresh(*, quiet: bool = False) -> RefreshIndexOutput:
+    async def fake_refresh(*, quiet: bool = False, verbose: bool = True) -> RefreshIndexOutput:
         _ = quiet
+        _ = verbose
         return RefreshIndexOutput(
             success=True,
             exit_code=0,

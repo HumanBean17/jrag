@@ -3,32 +3,83 @@ from __future__ import annotations
 
 import asyncio
 import sys
-from pathlib import Path
+
+from java_codebase_rag.cli_format import bold_cyan, styled_check, styled_cross
 
 
-def emit_lance_cocoindex_start(project_root: Path) -> None:
-    root = project_root.expanduser().resolve()
+def emit_vectors_start() -> None:
     print(
-        f"[lance] running cocoindex update (project_root={root})",
+        bold_cyan("[vectors]") + " running · cocoindex update",
         file=sys.stderr,
         flush=True,
     )
 
 
-def emit_lance_cocoindex_finish(*, elapsed_s: float, exit_code: int) -> None:
+def emit_vectors_finish(*, elapsed_s: float, exit_code: int) -> None:
+    marker = styled_check() if exit_code == 0 else styled_cross()
     print(
-        f"[lance] cocoindex update finished in {elapsed_s:.2f}s (exit={exit_code})",
+        f"{marker} {bold_cyan('[vectors]')} finished · {elapsed_s:.2f}s"
+        + (f" (exit={exit_code})" if exit_code != 0 else ""),
         file=sys.stderr,
         flush=True,
     )
+
+
+class _AsyncLineFilter:
+    """Buffers byte chunks and relays only non-noise lines to stderr (async drain path)."""
+
+    _NOISE_PREFIXES: tuple[bytes, ...] = ()
+    _NOISE_CONTAINS: tuple[bytes, ...] = (
+        b"lance::",
+        b"FutureWarning",
+        b"Loading weights:",
+        b'"event": "brownfield-',
+        b"unknown producer source strategy",
+        b"unknown client source strategy",
+    )
+
+    def __init__(self) -> None:
+        self._buf = bytearray()
+        self._suppress_next = False
+
+    def feed(self, chunk: bytes) -> None:
+        self._buf.extend(chunk)
+        while b"\n" in self._buf:
+            line, self._buf = self._buf.split(b"\n", 1)
+            line += b"\n"
+            noise = self._is_noise(line)
+            if noise:
+                self._suppress_next = True
+                continue
+            if self._suppress_next and line[:1] in (b" ", b"\t"):
+                continue
+            self._suppress_next = False
+            sys.stderr.buffer.write(line)
+            sys.stderr.buffer.flush()
+
+    def flush(self) -> None:
+        if self._buf:
+            if not self._is_noise(self._buf):
+                sys.stderr.buffer.write(bytes(self._buf))
+                sys.stderr.buffer.flush()
+            self._buf.clear()
+        self._suppress_next = False
+
+    @classmethod
+    def _is_noise(cls, line: bytes) -> bool:
+        return (
+            any(line.startswith(p) for p in cls._NOISE_PREFIXES)
+            or any(p in line for p in cls._NOISE_CONTAINS)
+        )
 
 
 async def accumulate_and_relay_subprocess_streams(
     proc: asyncio.subprocess.Process,
     *,
     relay: bool,
+    verbose: bool = True,
 ) -> tuple[bytes, bytes]:
-    """Read stdout and stderr until EOF; optionally copy each chunk verbatim to stderr."""
+    """Read stdout and stderr until EOF; optionally copy non-noise stderr chunks to stderr."""
     stdout = proc.stdout
     stderr = proc.stderr
     if stdout is None or stderr is None:
@@ -36,17 +87,29 @@ async def accumulate_and_relay_subprocess_streams(
 
     out_buf = bytearray()
     err_buf = bytearray()
+    filt = _AsyncLineFilter() if (relay and not verbose) else None
 
-    async def drain(reader: asyncio.StreamReader, target: bytearray) -> None:
+    async def drain_stdout(reader: asyncio.StreamReader, target: bytearray) -> None:
         while True:
             chunk = await reader.read(65536)
             if not chunk:
                 break
             target.extend(chunk)
-            if relay:
+
+    async def drain_stderr(reader: asyncio.StreamReader, target: bytearray) -> None:
+        while True:
+            chunk = await reader.read(65536)
+            if not chunk:
+                break
+            target.extend(chunk)
+            if filt is not None:
+                filt.feed(chunk)
+            elif relay:
                 sys.stderr.buffer.write(chunk)
                 sys.stderr.buffer.flush()
 
-    await asyncio.gather(drain(stdout, out_buf), drain(stderr, err_buf))
+    await asyncio.gather(drain_stdout(stdout, out_buf), drain_stderr(stderr, err_buf))
     await proc.wait()
+    if filt is not None:
+        filt.flush()
     return bytes(out_buf), bytes(err_buf)
