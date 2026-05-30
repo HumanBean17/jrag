@@ -18,7 +18,7 @@ gitignored).
 
 `.agents/` skills are loaded by the agent working *on* java-codebase-rag source
 code. `skills/` is shipped to consumers — it instructs an agent to call the
-MCP tools (`search`, `find`, `describe`, `neighbors`, `resolve`) against an
+MCP tools (`search`, `find`, `describe`, `neighbors`, `resolve`, `trace`) against an
 indexed Java codebase. Do not mix the two: never import consumer skills into
 `.agents/skills/` or vice versa.
 
@@ -36,7 +36,7 @@ when needed.
 
 - `README.md` — pip-first landing page: install, 5-minute walkthrough on the
   bank-chat fixture, MCP host wiring (Claude Code / Claude Desktop), the
-  five-tool cheat sheet (`search` / `find` / `describe` / `neighbors` / `resolve`),
+  six-tool cheat sheet (`search` / `find` / `describe` / `neighbors` / `resolve` / `trace`),
   and the CLI cheat sheet. Pointers out to other docs for depth.
 - [`docs/CONFIGURATION.md`](./docs/CONFIGURATION.md) — environment
   variables, full `.java-codebase-rag.yml` reference, **graph layer**
@@ -55,7 +55,7 @@ when needed.
 - `docs/CODEBASE_REQUIREMENTS.md` — Java-repo assumptions and per-file map of
   what to edit when a target tree doesn't match defaults.
 - `tests/README.md` — testing philosophy.
-- **`skills/explore-codebase/`** — user-facing skill shipped to java-codebase-rag consumers. Single self-contained operating manual for the 5-tool MCP. Developer workflow skills live in **`.agents/skills/`**, not here.
+- **`skills/explore-codebase/`** — user-facing skill shipped to java-codebase-rag consumers. Single self-contained operating manual for the 6-tool MCP. Developer workflow skills live in **`.agents/skills/`**, not here.
 - **`propose/`** — design proposes. **In-flight** proposes live in
   **`propose/active/`**. **`propose/completed/`** — landed work and rationale.
   **List or search this tree** for current filenames; do not rely on enumerated
@@ -79,6 +79,7 @@ when needed.
 | `java_ontology.py` | Source of truth for `VALID_ROLES`, `VALID_CAPABILITIES`, `VALID_CLIENT_KINDS`, `VALID_HTTP_CALL_STRATEGIES`, `VALID_ASYNC_CALL_STRATEGIES`, `VALID_HTTP_CALL_MATCHES`. |
 | `chunk_heuristics.py` | Query-time chunk hints (no AST / no re-index). |
 | `mcp_hints.py` | MCP v2 road-sign `hints` catalog (`generate_hints`; locked v1 templates in `propose/completed/HINTS-ROAD-SIGNS-PROPOSE.md`). |
+| `mcp_trace.py` | Multi-hop BFS traversal engine (`trace` MCP tool). |
 | `index_common.py` | Embedding config (no CocoIndex dep). |
 | `java_index_flow_lancedb.py` | CocoIndex flow (used by `java-codebase-rag init` / `increment` / `reprocess` / `erase`). |
 | `java_index_v1_common.py` | Shared file walker / exclude patterns. |

@@ -19,13 +19,14 @@ The graph exists to confirm structure you already have a hypothesis about — no
 
 ## Tools
 
-`search`, `find`, `describe`, `neighbors`, `resolve`.
+`search`, `find`, `describe`, `neighbors`, `resolve`, `trace`.
 
 - **`search(query, table?, hybrid?, limit?, filter?)`** — ranked chunk retrieval. `table`: `java`|`sql`|`yaml`|`all` (default `java`). `limit` default 5.
 - **`find(kind, filter, limit?)`** — structured listing. `kind`: `symbol`|`route`|`client`|`producer`. `filter` is required.
 - **`describe(id)`** — full node record + `edge_summary` (per-label in/out counts). 1 arg.
 - **`neighbors(ids, direction, edge_types, filter?, edge_filter?, limit?)`** — one hop. `direction` and `edge_types` required. `filter` applies to the other node. `edge_filter` (CALLS only) applies to edges before pagination.
 - **`resolve(identifier, hint_kind?)`** — identifier lookup. Returns `one`, `many`, or `none`.
+- **`trace(ids, direction, edge_types, max_depth?, max_paths?, prune_roles?, fan_out_cap?, collapse_trivial?)`** — multi-hop BFS with server-side pruning. Use for 3+ hop path questions or when `neighbors` returns high fan-out (>8 CALLS edges). `direction` and `edge_types` required. `max_depth` 1–5 (default 3). `prune_roles` soft gate (edges recorded, frontier stops). `fan_out_cap` per-node limit (default 5). Cross-service edges are boundary signals — BFS stops at the service boundary.
 
 ### NodeFilter keys (for `find`, `search.filter`, `neighbors.filter`)
 
@@ -48,8 +49,8 @@ The graph exists to confirm structure you already have a hypothesis about — no
 Before each MCP call, output one short line:
 
 ```
-Q-class: <semantic | structured | inspect | walk>
-Pick: <search|find|describe|neighbors|resolve>  Why: <≤8 words>
+Q-class: <semantic | structured | inspect | walk | trace>
+Pick: <search|find|describe|neighbors|trace|resolve>  Why: <≤8 words>
 ```
 
 Then use real JSON shapes.
@@ -119,7 +120,7 @@ Hypothesis: "assign() persists via a repository"
 
 ### Open-ended neighbors loops
 
-Never chain `neighbors(out, CALLS)` calls without a stopping condition. Each hop multiplies the surface area. After 2 hops, stop and reassess.
+Never chain `neighbors(out, CALLS)` calls without a stopping condition. Each hop multiplies the surface area. After 2 hops, stop and reassess — or escalate to `trace` to batch the remaining traversal with server-side pruning.
 
 ### Walking all edge types at once
 
