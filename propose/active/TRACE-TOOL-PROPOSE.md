@@ -92,6 +92,7 @@ TraceEdge:
   hop: int                             # BFS depth where discovered (0-indexed from seeds)
   collapsed: bool = False              # true if this edge was produced by collapsing a trivial chain
   collapsed_intermediates: list[str]   # node IDs of collapsed intermediates (empty if not collapsed)
+  cross_service_boundary: bool = False # true if this edge crosses into another microservice (BFS stops here)
   attrs: dict[str, Any]               # edge attributes (confidence, strategy, match, etc.)
 
 TracePath:
@@ -130,9 +131,16 @@ The trace engine is a **BFS traversal** that reuses the same Cypher query infras
         - Primary sort: confidence (highest first)
         - Tiebreaker: role priority (CONTROLLER > SERVICE > REPOSITORY > CLIENT > OTHER)
         - For structural edges without confidence: alphabetically by FQN (deterministic)
+      - For cross-service edges (HTTP_CALLS, ASYNC_CALLS):
+        - Mark cross_service_boundary = True
+        - Do NOT add downstream node to frontier (BFS stops at boundary)
+      - For scaffolding edges (DECLARES_CLIENT, DECLARES_PRODUCER):
+        - Only followed when HTTP_CALLS/ASYNC_CALLS is in edge_types
+        - Add Client/Producer node to frontier (needed to reach cross-service edge)
       - total_discovered += len(discovered neighbors)
       - Record TraceEdge(from=node, to=neighbor, hop=hop, attrs=...)
-   c. new_frontier = {neighbor.id for each discovered neighbor not in visited}
+   c. new_frontier = {neighbor.id for each discovered neighbor not in visited,
+                      excluding cross-service boundary downstream nodes}
    d. visited |= new_frontier
    e. frontier = new_frontier
 3. If collapse_trivial:
@@ -160,7 +168,7 @@ The `trace` tool's value is not "do what the agent could do but faster" -- it is
 
 **Trivial chain collapsing (`collapse_trivial`)**: Wrapper/delegate patterns are common in Spring microservices. `OrderServiceImpl#createOrder` calls `orderValidator#validate` calls `ValidationHelper#doValidate` calls `RulesEngine#check`. The intermediate wrapper and helper add no semantic value. Collapsing these into `OrderServiceImpl -> RulesEngine` shortens paths and keeps the agent focused on the real flow.
 
-**Cross-service seamless traversal**: When BFS encounters a `Symbol` with outgoing `DECLARES_CLIENT` or `DECLARES_PRODUCER`, and `HTTP_CALLS`/`ASYNC_CALLS` is in the requested `edge_types`, the engine follows through: `method -> Client -> HTTP_CALLS -> Route -> EXPOSES <- handler method`. This is a 4-hop traversal across service boundaries that would require 4 separate `neighbors` calls today. The engine follows it in one step because it has the full graph in Kuzu. Cross-service edges carry `confidence`, `strategy`, and `match` attributes so the agent can assess reliability.
+**Cross-service boundary detection**: When BFS encounters a `Symbol` with outgoing `DECLARES_CLIENT` or `DECLARES_PRODUCER`, and `HTTP_CALLS`/`ASYNC_CALLS` is in the requested `edge_types`, the engine follows to the Client/Producer and then to the downstream Route — but **stops at the boundary**. The cross-service edge is recorded with `cross_service_boundary: True` and full attributes (`confidence`, `strategy`, `match`). The downstream Route is included in the `nodes` dict so the agent can see what service and endpoint is being called. The agent decides whether to continue tracing in the downstream service via a separate `trace` call.
 
 ### Edge type handling
 
@@ -174,7 +182,7 @@ label_params = [f"l{i}" for i in range(len(flat_labels))]
 label_predicate = "(" + " OR ".join(f"label(e) = ${name}" for name in label_params) + ")"
 ```
 
-Cross-service traversal is implicit: when `HTTP_CALLS` or `ASYNC_CALLS` is in `edge_types`, the engine follows the full chain through Client/Producer nodes and Route nodes, collecting the intermediate edges as part of the same BFS.
+Cross-service traversal is a boundary signal: when `HTTP_CALLS` or `ASYNC_CALLS` is in `edge_types`, the engine follows scaffolding edges to reach the cross-service edge, records it with `cross_service_boundary: True`, and stops. The downstream service is not traversed — the agent issues a separate `trace` call if needed.
 
 ### Composability
 
@@ -236,7 +244,7 @@ PR-TRACE-3 must add the following `trace`-aware hints:
 
 4. **Trace budget hit hint**: When `stats.budget_hit=True`, emit: `"trace hit the node discovery budget (N nodes). Results are partial. Increase max_depth or add prune_roles and re-run."`
 
-5. **Cross-service boundary hint**: When `trace` discovers cross-service edges, emit: `"Cross-service boundary detected. Use describe(route_id) on downstream routes for handler details."`
+5. **Cross-service boundary hint**: When `trace` discovers edges with `cross_service_boundary=True`, emit: `"Cross-service boundary: Client X calls Route Y (confidence=N). Use trace(route_id, 'out', ['EXPOSES','CALLS'], max_depth=4) to continue in the downstream service, or describe(route_id) for route details."`
 
 #### Skill decision tree update
 
@@ -247,7 +255,7 @@ The decision tree in `skills/explore-codebase/SKILL.md` must be updated to inclu
 | "What happens when route R is called?" | `find(kind="route")` then `trace(route_id, "out", ["EXPOSES","CALLS"], max_depth=4)` | `describe` on key nodes |
 | "Impact of changing method M" | `resolve` / `find` then `trace(id, "in", ["CALLS","OVERRIDES"], max_depth=3)` | `describe` on callers |
 | "Trace from X to database" | `trace(id, "out", ["CALLS"], max_depth=4, prune_roles=["DTO","EXCEPTION"])` | `neighbors` for pruned detail |
-| "What calls this across services?" | `trace(id, "out", ["CALLS","HTTP_CALLS","ASYNC_CALLS"], max_depth=5)` | `describe` on downstream routes |
+| "What calls this across services?" | `trace(id, "out", ["CALLS","HTTP_CALLS","ASYNC_CALLS"], max_depth=5)` | `trace` on downstream route_id if needed |
 
 The existing `neighbors` rows remain unchanged. `trace` rows are additive — they cover the cases where the current table says "loop neighbors" or "no magic tool."
 
@@ -260,40 +268,78 @@ The existing `neighbors` rows remain unchanged. `trace` rows are additive — th
 - The engine stops early if the frontier is exhausted before `max_depth`.
 - `max_nodes_discovered` defaults to **500** and is clamped to 100..2000. This is a **compute guardrail**, not an output guarantee. It counts nodes discovered *before* pruning — this is intentional because the cost is in the Cypher queries and BFS traversal, not in the output serialization. Aggressive `prune_roles` may result in fewer output nodes for the same budget. When the budget is hit, BFS stops mid-traversal and reports `stats.budget_hit = True` plus an advisory: `"trace stopped early: discovered {N} of ~{M} nodes before budget. Reduce max_depth or add prune_roles to focus."`
 
-### Cross-service traversal
+### Cross-service traversal: boundary signals, not seamless traversal
 
-When `HTTP_CALLS` or `ASYNC_CALLS` is in `edge_types`, the BFS engine follows cross-service edges seamlessly:
+When BFS encounters a cross-service edge (`HTTP_CALLS` or `ASYNC_CALLS`), the engine **stops traversal at the boundary**. It does not follow into the downstream service. Instead, it records the cross-service edge as a **boundary signal** and includes enough data for the agent to decide whether to continue tracing in the downstream service.
 
-1. At a `Symbol` node with `DECLARES_CLIENT` -> `Client` -> `HTTP_CALLS` -> `Route`, the engine records:
-   - `Symbol --DECLARES_CLIENT--> Client` (hop N)
-   - `Client --HTTP_CALLS--> Route` (hop N+1)
-   - The Route's `EXPOSES` handler is discovered at hop N+2 (if `EXPOSES` is in `edge_types`)
-2. Cross-service edges carry their full attribute set: `confidence`, `strategy`, `match`, `raw_uri`/`raw_topic`.
-3. The `stats` object reports cross-service hops separately so the agent knows when it crossed a service boundary.
+#### Why not seamless traversal
 
-This is the highest-value feature of `trace`: a 4-hop cross-service trace that would require 8-12 `neighbors` calls today is a single `trace` call.
+Automatic cross-service traversal was initially proposed as "seamless" — the engine would follow `Symbol -> Client -> HTTP_CALLS -> Route -> EXPOSES handler` in a single call. This was rejected for three reasons:
 
-#### Cross-service edge-following rules
+1. **Context explosion**. A trace starting in `order-service` that follows into `payment-service` now returns two services' worth of paths. A depth-5 trace across 3 services could return hundreds of edges, defeating the pruning that `trace` exists to provide.
 
-The engine follows cross-service edges when `HTTP_CALLS` or `ASYNC_CALLS` is in the user's `edge_types`. Internally, it also follows **scaffolding edges** that connect the user's edge types across node kinds. These scaffolding edges are *not* required to be in `edge_types` — the engine follows them automatically:
+2. **Agent autonomy**. The GPS metaphor says the tool returns structure, the agent decides. Automatically crossing service boundaries is the GPS deciding the agent also needs to see what happens in the next city. The agent asked about one service — it should choose whether to follow into another.
 
-| Trigger (user-specified `edge_types` includes) | Scaffolding edges followed internally | Target node kind |
-|---|---|---|
-| `HTTP_CALLS` | `DECLARES_CLIENT` (outbound from Symbol to Client) | `client` |
-| `HTTP_CALLS` | `EXPOSES` (inbound from Route to handler Symbol) | `symbol` |
-| `ASYNC_CALLS` | `DECLARES_PRODUCER` (outbound from Symbol to Producer) | `producer` |
-| `ASYNC_CALLS` | `EXPOSES` (inbound from Route to handler Symbol) | `symbol` |
+3. **Hop budget waste**. Scaffolding edges (DECLARES_CLIENT, EXPOSES) would consume 2 of the 5 available hops just crossing the boundary. The agent gets fewer useful hops in both services.
 
-**All scaffolding edges appear in the result's `edges` list** with their actual edge type (e.g., `DECLARES_CLIENT`, `EXPOSES`). They are not hidden from the agent. They count toward `max_nodes_discovered` and `stats.total_edges_discovered` like any other edge.
+#### Boundary signal behavior
 
-**`hop` numbering**: Scaffolding edges consume hop slots. A `Symbol --DECLARES_CLIENT(hop 2)--> Client --HTTP_CALLS(hop 3)--> Route` sequence uses two hops, not one. This means cross-service traces reach `max_depth` faster — the agent should account for this when choosing depth. The advisory system warns when a cross-service boundary was detected but `max_depth` was exhausted before the downstream handler was reached.
+When BFS discovers a cross-service edge during traversal:
 
-**Example**: Agent calls `trace(id, "out", ["CALLS", "HTTP_CALLS"], max_depth=4)`:
-- Hop 0: seed Symbol —CALLS--> callee Symbols
-- Hop 1: callee Symbols —CALLS--> deeper Symbols (some have DECLARES_CLIENT)
-- Hop 2: Symbol —DECLARES_CLIENT--> Client (scaffolding, auto-followed)
-- Hop 3: Client —HTTP_CALLS--> Route (user-requested edge type)
-- Hop 4 would be needed for Route —EXPOSES--> handler, but `max_depth=4` is exhausted. Advisory: `"cross-service boundary detected at hop 3 but max_depth=4 exhausted before downstream handler. Increase max_depth to 5 or use neighbors on the discovered Route."`
+1. **Record the edge** with `cross_service_boundary: True` and full attributes (`confidence`, `strategy`, `match`, `raw_uri`/`raw_topic`).
+2. **Include the downstream node** (Route or Producer endpoint) in the `nodes` dict with its full `NodeRef` data (id, kind, fqn, microservice, etc.).
+3. **Include the Client/Producer node** that owns the cross-service edge — this is the node the BFS was traversing from, so it's already in the result.
+4. **Stop** — do not add the downstream Route to the frontier. Do not follow EXPOSES into the downstream handler. This branch ends at the boundary.
+5. **Emit hint**: `"Cross-service boundary: Client X calls Route Y (confidence=0.85, strategy=URI_PATH_MATCH). Use trace(route_id, 'out', ['EXPOSES','CALLS'], max_depth=4) to continue tracing in the downstream service, or describe(route_id) for route details."`
+
+The downstream Route's `NodeRef` includes its `fqn` (e.g., `payment-service:/api/payments:POST`), so the agent can see at a glance what service and endpoint is being called without issuing another tool call.
+
+#### What the agent sees
+
+Example: Agent calls `trace(id, "out", ["CALLS", "HTTP_CALLS"], max_depth=4)` from an `order-service` method:
+
+```yaml
+edges:
+  - from_id: "sym:OrderServiceImpl#createOrder"
+    to_id: "sym:OrderRepository#save"
+    edge_type: "CALLS"
+    hop: 1
+    cross_service_boundary: false
+    attrs: {confidence: 1.0}
+
+  - from_id: "sym:OrderServiceImpl#createOrder"
+    to_id: "client:PaymentClient"
+    edge_type: "DECLARES_CLIENT"        # auto-followed to reach HTTP_CALLS
+    hop: 2
+    cross_service_boundary: false
+    attrs: {}
+
+  - from_id: "client:PaymentClient"
+    to_id: "route:payment-service:/api/payments:POST"
+    edge_type: "HTTP_CALLS"
+    hop: 3
+    cross_service_boundary: true         # BFS stops here
+    attrs: {confidence: 0.85, strategy: "URI_PATH_MATCH", match: "exact", raw_uri: "/api/payments"}
+
+nodes:
+  "route:payment-service:/api/payments:POST":
+    id: "route:payment-service:/api/payments:POST"
+    kind: "route"
+    fqn: "payment-service:/api/payments:POST"
+    microservice: "payment-service"
+    ...
+
+hints_structured:
+  - text: "Cross-service boundary: PaymentClient calls payment-service:/api/payments:POST (confidence=0.85, strategy=URI_PATH_MATCH). Use trace(route_id, 'out', ['EXPOSES','CALLS'], max_depth=4) to continue tracing in the downstream service."
+```
+
+The agent now has a clear picture: `OrderServiceImpl` calls the repository (internal) and also calls `payment-service` via HTTP (cross-service boundary). It can choose to trace into `payment-service` or stop here.
+
+#### DECLARES_CLIENT / DECLARES_PRODUCER handling
+
+To reach the cross-service edge, BFS must first traverse from a Symbol to its Client/Producer via `DECLARES_CLIENT`/`DECLARES_PRODUCER`. These are **scaffolding edges** — they're followed only when `HTTP_CALLS` or `ASYNC_CALLS` is in the user's `edge_types`. They appear in the result with their actual edge type and consume a hop, but are not required to be in the user's `edge_types`.
+
+This is the only case where the engine follows edge types not in `edge_types`: the scaffolding hop from Symbol to Client/Producer is necessary to reach the cross-service edge the agent asked for. The engine never follows edges into the downstream service.
 
 ## Scope
 
@@ -331,7 +377,7 @@ The engine follows cross-service edges when `HTTP_CALLS` or `ASYNC_CALLS` is in 
 | `test_trace_prune_roles` | With `prune_roles=["DTO"]`, DTO nodes are excluded from traversal |
 | `test_trace_fan_out_cap` | With `fan_out_cap=2`, a node with 8 outbound CALLS returns at most 2 edges |
 | `test_trace_collapse_trivial` | Wrapper chain A->B->C where B has degree 2 is collapsed to A->C |
-| `test_trace_cross_service_http` | Traces from a method through DECLARES_CLIENT -> HTTP_CALLS -> Route -> EXPOSES handler across services |
+| `test_trace_cross_service_http` | Traces from a method through DECLARES_CLIENT -> HTTP_CALLS; stops at Route boundary with `cross_service_boundary=True`; Route in nodes dict but not in frontier |
 | `test_trace_cross_service_async` | Same for ASYNC_CALLS through Producer |
 | `test_trace_max_paths_cap` | Result paths list does not exceed `max_paths` |
 | `test_trace_budget_stops_early` | BFS stops when `max_nodes_discovered` is hit; `stats.budget_hit=True`; advisory message present |
@@ -346,7 +392,8 @@ The engine follows cross-service edges when `HTTP_CALLS` or `ASYNC_CALLS` is in 
 | `test_trace_edge_filter_calls` | EdgeFilter with `min_confidence` filters CALLS edges during traversal |
 | `test_trace_include_unresolved` | UnresolvedCallSite edges are interleaved when `include_unresolved=True, edge_types=["CALLS"], direction="out"` |
 | `test_trace_paths_root_to_leaf` | Each path starts at a seed and ends at a leaf with no further outbound edges in the result |
-| `test_trace_cross_service_edge_attrs` | Cross-service edges include `confidence`, `strategy`, `match` attributes |
+| `test_trace_cross_service_edge_attrs` | Cross-service boundary edges include `confidence`, `strategy`, `match` attributes and `cross_service_boundary=True` |
+| `test_trace_cross_service_boundary_stops` | BFS does not follow past cross-service boundary; downstream Route appears in nodes but no EXPOSES/CALLS edges from it |
 
 ### Integration validation
 
@@ -375,7 +422,7 @@ These questions were resolved during review (PR #234). Deferred items are tracke
 
 6. **Legacy `find_callers`/`find_callees`** — **Coexist for v1.** These methods serve the CLI, not the MCP surface — different consumers. Once the trace engine is proven on MCP, add a `java-codebase-rag trace` CLI command reusing the engine, then deprecate legacy methods — tracked in #241.
 
-7. **Cross-service scaffolding edges** — **Always followed when `HTTP_CALLS`/`ASYNC_CALLS` is in `edge_types`, always visible in output.** Scaffolding edges (`DECLARES_CLIENT`, `DECLARES_PRODUCER`, `EXPOSES`) do not need to be in the user's `edge_types`. They appear in the `edges` list with their actual edge type. They consume `hop` slots. Advisories fire when `max_depth` is exhausted mid-cross-service traversal.
+7. **Cross-service traversal: boundary-stop, not seamless** — **BFS stops at service boundaries.** When the engine encounters `HTTP_CALLS` or `ASYNC_CALLS` edges, it records them with `cross_service_boundary: True`, includes the downstream Route/Producer node in the result, but does not add it to the frontier. The agent decides whether to trace into the downstream service via a separate `trace` call. Scaffolding edges (`DECLARES_CLIENT`, `DECLARES_PRODUCER`) are followed only to reach the cross-service edge and appear in the result. See "Cross-service traversal: boundary signals, not seamless traversal" section for rationale.
 
 8. **`collapsed` marker on TraceEdge** — **Yes.** Collapsed edges carry `collapsed: True` and `collapsed_intermediates: [node_ids]` so agents can detect shortcuts and drill down via `neighbors`.
 
@@ -449,7 +496,7 @@ All PR-TRACE PRs target the `experimental` branch. They do not merge to `master`
 - Implement role-based pruning (`prune_roles`).
 - Implement fan-out throttling (`fan_out_cap`) with confidence-based ranking + role tiebreaker.
 - Implement trivial chain collapsing (`collapse_trivial`) with `collapsed`/`collapsed_intermediates` markers on TraceEdge.
-- Implement cross-service traversal (HTTP_CALLS, ASYNC_CALLS seamless hop-through) per the scaffolding edge rules.
+- Implement cross-service boundary detection (HTTP_CALLS, ASYNC_CALLS boundary-stop with `cross_service_boundary` marker) per the scaffolding edge rules.
 - **Tests**: `test_trace_prune_roles`, `test_trace_fan_out_cap`, `test_trace_collapse_trivial`, `test_trace_cross_service_http`, `test_trace_cross_service_async`, `test_trace_cross_service_edge_attrs`.
 
 ### PR-TRACE-2 -- `server.py` tool registration
@@ -502,7 +549,7 @@ The v2 "no trace tools" decision was made with good reason. `trace` ships as an 
 | Calls for a 3-hop trace | 3-8 tool calls | 1 tool call |
 | Visited set | Agent's responsibility (LLMs are bad at this) | Server-side (deterministic) |
 | Fan-out control | Agent must filter manually | `fan_out_cap`, `prune_roles` |
-| Cross-service | Multiple calls per boundary | Seamless in one call |
+| Cross-service | Multiple calls per boundary | Boundary signal with full attrs; separate `trace` per service |
 | Trivial chain collapsing | Agent must detect and skip | `collapse_trivial` |
 | Result structure | Flat edge lists per call | Structured paths + nodes dict |
 | Context budget | High (each call returns full payloads) | Low (pruned, deduplicated) |
