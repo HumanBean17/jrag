@@ -133,6 +133,10 @@ LABEL_CALLERS = "callers"
 LABEL_WRONG_SUBJECT_KIND = "wrong subject kind"
 LABEL_WRONG_DIRECTION = "wrong direction"
 LABEL_TYPE_LEVEL_REQUERY = "type-level requery"
+LABEL_BUDGET_HIT = "budget hit"
+LABEL_PRUNED_DRILLDOWN = "pruned drilldown"
+LABEL_CROSS_SERVICE_BOUNDARY = "cross-service boundary"
+LABEL_HIGH_FANOUT_TRACE = "high fanout trace"
 
 # §7.12 priority: DECLARES.* type rollups > OVERRIDDEN_BY.* > leaf follow-ups > meta.
 PRIORITY_DECLARES_TYPE_ROLLUP = 4
@@ -501,8 +505,81 @@ def _neighbors_success_structured_hints(payload: dict[str, Any]) -> list[_Struct
     return out
 
 
+def _trace_structured_hints(payload: dict[str, Any]) -> tuple[list[_StructuredHint], list[tuple[int, str]]]:
+    """Structured hints and advisories for trace output."""
+    struct_pairs: list[_StructuredHint] = []
+    advisories: list[tuple[int, str]] = []
+
+    stats = payload.get("stats")
+    edges = list(payload.get("edges") or [])
+
+    if not isinstance(stats, dict):
+        return (finalize_structured_hints(struct_pairs), finalize_advisories(advisories))
+
+    # (a) Budget hit hint.
+    if stats.get("budget_hit"):
+        n = int(stats.get("total_nodes_discovered") or 0)
+        advisories.append((
+            PRIORITY_META,
+            f"trace hit the node discovery budget ({n} nodes). "
+            "Results are partial. Increase max_depth or add prune_roles and re-run.",
+        ))
+        struct_pairs.append(_StructuredHint(
+            "trace",
+            {"ids": list(payload.get("seed_ids") or []),
+             "direction": str(payload.get("direction") or "out"),
+             "edge_types": list(payload.get("edge_types") or []),
+             "prune_roles": ["DTO", "EXCEPTION", "UTILITY"]},
+            False, PRIORITY_META,
+            LABEL_BUDGET_HIT,
+            f"budget hit at {n} nodes — results are incomplete",
+        ))
+
+    # (b) Pruned / collapsed edges drill-down hint.
+    pruned_count = (
+        int(stats.get("nodes_pruned_role") or 0)
+        + int(stats.get("nodes_pruned_fan_out") or 0)
+        + int(stats.get("edges_collapsed_trivial") or 0)
+    )
+    if pruned_count > 0 or any(e.get("collapsed") for e in edges):
+        advisories.append((
+            PRIORITY_META,
+            f"trace pruned {pruned_count} edges. Use neighbors(id, direction, edge_types) on specific nodes for full detail.",
+        ))
+        struct_pairs.append(_StructuredHint(
+            "neighbors",
+            {"ids": [], "direction": str(payload.get("direction") or "out"), "edge_types": list(payload.get("edge_types") or [])},
+            False, PRIORITY_META,
+            LABEL_PRUNED_DRILLDOWN,
+            f"trace pruned {pruned_count} edges — use neighbors on specific nodes for detail",
+        ))
+
+    # (c) Cross-service boundary hint.
+    xs_edges = [e for e in edges if e.get("cross_service_boundary")]
+    if xs_edges:
+        for xe in xs_edges[:3]:
+            to_id = str(xe.get("to_id") or "")
+            confidence = xe.get("attrs", {}).get("confidence") if isinstance(xe.get("attrs"), dict) else None
+            conf_str = f"confidence={confidence}" if confidence is not None else "low confidence"
+            advisories.append((
+                PRIORITY_META,
+                f"Cross-service boundary: {xe.get('from_id', '')} -> {to_id} ({conf_str}). "
+                f"Use trace('{to_id}', 'out', ['EXPOSES','CALLS'], max_depth=4) to continue in the downstream service, "
+                f"or describe('{to_id}') for route details.",
+            ))
+            struct_pairs.append(_StructuredHint(
+                "trace",
+                {"ids": [to_id], "direction": "out", "edge_types": ["EXPOSES", "CALLS"], "max_depth": 4},
+                True, PRIORITY_LEAF_FOLLOWUP,
+                LABEL_CROSS_SERVICE_BOUNDARY,
+                f"cross-service boundary at {to_id}",
+            ))
+
+    return (finalize_structured_hints(struct_pairs), finalize_advisories(advisories))
+
+
 def generate_hints(
-    output_kind: Literal["search", "find", "describe", "neighbors", "resolve"],
+    output_kind: Literal["search", "find", "describe", "neighbors", "resolve", "trace"],
     payload: dict[str, Any],
 ) -> tuple[list[_StructuredHint], list[str]]:
     """Return structured hints and advisories for a success-only MCP v2 payload dict.
@@ -684,6 +761,15 @@ def generate_hints(
                             False, PRIORITY_LEAF_FOLLOWUP,
                             LABEL_HIGH_FANOUT,
                             f"{calls_n} CALLS — noisy axes are callee_declaring_role and per-call-site multiplicity",
+                        ))
+                        # Trace recommendation for high fan-out neighbors results.
+                        struct_meta.append(_StructuredHint(
+                            "trace",
+                            {"ids": [origin_id], "direction": "out", "edge_types": ["CALLS"],
+                             "prune_roles": ["DTO", "EXCEPTION", "UTILITY"], "fan_out_cap": 5},
+                            True, PRIORITY_LEAF_FOLLOWUP,
+                            LABEL_HIGH_FANOUT_TRACE,
+                            f"{calls_n} CALLS — consider trace for a pruned multi-hop view",
                         ))
             # Unresolved sites advisory
             unresolved = int(payload.get("unresolved_count") or 0)
@@ -925,8 +1011,23 @@ def generate_hints(
                     LABEL_HIGH_FANOUT,
                     f"method has {_out_count(edge_summary, 'CALLS')} CALLS — consider filtering",
                 ))
+                struct_pairs.append(_StructuredHint(
+                    "trace",
+                    {"ids": [node_id], "direction": "out", "edge_types": ["CALLS"],
+                     "prune_roles": ["DTO", "EXCEPTION", "UTILITY"], "fan_out_cap": 5},
+                    True, PRIORITY_LEAF_FOLLOWUP,
+                    LABEL_HIGH_FANOUT_TRACE,
+                    f"method has {_out_count(edge_summary, 'CALLS')} CALLS — consider trace for a pruned multi-hop view",
+                ))
                 # Advisory for many CALLS
                 advisories.append((PRIORITY_LEAF_FOLLOWUP, "many CALLS — consider filtering by target microservice"))
             return (finalize_structured_hints(struct_pairs), finalize_advisories(advisories))
 
         return ([], [])
+
+    if output_kind == "trace":
+        if not payload.get("success"):
+            return ([], [])
+        return _trace_structured_hints(payload)
+
+    return ([], [])

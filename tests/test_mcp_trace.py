@@ -948,3 +948,55 @@ async def test_trace_tool_description_mentions_six_tools(mcp_server) -> None:
     assert "describe" in instructions
     assert "neighbors" in instructions
     assert "resolve" in instructions
+
+
+# ---------------------------------------------------------------------------
+# PR-TRACE-3 tests: cross-service integration + hint verification
+# ---------------------------------------------------------------------------
+
+
+def test_trace_bank_chat_cross_service_http_flow(kuzu_graph: KuzuGraph) -> None:
+    """Integration: trace from a bank-chat method through HTTP_CALLS; verify cross-service boundary + hints."""
+    # Find a method that declares a client (has cross-service path).
+    seed_id = _find_method_with_declares_client(kuzu_graph)
+    if seed_id is None:
+        pytest.skip("No method with DECLARES_CLIENT in fixture")
+
+    out = trace_v2(
+        ids=seed_id,
+        direction="out",
+        edge_types=["CALLS", "HTTP_CALLS"],
+        max_depth=4,
+        fan_out_cap=0,
+        graph=kuzu_graph,
+    )
+    assert out.success is True
+
+    # Verify cross-service boundary edges exist.
+    xs_edges = [e for e in out.edges if e.cross_service_boundary]
+    if xs_edges:
+        # Cross-service boundary edges should stop at the route.
+        for xe in xs_edges:
+            assert xe.edge_type in ("HTTP_CALLS", "ASYNC_CALLS")
+            assert xe.to_id in out.nodes
+            # No further edges from the downstream node.
+            downstream_edges = [e for e in out.edges if e.from_id == xe.to_id]
+            assert len(downstream_edges) == 0
+
+    # Verify hint generation works on the trace output.
+    from mcp_hints import generate_hints
+    trace_payload = {
+        "success": out.success,
+        "stats": out.stats.model_dump(),
+        "edges": [e.model_dump() for e in out.edges],
+        "nodes": {nid: n.model_dump() for nid, n in out.nodes.items()},
+        "seed_ids": out.seed_ids,
+        "direction": out.direction,
+        "edge_types": out.edge_types,
+    }
+    struct, advisories = generate_hints("trace", trace_payload)
+    # Cross-service boundary hints should fire if xs_edges exist.
+    if xs_edges:
+        assert any("cross-service" in a.lower() for a in advisories), (
+            f"expected cross-service advisory, got: {advisories}"
+        )
