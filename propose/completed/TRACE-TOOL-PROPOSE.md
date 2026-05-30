@@ -1,6 +1,6 @@
 # TRACE-TOOL -- Multi-hop navigation shortcut
 
-**Status**: active (experimental)
+**Status**: completed (merged to `experimental` as PR-TRACE-1a through PR-TRACE-4)
 **Target branch**: `experimental` — not `master`. `trace` is an experiment; it ships on a dedicated branch and is not merged to `master` until validated in production.
 **Author**: Dmitry + Computer
 **Date**: 2026-05-25

@@ -1,6 +1,6 @@
 # Agent Guide — `java-codebase-rag` MCP
 
-Copy the block between `<!-- BEGIN` and `<!-- END` into your project's `AGENTS.md`, `CLAUDE.md`, or equivalent. It is self-contained: five MCP tools, shared `NodeFilter`, edge taxonomy, tool-selection rules, and recovery moves.
+Copy the block between `<!-- BEGIN` and `<!-- END` into your project's `AGENTS.md`, `CLAUDE.md`, or equivalent. It is self-contained: six MCP tools, shared `NodeFilter`, edge taxonomy, tool-selection rules, and recovery moves.
 
 ---
 
@@ -8,7 +8,7 @@ Copy the block between `<!-- BEGIN` and `<!-- END` into your project's `AGENTS.m
 
 ## java-codebase-rag MCP — operating manual
 
-**Tools:** `search`, `find`, `describe`, `neighbors`, `resolve`.
+**Tools:** `search`, `find`, `describe`, `neighbors`, `resolve`, `trace`.
 
 **Node kinds:** `Symbol` (types and methods), `Route` (HTTP and messaging entry points), `Client` (outbound HTTP call sites), `Producer` (outbound async call sites).
 
@@ -16,7 +16,7 @@ Copy the block between `<!-- BEGIN` and `<!-- END` into your project's `AGENTS.m
 
 **Ontology: 16** — if results look structurally wrong or empty across tools, the index may be missing, stale, or built with a different `ontology_version`; you cannot re-index via MCP — ask the operator to rebuild.
 
-**Responses:** On success, `search`, `find`, `describe`, `neighbors`, and `resolve` may include two top-level fields: `hints_structured` (≤5 suggested next-tool calls) and `advisories` (≤5 pure informational strings). Each `hints_structured` entry has `tool`, `args`, `actionable`, `label`, and `reason`. `actionable=true` means you can call the tool directly with `args`; `actionable=false` means partial/advisory — fill missing values or use as guidance. `reason` explains why the hint was emitted. `advisories` carry context education (fuzzy strategy warnings, role collision explanations, etc.) with no tool call suggestion. For `search`/`find`, echoed `limit`/`offset`. Hints are advisory; ignore them when `success` is false.
+**Responses:** On success, `search`, `find`, `describe`, `neighbors`, `resolve`, and `trace` may include two top-level fields: `hints_structured` (≤5 suggested next-tool calls) and `advisories` (≤5 pure informational strings). Each `hints_structured` entry has `tool`, `args`, `actionable`, `label`, and `reason`. `actionable=true` means you can call the tool directly with `args`; `actionable=false` means partial/advisory — fill missing values or use as guidance. `reason` explains why the hint was emitted. `advisories` carry context education (fuzzy strategy warnings, role collision explanations, etc.) with no tool call suggestion. For `search`/`find`, echoed `limit`/`offset`. Hints are advisory; ignore them when `success` is false.
 
 **Use this MCP when** you need whole-codebase structure: callers/callees, route handlers, HTTP/async seams, clients/producers, or fuzzy entry points for a concept.
 
@@ -35,15 +35,15 @@ When MCP disagrees with the open file, **the file wins**; treat the mismatch as 
 
 1. **Locate** — `resolve` for identifier-shaped strings; `search` for natural language or code fragments; `find` for structured `NodeFilter` discovery.
 2. **Inspect** — `describe(id)` for the full record and `edge_summary` (per-label `in`/`out` counts).
-3. **Walk** — `neighbors` in a loop with explicit **`direction`** and **`edge_types`**. Multi-hop traces are **your** reasoning, not a separate tool.
+3. **Walk** — `neighbors` in a loop with explicit **`direction`** and **`edge_types`**, or `trace` for multi-hop BFS with server-side pruning in one call.
 
 ### Forced reasoning preamble (every tool call)
 
 Before each MCP call, output one short line:
 
 ```
-Q-class: <semantic | structured | inspect | walk>
-Pick: <search|find|describe|neighbors|resolve>  Why: <≤8 words>
+Q-class: <semantic | structured | inspect | walk | trace>
+Pick: <search|find|describe|neighbors|trace|resolve>  Why: <≤8 words>
 ```
 
 Then use real JSON shapes (see below). If the call fails or returns nothing useful, use the **Recovery playbook** — do not thrash.
@@ -178,7 +178,7 @@ Prefer **`resolve` → `describe(id=…)`** over **`describe(fqn=…)`** when an
 | Handler for route | route id | `neighbors(ids, "in", ["EXPOSES"])` |
 | Who implements interface T? | type symbol id | `neighbors(ids, "in", ["IMPLEMENTS"])` |
 | Who injects type T? | type symbol id | `neighbors(ids, "in", ["INJECTS"])` |
-| Impact / "what breaks if I change X"? | no magic tool | loop `neighbors` `in` with `CALLS`, `INJECTS`, … until bounded |
+| Impact / "what breaks if I change X"? | `trace` or `neighbors` loop | `trace(id, "in", ["CALLS","OVERRIDES"], max_depth=3)` or loop `neighbors` `in` with `CALLS`, `INJECTS` |
 
 **Rules of thumb:**
 
@@ -187,6 +187,14 @@ Prefer **`resolve` → `describe(id=…)`** over **`describe(fqn=…)`** when an
 3. **Filter by role** to keep traces focused — exclude `DTO`, `OTHER`, `MAPPER` for business logic; target `SERVICE` for orchestration, `REPOSITORY` for data access.
 
 ### Tool reference
+
+#### `trace`
+
+Multi-hop BFS traversal with server-side pruning. Returns structured paths, a node dict, and traversal stats. Use when the question implies a path or chain (3+ hops), needs to cross a service boundary, or a `neighbors` loop has exceeded 2 hops without converging. Args: `ids` (string or array), **`direction`**, **`edge_types`** (stored labels only — no composed dot-keys), `max_depth` (1–5, default 3), `max_paths` (default 20), `max_nodes_discovered` (100–2000, default 500), `filter` (hard gate `NodeFilter`), `edge_filter` (CALLS edge attribute filtering), `prune_roles` (soft gate — edges recorded, frontier stops), `fan_out_cap` (per-node edge limit, default 5), `collapse_trivial` (collapse wrapper chains, default true), `include_unresolved` (interleave unresolved call sites).
+
+Returns `TraceOutput` with `nodes` (dict of `NodeRef`), `edges` (list of `TraceEdge` with `hop`, `parent_edge_id`, `collapsed`, `cross_service_boundary`), `paths` (ranked root-to-leaf), and `stats` (budget, pruning counts). Cross-service edges (`HTTP_CALLS`, `ASYNC_CALLS`) are boundary signals — BFS stops at the service boundary and includes the downstream node for the agent to continue with a separate `trace` call.
+
+**`trace` vs `neighbors`:** Use `neighbors` for single-hop adjacency (full unfiltered result). Use `trace` for multi-hop path questions, impact analysis, or when `neighbors` returns high fan-out (>8 CALLS edges).
 
 #### `search`
 
@@ -272,7 +280,7 @@ After two failed attempts on the same intent, stop and report tool name, args, a
 
 ### Common navigation patterns
 
-These patterns combine the five tools above. Use the decision tree to pick the right starting tool.
+These patterns combine the six tools above. Use the decision tree to pick the right starting tool.
 
 | Intent | Tool chain |
 | ------ | ---------- |
@@ -287,7 +295,10 @@ These patterns combine the five tools above. Use the decision tree to pick the r
 | All inbound to route R | `neighbors(route_id, "in", ["HTTP_CALLS","ASYNC_CALLS","EXPOSES"])` |
 | Implementors of interface T | `neighbors(type_id, "in", ["IMPLEMENTS"])` |
 | Where is T injected | `neighbors(type_id, "in", ["INJECTS"])` |
-| Impact of changing X | `resolve` → `describe` → bounded `neighbors(in, ["CALLS","INJECTS","IMPLEMENTS","EXTENDS"])` depth ≤2 |
+| Impact of changing X | `resolve` → `trace(id, "in", ["CALLS","OVERRIDES"], max_depth=3)` or `neighbors` loop depth ≤2 |
+| "What happens when route R is called?" | `find(kind="route")` → `trace(route_id, "out", ["EXPOSES","CALLS"], max_depth=4)` |
+| "Trace from X to database" | `trace(id, "out", ["CALLS"], max_depth=4, prune_roles=["DTO","EXCEPTION"])` |
+| "What calls this across services?" | `trace(id, "out", ["CALLS","HTTP_CALLS","ASYNC_CALLS"], max_depth=5)` |
 
 ### Canonical workflow: "explain feature X"
 
@@ -305,5 +316,5 @@ These patterns combine the five tools above. Use the decision tree to pick the r
 When MCP behaviour, `NodeFilter` keys, edge labels, or node kinds change:
 
 1. Update this file's copy block and bump the **Ontology:** line to match `ast_java.ONTOLOGY_VERSION`.
-2. Update the five-tool cheat sheet in `README.md` and the "Driving the MCP from an agent" bullet there.
+2. Update the six-tool cheat sheet in `README.md` and the "Driving the MCP from an agent" bullet there.
 3. If enrichment semantics changed, add a "Re-index required" callout in [`docs/CONFIGURATION.md`](./CONFIGURATION.md) §3.
