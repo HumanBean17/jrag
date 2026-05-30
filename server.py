@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 from typing import Any, Literal
 
+import mcp_trace
 import mcp_v2
 from index_common import SBERT_MODEL
 from java_codebase_rag.cli_progress import (
@@ -27,6 +28,7 @@ _INSTRUCTIONS = (
     "Java codebase graph navigator (LanceDB + Kuzu). "
     "Tools: search (NL/code locate), find (structured NodeFilter), describe (one node + edge_summary: stored edge-label counts and optional composed keys for type Symbols and override-axis virtual keys for method Symbols), "
     "neighbors (one hop; you MUST pass direction in|out AND edge_types list — no defaults), "
+    "trace (multi-hop BFS with server-side pruning; direction + edge_types required; use for path/impact/cross-service questions where neighbors loops exceed 2 hops), "
     "resolve (identifier-shaped lookup for symbol/route/client/producer — three statuses one|many|none). "
     "NodeFilter `filter` is a JSON object (preferred); a JSON-encoded string is also accepted as a fallback. "
     "Unknown filter keys and populated fields not applicable to the effective node kind fail with success=false and message. "
@@ -566,6 +568,83 @@ def create_mcp_server() -> FastMCP:
         ),
     ) -> mcp_v2.ResolveOutput:
         return await asyncio.to_thread(mcp_v2.resolve_v2, identifier, hint_kind, None)
+
+    @mcp.tool(
+        name="trace",
+        description=(
+            "Multi-hop BFS traversal with server-side pruning. Returns pruned path structure in a single call. "
+            "Use `trace` instead of multiple `neighbors` calls when: (a) the question implies a path or chain "
+            "(e.g. 'trace from controller to database', 'what happens when POST /api/orders is called'), "
+            "(b) you need impact analysis ('who depends on X'), (c) you need to cross service boundaries "
+            "(HTTP_CALLS / ASYNC_CALLS), or (d) a `neighbors` loop has exceeded 2 hops without converging. "
+            "For simple one-hop adjacency ('what does M call?', 'who calls M?'), use `neighbors` instead — "
+            "it returns full unfiltered results. After `trace` returns a pruned result, use `neighbors` on "
+            "specific nodes to drill into edges that `trace` collapsed or pruned. "
+            "`direction` and `edge_types` are required. Stored edge labels only — no composed dot-keys. "
+            "`prune_roles` is a soft gate: edges to pruned-role nodes are recorded but BFS stops traversing "
+            "through them (agent sees the connection but traversal focuses on higher-signal paths). "
+            "`fan_out_cap` limits per-node edge expansion; scaffolding edges (DECLARES_CLIENT, DECLARES_PRODUCER) "
+            "are exempt. `collapse_trivial` merges wrapper chains (A→B→C where B is trivial). "
+            "Result: `nodes` dict (id → NodeRef), `edges` list with BFS metadata (hop, parent_edge_id, "
+            "collapsed, cross_service_boundary), ranked `paths` (root-to-leaf), and `stats` with pruning counts. "
+            "Cross-service boundary: BFS records the cross-service edge and includes the downstream Route/Producer "
+            "in `nodes` but stops the frontier — the agent decides whether to continue."
+        ),
+    )
+    async def trace(
+        ids: str | list[str] = Field(
+            description="Seed node IDs (single string or list). Differs from neighbors (single ID) — trace supports multi-seed for impact analysis.",
+        ),
+        direction: Literal["in", "out"] = Field(
+            description="Traversal direction: in (callers/dependents) or out (callees/dependencies). Required — no default.",
+        ),
+        edge_types: list[str] = Field(
+            description="Edge types to traverse (stored labels only: CALLS, IMPLEMENTS, OVERRIDES, EXPOSES, HTTP_CALLS, ASYNC_CALLS, etc.). Required non-empty. No composed dot-keys.",
+        ),
+        max_depth: int = Field(default=3, description="Max BFS hops (1-5, default 3)"),
+        max_paths: int = Field(default=20, description="Max root-to-leaf paths to return"),
+        max_nodes_discovered: int = Field(
+            default=500, description="Node discovery budget before pruning (100-2000)",
+        ),
+        filter: dict[str, Any] | str | None = Field(
+            default=None,
+            description="NodeFilter as JSON object or string. Hard gate — nodes failing filter are excluded entirely.",
+        ),
+        edge_filter: dict[str, Any] | str | None = Field(
+            default=None,
+            description="EdgeFilter for CALLS edges (min_confidence, strategies, etc.). Same contract as neighbors edge_filter.",
+        ),
+        prune_roles: list[str] | None = Field(
+            default=None,
+            description="Roles to prune (edges recorded, frontier stops through these roles). Soft gate — differs from NodeFilter exclude_roles (hard gate).",
+        ),
+        fan_out_cap: int | None = Field(
+            default=5, description="Per-node edge cap (scaffolding edges exempt). Set to 0 to disable.",
+        ),
+        collapse_trivial: bool = Field(
+            default=True, description="Collapse wrapper chains (A→B→C where B is trivial intermediate)",
+        ),
+        include_unresolved: bool = Field(
+            default=False,
+            description="Include UnresolvedCallSite edges (CALLS out only)",
+        ),
+    ) -> mcp_trace.TraceOutput:
+        return await asyncio.to_thread(
+            mcp_trace.trace_v2,
+            ids,
+            direction,
+            edge_types,
+            max_depth,
+            max_paths,
+            max_nodes_discovered,
+            filter,
+            edge_filter,
+            prune_roles,
+            fan_out_cap if fan_out_cap is not None else 5,
+            collapse_trivial,
+            include_unresolved,
+            None,
+        )
 
     return mcp
 

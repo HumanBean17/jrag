@@ -60,6 +60,7 @@ py-modules = [
     "java_ontology",
     "kuzu_queries",
     "mcp_hints",
+    "mcp_trace",
     "mcp_v2",
     "path_filtering",
     "pr_analysis",
