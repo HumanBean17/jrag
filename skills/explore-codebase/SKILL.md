@@ -23,25 +23,7 @@ Java production sources plus SQL and YAML. Use `search` `table`: `java`, `sql`, 
 
 ## What this MCP is not
 
-- **Test files, build files, CI/deploy** — read those files directly in the repo.
-- **Reflection and dynamic dispatch** — `CALLS` is static analysis only; the resolved set is a **lower bound**.
-- **Proof of absence** — an empty result may mean the project was not indexed, the wrong `table`, or a filter that matches nothing.
-- **Git history** — use `git log` / `git blame` for "who changed" / "when".
-
-When MCP disagrees with the open file, **the file wins**; treat the mismatch as a likely stale or incomplete index.
-
-## Brownfield annotations on methods
-
-If a method has any of these (including plural containers **`@CodebaseHttpRoutes`**, **`@CodebaseAsyncRoutes`**, **`@CodebaseHttpClients`**, **`@CodebaseProducers`**), that annotation is the **only** source for the facets it declares — framework inference on the **same** method is **not merged** for that axis:
-
-| Annotation | Declares | Framework rows bypassed (examples) |
-| ---------- | -------- | ---------------------------------- |
-| `@CodebaseHttpRoute` | inbound HTTP path / verb | Spring MVC/WebFlux mapping annotations |
-| `@CodebaseAsyncRoute` | inbound async topic / route | `@KafkaListener`, `@RabbitListener`, ... |
-| `@CodebaseHttpClient` | outbound HTTP client call site | `@FeignClient` method mappings, RestTemplate-style inference |
-| `@CodebaseProducer` | outbound async producer call site | `KafkaTemplate` / `StreamBridge` producer inference |
-
-Trust the indexed brownfield row over a framework-only reading of the source.
+Test/build/CI files, git history — read directly. `CALLS` is static analysis only (lower bound). Empty results may mean missing/wrong index. When MCP disagrees with the open file, **the file wins**.
 
 ## Workflow (locate -> inspect -> walk)
 
@@ -87,8 +69,8 @@ Use these strings **verbatim** in `neighbors(..., edge_types=[...])`.
 
 | Edge type | Meaning |
 | --------- | ------- |
-| `OVERRIDDEN_BY` | Concrete overrider methods (stored `[:OVERRIDES]` dispatch hop) |
-| `OVERRIDDEN_BY.DECLARES_CLIENT` | Clients declared on overriders (`via_id` = overrider method) |
+| `OVERRIDDEN_BY` | Concrete overrider methods |
+| `OVERRIDDEN_BY.DECLARES_CLIENT` | Clients declared on overriders |
 | `OVERRIDDEN_BY.DECLARES_PRODUCER` | Producers on overriders |
 | `OVERRIDDEN_BY.EXPOSES` | Routes exposed by overriders |
 
@@ -169,7 +151,7 @@ For **`find`**, `filter` is required — `{}` means no predicates (all nodes of 
 
 Prefer **`resolve` -> `describe(id=...)`** over **`describe(fqn=...)`** when an FQN may collide (`describe(fqn=...)` returns the first row).
 
-**`microservice`** — service where the node lives. **`target_service`** (clients only) — remote service being called. **`source_layer`** (clients/producers) — which extraction layer produced the row (`builtin`, `layer_a_meta`, `layer_b_ann`, `layer_c_source`, `layer_b_fqn`, ...). **`role`** (symbols only) — architectural stereotype (`CONTROLLER`, `SERVICE`, ...).
+**`microservice`** — service where the node lives. **`target_service`** (clients only) — remote service being called. **`role`** (symbols only) — architectural stereotype (`CONTROLLER`, `SERVICE`, ...).
 
 ## Decision tree
 
@@ -194,6 +176,7 @@ Prefer **`resolve` -> `describe(id=...)`** over **`describe(fqn=...)`** when an 
 
 1. **Structure beats vector** for exact questions — use `resolve` / `find` + `neighbors`, not `search`, for "who calls ...".
 2. **Vector beats structure** for fuzzy discovery — `search` first, then pivot to `describe` / `neighbors`.
+3. **Filter by role** to keep traces focused — exclude `DTO`, `OTHER`, `MAPPER` for business logic; target `SERVICE` for orchestration, `REPOSITORY` for data access.
 
 ## Tool reference
 
@@ -207,13 +190,7 @@ Exact listing for one kind. Args: `kind` (`symbol`|`route`|`client`|`producer`),
 
 ### `describe`
 
-Full node + `edge_summary`. Args: `id` (any kind) or `fqn` (symbol only; `id` wins).
-
-- **Stored keys** — counts for edges that exist in the graph.
-- **Type symbols** (`class`, `interface`, `enum`, `record`, `annotation`) may add composed keys `DECLARES.DECLARES_CLIENT`, `DECLARES.DECLARES_PRODUCER`, `DECLARES.EXPOSES` — navigable via `neighbors` with those dot-keys (`out` only).
-- **Method symbols** may add virtual keys `OVERRIDDEN_BY`, `OVERRIDDEN_BY.DECLARES_*`, `OVERRIDDEN_BY.EXPOSES` (navigable via `neighbors` on non-static method origins, `out` only), plus an **`OVERRIDES`** row merging stored `[:OVERRIDES]` incident counts with the rollup dispatch-up count (`max` per direction).
-
-Composed counts are **edge rows**, not distinct methods; `count > 0` means "there is something to walk".
+Full node + `edge_summary` (per-label in/out counts). Args: `id` (any kind) or `fqn` (symbol only; `id` wins). Type symbols add composed keys `DECLARES.*`; method symbols add `OVERRIDDEN_BY.*` and `OVERRIDES` — see edge taxonomy for details.
 
 ### `resolve`
 
@@ -227,11 +204,26 @@ Returns **edges** with `attrs` (`confidence`, `strategy`, `match`, ... on cross-
 
 **Cross-service edges** (`HTTP_CALLS`, `ASYNC_CALLS`): read `attrs.confidence` and `attrs.match` — low confidence or `unresolved`/`phantom`/`ambiguous` means treat as a resolver signal, not ground truth.
 
-**`CALLS` edges:** source-ordered (`call_site_line`, `call_site_byte`). `attrs.resolved=false` on `CALLS` rows means known-receiver-external (JDK/Spring) callees. **`include_unresolved=True`** (CALLS + `direction=out` only) interleaves unresolved sites with resolved `CALLS`. **`dedup_calls=True`** collapses identical `(origin, callee)` `CALLS` to one row with `call_site_lines`. Optional **`edge_filter`** projects before pagination: `min_confidence`; `include_strategies` / `exclude_strategies` (mutually exclusive); `callee_declaring_role`, `callee_declaring_roles`, `exclude_callee_declaring_roles` (`["OTHER"]` also drops known-external rows).
+**`CALLS` edges:** source-ordered (`call_site_line`, `call_site_byte`). **`include_unresolved=True`** (CALLS + `direction=out` only) interleaves unresolved call sites with resolved `CALLS` (`row_kind` discriminator); **mutually exclusive with `edge_filter`**. **`dedup_calls=True`** collapses identical `(origin, callee)` pairs to one row with `call_site_lines`. Optional **`edge_filter`** projects before pagination: `min_confidence`; `include_strategies` / `exclude_strategies` (mutually exclusive); `callee_declaring_role`, `callee_declaring_roles`, `exclude_callee_declaring_roles` (`["OTHER"]` also drops known-external rows). **Note:** `filter.role` filters the neighbor node, not the callee's declaring type — use `edge_filter.callee_declaring_role` for callee stereotype filtering.
 
 ## Ontology glossary
 
-**Roles (`filter.role` / `exclude_roles`):** `CONTROLLER`, `SERVICE`, `REPOSITORY`, `COMPONENT`, `CONFIG`, `ENTITY`, `CLIENT`, `MAPPER`, `DTO`, `OTHER`.
+**Roles** (`filter.role` / `exclude_roles`):
+
+| Role | Meaning |
+| ---- | ------- |
+| `CONTROLLER` | HTTP / messaging entry point |
+| `SERVICE` | Business logic orchestration |
+| `REPOSITORY` | Data access (JPA, JDBC) |
+| `COMPONENT` | General Spring component |
+| `CONFIG` | `@Configuration` class |
+| `ENTITY` | JPA / persistence entity |
+| `CLIENT` | Outbound HTTP call wrapper (Feign, RestTemplate, WebClient) |
+| `MAPPER` | Data mapper / converter |
+| `DTO` | Data transfer object — data carrier, no logic |
+| `OTHER` | Infrastructure / utility / framework / JDK / unclassified |
+
+**Filtering with roles:** `DTO`, `OTHER`, and `MAPPER` are data carriers and infrastructure — exclude them with `exclude_roles` or `edge_filter.exclude_callee_declaring_roles` when tracing business logic. On `CALLS` `out` edges, use `edge_filter={"exclude_callee_declaring_roles": ["OTHER"]}` to drop JDK/Spring/framework calls. Use `filter.role` to target a specific layer (e.g. `role=SERVICE` for business logic, `role=REPOSITORY` for data access).
 
 **Capabilities (`filter.capability`):** `MESSAGE_LISTENER`, `MESSAGE_PRODUCER`, `HTTP_CLIENT`, `SCHEDULED_TASK`, `EXCEPTION_HANDLER`.
 
@@ -261,23 +253,6 @@ Returns **edges** with `attrs` (`confidence`, `strategy`, `match`, ... on cross-
 | Override dot-key on type / DECLARES on method | Wrong Symbol origin for axis | Read `describe.edge_summary`; use the axis that matches the node kind |
 
 After two failed attempts on the same intent, stop and report tool name, args, and response snippet.
-
-## Common navigation patterns
-
-| Intent | Tool chain |
-| ------ | ---------- |
-| Natural-language "find X" | `search(query=..., limit=8)` -> `describe(top_hit.symbol_id)` |
-| List controllers in service S | `find(kind="symbol", filter={microservice:"S", role:"CONTROLLER"})` |
-| List routes in service S | `find(kind="route", filter={microservice:"S"})` |
-| List clients in service S | `find(kind="client", filter={microservice:"S"}, limit=100)` |
-| List producers in service S | `find(kind="producer", filter={microservice:"S"}, limit=100)` |
-| Who calls method M | `resolve` -> `neighbors(ids, "in", ["CALLS"])` |
-| What does M call | `resolve` -> `neighbors(ids, "out", ["CALLS"])` |
-| Handler for route R | `neighbors(route_id, "in", ["EXPOSES"])` |
-| All inbound to route R | `neighbors(route_id, "in", ["HTTP_CALLS","ASYNC_CALLS","EXPOSES"])` |
-| Implementors of interface T | `neighbors(type_id, "in", ["IMPLEMENTS"])` |
-| Where is T injected | `neighbors(type_id, "in", ["INJECTS"])` |
-| Impact of changing X | `resolve` -> `describe` -> bounded `neighbors(in, ["CALLS","INJECTS","IMPLEMENTS","EXTENDS"])` depth ≤2 |
 
 ## Canonical workflow: "explain feature X"
 
