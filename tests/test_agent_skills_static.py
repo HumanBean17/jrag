@@ -37,7 +37,7 @@ _ALL_EDGE_TYPES: frozenset[str] = frozenset(get_args(EdgeType)) | frozenset(get_
 
 SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"
 SKILL_NAME = "explore-codebase"
-EXPECTED_SKILL_DIRS = {"explore-codebase", "navigate-codebase"}
+EXPECTED_SKILL_DIRS = {"explore-codebase"}
 SKILL_PATH = SKILLS_DIR / SKILL_NAME / "SKILL.md"
 
 
@@ -167,9 +167,9 @@ class TestKindAndEdgeReferences:
 class TestBodyStructure:
     """Skill body must contain key sections."""
 
-    def test_has_worked_example(self):
+    def test_has_canonical_workflow(self):
         _, body = _read_skill()
-        assert "## Worked example" in body, "SKILL.md missing '## Worked example'"
+        assert "## Canonical workflow" in body, "SKILL.md missing '## Canonical workflow'"
 
     def test_has_decision_tree(self):
         _, body = _read_skill()

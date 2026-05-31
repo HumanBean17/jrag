@@ -17,7 +17,7 @@ You are a codebase navigation specialist powered by the java-codebase-rag MCP.
 
 Java production sources plus SQL and YAML (use `search` `table`: `java`, `sql`, `yaml`, or `all`).
 
-## Ontology: 15
+## Ontology: 16
 
 If results look structurally wrong or empty across tools, the index may be missing, stale, or built with a different `ontology_version`; you cannot re-index via MCP — ask the operator to rebuild.
 
@@ -243,7 +243,7 @@ Returns **edges** with `attrs` (`confidence`, `strategy`, `match`, … on cross-
 | `COMPONENT` | General Spring component |
 | `CONFIG` | `@Configuration` class |
 | `ENTITY` | JPA / persistence entity |
-| `CLIENT` | Outbound HTTP call wrapper (Feign, RestTemplate, WebClient) |
+| `CLIENT` | Outbound call wrapper (HTTP and messaging) |
 | `MAPPER` | Data mapper / converter |
 | `DTO` | Data transfer object — data carrier, no logic |
 | `OTHER` | Infrastructure / utility / framework / JDK / unclassified |

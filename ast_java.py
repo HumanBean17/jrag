@@ -83,7 +83,7 @@ _DTO_LOMBOK_ANNOTATIONS: frozenset[str] = frozenset({
 # Phase 11: `EDGE_SCHEMA` in `java_ontology.py` (canonical edge navigation schema; v14 re-index).
 # Phase 12: CALLS `callee_declaring_role`, supertype-walk dedup, pass3 unresolved counters (v15 re-index).
 # Bumps whenever extraction / enrichment semantics change.
-ONTOLOGY_VERSION = 15
+ONTOLOGY_VERSION = 16
 
 ROLE_ANNOTATIONS: dict[str, str] = {
     # Spring Web
@@ -2732,6 +2732,19 @@ def infer_role(annotation_names: Iterable[str]) -> str:
     return "OTHER"
 
 
+def _type_injects_messaging(type_decl: "TypeDecl") -> bool:
+    """True when the type injects a messaging template via field or constructor."""
+    for fld in type_decl.fields:
+        if fld.type_name in _INJECTED_TYPES_TO_CAPABILITY:
+            return True
+    for method in type_decl.methods:
+        if method.is_constructor:
+            for p in method.parameters:
+                if p.type_name in _INJECTED_TYPES_TO_CAPABILITY:
+                    return True
+    return False
+
+
 def infer_role_for_type(type_decl: "TypeDecl") -> str:
     """Role inference that also detects DTO-like passive data carriers.
 
@@ -2762,6 +2775,11 @@ def infer_role_for_type(type_decl: "TypeDecl") -> str:
     for suffix in _DTO_NAME_SUFFIXES:
         if name.endswith(suffix) and name != suffix:
             return "DTO"
+
+    # Types injecting messaging templates are outbound callers (CLIENT role),
+    # symmetric with CONTROLLER covering both HTTP and messaging inbound.
+    if _type_injects_messaging(type_decl):
+        return "CLIENT"
 
     return "OTHER"
 
