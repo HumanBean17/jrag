@@ -80,6 +80,7 @@ EdgeFromParent:
   direction: Literal["in", "out"]      # traversal direction that produced this edge
   edge_type: str
   hop: int
+  confidence: float | None             # edge confidence (None for non-CALLS edges)
   cross_service_boundary: bool = False
   attrs: dict[str, Any]
 
@@ -148,7 +149,7 @@ trace(
 )
 ```
 
-When `min_result_nodes > 0` and the initial BFS produces fewer result nodes than the target, the engine re-runs with `fan_out_cap * 2` (up to one retry). If still below target, returns what it has with an advisory. This is a soft target, not a guarantee.
+When `min_result_nodes > 0` and the initial BFS produces fewer result nodes than the target, the engine re-runs with `fan_out_cap * 2` (up to one retry). The doubled cap is still subject to the existing `max_nodes_discovered` budget clamp (100–2000), so a `fan_out_cap=50` retry caps at 100 but the overall BFS budget prevents runaway expansion. If still below target after the retry, returns what it has with an advisory. This is a soft target, not a guarantee.
 
 ### Enhancement 4: Bidirectional traversal
 
@@ -173,11 +174,13 @@ if direction == "both":
 - The `tree` has the seed at the root with a single `children` list containing nodes from both directions. Directionality is preserved via `edge_from_parent.direction` on each child -- agents can distinguish "who calls me" (`direction="in"`) from "what do I call" (`direction="out"`).
 - `stats` aggregates both traversals (nodes discovered = in + out, etc.).
 - `ranked_leaves` merges and re-ranks leaves from both directions.
-- If the same node is discovered in both directions, it appears once in `nodes` and once in the tree (in whichever direction it was first discovered; the other direction records the edge but does not duplicate the node).
+- If the same node is discovered in both directions, it appears once in `nodes`. In the tree, it appears as a child under the direction that discovered it first (with `edge_from_parent.direction` set accordingly). The second direction includes a **leaf TreeNode** for that node (with `edge_from_parent` pointing from the seed, `direction` set to the second direction, but `children=[]`) so the agent sees the connection from both sides without the node being nested under two parents.
 
 **Shared visited set.** Both BFS passes share a single visited set so that nodes discovered in the "out" direction are not re-visited in the "in" direction (and vice versa). This prevents redundant exploration of the same subgraph.
 
 **Edge type mapping.** The same `edge_types` list is used for both directions. This is correct because most stored edge labels are direction-agnostic in the graph schema (CALLS has a natural direction, but BFS handles directionality via the Cypher query pattern). If an edge type is only meaningful in one direction (e.g., EXPOSES is always Route -> Handler), the BFS in the other direction will simply find no edges of that type -- no special filtering needed.
+
+**`cross_service` + `direction="both"` interaction.** Boundary stopping applies independently per direction. In the "out" direction, BFS encounters HTTP_CALLS/ASYNC_CALLS edges and stops (or continues if `cross_service=True`). In the "in" direction, BFS follows CALLS edges inbound -- cross-service edges are rare inbound (a Route's inbound callers are typically within the same service), but if encountered, the same boundary logic applies. The two directions are independent: `cross_service=True` affects both directions equally.
 
 ## Scope
 
@@ -185,11 +188,11 @@ if direction == "both":
 
 1. **`mcp_trace.py`**: Replace `TraceEdge`, `TracePath` with `TreeNode`, `EdgeFromParent`, `RankedLeaf`. Refactor `_collapse_trivial_chains` to use configurable heuristic. Refactor `_fan_out_sort_key` to use source-relative priority. Add bidirectional BFS merge logic. Add `min_result_nodes` retry logic.
 2. **`server.py`**: Update `trace` tool registration to reflect new parameters (`collapse_roles`, `collapse_min_chain_length`, `min_result_nodes`, `direction="both"`).
-3. **`mcp_hints.py`**: Update `_trace_structured_hints` to consume `tree` and `ranked_leaves` instead of `edges` and `paths`. The hint at line 526 reads `payload.get("edges")` -- this must be rewritten to walk the tree structure. Cross-service boundary detection (line 571) must traverse tree nodes checking `edge_from_parent.cross_service_boundary` instead of iterating a flat `edges` list. Pruned/collapsed drill-down hint (line 557) must check `TreeNode.collapsed` on tree nodes instead of `e.get("collapsed")` on edges. The `_high_fanout_trace_hint` function (used by `neighbors` and `describe` paths) is unaffected -- it does not read trace output fields.
+3. **`mcp_hints.py`**: Update `_trace_structured_hints` to consume `tree` and `ranked_leaves` instead of `edges` and `paths`. The function currently reads `payload.get("edges")` to iterate flat edges -- this must be rewritten to walk the tree structure. Cross-service boundary detection must traverse tree nodes checking `edge_from_parent.cross_service_boundary` instead of filtering `[e for e in edges if e.get("cross_service_boundary")]`. Pruned/collapsed drill-down hint must check `TreeNode.collapsed` on tree nodes instead of `e.get("collapsed")` on edges. The `_high_fanout_trace_hint` function (used by `neighbors` and `describe` paths) is unaffected -- it does not read trace output fields.
 4. **Breaking API change**: `TraceOutput.edges` and `TraceOutput.paths` are removed. `TraceOutput.tree` and `TraceOutput.ranked_leaves` are added.
-4. **No graph schema changes**: No new node kinds, edge types, or edge attributes.
-5. **No re-index required**: The tool reads the existing graph.
-6. **No ontology bump**: No changes to `java_ontology.py`.
+5. **No graph schema changes**: No new node kinds, edge types, or edge attributes.
+6. **No re-index required**: The tool reads the existing graph.
+7. **No ontology bump**: No changes to `java_ontology.py`.
 
 ### What this proposal does NOT change
 
