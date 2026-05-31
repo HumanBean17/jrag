@@ -31,7 +31,7 @@ The comprehensive operating manual. Includes:
 | --------- | ---------- |
 | **`docs/AGENT-GUIDE.md`** copy-paste block | Paste the `BEGIN`/`END` block into your project's `AGENTS.md` / `CLAUDE.md`. Always-on. Best for hosts without skill or subagent loading. |
 | **`explore-codebase` skill** | Loaded on demand by hosts with skill discovery (Claude Code, Qwen Code, Cursor). One skill to rule them all. |
-| **`agents/java-codebase-rag.md`** subagent | Copy into your project's `.claude/agents/` for Claude Code subagent discovery. The agent gets the full guide as its system prompt. |
+| **`agents/java-codebase-rag-explorer.md`** subagent | Copy into your project's `.claude/agents/` for Claude Code subagent discovery. The agent gets the full guide as its system prompt. |
 
 Do not mix multiple mechanisms on the same agent — duplicate context confuses tool selection.
 

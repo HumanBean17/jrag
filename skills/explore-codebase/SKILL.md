@@ -1,6 +1,6 @@
 ---
 name: explore-codebase
-description: Complete operating manual for the java-codebase-rag MCP tools (search, find, describe, neighbors, resolve). Use this skill whenever you need to explore a Java codebase — locate symbols, trace call chains, find routes, walk cross-service boundaries, or answer any "where is X", "who calls Y", "what does Z depend on" question. Self-contained: includes edge taxonomy, NodeFilter reference, decision tree, argument shapes, recovery playbook, and navigation patterns. No external files needed.
+description: "MUST BE USED PROACTIVELY. Complete operating manual for the java-codebase-rag MCP tools (search, find, describe, neighbors, resolve). Use this skill whenever you need to explore a Java codebase — locate symbols, trace call chains, find routes, walk cross-service boundaries, or answer any \"where is X\", \"who calls Y\", \"what does Z depend on\" question. Self-contained: includes edge taxonomy, NodeFilter reference, decision tree, argument shapes, recovery playbook, and navigation patterns. No external files needed."
 ---
 
 # /explore-codebase — Codebase navigation via the java-codebase-rag MCP
