@@ -1336,7 +1336,7 @@ def test_hint_trace_budget_hit() -> None:
             "total_nodes_discovered": 500,
             "nodes_after_pruning": 120,
         },
-        "edges": [],
+        "tree": [],
         "nodes": {},
         "seed_ids": ["sym:com.example.Svc#run()"],
         "direction": "out",
@@ -1358,7 +1358,7 @@ def test_hint_trace_pruned_edges() -> None:
             "edges_collapsed_trivial": 2,
             "total_nodes_discovered": 100,
         },
-        "edges": [],
+        "tree": [],
         "nodes": {},
         "seed_ids": ["sym:a"],
         "direction": "out",
@@ -1370,7 +1370,7 @@ def test_hint_trace_pruned_edges() -> None:
 
 
 def test_hint_trace_cross_service_boundary() -> None:
-    """generate_hints('trace', {edges with cross_service_boundary=True}) returns cross-service hint."""
+    """generate_hints('trace', {tree with cross_service_boundary=True}) returns cross-service hint."""
     struct, advisories = generate_hints("trace", {
         "success": True,
         "stats": {
@@ -1380,12 +1380,43 @@ def test_hint_trace_cross_service_boundary() -> None:
             "nodes_pruned_fan_out": 0,
             "edges_collapsed_trivial": 0,
         },
-        "edges": [
+        "tree": [
             {
-                "from_id": "client:svc:PaymentClient",
-                "to_id": "route:payment-service:/api/payments:POST",
-                "cross_service_boundary": True,
-                "attrs": {"confidence": 0.85, "strategy": "URI_PATH_MATCH"},
+                "id": "sym:a",
+                "edge_from_parent": None,
+                "children": [
+                    {
+                        "id": "client:svc:PaymentClient",
+                        "edge_from_parent": {
+                            "direction": "out",
+                            "edge_type": "DECLARES_CLIENT",
+                            "hop": 0,
+                            "confidence": None,
+                            "cross_service_boundary": False,
+                            "attrs": {},
+                        },
+                        "children": [
+                            {
+                                "id": "route:payment-service:/api/payments:POST",
+                                "edge_from_parent": {
+                                    "direction": "out",
+                                    "edge_type": "HTTP_CALLS",
+                                    "hop": 1,
+                                    "confidence": 0.85,
+                                    "cross_service_boundary": True,
+                                    "attrs": {"confidence": 0.85, "strategy": "URI_PATH_MATCH"},
+                                },
+                                "children": [],
+                                "collapsed": False,
+                                "collapsed_intermediates": [],
+                            },
+                        ],
+                        "collapsed": False,
+                        "collapsed_intermediates": [],
+                    },
+                ],
+                "collapsed": False,
+                "collapsed_intermediates": [],
             },
         ],
         "nodes": {

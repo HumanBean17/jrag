@@ -178,7 +178,7 @@ Prefer **`resolve` → `describe(id=…)`** over **`describe(fqn=…)`** when an
 | Handler for route | route id | `neighbors(ids, "in", ["EXPOSES"])` |
 | Who implements interface T? | type symbol id | `neighbors(ids, "in", ["IMPLEMENTS"])` |
 | Who injects type T? | type symbol id | `neighbors(ids, "in", ["INJECTS"])` |
-| Impact / "what breaks if I change X"? | `trace` or `neighbors` loop | `trace(id, "in", ["CALLS","OVERRIDES"], max_depth=3)` or loop `neighbors` `in` with `CALLS`, `INJECTS` |
+| Impact / "what breaks if I change X"? | `trace` with `direction="both"` or `neighbors` loop | `trace(id, "both", ["CALLS","OVERRIDES"], max_depth=3)` or loop `neighbors` `in` with `CALLS`, `INJECTS` |
 
 **Rules of thumb:**
 
@@ -190,9 +190,11 @@ Prefer **`resolve` → `describe(id=…)`** over **`describe(fqn=…)`** when an
 
 #### `trace`
 
-Multi-hop BFS traversal with server-side pruning. Returns structured paths, a node dict, and traversal stats. Use when the question implies a path or chain (3+ hops), needs to cross a service boundary, or a `neighbors` loop has exceeded 2 hops without converging. Args: `ids` (string or array), **`direction`**, **`edge_types`** (stored labels only — no composed dot-keys), `max_depth` (1–5, default 3), `max_paths` (default 20), `max_nodes_discovered` (100–2000, default 500), `filter` (hard gate `NodeFilter`), `edge_filter` (CALLS edge attribute filtering), `prune_roles` (soft gate — edges recorded, frontier stops), `fan_out_cap` (per-node edge limit, default 5), `collapse_trivial` (collapse wrapper chains, default true), `include_unresolved` (interleave unresolved call sites).
+Multi-hop BFS traversal with server-side pruning. Returns nested tree structure, a node dict, and traversal stats. Use when the question implies a path or chain (3+ hops), needs to cross a service boundary, or a `neighbors` loop has exceeded 2 hops without converging. Args: `ids` (string or array), **`direction`** (`in` | `out` | `both`), **`edge_types`** (stored labels only — no composed dot-keys), `max_depth` (1–5, default 3), `max_paths` (default 20), `max_nodes_discovered` (100–2000, default 500), `filter` (hard gate `NodeFilter`), `edge_filter` (CALLS edge attribute filtering), `prune_roles` (soft gate — edges recorded, frontier stops), `fan_out_cap` (per-node edge limit, default 5), `collapse_trivial` (collapse wrapper chains, default true), `collapse_roles` (roles to collapse as trivial intermediates, default `["OTHER"]`; only effective when `collapse_trivial=true`), `collapse_min_chain_length` (minimum chain length for collapse, default 1), `include_unresolved` (interleave unresolved call sites), `cross_service` (continue BFS through HTTP_CALLS/ASYNC_CALLS boundaries), `min_result_nodes` (minimum result nodes target; retries with doubled `fan_out_cap` if below target, default 0).
 
-Returns `TraceOutput` with `nodes` (dict of `NodeRef`), `edges` (list of `TraceEdge` with `hop`, `parent_edge_id`, `collapsed`, `cross_service_boundary`), `paths` (ranked root-to-leaf), and `stats` (budget, pruning counts). Cross-service edges (`HTTP_CALLS`, `ASYNC_CALLS`) are boundary signals — BFS stops at the service boundary and includes the downstream node for the agent to continue with a separate `trace` call.
+Returns `TraceOutput` with `nodes` (dict of `NodeRef`), `tree` (nested `TreeNode` list — one per seed; each `TreeNode` has `id`, `edge_from_parent` with `direction`, `edge_type`, `hop`, `confidence`, `cross_service_boundary`, `attrs`; `children` (nested TreeNodes); `collapsed` and `collapsed_intermediates` for collapsed edges), `ranked_leaves` (scored leaf nodes with `node_id`, `depth`, `leaf_role`, `score`, sorted descending by score, capped at `max_paths`), and `stats` (budget, pruning counts). Cross-service edges (`HTTP_CALLS`, `ASYNC_CALLS`) are boundary signals — BFS stops at the service boundary unless `cross_service=true`.
+
+**`direction="both"`**: runs bidirectional traversal (out then in) with a shared visited set. Tree contains children from both directions; `edge_from_parent.direction` distinguishes them. Use for impact analysis ("who depends on X and what does X call?") in one call.
 
 **`trace` vs `neighbors`:** Use `neighbors` for single-hop adjacency (full unfiltered result). Use `trace` for multi-hop path questions, impact analysis, or when `neighbors` returns high fan-out (>8 CALLS edges).
 

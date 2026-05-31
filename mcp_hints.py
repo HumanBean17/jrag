@@ -517,13 +517,25 @@ def _high_fanout_trace_hint(origin_id: str, calls_n: int) -> _StructuredHint:
     )
 
 
+def _walk_tree_nodes(tree: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Flatten a tree structure into a list of all nodes (for iteration)."""
+    result: list[dict[str, Any]] = []
+    stack = list(tree)
+    while stack:
+        node = stack.pop()
+        result.append(node)
+        for child in node.get("children") or []:
+            stack.append(child)
+    return result
+
+
 def _trace_structured_hints(payload: dict[str, Any]) -> tuple[list[_StructuredHint], list[tuple[int, str]]]:
-    """Structured hints and advisories for trace output."""
+    """Structured hints and advisories for trace output (v2 tree format)."""
     struct_pairs: list[_StructuredHint] = []
     advisories: list[tuple[int, str]] = []
 
     stats = payload.get("stats")
-    edges = list(payload.get("edges") or [])
+    tree = list(payload.get("tree") or [])
 
     # Cross-service boundary hints don't require stats — guard stats-dependant hints separately.
     if isinstance(stats, dict):
@@ -554,7 +566,8 @@ def _trace_structured_hints(payload: dict[str, Any]) -> tuple[list[_StructuredHi
             + int(stats.get("nodes_pruned_fan_out") or 0)
             + int(stats.get("edges_collapsed_trivial") or 0)
         )
-        if pruned_count > 0 or any(e.get("collapsed") for e in edges):
+        has_collapsed = any(n.get("collapsed") for n in _walk_tree_nodes(tree))
+        if pruned_count > 0 or has_collapsed:
             advisories.append((
                 PRIORITY_META,
                 f"trace pruned {pruned_count} edges. Use neighbors(id, direction, edge_types) on specific nodes for full detail.",
@@ -568,21 +581,29 @@ def _trace_structured_hints(payload: dict[str, Any]) -> tuple[list[_StructuredHi
             ))
 
     # (c) Cross-service boundary hint (no stats dependency).
-    xs_edges = [e for e in edges if e.get("cross_service_boundary")]
-    if xs_edges:
-        # When cross_service=True, BFS already continued through boundaries.
-        # Emit a lighter informational advisory instead of an action hint.
+    # Walk tree in a single pass: build parent map and collect cross-service boundary nodes.
+    xs_edges_final: list[tuple[str, str, str | None]] = []  # (from_id, to_id, confidence)
+    stack: list[tuple[dict[str, Any], str | None]] = [(n, None) for n in tree]
+    while stack:
+        node, parent_id = stack.pop()
+        nid = str(node.get("id") or "")
+        efp = node.get("edge_from_parent")
+        if isinstance(efp, dict) and efp.get("cross_service_boundary"):
+            attrs = efp.get("attrs") if isinstance(efp.get("attrs"), dict) else {}
+            confidence = attrs.get("confidence")
+            xs_edges_final.append((parent_id or "", nid, confidence))
+        for child in node.get("children") or []:
+            stack.append((child, nid))
+
+    if xs_edges_final:
         was_seamless = bool(payload.get("cross_service"))
         if was_seamless:
             advisories.append((
                 PRIORITY_META,
-                f"trace crossed {len(xs_edges)} service boundary(ies).",
+                f"trace crossed {len(xs_edges_final)} service boundary(ies).",
             ))
         else:
-            for xe in xs_edges[:3]:
-                to_id = str(xe.get("to_id") or "")
-                from_id = str(xe.get("from_id") or "")
-                confidence = xe.get("attrs", {}).get("confidence") if isinstance(xe.get("attrs"), dict) else None
+            for from_id, to_id, confidence in xs_edges_final[:3]:
                 conf_str = f"confidence={confidence}" if confidence is not None else "low confidence"
                 advisories.append((
                     PRIORITY_META,
