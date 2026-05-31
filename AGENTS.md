@@ -15,12 +15,13 @@ gitignored).
 |-----------|----------|---------|
 | **`.agents/skills/`** (`.claude/skills/`, `.cursor/skills/`) | Agents **developing** this repo | propose, plan-prompts, pr-open, pr-review |
 | **`skills/explore-codebase/`** (project root) | Agents **using** this tool on their own codebase | /explore-codebase — complete MCP operating manual |
+| **`agents/java-codebase-rag-explorer.md`** (project root) | Agents **using** this tool on their own codebase | Claude Code subagent with full MCP guide as system prompt |
 
 `.agents/` skills are loaded by the agent working *on* java-codebase-rag source
-code. `skills/` is shipped to consumers — it instructs an agent to call the
-MCP tools (`search`, `find`, `describe`, `neighbors`, `resolve`) against an
-indexed Java codebase. Do not mix the two: never import consumer skills into
-`.agents/skills/` or vice versa.
+code. `skills/` and `agents/` are shipped to consumers — they instruct an agent
+to call the MCP tools (`search`, `find`, `describe`, `neighbors`, `resolve`)
+against an indexed Java codebase. Do not mix the two: never import consumer
+skills/agents into `.agents/skills/` or vice versa.
 
 This repo is a **self-contained stdio MCP server** that serves semantic
 + structural search over a Java codebase. It is a Python project (the
@@ -56,6 +57,7 @@ when needed.
   what to edit when a target tree doesn't match defaults.
 - `tests/README.md` — testing philosophy.
 - **`skills/explore-codebase/`** — user-facing skill shipped to java-codebase-rag consumers. Single self-contained operating manual for the 5-tool MCP. Developer workflow skills live in **`.agents/skills/`**, not here.
+- **`agents/java-codebase-rag-explorer.md`** — user-facing Claude Code subagent shipped to consumers. Contains the same MCP guide content as `docs/AGENT-GUIDE.md` (the single source of truth).
 - **`propose/`** — design proposes. **In-flight** proposes live in
   **`propose/active/`**. **`propose/completed/`** — landed work and rationale.
   **List or search this tree** for current filenames; do not rely on enumerated
