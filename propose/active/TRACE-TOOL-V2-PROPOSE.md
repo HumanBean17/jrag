@@ -74,9 +74,10 @@ TreeNode:
   edge_from_parent: EdgeFromParent | None  # null for seed nodes
   children: list[TreeNode]             # nested children (empty list for leaves)
   collapsed: bool = False              # true if this node was produced by collapsing
-  collapsed_intermediates: list[str]   # node IDs of collapsed intermediates
+  collapsed_intermediates: list[str]   # node IDs of collapsed intermediates (retained in nodes dict)
 
 EdgeFromParent:
+  direction: Literal["in", "out"]      # traversal direction that produced this edge
   edge_type: str
   hop: int
   cross_service_boundary: bool = False
@@ -94,6 +95,8 @@ RankedLeaf:
 - Keeping both `tree` + `paths` duplicates the leaf-ranking signal (paths exist to surface ranked leaves).
 - The `tree` format is what agents actually consume. The flat format was a v1 compromise to avoid token-cost concerns on large traces. Re-scoping as a replacement eliminates the redundancy.
 - `ranked_leaves` is a lightweight summary (node_id + score) that preserves the "which paths matter most" signal without duplicating the full edge lists.
+
+**Collapsed intermediates accessibility.** Unlike v1 (which removed collapsed nodes from the `nodes` dict), v2 **retains** collapsed intermediate nodes in `nodes` so agents can inspect them via `describe` or `neighbors`. The `collapsed_intermediates` list on the `TreeNode` references valid keys in `nodes`. The intermediate is simply removed from the tree structure (its children are not nested under it) but remains accessible as a standalone entry.
 
 **Token budget.** A nested tree with `TreeNode` objects reuses node IDs from the shared `nodes` dict -- node payloads are not duplicated at each nesting level. Empirical: a depth-3 trace on the bank-chat fixture produces ~30 TreeNodes vs ~24 TraceEdges (the tree format is slightly larger due to nesting structure but eliminates the `paths` list).
 
@@ -118,13 +121,12 @@ The degree-1 rule (exactly 1 inbound + 1 outbound CALLS in the result set) remai
 
 ### Enhancement 3: Source-relative fan-out ranking
 
-Replace the static `_ROLE_PRIORITY` dict with a **source-relative** priority that shifts based on the source node's role:
+Replace the static `_ROLE_PRIORITY` dict with a **source-relative** priority that shifts based on the source node's role. The priority table is built from `VALID_ROLES` (via `java_ontology.py`) to avoid duplicating role string literals across modules:
 
 ```python
-# From SERVICE: REPOSITORY is most relevant downstream
-# From CONTROLLER: SERVICE is most relevant downstream
-# From REPOSITORY: no strong signal, fall back to static order
-
+# Coupled to VALID_ROLES in java_ontology.py — when roles are added/removed there,
+# this table must be updated. The keys are source-node roles; the inner dicts map
+# target-node roles to priority values (higher = more relevant from that source).
 _SOURCE_RELATIVE_PRIORITY: dict[str, dict[str, int]] = {
     "CONTROLLER": {"SERVICE": 5, "REPOSITORY": 4, "CLIENT": 3, "OTHER": 2, "CONTROLLER": 1},
     "SERVICE": {"REPOSITORY": 5, "CLIENT": 4, "SERVICE": 3, "OTHER": 2, "CONTROLLER": 1},
@@ -132,6 +134,8 @@ _SOURCE_RELATIVE_PRIORITY: dict[str, dict[str, int]] = {
     # fallback for unmapped source roles: static priority
 }
 ```
+
+All role strings in this table must be members of `VALID_ROLES`. A startup assertion validates this so the table cannot silently drift from the ontology.
 
 When the source node's role is not in `_SOURCE_RELATIVE_PRIORITY`, the existing static `_ROLE_PRIORITY` is used as fallback. This is a zero-config change -- the behavior improves automatically without new parameters.
 
@@ -166,7 +170,7 @@ if direction == "both":
 
 **Merge semantics:**
 - The `nodes` dict is a union of both traversals (deduplicated by node ID).
-- The `tree` has the seed at the root with two subtrees: `in_children` and `out_children`. In practice, the tree format already supports this -- the seed node has children from both directions.
+- The `tree` has the seed at the root with a single `children` list containing nodes from both directions. Directionality is preserved via `edge_from_parent.direction` on each child -- agents can distinguish "who calls me" (`direction="in"`) from "what do I call" (`direction="out"`).
 - `stats` aggregates both traversals (nodes discovered = in + out, etc.).
 - `ranked_leaves` merges and re-ranks leaves from both directions.
 - If the same node is discovered in both directions, it appears once in `nodes` and once in the tree (in whichever direction it was first discovered; the other direction records the edge but does not duplicate the node).
@@ -181,7 +185,8 @@ if direction == "both":
 
 1. **`mcp_trace.py`**: Replace `TraceEdge`, `TracePath` with `TreeNode`, `EdgeFromParent`, `RankedLeaf`. Refactor `_collapse_trivial_chains` to use configurable heuristic. Refactor `_fan_out_sort_key` to use source-relative priority. Add bidirectional BFS merge logic. Add `min_result_nodes` retry logic.
 2. **`server.py`**: Update `trace` tool registration to reflect new parameters (`collapse_roles`, `collapse_min_chain_length`, `min_result_nodes`, `direction="both"`).
-3. **Breaking API change**: `TraceOutput.edges` and `TraceOutput.paths` are removed. `TraceOutput.tree` and `TraceOutput.ranked_leaves` are added.
+3. **`mcp_hints.py`**: Update `_trace_structured_hints` to consume `tree` and `ranked_leaves` instead of `edges` and `paths`. The hint at line 526 reads `payload.get("edges")` -- this must be rewritten to walk the tree structure. Cross-service boundary detection (line 571) must traverse tree nodes checking `edge_from_parent.cross_service_boundary` instead of iterating a flat `edges` list. Pruned/collapsed drill-down hint (line 557) must check `TreeNode.collapsed` on tree nodes instead of `e.get("collapsed")` on edges. The `_high_fanout_trace_hint` function (used by `neighbors` and `describe` paths) is unaffected -- it does not read trace output fields.
+4. **Breaking API change**: `TraceOutput.edges` and `TraceOutput.paths` are removed. `TraceOutput.tree` and `TraceOutput.ranked_leaves` are added.
 4. **No graph schema changes**: No new node kinds, edge types, or edge attributes.
 5. **No re-index required**: The tool reads the existing graph.
 6. **No ontology bump**: No changes to `java_ontology.py`.
@@ -192,6 +197,7 @@ if direction == "both":
 - `search`, `find`, `describe`, `resolve` are unchanged.
 - `kuzu_queries.py` is not modified.
 - `mcp_v2.py` types (`NodeFilter`, `EdgeFilter`, `NodeRef`) are unchanged.
+- `mcp_hints.py` hint functions for non-trace tools (`_high_fanout_trace_hint` used by `neighbors`/`describe`) are unchanged -- only `_trace_structured_hints` is updated.
 - Indexer, graph builder, CLI are unchanged.
 
 ## Schema / Ontology / Re-index impact
@@ -204,14 +210,63 @@ if direction == "both":
 
 ### Updated unit tests
 
-Tests from v1 that reference `edges` and `paths` fields are updated to reference `tree` and `ranked_leaves`. New tests:
+All 40 existing v1 tests in `tests/test_mcp_trace.py` must be updated. Every test that asserts on `result.edges` or `result.paths` changes to assert on `result.tree` and `result.ranked_leaves`. The table below lists each existing test and the required change:
+
+| Existing v1 test | Required change |
+|---|---|
+| `test_trace_outbound_calls_depth_2` | `result.edges[hop=0/1]` → walk `result.tree` children, assert depth-2 nesting |
+| `test_trace_inbound_callers_depth_2` | Same pattern for inbound tree |
+| `test_trace_max_paths_cap` | `len(result.paths)` → `len(result.ranked_leaves)` |
+| `test_trace_budget_stops_early` | `result.edges` → `result.tree` walk; stats assertions unchanged |
+| `test_trace_depth_1_equivalent_to_neighbors` | `result.edges` → single-level `result.tree` children |
+| `test_trace_stats_counts` | Unchanged (stats fields are the same) |
+| `test_trace_empty_seed` | `result.edges == []` → `result.tree == []`; `result.paths == []` → `result.ranked_leaves == []` |
+| `test_trace_single_string_seed` | `result.seed_ids` assertion unchanged |
+| `test_trace_multiple_seeds` | `result.edges` → `len(result.tree) >= N` seeds |
+| `test_trace_invalid_edge_type` | `result.success == False` unchanged |
+| `test_trace_direction_required` | `result.success == False` unchanged |
+| `test_trace_edge_types_required` | `result.success == False` unchanged |
+| `test_trace_max_depth_clamped` | Unchanged (tests parameter clamping, not output format) |
+| `test_trace_budget_clamped` | Unchanged (tests parameter clamping, not output format) |
+| `test_trace_visited_set_no_cycles` | `result.edges` → tree walk; assert no duplicate node IDs |
+| `test_trace_filter_applied` | `result.edges` → tree walk; assert excluded nodes absent |
+| `test_trace_filter_vs_prune_roles` | `result.edges` → tree walk; assert pruned-role nodes appear as leaves (no children) |
+| `test_trace_edge_filter_calls` | `result.edges` → tree walk; assert filtered edges absent |
+| `test_trace_include_unresolved` | `result.edges` → tree walk; assert unresolved nodes present |
+| `test_trace_paths_root_to_leaf` | `result.paths` → `result.ranked_leaves`; assert each leaf has a tree path from seed |
+| `test_trace_overrides_interface_resolution` | `result.edges` → tree walk; assert OVERRIDES edges present |
+| `test_trace_parent_edge_id_seed_null` | **Removed.** `parent_edge_id` no longer exists. Replaced by `test_trace_tree_seed_no_edge_from_parent` (new) |
+| `test_trace_parent_edge_id_chain` | **Removed.** `parent_edge_id` no longer exists. Replaced by `test_trace_tree_edge_from_parent_chain` (new) |
+| `test_trace_prune_roles` | `result.edges` → tree walk; assert pruned nodes are leaves |
+| `test_trace_fan_out_cap` | `result.edges` → tree walk; assert `len(children) <= cap` |
+| `test_trace_fan_out_cap_scaffolding_exempt` | `result.edges` → tree walk; assert scaffolding children present despite cap |
+| `test_trace_collapse_trivial` | `result.edges[i].collapsed` → `tree_node.collapsed`; assert intermediates in `nodes` dict |
+| `test_trace_collapse_trivial_disabled` | `result.edges` → tree walk; assert no `collapsed=True` nodes |
+| `test_trace_collapse_parent_edge_id_consistency` | **Removed.** `parent_edge_id` no longer exists. Replaced by `test_trace_tree_collapse_children_reparented` (new) |
+| `test_trace_cross_service_http` | `result.edges` → tree walk; assert `edge_from_parent.cross_service_boundary=True` |
+| `test_trace_cross_service_async` | Same pattern for async |
+| `test_trace_cross_service_edge_attrs` | `edges[i].attrs` → `tree_node.edge_from_parent.attrs` |
+| `test_trace_cross_service_boundary_stops` | `result.edges` → tree walk; assert boundary node has no children |
+| `test_trace_cross_service_seamless_http` | `result.edges` → tree walk; assert children exist past boundary |
+| `test_trace_cross_service_seamless_async` | Same pattern for async |
+| `test_trace_cross_service_seamless_respects_budget` | Stats unchanged; tree walk instead of edges |
+| `test_trace_cross_service_seamless_exposes_as_scaffolding` | `result.edges` → tree walk; assert EXPOSES followed as scaffolding |
+| `test_trace_registered_as_mcp_tool` | Unchanged (tests registration, not output) |
+| `test_trace_tool_description_mentions_six_tools` | Unchanged (tests description string) |
+| `test_trace_bank_chat_cross_service_http_flow` | `result.edges` → tree walk; full flow assertion on nested structure |
+
+New tests (v2 features):
 
 | Test name | Asserts |
 |-----------|---------|
 | `test_trace_tree_root_is_seed` | Tree root node matches seed ID |
+| `test_trace_tree_seed_no_edge_from_parent` | Seed nodes have `edge_from_parent=None` (replaces `test_trace_parent_edge_id_seed_null`) |
+| `test_trace_tree_edge_from_parent_chain` | Non-root nodes have `edge_from_parent` with valid edge_type, hop, and direction (replaces `test_trace_parent_edge_id_chain`) |
+| `test_trace_tree_edge_from_parent_direction` | `edge_from_parent.direction` is set ("in" or "out") for all non-root nodes |
 | `test_trace_tree_children_nested` | Children are nested TreeNodes, not flat |
-| `test_trace_tree_edge_from_parent` | Non-root nodes have `edge_from_parent` with correct edge_type and hop |
 | `test_trace_tree_collapsed_node` | Collapsed intermediates carry `collapsed=True` and `collapsed_intermediates` |
+| `test_trace_tree_collapse_intermediates_in_nodes` | Collapsed intermediate node IDs exist in `nodes` dict (accessible for describe/neighbors) |
+| `test_trace_tree_collapse_children_reparented` | After collapsing A→B→C, C appears as child of A in tree (replaces `test_trace_collapse_parent_edge_id_consistency`) |
 | `test_trace_ranked_leaves_capped` | `ranked_leaves` does not exceed `max_paths` |
 | `test_trace_ranked_leaves_scores` | Leaves are sorted by descending score |
 | `test_trace_collapse_roles_custom` | `collapse_roles=["OTHER","SERVICE"]` collapses SERVICE intermediates |
@@ -233,15 +288,15 @@ Tests from v1 that reference `edges` and `paths` fields are updated to reference
 - `ruff check` clean on all changed files.
 - Existing tool tests (`test_mcp_v2.py`, `test_server.py`) must pass unchanged.
 
-## Open Questions ([TBD])
+## Resolved Decisions
 
-1. **`tree` token cost on deep traces** -- The nested format adds structural overhead compared to the flat edge list. On a depth-5 trace with 50+ nodes, the tree JSON may be 15-20% larger. Should we add an optional `flat: bool = False` parameter that falls back to the old `edges` format for agents that prefer it? -- Recommended: No. The tree format is strictly better for LLM consumption. If token cost is a concern, reduce `max_depth` or `max_paths`.
+1. **`tree` token cost on deep traces** -- No fallback to flat format. The tree format is strictly better for LLM consumption. If token cost is a concern, reduce `max_depth` or `max_paths`.
 
-2. **`min_result_nodes` retry budget** -- Currently one retry with doubled `fan_out_cap`. Should this be a configurable number of retries? -- Recommended: No. One retry is sufficient. If the doubled cap still produces too few nodes, the graph genuinely has few reachable nodes and more retries won't help.
+2. **`min_result_nodes` retry budget** -- One retry with doubled `fan_out_cap`. No configurable retry count. If the doubled cap still produces too few nodes, the graph genuinely has few reachable nodes and more retries won't help.
 
-3. **Bidirectional `edge_types` per direction** -- Should the `direction="both"` mode allow different `edge_types` for in vs out? (e.g., `edge_types_in=["CALLS", "OVERRIDES"], edge_types_out=["CALLS", "HTTP_CALLS"]`). -- Recommended: No for v2. Use the same `edge_types` for both directions. If agents need different edge types per direction, they issue two unidirectional calls (same as today).
+3. **Bidirectional `edge_types` per direction** -- Same `edge_types` for both directions. If agents need different edge types per direction, they issue two unidirectional calls (same as today).
 
-4. **`collapse_roles` interaction with `prune_roles`** -- `collapse_roles` determines which nodes are trivial (collapsible). `prune_roles` determines which nodes stop the frontier. Should a role in `collapse_roles` also be eligible for `prune_roles`? -- Recommended: Yes, but independently configured. A role can be in one, both, or neither list. Default: `collapse_roles=["OTHER"]`, `prune_roles` unset.
+4. **`collapse_roles` interaction with `prune_roles`** -- Independently configured. A role can be in one, both, or neither list. Default: `collapse_roles=["OTHER"]`, `prune_roles` unset.
 
 ## Out of scope
 
@@ -266,7 +321,8 @@ experimental ← TRACE-V2 (single PR)
 4. Implement `direction="both"` bidirectional BFS merge.
 5. Update all v1 tests to new output format; add new tests listed above.
 6. Update `server.py` tool registration and description.
-7. Update `docs/AGENT-GUIDE.md` and `skills/explore-codebase/SKILL.md` for tree output.
+7. Update `mcp_hints.py` `_trace_structured_hints` to consume `tree` and `ranked_leaves` instead of `edges` and `paths`.
+8. Update `docs/AGENT-GUIDE.md` and `skills/explore-codebase/SKILL.md` for tree output.
 
 **Post-merge follow-ups:**
 - Production telemetry on `direction="both"` usage to validate the single edge_types-per-direction decision.
