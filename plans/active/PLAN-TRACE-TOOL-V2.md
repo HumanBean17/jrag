@@ -26,9 +26,9 @@ Depends on: v1 trace tool (shipped via PR-TRACE-1a through PR-TRACE-4, all merge
 
 ## PR breakdown — overview
 
-| PR | Scope | Ontology bump | Areas of concern | Test buckets | Independent of |
-| --- | --- | --- | --- | --- | --- |
-| PR-TRACE-V2 | Tree output, configurable collapse, source-relative ranking, bidirectional traversal, `min_result_nodes` retry | none | BFS→tree conversion correctness (children nesting, collapsed reparenting); bidirectional shared visited set; source-relative priority table drift from VALID_ROLES; hint function migration from flat edges to tree walk; breaking API surface in server.py | `tests/test_mcp_trace.py` (all 40 v1 tests updated + 21 new tests) | — |
+| PR | Scope | Ontology bump | Areas of concern | Test buckets |
+| --- | --- | --- | --- | --- |
+| PR-TRACE-V2 | Tree output, configurable collapse, source-relative ranking, bidirectional traversal, `min_result_nodes` retry | none | BFS→tree conversion correctness (children nesting, collapsed reparenting); bidirectional shared visited set; source-relative priority table drift from VALID_ROLES; hint function migration from flat edges to tree walk; breaking API surface in server.py | `tests/test_mcp_trace.py` (37 v1 tests updated + 3 removed + 22 new = 59 total) |
 
 Single PR. No sub-PR dependencies.
 
@@ -40,6 +40,7 @@ Single PR. No sub-PR dependencies.
 | `min_result_nodes` retry budget | One retry with doubled `fan_out_cap`. No configurable retry count. |
 | Bidirectional `edge_types` per direction | Same `edge_types` for both directions. Issue two unidirectional calls if per-direction types are needed. |
 | `collapse_roles` interaction with `prune_roles` | Independent. A role can be in one, both, or neither. Default: `collapse_roles=["OTHER"]`, `prune_roles` unset. |
+| `collapse_trivial=False` vs `collapse_roles` | `collapse_trivial` is the master toggle. When `False`, collapsing is disabled regardless of `collapse_roles`. `collapse_roles` only takes effect when `collapse_trivial=True`. |
 | Collapsed intermediate accessibility | Retained in `nodes` dict (unlike v1 which removed them). Not nested in tree but accessible standalone. |
 | Bidirectional shared visited set | Yes — nodes discovered in "out" are not re-visited in "in" (and vice versa). |
 | Bidirectional duplicate node handling | Node appears once in `nodes`. In tree, appears under direction discovered first; second direction produces a leaf TreeNode with its `edge_from_parent.direction`. |
@@ -59,6 +60,7 @@ Single PR. No sub-PR dependencies.
 - Add `EdgeFromParent` model: `direction: Literal["in", "out"]`, `edge_type: str`, `hop: int`, `confidence: float | None`, `cross_service_boundary: bool = False`, `attrs: dict[str, Any]`.
 - Add `RankedLeaf` model: `node_id: str`, `depth: int`, `leaf_role: str | None`, `score: float`.
 - Update `TraceOutput`: remove `edges: list[TraceEdge]` and `paths: list[TracePath]`; add `tree: list[TreeNode]` and `ranked_leaves: list[RankedLeaf]`.
+- Update `__all__`: remove `TraceEdge`, `TracePath`; add `TreeNode`, `EdgeFromParent`, `RankedLeaf`.
 
 **Source-relative fan-out ranking:**
 - Add `_SOURCE_RELATIVE_PRIORITY: dict[str, dict[str, int]]` table keyed by source node role → target role priority. All role strings must be members of `VALID_ROLES` from `java_ontology.py` (startup assertion validates this).
@@ -67,6 +69,7 @@ Single PR. No sub-PR dependencies.
 
 **Configurable collapse heuristic:**
 - Add parameters to `trace_v2`: `collapse_roles: list[str] | None = None` (default `["OTHER"]`), `collapse_min_chain_length: int = 1` (default `1`, matches v1).
+- `collapse_trivial` is the master toggle: when `False`, no collapsing happens regardless of `collapse_roles` value. When `True`, `collapse_roles` and `collapse_min_chain_length` control the heuristic. If `collapse_trivial=False` and `collapse_roles` is set, `collapse_roles` is ignored.
 - Refactor `_collapse_trivial_chains` to accept `collapse_roles` set and `collapse_min_chain_length`. Role check uses configurable set instead of hardcoded `("OTHER", None)`.
 - Change collapse behavior: retain collapsed intermediates in `nodes` dict (v1 removed them).
 
@@ -78,14 +81,22 @@ Single PR. No sub-PR dependencies.
   - `stats` aggregates both traversals.
   - `ranked_leaves` merges and re-ranks from both directions.
   - Duplicate nodes (discovered in both directions) appear under the direction that discovered them first; second direction produces a leaf TreeNode.
+  - **Shared visited set advisory**: when `direction="both"` and the shared visited set actually suppresses exploration in the second direction (i.e., some nodes discovered in pass 1 were eligible for discovery in pass 2), emit an advisory: `"bidirectional trace: N nodes explored in the first direction were not re-visited in the second direction"`. This gives agents a completeness signal.
 
 **`min_result_nodes` retry:**
 - Add parameter `min_result_nodes: int = 0`.
 - When `min_result_nodes > 0` and initial BFS produces fewer result nodes than target, re-run with `fan_out_cap * 2` (one retry, still clamped by `max_nodes_discovered`). If still below target, return what it has with an advisory.
 
 **BFS-to-tree conversion:**
-- Add `_build_tree` helper that converts the BFS edge list into nested `TreeNode` structure, handling collapsed intermediates and cross-service boundary metadata.
-- Add `_build_ranked_leaves` helper that replaces `_enumerate_paths`, producing `RankedLeaf` objects from the tree leaves.
+- Add `_build_tree` helper that converts the internal flat edge list into nested `TreeNode` structure. Contract:
+  - **Input**: `seed_ids: list[str]`, `nodes: dict[str, NodeRef]`, flat internal edge list (each edge has `from_id`, `to_id`, `edge_type`, `hop`, `direction`, `confidence`, `cross_service_boundary`, `attrs`, `collapsed`, `collapsed_intermediates`).
+  - **Multi-seed roots**: top-level `tree` list contains one `TreeNode` per seed ID. Each seed node has `edge_from_parent=None` and `children` populated from its outgoing/incoming edges.
+  - **Flat→nested conversion**: build an adjacency map `from_id → [edges]` from the flat list. For each seed, recursively descend: for every edge from the current node, create a child `TreeNode` with the target's ID, populate `edge_from_parent` from the edge metadata, and recurse into the target's children.
+  - **Collapsed intermediate reparenting**: collapsed edges already represent A→C (the collapse pass rewrote them). The collapsed intermediate's ID is in `collapsed_intermediates` on the merged edge. `_build_tree` creates the `TreeNode` for C as a direct child of A with `collapsed=True` and `collapsed_intermediates` carried over. The intermediate B is not in the tree (retained in `nodes` dict for standalone access).
+  - **Cross-service boundary metadata**: carried from the flat edge's `cross_service_boundary` flag into the child's `edge_from_parent.cross_service_boundary`. Boundary nodes that are also frontier-stopped have `children=[]`.
+  - **Cycle safety**: the adjacency map is a DAG by construction (BFS visited set prevents cycles). No additional cycle detection needed.
+  - **Output**: `list[TreeNode]` — one per seed, with fully nested children.
+- Add `_build_ranked_leaves` helper that replaces `_enumerate_paths`, producing `RankedLeaf` objects from the tree leaves. Walk the tree to find all leaf nodes (children=[]), compute `depth` (number of edges from root), `leaf_role` from `nodes[leaf_id].role`, and `score` from role priority + confidence. Sort descending by score; cap at `max_paths`.
 
 **Internal refactoring:**
 - BFS loop still builds an internal flat edge representation during traversal, then converts to tree post-BFS (after collapse pass).
@@ -113,7 +124,7 @@ Single PR. No sub-PR dependencies.
 
 ### 4. `tests/test_mcp_trace.py`
 
-- Update all 40 existing v1 tests to use new output format:
+- Update 37 existing v1 tests to use new output format (3 tests that test removed concepts are replaced — see below):
   - `result.edges[...]` → walk `result.tree` children.
   - `result.paths` → `result.ranked_leaves`.
   - `e.collapsed` → `tree_node.collapsed`.
@@ -227,11 +238,11 @@ Single PR. No sub-PR dependencies.
 
 | # | Step | File(s) | Done when |
 | - | - | - | - |
-| 1 | Define `TreeNode`, `EdgeFromParent`, `RankedLeaf` models; update `TraceOutput` | `mcp_trace.py` | Models validate with pydantic; `TraceOutput` has `tree` and `ranked_leaves` fields |
+| 1 | Define `TreeNode`, `EdgeFromParent`, `RankedLeaf` models; update `TraceOutput`; update `__all__` (remove `TraceEdge`/`TracePath`, add new models) | `mcp_trace.py` | Models validate with pydantic; `TraceOutput` has `tree` and `ranked_leaves` fields; `__all__` lists only live exports |
 | 2 | Add `_SOURCE_RELATIVE_PRIORITY` table with `VALID_ROLES` assertion | `mcp_trace.py` | Table loads; assertion passes |
 | 3 | Refactor `_fan_out_sort_key` to accept `source_role` and use source-relative priority | `mcp_trace.py` | Unit-callable with source role; falls back to static when unmapped |
 | 4 | Refactor `_collapse_trivial_chains` to accept `collapse_roles` and `collapse_min_chain_length`; retain intermediates in `nodes` | `mcp_trace.py` | Configurable roles + chain length; intermediates accessible in `nodes` |
-| 5 | Implement `_build_tree` helper (flat edges → nested TreeNodes) | `mcp_trace.py` | Tree nesting matches BFS parent-child structure |
+| 5 | Implement `_build_tree` helper (flat edges → nested TreeNodes): multi-seed roots, adjacency-map descent, collapsed reparenting, cross-service metadata, cycle-safe by construction | `mcp_trace.py` | Tree nesting matches BFS parent-child structure; collapsed intermediates reparented; boundary metadata preserved |
 | 6 | Implement `_build_ranked_leaves` helper (tree → RankedLeaf list with scoring) | `mcp_trace.py` | Leaves sorted by descending score; capped at `max_paths` |
 | 7 | Add `collapse_roles`, `collapse_min_chain_length`, `min_result_nodes` parameters to `trace_v2` | `mcp_trace.py` | Parameters accepted; defaults match v1 behavior |
 | 8 | Wire `source_role` from frontier node into fan-out sort key call | `mcp_trace.py` | Source-relative ranking active in BFS loop |
