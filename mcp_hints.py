@@ -570,24 +570,33 @@ def _trace_structured_hints(payload: dict[str, Any]) -> tuple[list[_StructuredHi
     # (c) Cross-service boundary hint (no stats dependency).
     xs_edges = [e for e in edges if e.get("cross_service_boundary")]
     if xs_edges:
-        for xe in xs_edges[:3]:
-            to_id = str(xe.get("to_id") or "")
-            from_id = str(xe.get("from_id") or "")
-            confidence = xe.get("attrs", {}).get("confidence") if isinstance(xe.get("attrs"), dict) else None
-            conf_str = f"confidence={confidence}" if confidence is not None else "low confidence"
+        # When cross_service=True, BFS already continued through boundaries.
+        # Emit a lighter informational advisory instead of an action hint.
+        was_seamless = bool(payload.get("cross_service"))
+        if was_seamless:
             advisories.append((
                 PRIORITY_META,
-                f"Cross-service boundary: {from_id} -> {to_id} ({conf_str}). "
-                f"Use trace('{to_id}', 'out', ['EXPOSES','CALLS'], max_depth=4) to continue in the downstream service, "
-                f"or describe('{to_id}') for route details.",
+                f"trace crossed {len(xs_edges)} service boundary(ies).",
             ))
-            struct_pairs.append(_StructuredHint(
-                "trace",
-                {"ids": [to_id], "direction": "out", "edge_types": ["EXPOSES", "CALLS"], "max_depth": 4},
-                True, PRIORITY_LEAF_FOLLOWUP,
-                LABEL_CROSS_SERVICE_BOUNDARY,
-                f"cross-service boundary: {from_id} -> {to_id}",
-            ))
+        else:
+            for xe in xs_edges[:3]:
+                to_id = str(xe.get("to_id") or "")
+                from_id = str(xe.get("from_id") or "")
+                confidence = xe.get("attrs", {}).get("confidence") if isinstance(xe.get("attrs"), dict) else None
+                conf_str = f"confidence={confidence}" if confidence is not None else "low confidence"
+                advisories.append((
+                    PRIORITY_META,
+                    f"Cross-service boundary: {from_id} -> {to_id} ({conf_str}). "
+                    f"Use trace('{to_id}', 'out', ['EXPOSES','CALLS'], max_depth=4) to continue in the downstream service, "
+                    f"or describe('{to_id}') for route details.",
+                ))
+                struct_pairs.append(_StructuredHint(
+                    "trace",
+                    {"ids": [to_id], "direction": "out", "edge_types": ["EXPOSES", "CALLS"], "max_depth": 4},
+                    True, PRIORITY_LEAF_FOLLOWUP,
+                    LABEL_CROSS_SERVICE_BOUNDARY,
+                    f"cross-service boundary: {from_id} -> {to_id}",
+                ))
 
     return (finalize_structured_hints(struct_pairs), finalize_advisories(advisories))
 

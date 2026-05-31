@@ -498,6 +498,7 @@ def trace_v2(
     fan_out_cap: int = 5,
     collapse_trivial: bool = True,
     include_unresolved: bool = False,
+    cross_service: bool = False,
     graph: KuzuGraph | None = None,
 ) -> TraceOutput:
     """Multi-hop BFS traversal with pruning."""
@@ -601,6 +602,12 @@ def trace_v2(
     # Determine if cross-service detection is active.
     cross_service_active = bool(set(edge_types) & _CROSS_SERVICE_EDGE_TYPES)
 
+    # Effective scaffolding set: when cross_service=True, EXPOSES is also scaffolding
+    # so Route -> Handler is followed automatically in downstream services.
+    effective_scaffolding = _SCAFFOLDING_EDGE_TYPES
+    if cross_service:
+        effective_scaffolding = _SCAFFOLDING_EDGE_TYPES | frozenset({"EXPOSES"})
+
     # BFS state.
     visited: set[str] = set(seed_ids)
     frontier: list[str] = list(seed_ids)
@@ -639,7 +646,7 @@ def trace_v2(
         query_edge_types = list(edge_types)
         # Cross-service: also query scaffolding edges when cross-service is active.
         if cross_service_active:
-            for scaffold_et in _SCAFFOLDING_EDGE_TYPES:
+            for scaffold_et in effective_scaffolding:
                 if scaffold_et not in query_edge_types:
                     query_edge_types.append(scaffold_et)
 
@@ -672,7 +679,7 @@ def trace_v2(
 
             for row in src_rows:
                 et = str(row.get("edge_type") or "")
-                if et in _SCAFFOLDING_EDGE_TYPES:
+                if et in effective_scaffolding:
                     scaffolding_rows.append(row)
                 else:
                     signal_rows.append(row)
@@ -703,7 +710,7 @@ def trace_v2(
                 edge_type = str(row.get("edge_type") or "")
 
                 # --- Cross-service boundary detection ---
-                if edge_type in _SCAFFOLDING_EDGE_TYPES and cross_service_active:
+                if edge_type in effective_scaffolding and cross_service_active:
                     # Follow scaffolding edge to Client/Producer node.
                     # Record the scaffolding edge and include the node.
                     try:
@@ -791,9 +798,16 @@ def trace_v2(
                         edges.append(cross_edge)
                         edge_id_map[cross_edge_id] = cross_edge
                         visited.add(cross_target_id)
-                        # Do NOT add downstream node to frontier — boundary-stop.
+                        # Track incoming edge for downstream node.
+                        if cross_target_id not in node_to_incoming_edge_id:
+                            node_to_incoming_edge_id[cross_target_id] = cross_edge_id
+                        # When cross_service=True, add downstream node to frontier
+                        # so BFS continues into the downstream service.
+                        if cross_service:
+                            new_frontier.add(cross_target_id)
 
-                    # Do NOT add Client/Producer to frontier either.
+                    # Do NOT add Client/Producer to frontier — its cross-service
+                    # edges were already queried inline above.
                     continue
 
                 # --- Standard edge processing ---
