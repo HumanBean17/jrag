@@ -572,7 +572,7 @@ def create_mcp_server() -> FastMCP:
     @mcp.tool(
         name="trace",
         description=(
-            "Multi-hop BFS traversal with server-side pruning. Returns pruned path structure in a single call. "
+            "Multi-hop BFS traversal with server-side pruning. Returns nested tree structure in a single call. "
             "Use `trace` instead of multiple `neighbors` calls when: (a) the question implies a path or chain "
             "(e.g. 'trace from controller to database', 'what happens when POST /api/orders is called'), "
             "(b) you need impact analysis ('who depends on X'), (c) you need to cross service boundaries "
@@ -584,25 +584,28 @@ def create_mcp_server() -> FastMCP:
             "`prune_roles` is a soft gate: edges to pruned-role nodes are recorded but BFS stops traversing "
             "through them (agent sees the connection but traversal focuses on higher-signal paths). "
             "`fan_out_cap` limits per-node edge expansion; scaffolding edges (DECLARES_CLIENT, DECLARES_PRODUCER) "
-            "are exempt. `collapse_trivial` merges wrapper chains (A→B→C where B is trivial). "
-            "Result: `nodes` dict (id → NodeRef), `edges` list with BFS metadata (hop, parent_edge_id, "
-            "collapsed, cross_service_boundary), ranked `paths` (root-to-leaf), and `stats` with pruning counts. "
+            "are exempt. `collapse_trivial` merges wrapper chains (A→B→C where B is trivial); "
+            "`collapse_roles` and `collapse_min_chain_length` configure which roles are collapsed and minimum chain length. "
+            "`min_result_nodes` triggers a retry with doubled fan_out_cap if initial result is below target. "
+            "Result: `nodes` dict (id → NodeRef), nested `tree` (TreeNodes with edge_from_parent metadata), "
+            "`ranked_leaves` (scored leaf nodes), and `stats` with pruning counts. "
             "Cross-service boundary: by default BFS stops at service boundaries. "
-            "Set `cross_service=True` to continue traversal through HTTP_CALLS/ASYNC_CALLS boundaries."
+            "Set `cross_service=True` to continue traversal through HTTP_CALLS/ASYNC_CALLS boundaries. "
+            "`direction='both'` runs bidirectional traversal (out + in) with shared visited set for impact analysis."
         ),
     )
     async def trace(
         ids: str | list[str] = Field(
             description="Seed node IDs (single string or list). Differs from neighbors (single ID) — trace supports multi-seed for impact analysis.",
         ),
-        direction: Literal["in", "out"] = Field(
-            description="Traversal direction: in (callers/dependents) or out (callees/dependencies). Required — no default.",
+        direction: Literal["in", "out", "both"] = Field(
+            description="Traversal direction: in (callers/dependents), out (callees/dependencies), or both (bidirectional for impact analysis). Required — no default.",
         ),
         edge_types: list[str] = Field(
             description="Edge types to traverse (stored labels only: CALLS, IMPLEMENTS, OVERRIDES, EXPOSES, HTTP_CALLS, ASYNC_CALLS, etc.). Required non-empty. No composed dot-keys.",
         ),
         max_depth: int = Field(default=3, description="Max BFS hops (1-5, default 3)"),
-        max_paths: int = Field(default=20, description="Max root-to-leaf paths to return"),
+        max_paths: int = Field(default=20, description="Max ranked leaves to return"),
         max_nodes_discovered: int = Field(
             default=500, description="Node discovery budget before pruning (100-2000)",
         ),
@@ -624,6 +627,13 @@ def create_mcp_server() -> FastMCP:
         collapse_trivial: bool = Field(
             default=True, description="Collapse wrapper chains (A→B→C where B is trivial intermediate)",
         ),
+        collapse_roles: list[str] | None = Field(
+            default=None,
+            description="Roles to collapse as trivial intermediates (default: ['OTHER']). Only takes effect when collapse_trivial=True.",
+        ),
+        collapse_min_chain_length: int = Field(
+            default=1, description="Minimum chain length for collapse (default 1). Set to 2 to skip single-intermediate collapses.",
+        ),
         include_unresolved: bool = Field(
             default=False,
             description="Include UnresolvedCallSite edges (CALLS out only)",
@@ -631,6 +641,10 @@ def create_mcp_server() -> FastMCP:
         cross_service: bool = Field(
             default=False,
             description="Continue BFS through service boundaries (HTTP_CALLS/ASYNC_CALLS). Default: stop at boundaries.",
+        ),
+        min_result_nodes: int = Field(
+            default=0,
+            description="Minimum result nodes target. If initial BFS produces fewer, retries with doubled fan_out_cap (one retry max).",
         ),
     ) -> mcp_trace.TraceOutput:
         return await asyncio.to_thread(
@@ -646,8 +660,11 @@ def create_mcp_server() -> FastMCP:
             prune_roles,
             fan_out_cap if fan_out_cap is not None else 5,
             collapse_trivial,
+            collapse_roles,
+            collapse_min_chain_length,
             include_unresolved,
             cross_service,
+            min_result_nodes,
             None,
         )
 
