@@ -581,41 +581,19 @@ def _trace_structured_hints(payload: dict[str, Any]) -> tuple[list[_StructuredHi
             ))
 
     # (c) Cross-service boundary hint (no stats dependency).
-    # Walk tree to find nodes with cross_service_boundary=True on their edge_from_parent.
-    xs_nodes: list[tuple[str, str, str | None]] = []  # (parent_id, child_id, confidence)
-    for node in _walk_tree_nodes(tree):
-        efp = node.get("edge_from_parent")
-        if isinstance(efp, dict) and efp.get("cross_service_boundary"):
-            # Find parent: walk tree to find who has this node as a child.
-            # Use the node id and reconstruct from_id from tree structure.
-            child_id = str(node.get("id") or "")
-            attrs = efp.get("attrs") if isinstance(efp.get("attrs"), dict) else {}
-            confidence = attrs.get("confidence")
-            # Parent id is not directly available from TreeNode, but we can look it up
-            # by walking the tree. For now, we use the child_id directly.
-            xs_nodes.append(("", child_id, confidence))
-
-    # Alternative: build parent map from tree walk.
-    parent_map: dict[str, str] = {}
-    stack = list(tree)
+    # Walk tree in a single pass: build parent map and collect cross-service boundary nodes.
+    xs_edges_final: list[tuple[str, str, str | None]] = []  # (from_id, to_id, confidence)
+    stack: list[tuple[dict[str, Any], str | None]] = [(n, None) for n in tree]
     while stack:
-        n = stack.pop()
-        nid = str(n.get("id") or "")
-        for child in n.get("children") or []:
-            cid = str(child.get("id") or "")
-            parent_map[cid] = nid
-            stack.append(child)
-
-    # Rebuild xs_nodes with parent info.
-    xs_edges_final: list[tuple[str, str, str | None]] = []
-    for node in _walk_tree_nodes(tree):
+        node, parent_id = stack.pop()
+        nid = str(node.get("id") or "")
         efp = node.get("edge_from_parent")
         if isinstance(efp, dict) and efp.get("cross_service_boundary"):
-            child_id = str(node.get("id") or "")
-            from_id = parent_map.get(child_id, "")
             attrs = efp.get("attrs") if isinstance(efp.get("attrs"), dict) else {}
             confidence = attrs.get("confidence")
-            xs_edges_final.append((from_id, child_id, confidence))
+            xs_edges_final.append((parent_id or "", nid, confidence))
+        for child in node.get("children") or []:
+            stack.append((child, nid))
 
     if xs_edges_final:
         was_seamless = bool(payload.get("cross_service"))

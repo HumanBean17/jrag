@@ -55,9 +55,9 @@ _SOURCE_RELATIVE_PRIORITY: dict[str, dict[str, int]] = {
         "OTHER": 1,
     },
     "REPOSITORY": {
-        "SERVICE": 5,
-        "REPOSITORY": 4,
-        "CONTROLLER": 3,
+        "REPOSITORY": 5,
+        "SERVICE": 4,
+        "ENTITY": 3,
         "CLIENT": 2,
         "OTHER": 1,
     },
@@ -521,8 +521,6 @@ def _collapse_trivial_chains(
         merged_edge.collapsed_intermediates = intermediates
 
         edges_to_remove.add(id(in_edge))
-        edges_to_remove.add(id(id(out_edge)))
-        # Also remove the original out_edge.
         edges_to_remove.add(id(out_edge))
 
         edges_to_add.append(merged_edge)
@@ -1079,15 +1077,6 @@ def trace_v2(
         budget_hit = budget_hit or pass_budget
         total_pruned_role += pass_pruned_role
         total_pruned_fan_out += pass_pruned_fan_out
-
-        # Bidirectional advisory: count nodes suppressed by shared visited set.
-        if direction == "both" and pass_idx == 0:
-            pass
-        if direction == "both" and pass_idx == 1:
-            # Nodes discovered in pass 0 that would also be discovered in pass 1
-            # are implicitly counted as "suppressed" by the shared visited set.
-            # We approximate: nodes in all_nodes from pass 0 minus what pass 1 added.
-            pass
 
     # Re-count seeds once.
     total_discovered = len(all_nodes)

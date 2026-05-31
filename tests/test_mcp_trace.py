@@ -1076,6 +1076,26 @@ def test_trace_tree_edge_from_parent_direction(kuzu_graph: KuzuGraph) -> None:
             assert node.edge_from_parent.direction == "out"
 
 
+def test_trace_tree_seed_with_zero_edges(kuzu_graph: KuzuGraph) -> None:
+    """Seed with zero matching edges produces tree=[TreeNode(id=seed)] with no children."""
+    # Use a method that likely has no IMPLEMENTS edges (most methods don't).
+    seed_id = _find_method_with_outbound_calls(kuzu_graph)
+    if seed_id is None:
+        pytest.skip("No method with outbound calls in fixture")
+    out = trace_v2(
+        ids=seed_id,
+        direction="out",
+        edge_types=["IMPLEMENTS"],
+        max_depth=2,
+        graph=kuzu_graph,
+    )
+    assert out.success is True
+    assert len(out.tree) >= 1
+    assert out.tree[0].id == seed_id
+    # No IMPLEMENTS edges from a method — tree should have seed with no children.
+    assert len(out.tree[0].children) == 0
+
+
 def test_trace_tree_children_nested(kuzu_graph: KuzuGraph) -> None:
     """Children are nested TreeNodes, not flat."""
     seed_id = _find_method_with_multiple_callees(kuzu_graph, min_callees=2)
