@@ -587,8 +587,8 @@ def create_mcp_server() -> FastMCP:
             "are exempt. `collapse_trivial` merges wrapper chains (A→B→C where B is trivial). "
             "Result: `nodes` dict (id → NodeRef), `edges` list with BFS metadata (hop, parent_edge_id, "
             "collapsed, cross_service_boundary), ranked `paths` (root-to-leaf), and `stats` with pruning counts. "
-            "Cross-service boundary: BFS records the cross-service edge and includes the downstream Route/Producer "
-            "in `nodes` but stops the frontier — the agent decides whether to continue."
+            "Cross-service boundary: by default BFS stops at service boundaries. "
+            "Set `cross_service=True` to continue traversal through HTTP_CALLS/ASYNC_CALLS boundaries."
         ),
     )
     async def trace(
@@ -628,6 +628,10 @@ def create_mcp_server() -> FastMCP:
             default=False,
             description="Include UnresolvedCallSite edges (CALLS out only)",
         ),
+        cross_service: bool = Field(
+            default=False,
+            description="Continue BFS through service boundaries (HTTP_CALLS/ASYNC_CALLS). Default: stop at boundaries.",
+        ),
     ) -> mcp_trace.TraceOutput:
         return await asyncio.to_thread(
             mcp_trace.trace_v2,
@@ -643,6 +647,7 @@ def create_mcp_server() -> FastMCP:
             fan_out_cap if fan_out_cap is not None else 5,
             collapse_trivial,
             include_unresolved,
+            cross_service,
             None,
         )
 
