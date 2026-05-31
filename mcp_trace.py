@@ -1125,8 +1125,12 @@ def trace_v2(
                 retry_pruned_fan_out += pf
 
             retry_total = len(retry_nodes)
+            if retry_total < min_result_nodes:
+                advisories.append(
+                    f"min_result_nodes retry with fan_out_cap={effective_cap} still below target "
+                    f"({retry_total} < {min_result_nodes}). Returning available results."
+                )
             if retry_total >= min_result_nodes or retry_total > len(all_nodes):
-                # Accept retry result.
                 all_nodes = retry_nodes
                 all_edges = retry_edges
                 total_discovered = retry_total
@@ -1134,20 +1138,6 @@ def trace_v2(
                 budget_hit = retry_budget
                 total_pruned_role = retry_pruned_role
                 total_pruned_fan_out = retry_pruned_fan_out
-            else:
-                advisories.append(
-                    f"min_result_nodes retry with fan_out_cap={effective_cap} still below target "
-                    f"({retry_total} < {min_result_nodes}). Returning available results."
-                )
-                # Still accept retry if it's better.
-                if retry_total > len(all_nodes):
-                    all_nodes = retry_nodes
-                    all_edges = retry_edges
-                    total_discovered = retry_total
-                    actual_depth = retry_depth
-                    budget_hit = retry_budget
-                    total_pruned_role = retry_pruned_role
-                    total_pruned_fan_out = retry_pruned_fan_out
 
     # Post-BFS: collapse trivial chains.
     edges_collapsed = 0
