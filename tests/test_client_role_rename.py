@@ -62,13 +62,15 @@ def test_no_legacy_feign_client_role_in_graph(tmp_path: Path) -> None:
     assert g.list_by_role("FEIGN_CLIENT") == []
 
 
-def test_resttemplate_class_unchanged(tmp_path: Path) -> None:
+def test_resttemplate_class_gets_client_role_from_messaging(tmp_path: Path) -> None:
     root = tmp_path / "proj"
     _copy_fixture(root)
     g = _build_graph(root, tmp_path / "g.kuzu")
     sym = _symbol_by_fqn(g.find_by_name_or_fqn("smoke.a.ClientA"), "smoke.a.ClientA")
     assert sym is not None
-    assert sym.role == "OTHER"
+    # ClientA injects KafkaTemplate → CLIENT role (symmetric with CONTROLLER)
+    assert sym.role == "CLIENT"
+    assert "MESSAGE_PRODUCER" in sym.capabilities
     assert "HTTP_CLIENT" not in sym.capabilities
 
 
