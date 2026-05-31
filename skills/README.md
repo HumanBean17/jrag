@@ -1,15 +1,6 @@
-# skills/ — RAG navigation skills for the java-codebase-rag MCP
+# skills/ — RAG navigation skill for the java-codebase-rag MCP
 
-Two self-contained skills for navigating indexed Java codebases via the 5-tool MCP (`search` / `find` / `describe` / `neighbors` / `resolve`). Skills are agent-side prompt scaffolding — they are **not** a second MCP API and **not** CLI subcommands.
-
-## Which skill to use
-
-| Skill | When to use | Size |
-| ----- | ----------- | ---- |
-| **`explore-codebase`** | Full operating manual: complete tool reference, edge taxonomy, argument shapes, recovery playbook, broad exploratory analysis | ~320 lines |
-| **`navigate-codebase`** | Targeted tracing: "how does X flow", "trace the call chain for Y", "what happens when Z is called". Uses RAG-first strategy with depth discipline to prevent drowning during multi-hop walks | ~230 lines |
-
-Both skills are standalone — an agent can load either one without the other. For a broad exploration session (onboarding onto a service, understanding a feature end-to-end), use `explore-codebase`. For a focused trace question where the agent already knows roughly what it's looking for, use `navigate-codebase`.
+One self-contained skill for navigating indexed Java codebases via the 5-tool MCP (`search` / `find` / `describe` / `neighbors` / `resolve`). Skills are agent-side prompt scaffolding — they are **not** a second MCP API and **not** CLI subcommands.
 
 ## Layout
 
@@ -17,12 +8,9 @@ Both skills are standalone — an agent can load either one without the other. F
 skills/
   README.md                        ← this file
   explore-codebase/SKILL.md        ← complete MCP operating manual
-  navigate-codebase/SKILL.md       ← RAG-first tracing skill
 ```
 
-## What's inside each skill
-
-### `explore-codebase`
+## `explore-codebase`
 
 The comprehensive operating manual. Includes:
 
@@ -34,43 +22,18 @@ The comprehensive operating manual. Includes:
 - **Recovery playbook** — common failure modes and fixes
 - **Navigation patterns** — 12 common intent-to-tool-chain mappings
 - **Ontology glossary** — roles, capabilities, symbol kinds, frameworks, match types
-- **Worked example** — end-to-end feature exploration
 
-### `navigate-codebase`
+## Relationship to `docs/AGENT-GUIDE.md` and `agents/`
 
-The tactical tracing skill. Includes:
+`docs/AGENT-GUIDE.md` is the **single source of truth** for the MCP operating manual. Three delivery mechanisms all carry the same content:
 
-- **Core strategy** — RAG-first, graph-for-precision
-- **4 navigation rules** — search before walking, always filter, depth discipline, hypothesis-driven hops
-- **Anti-patterns** — the drowning patterns to avoid (open-ended loops, bare walks, ignoring edge_summary)
-- **Quick reference** — essential tool args, NodeFilter keys, recovery table
-- **Worked example** — side-by-side correct vs drowning approach
+| Mechanism | How to use |
+| --------- | ---------- |
+| **`docs/AGENT-GUIDE.md`** copy-paste block | Paste the `BEGIN`/`END` block into your project's `AGENTS.md` / `CLAUDE.md`. Always-on. Best for hosts without skill or subagent loading. |
+| **`explore-codebase` skill** | Loaded on demand by hosts with skill discovery (Claude Code, Qwen Code, Cursor). One skill to rule them all. |
+| **`agents/java-codebase-rag.md`** subagent | Copy into your project's `.claude/agents/` for Claude Code subagent discovery. The agent gets the full guide as its system prompt. |
 
-## Three-layer architecture
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│ Layer 3 — High-level intents (what the user actually thinks) │
-│   "who calls X", "trace this route", "explain feature Y"     │
-│   ─────────────────────────────────────────────────────────  │
-│   Implementation: explore-codebase / navigate-codebase       │
-├──────────────────────────────────────────────────────────────┤
-│ Layer 2 — Composable primitives (the MCP API)                │
-│   search, find, describe, neighbors, resolve                 │
-├──────────────────────────────────────────────────────────────┤
-│ Layer 1 — Storage primitives                                 │
-│   Kuzu Cypher + LanceDB tables                               │
-└──────────────────────────────────────────────────────────────┘
-```
-
-## Relationship to `docs/AGENT-GUIDE.md`
-
-`explore-codebase` and `docs/AGENT-GUIDE.md` are **alternatives** covering the same ground. Pick one:
-
-- **`explore-codebase` skill** — loaded on demand by hosts with skill discovery (Claude Code, Qwen Code, Cursor). One skill to rule them all.
-- **AGENT-GUIDE block** — paste the `BEGIN`/`END` copy-paste block into your project's `AGENTS.md` / `CLAUDE.md`. Always-on. Best for hosts without skill loading.
-
-Do not mix the two — duplicate context confuses tool selection.
+Do not mix multiple mechanisms on the same agent — duplicate context confuses tool selection.
 
 ## Relationship to developer skills
 
