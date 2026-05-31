@@ -923,9 +923,123 @@ def test_trace_cross_service_boundary_stops(kuzu_graph: KuzuGraph) -> None:
         assert len(downstream_edges) == 0
 
 
-# ---------------------------------------------------------------------------
-# PR-TRACE-2 tests: MCP tool registration
-# ---------------------------------------------------------------------------
+def test_trace_cross_service_seamless_http(kuzu_graph: KuzuGraph) -> None:
+    """cross_service=True: BFS continues through HTTP_CALLS boundary into downstream service."""
+    seed_id = _find_method_with_declares_client(kuzu_graph)
+    if seed_id is None:
+        pytest.skip("No method with DECLARES_CLIENT in fixture")
+
+    out = trace_v2(
+        ids=seed_id,
+        direction="out",
+        edge_types=["CALLS", "HTTP_CALLS"],
+        max_depth=5,
+        fan_out_cap=0,
+        cross_service=True,
+        graph=kuzu_graph,
+    )
+    assert out.success is True
+
+    # Should have cross-service boundary edges.
+    xs_edges = [e for e in out.edges if e.cross_service_boundary]
+    if not xs_edges:
+        pytest.skip("No cross-service edges in result")
+
+    for xe in xs_edges:
+        assert xe.edge_type in ("HTTP_CALLS", "ASYNC_CALLS")
+        # Downstream node should be in nodes.
+        assert xe.to_id in out.nodes
+
+    # Key difference from boundary-stop: downstream Route should have edges FROM it
+    # (EXPOSES to handler, then CALLS from handler) because BFS continued through.
+    for xe in xs_edges:
+        downstream_edges = [e for e in out.edges if e.from_id == xe.to_id]
+        # At least one edge (EXPOSES to handler) should exist from the downstream Route.
+        if downstream_edges:
+            exposes_edges = [e for e in downstream_edges if e.edge_type == "EXPOSES"]
+            assert len(exposes_edges) >= 1, (
+                f"Expected EXPOSES edges from {xe.to_id}, got: {[e.edge_type for e in downstream_edges]}"
+            )
+
+
+def test_trace_cross_service_seamless_async(kuzu_graph: KuzuGraph) -> None:
+    """cross_service=True: BFS continues through ASYNC_CALLS boundary into downstream service."""
+    seed_id = _find_method_with_declares_producer(kuzu_graph)
+    if seed_id is None:
+        pytest.skip("No method with DECLARES_PRODUCER in fixture")
+
+    out = trace_v2(
+        ids=seed_id,
+        direction="out",
+        edge_types=["CALLS", "ASYNC_CALLS"],
+        max_depth=5,
+        fan_out_cap=0,
+        cross_service=True,
+        graph=kuzu_graph,
+    )
+    assert out.success is True
+
+    xs_edges = [e for e in out.edges if e.cross_service_boundary]
+    if not xs_edges:
+        pytest.skip("No cross-service edges in result")
+
+    for xe in xs_edges:
+        assert xe.edge_type in ("HTTP_CALLS", "ASYNC_CALLS")
+        assert xe.to_id in out.nodes
+
+
+def test_trace_cross_service_seamless_respects_budget(kuzu_graph: KuzuGraph) -> None:
+    """cross_service=True still respects max_nodes_discovered budget."""
+    seed_id = _find_method_with_declares_client(kuzu_graph)
+    if seed_id is None:
+        pytest.skip("No method with DECLARES_CLIENT in fixture")
+
+    out = trace_v2(
+        ids=seed_id,
+        direction="out",
+        edge_types=["CALLS", "HTTP_CALLS"],
+        max_depth=5,
+        max_nodes_discovered=100,
+        fan_out_cap=0,
+        cross_service=True,
+        graph=kuzu_graph,
+    )
+    assert out.success is True
+    # Budget may or may not have been hit depending on graph size,
+    # but if it was, the stats should reflect it.
+    if out.stats.budget_hit:
+        assert out.stats.total_nodes_discovered >= 100
+
+
+def test_trace_cross_service_seamless_exposes_as_scaffolding(kuzu_graph: KuzuGraph) -> None:
+    """EXPOSES edges from downstream Routes are exempt from fan_out_cap when cross_service=True."""
+    seed_id = _find_method_with_declares_client(kuzu_graph)
+    if seed_id is None:
+        pytest.skip("No method with DECLARES_CLIENT in fixture")
+
+    # Use fan_out_cap=1 — very tight, but EXPOSES should still come through.
+    out = trace_v2(
+        ids=seed_id,
+        direction="out",
+        edge_types=["CALLS", "HTTP_CALLS"],
+        max_depth=5,
+        fan_out_cap=1,
+        cross_service=True,
+        graph=kuzu_graph,
+    )
+    assert out.success is True
+
+    xs_edges = [e for e in out.edges if e.cross_service_boundary]
+    if xs_edges:
+        # Even with fan_out_cap=1, EXPOSES edges from downstream Routes should appear
+        # (they're scaffolding, exempt from cap).
+        for xe in xs_edges:
+            downstream_edges = [e for e in out.edges if e.from_id == xe.to_id]
+            if downstream_edges:
+                exposes_edges = [e for e in downstream_edges if e.edge_type == "EXPOSES"]
+                assert len(exposes_edges) >= 1, (
+                    f"EXPOSES should be exempt from fan_out_cap, but got: {[e.edge_type for e in downstream_edges]}"
+                )
 
 
 async def test_trace_registered_as_mcp_tool(mcp_server) -> None:

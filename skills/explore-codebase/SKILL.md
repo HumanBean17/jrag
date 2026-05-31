@@ -183,7 +183,7 @@ Prefer **`resolve` → `describe(id=…)`** over **`describe(fqn=…)`** when an
 | "What happens when route R is called?" | `find(kind="route")` then `trace(route_id, "out", ["EXPOSES","CALLS"], max_depth=4)` | `describe` on key nodes |
 | "Impact of changing method M" | `resolve` / `find` then `trace(id, "in", ["CALLS","OVERRIDES"], max_depth=3)` | `describe` on callers |
 | "Trace from X to database" | `trace(id, "out", ["CALLS"], max_depth=4, prune_roles=["DTO","EXCEPTION"])` | `neighbors` for pruned detail |
-| "What calls this across services?" | `trace(id, "out", ["CALLS","HTTP_CALLS","ASYNC_CALLS"], max_depth=5)` | `trace` on downstream route_id if needed |
+| "What calls this across services?" | `trace(id, "out", ["CALLS","HTTP_CALLS","ASYNC_CALLS"], max_depth=5, cross_service=True)` | `describe` on downstream routes |
 
 **Rules of thumb:**
 
@@ -229,7 +229,7 @@ Returns **edges** with `attrs` (`confidence`, `strategy`, `match`, … on cross-
 
 ### `trace`
 
-Multi-hop BFS with pruning. Args: `ids` (string or list), **`direction`**, **`edge_types`** (stored labels only — no composed dot-keys), `max_depth` (default 3, clamped 1–5), `max_paths` (default 20), `max_nodes_discovered` (default 500, clamped 100–2000), optional `filter` (NodeFilter), optional `edge_filter` (CALLS only), optional `prune_roles` (soft gate — edges recorded, frontier stops), `fan_out_cap` (default 5, scaffolding edges exempt), `collapse_trivial` (default true), `include_unresolved` (default false).
+Multi-hop BFS with pruning. Args: `ids` (string or list), **`direction`**, **`edge_types`** (stored labels only — no composed dot-keys), `max_depth` (default 3, clamped 1–5), `max_paths` (default 20), `max_nodes_discovered` (default 500, clamped 100–2000), optional `filter` (NodeFilter), optional `edge_filter` (CALLS only), optional `prune_roles` (soft gate — edges recorded, frontier stops), `fan_out_cap` (default 5, scaffolding edges exempt), `collapse_trivial` (default true), `include_unresolved` (default false), `cross_service` (default false — set true to continue BFS through HTTP_CALLS/ASYNC_CALLS boundaries into downstream services).
 
 Returns `TraceOutput`: `success`, `seed_ids`, `direction`, `edge_types`, `actual_depth`, `nodes` (dict of id→NodeRef), `edges` (list of `TraceEdge`), `paths` (list of `TracePath`), `stats` (`TraceStats`), `advisories`.
 
