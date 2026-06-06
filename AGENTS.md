@@ -154,6 +154,14 @@ The repo has a strong "propose then implement" culture (`propose/`,
 Skip this for clearly-bounded fixes (one-file bugs, doc edits, test
 loosening). Use judgement.
 
+When brainstorming produces a spec/design, write it as a proposal in
+`propose/active/<TOPIC>-PROPOSE.md` using the format established in
+`propose/completed/` (see any file there for the section structure:
+Status, Problem Statement, Proposed Solution, Scope, Schema / Ontology /
+Re-index impact, Tests / Validation, Open Questions, Out of scope,
+Sequencing / Migration). Do NOT use a brainstorming skill's default
+`docs/superpowers/specs/` location.
+
 ## Per-PR agent task contract
 
 When you're given a per-PR task prompt from `plans/AGENT-PROMPTS-*.md`
