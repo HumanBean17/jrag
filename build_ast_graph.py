@@ -401,6 +401,24 @@ class GraphTables:
     type_role_by_node_id: dict[str, str] = field(default_factory=dict)
 
 
+# ---------- per-file dependency tracking (sidecar .deps.json) ----------
+
+
+@dataclass
+class FileDeps:
+    """Per-file dependency metadata for incremental rebuild closure expansion."""
+
+    ext_hash: str = ""
+    declares: list[str] = field(default_factory=list)
+    injects: list[str] = field(default_factory=list)
+    extends: list[str] = field(default_factory=list)
+    calls: list[str] = field(default_factory=list)
+    uses_anno: list[str] = field(default_factory=list)
+    overrides: list[str] = field(default_factory=list)
+    declares_clients: list[str] = field(default_factory=list)
+    declares_producers: list[str] = field(default_factory=list)
+
+
 # ---------- file walk (see `path_filtering.iter_java_source_files`) ----------
 
 
@@ -2990,6 +3008,164 @@ def _write_meta(conn: kuzu.Connection, tables: GraphTables, source_root: Path) -
     )
 
 
+# ---------- dependency index (sidecar .deps.json) ----------
+
+
+def _build_file_deps(tables: GraphTables, source_root: Path) -> dict[str, FileDeps]:
+    """Build per-file dependency metadata from GraphTables for the sidecar index."""
+    # node_id -> file_path lookup
+    node_file: dict[str, str] = {}
+    for entry in tables.types.values():
+        node_file[entry.node_id] = entry.file_path
+    for m in tables.members:
+        node_file[m.node_id] = m.file_path
+
+    # node_id -> identifier (type FQN or "TypeFQN#method()" for members)
+    node_fqn: dict[str, str] = {}
+    for entry in tables.types.values():
+        node_fqn[entry.node_id] = entry.decl.fqn
+    for m in tables.members:
+        node_fqn[m.node_id] = f"{m.parent_fqn}#{m.decl.signature}"
+
+    deps: dict[str, FileDeps] = {}
+    for fp in tables.files:
+        deps[fp] = FileDeps()
+
+    # ext_hash — read file from disk and hash
+    for fp in deps:
+        full = source_root / fp
+        try:
+            raw = full.read_bytes()
+            deps[fp].ext_hash = f"sha256:{hashlib.sha256(raw).hexdigest()}"
+        except OSError:
+            deps[fp].ext_hash = ""
+
+    # declares — type FQNs declared in this file
+    for entry in tables.types.values():
+        fp = entry.file_path
+        if fp in deps:
+            deps[fp].declares.append(entry.outer_fqn or entry.decl.fqn)
+
+    # injects — FQNs of injected symbols (from injects_rows)
+    for row in tables.injects_rows:
+        fp = node_file.get(row.src_id)
+        if fp and fp in deps:
+            deps[fp].injects.append(row.dst_fqn)
+
+    # extends — FQNs of extended types (from extends_rows)
+    for row in tables.extends_rows:
+        fp = node_file.get(row.src_id)
+        if fp and fp in deps:
+            deps[fp].extends.append(row.dst_fqn)
+
+    # calls — callee identifiers (method/type FQNs from calls_rows)
+    for row in tables.calls_rows:
+        fp = node_file.get(row.src_id)
+        if fp and fp in deps:
+            callee = node_fqn.get(row.dst_id)
+            if callee is not None:
+                deps[fp].calls.append(callee)
+
+    # uses_anno — annotation simple names from types + members (deduplicated)
+    for entry in tables.types.values():
+        fp = entry.file_path
+        if fp in deps:
+            for anno in entry.decl.annotations:
+                if anno.name not in deps[fp].uses_anno:
+                    deps[fp].uses_anno.append(anno.name)
+    for m in tables.members:
+        fp = m.file_path
+        if fp in deps:
+            for anno in m.decl.annotations:
+                if anno.name not in deps[fp].uses_anno:
+                    deps[fp].uses_anno.append(anno.name)
+
+    # overrides — overridden method FQNs (from overrides_rows)
+    for row in tables.overrides_rows:
+        fp = node_file.get(row.src_id)
+        if fp and fp in deps:
+            overridden = node_fqn.get(row.dst_id)
+            if overridden is not None:
+                deps[fp].overrides.append(overridden)
+
+    # declares_clients — member FQNs declaring HTTP clients
+    for row in tables.client_rows:
+        fp = row.filename
+        if fp in deps:
+            deps[fp].declares_clients.append(row.member_fqn)
+
+    # declares_producers — member FQNs declaring async producers
+    for row in tables.producer_rows:
+        fp = row.filename
+        if fp in deps:
+            deps[fp].declares_producers.append(row.member_fqn)
+
+    return deps
+
+
+_DEPS_VERSION = 1
+
+
+def _write_dependency_index(
+    db_path: Path,
+    tables: GraphTables,
+    source_root: Path,
+) -> None:
+    """Write sidecar .deps.json alongside the Kuzu database."""
+    deps = _build_file_deps(tables, source_root)
+    payload = {
+        "version": _DEPS_VERSION,
+        "ontology_version": ONTOLOGY_VERSION,
+        "files": {fp: asdict(d) for fp, d in sorted(deps.items())},
+    }
+    deps_path = db_path.parent / ".deps.json"
+    tmp = deps_path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(payload, indent=2))
+    tmp.rename(deps_path)
+
+
+@dataclass
+class DepsIndex:
+    version: int
+    ontology_version: int
+    files: dict[str, FileDeps]
+
+
+def _read_dependency_index(deps_path: Path) -> DepsIndex | None:
+    """Read and validate sidecar .deps.json. Returns None on missing/corrupt/stale."""
+    if not deps_path.is_file():
+        return None
+    try:
+        raw = json.loads(deps_path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+    try:
+        if raw.get("version") != _DEPS_VERSION:
+            return None
+        if raw.get("ontology_version") != ONTOLOGY_VERSION:
+            return None
+        files: dict[str, FileDeps] = {}
+        for fp, obj in raw.get("files", {}).items():
+            files[fp] = FileDeps(
+                ext_hash=obj.get("ext_hash", ""),
+                declares=obj.get("declares", []),
+                injects=obj.get("injects", []),
+                extends=obj.get("extends", []),
+                calls=obj.get("calls", []),
+                uses_anno=obj.get("uses_anno", []),
+                overrides=obj.get("overrides", []),
+                declares_clients=obj.get("declares_clients", []),
+                declares_producers=obj.get("declares_producers", []),
+            )
+    except Exception:
+        return None
+    return DepsIndex(
+        version=raw["version"],
+        ontology_version=raw["ontology_version"],
+        files=files,
+    )
+
+
 def write_kuzu(
     db_path: Path,
     tables: GraphTables,
@@ -3031,6 +3207,7 @@ def write_kuzu(
             _verbose_stderr_line(f"[graph] writing · routes/exposes written in {time.time() - t2:.2f}s")
         _write_meta(conn, tables, source_root)
         conn.close()
+        _write_dependency_index(db_path, tables, source_root)
 
 
 # ---------- CLI ----------
