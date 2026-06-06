@@ -391,33 +391,9 @@ Decision engine inside `cli.py`'s `_cmd_increment`:
 The `_emit_increment_kuzu_warning()` call in `cli.py` is removed once
 this ships.
 
-## 5. MCP integration
+## 5. Determinism + correctness
 
-`refresh_code_index` (MCP tool in `server.py`) gains the ability to
-call the incremental Kuzu path via the CLI:
-
-```python
-# Pseudocode inside server.py:refresh_code_index
-decision = decide_mode(changed_paths, git_ref_base)
-if decision.lance_mode == "incremental":
-    cocoindex_update(incremental=True, paths=decision.lance_paths)
-else:
-    cocoindex_update(full=True)
-
-if decision.kuzu_mode == "incremental":
-    subprocess.run(["java-codebase-rag", "increment"])
-else:
-    subprocess.run(["java-codebase-rag", "reprocess", "--graph-only"])
-```
-
-Decision engine returns two independent mode choices — LanceDB and
-Kuzu may incrementally update independently. See
-[`INDEX-AUTO-MODE-PROPOSE.md`](INDEX-AUTO-MODE-PROPOSE.md) for the
-full decision engine specification.
-
-## 6. Determinism + correctness
-
-### 6.1 Determinism test
+### 5.1 Determinism test
 
 Create `tests/test_incremental_equivalence.py` as a prerequisite:
 
@@ -444,7 +420,7 @@ This is the single most important test in the entire feature.
 Without it, every incremental rebuild is a potential silent-divergence
 risk. Run against every fixture.
 
-### 6.2 Failure modes
+### 5.2 Failure modes
 
 - **Half-applied delete:** transaction wraps the entire incremental
   pass; on any exception, ROLLBACK and fall back to full rebuild.
@@ -453,7 +429,7 @@ risk. Run against every fixture.
 - **Schema-version mismatch:** if `graph_meta.ontology_version` ≠
   current `ONTOLOGY_VERSION`, force full rebuild.
 
-## 7. Rollout
+## 6. Rollout
 
 1. **PR-T1 (foundation + determinism test):** Create
    `tests/test_incremental_equivalence.py` with full-rebuild
@@ -473,8 +449,8 @@ risk. Run against every fixture.
    cover all fixtures.
 4. **PR-T4 (CLI + decision engine):** Integrate INDEX-AUTO-MODE
    decision engine into `cli.py`'s `_cmd_increment`. Remove
-   `_emit_increment_kuzu_warning()`. Wire `refresh_code_index`
-   MCP tool to dispatch.
+   `_emit_increment_kuzu_warning()`. Index building is
+   CLI-only — no MCP tools for index refresh.
 5. **PR-T5 (brownfield closure refinement, optional):** Narrow the
    pessimistic "any brownfield-override change → full" rule once
    Layer-4/5 fanout is explicitly documented.
@@ -482,18 +458,18 @@ risk. Run against every fixture.
 PR-T1 through PR-T4 are the headline. PR-T5 is an optimisation
 on top.
 
-## 8. Risk assessment
+## 7. Risk assessment
 
 | Risk | Severity | Mitigation |
 |------|----------|------------|
-| Silent divergence between full and incremental | **High** | `test_incremental_matches_full` mandatory per fixture; covered by §6.1 |
+| Silent divergence between full and incremental | **High** | `test_incremental_matches_full` mandatory per fixture; covered by §5.1 |
 | Pessimistic full-fallback hides real incremental wins | Medium | Track full-fallback rate via `graph_meta.last_rebuild_mode` + reason; review monthly |
 | `.deps.json` becomes stale | Medium | `ontology_version` field check; mismatch → full rebuild |
 | Decision engine bugs cause unsafe incremental | High | Default-to-full on ambiguity; conservative initial rules; expand only after burn-in |
 | Pass2/Pass3 closure misses an edge type | Medium | Determinism test surfaces this immediately |
 | Performance regression (incremental slower than full for small repos) | Low | Heuristic: skip incremental when dirty set is >50% of files |
 
-## 9. Performance estimate
+## 8. Performance estimate
 
 On a hypothetical 1000-file Java repo:
 
@@ -509,7 +485,7 @@ These are estimates — actual numbers depend on closure breadth and
 Kuzu transaction overhead. PR-T1 establishes a measured baseline on
 `bank-chat-system` and other fixtures.
 
-## 10. Resolved TBDs
+## 9. Resolved TBDs
 
 ### TBD-1: Brownfield closure granularity — **pessimistic fallback**
 
@@ -543,7 +519,7 @@ A follow-on proposal should layer a filesystem watcher on top of this
 incremental path. It needs debouncing, batched-change semantics, and
 its own state machine.
 
-## 11. Done definition (proposal-level)
+## 10. Done definition (proposal-level)
 
 This proposal is "ready for plan derivation" when:
 

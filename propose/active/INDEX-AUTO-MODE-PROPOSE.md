@@ -38,20 +38,8 @@ No new commands. Existing commands gain automatic mode selection:
 - `java-codebase-rag reprocess --graph-only` — full Kuzu rebuild only.
 - `java-codebase-rag reprocess --vectors-only` — full Lance rebuild only.
 
-### MCP tool (`refresh_code_index`)
-
-Add optional inputs:
-
-- `confirm: bool = false` (existing)
-- `mode: "auto" | "incremental" | "full" = "auto"`
-- `changed_paths: list[str] | null = null`
-- `git_ref_base: str = "HEAD"`
-- `reason: str | null = null`
-
-Backward compatibility:
-
-- Calls passing only `confirm=true` should still work.
-- Default mode is `auto` (safe-by-default decisioning).
+Index building is **CLI-only**. The MCP server (`server.py`) is a
+read-only query interface and does not expose index-building tools.
 
 ## Decision Engine (`mode=auto`)
 
@@ -126,20 +114,17 @@ Kuzu may incrementally update independently. For example, if
 `.deps.json` is missing but no config changed, Lance could be
 incremental while Kuzu falls back to full.
 
-## Response Payload Enhancements
+## CLI Output Enhancements
 
-Add decision transparency fields to `refresh_code_index` response:
+Emit the mode decision to stderr with `[graph]` / `[vectors]`
+prefixes consistent with existing progress output (see
+`CLI-PROGRESS-OUTPUT-PROPOSE.md`).
 
-- `effective_mode: { lance: "incremental" | "full", kuzu: "incremental" | "full" }`
-- `decision_reasons: list[str]`
-- `detected_changes: { added, modified, deleted, renamed }`
-- optional `warnings: list[str]`
+Decision transparency on stderr:
 
-Keep existing stdout/stderr/exit_code fields intact.
-
-For the CLI (`increment` command), emit the mode decision to stderr
-with `[graph]` / `[vectors]` prefixes consistent with existing
-progress output (see `CLI-PROGRESS-OUTPUT-PROPOSE.md`).
+- Effective mode (incremental or full) for Lance and Kuzu independently.
+- Decision reasons (why full was chosen, if applicable).
+- Detected changes summary (added, modified, deleted, renamed).
 
 ## Safety Policy
 
@@ -173,9 +158,8 @@ progress output (see `CLI-PROGRESS-OUTPUT-PROPOSE.md`).
 - Make logs/user-facing messages explicit about why full mode was
   selected.
 - Preserve current subprocess environment and project-root behavior.
-- The decision engine lives in a shared module (e.g. `index_common.py`
-  or a new `refresh_decision.py`) usable by both `cli.py` and
-  `server.py`.
+- The decision engine lives in a shared module (`refresh_decision.py`)
+  usable by `cli.py` and `pipeline.py`.
 
 ## Rollout
 
@@ -183,5 +167,4 @@ progress output (see `CLI-PROGRESS-OUTPUT-PROPOSE.md`).
 2. Integrate into `cli.py`'s `_cmd_increment` — remove
    `_emit_increment_kuzu_warning()`, dispatch to Kuzu incremental or
    full based on decision.
-3. Integrate into `server.py`'s `refresh_code_index` MCP tool.
-4. Update `README.md` and `docs/JAVA-CODEBASE-RAG-CLI.md`.
+3. Update `README.md` and `docs/JAVA-CODEBASE-RAG-CLI.md`.

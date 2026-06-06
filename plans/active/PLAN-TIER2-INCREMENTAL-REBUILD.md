@@ -53,7 +53,7 @@ Depends on: none (ontology 16 surface is stable; no pending PRs block this).
 | **PR-T1** | Foundation: `FileDeps` dataclass, `.deps.json` read/write, determinism test, perf baseline | none | `.deps.json` schema must be right first time (version field, field coverage for closure rules); determinism test coverage must surface divergence | determinism + deps-read/write | prerequisite only |
 | **PR-T2** | Symmetric delete helpers: `delete_*_for_file` for all node/edge types | none | Cypher DELETE must match current schema exactly; cascade semantics (Symbol delete must clean edges); count accuracy for verbose logging | per-node-type delete + cascade | PR-T1 (needs `.deps.json` read) |
 | **PR-T3** | Incremental orchestrator: `build_ast_graph_incremental`, `--changed-paths`, per-pass subset functions, closure expansion | none | Closure correctness (missing rule = silent divergence); transaction semantics; pass6/global-invariant; incremental-write functions | equivalence on all fixtures + closure expansion + subset passes | PR-T1 + PR-T2 |
-| **PR-T4** | CLI + decision engine: integrate into `_cmd_increment`, remove warning, create `refresh_code_index` MCP tool | none | Decision-engine correctness (wrong mode = stale graph); `refresh_code_index` is new (not an update); CLI stderr format consistency | decision engine + CLI integration + MCP tool | PR-T3 |
+| **PR-T4** | CLI + decision engine: integrate into `_cmd_increment`, remove warning | none | Decision-engine correctness (wrong mode = stale graph); CLI stderr format consistency | decision engine + CLI integration | PR-T3 |
 | **PR-T5** | Brownfield closure refinement (optional, deferred) | none | Brownfield fanout rules must be formalised before narrowing | brownfield closure tests | PR-T4 |
 
 Landing order: **T1 -> T2 -> T3 -> T4**. PR-T5 is optional and may follow.
@@ -71,8 +71,8 @@ Landing order: **T1 -> T2 -> T3 -> T4**. PR-T5 is optional and may follow.
 | Schema migrations | **Full rebuild required** — ontology bump invalidates `.deps.json` via `ontology_version` check. |
 | `_write_meta` in incremental | **Query live Kuzu DB for global stats** — the partial `GraphTables` accumulator only holds dirty-file data, so aggregation counts would be wrong. `_write_meta` in incremental mode runs a set of COUNT Cypher queries against the live DB to compute `routes_total`, `calls_total`, match breakdowns, etc. |
 | `pass5_imperative_edges` and `asts` | **`pass5` does not use `asts`** (it does `del asts` and works from `tables.members`). Subset version mirrors this: `pass5_imperative_edges_subset(tables, dirty)` without an `asts` parameter. |
-| `refresh_code_index` MCP tool | **Does not exist yet** — must be created in PR-T4. The proposal (INDEX-AUTO-MODE) specifies its schema; PR-T4 is the first implementation. |
-| `refresh_decision.py` location | **Top-level module** (`refresh_decision.py`) — imported by both `java_codebase_rag/cli.py` and `server.py`. Lives alongside `build_ast_graph.py`. |
+| Index building scope | **CLI-only** — no MCP tools for index refresh. The MCP server (`server.py`) is a read-only query interface. The decision engine lives in `refresh_decision.py`, imported by `java_codebase_rag/cli.py` and `java_codebase_rag/pipeline.py`. |
+| `refresh_decision.py` location | **Top-level module** (`refresh_decision.py`) — imported by `java_codebase_rag/cli.py` and `java_codebase_rag/pipeline.py`. Lives alongside `build_ast_graph.py`. |
 | Test fixture strategy | **Per-test fresh builds** for equivalence tests (Tier 3 in `tests/README.md`). Use `tests/_builders.py` helpers (`build_kuzu_full_into`, `build_graph_tables_to`) for full-rebuild baselines. Session fixtures (Tier 1/2) are read-only and cannot be mutated for incremental tests. |
 | `graph_meta.last_rebuild_mode` | **Added in PR-T3** — string field on `GraphMeta` node: `"full"` or `"incremental"`. Used for fallback-rate monitoring (cross-PR risk #5). |
 
@@ -439,17 +439,7 @@ Landing order: **T1 -> T2 -> T3 -> T4**. PR-T5 is optional and may follow.
   --changed-paths <temp-file>`. The temp file contains newline-separated
   paths, matching `build_ast_graph.py`'s `--changed-paths` contract.
 
-### 4. `server.py`
-- **Create** `refresh_code_index` MCP tool (does not exist yet). Accepts
-  optional inputs: `confirm: bool`, `mode: "auto" | "incremental" | "full"`,
-  `changed_paths: list[str] | null`, `git_ref_base: str`, `reason: str | null`.
-- Dispatches to incremental or full Kuzu rebuild based on `RefreshDecision`.
-- Includes `effective_mode`, `decision_reasons`, `detected_changes` in
-  response payload.
-- Backward compatible: calls passing only `confirm=true` still work
-  (mode defaults to `"auto"`).
-
-### 5. `tests/test_refresh_decision.py` (new)
+### 4. `tests/test_refresh_decision.py` (new)
 - `test_auto_modified_only_incremental` — modified-only changes → incremental.
 - `test_auto_deleted_file_full_kuzu` — deletion → full Kuzu, incremental Lance.
 - `test_auto_renamed_file_full_kuzu` — rename → full Kuzu.
@@ -458,9 +448,8 @@ Landing order: **T1 -> T2 -> T3 -> T4**. PR-T5 is optional and may follow.
 - `test_explicit_full_overrides` — `mode=full` → full regardless.
 - `test_deps_missing_full_kuzu` — no `.deps.json` → full Kuzu.
 - `test_deps_stale_ontology_full_kuzu` — wrong version → full Kuzu.
-- `test_backward_compat_confirm_only` — `confirm=true` only → auto mode.
 
-### 6. `tests/test_cli_increment.py` (new or extend existing CLI tests)
+### 5. `tests/test_cli_increment.py` (new or extend existing CLI tests)
 - `test_increment_dispatches_kuzu_incremental` — mock pipeline, verify
   `--changed-paths` passed.
 - `test_increment_dispatches_kuzu_full_fallback` — mock pipeline, verify
@@ -476,17 +465,16 @@ Landing order: **T1 -> T2 -> T3 -> T4**. PR-T5 is optional and may follow.
 6. `test_explicit_full_overrides`
 7. `test_deps_missing_full_kuzu`
 8. `test_deps_stale_ontology_full_kuzu`
-9. `test_backward_compat_confirm_only`
-10. `test_increment_dispatches_kuzu_incremental`
-11. `test_increment_dispatches_kuzu_full_fallback`
-12. `test_increment_removes_kuzu_warning`
+9. `test_increment_dispatches_kuzu_incremental`
+10. `test_increment_dispatches_kuzu_full_fallback`
+11. `test_increment_removes_kuzu_warning`
 
 ## Definition of done (PR-T4)
 - `java-codebase-rag increment` updates both Lance and Kuzu incrementally
   when safe.
 - Decision engine isolated in `refresh_decision.py` with full test coverage.
 - `_emit_increment_kuzu_warning()` removed from `java_codebase_rag/cli.py`.
-- `refresh_code_index` MCP tool created in `server.py`, backward compatible.
+- No MCP tools added — index building is CLI-only.
 - All existing tests pass.
 - `ruff check .` clean.
 
@@ -495,14 +483,13 @@ Landing order: **T1 -> T2 -> T3 -> T4**. PR-T5 is optional and may follow.
 | --- | --- | --- | --- |
 | 1 | Implement `ChangeSet` + `RefreshDecision` dataclasses | `refresh_decision.py` | Types defined |
 | 2 | Implement `_detect_repo_changes` | `refresh_decision.py` | Git diff + hash fallback work |
-| 3 | Implement `_choose_refresh_mode` | `refresh_decision.py` | All 9 decision tests pass |
+| 3 | Implement `_choose_refresh_mode` | `refresh_decision.py` | All 8 decision tests pass |
 | 4 | Add `run_build_ast_graph_incremental` to pipeline | `java_codebase_rag/pipeline.py` | Wrapper writes temp file, dispatches `--changed-paths` |
 | 5 | Update `_cmd_increment` in CLI | `java_codebase_rag/cli.py` | Dispatches incremental or full based on decision |
 | 6 | Remove `_emit_increment_kuzu_warning` + `_INCREMENT_WARNING_LINES` | `java_codebase_rag/cli.py` | No warning emitted |
-| 7 | Create `refresh_code_index` MCP tool | `server.py` | New tool with `mode`/`changed_paths`/`git_ref_base` inputs |
-| 8 | Write decision engine tests | `tests/test_refresh_decision.py` | All pass |
-| 9 | Write CLI integration tests | `tests/test_cli_increment.py` | All pass |
-| 10 | Run full test suite + ruff | all | Green |
+| 7 | Write decision engine tests | `tests/test_refresh_decision.py` | All pass |
+| 8 | Write CLI integration tests | `tests/test_cli_increment.py` | All pass |
+| 9 | Run full test suite + ruff | all | Green |
 
 ---
 
