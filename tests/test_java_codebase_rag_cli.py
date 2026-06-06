@@ -941,10 +941,9 @@ def test_mcp_server_loads_yaml_config_at_startup(
 ) -> None:
     """MCP server main() loads YAML config and applies to os.environ (issue #238).
 
-    Verifies that main() calls resolve_operator_config with source_root=None
-    (walk-up discovery) and applies the result to os.environ. Uses mocks to
-    avoid loading real models or leaking env state (e.g. SBERT_DEVICE=cuda)
-    to subsequent tests.
+    Verifies that main() calls resolve_operator_config with the correct source_root
+    and applies the result to os.environ. Uses mocks to avoid loading real models
+    or leaking env state (e.g. SBERT_DEVICE=cuda) to subsequent tests.
     """
     import server as server_mod
     from unittest.mock import MagicMock
@@ -962,9 +961,8 @@ def test_mcp_server_loads_yaml_config_at_startup(
 
     server_mod.main()
 
-    # resolve_operator_config should have been called with source_root=None
-    # so walk-up + YAML source_root resolution happens inside it
-    server_mod.resolve_operator_config.assert_called_once_with(source_root=None)
+    # resolve_operator_config should have been called with the project root
+    server_mod.resolve_operator_config.assert_called_once_with(source_root=server_mod._project_root())
     # apply_to_os_environ should have been called to set env vars
     fake_cfg.apply_to_os_environ.assert_called_once()
 
@@ -972,11 +970,12 @@ def test_mcp_server_loads_yaml_config_at_startup(
 def test_mcp_server_yaml_config_precedence_env_over_yaml(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """MCP server passes source_root=None to resolve_operator_config (issue #238).
+    """MCP server passes _project_root() to resolve_operator_config (issue #238).
 
-    Precedence (env > YAML > default) is handled inside resolve_operator_config
-    via walk-up discovery. This test verifies that main() delegates correctly
-    and apply_to_os_environ is called with the resolved config.
+    Precedence (env > YAML > default) is already tested by
+    test_embedding_model_precedence_cli_over_env_over_yaml_over_default.
+    This test verifies that main() delegates to resolve_operator_config
+    with the correct source root, which handles precedence internally.
     """
     import server as server_mod
     from unittest.mock import MagicMock
@@ -995,4 +994,5 @@ def test_mcp_server_yaml_config_precedence_env_over_yaml(
 
     server_mod.main()
 
-    server_mod.resolve_operator_config.assert_called_once_with(source_root=None)
+    server_mod.resolve_operator_config.assert_called_once()
+    assert server_mod.resolve_operator_config.call_args.kwargs["source_root"] == server_mod._project_root()

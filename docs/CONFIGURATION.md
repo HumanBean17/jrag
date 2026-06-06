@@ -22,22 +22,6 @@ For the architecture rationale (the GPS metaphor, three-layer design, future wor
 
 The operator-facing surface is **six** variables (plus MCP-only `JAVA_CODEBASE_RAG_SOURCE_ROOT` below). Precedence for knobs that also exist as CLI flags or YAML entries is **CLI flag > env var > YAML > built-in default** (see [`JAVA-CODEBASE-RAG-CLI.md`](./JAVA-CODEBASE-RAG-CLI.md)).
 
-### Source root discovery and precedence
-
-The server and CLI resolve the effective Java source root through a precedence chain:
-
-| Priority | Source | How it resolves |
-|---|---|---|
-| 1 (highest) | CLI `--source-root` | Absolute, or relative to cwd |
-| 2 | `JAVA_CODEBASE_RAG_SOURCE_ROOT` env var | Absolute, or relative to cwd |
-| 3 | YAML `source_root` field | **Relative to the config file directory** (not cwd) |
-| 4 | Walk-up discovery | Walk from cwd upward to find `.java-codebase-rag.yml`; uses the config file's directory as source root |
-| 5 (lowest) | cwd | No config found, no YAML override |
-
-Walk-up checks each directory from cwd upward for `.java-codebase-rag.yml` or `.java-codebase-rag.yaml`. The **first match wins** (closest to cwd). The walk stops at `$HOME` (inclusive — `$HOME` itself is checked) or the filesystem root. This mirrors how git finds `.git`.
-
-### Variables
-
 | Variable | Purpose |
 |---|---|
 | `JAVA_CODEBASE_RAG_INDEX_DIR` | Local filesystem **directory** for Lance tables, the Kuzu file `code_graph.kuzu`, and cocoindex state (`cocoindex.db`). Not a `lancedb://` or cloud URI — use a path. Default: `./.java-codebase-rag/` under the resolved Java tree root. |
@@ -47,14 +31,14 @@ Walk-up checks each directory from cwd upward for `.java-codebase-rag.yml` or `.
 | `JAVA_CODEBASE_RAG_RUN_HEAVY` | Test gate: set to `1` / `true` / `yes` to run the slow cocoindex + Lance end-to-end test (`pytest`); not used in normal operator workflows. |
 | `JAVA_CODEBASE_RAG_HINTS_ENABLED` | When `0` / `false` / `no`, suppress `hints_structured` and `advisories` from all MCP tool responses. Overridable via `.java-codebase-rag.yml` `hints.enabled`. Default: enabled. |
 
-**MCP host launchers** also set `JAVA_CODEBASE_RAG_SOURCE_ROOT` to the Java repository root when it differs from the server process cwd (see `mcp.json.example` in the repo root). When the env var is unset, the server walks up from cwd to discover the config automatically.
+**MCP host launchers** also set `JAVA_CODEBASE_RAG_SOURCE_ROOT` to the Java repository root when it differs from the server process cwd (see `mcp.json.example` in the repo root).
 
 Only the names in the table above (plus `JAVA_CODEBASE_RAG_SOURCE_ROOT` for MCP hosts) are read as configuration. Project config belongs in **`.java-codebase-rag.yml`** (or `.yaml`).
 
 **Paths and conventions** (for scripts and operators):
 
 - **`JAVA_CODEBASE_RAG_INDEX_DIR`** — filesystem path to the index directory (not a URI). Lance opens this directory; Kuzu is always `<index-dir>/code_graph.kuzu`; cocoindex keeps **`cocoindex.db`** next to them.
-- **Java tree root** — CLI: `--source-root` (else walk-up discovery, else cwd). MCP stdio: `JAVA_CODEBASE_RAG_SOURCE_ROOT` env var (else walk-up from cwd). YAML: `source_root` field resolved relative to the config file directory.
+- **Java tree root** — CLI: `--source-root` (else cwd). MCP stdio: set `JAVA_CODEBASE_RAG_SOURCE_ROOT` when the Java repo root differs from the server process cwd.
 - **`microservice_roots`** — configure only under **`microservice_roots:`** in `.java-codebase-rag.yml` (or `.yaml`).
 - **Chunk context diagnostics / heavy tests** — `JAVA_CODEBASE_RAG_DEBUG_CONTEXT`, `JAVA_CODEBASE_RAG_RUN_HEAVY` (see the table above).
 
@@ -64,23 +48,15 @@ Python package: **`java_codebase_rag`** (`python -m java_codebase_rag.cli`).
 
 ## 2. Project YAML reference (`.java-codebase-rag.yml`)
 
-A single file at the project root (the directory you pass as `--source-root`, or discovered via walk-up, or cwd) holds everything that isn't an environment variable. The two accepted filenames are `.java-codebase-rag.yml` and `.java-codebase-rag.yaml`; if both exist, `.yml` wins.
+A single file at the project root (the directory you pass as `--source-root`, or cwd) holds everything that isn't an environment variable. The two accepted filenames are `.java-codebase-rag.yml` and `.java-codebase-rag.yaml`; if both exist, `.yml` wins.
 
 **All keys are optional.** A project with no YAML at all uses built-in defaults plus env vars. Add only the keys you need.
 
 ```yaml
 # .java-codebase-rag.yml — full reference, every key annotated.
-# Place at the project root (same directory you pass as --source-root),
-# or anywhere above it — the server walks up from cwd to find it.
+# Place at the project root (same directory you pass as --source-root).
 
 # -------- Core knobs (mirror env vars; precedence: CLI > env > YAML > default) --------
-
-# Source root: where your Java source tree lives. When set, resolves relative to
-# this config file's directory (not cwd). Useful when the config file lives outside
-# the Java tree (e.g. in a monorepo root above multiple Java projects).
-# When omitted, defaults to the directory containing this config file (found via walk-up).
-# CLI: --source-root. Env: JAVA_CODEBASE_RAG_SOURCE_ROOT.
-source_root: ./my-java-project
 
 # Index directory: where Lance tables, code_graph.kuzu, and cocoindex.db live.
 # - Tilde (`~`) is expanded; `$VAR` is NOT (use absolute paths or `~`).
@@ -195,7 +171,6 @@ async_producer_overrides:
 
 | Field | Expanded? | Notes |
 |---|---|---|
-| `source_root` | partial | `~` expanded; `$VAR` is NOT expanded. Relative paths resolve against the **config file directory** (not cwd). |
 | `index_dir` | partial | `~` expanded; `$VAR` is NOT expanded. Relative paths resolve against `source_root`. |
 | `embedding.model` (when path-shaped) | yes | Path-shape = starts with `/`, `./`, `../`, `~`, or contains `$`. Plain `org/name` is treated as a hub id and passed through. Applies to the value after CLI > env > YAML > default precedence. Long-lived MCP hosts also apply the same expansion when reading `SBERT_MODEL` from the process environment (so table metadata and search agree with `index_common` defaults). |
 | `embedding.device` | n/a | Device strings (`cpu`, `cuda`, `mps`) aren't paths. |
@@ -204,7 +179,7 @@ async_producer_overrides:
 
 **Tips & gotchas:**
 
-- **The file is discovered by walking up from cwd** — like git finds `.git`. Place it at or above your project root. The walk stops at `$HOME` (inclusive). You can also set `JAVA_CODEBASE_RAG_SOURCE_ROOT` or use `--source-root` to bypass discovery entirely.
+- **The file must be at `source_root`**, not in `$HOME`. The MCP server reads `JAVA_CODEBASE_RAG_SOURCE_ROOT` to find it; the CLI uses `--source-root` (else cwd).
 - **Don't commit secrets** into this YAML — it sits next to your source tree and is read by every operator who clones it.
 - **Rebuild after editing brownfield overrides.** Run a full `java-codebase-rag reprocess` (no flags) so Lance and Kuzu stay coherent, or use `--graph-only` / `--vectors-only` when you know only one store needs invalidation. Editing `embedding.model` requires a vector rebuild (`reprocess` or `--vectors-only`).
 - **Diagnose what's loaded.** `java-codebase-rag meta` prints the resolved config and each value's `*_source` (`cli` / `env` / `yaml` / `default`) — see `embedding_model_source`, `embedding_device_source`, `index_dir_source`.

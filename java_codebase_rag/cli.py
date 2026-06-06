@@ -16,7 +16,6 @@ from typing import Any, Callable
 from java_codebase_rag.config import (
     ResolvedOperatorConfig,
     describe_path_sizes,
-    discover_project_root,
     emit_legacy_env_hints_if_present,
     emit_legacy_yaml_hint_if_needed,
     index_dir_has_existing_artifacts,
@@ -232,18 +231,6 @@ def _cmd_init(args: argparse.Namespace) -> int:
     cfg = _resolved_from_ns(args)
     _startup_hints(cfg)
     cfg.apply_to_os_environ()
-    parent_cfg_dir = discover_project_root(cfg.source_root.parent)
-    if parent_cfg_dir is not None:
-        from java_codebase_rag.config import YAML_CONFIG_FILENAMES
-
-        for name in YAML_CONFIG_FILENAMES:
-            if (parent_cfg_dir / name).is_file():
-                print(
-                    f"Warning: found existing config at {parent_cfg_dir / name}. "
-                    "Creating a new project here will create a separate index.",
-                    file=sys.stderr,
-                )
-                break
     occupied, paths = index_dir_has_existing_artifacts(cfg.index_dir)
     if occupied:
         _emit(
@@ -534,12 +521,13 @@ def _cmd_tables(args: argparse.Namespace) -> int:
 
 
 def _cmd_diagnose_ignore(args: argparse.Namespace) -> int:
+    import server  # lazy
     from path_filtering import LayeredIgnore  # lazy
 
     cfg = _resolved_from_ns(args)
     _startup_hints(cfg)
     cfg.apply_to_os_environ()
-    root = cfg.source_root
+    root = server._project_root()
     raw = Path(args.path)
     try:
         abs_path = raw.resolve() if raw.is_absolute() else (root / raw).resolve()
