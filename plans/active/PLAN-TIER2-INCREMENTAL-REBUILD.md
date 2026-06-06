@@ -410,8 +410,8 @@ Landing order: **T1 -> T2 -> T3 -> T4**. PR-T5 is optional and may follow.
   `detected_changes: ChangeSet`. The `"auto"` mode from
   INDEX-AUTO-MODE-PROPOSE is resolved to concrete `incremental`/`full`
   by `_choose_refresh_mode` before returning — callers never see `"auto"`.
-- `_detect_repo_changes(source_root, git_ref_base, changed_paths) -> ChangeSet`
-  — git diff or hash-based change detection.
+- `_detect_repo_changes(source_root, changed_paths, deps_index) -> ChangeSet`
+  — explicit `changed_paths` or hash-based diff against `.deps.json`.
 - `_choose_refresh_mode(changes: ChangeSet, deps_path: Path, total_files: int) -> RefreshDecision`
   — implements the decision rules from `INDEX-AUTO-MODE-PROPOSE.md`:
   - Full Kuzu when: deletes, renames, config changes, pipeline changes,
@@ -444,7 +444,7 @@ Landing order: **T1 -> T2 -> T3 -> T4**. PR-T5 is optional and may follow.
 - `test_auto_deleted_file_full_kuzu` — deletion → full Kuzu, incremental Lance.
 - `test_auto_renamed_file_full_kuzu` — rename → full Kuzu.
 - `test_auto_config_change_full` — `.java-codebase-rag.yml` change → full.
-- `test_auto_detection_failure_full` — no git, no paths → full.
+- `test_auto_detection_failure_full` — no paths, no `.deps.json` → incremental with empty changes.
 - `test_explicit_full_overrides` — `mode=full` → full regardless.
 - `test_deps_missing_full_kuzu` — no `.deps.json` → full Kuzu.
 - `test_deps_stale_ontology_full_kuzu` — wrong version → full Kuzu.
@@ -482,7 +482,7 @@ Landing order: **T1 -> T2 -> T3 -> T4**. PR-T5 is optional and may follow.
 | # | Step | File(s) | Done when |
 | --- | --- | --- | --- |
 | 1 | Implement `ChangeSet` + `RefreshDecision` dataclasses | `refresh_decision.py` | Types defined |
-| 2 | Implement `_detect_repo_changes` | `refresh_decision.py` | Git diff + hash fallback work |
+| 2 | Implement `_detect_repo_changes` | `refresh_decision.py` | changed_paths + hash-based detection work |
 | 3 | Implement `_choose_refresh_mode` | `refresh_decision.py` | All 8 decision tests pass |
 | 4 | Add `run_build_ast_graph_incremental` to pipeline | `java_codebase_rag/pipeline.py` | Wrapper writes temp file, dispatches `--changed-paths` |
 | 5 | Update `_cmd_increment` in CLI | `java_codebase_rag/cli.py` | Dispatches incremental or full based on decision |

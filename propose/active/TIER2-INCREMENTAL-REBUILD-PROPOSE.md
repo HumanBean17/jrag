@@ -280,18 +280,17 @@ path is reachable via the source `Symbol`'s `path` field (or via
 
 ### 2.6 Change-detection sources
 
-Three sources, in priority order:
+Two sources, in priority order:
 
 1. **`--changed-paths` flag** (or stdin list). Caller responsibility
    to be accurate. This is what the INDEX-AUTO-MODE decision engine
    would pass.
-2. **Git diff** between `--git-ref-base` and `HEAD`. Same logic as
-   INDEX-AUTO-MODE §"Change Detection Strategy".
-3. **Hash-based detection** using `.deps.json` `ext_hash` fields. Walk
-   the source tree, compute hashes, compare against cached. Slowest;
-   used as last-resort fallback.
+2. **Hash-based detection** using `.deps.json` `ext_hash` fields. Walk
+   the source tree, compute SHA-256 hashes, compare against cached.
+   New files = added, hash changed = modified, in index but not on
+   disk = deleted.
 
-If all three fail or are ambiguous, fall back to full rebuild.
+If both fail or are ambiguous, fall back to full rebuild.
 
 ## 3. Pass-by-pass incrementalisation notes
 

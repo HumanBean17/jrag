@@ -83,12 +83,12 @@ class RefreshDecision:
 
 ## Change Detection Strategy
 
-1. Prefer git diff status:
-   - `git diff --name-status <base>...HEAD`
-   - optionally include working tree status (`git diff --name-status`
-     and `git diff --name-status --cached`)
-2. If git signal is unavailable, use `changed_paths` when supplied.
-3. If still uncertain, fall back to `full`.
+1. If `changed_paths` is provided, use those directly.
+2. If not, hash-based diff against `.deps.json`: walk the source tree,
+   compute SHA-256 per `.java` file, compare against cached hashes.
+   New files = added, hash changed = modified, in index but not on
+   disk = deleted.
+3. If neither is available, fall back to `full`.
 
 Represent results as:
 

@@ -1,8 +1,8 @@
 """Decision engine for incremental vs full refresh of Lance + Kuzu indexes."""
 from __future__ import annotations
 
+import hashlib
 import json
-import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -47,91 +47,61 @@ def _all_java_paths(changes: ChangeSet) -> tuple[str, ...]:
     return changes.added + changes.modified + changes.deleted + changes.renamed
 
 
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    h.update(path.read_bytes())
+    return f"sha256:{h.hexdigest()}"
+
+
 def _detect_repo_changes(
     source_root: Path,
     *,
-    git_ref_base: str = "HEAD",
     changed_paths: list[str] | None = None,
+    deps_index: dict | None = None,
 ) -> ChangeSet:
-    """Detect repository changes via git diff or changed_paths fallback."""
+    """Detect repository changes via changed_paths or hash-based diff against .deps.json."""
     added: list[str] = []
     modified: list[str] = []
     deleted: list[str] = []
-    renamed: list[str] = []
     all_paths: list[str] = []
 
-    # Try git first
-    git_ok = False
-    try:
-        result = subprocess.run(
-            ["git", "diff", "--name-status", git_ref_base],
-            cwd=str(source_root),
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if result.returncode == 0:
-            git_ok = True
-            for line in result.stdout.strip().splitlines():
-                parts = line.split("\t")
-                if len(parts) < 2:
-                    continue
-                status = parts[0][0]
-                path = parts[-1]
-                all_paths.append(path)
-                if status == "A":
-                    added.append(path)
-                elif status == "M":
-                    modified.append(path)
-                elif status == "D":
-                    deleted.append(path)
-                elif status == "R":
-                    renamed.append(path)
-                else:
-                    modified.append(path)
-        # Also check working tree + staged
-        result2 = subprocess.run(
-            ["git", "diff", "--name-status"],
-            cwd=str(source_root),
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if result2.returncode == 0:
-            for line in result2.stdout.strip().splitlines():
-                parts = line.split("\t")
-                if len(parts) < 2:
-                    continue
-                status = parts[0][0]
-                path = parts[-1]
-                if path not in all_paths:
-                    all_paths.append(path)
-                    if status == "D":
-                        deleted.append(path)
-                    elif status == "R":
-                        renamed.append(path)
-                    else:
-                        modified.append(path)
-    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-        pass
-
-    if not git_ok and changed_paths is not None:
+    if changed_paths is not None:
         for p in changed_paths:
             all_paths.append(p)
             modified.append(p)
+    elif deps_index is not None:
+        files_index = deps_index.get("files", {})
+        cached_paths = set(files_index.keys())
+
+        # Walk source tree for .java files and compare hashes
+        on_disk: set[str] = set()
+        for java_file in source_root.rglob("*.java"):
+            rel = str(java_file.relative_to(source_root))
+            on_disk.add(rel)
+            current_hash = _sha256(java_file)
+            cached = files_index.get(rel)
+            if cached is None:
+                added.append(rel)
+                all_paths.append(rel)
+            elif cached.get("ext_hash") != current_hash:
+                modified.append(rel)
+                all_paths.append(rel)
+
+        # Files in index but no longer on disk
+        for rel in cached_paths - on_disk:
+            deleted.append(rel)
+            all_paths.append(rel)
 
     all_t = tuple(all_paths)
     config_changed = _any_match(all_t, _CONFIG_FILES)
     pipeline_changed = _any_match(all_t, _PIPELINE_FILES)
-
-    # Heuristic: if any changed file is an @interface, flag meta_annotation
     meta_annotation_changed = False  # deferred to PR-T5 brownfield closure refinement
 
     return ChangeSet(
         added=tuple(added),
         modified=tuple(modified),
         deleted=tuple(deleted),
-        renamed=tuple(renamed),
+        renamed=(),
         config_changed=config_changed,
         pipeline_changed=pipeline_changed,
         meta_annotation_changed=meta_annotation_changed,
@@ -162,9 +132,19 @@ def _count_deps_files(kuzu_path: Path) -> int:
         return 0
 
 
+def _read_deps_index(kuzu_path: Path) -> dict | None:
+    """Read full .deps.json content. Returns None if missing or corrupt."""
+    deps_path = kuzu_path.parent / ".deps.json"
+    if not deps_path.is_file():
+        return None
+    try:
+        return json.loads(deps_path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
 def _current_ontology_version() -> int:
     """Import and return the current ontology version from ast_java."""
-    # Avoid heavy import at module level
     from ast_java import ONTOLOGY_VERSION
 
     return ONTOLOGY_VERSION
@@ -230,19 +210,6 @@ def _choose_refresh_mode(
             kuzu_mode = "full"
             reasons.append(f"dirty set {dirty_count}/{total} > 50%")
 
-    # Detection failure — if no changes detected at all and mode is auto,
-    # be conservative unless we had explicit changed_paths
-    if (
-        kuzu_mode == "incremental"
-        and mode == "auto"
-        and not changes.added
-        and not changes.modified
-        and not changes.deleted
-        and not changes.renamed
-    ):
-        # No changes detected — this is fine for incremental (nothing to do)
-        pass
-
     # --- Lance mode ---
     lance_mode: Literal["incremental", "full"] = "incremental"
     if changes.config_changed:
@@ -268,12 +235,19 @@ def choose_refresh_mode(
     *,
     mode: Literal["auto", "incremental", "full"] = "auto",
     changed_paths: list[str] | None = None,
-    git_ref_base: str = "HEAD",
 ) -> RefreshDecision:
-    """Public API: detect changes and choose refresh mode."""
+    """Public API: detect changes and choose refresh mode.
+
+    Change detection order:
+    1. Explicit ``changed_paths`` if provided.
+    2. Hash-based diff against ``.deps.json`` (walk source tree, compare
+       SHA-256 hashes).
+    3. Empty change set if neither is available.
+    """
+    deps_index = _read_deps_index(kuzu_path) if changed_paths is None else None
     changes = _detect_repo_changes(
         source_root,
-        git_ref_base=git_ref_base,
         changed_paths=changed_paths,
+        deps_index=deps_index,
     )
     return _choose_refresh_mode(changes, kuzu_path=kuzu_path, mode=mode)
