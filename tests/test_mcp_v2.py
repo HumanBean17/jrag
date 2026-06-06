@@ -594,6 +594,7 @@ def test_search_cross_kind_filter_returns_failure(monkeypatch, kuzu_graph) -> No
 
 
 def test_search_filter_empty_string_treated_as_none(monkeypatch, kuzu_graph) -> None:
+    monkeypatch.setattr("mcp_v2._get_sentence_transformer", lambda *a, **kw: None)
     monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
     baseline = search_v2("ChatService", graph=kuzu_graph)
     empty = search_v2("ChatService", filter="", graph=kuzu_graph)
@@ -605,6 +606,7 @@ def test_search_filter_empty_string_treated_as_none(monkeypatch, kuzu_graph) -> 
 
 
 def test_search_filter_json_null_treated_as_none(monkeypatch, kuzu_graph) -> None:
+    monkeypatch.setattr("mcp_v2._get_sentence_transformer", lambda *a, **kw: None)
     monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
     baseline = search_v2("ChatService", graph=kuzu_graph)
     out = search_v2("ChatService", filter="null", graph=kuzu_graph)
