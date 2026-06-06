@@ -578,8 +578,10 @@ def main() -> None:
 
     # Load YAML config and apply embedding settings to environment
     # This ensures SBERT_MODEL and SBERT_DEVICE from .java-codebase-rag.yml are available
-    # before any tool handler runs (same behavior as CLI path)
-    cfg = resolve_operator_config(source_root=_project_root())
+    # before any tool handler runs (same behavior as CLI path).
+    # Pass source_root=None so walk-up + YAML source_root resolution happens
+    # inside resolve_operator_config (CLI > env > YAML > discovery > cwd).
+    cfg = resolve_operator_config(source_root=None)
     cfg.apply_to_os_environ()
     mcp_v2.set_hints_enabled(cfg.hints_enabled)
 

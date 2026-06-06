@@ -534,13 +534,12 @@ def _cmd_tables(args: argparse.Namespace) -> int:
 
 
 def _cmd_diagnose_ignore(args: argparse.Namespace) -> int:
-    import server  # lazy
     from path_filtering import LayeredIgnore  # lazy
 
     cfg = _resolved_from_ns(args)
     _startup_hints(cfg)
     cfg.apply_to_os_environ()
-    root = server._project_root()
+    root = cfg.source_root
     raw = Path(args.path)
     try:
         abs_path = raw.resolve() if raw.is_absolute() else (root / raw).resolve()

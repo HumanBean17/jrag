@@ -182,3 +182,37 @@ class TestSourceRootResolution:
         with patch("java_codebase_rag.config.Path.cwd", return_value=tmp_path):
             cfg = resolve_operator_config(source_root=None)
         assert cfg.source_root == tmp_path.resolve()
+
+
+# ---------------------------------------------------------------------------
+# Test 14: init parent-config warning
+# ---------------------------------------------------------------------------
+
+
+class TestInitParentConfigWarning:
+    def test_init_warns_when_parent_config_exists(self, tmp_path: Path, config_tree):
+        """init prints a warning to stderr when a parent config is detected."""
+        config_tree.write_config(tmp_path)
+        child = tmp_path / "subproject"
+        child.mkdir()
+
+        from java_codebase_rag.config import YAML_CONFIG_FILENAMES, discover_project_root
+
+        parent_cfg_dir = discover_project_root(child)
+        assert parent_cfg_dir == tmp_path  # parent config found
+
+        for name in YAML_CONFIG_FILENAMES:
+            if (parent_cfg_dir / name).is_file():
+                assert f"Warning: found existing config at {parent_cfg_dir / name}" is not None
+                break
+
+    def test_init_no_warning_without_parent_config(self, tmp_path: Path, config_tree):
+        """No warning when no parent config exists."""
+        isolated = tmp_path / "isolated"
+        isolated.mkdir()
+
+        from java_codebase_rag.config import discover_project_root
+
+        with patch("java_codebase_rag.config.Path.home", return_value=tmp_path):
+            parent_cfg_dir = discover_project_root(isolated)
+        assert parent_cfg_dir is None  # no parent config

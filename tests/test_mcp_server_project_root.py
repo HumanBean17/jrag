@@ -33,3 +33,25 @@ class TestProjectRootDiscovery:
         with patch("server.Path.cwd", return_value=child):
             result = server._project_root()
         assert result == tmp_path
+
+    def test_resolve_operator_config_honors_yaml_source_root_from_server_path(
+        self, tmp_path: Path
+    ):
+        """resolve_operator_config(source_root=None) resolves YAML source_root.
+
+        This tests the MCP server startup path where source_root=None is passed
+        (not the discovered config dir directly), so the YAML source_root field
+        is correctly resolved in Phase 2.
+        """
+        from java_codebase_rag.config import YAML_CONFIG_FILENAMES, resolve_operator_config
+
+        target = tmp_path / "actual-java-src"
+        target.mkdir()
+        cfg = tmp_path / YAML_CONFIG_FILENAMES[0]
+        cfg.write_text(f"source_root: {target}\n", encoding="utf-8")
+        child = tmp_path / "subdir"
+        child.mkdir()
+
+        with patch("java_codebase_rag.config.Path.cwd", return_value=child):
+            result = resolve_operator_config(source_root=None)
+        assert result.source_root == target.resolve()
