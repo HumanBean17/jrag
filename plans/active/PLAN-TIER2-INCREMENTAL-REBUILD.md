@@ -199,19 +199,25 @@ Landing order: **T1 -> T2 -> T3 -> T4**. PR-T5 is optional and may follow.
 
 ## Tests for PR-T2
 1. `test_delete_symbols_for_file`
-2. `test_delete_extends_for_file`
-3. `test_delete_implements_for_file`
-4. `test_delete_injects_for_file`
-5. `test_delete_calls_for_file`
-6. `test_delete_routes_for_file`
-7. `test_delete_clients_for_file`
-8. `test_delete_producers_for_file`
-9. `test_delete_http_calls_for_file`
-10. `test_delete_async_calls_for_file`
-11. `test_delete_overrides_for_file`
-12. `test_delete_all_for_file`
-13. `test_delete_idempotent`
-14. `test_delete_unknown_file_returns_zero`
+2. `test_deletes_declares_edges`
+3. `test_delete_extends_for_file`
+4. `test_delete_implements_for_file`
+5. `test_delete_injects_for_file`
+6. `test_delete_calls_for_file`
+7. `test_deletes_unresolved_call_sites`
+8. `test_delete_routes_for_file`
+9. `test_deletes_exposes_edges`
+10. `test_delete_clients_for_file`
+11. `test_deletes_declares_client_edges`
+12. `test_delete_producers_for_file`
+13. `test_deletes_declares_producer_edges`
+14. `test_delete_http_calls_for_file`
+15. `test_delete_async_calls_for_file`
+16. `test_delete_overrides_for_file`
+17. `test_delete_all_for_file`
+18. `test_calls_each_helper`
+19. `test_delete_idempotent`
+20. `test_delete_unknown_file_returns_zero`
 
 ## Definition of done (PR-T2)
 - All delete helpers implemented and unit-tested in isolation.
@@ -536,8 +542,8 @@ Landing order: **T1 -> T2 -> T3 -> T4**. PR-T5 is optional and may follow.
 
 # Tracking
 
-- `PR-T1`: _pending_
-- `PR-T2`: _pending_
+- `PR-T1`: _done_
+- `PR-T2`: _done_
 - `PR-T3`: _pending_
 - `PR-T4`: _pending_
 - `PR-T5`: _deferred_
