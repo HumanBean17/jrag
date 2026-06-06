@@ -55,6 +55,7 @@ jobs:
         if: steps.changes.outputs.code == 'true'
         env:
           JAVA_CODEBASE_RAG_RUN_HEAVY: "0"
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: pytest tests -v
       - name: Skip tests (docs-only)
         if: steps.changes.outputs.code != 'true'
