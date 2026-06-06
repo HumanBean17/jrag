@@ -8,8 +8,8 @@
 
 - **The call**: add walk-up config discovery (like git) so the tool finds `.java-codebase-rag.yml` in any parent directory, and add a `source_root` field to the YAML config so the config can live separately from the source code.
 - **Why**: the tool currently couples three things — config file location, source code location, and cwd. All three must be the same directory. Users who organize projects in varied directory structures hit walls: running `init` from a multi-system parent creates a mixed index, using MCP from a microservice subdirectory can't find the config, and placing the config in a separate context directory requires `--source-root` on every invocation.
-- **Scope**: config discovery and source root resolution. No changes to indexing, query, or graph-building logic. No changes to `init` beyond a warning when a parent config exists.
-- **Migration**: 1 PR. No breaking changes. Existing workflows where cwd = config dir continue to work identically. New workflows (running from subdirectories) unlock.
+- **Scope**: config discovery and source root resolution. Both CLI and MCP server use the same walk-up logic, eliminating the need for env vars in `.mcp.json`. No changes to indexing, query, or graph-building logic. No changes to `init` beyond a warning when a parent config exists.
+- **Migration**: 1 PR. No breaking changes. Existing workflows where cwd = config dir continue to work identically. Existing `.mcp.json` files with env vars continue to work (env vars are overrides). New workflows (running from subdirectories, zero-config MCP) unlock.
 
 ## 1. Problem statement
 
@@ -56,6 +56,34 @@ Config is in `system-D-context/`, code is at `../` via `--source-root`. The `--s
 5. **No breaking changes.** Existing workflows where cwd = config dir must produce identical behavior. The walk-up is additive — it only fires when the config isn't found in cwd.
 
 ## 3. Proposed solution
+
+Once walk-up finds the config file, everything else is derivable — no env vars needed:
+
+```
+config found at System-C/.java-codebase-rag.yml
+  → source root = System-C/  (or source_root from YAML)
+    → index dir = System-C/.java-codebase-rag/
+```
+
+Both CLI and MCP server follow the same discovery path. The minimal `.mcp.json` becomes:
+
+```json
+{
+  "mcpServers": {
+    "java-codebase-rag": {
+      "type": "stdio",
+      "command": "java-codebase-rag-mcp"
+    }
+  }
+}
+```
+
+This works because MCP hosts set cwd to the workspace directory at server startup:
+- **Claude Code** — cwd = workspace directory. Walk-up from there finds the config.
+- **VS Code / Cursor** — cwd = workspace root. Same.
+- **Claude Desktop** — cwd is less predictable. Users can still set `JAVA_CODEBASE_RAG_SOURCE_ROOT` as an optional override.
+
+Both `JAVA_CODEBASE_RAG_SOURCE_ROOT` and `JAVA_CODEBASE_RAG_INDEX_DIR` become **optional overrides** rather than requirements.
 
 ### 3.1 Walk-up config discovery
 
@@ -133,6 +161,8 @@ Resolution is straightforward: `Path(config_dir) / source_root`. For the example
 - `source_root` field in YAML config
 - Updated precedence chain
 - Integration in CLI and MCP server
+- `JAVA_CODEBASE_RAG_INDEX_DIR` and `JAVA_CODEBASE_RAG_SOURCE_ROOT` env vars become optional (still supported as overrides)
+- `mcp.json.example` updated to show minimal zero-env-var config
 - Clear error messages when config is not found
 - Soft warning during `init` when a parent config exists
 
@@ -193,6 +223,8 @@ Single PR containing:
 2. `source_root` YAML field parsing in `resolve_operator_config()`
 3. Updated `_project_root()` in `server.py`
 4. Updated `_resolved_from_ns()` in `cli.py`
-5. Soft warning in `init` when parent config detected
-6. All tests from §6
-7. README update documenting the new behavior
+5. Index dir auto-derived from discovered source root (no env var needed)
+6. Soft warning in `init` when parent config detected
+7. All tests from §6
+8. `mcp.json.example` updated to show minimal zero-env-var config
+9. README update documenting the new behavior
