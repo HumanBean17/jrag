@@ -64,7 +64,8 @@ New function `discover_project_root(start: Path) -> Path | None` in `config.py`:
 - Starts from `start` (typically cwd)
 - Checks for `.java-codebase-rag.yml` or `.java-codebase-rag.yaml` in the current directory
 - If not found, moves to parent and repeats
-- **Boundary conditions**: stops before reaching `$HOME` (does not check `$HOME` itself), stops at filesystem root
+- **First match wins** (closest to cwd): if nested configs exist at multiple levels (e.g. `System-A/.java-codebase-rag.yml` and `IdeaProjects/.java-codebase-rag.yml`), the one closest to cwd is used. This mirrors git's behavior when nested `.git` directories exist.
+- **Boundary conditions**: stops at `$HOME` (inclusive — checks `$HOME` itself but does not go past it), stops at filesystem root. Rationale: `$HOME` is the natural project root on macOS/Linux workstations. On CI/CD (`/root`, `/home/runner`) this is equally appropriate. Configs above `$HOME` are almost certainly unrelated to the current project.
 - Returns the directory containing the config file, or `None`
 
 The function is a pure discovery step — it finds where the config lives, nothing more. It does not parse the config or resolve source roots.
@@ -81,6 +82,8 @@ source_root: ../
 ```
 
 Resolution is straightforward: `Path(config_dir) / source_root`. For the example above, if config is at `system-D-context/.java-codebase-rag.yml`, then `source_root: ../` resolves to `System-D/`.
+
+**Note on resolution base**: the YAML `source_root` field resolves relative to the config file's directory, while the CLI `--source-root` flag resolves relative to cwd. These are intentionally different resolution bases — the YAML field is a portable declaration ("my code is one level up from this config"), while the CLI flag is an absolute or cwd-relative override. The precedence table in §3.3 handles priority; the resolution base difference is a non-issue because each source resolves independently before comparison.
 
 ### 3.3 Full precedence chain for source root
 
@@ -164,7 +167,26 @@ None — all key decisions resolved during brainstorming.
 - Changes to indexing, query, or graph-building logic
 - `init` command behavior changes (beyond the parent-config warning)
 
-## 9. Migration plan — 1 PR
+## 9. Risks and mitigations
+
+| Risk | Mitigation |
+|---|---|
+| Walk-up finds wrong config in a shared parent (e.g. `IdeaProjects/.java-codebase-rag.yml` when user meant `System-A/`) | `init` warns when a parent config exists. First-match-wins means the closest config is always preferred. If a stray config exists at a high level, it's only found when no closer config exists. |
+| Symlink cycles during walk-up | `Path.resolve()` canonicalizes the path before walking. The `parent` chain on resolved paths cannot cycle. |
+| Performance of filesystem stat calls in deep directory trees | Each step is a single `is_file()` check. Even at 20 levels deep, this is negligible compared to the embedding/indexing work the tool already does. |
+| `$HOME` boundary stops too early or too late | `$HOME` is checked inclusively (a config at `$HOME` itself is found). This covers the common macOS case where projects live under `~/Projects/`. Going past `$HOME` would risk picking up system-level or unrelated configs. |
+| Nested configs create confusion (which one is active?) | First-match-wins is simple and matches git's behavior. The tool can log which config file it discovered to aid debugging. |
+
+## 10. Decisions taken
+
+1. **First match wins** — closest config to cwd, not "most specific" or "deepest". Matches git behavior. No heuristic for picking among multiple configs.
+2. **`$HOME` is inclusive boundary** — check `$HOME` itself, don't go past it. Avoids finding configs in `/` or system directories.
+3. **YAML field named `source_root`** — same name as the CLI flag for conceptual consistency, despite different resolution bases. The alternative (`project_root`, `code_dir`) would add a new concept where none is needed.
+4. **Walk-up is a separate pre-step** — not integrated into `resolve_operator_config()`. Cleaner separation, easier to test, lower risk to existing resolution logic.
+5. **No changes to `init`** — `init` creates config + index as before. The walk-up only helps find existing configs from subdirectories.
+6. **No `--walk-up` opt-out flag** — walk-up is always-on when no explicit source root is given. If a user hits the wrong config, the fix is to move or remove the stray config file, not to add a flag.
+
+## 11. Migration plan — 1 PR
 
 Single PR containing:
 1. `discover_project_root()` function in `config.py`

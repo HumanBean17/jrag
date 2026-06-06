@@ -156,10 +156,11 @@ loosening). Use judgement.
 
 When brainstorming produces a spec/design, write it as a proposal in
 `propose/active/<TOPIC>-PROPOSE.md` using the format established in
-`propose/completed/` (see any file there for the section structure:
-Status, Problem Statement, Proposed Solution, Scope, Schema / Ontology /
-Re-index impact, Tests / Validation, Open Questions, Out of scope,
-Sequencing / Migration). Do NOT use a brainstorming skill's default
+`propose/completed/` (open a completed proposal there and match its
+section structure, headings, and level of detail — specific headings vary
+by proposal but always include: TL;DR, design principles, proposed
+surface/solution, risks and mitigations, decisions taken, tests, out of
+scope, migration plan). Do NOT use a brainstorming skill's default
 `docs/superpowers/specs/` location.
 
 ## Per-PR agent task contract
