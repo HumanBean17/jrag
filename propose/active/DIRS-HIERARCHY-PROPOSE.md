@@ -1,0 +1,176 @@
+# DIRS-HIERARCHY — Walk-up config discovery and configurable source root
+
+**Status**: proposal — not yet implemented.
+**Author**: Dmitry Teryaev
+**Date**: 2026-06-06
+
+## TL;DR
+
+- **The call**: add walk-up config discovery (like git) so the tool finds `.java-codebase-rag.yml` in any parent directory, and add a `source_root` field to the YAML config so the config can live separately from the source code.
+- **Why**: the tool currently couples three things — config file location, source code location, and cwd. All three must be the same directory. Users who organize projects in varied directory structures hit walls: running `init` from a multi-system parent creates a mixed index, using MCP from a microservice subdirectory can't find the config, and placing the config in a separate context directory requires `--source-root` on every invocation.
+- **Scope**: config discovery and source root resolution. No changes to indexing, query, or graph-building logic. No changes to `init` beyond a warning when a parent config exists.
+- **Migration**: 1 PR. No breaking changes. Existing workflows where cwd = config dir continue to work identically. New workflows (running from subdirectories) unlock.
+
+## 1. Problem statement
+
+Three real user scenarios that break today:
+
+**User A** — multi-system parent directory:
+```
+IdeaProjects/
+  .java-codebase-rag.yml
+  System-A/  microservice-A-1/  microservice-A-2/
+  System-B/  microservice-B-1/  microservice-B-2/
+```
+Running `init` from `IdeaProjects/` indexes ALL Java files from all systems into one giant mixed index. The tool doesn't recognize project boundaries.
+
+**User B** — working from a microservice subdirectory:
+```
+IdeaProjects/
+  System-C/
+    .java-codebase-rag.yml
+    microservice-C-1/
+    microservice-C-2/
+```
+`init` runs correctly from `System-C/`. But then `cd microservice-C-1/` and starting the MCP server — the tool looks for config only in cwd (`microservice-C-1/`), doesn't find it, fails.
+
+**User C** — config lives separately from source code:
+```
+IdeaProjects/
+  System-D/
+    system-D-context/
+      .java-codebase-rag.yml
+    microservice-D-1/
+    microservice-D-2/
+```
+Config is in `system-D-context/`, code is at `../` via `--source-root`. The `--source-root` flag works but must be passed on every invocation. No way to persist this in the config.
+
+**Root cause**: `find_yaml_config_file()` only checks the exact `source_root` directory. No walking up. And the config has no `source_root` field, so the only way to point to code elsewhere is the `--source-root` flag or env var.
+
+## 2. Design principles
+
+1. **cwd independence.** The tool should work from any subdirectory of the project, not just from the directory containing the config.
+2. **Config is the anchor.** The presence of `.java-codebase-rag.yml` defines a project boundary. The tool walks up to find it (like git finds `.git`).
+3. **Source root is configurable but has a sane default.** Default source root = config file's parent directory. Override via YAML `source_root` field, env var, or CLI flag.
+4. **Index follows source root.** The index directory always lives at `<source-root>/.java-codebase-rag/`. Config and source root can be in different places, but the index stays with the code.
+5. **No breaking changes.** Existing workflows where cwd = config dir must produce identical behavior. The walk-up is additive — it only fires when the config isn't found in cwd.
+
+## 3. Proposed solution
+
+### 3.1 Walk-up config discovery
+
+New function `discover_project_root(start: Path) -> Path | None` in `config.py`:
+
+- Starts from `start` (typically cwd)
+- Checks for `.java-codebase-rag.yml` or `.java-codebase-rag.yaml` in the current directory
+- If not found, moves to parent and repeats
+- **Boundary conditions**: stops before reaching `$HOME` (does not check `$HOME` itself), stops at filesystem root
+- Returns the directory containing the config file, or `None`
+
+The function is a pure discovery step — it finds where the config lives, nothing more. It does not parse the config or resolve source roots.
+
+### 3.2 `source_root` field in config YAML
+
+New optional top-level field:
+
+```yaml
+# Optional: override where Java source code lives.
+# Relative paths resolve relative to the config file's directory.
+# Default: the directory containing this config file.
+source_root: ../
+```
+
+Resolution is straightforward: `Path(config_dir) / source_root`. For the example above, if config is at `system-D-context/.java-codebase-rag.yml`, then `source_root: ../` resolves to `System-D/`.
+
+### 3.3 Full precedence chain for source root
+
+| Priority | Source | Example |
+|---|---|---|
+| 1 (highest) | `--source-root` CLI flag | `--source-root /other/path` |
+| 2 | `JAVA_CODEBASE_RAG_SOURCE_ROOT` env var | `export JAVA_CODEBASE_RAG_SOURCE_ROOT=/other/path` |
+| 3 | `source_root` field in YAML config | `source_root: ../` |
+| 4 | Walk-up discovery result (config file's parent dir) | Config at `System-C/.java-codebase-rag.yml` → source root = `System-C/` |
+| 5 (lowest) | `Path.cwd()` (unchanged fallback) | No config found anywhere |
+
+### 3.4 Where changes happen
+
+**`config.py`**:
+- Add `discover_project_root(start: Path) -> Path | None`
+- Add `find_config_dir(source_root: Path | None) -> Path` — returns the effective project root by combining walk-up discovery with the precedence chain
+- Update `resolve_operator_config()` to read `source_root` from YAML and resolve it relative to config dir
+- When `source_root` param is `None` (no CLI flag, no env var), the function discovers the project root via walk-up, then reads `source_root` from the discovered YAML, then falls back to cwd
+
+**`server.py`**:
+- Update `_project_root()` to call `discover_project_root()` before falling back to cwd. Env var still takes precedence.
+
+**`cli.py`**:
+- Update `_resolved_from_ns()` to use walk-up discovery when `--source-root` is not provided. CLI flag still takes precedence.
+
+**`init` command**: no behavior change. The `init` command creates config + index in the specified directory as before. Walk-up only helps find existing configs. Add a soft warning if a parent config is detected.
+
+### 3.5 Error messages
+
+**No config found (MCP/query/index commands)**:
+> No `.java-codebase-rag.yml` found in `[cwd]` or any parent directory (stopped at home). Run `java-codebase-rag init` in your project root first.
+
+**`init` finds existing config in parent (soft warning)**:
+> Warning: found existing config at `[parent]/.java-codebase-rag.yml`. Creating a new project here will create a separate index.
+
+### 3.6 What each user scenario looks like after
+
+**User A** — runs `init` from each `System-X/` directory separately. Then uses MCP from any subdirectory — walk-up finds the config for the current system. No more mixed indexes.
+
+**User B** — runs `init` from `System-C/`. Then `cd`s to `microservice-C-1/` and starts MCP. Walk-up finds `System-C/.java-codebase-rag.yml`, source root defaults to `System-C/`. Works.
+
+**User C** — creates config at `system-D-context/.java-codebase-rag.yml` with `source_root: ../`. Runs `init` from `system-D-context/`. Walk-up from any subdirectory finds the config. Source root = `System-D/`. Index at `System-D/.java-codebase-rag/`.
+
+## 4. Scope
+
+- Config file discovery via walk-up
+- `source_root` field in YAML config
+- Updated precedence chain
+- Integration in CLI and MCP server
+- Clear error messages when config is not found
+- Soft warning during `init` when a parent config exists
+
+## 5. Schema / Ontology / Re-index impact
+
+- Ontology bump: not required
+- Re-index required: no. The index structure and content are unchanged.
+- Config surface changes: new optional `source_root` field in YAML. Fully backward-compatible — existing configs without this field continue to work identically.
+
+## 6. Tests / Validation
+
+- `test_discover_project_root_finds_config_in_cwd` — config in cwd, returns cwd
+- `test_discover_project_root_walks_up` — config in parent, returns parent
+- `test_discover_project_root_stops_at_home` — config in $HOME, returns None
+- `test_discover_project_root_not_found` — no config anywhere, returns None
+- `test_source_root_from_yaml_relative` — `source_root: ../` resolves to parent of config dir
+- `test_source_root_from_yaml_absolute` — `source_root: /abs/path` resolves to absolute path
+- `test_source_root_precedence_cli_over_yaml` — CLI flag wins over YAML `source_root`
+- `test_source_root_precedence_yaml_over_discovery` — YAML `source_root` wins over config dir default
+- `test_source_root_precedence_env_over_yaml` — env var wins over YAML `source_root`
+- `test_existing_behavior_unchanged` — no walk-up, cwd = config dir → identical behavior to today
+
+## 7. Open questions
+
+None — all key decisions resolved during brainstorming.
+
+## 8. Out of scope
+
+- Auto-detecting multiple systems and splitting indexes
+- Changing index directory structure
+- Global config or project registry
+- Changes to indexing, query, or graph-building logic
+- `init` command behavior changes (beyond the parent-config warning)
+
+## 9. Migration plan — 1 PR
+
+Single PR containing:
+1. `discover_project_root()` function in `config.py`
+2. `source_root` YAML field parsing in `resolve_operator_config()`
+3. Updated `_project_root()` in `server.py`
+4. Updated `_resolved_from_ns()` in `cli.py`
+5. Soft warning in `init` when parent config detected
+6. All tests from §6
+7. README update documenting the new behavior
