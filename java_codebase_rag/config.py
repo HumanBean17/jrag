@@ -115,6 +115,28 @@ def emit_legacy_yaml_hint_if_needed(source_root: Path) -> None:
             return
 
 
+def discover_project_root(start: Path) -> Path | None:
+    """Walk from *start* upward looking for a YAML config file.
+
+    Returns the directory containing the first matching config file
+    (closest to *start*), or ``None`` if no config is found before
+    reaching ``$HOME`` (inclusive — ``$HOME`` itself is checked) or
+    the filesystem root.
+    """
+    home = Path.home().resolve()
+    cur = start.resolve()
+    while True:
+        for name in YAML_CONFIG_FILENAMES:
+            if (cur / name).is_file():
+                return cur
+        if cur == home:
+            return None
+        parent = cur.parent
+        if parent == cur:
+            return None
+        cur = parent
+
+
 def find_yaml_config_file(source_root: Path) -> Path | None:
     for name in YAML_CONFIG_FILENAMES:
         p = source_root / name
@@ -277,10 +299,33 @@ def resolve_operator_config(
     cli_embedding_model: str | None = None,
     cli_embedding_device: str | None = None,
 ) -> ResolvedOperatorConfig:
-    root = (source_root or Path.cwd()).expanduser().resolve()
-    yaml_dict = load_yaml_mapping(root)
+    # Phase 1 — find the config file directory.
+    if source_root is not None:
+        config_dir = source_root.expanduser().resolve()
+    else:
+        discovered = discover_project_root(Path.cwd())
+        if discovered is not None:
+            config_dir = discovered
+        else:
+            config_dir = Path.cwd().resolve()
+
+    yaml_dict = load_yaml_mapping(config_dir)
+
+    # Phase 2 — resolve effective source root.
+    env_root = os.environ.get(ENV_SOURCE_ROOT, "").strip()
+    if source_root is not None:
+        effective_root = source_root.expanduser().resolve()
+    elif env_root:
+        effective_root = Path(env_root).expanduser().resolve()
+    else:
+        yaml_sr = yaml_dict.get("source_root")
+        if isinstance(yaml_sr, str) and yaml_sr.strip():
+            effective_root = (config_dir / Path(yaml_sr.strip()).expanduser()).resolve()
+        else:
+            effective_root = config_dir
+
     index_dir, index_src = _resolve_index_dir_path(
-        source_root=root, cli_index_dir=cli_index_dir, yaml_dict=yaml_dict
+        source_root=effective_root, cli_index_dir=cli_index_dir, yaml_dict=yaml_dict
     )
     model, model_src = _pick_str(
         cli_val=cli_embedding_model,
@@ -304,7 +349,7 @@ def resolve_operator_config(
     ku = index_dir / "code_graph.kuzu"
     coco = index_dir / "cocoindex.db"
     return ResolvedOperatorConfig(
-        source_root=root,
+        source_root=effective_root,
         index_dir=index_dir,
         kuzu_path=ku,
         cocoindex_db=coco,
