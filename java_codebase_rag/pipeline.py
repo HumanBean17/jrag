@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -19,7 +20,13 @@ def bundle_dir() -> Path:
 
 
 def cocoindex_bin() -> Path:
-    return Path(sys.executable).parent / "cocoindex"
+    candidate = Path(sys.executable).parent / "cocoindex"
+    if candidate.is_file():
+        return candidate
+    found = shutil.which("cocoindex")
+    if found:
+        return Path(found)
+    return candidate
 
 
 class _LineFilter:
