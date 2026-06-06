@@ -2509,6 +2509,229 @@ def _drop_all(conn: kuzu.Connection) -> None:
             pass
 
 
+# ---------------------------------------------------------------------------
+# Symmetric delete helpers (PR-T2)
+# ---------------------------------------------------------------------------
+
+def _del_count(
+    conn: kuzu.Connection, count_q: str, del_q: str, fp: str
+) -> int:
+    r = conn.execute(count_q, {"fp": fp})
+    n = int(r.get_next()[0]) if r.has_next() else 0
+    if n > 0:
+        conn.execute(del_q, {"fp": fp})
+    return n
+
+
+def delete_symbols_for_file(conn: kuzu.Connection, file_path: str) -> int:
+    for edge in (
+        "DECLARES", "EXTENDS", "IMPLEMENTS", "INJECTS", "CALLS", "OVERRIDES",
+    ):
+        conn.execute(
+            f"MATCH (a:Symbol)-[e:{edge}]->(b:Symbol) "
+            "WHERE a.filename = $fp OR b.filename = $fp DELETE e",
+            {"fp": file_path},
+        )
+    conn.execute(
+        "MATCH (s:Symbol)-[e:UNRESOLVED_AT]->(u:UnresolvedCallSite) "
+        "WHERE s.filename = $fp DELETE e",
+        {"fp": file_path},
+    )
+    conn.execute(
+        "MATCH (s:Symbol), (u:UnresolvedCallSite) "
+        "WHERE s.filename = $fp AND u.caller_id = s.id DELETE u",
+        {"fp": file_path},
+    )
+    conn.execute(
+        "MATCH (s:Symbol)-[e:EXPOSES]->(r:Route) "
+        "WHERE s.filename = $fp DELETE e",
+        {"fp": file_path},
+    )
+    conn.execute(
+        "MATCH (s:Symbol)-[e:DECLARES_CLIENT]->(c:Client) "
+        "WHERE s.filename = $fp DELETE e",
+        {"fp": file_path},
+    )
+    conn.execute(
+        "MATCH (s:Symbol)-[e:DECLARES_PRODUCER]->(p:Producer) "
+        "WHERE s.filename = $fp DELETE e",
+        {"fp": file_path},
+    )
+    return _del_count(
+        conn,
+        "MATCH (s:Symbol) WHERE s.filename = $fp RETURN count(s) AS n",
+        "MATCH (s:Symbol) WHERE s.filename = $fp DELETE s",
+        file_path,
+    )
+
+
+def delete_extends_for_file(conn: kuzu.Connection, file_path: str) -> int:
+    return _del_count(
+        conn,
+        "MATCH (a:Symbol)-[e:EXTENDS]->(b:Symbol) "
+        "WHERE a.filename = $fp RETURN count(e) AS n",
+        "MATCH (a:Symbol)-[e:EXTENDS]->(b:Symbol) "
+        "WHERE a.filename = $fp DELETE e",
+        file_path,
+    )
+
+
+def delete_implements_for_file(conn: kuzu.Connection, file_path: str) -> int:
+    return _del_count(
+        conn,
+        "MATCH (a:Symbol)-[e:IMPLEMENTS]->(b:Symbol) "
+        "WHERE a.filename = $fp RETURN count(e) AS n",
+        "MATCH (a:Symbol)-[e:IMPLEMENTS]->(b:Symbol) "
+        "WHERE a.filename = $fp DELETE e",
+        file_path,
+    )
+
+
+def delete_injects_for_file(conn: kuzu.Connection, file_path: str) -> int:
+    return _del_count(
+        conn,
+        "MATCH (a:Symbol)-[e:INJECTS]->(b:Symbol) "
+        "WHERE a.filename = $fp RETURN count(e) AS n",
+        "MATCH (a:Symbol)-[e:INJECTS]->(b:Symbol) "
+        "WHERE a.filename = $fp DELETE e",
+        file_path,
+    )
+
+
+def delete_calls_for_file(conn: kuzu.Connection, file_path: str) -> int:
+    conn.execute(
+        "MATCH (s:Symbol)-[e:UNRESOLVED_AT]->(u:UnresolvedCallSite) "
+        "WHERE s.filename = $fp DELETE e",
+        {"fp": file_path},
+    )
+    conn.execute(
+        "MATCH (s:Symbol), (u:UnresolvedCallSite) "
+        "WHERE s.filename = $fp AND u.caller_id = s.id DELETE u",
+        {"fp": file_path},
+    )
+    return _del_count(
+        conn,
+        "MATCH (a:Symbol)-[e:CALLS]->(b:Symbol) "
+        "WHERE a.filename = $fp RETURN count(e) AS n",
+        "MATCH (a:Symbol)-[e:CALLS]->(b:Symbol) "
+        "WHERE a.filename = $fp DELETE e",
+        file_path,
+    )
+
+
+def delete_routes_for_file(conn: kuzu.Connection, file_path: str) -> int:
+    conn.execute(
+        "MATCH (s:Symbol)-[e:EXPOSES]->(r:Route) "
+        "WHERE r.filename = $fp DELETE e",
+        {"fp": file_path},
+    )
+    conn.execute(
+        "MATCH (c:Client)-[e:HTTP_CALLS]->(r:Route) "
+        "WHERE r.filename = $fp DELETE e",
+        {"fp": file_path},
+    )
+    conn.execute(
+        "MATCH (p:Producer)-[e:ASYNC_CALLS]->(r:Route) "
+        "WHERE r.filename = $fp DELETE e",
+        {"fp": file_path},
+    )
+    return _del_count(
+        conn,
+        "MATCH (r:Route) WHERE r.filename = $fp RETURN count(r) AS n",
+        "MATCH (r:Route) WHERE r.filename = $fp DELETE r",
+        file_path,
+    )
+
+
+def delete_clients_for_file(conn: kuzu.Connection, file_path: str) -> int:
+    conn.execute(
+        "MATCH (s:Symbol)-[e:DECLARES_CLIENT]->(c:Client) "
+        "WHERE c.filename = $fp DELETE e",
+        {"fp": file_path},
+    )
+    conn.execute(
+        "MATCH (c:Client)-[e:HTTP_CALLS]->(r:Route) "
+        "WHERE c.filename = $fp DELETE e",
+        {"fp": file_path},
+    )
+    return _del_count(
+        conn,
+        "MATCH (c:Client) WHERE c.filename = $fp RETURN count(c) AS n",
+        "MATCH (c:Client) WHERE c.filename = $fp DELETE c",
+        file_path,
+    )
+
+
+def delete_producers_for_file(conn: kuzu.Connection, file_path: str) -> int:
+    conn.execute(
+        "MATCH (s:Symbol)-[e:DECLARES_PRODUCER]->(p:Producer) "
+        "WHERE p.filename = $fp DELETE e",
+        {"fp": file_path},
+    )
+    conn.execute(
+        "MATCH (p:Producer)-[e:ASYNC_CALLS]->(r:Route) "
+        "WHERE p.filename = $fp DELETE e",
+        {"fp": file_path},
+    )
+    return _del_count(
+        conn,
+        "MATCH (p:Producer) WHERE p.filename = $fp RETURN count(p) AS n",
+        "MATCH (p:Producer) WHERE p.filename = $fp DELETE p",
+        file_path,
+    )
+
+
+def delete_http_calls_for_file(conn: kuzu.Connection, file_path: str) -> int:
+    return _del_count(
+        conn,
+        "MATCH (c:Client)-[e:HTTP_CALLS]->(r:Route) "
+        "WHERE c.filename = $fp RETURN count(e) AS n",
+        "MATCH (c:Client)-[e:HTTP_CALLS]->(r:Route) "
+        "WHERE c.filename = $fp DELETE e",
+        file_path,
+    )
+
+
+def delete_async_calls_for_file(conn: kuzu.Connection, file_path: str) -> int:
+    return _del_count(
+        conn,
+        "MATCH (p:Producer)-[e:ASYNC_CALLS]->(r:Route) "
+        "WHERE p.filename = $fp RETURN count(e) AS n",
+        "MATCH (p:Producer)-[e:ASYNC_CALLS]->(r:Route) "
+        "WHERE p.filename = $fp DELETE e",
+        file_path,
+    )
+
+
+def delete_overrides_for_file(conn: kuzu.Connection, file_path: str) -> int:
+    return _del_count(
+        conn,
+        "MATCH (a:Symbol)-[e:OVERRIDES]->(b:Symbol) "
+        "WHERE a.filename = $fp RETURN count(e) AS n",
+        "MATCH (a:Symbol)-[e:OVERRIDES]->(b:Symbol) "
+        "WHERE a.filename = $fp DELETE e",
+        file_path,
+    )
+
+
+def delete_all_for_file(
+    conn: kuzu.Connection, file_path: str
+) -> dict[str, int]:
+    return {
+        "http_calls": delete_http_calls_for_file(conn, file_path),
+        "async_calls": delete_async_calls_for_file(conn, file_path),
+        "routes": delete_routes_for_file(conn, file_path),
+        "clients": delete_clients_for_file(conn, file_path),
+        "producers": delete_producers_for_file(conn, file_path),
+        "calls": delete_calls_for_file(conn, file_path),
+        "extends": delete_extends_for_file(conn, file_path),
+        "implements": delete_implements_for_file(conn, file_path),
+        "injects": delete_injects_for_file(conn, file_path),
+        "overrides": delete_overrides_for_file(conn, file_path),
+        "symbols": delete_symbols_for_file(conn, file_path),
+    }
+
+
 def _create_schema(conn: kuzu.Connection) -> None:
     for stmt in (
         _SCHEMA_NODE,
