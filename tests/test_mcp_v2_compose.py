@@ -188,6 +188,7 @@ def test_describe_edge_summary_for_route(kuzu_graph) -> None:
 
 
 def test_search_populates_symbol_id_when_chunk_rooted_in_symbol(monkeypatch, kuzu_graph) -> None:
+    monkeypatch.setattr("mcp_v2._get_sentence_transformer", lambda *a, **kw: None)
     rows: list[dict[str, Any]] = [
         {
             "filename": "A.java",
@@ -232,7 +233,7 @@ def test_search_populates_symbol_id_when_chunk_rooted_in_symbol(monkeypatch, kuz
     assert all(hit.symbol_id is not None for hit in rooted)
 
 
-def test_meta_returns_per_edge_type_counts() -> None:
+def test_meta_returns_per_edge_type_counts(mcp_env) -> None:
     out = _graph_meta_output()
     assert out.success is True
     assert set(out.edge_counts.keys()) == set(_EDGE_TYPES)
