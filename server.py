@@ -16,7 +16,7 @@ from java_codebase_rag.cli_progress import (
     emit_vectors_finish,
     emit_vectors_start,
 )
-from java_codebase_rag.config import emit_legacy_env_hints_if_present, resolved_sbert_model_for_process_env, resolve_operator_config
+from java_codebase_rag.config import discover_project_root, emit_legacy_env_hints_if_present, resolved_sbert_model_for_process_env, resolve_operator_config
 from kuzu_queries import KuzuGraph, resolve_kuzu_path
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
@@ -94,7 +94,7 @@ class IndexInfoOutput(BaseModel):
 def _resolve_lancedb_uri() -> str:
     raw = os.environ.get("JAVA_CODEBASE_RAG_INDEX_DIR", "").strip()
     if not raw:
-        raw = str((Path.cwd() / ".java-codebase-rag").resolve())
+        raw = str((_project_root() / ".java-codebase-rag").resolve())
     p = Path(raw).expanduser()
     if not str(raw).startswith(("s3://", "gs://", "az://")):
         try:
@@ -108,6 +108,9 @@ def _project_root() -> Path:
     env = os.environ.get("JAVA_CODEBASE_RAG_SOURCE_ROOT", "").strip()
     if env:
         return Path(env).expanduser().resolve()
+    discovered = discover_project_root(Path.cwd())
+    if discovered is not None:
+        return discovered
     return Path.cwd().resolve()
 
 
@@ -575,8 +578,10 @@ def main() -> None:
 
     # Load YAML config and apply embedding settings to environment
     # This ensures SBERT_MODEL and SBERT_DEVICE from .java-codebase-rag.yml are available
-    # before any tool handler runs (same behavior as CLI path)
-    cfg = resolve_operator_config(source_root=_project_root())
+    # before any tool handler runs (same behavior as CLI path).
+    # Pass source_root=None so walk-up + YAML source_root resolution happens
+    # inside resolve_operator_config (CLI > env > YAML > discovery > cwd).
+    cfg = resolve_operator_config(source_root=None)
     cfg.apply_to_os_environ()
     mcp_v2.set_hints_enabled(cfg.hints_enabled)
 
