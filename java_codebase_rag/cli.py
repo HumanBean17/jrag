@@ -21,25 +21,9 @@ from java_codebase_rag.config import (
     index_dir_has_existing_artifacts,
     resolve_operator_config,
 )
-from java_codebase_rag.pipeline import clip, run_build_ast_graph, run_cocoindex_drop, run_cocoindex_update
+from java_codebase_rag.pipeline import clip, run_build_ast_graph, run_build_ast_graph_incremental, run_cocoindex_drop, run_cocoindex_update
+from refresh_decision import choose_refresh_mode
 from java_ontology import VALID_UNRESOLVED_CALL_REASONS
-
-KUZU_INCREMENTAL_TRACKING_ISSUE_URL = "https://github.com/HumanBean17/java-codebase-rag/issues/73"
-
-_INCREMENT_WARNING_LINES = (
-    "WARNING: AST graph (Kuzu) incremental rebuild is not yet implemented.",
-    "The graph reflects the index state from the last `init` or `reprocess`,",
-    "which means `find`, `neighbors`, and `describe` may return stale results",
-    "for files changed since then.",
-    "",
-    "Lance vector index has been updated incrementally and is current.",
-    "",
-    "For an up-to-date graph, run:",
-    "    java-codebase-rag reprocess",
-    "",
-    "Track progress on Kuzu incremental rebuild:",
-    f"    {KUZU_INCREMENTAL_TRACKING_ISSUE_URL}",
-)
 
 _REFRESH_DEPRECATION = (
     "WARN: 'refresh' is deprecated; use 'reprocess'. "
@@ -178,11 +162,6 @@ def _emit(value: Any) -> None:
     print(json.dumps(payload, default=_jsonable, sort_keys=True, indent=None))
 
 
-def _emit_increment_kuzu_warning() -> None:
-    for line in _INCREMENT_WARNING_LINES:
-        print(line, file=sys.stderr)
-
-
 def _parse_source_root(ns: argparse.Namespace) -> Path | None:
     if ns.source_root:
         return Path(ns.source_root).expanduser().resolve()
@@ -298,15 +277,25 @@ def _cmd_increment(args: argparse.Namespace) -> int:
     cfg = _resolved_from_ns(args)
     _startup_hints(cfg)
     cfg.apply_to_os_environ()
-    _emit_increment_kuzu_warning()
 
     def work() -> int:
         env = cfg.subprocess_env()
+        verbose = bool(args.verbose)
+
+        # Decide refresh mode first so Lance mode is known
+        decision = choose_refresh_mode(
+            cfg.source_root,
+            cfg.kuzu_path,
+            mode="auto",
+        )
+
+        # Lance update — full when decision engine says so (config/pipeline change)
+        lance_full = decision.lance_mode == "full"
         coco = run_cocoindex_update(
             env,
-            full_reprocess=False,
+            full_reprocess=lance_full,
             quiet=bool(args.quiet),
-            verbose=bool(args.verbose),
+            verbose=verbose,
             lance_project_root=None if args.quiet else cfg.source_root,
         )
         if coco.returncode != 0:
@@ -320,7 +309,72 @@ def _cmd_increment(args: argparse.Namespace) -> int:
                 }
             )
             return 1
-        _emit({"success": True, "message": "increment completed (Lance only; graph may be stale — see stderr)"})
+
+        # Kuzu rebuild based on decision
+        if decision.kuzu_mode == "incremental" and decision.detected_changes.modified:
+            changed = set(decision.detected_changes.modified + decision.detected_changes.added)
+            if not args.quiet and verbose:
+                for r in decision.reasons:
+                    print(f"  [graph] {r}", file=sys.stderr)
+            g = run_build_ast_graph_incremental(
+                source_root=cfg.source_root,
+                kuzu_path=cfg.kuzu_path,
+                changed_paths=changed,
+                verbose=verbose,
+                quiet=bool(args.quiet),
+                env=env,
+            )
+            if g.returncode != 0:
+                # Incremental failed — fall back to full
+                print(
+                    f"[graph] incremental failed (exit {g.returncode}), falling back to full rebuild",
+                    file=sys.stderr,
+                )
+                g = run_build_ast_graph(
+                    source_root=cfg.source_root,
+                    kuzu_path=cfg.kuzu_path,
+                    verbose=verbose,
+                    quiet=bool(args.quiet),
+                    env=env,
+                )
+            if g.returncode != 0:
+                _emit(
+                    {
+                        "success": False,
+                        "exit_code": g.returncode,
+                        "stdout": clip(g.stdout, 4000),
+                        "stderr": clip(g.stderr, 4000),
+                        "message": f"graph builder exit {g.returncode}",
+                    }
+                )
+                return 1
+        else:
+            # Full Kuzu rebuild
+            if not args.quiet:
+                for r in decision.reasons:
+                    print(f"  [graph] {r}", file=sys.stderr)
+                if decision.reasons:
+                    print("  [graph] falling back to full Kuzu rebuild", file=sys.stderr)
+            g = run_build_ast_graph(
+                source_root=cfg.source_root,
+                kuzu_path=cfg.kuzu_path,
+                verbose=verbose,
+                quiet=bool(args.quiet),
+                env=env,
+            )
+            if g.returncode != 0:
+                _emit(
+                    {
+                        "success": False,
+                        "exit_code": g.returncode,
+                        "stdout": clip(g.stdout, 4000),
+                        "stderr": clip(g.stderr, 4000),
+                        "message": f"graph builder exit {g.returncode}",
+                    }
+                )
+                return 1
+
+        _emit({"success": True, "message": "increment completed"})
         return 0
 
     return _run_with_pipeline_progress("increment", cfg, quiet=bool(args.quiet), work=work)
@@ -615,7 +669,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--quiet suppresses that stream; stdout remains the machine-readable payload.\n\n"
         "Lifecycle (manage the index):\n"
         "  init            Create a fresh index from a Java repository.\n"
-        "  increment       Pick up changes since the last index update (Lance only).\n"
+        "  increment       Pick up changes since the last index update (Lance + Kuzu incremental).\n"
         "  reprocess       Full vector + graph rebuild (default); optional --vectors-only / --graph-only.\n"
         "  erase           Delete the index from disk.\n\n"
         "Introspection (inspect the index):\n"
@@ -650,7 +704,7 @@ def build_parser() -> argparse.ArgumentParser:
     increment = subparsers.add_parser(
         "increment",
         help="Pick up changes since the last index update.",
-        description="Runs cocoindex catch-up (no full reprocess). Does not rebuild Kuzu; see stderr warning.",
+        description="Runs cocoindex catch-up (no full reprocess). Kuzu graph updated incrementally when safe; full rebuild as fallback.",
     )
     _add_index_embedding_flags(increment)
     _add_verbosity_flags(increment)

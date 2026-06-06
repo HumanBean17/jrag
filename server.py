@@ -32,7 +32,8 @@ _INSTRUCTIONS = (
     "Unknown filter keys and populated fields not applicable to the effective node kind fail with success=false and message. "
     "Edge labels: EXTENDS, IMPLEMENTS, INJECTS, OVERRIDES, DECLARES, DECLARES_CLIENT, DECLARES_PRODUCER, CALLS, EXPOSES, HTTP_CALLS, ASYNC_CALLS; "
     "type Symbols may also use composed neighbors edge_types DECLARES.DECLARES_CLIENT, DECLARES.DECLARES_PRODUCER, DECLARES.EXPOSES (out only). "
-    "Reprocess/init, meta, tables, diagnose-ignore, analyze-pr: use java-codebase-rag CLI — not MCP."
+    "Reprocess/init, meta, tables, diagnose-ignore, analyze-pr: use java-codebase-rag CLI — not MCP. "
+    "refresh_code_index: refresh Lance + Kuzu (auto/incremental/full mode, optional changed_paths)."
 )
 
 
@@ -566,6 +567,146 @@ def create_mcp_server() -> FastMCP:
         ),
     ) -> mcp_v2.ResolveOutput:
         return await asyncio.to_thread(mcp_v2.resolve_v2, identifier, hint_kind, None)
+
+    @mcp.tool(
+        name="refresh_code_index",
+        description=(
+            "Refresh the code index (Lance vectors + Kuzu graph). Accepts `mode` "
+            "(`auto`, `incremental`, `full`) and optional `changed_paths`. Returns "
+            "decision transparency fields: effective_mode, decision_reasons, detected_changes."
+        ),
+    )
+    async def refresh_code_index(
+        confirm: bool = Field(
+            default=False,
+            description="Confirm the refresh operation.",
+        ),
+        mode: Literal["auto", "incremental", "full"] = Field(
+            default="auto",
+            description="Refresh mode: auto (safe-by-default), incremental, or full.",
+        ),
+        changed_paths: list[str] | None = Field(
+            default=None,
+            description="Explicit list of changed file paths (used when git is unavailable).",
+        ),
+        git_ref_base: str = Field(
+            default="HEAD",
+            description="Git ref to diff against for change detection.",
+        ),
+        reason: str | None = Field(
+            default=None,
+            description="Optional caller-provided reason for the refresh.",
+        ),
+    ) -> dict[str, Any]:
+        if not confirm:
+            return {
+                "success": False,
+                "message": "confirm=true required to execute refresh",
+                "effective_mode": {"lance": mode, "kuzu": mode},
+                "decision_reasons": [],
+                "detected_changes": None,
+            }
+
+        def _run() -> dict[str, Any]:
+            from java_codebase_rag.pipeline import (
+                run_build_ast_graph,
+                run_build_ast_graph_incremental,
+                run_cocoindex_update,
+            )
+            from refresh_decision import choose_refresh_mode
+
+            root = _project_root()
+            kuzu_path = Path(resolve_kuzu_path())
+            sub_env = _cocoindex_subprocess_env(root)
+
+            decision = choose_refresh_mode(
+                root,
+                kuzu_path,
+                mode=mode,
+                changed_paths=changed_paths,
+                git_ref_base=git_ref_base,
+            )
+
+            reasons_list = list(decision.reasons)
+            if reason:
+                reasons_list.append(f"caller reason: {reason}")
+
+            changes_dict = {
+                "added": list(decision.detected_changes.added),
+                "modified": list(decision.detected_changes.modified),
+                "deleted": list(decision.detected_changes.deleted),
+                "renamed": list(decision.detected_changes.renamed),
+            }
+
+            effective = {
+                "lance": decision.lance_mode,
+                "kuzu": decision.kuzu_mode,
+            }
+
+            # Execute Lance update
+            lance_full = decision.lance_mode == "full"
+            coco = run_cocoindex_update(
+                sub_env,
+                full_reprocess=lance_full,
+                quiet=True,
+            )
+            if coco.returncode != 0:
+                return {
+                    "success": False,
+                    "message": f"cocoindex exit {coco.returncode}",
+                    "effective_mode": effective,
+                    "decision_reasons": reasons_list,
+                    "detected_changes": changes_dict,
+                }
+
+            # Execute Kuzu rebuild
+            if decision.kuzu_mode == "incremental" and decision.detected_changes.modified:
+                changed = set(
+                    decision.detected_changes.modified + decision.detected_changes.added
+                )
+                g = run_build_ast_graph_incremental(
+                    source_root=root,
+                    kuzu_path=kuzu_path,
+                    changed_paths=changed,
+                    verbose=False,
+                    quiet=True,
+                    env=sub_env,
+                )
+                if g.returncode != 0:
+                    g = run_build_ast_graph(
+                        source_root=root,
+                        kuzu_path=kuzu_path,
+                        verbose=False,
+                        quiet=True,
+                        env=sub_env,
+                    )
+            else:
+                g = run_build_ast_graph(
+                    source_root=root,
+                    kuzu_path=kuzu_path,
+                    verbose=False,
+                    quiet=True,
+                    env=sub_env,
+                )
+
+            if g.returncode != 0:
+                return {
+                    "success": False,
+                    "message": f"graph builder exit {g.returncode}",
+                    "effective_mode": effective,
+                    "decision_reasons": reasons_list,
+                    "detected_changes": changes_dict,
+                }
+
+            return {
+                "success": True,
+                "message": "refresh completed",
+                "effective_mode": effective,
+                "decision_reasons": reasons_list,
+                "detected_changes": changes_dict,
+            }
+
+        return await asyncio.to_thread(_run)
 
     return mcp
 

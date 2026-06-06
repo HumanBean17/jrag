@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -245,6 +246,74 @@ def run_build_ast_graph(
         marker = styled_check() if code == 0 else styled_cross()
         print(f"{marker} {bold_cyan('[graph]')} done", file=sys.stderr, flush=True)
     return subprocess.CompletedProcess(args=cmd, returncode=code, stdout=out_s, stderr=err_s)
+
+
+def run_build_ast_graph_incremental(
+    *,
+    source_root: Path,
+    kuzu_path: Path,
+    changed_paths: set[str],
+    verbose: bool,
+    quiet: bool = False,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run build_ast_graph.py in incremental mode with --changed-paths."""
+    builder = bundle_dir() / "build_ast_graph.py"
+    if not builder.is_file():
+        return subprocess.CompletedProcess(
+            args=[],
+            returncode=126,
+            stdout="",
+            stderr=f"build_ast_graph.py not found under {builder.parent}",
+        )
+    # Write changed paths to a temp file
+    tmp = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".paths", delete=False, prefix="changed-",
+    )
+    try:
+        for p in sorted(changed_paths):
+            tmp.write(p + "\n")
+        tmp.close()
+
+        cmd: list[str] = [
+            sys.executable,
+            str(builder),
+            "--source-root",
+            str(source_root),
+            "--kuzu-path",
+            str(kuzu_path),
+            "--changed-paths",
+            tmp.name,
+        ]
+        if verbose or not quiet:
+            cmd.append("--verbose")
+        if quiet:
+            return subprocess.run(
+                cmd,
+                cwd=str(source_root),
+                env=env or os.environ.copy(),
+                capture_output=True,
+                text=True,
+            )
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(source_root),
+            env=env or os.environ.copy(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=0,
+        )
+        out_s, err_s, code = _popen_capturing_stderr(proc, verbose=verbose)
+        if not verbose:
+            from java_codebase_rag.cli_format import bold_cyan, styled_check, styled_cross
+            marker = styled_check() if code == 0 else styled_cross()
+            print(f"{marker} {bold_cyan('[graph]')} incremental done", file=sys.stderr, flush=True)
+        return subprocess.CompletedProcess(args=cmd, returncode=code, stdout=out_s, stderr=err_s)
+    finally:
+        try:
+            Path(tmp.name).unlink()
+        except OSError:
+            pass
 
 
 def clip(s: str, n: int) -> str:
