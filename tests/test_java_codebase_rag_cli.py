@@ -784,7 +784,7 @@ def test_reprocess_vectors_only_setup_failure_returns_exit_2_without_phase(
             args=["/nonexistent/cocoindex"],
             returncode=127,
             stdout="",
-            stderr="cocoindex not found next to Python",
+            stderr="cocoindex not found",
         )
 
     monkeypatch.setattr(cli_mod, "run_cocoindex_update", fake_coco)
