@@ -234,6 +234,9 @@ def test_search_populates_symbol_id_when_chunk_rooted_in_symbol(monkeypatch, kuz
 
 
 def test_meta_returns_per_edge_type_counts(kuzu_graph) -> None:
+    # Re-bind the global singleton in case a prior test reset it.
+    KuzuGraph._instance = kuzu_graph
+    KuzuGraph._instance_path = kuzu_graph.db_path
     out = _graph_meta_output()
     assert out.success is True
     assert set(out.edge_counts.keys()) == set(_EDGE_TYPES)
