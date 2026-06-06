@@ -167,25 +167,25 @@ class TestKindAndEdgeReferences:
 class TestBodyStructure:
     """Skill body must contain key sections."""
 
-    def test_has_canonical_workflow(self):
+    def test_has_workflow_patterns(self):
         _, body = _read_skill()
-        assert "## Canonical workflow" in body, "SKILL.md missing '## Canonical workflow'"
+        assert "## Workflow Patterns" in body, "SKILL.md missing '## Workflow Patterns'"
 
-    def test_has_decision_tree(self):
+    def test_has_decision_framework(self):
         _, body = _read_skill()
-        assert "## Decision tree" in body, "SKILL.md missing '## Decision tree'"
+        assert "## Decision Framework" in body, "SKILL.md missing '## Decision Framework'"
 
     def test_has_recovery_playbook(self):
         _, body = _read_skill()
-        assert "## Recovery playbook" in body, "SKILL.md missing '## Recovery playbook'"
+        assert "## Recovery Playbook" in body, "SKILL.md missing '## Recovery Playbook'"
 
     def test_has_edge_taxonomy(self):
         _, body = _read_skill()
         assert "## Edge taxonomy" in body, "SKILL.md missing '## Edge taxonomy'"
 
-    def test_has_navigation_patterns(self):
+    def test_has_tool_inventory(self):
         _, body = _read_skill()
-        assert "## Common navigation patterns" in body, "SKILL.md missing '## Common navigation patterns'"
+        assert "## Tool Inventory" in body, "SKILL.md missing '## Tool Inventory'"
 
     def test_has_reasoning_preamble(self):
         _, body = _read_skill()
