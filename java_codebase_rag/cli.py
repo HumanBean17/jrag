@@ -22,7 +22,6 @@ from java_codebase_rag.config import (
     resolve_operator_config,
 )
 from java_codebase_rag.pipeline import clip, run_build_ast_graph, run_build_ast_graph_incremental, run_cocoindex_drop, run_cocoindex_update
-from refresh_decision import choose_refresh_mode
 from java_ontology import VALID_UNRESOLVED_CALL_REASONS
 
 _REFRESH_DEPRECATION = (
@@ -279,6 +278,8 @@ def _cmd_increment(args: argparse.Namespace) -> int:
     cfg.apply_to_os_environ()
 
     def work() -> int:
+        from refresh_decision import choose_refresh_mode
+
         env = cfg.subprocess_env()
         verbose = bool(args.verbose)
 
