@@ -241,6 +241,7 @@ def test_meta_returns_per_edge_type_counts(kuzu_graph) -> None:
 
 
 def test_search_describe_neighbors_chain_end_to_end(kuzu_graph, monkeypatch) -> None:
+    monkeypatch.setattr("mcp_v2._get_sentence_transformer", lambda *a, **kw: None)
     node_id, _ = _method_with_incoming_calls(kuzu_graph)
     rows = kuzu_graph._rows(  # noqa: SLF001
         "MATCH (m:Symbol {id: $id}) RETURN m.fqn AS fqn, m.role AS role, m.module AS module, "

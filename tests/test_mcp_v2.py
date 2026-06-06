@@ -117,6 +117,7 @@ def _fake_search_rows() -> list[dict[str, Any]]:
 
 
 def test_search_basic_returns_hits_with_symbol_id(monkeypatch, kuzu_graph) -> None:
+    monkeypatch.setattr("mcp_v2._get_sentence_transformer", lambda *a, **kw: None)
     monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
     out = search_v2("ChatService", graph=kuzu_graph)
     assert out.success is True
@@ -125,6 +126,7 @@ def test_search_basic_returns_hits_with_symbol_id(monkeypatch, kuzu_graph) -> No
 
 
 def test_search_filter_microservice(monkeypatch, kuzu_graph) -> None:
+    monkeypatch.setattr("mcp_v2._get_sentence_transformer", lambda *a, **kw: None)
     monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
     out = search_v2("ChatService", filter={"microservice": "chat-assign"}, graph=kuzu_graph)
     assert out.success is True
@@ -133,6 +135,7 @@ def test_search_filter_microservice(monkeypatch, kuzu_graph) -> None:
 
 
 def test_search_path_contains_filter(monkeypatch, kuzu_graph) -> None:
+    monkeypatch.setattr("mcp_v2._get_sentence_transformer", lambda *a, **kw: None)
     monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
     out = search_v2("ChatAssign", path_contains="ChatAssign", graph=kuzu_graph)
     assert out.success is True
@@ -566,6 +569,7 @@ async def test_search_invalid_table_rejected(mcp_server) -> None:
 
 
 def test_search_filter_accepts_json_string(monkeypatch, kuzu_graph) -> None:
+    monkeypatch.setattr("mcp_v2._get_sentence_transformer", lambda *a, **kw: None)
     monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
     want = {"microservice": "chat-assign"}
     out_dict = search_v2("ChatService", filter=want, graph=kuzu_graph)
@@ -576,6 +580,7 @@ def test_search_filter_accepts_json_string(monkeypatch, kuzu_graph) -> None:
 
 
 def test_search_unknown_filter_key_returns_failure(monkeypatch, kuzu_graph) -> None:
+    monkeypatch.setattr("mcp_v2._get_sentence_transformer", lambda *a, **kw: None)
     monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
     out = search_v2("ChatService", filter={"typo_key": "x"}, graph=kuzu_graph)
     assert out.success is False
@@ -585,6 +590,7 @@ def test_search_unknown_filter_key_returns_failure(monkeypatch, kuzu_graph) -> N
 
 
 def test_search_cross_kind_filter_returns_failure(monkeypatch, kuzu_graph) -> None:
+    monkeypatch.setattr("mcp_v2._get_sentence_transformer", lambda *a, **kw: None)
     monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
     out = search_v2("ChatService", filter={"path_prefix": "/api"}, graph=kuzu_graph)
     assert out.success is False
@@ -674,6 +680,7 @@ def test_neighbors_validate_call_still_raises(kuzu_graph) -> None:
 
 
 def test_filter_invalid_json_returns_failure(monkeypatch, kuzu_graph) -> None:
+    monkeypatch.setattr("mcp_v2._get_sentence_transformer", lambda *a, **kw: None)
     monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
     out = search_v2("ChatService", filter="{not json", graph=kuzu_graph)
     assert out.success is False
@@ -713,6 +720,7 @@ def test_wildcard_question_mark_in_fqn_prefix_rejected(kuzu_graph) -> None:
 
 
 def test_search_wildcard_in_fqn_prefix_rejected_without_run_search(monkeypatch, kuzu_graph) -> None:
+    monkeypatch.setattr("mcp_v2._get_sentence_transformer", lambda *a, **kw: None)
     calls: list[int] = []
 
     def boom(*_a, **_k):
