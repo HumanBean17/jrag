@@ -84,8 +84,6 @@ If vector hits come back and graph expansion adds neighbor symbols, the install 
 
 ## Wire into an MCP host
 
-The server discovers your project automatically: it walks up from cwd looking for `.java-codebase-rag.yml` (or `.yaml`), like git finds `.git`. No env vars required if you have a YAML config in your project tree. For full precedence details, see [`docs/CONFIGURATION.md`](./docs/CONFIGURATION.md).
-
 ### Claude Code
 
 With the package installed, the console script `java-codebase-rag-mcp` is on your `PATH`. Register it project-scoped:
@@ -94,7 +92,7 @@ With the package installed, the console script `java-codebase-rag-mcp` is on you
 claude mcp add --transport stdio java-codebase-rag -- java-codebase-rag-mcp
 ```
 
-No env vars needed — the server walks up from cwd to find `.java-codebase-rag.yml`. For a minimal `.mcp.json` template, see [`mcp.json.example`](./mcp.json.example). Official docs: [Claude Code settings](https://docs.anthropic.com/en/docs/claude-code/settings).
+Then set env vars (`JAVA_CODEBASE_RAG_INDEX_DIR`, `JAVA_CODEBASE_RAG_SOURCE_ROOT`, `SBERT_MODEL`, …) in `.mcp.json` or your shell profile. For a project-scoped `.mcp.json` template, see [`mcp.json.example`](./mcp.json.example). Official docs: [Claude Code settings](https://docs.anthropic.com/en/docs/claude-code/settings).
 
 ### Claude Desktop
 
@@ -104,13 +102,15 @@ Edit `claude_desktop_config.json` (macOS: `~/Library/Application Support/Claude/
 {
   "mcpServers": {
     "java-codebase-rag": {
-      "command": "java-codebase-rag-mcp"
+      "command": "java-codebase-rag-mcp",
+      "env": {
+        "JAVA_CODEBASE_RAG_INDEX_DIR": "/ABSOLUTE/PATH/TO/.java-codebase-rag",
+        "JAVA_CODEBASE_RAG_SOURCE_ROOT": "/ABSOLUTE/PATH/TO/your-java-project"
+      }
     }
   }
 }
 ```
-
-The server discovers the project via walk-up from the cwd of the MCP host process. If your Java project is not the cwd, either set `JAVA_CODEBASE_RAG_SOURCE_ROOT` in the `env` block or add a `source_root` field to `.java-codebase-rag.yml` (see [`docs/CONFIGURATION.md`](./docs/CONFIGURATION.md)).
 
 See [`mcp.json.example`](./mcp.json.example) for the same shape in `.mcp.json` (Claude Code project-scoped) form.
 

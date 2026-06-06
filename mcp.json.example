@@ -2,37 +2,12 @@
   "mcpServers": {
     "java-codebase-rag": {
       "type": "stdio",
-      "command": "java-codebase-rag-mcp"
+      "command": "java-codebase-rag-mcp",
+      "env": {
+        "JAVA_CODEBASE_RAG_INDEX_DIR": "/ABSOLUTE/PATH/TO/.java-codebase-rag",
+        "JAVA_CODEBASE_RAG_SOURCE_ROOT": "/ABSOLUTE/PATH/TO/your-java-project",
+        "SBERT_MODEL": "sentence-transformers/all-MiniLM-L6-v2"
+      }
     }
   }
 }
-
-// ──────────────────────────────────────────────────────────────────────────────
-// 1. MINIMAL CONFIG — no env vars required
-//
-//    Requires a `.java-codebase-rag.yml` in (or above) your Java project root.
-//    The server walks up from cwd to find the config file (like git finds .git).
-//    Run `java-codebase-rag init` from the project root first to create the index.
-//
-//    Claude Code: drop this as `.mcp.json` in your project root.
-//    Claude Desktop: paste into ~/Library/Application Support/Claude/claude_desktop_config.json
-//       and add `"cwd": "/path/to/your-java-project"` inside the server block.
-// ──────────────────────────────────────────────────────────────────────────────
-
-// ──────────────────────────────────────────────────────────────────────────────
-// 2. FULL CONFIG — explicit env vars (works without .java-codebase-rag.yml)
-//
-//    {
-//      "mcpServers": {
-//        "java-codebase-rag": {
-//          "type": "stdio",
-//          "command": "java-codebase-rag-mcp",
-//          "env": {
-//            "JAVA_CODEBASE_RAG_INDEX_DIR": "/ABSOLUTE/PATH/TO/.java-codebase-rag",
-//            "JAVA_CODEBASE_RAG_SOURCE_ROOT": "/ABSOLUTE/PATH/TO/your-java-project",
-//            "SBERT_MODEL": "sentence-transformers/all-MiniLM-L6-v2"
-//          }
-//        }
-//      }
-//    }
-// ──────────────────────────────────────────────────────────────────────────────
