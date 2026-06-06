@@ -34,6 +34,13 @@ def _cocoindex_available() -> bool:
     return (Path(sys.executable).parent / "cocoindex").is_file()
 
 
+def _heavy_ok() -> bool:
+    """Integration tests that need cocoindex + SentenceTransformer model download."""
+    if os.environ.get("JAVA_CODEBASE_RAG_RUN_HEAVY", "1") == "0":
+        return False
+    return _cocoindex_available()
+
+
 def _base_env(corpus_root: Path, kuzu_db_path: Path | None = None) -> dict[str, str]:
     env = os.environ.copy()
     env["JAVA_CODEBASE_RAG_SOURCE_ROOT"] = str(corpus_root)
@@ -320,7 +327,7 @@ def test_refresh_hidden_alias_deprecates_on_stderr(tmp_path: Path) -> None:
     assert "reprocess" in err.lower()
 
 
-@pytest.mark.skipif(not _cocoindex_available(), reason="cocoindex not installed in venv")
+@pytest.mark.skipif(not _heavy_ok(), reason="needs cocoindex + model download (RUN_HEAVY=0 skips)")
 def test_increment_emits_kuzu_stale_warning_block(
     corpus_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -369,7 +376,7 @@ def test_legacy_env_var_set_emits_stderr_hint(monkeypatch: pytest.MonkeyPatch, t
     assert err.count("LANCEDB_URI") == 1
 
 
-@pytest.mark.skipif(not _cocoindex_available(), reason="cocoindex not installed in venv")
+@pytest.mark.skipif(not _heavy_ok(), reason="needs cocoindex + model download (RUN_HEAVY=0 skips)")
 def test_init_after_erase_succeeds(corpus_root: Path, tmp_path: Path) -> None:
     idx = tmp_path / "lifecycle_idx"
     idx.mkdir(parents=True)
@@ -388,7 +395,7 @@ def test_init_after_erase_succeeds(corpus_root: Path, tmp_path: Path) -> None:
     assert init.returncode == 0, init.stdout + init.stderr
 
 
-@pytest.mark.skipif(not _cocoindex_available(), reason="cocoindex not installed in venv")
+@pytest.mark.skipif(not _heavy_ok(), reason="needs cocoindex + model download (RUN_HEAVY=0 skips)")
 def test_cli_lifecycle_round_trip_init_increment_meta_erase(
     corpus_root: Path, tmp_path: Path,
 ) -> None:
@@ -421,7 +428,7 @@ def test_cli_lifecycle_round_trip_init_increment_meta_erase(
     assert er.returncode == 0, er.stderr
 
 
-@pytest.mark.skipif(not _cocoindex_available(), reason="cocoindex not installed in venv")
+@pytest.mark.skipif(not _heavy_ok(), reason="needs cocoindex + model download (RUN_HEAVY=0 skips)")
 def test_increment_updates_lance_after_touch_java_file(corpus_root: Path, tmp_path: Path) -> None:
     import lancedb  # noqa: PLC0415
 
@@ -897,8 +904,8 @@ def test_reprocess_pretty_output_lists_rebuilt_and_skipped(
 
 
 def test_cli_reprocess_builds_kuzu_path(corpus_root, tmp_path) -> None:
-    if not _cocoindex_available():
-        pytest.skip("cocoindex CLI missing")
+    if not _heavy_ok():
+        pytest.skip("cocoindex + model download not available")
     idx = tmp_path / "rep_idx"
     env = os.environ.copy()
     env["JAVA_CODEBASE_RAG_INDEX_DIR"] = str(idx)
