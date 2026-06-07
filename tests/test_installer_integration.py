@@ -29,6 +29,9 @@ class TestInstallIntegration:
 
         cwd = tmp_path / "bank-chat"
 
+        # Create .git so update_gitignore works
+        (cwd / ".git").mkdir()
+
         # Run install via subprocess to test the CLI integration
         result = subprocess.run(
             [
@@ -90,6 +93,9 @@ class TestInstallIntegration:
         shutil.copytree(bank_chat, tmp_path / "bank-chat")
 
         cwd = tmp_path / "bank-chat"
+
+        # Create .git so update_gitignore works
+        (cwd / ".git").mkdir()
 
         # Run install via subprocess to test the CLI integration
         result = subprocess.run(
