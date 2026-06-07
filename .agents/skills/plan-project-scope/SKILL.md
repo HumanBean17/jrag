@@ -126,11 +126,32 @@ Landing order: **X1 -> X2 -> X3**.
 
 - Prefer concrete, testable statements over high-level intentions.
 - Keep PR scopes independent when possible; state landing order explicitly.
-- Name tests exactly when feasible; avoid vague "add tests".
+- Name tests exactly when feasible; avoid vague “add tests”.
 - Call out ontology bump and re-index impact for schema/enrichment changes.
-- Keep "Out of scope" strict; use it to prevent scope creep during implementation.
+- Keep “Out of scope” strict; use it to prevent scope creep during implementation.
 - Treat **Areas of concern** as **heads-up text for reviewers** (coupling, regression risk, semantic hotspots). Do **not** phrase it as “only these modules” — honest implementation may touch adjacent files; when that happens, update the **File-by-file changes** list and **Out of scope** so the contract stays clear.
 - Do not add compatibility shims unless explicitly requested.
+
+## No placeholders
+
+Every section must contain the actual detail an agent or reviewer needs. These are **plan failures** — never write them:
+- “TBD”, “TODO”, “implement later”, “fill in details”
+- “Add appropriate error handling” / “add validation” / “handle edge cases” (without specifics)
+- “Write tests for the above” (without naming test cases)
+- “Similar to PR-X1” (repeat the detail — the implementer may read PRs out of order)
+- File-by-file changes that describe *what* to do without enough context for *how*
+- References to functions, types, or schemas not defined in any PR section
+
+When a decision is genuinely deferred, label it explicitly: `**DEFERRED:** <what> — will be resolved in <which PR> because <why>.`
+
+## Self-review
+
+After drafting the complete plan, run these checks before finalizing:
+
+1. **Spec coverage:** Skim each requirement from the proposal. Can you point to a PR section that implements it? Add tasks for any gaps.
+2. **Placeholder scan:** Search the plan for the anti-patterns listed in “No placeholders” above. Fix them.
+3. **Consistency check:** Do function names, type signatures, schema versions, and file paths used in later PRs match what earlier PRs define? A function called `clearLayers()` in PR-X1 but `clearFullLayers()` in PR-X3 is a plan bug.
+4. **Dependency order:** Does the landing order actually satisfy all cross-PR dependencies stated in the overview table?
 
 ## Per-PR execution prompt option
 
@@ -151,12 +172,24 @@ Use **any** completed **`plans/completed/AGENT-PROMPTS-*.md`** as the structural
 - Active plan files live in `plans/active/` as `PLAN-<TOPIC>.md` (uppercase topic).
 - Move completed plans to `plans/completed/` after full rollout lands.
 
+## Execution handoff
+
+After saving the plan, offer the user an execution choice:
+
+1. **Subagent-driven** — dispatch a fresh subagent per PR (via `superpowers:subagent-driven-development`), review between PRs, fast iteration. Best for multi-PR plans.
+2. **Inline execution** — execute PRs in this session (via `superpowers:executing-plans`), batch execution with checkpoints. Best for single-PR plans or when context continuity matters.
+3. **Manual handoff** — save the plan and AGENT-PROMPTS file for later execution. The implementer picks up from the written artifacts.
+
+If the user picks option 1 or 2, invoke the corresponding superpowers skill before starting execution.
+
 ## Final checklist
 
 - [ ] Plan has status, goal, principles, PR breakdown, risks, out-of-scope, done definition
-- [ ] Every PR section has file-level scope and tests
+- [ ] Every PR section has file-level scope and named tests
+- [ ] No placeholders — every section has concrete detail, no TBD/TODO/vague directives
 - [ ] Ontology/reindex implications are explicit when relevant
 - [ ] Implementation order is explicit and dependency-safe
+- [ ] Cross-PR names/types/paths are consistent (self-review passed)
 - [ ] Plan is execution-ready without re-deriving design
 
 ## Additional resources
