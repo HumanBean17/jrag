@@ -234,6 +234,15 @@ Docs-only; baseline unchanged.
   - `TOOL-NAME-PROPOSE.md`
   - `ARCHITECTURE-CHANGE-PROPOSE.md`
 
+## Final checklist
+
+- [ ] Proposal file lives under `propose/active/`
+- [ ] Problem statement includes concrete examples
+- [ ] Schema/ontology/re-index impact is explicit
+- [ ] Open questions include `[TBD]` with recommendations
+- [ ] Out-of-scope section is present
+- [ ] Sequencing/follow-up path is clear
+
 ## Key Principles
 
 - **One question at a time** — Don't overwhelm with multiple questions
