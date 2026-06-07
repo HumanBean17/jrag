@@ -983,8 +983,6 @@ def pass1_parse(root: Path, tables: GraphTables, *, verbose: bool, scope_files: 
                 rel = p.as_posix()
             if scope_files is not None and rel not in scope_files:
                 continue
-            # Skip files not in scope (if scope is provided)
-            # (rel is computed above before the scope check)
             n_files += 1
             try:
                 content = p.read_bytes()
@@ -3615,12 +3613,12 @@ def incremental_rebuild(
             if version < 17:
                 if verbose:
                     _verbose_stderr_line(f"[increment] ontology version {version} < 17; falling back to full rebuild")
-                conn.close()
+                del conn, db
                 return _fallback_to_full(source_root, kuzu_path, verbose, t_start)
     except Exception as e:
         if verbose:
             _verbose_stderr_line(f"[increment] failed to read ontology version: {e}; falling back to full rebuild")
-        conn.close()
+        del conn, db
         return _fallback_to_full(source_root, kuzu_path, verbose, t_start)
 
     index_dir = kuzu_path.parent
@@ -3851,42 +3849,57 @@ def _write_clients_producers_and_calls(conn: kuzu.Connection, tables: GraphTable
             "topic": row.topic,
         })
 
+    client_by_id = {c.id: c for c in tables.client_rows}
+    producer_by_id = {p.id: p for p in tables.producer_rows}
+
     # Write declares_client edges
     for row in tables.declares_client_rows:
-        source_file = member_by_id.get(row.symbol_id, MemberEntry("", None, "", "", "", "", "")).file_path
+        source_file = member_by_id.get(row.symbol_id, MemberEntry(kind="", decl=None, parent_id="", parent_fqn="", file_path="", module="", microservice="")).file_path
         conn.execute(_CREATE_DECLARES_CLIENT, {
-            "src": row.symbol_id,
-            "dst": row.client_id,
+            "sid": row.symbol_id,
+            "cid": row.client_id,
             "source_file": source_file,
             "confidence": row.confidence,
+            "strategy": row.strategy,
         })
 
     # Write declares_producer edges
     for row in tables.declares_producer_rows:
-        source_file = member_by_id.get(row.symbol_id, MemberEntry("", None, "", "", "", "", "")).file_path
+        source_file = member_by_id.get(row.symbol_id, MemberEntry(kind="", decl=None, parent_id="", parent_fqn="", file_path="", module="", microservice="")).file_path
         conn.execute(_CREATE_DECLARES_PRODUCER, {
-            "src": row.symbol_id,
-            "dst": row.producer_id,
+            "sid": row.symbol_id,
+            "pid": row.producer_id,
             "source_file": source_file,
             "confidence": row.confidence,
+            "strategy": row.strategy,
         })
 
     # Write HTTP_CALLS edges
     for row in tables.http_call_rows:
+        client = client_by_id.get(row.client_id)
         conn.execute(_CREATE_HTTP_CALL, {
-            "src": row.client_id,
-            "dst": row.route_id,
+            "cid": row.client_id,
+            "rid": row.route_id,
+            "source_file": client.filename if client else "",
             "confidence": row.confidence,
-            "source_file": tables.client_rows[[c.id for c in tables.client_rows].index(row.client_id)].filename if any(c.id == row.client_id for c in tables.client_rows) else "",
+            "strategy": row.strategy,
+            "method_call": row.method_call,
+            "raw_uri": row.raw_uri,
+            "match": row.match,
         })
 
     # Write ASYNC_CALLS edges
     for row in tables.async_call_rows:
+        producer = producer_by_id.get(row.producer_id)
         conn.execute(_CREATE_ASYNC_CALL, {
-            "src": row.producer_id,
-            "dst": row.route_id,
+            "pid": row.producer_id,
+            "rid": row.route_id,
+            "source_file": producer.filename if producer else "",
             "confidence": row.confidence,
-            "source_file": tables.producer_rows[[p.id for p in tables.producer_rows].index(row.producer_id)].filename if any(p.id == row.producer_id for p in tables.producer_rows) else "",
+            "strategy": row.strategy,
+            "direction": row.direction,
+            "raw_topic": row.raw_topic,
+            "match": row.match,
         })
 
 
@@ -3967,8 +3980,6 @@ def main() -> int:
 
     if args.incremental:
         result = incremental_rebuild(root, kuzu_path, verbose=args.verbose)
-        # Emit result as JSON to stdout so CLI can parse the mode
-        import json
         print(json.dumps({
             "mode": result.mode,
             "files_changed": result.files_changed,
