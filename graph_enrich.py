@@ -1565,6 +1565,35 @@ def microservice_for_path(
     return ""
 
 
+def detect_microservice_from_path(cwd: Path, source_root: Path) -> str | None:
+    """Detect microservice from cwd for query-time auto-scope.
+
+    Returns None if cwd is outside source_root, cwd IS source_root (system level),
+    or no microservice is detected. Otherwise returns the microservice name.
+    """
+    cwd_resolved = cwd.resolve()
+    source_resolved = source_root.resolve()
+
+    # Check if cwd is outside source_root
+    try:
+        cwd_resolved.relative_to(source_resolved)
+    except ValueError:
+        return None
+
+    # Check if cwd IS source_root (at system level, no specific scope)
+    if cwd_resolved == source_resolved:
+        return None
+
+    # Check if cwd itself matches a YAML override (directory name matches microservice_roots)
+    overrides = load_microservice_overrides(source_resolved)
+    if overrides and cwd_resolved.name in overrides:
+        return cwd_resolved.name
+
+    # Call existing microservice_for_path to detect microservice from build markers
+    ms = microservice_for_path(str(cwd_resolved), source_resolved)
+    return ms if ms else None
+
+
 # ---------- chunk enrichment ----------
 
 

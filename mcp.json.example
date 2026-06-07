@@ -11,3 +11,28 @@
     }
   }
 }
+
+// Minimal configuration with walk-up discovery (no env vars required):
+// The tool walks up from the current directory to find .java-codebase-rag.yml,
+// then uses the config's source_root (or the config directory itself) to find the index.
+// Just omit the "env" section entirely:
+//
+// {
+//   "mcpServers": {
+//     "java-codebase-rag": {
+//       "type": "stdio",
+//       "command": "java-codebase-rag-mcp"
+//     }
+//   }
+// }
+//
+// For Claude Code (which uses the same MCP protocol but different config format),
+// the minimal configuration in .mcp.json is similar:
+//
+// {
+//   "mcpServers": {
+//     "java-codebase-rag": {
+//       "command": "java-codebase-rag-mcp"
+//     }
+//   }
+// }

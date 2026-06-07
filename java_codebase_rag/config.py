@@ -123,6 +123,33 @@ def find_yaml_config_file(source_root: Path) -> Path | None:
     return None
 
 
+def discover_project_root(start: Path) -> Path | None:
+    """Walk up from start to find the directory containing a config file.
+
+    First match wins (closest to start). Stops at $HOME inclusive — checks $HOME
+    itself but does not walk past it. Returns None if no config found.
+    """
+    start = start.resolve()
+    home = Path.home().resolve()
+
+    current = start
+    while True:
+        # Check if current directory contains a config file
+        if find_yaml_config_file(current) is not None:
+            return current
+
+        # Stop if we've reached home (check home itself, but don't walk past it)
+        if current == home:
+            return None
+
+        # Stop if we've reached filesystem root
+        parent = current.parent
+        if parent == current:
+            return None
+
+        current = parent
+
+
 def load_yaml_mapping(source_root: Path) -> dict[str, Any]:
     path = find_yaml_config_file(source_root)
     if path is None:
@@ -277,8 +304,36 @@ def resolve_operator_config(
     cli_embedding_model: str | None = None,
     cli_embedding_device: str | None = None,
 ) -> ResolvedOperatorConfig:
-    root = (source_root or Path.cwd()).expanduser().resolve()
-    yaml_dict = load_yaml_mapping(root)
+    # Phase 1: Find the config file directory
+    if source_root is not None:
+        # CLI flag provided: use it as both config_dir and effective source_root
+        # (skip YAML source_root check - CLI wins)
+        root = source_root.expanduser().resolve()
+        config_dir = root
+        yaml_dict = load_yaml_mapping(config_dir)
+    else:
+        # Check env var first
+        env_raw = os.environ.get(ENV_SOURCE_ROOT, "").strip()
+        if env_raw:
+            root = Path(env_raw).expanduser().resolve()
+            config_dir = root
+            yaml_dict = load_yaml_mapping(config_dir)
+        else:
+            # Walk up to find config dir
+            discovered = discover_project_root(Path.cwd())
+            config_dir = discovered if discovered is not None else Path.cwd().resolve()
+            # Load YAML from config dir
+            yaml_dict = load_yaml_mapping(config_dir)
+
+            # Phase 2: Resolve effective source root
+            # Check for YAML source_root field (resolved relative to config dir)
+            yaml_source_root = yaml_dict.get("source_root")
+            if isinstance(yaml_source_root, str) and yaml_source_root.strip():
+                yroot = Path(yaml_source_root.strip()).expanduser()
+                root = yroot.resolve() if yroot.is_absolute() else (config_dir / yroot).resolve()
+            else:
+                root = config_dir
+
     index_dir, index_src = _resolve_index_dir_path(
         source_root=root, cli_index_dir=cli_index_dir, yaml_dict=yaml_dict
     )

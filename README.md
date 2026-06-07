@@ -92,7 +92,9 @@ With the package installed, the console script `java-codebase-rag-mcp` is on you
 claude mcp add --transport stdio java-codebase-rag -- java-codebase-rag-mcp
 ```
 
-Then set env vars (`JAVA_CODEBASE_RAG_INDEX_DIR`, `JAVA_CODEBASE_RAG_SOURCE_ROOT`, `SBERT_MODEL`, …) in `.mcp.json` or your shell profile. For a project-scoped `.mcp.json` template, see [`mcp.json.example`](./mcp.json.example). Official docs: [Claude Code settings](https://docs.anthropic.com/en/docs/claude-code/settings).
+**Zero-env-var configuration:** The tool automatically walks up the directory tree to find `.java-codebase-rag.yml`, so you don't need to set `JAVA_CODEBASE_RAG_SOURCE_ROOT` when working from within a project. Just place the config file at your project root and the tool will find it. See [`mcp.json.example`](./mcp.json.example) for the minimal configuration.
+
+If you need to override defaults, you can set env vars (`JAVA_CODEBASE_RAG_INDEX_DIR`, `JAVA_CODEBASE_RAG_SOURCE_ROOT`, `SBERT_MODEL`, …) in `.mcp.json` or your shell profile. For a full configuration template, see [`mcp.json.example`](./mcp.json.example). Official docs: [Claude Code settings](https://docs.anthropic.com/en/docs/claude-code/settings).
 
 ### Claude Desktop
 

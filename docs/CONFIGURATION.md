@@ -22,6 +22,25 @@ For the architecture rationale (the GPS metaphor, three-layer design, future wor
 
 The operator-facing surface is **six** variables (plus MCP-only `JAVA_CODEBASE_RAG_SOURCE_ROOT` below). Precedence for knobs that also exist as CLI flags or YAML entries is **CLI flag > env var > YAML > built-in default** (see [`JAVA-CODEBASE-RAG-CLI.md`](./JAVA-CODEBASE-RAG-CLI.md)).
 
+### Config file discovery (walk-up)
+
+The tool automatically walks up the directory tree from the current working directory to find `.java-codebase-rag.yml` (or `.yaml`), similar to how Git finds `.git`. This means you can run CLI commands and MCP queries from any subdirectory within your project — the tool will locate the config file automatically.
+
+**Walk-up behavior:**
+- Starts from the current working directory and walks up the directory tree
+- Stops at `$HOME` (inclusive — checks `$HOME` itself but doesn't walk past it)
+- First match wins (closest config to cwd, not "most specific" or "deepest")
+- If no config is found, falls back to using the current directory
+
+**Precedence for source root resolution:**
+1. CLI flag `--source-root` (highest priority)
+2. Environment variable `JAVA_CODEBASE_RAG_SOURCE_ROOT`
+3. YAML field `source_root` (resolved relative to config directory)
+4. Walk-up discovery result (config directory itself)
+5. Current working directory (fallback)
+
+This walk-up behavior means you no longer need to set environment variables or pass flags when working from within a project — the tool finds the config automatically.
+
 | Variable | Purpose |
 |---|---|
 | `JAVA_CODEBASE_RAG_INDEX_DIR` | Local filesystem **directory** for Lance tables, the Kuzu file `code_graph.kuzu`, and cocoindex state (`cocoindex.db`). Not a `lancedb://` or cloud URI — use a path. Default: `./.java-codebase-rag/` under the resolved Java tree root. |
@@ -57,6 +76,14 @@ A single file at the project root (the directory you pass as `--source-root`, or
 # Place at the project root (same directory you pass as --source-root).
 
 # -------- Core knobs (mirror env vars; precedence: CLI > env > YAML > default) --------
+
+# Source root: the Java project root. Useful when the config file lives
+# separately from the Java source code (e.g., monorepo with configs at repo root).
+# - Tilde (`~`) is expanded; `$VAR` is NOT (use absolute paths or `~`).
+# - Relative paths resolve against the config file's parent directory, not cwd.
+# - Env: JAVA_CODEBASE_RAG_SOURCE_ROOT. CLI: --source-root.
+# - Default: the directory containing this config file (for walk-up discovery).
+# source_root: ../java-project
 
 # Index directory: where Lance tables, code_graph.kuzu, and cocoindex.db live.
 # - Tilde (`~`) is expanded; `$VAR` is NOT (use absolute paths or `~`).
@@ -94,6 +121,25 @@ microservice_roots:
   - chat-core
   - chat-orchestrator
   - ranking
+
+# Automatic microservice scope for queries (MCP server only)
+# When working from a microservice subdirectory, queries automatically scope
+# to that microservice — no manual filter needed. This provides correct
+# codebase boundaries for agents working on specific microservices.
+#
+# Behavior:
+# - At microservice root or inside a microservice subdirectory:
+#   → Queries automatically scoped to that microservice
+# - At project root (above all microservices):
+#   → Queries span all microservices with an advisory message
+# - Explicit microservice filters always override auto-detected scope
+#
+# The MCP server logs scope detection at startup:
+#   [scope] Detected microservice: chat-core
+#   [scope] Queries scoped to chat-core
+# Or at system level:
+#   [scope] No microservice detected (at project root)
+#   [scope] Queries will span all microservices
 
 # -------- Cross-service edge resolution --------
 
