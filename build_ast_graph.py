@@ -462,7 +462,10 @@ class FileHashTracker:
         # Detect added and changed files.
         for rel_path in current_files:
             abs_path = source_root / rel_path
-            file_hash = _hash_file(abs_path)
+            try:
+                file_hash = _hash_file(abs_path)
+            except FileNotFoundError:
+                continue
             stored_hash = self._hashes.get(rel_path)
             if stored_hash is None:
                 added.add(rel_path)
@@ -612,9 +615,9 @@ def _find_dependents(conn: kuzu.Connection, changed_node_ids: set[str]) -> set[s
 def _delete_file_scope(conn: kuzu.Connection, filenames: set[str]) -> None:
     """Delete all nodes and edges originating from the given files.
 
-    Skip phantom nodes (filename=""). For Symbol-to-Symbol and UNRESOLVED_AT
-    edge tables only. Client/Producer/Route edges are handled separately in
-    pass 5-6 global rebuild.
+    Skip phantom nodes (filename=""). Deletes ALL edge types in Phase 1,
+    then nodes in subsequent phases. Route/Client/Producer nodes use
+    DETACH DELETE as a safety net for any edges missed in Phase 1.
 
     Edges are deleted in batch across all filenames first to avoid Kuzu
     "has connected edges" errors when edges from one file point to nodes
@@ -3442,11 +3445,16 @@ def incremental_rebuild(
             if version < 17:
                 if verbose:
                     _verbose_stderr_line(f"[increment] ontology version {version} < 17; falling back to full rebuild")
+                conn.close()
                 del conn, db
                 return _fallback_to_full(source_root, kuzu_path, verbose, t_start)
     except Exception as e:
         if verbose:
             _verbose_stderr_line(f"[increment] failed to read ontology version: {e}; falling back to full rebuild")
+        try:
+            conn.close()
+        except Exception:
+            pass
         del conn, db
         return _fallback_to_full(source_root, kuzu_path, verbose, t_start)
 
@@ -3550,11 +3558,8 @@ def incremental_rebuild(
         if verbose:
             _verbose_stderr_line("[increment] running global passes 5-6")
 
-        # Load all members for pass 5
+        # Rebuild full tables for global pass 5-6 (pass1 populates members from scratch)
         tables_for_global = GraphTables()
-        _load_existing_members(conn, tables_for_global)
-
-        # Rebuild asts for global scope (need for pass5/6)
         global_asts = pass1_parse(source_root, tables_for_global, verbose=verbose)
 
         pass5_imperative_edges(tables_for_global, global_asts, source_root=source_root, verbose=verbose)
@@ -3656,7 +3661,25 @@ def _fallback_to_full(source_root: Path, kuzu_path: Path, verbose: bool, t_start
 
 
 def _write_clients_producers_and_calls(conn: kuzu.Connection, tables: GraphTables) -> None:
-    """Write Client, Producer, and cross-service edges to Kuzu."""
+    """Write Route, Client, Producer, and cross-service edges to Kuzu.
+
+    Used by the incremental rebuild's global pass 5-6 step. Writes phantom
+    Route nodes (created by pass5 for cross-service calls) that wouldn't
+    otherwise exist in Kuzu.
+    """
+    # Write phantom routes that don't already exist (pass5 creates these for cross-service calls)
+    for row in tables.routes_rows:
+        # MERGE to avoid duplicates with routes written during scoped step
+        conn.execute(
+            "MERGE (r:Route {id: $id}) "
+            "SET r.kind = $kind, r.framework = $framework, r.method = $method, "
+            "r.path = $path, r.path_template = $path_template, r.path_regex = $path_regex, "
+            "r.topic = $topic, r.broker = $broker, r.feign_name = $feign_name, r.feign_url = $feign_url, "
+            "r.microservice = $microservice, r.module = $module, r.filename = $filename, "
+            "r.start_line = $start_line, r.end_line = $end_line, r.resolved = $resolved",
+            asdict(row),
+        )
+
     # Build node_id lookup for members and types
     member_by_id = {m.node_id: m for m in tables.members}
 

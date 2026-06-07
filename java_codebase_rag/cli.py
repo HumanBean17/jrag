@@ -356,7 +356,6 @@ def _cmd_increment(args: argparse.Namespace) -> int:
             # Parse stdout to check for full_fallback mode
             # The incremental_rebuild function returns a JSON payload with mode field
             try:
-                import json
                 result = json.loads(g.stdout.strip())
                 if result.get("mode") == "full_fallback":
                     print(
