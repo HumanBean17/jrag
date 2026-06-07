@@ -247,5 +247,60 @@ def run_build_ast_graph(
     return subprocess.CompletedProcess(args=cmd, returncode=code, stdout=out_s, stderr=err_s)
 
 
+def run_incremental_graph(
+    *,
+    source_root: Path,
+    kuzu_path: Path,
+    verbose: bool,
+    quiet: bool = False,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run incremental graph rebuild by passing --incremental flag to build_ast_graph.py."""
+    builder = bundle_dir() / "build_ast_graph.py"
+    if not builder.is_file():
+        return subprocess.CompletedProcess(
+            args=[],
+            returncode=126,
+            stdout="",
+            stderr=f"build_ast_graph.py not found under {builder.parent}",
+        )
+    cmd: list[str] = [
+        sys.executable,
+        str(builder),
+        "--source-root",
+        str(source_root),
+        "--kuzu-path",
+        str(kuzu_path),
+        "--incremental",
+    ]
+    # Three-tier: --quiet (silent) / default (filtered progress) / --verbose (raw).
+    # Default passes --verbose so the builder emits per-pass progress lines,
+    # which the parent filters via _LineFilter.  --verbose bypasses the filter.
+    if verbose or not quiet:
+        cmd.append("--verbose")
+    if quiet:
+        return subprocess.run(
+            cmd,
+            cwd=str(source_root),
+            env=env or os.environ.copy(),
+            capture_output=True,
+            text=True,
+        )
+    proc = subprocess.Popen(
+        cmd,
+        cwd=str(source_root),
+        env=env or os.environ.copy(),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        bufsize=0,
+    )
+    out_s, err_s, code = _popen_capturing_stderr(proc, verbose=verbose)
+    if not verbose:
+        from java_codebase_rag.cli_format import bold_cyan, styled_check, styled_cross
+        marker = styled_check() if code == 0 else styled_cross()
+        print(f"{marker} {bold_cyan('[increment]')} done", file=sys.stderr, flush=True)
+    return subprocess.CompletedProcess(args=cmd, returncode=code, stdout=out_s, stderr=err_s)
+
+
 def clip(s: str, n: int) -> str:
     return s[-n:] if len(s) > n else s
