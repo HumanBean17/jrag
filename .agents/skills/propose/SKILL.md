@@ -234,14 +234,14 @@ Docs-only; baseline unchanged.
   - `TOOL-NAME-PROPOSE.md`
   - `ARCHITECTURE-CHANGE-PROPOSE.md`
 
-## Final checklist
+## Key Principles
 
-- [ ] Proposal file lives under `propose/active/`
-- [ ] Problem statement includes concrete examples
-- [ ] Schema/ontology/re-index impact is explicit
-- [ ] Open questions include `[TBD]` with recommendations
-- [ ] Out-of-scope section is present
-- [ ] Sequencing/follow-up path is clear
+- **One question at a time** — Don't overwhelm with multiple questions
+- **Multiple choice preferred** — Easier to answer than open-ended when possible
+- **Agent determines questions** — You figure out what to ask based on context
+- **Explore alternatives** — Always propose 2-3 approaches before settling
+- **Incremental validation** — Present sections, get approval before moving on
+- **Be flexible** — Go back and clarify when something doesn't make sense
 
 ## Key Principles
 
