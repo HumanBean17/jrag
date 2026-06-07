@@ -16,6 +16,7 @@ Depends on: none.
 ## Principles (do not relitigate in review)
 
 - **Interactive-first, non-interactive escape hatch.** Every prompt goes through a single `prompt()` helper in `installer.py` that dispatches to `questionary` when `sys.stdin.isatty()` is True, or returns defaults when False. This helper is a first-class abstraction — no ad-hoc `if isatty()` scattered through stage logic.
+- **Multi-host by default.** Stage 3 uses a checkbox with all hosts pre-selected. Users configure multiple agent hosts in a single run. Non-interactive mode accepts multiple `--agent` flags.
 - **Merge, never overwrite wholesale.** MCP config files (`~/.claude.json`, `.qwen/settings.json`, `.gigacode/settings.json`) are JSON files that contain other keys the installer must not destroy. Always read → merge into `mcpServers` → write back.
 - **Shipped artifacts are versioned assets.** Skill (`SKILL.md`) and agent (`explorer-rag-enhanced.md`) files live inside the package as `package_data`. The installer copies them; `update` overwrites them without asking (they are not user-editable).
 - **No new Python dependency on `rich`.** The proposal lists `rich` but the codebase already has `cli_format.py` (TTY-aware ANSI styling) and `cli_progress.py`. Use these instead of adding `rich`. Only `questionary` (for interactive prompts) is a new dependency.
@@ -38,10 +39,11 @@ Landing order: **I1 → I2**.
 | Dependency: `rich` | **Not added.** Reuse `cli_format.py` and `cli_progress.py` for progress display. Only `questionary>=2.0` is added. |
 | Artifact source location | `java_codebase_rag/install_data/skills/explore-codebase/SKILL.md` and `java_codebase_rag/install_data/agents/explorer-rag-enhanced.md` inside the package. Registered via `package_data` in `pyproject.toml`. |
 | MCP entry shape | `{"java-codebase-rag": {"command": "<resolved-absolute-path>", "type": "stdio"}}` — `command` is the resolved absolute path from `shutil.which("java-codebase-rag-mcp")`, not the bare name. If `shutil.which` returns None: interactive mode prompts the user for a path; non-interactive mode exits with code 2. No env vars (walk-up discovery handles config). `"type": "stdio"` included for all hosts. |
-| Interactive prompt library | `questionary` (checkbox for stage 1, select for stages 3/4, text for stage 2, confirm for overwrite prompts). All dispatched through a `prompt()` helper that checks `sys.stdin.isatty()`. |
-| Non-interactive mode | `--non-interactive` flag or non-TTY stdin → all defaults, no prompts. Requires `--agent` flag. `--scope project` default. `--model auto` default. |
+| Interactive prompt library | `questionary` (checkbox for stages 1/3, text for stage 2, select for stage 4, confirm for overwrite prompts). All dispatched through a `prompt()` helper that checks `sys.stdin.isatty()`. |
+| Multi-host support | Stage 3 uses a checkbox (all hosts selected by default). User can configure multiple agent hosts in a single run. Non-interactive mode supports multiple `--agent` flags (requires at least one). |
+| Non-interactive mode | `--non-interactive` flag or non-TTY stdin → all defaults, no prompts. Requires at least one `--agent` flag (can be passed multiple times). `--scope project` default. `--model auto` default. |
 | Re-run detection | If `.java-codebase-rag.yml` exists, show current values and offer "Update" (pre-filled) or "Start fresh". Unmanaged YAML keys preserved in "Update" mode. |
-| Stage 1 detection granularity | Top-level directories only (immediate children of cwd containing `.java` files). Not nested package dirs. |
+| Stage 1 detection granularity | If root has `pom.xml`/`build.gradle*`: show only `.` (entire project). If root has no build file: show immediate children with build files (microservice roots). No recursive enumeration of nested modules. |
 | `~` expansion | `Path.home()`, not shell expansion. `os.path.expandvars` for `$HOME`. |
 | Post-deploy PATH validation | `shutil.which("java-codebase-rag-mcp")` is called **before** writing MCP config (Stage 5), not just after. The resolved absolute path becomes the `"command"` value. If not found: interactive mode prompts for path; non-interactive exits with code 2. Post-deploy validation is a secondary sanity check. |
 | `.gitignore` pattern-aware check | Check for `.java-codebase-rag` or `.java-codebase-rag/` (with or without trailing slash). Not just string equality. |
@@ -122,13 +124,16 @@ def confirm_source_root(cwd: Path, *, non_interactive: bool) -> Path:
 
 ```python
 def detect_java_directories(source_root: Path) -> list[Path]:
-    """Return immediate child directories of source_root that contain .java files recursively."""
+    """Return Maven/Gradle module roots. If root has build file, returns [Path('.')]."""
 ```
 
-- Walk `source_root` immediate children only. For each child that is a directory, check recursively for `.java` files using `any((d / f).is_file() for ...)` or a fast glob.
-- Also check if `source_root` itself contains `.java` files (single-module project).
-- If no `.java` found anywhere: raise a fatal error (exit code 2).
-- Return list of detected directories (relative to `source_root`).
+- Check if `source_root` itself contains a build file (`pom.xml`, `build.gradle`, or `build.gradle.kts`).
+  - If YES: return `[Path(".")]` — the entire project is indexed as one unit.
+  - If NO: scan immediate children of `source_root` for directories containing build files.
+    - For each child directory that is a directory and contains a build file, add to list (relative to `source_root`).
+    - If no children have build files: raise a fatal error (exit code 2).
+- Return list of detected module roots (relative to `source_root`).
+- No recursive descent — only immediate children are checked in Case B (prevents enumerating every nested Maven submodule).
 
 #### 1d. Stage 2: Embedding model
 
@@ -145,13 +150,14 @@ def resolve_model(model_input: str | None, *, non_interactive: bool) -> str:
 #### 1e. Stage 3-4: Agent host + scope selection
 
 ```python
-def select_host(*, non_interactive: bool, cli_agent: str | None) -> HostConfig:
-    """Select agent host from menu or CLI flag."""
+def select_hosts(*, non_interactive: bool, cli_agents: list[str] | None) -> list[HostConfig]:
+    """Select agent hosts from checkbox or CLI flags. Returns list of selected HostConfig."""
 ```
 
-- If `cli_agent` is given: look up in `HOSTS`, error if invalid.
+- If `cli_agents` is given (non-empty list): look up each in `HOSTS`, error if any invalid.
 - If non-interactive with no `--agent`: fatal error (exit code 2).
-- Interactive: `prompt("select", ...)` with 3 choices.
+- Interactive: `prompt("checkbox", ...)` with all 3 choices checked by default.
+- If user unchecks all hosts: prompt "At least one agent host is required. Re-select or abort." If they choose abort: `SystemExit(2)`.
 
 ```python
 def select_scope(*, non_interactive: bool, cli_scope: str | None) -> Scope:
@@ -165,7 +171,7 @@ def select_scope(*, non_interactive: bool, cli_scope: str | None) -> Scope:
 
 ```python
 def deploy_artifacts(
-    host: HostConfig,
+    hosts: list[HostConfig],
     scope: Scope,
     cwd: Path,
     *,
@@ -174,7 +180,7 @@ def deploy_artifacts(
 ) -> list[ArtifactResult]:
 ```
 
-`mcp_command` is the resolved absolute path from `resolve_mcp_command()`. For each of 3 artifacts (MCP config, skill, agent):
+`mcp_command` is the resolved absolute path from `resolve_mcp_command()`. For each host in `hosts`, for each of 3 artifacts (MCP config, skill, agent):
 
 1. Resolve source path (package data dir or generated JSON) and destination path.
 2. Check writability of parent directory. If not writable: record error, skip, continue.
@@ -302,7 +308,7 @@ def handle_rerun(cwd: Path, *, non_interactive: bool) -> dict | None:
 def run_install(
     *,
     non_interactive: bool,
-    agent: str | None,
+    agents: list[str] | None,
     scope: str | None,
     model: str | None,
     source_root: Path | None = None,
@@ -314,10 +320,10 @@ This is the top-level function called from `_cmd_install` in `cli.py`. It orches
 1. Confirm source root (interactive: prompt with cwd default; non-interactive: cwd).
 2. Detect Java sources (fatal exit 2 if none).
 3. Resolve model.
-4. Select host.
+4. Select hosts (returns list of `HostConfig`).
 5. Select scope.
 6. Resolve MCP command path via `resolve_mcp_command()`.
-7. Deploy artifacts (passing `mcp_command`; partial failure → exit 1).
+7. Deploy artifacts to all selected hosts (passing `mcp_command`; partial failure → exit 1).
 8. Generate YAML, update `.gitignore`, run `init` if needed.
 9. Print summary.
 
@@ -379,7 +385,7 @@ def _cmd_install(args: argparse.Namespace) -> int:
     from java_codebase_rag.installer import run_install
     return run_install(
         non_interactive=bool(args.non_interactive),
-        agent=args.agent,
+        agents=args.agent,  # list of str (may be empty)
         scope=args.scope,
         model=args.model,
         source_root=None,  # None means cwd; installer confirms interactively
@@ -394,7 +400,7 @@ install = subparsers.add_parser(
     description="(...)"
 )
 install.add_argument("--non-interactive", action="store_true")
-install.add_argument("--agent", choices=["claude-code", "qwen-code", "gigacode"], default=None)
+install.add_argument("--agent", choices=["claude-code", "qwen-code", "gigacode"], default=[], action="append")
 install.add_argument("--scope", choices=["project", "user"], default=None)
 install.add_argument("--model", type=str, default=None)
 install.set_defaults(handler=_cmd_install)
@@ -440,31 +446,38 @@ All tests for PR-I1. See Tests section below for named test cases.
 23. `test_prompt_returns_default_on_non_tty` — non-TTY → default returned, questionary not called
 24. `test_rerun_detects_existing_config` — existing `.java-codebase-rag.yml` → returns parsed data
 25. `test_rerun_no_config_returns_none` — no config → returns None
-26. `test_detect_java_no_files_exit_code_2` — cwd with no `.java` files → raises SystemExit or returns 2
-27. `test_detect_java_single_module` — cwd with `src/main/java/Foo.java` → returns cwd as sole entry
-28. `test_detect_java_multi_module` — cwd with `service-a/src/.../Foo.java` and `service-b/src/.../Bar.java` → returns both dirs
-29. `test_confirm_source_root_interactive_accepts_default` — user presses Enter → returns cwd
-30. `test_confirm_source_root_interactive_changes_path` — user types `/other/path` → returns that path (validated)
-31. `test_confirm_source_root_interactive_invalid_path_reprompts` — user types non-existent path → re-prompted
-32. `test_confirm_source_root_non_interactive_returns_cwd` — non-interactive → returns cwd, no prompt
-33. `test_confirm_source_root_expands_tilde` — user types `~/projects/foo` → expanded via `Path.home()`
-34. `test_model_path_not_found_prompts_confirmation` — non-existent path → confirmation prompt
-35. `test_model_path_found_returns_resolved` — existing path → returned expanded
-36. `test_path_validation_warns_missing_mcp_entrypoint` — `shutil.which` returns None → warning printed, continues
-37. `test_resolve_mcp_command_found` — `shutil.which` returns `/usr/local/bin/java-codebase-rag-mcp` → that path returned
-38. `test_resolve_mcp_command_not_found_interactive_prompt` — `shutil.which` returns None in interactive mode → prompts user for path
-39. `test_resolve_mcp_command_not_found_interactive_abort` — user enters "abort" at prompt → `SystemExit(2)`
-40. `test_resolve_mcp_command_not_found_interactive_user_path` — user provides valid path → returned
-41. `test_resolve_mcp_command_not_found_interactive_invalid_path` — user provides non-existent path → re-prompted
-42. `test_resolve_mcp_command_not_found_non_interactive_exit_2` — `shutil.which` returns None + non-interactive → `SystemExit(2)`
-43. `test_permission_error_skips_artifact_continues` — unwritable directory → artifact skipped, others continue, exit 1
-44. `test_select_host_non_interactive_requires_agent` — no `--agent` in non-interactive → exit 2
-45. `test_select_host_invalid_agent_exit_2` — unknown agent string → exit 2
-46. `test_artifact_overwrite_prompt_existing_skill` — existing skill file → prompts overwrite/skip/abort
+26. `test_detect_java_root_has_maven_pom` — cwd with `pom.xml` → returns `[Path(".")]`
+27. `test_detect_java_root_has_gradle_build` — cwd with `build.gradle` → returns `[Path(".")]`
+28. `test_detect_java_root_has_gradle_kts` — cwd with `build.gradle.kts` → returns `[Path(".")]`
+29. `test_detect_java_no_root_microservice_monorepo` — cwd has no build file, `service-a/pom.xml` and `service-b/pom.xml` exist → returns `[Path("service-a"), Path("service-b")]`
+30. `test_detect_java_no_root_single_service` — cwd has no build file, only `service-a/pom.xml` exists → returns `[Path("service-a")]`
+31. `test_detect_java_no_root_no_services_exit_2` — cwd has no build file, no children have build files → raises SystemExit(2)
+32. `test_confirm_source_root_interactive_accepts_default` — user presses Enter → returns cwd
+33. `test_confirm_source_root_interactive_changes_path` — user types `/other/path` → returns that path (validated)
+34. `test_confirm_source_root_interactive_invalid_path_reprompts` — user types non-existent path → re-prompted
+35. `test_confirm_source_root_non_interactive_returns_cwd` — non-interactive → returns cwd, no prompt
+36. `test_confirm_source_root_expands_tilde` — user types `~/projects/foo` → expanded via `Path.home()`
+37. `test_model_path_not_found_prompts_confirmation` — non-existent path → confirmation prompt
+38. `test_model_path_found_returns_resolved` — existing path → returned expanded
+39. `test_path_validation_warns_missing_mcp_entrypoint` — `shutil.which` returns None → warning printed, continues
+40. `test_resolve_mcp_command_found` — `shutil.which` returns `/usr/local/bin/java-codebase-rag-mcp` → that path returned
+41. `test_resolve_mcp_command_not_found_interactive_prompt` — `shutil.which` returns None in interactive mode → prompts user for path
+42. `test_resolve_mcp_command_not_found_interactive_abort` — user enters "abort" at prompt → `SystemExit(2)`
+43. `test_resolve_mcp_command_not_found_interactive_user_path` — user provides valid path → returned
+44. `test_resolve_mcp_command_not_found_interactive_invalid_path` — user provides non-existent path → re-prompted
+45. `test_resolve_mcp_command_not_found_non_interactive_exit_2` — `shutil.which` returns None + non-interactive → `SystemExit(2)`
+46. `test_permission_error_skips_artifact_continues` — unwritable directory → artifact skipped, others continue, exit 1
+47. `test_select_hosts_non_interactive_requires_agent` — no `--agent` in non-interactive → exit 2
+48. `test_select_hosts_invalid_agent_exit_2` — unknown agent string → exit 2
+49. `test_select_hosts_interactive_all_checked_by_default` — interactive mode → all 3 hosts pre-selected
+50. `test_select_hosts_interactive_none_selected_prompts_required` — user unchecks all → prompts for at least one host
+51. `test_select_hosts_multi_host_non_interactive` — `--agent claude-code --agent qwen-code` → both hosts selected
+52. `test_select_hosts_multi_host_deploy_all` — multiple hosts selected → artifacts deployed to all
+53. `test_artifact_overwrite_prompt_existing_skill` — existing skill file → prompts overwrite/skip/abort
 
 ### Integration test
 
-47. `test_install_non_interactive_claude_code_bank_chat` — run `install --non-interactive --agent claude-code` from `tests/bank-chat-system/` fixture. This test is gated behind `JAVA_CODEBASE_RAG_RUN_HEAVY=1` (same as other e2e tests — see `tests/README.md`). It calls `run_install()` directly (not via subprocess) with mocked pipeline functions (`run_cocoindex_update`, `run_build_ast_graph` are mocked to return success `CompletedProcess`) and mocked `shutil.which` returning a fake path. Verify:
+54. `test_install_non_interactive_claude_code_bank_chat` — run `install --non-interactive --agent claude-code` from `tests/bank-chat-system/` fixture. This test is gated behind `JAVA_CODEBASE_RAG_RUN_HEAVY=1` (same as other e2e tests — see `tests/README.md`). It calls `run_install()` directly (not via subprocess) with mocked pipeline functions (`run_cocoindex_update`, `run_build_ast_graph` are mocked to return success `CompletedProcess`) and mocked `shutil.which` returning a fake path. Verify:
     - `.java-codebase-rag.yml` created (no `source_root` key, no `embedding.model` if auto)
     - `.mcp.json` has `java-codebase-rag` entry with `"command": "<mocked-absolute-path>", "type": "stdio"`
     - `.claude/skills/explore-codebase/SKILL.md` exists
@@ -472,11 +485,19 @@ All tests for PR-I1. See Tests section below for named test cases.
     - `.gitignore` has `.java-codebase-rag/`
     - `run_install()` returns 0
 
+54.1. `test_install_non_interactive_multi_host_bank_chat` — run `install --non-interactive --agent claude-code --agent qwen-code` from `tests/bank-chat-system/` fixture. Same mocking as above. Verify:
+    - `.mcp.json` has `java-codebase-rag` entry
+    - `.qwen/settings.json` has `java-codebase-rag` entry
+    - `.claude/skills/explore-codebase/SKILL.md` exists
+    - `.qwen/skills/explore-codebase/SKILL.md` exists
+    - `run_install()` returns 0
+
 ## Definition of done (PR-I1)
 
 - `install` subcommand is registered and appears in `--help` output.
 - `install --non-interactive --agent claude-code` completes end-to-end on bank-chat fixture with exit code 0.
-- All 47 named tests pass.
+- `install --non-interactive --agent claude-code --agent qwen-code` (multi-host) completes end-to-end on bank-chat fixture with exit code 0.
+- All 53 named tests pass.
 - `ruff check .` is clean.
 - Existing test suite (`pytest tests -v` without `JAVA_CODEBASE_RAG_RUN_HEAVY`) passes.
 - `questionary` is listed in `pyproject.toml` dependencies.
@@ -490,16 +511,16 @@ All tests for PR-I1. See Tests section below for named test cases.
 | 2 | Add `package_data` to `pyproject.toml`; add `questionary` dependency | `pyproject.toml` | `pip install -e .` succeeds and `import questionary` works |
 | 3 | Implement `HostConfig` dataclass + `HOSTS` mapping + scope/path helpers | `installer.py` | Tests 1-6 pass |
 | 4 | Implement `prompt()` helper | `installer.py` | Tests 22-23 pass |
-| 5 | Implement `detect_java_directories` (stage 1) | `installer.py` | Tests 26-28 pass |
-| 5.5 | Implement `confirm_source_root` (stage 1 pre-step) | `installer.py` | Tests 29-33 pass |
-| 6 | Implement `resolve_model` (stage 2) | `installer.py` | Tests 29-30 pass |
-| 7 | Implement `select_host` + `select_scope` (stages 3-4) | `installer.py` | Tests 33-34 pass |
+| 5 | Implement `detect_java_directories` (stage 1) | `installer.py` | Tests 26-31 pass |
+| 5.5 | Implement `confirm_source_root` (stage 1 pre-step) | `installer.py` | Tests 32-36 pass |
+| 6 | Implement `resolve_model` (stage 2) | `installer.py` | Tests 37-38 pass |
+| 7 | Implement `select_hosts` + `select_scope` (stages 3-4) | `installer.py` | Tests 44-48 pass |
 | 8 | Implement `merge_mcp_config` | `installer.py` | Tests 12-16 pass |
-| 8.5 | Implement `resolve_mcp_command` (MCP entrypoint path resolution) | `installer.py` | Tests 32-37 pass |
-| 9 | Implement `deploy_artifacts` (stage 5) | `installer.py` | Tests 31, 38-39, 41 pass |
+| 8.5 | Implement `resolve_mcp_command` (MCP entrypoint path resolution) | `installer.py` | Tests 39-44 pass |
+| 9 | Implement `deploy_artifacts` (stage 5) | `installer.py` | Tests 40, 45-46, 50 pass |
 | 10 | Implement `generate_yaml_config` + `update_gitignore` + `run_init_if_needed` (stage 6) | `installer.py` | Tests 7-11, 17-21 pass |
 | 11 | Implement `handle_rerun` | `installer.py` | Tests 24-25 pass |
-| 12 | Implement `run_install` orchestrator | `installer.py` | Integration test 42 passes |
+| 12 | Implement `run_install` orchestrator | `installer.py` | Integration tests 54-54.1 pass |
 | 13 | Add `_cmd_install` + `install` subparser to `cli.py` | `cli.py` | `java-codebase-rag install --help` prints usage |
 | 14 | Final validation: full test suite + ruff | all | Green suite, clean lint |
 
@@ -636,11 +657,12 @@ Add `update` subparser with `--force` and `--dry-run` flags.
 # Whole-plan done definition
 
 1. `java-codebase-rag install --non-interactive --agent claude-code` completes on bank-chat fixture with exit code 0, producing valid config, MCP registration, skill, agent, and index.
-2. `java-codebase-rag install` (interactive) prompts for source root (defaulting to cwd) and completes the wizard.
-3. `java-codebase-rag update` after install refreshes artifacts with exit code 0.
-4. All named tests pass.
-5. `ruff check .` is clean and existing test suite passes.
-6. No ontology bump or re-index required for existing installations.
+2. `java-codebase-rag install --non-interactive --agent claude-code --agent qwen-code` (multi-host) completes on bank-chat fixture with exit code 0, producing valid configs for both hosts.
+3. `java-codebase-rag install` (interactive) prompts for source root (defaulting to cwd), allows multi-host selection via checkbox, and completes the wizard.
+4. `java-codebase-rag update` after install refreshes artifacts with exit code 0.
+5. All named tests pass.
+6. `ruff check .` is clean and existing test suite passes.
+7. No ontology bump or re-index required for existing installations.
 
 # Tracking
 
