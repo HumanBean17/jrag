@@ -37,13 +37,13 @@ Landing order: **I1 → I2**.
 | --- | --- |
 | Dependency: `rich` | **Not added.** Reuse `cli_format.py` and `cli_progress.py` for progress display. Only `questionary>=2.0` is added. |
 | Artifact source location | `java_codebase_rag/install_data/skills/explore-codebase/SKILL.md` and `java_codebase_rag/install_data/agents/explorer-rag-enhanced.md` inside the package. Registered via `package_data` in `pyproject.toml`. |
-| MCP entry shape | `{"java-codebase-rag": {"command": "java-codebase-rag-mcp", "type": "stdio"}}` — no env vars (walk-up discovery handles config). Includes `"type": "stdio"` for all hosts (safe default; Claude Code ignores it, Qwen/GigaCode expect it). |
+| MCP entry shape | `{"java-codebase-rag": {"command": "<resolved-absolute-path>", "type": "stdio"}}` — `command` is the resolved absolute path from `shutil.which("java-codebase-rag-mcp")`, not the bare name. If `shutil.which` returns None: interactive mode prompts the user for a path; non-interactive mode exits with code 2. No env vars (walk-up discovery handles config). `"type": "stdio"` included for all hosts. |
 | Interactive prompt library | `questionary` (checkbox for stage 1, select for stages 3/4, text for stage 2, confirm for overwrite prompts). All dispatched through a `prompt()` helper that checks `sys.stdin.isatty()`. |
 | Non-interactive mode | `--non-interactive` flag or non-TTY stdin → all defaults, no prompts. Requires `--agent` flag. `--scope project` default. `--model auto` default. |
 | Re-run detection | If `.java-codebase-rag.yml` exists, show current values and offer "Update" (pre-filled) or "Start fresh". Unmanaged YAML keys preserved in "Update" mode. |
 | Stage 1 detection granularity | Top-level directories only (immediate children of cwd containing `.java` files). Not nested package dirs. |
 | `~` expansion | `Path.home()`, not shell expansion. `os.path.expandvars` for `$HOME`. |
-| Post-deploy PATH validation | `shutil.which("java-codebase-rag-mcp")` — warn but don't abort if missing (GUI launcher PATH may differ). |
+| Post-deploy PATH validation | `shutil.which("java-codebase-rag-mcp")` is called **before** writing MCP config (Stage 5), not just after. The resolved absolute path becomes the `"command"` value. If not found: interactive mode prompts for path; non-interactive exits with code 2. Post-deploy validation is a secondary sanity check. |
 | `.gitignore` pattern-aware check | Check for `.java-codebase-rag` or `.java-codebase-rag/` (with or without trailing slash). Not just string equality. |
 
 ---
@@ -162,31 +162,47 @@ def deploy_artifacts(
     cwd: Path,
     *,
     non_interactive: bool,
+    mcp_command: str,
 ) -> list[ArtifactResult]:
 ```
 
-For each of 3 artifacts (MCP config, skill, agent):
+`mcp_command` is the resolved absolute path from `resolve_mcp_command()`. For each of 3 artifacts (MCP config, skill, agent):
 
 1. Resolve source path (package data dir or generated JSON) and destination path.
 2. Check writability of parent directory. If not writable: record error, skip, continue.
 3. Handle existing files:
    - Skill/agent: if exists, prompt overwrite/skip/abort (via `prompt("select", ...)`). Show file size and mtime.
-   - MCP config: merge into existing JSON. If `java-codebase-rag` entry already exists with different config, prompt for confirmation.
+   - MCP config: merge into existing JSON using `merge_mcp_config(path, host, mcp_command=mcp_command)`. If `java-codebase-rag` entry already exists with different config, prompt for confirmation.
 4. Write the file.
-5. Run post-deploy PATH validation for `java-codebase-rag-mcp` via `shutil.which()`.
+5. Run post-deploy sanity check: verify `mcp_command` is still executable via `os.access(mcp_command, os.X_OK)`.
 
 Return a list of `ArtifactResult` (named tuple with `path`, `success`, `error`).
+
+#### 1g-pre. MCP entrypoint path resolution
+
+```python
+def resolve_mcp_command(*, non_interactive: bool) -> str:
+    """Resolve the absolute path to java-codebase-rag-mcp.
+    Returns the path string for use as MCP 'command' value.
+    Raises SystemExit(2) if not found in non-interactive mode."""
+```
+
+- Call `shutil.which("java-codebase-rag-mcp")`.
+- **If found**: return the resolved absolute path (e.g., `/Users/x/.local/bin/java-codebase-rag-mcp`).
+- **If not found**:
+  - Interactive: prompt the user with `prompt("text", "Could not find java-codebase-rag-mcp on PATH. Enter the full path (or 'abort'):", default="abort")`. If the user enters "abort" or empty: `raise SystemExit(2)`. Otherwise: validate the provided path exists (`Path(path).is_file()`) and is executable (`os.access(path, os.X_OK)`). If validation fails: re-prompt with the specific error ("Path not found" or "Not executable"). Return the validated path.
+  - Non-interactive: print "Error: `java-codebase-rag-mcp` not found on PATH. Ensure `java-codebase-rag` is installed, then re-run with `--non-interactive --agent <host>`.", raise `SystemExit(2)`.
 
 #### 1g. MCP JSON merge
 
 ```python
-def merge_mcp_config(config_path: Path, host: HostConfig) -> bool:
+def merge_mcp_config(config_path: Path, host: HostConfig, *, mcp_command: str) -> bool:
     """Read, merge, write MCP config. Returns True if entry was added/updated."""
 ```
 
 - Read existing JSON (or start with `{}`).
 - Ensure `mcpServers` key exists.
-- Merge `{"java-codebase-rag": {"command": "java-codebase-rag-mcp", "type": "stdio"}}` into `mcpServers`.
+- Merge `{"java-codebase-rag": {"command": mcp_command, "type": "stdio"}}` into `mcpServers`.
 - If entry already exists with same config: no-op, return True.
 - If entry exists with different config: update in-place, return True.
 - Preserve all other keys in the file (e.g., `~/.claude.json` may have `numStartups`, `userID`).
@@ -291,9 +307,10 @@ This is the top-level function called from `_cmd_install` in `cli.py`. It orches
 2. Resolve model.
 3. Select host.
 4. Select scope.
-5. Deploy artifacts (partial failure → exit 1).
-6. Generate YAML, update `.gitignore`, run `init` if needed.
-7. Print summary.
+5. Resolve MCP command path via `resolve_mcp_command()`.
+6. Deploy artifacts (passing `mcp_command`; partial failure → exit 1).
+7. Generate YAML, update `.gitignore`, run `init` if needed.
+8. Print summary.
 
 ### 2. `java_codebase_rag/install_data/` — new package data directory
 
@@ -399,7 +416,7 @@ All tests for PR-I1. See Tests section below for named test cases.
 10. `test_yaml_generation_all_dirs_selected` — all dirs → no `microservice_roots` in YAML
 11. `test_yaml_generation_preserves_unmanaged_keys` — existing YAML with `brownfield_overrides` and `embedding.device` → both preserved in update mode
 12. `test_yaml_generation_does_not_write_source_root_or_index_dir` — generated YAML never contains `source_root` or `index_dir` keys
-12. `test_mcp_merge_adds_to_empty` — empty `{}` → `{"mcpServers": {"java-codebase-rag": {"command": "java-codebase-rag-mcp", "type": "stdio"}}}`
+12. `test_mcp_merge_adds_to_empty` — empty `{}` → `{"mcpServers": {"java-codebase-rag": {"command": "/resolved/path/java-codebase-rag-mcp", "type": "stdio"}}}`
 13. `test_mcp_merge_adds_to_existing_servers` — existing `{"mcpServers": {"other": {...}}}` → both servers present
 14. `test_mcp_merge_updates_existing_entry` — existing `java-codebase-rag` entry with different command → updated
 15. `test_mcp_merge_preserves_other_keys_claude_json` — `{"numStartups": 42, "userID": "abc", "mcpServers": {...}}` → `numStartups` and `userID` preserved
@@ -419,16 +436,22 @@ All tests for PR-I1. See Tests section below for named test cases.
 29. `test_model_path_not_found_prompts_confirmation` — non-existent path → confirmation prompt
 30. `test_model_path_found_returns_resolved` — existing path → returned expanded
 31. `test_path_validation_warns_missing_mcp_entrypoint` — `shutil.which` returns None → warning printed, continues
-32. `test_permission_error_skips_artifact_continues` — unwritable directory → artifact skipped, others continue, exit 1
-33. `test_select_host_non_interactive_requires_agent` — no `--agent` in non-interactive → exit 2
-34. `test_select_host_invalid_agent_exit_2` — unknown agent string → exit 2
-35. `test_artifact_overwrite_prompt_existing_skill` — existing skill file → prompts overwrite/skip/abort
+32. `test_resolve_mcp_command_found` — `shutil.which` returns `/usr/local/bin/java-codebase-rag-mcp` → that path returned
+33. `test_resolve_mcp_command_not_found_interactive_prompt` — `shutil.which` returns None in interactive mode → prompts user for path
+34. `test_resolve_mcp_command_not_found_interactive_abort` — user enters "abort" at prompt → `SystemExit(2)`
+35. `test_resolve_mcp_command_not_found_interactive_user_path` — user provides valid path → returned
+36. `test_resolve_mcp_command_not_found_interactive_invalid_path` — user provides non-existent path → re-prompted
+37. `test_resolve_mcp_command_not_found_non_interactive_exit_2` — `shutil.which` returns None + non-interactive → `SystemExit(2)`
+38. `test_permission_error_skips_artifact_continues` — unwritable directory → artifact skipped, others continue, exit 1
+39. `test_select_host_non_interactive_requires_agent` — no `--agent` in non-interactive → exit 2
+40. `test_select_host_invalid_agent_exit_2` — unknown agent string → exit 2
+41. `test_artifact_overwrite_prompt_existing_skill` — existing skill file → prompts overwrite/skip/abort
 
 ### Integration test
 
-36. `test_install_non_interactive_claude_code_bank_chat` — run `install --non-interactive --agent claude-code` from `tests/bank-chat-system/` fixture. This test is gated behind `JAVA_CODEBASE_RAG_RUN_HEAVY=1` (same as other e2e tests — see `tests/README.md`). It calls `run_install()` directly (not via subprocess) with mocked pipeline functions (`run_cocoindex_update`, `run_build_ast_graph` are mocked to return success `CompletedProcess`). Verify:
+42. `test_install_non_interactive_claude_code_bank_chat` — run `install --non-interactive --agent claude-code` from `tests/bank-chat-system/` fixture. This test is gated behind `JAVA_CODEBASE_RAG_RUN_HEAVY=1` (same as other e2e tests — see `tests/README.md`). It calls `run_install()` directly (not via subprocess) with mocked pipeline functions (`run_cocoindex_update`, `run_build_ast_graph` are mocked to return success `CompletedProcess`) and mocked `shutil.which` returning a fake path. Verify:
     - `.java-codebase-rag.yml` created (no `source_root` key, no `embedding.model` if auto)
-    - `.mcp.json` has `java-codebase-rag` entry with `"command": "java-codebase-rag-mcp", "type": "stdio"`
+    - `.mcp.json` has `java-codebase-rag` entry with `"command": "<mocked-absolute-path>", "type": "stdio"`
     - `.claude/skills/explore-codebase/SKILL.md` exists
     - `.claude/agents/explorer-rag-enhanced.md` exists
     - `.gitignore` has `.java-codebase-rag/`
@@ -438,7 +461,7 @@ All tests for PR-I1. See Tests section below for named test cases.
 
 - `install` subcommand is registered and appears in `--help` output.
 - `install --non-interactive --agent claude-code` completes end-to-end on bank-chat fixture with exit code 0.
-- All 37 named tests pass.
+- All 42 named tests pass.
 - `ruff check .` is clean.
 - Existing test suite (`pytest tests -v` without `JAVA_CODEBASE_RAG_RUN_HEAVY`) passes.
 - `questionary` is listed in `pyproject.toml` dependencies.
@@ -456,10 +479,11 @@ All tests for PR-I1. See Tests section below for named test cases.
 | 6 | Implement `resolve_model` (stage 2) | `installer.py` | Tests 29-30 pass |
 | 7 | Implement `select_host` + `select_scope` (stages 3-4) | `installer.py` | Tests 33-34 pass |
 | 8 | Implement `merge_mcp_config` | `installer.py` | Tests 12-16 pass |
-| 9 | Implement `deploy_artifacts` (stage 5) | `installer.py` | Tests 31-32, 35 pass |
+| 8.5 | Implement `resolve_mcp_command` (MCP entrypoint path resolution) | `installer.py` | Tests 32-37 pass |
+| 9 | Implement `deploy_artifacts` (stage 5) | `installer.py` | Tests 31, 38-39, 41 pass |
 | 10 | Implement `generate_yaml_config` + `update_gitignore` + `run_init_if_needed` (stage 6) | `installer.py` | Tests 7-11, 17-21 pass |
 | 11 | Implement `handle_rerun` | `installer.py` | Tests 24-25 pass |
-| 12 | Implement `run_install` orchestrator | `installer.py` | Integration test 36 passes |
+| 12 | Implement `run_install` orchestrator | `installer.py` | Integration test 42 passes |
 | 13 | Add `_cmd_install` + `install` subparser to `cli.py` | `cli.py` | `java-codebase-rag install --help` prints usage |
 | 14 | Final validation: full test suite + ruff | all | Green suite, clean lint |
 
@@ -499,7 +523,7 @@ def refresh_artifacts(
 ```
 
 - For skill and agent files: compare content with package data. If different (or `--force`): overwrite. If `--dry-run`: print what would change, don't write.
-- For MCP config: if entry exists and matches `{"command": "java-codebase-rag-mcp", "type": "stdio"}`, skip. If different or missing: merge.
+- For MCP config: call `resolve_mcp_command(non_interactive=False)` to get the current absolute path. If entry exists and matches `{"command": "<resolved-path>", "type": "stdio"}`, skip. If different or missing: merge with the new resolved path.
 
 #### 1c. `run_update` orchestrator
 
@@ -543,7 +567,7 @@ Add `update` subparser with `--force` and `--dry-run` flags.
 5. `test_detect_hosts_ignores_unrelated_entries` — `mcpServers` with other tools but not `java-codebase-rag` → empty
 6. `test_refresh_skill_overwrites_stale` — skill file differs from package → overwritten
 7. `test_refresh_skill_skips_if_matching` — skill file matches → not overwritten (unless `--force`)
-8. `test_refresh_mcp_skips_if_correct` — MCP entry matches → not modified
+8. `test_refresh_mcp_skips_if_correct` — MCP entry matches the current resolved path → not modified
 9. `test_refresh_dry_run_prints_no_write` — `--dry-run` → prints changes, no files written
 10. `test_update_no_hosts_exit_2` — no configured hosts → exit 2
 11. `test_update_no_index_skips_increment` — hosts configured but no index directory → `increment` skipped, warning printed
@@ -579,7 +603,7 @@ Add `update` subparser with `--force` and `--dry-run` flags.
 | 2 | MCP config file format varies across agent host versions | medium | Merge logic is defensive: read JSON, ensure `mcpServers` key, merge entry. If JSON parse fails, print error and skip that artifact (exit 1). |
 | 3 | Package data not found in wheel vs editable install | medium | Use `importlib.resources.files("java_codebase_rag.install_data")` which works in both modes. Test with `pip install -e .` and verify `importlib.resources` path resolves. |
 | 4 | Re-run "Update" mode corrupts YAML with hand-edited keys | low | `generate_yaml_config` reads existing YAML, preserves keys not managed by installer, only overwrites installer-managed keys. Test explicitly (`test_yaml_generation_preserves_unmanaged_keys`). |
-| 5 | `shutil.which("java-codebase-rag-mcp")` fails in GUI-launched terminals with different PATH | low | Print warning only, don't abort. The entrypoint may work from the agent host's process even if not found from the installer's shell. |
+| 5 | `shutil.which("java-codebase-rag-mcp")` fails in GUI-launched terminals with different PATH | low | The installer resolves the absolute path before writing MCP config, so the agent host gets a fully qualified path. If `shutil.which` still fails, interactive mode prompts the user for the path. Post-deploy validation is a secondary sanity check only. |
 
 # Out of scope
 

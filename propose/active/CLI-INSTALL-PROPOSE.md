@@ -84,7 +84,13 @@ Prompt: *"Install for this project only, or for all projects?"*
 
 Note: both scopes are fully supported. Claude Code loads skills from both `~/.claude/skills/` (user) and `.claude/skills/` (project). Same for agents. Qwen Code and GigaCode follow the same pattern.
 
-**Stage 5: Artifact deployment**
+**Stage 5: MCP entrypoint resolution + artifact deployment**
+
+Before writing any artifacts, resolve the MCP server command path:
+
+1. Run `shutil.which("java-codebase-rag-mcp")` to find the absolute path to the entrypoint.
+2. **If found** — use the resolved absolute path as the `"command"` value in the MCP config (e.g., `"/Users/x/.local/bin/java-codebase-rag-mcp"`). This ensures the agent host can start the server regardless of its own PATH configuration (GUI launchers, virtualenvs, etc.).
+3. **If not found** — in interactive mode, prompt the user: *"Could not find `java-codebase-rag-mcp` on PATH. This usually means the package isn't installed or `~/.local/bin` is not on PATH. Enter the full path (or 'abort'):"* If the user provides a path, validate it exists and is executable. In non-interactive mode, print the error and exit with code 2.
 
 Deploy 3 artifacts to the resolved host directory:
 
@@ -102,11 +108,12 @@ MCP config behavior differs by host and scope:
 | Qwen Code | `.qwen/settings.json` | `~/.qwen/settings.json` | Read existing JSON → merge into `mcpServers` key → write back. File may contain `security`, `model`, `$version` keys — preserve them. |
 | GigaCode | `.gigacode/settings.json` | `~/.gigacode/settings.json` | Same as Qwen Code (fork, identical format). |
 
-MCP entry to write (same for all hosts):
+MCP entry to write (same for all hosts, `MCP_COMMAND` is the resolved absolute path):
 ```json
 {
   "java-codebase-rag": {
-    "command": "java-codebase-rag-mcp"
+    "command": "MCP_COMMAND",
+    "type": "stdio"
   }
 }
 ```
@@ -119,9 +126,9 @@ When files already exist:
 
 **Post-deploy validation:**
 
-After writing all artifacts, verify that `java-codebase-rag-mcp` is discoverable on PATH by running `shutil.which("java-codebase-rag-mcp")`. If not found:
-- Print: "Warning: `java-codebase-rag-mcp` not found on PATH. Your agent host may fail to start the MCP server. Ensure `java-codebase-rag` is installed: `pip install java-codebase-rag`"
-- Continue (don't abort) — the entrypoint may work from the agent host's shell even if not found from the installer's shell (e.g. different PATH in GUI launchers vs terminal)
+After writing all artifacts, verify the MCP command written to the config is actually executable by running `shutil.which()` or checking `os.access(resolved_path, os.X_OK)`. If the resolved path is no longer valid (e.g. race condition with uninstall):
+- Print: "Warning: the MCP command `<path>` may not be executable. Your agent host may fail to start the MCP server. Re-run `java-codebase-rag install` to reconfigure."
+- Continue (don't abort) — the path was valid at resolution time and may work from the agent host's environment
 
 Also verify the target directories are writable before attempting to write. If a directory is not writable:
 - Print the specific path and error
@@ -248,7 +255,10 @@ When `--non-interactive` is passed or stdin is not a TTY:
 - Unit: re-run detection: existing `.java-codebase-rag.yml` triggers informative message
 - Unit: empty cwd (no `.java` files) exits with code 2
 - Unit: `source_root` is always cwd; subset of directories → `microservice_roots`
-- Unit: post-deploy validation detects missing `java-codebase-rag-mcp` on PATH
+- Unit: MCP entrypoint resolution: `shutil.which` finds entrypoint → absolute path written to MCP config
+- Unit: MCP entrypoint resolution: `shutil.which` returns None → interactive prompt for user-provided path
+- Unit: MCP entrypoint resolution: `shutil.which` returns None in non-interactive mode → exit code 2
+- Unit: MCP entrypoint resolution: user-provided path validated for existence and executability
 - Unit: model path validation prompts for confirmation when path doesn't exist
 - Unit: re-run "update" preserves unmanaged YAML keys (e.g. `brownfield_overrides`)
 - Unit: permission error on target directory is caught and reported, other artifacts continue
