@@ -401,6 +401,330 @@ class GraphTables:
     type_role_by_node_id: dict[str, str] = field(default_factory=dict)
 
 
+@dataclass
+class IncrementalResult:
+    """Result of an incremental graph rebuild."""
+    mode: str  # "incremental" | "full_fallback"
+    files_changed: int
+    files_added: int
+    files_removed: int
+    dependents_reprocessed: int
+    elapsed_sec: float
+
+
+class FileHashTracker:
+    """Track content hashes for incremental graph rebuild."""
+    def __init__(self, index_dir: Path):
+        self._path = index_dir / ".graph_hashes.json"
+        self._hashes: dict[str, str] = {}  # rel_path -> sha256_hex
+
+    def load(self) -> None:
+        """Load hashes from disk. No-op if file missing (first run)."""
+        if not self._path.exists():
+            return
+        try:
+            with open(self._path, "r", encoding="utf-8") as f:
+                self._hashes = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            # Corrupt or unreadable hash file; start fresh.
+            self._hashes = {}
+
+    def save(self) -> None:
+        """Persist hashes to disk atomically (write .tmp, rename)."""
+        tmp_path = self._path.with_suffix(".json.tmp")
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(self._hashes, f, sort_keys=True)
+            os.replace(tmp_path, self._path)
+        except OSError as e:
+            # Fail gracefully; next run will treat as missing and rebuild.
+            log.warning("Failed to save hash file %s: %s; next run will rebuild from scratch", self._path, e)
+
+    def detect_changes(self, source_root: Path, ignore: LayeredIgnore) -> tuple[set[str], set[str], set[str]]:
+        """Return (added, changed, removed) sets of relative POSIX paths."""
+        current_files: set[str] = set()
+        # Resolve source_root to handle symlinks
+        source_root_resolved = source_root.resolve()
+        for abs_path in iter_java_source_files(source_root, ignore=ignore):
+            # Resolve the absolute path and compute relative path
+            abs_path_resolved = abs_path.resolve()
+            try:
+                rel_path = abs_path_resolved.relative_to(source_root_resolved).as_posix()
+            except ValueError:
+                # Fallback to using the path as-is if it's not under source_root
+                rel_path = abs_path.as_posix()
+            current_files.add(rel_path)
+
+        added: set[str] = set()
+        changed: set[str] = set()
+        removed: set[str] = set()
+
+        # Detect added and changed files.
+        for rel_path in current_files:
+            abs_path = source_root / rel_path
+            try:
+                file_hash = _hash_file(abs_path)
+            except FileNotFoundError:
+                continue
+            stored_hash = self._hashes.get(rel_path)
+            if stored_hash is None:
+                added.add(rel_path)
+            elif stored_hash != file_hash:
+                changed.add(rel_path)
+
+        # Detect removed files.
+        for rel_path in self._hashes:
+            if rel_path not in current_files:
+                removed.add(rel_path)
+
+        return added, changed, removed
+
+    def update(self, rel_paths: set[str], source_root: Path) -> None:
+        """Compute and store hashes for the given paths."""
+        for rel_path in rel_paths:
+            abs_path = source_root / rel_path
+            if abs_path.exists():
+                self._hashes[rel_path] = _hash_file(abs_path)
+
+
+def _hash_file(abs_path: Path) -> str:
+    """Compute SHA-256 hash of a file's raw bytes."""
+    hasher = hashlib.sha256()
+    with open(abs_path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
+# ---------- incremental rebuild helpers ----------
+
+
+def _load_existing_types(conn: kuzu.Connection, tables: GraphTables, exclude_files: set[str] | None = None) -> None:
+    """Load type entries from existing Kuzu graph into tables for cross-file resolution.
+
+    When exclude_files is provided, only load types from files NOT in the set.
+    """
+    if exclude_files is not None and not exclude_files:
+        return
+
+    where = "WHERE s.kind IN ['class', 'interface', 'enum', 'annotation', 'record']"
+    params: dict = {}
+    if exclude_files:
+        where += "\n    AND NOT (s.filename IN $exclude_files)"
+        params["exclude_files"] = list(exclude_files)
+
+    query = f"""
+    MATCH (s:Symbol)
+    {where}
+    RETURN s.kind, s.fqn, s.name, s.filename, s.module, s.microservice, s.id
+    """
+    result = conn.execute(query, params)
+    while result.has_next():
+        row = result.get_next()
+        kind, fqn, name, filename = row[0], row[1], row[2], row[3]
+        module = row[4] if len(row) > 4 else ""
+        microservice = row[5] if len(row) > 5 else ""
+        node_id = row[6] if len(row) > 6 else ""
+
+        decl = TypeDecl(name, kind, fqn)
+        package = fqn[: -(len(name) + 1)] if fqn.endswith("." + name) else ""
+
+        entry = TypeIndexEntry(
+            decl=decl,
+            file_path=filename,
+            module=module,
+            microservice=microservice,
+            package=package,
+            outer_fqn=None,
+            node_id=node_id,
+        )
+        tables.types[fqn] = entry
+        tables.by_simple_name.setdefault(name, []).append(entry)
+        tables.by_package.setdefault(package, []).append(entry)
+
+
+def _load_existing_members(conn: kuzu.Connection, tables: GraphTables, exclude_files: set[str] | None = None) -> None:
+    """Load member entries from existing Kuzu graph into tables.members.
+
+    When exclude_files is provided, only load members from files NOT in the set.
+    """
+    if exclude_files is not None and not exclude_files:
+        return
+
+    where = "WHERE s.kind IN ['method', 'constructor']"
+    params: dict = {}
+    if exclude_files:
+        where += "\n    AND NOT (s.filename IN $exclude_files)"
+        params["exclude_files"] = list(exclude_files)
+
+    query = f"""
+    MATCH (s:Symbol)
+    {where}
+    RETURN s.kind, s.name, s.filename, s.signature, s.parent_id, s.fqn, s.id
+    """
+    result = conn.execute(query, params)
+    while result.has_next():
+        row = result.get_next()
+        kind, name, filename = row[0], row[1], row[2]
+        signature = row[3] if len(row) > 3 else ""
+        parent_id = row[4] if len(row) > 4 else ""
+        fqn = row[5] if len(row) > 5 else ""
+        node_id = row[6] if len(row) > 6 else ""
+
+        parent_fqn = fqn.split("#")[0] if "#" in fqn else ""
+
+        decl = MethodDecl(name, "", kind == "constructor")
+        decl.signature = signature
+
+        tables.members.append(MemberEntry(
+            kind=kind,
+            decl=decl,
+            parent_id=parent_id,
+            parent_fqn=parent_fqn,
+            file_path=filename,
+            module="",
+            microservice="",
+            node_id=node_id,
+        ))
+
+
+def _find_dependents(conn: kuzu.Connection, changed_node_ids: set[str]) -> set[str]:
+    """Find files whose nodes have edges pointing into changed nodes. Returns set of filenames."""
+    dependent_files: set[str] = set()
+
+    # Query each Symbol-to-Symbol edge table for incoming edges
+    edge_types = ["EXTENDS", "IMPLEMENTS", "INJECTS", "CALLS", "DECLARES", "OVERRIDES"]
+    params = {"changed_ids": list(changed_node_ids)}
+
+    for edge_type in edge_types:
+        query = f"""
+        MATCH (src:Symbol)-[e:{edge_type}]->(dst:Symbol)
+        WHERE dst.id IN $changed_ids
+        RETURN DISTINCT src.filename
+        """
+        result = conn.execute(query, params)
+        while result.has_next():
+            row = result.get_next()
+            filename = row[0]
+            if filename:  # Skip phantom nodes (filename = "")
+                dependent_files.add(filename)
+
+    return dependent_files
+
+
+def _delete_file_scope(conn: kuzu.Connection, filenames: set[str]) -> None:
+    """Delete all nodes and edges originating from the given files.
+
+    Skip phantom nodes (filename=""). Deletes ALL edge types in Phase 1,
+    then nodes in subsequent phases. Route/Client/Producer nodes use
+    DETACH DELETE as a safety net for any edges missed in Phase 1.
+
+    Edges are deleted in batch across all filenames first to avoid Kuzu
+    "has connected edges" errors when edges from one file point to nodes
+    in another file within the same scope.
+    """
+    filename_list = list(filenames)
+
+    # Phase 1: Delete ALL edges from ALL scope files at once.
+    # This avoids ordering issues where file A has an edge from file B
+    # pointing into it; if we delete A's nodes before B's edges, Kuzu
+    # raises "has connected edges" errors.
+    edge_tables = [
+        "EXTENDS", "IMPLEMENTS", "INJECTS", "CALLS", "DECLARES", "OVERRIDES",
+        "UNRESOLVED_AT", "EXPOSES", "DECLARES_CLIENT", "DECLARES_PRODUCER",
+        "HTTP_CALLS", "ASYNC_CALLS",
+    ]
+    for edge_type in edge_tables:
+        query = f"""
+        MATCH (src)-[e:{edge_type}]->(dst)
+        WHERE e.source_file IN $filenames
+        DELETE e
+        """
+        conn.execute(query, {"filenames": filename_list})
+
+    # Phase 2: Collect all Symbol node IDs for UnresolvedCallSite cleanup.
+    symbol_ids: list[str] = []
+    symbol_ids_query = """
+    MATCH (s:Symbol)
+    WHERE s.filename IN $filenames
+    RETURN s.id
+    """
+    result = conn.execute(symbol_ids_query, {"filenames": filename_list})
+    while result.has_next():
+        row = result.get_next()
+        symbol_ids.append(row[0])
+
+    # Delete UnresolvedCallSite nodes whose caller_id is in the collected set
+    if symbol_ids:
+        unresolved_query = """
+        MATCH (u:UnresolvedCallSite)
+        WHERE u.caller_id IN $symbol_ids
+        DELETE u
+        """
+        conn.execute(unresolved_query, {"symbol_ids": symbol_ids})
+
+    # Phase 3: Delete Symbol nodes.
+    delete_symbols_query = """
+    MATCH (s:Symbol)
+    WHERE s.filename IN $filenames
+    DELETE s
+    """
+    conn.execute(delete_symbols_query, {"filenames": filename_list})
+
+    # Phase 4: Delete Route, Client, Producer nodes.
+    # Use DETACH DELETE as a safety net in case any edges were missed in Phase 1.
+    for label in ["Route", "Client", "Producer"]:
+        conn.execute(
+            f"MATCH (n:{label}) WHERE n.filename IN $filenames DETACH DELETE n",
+            {"filenames": filename_list},
+        )
+
+
+def _scoped_write(conn: kuzu.Connection, tables: GraphTables, *, project_root: Path, meta_chain: dict[str, frozenset[str]] | None) -> None:
+    """Write nodes and edges to existing Kuzu database without drop/create schema.
+
+    Like write_kuzu() but without _drop_all()/_create_schema(). The caller is
+    responsible for calling _populate_declares_rows() and _populate_overrides_rows()
+    before invoking this function.
+
+    Uses MERGE instead of CREATE to handle cases where nodes already exist.
+    """
+    t0 = time.time()
+    _write_nodes_merge(
+        conn,
+        tables,
+        project_root=project_root,
+        meta_chain=meta_chain,
+    )
+    elapsed = time.time() - t0
+    if elapsed > 0.1:  # Only log if significant
+        _verbose_stderr_line(f"[graph] scoped write · nodes written in {elapsed:.2f}s")
+
+    t1 = time.time()
+    _fbyid = _build_file_by_node_id(tables)
+    _write_edges(conn, tables, _fbyid)
+    elapsed = time.time() - t1
+    if elapsed > 0.1:
+        _verbose_stderr_line(f"[graph] scoped write · edges written in {elapsed:.2f}s")
+
+    t2 = time.time()
+    _write_routes_and_exposes(conn, tables, _fbyid)
+    elapsed = time.time() - t2
+    if elapsed > 0.1:
+        _verbose_stderr_line(f"[graph] scoped write · routes/exposes written in {elapsed:.2f}s")
+
+
+def _write_nodes_merge(
+    conn: kuzu.Connection,
+    tables: GraphTables,
+    *,
+    project_root: Path,
+    meta_chain: dict[str, frozenset[str]] | None,
+) -> None:
+    """Write nodes to existing Kuzu database using MERGE to handle existing nodes."""
+    _write_nodes_impl(conn, tables, project_root=project_root, meta_chain=meta_chain, symbol_query=_MERGE_SYMBOL)
+
+
 # ---------- file walk (see `path_filtering.iter_java_source_files`) ----------
 
 
@@ -461,8 +785,15 @@ def _register_type(
     return entry
 
 
-def pass1_parse(root: Path, tables: GraphTables, *, verbose: bool) -> dict[str, JavaFileAst]:
-    """Walk files, parse them, populate node indexes. Returns path -> AST."""
+def pass1_parse(root: Path, tables: GraphTables, *, verbose: bool, scope_files: set[str] | None = None) -> dict[str, JavaFileAst]:
+    """Walk files, parse them, populate node indexes. Returns path -> AST.
+
+    Args:
+        root: Source root directory.
+        tables: GraphTables to populate.
+        verbose: Whether to emit progress output.
+        scope_files: Optional set of relative POSIX paths to parse. If None, parse all files.
+    """
     asts: dict[str, JavaFileAst] = {}
     ignore = LayeredIgnore(root)
     t0 = time.time()
@@ -480,6 +811,13 @@ def pass1_parse(root: Path, tables: GraphTables, *, verbose: bool) -> dict[str, 
         if verbose and slow_sec > 0:
             time.sleep(slow_sec)
         for p in iter_java_source_files(root, ignore=ignore):
+            # Skip files not in scope (if scope is provided)
+            try:
+                rel = p.resolve().relative_to(root.resolve()).as_posix()
+            except ValueError:
+                rel = p.as_posix()
+            if scope_files is not None and rel not in scope_files:
+                continue
             n_files += 1
             try:
                 content = p.read_bytes()
@@ -488,10 +826,6 @@ def pass1_parse(root: Path, tables: GraphTables, *, verbose: bool) -> dict[str, 
                 continue
             if not content.strip():
                 continue
-            try:
-                rel = p.resolve().relative_to(root.resolve()).as_posix()
-            except ValueError:
-                rel = p.as_posix()
             try:
                 ast = parse_java(content, filename=rel, verbose=verbose)
             except Exception:
@@ -2414,22 +2748,22 @@ _SCHEMA_PRODUCER = (
 
 _SCHEMA_EXTENDS = (
     "CREATE REL TABLE EXTENDS(FROM Symbol TO Symbol, "
-    "dst_name STRING, dst_fqn STRING, resolved BOOLEAN)"
+    "source_file STRING, dst_name STRING, dst_fqn STRING, resolved BOOLEAN)"
 )
 _SCHEMA_IMPLEMENTS = (
     "CREATE REL TABLE IMPLEMENTS(FROM Symbol TO Symbol, "
-    "dst_name STRING, dst_fqn STRING, resolved BOOLEAN)"
+    "source_file STRING, dst_name STRING, dst_fqn STRING, resolved BOOLEAN)"
 )
 _SCHEMA_INJECTS = (
     "CREATE REL TABLE INJECTS(FROM Symbol TO Symbol, "
-    "dst_name STRING, dst_fqn STRING, resolved BOOLEAN, "
+    "source_file STRING, dst_name STRING, dst_fqn STRING, resolved BOOLEAN, "
     "mechanism STRING, annotation STRING, field_or_param STRING)"
 )
-_SCHEMA_DECLARES = "CREATE REL TABLE DECLARES(FROM Symbol TO Symbol)"
-_SCHEMA_OVERRIDES = "CREATE REL TABLE OVERRIDES(FROM Symbol TO Symbol)"
+_SCHEMA_DECLARES = "CREATE REL TABLE DECLARES(FROM Symbol TO Symbol, source_file STRING)"
+_SCHEMA_OVERRIDES = "CREATE REL TABLE OVERRIDES(FROM Symbol TO Symbol, source_file STRING)"
 _SCHEMA_CALLS = (
     "CREATE REL TABLE CALLS(FROM Symbol TO Symbol, "
-    "call_site_line INT64, call_site_byte INT64, arg_count INT64, "
+    "source_file STRING, call_site_line INT64, call_site_byte INT64, arg_count INT64, "
     "confidence DOUBLE, strategy STRING, source STRING, resolved BOOLEAN, "
     "callee_declaring_role STRING)"
 )
@@ -2439,27 +2773,27 @@ _SCHEMA_UNRESOLVED_CALL_SITE = (
     "arg_count INT64, callee_simple STRING, receiver_expr STRING, reason STRING, "
     "PRIMARY KEY(id))"
 )
-_SCHEMA_UNRESOLVED_AT = "CREATE REL TABLE UNRESOLVED_AT(FROM Symbol TO UnresolvedCallSite)"
+_SCHEMA_UNRESOLVED_AT = "CREATE REL TABLE UNRESOLVED_AT(FROM Symbol TO UnresolvedCallSite, source_file STRING)"
 _SCHEMA_EXPOSES = (
     "CREATE REL TABLE EXPOSES(FROM Symbol TO Route, "
-    "confidence DOUBLE, strategy STRING)"
+    "source_file STRING, confidence DOUBLE, strategy STRING)"
 )
 _SCHEMA_DECLARES_CLIENT = (
     "CREATE REL TABLE DECLARES_CLIENT(FROM Symbol TO Client, "
-    "confidence DOUBLE, strategy STRING)"
+    "source_file STRING, confidence DOUBLE, strategy STRING)"
 )
 _SCHEMA_DECLARES_PRODUCER = (
     "CREATE REL TABLE DECLARES_PRODUCER(FROM Symbol TO Producer, "
-    "confidence DOUBLE, strategy STRING)"
+    "source_file STRING, confidence DOUBLE, strategy STRING)"
 )
 _SCHEMA_HTTP_CALLS = (
     "CREATE REL TABLE HTTP_CALLS(FROM Client TO Route, "
-    "confidence DOUBLE, strategy STRING, "
+    "source_file STRING, confidence DOUBLE, strategy STRING, "
     "method_call STRING, raw_uri STRING, match STRING)"
 )
 _SCHEMA_ASYNC_CALLS = (
     "CREATE REL TABLE ASYNC_CALLS(FROM Producer TO Route, "
-    "confidence DOUBLE, strategy STRING, "
+    "source_file STRING, confidence DOUBLE, strategy STRING, "
     "direction STRING, raw_topic STRING, match STRING)"
 )
 
@@ -2538,13 +2872,25 @@ _CREATE_SYMBOL = (
     "role: $role, signature: $signature, parent_id: $parent_id, resolved: $resolved})"
 )
 
+_MERGE_SYMBOL = (
+    "MERGE (n:Symbol {id: $id}) "
+    "SET n.kind = $kind, n.name = $name, n.fqn = $fqn, "
+    "n.package = $package, n.module = $module, n.microservice = $microservice, "
+    "n.filename = $filename, "
+    "n.start_line = $start_line, n.end_line = $end_line, "
+    "n.start_byte = $start_byte, n.end_byte = $end_byte, "
+    "n.modifiers = $modifiers, n.annotations = $annotations, n.capabilities = $capabilities, "
+    "n.role = $role, n.signature = $signature, n.parent_id = $parent_id, n.resolved = $resolved"
+)
 
-def _write_nodes(
+
+def _write_nodes_impl(
     conn: kuzu.Connection,
     tables: GraphTables,
     *,
     project_root: Path,
     meta_chain: dict[str, frozenset[str]] | None,
+    symbol_query: str,
 ) -> None:
     overrides = load_brownfield_overrides(project_root)
     try:
@@ -2555,12 +2901,12 @@ def _write_nodes(
     mch = meta_chain
     # packages
     for pkg, pid in tables.packages.items():
-        conn.execute(_CREATE_SYMBOL, _node_row(
+        conn.execute(symbol_query, _node_row(
             id=pid, kind="package", name=pkg.rsplit(".", 1)[-1], fqn=pkg, package=pkg,
         ))
     # files
     for path, fid in tables.files.items():
-        conn.execute(_CREATE_SYMBOL, _node_row(
+        conn.execute(symbol_query, _node_row(
             id=fid, kind="file", name=Path(path).name, fqn=path, filename=path,
         ))
     # types
@@ -2572,7 +2918,7 @@ def _write_nodes(
             meta_chain=mch,
         )
         tables.type_role_by_node_id[entry.node_id] = role
-        conn.execute(_CREATE_SYMBOL, _node_row(
+        conn.execute(symbol_query, _node_row(
             id=entry.node_id, kind=d.kind, name=d.name, fqn=d.fqn,
             package=entry.package,
             module=entry.module, microservice=entry.microservice,
@@ -2588,7 +2934,7 @@ def _write_nodes(
         ))
     # members (methods / constructors)
     for m in tables.members:
-        conn.execute(_CREATE_SYMBOL, _node_row(
+        conn.execute(symbol_query, _node_row(
             id=m.node_id, kind=m.kind, name=m.decl.name,
             fqn=f"{m.parent_fqn}#{m.decl.signature}",
             package=tables.types[m.parent_fqn].package if m.parent_fqn in tables.types else "",
@@ -2602,33 +2948,44 @@ def _write_nodes(
         ))
     # phantoms
     for pid, row in tables.phantoms.items():
-        conn.execute(_CREATE_SYMBOL, row)
+        conn.execute(symbol_query, row)
+
+
+def _write_nodes(
+    conn: kuzu.Connection,
+    tables: GraphTables,
+    *,
+    project_root: Path,
+    meta_chain: dict[str, frozenset[str]] | None,
+) -> None:
+    _write_nodes_impl(conn, tables, project_root=project_root, meta_chain=meta_chain, symbol_query=_CREATE_SYMBOL)
 
 
 _CREATE_EXT = (
     "MATCH (a:Symbol {id: $src}), (b:Symbol {id: $dst}) "
-    "CREATE (a)-[:EXTENDS {dst_name: $dst_name, dst_fqn: $dst_fqn, resolved: $resolved}]->(b)"
+    "CREATE (a)-[:EXTENDS {source_file: $source_file, dst_name: $dst_name, dst_fqn: $dst_fqn, resolved: $resolved}]->(b)"
 )
 _CREATE_IMPL = (
     "MATCH (a:Symbol {id: $src}), (b:Symbol {id: $dst}) "
-    "CREATE (a)-[:IMPLEMENTS {dst_name: $dst_name, dst_fqn: $dst_fqn, resolved: $resolved}]->(b)"
+    "CREATE (a)-[:IMPLEMENTS {source_file: $source_file, dst_name: $dst_name, dst_fqn: $dst_fqn, resolved: $resolved}]->(b)"
 )
 _CREATE_INJ = (
     "MATCH (a:Symbol {id: $src}), (b:Symbol {id: $dst}) "
-    "CREATE (a)-[:INJECTS {dst_name: $dst_name, dst_fqn: $dst_fqn, resolved: $resolved, "
+    "CREATE (a)-[:INJECTS {source_file: $source_file, dst_name: $dst_name, dst_fqn: $dst_fqn, resolved: $resolved, "
     "mechanism: $mechanism, annotation: $annotation, field_or_param: $field_or_param}]->(b)"
 )
 _CREATE_DECL = (
     "MATCH (a:Symbol {id: $src}), (b:Symbol {id: $dst}) "
-    "CREATE (a)-[:DECLARES]->(b)"
+    "CREATE (a)-[:DECLARES {source_file: $source_file}]->(b)"
 )
 _CREATE_OVERRIDES = (
     "MATCH (a:Symbol {id: $src}), (b:Symbol {id: $dst}) "
-    "CREATE (a)-[:OVERRIDES]->(b)"
+    "CREATE (a)-[:OVERRIDES {source_file: $source_file}]->(b)"
 )
 _CREATE_CALL = (
     "MATCH (a:Symbol {id: $src}), (b:Symbol {id: $dst}) "
     "CREATE (a)-[:CALLS {"
+    "source_file: $source_file, "
     "call_site_line: $line, call_site_byte: $byte, arg_count: $argc, "
     "confidence: $conf, strategy: $strat, source: $src_kind, resolved: $resolved, "
     "callee_declaring_role: $callee_declaring_role"
@@ -2656,11 +3013,11 @@ _CREATE_CLIENT = (
 
 _CREATE_EXPOSES = (
     "MATCH (s:Symbol {id: $sid}), (r:Route {id: $rid}) "
-    "CREATE (s)-[:EXPOSES {confidence: $confidence, strategy: $strategy}]->(r)"
+    "CREATE (s)-[:EXPOSES {source_file: $source_file, confidence: $confidence, strategy: $strategy}]->(r)"
 )
 _CREATE_DECLARES_CLIENT = (
     "MATCH (s:Symbol {id: $sid}), (c:Client {id: $cid}) "
-    "CREATE (s)-[:DECLARES_CLIENT {confidence: $confidence, strategy: $strategy}]->(c)"
+    "CREATE (s)-[:DECLARES_CLIENT {source_file: $source_file, confidence: $confidence, strategy: $strategy}]->(c)"
 )
 _CREATE_PRODUCER = (
     "CREATE (:Producer {"
@@ -2673,16 +3030,16 @@ _CREATE_PRODUCER = (
 )
 _CREATE_DECLARES_PRODUCER = (
     "MATCH (s:Symbol {id: $sid}), (p:Producer {id: $pid}) "
-    "CREATE (s)-[:DECLARES_PRODUCER {confidence: $confidence, strategy: $strategy}]->(p)"
+    "CREATE (s)-[:DECLARES_PRODUCER {source_file: $source_file, confidence: $confidence, strategy: $strategy}]->(p)"
 )
 _CREATE_HTTP_CALL = (
     "MATCH (c:Client {id: $cid}), (r:Route {id: $rid}) "
-    "CREATE (c)-[:HTTP_CALLS {confidence: $confidence, strategy: $strategy, "
+    "CREATE (c)-[:HTTP_CALLS {source_file: $source_file, confidence: $confidence, strategy: $strategy, "
     "method_call: $method_call, raw_uri: $raw_uri, match: $match}]->(r)"
 )
 _CREATE_ASYNC_CALL = (
     "MATCH (p:Producer {id: $pid}), (r:Route {id: $rid}) "
-    "CREATE (p)-[:ASYNC_CALLS {confidence: $confidence, strategy: $strategy, "
+    "CREATE (p)-[:ASYNC_CALLS {source_file: $source_file, confidence: $confidence, strategy: $strategy, "
     "direction: $direction, raw_topic: $raw_topic, match: $match}]->(r)"
 )
 
@@ -2732,30 +3089,53 @@ def _populate_overrides_rows(tables: GraphTables) -> None:
     ]
 
 
-def _write_edges(conn: kuzu.Connection, tables: GraphTables) -> None:
+def _build_file_by_node_id(tables: GraphTables) -> dict[str, str]:
+    """Build node_id -> file_path lookup for source_file resolution."""
+    lookup: dict[str, str] = {}
+    for entry in tables.types.values():
+        lookup[entry.node_id] = entry.file_path
+    for m in tables.members:
+        lookup[m.node_id] = m.file_path
+    return lookup
+
+
+def _write_edges(conn: kuzu.Connection, tables: GraphTables, _file_by_node_id: dict[str, str] | None = None) -> None:
+    # Build node_id -> file_path lookup for source_file resolution.
+    if _file_by_node_id is None:
+        _file_by_node_id = _build_file_by_node_id(tables)
+
     for r in tables.extends_rows:
         conn.execute(_CREATE_EXT, {
             "src": r.src_id, "dst": r.dst_id,
+            "source_file": _file_by_node_id.get(r.src_id, ""),
             "dst_name": r.dst_name, "dst_fqn": r.dst_fqn, "resolved": r.resolved,
         })
     for r in tables.implements_rows:
         conn.execute(_CREATE_IMPL, {
             "src": r.src_id, "dst": r.dst_id,
+            "source_file": _file_by_node_id.get(r.src_id, ""),
             "dst_name": r.dst_name, "dst_fqn": r.dst_fqn, "resolved": r.resolved,
         })
     for r in tables.injects_rows:
         conn.execute(_CREATE_INJ, {
             "src": r.src_id, "dst": r.dst_id,
+            "source_file": _file_by_node_id.get(r.src_id, ""),
             "dst_name": r.dst_name, "dst_fqn": r.dst_fqn, "resolved": r.resolved,
             "mechanism": r.mechanism, "annotation": r.annotation,
             "field_or_param": r.field_or_param,
         })
 
     for row in tables.declares_rows:
-        conn.execute(_CREATE_DECL, {"src": row.src_id, "dst": row.dst_id})
+        conn.execute(_CREATE_DECL, {
+            "src": row.src_id, "dst": row.dst_id,
+            "source_file": _file_by_node_id.get(row.src_id, ""),
+        })
 
     for row in tables.overrides_rows:
-        conn.execute(_CREATE_OVERRIDES, {"src": row.src_id, "dst": row.dst_id})
+        conn.execute(_CREATE_OVERRIDES, {
+            "src": row.src_id, "dst": row.dst_id,
+            "source_file": _file_by_node_id.get(row.src_id, ""),
+        })
 
     seen_calls: set[tuple[str, str, int, int]] = set()
     unique_calls: list[CallsRow] = []
@@ -2769,6 +3149,7 @@ def _write_edges(conn: kuzu.Connection, tables: GraphTables) -> None:
     for row in unique_calls:
         conn.execute(_CREATE_CALL, {
             "src": row.src_id, "dst": row.dst_id,
+            "source_file": _file_by_node_id.get(row.src_id, ""),
             "line": row.call_site_line,
             "byte": row.call_site_byte,
             "argc": row.arg_count,
@@ -2789,7 +3170,7 @@ def _write_edges(conn: kuzu.Connection, tables: GraphTables) -> None:
     )
     _CREATE_UNRESOLVED_AT = (
         "MATCH (a:Symbol {id: $caller}), (u:UnresolvedCallSite {id: $ucs}) "
-        "CREATE (a)-[:UNRESOLVED_AT]->(u)"
+        "CREATE (a)-[:UNRESOLVED_AT {source_file: $source_file}]->(u)"
     )
     seen_ucs: set[str] = set()
     for row in tables.unresolved_call_site_rows:
@@ -2806,10 +3187,23 @@ def _write_edges(conn: kuzu.Connection, tables: GraphTables) -> None:
             "recv": row.receiver_expr,
             "reason": row.reason,
         })
-        conn.execute(_CREATE_UNRESOLVED_AT, {"caller": row.caller_id, "ucs": row.id})
+        conn.execute(_CREATE_UNRESOLVED_AT, {
+            "caller": row.caller_id, "ucs": row.id,
+            "source_file": _file_by_node_id.get(row.caller_id, ""),
+        })
 
 
-def _write_routes_and_exposes(conn: kuzu.Connection, tables: GraphTables) -> None:
+def _write_routes_and_exposes(conn: kuzu.Connection, tables: GraphTables, _file_by_node_id: dict[str, str] | None = None) -> None:
+    # Build node_id -> file_path lookup for source_file resolution (for Symbol sources).
+    if _file_by_node_id is None:
+        _file_by_node_id = _build_file_by_node_id(tables)
+
+    # Build client_id -> filename lookup for HTTP_CALLS source_file.
+    _file_by_client_id: dict[str, str] = {row.id: row.filename for row in tables.client_rows}
+
+    # Build producer_id -> filename lookup for ASYNC_CALLS source_file.
+    _file_by_producer_id: dict[str, str] = {row.id: row.filename for row in tables.producer_rows}
+
     for row in tables.routes_rows:
         conn.execute(_CREATE_ROUTE, {
             "id": row.id,
@@ -2834,6 +3228,7 @@ def _write_routes_and_exposes(conn: kuzu.Connection, tables: GraphTables) -> Non
         conn.execute(_CREATE_EXPOSES, {
             "sid": row.symbol_id,
             "rid": row.route_id,
+            "source_file": _file_by_node_id.get(row.symbol_id, ""),
             "confidence": row.confidence,
             "strategy": row.strategy,
         })
@@ -2843,6 +3238,7 @@ def _write_routes_and_exposes(conn: kuzu.Connection, tables: GraphTables) -> Non
         conn.execute(_CREATE_DECLARES_CLIENT, {
             "sid": row.symbol_id,
             "cid": row.client_id,
+            "source_file": _file_by_node_id.get(row.symbol_id, ""),
             "confidence": row.confidence,
             "strategy": row.strategy,
         })
@@ -2852,6 +3248,7 @@ def _write_routes_and_exposes(conn: kuzu.Connection, tables: GraphTables) -> Non
         conn.execute(_CREATE_DECLARES_PRODUCER, {
             "sid": row.symbol_id,
             "pid": row.producer_id,
+            "source_file": _file_by_node_id.get(row.symbol_id, ""),
             "confidence": row.confidence,
             "strategy": row.strategy,
         })
@@ -2859,6 +3256,7 @@ def _write_routes_and_exposes(conn: kuzu.Connection, tables: GraphTables) -> Non
         conn.execute(_CREATE_HTTP_CALL, {
             "cid": row.client_id,
             "rid": row.route_id,
+            "source_file": _file_by_client_id.get(row.client_id, ""),
             "confidence": row.confidence,
             "strategy": row.strategy,
             "method_call": row.method_call,
@@ -2869,6 +3267,7 @@ def _write_routes_and_exposes(conn: kuzu.Connection, tables: GraphTables) -> Non
         conn.execute(_CREATE_ASYNC_CALL, {
             "pid": row.producer_id,
             "rid": row.route_id,
+            "source_file": _file_by_producer_id.get(row.producer_id, ""),
             "confidence": row.confidence,
             "strategy": row.strategy,
             "direction": row.direction,
@@ -2929,28 +3328,29 @@ def _write_meta(conn: kuzu.Connection, tables: GraphTables, source_root: Path) -
     clients_by_kind = dict(sorted(client_stats.clients_by_kind.items()))
     producers_by_kind = dict(sorted(producer_stats.producers_by_kind.items()))
     conn.execute(
-        "CREATE (:GraphMeta {key: $k, ontology_version: $ov, built_at: $t, "
-        "source_root: $sr, counts_json: $cj, parse_errors: $pe, "
-        "routes_total: $routes_total, exposes_total: $exposes_total, "
-        "routes_by_framework: $routes_by_framework, routes_resolved_pct: $routes_resolved_pct, "
-        "routes_from_brownfield_pct: $routes_from_brownfield_pct, routes_by_layer: $routes_by_layer, "
-        "clients_total: $clients_total, declares_client_total: $declares_client_total, "
-        "clients_by_kind: $clients_by_kind, "
-        "producers_total: $producers_total, declares_producer_total: $declares_producer_total, "
-        "producers_by_kind: $producers_by_kind, "
-        "http_calls_total: $http_calls_total, async_calls_total: $async_calls_total, "
-        "http_calls_by_strategy: $http_calls_by_strategy, async_calls_by_strategy: $async_calls_by_strategy, "
-        "http_calls_resolved_pct: $http_calls_resolved_pct, async_calls_resolved_pct: $async_calls_resolved_pct, "
-        "http_clients_from_brownfield_pct: $http_clients_from_brownfield_pct, "
-        "async_producers_from_brownfield_pct: $async_producers_from_brownfield_pct, "
-        "http_calls_match_breakdown: $http_calls_match_breakdown, "
-        "async_calls_match_breakdown: $async_calls_match_breakdown, "
-        "cross_service_calls_total: $cross_service_calls_total, "
-        "pass3_skipped_cross_service: $pass3_skipped_cross_service, "
-        "pass3_unresolved_phantom_receiver: $pass3_unresolved_phantom_receiver, "
-        "pass3_unresolved_chained: $pass3_unresolved_chained, "
-        "pass4_exposes_suppressed_feign: $pass4_exposes_suppressed_feign, "
-        "cross_service_resolution: $cross_service_resolution})",
+        "MERGE (m:GraphMeta {key: $k}) "
+        "SET m.ontology_version = $ov, m.built_at = $t, "
+        "m.source_root = $sr, m.counts_json = $cj, m.parse_errors = $pe, "
+        "m.routes_total = $routes_total, m.exposes_total = $exposes_total, "
+        "m.routes_by_framework = $routes_by_framework, m.routes_resolved_pct = $routes_resolved_pct, "
+        "m.routes_from_brownfield_pct = $routes_from_brownfield_pct, m.routes_by_layer = $routes_by_layer, "
+        "m.clients_total = $clients_total, m.declares_client_total = $declares_client_total, "
+        "m.clients_by_kind = $clients_by_kind, "
+        "m.producers_total = $producers_total, m.declares_producer_total = $declares_producer_total, "
+        "m.producers_by_kind = $producers_by_kind, "
+        "m.http_calls_total = $http_calls_total, m.async_calls_total = $async_calls_total, "
+        "m.http_calls_by_strategy = $http_calls_by_strategy, m.async_calls_by_strategy = $async_calls_by_strategy, "
+        "m.http_calls_resolved_pct = $http_calls_resolved_pct, m.async_calls_resolved_pct = $async_calls_resolved_pct, "
+        "m.http_clients_from_brownfield_pct = $http_clients_from_brownfield_pct, "
+        "m.async_producers_from_brownfield_pct = $async_producers_from_brownfield_pct, "
+        "m.http_calls_match_breakdown = $http_calls_match_breakdown, "
+        "m.async_calls_match_breakdown = $async_calls_match_breakdown, "
+        "m.cross_service_calls_total = $cross_service_calls_total, "
+        "m.pass3_skipped_cross_service = $pass3_skipped_cross_service, "
+        "m.pass3_unresolved_phantom_receiver = $pass3_unresolved_phantom_receiver, "
+        "m.pass3_unresolved_chained = $pass3_unresolved_chained, "
+        "m.pass4_exposes_suppressed_feign = $pass4_exposes_suppressed_feign, "
+        "m.cross_service_resolution = $cross_service_resolution",
         {
             "k": "graph",
             "ov": ONTOLOGY_VERSION,
@@ -2990,6 +3390,359 @@ def _write_meta(conn: kuzu.Connection, tables: GraphTables, source_root: Path) -
     )
 
 
+def incremental_rebuild(
+    source_root: Path,
+    kuzu_path: Path,
+    *,
+    verbose: bool,
+    expansion_cap: int = 50,
+) -> IncrementalResult:
+    """Incrementally rebuild the Kuzu graph, processing only changed files and their dependents.
+
+    Returns IncrementalResult with statistics about the rebuild.
+    Falls back to full rebuild if:
+    - No previous graph exists
+    - Ontology version < 17 (missing source_file on edges)
+    - Crash marker exists (previous incremental run failed)
+    - Dependent expansion exceeds expansion_cap
+    """
+    t_start = time.time()
+
+    # Step 1: Load existing graph and detect changes
+    if not kuzu_path.exists():
+        if verbose:
+            _verbose_stderr_line("[increment] no existing graph; falling back to full rebuild")
+        # Fall back to full rebuild
+        tables = GraphTables()
+        asts = pass1_parse(source_root, tables, verbose=verbose)
+        pass2_edges(tables, asts, verbose=verbose)
+        pass3_calls(tables, asts, verbose=verbose)
+        pass4_routes(tables, asts, source_root=source_root, verbose=verbose)
+        pass5_imperative_edges(tables, asts, source_root=source_root, verbose=verbose)
+        pass6_match_edges(tables, verbose=verbose)
+        write_kuzu(kuzu_path, tables, source_root=source_root, verbose=verbose)
+
+        n_files = _init_hash_tracker(source_root, kuzu_path)
+
+        return IncrementalResult(
+            mode="full_fallback",
+            files_changed=0,
+            files_added=n_files,
+            files_removed=0,
+            dependents_reprocessed=0,
+            elapsed_sec=time.time() - t_start,
+        )
+
+    db = kuzu.Database(str(kuzu_path))
+    conn = kuzu.Connection(db)
+
+    # Check ontology version
+    try:
+        meta_result = conn.execute("MATCH (m:GraphMeta) RETURN m.ontology_version AS version")
+        if meta_result.has_next():
+            row = meta_result.get_next()
+            version = row[0] if row else 0
+            if version < 17:
+                if verbose:
+                    _verbose_stderr_line(f"[increment] ontology version {version} < 17; falling back to full rebuild")
+                conn.close()
+                del conn, db
+                return _fallback_to_full(source_root, kuzu_path, verbose, t_start)
+    except Exception as e:
+        if verbose:
+            _verbose_stderr_line(f"[increment] failed to read ontology version: {e}; falling back to full rebuild")
+        try:
+            conn.close()
+        except Exception:
+            pass
+        del conn, db
+        return _fallback_to_full(source_root, kuzu_path, verbose, t_start)
+
+    index_dir = kuzu_path.parent
+    tracker = FileHashTracker(index_dir)
+    tracker.load()
+
+    ignore = LayeredIgnore(source_root)
+    added, changed, removed = tracker.detect_changes(source_root, ignore=ignore)
+
+    changed_files = added | changed | removed
+
+    if not changed_files:
+        if verbose:
+            _verbose_stderr_line("[increment] no changes detected; no-op")
+        conn.close()
+        return IncrementalResult(
+            mode="incremental",
+            files_changed=0,
+            files_added=0,
+            files_removed=0,
+            dependents_reprocessed=0,
+            elapsed_sec=time.time() - t_start,
+        )
+
+    if verbose:
+        _verbose_stderr_line(f"[increment] detected {len(added)} added, {len(changed)} changed, {len(removed)} removed files")
+
+    # Step 2: Crash marker check
+    crash_marker_path = index_dir / ".graph_increment_in_progress"
+    if crash_marker_path.exists():
+        if verbose:
+            _verbose_stderr_line("[increment] crash marker exists; falling back to full rebuild")
+        conn.close()
+        crash_marker_path.unlink(missing_ok=True)
+        return _fallback_to_full(source_root, kuzu_path, verbose, t_start)
+
+    # Write crash marker
+    crash_marker_path.write_text("", encoding="utf-8")
+
+    try:
+        # Step 3: Dependent expansion
+        # Collect node IDs for changed files (single query instead of N+1)
+        changed_node_ids: set[str] = set()
+        result = conn.execute(
+            "MATCH (s:Symbol) WHERE s.filename IN $filenames RETURN s.id",
+            {"filenames": list(changed_files)},
+        )
+        while result.has_next():
+            row = result.get_next()
+            changed_node_ids.add(row[0])
+
+        # Find dependents
+        dependent_files = _find_dependents(conn, changed_node_ids)
+
+        # Union changed files with dependents
+        scope_files = changed_files | dependent_files
+
+        if len(scope_files) > expansion_cap:
+            if verbose:
+                _verbose_stderr_line(f"[increment] dependent expansion cap ({expansion_cap}) exceeded ({len(scope_files)} files); falling back to full rebuild")
+            conn.close()
+            crash_marker_path.unlink(missing_ok=True)
+            return _fallback_to_full(source_root, kuzu_path, verbose, t_start)
+
+        if verbose:
+            _verbose_stderr_line(f"[increment] processing {len(scope_files)} files ({len(changed_files)} changed + {len(dependent_files)} dependents)")
+
+        # Step 4: Scoped deletion
+        if verbose:
+            _verbose_stderr_line("[increment] deleting outdated nodes and edges")
+        _delete_file_scope(conn, scope_files)
+
+        # Force deletion to be applied by running a dummy query
+        conn.execute("MATCH (s:Symbol) RETURN count(*)")
+
+        # Step 5: Scoped pass 1-4
+        if verbose:
+            _verbose_stderr_line("[increment] rebuilding scoped files (passes 1-4)")
+
+        tables = GraphTables()
+        asts = pass1_parse(source_root, tables, verbose=verbose, scope_files=scope_files)
+
+        # Load existing types and members for cross-file resolution (only from unchanged files)
+        _load_existing_types(conn, tables, exclude_files=scope_files)
+        _load_existing_members(conn, tables, exclude_files=scope_files)
+
+        pass2_edges(tables, asts, verbose=verbose)
+        pass3_calls(tables, asts, verbose=verbose)
+        pass4_routes(tables, asts, source_root=source_root, verbose=verbose)
+
+        # Populate declares and overrides rows
+        _populate_declares_rows(tables)
+        _populate_overrides_rows(tables)
+
+        # Write scoped nodes and edges
+        meta_chain = collect_annotation_meta_chain(str(source_root.resolve()))
+        _scoped_write(conn, tables, project_root=source_root, meta_chain=meta_chain)
+
+        # Step 6: Global pass 5-6
+        if verbose:
+            _verbose_stderr_line("[increment] running global passes 5-6")
+
+        # Rebuild full tables for global pass 5-6 (pass1 populates members from scratch)
+        tables_for_global = GraphTables()
+        global_asts = pass1_parse(source_root, tables_for_global, verbose=verbose)
+
+        pass5_imperative_edges(tables_for_global, global_asts, source_root=source_root, verbose=verbose)
+
+        # Delete existing Client, Producer, and their edges
+        conn.execute("MATCH (c:Client) DETACH DELETE c")
+        conn.execute("MATCH (p:Producer) DETACH DELETE p")
+
+        pass6_match_edges(tables_for_global, verbose=verbose)
+
+        # Write Client, Producer, and cross-service edges
+        _write_clients_producers_and_calls(conn, tables_for_global)
+
+        # Step 7: Update hash store and metadata
+        if verbose:
+            _verbose_stderr_line("[increment] updating hash store and metadata")
+
+        # Update hashes for processed files
+        tracker.update(scope_files, source_root)
+
+        # Remove hashes for deleted files
+        for filename in removed:
+            if filename in tracker._hashes:
+                del tracker._hashes[filename]
+
+        tracker.save()
+
+        # Update GraphMeta
+        _write_meta(conn, tables_for_global, source_root)
+
+        # Remove crash marker
+        crash_marker_path.unlink(missing_ok=True)
+
+        conn.close()
+
+        elapsed = time.time() - t_start
+        if verbose:
+            _verbose_stderr_line(f"[increment] completed in {elapsed:.2f}s")
+
+        return IncrementalResult(
+            mode="incremental",
+            files_changed=len(changed),
+            files_added=len(added),
+            files_removed=len(removed),
+            dependents_reprocessed=len(dependent_files),
+            elapsed_sec=elapsed,
+        )
+
+    except Exception as e:
+        # On error, remove crash marker and fall back to full rebuild
+        if verbose:
+            _verbose_stderr_line(f"[increment] error during incremental rebuild: {e}; falling back to full rebuild")
+        conn.close()
+        crash_marker_path.unlink(missing_ok=True)
+        return _fallback_to_full(source_root, kuzu_path, verbose, t_start)
+
+
+def _init_hash_tracker(source_root: Path, kuzu_path: Path) -> int:
+    """Initialize hash tracker for all Java files. Returns number of files hashed."""
+    index_dir = kuzu_path.parent
+    tracker = FileHashTracker(index_dir)
+    tracker.load()
+    ignore = LayeredIgnore(source_root)
+    all_files: set[str] = set()
+    source_root_resolved = source_root.resolve()
+    for p in iter_java_source_files(source_root, ignore=ignore):
+        p_resolved = p.resolve()
+        try:
+            rel_path = p_resolved.relative_to(source_root_resolved).as_posix()
+        except ValueError:
+            rel_path = p.as_posix()
+        all_files.add(rel_path)
+    tracker.update(all_files, source_root)
+    tracker.save()
+    return len(all_files)
+
+
+def _fallback_to_full(source_root: Path, kuzu_path: Path, verbose: bool, t_start: float) -> IncrementalResult:
+    """Fallback to full rebuild."""
+    tables = GraphTables()
+    asts = pass1_parse(source_root, tables, verbose=verbose)
+    pass2_edges(tables, asts, verbose=verbose)
+    pass3_calls(tables, asts, verbose=verbose)
+    pass4_routes(tables, asts, source_root=source_root, verbose=verbose)
+    pass5_imperative_edges(tables, asts, source_root=source_root, verbose=verbose)
+    pass6_match_edges(tables, verbose=verbose)
+    write_kuzu(kuzu_path, tables, source_root=source_root, verbose=verbose)
+
+    n_files = _init_hash_tracker(source_root, kuzu_path)
+
+    return IncrementalResult(
+        mode="full_fallback",
+        files_changed=0,
+        files_added=n_files,
+        files_removed=0,
+        dependents_reprocessed=0,
+        elapsed_sec=time.time() - t_start,
+    )
+
+
+def _write_clients_producers_and_calls(conn: kuzu.Connection, tables: GraphTables) -> None:
+    """Write Route, Client, Producer, and cross-service edges to Kuzu.
+
+    Used by the incremental rebuild's global pass 5-6 step. Writes phantom
+    Route nodes (created by pass5 for cross-service calls) that wouldn't
+    otherwise exist in Kuzu.
+    """
+    # Write phantom routes that don't already exist (pass5 creates these for cross-service calls)
+    for row in tables.routes_rows:
+        # MERGE to avoid duplicates with routes written during scoped step
+        conn.execute(
+            "MERGE (r:Route {id: $id}) "
+            "SET r.kind = $kind, r.framework = $framework, r.method = $method, "
+            "r.path = $path, r.path_template = $path_template, r.path_regex = $path_regex, "
+            "r.topic = $topic, r.broker = $broker, r.feign_name = $feign_name, r.feign_url = $feign_url, "
+            "r.microservice = $microservice, r.module = $module, r.filename = $filename, "
+            "r.start_line = $start_line, r.end_line = $end_line, r.resolved = $resolved",
+            asdict(row),
+        )
+
+    # Build node_id lookup for members and types
+    member_by_id = {m.node_id: m for m in tables.members}
+
+    # Write clients and producers using asdict (same pattern as _write_routes_and_exposes)
+    for row in tables.client_rows:
+        conn.execute(_CREATE_CLIENT, asdict(row))
+    for row in tables.producer_rows:
+        conn.execute(_CREATE_PRODUCER, asdict(row))
+
+    client_by_id = {c.id: c for c in tables.client_rows}
+    producer_by_id = {p.id: p for p in tables.producer_rows}
+
+    # Write declares_client edges
+    for row in tables.declares_client_rows:
+        source_file = member_by_id.get(row.symbol_id, MemberEntry(kind="", decl=None, parent_id="", parent_fqn="", file_path="", module="", microservice="")).file_path
+        conn.execute(_CREATE_DECLARES_CLIENT, {
+            "sid": row.symbol_id,
+            "cid": row.client_id,
+            "source_file": source_file,
+            "confidence": row.confidence,
+            "strategy": row.strategy,
+        })
+
+    # Write declares_producer edges
+    for row in tables.declares_producer_rows:
+        source_file = member_by_id.get(row.symbol_id, MemberEntry(kind="", decl=None, parent_id="", parent_fqn="", file_path="", module="", microservice="")).file_path
+        conn.execute(_CREATE_DECLARES_PRODUCER, {
+            "sid": row.symbol_id,
+            "pid": row.producer_id,
+            "source_file": source_file,
+            "confidence": row.confidence,
+            "strategy": row.strategy,
+        })
+
+    # Write HTTP_CALLS edges
+    for row in tables.http_call_rows:
+        client = client_by_id.get(row.client_id)
+        conn.execute(_CREATE_HTTP_CALL, {
+            "cid": row.client_id,
+            "rid": row.route_id,
+            "source_file": client.filename if client else "",
+            "confidence": row.confidence,
+            "strategy": row.strategy,
+            "method_call": row.method_call,
+            "raw_uri": row.raw_uri,
+            "match": row.match,
+        })
+
+    # Write ASYNC_CALLS edges
+    for row in tables.async_call_rows:
+        producer = producer_by_id.get(row.producer_id)
+        conn.execute(_CREATE_ASYNC_CALL, {
+            "pid": row.producer_id,
+            "rid": row.route_id,
+            "source_file": producer.filename if producer else "",
+            "confidence": row.confidence,
+            "strategy": row.strategy,
+            "direction": row.direction,
+            "raw_topic": row.raw_topic,
+            "match": row.match,
+        })
+
+
 def write_kuzu(
     db_path: Path,
     tables: GraphTables,
@@ -3022,11 +3775,12 @@ def write_kuzu(
         _populate_declares_rows(tables)
         _populate_overrides_rows(tables)
         t1 = time.time()
-        _write_edges(conn, tables)
+        _fbyid = _build_file_by_node_id(tables)
+        _write_edges(conn, tables, _fbyid)
         if verbose:
             _verbose_stderr_line(f"[graph] writing · edges written in {time.time() - t1:.2f}s")
         t2 = time.time()
-        _write_routes_and_exposes(conn, tables)
+        _write_routes_and_exposes(conn, tables, _fbyid)
         if verbose:
             _verbose_stderr_line(f"[graph] writing · routes/exposes written in {time.time() - t2:.2f}s")
         _write_meta(conn, tables, source_root)
@@ -3055,6 +3809,7 @@ def main() -> int:
         ),
     )
     parser.add_argument("--verbose", action="store_true")
+    parser.add_argument("--incremental", action="store_true", help="Run incremental rebuild instead of full rebuild")
     args = parser.parse_args()
 
     root = Path(args.source_root).expanduser().resolve() if args.source_root else Path.cwd().resolve()
@@ -3063,6 +3818,20 @@ def main() -> int:
         return 2
 
     kuzu_path = Path(args.kuzu_path).expanduser() if args.kuzu_path else _default_kuzu_path()
+
+    if args.incremental:
+        result = incremental_rebuild(root, kuzu_path, verbose=args.verbose)
+        print(json.dumps({
+            "mode": result.mode,
+            "files_changed": result.files_changed,
+            "files_added": result.files_added,
+            "files_removed": result.files_removed,
+            "dependents_reprocessed": result.dependents_reprocessed,
+            "elapsed_sec": result.elapsed_sec,
+        }))
+        if args.verbose:
+            _verbose_stderr_line(f"[graph] done · mode={result.mode} files_changed={result.files_changed} files_added={result.files_added} files_removed={result.files_removed} dependents={result.dependents_reprocessed} elapsed={result.elapsed_sec:.2f}s")
+        return 0
 
     tables = GraphTables()
     asts = pass1_parse(root, tables, verbose=args.verbose)

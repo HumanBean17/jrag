@@ -324,6 +324,11 @@ def test_refresh_hidden_alias_deprecates_on_stderr(tmp_path: Path) -> None:
 def test_increment_emits_kuzu_stale_warning_block(
     corpus_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Test that increment does NOT emit stale warning by default (new behavior).
+
+    The stale warning is now only emitted with --vectors-only flag.
+    This test verifies the new default behavior where graph IS updated.
+    """
     idx = tmp_path / "idx_inc"
     idx.mkdir()
     monkeypatch.setenv("JAVA_CODEBASE_RAG_INDEX_DIR", str(idx))
@@ -339,9 +344,10 @@ def test_increment_emits_kuzu_stale_warning_block(
         )
     assert rc == 0
     err = buf.getvalue()
-    assert "WARNING: AST graph (Kuzu) incremental rebuild is not yet implemented." in err
-    assert "java-codebase-rag reprocess" in err
-    assert cli_mod.KUZU_INCREMENTAL_TRACKING_ISSUE_URL in err
+    # Should NOT contain old stale warning
+    assert "WARNING: AST graph (Kuzu) incremental rebuild is not yet implemented." not in err
+    assert "java-codebase-rag reprocess" not in err
+    assert cli_mod.KUZU_INCREMENTAL_TRACKING_ISSUE_URL not in err
 
 
 def test_meta_reports_embedding_setting_source(corpus_root: Path, kuzu_db_path: Path) -> None:
@@ -392,6 +398,10 @@ def test_init_after_erase_succeeds(corpus_root: Path, tmp_path: Path) -> None:
 def test_cli_lifecycle_round_trip_init_increment_meta_erase(
     corpus_root: Path, tmp_path: Path,
 ) -> None:
+    """Test lifecycle round-trip: init -> increment -> meta -> erase.
+
+    This test verifies that increment updates both Lance and graph (new behavior).
+    """
     idx = tmp_path / "rt_idx"
     env = os.environ.copy()
     env["JAVA_CODEBASE_RAG_INDEX_DIR"] = str(idx)
@@ -411,7 +421,10 @@ def test_cli_lifecycle_round_trip_init_increment_meta_erase(
         env=env,
     )
     assert inc.returncode == 0, inc.stdout + inc.stderr
-    assert "WARNING: AST graph" in inc.stderr
+    # Should NOT contain old stale warning (new behavior)
+    assert "WARNING: AST graph" not in inc.stderr
+    # Should contain new success message
+    assert "Lance + graph updated" in inc.stdout
     meta = _run_cli(["meta", "--source-root", str(corpus_root), "--index-dir", str(idx)], env=env)
     assert meta.returncode == 0, meta.stderr
     er = _run_cli(
@@ -419,6 +432,116 @@ def test_cli_lifecycle_round_trip_init_increment_meta_erase(
         env=env,
     )
     assert er.returncode == 0, er.stderr
+
+
+@pytest.mark.skipif(not _cocoindex_available(), reason="cocoindex not installed in venv")
+def test_increment_runs_graph_update(
+    corpus_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test that increment updates graph by default (no --vectors-only)."""
+    idx = tmp_path / "idx_graph_update"
+    idx.mkdir()
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_INDEX_DIR", str(idx))
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", str(corpus_root))
+    init_rc = cli_mod.main(
+        ["init", "--source-root", str(corpus_root), "--index-dir", str(idx), "--quiet"],
+    )
+    assert init_rc == 0
+    buf = io.StringIO()
+    with contextlib.redirect_stderr(buf):
+        rc = cli_mod.main(
+            ["increment", "--source-root", str(corpus_root), "--index-dir", str(idx), "--quiet"],
+        )
+    assert rc == 0
+    # Should NOT contain stale warning
+    err = buf.getvalue()
+    assert "WARNING: AST graph" not in err
+
+
+def test_increment_vectors_only_skips_graph(
+    corpus_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test that increment --vectors-only emits stale warning and skips graph update."""
+    idx = tmp_path / "idx_vectors_only"
+    idx.mkdir()
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_INDEX_DIR", str(idx))
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", str(corpus_root))
+    init_rc = cli_mod.main(
+        ["init", "--source-root", str(corpus_root), "--index-dir", str(idx), "--quiet"],
+    )
+    assert init_rc == 0
+    buf = io.StringIO()
+    with contextlib.redirect_stderr(buf):
+        rc = cli_mod.main(
+            ["increment", "--vectors-only", "--source-root", str(corpus_root), "--index-dir", str(idx), "--quiet"],
+        )
+    assert rc == 0
+    err = buf.getvalue()
+    # Should contain stale warning
+    assert "WARNING: AST graph (Kuzu) incremental rebuild is not yet implemented." in err
+    assert "java-codebase-rag reprocess" in err
+    assert cli_mod.KUZU_INCREMENTAL_TRACKING_ISSUE_URL in err
+
+
+def test_increment_cli_help_mentions_vectors_only(
+    corpus_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test that increment --help mentions --vectors-only flag."""
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = cli_mod.main(["increment", "--help"])
+    assert rc == 0
+    help_text = buf.getvalue()
+    assert "--vectors-only" in help_text
+    assert "Run only cocoindex catch-up" in help_text
+
+
+def test_increment_cli_help_no_longer_says_lance_only(
+    corpus_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test that increment --help no longer says 'Lance only'."""
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = cli_mod.main(["increment", "--help"])
+    assert rc == 0
+    help_text = buf.getvalue()
+    # Should NOT say "Lance only" in help
+    assert "Lance only" not in help_text
+    # Should say it updates graph
+    assert "graph" in help_text.lower()
+
+
+def test_increment_first_run_falls_back_to_full(
+    corpus_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test that increment on fresh index (no graph hashes) falls back to full rebuild."""
+    idx = tmp_path / "idx_first_run"
+    idx.mkdir()
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_INDEX_DIR", str(idx))
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", str(corpus_root))
+    # Run init first
+    init_rc = cli_mod.main(
+        ["init", "--source-root", str(corpus_root), "--index-dir", str(idx), "--quiet"],
+    )
+    assert init_rc == 0
+    # Remove hash file to simulate first run after upgrade
+    hash_file = idx / ".graph_hashes.json"
+    if hash_file.exists():
+        hash_file.unlink()
+    buf = io.StringIO()
+    buf_err = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        with contextlib.redirect_stderr(buf_err):
+            rc = cli_mod.main(
+                ["increment", "--source-root", str(corpus_root), "--index-dir", str(idx), "--quiet"],
+            )
+    assert rc == 0
+    err = buf_err.getvalue()
+    # Should fall back to full rebuild gracefully
+    assert "fell back to full graph rebuild" in err
+    # Should still succeed
+    assert "increment completed (Lance + graph updated)" in buf.getvalue()
+
 
 
 @pytest.mark.skipif(not _cocoindex_available(), reason="cocoindex not installed in venv")

@@ -76,11 +76,20 @@ java-codebase-rag init --source-root /path/to/java/repo --index-dir /path/to/.ja
 
 ### `increment`
 
-Runs cocoindex **catch-up** without a full Lance reprocess. **Does not** rebuild Kuzu. Every run prints a **multi-line stderr warning** that graph navigation may be stale until you run `reprocess` (see [`propose/completed/CLI-SCENARIOS-PROPOSE.md`](../propose/completed/CLI-SCENARIOS-PROPOSE.md) Appendix A for the contract).
+Runs cocoindex **catch-up** and **incremental Kuzu graph update**. Only changed files and their single-hop dependents are re-parsed and re-written to the graph. Passes 5–6 (client/producer extraction and cross-service matching) run globally. Falls back to full `reprocess` if:
+- No previous graph exists (first run)
+- Graph schema is outdated (missing `source_file` on edges)
+- Previous incremental run crashed (crash marker detected)
+- Dependent expansion exceeds 50 files
 
 ```bash
 java-codebase-rag increment --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-rag --quiet
 ```
+
+**Flags:**
+- `--vectors-only` — runs only cocoindex catch-up; skips graph update and emits stale-graph warning. Use this when you want the old Lance-only behavior.
+
+**Migration note:** After upgrading, run `reprocess` once to ensure edge tables have `source_file` columns (ontology version 17+).
 
 ### `reprocess`
 
