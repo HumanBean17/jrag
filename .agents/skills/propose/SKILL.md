@@ -243,15 +243,6 @@ Docs-only; baseline unchanged.
 - **Incremental validation** — Present sections, get approval before moving on
 - **Be flexible** — Go back and clarify when something doesn't make sense
 
-## Key Principles
-
-- **One question at a time** — Don't overwhelm with multiple questions
-- **Multiple choice preferred** — Easier to answer than open-ended when possible
-- **Agent determines questions** — You figure out what to ask based on context
-- **Explore alternatives** — Always propose 2-3 approaches before settling
-- **Incremental validation** — Present sections, get approval before moving on
-- **Be flexible** — Go back and clarify when something doesn't make sense
-
 ## Additional resources
 
 - See practical examples in [reference.md](reference.md).

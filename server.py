@@ -120,15 +120,15 @@ class ScopeManager:
             print("[scope] No microservice detected (at project root)", file=sys.stderr)
             print("[scope] Queries will span all microservices", file=sys.stderr)
 
-    def apply_auto_scope(self, filter: dict[str, Any] | None) -> dict[str, Any] | None:
+    def apply_auto_scope(self, node_filter: dict[str, Any] | None) -> dict[str, Any] | None:
         """Apply auto-detected scope to filter if no explicit microservice is set."""
         if self.default_scope is None:
-            return filter
+            return node_filter
         # Convert to dict for manipulation
-        if filter is None:
+        if node_filter is None:
             filter_dict = {}
         else:
-            filter_dict = dict(filter)
+            filter_dict = dict(node_filter)
         # Only inject if user didn't specify microservice
         if "microservice" not in filter_dict:
             filter_dict["microservice"] = self.default_scope

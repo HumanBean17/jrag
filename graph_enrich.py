@@ -1584,7 +1584,12 @@ def detect_microservice_from_path(cwd: Path, source_root: Path) -> str | None:
     if cwd_resolved == source_resolved:
         return None
 
-    # Call existing microservice_for_path to detect microservice
+    # Check if cwd itself matches a YAML override (directory name matches microservice_roots)
+    overrides = load_microservice_overrides(source_resolved)
+    if overrides and cwd_resolved.name in overrides:
+        return cwd_resolved.name
+
+    # Call existing microservice_for_path to detect microservice from build markers
     ms = microservice_for_path(str(cwd_resolved), source_resolved)
     return ms if ms else None
 
