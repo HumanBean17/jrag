@@ -216,30 +216,41 @@ def resolve_model(model_input: str | None, *, non_interactive: bool) -> str:
     Returns:
         Resolved model string ("auto" or a valid path)
     """
-    if non_interactive or not model_input:
-        return "auto"
+    if model_input:
+        # Expand ~ and $HOME
+        expanded = os.path.expandvars(model_input.strip())
+        expanded = os.path.expanduser(expanded)
+        model_path = Path(expanded)
 
-    # Expand ~ and $HOME
-    expanded = os.path.expandvars(model_input.strip())
-    expanded = os.path.expanduser(expanded)
-    model_path = Path(expanded)
+        if model_path.exists():
+            return str(model_path)
 
-    if model_path.exists():
-        return str(model_path)
-
-    # Path not found - prompt for confirmation in interactive mode
-    confirmed = prompt(
-        "confirm",
-        f"Model path {model_input} not found. Use 'auto' instead?",
-    )
-    if confirmed:
-        return "auto"
-    else:
-        # Re-prompt for model path
-        new_input = prompt("text", "Enter model path (or 'auto'):", default="auto")
-        if new_input == "auto" or not new_input:
+        # Path not found
+        if non_interactive:
+            print(f"Warning: Model path {model_input} not found, falling back to 'auto'.")
             return "auto"
-        return resolve_model(new_input, non_interactive=non_interactive)
+
+        confirmed = prompt(
+            "confirm",
+            f"Model path {model_input} not found. Use 'auto' instead?",
+        )
+        if confirmed:
+            return "auto"
+        else:
+            # Re-prompt for model path
+            new_input = prompt("text", "Enter model path (or 'auto'):", default="auto")
+            if new_input == "auto" or not new_input:
+                return "auto"
+            return resolve_model(new_input, non_interactive=non_interactive)
+
+    if non_interactive:
+        return "auto"
+
+    # Interactive with no CLI input: prompt for model
+    user_input = prompt("text", "Embedding model path (or 'auto'):", default="auto")
+    if user_input == "auto" or not user_input:
+        return "auto"
+    return resolve_model(user_input, non_interactive=False)
 
 
 def select_hosts(*, non_interactive: bool, cli_agents: list[str] | None) -> list[HostConfig]:
@@ -438,13 +449,12 @@ def merge_mcp_config(config_path: Path, host: HostConfig, *, mcp_command: str) -
         os.rename(tmp_name, config_path)
         return True
     except (IOError, OSError) as e:
-        print(f"Error: Failed to write {config_path}: {e}")
         if tmp_name:
             try:
                 os.unlink(tmp_name)
             except OSError:
                 pass
-        return False
+        raise RuntimeError(f"Failed to write {config_path}: {e}") from e
 
 
 def _read_package_artifact(relative_path: str) -> str:

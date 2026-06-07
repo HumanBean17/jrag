@@ -219,6 +219,28 @@ class TestResolveModel:
         result = resolve_model("/nonexistent/path", non_interactive=False)
         assert result == "auto"
 
+    def test_model_non_interactive_with_path_uses_path(self, tmp_path):
+        """--model /path/to/model with --non-interactive → uses the path"""
+        model_file = tmp_path / "model.gguf"
+        model_file.write_text("fake model")
+        from java_codebase_rag.installer import resolve_model
+        result = resolve_model(str(model_file), non_interactive=True)
+        assert result == str(model_file)
+
+    def test_model_non_interactive_with_bad_path_falls_back(self, capsys):
+        """--model /bad/path with --non-interactive → warning + auto"""
+        from java_codebase_rag.installer import resolve_model
+        result = resolve_model("/nonexistent/model.gguf", non_interactive=True)
+        assert result == "auto"
+        captured = capsys.readouterr()
+        assert "Warning" in captured.out
+
+    def test_model_non_interactive_no_input_returns_auto(self):
+        """no --model with --non-interactive → auto"""
+        from java_codebase_rag.installer import resolve_model
+        result = resolve_model(None, non_interactive=True)
+        assert result == "auto"
+
 
 class TestSelectHostsAndScope:
     """Test select_hosts and select_scope functions."""

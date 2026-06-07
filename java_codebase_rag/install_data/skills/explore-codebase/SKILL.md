@@ -66,7 +66,7 @@ Any time you need to search, locate, navigate, or explore the codebase. **Do NOT
 
 ## Graph Navigation Reference (java-codebase-rag MCP)
 
-**Ontology: 16** — if results look structurally wrong or empty across tools, the index may be missing or stale; ask the operator to rebuild.
+**Ontology: 17** — if results look structurally wrong or empty across tools, the index may be missing or stale; ask the operator to rebuild.
 Responses may include `hints_structured` (suggested next calls) and `advisories` — advisory only; ignore when `success` is false.
 
 ### Forced reasoning preamble (every MCP call)
