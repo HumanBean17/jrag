@@ -21,7 +21,7 @@ from java_codebase_rag.config import (
     index_dir_has_existing_artifacts,
     resolve_operator_config,
 )
-from java_codebase_rag.pipeline import clip, run_build_ast_graph, run_cocoindex_drop, run_cocoindex_update
+from java_codebase_rag.pipeline import clip, run_build_ast_graph, run_cocoindex_drop, run_cocoindex_update, run_incremental_graph
 from java_ontology import VALID_UNRESOLVED_CALL_REASONS
 
 KUZU_INCREMENTAL_TRACKING_ISSUE_URL = "https://github.com/HumanBean17/java-codebase-rag/issues/73"
@@ -310,7 +310,11 @@ def _cmd_increment(args: argparse.Namespace) -> int:
     cfg = _resolved_from_ns(args)
     _startup_hints(cfg)
     cfg.apply_to_os_environ()
-    _emit_increment_kuzu_warning()
+
+    # Check for --vectors-only flag
+    vectors_only = bool(getattr(args, "vectors_only", False))
+    if vectors_only:
+        _emit_increment_kuzu_warning()
 
     def work() -> int:
         env = cfg.subprocess_env()
@@ -332,7 +336,51 @@ def _cmd_increment(args: argparse.Namespace) -> int:
                 }
             )
             return 1
-        _emit({"success": True, "message": "increment completed (Lance only; graph may be stale — see stderr)"})
+
+        # If --vectors-only is set, skip graph update
+        if vectors_only:
+            _emit({"success": True, "message": "increment completed (Lance only; graph may be stale — see stderr)"})
+            return 0
+
+        # Run incremental graph update
+        g = run_incremental_graph(
+            source_root=cfg.source_root,
+            kuzu_path=cfg.kuzu_path,
+            verbose=bool(args.verbose),
+            quiet=bool(args.quiet),
+            env=env,
+        )
+
+        # Check if incremental fell back to full rebuild
+        if g.returncode == 0 and g.stdout:
+            # Parse stdout to check for full_fallback mode
+            # The incremental_rebuild function returns a JSON payload with mode field
+            try:
+                import json
+                result = json.loads(g.stdout.strip())
+                if result.get("mode") == "full_fallback":
+                    print(
+                        "[increment] fell back to full graph rebuild — this is normal after schema changes or first run",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+            except (json.JSONDecodeError, ValueError):
+                # If parsing fails, continue silently
+                pass
+
+        if g.returncode != 0:
+            _emit(
+                {
+                    "success": False,
+                    "exit_code": g.returncode,
+                    "stdout": clip(g.stdout, 4000),
+                    "stderr": clip(g.stderr, 4000),
+                    "message": f"graph builder exit {g.returncode}",
+                }
+            )
+            return 1
+
+        _emit({"success": True, "message": "increment completed (Lance + graph updated)"})
         return 0
 
     return _run_with_pipeline_progress("increment", cfg, quiet=bool(args.quiet), work=work)
@@ -627,7 +675,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--quiet suppresses that stream; stdout remains the machine-readable payload.\n\n"
         "Lifecycle (manage the index):\n"
         "  init            Create a fresh index from a Java repository.\n"
-        "  increment       Pick up changes since the last index update (Lance only).\n"
+        "  increment       Pick up changes since the last index update (Lance + graph).\n"
         "  reprocess       Full vector + graph rebuild (default); optional --vectors-only / --graph-only.\n"
         "  erase           Delete the index from disk.\n\n"
         "Introspection (inspect the index):\n"
@@ -662,10 +710,15 @@ def build_parser() -> argparse.ArgumentParser:
     increment = subparsers.add_parser(
         "increment",
         help="Pick up changes since the last index update.",
-        description="Runs cocoindex catch-up (no full reprocess). Does not rebuild Kuzu; see stderr warning.",
+        description="Runs cocoindex catch-up and incremental Kuzu graph update. Use --vectors-only to skip graph update.",
     )
     _add_index_embedding_flags(increment)
     _add_verbosity_flags(increment)
+    increment.add_argument(
+        "--vectors-only",
+        action="store_true",
+        help="Run only cocoindex catch-up (Lance); skip graph update.",
+    )
     increment.set_defaults(handler=_cmd_increment)
 
     reprocess = subparsers.add_parser(

@@ -168,7 +168,7 @@ Run `java-codebase-rag --help` to list grouped subcommands. Operator playbook wi
 | Group | Subcommand | What it does |
 |---|---|---|
 | Lifecycle | `init` | First-time index. Refuses if artifacts already exist. |
-| Lifecycle | `increment` | CocoIndex catch-up (Lance only); Kuzu stays stale until `reprocess`. |
+| Lifecycle | `increment` | CocoIndex catch-up + incremental Kuzu update. `--vectors-only` for Lance only. |
 | Lifecycle | `reprocess` | Full Lance + Kuzu rebuild. `--vectors-only` / `--graph-only` for a single phase. |
 | Lifecycle | `erase` | Delete index artifacts. Requires `--yes` or TTY confirm. |
 | Introspection | `meta`, `tables`, `diagnose-ignore`, `unresolved-calls` | Health, table listing, ignore-layer diagnostics, receiver-failure call sites. |
@@ -212,5 +212,4 @@ The default embedding model is `sentence-transformers/all-MiniLM-L6-v2` (downloa
 
 - `get_service_topology` — microservice-level summary aggregating `HTTP_CALLS` / `ASYNC_CALLS`.
 - Agentic routing layer (query classifier → vector / graph / both).
-- Incremental Kuzu updates (per-changed-file).
 - Optional `codegraph_nodes` LanceDB table embedding symbol summaries so the graph itself is vector-searchable.

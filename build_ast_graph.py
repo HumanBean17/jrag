@@ -3967,6 +3967,16 @@ def main() -> int:
 
     if args.incremental:
         result = incremental_rebuild(root, kuzu_path, verbose=args.verbose)
+        # Emit result as JSON to stdout so CLI can parse the mode
+        import json
+        print(json.dumps({
+            "mode": result.mode,
+            "files_changed": result.files_changed,
+            "files_added": result.files_added,
+            "files_removed": result.files_removed,
+            "dependents_reprocessed": result.dependents_reprocessed,
+            "elapsed_sec": result.elapsed_sec,
+        }))
         if args.verbose:
             _verbose_stderr_line(f"[graph] done · mode={result.mode} files_changed={result.files_changed} files_added={result.files_added} files_removed={result.files_removed} dependents={result.dependents_reprocessed} elapsed={result.elapsed_sec:.2f}s")
         return 0
