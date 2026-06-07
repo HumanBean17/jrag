@@ -208,9 +208,9 @@ disagreement as evidence of staleness, not as a contradiction.
 
 ```markdown
 **Staleness rule:** after `java-codebase-rag increment`, Lance is fresh
-but Kuzu may be stale (see `propose/TIER2-INCREMENTAL-REBUILD-PROPOSE.md`).
-A graph older than the source tree is normal mid-development. When in
-doubt, run `meta` and compare against your working tree.
+but Kuzu may be stale. A graph older than the source tree is normal
+mid-development. When in doubt, run `meta` and compare against your
+working tree.
 ```
 
 ### Patch C — `neighbors` subsection after Batching

@@ -4,9 +4,8 @@ Status: **completed — shipped** to `master`. This plan implemented
 [`propose/completed/CLI-SCENARIOS-PROPOSE.md`](../propose/completed/CLI-SCENARIOS-PROPOSE.md).
 **PR-CLI-1** (propose approval + plan tracking) was [#72](https://github.com/HumanBean17/java-codebase-rag/pull/72).
 
-Depends on: **none** (engine work for Kuzu incremental rebuild stays under
-[`propose/TIER2-INCREMENTAL-REBUILD-PROPOSE.md`](../propose/TIER2-INCREMENTAL-REBUILD-PROPOSE.md)
-and the tracking issue created in PR-CLI-2). **Recommended ordering:** any
+Depends on: **none** (engine work for Kuzu incremental rebuild is tracked under
+GitHub issue #73, created in PR-CLI-2). **Recommended ordering:** any
 standalone `cli.py` import-latency / deferred-import hardening PR should land
 before PR-CLI-2 so contributors exercising new subcommands do not pay multi-second
 `--help` cost (see propose §6 closing note).
@@ -201,8 +200,8 @@ Landing order: **PR-CLI-1 → PR-CLI-2 → PR-CLI-3**.
 
 ### 8. GitHub
 
-- Open issue **“AST graph (Kuzu) incremental rebuild”** referencing
-  `propose/TIER2-INCREMENTAL-REBUILD-PROPOSE.md`; paste URL into cli constant.
+- Open issue **”AST graph (Kuzu) incremental rebuild”** (tracking issue #73);
+  paste URL into cli constant.
 
 ## Tests for PR-CLI-2
 
@@ -283,9 +282,7 @@ Follow the **explicit file list** in propose §6 (`README.md`,
 `docs/MANUAL-VERIFICATION-CHECKLIST.md`, `docs/paper/paper.tex` + rebuild
 `paper.pdf`, `AGENTS.md`, **`.cursor/rules/*.mdc`** (agent rules audit),
 `CODEBASE_REQUIREMENTS.md`, `mcp.json.example` (comments only — keys from PR-CLI-2),
-`propose/INDEX-AUTO-MODE-PROPOSE.md`,
-`propose/TIER2-INCREMENTAL-REBUILD-PROPOSE.md`, `docs/PRODUCT-VISION.md`,
-`.gitignore`).
+`docs/PRODUCT-VISION.md`, `.gitignore`).
 
 Add **Migration from legacy names** sections with explicit `mv` commands
 (`lancedb_data` → `.java-codebase-rag`, `.lancedb-mcp.yml` →

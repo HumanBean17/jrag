@@ -360,7 +360,7 @@ with every hit accounted for (fixed or justified).
 - Multi-target Client/Producer nodes; materialized composite edges.
 - Hints v3 implementation (PR-D — [`plans/completed/PLAN-HINTS-V3.md`](./PLAN-HINTS-V3.md)).
 - Ontology **15** or second re-index.
-- Ranking / incremental rebuild proposes (`RANKING-MICROSERVICE`, `TIER2-INCREMENTAL-REBUILD`).
+- Ranking / incremental rebuild proposals.
 - Special-casing `tests/bank-chat-system/` in production code.
 
 # Whole-plan done definition
