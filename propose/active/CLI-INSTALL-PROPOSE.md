@@ -31,11 +31,11 @@ java-codebase-rag update [--force] [--dry-run]
 
 ### Exit codes
 
-| Code | Meaning |
-|------|---------|
-| 0 | Success (all stages completed) |
-| 1 | Partial success (some stages failed, e.g. MCP written but init skipped) |
-| 2 | Refusal or fatal error (no Java files found, required flag missing) |
+| Code | Meaning | User action |
+|------|---------|-------------|
+| 0 | Success (all stages completed) | None — tool is ready |
+| 1 | Partial success | Read the summary. Failed stages are listed with specific errors. Fix the reported issue (e.g. missing entrypoint, permission error) and re-run `install` — it will skip already-completed stages. |
+| 2 | Fatal error (no Java files, required flag missing) | Fix the root cause (e.g. run from a Java project, pass `--agent` in non-interactive mode) and re-run. |
 
 ### `install` — interactive pipeline (6 stages)
 
@@ -62,7 +62,7 @@ Resolution rules:
 Prompt: *"Embedding model? Press Enter for auto-download (~90MB), or type a local path:"*
 
 - Default: `auto` (= `sentence-transformers/all-MiniLM-L6-v2`, downloads on first `init`)
-- If user provides a local path, validate it exists (warn but allow continuing)
+- If user provides a local path, validate it exists. If not found: prompt "Path not found: `<path>`. Continue anyway? (y/n)" — require explicit confirmation before proceeding with a bad path
 - Path expansion: support `~`, `$HOME`, relative paths
 - When `--model auto` flag is passed (non-interactive), skip this stage entirely
 
@@ -117,6 +117,17 @@ When files already exist:
 - **Skill/agent files**: ask before overwriting. Show file size and mtime. Options: overwrite / skip / abort.
 - **MCP config files**: always merge (never overwrite the entire file). If `java-codebase-rag` entry already exists in `mcpServers`, update it in-place. Ask before modifying only if the entry already exists with a different config.
 
+**Post-deploy validation:**
+
+After writing all artifacts, verify that `java-codebase-rag-mcp` is discoverable on PATH by running `shutil.which("java-codebase-rag-mcp")`. If not found:
+- Print: "Warning: `java-codebase-rag-mcp` not found on PATH. Your agent host may fail to start the MCP server. Ensure `java-codebase-rag` is installed: `pip install java-codebase-rag`"
+- Continue (don't abort) — the entrypoint may work from the agent host's shell even if not found from the installer's shell (e.g. different PATH in GUI launchers vs terminal)
+
+Also verify the target directories are writable before attempting to write. If a directory is not writable:
+- Print the specific path and error
+- Skip that artifact, continue with others
+- Exit with code 1 if any artifact failed to write
+
 **Stage 6: Index + finish**
 
 1. Generate `.java-codebase-rag.yml` from collected answers (source_root, model, microservice_roots)
@@ -135,7 +146,9 @@ When files already exist:
 ### Re-running `install`
 
 When `install` is run in an already-configured project:
-- If `.java-codebase-rag.yml` exists: detect it, inform the user, and offer to update config or start fresh
+- If `.java-codebase-rag.yml` exists: read it and show current values to the user. Offer two options:
+  1. **Update** — re-run the pipeline pre-filled with existing values. The user can change individual fields. Existing keys in the YAML that the installer doesn't manage (e.g. `brownfield_overrides`, custom `embedding.device`) are preserved verbatim.
+  2. **Start fresh** — overwrite the config from scratch (after confirmation).
 - Existing MCP entries are updated in-place (merged, not duplicated)
 - Existing skill/agent files trigger overwrite confirmation
 
@@ -170,6 +183,11 @@ When `--non-interactive` is passed or stdin is not a TTY:
 | Claude Code | `.claude` | `.mcp.json` | `~/.claude.json` | `.claude/skills/` | `~/.claude/skills/` | `.claude/agents/` | `~/.claude/agents/` |
 | Qwen Code | `.qwen` | `.qwen/settings.json` | `~/.qwen/settings.json` | `.qwen/skills/` | `~/.qwen/skills/` | `.qwen/agents/` | `~/.qwen/agents/` |
 | GigaCode | `.gigacode` | `.gigacode/settings.json` | `~/.gigacode/settings.json` | `.gigacode/skills/` | `~/.gigacode/skills/` | `.gigacode/agents/` | `~/.gigacode/agents/` |
+
+**Platform notes:**
+- All paths use `pathlib.Path` — no hardcoded separators. Works on macOS, Linux, and Windows.
+- `~` is expanded via `Path.home()`, not shell expansion.
+- Writability is checked before each write attempt. Permission errors are caught and reported per-artifact (exit code 1 for partial failure).
 
 ### Implementation stack
 
@@ -230,6 +248,10 @@ When `--non-interactive` is passed or stdin is not a TTY:
 - Unit: re-run detection: existing `.java-codebase-rag.yml` triggers informative message
 - Unit: empty cwd (no `.java` files) exits with code 2
 - Unit: `source_root` is always cwd; subset of directories → `microservice_roots`
+- Unit: post-deploy validation detects missing `java-codebase-rag-mcp` on PATH
+- Unit: model path validation prompts for confirmation when path doesn't exist
+- Unit: re-run "update" preserves unmanaged YAML keys (e.g. `brownfield_overrides`)
+- Unit: permission error on target directory is caught and reported, other artifacts continue
 - Integration: `install --non-interactive --agent claude-code` from bank-chat fixture → verify files written, MCP config valid, `init` succeeds, index is queryable
 
 **PR 2 tests:**
