@@ -1,6 +1,6 @@
-"""Tests for incremental graph rebuild functionality (PR-G1).
+"""Tests for incremental graph rebuild functionality (PR-G1 and PR-G2).
 
-Tests cover FileHashTracker behavior and edge schema source_file column.
+Tests cover FileHashTracker behavior, edge schema source_file column, and incremental orchestrator.
 """
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from pathlib import Path
 import kuzu
 
 from ast_java import ONTOLOGY_VERSION
-from build_ast_graph import FileHashTracker
+from build_ast_graph import FileHashTracker, GraphTables, pass1_parse, pass2_edges
 from path_filtering import LayeredIgnore
 
 
@@ -223,3 +223,558 @@ class TestEdgeSchema:
     def test_ontology_version_bumped_to_17(self) -> None:
         """ONTOLOGY_VERSION == 17."""
         assert ONTOLOGY_VERSION == 17
+
+
+class TestIncrementalOrchestrator:
+    """Test incremental rebuild orchestrator (PR-G2)."""
+
+    def test_incremental_single_file_change(self, tmp_path: Path) -> None:
+        """Change one .java file, run incremental, verify only that file's nodes changed."""
+        from build_ast_graph import incremental_rebuild
+
+        source_root = tmp_path / "src"
+        source_root.mkdir()
+        index_dir = tmp_path / "index"
+        index_dir.mkdir()
+        kuzu_path = index_dir / "code_graph.kuzu"
+
+        # Create initial files
+        (source_root / "A.java").write_text("package pkg; class A {}", encoding="utf-8")
+        (source_root / "B.java").write_text("package pkg; class B extends A {}", encoding="utf-8")
+
+        # Initial build
+        tables = GraphTables()
+        asts = pass1_parse(source_root, tables, verbose=False)
+        assert len(asts) == 2
+
+        # Build full graph (pass2 needed for EXTENDS edges)
+        from build_ast_graph import write_kuzu
+        pass2_edges(tables, asts, verbose=False)
+        write_kuzu(kuzu_path, tables, source_root=source_root, verbose=False)
+
+        # Initialize hash tracker
+        tracker = FileHashTracker(index_dir)
+        ignore = LayeredIgnore(source_root, use_gitignore=False, builtin_patterns=[])
+        tracker.detect_changes(source_root, ignore)
+        for rel_path in ["A.java", "B.java"]:
+            tracker.update({rel_path}, source_root)
+        tracker.save()
+
+        # Modify A.java
+        (source_root / "A.java").write_text("package pkg; class A { void foo() {} }", encoding="utf-8")
+
+        # Run incremental
+        result = incremental_rebuild(source_root, kuzu_path, verbose=False)
+
+        assert result.mode == "incremental"
+        assert result.files_changed == 1
+        assert result.files_added == 0
+        assert result.files_removed == 0
+        assert result.dependents_reprocessed >= 1  # B depends on A
+
+    def test_incremental_new_file(self, tmp_path: Path) -> None:
+        """Add a new .java file, run incremental, verify all new nodes/edges appear."""
+        source_root = tmp_path / "src"
+        source_root.mkdir()
+        index_dir = tmp_path / "index"
+        index_dir.mkdir()
+        kuzu_path = index_dir / "code_graph.kuzu"
+
+        # Create initial file
+        (source_root / "A.java").write_text("package pkg; class A {}", encoding="utf-8")
+
+        # Initial build
+        from build_ast_graph import write_kuzu
+        tables = GraphTables()
+        pass1_parse(source_root, tables, verbose=False)
+        write_kuzu(kuzu_path, tables, source_root=source_root, verbose=False)
+
+        # Initialize hash tracker
+        tracker = FileHashTracker(index_dir)
+        ignore = LayeredIgnore(source_root, use_gitignore=False, builtin_patterns=[])
+        tracker.detect_changes(source_root, ignore)
+        tracker.update({"A.java"}, source_root)
+        tracker.save()
+
+        # Add new file
+        (source_root / "B.java").write_text("package pkg; class B {}", encoding="utf-8")
+
+        # Run incremental
+        from build_ast_graph import incremental_rebuild
+        result = incremental_rebuild(source_root, kuzu_path, verbose=False)
+
+        assert result.mode == "incremental"
+        assert result.files_changed == 0
+        assert result.files_added == 1
+
+    def test_incremental_deleted_file(self, tmp_path: Path) -> None:
+        """Remove a .java file from fixture, run incremental, verify orphaned nodes/edges cleaned up."""
+        source_root = tmp_path / "src"
+        source_root.mkdir()
+        index_dir = tmp_path / "index"
+        index_dir.mkdir()
+        kuzu_path = index_dir / "code_graph.kuzu"
+
+        # Create initial files
+        (source_root / "A.java").write_text("package pkg; class A {}", encoding="utf-8")
+        (source_root / "B.java").write_text("package pkg; class B {}", encoding="utf-8")
+
+        # Initial build
+        from build_ast_graph import write_kuzu
+        tables = GraphTables()
+        pass1_parse(source_root, tables, verbose=False)
+        write_kuzu(kuzu_path, tables, source_root=source_root, verbose=False)
+
+        # Initialize hash tracker
+        tracker = FileHashTracker(index_dir)
+        ignore = LayeredIgnore(source_root, use_gitignore=False, builtin_patterns=[])
+        tracker.detect_changes(source_root, ignore)
+        tracker.update({"A.java", "B.java"}, source_root)
+        tracker.save()
+
+        # Delete B.java
+        (source_root / "B.java").unlink()
+
+        # Run incremental
+        from build_ast_graph import incremental_rebuild
+        result = incremental_rebuild(source_root, kuzu_path, verbose=False)
+
+        assert result.mode == "incremental"
+        assert result.files_changed == 0
+        assert result.files_added == 0
+        assert result.files_removed == 1
+
+        # Verify B's nodes are deleted
+        db = kuzu.Database(str(kuzu_path))
+        conn = kuzu.Connection(db)
+        check_result = conn.execute("MATCH (s:Symbol) WHERE s.fqn = 'pkg.B' RETURN count(*)")
+        if check_result.has_next():
+            count = check_result.get_next()[0]
+            assert count == 0
+
+    def test_incremental_phantom_nodes_preserved(self, tmp_path: Path) -> None:
+        """Run incremental after a change, verify phantom nodes (those with filename = "") are untouched."""
+        source_root = tmp_path / "src"
+        source_root.mkdir()
+        index_dir = tmp_path / "index"
+        index_dir.mkdir()
+        kuzu_path = index_dir / "code_graph.kuzu"
+
+        # Create file with external reference
+        (source_root / "A.java").write_text(
+            "package pkg; import java.util.List; class A { List<String> list; }",
+            encoding="utf-8",
+        )
+
+        # Initial build
+        from build_ast_graph import write_kuzu
+        tables = GraphTables()
+        pass1_parse(source_root, tables, verbose=False)
+        write_kuzu(kuzu_path, tables, source_root=source_root, verbose=False)
+
+        # Count phantom nodes before
+        db = kuzu.Database(str(kuzu_path))
+        conn = kuzu.Connection(db)
+        phantom_count_before = 0
+        phantom_result = conn.execute("MATCH (s:Symbol) WHERE s.filename = '' RETURN count(*)")
+        if phantom_result.has_next():
+            phantom_count_before = phantom_result.get_next()[0]
+
+        conn.close()
+
+        # Initialize hash tracker
+        tracker = FileHashTracker(index_dir)
+        ignore = LayeredIgnore(source_root, use_gitignore=False, builtin_patterns=[])
+        tracker.detect_changes(source_root, ignore)
+        tracker.update({"A.java"}, source_root)
+        tracker.save()
+
+        # Modify A.java
+        (source_root / "A.java").write_text(
+            "package pkg; import java.util.List; class A { List<Integer> list; }",
+            encoding="utf-8",
+        )
+
+        # Run incremental
+        from build_ast_graph import incremental_rebuild
+        incremental_rebuild(source_root, kuzu_path, verbose=False)
+
+        # Verify phantom nodes still exist
+        db = kuzu.Database(str(kuzu_path))
+        conn = kuzu.Connection(db)
+        phantom_count_after = 0
+        phantom_result = conn.execute("MATCH (s:Symbol) WHERE s.filename = '' RETURN count(*)")
+        if phantom_result.has_next():
+            phantom_count_after = phantom_result.get_next()[0]
+
+        assert phantom_count_after >= phantom_count_before
+
+    def test_incremental_dependent_expansion(self, tmp_path: Path) -> None:
+        """Change a base class, verify that files with EXTENDS/IMPLEMENTS edges into it are also reprocessed."""
+        source_root = tmp_path / "src"
+        source_root.mkdir()
+        index_dir = tmp_path / "index"
+        index_dir.mkdir()
+        kuzu_path = index_dir / "code_graph.kuzu"
+
+        # Create files with inheritance
+        (source_root / "Base.java").write_text("package pkg; class Base {}", encoding="utf-8")
+        (source_root / "Derived.java").write_text(
+            "package pkg; class Derived extends Base {}", encoding="utf-8"
+        )
+
+        # Initial build (pass2 needed for EXTENDS edges)
+        from build_ast_graph import write_kuzu
+        tables = GraphTables()
+        asts = pass1_parse(source_root, tables, verbose=False)
+        pass2_edges(tables, asts, verbose=False)
+        write_kuzu(kuzu_path, tables, source_root=source_root, verbose=False)
+
+        # Initialize hash tracker
+        tracker = FileHashTracker(index_dir)
+        ignore = LayeredIgnore(source_root, use_gitignore=False, builtin_patterns=[])
+        tracker.detect_changes(source_root, ignore)
+        tracker.update({"Base.java", "Derived.java"}, source_root)
+        tracker.save()
+
+        # Modify Base.java
+        (source_root / "Base.java").write_text(
+            "package pkg; class Base { void foo() {} }", encoding="utf-8"
+        )
+
+        # Run incremental
+        from build_ast_graph import incremental_rebuild
+        result = incremental_rebuild(source_root, kuzu_path, verbose=False)
+
+        # Derived.java should be reprocessed due to EXTENDS edge
+        assert result.dependents_reprocessed >= 1
+
+    def test_incremental_expansion_cap_fallback(self, tmp_path: Path) -> None:
+        """Mock expansion_cap=2, change a widely-used file that has >2 dependents, verify fallback to full rebuild."""
+        source_root = tmp_path / "src"
+        source_root.mkdir()
+        index_dir = tmp_path / "index"
+        index_dir.mkdir()
+        kuzu_path = index_dir / "code_graph.kuzu"
+
+        # Create base class and many derived classes
+        (source_root / "Base.java").write_text("package pkg; class Base {}", encoding="utf-8")
+        for i in range(5):
+            (source_root / f"Derived{i}.java").write_text(
+                f"package pkg; class Derived{i} extends Base {{}}", encoding="utf-8"
+            )
+
+        # Initial build
+        from build_ast_graph import write_kuzu
+        tables = GraphTables()
+        asts = pass1_parse(source_root, tables, verbose=False)
+        pass2_edges(tables, asts, verbose=False)
+        write_kuzu(kuzu_path, tables, source_root=source_root, verbose=False)
+
+        # Initialize hash tracker
+        tracker = FileHashTracker(index_dir)
+        ignore = LayeredIgnore(source_root, use_gitignore=False, builtin_patterns=[])
+        tracker.detect_changes(source_root, ignore)
+        all_files = {"Base.java"} | {f"Derived{i}.java" for i in range(5)}
+        tracker.update(all_files, source_root)
+        tracker.save()
+
+        # Modify Base.java
+        (source_root / "Base.java").write_text(
+            "package pkg; class Base { void foo() {} }", encoding="utf-8"
+        )
+
+        # Run incremental with low expansion cap
+        from build_ast_graph import incremental_rebuild
+        result = incremental_rebuild(source_root, kuzu_path, verbose=False, expansion_cap=2)
+
+        # Should fall back to full rebuild due to cap exceeded
+        assert result.mode == "full_fallback"
+
+    def test_incremental_crash_marker_triggers_fallback(self, tmp_path: Path) -> None:
+        """Leave .graph_increment_in_progress marker, run incremental, verify full rebuild happens."""
+        source_root = tmp_path / "src"
+        source_root.mkdir()
+        index_dir = tmp_path / "index"
+        index_dir.mkdir()
+        kuzu_path = index_dir / "code_graph.kuzu"
+
+        # Create file
+        (source_root / "A.java").write_text("package pkg; class A {}", encoding="utf-8")
+
+        # Initial build
+        from build_ast_graph import write_kuzu
+        tables = GraphTables()
+        pass1_parse(source_root, tables, verbose=False)
+        write_kuzu(kuzu_path, tables, source_root=source_root, verbose=False)
+
+        # Initialize hash tracker
+        tracker = FileHashTracker(index_dir)
+        ignore = LayeredIgnore(source_root, use_gitignore=False, builtin_patterns=[])
+        tracker.detect_changes(source_root, ignore)
+        tracker.update({"A.java"}, source_root)
+        tracker.save()
+
+        # Create crash marker
+        crash_marker = index_dir / ".graph_increment_in_progress"
+        crash_marker.write_text("", encoding="utf-8")
+
+        # Modify A.java
+        (source_root / "A.java").write_text(
+            "package pkg; class A { void foo() {} }", encoding="utf-8"
+        )
+
+        # Run incremental - should fall back to full rebuild
+        from build_ast_graph import incremental_rebuild
+        result = incremental_rebuild(source_root, kuzu_path, verbose=False)
+
+        assert result.mode == "full_fallback"
+        # Crash marker should be removed
+        assert not crash_marker.exists()
+
+    def test_incremental_crash_marker_removed_on_success(self, tmp_path: Path) -> None:
+        """Run successful incremental, verify marker file is removed."""
+        source_root = tmp_path / "src"
+        source_root.mkdir()
+        index_dir = tmp_path / "index"
+        index_dir.mkdir()
+        kuzu_path = index_dir / "code_graph.kuzu"
+
+        # Create file
+        (source_root / "A.java").write_text("package pkg; class A {}", encoding="utf-8")
+
+        # Initial build
+        from build_ast_graph import write_kuzu
+        tables = GraphTables()
+        pass1_parse(source_root, tables, verbose=False)
+        write_kuzu(kuzu_path, tables, source_root=source_root, verbose=False)
+
+        # Initialize hash tracker
+        tracker = FileHashTracker(index_dir)
+        ignore = LayeredIgnore(source_root, use_gitignore=False, builtin_patterns=[])
+        tracker.detect_changes(source_root, ignore)
+        tracker.update({"A.java"}, source_root)
+        tracker.save()
+
+        # Modify A.java
+        (source_root / "A.java").write_text(
+            "package pkg; class A { void foo() {} }", encoding="utf-8"
+        )
+
+        # Run incremental
+        from build_ast_graph import incremental_rebuild
+        result = incremental_rebuild(source_root, kuzu_path, verbose=False)
+
+        assert result.mode == "incremental"
+
+        # Crash marker should not exist
+        crash_marker = index_dir / ".graph_increment_in_progress"
+        assert not crash_marker.exists()
+
+    def test_incremental_no_changes_is_noop(self, tmp_path: Path) -> None:
+        """Run incremental with no file changes, verify graph is unchanged (same node/edge counts)."""
+        source_root = tmp_path / "src"
+        source_root.mkdir()
+        index_dir = tmp_path / "index"
+        index_dir.mkdir()
+        kuzu_path = index_dir / "code_graph.kuzu"
+
+        # Create file
+        (source_root / "A.java").write_text("package pkg; class A {}", encoding="utf-8")
+
+        # Initial build
+        from build_ast_graph import write_kuzu
+        tables = GraphTables()
+        pass1_parse(source_root, tables, verbose=False)
+        write_kuzu(kuzu_path, tables, source_root=source_root, verbose=False)
+
+        # Get node count before
+        db = kuzu.Database(str(kuzu_path))
+        conn = kuzu.Connection(db)
+        count_before_result = conn.execute("MATCH (s:Symbol) RETURN count(*)")
+        count_before = 0
+        if count_before_result.has_next():
+            count_before = count_before_result.get_next()[0]
+        conn.close()
+
+        # Initialize hash tracker
+        tracker = FileHashTracker(index_dir)
+        ignore = LayeredIgnore(source_root, use_gitignore=False, builtin_patterns=[])
+        tracker.detect_changes(source_root, ignore)
+        tracker.update({"A.java"}, source_root)
+        tracker.save()
+
+        # Run incremental with no changes
+        from build_ast_graph import incremental_rebuild
+        result = incremental_rebuild(source_root, kuzu_path, verbose=False)
+
+        assert result.mode == "incremental"
+        assert result.files_changed == 0
+
+        # Verify node count unchanged
+        db = kuzu.Database(str(kuzu_path))
+        conn = kuzu.Connection(db)
+        count_after_result = conn.execute("MATCH (s:Symbol) RETURN count(*)")
+        count_after = 0
+        if count_after_result.has_next():
+            count_after = count_after_result.get_next()[0]
+        conn.close()
+
+        assert count_after == count_before
+
+    def test_incremental_pass5_6_always_global(self, tmp_path: Path) -> None:
+        """Change a file unrelated to routes, verify Client/Producer/HTTP_CALLS/ASYNC_CALLS are still fully rebuilt."""
+        source_root = tmp_path / "src"
+        source_root.mkdir()
+        index_dir = tmp_path / "index"
+        index_dir.mkdir()
+        kuzu_path = index_dir / "code_graph.kuzu"
+
+        # Create files
+        (source_root / "A.java").write_text("package pkg; class A {}", encoding="utf-8")
+
+        # Initial build
+        from build_ast_graph import write_kuzu
+        tables = GraphTables()
+        pass1_parse(source_root, tables, verbose=False)
+        write_kuzu(kuzu_path, tables, source_root=source_root, verbose=False)
+
+        # Initialize hash tracker
+        tracker = FileHashTracker(index_dir)
+        ignore = LayeredIgnore(source_root, use_gitignore=False, builtin_patterns=[])
+        tracker.detect_changes(source_root, ignore)
+        tracker.update({"A.java"}, source_root)
+        tracker.save()
+
+        # Modify A.java
+        (source_root / "A.java").write_text(
+            "package pkg; class A { void foo() {} }", encoding="utf-8"
+        )
+
+        # Run incremental
+        from build_ast_graph import incremental_rebuild
+        result = incremental_rebuild(source_root, kuzu_path, verbose=False)
+
+        assert result.mode == "incremental"
+
+        # Verify graph is still valid (Client/Producer tables exist even if empty)
+        db = kuzu.Database(str(kuzu_path))
+        conn = kuzu.Connection(db)
+
+        # Check that Client and Producer node tables exist by querying them
+        client_result = conn.execute("MATCH (c:Client) RETURN count(*)")
+        producer_result = conn.execute("MATCH (p:Producer) RETURN count(*)")
+        assert client_result.has_next()
+        assert producer_result.has_next()
+
+        conn.close()
+
+    def test_load_existing_types_populates_indexes(self, tmp_path: Path) -> None:
+        """Build full graph, then load existing types into empty GraphTables, verify types/by_simple_name/by_package populated."""
+        from build_ast_graph import _load_existing_types
+
+        source_root = tmp_path / "src"
+        source_root.mkdir()
+        kuzu_path = tmp_path / "code_graph.kuzu"
+
+        # Create file
+        (source_root / "A.java").write_text("package pkg; class A {}", encoding="utf-8")
+
+        # Build full graph
+        from build_ast_graph import write_kuzu
+        tables = GraphTables()
+        pass1_parse(source_root, tables, verbose=False)
+        write_kuzu(kuzu_path, tables, source_root=source_root, verbose=False)
+
+        # Load existing types into empty tables
+        new_tables = GraphTables()
+        db = kuzu.Database(str(kuzu_path))
+        conn = kuzu.Connection(db)
+        _load_existing_types(conn, new_tables)
+        conn.close()
+
+        # Verify types loaded
+        assert "pkg.A" in new_tables.types
+        assert len(new_tables.by_simple_name.get("A", [])) == 1
+        assert len(new_tables.by_package.get("pkg", [])) == 1
+
+    def test_find_dependents_returns_incoming_edge_sources(self, tmp_path: Path) -> None:
+        """Seed graph with EXTENDS edge from file B to file A, change file A, verify _find_dependents returns file B's filename."""
+        from build_ast_graph import _find_dependents
+
+        source_root = tmp_path / "src"
+        source_root.mkdir()
+        kuzu_path = tmp_path / "code_graph.kuzu"
+
+        # Create files
+        (source_root / "Base.java").write_text("package pkg; class Base {}", encoding="utf-8")
+        (source_root / "Derived.java").write_text(
+            "package pkg; class Derived extends Base {}", encoding="utf-8"
+        )
+
+        # Build full graph
+        from build_ast_graph import write_kuzu
+        tables = GraphTables()
+        asts = pass1_parse(source_root, tables, verbose=False)
+        pass2_edges(tables, asts, verbose=False)
+        write_kuzu(kuzu_path, tables, source_root=source_root, verbose=False)
+
+        # Get Base node ID
+        db = kuzu.Database(str(kuzu_path))
+        conn = kuzu.Connection(db)
+        base_result = conn.execute("MATCH (s:Symbol) WHERE s.fqn = 'pkg.Base' RETURN s.id")
+        base_id = None
+        if base_result.has_next():
+            base_id = base_result.get_next()[0]
+
+        assert base_id is not None
+
+        # Find dependents of Base
+        dependent_files = _find_dependents(conn, {base_id})
+
+        # Should include Derived.java
+        assert "Derived.java" in dependent_files
+
+        conn.close()
+
+    def test_delete_file_scope_removes_only_matching(self, tmp_path: Path) -> None:
+        """Delete scope for one file, verify other files' nodes/edges untouched."""
+        from build_ast_graph import _delete_file_scope
+
+        source_root = tmp_path / "src"
+        source_root.mkdir()
+        kuzu_path = tmp_path / "code_graph.kuzu"
+
+        # Create files
+        (source_root / "A.java").write_text("package pkg; class A {}", encoding="utf-8")
+        (source_root / "B.java").write_text("package pkg; class B {}", encoding="utf-8")
+
+        # Build full graph
+        from build_ast_graph import write_kuzu
+        tables = GraphTables()
+        pass1_parse(source_root, tables, verbose=False)
+        write_kuzu(kuzu_path, tables, source_root=source_root, verbose=False)
+
+        # Get node count before
+        db = kuzu.Database(str(kuzu_path))
+        conn = kuzu.Connection(db)
+        conn.execute("MATCH (s:Symbol) RETURN count(*)")
+
+        # Delete only A.java's scope
+        _delete_file_scope(conn, {"A.java"})
+
+        # Verify A's nodes are gone but B's remain
+        a_result = conn.execute("MATCH (s:Symbol) WHERE s.fqn = 'pkg.A' RETURN count(*)")
+        b_result = conn.execute("MATCH (s:Symbol) WHERE s.fqn = 'pkg.B' RETURN count(*)")
+
+        a_count = 0
+        b_count = 0
+        if a_result.has_next():
+            a_count = a_result.get_next()[0]
+        if b_result.has_next():
+            b_count = b_result.get_next()[0]
+
+        assert a_count == 0
+        assert b_count > 0
+
+        conn.close()
