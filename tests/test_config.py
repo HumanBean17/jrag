@@ -80,6 +80,62 @@ class TestDiscoverProjectRoot:
         # Should find the closest config (subdir), not the parent (tmp_path)
         assert result == subdir
 
+    def test_discover_project_root_finds_nonempty_index_dir(self, tmp_path):
+        """Non-empty .java-codebase-rag/ directory acts as project anchor."""
+        subdir = tmp_path / "microservice"
+        subdir.mkdir()
+        idx = tmp_path / ".java-codebase-rag"
+        idx.mkdir()
+        (idx / "code_graph.kuzu").write_bytes(b"\x00" * 16)
+
+        result = discover_project_root(subdir)
+        assert result == tmp_path
+
+    def test_discover_project_root_skips_empty_index_dir(self, tmp_path):
+        """Empty .java-codebase-rag/ directory does not anchor the project."""
+        subdir = tmp_path / "microservice"
+        subdir.mkdir()
+        # Empty index dir at subdir level
+        empty_idx = subdir / ".java-codebase-rag"
+        empty_idx.mkdir()
+        # Real index at parent level
+        real_idx = tmp_path / ".java-codebase-rag"
+        real_idx.mkdir()
+        (real_idx / "code_graph.kuzu").write_bytes(b"\x00" * 16)
+
+        result = discover_project_root(subdir)
+        assert result == tmp_path
+
+    def test_discover_project_root_config_wins_over_index_dir(self, tmp_path):
+        """Config file takes priority over index dir at the same level."""
+        subdir = tmp_path / "subdir"
+        subdir.mkdir()
+        # Index dir at tmp_path level
+        idx = tmp_path / ".java-codebase-rag"
+        idx.mkdir()
+        (idx / "code_graph.kuzu").write_bytes(b"\x00" * 16)
+        # Config at subdir level
+        config_file = subdir / YAML_CONFIG_FILENAMES[0]
+        config_file.write_text("# child config")
+
+        deep = subdir / "deep"
+        deep.mkdir()
+        result = discover_project_root(deep)
+        # Config at subdir is closer and wins
+        assert result == subdir
+
+    def test_discover_project_root_both_markers_same_level(self, tmp_path):
+        """When both config and index dir exist at same dir, both resolve correctly."""
+        # Both markers in the same directory
+        config_file = tmp_path / YAML_CONFIG_FILENAMES[0]
+        config_file.write_text("# config")
+        idx = tmp_path / ".java-codebase-rag"
+        idx.mkdir()
+        (idx / "code_graph.kuzu").write_bytes(b"\x00" * 16)
+
+        result = discover_project_root(tmp_path)
+        assert result == tmp_path
+
 
 class TestSourceRootFromYaml:
     """Tests for source_root YAML field parsing and resolution."""

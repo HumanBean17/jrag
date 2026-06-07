@@ -123,19 +123,32 @@ def find_yaml_config_file(source_root: Path) -> Path | None:
     return None
 
 
-def discover_project_root(start: Path) -> Path | None:
-    """Walk up from start to find the directory containing a config file.
+def _has_index_dir(directory: Path) -> bool:
+    """True if *directory* contains a non-empty ``.java-codebase-rag/`` index directory."""
+    idx = directory / ".java-codebase-rag"
+    return idx.is_dir() and any(idx.iterdir())
 
-    First match wins (closest to start). Stops at $HOME inclusive — checks $HOME
-    itself but does not walk past it. Returns None if no config found.
+
+def discover_project_root(start: Path) -> Path | None:
+    """Walk up from start to find the directory containing a config file or index.
+
+    Looks for ``.java-codebase-rag.yml`` / ``.java-codebase-rag.yaml`` (preferred)
+    or the ``.java-codebase-rag/`` index directory as a project boundary marker.
+
+    First match wins (closest to start). Config file takes priority over index
+    directory at the same level. Stops at $HOME inclusive — checks $HOME itself
+    but does not walk past it. Returns None if no marker found.
     """
     start = start.resolve()
     home = Path.home().resolve()
 
     current = start
     while True:
-        # Check if current directory contains a config file
+        # Config file is the primary anchor
         if find_yaml_config_file(current) is not None:
+            return current
+        # Index directory is the secondary anchor (supports indexes without config)
+        if _has_index_dir(current):
             return current
 
         # Stop if we've reached home (check home itself, but don't walk past it)
