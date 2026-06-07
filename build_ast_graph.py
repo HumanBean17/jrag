@@ -729,70 +729,61 @@ def _delete_file_scope(conn: kuzu.Connection, filenames: set[str]) -> None:
     Skip phantom nodes (filename=""). For Symbol-to-Symbol and UNRESOLVED_AT
     edge tables only. Client/Producer/Route edges are handled separately in
     pass 5-6 global rebuild.
+
+    Edges are deleted in batch across all filenames first to avoid Kuzu
+    "has connected edges" errors when edges from one file point to nodes
+    in another file within the same scope.
     """
-    for filename in filenames:
-        # Delete Symbol-to-Symbol edges by source_file
-        edge_tables = ["EXTENDS", "IMPLEMENTS", "INJECTS", "CALLS", "DECLARES", "OVERRIDES", "UNRESOLVED_AT"]
-        for edge_type in edge_tables:
-            query = f"""
-            MATCH (src)-[e:{edge_type}]->(dst)
-            WHERE e.source_file = $filename
-            DELETE e
-            """
-            conn.execute(query, {"filename": filename})
+    filename_list = list(filenames)
 
-        # Collect Symbol node IDs for this file (for UnresolvedCallSite cleanup)
-        symbol_ids_query = """
-        MATCH (s:Symbol)
-        WHERE s.filename = $filename
-        RETURN s.id
+    # Phase 1: Delete ALL edges from ALL scope files at once.
+    # This avoids ordering issues where file A has an edge from file B
+    # pointing into it; if we delete A's nodes before B's edges, Kuzu
+    # raises "has connected edges" errors.
+    edge_tables = ["EXTENDS", "IMPLEMENTS", "INJECTS", "CALLS", "DECLARES", "OVERRIDES", "UNRESOLVED_AT"]
+    for edge_type in edge_tables:
+        query = f"""
+        MATCH (src)-[e:{edge_type}]->(dst)
+        WHERE e.source_file IN $filenames
+        DELETE e
         """
-        symbol_ids = []
-        result = conn.execute(symbol_ids_query, {"filename": filename})
-        while result.has_next():
-            row = result.get_next()
-            symbol_ids.append(row[0])  # Kuzu returns list, not dict
+        conn.execute(query, {"filenames": filename_list})
 
-        # Delete UnresolvedCallSite nodes whose caller_id is in the collected set
-        if symbol_ids:
-            unresolved_query = """
-            MATCH (u:UnresolvedCallSite)
-            WHERE u.caller_id IN $symbol_ids
-            DELETE u
-            """
-            conn.execute(unresolved_query, {"symbol_ids": symbol_ids})
+    # Phase 2: Collect all Symbol node IDs for UnresolvedCallSite cleanup.
+    symbol_ids: list[str] = []
+    symbol_ids_query = """
+    MATCH (s:Symbol)
+    WHERE s.filename IN $filenames
+    RETURN s.id
+    """
+    result = conn.execute(symbol_ids_query, {"filenames": filename_list})
+    while result.has_next():
+        row = result.get_next()
+        symbol_ids.append(row[0])
 
-        # Delete Symbol nodes
-        delete_symbols_query = """
-        MATCH (s:Symbol)
-        WHERE s.filename = $filename
-        DELETE s
+    # Delete UnresolvedCallSite nodes whose caller_id is in the collected set
+    if symbol_ids:
+        unresolved_query = """
+        MATCH (u:UnresolvedCallSite)
+        WHERE u.caller_id IN $symbol_ids
+        DELETE u
         """
-        conn.execute(delete_symbols_query, {"filename": filename})
+        conn.execute(unresolved_query, {"symbol_ids": symbol_ids})
 
-        # Delete Route nodes (note: EXPOSES edges are deleted in pass 5-6 global rebuild)
-        delete_routes_query = """
-        MATCH (r:Route)
-        WHERE r.filename = $filename
-        DELETE r
-        """
-        conn.execute(delete_routes_query, {"filename": filename})
+    # Phase 3: Delete Symbol nodes.
+    delete_symbols_query = """
+    MATCH (s:Symbol)
+    WHERE s.filename IN $filenames
+    DELETE s
+    """
+    conn.execute(delete_symbols_query, {"filenames": filename_list})
 
-        # Delete Client nodes
-        delete_clients_query = """
-        MATCH (c:Client)
-        WHERE c.filename = $filename
-        DELETE c
-        """
-        conn.execute(delete_clients_query, {"filename": filename})
-
-        # Delete Producer nodes
-        delete_producers_query = """
-        MATCH (p:Producer)
-        WHERE p.filename = $filename
-        DELETE p
-        """
-        conn.execute(delete_producers_query, {"filename": filename})
+    # Phase 4: Delete Route, Client, Producer nodes.
+    for label in ["Route", "Client", "Producer"]:
+        conn.execute(
+            f"MATCH (n:{label}) WHERE n.filename IN $filenames DELETE n",
+            {"filenames": filename_list},
+        )
 
 
 def _scoped_write(conn: kuzu.Connection, tables: GraphTables, *, project_root: Path, meta_chain: dict[str, frozenset[str]] | None) -> None:
