@@ -86,6 +86,10 @@ class TestSourceRootFromYaml:
 
     def test_source_root_from_yaml_relative(self, tmp_path, monkeypatch):
         """source_root: ../ resolves to parent of config dir."""
+        # Clean environment from conftest.py session fixture
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_INDEX_DIR", raising=False)
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", raising=False)
+
         config_file = tmp_path / YAML_CONFIG_FILENAMES[0]
         config_file.write_text("source_root: ../")
 
@@ -99,6 +103,10 @@ class TestSourceRootFromYaml:
 
     def test_source_root_from_yaml_absolute(self, tmp_path, monkeypatch):
         """source_root: /abs/path resolves to absolute path."""
+        # Clean environment from conftest.py session fixture
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_INDEX_DIR", raising=False)
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", raising=False)
+
         config_file = tmp_path / YAML_CONFIG_FILENAMES[0]
         absolute_path = "/some/absolute/path"
         config_file.write_text(f"source_root: {absolute_path}")
@@ -128,6 +136,10 @@ class TestSourceRootPrecedence:
 
     def test_source_root_precedence_yaml_over_discovery(self, tmp_path, monkeypatch):
         """YAML source_root wins over config dir default."""
+        # Clean environment from conftest.py session fixture
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_INDEX_DIR", raising=False)
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", raising=False)
+
         config_file = tmp_path / YAML_CONFIG_FILENAMES[0]
         config_file.write_text("source_root: /yaml/root")
 
@@ -154,6 +166,10 @@ class TestSourceRootPrecedence:
 
     def test_existing_behavior_unchanged(self, tmp_path, monkeypatch):
         """No walk-up, cwd = config dir → identical behavior to today."""
+        # Clean environment from conftest.py session fixture
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_INDEX_DIR", raising=False)
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", raising=False)
+
         # Create a config at cwd
         config_file = tmp_path / YAML_CONFIG_FILENAMES[0]
         config_file.write_text("# test config")
