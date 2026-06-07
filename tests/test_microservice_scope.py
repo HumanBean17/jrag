@@ -21,19 +21,29 @@ class TestDetectMicroserviceFromPath:
         assert result == "microservice-a"
 
     def test_detect_microservice_at_microservice_root(self, tmp_path):
-        """At microservice root detects that microservice."""
+        """At microservice root (cwd = the dir with pom.xml) detects that microservice."""
         ms_dir = tmp_path / "microservice-b"
         ms_dir.mkdir()
 
         # Add a build marker
         (ms_dir / "build.gradle").write_text("plugins { id 'java' }")
 
-        # Use a subdirectory inside the microservice (not the root itself)
-        sub_dir = ms_dir / "src"
-        sub_dir.mkdir()
-
-        result = detect_microservice_from_path(sub_dir, tmp_path)
+        # cwd IS the microservice root — the most common user scenario
+        result = detect_microservice_from_path(ms_dir, tmp_path)
         assert result == "microservice-b"
+
+    def test_detect_microservice_nested_modules(self, tmp_path):
+        """Nested build markers scope to outermost microservice, not inner module."""
+        ms_dir = tmp_path / "my-service"
+        ms_dir.mkdir()
+        (ms_dir / "pom.xml").write_text("<project></project>")
+        module_dir = ms_dir / "my-module"
+        module_dir.mkdir()
+        (module_dir / "pom.xml").write_text("<project></project>")
+
+        # From inside the module, should scope to the service, not the module
+        result = detect_microservice_from_path(module_dir, tmp_path)
+        assert result == "my-service"
 
     def test_detect_microservice_at_system_root(self, tmp_path):
         """At system root returns None (no specific scope)."""
