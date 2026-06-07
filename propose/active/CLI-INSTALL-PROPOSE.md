@@ -211,11 +211,11 @@ When `--non-interactive` is passed or stdin is not a TTY:
 ### Implementation stack
 
 - **Interactive prompts**: `questionary` (new dependency, depends on `prompt_toolkit`) for checkboxes (Java sources, agent hosts) and text/confirm dialogs. All calls go through a `prompt()` helper in `installer.py` that checks `sys.stdin.isatty()` and falls back to default values when False.
-- **Styling/output**: `rich` (explicit dependency in `pyproject.toml`) for progress display, tables, and summary formatting.
+- **Styling/output**: Reuse existing `cli_format.py` and `cli_progress.py` for TTY-aware formatting and progress display. No new dependency for styling.
 - **Shipped artifacts**: Skill and agent files live at `java_codebase_rag/install_data/skills/` and `java_codebase_rag/install_data/agents/` inside the package directory. Included via `package_data` in `pyproject.toml`. The build process copies them from the repo-root `skills/` and `agents/` directories.
 - **New module**: `java_codebase_rag/installer.py` (host config mapping, prompt helper, artifact deployment, MCP merge logic)
 - **New subcommand handler**: `_cmd_install()` and `_cmd_update()` in `cli.py`
-- **New dependencies**: `questionary>=2.0`, `rich>=13.0` added to `pyproject.toml` `dependencies`
+- **New dependency**: `questionary>=2.0` added to `pyproject.toml` `dependencies`
 
 ## Scope
 
@@ -270,7 +270,6 @@ When `--non-interactive` is passed or stdin is not a TTY:
 - Unit: `source_root` is always cwd; subset of modules → `microservice_roots`
 - Unit: Maven module detection: `pom.xml` found → module root detected
 - Unit: Gradle module detection: `build.gradle` or `build.gradle.kts` found → module root detected
-- Unit: nested module detection: `service-a/api/pom.xml` → relative path `service-a/api` detected
 - Unit: MCP entrypoint resolution: `shutil.which` finds entrypoint → absolute path written to MCP config
 - Unit: MCP entrypoint resolution: `shutil.which` returns None → interactive prompt for user-provided path
 - Unit: MCP entrypoint resolution: `shutil.which` returns None in non-interactive mode → exit code 2
@@ -288,10 +287,10 @@ When `--non-interactive` is passed or stdin is not a TTY:
 - Unit: artifact refresh detects and updates stale files
 - Integration: install then update cycle
 
-## Open Questions ([TBD])
+## Resolved design decisions
 
-1. **Existing MCP registration update** — Should the installer detect and update existing `java-codebase-rag` MCP entries in-place? Recommended: yes, merge/update the existing entry rather than duplicating. (Implemented as per-host deep merge described in Stage 5.)
-2. **User-scope with no project config** — If the user picks "user" scope, MCP registration goes global but `.java-codebase-rag.yml` is still written to cwd. If they later open a different project without a config file, the globally registered MCP server starts but walk-up discovery finds no config. Recommended: user-scope install prints a note explaining that each Java project needs its own `.java-codebase-rag.yml` (the installer creates one in cwd, but other projects need one too).
+1. **Existing MCP registration update** — The installer detects and updates existing `java-codebase-rag` MCP entries in-place via merge (never duplicates). Implemented as per-host deep merge described in Stage 5.
+2. **User-scope with no project config** — If the user picks "user" scope, MCP registration goes global but `.java-codebase-rag.yml` is still written to cwd. If they later open a different project without a config file, the globally registered MCP server starts but walk-up discovery finds no config. User-scope install prints a note explaining that each Java project needs its own `.java-codebase-rag.yml` (the installer creates one in cwd, but other projects need one too).
 
 ## Out of scope
 

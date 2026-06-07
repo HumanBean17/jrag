@@ -432,52 +432,52 @@ All tests for PR-I1. See Tests section below for named test cases.
 10. `test_yaml_generation_all_dirs_selected` — all dirs → no `microservice_roots` in YAML
 11. `test_yaml_generation_preserves_unmanaged_keys` — existing YAML with `brownfield_overrides` and `embedding.device` → both preserved in update mode
 12. `test_yaml_generation_does_not_write_source_root_or_index_dir` — generated YAML never contains `source_root` or `index_dir` keys
-12. `test_mcp_merge_adds_to_empty` — empty `{}` → `{"mcpServers": {"java-codebase-rag": {"command": "/resolved/path/java-codebase-rag-mcp", "type": "stdio"}}}`
-13. `test_mcp_merge_adds_to_existing_servers` — existing `{"mcpServers": {"other": {...}}}` → both servers present
-14. `test_mcp_merge_updates_existing_entry` — existing `java-codebase-rag` entry with different command → updated
-15. `test_mcp_merge_preserves_other_keys_claude_json` — `{"numStartups": 42, "userID": "abc", "mcpServers": {...}}` → `numStartups` and `userID` preserved
-16. `test_mcp_merge_preserves_other_keys_settings_json` — `{"security": {...}, "$version": 2, "mcpServers": {...}}` → preserved
-17. `test_gitignore_creates_if_missing` — no `.gitignore` → created with `.java-codebase-rag/`
-18. `test_gitignore_appends_if_not_present` — existing `.gitignore` without pattern → appended
-19. `test_gitignore_skips_if_present_with_slash` — existing `.java-codebase-rag/` → no change
-20. `test_gitignore_skips_if_present_without_slash` — existing `.java-codebase-rag` → no change
-21. `test_gitignore_skips_if_not_git_repo` — no `.git` dir → no file created, no error
-22. `test_prompt_dispatches_to_questionary_on_tty` — mock `sys.stdin.isatty()` → questionary called
-23. `test_prompt_returns_default_on_non_tty` — non-TTY → default returned, questionary not called
-24. `test_rerun_detects_existing_config` — existing `.java-codebase-rag.yml` → returns parsed data
-25. `test_rerun_no_config_returns_none` — no config → returns None
-26. `test_detect_java_root_has_maven_pom` — cwd with `pom.xml` → returns `[Path(".")]`
-27. `test_detect_java_root_has_gradle_build` — cwd with `build.gradle` → returns `[Path(".")]`
-28. `test_detect_java_root_has_gradle_kts` — cwd with `build.gradle.kts` → returns `[Path(".")]`
-29. `test_detect_java_no_root_microservice_monorepo` — cwd has no build file, `service-a/pom.xml` and `service-b/pom.xml` exist → returns `[Path("service-a"), Path("service-b")]`
-30. `test_detect_java_no_root_single_service` — cwd has no build file, only `service-a/pom.xml` exists → returns `[Path("service-a")]`
-31. `test_detect_java_no_root_no_services_exit_2` — cwd has no build file, no children have build files → raises SystemExit(2)
-32. `test_confirm_source_root_interactive_accepts_default` — user presses Enter → returns cwd
-33. `test_confirm_source_root_interactive_changes_path` — user types `/other/path` → returns that path (validated)
-34. `test_confirm_source_root_interactive_invalid_path_reprompts` — user types non-existent path → re-prompted
-35. `test_confirm_source_root_non_interactive_returns_cwd` — non-interactive → returns cwd, no prompt
-36. `test_confirm_source_root_expands_tilde` — user types `~/projects/foo` → expanded via `Path.home()`
-37. `test_model_path_not_found_prompts_confirmation` — non-existent path → confirmation prompt
-38. `test_model_path_found_returns_resolved` — existing path → returned expanded
-39. `test_path_validation_warns_missing_mcp_entrypoint` — `shutil.which` returns None → warning printed, continues
-40. `test_resolve_mcp_command_found` — `shutil.which` returns `/usr/local/bin/java-codebase-rag-mcp` → that path returned
-41. `test_resolve_mcp_command_not_found_interactive_prompt` — `shutil.which` returns None in interactive mode → prompts user for path
-42. `test_resolve_mcp_command_not_found_interactive_abort` — user enters "abort" at prompt → `SystemExit(2)`
-43. `test_resolve_mcp_command_not_found_interactive_user_path` — user provides valid path → returned
-44. `test_resolve_mcp_command_not_found_interactive_invalid_path` — user provides non-existent path → re-prompted
-45. `test_resolve_mcp_command_not_found_non_interactive_exit_2` — `shutil.which` returns None + non-interactive → `SystemExit(2)`
-46. `test_permission_error_skips_artifact_continues` — unwritable directory → artifact skipped, others continue, exit 1
-47. `test_select_hosts_non_interactive_requires_agent` — no `--agent` in non-interactive → exit 2
-48. `test_select_hosts_invalid_agent_exit_2` — unknown agent string → exit 2
-49. `test_select_hosts_interactive_all_checked_by_default` — interactive mode → all 3 hosts pre-selected
-50. `test_select_hosts_interactive_none_selected_prompts_required` — user unchecks all → prompts for at least one host
-51. `test_select_hosts_multi_host_non_interactive` — `--agent claude-code --agent qwen-code` → both hosts selected
-52. `test_select_hosts_multi_host_deploy_all` — multiple hosts selected → artifacts deployed to all
-53. `test_artifact_overwrite_prompt_existing_skill` — existing skill file → prompts overwrite/skip/abort
+13. `test_mcp_merge_adds_to_empty` — empty `{}` → `{"mcpServers": {"java-codebase-rag": {"command": "/resolved/path/java-codebase-rag-mcp", "type": "stdio"}}}`
+14. `test_mcp_merge_adds_to_existing_servers` — existing `{"mcpServers": {"other": {...}}}` → both servers present
+15. `test_mcp_merge_updates_existing_entry` — existing `java-codebase-rag` entry with different command → updated
+16. `test_mcp_merge_preserves_other_keys_claude_json` — `{"numStartups": 42, "userID": "abc", "mcpServers": {...}}` → `numStartups` and `userID` preserved
+17. `test_mcp_merge_preserves_other_keys_settings_json` — `{"security": {...}, "$version": 2, "mcpServers": {...}}` → preserved
+18. `test_gitignore_creates_if_missing` — no `.gitignore` → created with `.java-codebase-rag/`
+19. `test_gitignore_appends_if_not_present` — existing `.gitignore` without pattern → appended
+20. `test_gitignore_skips_if_present_with_slash` — existing `.java-codebase-rag/` → no change
+21. `test_gitignore_skips_if_present_without_slash` — existing `.java-codebase-rag` → no change
+22. `test_gitignore_skips_if_not_git_repo` — no `.git` dir → no file created, no error
+23. `test_prompt_dispatches_to_questionary_on_tty` — mock `sys.stdin.isatty()` → questionary called
+24. `test_prompt_returns_default_on_non_tty` — non-TTY → default returned, questionary not called
+25. `test_rerun_detects_existing_config` — existing `.java-codebase-rag.yml` → returns parsed data
+26. `test_rerun_no_config_returns_none` — no config → returns None
+27. `test_detect_java_root_has_maven_pom` — cwd with `pom.xml` → returns `[Path(".")]`
+28. `test_detect_java_root_has_gradle_build` — cwd with `build.gradle` → returns `[Path(".")]`
+29. `test_detect_java_root_has_gradle_kts` — cwd with `build.gradle.kts` → returns `[Path(".")]`
+30. `test_detect_java_no_root_microservice_monorepo` — cwd has no build file, `service-a/pom.xml` and `service-b/pom.xml` exist → returns `[Path("service-a"), Path("service-b")]`
+31. `test_detect_java_no_root_single_service` — cwd has no build file, only `service-a/pom.xml` exists → returns `[Path("service-a")]`
+32. `test_detect_java_no_root_no_services_exit_2` — cwd has no build file, no children have build files → raises SystemExit(2)
+33. `test_confirm_source_root_interactive_accepts_default` — user presses Enter → returns cwd
+34. `test_confirm_source_root_interactive_changes_path` — user types `/other/path` → returns that path (validated)
+35. `test_confirm_source_root_interactive_invalid_path_reprompts` — user types non-existent path → re-prompted
+36. `test_confirm_source_root_non_interactive_returns_cwd` — non-interactive → returns cwd, no prompt
+37. `test_confirm_source_root_expands_tilde` — user types `~/projects/foo` → expanded via `Path.home()`
+38. `test_model_path_not_found_prompts_confirmation` — non-existent path → confirmation prompt
+39. `test_model_path_found_returns_resolved` — existing path → returned expanded
+40. `test_path_validation_warns_missing_mcp_entrypoint` — `shutil.which` returns None → warning printed, continues
+41. `test_resolve_mcp_command_found` — `shutil.which` returns `/usr/local/bin/java-codebase-rag-mcp` → that path returned
+42. `test_resolve_mcp_command_not_found_interactive_prompt` — `shutil.which` returns None in interactive mode → prompts user for path
+43. `test_resolve_mcp_command_not_found_interactive_abort` — user enters "abort" at prompt → `SystemExit(2)`
+44. `test_resolve_mcp_command_not_found_interactive_user_path` — user provides valid path → returned
+45. `test_resolve_mcp_command_not_found_interactive_invalid_path` — user provides non-existent path → re-prompted
+46. `test_resolve_mcp_command_not_found_non_interactive_exit_2` — `shutil.which` returns None + non-interactive → `SystemExit(2)`
+47. `test_permission_error_skips_artifact_continues` — unwritable directory → artifact skipped, others continue, exit 1
+48. `test_select_hosts_non_interactive_requires_agent` — no `--agent` in non-interactive → exit 2
+49. `test_select_hosts_invalid_agent_exit_2` — unknown agent string → exit 2
+50. `test_select_hosts_interactive_all_checked_by_default` — interactive mode → all 3 hosts pre-selected
+51. `test_select_hosts_interactive_none_selected_prompts_required` — user unchecks all → prompts for at least one host
+52. `test_select_hosts_multi_host_non_interactive` — `--agent claude-code --agent qwen-code` → both hosts selected
+53. `test_select_hosts_multi_host_deploy_all` — multiple hosts selected → artifacts deployed to all
+54. `test_artifact_overwrite_prompt_existing_skill` — existing skill file → prompts overwrite/skip/abort
 
 ### Integration test
 
-54. `test_install_non_interactive_claude_code_bank_chat` — run `install --non-interactive --agent claude-code` from `tests/bank-chat-system/` fixture. This test is gated behind `JAVA_CODEBASE_RAG_RUN_HEAVY=1` (same as other e2e tests — see `tests/README.md`). It calls `run_install()` directly (not via subprocess) with mocked pipeline functions (`run_cocoindex_update`, `run_build_ast_graph` are mocked to return success `CompletedProcess`) and mocked `shutil.which` returning a fake path. Verify:
+55. `test_install_non_interactive_claude_code_bank_chat` — run `install --non-interactive --agent claude-code` from `tests/bank-chat-system/` fixture. This test is gated behind `JAVA_CODEBASE_RAG_RUN_HEAVY=1` (same as other e2e tests — see `tests/README.md`). It calls `run_install()` directly (not via subprocess) with mocked pipeline functions (`run_cocoindex_update`, `run_build_ast_graph` are mocked to return success `CompletedProcess`) and mocked `shutil.which` returning a fake path. Verify:
     - `.java-codebase-rag.yml` created (no `source_root` key, no `embedding.model` if auto)
     - `.mcp.json` has `java-codebase-rag` entry with `"command": "<mocked-absolute-path>", "type": "stdio"`
     - `.claude/skills/explore-codebase/SKILL.md` exists
@@ -485,7 +485,7 @@ All tests for PR-I1. See Tests section below for named test cases.
     - `.gitignore` has `.java-codebase-rag/`
     - `run_install()` returns 0
 
-54.1. `test_install_non_interactive_multi_host_bank_chat` — run `install --non-interactive --agent claude-code --agent qwen-code` from `tests/bank-chat-system/` fixture. Same mocking as above. Verify:
+55.1. `test_install_non_interactive_multi_host_bank_chat` — run `install --non-interactive --agent claude-code --agent qwen-code` from `tests/bank-chat-system/` fixture. Same mocking as above. Verify:
     - `.mcp.json` has `java-codebase-rag` entry
     - `.qwen/settings.json` has `java-codebase-rag` entry
     - `.claude/skills/explore-codebase/SKILL.md` exists
@@ -497,7 +497,7 @@ All tests for PR-I1. See Tests section below for named test cases.
 - `install` subcommand is registered and appears in `--help` output.
 - `install --non-interactive --agent claude-code` completes end-to-end on bank-chat fixture with exit code 0.
 - `install --non-interactive --agent claude-code --agent qwen-code` (multi-host) completes end-to-end on bank-chat fixture with exit code 0.
-- All 53 named tests pass.
+- All 54 named tests pass.
 - `ruff check .` is clean.
 - Existing test suite (`pytest tests -v` without `JAVA_CODEBASE_RAG_RUN_HEAVY`) passes.
 - `questionary` is listed in `pyproject.toml` dependencies.
@@ -510,17 +510,17 @@ All tests for PR-I1. See Tests section below for named test cases.
 | 1 | Create `java_codebase_rag/install_data/` directory with `__init__.py`, copy skill and agent files | `install_data/` | `importlib.resources` can find both files from a test |
 | 2 | Add `package_data` to `pyproject.toml`; add `questionary` dependency | `pyproject.toml` | `pip install -e .` succeeds and `import questionary` works |
 | 3 | Implement `HostConfig` dataclass + `HOSTS` mapping + scope/path helpers | `installer.py` | Tests 1-6 pass |
-| 4 | Implement `prompt()` helper | `installer.py` | Tests 22-23 pass |
-| 5 | Implement `detect_java_directories` (stage 1) | `installer.py` | Tests 26-31 pass |
-| 5.5 | Implement `confirm_source_root` (stage 1 pre-step) | `installer.py` | Tests 32-36 pass |
-| 6 | Implement `resolve_model` (stage 2) | `installer.py` | Tests 37-38 pass |
-| 7 | Implement `select_hosts` + `select_scope` (stages 3-4) | `installer.py` | Tests 44-48 pass |
-| 8 | Implement `merge_mcp_config` | `installer.py` | Tests 12-16 pass |
-| 8.5 | Implement `resolve_mcp_command` (MCP entrypoint path resolution) | `installer.py` | Tests 39-44 pass |
-| 9 | Implement `deploy_artifacts` (stage 5) | `installer.py` | Tests 40, 45-46, 50 pass |
-| 10 | Implement `generate_yaml_config` + `update_gitignore` + `run_init_if_needed` (stage 6) | `installer.py` | Tests 7-11, 17-21 pass |
-| 11 | Implement `handle_rerun` | `installer.py` | Tests 24-25 pass |
-| 12 | Implement `run_install` orchestrator | `installer.py` | Integration tests 54-54.1 pass |
+| 4 | Implement `prompt()` helper | `installer.py` | Tests 23-24 pass |
+| 5 | Implement `detect_java_directories` (stage 1) | `installer.py` | Tests 27-32 pass |
+| 5.5 | Implement `confirm_source_root` (stage 1 pre-step) | `installer.py` | Tests 33-37 pass |
+| 6 | Implement `resolve_model` (stage 2) | `installer.py` | Tests 38-39 pass |
+| 7 | Implement `select_hosts` + `select_scope` (stages 3-4) | `installer.py` | Tests 48-53 pass |
+| 8 | Implement `merge_mcp_config` | `installer.py` | Tests 13-17 pass |
+| 8.5 | Implement `resolve_mcp_command` (MCP entrypoint path resolution) | `installer.py` | Tests 41-46 pass |
+| 9 | Implement `deploy_artifacts` (stage 5) | `installer.py` | Tests 40, 47-48, 54 pass |
+| 10 | Implement `generate_yaml_config` + `update_gitignore` + `run_init_if_needed` (stage 6) | `installer.py` | Tests 7-11, 18-22 pass |
+| 11 | Implement `handle_rerun` | `installer.py` | Tests 25-26 pass |
+| 12 | Implement `run_install` orchestrator | `installer.py` | Integration tests 55-55.1 pass |
 | 13 | Add `_cmd_install` + `install` subparser to `cli.py` | `cli.py` | `java-codebase-rag install --help` prints usage |
 | 14 | Final validation: full test suite + ruff | all | Green suite, clean lint |
 
@@ -560,7 +560,7 @@ def refresh_artifacts(
 ```
 
 - For skill and agent files: compare content with package data. If different (or `--force`): overwrite. If `--dry-run`: print what would change, don't write.
-- For MCP config: call `resolve_mcp_command(non_interactive=False)` to get the current absolute path. If entry exists and matches `{"command": "<resolved-path>", "type": "stdio"}`, skip. If different or missing: merge with the new resolved path.
+- For MCP config: call `resolve_mcp_command(non_interactive=True)` to get the current absolute path. If entry exists and matches `{"command": "<resolved-path>", "type": "stdio"}`, skip. If different or missing: merge with the new resolved path.
 
 #### 1c. `run_update` orchestrator
 
