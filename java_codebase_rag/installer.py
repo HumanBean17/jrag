@@ -391,6 +391,9 @@ def merge_mcp_config(config_path: Path, host: HostConfig, *, mcp_command: str) -
 
     Returns:
         True if entry was added/updated, False if no change needed
+
+    Raises:
+        ValueError: If existing config file cannot be parsed as JSON
     """
     # Read existing config (or start with empty dict)
     if config_path.is_file():
@@ -398,8 +401,7 @@ def merge_mcp_config(config_path: Path, host: HostConfig, *, mcp_command: str) -
             with open(config_path, "r") as f:
                 config = json.load(f)
         except json.JSONDecodeError as e:
-            print(f"Error: Failed to parse {config_path}: {e}")
-            return False
+            raise ValueError(f"Failed to parse {config_path}: {e}") from e
     else:
         config = {}
 
@@ -531,9 +533,11 @@ def _deploy_mcp_config(
                 error=f"Directory not writable: {config_path.parent}",
             )
 
-        # Merge config (returns True if updated, False if no-op or parse error)
+        # Merge config (returns True if updated, False if already current)
         merge_mcp_config(config_path, host, mcp_command=mcp_command)
         return ArtifactResult(path=config_path, success=True, error=None)
+    except ValueError as e:
+        return ArtifactResult(path=config_path, success=False, error=str(e))
     except Exception as e:
         return ArtifactResult(path=config_path, success=False, error=str(e))
 

@@ -374,6 +374,14 @@ class TestMergeMcpConfig:
         assert config["security"]["level"] == "high"
         assert config["$version"] == 2
 
+    def test_mcp_merge_raises_on_invalid_json(self, tmp_path):
+        """malformed JSON → raises ValueError"""
+        from java_codebase_rag.installer import merge_mcp_config, HOSTS
+        config_path = tmp_path / "mcp.json"
+        config_path.write_text("{invalid json!!!")
+        with pytest.raises(ValueError, match="Failed to parse"):
+            merge_mcp_config(config_path, HOSTS["claude-code"], mcp_command="/bin/mcp")
+
 
 class TestDeployArtifacts:
     """Test deploy_artifacts function."""
