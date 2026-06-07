@@ -8,6 +8,7 @@ import os
 import pytest
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 
@@ -31,7 +32,7 @@ class TestInstallIntegration:
         # Run install via subprocess to test the CLI integration
         result = subprocess.run(
             [
-                ".venv/bin/python",
+                sys.executable,
                 "-m",
                 "java_codebase_rag.cli",
                 "install",
@@ -93,7 +94,7 @@ class TestInstallIntegration:
         # Run install via subprocess to test the CLI integration
         result = subprocess.run(
             [
-                ".venv/bin/python",
+                sys.executable,
                 "-m",
                 "java_codebase_rag.cli",
                 "install",
