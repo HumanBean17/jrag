@@ -96,9 +96,9 @@ Staleness paragraph (step 3, after the `After two failed attempts…` line):
 
 ```markdown
 **Staleness rule:** after `java-codebase-rag increment`, Lance is fresh
-but Kuzu may be stale (see `propose/TIER2-INCREMENTAL-REBUILD-PROPOSE.md`).
-A graph older than the source tree is normal mid-development. When in
-doubt, run `meta` and compare against your working tree.
+but Kuzu may be stale. A graph older than the source tree is normal
+mid-development. When in doubt, run `meta` and compare against your
+working tree.
 ```
 
 **Why the placement**: the recovery playbook is where agents land after a confusing result; the staleness note reads as a follow-on to the existing “stop thrashing” sentence, not as a stray table footer.
@@ -260,9 +260,9 @@ disagreement as evidence of staleness, not as a contradiction.
 
 ```markdown
 **Staleness rule:** after `java-codebase-rag increment`, Lance is fresh
-but Kuzu may be stale (see `propose/TIER2-INCREMENTAL-REBUILD-PROPOSE.md`).
-A graph older than the source tree is normal mid-development. When in
-doubt, run `meta` and compare against your working tree.
+but Kuzu may be stale. A graph older than the source tree is normal
+mid-development. When in doubt, run `meta` and compare against your
+working tree.
 ```
 
 ### A.4 — Patch C (after `**Batching:**` under `#### neighbors`)

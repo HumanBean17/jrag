@@ -15,7 +15,7 @@
 - **Rename `lancedb_data` default index directory** to `.java-codebase-rag/` (a hidden dotted directory under the project root, matching the dotted-config-file convention). All hardcoded `./lancedb_data` defaults updated.
 - **Rename Python package** `user_rag/` → `java_codebase_rag/`. Update `pyproject.toml [project.scripts]`, all imports, the test file `tests/test_user_rag_cli.py`, and the `python -m user_rag.cli` example in the operator playbook. Set `pyproject.toml [project].name` to **`java-codebase-rag`** (aligned with the GitHub repository basename).
 - One-release deprecation: `refresh` stays as a hidden alias for `reprocess` with a stderr warning, then drops. **No deprecation window for env vars / config / package rename** — breaking changes allowed (no users yet).
-- Migration shape: **3 PRs** — propose merge → CLI + config consolidation (this design) → docs update across the full tree. Engine work for true Kuzu incremental is out of scope and tracked under `propose/TIER2-INCREMENTAL-REBUILD-PROPOSE.md`.
+- Migration shape: **3 PRs** — propose merge → CLI + config consolidation (this design) → docs update across the full tree. Engine work for true Kuzu incremental is out of scope.
 
 ---
 
@@ -230,7 +230,7 @@ Three more renames that the env-var work makes the natural moment for:
 
 ### 3.9 GitHub issue for Kuzu incremental tracking
 
-Open a GitHub issue titled **"AST graph (Kuzu) incremental rebuild"** referencing `propose/TIER2-INCREMENTAL-REBUILD-PROPOSE.md`. Issue URL is hard-coded into the `increment` warning message. The issue is the user-facing handle the warning points at; the propose is the technical scope. Use the **canonical GitHub repo path for this project** when the issue is filed (see Appendix A); do not hard-code a stale org/repo slug in the merged propose.
+Open a GitHub issue titled **"AST graph (Kuzu) incremental rebuild"**. Issue URL is hard-coded into the `increment` warning message. The issue is the user-facing handle the warning points at. Use the **canonical GitHub repo path for this project** when the issue is filed (see Appendix A); do not hard-code a stale org/repo slug in the merged code.
 
 ---
 
@@ -280,7 +280,7 @@ Open a GitHub issue titled **"AST graph (Kuzu) incremental rebuild"** referencin
 
 | Question / feature | Why we skip it |
 |---|---|
-| Kuzu incremental rebuild | Engine work; tracked under `propose/TIER2-INCREMENTAL-REBUILD-PROPOSE.md` and the new tracking issue. Out of scope of a CLI restructure. |
+| Kuzu incremental rebuild | Engine work; tracked under the GitHub issue #73. Out of scope of a CLI restructure. |
 | Auto-detect "should this be `init` or `reprocess`?" | Violates principle 3 (one scenario, one safe default). Operator intent matters; refusing on `init` and being explicit on `reprocess` is the safety policy. |
 | Pipeline-stage subcommands (`build-graph`, `update-lance`) | Violates principle 1. Direct script invocation (`python build_ast_graph.py`) is the escape hatch for advanced users; documented in `docs/JAVA-CODEBASE-RAG-CLI.md` but not a first-class CLI verb. |
 | Graph-freshness query (`meta --graph-freshness`) | Useful but distinct surface; should ride with the Tier-2 incremental work where graph version tracking gets implemented. |
@@ -314,8 +314,6 @@ Open a GitHub issue titled **"AST graph (Kuzu) incremental rebuild"** referencin
 - `.cursor/rules/*.mdc` — agent workflow / env / CLI contract; see **Agent rules audit** below (must match post-rename surface).
 - `docs/CODEBASE_REQUIREMENTS.md` — every `.lancedb-mcp.yml` / `LANCEDB_MCP_*` / `lancedb_data` reference updated.
 - `mcp.json.example` — **PR-CLI-3 is a second pass only:** PR-CLI-2 updates this file so **env keys match the live server**; PR-CLI-3 reconciles comments, examples, and any doc drift — **no conflicting edits**; if both PRs touch it, **PR-CLI-2 wins** for structure, PR-CLI-3 for prose polish.
-- `propose/INDEX-AUTO-MODE-PROPOSE.md` — one-line note that `refresh` is being renamed to `reprocess`.
-- `propose/TIER2-INCREMENTAL-REBUILD-PROPOSE.md` — one-line note that the new tracking issue (created in PR-CLI-2) is the user-facing handle.
 - `docs/PRODUCT-VISION.md` — update `lancedb_data` mention (§ about Kuzu's on-disk footprint) and any `refresh` reference.
 - `.gitignore` — add `.java-codebase-rag/`, keep `lancedb_data/` for grace-period cleanup, or remove if PR-CLI-2 drops that grace-period entry.
 

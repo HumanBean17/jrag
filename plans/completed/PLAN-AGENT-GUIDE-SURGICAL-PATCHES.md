@@ -110,8 +110,7 @@ Landing order: **PR-AGP-1 → PR-AGP-2**.
   (disagreement vs open file; empty `search` with visible string in editor).
 - Leave `After two failed attempts on the same intent, stop and report tool name, args, and response.` **unchanged**.
 - Immediately **after** that line, append the **Staleness rule** paragraph
-  (Lance vs Kuzu after `increment`, pointer to
-  `propose/TIER2-INCREMENTAL-REBUILD-PROPOSE.md`, `meta` comparison).
+  (Lance vs Kuzu after `increment`, `meta` comparison).
 
 **Patch C — `neighbors` confidence**
 

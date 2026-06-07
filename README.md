@@ -212,5 +212,5 @@ The default embedding model is `sentence-transformers/all-MiniLM-L6-v2` (downloa
 
 - `get_service_topology` — microservice-level summary aggregating `HTTP_CALLS` / `ASYNC_CALLS`.
 - Agentic routing layer (query classifier → vector / graph / both).
-- Incremental Kuzu updates (per-changed-file) — see [`propose/TIER2-INCREMENTAL-REBUILD-PROPOSE.md`](./propose/TIER2-INCREMENTAL-REBUILD-PROPOSE.md) and [`propose/INDEX-AUTO-MODE-PROPOSE.md`](./propose/INDEX-AUTO-MODE-PROPOSE.md).
+- Incremental Kuzu updates (per-changed-file).
 - Optional `codegraph_nodes` LanceDB table embedding symbol summaries so the graph itself is vector-searchable.
