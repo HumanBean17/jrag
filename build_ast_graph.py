@@ -740,7 +740,11 @@ def _delete_file_scope(conn: kuzu.Connection, filenames: set[str]) -> None:
     # This avoids ordering issues where file A has an edge from file B
     # pointing into it; if we delete A's nodes before B's edges, Kuzu
     # raises "has connected edges" errors.
-    edge_tables = ["EXTENDS", "IMPLEMENTS", "INJECTS", "CALLS", "DECLARES", "OVERRIDES", "UNRESOLVED_AT"]
+    edge_tables = [
+        "EXTENDS", "IMPLEMENTS", "INJECTS", "CALLS", "DECLARES", "OVERRIDES",
+        "UNRESOLVED_AT", "EXPOSES", "DECLARES_CLIENT", "DECLARES_PRODUCER",
+        "HTTP_CALLS", "ASYNC_CALLS",
+    ]
     for edge_type in edge_tables:
         query = f"""
         MATCH (src)-[e:{edge_type}]->(dst)
@@ -779,9 +783,10 @@ def _delete_file_scope(conn: kuzu.Connection, filenames: set[str]) -> None:
     conn.execute(delete_symbols_query, {"filenames": filename_list})
 
     # Phase 4: Delete Route, Client, Producer nodes.
+    # Use DETACH DELETE as a safety net in case any edges were missed in Phase 1.
     for label in ["Route", "Client", "Producer"]:
         conn.execute(
-            f"MATCH (n:{label}) WHERE n.filename IN $filenames DELETE n",
+            f"MATCH (n:{label}) WHERE n.filename IN $filenames DETACH DELETE n",
             {"filenames": filename_list},
         )
 
@@ -3660,14 +3665,15 @@ def incremental_rebuild(
 
     try:
         # Step 3: Dependent expansion
-        # Collect node IDs for changed files
+        # Collect node IDs for changed files (single query instead of N+1)
         changed_node_ids: set[str] = set()
-        for filename in changed_files:
-            query = "MATCH (s:Symbol) WHERE s.filename = $filename RETURN s.id"
-            result = conn.execute(query, {"filename": filename})
-            while result.has_next():
-                row = result.get_next()
-                changed_node_ids.add(row[0])  # Kuzu returns list, not dict
+        result = conn.execute(
+            "MATCH (s:Symbol) WHERE s.filename IN $filenames RETURN s.id",
+            {"filenames": list(changed_files)},
+        )
+        while result.has_next():
+            row = result.get_next()
+            changed_node_ids.add(row[0])
 
         # Find dependents
         dependent_files = _find_dependents(conn, changed_node_ids)
@@ -3828,26 +3834,11 @@ def _write_clients_producers_and_calls(conn: kuzu.Connection, tables: GraphTable
     # Build node_id lookup for members and types
     member_by_id = {m.node_id: m for m in tables.members}
 
-    # Write clients
+    # Write clients and producers using asdict (same pattern as _write_routes_and_exposes)
     for row in tables.client_rows:
-        conn.execute(_CREATE_CLIENT, {
-            "id": row.id,
-            "symbol_id": row.symbol_id,
-            "filename": row.filename,
-            "kind": row.kind,
-            "target": row.target,
-            "target_type": row.target_type,
-        })
-
-    # Write producers
+        conn.execute(_CREATE_CLIENT, asdict(row))
     for row in tables.producer_rows:
-        conn.execute(_CREATE_PRODUCER, {
-            "id": row.id,
-            "symbol_id": row.symbol_id,
-            "filename": row.filename,
-            "kind": row.kind,
-            "topic": row.topic,
-        })
+        conn.execute(_CREATE_PRODUCER, asdict(row))
 
     client_by_id = {c.id: c for c in tables.client_rows}
     producer_by_id = {p.id: p for p in tables.producer_rows}
