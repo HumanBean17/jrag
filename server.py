@@ -16,7 +16,12 @@ from java_codebase_rag.cli_progress import (
     emit_vectors_finish,
     emit_vectors_start,
 )
-from java_codebase_rag.config import emit_legacy_env_hints_if_present, resolved_sbert_model_for_process_env, resolve_operator_config
+from java_codebase_rag.config import (
+    discover_project_root,
+    emit_legacy_env_hints_if_present,
+    resolved_sbert_model_for_process_env,
+    resolve_operator_config,
+)
 from kuzu_queries import KuzuGraph, resolve_kuzu_path
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
@@ -91,10 +96,49 @@ class IndexInfoOutput(BaseModel):
     graph: GraphMetaOutput
 
 
+# Module-level scope manager, initialized in main()
+_scope_manager: ScopeManager | None = None
+
+
+class ScopeManager:
+    """Manages automatic microservice scope detection and injection."""
+
+    def __init__(self, source_root: Path):
+        self.source_root = source_root
+        self.default_scope: str | None = self._detect_scope()
+        self._log_detection()
+
+    def _detect_scope(self) -> str | None:
+        from graph_enrich import detect_microservice_from_path
+        return detect_microservice_from_path(Path.cwd(), self.source_root)
+
+    def _log_detection(self) -> None:
+        if self.default_scope:
+            print(f"[scope] Detected microservice: {self.default_scope}", file=sys.stderr)
+            print(f"[scope] Queries scoped to {self.default_scope}", file=sys.stderr)
+        else:
+            print("[scope] No microservice detected (at project root)", file=sys.stderr)
+            print("[scope] Queries will span all microservices", file=sys.stderr)
+
+    def apply_auto_scope(self, filter: dict[str, Any] | None) -> dict[str, Any] | None:
+        """Apply auto-detected scope to filter if no explicit microservice is set."""
+        if self.default_scope is None:
+            return filter
+        # Convert to dict for manipulation
+        if filter is None:
+            filter_dict = {}
+        else:
+            filter_dict = dict(filter)
+        # Only inject if user didn't specify microservice
+        if "microservice" not in filter_dict:
+            filter_dict["microservice"] = self.default_scope
+        return filter_dict
+
+
 def _resolve_lancedb_uri() -> str:
     raw = os.environ.get("JAVA_CODEBASE_RAG_INDEX_DIR", "").strip()
     if not raw:
-        raw = str((Path.cwd() / ".java-codebase-rag").resolve())
+        raw = str((_project_root() / ".java-codebase-rag").resolve())
     p = Path(raw).expanduser()
     if not str(raw).startswith(("s3://", "gs://", "az://")):
         try:
@@ -108,7 +152,8 @@ def _project_root() -> Path:
     env = os.environ.get("JAVA_CODEBASE_RAG_SOURCE_ROOT", "").strip()
     if env:
         return Path(env).expanduser().resolve()
-    return Path.cwd().resolve()
+    discovered = discover_project_root(Path.cwd())
+    return discovered if discovered is not None else Path.cwd().resolve()
 
 
 def _cocoindex_subprocess_env(project_root: Path) -> dict[str, str]:
@@ -370,6 +415,7 @@ def create_mcp_server() -> FastMCP:
             ),
         ),
     ) -> mcp_v2.SearchOutput:
+        scoped_filter = _scope_manager.apply_auto_scope(filter) if _scope_manager else filter
         return await asyncio.to_thread(
             mcp_v2.search_v2,
             query,
@@ -378,7 +424,7 @@ def create_mcp_server() -> FastMCP:
             limit,
             offset,
             path_contains,
-            filter,
+            scoped_filter,
             None,
         )
 
@@ -413,7 +459,8 @@ def create_mcp_server() -> FastMCP:
         limit: int = Field(default=25, ge=1, le=500, description="Max nodes to return"),
         offset: int = Field(default=0, ge=0, le=499, description="Skip this many nodes (pagination)"),
     ) -> mcp_v2.FindOutput:
-        return await asyncio.to_thread(mcp_v2.find_v2, kind, filter, limit, offset, None)
+        scoped_filter = _scope_manager.apply_auto_scope(filter) if _scope_manager else filter
+        return await asyncio.to_thread(mcp_v2.find_v2, kind, scoped_filter, limit, offset, None)
 
     @mcp.tool(
         name="describe",
@@ -525,6 +572,7 @@ def create_mcp_server() -> FastMCP:
             ),
         ),
     ) -> mcp_v2.NeighborsOutput:
+        scoped_filter = _scope_manager.apply_auto_scope(filter) if _scope_manager else filter
         return await asyncio.to_thread(
             mcp_v2.neighbors_v2,
             ids,
@@ -532,7 +580,7 @@ def create_mcp_server() -> FastMCP:
             edge_types,
             limit,
             offset,
-            filter,
+            scoped_filter,
             edge_filter,
             include_unresolved,
             dedup_calls,
@@ -579,6 +627,10 @@ def main() -> None:
     cfg = resolve_operator_config(source_root=_project_root())
     cfg.apply_to_os_environ()
     mcp_v2.set_hints_enabled(cfg.hints_enabled)
+
+    # Initialize scope manager for automatic microservice detection
+    global _scope_manager
+    _scope_manager = ScopeManager(cfg.source_root)
 
     asyncio.run(create_mcp_server().run_stdio_async())
 

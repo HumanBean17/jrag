@@ -229,6 +229,18 @@ def _add_verbosity_flags(p: argparse.ArgumentParser) -> None:
 
 def _cmd_init(args: argparse.Namespace) -> int:
     cfg = _resolved_from_ns(args)
+    # Check for parent config
+    from java_codebase_rag.config import discover_project_root, YAML_CONFIG_FILENAMES
+    parent_config_dir = discover_project_root(cfg.source_root.parent)
+    if parent_config_dir is not None:
+        parent_config = parent_config_dir / YAML_CONFIG_FILENAMES[0]
+        if not parent_config.is_file():
+            parent_config = parent_config_dir / YAML_CONFIG_FILENAMES[1]
+        print(
+            f"Warning: found existing config at {parent_config}. "
+            f"Creating a new project here will create a separate index.",
+            file=sys.stderr,
+        )
     _startup_hints(cfg)
     cfg.apply_to_os_environ()
     occupied, paths = index_dir_has_existing_artifacts(cfg.index_dir)
