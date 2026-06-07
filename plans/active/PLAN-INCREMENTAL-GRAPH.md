@@ -35,6 +35,8 @@ Depends on: none.
 
 Landing order: **G1 → G2 → G3**.
 
+**Note on sequencing:** The proposal states "Single implementation PR." This plan splits into 3 PRs to isolate the schema change (G1, which requires a re-index) from the orchestrator logic (G2) and CLI integration (G3). This allows G1 to land independently and gives reviewers smaller, more focused diffs.
+
 ## Resolved design decisions
 
 | Topic | Decision |
@@ -72,24 +74,26 @@ Add `source_file STRING` as the first property column to every relationship tabl
 - `_SCHEMA_HTTP_CALLS`: add `source_file STRING` before `confidence`
 - `_SCHEMA_ASYNC_CALLS`: add `source_file STRING` before `confidence`
 
-**Why `source_file` as first column:** Kuzu stores rel table properties in declaration order. Putting `source_file` first makes the column offset predictable for the incremental writer without having to look up per-table schemas.
+**Why `source_file` as first column:** Convention only — placing `source_file` first makes DDL diffs easier to read. Column position does not affect Kuzu query behavior with named parameters (`$source_file`).
 
 ### 2. `build_ast_graph.py` — edge write queries
 
-Every edge-write Cypher query (in `_write_edges`, `_write_routes_and_exposes`, `_write_unresolved`) must include the new `source_file` parameter. The value comes from the source node's `filename` field, which is already available in the edge row's source `MemberEntry.file_path` or `TypeIndexEntry.file_path`.
+Every edge-write Cypher query (in `_write_edges`, `_write_routes_and_exposes`) must include the new `source_file` parameter. The value is **always the source (origin) node's filename**, never the target's.
 
-For edges where the source is a Symbol (EXTENDS, IMPLEMENTS, INJECTS, CALLS, DECLARES, OVERRIDES), pass the source node's `file_path`. For UNRESOLVED_AT, pass the caller's file. For EXPOSES, DECLARES_CLIENT, DECLARES_PRODUCER, pass the originating member's `file_path`. For HTTP_CALLS and ASYNC_CALLS, pass the Client/Producer's `filename`.
+`source_file` semantics per edge type:
+- **Symbol-to-Symbol edges** (EXTENDS, IMPLEMENTS, INJECTS, CALLS, DECLARES, OVERRIDES): pass the source Symbol's `file_path` — available from `MemberEntry.file_path` or `TypeIndexEntry.file_path` via `tables.members`/`tables.types` lookup by `src_id`.
+- **UNRESOLVED_AT** (Symbol → UnresolvedCallSite): pass the caller Symbol's filename. The inline UnresolvedCallSite write block in `_write_edges()` already has access to the caller's member entry.
+- **EXPOSES** (Symbol → Route): pass the source Symbol's filename, looked up from the `ExposesRow.symbol_id` via `tables.members`/`tables.types`.
+- **DECLARES_CLIENT** (Symbol → Client): pass the source Symbol's filename, looked up from `DeclaresClientRow.symbol_id`.
+- **DECLARES_PRODUCER** (Symbol → Producer): pass the source Symbol's filename, looked up from `DeclaresProducerRow.symbol_id`.
+- **HTTP_CALLS** (Client → Route): pass the Client's `filename` (from `ClientRow.filename`). The Client is the source node.
+- **ASYNC_CALLS** (Producer → Route): pass the Producer's `filename` (from `ProducerRow.filename`). The Producer is the source node.
 
 Specifically:
-- In `_write_edges()`: add `source_file` parameter to each `conn.execute(_CREATE_*EDGE*, ...)` call. For `EdgeRow`/`InjectsRow`/`CallsRow`, derive from the source entry's `file_path` via `tables.members` or `tables.types` lookup by src_id.
-- In `_write_routes_and_exposes()`: add `source_file` to EXPOSES, DECLARES_CLIENT, DECLARES_PRODUCER, HTTP_CALLS, ASYNC_CALLS write calls. Derive from `RouteRow.filename`, `ClientRow.filename`, `ProducerRow.filename` respectively.
-- In `_write_unresolved()`: add `source_file` to UNRESOLVED_AT from the caller Symbol's filename.
+- In `_write_edges()`: add `source_file` parameter to each `conn.execute(_CREATE_*EDGE*, ...)` call. For `EdgeRow`/`InjectsRow`/`CallsRow`, derive from the source entry's `file_path` via `tables.members` or `tables.types` lookup by src_id. For the inline UnresolvedCallSite/UNRESOLVED_AT block, pass the caller member's `file_path`.
+- In `_write_routes_and_exposes()`: add `source_file` to EXPOSES (source Symbol's filename via lookup), DECLARES_CLIENT (source Symbol's filename via lookup), DECLARES_PRODUCER (source Symbol's filename via lookup), HTTP_CALLS (Client's `filename`), ASYNC_CALLS (Producer's `filename`).
 
-### 3. `build_ast_graph.py` — GraphMeta bump
-
-Add `source_file_schema BOOLEAN` column to `_SCHEMA_META` with value `true`. This lets the incremental orchestrator check whether the existing DB has the new schema.
-
-### 4. `ast_java.py` — ontology version bump
+### 3. `ast_java.py` — ontology version bump
 
 Change `ONTOLOGY_VERSION = 16` to `ONTOLOGY_VERSION = 17`. This triggers a re-index requirement for existing installations.
 
@@ -120,11 +124,7 @@ class FileHashTracker:
 - `save` writes atomically: dump to `.graph_hashes.json.tmp`, then `os.replace()`.
 - Location: top-level in `build_ast_graph.py` (same file as the pipeline; no new module needed for a single class).
 
-### 6. `build_ast_graph.py` — update `_drop_all`
-
-Add `DROP TABLE IF EXISTS GraphMeta` is already there. No changes needed — `_drop_all` drops everything.
-
-### 7. `tests/test_incremental_graph.py` (NEW FILE)
+### 5. `tests/test_incremental_graph.py` (NEW FILE)
 
 ## Tests for PR-G1
 
@@ -136,16 +136,14 @@ Add `DROP TABLE IF EXISTS GraphMeta` is already there. No changes needed — `_d
 6. `test_file_hash_tracker_atomic_save` — `.graph_hashes.json.tmp` not left behind on successful save
 7. `test_edge_schema_has_source_file` — build a full graph on the bank-chat fixture, query each edge table for `source_file` column existence and non-empty values
 8. `test_source_file_value_matches_symbol_filename` — for edges originating from Symbol nodes, the edge's `source_file` equals the source Symbol's `filename`
-9. `test_graph_meta_has_source_file_schema_flag` — GraphMeta node has `source_file_schema = true`
-10. `test_ontology_version_bumped_to_17` — `ONTOLOGY_VERSION == 17`
+9. `test_ontology_version_bumped_to_17` — `ONTOLOGY_VERSION == 17`
 
 ## Definition of done (PR-G1)
 
-- [ ] All 10 new tests pass
+- [ ] All 9 new tests pass
 - [ ] Existing test suite passes (schema change is backwards-incompatible — tests that build fresh graphs will auto-adapt)
 - [ ] Edge tables in a freshly built graph have `source_file` populated on every row
 - [ ] `ruff check build_ast_graph.py ast_java.py tests/test_incremental_graph.py` is clean
-- [ ] `GraphMeta` contains `source_file_schema = true`
 
 ## Implementation step list
 
@@ -153,11 +151,10 @@ Add `DROP TABLE IF EXISTS GraphMeta` is already there. No changes needed — `_d
 | - | - | - | - |
 | 1 | Bump `ONTOLOGY_VERSION` to 17 | `ast_java.py` | `test_ontology_version_bumped_to_17` passes |
 | 2 | Add `source_file STRING` to all 12 edge DDL constants | `build_ast_graph.py` | DDL strings compile |
-| 3 | Add `source_file_schema BOOLEAN` to `_SCHEMA_META` | `build_ast_graph.py` | GraphMeta has new column |
-| 4 | Update all edge-write Cypher queries to pass `source_file` | `build_ast_graph.py` | Tests 7–9 pass |
-| 5 | Implement `FileHashTracker` class | `build_ast_graph.py` | Tests 1–6 pass |
-| 6 | Add `test_incremental_graph.py` with all 10 tests | `tests/test_incremental_graph.py` | All 10 tests pass |
-| 7 | Run full validation | all | `ruff check` + `pytest tests -v` green |
+| 3 | Update all edge-write Cypher queries to pass `source_file` | `build_ast_graph.py` | Tests 7–9 pass |
+| 4 | Implement `FileHashTracker` class | `build_ast_graph.py` | Tests 1–6 pass |
+| 5 | Add `test_incremental_graph.py` with all 9 tests | `tests/test_incremental_graph.py` | All 9 tests pass |
+| 6 | Run full validation | all | `ruff check` + `pytest tests -v` green |
 
 ---
 
@@ -195,11 +192,11 @@ class IncrementalResult:
 **Algorithm:**
 
 1. **Load existing graph and detect changes.**
-   - Open existing Kuzu database (read-only).
+   - Open existing Kuzu database (read-write — subsequent steps write to it).
    - Load `FileHashTracker` from index dir.
    - Call `detect_changes(source_root, ignore)` to get `(added, changed, removed)`.
    - If the total set `changed_files = added | changed | removed` is empty, return immediately (no-op).
-   - Check that `GraphMeta.source_file_schema == true`; if not, fall back to full rebuild.
+   - Check that the existing graph's `GraphMeta.ontology_version >= 17`; if not (column missing or version too old), fall back to full rebuild. Query: `MATCH (m:GraphMeta) RETURN m.ontology_version`; if the query fails or returns a version < 17, fall back.
 
 2. **Crash marker.**
    - Write `.graph_increment_in_progress` marker file.
@@ -223,14 +220,16 @@ class IncrementalResult:
 
 5. **Scoped pass 1–4 (rebuild).**
    - Run `pass1_parse()` but only on files in `scope_files` (not the full tree). This requires a new parameter or a filtered walk.
+   - Before pass 2, load existing types from Kuzu into `tables.types` so cross-file type resolution works for unchanged types. This query: `MATCH (s:Symbol) WHERE s.kind IN ['class','interface','enum','annotation','record'] RETURN s.*`. Call `_load_existing_types(conn, tables)`.
+   - Before pass 3, load existing members from Kuzu into `tables.members` so call resolution can find methods on unchanged types. Call `_load_existing_members(conn, tables)` (note: this populates `tables.members` directly, not returning a separate list — see PR-G2 section 4 for the modified signature).
    - Run `pass2_edges()`, `pass3_calls()`, `pass4_routes()` on the scoped `GraphTables`.
-   - Before pass 2, load existing types from Kuzu into `tables.types` so cross-file type resolution works for unchanged types. This query: `MATCH (s:Symbol) WHERE s.kind IN ['class','interface','enum','annotation','record'] RETURN s.*`.
-   - Write the scoped nodes and edges to the *existing* Kuzu database (not a fresh one). Use the same write functions but without `_drop_all`/`_create_schema`.
+   - Call `_populate_declares_rows(tables)` and `_populate_overrides_rows(tables)` — same as the full rebuild flow — so DECLARES and OVERRIDES edges are emitted for scoped members.
+   - Write the scoped nodes and edges to the *existing* Kuzu database (not a fresh one). Use `_scoped_write()` which writes nodes and edges without `_drop_all`/`_create_schema`.
 
 6. **Global pass 5–6.**
    - Load *all* members from Kuzu (not just scoped) for pass 5.
    - Run `pass5_imperative_edges()` globally — iterate all members, extract clients/producers.
-   - Delete all existing Client, Producer nodes and their edges (DECLARES_CLIENT, DECLARES_PRODUCER, HTTP_CALLS, ASYNC_CALLS) before rewriting.
+   - Delete all existing Client, Producer nodes and their edges (DECLARES_CLIENT, DECLARES_PRODUCER, HTTP_CALLS, ASYNC_CALLS) before rewriting. This means `source_file` on HTTP_CALLS/ASYNC_CALLS/DECLARES_CLIENT/DECLARES_PRODUCER is **not used for scoped deletion** — these tables are always fully rebuilt. The column is still valuable for debugging and querying.
    - Run `pass6_match_edges()` globally — match all HTTP_CALLS and ASYNC_CALLS.
    - Write Client, Producer, and cross-service edges.
 
@@ -263,11 +262,11 @@ Queries all Symbol nodes with `kind IN ['class','interface','enum','annotation',
 ### 4. `build_ast_graph.py` — new helper: `_load_existing_members()`
 
 ```python
-def _load_existing_members(conn: kuzu.Connection) -> list[MemberEntry]:
-    """Load all member entries from existing Kuzu graph for global pass 5."""
+def _load_existing_members(conn: kuzu.Connection, tables: GraphTables) -> None:
+    """Load all member entries from existing Kuzu graph into tables.members."""
 ```
 
-Queries all Symbol nodes with `kind IN ['method','constructor']` and returns a list of `MemberEntry`-compatible objects. Used by the global pass 5 to iterate all members, not just scoped ones.
+Queries all Symbol nodes with `kind IN ['method','constructor']` and populates `tables.members` with `MemberEntry`-compatible objects. Used before pass 3 (so call resolution finds methods on unchanged types) and for global pass 5 (iterate all members for client/producer extraction).
 
 ### 5. `build_ast_graph.py` — new helper: `_scoped_write()`
 
@@ -275,7 +274,7 @@ Queries all Symbol nodes with `kind IN ['method','constructor']` and returns a l
 def _scoped_write(conn: kuzu.Connection, tables: GraphTables, *, project_root: Path, meta_chain: dict[str, frozenset[str]] | None) -> None:
 ```
 
-Like the node/edge writing portions of `write_kuzu()` but does NOT call `_drop_all` or `_create_schema`. Writes nodes and edges into the existing database. Used by the incremental rebuild.
+Like the node/edge writing portions of `write_kuzu()` but does NOT call `_drop_all` or `_create_schema`. Writes nodes and edges into the existing database. The caller is responsible for calling `_populate_declares_rows(tables)` and `_populate_overrides_rows(tables)` before invoking `_scoped_write()` — same as the full rebuild flow in `write_kuzu()`. Used by the incremental rebuild.
 
 ### 6. `build_ast_graph.py` — new helper: `_find_dependents()`
 
@@ -284,7 +283,9 @@ def _find_dependents(conn: kuzu.Connection, changed_node_ids: set[str]) -> set[s
     """Find files whose nodes have edges pointing into changed nodes. Returns set of filenames."""
 ```
 
-For each edge table, query `MATCH (src:Symbol)-[e]->(dst:Symbol) WHERE dst.id IN $ids RETURN DISTINCT src.filename`. Collect unique filenames that are NOT in the changed files themselves. This is the single-hop dependent expansion.
+For each Symbol-to-Symbol edge table (EXTENDS, IMPLEMENTS, INJECTS, CALLS, DECLARES, OVERRIDES), query `MATCH (src:Symbol)-[e]->(dst:Symbol) WHERE dst.id IN $ids RETURN DISTINCT src.filename`. Collect unique filenames that are NOT in the changed files themselves. This is the single-hop dependent expansion.
+
+**Excluded from dependent expansion:** UNRESOLVED_AT (Symbol→UnresolvedCallSite), EXPOSES (Symbol→Route), DECLARES_CLIENT (Symbol→Client), DECLARES_PRODUCER (Symbol→Producer), HTTP_CALLS (Client→Route), ASYNC_CALLS (Producer→Route). These are either not Symbol-to-Symbol edges or are always globally rebuilt in pass 5–6, so file-scoped dependent tracking is unnecessary.
 
 ### 7. `build_ast_graph.py` — new helper: `_delete_file_scope()`
 
@@ -294,7 +295,7 @@ def _delete_file_scope(conn: kuzu.Connection, filenames: set[str]) -> None:
 ```
 
 For each filename in the set:
-- Delete all edge rows where `source_file = filename` (one DELETE per edge table).
+- Delete all edge rows where `source_file = filename` — but **only for Symbol-to-Symbol and UNRESOLVED_AT tables** (EXTENDS, IMPLEMENTS, INJECTS, DECLARES, OVERRIDES, CALLS, UNRESOLVED_AT). EXPOSES, DECLARES_CLIENT, DECLARES_PRODUCER, HTTP_CALLS, and ASYNC_CALLS are skipped because pass 5–6 globally deletes and recreates them.
 - Collect Symbol node IDs where `filename = filename`.
 - Delete UnresolvedCallSite nodes whose `caller_id` is in the collected set.
 - Delete Symbol nodes where `filename = filename`.
@@ -462,9 +463,9 @@ Update `test_increment_emits_kuzu_stale_warning_block` to verify the warning is 
 
 | # | Risk | Severity | Mitigation |
 | --- | --- | --- | --- |
-| 1 | Schema mismatch: existing DB lacks `source_file` on edges, incremental orchestrator queries it | high | `incremental_rebuild()` checks `GraphMeta.source_file_schema` before proceeding; falls back to full rebuild if absent. PR-G1 ensures all new builds have the column. |
+| 1 | Schema mismatch: existing DB lacks `source_file` on edges, incremental orchestrator queries it | high | `incremental_rebuild()` checks `GraphMeta.ontology_version >= 17` before proceeding; falls back to full rebuild if absent or too old. PR-G1 bumps ontology to 17. |
 | 2 | Dependent expansion misses indirect callers (multi-hop) | medium | Proposal explicitly scopes to single-hop. Document as known limitation. Multi-hop is out of scope (listed in proposal). |
-| 3 | Pass 2–3 type resolution fails when dependent types aren't loaded | medium | `_load_existing_types()` loads ALL types from existing graph before scoped rebuild. Cross-file resolution works against loaded types. |
+| 3 | Pass 2–3 resolution fails when dependent types/members aren't loaded | medium | `_load_existing_types()` loads ALL types and `_load_existing_members()` loads ALL members from existing graph before scoped rebuild. Cross-file resolution works against loaded data. |
 | 4 | Edge `source_file` populated incorrectly during write | high | PR-G1 tests 7–9 verify `source_file` matches source Symbol's `filename` for every edge type. |
 | 5 | Concurrent `increment` runs corrupt graph | medium | Crash marker file prevents concurrent runs. Marker is checked at start of `incremental_rebuild()`. |
 | 6 | Hash computation differs across platforms (line endings) | low | Use `read_bytes()` (same as pass1_parse) — raw bytes, no line-ending normalization. Consistent across platforms. |
@@ -483,7 +484,7 @@ Update `test_increment_emits_kuzu_stale_warning_block` to verify the warning is 
 
 # Whole-plan done definition
 
-1. All 29 named tests pass across the three PRs.
+1. All 28 named tests pass across the three PRs.
 2. Existing test suite passes without `JAVA_CODEBASE_RAG_RUN_HEAVY`.
 3. `ruff check .` is clean.
 4. `increment` on a changed file updates both Lance and Kuzu graph in <25% of full `reprocess` time.
