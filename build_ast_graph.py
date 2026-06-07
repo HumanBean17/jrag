@@ -401,6 +401,79 @@ class GraphTables:
     type_role_by_node_id: dict[str, str] = field(default_factory=dict)
 
 
+class FileHashTracker:
+    """Track content hashes for incremental graph rebuild."""
+    def __init__(self, index_dir: Path):
+        self._path = index_dir / ".graph_hashes.json"
+        self._hashes: dict[str, str] = {}  # rel_path -> sha256_hex
+
+    def load(self) -> None:
+        """Load hashes from disk. No-op if file missing (first run)."""
+        if not self._path.exists():
+            return
+        try:
+            with open(self._path, "r", encoding="utf-8") as f:
+                self._hashes = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            # Corrupt or unreadable hash file; start fresh.
+            self._hashes = {}
+
+    def save(self) -> None:
+        """Persist hashes to disk atomically (write .tmp, rename)."""
+        tmp_path = self._path.with_suffix(".json.tmp")
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(self._hashes, f, sort_keys=True)
+            os.replace(tmp_path, self._path)
+        except OSError:
+            # Fail gracefully; next run will treat as missing and rebuild.
+            pass
+
+    def detect_changes(self, source_root: Path, ignore: LayeredIgnore) -> tuple[set[str], set[str], set[str]]:
+        """Return (added, changed, removed) sets of relative POSIX paths."""
+        current_files: set[str] = set()
+        for abs_path in iter_java_source_files(source_root, ignore=ignore):
+            rel_path = abs_path.relative_to(source_root).as_posix()
+            current_files.add(rel_path)
+
+        added: set[str] = set()
+        changed: set[str] = set()
+        removed: set[str] = set()
+
+        # Detect added and changed files.
+        for rel_path in current_files:
+            abs_path = source_root / rel_path
+            file_hash = _hash_file(abs_path)
+            stored_hash = self._hashes.get(rel_path)
+            if stored_hash is None:
+                added.add(rel_path)
+            elif stored_hash != file_hash:
+                changed.add(rel_path)
+
+        # Detect removed files.
+        for rel_path in self._hashes:
+            if rel_path not in current_files:
+                removed.add(rel_path)
+
+        return added, changed, removed
+
+    def update(self, rel_paths: set[str], source_root: Path) -> None:
+        """Compute and store hashes for the given paths."""
+        for rel_path in rel_paths:
+            abs_path = source_root / rel_path
+            if abs_path.exists():
+                self._hashes[rel_path] = _hash_file(abs_path)
+
+
+def _hash_file(abs_path: Path) -> str:
+    """Compute SHA-256 hash of a file's raw bytes."""
+    hasher = hashlib.sha256()
+    with open(abs_path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
 # ---------- file walk (see `path_filtering.iter_java_source_files`) ----------
 
 
@@ -2414,22 +2487,22 @@ _SCHEMA_PRODUCER = (
 
 _SCHEMA_EXTENDS = (
     "CREATE REL TABLE EXTENDS(FROM Symbol TO Symbol, "
-    "dst_name STRING, dst_fqn STRING, resolved BOOLEAN)"
+    "source_file STRING, dst_name STRING, dst_fqn STRING, resolved BOOLEAN)"
 )
 _SCHEMA_IMPLEMENTS = (
     "CREATE REL TABLE IMPLEMENTS(FROM Symbol TO Symbol, "
-    "dst_name STRING, dst_fqn STRING, resolved BOOLEAN)"
+    "source_file STRING, dst_name STRING, dst_fqn STRING, resolved BOOLEAN)"
 )
 _SCHEMA_INJECTS = (
     "CREATE REL TABLE INJECTS(FROM Symbol TO Symbol, "
-    "dst_name STRING, dst_fqn STRING, resolved BOOLEAN, "
+    "source_file STRING, dst_name STRING, dst_fqn STRING, resolved BOOLEAN, "
     "mechanism STRING, annotation STRING, field_or_param STRING)"
 )
-_SCHEMA_DECLARES = "CREATE REL TABLE DECLARES(FROM Symbol TO Symbol)"
-_SCHEMA_OVERRIDES = "CREATE REL TABLE OVERRIDES(FROM Symbol TO Symbol)"
+_SCHEMA_DECLARES = "CREATE REL TABLE DECLARES(FROM Symbol TO Symbol, source_file STRING)"
+_SCHEMA_OVERRIDES = "CREATE REL TABLE OVERRIDES(FROM Symbol TO Symbol, source_file STRING)"
 _SCHEMA_CALLS = (
     "CREATE REL TABLE CALLS(FROM Symbol TO Symbol, "
-    "call_site_line INT64, call_site_byte INT64, arg_count INT64, "
+    "source_file STRING, call_site_line INT64, call_site_byte INT64, arg_count INT64, "
     "confidence DOUBLE, strategy STRING, source STRING, resolved BOOLEAN, "
     "callee_declaring_role STRING)"
 )
@@ -2439,27 +2512,27 @@ _SCHEMA_UNRESOLVED_CALL_SITE = (
     "arg_count INT64, callee_simple STRING, receiver_expr STRING, reason STRING, "
     "PRIMARY KEY(id))"
 )
-_SCHEMA_UNRESOLVED_AT = "CREATE REL TABLE UNRESOLVED_AT(FROM Symbol TO UnresolvedCallSite)"
+_SCHEMA_UNRESOLVED_AT = "CREATE REL TABLE UNRESOLVED_AT(FROM Symbol TO UnresolvedCallSite, source_file STRING)"
 _SCHEMA_EXPOSES = (
     "CREATE REL TABLE EXPOSES(FROM Symbol TO Route, "
-    "confidence DOUBLE, strategy STRING)"
+    "source_file STRING, confidence DOUBLE, strategy STRING)"
 )
 _SCHEMA_DECLARES_CLIENT = (
     "CREATE REL TABLE DECLARES_CLIENT(FROM Symbol TO Client, "
-    "confidence DOUBLE, strategy STRING)"
+    "source_file STRING, confidence DOUBLE, strategy STRING)"
 )
 _SCHEMA_DECLARES_PRODUCER = (
     "CREATE REL TABLE DECLARES_PRODUCER(FROM Symbol TO Producer, "
-    "confidence DOUBLE, strategy STRING)"
+    "source_file STRING, confidence DOUBLE, strategy STRING)"
 )
 _SCHEMA_HTTP_CALLS = (
     "CREATE REL TABLE HTTP_CALLS(FROM Client TO Route, "
-    "confidence DOUBLE, strategy STRING, "
+    "source_file STRING, confidence DOUBLE, strategy STRING, "
     "method_call STRING, raw_uri STRING, match STRING)"
 )
 _SCHEMA_ASYNC_CALLS = (
     "CREATE REL TABLE ASYNC_CALLS(FROM Producer TO Route, "
-    "confidence DOUBLE, strategy STRING, "
+    "source_file STRING, confidence DOUBLE, strategy STRING, "
     "direction STRING, raw_topic STRING, match STRING)"
 )
 
@@ -2607,28 +2680,29 @@ def _write_nodes(
 
 _CREATE_EXT = (
     "MATCH (a:Symbol {id: $src}), (b:Symbol {id: $dst}) "
-    "CREATE (a)-[:EXTENDS {dst_name: $dst_name, dst_fqn: $dst_fqn, resolved: $resolved}]->(b)"
+    "CREATE (a)-[:EXTENDS {source_file: $source_file, dst_name: $dst_name, dst_fqn: $dst_fqn, resolved: $resolved}]->(b)"
 )
 _CREATE_IMPL = (
     "MATCH (a:Symbol {id: $src}), (b:Symbol {id: $dst}) "
-    "CREATE (a)-[:IMPLEMENTS {dst_name: $dst_name, dst_fqn: $dst_fqn, resolved: $resolved}]->(b)"
+    "CREATE (a)-[:IMPLEMENTS {source_file: $source_file, dst_name: $dst_name, dst_fqn: $dst_fqn, resolved: $resolved}]->(b)"
 )
 _CREATE_INJ = (
     "MATCH (a:Symbol {id: $src}), (b:Symbol {id: $dst}) "
-    "CREATE (a)-[:INJECTS {dst_name: $dst_name, dst_fqn: $dst_fqn, resolved: $resolved, "
+    "CREATE (a)-[:INJECTS {source_file: $source_file, dst_name: $dst_name, dst_fqn: $dst_fqn, resolved: $resolved, "
     "mechanism: $mechanism, annotation: $annotation, field_or_param: $field_or_param}]->(b)"
 )
 _CREATE_DECL = (
     "MATCH (a:Symbol {id: $src}), (b:Symbol {id: $dst}) "
-    "CREATE (a)-[:DECLARES]->(b)"
+    "CREATE (a)-[:DECLARES {source_file: $source_file}]->(b)"
 )
 _CREATE_OVERRIDES = (
     "MATCH (a:Symbol {id: $src}), (b:Symbol {id: $dst}) "
-    "CREATE (a)-[:OVERRIDES]->(b)"
+    "CREATE (a)-[:OVERRIDES {source_file: $source_file}]->(b)"
 )
 _CREATE_CALL = (
     "MATCH (a:Symbol {id: $src}), (b:Symbol {id: $dst}) "
     "CREATE (a)-[:CALLS {"
+    "source_file: $source_file, "
     "call_site_line: $line, call_site_byte: $byte, arg_count: $argc, "
     "confidence: $conf, strategy: $strat, source: $src_kind, resolved: $resolved, "
     "callee_declaring_role: $callee_declaring_role"
@@ -2656,11 +2730,11 @@ _CREATE_CLIENT = (
 
 _CREATE_EXPOSES = (
     "MATCH (s:Symbol {id: $sid}), (r:Route {id: $rid}) "
-    "CREATE (s)-[:EXPOSES {confidence: $confidence, strategy: $strategy}]->(r)"
+    "CREATE (s)-[:EXPOSES {source_file: $source_file, confidence: $confidence, strategy: $strategy}]->(r)"
 )
 _CREATE_DECLARES_CLIENT = (
     "MATCH (s:Symbol {id: $sid}), (c:Client {id: $cid}) "
-    "CREATE (s)-[:DECLARES_CLIENT {confidence: $confidence, strategy: $strategy}]->(c)"
+    "CREATE (s)-[:DECLARES_CLIENT {source_file: $source_file, confidence: $confidence, strategy: $strategy}]->(c)"
 )
 _CREATE_PRODUCER = (
     "CREATE (:Producer {"
@@ -2673,16 +2747,16 @@ _CREATE_PRODUCER = (
 )
 _CREATE_DECLARES_PRODUCER = (
     "MATCH (s:Symbol {id: $sid}), (p:Producer {id: $pid}) "
-    "CREATE (s)-[:DECLARES_PRODUCER {confidence: $confidence, strategy: $strategy}]->(p)"
+    "CREATE (s)-[:DECLARES_PRODUCER {source_file: $source_file, confidence: $confidence, strategy: $strategy}]->(p)"
 )
 _CREATE_HTTP_CALL = (
     "MATCH (c:Client {id: $cid}), (r:Route {id: $rid}) "
-    "CREATE (c)-[:HTTP_CALLS {confidence: $confidence, strategy: $strategy, "
+    "CREATE (c)-[:HTTP_CALLS {source_file: $source_file, confidence: $confidence, strategy: $strategy, "
     "method_call: $method_call, raw_uri: $raw_uri, match: $match}]->(r)"
 )
 _CREATE_ASYNC_CALL = (
     "MATCH (p:Producer {id: $pid}), (r:Route {id: $rid}) "
-    "CREATE (p)-[:ASYNC_CALLS {confidence: $confidence, strategy: $strategy, "
+    "CREATE (p)-[:ASYNC_CALLS {source_file: $source_file, confidence: $confidence, strategy: $strategy, "
     "direction: $direction, raw_topic: $raw_topic, match: $match}]->(r)"
 )
 
@@ -2733,29 +2807,45 @@ def _populate_overrides_rows(tables: GraphTables) -> None:
 
 
 def _write_edges(conn: kuzu.Connection, tables: GraphTables) -> None:
+    # Build node_id -> file_path lookup for source_file resolution.
+    _file_by_node_id: dict[str, str] = {}
+    for entry in tables.types.values():
+        _file_by_node_id[entry.node_id] = entry.file_path
+    for m in tables.members:
+        _file_by_node_id[m.node_id] = m.file_path
+
     for r in tables.extends_rows:
         conn.execute(_CREATE_EXT, {
             "src": r.src_id, "dst": r.dst_id,
+            "source_file": _file_by_node_id.get(r.src_id, ""),
             "dst_name": r.dst_name, "dst_fqn": r.dst_fqn, "resolved": r.resolved,
         })
     for r in tables.implements_rows:
         conn.execute(_CREATE_IMPL, {
             "src": r.src_id, "dst": r.dst_id,
+            "source_file": _file_by_node_id.get(r.src_id, ""),
             "dst_name": r.dst_name, "dst_fqn": r.dst_fqn, "resolved": r.resolved,
         })
     for r in tables.injects_rows:
         conn.execute(_CREATE_INJ, {
             "src": r.src_id, "dst": r.dst_id,
+            "source_file": _file_by_node_id.get(r.src_id, ""),
             "dst_name": r.dst_name, "dst_fqn": r.dst_fqn, "resolved": r.resolved,
             "mechanism": r.mechanism, "annotation": r.annotation,
             "field_or_param": r.field_or_param,
         })
 
     for row in tables.declares_rows:
-        conn.execute(_CREATE_DECL, {"src": row.src_id, "dst": row.dst_id})
+        conn.execute(_CREATE_DECL, {
+            "src": row.src_id, "dst": row.dst_id,
+            "source_file": _file_by_node_id.get(row.src_id, ""),
+        })
 
     for row in tables.overrides_rows:
-        conn.execute(_CREATE_OVERRIDES, {"src": row.src_id, "dst": row.dst_id})
+        conn.execute(_CREATE_OVERRIDES, {
+            "src": row.src_id, "dst": row.dst_id,
+            "source_file": _file_by_node_id.get(row.src_id, ""),
+        })
 
     seen_calls: set[tuple[str, str, int, int]] = set()
     unique_calls: list[CallsRow] = []
@@ -2769,6 +2859,7 @@ def _write_edges(conn: kuzu.Connection, tables: GraphTables) -> None:
     for row in unique_calls:
         conn.execute(_CREATE_CALL, {
             "src": row.src_id, "dst": row.dst_id,
+            "source_file": _file_by_node_id.get(row.src_id, ""),
             "line": row.call_site_line,
             "byte": row.call_site_byte,
             "argc": row.arg_count,
@@ -2789,7 +2880,7 @@ def _write_edges(conn: kuzu.Connection, tables: GraphTables) -> None:
     )
     _CREATE_UNRESOLVED_AT = (
         "MATCH (a:Symbol {id: $caller}), (u:UnresolvedCallSite {id: $ucs}) "
-        "CREATE (a)-[:UNRESOLVED_AT]->(u)"
+        "CREATE (a)-[:UNRESOLVED_AT {source_file: $source_file}]->(u)"
     )
     seen_ucs: set[str] = set()
     for row in tables.unresolved_call_site_rows:
@@ -2806,10 +2897,26 @@ def _write_edges(conn: kuzu.Connection, tables: GraphTables) -> None:
             "recv": row.receiver_expr,
             "reason": row.reason,
         })
-        conn.execute(_CREATE_UNRESOLVED_AT, {"caller": row.caller_id, "ucs": row.id})
+        conn.execute(_CREATE_UNRESOLVED_AT, {
+            "caller": row.caller_id, "ucs": row.id,
+            "source_file": _file_by_node_id.get(row.caller_id, ""),
+        })
 
 
 def _write_routes_and_exposes(conn: kuzu.Connection, tables: GraphTables) -> None:
+    # Build node_id -> file_path lookup for source_file resolution (for Symbol sources).
+    _file_by_node_id: dict[str, str] = {}
+    for entry in tables.types.values():
+        _file_by_node_id[entry.node_id] = entry.file_path
+    for m in tables.members:
+        _file_by_node_id[m.node_id] = m.file_path
+
+    # Build client_id -> filename lookup for HTTP_CALLS source_file.
+    _file_by_client_id: dict[str, str] = {row.id: row.filename for row in tables.client_rows}
+
+    # Build producer_id -> filename lookup for ASYNC_CALLS source_file.
+    _file_by_producer_id: dict[str, str] = {row.id: row.filename for row in tables.producer_rows}
+
     for row in tables.routes_rows:
         conn.execute(_CREATE_ROUTE, {
             "id": row.id,
@@ -2834,6 +2941,7 @@ def _write_routes_and_exposes(conn: kuzu.Connection, tables: GraphTables) -> Non
         conn.execute(_CREATE_EXPOSES, {
             "sid": row.symbol_id,
             "rid": row.route_id,
+            "source_file": _file_by_node_id.get(row.symbol_id, ""),
             "confidence": row.confidence,
             "strategy": row.strategy,
         })
@@ -2843,6 +2951,7 @@ def _write_routes_and_exposes(conn: kuzu.Connection, tables: GraphTables) -> Non
         conn.execute(_CREATE_DECLARES_CLIENT, {
             "sid": row.symbol_id,
             "cid": row.client_id,
+            "source_file": _file_by_node_id.get(row.symbol_id, ""),
             "confidence": row.confidence,
             "strategy": row.strategy,
         })
@@ -2852,6 +2961,7 @@ def _write_routes_and_exposes(conn: kuzu.Connection, tables: GraphTables) -> Non
         conn.execute(_CREATE_DECLARES_PRODUCER, {
             "sid": row.symbol_id,
             "pid": row.producer_id,
+            "source_file": _file_by_node_id.get(row.symbol_id, ""),
             "confidence": row.confidence,
             "strategy": row.strategy,
         })
@@ -2859,6 +2969,7 @@ def _write_routes_and_exposes(conn: kuzu.Connection, tables: GraphTables) -> Non
         conn.execute(_CREATE_HTTP_CALL, {
             "cid": row.client_id,
             "rid": row.route_id,
+            "source_file": _file_by_client_id.get(row.client_id, ""),
             "confidence": row.confidence,
             "strategy": row.strategy,
             "method_call": row.method_call,
@@ -2869,6 +2980,7 @@ def _write_routes_and_exposes(conn: kuzu.Connection, tables: GraphTables) -> Non
         conn.execute(_CREATE_ASYNC_CALL, {
             "pid": row.producer_id,
             "rid": row.route_id,
+            "source_file": _file_by_producer_id.get(row.producer_id, ""),
             "confidence": row.confidence,
             "strategy": row.strategy,
             "direction": row.direction,
