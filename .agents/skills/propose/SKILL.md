@@ -44,12 +44,13 @@ You MUST create a task for each of these items and complete them in order:
 
 1. **Explore repo context** — check README.md, CODEBASE_REQUIREMENTS.md, relevant existing proposals, recent commits
 2. **Ask clarifying questions** — one at a time, determine what to ask based on context and topic. Focus on understanding the real problem, constraints, success criteria
-3. **Propose 2-3 approaches** — with trade-offs and your recommendation
-4. **Draft proposal sections** — present each section and get approval before moving to the next
-5. **Write proposal file** — save to `propose/active/<TOPIC>-PROPOSE.md`
-6. **Self-review** — check for quality issues inline
-7. **User review gate** — ask user to review the written proposal
-8. **Complete** — mark proposal ready for implementation planning
+3. **Validate assumptions** — investigate every external dependency or integration the solution might rely on before recommending approaches
+4. **Propose 2-3 approaches** — with trade-offs and your recommendation
+5. **Draft proposal sections** — present each section and get approval before moving to the next
+6. **Write proposal file** — save to `propose/active/<TOPIC>-PROPOSE.md`
+7. **Self-review** — check for quality issues inline
+8. **User review gate** — ask user to review the written proposal
+9. **Complete** — mark proposal ready for implementation planning
 
 ## Process Flow
 
@@ -57,6 +58,7 @@ You MUST create a task for each of these items and complete them in order:
 digraph propose_flow {
     "Explore repo context" [shape=box];
     "Ask clarifying questions" [shape=box];
+    "Validate assumptions" [shape=box];
     "Propose 2-3 approaches" [shape=box];
     "Draft proposal sections" [shape=box];
     "User approves section?" [shape=diamond];
@@ -66,7 +68,8 @@ digraph propose_flow {
     "Complete" [shape=doublecircle];
 
     "Explore repo context" -> "Ask clarifying questions";
-    "Ask clarifying questions" -> "Propose 2-3 approaches";
+    "Ask clarifying questions" -> "Validate assumptions";
+    "Validate assumptions" -> "Propose 2-3 approaches";
     "Propose 2-3 approaches" -> "Draft proposal sections";
     "Draft proposal sections" -> "User approves section?";
     "User approves section?" -> "Draft proposal sections" [label="no, revise"];
@@ -106,9 +109,15 @@ Focus on understanding:
 - Constraints and dependencies
 - What's explicitly out of scope
 
-**3. Propose approaches:**
+**3. Validate assumptions before recommending:**
 
-Once you understand the problem space, present 2-3 different solution approaches:
+Before presenting approaches, investigate every dependency or integration your solution depends on. If you plan to "reuse X" or "integrate with Y", verify that X's API actually exposes what you need. Never recommend a solution that relies on external behavior you haven't confirmed.
+
+If investigation reveals an assumption is invalid, report this to the user and revise before continuing.
+
+**4. Propose approaches:**
+
+Once you understand the problem space and have validated key assumptions, present 2-3 different solution approaches:
 - Lead with your recommended option and explain why
 - Include trade-offs for each option
 - Be specific about what each approach means
