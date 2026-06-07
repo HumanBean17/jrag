@@ -199,6 +199,12 @@ class ScopeManager:
 
 All new tests go in **`tests/test_config.py`** (new file). Tests that exercise `_project_root()` in `server.py` go in **`tests/test_mcp_server_project_root.py`** (new file) to keep MCP test concerns separate.
 
+**Test file organization justification:**
+- `test_config.py` — Pure unit tests for config discovery and resolution logic (no server/process dependencies)
+- `test_mcp_server_project_root.py` — Integration test that specifically exercises server.py's `_project_root()` function in the MCP server context
+- **Rationale**: Keeping these separate prevents test pollution — config tests remain fast and isolated, while server integration tests can assume MCP server context and potentially mock server internals
+- **Alternative considered**: Adding server tests to `test_config.py` would require importing server.py and its dependencies, making config tests slower and more brittle
+
 ### Config discovery tests (`tests/test_config.py`)
 
 1. `test_discover_project_root_finds_config_in_cwd` — config in cwd, returns cwd
@@ -267,6 +273,11 @@ All new tests go in **`tests/test_config.py`** (new file). Tests that exercise `
 | 11 | Update `mcp.json.example` | `mcp.json.example` | Shows minimal zero-env-var config |
 | 12 | Update README and CONFIGURATION docs | `README.md`, `docs/CONFIGURATION.md` | Walk-up, `source_root`, and auto-scope documented |
 | 13 | Run full validation | all | `ruff check` + `pytest tests -v` green |
+
+**Documentation timing:**
+- Documentation updates (step 12) should happen AFTER implementation is complete and tests pass
+- This ensures docs accurately reflect the final implementation
+- mcp.json.example (step 11) can be updated in parallel with implementation as it's straightforward
 
 ---
 

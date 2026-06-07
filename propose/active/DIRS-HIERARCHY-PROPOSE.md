@@ -93,12 +93,37 @@ Both `JAVA_CODEBASE_RAG_SOURCE_ROOT` and `JAVA_CODEBASE_RAG_INDEX_DIR` become **
 
 New function `discover_project_root(start: Path) -> Path | None` in `config.py`:
 
-- Starts from `start` (typically cwd)
-- Checks for `.java-codebase-rag.yml` or `.java-codebase-rag.yaml` in the current directory
-- If not found, moves to parent and repeats
-- **First match wins** (closest to cwd): if nested configs exist at multiple levels (e.g. `System-A/.java-codebase-rag.yml` and `IdeaProjects/.java-codebase-rag.yml`), the one closest to cwd is used. This mirrors git's behavior when nested `.git` directories exist.
-- **Boundary conditions**: stops at the user home directory (inclusive — checks home itself but does not go past it), stops at filesystem root. Use `Path.home()` for cross-platform compatibility (returns `$HOME` on Unix/macOS, `%USERPROFILE%` on Windows). Rationale: the home directory is the natural project root on user workstations. On CI/CD (`/root`, `/home/runner`) this is equally appropriate. Configs above home are almost certainly unrelated to the current project.
-- Returns the directory containing the config file, or `None`
+**Traversal algorithm:**
+
+1. **Initialize**: Set `current = start.resolve()` (canonicalize via `Path.resolve()` to handle symlinks)
+2. **Check home boundary**: Get `home = Path.home()`. If `home` cannot be resolved, log warning and use filesystem root `/` as boundary
+3. **Loop**: While `current` exists and is not past boundary:
+   a. Check for config files in order: `.java-codebase-rag.yml`, then `.java-codebase-rag.yaml`
+   b. **If both exist in same directory**: Prefer `.yml` over `.yaml` (establish precedence order)
+   c. **If config found**: Return `current` (the directory containing the config, not the config file itself)
+   d. **If `current == home`**: Break (check home itself, then stop — inclusive boundary)
+   e. **If `current.parent == current`**: Break (reached filesystem root)
+   f. **Move to parent**: `current = current.parent`
+4. **Return None**: No config found
+
+**Error handling:**
+
+- **Permission denied on directory**: Log warning at WARNING level, continue to parent
+- **Home directory inaccessible**: Log warning, fall back to filesystem root boundary
+- **Config file exists but unreadable**: Log error, continue as if not found (same as missing)
+
+**Stopping conditions:**
+
+The walk-up stops when any of these conditions is met:
+- Config file is found and successfully read
+- Current directory equals home directory (after checking it)
+- Current directory has no parent (filesystem root reached)
+
+**First match wins** (closest to cwd): if nested configs exist at multiple levels (e.g. `System-A/.java-codebase-rag.yml` and `IdeaProjects/.java-codebase-rag.yml`), the one closest to cwd is used. This mirrors git's behavior when nested `.git` directories exist.
+
+**Boundary rationale**: The home directory is the natural project root on user workstations. On CI/CD (`/root`, `/home/runner`) this is equally appropriate. Configs above home are almost certainly unrelated to the current project. Use `Path.home()` for cross-platform compatibility (returns `$HOME` on Unix/macOS, `%USERPROFILE%` on Windows).
+
+**Returns**: The directory containing the config file, or `None` if no config found.
 
 The function is a pure discovery step — it finds where the config lives, nothing more. It does not parse the config or resolve source roots.
 
@@ -135,10 +160,24 @@ Resolution is straightforward: `Path(config_dir) / source_root`. For the example
 |---|---|---|
 | YAML `source_root: ../` | Config file's directory | If config is at `System-C/.java-codebase-rag.yml`, resolves to `System-C/../` (parent of System-C) |
 | CLI `--source-root ../` | Current working directory | If cwd is `services/api/`, resolves to `services/` |
+| Env var `JAVA_CODEBASE_RAG_SOURCE_ROOT=../` | Current working directory | If cwd is `services/api/`, resolves to `services/` |
 
-This design choice is intentional:
+**How precedence interacts with resolution bases:**
+
+Each source in the precedence chain resolves independently using its own resolution base:
+
+1. **CLI flag**: Resolves relative to cwd at invocation time
+2. **Env var**: Resolves relative to cwd at server startup/CLI invocation
+3. **YAML field**: Resolves relative to config file's directory (discovered via walk-up)
+4. **Walk-up result**: Already an absolute path (the config directory)
+5. **cwd fallback**: Current working directory at time of resolution
+
+**Key point**: The precedence chain selects ONE source, then that source is resolved. The different resolution bases do not interact with each other — they apply at different stages of selection and resolution. For example, if a YAML `source_root: ../` is selected, it resolves relative to the config dir, regardless of what cwd might be.
+
+**Why this design works:**
 - **YAML field** is a portable declaration tied to the config file's location ("my code is one level up from this config")
 - **CLI flag** is a runtime override relative to where the command is executed
+- **Env var** follows CLI convention (cwd-relative) for consistency
 
 Example showing the difference:
 ```
@@ -165,6 +204,8 @@ System-C/services/
 
 **`server.py`**:
 - Update `_project_root()` to call `discover_project_root()` before falling back to cwd. Env var still takes precedence.
+- Update `_resolve_lancedb_uri()` to use `_project_root()` instead of raw `Path.cwd()` when `JAVA_CODEBASE_RAG_INDEX_DIR` is unset. This ensures consistency: index dir and source root derive from the same discovered location.
+- **When `JAVA_CODEBASE_RAG_INDEX_DIR` is set but `JAVA_CODEBASE_RAG_SOURCE_ROOT` is not**: The index dir uses the env var value (absolute path or resolved relative to cwd), while source_root uses walk-up discovery. This is intentional — the index dir env var is an explicit override for where the index lives, independent of source root discovery.
 
 **`cli.py`**:
 - Update `_resolved_from_ns()` to use walk-up discovery when `--source-root` is not provided. CLI flag still takes precedence.
@@ -179,11 +220,17 @@ System-C/services/
 
 **Detection logic (Option A - reuse indexing logic):**
 
-Microservice detection uses the same logic as indexing:
+Microservice detection uses the same logic as indexing, with an important addition for the source_root level case:
 
-1. Walk up from cwd to find the outermost build marker (pom.xml, build.gradle, etc.) under source_root
-2. Resolve to microservice name using `microservice_for_path()` from `graph_enrich.py`
-3. Check `microservice_roots` YAML config for overrides
+1. **Check if cwd equals source_root**: If `cwd.resolve() == source_root.resolve()`, return `None` (at system level, no specific scope). This is NEW behavior specific to auto-scope — it ensures that working at the project root shows all microservices rather than arbitrarily scoping to one.
+2. **Check if cwd outside source_root**: If cwd is not under source_root, return `None` (outside project context)
+3. **Walk up to find outermost build marker**: From cwd, walk up to find the outermost build marker (pom.xml, build.gradle, etc.) under source_root
+4. **Resolve to microservice name**: Use `microservice_for_path()` from `graph_enrich.py` with the detected build marker path
+5. **Check YAML overrides**: Apply `microservice_roots` YAML config if present
+
+**Why the source_root check is needed:**
+
+During indexing, `microservice_for_path()` returns the first path segment when no build marker is found. This is appropriate for indexing (every file belongs to some microservice). But for query-time scoping, working at the project root should show ALL microservices, not arbitrarily scope to the first one. The source_root equality check implements this semantic difference.
 
 **Scope behavior (Option B - scoped inside, all at root):**
 
@@ -207,9 +254,10 @@ The MCP server detects microservice at startup and caches it as "default_scope".
 
 2. **`ScopeManager` class** in `server.py`
    - Initialized after source_root resolution
-   - Detects and caches default_scope
+   - Detects and caches default_scope at server startup
    - Logs detection at INFO level
    - `apply_auto_scope(filter)` method injects scope when needed
+   - **Scope lifecycle**: Scope is detected once at server startup and cached for the server's lifetime. If the user changes directories during a long-running MCP session, the scope will NOT be re-detected automatically. Users who change directories should restart the MCP server to get updated scope detection. This is a known limitation documented in README.
 
 3. **Tool wrapper integration** in `server.py`
    - Each MCP tool wrapper calls `apply_auto_scope()` before passing filter to underlying function
@@ -226,7 +274,10 @@ The MCP server detects microservice at startup and caches it as "default_scope".
 **Logging and advisories:**
 
 - INFO-level logging shows detected microservice at startup
-- When at source_root level (no auto-scope), include advisory: "Query results span multiple microservices. Use filter='{\"microservice\": \"...\"}' to scope to a specific service."
+- Exact log messages:
+  - When scope detected: `[scope] Detected microservice: {microservice_name}` then `[scope] Queries scoped to {microservice_name}`
+  - When no scope (at source_root): `[scope] No microservice detected (at project root)` then `[scope] Queries will span all microservices`
+- Advisory message (shown in MCP response advisories field when at source_root and no explicit microservice filter): `Query results span multiple microservices. Use filter='{"microservice": "..."}' to scope to a specific service.`
 
 ### 3.6 Error messages
 
