@@ -30,11 +30,12 @@ dependencies = [
     "numpy>=1.26.4,<2.5",
     "pathspec>=1.0.4,<2",
     "pyarrow>=23.0.1,<24",
+    "pydantic>=2.0,<3",
     "PyYAML>=6.0.3,<7",
+    "questionary>=2.0,<3",
     "sentence-transformers>=5.4.0,<6",
     "tree-sitter>=0.25.2,<0.26",
     "tree-sitter-java>=0.23.5,<0.24",
-    "pydantic>=2.0,<3",
     "unidiff>=0.7.3,<1",
 ]
 
@@ -78,3 +79,6 @@ py-modules = [
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+
+[tool.setuptools.package-data]
+"java_codebase_rag" = ["install_data/skills/**/*", "install_data/agents/**/*"]
