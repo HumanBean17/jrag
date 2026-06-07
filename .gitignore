@@ -56,3 +56,6 @@ cocoindex_java_lance.db/
 .env
 .env.*
 tmp/
+
+# uv lock file (should not be committed)
+uv.lock
