@@ -599,6 +599,9 @@ class TestInstallIntegration:
 
         cwd = tmp_path / "bank-chat"
 
+        # Create .git so update_gitignore works
+        (cwd / ".git").mkdir()
+
         # Mock shutil.which to return a fake MCP path
         monkeypatch.setattr(shutil, "which", lambda x: "/fake/bin/java-codebase-rag-mcp")
 
@@ -679,6 +682,9 @@ class TestInstallIntegration:
         shutil.copytree(bank_chat, tmp_path / "bank-chat")
 
         cwd = tmp_path / "bank-chat"
+
+        # Create .git so update_gitignore works
+        (cwd / ".git").mkdir()
 
         # Mock shutil.which to return a fake MCP path
         monkeypatch.setattr(shutil, "which", lambda x: "/fake/bin/java-codebase-rag-mcp")

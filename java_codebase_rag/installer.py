@@ -228,9 +228,6 @@ def resolve_model(model_input: str | None, *, non_interactive: bool) -> str:
         return str(model_path)
 
     # Path not found - prompt for confirmation in interactive mode
-    if non_interactive:
-        return "auto"
-
     confirmed = prompt(
         "confirm",
         f"Model path {model_input} not found. Use 'auto' instead?",
@@ -422,6 +419,7 @@ def merge_mcp_config(config_path: Path, host: HostConfig, *, mcp_command: str) -
     config["mcpServers"]["java-codebase-rag"] = new_entry
 
     # Write atomically (write to tmp, then rename)
+    tmp_name = None
     try:
         with tempfile.NamedTemporaryFile(
             mode="w",
@@ -432,15 +430,16 @@ def merge_mcp_config(config_path: Path, host: HostConfig, *, mcp_command: str) -
             json.dump(config, tmp, indent=2)
             tmp.flush()
             os.fsync(tmp.fileno())
+            tmp_name = tmp.name
 
         # Atomic rename
-        os.rename(tmp.name, config_path)
+        os.rename(tmp_name, config_path)
         return True
     except (IOError, OSError) as e:
         print(f"Error: Failed to write {config_path}: {e}")
-        if tmp:
+        if tmp_name:
             try:
-                os.unlink(tmp.name)
+                os.unlink(tmp_name)
             except OSError:
                 pass
         return False
@@ -532,7 +531,7 @@ def _deploy_mcp_config(
                 error=f"Directory not writable: {config_path.parent}",
             )
 
-        # Merge config
+        # Merge config (returns True if updated, False if no-op or parse error)
         merge_mcp_config(config_path, host, mcp_command=mcp_command)
         return ArtifactResult(path=config_path, success=True, error=None)
     except Exception as e:
@@ -638,13 +637,9 @@ def generate_yaml_config(
     # Start with existing YAML or empty dict
     config = existing_yaml.copy() if existing_yaml else {}
 
-    # Keys managed by installer (will be overwritten)
-    managed_keys = set()
-
     # Write microservice_roots only if subset selected
     if microservice_roots:
         config["microservice_roots"] = microservice_roots
-        managed_keys.add("microservice_roots")
     elif "microservice_roots" in config:
         # Remove if not needed (was set before but user wants all)
         del config["microservice_roots"]
@@ -654,7 +649,6 @@ def generate_yaml_config(
         if "embedding" not in config:
             config["embedding"] = {}
         config["embedding"]["model"] = model
-        managed_keys.add("embedding")
     elif "embedding" in config and "model" in config["embedding"]:
         # Remove model if using auto
         if config["embedding"] == {"model": model}:
@@ -906,8 +900,17 @@ def run_install(
     # Update .gitignore
     update_gitignore(source_root)
 
-    # Run init if needed
     if not quiet:
         print("Configuration written to", config_path)
+
+    # Run init if index directory is empty
+    index_dir = (source_root / ".java-codebase-rag").resolve()
+    run_init_if_needed(
+        source_root,
+        index_dir,
+        resolved_model,
+        non_interactive=non_interactive,
+        quiet=quiet,
+    )
 
     return 0
