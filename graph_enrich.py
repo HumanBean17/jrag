@@ -1589,8 +1589,11 @@ def detect_microservice_from_path(cwd: Path, source_root: Path) -> str | None:
     if overrides and cwd_resolved.name in overrides:
         return cwd_resolved.name
 
-    # Call existing microservice_for_path to detect microservice from build markers
-    ms = microservice_for_path(str(cwd_resolved), source_resolved)
+    # microservice_for_path walks _bounded_parents which excludes the path itself.
+    # For query-time detection we need cwd included in the walk, so pass a synthetic
+    # child path so that cwd appears as a parent in the build-marker scan.
+    synthetic = cwd_resolved / "__scope_probe__"
+    ms = microservice_for_path(str(synthetic), source_resolved)
     return ms if ms else None
 
 
