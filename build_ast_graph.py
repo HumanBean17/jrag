@@ -436,9 +436,9 @@ class FileHashTracker:
             with open(tmp_path, "w", encoding="utf-8") as f:
                 json.dump(self._hashes, f, sort_keys=True)
             os.replace(tmp_path, self._path)
-        except OSError:
+        except OSError as e:
             # Fail gracefully; next run will treat as missing and rebuild.
-            pass
+            log.warning("Failed to save hash file %s: %s; next run will rebuild from scratch", self._path, e)
 
     def detect_changes(self, source_root: Path, ignore: LayeredIgnore) -> tuple[set[str], set[str], set[str]]:
         """Return (added, changed, removed) sets of relative POSIX paths."""
@@ -496,29 +496,34 @@ def _hash_file(abs_path: Path) -> str:
 # ---------- incremental rebuild helpers ----------
 
 
-def _load_existing_types(conn: kuzu.Connection, tables: GraphTables) -> None:
-    """Load type entries from existing Kuzu graph into tables for cross-file resolution."""
-    query = """
+def _load_existing_types(conn: kuzu.Connection, tables: GraphTables, exclude_files: set[str] | None = None) -> None:
+    """Load type entries from existing Kuzu graph into tables for cross-file resolution.
+
+    When exclude_files is provided, only load types from files NOT in the set.
+    """
+    if exclude_files is not None and not exclude_files:
+        return
+
+    where = "WHERE s.kind IN ['class', 'interface', 'enum', 'annotation', 'record']"
+    params: dict = {}
+    if exclude_files:
+        where += "\n    AND NOT (s.filename IN $exclude_files)"
+        params["exclude_files"] = list(exclude_files)
+
+    query = f"""
     MATCH (s:Symbol)
-    WHERE s.kind IN ['class', 'interface', 'enum', 'annotation', 'record']
+    {where}
     RETURN s.kind, s.fqn, s.name, s.filename, s.module, s.microservice, s.id
     """
-    result = conn.execute(query)
+    result = conn.execute(query, params)
     while result.has_next():
         row = result.get_next()
-        # Kuzu returns list, access by index
-        # Columns: kind, fqn, name, filename, module, microservice, id
-        kind = row[0]
-        fqn = row[1]
-        name = row[2]
-        filename = row[3]
+        kind, fqn, name, filename = row[0], row[1], row[2], row[3]
         module = row[4] if len(row) > 4 else ""
         microservice = row[5] if len(row) > 5 else ""
         node_id = row[6] if len(row) > 6 else ""
 
-        # Create a minimal TypeDecl (full details not needed for cross-file resolution)
         decl = TypeDecl(name, kind, fqn)
-
         package = fqn[: -(len(name) + 1)] if fqn.endswith("." + name) else ""
 
         entry = TypeIndexEntry(
@@ -527,7 +532,7 @@ def _load_existing_types(conn: kuzu.Connection, tables: GraphTables) -> None:
             module=module,
             microservice=microservice,
             package=package,
-            outer_fqn=None,  # Simplified: assume top-level for loading
+            outer_fqn=None,
             node_id=node_id,
         )
         tables.types[fqn] = entry
@@ -535,31 +540,36 @@ def _load_existing_types(conn: kuzu.Connection, tables: GraphTables) -> None:
         tables.by_package.setdefault(package, []).append(entry)
 
 
-def _load_existing_members(conn: kuzu.Connection, tables: GraphTables) -> None:
-    """Load all member entries from existing Kuzu graph into tables.members."""
-    query = """
+def _load_existing_members(conn: kuzu.Connection, tables: GraphTables, exclude_files: set[str] | None = None) -> None:
+    """Load member entries from existing Kuzu graph into tables.members.
+
+    When exclude_files is provided, only load members from files NOT in the set.
+    """
+    if exclude_files is not None and not exclude_files:
+        return
+
+    where = "WHERE s.kind IN ['method', 'constructor']"
+    params: dict = {}
+    if exclude_files:
+        where += "\n    AND NOT (s.filename IN $exclude_files)"
+        params["exclude_files"] = list(exclude_files)
+
+    query = f"""
     MATCH (s:Symbol)
-    WHERE s.kind IN ['method', 'constructor']
+    {where}
     RETURN s.kind, s.name, s.filename, s.signature, s.parent_id, s.fqn, s.id
     """
-    result = conn.execute(query)
+    result = conn.execute(query, params)
     while result.has_next():
         row = result.get_next()
-        # Kuzu returns list, access by index
-        # Columns: kind, name, filename, signature, parent_id, fqn, id
-        kind = row[0]
-        name = row[1]
-        filename = row[2]
+        kind, name, filename = row[0], row[1], row[2]
         signature = row[3] if len(row) > 3 else ""
         parent_id = row[4] if len(row) > 4 else ""
         fqn = row[5] if len(row) > 5 else ""
         node_id = row[6] if len(row) > 6 else ""
 
-        # Extract parent_fqn from method's fqn (format: "pkg.Type#method(params)")
         parent_fqn = fqn.split("#")[0] if "#" in fqn else ""
 
-        # Create a minimal MethodDecl (full details not needed for resolution)
-        # MethodDecl(name, return_type, is_constructor=False)
         decl = MethodDecl(name, "", kind == "constructor")
         decl.signature = signature
 
@@ -569,97 +579,8 @@ def _load_existing_members(conn: kuzu.Connection, tables: GraphTables) -> None:
             parent_id=parent_id,
             parent_fqn=parent_fqn,
             file_path=filename,
-            module="",  # Not needed for resolution
-            microservice="",  # Not needed for resolution
-            node_id=node_id,
-        ))
-
-
-def _load_existing_types_filtered(conn: kuzu.Connection, tables: GraphTables, exclude_files: set[str]) -> None:
-    """Load type entries from existing Kuzu graph, excluding specified files."""
-    if not exclude_files:
-        # If no files to exclude, don't load anything (all files are being reprocessed)
-        return
-
-    query = """
-    MATCH (s:Symbol)
-    WHERE s.kind IN ['class', 'interface', 'enum', 'annotation', 'record']
-    AND NOT (s.filename IN $exclude_files)
-    RETURN s.kind, s.fqn, s.name, s.filename, s.module, s.microservice, s.id
-    """
-    result = conn.execute(query, {"exclude_files": list(exclude_files)})
-    while result.has_next():
-        row = result.get_next()
-        # Kuzu returns list, access by index
-        # Columns: kind, fqn, name, filename, module, microservice, id
-        kind = row[0]
-        fqn = row[1]
-        name = row[2]
-        filename = row[3]
-        module = row[4] if len(row) > 4 else ""
-        microservice = row[5] if len(row) > 5 else ""
-        node_id = row[6] if len(row) > 6 else ""
-
-        # Create a minimal TypeDecl (full details not needed for cross-file resolution)
-        decl = TypeDecl(name, kind, fqn)
-
-        package = fqn[: -(len(name) + 1)] if fqn.endswith("." + name) else ""
-
-        entry = TypeIndexEntry(
-            decl=decl,
-            file_path=filename,
-            module=module,
-            microservice=microservice,
-            package=package,
-            outer_fqn=None,  # Simplified: assume top-level for loading
-            node_id=node_id,
-        )
-        tables.types[fqn] = entry
-        tables.by_simple_name.setdefault(name, []).append(entry)
-        tables.by_package.setdefault(package, []).append(entry)
-
-
-def _load_existing_members_filtered(conn: kuzu.Connection, tables: GraphTables, exclude_files: set[str]) -> None:
-    """Load member entries from existing Kuzu graph, excluding specified files."""
-    if not exclude_files:
-        # If no files to exclude, don't load anything (all files are being reprocessed)
-        return
-
-    query = """
-    MATCH (s:Symbol)
-    WHERE s.kind IN ['method', 'constructor']
-    AND NOT (s.filename IN $exclude_files)
-    RETURN s.kind, s.name, s.filename, s.signature, s.parent_id, s.fqn, s.id
-    """
-    result = conn.execute(query, {"exclude_files": list(exclude_files)})
-    while result.has_next():
-        row = result.get_next()
-        # Kuzu returns list, access by index
-        # Columns: kind, name, filename, signature, parent_id, fqn, id
-        kind = row[0]
-        name = row[1]
-        filename = row[2]
-        signature = row[3] if len(row) > 3 else ""
-        parent_id = row[4] if len(row) > 4 else ""
-        fqn = row[5] if len(row) > 5 else ""
-        node_id = row[6] if len(row) > 6 else ""
-
-        # Extract parent_fqn from method's fqn (format: "pkg.Type#method(params)")
-        parent_fqn = fqn.split("#")[0] if "#" in fqn else ""
-
-        # Create a minimal MethodDecl (full details not needed for resolution)
-        # MethodDecl(name, return_type, is_constructor=False)
-        decl = MethodDecl(name, "", kind == "constructor")
-        decl.signature = signature
-
-        tables.members.append(MemberEntry(
-            kind=kind,
-            decl=decl,
-            parent_id=parent_id,
-            parent_fqn=parent_fqn,
-            file_path=filename,
-            module="",  # Not needed for resolution
-            microservice="",  # Not needed for resolution
+            module="",
+            microservice="",
             node_id=node_id,
         ))
 
@@ -670,53 +591,18 @@ def _find_dependents(conn: kuzu.Connection, changed_node_ids: set[str]) -> set[s
 
     # Query each Symbol-to-Symbol edge table for incoming edges
     edge_types = ["EXTENDS", "IMPLEMENTS", "INJECTS", "CALLS", "DECLARES", "OVERRIDES"]
+    params = {"changed_ids": list(changed_node_ids)}
 
     for edge_type in edge_types:
-        # Use label(e) = 'TYPE' pattern (not label(e) IN $list due to Kuzu pitfalls)
-        # We need to build a query with OR conditions
-        if edge_type == "EXTENDS":
-            query = """
-            MATCH (src:Symbol)-[e:EXTENDS]->(dst:Symbol)
-            WHERE dst.id IN $changed_ids
-            RETURN DISTINCT src.filename
-            """
-        elif edge_type == "IMPLEMENTS":
-            query = """
-            MATCH (src:Symbol)-[e:IMPLEMENTS]->(dst:Symbol)
-            WHERE dst.id IN $changed_ids
-            RETURN DISTINCT src.filename
-            """
-        elif edge_type == "INJECTS":
-            query = """
-            MATCH (src:Symbol)-[e:INJECTS]->(dst:Symbol)
-            WHERE dst.id IN $changed_ids
-            RETURN DISTINCT src.filename
-            """
-        elif edge_type == "CALLS":
-            query = """
-            MATCH (src:Symbol)-[e:CALLS]->(dst:Symbol)
-            WHERE dst.id IN $changed_ids
-            RETURN DISTINCT src.filename
-            """
-        elif edge_type == "DECLARES":
-            query = """
-            MATCH (src:Symbol)-[e:DECLARES]->(dst:Symbol)
-            WHERE dst.id IN $changed_ids
-            RETURN DISTINCT src.filename
-            """
-        elif edge_type == "OVERRIDES":
-            query = """
-            MATCH (src:Symbol)-[e:OVERRIDES]->(dst:Symbol)
-            WHERE dst.id IN $changed_ids
-            RETURN DISTINCT src.filename
-            """
-        else:
-            continue
-
-        result = conn.execute(query, {"changed_ids": list(changed_node_ids)})
+        query = f"""
+        MATCH (src:Symbol)-[e:{edge_type}]->(dst:Symbol)
+        WHERE dst.id IN $changed_ids
+        RETURN DISTINCT src.filename
+        """
+        result = conn.execute(query, params)
         while result.has_next():
             row = result.get_next()
-            filename = row[0]  # Kuzu returns list, not dict
+            filename = row[0]
             if filename:  # Skip phantom nodes (filename = "")
                 dependent_files.add(filename)
 
@@ -812,13 +698,14 @@ def _scoped_write(conn: kuzu.Connection, tables: GraphTables, *, project_root: P
         _verbose_stderr_line(f"[graph] scoped write · nodes written in {elapsed:.2f}s")
 
     t1 = time.time()
-    _write_edges(conn, tables)
+    _fbyid = _build_file_by_node_id(tables)
+    _write_edges(conn, tables, _fbyid)
     elapsed = time.time() - t1
     if elapsed > 0.1:
         _verbose_stderr_line(f"[graph] scoped write · edges written in {elapsed:.2f}s")
 
     t2 = time.time()
-    _write_routes_and_exposes(conn, tables)
+    _write_routes_and_exposes(conn, tables, _fbyid)
     elapsed = time.time() - t2
     if elapsed > 0.1:
         _verbose_stderr_line(f"[graph] scoped write · routes/exposes written in {elapsed:.2f}s")
@@ -831,68 +718,8 @@ def _write_nodes_merge(
     project_root: Path,
     meta_chain: dict[str, frozenset[str]] | None,
 ) -> None:
-    """Write nodes to existing Kuzu database using MERGE to handle existing nodes.
-
-    Like _write_nodes but uses MERGE instead of CREATE to handle cases where
-    nodes might already exist in the database.
-    """
-    overrides = load_brownfield_overrides(project_root)
-    try:
-        prs = str(project_root.resolve())
-    except OSError:
-        prs = str(project_root)
-    tables.cross_service_resolution = _load_config_cross_service_resolution(prs)
-    mch = meta_chain
-    # packages
-    for pkg, pid in tables.packages.items():
-        conn.execute(_MERGE_SYMBOL, _node_row(
-            id=pid, kind="package", name=pkg.rsplit(".", 1)[-1], fqn=pkg, package=pkg,
-        ))
-    # files
-    for path, fid in tables.files.items():
-        conn.execute(_MERGE_SYMBOL, _node_row(
-            id=fid, kind="file", name=Path(path).name, fqn=path, filename=path,
-        ))
-    # types
-    for entry in tables.types.values():
-        d = entry.decl
-        role, capabilities = resolve_role_and_capabilities(
-            d,
-            overrides=overrides,
-            meta_chain=mch,
-        )
-        tables.type_role_by_node_id[entry.node_id] = role
-        conn.execute(_MERGE_SYMBOL, _node_row(
-            id=entry.node_id, kind=d.kind, name=d.name, fqn=d.fqn,
-            package=entry.package,
-            module=entry.module, microservice=entry.microservice,
-            filename=entry.file_path,
-            start_line=d.start_line, end_line=d.end_line,
-            start_byte=d.start_byte, end_byte=d.end_byte,
-            modifiers=list(d.modifiers),
-            annotations=[a.name for a in d.annotations],
-            capabilities=capabilities,
-            role=role,
-            signature="",
-            parent_id=tables.types[entry.outer_fqn].node_id if entry.outer_fqn and entry.outer_fqn in tables.types else "",
-        ))
-    # members (methods / constructors)
-    for m in tables.members:
-        conn.execute(_MERGE_SYMBOL, _node_row(
-            id=m.node_id, kind=m.kind, name=m.decl.name,
-            fqn=f"{m.parent_fqn}#{m.decl.signature}",
-            package=tables.types[m.parent_fqn].package if m.parent_fqn in tables.types else "",
-            module=m.module, microservice=m.microservice,
-            filename=m.file_path,
-            start_line=m.decl.start_line, end_line=m.decl.end_line,
-            start_byte=m.decl.start_byte, end_byte=m.decl.end_byte,
-            modifiers=list(m.decl.modifiers),
-            annotations=[a.name for a in m.decl.annotations],
-            signature=m.decl.signature, parent_id=m.parent_id,
-        ))
-    # phantoms
-    for pid, row in tables.phantoms.items():
-        conn.execute(_MERGE_SYMBOL, row)
+    """Write nodes to existing Kuzu database using MERGE to handle existing nodes."""
+    _write_nodes_impl(conn, tables, project_root=project_root, meta_chain=meta_chain, symbol_query=_MERGE_SYMBOL)
 
 
 # ---------- file walk (see `path_filtering.iter_java_source_files`) ----------
@@ -3054,12 +2881,13 @@ _MERGE_SYMBOL = (
 )
 
 
-def _write_nodes(
+def _write_nodes_impl(
     conn: kuzu.Connection,
     tables: GraphTables,
     *,
     project_root: Path,
     meta_chain: dict[str, frozenset[str]] | None,
+    symbol_query: str,
 ) -> None:
     overrides = load_brownfield_overrides(project_root)
     try:
@@ -3070,12 +2898,12 @@ def _write_nodes(
     mch = meta_chain
     # packages
     for pkg, pid in tables.packages.items():
-        conn.execute(_CREATE_SYMBOL, _node_row(
+        conn.execute(symbol_query, _node_row(
             id=pid, kind="package", name=pkg.rsplit(".", 1)[-1], fqn=pkg, package=pkg,
         ))
     # files
     for path, fid in tables.files.items():
-        conn.execute(_CREATE_SYMBOL, _node_row(
+        conn.execute(symbol_query, _node_row(
             id=fid, kind="file", name=Path(path).name, fqn=path, filename=path,
         ))
     # types
@@ -3087,7 +2915,7 @@ def _write_nodes(
             meta_chain=mch,
         )
         tables.type_role_by_node_id[entry.node_id] = role
-        conn.execute(_CREATE_SYMBOL, _node_row(
+        conn.execute(symbol_query, _node_row(
             id=entry.node_id, kind=d.kind, name=d.name, fqn=d.fqn,
             package=entry.package,
             module=entry.module, microservice=entry.microservice,
@@ -3103,7 +2931,7 @@ def _write_nodes(
         ))
     # members (methods / constructors)
     for m in tables.members:
-        conn.execute(_CREATE_SYMBOL, _node_row(
+        conn.execute(symbol_query, _node_row(
             id=m.node_id, kind=m.kind, name=m.decl.name,
             fqn=f"{m.parent_fqn}#{m.decl.signature}",
             package=tables.types[m.parent_fqn].package if m.parent_fqn in tables.types else "",
@@ -3117,7 +2945,17 @@ def _write_nodes(
         ))
     # phantoms
     for pid, row in tables.phantoms.items():
-        conn.execute(_CREATE_SYMBOL, row)
+        conn.execute(symbol_query, row)
+
+
+def _write_nodes(
+    conn: kuzu.Connection,
+    tables: GraphTables,
+    *,
+    project_root: Path,
+    meta_chain: dict[str, frozenset[str]] | None,
+) -> None:
+    _write_nodes_impl(conn, tables, project_root=project_root, meta_chain=meta_chain, symbol_query=_CREATE_SYMBOL)
 
 
 _CREATE_EXT = (
@@ -3248,13 +3086,20 @@ def _populate_overrides_rows(tables: GraphTables) -> None:
     ]
 
 
-def _write_edges(conn: kuzu.Connection, tables: GraphTables) -> None:
-    # Build node_id -> file_path lookup for source_file resolution.
-    _file_by_node_id: dict[str, str] = {}
+def _build_file_by_node_id(tables: GraphTables) -> dict[str, str]:
+    """Build node_id -> file_path lookup for source_file resolution."""
+    lookup: dict[str, str] = {}
     for entry in tables.types.values():
-        _file_by_node_id[entry.node_id] = entry.file_path
+        lookup[entry.node_id] = entry.file_path
     for m in tables.members:
-        _file_by_node_id[m.node_id] = m.file_path
+        lookup[m.node_id] = m.file_path
+    return lookup
+
+
+def _write_edges(conn: kuzu.Connection, tables: GraphTables, _file_by_node_id: dict[str, str] | None = None) -> None:
+    # Build node_id -> file_path lookup for source_file resolution.
+    if _file_by_node_id is None:
+        _file_by_node_id = _build_file_by_node_id(tables)
 
     for r in tables.extends_rows:
         conn.execute(_CREATE_EXT, {
@@ -3345,13 +3190,10 @@ def _write_edges(conn: kuzu.Connection, tables: GraphTables) -> None:
         })
 
 
-def _write_routes_and_exposes(conn: kuzu.Connection, tables: GraphTables) -> None:
+def _write_routes_and_exposes(conn: kuzu.Connection, tables: GraphTables, _file_by_node_id: dict[str, str] | None = None) -> None:
     # Build node_id -> file_path lookup for source_file resolution (for Symbol sources).
-    _file_by_node_id: dict[str, str] = {}
-    for entry in tables.types.values():
-        _file_by_node_id[entry.node_id] = entry.file_path
-    for m in tables.members:
-        _file_by_node_id[m.node_id] = m.file_path
+    if _file_by_node_id is None:
+        _file_by_node_id = _build_file_by_node_id(tables)
 
     # Build client_id -> filename lookup for HTTP_CALLS source_file.
     _file_by_client_id: dict[str, str] = {row.id: row.filename for row in tables.client_rows}
@@ -3577,30 +3419,12 @@ def incremental_rebuild(
         pass6_match_edges(tables, verbose=verbose)
         write_kuzu(kuzu_path, tables, source_root=source_root, verbose=verbose)
 
-        # Initialize hash tracker
-        index_dir = kuzu_path.parent
-        tracker = FileHashTracker(index_dir)
-        tracker.load()
-        ignore = LayeredIgnore(source_root)
-        all_files = set()
-        # Resolve source_root to handle symlinks
-        source_root_resolved = source_root.resolve()
-        for p in iter_java_source_files(source_root, ignore=ignore):
-            # Resolve the absolute path and compute relative path
-            p_resolved = p.resolve()
-            try:
-                rel_path = p_resolved.relative_to(source_root_resolved).as_posix()
-            except ValueError:
-                # Fallback to using the path as-is if it's not under source_root
-                rel_path = p.as_posix()
-            all_files.add(rel_path)
-        tracker.update(all_files, source_root)
-        tracker.save()
+        n_files = _init_hash_tracker(source_root, kuzu_path)
 
         return IncrementalResult(
             mode="full_fallback",
             files_changed=0,
-            files_added=len(all_files),
+            files_added=n_files,
             files_removed=0,
             dependents_reprocessed=0,
             elapsed_sec=time.time() - t_start,
@@ -3707,8 +3531,8 @@ def incremental_rebuild(
         asts = pass1_parse(source_root, tables, verbose=verbose, scope_files=scope_files)
 
         # Load existing types and members for cross-file resolution (only from unchanged files)
-        _load_existing_types_filtered(conn, tables, exclude_files=scope_files)
-        _load_existing_members_filtered(conn, tables, exclude_files=scope_files)
+        _load_existing_types(conn, tables, exclude_files=scope_files)
+        _load_existing_members(conn, tables, exclude_files=scope_files)
 
         pass2_edges(tables, asts, verbose=verbose)
         pass3_calls(tables, asts, verbose=verbose)
@@ -3788,6 +3612,26 @@ def incremental_rebuild(
         return _fallback_to_full(source_root, kuzu_path, verbose, t_start)
 
 
+def _init_hash_tracker(source_root: Path, kuzu_path: Path) -> int:
+    """Initialize hash tracker for all Java files. Returns number of files hashed."""
+    index_dir = kuzu_path.parent
+    tracker = FileHashTracker(index_dir)
+    tracker.load()
+    ignore = LayeredIgnore(source_root)
+    all_files: set[str] = set()
+    source_root_resolved = source_root.resolve()
+    for p in iter_java_source_files(source_root, ignore=ignore):
+        p_resolved = p.resolve()
+        try:
+            rel_path = p_resolved.relative_to(source_root_resolved).as_posix()
+        except ValueError:
+            rel_path = p.as_posix()
+        all_files.add(rel_path)
+    tracker.update(all_files, source_root)
+    tracker.save()
+    return len(all_files)
+
+
 def _fallback_to_full(source_root: Path, kuzu_path: Path, verbose: bool, t_start: float) -> IncrementalResult:
     """Fallback to full rebuild."""
     tables = GraphTables()
@@ -3799,30 +3643,12 @@ def _fallback_to_full(source_root: Path, kuzu_path: Path, verbose: bool, t_start
     pass6_match_edges(tables, verbose=verbose)
     write_kuzu(kuzu_path, tables, source_root=source_root, verbose=verbose)
 
-    # Initialize hash tracker
-    index_dir = kuzu_path.parent
-    tracker = FileHashTracker(index_dir)
-    tracker.load()
-    ignore = LayeredIgnore(source_root)
-    all_files = set()
-    # Resolve source_root to handle symlinks
-    source_root_resolved = source_root.resolve()
-    for p in iter_java_source_files(source_root, ignore=ignore):
-        # Resolve the absolute path and compute relative path
-        p_resolved = p.resolve()
-        try:
-            rel_path = p_resolved.relative_to(source_root_resolved).as_posix()
-        except ValueError:
-            # Fallback to using the path as-is if it's not under source_root
-            rel_path = p.as_posix()
-        all_files.add(rel_path)
-    tracker.update(all_files, source_root)
-    tracker.save()
+    n_files = _init_hash_tracker(source_root, kuzu_path)
 
     return IncrementalResult(
         mode="full_fallback",
         files_changed=0,
-        files_added=len(all_files),
+        files_added=n_files,
         files_removed=0,
         dependents_reprocessed=0,
         elapsed_sec=time.time() - t_start,
@@ -3926,11 +3752,12 @@ def write_kuzu(
         _populate_declares_rows(tables)
         _populate_overrides_rows(tables)
         t1 = time.time()
-        _write_edges(conn, tables)
+        _fbyid = _build_file_by_node_id(tables)
+        _write_edges(conn, tables, _fbyid)
         if verbose:
             _verbose_stderr_line(f"[graph] writing · edges written in {time.time() - t1:.2f}s")
         t2 = time.time()
-        _write_routes_and_exposes(conn, tables)
+        _write_routes_and_exposes(conn, tables, _fbyid)
         if verbose:
             _verbose_stderr_line(f"[graph] writing · routes/exposes written in {time.time() - t2:.2f}s")
         _write_meta(conn, tables, source_root)

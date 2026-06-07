@@ -43,7 +43,7 @@ when needed.
   variables, full `.java-codebase-rag.yml` reference, **graph layer**
   (node kinds, edges, capabilities, ranking, "Re-index required"
   callouts), brownfield overrides, ignore patterns. The current
-  `ontology_version` is **15** (`EDGE_SCHEMA` in `java_ontology.py`;
+  `ontology_version` is **17** (`EDGE_SCHEMA` in `java_ontology.py`;
   material `OVERRIDES` Symbol→Symbol edges: subtype instance method →
   supertype declaration with matching `signature`, one
   `IMPLEMENTS`/`EXTENDS` hop; valid `neighbors` `EdgeType`).
@@ -190,7 +190,7 @@ template):
   `VALID_RESOLVE_REASONS`, `VALID_UNRESOLVED_CALL_REASONS`.
 - Schema changes that affect the Lance index or Kuzu graph need a
   matching update to the README "Re-index required" callout. Bump
-  `ontology_version` when enrichment semantics change (currently **15**).
+  `ontology_version` when enrichment semantics change (currently **17**).
 - Brownfield is a first-class surface: any new auto-detection (route,
   role, capability, http client, async producer) must compose with the
   matching `BrownfieldOverrides` layer. Last writer wins (outermost layer
