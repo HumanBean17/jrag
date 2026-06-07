@@ -22,7 +22,7 @@ These steps are documented across README, CONFIGURATION.md, AGENT-GUIDE.md, and 
 ### Two new subcommands
 
 ```
-java-codebase-rag install [--non-interactive] [--agent {claude-code|qwen-code|gigacode}] [--scope {user|project}] [--model {auto|<path>}]
+java-codebase-rag install [--non-interactive] [--agent {claude-code|qwen-code|gigacode}]... [--scope {user|project}] [--model {auto|<path>}]
 java-codebase-rag update [--force] [--dry-run]
 ```
 
@@ -31,11 +31,11 @@ java-codebase-rag update [--force] [--dry-run]
 
 ### Exit codes
 
-| Code | Meaning |
-|------|---------|
-| 0 | Success (all stages completed) |
-| 1 | Partial success (some stages failed, e.g. MCP written but init skipped) |
-| 2 | Refusal or fatal error (no Java files found, required flag missing) |
+| Code | Meaning | User action |
+|------|---------|-------------|
+| 0 | Success (all stages completed) | None — tool is ready |
+| 1 | Partial success | Read the summary. Failed stages are listed with specific errors. Fix the reported issue (e.g. missing entrypoint, permission error) and re-run `install` — it will skip already-completed stages. |
+| 2 | Fatal error (no Java files, required flag missing) | Fix the root cause (e.g. run from a Java project, pass `--agent` in non-interactive mode) and re-run. |
 
 ### `install` — interactive pipeline (6 stages)
 
@@ -43,37 +43,49 @@ All interactive prompts go through a `prompt()` helper in `java_codebase_rag/ins
 
 **Stage 1: Java source detection**
 
-Scan cwd recursively for directories containing `.java` files. Detection granularity: **top-level directories only** (immediate children of cwd). If cwd contains `service-a/src/main/java/...` and `service-b/src/main/java/...`, the checklist shows `service-a` and `service-b`, not nested package directories.
+Detection strategy depends on whether cwd has a root build file:
 
-If no `.java` files are found anywhere under cwd: print "No Java source files found in `<cwd>`. Run this command from your Java project root." and exit with code 2.
+**Case A: Root has `pom.xml` or `build.gradle*` (multi-module or single-module project)**
+- Show only `.` (the root directory) in the checklist
+- No nested module enumeration — the entire tree is indexed as one unit
+- This prevents overwhelming the user with every Maven submodule in a large project
 
-Display as an interactive checklist (via `questionary.checkbox`) with all detected directories checked by default. User can:
-- Uncheck individual directories
+**Case B: Root has NO build file (microservice monorepo or multiple projects)**
+- Scan immediate children of cwd for directories containing `pom.xml` or `build.gradle*`
+- Show those directories as microservice roots
+- Example: if cwd has `service-a/pom.xml`, `service-b/build.gradle`, `common/pom.xml` → show `service-a`, `service-b`, `common`
+
+**Fatal error:** If no build files are found anywhere (neither at root nor in any subdirectory), print "No Maven or Gradle modules found in `<cwd>`. Run this command from your Java project root." and exit with code 2.
+
+Display as an interactive checklist (via `questionary.checkbox`) with all detected items checked by default. User can:
+- Uncheck individual items
 - Uncheck all, then selectively check some back
 - Accept the default (all checked)
 
 Resolution rules:
 - **cwd** is always `source_root`
-- If the user selects a subset of detected directories, those become `microservice_roots` in `.java-codebase-rag.yml`
-- If the user accepts all (default), `microservice_roots` is omitted (the indexer walks the entire tree)
+- If Case A (root build file exists) and user accepts `.` default: `microservice_roots` is omitted (the indexer walks the entire tree)
+- If Case A and user unchecks `.` (invalid state): prompt "At least one module is required. Re-select or abort."
+- If Case B and user selects a subset of detected directories: those become `microservice_roots` in `.java-codebase-rag.yml`
+- If Case B and user accepts all (default): `microservice_roots` is omitted (the indexer walks the entire tree)
 
 **Stage 2: Embedding model**
 
 Prompt: *"Embedding model? Press Enter for auto-download (~90MB), or type a local path:"*
 
 - Default: `auto` (= `sentence-transformers/all-MiniLM-L6-v2`, downloads on first `init`)
-- If user provides a local path, validate it exists (warn but allow continuing)
+- If user provides a local path, validate it exists. If not found: prompt "Path not found: `<path>`. Continue anyway? (y/n)" — require explicit confirmation before proceeding with a bad path
 - Path expansion: support `~`, `$HOME`, relative paths
 - When `--model auto` flag is passed (non-interactive), skip this stage entirely
 
 **Stage 3: Agent host selection**
 
-Menu with 3 options:
-1. Claude Code (`.claude`)
-2. GigaCode (`.gigacode`)
-3. Qwen Code (`.qwen`)
+Checkbox with 3 options (all checked by default):
+- Claude Code (`.claude`)
+- GigaCode (`.gigacode`)
+- Qwen Code (`.qwen`)
 
-This determines the directory prefix for all artifact paths.
+This determines the directory prefix for all artifact paths. Users may select multiple hosts to configure all their coding agents in one run. If no hosts are selected, the installer prompts to confirm before proceeding (at least one host is required).
 
 **Stage 4: Install scope**
 
@@ -84,9 +96,15 @@ Prompt: *"Install for this project only, or for all projects?"*
 
 Note: both scopes are fully supported. Claude Code loads skills from both `~/.claude/skills/` (user) and `.claude/skills/` (project). Same for agents. Qwen Code and GigaCode follow the same pattern.
 
-**Stage 5: Artifact deployment**
+**Stage 5: MCP entrypoint resolution + artifact deployment**
 
-Deploy 3 artifacts to the resolved host directory:
+Before writing any artifacts, resolve the MCP server command path:
+
+1. Run `shutil.which("java-codebase-rag-mcp")` to find the absolute path to the entrypoint.
+2. **If found** — use the resolved absolute path as the `"command"` value in the MCP config (e.g., `"/Users/x/.local/bin/java-codebase-rag-mcp"`). This ensures the agent host can start the server regardless of its own PATH configuration (GUI launchers, virtualenvs, etc.).
+3. **If not found** — in interactive mode, prompt the user: *"Could not find `java-codebase-rag-mcp` on PATH. This usually means the package isn't installed or `~/.local/bin` is not on PATH. Enter the full path (or 'abort'):"* If the user provides a path, validate it exists and is executable. In non-interactive mode, print the error and exit with code 2.
+
+Deploy 3 artifacts to each selected host's directory:
 
 | Artifact | Source (in pip package) | Destination |
 |----------|------------------------|-------------|
@@ -102,11 +120,12 @@ MCP config behavior differs by host and scope:
 | Qwen Code | `.qwen/settings.json` | `~/.qwen/settings.json` | Read existing JSON → merge into `mcpServers` key → write back. File may contain `security`, `model`, `$version` keys — preserve them. |
 | GigaCode | `.gigacode/settings.json` | `~/.gigacode/settings.json` | Same as Qwen Code (fork, identical format). |
 
-MCP entry to write (same for all hosts):
+MCP entry to write (same for all hosts, `MCP_COMMAND` is the resolved absolute path):
 ```json
 {
   "java-codebase-rag": {
-    "command": "java-codebase-rag-mcp"
+    "command": "MCP_COMMAND",
+    "type": "stdio"
   }
 }
 ```
@@ -116,6 +135,17 @@ No env vars in MCP config — walk-up discovery resolves source root and index d
 When files already exist:
 - **Skill/agent files**: ask before overwriting. Show file size and mtime. Options: overwrite / skip / abort.
 - **MCP config files**: always merge (never overwrite the entire file). If `java-codebase-rag` entry already exists in `mcpServers`, update it in-place. Ask before modifying only if the entry already exists with a different config.
+
+**Post-deploy validation:**
+
+After writing all artifacts, verify the MCP command written to the config is actually executable by running `shutil.which()` or checking `os.access(resolved_path, os.X_OK)`. If the resolved path is no longer valid (e.g. race condition with uninstall):
+- Print: "Warning: the MCP command `<path>` may not be executable. Your agent host may fail to start the MCP server. Re-run `java-codebase-rag install` to reconfigure."
+- Continue (don't abort) — the path was valid at resolution time and may work from the agent host's environment
+
+Also verify the target directories are writable before attempting to write. If a directory is not writable:
+- Print the specific path and error
+- Skip that artifact, continue with others
+- Exit with code 1 if any artifact failed to write
 
 **Stage 6: Index + finish**
 
@@ -135,7 +165,9 @@ When files already exist:
 ### Re-running `install`
 
 When `install` is run in an already-configured project:
-- If `.java-codebase-rag.yml` exists: detect it, inform the user, and offer to update config or start fresh
+- If `.java-codebase-rag.yml` exists: read it and show current values to the user. Offer two options:
+  1. **Update** — re-run the pipeline pre-filled with existing values. The user can change individual fields. Existing keys in the YAML that the installer doesn't manage (e.g. `brownfield_overrides`, custom `embedding.device`) are preserved verbatim.
+  2. **Start fresh** — overwrite the config from scratch (after confirmation).
 - Existing MCP entries are updated in-place (merged, not duplicated)
 - Existing skill/agent files trigger overwrite confirmation
 
@@ -158,7 +190,7 @@ Flags: `--force` (reinstall even if files match), `--dry-run`.
 
 When `--non-interactive` is passed or stdin is not a TTY:
 - Use defaults for all prompts
-- Requires `--agent` flag (error if missing, exit code 2)
+- Requires at least one `--agent` flag (can be passed multiple times for multiple hosts; error if none provided, exit code 2)
 - Defaults to `--scope project` unless overridden
 - `--model auto` is the default (skip model prompt)
 - No confirmation prompts (CI-friendly)
@@ -171,9 +203,14 @@ When `--non-interactive` is passed or stdin is not a TTY:
 | Qwen Code | `.qwen` | `.qwen/settings.json` | `~/.qwen/settings.json` | `.qwen/skills/` | `~/.qwen/skills/` | `.qwen/agents/` | `~/.qwen/agents/` |
 | GigaCode | `.gigacode` | `.gigacode/settings.json` | `~/.gigacode/settings.json` | `.gigacode/skills/` | `~/.gigacode/skills/` | `.gigacode/agents/` | `~/.gigacode/agents/` |
 
+**Platform notes:**
+- All paths use `pathlib.Path` — no hardcoded separators. Works on macOS, Linux, and Windows.
+- `~` is expanded via `Path.home()`, not shell expansion.
+- Writability is checked before each write attempt. Permission errors are caught and reported per-artifact (exit code 1 for partial failure).
+
 ### Implementation stack
 
-- **Interactive prompts**: `questionary` (new dependency, depends on `prompt_toolkit`) for checkboxes, menus, and confirm dialogs. All calls go through a `prompt()` helper in `installer.py` that checks `sys.stdin.isatty()` and falls back to default values when False.
+- **Interactive prompts**: `questionary` (new dependency, depends on `prompt_toolkit`) for checkboxes (Java sources, agent hosts) and text/confirm dialogs. All calls go through a `prompt()` helper in `installer.py` that checks `sys.stdin.isatty()` and falls back to default values when False.
 - **Styling/output**: `rich` (explicit dependency in `pyproject.toml`) for progress display, tables, and summary formatting.
 - **Shipped artifacts**: Skill and agent files live at `java_codebase_rag/install_data/skills/` and `java_codebase_rag/install_data/agents/` inside the package directory. Included via `package_data` in `pyproject.toml`. The build process copies them from the repo-root `skills/` and `agents/` directories.
 - **New module**: `java_codebase_rag/installer.py` (host config mapping, prompt helper, artifact deployment, MCP merge logic)
@@ -186,8 +223,9 @@ When `--non-interactive` is passed or stdin is not a TTY:
 - New `install` subcommand with 6-stage interactive pipeline
 - New `java_codebase_rag/installer.py` module with `prompt()` TTY-abstraction helper
 - Move skill/agent files into `java_codebase_rag/install_data/` and register as `package_data`
-- Non-interactive mode with `--non-interactive` and flag overrides
+- Non-interactive mode with `--non-interactive` and flag overrides (supports multiple `--agent` flags)
 - Per-host MCP config merge logic (handles `~/.claude.json` with other keys, `settings.json` with other sections)
+- Multi-host support: configure multiple agent hosts in a single run
 - Host config mapping for Claude Code, Qwen Code, GigaCode
 - `.gitignore` auto-update (create if missing, skip if not a git repo, pattern-aware check)
 - YAML config generation from installer answers
@@ -228,9 +266,22 @@ When `--non-interactive` is passed or stdin is not a TTY:
 - Unit: `.gitignore` update: skips silently if not a git repo
 - Unit: `prompt()` helper dispatches to `questionary` when TTY, returns defaults when not
 - Unit: re-run detection: existing `.java-codebase-rag.yml` triggers informative message
-- Unit: empty cwd (no `.java` files) exits with code 2
-- Unit: `source_root` is always cwd; subset of directories → `microservice_roots`
-- Integration: `install --non-interactive --agent claude-code` from bank-chat fixture → verify files written, MCP config valid, `init` succeeds, index is queryable
+- Unit: empty cwd (no `pom.xml` or `build.gradle*` files) exits with code 2
+- Unit: `source_root` is always cwd; subset of modules → `microservice_roots`
+- Unit: Maven module detection: `pom.xml` found → module root detected
+- Unit: Gradle module detection: `build.gradle` or `build.gradle.kts` found → module root detected
+- Unit: nested module detection: `service-a/api/pom.xml` → relative path `service-a/api` detected
+- Unit: MCP entrypoint resolution: `shutil.which` finds entrypoint → absolute path written to MCP config
+- Unit: MCP entrypoint resolution: `shutil.which` returns None → interactive prompt for user-provided path
+- Unit: MCP entrypoint resolution: `shutil.which` returns None in non-interactive mode → exit code 2
+- Unit: MCP entrypoint resolution: user-provided path validated for existence and executability
+- Unit: model path validation prompts for confirmation when path doesn't exist
+- Unit: re-run "update" preserves unmanaged YAML keys (e.g. `brownfield_overrides`)
+- Unit: permission error on target directory is caught and reported, other artifacts continue
+- Unit: multi-host selection: no hosts selected → prompts for at least one host
+- Unit: multi-host selection: multiple hosts selected → artifacts deployed to all selected hosts
+- Unit: multi-host non-interactive: multiple `--agent` flags → configures all specified hosts
+- Integration: `install --non-interactive --agent claude-code --agent qwen-code` from bank-chat fixture → verify files written to both `.mcp.json` and `.qwen/settings.json`, MCP configs valid, `init` succeeds
 
 **PR 2 tests:**
 - Unit: host detection scans both project-level and user-level paths
