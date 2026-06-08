@@ -22,6 +22,14 @@ import yaml
 
 Scope = Literal["project", "user"]
 
+# MCP server name constant
+_MCP_SERVER_NAME = "java-codebase-rag"
+
+# Exit code constants
+EXIT_SUCCESS = 0
+EXIT_PARTIAL = 1
+EXIT_FATAL = 2
+
 
 class ArtifactResult(NamedTuple):
     """Result of deploying a single artifact."""
@@ -422,14 +430,14 @@ def merge_mcp_config(config_path: Path, host: HostConfig, *, mcp_command: str) -
 
     # Prepare new entry
     new_entry = {"command": mcp_command, "type": "stdio"}
-    existing_entry = config["mcpServers"].get("java-codebase-rag")
+    existing_entry = config["mcpServers"].get(_MCP_SERVER_NAME)
 
     # Check if entry already exists with same config
     if existing_entry == new_entry:
         return False
 
     # Merge/update entry
-    config["mcpServers"]["java-codebase-rag"] = new_entry
+    config["mcpServers"][_MCP_SERVER_NAME] = new_entry
 
     # Write atomically (write to tmp, then rename)
     tmp_name = None
@@ -868,7 +876,7 @@ def _has_java_codebase_rag_entry(config_path: Path) -> bool:
         return False
 
     mcp_servers = config.get("mcpServers", {})
-    return "java-codebase-rag" in mcp_servers
+    return _MCP_SERVER_NAME in mcp_servers
 
 
 def refresh_artifacts(
@@ -1032,7 +1040,7 @@ def _refresh_mcp_config(
         if "mcpServers" not in config:
             config["mcpServers"] = {}
 
-        existing_entry = config["mcpServers"].get("java-codebase-rag")
+        existing_entry = config["mcpServers"].get(_MCP_SERVER_NAME)
 
         # Check if entry already matches (skip unless force)
         if existing_entry == new_entry and not force:
@@ -1044,7 +1052,7 @@ def _refresh_mcp_config(
             return ArtifactResult(path=config_path, success=True, error=None)
 
         # Merge/update entry
-        config["mcpServers"]["java-codebase-rag"] = new_entry
+        config["mcpServers"][_MCP_SERVER_NAME] = new_entry
 
         # Ensure parent directory exists
         config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1086,22 +1094,6 @@ def _refresh_mcp_config(
 
     except Exception as e:
         return ArtifactResult(path=config_path, success=False, error=str(e))
-
-
-_INCREMENT_WARNING_LINES = (
-    "WARNING: AST graph (Kuzu) incremental rebuild is not yet implemented.",
-    "The graph reflects the index state from the last `init` or `reprocess`,",
-    "which means `find`, `neighbors`, and `describe` may return stale results",
-    "for files changed since then.",
-    "",
-    "Lance vector index has been updated incrementally and is current.",
-    "",
-    "For an up-to-date graph, run:",
-    "    java-codebase-rag reprocess",
-    "",
-    "Track progress on Kuzu incremental rebuild:",
-    "    https://github.com/HumanBean17/java-codebase-rag/issues/73",
-)
 
 
 def run_update(
@@ -1191,6 +1183,7 @@ def run_update(
             return 1
 
         # Print graph staleness warning
+        from java_codebase_rag.cli import _INCREMENT_WARNING_LINES
         print("\n" + "\n".join(_INCREMENT_WARNING_LINES))
     else:
         print("\nWould run incremental index update.")
