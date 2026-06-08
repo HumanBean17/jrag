@@ -544,6 +544,10 @@ def test_increment_first_run_falls_back_to_full(
 
 
 
+@pytest.mark.skipif(
+    os.environ.get("JAVA_CODEBASE_RAG_RUN_HEAVY", "").strip() != "1",
+    reason="imports lancedb which spawns background thread that causes Kuzu segfaults",
+)
 @pytest.mark.skipif(not _cocoindex_available(), reason="cocoindex not installed in venv")
 def test_increment_updates_lance_after_touch_java_file(corpus_root: Path, tmp_path: Path) -> None:
     import lancedb  # noqa: PLC0415
