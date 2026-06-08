@@ -52,8 +52,6 @@ def _session_db_path(tmp_path_factory: pytest.TempPathFactory, name: str) -> Pat
 @pytest.fixture(scope="session")
 def kuzu_db_path(tmp_path_factory, corpus_root: Path) -> Path:
     """Bank-chat Kuzu DB: pass1–5 + ``write_kuzu`` (no pass6)."""
-    import gc
-
     import kuzu
 
     from _builders import build_kuzu_to
@@ -61,8 +59,7 @@ def kuzu_db_path(tmp_path_factory, corpus_root: Path) -> Path:
     db_path = _session_db_path(tmp_path_factory, "bank_chat")
     build_kuzu_to(corpus_root, db_path, max_pass=5)
 
-    db = kuzu.Database(str(db_path), read_only=True)
-    conn = kuzu.Connection(db, num_threads=1)
+    conn = kuzu.Connection(kuzu.Database(str(db_path), read_only=True))
     n_types = 0
     r = conn.execute("MATCH (s:Symbol) WHERE s.kind = 'class' RETURN count(*) AS n")
     if r.has_next():
@@ -71,12 +68,6 @@ def kuzu_db_path(tmp_path_factory, corpus_root: Path) -> Path:
     r = conn.execute("MATCH ()-[e:INJECTS]->() RETURN count(e) AS n")
     n_injects = int(r.get_next()[0] or 0) if r.has_next() else 0
     assert n_injects >= 1, "build produced no INJECTS edges"
-    del r
-    conn.close()
-    conn = None
-    db.close()
-    db = None
-    gc.collect()
     return db_path
 
 
