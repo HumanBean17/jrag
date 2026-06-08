@@ -22,6 +22,14 @@ import yaml
 
 Scope = Literal["project", "user"]
 
+# MCP server name constant
+_MCP_SERVER_NAME = "java-codebase-rag"
+
+# Exit code constants
+EXIT_SUCCESS = 0
+EXIT_PARTIAL = 1
+EXIT_FATAL = 2
+
 
 class ArtifactResult(NamedTuple):
     """Result of deploying a single artifact."""
@@ -422,14 +430,14 @@ def merge_mcp_config(config_path: Path, host: HostConfig, *, mcp_command: str) -
 
     # Prepare new entry
     new_entry = {"command": mcp_command, "type": "stdio"}
-    existing_entry = config["mcpServers"].get("java-codebase-rag")
+    existing_entry = config["mcpServers"].get(_MCP_SERVER_NAME)
 
     # Check if entry already exists with same config
     if existing_entry == new_entry:
         return False
 
     # Merge/update entry
-    config["mcpServers"]["java-codebase-rag"] = new_entry
+    config["mcpServers"][_MCP_SERVER_NAME] = new_entry
 
     # Write atomically (write to tmp, then rename)
     tmp_name = None
@@ -821,6 +829,383 @@ def handle_rerun(cwd: Path, *, non_interactive: bool) -> dict | None:
         return None
     else:  # update
         return existing_config
+
+
+def detect_configured_hosts(cwd: Path) -> list[tuple[HostConfig, str]]:
+    """Scan project + user config files for java-codebase-rag MCP entries.
+
+    Args:
+        cwd: Current working directory (for project-scope configs)
+
+    Returns:
+        List of (host_config, scope) tuples where scope is "project" or "user"
+    """
+    detected = []
+
+    # Check all hosts in both project and user scopes
+    for host_name, host_config in HOSTS.items():
+        # Check project scope
+        project_mcp_path = host_config.mcp_config_path("project", cwd)
+        if _has_java_codebase_rag_entry(project_mcp_path):
+            detected.append((host_config, "project"))
+
+        # Check user scope
+        user_mcp_path = host_config.mcp_config_path("user", cwd)
+        if _has_java_codebase_rag_entry(user_mcp_path):
+            detected.append((host_config, "user"))
+
+    return detected
+
+
+def _has_java_codebase_rag_entry(config_path: Path) -> bool:
+    """Check if MCP config file has a java-codebase-rag entry.
+
+    Args:
+        config_path: Path to MCP config file
+
+    Returns:
+        True if file exists and contains java-codebase-rag in mcpServers
+    """
+    if not config_path.is_file():
+        return False
+
+    try:
+        with open(config_path, "r") as f:
+            config = json.load(f)
+    except (json.JSONDecodeError, IOError, OSError):
+        return False
+
+    mcp_servers = config.get("mcpServers", {})
+    return _MCP_SERVER_NAME in mcp_servers
+
+
+def refresh_artifacts(
+    host: HostConfig,
+    scope: str,
+    cwd: Path,
+    *,
+    force: bool,
+    dry_run: bool,
+) -> list[ArtifactResult]:
+    """Overwrite skill and agent files from package data. Skip MCP if entry is correct.
+
+    Args:
+        host: HostConfig for the agent host
+        scope: Installation scope ("project" or "user")
+        cwd: Current working directory
+        force: If True, overwrite all files even if matching
+        dry_run: If True, print changes without writing
+
+    Returns:
+        List of ArtifactResult objects for each artifact
+    """
+    results = []
+
+    # Refresh skill file
+    skills_dir = host.skills_dir(scope, cwd)
+    skill_dest = skills_dir / "explore-codebase" / "SKILL.md"
+    skill_result = _refresh_file(
+        skill_dest,
+        "skills/explore-codebase/SKILL.md",
+        artifact_type="skill",
+        force=force,
+        dry_run=dry_run,
+    )
+    results.append(skill_result)
+
+    # Refresh agent file
+    agents_dir = host.agents_dir(scope, cwd)
+    agent_dest = agents_dir / "explorer-rag-enhanced.md"
+    agent_result = _refresh_file(
+        agent_dest,
+        "agents/explorer-rag-enhanced.md",
+        artifact_type="agent",
+        force=force,
+        dry_run=dry_run,
+    )
+    results.append(agent_result)
+
+    # Refresh MCP config (update command path if needed)
+    mcp_config_path = host.mcp_config_path(scope, cwd)
+    mcp_result = _refresh_mcp_config(mcp_config_path, host, force=force, dry_run=dry_run)
+    results.append(mcp_result)
+
+    return results
+
+
+def _refresh_file(
+    dest_path: Path,
+    package_relative_path: str,
+    *,
+    artifact_type: str,
+    force: bool,
+    dry_run: bool,
+) -> ArtifactResult:
+    """Refresh a single file from package data.
+
+    Args:
+        dest_path: Destination file path
+        package_relative_path: Path relative to install_data
+        artifact_type: Type of artifact (for error messages)
+        force: If True, overwrite even if matching
+        dry_run: If True, print without writing
+
+    Returns:
+        ArtifactResult with success status
+    """
+    try:
+        # Read package data
+        package_content = _read_package_artifact(package_relative_path)
+
+        # Check if file exists
+        if dest_path.is_file():
+            existing_content = dest_path.read_text(encoding="utf-8")
+
+            # Skip if content matches and not forcing
+            if package_content == existing_content and not force:
+                return ArtifactResult(path=dest_path, success=True, error=None)
+
+            # Content differs or force mode
+            if dry_run:
+                print(f"Would update {artifact_type} file at {dest_path}")
+                return ArtifactResult(path=dest_path, success=True, error=None)
+
+        elif dry_run:
+            print(f"Would create {artifact_type} file at {dest_path}")
+            return ArtifactResult(path=dest_path, success=True, error=None)
+
+        # Ensure parent directory exists
+        if not dry_run:
+            dest_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Check writability
+            if not _is_writable(dest_path.parent):
+                return ArtifactResult(
+                    path=dest_path,
+                    success=False,
+                    error=f"Directory not writable: {dest_path.parent}",
+                )
+
+        # Write file (skip in dry_run mode)
+        if not dry_run:
+            dest_path.write_text(package_content, encoding="utf-8")
+            print(f"Updated {artifact_type} file at {dest_path}")
+
+        return ArtifactResult(path=dest_path, success=True, error=None)
+
+    except Exception as e:
+        return ArtifactResult(path=dest_path, success=False, error=str(e))
+
+
+def _refresh_mcp_config(
+    config_path: Path,
+    host: HostConfig,
+    *,
+    force: bool,
+    dry_run: bool,
+) -> ArtifactResult:
+    """Refresh MCP config entry (update command path if needed).
+
+    Args:
+        config_path: Path to MCP config file
+        host: HostConfig for the agent host
+        force: If True, update even if matching
+        dry_run: If True, print without writing
+
+    Returns:
+        ArtifactResult with success status
+    """
+    try:
+        # Resolve current MCP command path
+        # Catch SystemExit because resolve_mcp_command raises it when binary not found
+        try:
+            mcp_command = resolve_mcp_command(non_interactive=True)
+        except SystemExit:
+            return ArtifactResult(
+                path=config_path,
+                success=False,
+                error="java-codebase-rag-mcp not found on PATH",
+            )
+
+        # Prepare new entry
+        new_entry = {"command": mcp_command, "type": "stdio"}
+
+        # Read existing config
+        if config_path.is_file():
+            try:
+                with open(config_path, "r") as f:
+                    config = json.load(f)
+            except json.JSONDecodeError as e:
+                return ArtifactResult(
+                    path=config_path,
+                    success=False,
+                    error=f"Failed to parse {config_path}: {e}",
+                )
+        else:
+            config = {}
+
+        # Ensure mcpServers key exists
+        if "mcpServers" not in config:
+            config["mcpServers"] = {}
+
+        existing_entry = config["mcpServers"].get(_MCP_SERVER_NAME)
+
+        # Check if entry already matches (skip unless force)
+        if existing_entry == new_entry and not force:
+            return ArtifactResult(path=config_path, success=True, error=None)
+
+        # Entry differs or force mode
+        if dry_run:
+            print(f"Would update MCP config at {config_path}")
+            return ArtifactResult(path=config_path, success=True, error=None)
+
+        # Merge/update entry
+        config["mcpServers"][_MCP_SERVER_NAME] = new_entry
+
+        # Ensure parent directory exists
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Check writability
+        if not _is_writable(config_path.parent):
+            return ArtifactResult(
+                path=config_path,
+                success=False,
+                error=f"Directory not writable: {config_path.parent}",
+            )
+
+        # Write atomically
+        tmp_name = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                dir=config_path.parent,
+                prefix=f".{config_path.name}.",
+                delete=False,
+            ) as tmp:
+                json.dump(config, tmp, indent=2)
+                tmp.flush()
+                os.fsync(tmp.fileno())
+                tmp_name = tmp.name
+
+            # Atomic rename
+            os.rename(tmp_name, config_path)
+            print(f"Updated MCP config at {config_path}")
+            return ArtifactResult(path=config_path, success=True, error=None)
+
+        except (IOError, OSError) as e:
+            if tmp_name:
+                try:
+                    os.unlink(tmp_name)
+                except OSError:
+                    pass
+            raise RuntimeError(f"Failed to write {config_path}: {e}") from e
+
+    except SystemExit as e:
+        # Catch SystemExit from resolve_mcp_command and other exits
+        return ArtifactResult(path=config_path, success=False, error=f"Command failed: {e.code}")
+    except Exception as e:
+        return ArtifactResult(path=config_path, success=False, error=str(e))
+
+
+def run_update(
+    *,
+    force: bool,
+    dry_run: bool,
+    cwd: Path | None = None,
+) -> int:
+    """Run the update pipeline. Returns exit code.
+
+    Args:
+        force: If True, overwrite all artifacts even if matching
+        dry_run: If True, print changes without writing
+        cwd: Current working directory (defaults to Path.cwd())
+
+    Returns:
+        Exit code (0=success, 1=partial, 2=fatal)
+    """
+    if cwd is None:
+        cwd = Path.cwd()
+    cwd = cwd.resolve()
+
+    # Detect configured hosts
+    configured_hosts = detect_configured_hosts(cwd)
+
+    if not configured_hosts:
+        print("No configured agent hosts found.")
+        print("Run `java-codebase-rag install` first.")
+        return EXIT_FATAL
+
+    print(f"Found {len(configured_hosts)} configured host(s).")
+
+    # Refresh artifacts for each host
+    all_results = []
+    for host_config, scope in configured_hosts:
+        print(f"\nRefreshing {host_config.name} ({scope} scope)...")
+        results = refresh_artifacts(host_config, scope, cwd, force=force, dry_run=dry_run)
+        all_results.extend(results)
+
+    # Check for partial failures
+    partial_failures = [r for r in all_results if not r.success]
+    has_artifact_failures = len(partial_failures) > 0
+    if partial_failures:
+        print("\nWarning: Some artifacts failed to update:")
+        for r in partial_failures:
+            print(f"  {r.path}: {r.error}")
+
+    # Check if index exists
+    from java_codebase_rag.config import (
+        discover_project_root,
+        index_dir_has_existing_artifacts,
+        resolve_operator_config,
+    )
+    from java_codebase_rag.pipeline import run_cocoindex_update
+
+    project_root = discover_project_root(cwd)
+    if project_root is None:
+        print("\nNo project configuration found (.java-codebase-rag.yml).")
+        print("Skipping index update.")
+        return EXIT_PARTIAL if has_artifact_failures else EXIT_SUCCESS
+
+    # Resolve configuration
+    try:
+        cfg = resolve_operator_config(source_root=project_root, cli_index_dir=None)
+        index_dir = cfg.index_dir
+    except Exception as e:
+        print(f"\nWarning: Failed to resolve configuration: {e}")
+        print("Skipping index update.")
+        return EXIT_PARTIAL if has_artifact_failures else EXIT_SUCCESS
+
+    # Check if index has existing artifacts
+    index_exists, _ = index_dir_has_existing_artifacts(index_dir)
+
+    if not index_exists:
+        print("\nNo index found.")
+        print("Run `java-codebase-rag install` to create one.")
+        return EXIT_PARTIAL if has_artifact_failures else EXIT_SUCCESS
+
+    # Run increment (LanceDB catch-up)
+    if not dry_run:
+        print("\nUpdating index (incremental LanceDB update)...")
+        cfg.apply_to_os_environ()
+        env = cfg.subprocess_env()
+
+        coco = run_cocoindex_update(env, full_reprocess=False, quiet=True)
+        if coco.returncode != 0:
+            print(f"Error: Index update failed with code {coco.returncode}")
+            return 1
+
+        # Print graph staleness warning
+        from java_codebase_rag.cli import _INCREMENT_WARNING_LINES
+        print("\n" + "\n".join(_INCREMENT_WARNING_LINES))
+    else:
+        print("\nWould run incremental index update.")
+
+    # Print summary
+    print("\nUpdate complete.")
+    successful = [r for r in all_results if r.success]
+    print(f"Updated {len(successful)} artifact(s).")
+
+    return 1 if has_artifact_failures else 0
 
 
 def run_install(

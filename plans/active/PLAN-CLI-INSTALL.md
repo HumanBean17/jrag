@@ -666,5 +666,5 @@ Add `update` subparser with `--force` and `--dry-run` flags.
 
 # Tracking
 
-- `PR-I1`: _pending_
-- `PR-I2`: _pending_
+- `PR-I1`: _completed_
+- `PR-I2`: _completed_

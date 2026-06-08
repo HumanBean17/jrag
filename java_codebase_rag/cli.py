@@ -496,6 +496,15 @@ def _cmd_install(args: argparse.Namespace) -> int:
     )
 
 
+def _cmd_update(args: argparse.Namespace) -> int:
+    from java_codebase_rag.installer import run_update
+
+    return run_update(
+        force=bool(args.force),
+        dry_run=bool(args.dry_run),
+    )
+
+
 def _cmd_erase(args: argparse.Namespace) -> int:
     cfg = _resolved_from_ns(args)
     _startup_hints(cfg)
@@ -759,6 +768,28 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_verbosity_flags(install)
     install.set_defaults(handler=_cmd_install)
+
+    update = subparsers.add_parser(
+        "update",
+        help="Refresh shipped artifacts (skill, agent, MCP entry) after pip upgrade.",
+        description=(
+            "Post-upgrade refresh: overwrites skill and agent files with the latest "
+            "shipped versions and updates the MCP command path. Use --dry-run to "
+            "preview changes without writing. Requires a prior `install` run."
+        ),
+    )
+    update.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite all artifacts even if content matches.",
+    )
+    update.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print changes without writing files.",
+    )
+    _add_verbosity_flags(update)
+    update.set_defaults(handler=_cmd_update)
 
     increment = subparsers.add_parser(
         "increment",
