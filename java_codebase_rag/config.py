@@ -393,14 +393,12 @@ def index_dir_has_existing_artifacts(index_dir: Path) -> tuple[bool, list[str]]:
     if ku.exists():
         paths.append(str(ku.resolve()))
     if index_dir.is_dir():
-        try:
-            import lancedb
-
-            db = lancedb.connect(str(index_dir.resolve()))
-            for name in db.table_names():
-                paths.append(str((index_dir / name).resolve()) + " (Lance table)")
-        except Exception:
-            pass
+        # Check for Lance tables via filesystem to avoid importing lancedb,
+        # which spawns a BackgroundEventLoop daemon thread that causes Kuzu
+        # C++ segfaults in the same process.
+        for child in index_dir.iterdir():
+            if child.is_dir() and (child / "data.lance").exists():
+                paths.append(str(child.resolve()) + " (Lance table)")
     return bool(paths), paths
 
 
