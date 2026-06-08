@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+import os
 from contextlib import redirect_stderr
 from pathlib import Path
 
@@ -483,6 +484,10 @@ def test_fqn_fires_with_enrich_chunk_lance_path(tmp_path: Path) -> None:
     assert c.role == "SERVICE"
 
 
+@pytest.mark.skipif(
+    os.environ.get("JAVA_CODEBASE_RAG_RUN_HEAVY", "").strip() != "1",
+    reason="imports cocoindex/lancedb which spawns a background thread that causes Kuzu segfaults",
+)
 def test_tier1_java_lance_chunk_capabilities_list_type_matches_other_lists() -> None:
     """Pre-flight tier 1: `capabilities` uses the same Arrow list<string> as other list cols."""
     import java_index_flow_lancedb as java_lance
@@ -509,6 +514,10 @@ def test_tier1_java_lance_chunk_capabilities_list_type_matches_other_lists() -> 
     assert l_cap == l_ann == l_sym
 
 
+@pytest.mark.skipif(
+    os.environ.get("JAVA_CODEBASE_RAG_RUN_HEAVY", "").strip() != "1",
+    reason="imports cocoindex/lancedb which spawns a background thread that causes Kuzu segfaults",
+)
 def test_tier2_lance_row_carries_enrich_capabilities_without_lancedb() -> None:
     """Pre-flight tier 2: `JavaLanceChunk` row would carry the same `capabilities` as `enrich_chunk` (CocoIndex wiring)."""
     import numpy as np
@@ -558,6 +567,10 @@ def test_tier2_lance_row_carries_enrich_capabilities_without_lancedb() -> None:
     assert "MESSAGE_LISTENER" in row.capabilities
 
 
+@pytest.mark.skipif(
+    os.environ.get("JAVA_CODEBASE_RAG_RUN_HEAVY", "").strip() != "1",
+    reason="imports lancedb which spawns a background thread that causes Kuzu segfaults",
+)
 def test_lance_table_round_trips_list_capabilities(tmp_path: Path) -> None:
     """Lance can store and read list<string> `capabilities` (CocoIndex write path).
 

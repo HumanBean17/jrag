@@ -11,7 +11,6 @@ import threading
 from collections.abc import Callable
 from pathlib import Path
 
-import lancedb
 import numpy as np
 from sentence_transformers import SentenceTransformer
 
@@ -48,13 +47,19 @@ _SCHEMA_CACHE: dict[tuple[str, str], set[str]] = {}
 _SCHEMA_LOCK = threading.Lock()
 
 
+def _connect_lancedb(uri: str):
+    import lancedb
+
+    return lancedb.connect(uri)
+
+
 def _table_columns(uri: str, lance_table_name: str, db_obj: object | None = None) -> set[str]:
     key = (uri, lance_table_name)
     with _SCHEMA_LOCK:
         cached = _SCHEMA_CACHE.get(key)
         if cached is not None:
             return cached
-    db = db_obj if db_obj is not None else lancedb.connect(uri)
+    db = db_obj if db_obj is not None else _connect_lancedb(uri)
     tbl = db.open_table(lance_table_name)
     cols = {f.name for f in tbl.schema}
     with _SCHEMA_LOCK:
@@ -428,7 +433,7 @@ def ensure_text_fts_index(uri: str, lance_table_name: str) -> None:
     with _FTS_LOCK:
         if key in _FTS_READY:
             return
-        db = lancedb.connect(uri)
+        db = _connect_lancedb(uri)
         tbl = db.open_table(lance_table_name)
         try:
             tbl.create_fts_index("text", replace=False)
@@ -842,7 +847,7 @@ def run_search(
     query_vec = _query_vector(model, query)
     fts_for_hybrid = effective_fts if effective_fts is not None else query
 
-    db = lancedb.connect(uri)
+    db = _connect_lancedb(uri)
     need = max(limit + offset, 1)
 
     extra_java = _build_extra_predicates(
