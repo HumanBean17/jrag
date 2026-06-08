@@ -25,7 +25,8 @@ from java_codebase_rag.config import (
 from kuzu_queries import KuzuGraph, resolve_kuzu_path
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
-from search_lancedb import TABLES
+# TABLES imported lazily in list_code_index_tables_payload() to avoid
+# spawning the LanceDB background event-loop thread on module import.
 
 _COCOINDEX_TARGET = "java_index_flow_lancedb.py:JavaCodeIndexLance"
 _INSTRUCTIONS = (
@@ -236,6 +237,8 @@ def _graph_meta_output() -> GraphMetaOutput:
 
 
 def list_code_index_tables_payload() -> IndexInfoOutput:
+    from search_lancedb import TABLES
+
     return IndexInfoOutput(
         lancedb_uri=_resolve_lancedb_uri(),
         embedding_model=resolved_sbert_model_for_process_env(SBERT_MODEL),
