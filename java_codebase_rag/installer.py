@@ -796,6 +796,8 @@ def run_init_if_needed(
     g = run_build_ast_graph(
         source_root=cfg.source_root,
         kuzu_path=cfg.kuzu_path,
+        verbose=not quiet,
+        quiet=quiet,
         env=env,
     )
     if g.returncode != 0:
