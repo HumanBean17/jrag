@@ -10,6 +10,7 @@ test. See ``tests/README.md`` for the project's anti-overfitting rules.
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 from pathlib import Path
@@ -20,6 +21,23 @@ import pytest
 
 if TYPE_CHECKING:
     from build_ast_graph import GraphTables
+
+
+def pytest_runtest_teardown(item, nextitem):
+    """Close lingering event loops after each test to prevent kuzu segfaults.
+
+    pytest-asyncio may leave event loops running after async tests complete.
+    These background threads conflict with Kuzu's C++ library during subsequent tests.
+    This hook ensures event loops are closed after each test.
+    """
+    try:
+        loop = asyncio.get_event_loop()
+        if loop and not loop.is_closed():
+            if loop.is_running():
+                loop.call_soon_threadsafe(loop.stop)
+            loop.close()
+    except RuntimeError:
+        pass  # No event loop exists
 
 BUNDLE_DIR = Path(__file__).resolve().parent.parent
 TESTS_DIR = Path(__file__).resolve().parent
