@@ -44,6 +44,31 @@ pip install java-codebase-rag
 Python **3.11+** required. After install, `java-codebase-rag --help` should print the CLI groups.
 The package includes the CocoIndex lifecycle dependency used by `init`, `increment`, `reprocess`, and `erase`.
 
+### Interactive setup (recommended)
+
+Run `java-codebase-rag install` from your Java project root to launch an interactive setup wizard that:
+
+1. Detects Java source directories (Maven/Gradle modules)
+2. Configures the embedding model (auto-downloads ~90MB or uses a local path)
+3. Selects agent hosts (Claude Code, Qwen Code, GigaCode)
+4. Deploys MCP registration, skill, and agent artifacts
+5. Generates `.java-codebase-rag.yml` configuration
+6. Runs `init` to build the index
+
+```bash
+# Interactive mode
+java-codebase-rag install
+
+# Non-interactive mode (for CI/automation)
+java-codebase-rag install --non-interactive --agent claude-code
+```
+
+After `pip install --upgrade java-codebase-rag`, run `java-codebase-rag update` to refresh shipped artifacts.
+
+### Manual registration
+
+If you prefer manual configuration, see [`docs/JAVA-CODEBASE-RAG-CLI.md`](./docs/JAVA-CODEBASE-RAG-CLI.md) for the full CLI reference.
+
 > **Stability disclaimer.** This package does **not** promise backward compatibility. MCP tool contracts, env vars, Lance/Kuzu schemas, config files, and Python APIs may change without a deprecation period. Track `main` and rebuild indexes when ontology or embedding settings change.
 
 ---
@@ -84,7 +109,9 @@ If vector hits come back and graph expansion adds neighbor symbols, the install 
 
 ## Wire into an MCP host
 
-### Claude Code
+> **Quick setup:** Run `java-codebase-rag install` from your Java project root. The interactive wizard handles MCP registration, skill deployment, and configuration for Claude Code, Qwen Code, and GigaCode in one step.
+
+### Claude Code (manual)
 
 With the package installed, the console script `java-codebase-rag-mcp` is on your `PATH`. Register it project-scoped:
 
@@ -167,6 +194,8 @@ Run `java-codebase-rag --help` to list grouped subcommands. Operator playbook wi
 
 | Group | Subcommand | What it does |
 |---|---|---|
+| Setup | `install` | Interactive setup wizard: config, MCP registration, skill/agent deployment, indexing. |
+| Setup | `update` | Refresh shipped artifacts (skill, agent, MCP entry) after pip upgrade. |
 | Lifecycle | `init` | First-time index. Refuses if artifacts already exist. |
 | Lifecycle | `increment` | CocoIndex catch-up + incremental Kuzu update. `--vectors-only` for Lance only. |
 | Lifecycle | `reprocess` | Full Lance + Kuzu rebuild. `--vectors-only` / `--graph-only` for a single phase. |

@@ -17,6 +17,80 @@ If `java-codebase-rag` is missing, run the module entrypoint:
 .venv/bin/python -m java_codebase_rag.cli --help
 ```
 
+## Setup commands
+
+### `install`
+
+Interactive setup wizard that walks users through Java source detection, embedding model selection, agent host configuration, artifact deployment, and YAML config generation. Use `--non-interactive` for CI/automation.
+
+```bash
+# Interactive mode
+java-codebase-rag install
+
+# Non-interactive mode (requires at least one --agent)
+java-codebase-rag install --non-interactive --agent claude-code
+java-codebase-rag install --non-interactive --agent claude-code --agent qwen-code
+
+# With custom embedding model
+java-codebase-rag install --model /path/to/model
+
+# User-scope installation (available globally)
+java-codebase-rag install --scope user
+```
+
+**Flags:**
+- `--non-interactive` — Run without prompts (requires `--agent`).
+- `--agent {claude-code,qwen-code,gigacode}` — Agent host to configure (can be passed multiple times).
+- `--scope {project,user}` — Installation scope (default: `project`). Project scope writes to `.<host>/` in the project repo; user scope writes to `~/.<host>/` (globally available).
+- `--model MODEL` — Embedding model path or `auto` (default: `auto`, downloads `sentence-transformers/all-MiniLM-L6-v2` on first run).
+
+**Exit codes:**
+- `0` — Success (all stages completed).
+- `1` — Partial success (some stages failed). Re-run `install` to retry failed stages.
+- `2` — Fatal error (no Java files found, required flag missing).
+
+**Stages:**
+1. Java source detection — Maven/Gradle module roots.
+2. Embedding model selection — auto-download or local path.
+3. Agent host selection — Claude Code, Qwen Code, GigaCode (multi-select).
+4. Install scope — project or user.
+5. MCP entrypoint resolution + artifact deployment — config, skill, agent files.
+6. Index + finish — YAML generation, `.gitignore` update, `init`.
+
+**Re-running `install`:** If `.java-codebase-rag.yml` exists, the installer shows current values and offers "Update" (pre-filled) or "Start fresh". Existing MCP entries are updated in-place (merged, not duplicated). Skill/agent files trigger overwrite confirmation.
+
+### `update`
+
+Post-upgrade refresh: overwrites skill and agent files with the latest shipped versions and updates the MCP command path. Requires a prior `install` run.
+
+```bash
+# Refresh after pip upgrade
+pip install --upgrade java-codebase-rag
+java-codebase-rag update
+
+# Preview changes without writing
+java-codebase-rag update --dry-run
+
+# Force overwrite all artifacts
+java-codebase-rag update --force
+```
+
+**Flags:**
+- `--force` — Overwrite all artifacts even if content matches.
+- `--dry-run` — Print changes without writing files.
+
+**Behavior:**
+- Detects previously configured agent hosts (scans both project-level and user-level config files).
+- Refreshes skill and agent files (versioned assets from the package).
+- Updates MCP entrypoint path if `java-codebase-rag-mcp` has moved.
+- Runs `increment` on the index if it exists (LanceDB catch-up). Prints graph staleness warning.
+- Skips MCP config if the entry already exists and is correct.
+
+**Exit codes:**
+- `0` — Success.
+- `1` — Partial failure (some artifacts failed to write).
+- `2` — No configured hosts found.
+
 ## Output mode
 
 - **TTY:** human-readable `pprint` of the payload on stdout (except **successful selective `reprocess`** with `--vectors-only` / `--graph-only`, which prints `Rebuilt:` / `Skipped:` lines instead of dumping the full dict).
