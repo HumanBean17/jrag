@@ -119,16 +119,31 @@ def prompt(
 
     # Lazy import questionary only when needed (TTY)
     import questionary
+    from prompt_toolkit.styles import Style
+
+    # Custom style for better visibility on both light and dark backgrounds
+    # Uses bold and darker colors (blue/cyan) which work well on white backgrounds
+    custom_style = Style(
+        [
+            ("qmark", "fg:cyan bold"),  # Question mark '?'
+            ("question", "bold"),  # Question text
+            ("answer", "fg:blue bold"),  # Selected answer (darker blue for white bg)
+            ("pointer", "fg:cyan bold"),  # Selection pointer '>'
+            ("selected", "fg:blue bold"),  # Selected item in checkbox
+            ("highlighted", "fg:blue underline"),  # Highlighted item with underline
+            ("instruction", "dim"),  # Instruction text
+        ]
+    )
 
     try:
         if prompt_type == "checkbox":
-            return questionary.checkbox(message, choices=choices).ask()
+            return questionary.checkbox(message, choices=choices, style=custom_style).ask()
         elif prompt_type == "select":
-            return questionary.select(message, choices=choices).ask()
+            return questionary.select(message, choices=choices, style=custom_style).ask()
         elif prompt_type == "text":
-            return questionary.text(message, default=default).ask()
+            return questionary.text(message, default=default, style=custom_style).ask()
         elif prompt_type == "confirm":
-            return questionary.confirm(message).ask()
+            return questionary.confirm(message, style=custom_style).ask()
         else:
             raise ValueError(f"Unknown prompt_type: {prompt_type}")
     except KeyboardInterrupt:
@@ -287,10 +302,15 @@ def select_hosts(*, non_interactive: bool, cli_agents: list[str] | None) -> list
         print(f"Valid agents: {', '.join(HOSTS.keys())}")
         raise SystemExit(2)
 
-    # Interactive: show checkbox with all hosts pre-selected
+    # Interactive: show checkbox with claude-code pre-selected (most common)
+    # Changed from all pre-selected to avoid confusion
     host_names = list(HOSTS.keys())
-    choices = [{"name": name, "value": name, "checked": True} for name in host_names]
+    choices = [
+        {"name": name, "value": name, "checked": (name == "claude-code")}
+        for name in host_names
+    ]
 
+    print("Note: You can select multiple agent hosts with Space. Navigate with arrow keys.")
     selected = prompt("checkbox", "Select agent hosts to configure:", choices=choices)
 
     if not selected:
@@ -304,6 +324,8 @@ def select_hosts(*, non_interactive: bool, cli_agents: list[str] | None) -> list
         else:
             raise SystemExit(2)
 
+    # Show confirmation of what will be deployed
+    print(f"Will deploy to: {', '.join(selected)}")
     return [HOSTS[name] for name in selected]
 
 
@@ -327,6 +349,8 @@ def select_scope(*, non_interactive: bool, cli_scope: str | None) -> Scope:
         return "project"
 
     # Interactive: prompt for scope
+    print("Note: 'project' scope stores configs in the project directory.")
+    print("      'user' scope stores configs in your home directory.")
     selected = prompt(
         "select",
         "Select installation scope:",
@@ -336,6 +360,7 @@ def select_scope(*, non_interactive: bool, cli_scope: str | None) -> Scope:
     if not selected:
         return "project"
 
+    print(f"Selected scope: {selected}")
     return selected  # type: ignore
 
 
@@ -746,7 +771,8 @@ def run_init_if_needed(
     )
     from java_codebase_rag.pipeline import run_build_ast_graph, run_cocoindex_update
 
-    if index_dir_has_existing_artifacts(index_dir):
+    has_existing, _ = index_dir_has_existing_artifacts(index_dir)
+    if has_existing:
         print("Index already exists. Run `java-codebase-rag reprocess` to rebuild.")
         return False
 
