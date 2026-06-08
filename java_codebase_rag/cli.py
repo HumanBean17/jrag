@@ -483,6 +483,19 @@ def _cmd_reprocess(args: argparse.Namespace) -> int:
     return _run_with_pipeline_progress("reprocess", cfg, quiet=bool(args.quiet), work=work)
 
 
+def _cmd_install(args: argparse.Namespace) -> int:
+    from java_codebase_rag.installer import run_install
+
+    return run_install(
+        non_interactive=bool(args.non_interactive),
+        agents=args.agent,  # list of str (may be empty)
+        scope=args.scope,
+        model=args.model,
+        source_root=None,  # None means cwd; installer confirms interactively
+        quiet=bool(args.quiet),
+    )
+
+
 def _cmd_erase(args: argparse.Namespace) -> int:
     cfg = _resolved_from_ns(args)
     _startup_hints(cfg)
@@ -710,6 +723,42 @@ def build_parser() -> argparse.ArgumentParser:
     _add_index_embedding_flags(init)
     _add_verbosity_flags(init)
     init.set_defaults(handler=_cmd_init)
+
+    install = subparsers.add_parser(
+        "install",
+        help="Interactive setup wizard: config, MCP registration, skill/agent deployment, indexing.",
+        description=(
+            "Interactive setup wizard that guides users through: Java source detection, "
+            "embedding model selection, agent host configuration, artifact deployment, "
+            "and YAML config generation. Use --non-interactive for CI/automation."
+        ),
+    )
+    install.add_argument(
+        "--non-interactive",
+        action="store_true",
+        help="Run without prompts (requires --agent).",
+    )
+    install.add_argument(
+        "--agent",
+        choices=["claude-code", "qwen-code", "gigacode"],
+        default=[],
+        action="append",
+        help="Agent host to configure (can be passed multiple times).",
+    )
+    install.add_argument(
+        "--scope",
+        choices=["project", "user"],
+        default=None,
+        help="Installation scope (default: project).",
+    )
+    install.add_argument(
+        "--model",
+        type=str,
+        default=None,
+        help="Embedding model path or 'auto' (default: auto).",
+    )
+    _add_verbosity_flags(install)
+    install.set_defaults(handler=_cmd_install)
 
     increment = subparsers.add_parser(
         "increment",
