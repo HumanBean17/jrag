@@ -340,6 +340,11 @@ class KuzuGraph:
         self._conn = kuzu.Connection(self._db)
         self._conn_lock = threading.Lock()
 
+    def close(self) -> None:
+        """Release native Kuzu objects before interpreter shutdown GC."""
+        self._conn = None
+        self._db = None
+
     @classmethod
     def get(cls, db_path: str | None = None) -> "KuzuGraph":
         resolved = resolve_kuzu_path(db_path)

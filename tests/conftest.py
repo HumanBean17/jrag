@@ -51,6 +51,8 @@ def _session_db_path(tmp_path_factory: pytest.TempPathFactory, name: str) -> Pat
 @pytest.fixture(scope="session")
 def kuzu_db_path(tmp_path_factory, corpus_root: Path) -> Path:
     """Bank-chat Kuzu DB: pass1–5 + ``write_kuzu`` (no pass6)."""
+    import gc
+
     import kuzu
 
     from _builders import build_kuzu_to
@@ -58,7 +60,8 @@ def kuzu_db_path(tmp_path_factory, corpus_root: Path) -> Path:
     db_path = _session_db_path(tmp_path_factory, "bank_chat")
     build_kuzu_to(corpus_root, db_path, max_pass=5)
 
-    conn = kuzu.Connection(kuzu.Database(str(db_path), read_only=True))
+    db = kuzu.Database(str(db_path), read_only=True)
+    conn = kuzu.Connection(db)
     n_types = 0
     r = conn.execute("MATCH (s:Symbol) WHERE s.kind = 'class' RETURN count(*) AS n")
     if r.has_next():
@@ -67,6 +70,8 @@ def kuzu_db_path(tmp_path_factory, corpus_root: Path) -> Path:
     r = conn.execute("MATCH ()-[e:INJECTS]->() RETURN count(e) AS n")
     n_injects = int(r.get_next()[0] or 0) if r.has_next() else 0
     assert n_injects >= 1, "build produced no INJECTS edges"
+    del r, conn, db
+    gc.collect()
     return db_path
 
 
@@ -95,7 +100,11 @@ def kuzu_graph(mcp_env, kuzu_db_path: Path):
 
     KuzuGraph._instance = None
     KuzuGraph._instance_path = None
-    return KuzuGraph.get(str(kuzu_db_path))
+    graph = KuzuGraph.get(str(kuzu_db_path))
+    yield graph
+    graph.close()
+    KuzuGraph._instance = None
+    KuzuGraph._instance_path = None
 
 
 @pytest.fixture(scope="session")
@@ -134,7 +143,9 @@ def kuzu_graph_route_extraction_smoke(kuzu_db_path_route_extraction_smoke: Path)
     """Read-only ``KuzuGraph`` for ``route_extraction_smoke`` (own DB path; not ``KuzuGraph.get``)."""
     from kuzu_queries import KuzuGraph
 
-    return KuzuGraph(str(kuzu_db_path_route_extraction_smoke))
+    graph = KuzuGraph(str(kuzu_db_path_route_extraction_smoke))
+    yield graph
+    graph.close()
 
 
 @pytest.fixture(scope="session")
@@ -161,7 +172,9 @@ def kuzu_db_path_fqn_collision_smoke(tmp_path_factory) -> Path:
 def kuzu_graph_fqn_collision_smoke(kuzu_db_path_fqn_collision_smoke: Path):
     from kuzu_queries import KuzuGraph
 
-    return KuzuGraph(str(kuzu_db_path_fqn_collision_smoke))
+    graph = KuzuGraph(str(kuzu_db_path_fqn_collision_smoke))
+    yield graph
+    graph.close()
 
 
 @pytest.fixture(scope="session")

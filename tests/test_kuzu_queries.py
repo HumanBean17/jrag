@@ -375,7 +375,8 @@ def test_trace_flow_empty_seeds_returns_empty(kuzu_graph) -> None:
 
 def _open_stale_ontology_graph(tmp_path: Path, ontology_version: int) -> Path:
     db_path = tmp_path / f"stale_ontology_{ontology_version}.kuzu"
-    conn = kuzu.Connection(kuzu.Database(str(db_path)))
+    db = kuzu.Database(str(db_path))
+    conn = kuzu.Connection(db)
     conn.execute(
         "CREATE NODE TABLE GraphMeta("
         "key STRING PRIMARY KEY, "
@@ -387,6 +388,7 @@ def _open_stale_ontology_graph(tmp_path: Path, ontology_version: int) -> Path:
         "source_root: '', counts_json: '{}', parse_errors: 0})",
         {"k": "graph", "ov": ontology_version},
     )
+    del conn, db
     return db_path
 
 
