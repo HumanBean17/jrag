@@ -337,7 +337,8 @@ class KuzuGraph:
     def __init__(self, db_path: str) -> None:
         self.db_path = db_path
         self._db = kuzu.Database(db_path, read_only=True)
-        self._conn = kuzu.Connection(self._db)
+        # num_threads=1 avoids internal threading that conflicts with pytest-asyncio
+        self._conn = kuzu.Connection(self._db, num_threads=1)
         self._conn_lock = threading.Lock()
 
     def close(self) -> None:

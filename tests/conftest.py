@@ -61,7 +61,7 @@ def kuzu_db_path(tmp_path_factory, corpus_root: Path) -> Path:
     build_kuzu_to(corpus_root, db_path, max_pass=5)
 
     db = kuzu.Database(str(db_path), read_only=True)
-    conn = kuzu.Connection(db)
+    conn = kuzu.Connection(db, num_threads=1)
     n_types = 0
     r = conn.execute("MATCH (s:Symbol) WHERE s.kind = 'class' RETURN count(*) AS n")
     if r.has_next():
