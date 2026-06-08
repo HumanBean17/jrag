@@ -162,6 +162,9 @@ def _cocoindex_subprocess_env(project_root: Path) -> dict[str, str]:
     idx = os.environ.get("JAVA_CODEBASE_RAG_INDEX_DIR", "").strip()
     if idx:
         sub_env["JAVA_CODEBASE_RAG_INDEX_DIR"] = str(Path(idx).expanduser().resolve())
+    # Set CocoIndex concurrency limits to prevent "too many open files" error
+    # See: https://github.com/HumanBean17/java-codebase-rag/issues/293
+    sub_env.setdefault("COCOINDEX_SOURCE_MAX_INFLIGHT_ROWS", "256")
     return sub_env
 
 

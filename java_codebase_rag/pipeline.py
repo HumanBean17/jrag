@@ -128,6 +128,10 @@ def run_cocoindex_update(
             stdout="",
             stderr=f"java_index_flow_lancedb.py not found under {bd}",
         )
+    # Set CocoIndex concurrency limits to prevent "too many open files" error
+    # See: https://github.com/HumanBean17/java-codebase-rag/issues/293
+    env = env.copy()
+    env.setdefault("COCOINDEX_SOURCE_MAX_INFLIGHT_ROWS", "256")
     cmd: list[str] = [str(exe), "update", COCOINDEX_TARGET]
     if full_reprocess:
         cmd.extend(["--full-reprocess", "-f"])
