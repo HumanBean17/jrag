@@ -1142,3 +1142,36 @@ class TestRunUpdate:
 
         # Skill file should have been refreshed back to package content
         # (In real scenario, this would be the actual package content)
+
+    def test_update_missing_mcp_binary_returns_partial_failure(self, tmp_path, monkeypatch):
+        """java-codebase-rag-mcp not found on PATH → returns partial failure (1)"""
+        from java_codebase_rag.installer import run_update
+        import shutil
+
+        # Create MCP config to have a configured host
+        mcp_config = tmp_path / ".mcp.json"
+        mcp_config.write_text(
+            json.dumps(
+                {
+                    "mcpServers": {
+                        "java-codebase-rag": {
+                            "command": "/usr/local/bin/java-codebase-rag-mcp",
+                            "type": "stdio"
+                        }
+                    }
+                }
+            )
+        )
+
+        # Mock shutil.which to return None (MCP binary not found)
+        monkeypatch.setattr(shutil, "which", lambda x: None)
+
+        # Mock _read_package_artifact
+        monkeypatch.setattr(
+            "java_codebase_rag.installer._read_package_artifact",
+            lambda path: "PACKAGE CONTENT",
+        )
+
+        result = run_update(force=False, dry_run=False, cwd=tmp_path)
+        # Should return partial failure (1) because artifact refresh failed
+        assert result == 1

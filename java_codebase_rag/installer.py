@@ -1017,7 +1017,15 @@ def _refresh_mcp_config(
     """
     try:
         # Resolve current MCP command path
-        mcp_command = resolve_mcp_command(non_interactive=True)
+        # Catch SystemExit because resolve_mcp_command raises it when binary not found
+        try:
+            mcp_command = resolve_mcp_command(non_interactive=True)
+        except SystemExit:
+            return ArtifactResult(
+                path=config_path,
+                success=False,
+                error="java-codebase-rag-mcp not found on PATH",
+            )
 
         # Prepare new entry
         new_entry = {"command": mcp_command, "type": "stdio"}
@@ -1092,6 +1100,9 @@ def _refresh_mcp_config(
                     pass
             raise RuntimeError(f"Failed to write {config_path}: {e}") from e
 
+    except SystemExit as e:
+        # Catch SystemExit from resolve_mcp_command and other exits
+        return ArtifactResult(path=config_path, success=False, error=f"Command failed: {e.code}")
     except Exception as e:
         return ArtifactResult(path=config_path, success=False, error=str(e))
 
@@ -1122,7 +1133,7 @@ def run_update(
     if not configured_hosts:
         print("No configured agent hosts found.")
         print("Run `java-codebase-rag install` first.")
-        return 2
+        return EXIT_FATAL
 
     print(f"Found {len(configured_hosts)} configured host(s).")
 
@@ -1135,6 +1146,7 @@ def run_update(
 
     # Check for partial failures
     partial_failures = [r for r in all_results if not r.success]
+    has_artifact_failures = len(partial_failures) > 0
     if partial_failures:
         print("\nWarning: Some artifacts failed to update:")
         for r in partial_failures:
@@ -1152,7 +1164,7 @@ def run_update(
     if project_root is None:
         print("\nNo project configuration found (.java-codebase-rag.yml).")
         print("Skipping index update.")
-        return 0
+        return EXIT_PARTIAL if has_artifact_failures else EXIT_SUCCESS
 
     # Resolve configuration
     try:
@@ -1161,7 +1173,7 @@ def run_update(
     except Exception as e:
         print(f"\nWarning: Failed to resolve configuration: {e}")
         print("Skipping index update.")
-        return 0
+        return EXIT_PARTIAL if has_artifact_failures else EXIT_SUCCESS
 
     # Check if index has existing artifacts
     index_exists, _ = index_dir_has_existing_artifacts(index_dir)
@@ -1169,7 +1181,7 @@ def run_update(
     if not index_exists:
         print("\nNo index found.")
         print("Run `java-codebase-rag install` to create one.")
-        return 0
+        return EXIT_PARTIAL if has_artifact_failures else EXIT_SUCCESS
 
     # Run increment (LanceDB catch-up)
     if not dry_run:
@@ -1193,7 +1205,7 @@ def run_update(
     successful = [r for r in all_results if r.success]
     print(f"Updated {len(successful)} artifact(s).")
 
-    return 0
+    return 1 if has_artifact_failures else 0
 
 
 def run_install(
