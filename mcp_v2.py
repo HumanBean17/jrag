@@ -32,8 +32,22 @@ from java_codebase_rag.config import resolved_sbert_model_for_process_env
 from java_ontology import EDGE_SCHEMA, ResolveReason
 from kuzu_queries import KuzuGraph, OVERRIDE_AXIS_COMPOSED_EDGE_TYPES
 from mcp_hints import generate_hints, MCP_HINTS_STRUCTURED_FIELD_DESCRIPTION
-# search_lancedb imported lazily in search_v2() to avoid spawning the
-# LanceDB background event-loop thread on module import.
+
+# Populated lazily by _init_search() on first call to search_v2().
+# Tests monkeypatch mcp_v2.run_search; the None sentinel lets mock
+# detection skip the real import.
+run_search = None
+TABLES = None
+
+
+def _init_search() -> None:
+    global run_search, TABLES
+    if run_search is None:
+        from search_lancedb import TABLES as _T, run_search as _rs
+
+        run_search = _rs
+        TABLES = _T
+
 
 # Module-level flag set by server.py at startup from resolved config.
 _hints_enabled: bool = True
@@ -922,8 +936,7 @@ def search_v2(
         uri_path = Path(uri)
         if not uri.startswith(("s3://", "gs://", "az://")) and uri_path.exists():
             uri = str(uri_path.resolve())
-        from search_lancedb import TABLES, run_search
-
+        _init_search()
         table_keys = list(TABLES) if table == "all" else [table]
         rows = run_search(
             query,
