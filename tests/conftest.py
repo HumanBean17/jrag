@@ -70,7 +70,11 @@ def kuzu_db_path(tmp_path_factory, corpus_root: Path) -> Path:
     r = conn.execute("MATCH ()-[e:INJECTS]->() RETURN count(e) AS n")
     n_injects = int(r.get_next()[0] or 0) if r.has_next() else 0
     assert n_injects >= 1, "build produced no INJECTS edges"
-    del r, conn, db
+    del r
+    conn.close()
+    conn = None
+    db.close()
+    db = None
     gc.collect()
     return db_path
 

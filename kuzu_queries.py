@@ -342,8 +342,12 @@ class KuzuGraph:
 
     def close(self) -> None:
         """Release native Kuzu objects before interpreter shutdown GC."""
-        self._conn = None
-        self._db = None
+        if self._conn is not None:
+            self._conn.close()
+            self._conn = None
+        if self._db is not None:
+            self._db.close()
+            self._db = None
 
     @classmethod
     def get(cls, db_path: str | None = None) -> "KuzuGraph":

@@ -388,7 +388,8 @@ def _open_stale_ontology_graph(tmp_path: Path, ontology_version: int) -> Path:
         "source_root: '', counts_json: '{}', parse_errors: 0})",
         {"k": "graph", "ov": ontology_version},
     )
-    del conn, db
+    conn.close()
+    db.close()
     return db_path
 
 
