@@ -30,6 +30,7 @@ pytestmark = [
         reason="set JAVA_CODEBASE_RAG_RUN_HEAVY=1 to run the cocoindex + LanceDB end-to-end test",
     ),
     pytest.mark.lance_e2e,
+    pytest.mark.asyncio,
 ]
 
 CAPABILITY_SMOKE_ROOT = Path(__file__).resolve().parent / "fixtures" / "capability_smoke"

@@ -1,6 +1,11 @@
 """Tool-surface assertions for the v2 MCP API."""
 from __future__ import annotations
 
+import pytest
+
+# Mark all async tests in this module to use asyncio
+pytestmark = pytest.mark.asyncio
+
 
 def _enum_sets(node: object) -> list[set[str]]:
     found: list[set[str]] = []

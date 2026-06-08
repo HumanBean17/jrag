@@ -16,6 +16,9 @@ from mcp.server.fastmcp.exceptions import ToolError
 
 from java_ontology import VALID_RESOLVE_REASONS
 
+# Mark all async tests in this module to use asyncio
+pytestmark = pytest.mark.asyncio
+
 from mcp_v2 import (
     Edge,
     NodeFilter,
