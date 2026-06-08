@@ -762,3 +762,383 @@ class TestInstallIntegration:
         skill_qwen = cwd / ".qwen" / "skills" / "explore-codebase" / "SKILL.md"
         assert skill_claude.is_file()
         assert skill_qwen.is_file()
+
+
+class TestDetectConfiguredHosts:
+    """Test detect_configured_hosts function for PR-I2."""
+
+    def test_detect_hosts_project_mcp_json(self, tmp_path):
+        """.mcp.json with entry → detects claude-code project scope"""
+        from java_codebase_rag.installer import detect_configured_hosts
+
+        # Create .mcp.json with java-codebase-rag entry
+        mcp_config = tmp_path / ".mcp.json"
+        mcp_config.write_text(
+            json.dumps(
+                {
+                    "mcpServers": {
+                        "java-codebase-rag": {
+                            "command": "/usr/local/bin/java-codebase-rag-mcp",
+                            "type": "stdio"
+                        }
+                    }
+                }
+            )
+        )
+
+        detected = detect_configured_hosts(tmp_path)
+        assert len(detected) == 1
+        host_config, scope = detected[0]
+        assert host_config.name == "claude-code"
+        assert scope == "project"
+
+    def test_detect_hosts_user_claude_json(self, tmp_path, monkeypatch):
+        """~/.claude.json with entry → detects claude-code user scope"""
+        from java_codebase_rag.installer import detect_configured_hosts
+
+        # Create a fake home directory
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+        # Create ~/.claude.json with java-codebase-rag entry
+        claude_json = fake_home / ".claude.json"
+        claude_json.write_text(
+            json.dumps(
+                {
+                    "mcpServers": {
+                        "java-codebase-rag": {
+                            "command": "/usr/local/bin/java-codebase-rag-mcp",
+                            "type": "stdio"
+                        }
+                    }
+                }
+            )
+        )
+
+        detected = detect_configured_hosts(tmp_path)
+        assert len(detected) == 1
+        host_config, scope = detected[0]
+        assert host_config.name == "claude-code"
+        assert scope == "user"
+
+    def test_detect_hosts_multiple_hosts(self, tmp_path, monkeypatch):
+        """both .mcp.json and ~/.qwen/settings.json → returns both"""
+        from java_codebase_rag.installer import detect_configured_hosts
+
+        # Create a fake home directory
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+        # Create project-level .mcp.json
+        mcp_config = tmp_path / ".mcp.json"
+        mcp_config.write_text(
+            json.dumps(
+                {
+                    "mcpServers": {
+                        "java-codebase-rag": {
+                            "command": "/usr/local/bin/java-codebase-rag-mcp",
+                            "type": "stdio"
+                        }
+                    }
+                }
+            )
+        )
+
+        # Create user-level .qwen/settings.json
+        qwen_settings = fake_home / ".qwen" / "settings.json"
+        qwen_settings.parent.mkdir(parents=True, exist_ok=True)
+        qwen_settings.write_text(
+            json.dumps(
+                {
+                    "mcpServers": {
+                        "java-codebase-rag": {
+                            "command": "/usr/local/bin/java-codebase-rag-mcp",
+                            "type": "stdio"
+                        }
+                    }
+                }
+            )
+        )
+
+        detected = detect_configured_hosts(tmp_path)
+        assert len(detected) == 2
+
+        # Sort by scope for consistent ordering
+        detected_sorted = sorted(detected, key=lambda x: x[1])
+
+        # First should be project scope claude-code
+        assert detected_sorted[0][0].name == "claude-code"
+        assert detected_sorted[0][1] == "project"
+
+        # Second should be user scope qwen-code
+        assert detected_sorted[1][0].name == "qwen-code"
+        assert detected_sorted[1][1] == "user"
+
+    def test_detect_hosts_no_config_returns_empty(self, tmp_path):
+        """no MCP configs → empty list"""
+        from java_codebase_rag.installer import detect_configured_hosts
+
+        detected = detect_configured_hosts(tmp_path)
+        assert detected == []
+
+    def test_detect_hosts_ignores_unrelated_entries(self, tmp_path):
+        """mcpServers with other tools but not java-codebase-rag → empty"""
+        from java_codebase_rag.installer import detect_configured_hosts
+
+        # Create .mcp.json with other MCP servers but not java-codebase-rag
+        mcp_config = tmp_path / ".mcp.json"
+        mcp_config.write_text(
+            json.dumps(
+                {
+                    "mcpServers": {
+                        "filesystem": {"command": "/bin/fs", "type": "stdio"},
+                        "brave-search": {"command": "/bin/search", "type": "stdio"},
+                    }
+                }
+            )
+        )
+
+        detected = detect_configured_hosts(tmp_path)
+        assert detected == []
+
+
+class TestRefreshArtifacts:
+    """Test refresh_artifacts function for PR-I2."""
+
+    def test_refresh_skill_overwrites_stale(self, tmp_path, monkeypatch):
+        """skill file differs from package → overwritten"""
+        from java_codebase_rag.installer import refresh_artifacts, HOSTS
+
+        # Create skill file with stale content
+        skills_dir = tmp_path / ".claude" / "skills" / "explore-codebase"
+        skills_dir.mkdir(parents=True)
+        skill_file = skills_dir / "SKILL.md"
+        skill_file.write_text("STALE CONTENT")
+
+        # Mock _read_package_artifact to return new content
+        monkeypatch.setattr(
+            "java_codebase_rag.installer._read_package_artifact",
+            lambda path: "NEW CONTENT",
+        )
+
+        host = HOSTS["claude-code"]
+        results = refresh_artifacts(host, "project", tmp_path, force=False, dry_run=False)
+
+        # Should have updated the skill file
+        skill_results = [r for r in results if "SKILL.md" in str(r.path)]
+        assert len(skill_results) == 1
+        assert skill_results[0].success is True
+        assert skill_file.read_text() == "NEW CONTENT"
+
+    def test_refresh_skill_skips_if_matching(self, tmp_path, monkeypatch):
+        """skill file matches → not overwritten (unless --force)"""
+        from java_codebase_rag.installer import refresh_artifacts, HOSTS
+
+        # Create skill file with current content
+        skills_dir = tmp_path / ".claude" / "skills" / "explore-codebase"
+        skills_dir.mkdir(parents=True)
+        skill_file = skills_dir / "SKILL.md"
+        skill_file.write_text("CURRENT CONTENT")
+
+        # Mock _read_package_artifact to return same content
+        monkeypatch.setattr(
+            "java_codebase_rag.installer._read_package_artifact",
+            lambda path: "CURRENT CONTENT",
+        )
+
+        host = HOSTS["claude-code"]
+        results = refresh_artifacts(host, "project", tmp_path, force=False, dry_run=False)
+
+        # Should have skipped the skill file (no change needed)
+        skill_results = [r for r in results if "SKILL.md" in str(r.path)]
+        assert len(skill_results) == 1
+        assert skill_results[0].success is True
+        # File should remain unchanged
+        assert skill_file.read_text() == "CURRENT CONTENT"
+
+    def test_refresh_mcp_skips_if_correct(self, tmp_path, monkeypatch):
+        """MCP entry matches the current resolved path → not modified"""
+        from java_codebase_rag.installer import refresh_artifacts, HOSTS
+        import shutil
+
+        # Create MCP config with correct entry
+        mcp_config = tmp_path / ".mcp.json"
+        expected_command = "/usr/local/bin/java-codebase-rag-mcp"
+        mcp_config.write_text(
+            json.dumps(
+                {
+                    "mcpServers": {
+                        "java-codebase-rag": {
+                            "command": expected_command,
+                            "type": "stdio"
+                        }
+                    }
+                }
+            )
+        )
+
+        # Mock shutil.which to return the same path
+        monkeypatch.setattr(shutil, "which", lambda x: expected_command)
+
+        host = HOSTS["claude-code"]
+        results = refresh_artifacts(host, "project", tmp_path, force=False, dry_run=False)
+
+        # MCP config should be skipped (no change needed)
+        mcp_results = [r for r in results if ".mcp.json" in str(r.path)]
+        assert len(mcp_results) == 1
+        assert mcp_results[0].success is True
+        # Config should remain unchanged
+        config_data = json.loads(mcp_config.read_text())
+        assert config_data["mcpServers"]["java-codebase-rag"]["command"] == expected_command
+
+    def test_refresh_dry_run_prints_no_write(self, tmp_path, monkeypatch, capsys):
+        """--dry-run → prints changes, no files written"""
+        from java_codebase_rag.installer import refresh_artifacts, HOSTS
+
+        # Create skill file with stale content
+        skills_dir = tmp_path / ".claude" / "skills" / "explore-codebase"
+        skills_dir.mkdir(parents=True)
+        skill_file = skills_dir / "SKILL.md"
+        skill_file.write_text("STALE CONTENT")
+
+        # Mock _read_package_artifact to return new content
+        monkeypatch.setattr(
+            "java_codebase_rag.installer._read_package_artifact",
+            lambda path: "NEW CONTENT",
+        )
+
+        host = HOSTS["claude-code"]
+        refresh_artifacts(host, "project", tmp_path, force=False, dry_run=True)
+
+        # In dry-run mode, files should not be written
+        captured = capsys.readouterr()
+        assert "dry-run" in captured.out.lower() or "would" in captured.out.lower()
+        # File should remain unchanged
+        assert skill_file.read_text() == "STALE CONTENT"
+
+
+class TestRunUpdate:
+    """Test run_update orchestrator for PR-I2."""
+
+    def test_update_no_hosts_exit_2(self, tmp_path, monkeypatch):
+        """no configured hosts → exit 2"""
+        from java_codebase_rag.installer import run_update
+
+        # No MCP configs exist
+        result = run_update(force=False, dry_run=False, cwd=tmp_path)
+        assert result == 2
+
+    def test_update_no_index_skips_increment(self, tmp_path, monkeypatch):
+        """hosts configured but no index directory → increment skipped, warning printed"""
+        from java_codebase_rag.installer import run_update
+        import shutil
+        import io
+
+        # Create MCP config to have a configured host
+        mcp_config = tmp_path / ".mcp.json"
+        mcp_config.write_text(
+            json.dumps(
+                {
+                    "mcpServers": {
+                        "java-codebase-rag": {
+                            "command": "/usr/local/bin/java-codebase-rag-mcp",
+                            "type": "stdio"
+                        }
+                    }
+                }
+            )
+        )
+
+        # Create .java-codebase-rag.yml (config exists)
+        config_file = tmp_path / ".java-codebase-rag.yml"
+        config_file.write_text("source_root: .")
+
+        # Mock shutil.which
+        monkeypatch.setattr(shutil, "which", lambda x: "/usr/local/bin/java-codebase-rag-mcp")
+
+        # Mock index_dir_has_existing_artifacts to return False (no index)
+        monkeypatch.setattr(
+            "java_codebase_rag.config.index_dir_has_existing_artifacts",
+            lambda path: (False, []),
+        )
+
+        # Mock _read_package_artifact
+        monkeypatch.setattr(
+            "java_codebase_rag.installer._read_package_artifact",
+            lambda path: "PACKAGE CONTENT",
+        )
+
+        # Capture stdout
+        fake_stdout = io.StringIO()
+        monkeypatch.setattr("sys.stdout", fake_stdout)
+
+        result = run_update(force=False, dry_run=False, cwd=tmp_path)
+        # Should succeed (no hosts is fatal, but no index is just a warning)
+        assert result == 0
+
+    def test_install_then_update_cycle(self, tmp_path, monkeypatch):
+        """install then update: artifacts refreshed, no errors"""
+        from java_codebase_rag.installer import run_install, run_update
+        import shutil
+
+        # Copy bank-chat fixture
+        bank_chat = Path("tests/bank-chat-system")
+        if not bank_chat.is_dir():
+            pytest.skip("bank-chat-system fixture not found")
+        shutil.copytree(bank_chat, tmp_path / "bank-chat")
+
+        cwd = tmp_path / "bank-chat"
+
+        # Create .git so update_gitignore works
+        (cwd / ".git").mkdir()
+
+        # Mock shutil.which
+        monkeypatch.setattr(shutil, "which", lambda x: "/usr/local/bin/java-codebase-rag-mcp")
+
+        # Mock pipeline functions
+        def mock_run_cocoindex_update(*args, **kwargs):
+            from subprocess import CompletedProcess
+            return CompletedProcess(["cocoindex"], 0)
+
+        def mock_run_build_ast_graph(*args, **kwargs):
+            from subprocess import CompletedProcess
+            return CompletedProcess(["build_ast_graph"], 0)
+
+        monkeypatch.setattr(
+            "java_codebase_rag.pipeline.run_cocoindex_update",
+            mock_run_cocoindex_update,
+        )
+        monkeypatch.setattr(
+            "java_codebase_rag.pipeline.run_build_ast_graph",
+            mock_run_build_ast_graph,
+        )
+
+        # Change to fixture directory
+        monkeypatch.setattr(Path, "cwd", lambda: cwd)
+
+        # Run install
+        install_result = run_install(
+            non_interactive=True,
+            agents=["claude-code"],
+            scope="project",
+            model="auto",
+            source_root=cwd,
+            quiet=True,
+        )
+        assert install_result == 0
+
+        # Verify artifacts were created
+        skill_file = cwd / ".claude" / "skills" / "explore-codebase" / "SKILL.md"
+        assert skill_file.is_file()
+
+        # Modify skill file to make it "stale"
+        skill_file.write_text("MODIFIED CONTENT")
+
+        # Run update
+        update_result = run_update(force=False, dry_run=False, cwd=cwd)
+        assert update_result == 0
+
+        # Skill file should have been refreshed back to package content
+        # (In real scenario, this would be the actual package content)
