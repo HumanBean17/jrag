@@ -121,29 +121,25 @@ def prompt(
     import questionary
     from prompt_toolkit.styles import Style
 
-    # Custom style for better visibility on both light and dark backgrounds
-    # Uses bold and darker colors (blue/cyan) which work well on white backgrounds
-    custom_style = Style(
+    # Strip default ANSI colors — rely on ●/○ indicators only, no fg/bg highlights
+    # noinherit prevents prompt_toolkit from merging in questionary's default fg colors
+    no_color_style = Style(
         [
-            ("qmark", "fg:cyan bold"),  # Question mark '?'
-            ("question", "bold"),  # Question text
-            ("answer", "fg:blue bold"),  # Selected answer (darker blue for white bg)
-            ("pointer", "fg:cyan bold"),  # Selection pointer '>'
-            ("selected", "fg:blue bold"),  # Selected item in checkbox
-            ("highlighted", "fg:blue underline"),  # Highlighted item with underline
-            ("instruction", "dim"),  # Instruction text
+            ("highlighted", "noinherit"),
+            ("selected", "noinherit"),
+            ("pointer", "noinherit bold"),
         ]
     )
 
     try:
         if prompt_type == "checkbox":
-            return questionary.checkbox(message, choices=choices, style=custom_style).ask()
+            return questionary.checkbox(message, choices=choices, style=no_color_style).ask()
         elif prompt_type == "select":
-            return questionary.select(message, choices=choices, style=custom_style).ask()
+            return questionary.select(message, choices=choices, style=no_color_style).ask()
         elif prompt_type == "text":
-            return questionary.text(message, default=default, style=custom_style).ask()
+            return questionary.text(message, default=default, style=no_color_style).ask()
         elif prompt_type == "confirm":
-            return questionary.confirm(message, style=custom_style).ask()
+            return questionary.confirm(message, style=no_color_style).ask()
         else:
             raise ValueError(f"Unknown prompt_type: {prompt_type}")
     except KeyboardInterrupt:
@@ -796,6 +792,8 @@ def run_init_if_needed(
     g = run_build_ast_graph(
         source_root=cfg.source_root,
         kuzu_path=cfg.kuzu_path,
+        verbose=not quiet,
+        quiet=quiet,
         env=env,
     )
     if g.returncode != 0:
