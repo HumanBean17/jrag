@@ -3422,12 +3422,10 @@ def incremental_rebuild(
         pass6_match_edges(tables, verbose=verbose)
         write_kuzu(kuzu_path, tables, source_root=source_root, verbose=verbose)
 
-        n_files = _init_hash_tracker(source_root, kuzu_path)
-
         return IncrementalResult(
             mode="full_fallback",
             files_changed=0,
-            files_added=n_files,
+            files_added=0,
             files_removed=0,
             dependents_reprocessed=0,
             elapsed_sec=time.time() - t_start,
@@ -3648,12 +3646,10 @@ def _fallback_to_full(source_root: Path, kuzu_path: Path, verbose: bool, t_start
     pass6_match_edges(tables, verbose=verbose)
     write_kuzu(kuzu_path, tables, source_root=source_root, verbose=verbose)
 
-    n_files = _init_hash_tracker(source_root, kuzu_path)
-
     return IncrementalResult(
         mode="full_fallback",
         files_changed=0,
-        files_added=n_files,
+        files_added=0,
         files_removed=0,
         dependents_reprocessed=0,
         elapsed_sec=time.time() - t_start,
@@ -3785,6 +3781,7 @@ def write_kuzu(
             _verbose_stderr_line(f"[graph] writing · routes/exposes written in {time.time() - t2:.2f}s")
         _write_meta(conn, tables, source_root)
         conn.close()
+    _init_hash_tracker(source_root, db_path)
 
 
 # ---------- CLI ----------
