@@ -1,13 +1,21 @@
 """`run_search` with `capability=` — exercises Lance `array_has` + vector path (no CocoIndex)."""
 from __future__ import annotations
 
+import os
 import uuid
+
+import pytest
 
 from sentence_transformers import SentenceTransformer
 
 from ast_java import ONTOLOGY_VERSION
 from index_common import SBERT_MODEL
 from search_lancedb import TABLES, _query_vector, run_search
+
+pytestmark = pytest.mark.skipif(
+    os.environ.get("JAVA_CODEBASE_RAG_RUN_HEAVY", "").strip() != "1",
+    reason="imports lancedb at runtime (spawns background thread that causes Kuzu segfaults)",
+)
 
 
 def _one_java_row_built_for_capability_filter(
