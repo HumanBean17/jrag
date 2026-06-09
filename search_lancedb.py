@@ -675,16 +675,16 @@ def _graph_expand_merge(
     limit: int,
     extra_predicates: list[str],
     expand_depth: int,
-    kuzu_path: str | None,
+    ladybug_path: str | None,
 ) -> list[dict]:
     """Expand vector top-k through the Kuzu graph and fuse (RRF) with the original list."""
     # Lazy import so the module works without kuzu installed when graph_expand=False.
     try:
-        from kuzu_queries import KuzuGraph
+        from ladybug_queries import LadybugGraph
     except Exception:
         return vector_rows
 
-    if not KuzuGraph.exists(kuzu_path):
+    if not LadybugGraph.exists(ladybug_path):
         return vector_rows
 
     seed_fqns = sorted({r.get("primary_type_fqn") for r in vector_rows if r.get("primary_type_fqn")})
@@ -692,7 +692,7 @@ def _graph_expand_merge(
         return vector_rows
 
     try:
-        graph = KuzuGraph.get(kuzu_path)
+        graph = LadybugGraph.get(ladybug_path)
         structural = graph.expand_fqns(seed_fqns, depth=expand_depth)
         method_pairs = graph.expand_methods(
             seed_fqns, depth=expand_depth, exclude_external=True,
@@ -804,7 +804,7 @@ def run_search(
     package_prefix: str | None = None,
     graph_expand: bool = False,
     expand_depth: int = 1,
-    kuzu_path: str | None = None,
+    ladybug_path: str | None = None,
     context_neighbors: int = 0,
     role_in: list[str] | None = None,
     exclude_roles: list[str] | None = None,
@@ -890,7 +890,7 @@ def run_search(
                 limit=need,
                 extra_predicates=extra_java,
                 expand_depth=expand_depth,
-                kuzu_path=kuzu_path,
+                ladybug_path=ladybug_path,
             )
 
         window = rows[offset : offset + limit]
@@ -966,7 +966,7 @@ def main() -> None:
     parser.add_argument("--package-prefix", default=None)
     parser.add_argument("--graph-expand", action="store_true")
     parser.add_argument("--expand-depth", type=int, default=1)
-    parser.add_argument("--kuzu-path", default=None)
+    parser.add_argument("--ladybug-path", default=None)
     parser.add_argument(
         "--context-neighbors", type=int, default=0,
         help="Attach N adjacent chunks per hit as surrounding context (Java only).",
@@ -1010,7 +1010,7 @@ def main() -> None:
             package_prefix=args.package_prefix,
             graph_expand=args.graph_expand,
             expand_depth=args.expand_depth,
-            kuzu_path=args.kuzu_path,
+            ladybug_path=args.ladybug_path,
             context_neighbors=args.context_neighbors,
         )
     except Exception as e:

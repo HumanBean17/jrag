@@ -5,7 +5,7 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-import kuzu
+import ladybug
 
 from ast_java import ONTOLOGY_VERSION
 from graph_enrich import _load_brownfield_overrides, collect_annotation_meta_chain
@@ -25,16 +25,16 @@ def _build(tmp: Path, yml: str | None, extra_files: dict[str, str]) -> Path:
         p = tmp / rel
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(body, encoding="utf-8")
-    from _builders import build_kuzu_full_into
+    from _builders import build_ladybug_full_into
 
-    db_path = tmp / "g.kuzu"
-    build_kuzu_full_into(tmp, db_path)
+    db_path = tmp / "g.lbug"
+    build_ladybug_full_into(tmp, db_path)
     return db_path
 
 
 def _rows(db_path: Path, query: str) -> list[tuple]:
-    db = kuzu.Database(str(db_path), read_only=True)
-    conn = kuzu.Connection(db)
+    db = ladybug.Database(str(db_path), read_only=True)
+    conn = ladybug.Connection(db)
     r = conn.execute(query)
     out: list[tuple] = []
     while r.has_next():

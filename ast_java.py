@@ -325,7 +325,7 @@ class RouteDecl:
     filename: str
     start_line: int
     end_line: int
-    # brownfield / B2a composition (graph_enrich.resolve_routes_for_method); not a Kuzu column.
+    # brownfield / B2a composition (graph_enrich.resolve_routes_for_method); not a graph column.
     route_source_layer: str = "builtin"
 
 

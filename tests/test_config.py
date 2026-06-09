@@ -86,7 +86,7 @@ class TestDiscoverProjectRoot:
         subdir.mkdir()
         idx = tmp_path / ".java-codebase-rag"
         idx.mkdir()
-        (idx / "code_graph.kuzu").write_bytes(b"\x00" * 16)
+        (idx / "code_graph.lbug").write_bytes(b"\x00" * 16)
 
         result = discover_project_root(subdir)
         assert result == tmp_path
@@ -101,7 +101,7 @@ class TestDiscoverProjectRoot:
         # Real index at parent level
         real_idx = tmp_path / ".java-codebase-rag"
         real_idx.mkdir()
-        (real_idx / "code_graph.kuzu").write_bytes(b"\x00" * 16)
+        (real_idx / "code_graph.lbug").write_bytes(b"\x00" * 16)
 
         result = discover_project_root(subdir)
         assert result == tmp_path
@@ -113,7 +113,7 @@ class TestDiscoverProjectRoot:
         # Index dir at tmp_path level
         idx = tmp_path / ".java-codebase-rag"
         idx.mkdir()
-        (idx / "code_graph.kuzu").write_bytes(b"\x00" * 16)
+        (idx / "code_graph.lbug").write_bytes(b"\x00" * 16)
         # Config at subdir level
         config_file = subdir / YAML_CONFIG_FILENAMES[0]
         config_file.write_text("# child config")
@@ -131,7 +131,7 @@ class TestDiscoverProjectRoot:
         config_file.write_text("# config")
         idx = tmp_path / ".java-codebase-rag"
         idx.mkdir()
-        (idx / "code_graph.kuzu").write_bytes(b"\x00" * 16)
+        (idx / "code_graph.lbug").write_bytes(b"\x00" * 16)
 
         result = discover_project_root(tmp_path)
         assert result == tmp_path

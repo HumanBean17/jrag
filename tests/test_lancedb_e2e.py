@@ -123,8 +123,8 @@ def lance_index(tmp_path_factory, corpus_root: Path) -> Path:
             str(builder),
             "--source-root",
             str(corpus_root),
-            "--kuzu-path",
-            str(index_dir / "code_graph.kuzu"),
+            "--ladybug-path",
+            str(index_dir / "code_graph.lbug"),
         ],
         env=env,
         capture_output=True,
@@ -181,8 +181,8 @@ def lance_index_capability_smoke(tmp_path_factory) -> Path:
             str(builder),
             "--source-root",
             str(CAPABILITY_SMOKE_ROOT),
-            "--kuzu-path",
-            str(index_dir / "code_graph.kuzu"),
+            "--ladybug-path",
+            str(index_dir / "code_graph.lbug"),
         ],
         env=env,
         capture_output=True,
@@ -197,10 +197,10 @@ async def test_search_returns_hits(lance_index: Path, monkeypatch) -> None:
     monkeypatch.setenv("JAVA_CODEBASE_RAG_INDEX_DIR", str(lance_index))
     monkeypatch.delenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", raising=False)
 
-    from kuzu_queries import KuzuGraph
+    from ladybug_queries import LadybugGraph
 
-    KuzuGraph._instance = None
-    KuzuGraph._instance_path = None
+    LadybugGraph._instance = None
+    LadybugGraph._instance_path = None
 
     from server import create_mcp_server
 
@@ -230,10 +230,10 @@ async def test_search_capability_filter_e2e(
     monkeypatch.setenv("JAVA_CODEBASE_RAG_INDEX_DIR", str(lance_index_capability_smoke))
     monkeypatch.delenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", raising=False)
 
-    from kuzu_queries import KuzuGraph
+    from ladybug_queries import LadybugGraph
 
-    KuzuGraph._instance = None
-    KuzuGraph._instance_path = None
+    LadybugGraph._instance = None
+    LadybugGraph._instance_path = None
 
     from server import create_mcp_server
 
@@ -318,10 +318,10 @@ async def test_search_returns_multiple_hits(lance_index: Path, monkeypatch) -> N
     monkeypatch.setenv("JAVA_CODEBASE_RAG_INDEX_DIR", str(lance_index))
     monkeypatch.delenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", raising=False)
 
-    from kuzu_queries import KuzuGraph
+    from ladybug_queries import LadybugGraph
 
-    KuzuGraph._instance = None
-    KuzuGraph._instance_path = None
+    LadybugGraph._instance = None
+    LadybugGraph._instance_path = None
 
     from server import create_mcp_server
 

@@ -81,7 +81,7 @@ def _render_edge(spec: EdgeSpec) -> list[str]:
         lines.append("**Attributes**:")
         lines.append("")
         for attr in spec.attrs:
-            lines.append(f"- `{attr.name}` (`{attr.kuzu_type}`) — {attr.purpose}")
+            lines.append(f"- `{attr.name}` (`{attr.graph_type}`) — {attr.purpose}")
         lines.append("")
     else:
         lines.append("**Attributes**: _(none)_")

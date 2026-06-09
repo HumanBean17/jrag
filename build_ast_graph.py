@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Four-pass AST-derived Knowledge Base builder (Kuzu).
+"""Four-pass AST-derived Knowledge Base builder (LadybugDB).
 
 Walks a Java source tree with `tree_sitter_java`, writes a deterministic graph of:
     Symbol nodes: package, file, class, interface, enum, record, annotation, method, constructor
@@ -13,14 +13,14 @@ Pass 3 resolves static call sites into confidence-scored CALLS edges and DECLARE
 Pass 4 emits Route rows plus Symbol→Route EXPOSES edges from literal annotation metadata.
 
 Usage:
-    build_ast_graph.py --source-root <repo> [--kuzu-path <path>] [--verbose]
+    build_ast_graph.py --source-root <repo> [--ladybug-path <path>] [--verbose]
 
-Default Kuzu database path resolution order:
-    --kuzu-path CLI arg (path passed to kuzu.Database(...))
-    JAVA_CODEBASE_RAG_INDEX_DIR/code_graph.kuzu (if set and local)
-    ./.java-codebase-rag/code_graph.kuzu under cwd
+Default LadybugDB database path resolution order:
+    --ladybug-path CLI arg (path passed to ladybug.Database(...))
+    JAVA_CODEBASE_RAG_INDEX_DIR/code_graph.lbug (if set and local)
+    ./.java-codebase-rag/code_graph.lbug under cwd
 
-The Kuzu DB is dropped and rebuilt on every run (Phase 1 is a full rebuild).
+The LadybugDB DB is dropped and rebuilt on every run (Phase 1 is a full rebuild).
 """
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ from collections import defaultdict
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
-import kuzu
+import ladybug
 
 from ast_java import (
     ONTOLOGY_VERSION,
@@ -76,7 +76,7 @@ _PASS3_START = "[graph] pass 3 · call resolution (outgoing calls per site)"
 _PASS4_START = "[graph] pass 4 · route and EXPOSES extraction"
 _PASS5_START = "[graph] pass 5 · imperative HTTP_CALLS / ASYNC_CALLS edges"
 _PASS6_START = "[graph] pass 6 · cross-service call-edge matching"
-_WRITE_START = "[graph] writing · Kuzu graph to disk"
+_WRITE_START = "[graph] writing · LadybugDB graph to disk"
 
 
 def _verbose_stderr_line(content: str) -> None:
@@ -230,7 +230,7 @@ class RouteRow:
     start_line: int
     end_line: int
     resolved: bool
-    # B2a brownfield composition (PR-A3); not persisted on Kuzu `Route` nodes.
+    # B2a brownfield composition (PR-A3); not persisted on LadybugDB `Route` nodes.
     source_layer: str = "builtin"
 
 
@@ -499,8 +499,8 @@ def _hash_file(abs_path: Path) -> str:
 # ---------- incremental rebuild helpers ----------
 
 
-def _load_existing_types(conn: kuzu.Connection, tables: GraphTables, exclude_files: set[str] | None = None) -> None:
-    """Load type entries from existing Kuzu graph into tables for cross-file resolution.
+def _load_existing_types(conn: ladybug.Connection, tables: GraphTables, exclude_files: set[str] | None = None) -> None:
+    """Load type entries from existing LadybugDB graph into tables for cross-file resolution.
 
     When exclude_files is provided, only load types from files NOT in the set.
     """
@@ -543,8 +543,8 @@ def _load_existing_types(conn: kuzu.Connection, tables: GraphTables, exclude_fil
         tables.by_package.setdefault(package, []).append(entry)
 
 
-def _load_existing_members(conn: kuzu.Connection, tables: GraphTables, exclude_files: set[str] | None = None) -> None:
-    """Load member entries from existing Kuzu graph into tables.members.
+def _load_existing_members(conn: ladybug.Connection, tables: GraphTables, exclude_files: set[str] | None = None) -> None:
+    """Load member entries from existing LadybugDB graph into tables.members.
 
     When exclude_files is provided, only load members from files NOT in the set.
     """
@@ -588,7 +588,7 @@ def _load_existing_members(conn: kuzu.Connection, tables: GraphTables, exclude_f
         ))
 
 
-def _find_dependents(conn: kuzu.Connection, changed_node_ids: set[str]) -> set[str]:
+def _find_dependents(conn: ladybug.Connection, changed_node_ids: set[str]) -> set[str]:
     """Find files whose nodes have edges pointing into changed nodes. Returns set of filenames."""
     dependent_files: set[str] = set()
 
@@ -612,14 +612,14 @@ def _find_dependents(conn: kuzu.Connection, changed_node_ids: set[str]) -> set[s
     return dependent_files
 
 
-def _delete_file_scope(conn: kuzu.Connection, filenames: set[str]) -> None:
+def _delete_file_scope(conn: ladybug.Connection, filenames: set[str]) -> None:
     """Delete all nodes and edges originating from the given files.
 
     Skip phantom nodes (filename=""). Deletes ALL edge types in Phase 1,
     then nodes in subsequent phases. Route/Client/Producer nodes use
     DETACH DELETE as a safety net for any edges missed in Phase 1.
 
-    Edges are deleted in batch across all filenames first to avoid Kuzu
+    Edges are deleted in batch across all filenames first to avoid LadybugDB
     "has connected edges" errors when edges from one file point to nodes
     in another file within the same scope.
     """
@@ -627,7 +627,7 @@ def _delete_file_scope(conn: kuzu.Connection, filenames: set[str]) -> None:
 
     # Phase 1: Delete ALL edges from ALL scope files at once.
     # This avoids ordering issues where file A has an edge from file B
-    # pointing into it; if we delete A's nodes before B's edges, Kuzu
+    # pointing into it; if we delete A's nodes before B's edges, LadybugDB
     # raises "has connected edges" errors.
     edge_tables = [
         "EXTENDS", "IMPLEMENTS", "INJECTS", "CALLS", "DECLARES", "OVERRIDES",
@@ -680,10 +680,10 @@ def _delete_file_scope(conn: kuzu.Connection, filenames: set[str]) -> None:
         )
 
 
-def _scoped_write(conn: kuzu.Connection, tables: GraphTables, *, project_root: Path, meta_chain: dict[str, frozenset[str]] | None) -> None:
-    """Write nodes and edges to existing Kuzu database without drop/create schema.
+def _scoped_write(conn: ladybug.Connection, tables: GraphTables, *, project_root: Path, meta_chain: dict[str, frozenset[str]] | None) -> None:
+    """Write nodes and edges to existing LadybugDB database without drop/create schema.
 
-    Like write_kuzu() but without _drop_all()/_create_schema(). The caller is
+    Like write_ladybug() but without _drop_all()/_create_schema(). The caller is
     responsible for calling _populate_declares_rows() and _populate_overrides_rows()
     before invoking this function.
 
@@ -715,13 +715,13 @@ def _scoped_write(conn: kuzu.Connection, tables: GraphTables, *, project_root: P
 
 
 def _write_nodes_merge(
-    conn: kuzu.Connection,
+    conn: ladybug.Connection,
     tables: GraphTables,
     *,
     project_root: Path,
     meta_chain: dict[str, frozenset[str]] | None,
 ) -> None:
-    """Write nodes to existing Kuzu database using MERGE to handle existing nodes."""
+    """Write nodes to existing LadybugDB database using MERGE to handle existing nodes."""
     _write_nodes_impl(conn, tables, project_root=project_root, meta_chain=meta_chain, symbol_query=_MERGE_SYMBOL)
 
 
@@ -2664,7 +2664,7 @@ def pass6_match_edges(
         )
 
 
-# ---------- Kuzu write ----------
+# ---------- LadybugDB write ----------
 
 
 _SCHEMA_NODE = (
@@ -2685,7 +2685,7 @@ _SCHEMA_META = (
     "ontology_version INT64, built_at INT64, source_root STRING, "
     "counts_json STRING, parse_errors INT64, "
     "routes_total INT64, exposes_total INT64, "
-    # JSON map {framework: count}; STRING avoids Kuzu Python MAP↔STRUCT binder mismatch.
+    # JSON map {framework: count}; STRING avoids LadybugDB Python MAP↔STRUCT binder mismatch.
     "routes_by_framework STRING, "
     "routes_resolved_pct DOUBLE, "
     "routes_from_brownfield_pct DOUBLE, "
@@ -2798,7 +2798,7 @@ _SCHEMA_ASYNC_CALLS = (
 )
 
 
-def _drop_all(conn: kuzu.Connection) -> None:
+def _drop_all(conn: ladybug.Connection) -> None:
     for stmt in (
         "DROP TABLE IF EXISTS DECLARES_CLIENT",
         "DROP TABLE IF EXISTS DECLARES_PRODUCER",
@@ -2825,7 +2825,7 @@ def _drop_all(conn: kuzu.Connection) -> None:
             pass
 
 
-def _create_schema(conn: kuzu.Connection) -> None:
+def _create_schema(conn: ladybug.Connection) -> None:
     for stmt in (
         _SCHEMA_NODE,
         _SCHEMA_UNRESOLVED_CALL_SITE,
@@ -2885,7 +2885,7 @@ _MERGE_SYMBOL = (
 
 
 def _write_nodes_impl(
-    conn: kuzu.Connection,
+    conn: ladybug.Connection,
     tables: GraphTables,
     *,
     project_root: Path,
@@ -2952,7 +2952,7 @@ def _write_nodes_impl(
 
 
 def _write_nodes(
-    conn: kuzu.Connection,
+    conn: ladybug.Connection,
     tables: GraphTables,
     *,
     project_root: Path,
@@ -3064,7 +3064,7 @@ def _direct_supertype_ids(tables: GraphTables, type_id: str) -> list[str]:
 def _populate_overrides_rows(tables: GraphTables) -> None:
     """Materialize (subtype_method)-[:OVERRIDES]->(supertype_method) for one supertype hop.
 
-    Matches ``KuzuGraph.override_axis_rollup_for`` (direct ``IMPLEMENTS`` / ``EXTENDS``
+    Matches ``LadybugDBGraph.override_axis_rollup_for`` (direct ``IMPLEMENTS`` / ``EXTENDS``
     only, same ``signature``, distinct method ids, non-static instance methods).
     """
     by_declaring_type: dict[str, list[MemberEntry]] = defaultdict(list)
@@ -3099,7 +3099,7 @@ def _build_file_by_node_id(tables: GraphTables) -> dict[str, str]:
     return lookup
 
 
-def _write_edges(conn: kuzu.Connection, tables: GraphTables, _file_by_node_id: dict[str, str] | None = None) -> None:
+def _write_edges(conn: ladybug.Connection, tables: GraphTables, _file_by_node_id: dict[str, str] | None = None) -> None:
     # Build node_id -> file_path lookup for source_file resolution.
     if _file_by_node_id is None:
         _file_by_node_id = _build_file_by_node_id(tables)
@@ -3193,7 +3193,7 @@ def _write_edges(conn: kuzu.Connection, tables: GraphTables, _file_by_node_id: d
         })
 
 
-def _write_routes_and_exposes(conn: kuzu.Connection, tables: GraphTables, _file_by_node_id: dict[str, str] | None = None) -> None:
+def _write_routes_and_exposes(conn: ladybug.Connection, tables: GraphTables, _file_by_node_id: dict[str, str] | None = None) -> None:
     # Build node_id -> file_path lookup for source_file resolution (for Symbol sources).
     if _file_by_node_id is None:
         _file_by_node_id = _build_file_by_node_id(tables)
@@ -3276,7 +3276,7 @@ def _write_routes_and_exposes(conn: kuzu.Connection, tables: GraphTables, _file_
         })
 
 
-def _write_meta(conn: kuzu.Connection, tables: GraphTables, source_root: Path) -> None:
+def _write_meta(conn: ladybug.Connection, tables: GraphTables, source_root: Path) -> None:
     seen_calls: set[tuple[str, str, int, int]] = set()
     calls_unique = 0
     for row in tables.calls_rows:
@@ -3392,12 +3392,12 @@ def _write_meta(conn: kuzu.Connection, tables: GraphTables, source_root: Path) -
 
 def incremental_rebuild(
     source_root: Path,
-    kuzu_path: Path,
+    ladybug_path: Path,
     *,
     verbose: bool,
     expansion_cap: int = 50,
 ) -> IncrementalResult:
-    """Incrementally rebuild the Kuzu graph, processing only changed files and their dependents.
+    """Incrementally rebuild the LadybugDB graph, processing only changed files and their dependents.
 
     Returns IncrementalResult with statistics about the rebuild.
     Falls back to full rebuild if:
@@ -3409,7 +3409,7 @@ def incremental_rebuild(
     t_start = time.time()
 
     # Step 1: Load existing graph and detect changes
-    if not kuzu_path.exists():
+    if not ladybug_path.exists():
         if verbose:
             _verbose_stderr_line("[increment] no existing graph; falling back to full rebuild")
         # Fall back to full rebuild
@@ -3420,7 +3420,7 @@ def incremental_rebuild(
         pass4_routes(tables, asts, source_root=source_root, verbose=verbose)
         pass5_imperative_edges(tables, asts, source_root=source_root, verbose=verbose)
         pass6_match_edges(tables, verbose=verbose)
-        write_kuzu(kuzu_path, tables, source_root=source_root, verbose=verbose)
+        write_ladybug(ladybug_path, tables, source_root=source_root, verbose=verbose)
 
         return IncrementalResult(
             mode="full_fallback",
@@ -3431,8 +3431,8 @@ def incremental_rebuild(
             elapsed_sec=time.time() - t_start,
         )
 
-    db = kuzu.Database(str(kuzu_path))
-    conn = kuzu.Connection(db)
+    db = ladybug.Database(str(ladybug_path))
+    conn = ladybug.Connection(db)
 
     # Check ontology version
     try:
@@ -3445,7 +3445,7 @@ def incremental_rebuild(
                     _verbose_stderr_line(f"[increment] ontology version {version} < 17; falling back to full rebuild")
                 conn.close()
                 del conn, db
-                return _fallback_to_full(source_root, kuzu_path, verbose, t_start)
+                return _fallback_to_full(source_root, ladybug_path, verbose, t_start)
     except Exception as e:
         if verbose:
             _verbose_stderr_line(f"[increment] failed to read ontology version: {e}; falling back to full rebuild")
@@ -3454,9 +3454,9 @@ def incremental_rebuild(
         except Exception:
             pass
         del conn, db
-        return _fallback_to_full(source_root, kuzu_path, verbose, t_start)
+        return _fallback_to_full(source_root, ladybug_path, verbose, t_start)
 
-    index_dir = kuzu_path.parent
+    index_dir = ladybug_path.parent
     tracker = FileHashTracker(index_dir)
     tracker.load()
 
@@ -3488,7 +3488,7 @@ def incremental_rebuild(
             _verbose_stderr_line("[increment] crash marker exists; falling back to full rebuild")
         conn.close()
         crash_marker_path.unlink(missing_ok=True)
-        return _fallback_to_full(source_root, kuzu_path, verbose, t_start)
+        return _fallback_to_full(source_root, ladybug_path, verbose, t_start)
 
     # Write crash marker
     crash_marker_path.write_text("", encoding="utf-8")
@@ -3516,7 +3516,7 @@ def incremental_rebuild(
                 _verbose_stderr_line(f"[increment] dependent expansion cap ({expansion_cap}) exceeded ({len(scope_files)} files); falling back to full rebuild")
             conn.close()
             crash_marker_path.unlink(missing_ok=True)
-            return _fallback_to_full(source_root, kuzu_path, verbose, t_start)
+            return _fallback_to_full(source_root, ladybug_path, verbose, t_start)
 
         if verbose:
             _verbose_stderr_line(f"[increment] processing {len(scope_files)} files ({len(changed_files)} changed + {len(dependent_files)} dependents)")
@@ -3612,12 +3612,12 @@ def incremental_rebuild(
             _verbose_stderr_line(f"[increment] error during incremental rebuild: {e}; falling back to full rebuild")
         conn.close()
         crash_marker_path.unlink(missing_ok=True)
-        return _fallback_to_full(source_root, kuzu_path, verbose, t_start)
+        return _fallback_to_full(source_root, ladybug_path, verbose, t_start)
 
 
-def _init_hash_tracker(source_root: Path, kuzu_path: Path) -> int:
+def _init_hash_tracker(source_root: Path, ladybug_path: Path) -> int:
     """Initialize hash tracker for all Java files. Returns number of files hashed."""
-    index_dir = kuzu_path.parent
+    index_dir = ladybug_path.parent
     tracker = FileHashTracker(index_dir)
     tracker.load()
     ignore = LayeredIgnore(source_root)
@@ -3635,7 +3635,7 @@ def _init_hash_tracker(source_root: Path, kuzu_path: Path) -> int:
     return len(all_files)
 
 
-def _fallback_to_full(source_root: Path, kuzu_path: Path, verbose: bool, t_start: float) -> IncrementalResult:
+def _fallback_to_full(source_root: Path, ladybug_path: Path, verbose: bool, t_start: float) -> IncrementalResult:
     """Fallback to full rebuild."""
     tables = GraphTables()
     asts = pass1_parse(source_root, tables, verbose=verbose)
@@ -3644,7 +3644,7 @@ def _fallback_to_full(source_root: Path, kuzu_path: Path, verbose: bool, t_start
     pass4_routes(tables, asts, source_root=source_root, verbose=verbose)
     pass5_imperative_edges(tables, asts, source_root=source_root, verbose=verbose)
     pass6_match_edges(tables, verbose=verbose)
-    write_kuzu(kuzu_path, tables, source_root=source_root, verbose=verbose)
+    write_ladybug(ladybug_path, tables, source_root=source_root, verbose=verbose)
 
     return IncrementalResult(
         mode="full_fallback",
@@ -3656,12 +3656,12 @@ def _fallback_to_full(source_root: Path, kuzu_path: Path, verbose: bool, t_start
     )
 
 
-def _write_clients_producers_and_calls(conn: kuzu.Connection, tables: GraphTables) -> None:
-    """Write Route, Client, Producer, and cross-service edges to Kuzu.
+def _write_clients_producers_and_calls(conn: ladybug.Connection, tables: GraphTables) -> None:
+    """Write Route, Client, Producer, and cross-service edges to LadybugDB.
 
     Used by the incremental rebuild's global pass 5-6 step. Writes phantom
     Route nodes (created by pass5 for cross-service calls) that wouldn't
-    otherwise exist in Kuzu.
+    otherwise exist in LadybugDB.
     """
     # Write phantom routes that don't already exist (pass5 creates these for cross-service calls)
     for row in tables.routes_rows:
@@ -3739,7 +3739,7 @@ def _write_clients_producers_and_calls(conn: kuzu.Connection, tables: GraphTable
         })
 
 
-def write_kuzu(
+def write_ladybug(
     db_path: Path,
     tables: GraphTables,
     *,
@@ -3755,8 +3755,8 @@ def write_kuzu(
         _verbose_stderr_line(_WRITE_START)
     with _VerbosePassHeartbeats("[graph] writing", verbose=verbose):
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        db = kuzu.Database(str(db_path))
-        conn = kuzu.Connection(db)
+        db = ladybug.Database(str(db_path))
+        conn = ladybug.Connection(db)
         _drop_all(conn)
         _create_schema(conn)
         t0 = time.time()
@@ -3787,22 +3787,22 @@ def write_kuzu(
 # ---------- CLI ----------
 
 
-def _default_kuzu_path() -> Path:
+def _default_ladybug_path() -> Path:
     idx = os.environ.get("JAVA_CODEBASE_RAG_INDEX_DIR", "").strip()
     if idx and not idx.startswith(("s3://", "gs://", "az://")):
-        return Path(os.path.expanduser(idx.rstrip("/"))) / "code_graph.kuzu"
-    return Path.cwd() / ".java-codebase-rag" / "code_graph.kuzu"
+        return Path(os.path.expanduser(idx.rstrip("/"))) / "code_graph.lbug"
+    return Path.cwd() / ".java-codebase-rag" / "code_graph.lbug"
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Build an AST-derived Kuzu graph for Java sources.")
+    parser = argparse.ArgumentParser(description="Build an AST-derived LadybugDB graph for Java sources.")
     parser.add_argument("--source-root", default=None, help="Repository / monorepo root to scan for .java (defaults to current working directory)")
     parser.add_argument(
-        "--kuzu-path",
+        "--ladybug-path",
         default=None,
         help=(
-            "Kuzu database path (file/dir as used by kuzu.Database; "
-            "default: $JAVA_CODEBASE_RAG_INDEX_DIR/code_graph.kuzu or ./.java-codebase-rag/code_graph.kuzu)"
+            "LadybugDB database path (file/dir as used by ladybug.Database; "
+            "default: $JAVA_CODEBASE_RAG_INDEX_DIR/code_graph.lbug or ./.java-codebase-rag/code_graph.lbug)"
         ),
     )
     parser.add_argument("--verbose", action="store_true")
@@ -3814,10 +3814,10 @@ def main() -> int:
         print(f"source-root not a directory: {root}", file=sys.stderr)
         return 2
 
-    kuzu_path = Path(args.kuzu_path).expanduser() if args.kuzu_path else _default_kuzu_path()
+    ladybug_path = Path(args.ladybug_path).expanduser() if args.ladybug_path else _default_ladybug_path()
 
     if args.incremental:
-        result = incremental_rebuild(root, kuzu_path, verbose=args.verbose)
+        result = incremental_rebuild(root, ladybug_path, verbose=args.verbose)
         print(json.dumps({
             "mode": result.mode,
             "files_changed": result.files_changed,
@@ -3837,9 +3837,9 @@ def main() -> int:
     pass4_routes(tables, asts, source_root=root, verbose=args.verbose)
     pass5_imperative_edges(tables, asts, source_root=root, verbose=args.verbose)
     pass6_match_edges(tables, verbose=args.verbose)
-    write_kuzu(kuzu_path, tables, source_root=root, verbose=args.verbose)
+    write_ladybug(ladybug_path, tables, source_root=root, verbose=args.verbose)
     if args.verbose:
-        _verbose_stderr_line(f"[graph] done · kuzu at {kuzu_path}")
+        _verbose_stderr_line(f"[graph] done · ladybug at {ladybug_path}")
     return 0
 
 

@@ -6,7 +6,7 @@ import shutil
 from contextlib import redirect_stderr
 from pathlib import Path
 
-import kuzu
+import ladybug
 import pytest
 
 from graph_enrich import _load_brownfield_overrides, collect_annotation_meta_chain
@@ -33,16 +33,16 @@ def _build(tmp: Path, yml: str | None, extra_files: dict[str, str]) -> Path:
         p = tmp / rel
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(body, encoding="utf-8")
-    from _builders import build_kuzu_into
+    from _builders import build_ladybug_into
 
-    db_path = tmp / "g.kuzu"
-    build_kuzu_into(tmp, db_path)
+    db_path = tmp / "g.lbug"
+    build_ladybug_into(tmp, db_path)
     return db_path
 
 
 def _route_paths(db_path: Path) -> list[str]:
-    db = kuzu.Database(str(db_path), read_only=True)
-    conn = kuzu.Connection(db)
+    db = ladybug.Database(str(db_path), read_only=True)
+    conn = ladybug.Connection(db)
     r = conn.execute("MATCH (rt:Route) RETURN rt.path ORDER BY rt.path")
     out: list[str] = []
     while r.has_next():
@@ -51,8 +51,8 @@ def _route_paths(db_path: Path) -> list[str]:
 
 
 def _route_ids(db_path: Path) -> list[str]:
-    db = kuzu.Database(str(db_path), read_only=True)
-    conn = kuzu.Connection(db)
+    db = ladybug.Database(str(db_path), read_only=True)
+    conn = ladybug.Connection(db)
     r = conn.execute("MATCH (rt:Route) RETURN rt.id ORDER BY rt.id")
     out: list[str] = []
     while r.has_next():
@@ -61,11 +61,11 @@ def _route_ids(db_path: Path) -> list[str]:
 
 
 def _meta(db_path: Path) -> dict:
-    from kuzu_queries import KuzuGraph
+    from ladybug_queries import LadybugGraph
 
-    KuzuGraph._instance = None
-    KuzuGraph._instance_path = None
-    return KuzuGraph.get(str(db_path)).meta()
+    LadybugGraph._instance = None
+    LadybugGraph._instance_path = None
+    return LadybugGraph.get(str(db_path)).meta()
 
 
 def test_19_layer_b_annotation_route(tmp_path: Path) -> None:
@@ -110,7 +110,7 @@ route_overrides:
         ),
     }
     db = _build(tmp_path, yml, java)
-    conn = kuzu.Connection(kuzu.Database(str(db), read_only=True))
+    conn = ladybug.Connection(ladybug.Database(str(db), read_only=True))
     r = conn.execute(
         "MATCH (s:Symbol)-[:EXPOSES]->(r:Route) "
         "WHERE r.path = '/legacy/users' RETURN count(*)",
@@ -330,7 +330,7 @@ def test_31_layer_c_http_replaces_builtin_spring_row(tmp_path: Path) -> None:
         ),
     }
     db = _build(tmp_path, None, java)
-    conn = kuzu.Connection(kuzu.Database(str(db), read_only=True))
+    conn = ladybug.Connection(ladybug.Database(str(db), read_only=True))
     n = int(
         conn.execute(
             "MATCH (rt:Route) WHERE rt.path = '/x' AND rt.method = 'GET' RETURN count(*)",

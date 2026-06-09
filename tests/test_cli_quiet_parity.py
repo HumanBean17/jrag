@@ -31,7 +31,7 @@ def _assert_quiet_stderr_no_progress_markers(stderr: str) -> None:
 
 
 def test_pass_heartbeat_fires_when_pass_slowed(tmp_path: Path) -> None:
-    kuzu = tmp_path / "g.kuzu"
+    kuzu = tmp_path / "g.lbug"
     env = os.environ.copy()
     env["JAVA_CODEBASE_RAG_TEST_GRAPH_SLOW_SEC"] = "6"
     proc = subprocess.run(
@@ -40,7 +40,7 @@ def test_pass_heartbeat_fires_when_pass_slowed(tmp_path: Path) -> None:
             str(BUILDER),
             "--source-root",
             str(FIXTURE_ROOT),
-            "--kuzu-path",
+            "--ladybug-path",
             str(kuzu),
             "--verbose",
         ],
@@ -59,14 +59,14 @@ def test_pass_heartbeat_fires_when_pass_slowed(tmp_path: Path) -> None:
 
 
 def test_pass_start_before_pass_body(tmp_path: Path) -> None:
-    kuzu = tmp_path / "g2.kuzu"
+    kuzu = tmp_path / "g2.lbug"
     proc = subprocess.run(
         [
             sys.executable,
             str(BUILDER),
             "--source-root",
             str(FIXTURE_ROOT),
-            "--kuzu-path",
+            "--ladybug-path",
             str(kuzu),
             "--verbose",
         ],

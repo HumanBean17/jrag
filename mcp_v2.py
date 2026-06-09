@@ -30,7 +30,7 @@ from sentence_transformers import SentenceTransformer
 from index_common import SBERT_MODEL
 from java_codebase_rag.config import resolved_sbert_model_for_process_env
 from java_ontology import EDGE_SCHEMA, ResolveReason
-from kuzu_queries import KuzuGraph, OVERRIDE_AXIS_COMPOSED_EDGE_TYPES
+from ladybug_queries import LadybugGraph, OVERRIDE_AXIS_COMPOSED_EDGE_TYPES
 from mcp_hints import generate_hints, MCP_HINTS_STRUCTURED_FIELD_DESCRIPTION
 from search_lancedb import TABLES, run_search
 
@@ -604,7 +604,7 @@ def _node_kind_from_id(
 
 
 def _resolve_node_kind(
-    graph: KuzuGraph,
+    graph: LadybugGraph,
     node_id: str,
 ) -> Literal["symbol", "route", "client", "producer", "unresolved_call_site"]:
     try:
@@ -733,7 +733,7 @@ def _node_ref_from_row(kind: Literal["symbol", "route", "client", "producer"], r
 
 
 def _load_node_record(
-    graph: KuzuGraph, node_id: str, kind: Literal["symbol", "route", "client", "producer"],
+    graph: LadybugGraph, node_id: str, kind: Literal["symbol", "route", "client", "producer"],
 ) -> dict[str, Any] | None:
     if kind == "symbol":
         projection = (
@@ -807,7 +807,7 @@ def _merge_overrides_edge_summary(
 
 
 def _edge_summary_for_node(
-    graph: KuzuGraph, node_id: str, *, kind: str, row: dict[str, Any]
+    graph: LadybugGraph, node_id: str, *, kind: str, row: dict[str, Any]
 ) -> dict[str, dict[str, int]]:
     summary = dict(graph.edge_counts_for(node_id))
     sym_kind = str(row.get("kind") or "")
@@ -887,7 +887,7 @@ def search_v2(
     offset: int = 0,
     path_contains: str | None = None,
     filter: NodeFilter | dict[str, Any] | str | None = None,
-    graph: KuzuGraph | None = None,
+    graph: LadybugGraph | None = None,
 ) -> SearchOutput:
     try:
         raw_filter = _coerce_filter(filter)
@@ -967,10 +967,10 @@ def find_v2(
     filter: NodeFilter | dict[str, Any] | str,
     limit: int = 25,
     offset: int = 0,
-    graph: KuzuGraph | None = None,
+    graph: LadybugGraph | None = None,
 ) -> FindOutput:
     try:
-        g = graph or KuzuGraph.get()
+        g = graph or LadybugGraph.get()
         raw_filter = _coerce_filter(filter)
         if raw_filter is None:
             raw_filter = {}
@@ -1063,10 +1063,10 @@ _DESCRIBE_UCS_ID_MESSAGE = (
 def describe_v2(
     id: str | None = None,
     fqn: str | None = None,
-    graph: KuzuGraph | None = None,
+    graph: LadybugGraph | None = None,
 ) -> DescribeOutput:
     try:
-        g = graph or KuzuGraph.get()
+        g = graph or LadybugGraph.get()
         has_id = bool(id and str(id).strip())
         has_fqn = bool(fqn and str(fqn).strip())
         if not has_id and not has_fqn:
@@ -1171,7 +1171,7 @@ def _resolve_parse_microservice_route(identifier: str) -> tuple[str, str, str] |
 
 
 def _resolve_symbol_candidates(
-    g: KuzuGraph,
+    g: LadybugGraph,
     identifier: str,
 ) -> list[tuple[NodeRef, ResolveReason, int]]:
     out: list[tuple[NodeRef, ResolveReason, int]] = []
@@ -1213,7 +1213,7 @@ def _resolve_symbol_candidates(
 
 
 def _resolve_route_candidates(
-    g: KuzuGraph,
+    g: LadybugGraph,
     identifier: str,
 ) -> list[tuple[NodeRef, ResolveReason, int]]:
     out: list[tuple[NodeRef, ResolveReason, int]] = []
@@ -1265,7 +1265,7 @@ def _resolve_route_candidates(
 
 
 def _resolve_client_candidates(
-    g: KuzuGraph,
+    g: LadybugGraph,
     identifier: str,
 ) -> list[tuple[NodeRef, ResolveReason, int]]:
     out: list[tuple[NodeRef, ResolveReason, int]] = []
@@ -1304,7 +1304,7 @@ def _resolve_client_candidates(
 
 
 def _resolve_producer_candidates(
-    g: KuzuGraph,
+    g: LadybugGraph,
     identifier: str,
 ) -> list[tuple[NodeRef, ResolveReason, int]]:
     out: list[tuple[NodeRef, ResolveReason, int]] = []
@@ -1462,7 +1462,7 @@ def _resolve_finalize_success(
 def resolve_v2(
     identifier: str,
     hint_kind: Literal["symbol", "route", "client", "producer"] | None = None,
-    graph: KuzuGraph | None = None,
+    graph: LadybugGraph | None = None,
 ) -> ResolveOutput:
     try:
         trimmed, err = _resolve_validate_identifier(identifier)
@@ -1481,7 +1481,7 @@ def resolve_v2(
         if "*" in trimmed or "?" in trimmed:
             return _resolve_finalize_success(trimmed, hint_kind, [])
 
-        g = graph or KuzuGraph.get()
+        g = graph or LadybugGraph.get()
         raw: list[tuple[NodeRef, ResolveReason, int]] = []
         for kind in _resolve_kinds_to_search(hint_kind):
             if kind == "symbol":
@@ -1726,7 +1726,7 @@ def neighbors_v2(
         declares_composed = [k for k in composed_keys if k in _MEMBER_COMPOSED_EDGE_TYPES]
         override_composed = [k for k in composed_keys if k in _OVERRIDE_COMPOSED_EDGE_TYPES]
         ordered_composed = declares_composed + override_composed
-        g = graph or KuzuGraph.get()
+        g = graph or LadybugGraph.get()
         try:
             raw_filter = _coerce_filter(filter)
             nf = (

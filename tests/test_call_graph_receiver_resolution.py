@@ -1,6 +1,6 @@
 """Isolated call-graph resolution checks (minimal Java trees under tmp_path).
 
-The session `kuzu_graph` fixture uses bank-chat-system only; these tests build
+The session `ladybug_graph` fixture uses bank-chat-system only; these tests build
 tiny graphs so we can assert on a single known failure mode without coupling
 to the large corpus.
 """
@@ -8,13 +8,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import kuzu
+import ladybug
 
-from _builders import build_kuzu_to
+from _builders import build_ladybug_to
 
 
-def _connect(db_path: Path) -> kuzu.Connection:
-    return kuzu.Connection(kuzu.Database(str(db_path), read_only=True))
+def _connect(db_path: Path) -> ladybug.Connection:
+    return ladybug.Connection(ladybug.Database(str(db_path), read_only=True))
 
 
 def test_resolved_receiver_unindexed_callee_preserves_strategy(tmp_path: Path) -> None:
@@ -42,8 +42,8 @@ def test_resolved_receiver_unindexed_callee_preserves_strategy(tmp_path: Path) -
         encoding="utf-8",
     )
 
-    db_path = tmp_path / "b3.kuzu"
-    build_kuzu_to(root, db_path, max_pass=3)
+    db_path = tmp_path / "b3.lbug"
+    build_ladybug_to(root, db_path, max_pass=3)
 
     conn = _connect(db_path)
     r = conn.execute(
@@ -101,8 +101,8 @@ def test_receiver_disambiguation_uses_type_index_not_method_unique(tmp_path: Pat
         encoding="utf-8",
     )
 
-    db_path = tmp_path / "cg.kuzu"
-    build_kuzu_to(root, db_path, max_pass=3)
+    db_path = tmp_path / "cg.lbug"
+    build_ladybug_to(root, db_path, max_pass=3)
 
     conn = _connect(db_path)
     r = conn.execute(
@@ -143,8 +143,8 @@ def test_uppercase_local_receiver_not_treated_as_static_qualifier(tmp_path: Path
         encoding="utf-8",
     )
 
-    db_path = tmp_path / "n3.kuzu"
-    build_kuzu_to(root, db_path, max_pass=3)
+    db_path = tmp_path / "n3.lbug"
+    build_ladybug_to(root, db_path, max_pass=3)
 
     conn = _connect(db_path)
     r = conn.execute(

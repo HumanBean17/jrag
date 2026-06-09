@@ -12,7 +12,7 @@ from build_ast_graph import (
     pass4_routes,
     pass5_imperative_edges,
     pass6_match_edges,
-    write_kuzu,
+    write_ladybug,
 )
 
 
@@ -36,23 +36,23 @@ def build_graph_tables_to(corpus_root: Path, *, max_pass: int) -> GraphTables:
     return tables
 
 
-def build_kuzu_to(corpus_root: Path, db_path: Path, *, max_pass: int) -> Path:
-    """Build through ``max_pass``, ``write_kuzu`` to ``db_path``; return ``db_path``."""
+def build_ladybug_to(corpus_root: Path, db_path: Path, *, max_pass: int) -> Path:
+    """Build through ``max_pass``, ``write_ladybug`` to ``db_path``; return ``db_path``."""
     tables = build_graph_tables_to(corpus_root, max_pass=max_pass)
-    write_kuzu(db_path, tables, source_root=corpus_root, verbose=False)
+    write_ladybug(db_path, tables, source_root=corpus_root, verbose=False)
     return db_path
 
 
-def build_kuzu_into(corpus_root: Path, db_path: Path) -> Path:
-    """Tier-3 helper: pass1–4 + ``write_kuzu`` (mutable per-test corpus under ``corpus_root``)."""
-    return build_kuzu_to(corpus_root, db_path, max_pass=4)
+def build_ladybug_into(corpus_root: Path, db_path: Path) -> Path:
+    """Tier-3 helper: pass1–4 + ``write_ladybug`` (mutable per-test corpus under ``corpus_root``)."""
+    return build_ladybug_to(corpus_root, db_path, max_pass=4)
 
 
-def build_kuzu_imperative_into(corpus_root: Path, db_path: Path) -> Path:
-    """pass1–5 + ``write_kuzu`` (no pass6)."""
-    return build_kuzu_to(corpus_root, db_path, max_pass=5)
+def build_ladybug_imperative_into(corpus_root: Path, db_path: Path) -> Path:
+    """pass1–5 + ``write_ladybug`` (no pass6)."""
+    return build_ladybug_to(corpus_root, db_path, max_pass=5)
 
 
-def build_kuzu_full_into(corpus_root: Path, db_path: Path) -> Path:
-    """pass1–6 + ``write_kuzu``."""
-    return build_kuzu_to(corpus_root, db_path, max_pass=6)
+def build_ladybug_full_into(corpus_root: Path, db_path: Path) -> Path:
+    """pass1–6 + ``write_ladybug``."""
+    return build_ladybug_to(corpus_root, db_path, max_pass=6)

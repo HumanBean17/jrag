@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
-from kuzu_queries import find_symbols_in_file_range
+from ladybug_queries import find_symbols_in_file_range
 from pr_analysis import (
     DiffHunk,
     analyze_pr_pipeline,
@@ -52,7 +52,7 @@ diff --git a/b.java b/b.java
     assert paths == {"a.java", "b.java"}
 
 
-def test_33_map_hunks_to_symbols_chat_management_service_assign(kuzu_graph) -> None:
+def test_33_map_hunks_to_symbols_chat_management_service_assign(ladybug_graph) -> None:
     diff = """diff --git a/chat-assign/src/main/java/com/bank/chat/assign/service/ChatManagementService.java b/chat-assign/src/main/java/com/bank/chat/assign/service/ChatManagementService.java
 --- a/chat-assign/src/main/java/com/bank/chat/assign/service/ChatManagementService.java
 +++ b/chat-assign/src/main/java/com/bank/chat/assign/service/ChatManagementService.java
@@ -64,25 +64,25 @@ def test_33_map_hunks_to_symbols_chat_management_service_assign(kuzu_graph) -> N
              throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "conversationId required");
          }
 """
-    changed = map_hunks_to_symbols(kuzu_graph, parse_unified_diff(diff))
+    changed = map_hunks_to_symbols(ladybug_graph, parse_unified_diff(diff))
     fqns = {c.fqn for c in changed}
     assert any(f.endswith("ChatManagementService#assign(AssignmentRequest)") for f in fqns), fqns
     assign = next(c for c in changed if c.fqn.endswith("assign(AssignmentRequest)"))
     assert assign.change_type == "modified"
 
 
-def test_34_compute_risk_leaf_private_method_low_blast(kuzu_graph) -> None:
+def test_34_compute_risk_leaf_private_method_low_blast(ladybug_graph) -> None:
     from pr_analysis import ChangedSymbol
 
     sym = find_symbols_in_file_range(
-        kuzu_graph,
+        ladybug_graph,
         filename="chat-assign/src/main/java/com/bank/chat/assign/service/DistributionChunkService.java",
         start_line=89,
         end_line=95,
     )
     pick = next(s for s in sym if s.fqn.endswith("pickEligibleOperator(UUID)"))
     rep = compute_risk(
-        kuzu_graph,
+        ladybug_graph,
         [
             ChangedSymbol(
                 symbol_id=pick.id,
@@ -99,7 +99,7 @@ def test_34_compute_risk_leaf_private_method_low_blast(kuzu_graph) -> None:
 
 
 def test_35_compute_risk_controller_route_and_high_band_when_saturated(
-    monkeypatch, kuzu_graph,
+    monkeypatch, ladybug_graph,
 ) -> None:
     """Fixture corpus: controller diff surfaces EXPOSES routes; `high` needs saturated metrics."""
     from pr_analysis import ChangedSymbol
@@ -115,11 +115,11 @@ def test_35_compute_risk_controller_route_and_high_band_when_saturated(
          return ResponseEntity.accepted().build();
      }
 """
-    rep0 = analyze_pr_pipeline(kuzu_graph, diff)
+    rep0 = analyze_pr_pipeline(ladybug_graph, diff)
     assert rep0.routes_touched, rep0
     assert any("assign(AssignmentRequest)" in s.fqn for s in rep0.changed_symbols), rep0
 
-    hit = kuzu_graph.impact_analysis("AssignChatRepository", depth=2, limit=10)[0]
+    hit = ladybug_graph.impact_analysis("AssignChatRepository", depth=2, limit=10)[0]
 
     def fake_ia(self, name, **kwargs):
         del name, kwargs
@@ -137,13 +137,13 @@ def test_35_compute_risk_controller_route_and_high_band_when_saturated(
             )
         return out
 
-    monkeypatch.setattr(type(kuzu_graph), "impact_analysis", fake_ia)
-    monkeypatch.setattr(type(kuzu_graph), "find_callers", fake_fc)
+    monkeypatch.setattr(type(ladybug_graph), "impact_analysis", fake_ia)
+    monkeypatch.setattr(type(ladybug_graph), "find_callers", fake_fc)
 
     sym = next(
         s
         for s in find_symbols_in_file_range(
-            kuzu_graph,
+            ladybug_graph,
             filename="chat-assign/src/main/java/com/bank/chat/assign/web/ChatManagementController.java",
             start_line=25,
             end_line=29,
@@ -151,7 +151,7 @@ def test_35_compute_risk_controller_route_and_high_band_when_saturated(
         if s.fqn.endswith("assign(AssignmentRequest)")
     )
     rep = compute_risk(
-        kuzu_graph,
+        ladybug_graph,
         [
             ChangedSymbol(
                 symbol_id=sym.id,
@@ -304,13 +304,13 @@ def test_35b_compute_risk_single_cross_service_bonus_is_point_two(monkeypatch) -
 
 
 def test_pr_analysis_changed_methods_finds_routes_via_declares_client(
-    kuzu_db_path_cross_service_smoke: Path,
+    ladybug_db_path_cross_service_smoke: Path,
 ) -> None:
-    from kuzu_queries import KuzuGraph
+    from ladybug_queries import LadybugGraph
 
     from pr_analysis import ChangedSymbol, compute_risk
 
-    g = KuzuGraph(str(kuzu_db_path_cross_service_smoke))
+    g = LadybugGraph(str(ladybug_db_path_cross_service_smoke))
     route_rows = g._rows(  # noqa: SLF001
         "MATCH (r:Route) "
         "WHERE r.microservice = 'svc-b' AND r.path_template = '/chat/joinOperator' "
@@ -341,7 +341,7 @@ def test_pr_analysis_changed_methods_finds_routes_via_declares_client(
     assert rep.changed_symbols[0].cross_service_callers_count >= 1
 
 
-def test_36_removed_symbol_from_minus_only_hunk(kuzu_graph) -> None:
+def test_36_removed_symbol_from_minus_only_hunk(ladybug_graph) -> None:
     diff = """diff --git a/chat-assign/src/main/java/com/bank/chat/assign/service/ChatManagementService.java b/chat-assign/src/main/java/com/bank/chat/assign/service/ChatManagementService.java
 --- a/chat-assign/src/main/java/com/bank/chat/assign/service/ChatManagementService.java
 +++ b/chat-assign/src/main/java/com/bank/chat/assign/service/ChatManagementService.java
@@ -352,14 +352,14 @@ def test_36_removed_symbol_from_minus_only_hunk(kuzu_graph) -> None:
 -                .ifPresent(assignChatRepository::delete);
 -    }
 """
-    changed = map_hunks_to_symbols(kuzu_graph, parse_unified_diff(diff))
+    changed = map_hunks_to_symbols(ladybug_graph, parse_unified_diff(diff))
     fqns = {c.fqn for c in changed}
     assert any(f.endswith("closeChat(String)") for f in fqns), fqns
     close = next(c for c in changed if c.fqn.endswith("closeChat(String)"))
     assert close.change_type == "removed"
 
 
-def test_37_added_method_surfaces_not_yet_indexed_note(kuzu_graph) -> None:
+def test_37_added_method_surfaces_not_yet_indexed_note(ladybug_graph) -> None:
     diff = """diff --git a/chat-assign/src/main/java/com/bank/chat/assign/service/ChatManagementService.java b/chat-assign/src/main/java/com/bank/chat/assign/service/ChatManagementService.java
 --- a/chat-assign/src/main/java/com/bank/chat/assign/service/ChatManagementService.java
 +++ b/chat-assign/src/main/java/com/bank/chat/assign/service/ChatManagementService.java
@@ -376,14 +376,14 @@ def test_37_added_method_surfaces_not_yet_indexed_note(kuzu_graph) -> None:
 +    }
  }
  """
-    rep = analyze_pr_pipeline(kuzu_graph, diff)
+    rep = analyze_pr_pipeline(ladybug_graph, diff)
     joined = " ".join(rep.notes).lower()
     assert "not yet indexed" in joined, rep.notes
 
 
-def test_find_symbols_in_file_range_query(kuzu_graph) -> None:
+def test_find_symbols_in_file_range_query(ladybug_graph) -> None:
     rows = find_symbols_in_file_range(
-        kuzu_graph,
+        ladybug_graph,
         filename="chat-assign/src/main/java/com/bank/chat/assign/service/ChatManagementService.java",
         start_line=47,
         end_line=50,
@@ -391,7 +391,7 @@ def test_find_symbols_in_file_range_query(kuzu_graph) -> None:
     assert any("assign(AssignmentRequest)" in r.fqn for r in rows)
 
 
-def test_binary_and_rename_diffs_do_not_crash(kuzu_graph) -> None:
+def test_binary_and_rename_diffs_do_not_crash(ladybug_graph) -> None:
     diff = """diff --git a/x.bin b/x.bin
 index 111..222 100644
 Binary files a/x.bin and b/x.bin differ
@@ -408,7 +408,7 @@ index 111..222 100644
 +c
  d
 """
-    rep = analyze_pr_pipeline(kuzu_graph, diff)
+    rep = analyze_pr_pipeline(ladybug_graph, diff)
     assert rep.risk_band in ("low", "medium", "high")
     notes = " ".join(rep.notes).lower()
     assert "binary" in notes or "skipped binary" in notes

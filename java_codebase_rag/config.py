@@ -67,10 +67,9 @@ def resolved_sbert_model_for_process_env(import_time_default: str) -> str:
 # Legacy env keys: never honored; detection-only hints name the replacement (if any).
 _LEGACY_ENV_HINTS: tuple[tuple[str, str], ...] = (
     ("LANCEDB_URI", "JAVA_CODEBASE_RAG_INDEX_DIR"),
-    ("KUZU_DB_PATH", "JAVA_CODEBASE_RAG_INDEX_DIR (Kuzu lives at <index_dir>/code_graph.kuzu)"),
     ("LANCEDB_MCP_PROJECT_ROOT", "cwd or --source-root (no env replacement)"),
     ("LANCEDB_MCP_ALLOW_REFRESH", "(removed; use init / increment / reprocess / erase)"),
-    ("LANCEDB_MCP_GRAPH_ENABLED", "(removed; graph is used when code_graph.kuzu exists)"),
+    ("LANCEDB_MCP_GRAPH_ENABLED", "(removed; graph is used when code_graph.lbug exists)"),
     ("LANCEDB_MCP_MICROSERVICE_ROOTS", "microservice_roots: in .java-codebase-rag.yml"),
     ("LANCEDB_MCP_DEBUG_CONTEXT", ENV_DEBUG_CONTEXT),
     ("LANCEDB_MCP_RUN_HEAVY", ENV_RUN_HEAVY),
@@ -182,7 +181,7 @@ def load_yaml_mapping(source_root: Path) -> dict[str, Any]:
 class ResolvedOperatorConfig:
     source_root: Path
     index_dir: Path
-    kuzu_path: Path
+    ladybug_path: Path
     cocoindex_db: Path
     embedding_model: str
     embedding_device: str | None
@@ -193,7 +192,7 @@ class ResolvedOperatorConfig:
     hints_enabled_source: SettingSource
 
     def apply_to_os_environ(self) -> None:
-        """Make downstream modules (server, kuzu_queries, flows) see a consistent environment.
+        """Make downstream modules (server, ladybug_queries, flows) see a consistent environment.
 
         When ``embedding_device`` is unset, ``SBERT_DEVICE`` is not removed from ``os.environ`` so
         a long-lived host process is not mutated for unrelated callers; subprocesses still use
@@ -369,12 +368,12 @@ def resolve_operator_config(
         yaml_path=("hints", "enabled"),
         default=True,
     )
-    ku = index_dir / "code_graph.kuzu"
+    ku = index_dir / "code_graph.lbug"
     coco = index_dir / "cocoindex.db"
     return ResolvedOperatorConfig(
         source_root=root,
         index_dir=index_dir,
-        kuzu_path=ku,
+        ladybug_path=ku,
         cocoindex_db=coco,
         embedding_model=model,
         embedding_device=device,
@@ -387,9 +386,9 @@ def resolve_operator_config(
 
 
 def index_dir_has_existing_artifacts(index_dir: Path) -> tuple[bool, list[str]]:
-    """True if Kuzu graph dir or any Lance table already exists under index_dir."""
+    """True if graph dir or any Lance table already exists under index_dir."""
     paths: list[str] = []
-    ku = index_dir / "code_graph.kuzu"
+    ku = index_dir / "code_graph.lbug"
     if ku.exists():
         paths.append(str(ku.resolve()))
     if index_dir.is_dir():

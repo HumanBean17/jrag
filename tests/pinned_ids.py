@@ -10,10 +10,10 @@ CLIENT_MESSAGE_PROCESSOR_PROCESS_FQN = (
 )
 
 if TYPE_CHECKING:
-    from kuzu_queries import KuzuGraph
+    from ladybug_queries import LadybugGraph
 
 
-def client_message_processor_process_id(graph: KuzuGraph) -> str:
+def client_message_processor_process_id(graph: LadybugGraph) -> str:
     rows = graph._rows(  # noqa: SLF001
         "MATCH (m:Symbol {fqn: $fqn}) RETURN m.id AS id LIMIT 1",
         {"fqn": CLIENT_MESSAGE_PROCESSOR_PROCESS_FQN},

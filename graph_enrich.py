@@ -334,7 +334,7 @@ def collect_annotation_meta_chain(
 ) -> dict[str, frozenset[str]]:
     """Map annotation simple name → built-in simple names reachable via meta-annotations.
 
-    Single source of truth for Layer A: both the Kuzu writer and Lance chunk
+    Single source of truth for Layer A: both the LadybugDB writer and Lance chunk
     enrichment must use this; they must not derive `meta_chain` from separate
     filesystem walks. See ``PLAN-BROWNFIELD-ROLE-OVERRIDES`` §
     *Single source of truth (REQUIRED — read before implementation)*.
@@ -350,7 +350,7 @@ def annotation_meta_decls_from_graph_tables(
     """From `build_ast_graph.GraphTables.types`, map @interface simple name -> meta anns.
 
     Used for diagnostics; Layer A in production uses `collect_annotation_meta_chain`
-    (disk) so Kuzu and Lance share one index.
+    (disk) so LadybugDB and Lance share one index.
     """
     decls: dict[str, tuple[str, ...]] = {}
     first_fqn: dict[str, str] = {}
@@ -1702,7 +1702,7 @@ def enrich_chunk(
 
 
 def symbol_id(kind: str, fqn: str, file_path: str = "", start_byte: int = 0) -> str:
-    """Deterministic SHA1-based id for Kuzu Symbol nodes."""
+    """Deterministic SHA1-based id for LadybugDB Symbol nodes."""
     key = f"{kind}|{fqn}|{file_path}|{start_byte}".encode("utf-8")
     return hashlib.sha1(key).hexdigest()
 

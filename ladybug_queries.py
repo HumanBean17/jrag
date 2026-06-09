@@ -1,9 +1,9 @@
-"""Read-only Cypher helpers over the Kuzu AST graph built by `build_ast_graph.py`.
+"""Read-only Cypher helpers over the Ladybug AST graph built by `build_ast_graph.py`.
 
-Each function opens a Kuzu connection on demand and returns plain JSON-ish dicts
+Each function opens a Ladybug connection on demand and returns plain JSON-ish dicts
 so the MCP server can serialize them without further mapping.
 
-The Kuzu database is opened read-only and cached per-process. This module is
+The Ladybug database is opened read-only and cached per-process. This module is
 intentionally dependency-light: nothing here imports LanceDB or sentence-transformers.
 
 Cypher pitfalls (see also ``AGENTS.md``): avoid ``label(e) IN $list`` in ``WHERE`` for
@@ -16,16 +16,36 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import threading
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-import kuzu
+import ladybug
 
 from ast_java import ONTOLOGY_VERSION as _ONTOLOGY_VERSION
 
 log = logging.getLogger(__name__)
+
+
+def _parse_ladybug_json(raw: str | None) -> dict[str, Any]:
+    """Parse JSON from LadybugDB which returns unquoted keys like {key: value}."""
+    if not raw:
+        return {}
+    # LadybugDB returns JSON without quotes around keys: {packages: 1, files: 2}
+    # Convert to standard JSON: {"packages": 1, "files": 2}
+    # This regex matches word characters followed by ':' at the start of a key
+    quoted = re.sub(r'(\w+):', r'"\1":', raw)
+    try:
+        return json.loads(quoted)
+    except Exception:
+        try:
+            # Fallback: try parsing as-is (for standard JSON)
+            return json.loads(raw)
+        except Exception:
+            log.warning("Failed to parse counts_json: %s", raw[:100])
+            return {}
 
 # Composed describe / neighbors dot-keys (not stored graph edge labels).
 _MEMBER_EDGE_COMPOSED_REL_MAP: tuple[tuple[str, str], ...] = (
@@ -46,7 +66,7 @@ OVERRIDE_AXIS_COMPOSED_EDGE_TYPES: frozenset[str] = frozenset(_OVERRIDE_AXIS_COM
 
 
 def _coerce_id_list(raw: Any) -> list[str]:
-    """Normalize Kuzu ``collect(DISTINCT ...)`` list results to string ids."""
+    """Normalize Ladybug ``collect(DISTINCT ...)`` list results to string ids."""
     if raw is None:
         return []
     if isinstance(raw, list):
@@ -56,8 +76,8 @@ def _coerce_id_list(raw: Any) -> list[str]:
 
 
 __all__ = [
-    "KuzuGraph",
-    "resolve_kuzu_path",
+    "LadybugGraph",
+    "resolve_ladybug_path",
     "SymbolHit",
     "EdgeHit",
     "CallEdge",
@@ -68,14 +88,14 @@ __all__ = [
 ]
 
 
-def resolve_kuzu_path(explicit: str | None = None) -> str:
-    """Resolve the Kuzu DB path the same way the builder does."""
+def resolve_ladybug_path(explicit: str | None = None) -> str:
+    """Resolve the Ladybug DB path the same way the builder does."""
     if explicit:
         return str(Path(explicit).expanduser())
     idx = os.environ.get("JAVA_CODEBASE_RAG_INDEX_DIR", "").strip()
     if idx and not idx.startswith(("s3://", "gs://", "az://")):
-        return str(Path(os.path.expanduser(idx.rstrip("/"))) / "code_graph.kuzu")
-    return str((Path.cwd() / ".java-codebase-rag" / "code_graph.kuzu").resolve())
+        return str(Path(os.path.expanduser(idx.rstrip("/"))) / "code_graph.lbug")
+    return str((Path.cwd() / ".java-codebase-rag" / "code_graph.lbug").resolve())
 
 
 @dataclass
@@ -165,10 +185,10 @@ class RouteCaller:
 
 
 def _symbol_return_for(alias: str) -> str:
-    """Kuzu RETURN projection for Symbol properties, using the given node alias.
+    """Ladybug RETURN projection for Symbol properties, using the given node alias.
 
     Centralised so queries that bind Symbol under a non-`s` alias (e.g. `n` in
-    graph-expansion / flow-tracing) don't emit `s.*` references that Kuzu
+    graph-expansion / flow-tracing) don't emit `s.*` references that Ladybug
     rejects with `Variable s is not in scope`.
     """
     return (
@@ -198,7 +218,7 @@ def _scope_filters(
 
     Mutates `params` to bind `$module` / `$microservice` only when the
     corresponding filter is set, so unused names don't leak into the
-    Kuzu plan.
+    Ladybug plan.
     """
     out: list[str] = []
     if module:
@@ -274,7 +294,7 @@ _SYM_COLS = (
 
 
 def find_symbols_in_file_range(
-    graph: "KuzuGraph",
+    graph: "LadybugGraph",
     *,
     filename: str,
     start_line: int,
@@ -324,25 +344,25 @@ def _call_graph_needle_phantom_arity_alt(needle: str) -> str | None:
     return needle[:i] + "(?)"
 
 
-class KuzuGraph:
-    """Thin wrapper around a read-only Kuzu connection.
+class LadybugGraph:
+    """Thin wrapper around a read-only Ladybug connection.
 
     Safe to share across threads: we hold a single `Connection`, guarded by a lock.
     """
 
     _lock = threading.Lock()
-    _instance: "KuzuGraph | None" = None
+    _instance: "LadybugGraph | None" = None
     _instance_path: str | None = None
 
     def __init__(self, db_path: str) -> None:
         self.db_path = db_path
-        self._db = kuzu.Database(db_path, read_only=True)
-        self._conn = kuzu.Connection(self._db)
+        self._db = ladybug.Database(db_path, read_only=True)
+        self._conn = ladybug.Connection(self._db)
         self._conn_lock = threading.Lock()
 
     @classmethod
-    def get(cls, db_path: str | None = None) -> "KuzuGraph":
-        resolved = resolve_kuzu_path(db_path)
+    def get(cls, db_path: str | None = None) -> "LadybugGraph":
+        resolved = resolve_ladybug_path(db_path)
         with cls._lock:
             if cls._instance is None or cls._instance_path != resolved:
                 instance = cls(resolved)
@@ -354,7 +374,7 @@ class KuzuGraph:
                         f"required version {_ONTOLOGY_VERSION}. "
                         "Rebuild the graph: `python build_ast_graph.py --source-root <repo>`, "
                         "or run `java-codebase-rag reprocess --source-root <repo>` for a full "
-                        "Lance+Kuzu re-index."
+                        "Lance+Ladybug re-index."
                     )
                 cls._instance = instance
                 cls._instance_path = resolved
@@ -362,11 +382,11 @@ class KuzuGraph:
 
     @classmethod
     def exists(cls, db_path: str | None = None) -> bool:
-        resolved = resolve_kuzu_path(db_path)
+        resolved = resolve_ladybug_path(db_path)
         p = Path(resolved)
         if not p.exists():
             return False
-        # Kuzu represents DB as a directory; allow file form too (single-file DBs).
+        # Ladybug represents DB as a directory; allow file form too (single-file DBs).
         return True
 
     # ---- low-level ----
@@ -481,11 +501,15 @@ class KuzuGraph:
         if not rows:
             return {"error": "no GraphMeta node"}
         row = rows[0]
-        counts: dict[str, Any]
-        try:
-            counts = json.loads(row.get("counts_json") or "{}")
-        except Exception:
-            counts = {}
+        counts: dict[str, Any] = _parse_ladybug_json(row.get("counts_json"))
+        # Ensure counts has expected keys even if empty
+        if not counts:
+            counts = {
+                "packages": 0, "files": 0, "types": 0, "members": 0, "phantoms": 0,
+                "extends": 0, "implements": 0, "injects": 0, "declares": 0, "overrides": 0,
+                "calls": 0, "routes": 0, "exposes": 0, "clients": 0, "declares_client": 0,
+                "producers": 0, "declares_producer": 0, "http_calls": 0, "async_calls": 0,
+            }
         routes_total = exposes_total = 0
         routes_resolved_pct = 0.0
         routes_by_framework: dict[str, Any] = {}
@@ -507,10 +531,7 @@ class KuzuGraph:
         cross_service_resolution: str | None = None
         if meta_mode != "legacy":
             rfw_raw = row.get("routes_by_framework") or "{}"
-            try:
-                routes_by_framework = json.loads(rfw_raw) if isinstance(rfw_raw, str) else (rfw_raw or {})
-            except Exception:
-                routes_by_framework = {}
+            routes_by_framework = _parse_ladybug_json(rfw_raw) if isinstance(rfw_raw, str) else (rfw_raw or {})
             if not isinstance(routes_by_framework, dict):
                 routes_by_framework = {}
             routes_total = int(row.get("routes_total") or 0)
@@ -519,26 +540,17 @@ class KuzuGraph:
         if meta_mode in ("pr_f1", "pr_e3", "pre_e3"):
             routes_from_brownfield_pct = float(row.get("routes_from_brownfield_pct") or 0.0)
             rbl_raw = row.get("routes_by_layer") or "{}"
-            try:
-                routes_by_layer = json.loads(rbl_raw) if isinstance(rbl_raw, str) else (rbl_raw or {})
-            except Exception:
-                routes_by_layer = {}
+            routes_by_layer = _parse_ladybug_json(rbl_raw) if isinstance(rbl_raw, str) else (rbl_raw or {})
             if not isinstance(routes_by_layer, dict):
                 routes_by_layer = {}
             http_calls_total = int(row.get("http_calls_total") or 0)
             async_calls_total = int(row.get("async_calls_total") or 0)
             hbs_raw = row.get("http_calls_by_strategy") or "{}"
             abs_raw = row.get("async_calls_by_strategy") or "{}"
-            try:
-                http_calls_by_strategy = json.loads(hbs_raw) if isinstance(hbs_raw, str) else (hbs_raw or {})
-            except Exception:
-                http_calls_by_strategy = {}
+            http_calls_by_strategy = _parse_ladybug_json(hbs_raw) if isinstance(hbs_raw, str) else (hbs_raw or {})
             if not isinstance(http_calls_by_strategy, dict):
                 http_calls_by_strategy = {}
-            try:
-                async_calls_by_strategy = json.loads(abs_raw) if isinstance(abs_raw, str) else (abs_raw or {})
-            except Exception:
-                async_calls_by_strategy = {}
+            async_calls_by_strategy = _parse_ladybug_json(abs_raw) if isinstance(abs_raw, str) else (abs_raw or {})
             if not isinstance(async_calls_by_strategy, dict):
                 async_calls_by_strategy = {}
             http_calls_resolved_pct = float(row.get("http_calls_resolved_pct") or 0.0)
@@ -547,16 +559,10 @@ class KuzuGraph:
             async_producers_from_brownfield_pct = float(row.get("async_producers_from_brownfield_pct") or 0.0)
             hmb_raw = row.get("http_calls_match_breakdown") or "{}"
             amb_raw = row.get("async_calls_match_breakdown") or "{}"
-            try:
-                http_calls_match_breakdown = json.loads(hmb_raw) if isinstance(hmb_raw, str) else (hmb_raw or {})
-            except Exception:
-                http_calls_match_breakdown = {}
+            http_calls_match_breakdown = _parse_ladybug_json(hmb_raw) if isinstance(hmb_raw, str) else (hmb_raw or {})
             if not isinstance(http_calls_match_breakdown, dict):
                 http_calls_match_breakdown = {}
-            try:
-                async_calls_match_breakdown = json.loads(amb_raw) if isinstance(amb_raw, str) else (amb_raw or {})
-            except Exception:
-                async_calls_match_breakdown = {}
+            async_calls_match_breakdown = _parse_ladybug_json(amb_raw) if isinstance(amb_raw, str) else (amb_raw or {})
             if not isinstance(async_calls_match_breakdown, dict):
                 async_calls_match_breakdown = {}
             cross_service_calls_total = int(row.get("cross_service_calls_total") or 0)
@@ -1013,7 +1019,7 @@ class KuzuGraph:
                            microservice: str | None = None,
                            capability: str | None = None,
                            limit: int = 100) -> list[SymbolHit]:
-        # Kuzu supports `list_contains` for STRING[].
+        # Ladybug supports `list_contains` for STRING[].
         filters = ["list_contains(s.annotations, $ann)"]
         params: dict[str, Any] = {"ann": annotation}
         if capability:
@@ -1454,7 +1460,7 @@ class KuzuGraph:
             ))
             if entry_roles:
                 params["entry_roles"] = list(entry_roles)
-                # Kuzu 0.11.x does not support parameterized lists inside ANY
+                # Ladybug 0.17.x does not support parameterized lists inside ANY
                 # comprehensions, so we expand the fixed capability set as
                 # individual list_contains predicates ORed together.
                 cap_predicates = " OR ".join(

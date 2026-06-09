@@ -46,41 +46,41 @@ def _assert_no_pr2_sentinels(label: str, text: str, *, is_resolve_tool: bool) ->
         assert match is None, f"{label}: forbidden pattern {pat.pattern!r} matched {match.group(0)!r}"
 
 
-def _method_id_with_calls(kuzu_graph, direction: str) -> str:
+def _method_id_with_calls(ladybug_graph, direction: str) -> str:
     if direction == "in":
-        rows = kuzu_graph._rows(  # noqa: SLF001
+        rows = ladybug_graph._rows(  # noqa: SLF001
             "MATCH (src:Symbol)-[:CALLS]->(dst:Symbol) RETURN dst.id AS id LIMIT 1"
         )
     else:
-        rows = kuzu_graph._rows(  # noqa: SLF001
+        rows = ladybug_graph._rows(  # noqa: SLF001
             "MATCH (src:Symbol)-[:CALLS]->(dst:Symbol) RETURN src.id AS id LIMIT 1"
         )
     assert rows
     return str(rows[0]["id"])
 
 
-def _method_id_declares_client_and_other_out_edge(kuzu_graph) -> str | None:
+def _method_id_declares_client_and_other_out_edge(ladybug_graph) -> str | None:
     """A method with DECLARES_CLIENT plus another out-label (Kuzu #119 strict-subset case)."""
     for pattern in (
         "MATCH (m:Symbol {kind: 'method'})-[:DECLARES_CLIENT]->() MATCH (m)-[:CALLS]->() RETURN m.id AS id LIMIT 1",
         "MATCH (m:Symbol {kind: 'method'})-[:DECLARES_CLIENT]->(:Client)-[:HTTP_CALLS]->() RETURN m.id AS id LIMIT 1",
     ):
-        rows = kuzu_graph._rows(pattern)  # noqa: SLF001
+        rows = ladybug_graph._rows(pattern)  # noqa: SLF001
         if rows:
             return str(rows[0]["id"])
     return None
 
 
-def _first_route_with_handler(kuzu_graph) -> str:
-    for route in kuzu_graph.list_routes(limit=200):
-        if kuzu_graph.find_route_handlers(route_id=route["id"]):
+def _first_route_with_handler(ladybug_graph) -> str:
+    for route in ladybug_graph.list_routes(limit=200):
+        if ladybug_graph.find_route_handlers(route_id=route["id"]):
             return route["id"]
     raise AssertionError("expected a route with at least one handler")
 
 
-def _first_route_with_callers(kuzu_graph) -> str:
-    for route in kuzu_graph.list_routes(limit=200):
-        if kuzu_graph.find_route_callers(route["id"]):
+def _first_route_with_callers(ladybug_graph) -> str:
+    for route in ladybug_graph.list_routes(limit=200):
+        if ladybug_graph.find_route_callers(route["id"]):
             return route["id"]
     raise AssertionError("expected a route with at least one caller")
 
@@ -116,96 +116,96 @@ def _fake_search_rows() -> list[dict[str, Any]]:
     ]
 
 
-def test_search_basic_returns_hits_with_symbol_id(monkeypatch, kuzu_graph) -> None:
+def test_search_basic_returns_hits_with_symbol_id(monkeypatch, ladybug_graph) -> None:
     monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
-    out = search_v2("ChatService", graph=kuzu_graph)
+    out = search_v2("ChatService", graph=ladybug_graph)
     assert out.success is True
     assert out.results
     assert out.results[0].symbol_id is not None
 
 
-def test_search_filter_microservice(monkeypatch, kuzu_graph) -> None:
+def test_search_filter_microservice(monkeypatch, ladybug_graph) -> None:
     monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
-    out = search_v2("ChatService", filter={"microservice": "chat-assign"}, graph=kuzu_graph)
+    out = search_v2("ChatService", filter={"microservice": "chat-assign"}, graph=ladybug_graph)
     assert out.success is True
     assert out.results
     assert {h.microservice for h in out.results} == {"chat-assign"}
 
 
-def test_search_path_contains_filter(monkeypatch, kuzu_graph) -> None:
+def test_search_path_contains_filter(monkeypatch, ladybug_graph) -> None:
     monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
-    out = search_v2("ChatAssign", path_contains="ChatAssign", graph=kuzu_graph)
+    out = search_v2("ChatAssign", path_contains="ChatAssign", graph=ladybug_graph)
     assert out.success is True
     assert len(out.results) == 1
 
 
-def test_find_symbol_by_role(kuzu_graph) -> None:
-    out = find_v2("symbol", {"role": "CONTROLLER"}, graph=kuzu_graph)
+def test_find_symbol_by_role(ladybug_graph) -> None:
+    out = find_v2("symbol", {"role": "CONTROLLER"}, graph=ladybug_graph)
     assert out.success is True
     assert out.results
     assert all(r.role == "CONTROLLER" for r in out.results if r.role is not None)
 
 
-def test_find_symbol_empty_filter_returns_results(kuzu_graph) -> None:
-    out = find_v2("symbol", {}, graph=kuzu_graph)
+def test_find_symbol_empty_filter_returns_results(ladybug_graph) -> None:
+    out = find_v2("symbol", {}, graph=ladybug_graph)
     assert out.success is True
     assert out.results
     # Regression guard: Symbol rows can include non-declaration kinds (e.g., package/file).
     assert all(isinstance(r.symbol_kind, str) and r.symbol_kind for r in out.results)
 
 
-def test_find_symbol_by_symbol_kind_method(kuzu_graph) -> None:
-    out = find_v2("symbol", {"symbol_kind": "method"}, graph=kuzu_graph)
+def test_find_symbol_by_symbol_kind_method(ladybug_graph) -> None:
+    out = find_v2("symbol", {"symbol_kind": "method"}, graph=ladybug_graph)
     assert out.success is True
     assert out.results
     assert all(r.symbol_kind == "method" for r in out.results)
 
 
-def test_find_symbol_by_symbol_kind_interface(kuzu_graph) -> None:
-    out = find_v2("symbol", {"symbol_kind": "interface"}, graph=kuzu_graph)
+def test_find_symbol_by_symbol_kind_interface(ladybug_graph) -> None:
+    out = find_v2("symbol", {"symbol_kind": "interface"}, graph=ladybug_graph)
     assert out.success is True
     if not out.results:
         pytest.skip("fixture has no interface symbols")
     assert all(r.symbol_kind == "interface" for r in out.results)
 
 
-def test_find_symbol_by_symbol_kinds_type_level(kuzu_graph) -> None:
+def test_find_symbol_by_symbol_kinds_type_level(ladybug_graph) -> None:
     type_level_kinds = ["class", "interface", "enum", "record", "annotation"]
-    out = find_v2("symbol", {"symbol_kinds": type_level_kinds}, graph=kuzu_graph)
+    out = find_v2("symbol", {"symbol_kinds": type_level_kinds}, graph=ladybug_graph)
     assert out.success is True
     assert out.results
     assert all(r.symbol_kind in set(type_level_kinds) for r in out.results)
 
 
-def test_find_symbol_projection_includes_symbol_kind(kuzu_graph) -> None:
-    out = find_v2("symbol", {"symbol_kind": "method"}, graph=kuzu_graph)
+def test_find_symbol_projection_includes_symbol_kind(ladybug_graph) -> None:
+    out = find_v2("symbol", {"symbol_kind": "method"}, graph=ladybug_graph)
     assert out.success is True
     assert out.results
     assert all(isinstance(r.symbol_kind, str) and r.symbol_kind for r in out.results)
 
 
-def test_find_route_by_path_prefix(kuzu_graph) -> None:
-    out = find_v2("route", {"path_prefix": "/api"}, graph=kuzu_graph)
+def test_find_route_by_path_prefix(ladybug_graph) -> None:
+    out = find_v2("route", {"path_prefix": "/api"}, graph=ladybug_graph)
     assert out.success is True
     assert isinstance(out.results, list)
 
 
-def test_find_kind_producer_returns_producer_nodes(kuzu_graph) -> None:
-    out = find_v2("producer", filter={}, graph=kuzu_graph)
+def test_find_kind_producer_returns_producer_nodes(ladybug_graph) -> None:
+    out = find_v2("producer", filter={}, graph=ladybug_graph)
     if not out.results:
         pytest.skip("no Producer nodes in session fixture")
     assert out.success is True
     assert all(r.kind == "producer" for r in out.results)
 
 
-def test_resolve_hint_kind_producer(kuzu_graph) -> None:
-    rows = kuzu_graph.list_producers(limit=10)
+def test_resolve_hint_kind_producer(ladybug_graph) -> None:
+    rows = ladybug_graph.list_producers(limit=10)
     if not rows:
         pytest.skip("no Producer nodes in session fixture")
     topic = str(rows[0].get("topic") or "")
     if not topic:
         pytest.skip("producer row missing topic")
-    out = resolve_v2(topic, hint_kind="producer", graph=kuzu_graph)
+    out = resolve_v2(topic, hint_kind="producer", graph=ladybug_graph)
     assert out.success is True
     assert out.status in {"one", "many"}
     if out.status == "one":
@@ -213,12 +213,12 @@ def test_resolve_hint_kind_producer(kuzu_graph) -> None:
         assert out.node.kind == "producer"
 
 
-def test_find_client_by_client_kind(kuzu_graph) -> None:
-    rows = kuzu_graph.list_clients(client_kind="feign_method", limit=500)
+def test_find_client_by_client_kind(ladybug_graph) -> None:
+    rows = ladybug_graph.list_clients(client_kind="feign_method", limit=500)
     if not rows:
         pytest.skip("fixture has no feign_method client rows")
     by_id = {str(r["id"]): r for r in rows}
-    out = find_v2("client", {"client_kind": "feign_method"}, graph=kuzu_graph)
+    out = find_v2("client", {"client_kind": "feign_method"}, graph=ladybug_graph)
     assert out.success is True
     assert out.results
     for ref in out.results:
@@ -227,20 +227,20 @@ def test_find_client_by_client_kind(kuzu_graph) -> None:
         assert str(row.get("client_kind") or "") == "feign_method"
 
 
-def test_find_client_by_target_service(kuzu_graph) -> None:
-    rows = kuzu_graph.list_clients(limit=500)
+def test_find_client_by_target_service(ladybug_graph) -> None:
+    rows = ladybug_graph.list_clients(limit=500)
     seed = next((r for r in rows if str(r.get("target_service") or "").strip()), None)
     if seed is None:
         pytest.skip("no client rows with target_service in fixture")
     target_service = str(seed["target_service"])
-    out = find_v2("client", {"target_service": target_service}, graph=kuzu_graph)
+    out = find_v2("client", {"target_service": target_service}, graph=ladybug_graph)
     assert out.success is True
     assert out.results
     assert all(r.fqn.startswith(f"{target_service} ") for r in out.results)
 
 
-def test_find_client_by_path_prefix(kuzu_graph) -> None:
-    all_clients = find_v2("client", {}, graph=kuzu_graph)
+def test_find_client_by_path_prefix(ladybug_graph) -> None:
+    all_clients = find_v2("client", {}, graph=ladybug_graph)
     assert all_clients.success is True
     sample = next((r for r in all_clients.results if "/" in r.fqn), None)
     if sample is None:
@@ -250,7 +250,7 @@ def test_find_client_by_path_prefix(kuzu_graph) -> None:
     if not path.startswith("/"):
         pytest.skip("sample client path is unavailable")
     prefix = path[: min(len(path), 5)]
-    out = find_v2("client", {"target_path_prefix": prefix}, graph=kuzu_graph)
+    out = find_v2("client", {"target_path_prefix": prefix}, graph=ladybug_graph)
     assert out.success is True
     assert out.results
     for ref in out.results:
@@ -259,32 +259,32 @@ def test_find_client_by_path_prefix(kuzu_graph) -> None:
         assert bits[-1].startswith(prefix)
 
 
-def test_find_cross_kind_filter_fields_return_failure(kuzu_graph) -> None:
-    out = find_v2("symbol", {"path_prefix": "/api"}, graph=kuzu_graph)
+def test_find_cross_kind_filter_fields_return_failure(ladybug_graph) -> None:
+    out = find_v2("symbol", {"path_prefix": "/api"}, graph=ladybug_graph)
     assert out.success is False
     assert out.message is not None
     assert "path_prefix" in out.message
     assert "kind='symbol'" in out.message
 
 
-def test_find_unknown_filter_key_returns_failure(kuzu_graph) -> None:
-    out = find_v2("symbol", {"typo_key": "x"}, graph=kuzu_graph)
+def test_find_unknown_filter_key_returns_failure(ladybug_graph) -> None:
+    out = find_v2("symbol", {"typo_key": "x"}, graph=ladybug_graph)
     assert out.success is False
     assert out.message is not None
     assert "Invalid filter" in out.message
     assert "typo_key" in out.message
 
 
-def test_find_symbol_only_field_with_kind_client_returns_failure(kuzu_graph) -> None:
-    out = find_v2("client", {"fqn_prefix": "com.example"}, graph=kuzu_graph)
+def test_find_symbol_only_field_with_kind_client_returns_failure(ladybug_graph) -> None:
+    out = find_v2("client", {"fqn_prefix": "com.example"}, graph=ladybug_graph)
     assert out.success is False
     assert out.message is not None
     assert "fqn_prefix" in out.message
     assert "kind='client'" in out.message
 
 
-def test_find_client_only_field_with_kind_symbol_returns_failure(kuzu_graph) -> None:
-    out = find_v2("symbol", {"client_kind": "feign_method"}, graph=kuzu_graph)
+def test_find_client_only_field_with_kind_symbol_returns_failure(ladybug_graph) -> None:
+    out = find_v2("symbol", {"client_kind": "feign_method"}, graph=ladybug_graph)
     assert out.success is False
     assert out.message is not None
     assert "client_kind" in out.message
@@ -297,31 +297,31 @@ def test_nodefilter_applicability_table_covers_all_fields() -> None:
     assert declared == covered
 
 
-def test_http_method_field_applies_to_route_kind(kuzu_graph) -> None:
-    routes = kuzu_graph.list_routes(limit=2000)
+def test_http_method_field_applies_to_route_kind(ladybug_graph) -> None:
+    routes = ladybug_graph.list_routes(limit=2000)
     post_ids = {str(r["id"]) for r in routes if str(r.get("method") or "").upper() == "POST"}
     if not post_ids:
         pytest.skip("fixture has no POST routes")
-    out = find_v2("route", {"http_method": "POST"}, graph=kuzu_graph, limit=500)
+    out = find_v2("route", {"http_method": "POST"}, graph=ladybug_graph, limit=500)
     assert out.success is True
     assert out.results
     assert {r.id for r in out.results} <= post_ids
     assert all(r.fqn == "POST" or r.fqn.startswith("POST ") for r in out.results)
 
 
-def test_http_method_field_applies_to_client_kind(kuzu_graph) -> None:
-    clients = kuzu_graph.list_clients(limit=2000)
+def test_http_method_field_applies_to_client_kind(ladybug_graph) -> None:
+    clients = ladybug_graph.list_clients(limit=2000)
     post_ids = {str(r["id"]) for r in clients if str(r.get("method") or "").upper() == "POST"}
     if not post_ids:
         pytest.skip("fixture has no POST clients")
-    out = find_v2("client", {"http_method": "POST"}, graph=kuzu_graph, limit=500)
+    out = find_v2("client", {"http_method": "POST"}, graph=ladybug_graph, limit=500)
     assert out.success is True
     assert out.results
     assert {r.id for r in out.results} <= post_ids
 
 
-def test_http_method_field_inapplicable_to_symbol(kuzu_graph) -> None:
-    out = find_v2("symbol", {"http_method": "POST"}, graph=kuzu_graph)
+def test_http_method_field_inapplicable_to_symbol(ladybug_graph) -> None:
+    out = find_v2("symbol", {"http_method": "POST"}, graph=ladybug_graph)
     assert out.success is False
     assert out.message is not None
     assert "http_method" in out.message
@@ -339,23 +339,23 @@ async def test_find_missing_filter_rejected(mcp_server) -> None:
         await mcp_server.call_tool("find", {"kind": "symbol"})
 
 
-def test_describe_symbol_returns_record(kuzu_graph) -> None:
-    symbol = kuzu_graph.list_by_role("SERVICE", limit=1)[0]
-    out = describe_v2(symbol.id, graph=kuzu_graph)
+def test_describe_symbol_returns_record(ladybug_graph) -> None:
+    symbol = ladybug_graph.list_by_role("SERVICE", limit=1)[0]
+    out = describe_v2(symbol.id, graph=ladybug_graph)
     assert out.success is True
     assert out.record is not None
     assert out.record.kind == "symbol"
 
 
-def test_describe_route_returns_record(kuzu_graph) -> None:
-    route = kuzu_graph.list_routes(limit=1)[0]
-    out = describe_v2(route["id"], graph=kuzu_graph)
+def test_describe_route_returns_record(ladybug_graph) -> None:
+    route = ladybug_graph.list_routes(limit=1)[0]
+    out = describe_v2(route["id"], graph=ladybug_graph)
     assert out.success is True
     assert out.record is not None
     assert out.record.kind == "route"
 
 
-def test_describe_client_returns_record(kuzu_graph) -> None:
+def test_describe_client_returns_record(ladybug_graph) -> None:
     class FakeGraph:
         def edge_counts_for(self, node_id: str) -> dict[str, dict[str, int]]:
             return {}
@@ -390,65 +390,65 @@ def test_describe_client_returns_record(kuzu_graph) -> None:
     assert out.record.kind == "client"
 
 
-def test_describe_unknown_id_returns_error(kuzu_graph) -> None:
-    out = describe_v2("bogus:1", graph=kuzu_graph)
+def test_describe_unknown_id_returns_error(ladybug_graph) -> None:
+    out = describe_v2("bogus:1", graph=ladybug_graph)
     assert out.success is False
     assert out.message
 
 
-def test_describe_package_or_file_symbol_succeeds(kuzu_graph) -> None:
-    rows = kuzu_graph._rows(  # noqa: SLF001
+def test_describe_package_or_file_symbol_succeeds(ladybug_graph) -> None:
+    rows = ladybug_graph._rows(  # noqa: SLF001
         "MATCH (s:Symbol) WHERE s.kind IN ['package', 'file'] RETURN s.id AS id LIMIT 1"
     )
     if not rows:
         pytest.skip("fixture has no package/file symbol rows")
-    out = describe_v2(str(rows[0]["id"]), graph=kuzu_graph)
+    out = describe_v2(str(rows[0]["id"]), graph=ladybug_graph)
     assert out.success is True
     assert out.record is not None
     assert out.record.kind == "symbol"
     assert out.record.data.get("kind") in {"package", "file"}
 
 
-def test_neighbors_in_calls(kuzu_graph) -> None:
-    mid = _method_id_with_calls(kuzu_graph, "in")
-    out = neighbors_v2(mid, direction="in", edge_types=["CALLS"], graph=kuzu_graph)
+def test_neighbors_in_calls(ladybug_graph) -> None:
+    mid = _method_id_with_calls(ladybug_graph, "in")
+    out = neighbors_v2(mid, direction="in", edge_types=["CALLS"], graph=ladybug_graph)
     assert out.success is True
     assert isinstance(out.results, list)
 
 
-def test_neighbors_out_calls(kuzu_graph) -> None:
-    mid = _method_id_with_calls(kuzu_graph, "out")
-    out = neighbors_v2(mid, direction="out", edge_types=["CALLS"], graph=kuzu_graph)
+def test_neighbors_out_calls(ladybug_graph) -> None:
+    mid = _method_id_with_calls(ladybug_graph, "out")
+    out = neighbors_v2(mid, direction="out", edge_types=["CALLS"], graph=ladybug_graph)
     assert out.success is True
     assert isinstance(out.results, list)
 
 
-def test_neighbors_edge_types_strict_subset_respects_label_filter(kuzu_graph) -> None:
+def test_neighbors_edge_types_strict_subset_respects_label_filter(ladybug_graph) -> None:
     """Regression (#119): Kuzu can drop `label(e) IN $list`; use OR of `label(e) = $p` instead."""
-    mid = _method_id_declares_client_and_other_out_edge(kuzu_graph)
+    mid = _method_id_declares_client_and_other_out_edge(ladybug_graph)
     if mid is None:
         pytest.skip("no method with DECLARES_CLIENT and CALLS or HTTP_CALLS out-edges")
-    dc_rows = kuzu_graph._rows(  # noqa: SLF001
+    dc_rows = ladybug_graph._rows(  # noqa: SLF001
         "MATCH (m:Symbol)-[e:DECLARES_CLIENT]->() WHERE m.id = $id RETURN count(e) AS n",
         {"id": mid},
     )
     assert dc_rows
     want_dc = int(dc_rows[0]["n"])
     assert want_dc >= 1
-    out = neighbors_v2(mid, direction="out", edge_types=["DECLARES_CLIENT"], graph=kuzu_graph)
+    out = neighbors_v2(mid, direction="out", edge_types=["DECLARES_CLIENT"], graph=ladybug_graph)
     assert out.success is True
     assert all(e.edge_type == "DECLARES_CLIENT" for e in out.results)
     assert len(out.results) == want_dc
 
 
-def test_neighbors_route_in_exposes_returns_handler(kuzu_graph) -> None:
-    route_id = _first_route_with_handler(kuzu_graph)
-    out = neighbors_v2(route_id, direction="in", edge_types=["EXPOSES"], graph=kuzu_graph)
+def test_neighbors_route_in_exposes_returns_handler(ladybug_graph) -> None:
+    route_id = _first_route_with_handler(ladybug_graph)
+    out = neighbors_v2(route_id, direction="in", edge_types=["EXPOSES"], graph=ladybug_graph)
     assert out.success is True
     assert out.results
 
 
-def test_neighbors_route_in_http_calls_returns_callers(kuzu_graph) -> None:
+def test_neighbors_route_in_http_calls_returns_callers(ladybug_graph) -> None:
     class FakeGraph:
         def _rows(self, query: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
             if (
@@ -516,43 +516,43 @@ def test_neighbors_route_in_http_calls_returns_callers(kuzu_graph) -> None:
     assert out.results[0].other.kind == "client"
 
 
-def test_neighbors_batch_ids_carries_origin_id(kuzu_graph) -> None:
-    one = _method_id_with_calls(kuzu_graph, "out")
-    two = _method_id_with_calls(kuzu_graph, "in")
-    out = neighbors_v2([one, two], direction="out", edge_types=["CALLS"], graph=kuzu_graph)
+def test_neighbors_batch_ids_carries_origin_id(ladybug_graph) -> None:
+    one = _method_id_with_calls(ladybug_graph, "out")
+    two = _method_id_with_calls(ladybug_graph, "in")
+    out = neighbors_v2([one, two], direction="out", edge_types=["CALLS"], graph=ladybug_graph)
     assert out.success is True
     assert {e.origin_id for e in out.results} <= {one, two}
 
 
-def test_neighbors_missing_direction_rejected(kuzu_graph) -> None:
-    mid = _method_id_with_calls(kuzu_graph, "out")
+def test_neighbors_missing_direction_rejected(ladybug_graph) -> None:
+    mid = _method_id_with_calls(ladybug_graph, "out")
     with pytest.raises(ValidationError):
-        neighbors_v2(mid, edge_types=["CALLS"], graph=kuzu_graph)
+        neighbors_v2(mid, edge_types=["CALLS"], graph=ladybug_graph)
 
 
-def test_neighbors_missing_edge_types_rejected(kuzu_graph) -> None:
-    mid = _method_id_with_calls(kuzu_graph, "out")
+def test_neighbors_missing_edge_types_rejected(ladybug_graph) -> None:
+    mid = _method_id_with_calls(ladybug_graph, "out")
     with pytest.raises(ValidationError):
-        neighbors_v2(mid, direction="in", graph=kuzu_graph)
+        neighbors_v2(mid, direction="in", graph=ladybug_graph)
 
 
-def test_neighbors_empty_edge_types_rejected(kuzu_graph) -> None:
+def test_neighbors_empty_edge_types_rejected(ladybug_graph) -> None:
     # Exercises TypeAdapter(min_length=1), distinct from missing edge_types (validate_call / Field(...)).
-    mid = _method_id_with_calls(kuzu_graph, "out")
+    mid = _method_id_with_calls(ladybug_graph, "out")
     with pytest.raises(ValidationError):
-        neighbors_v2(mid, direction="in", edge_types=[], graph=kuzu_graph)
+        neighbors_v2(mid, direction="in", edge_types=[], graph=ladybug_graph)
 
 
-def test_neighbors_invalid_direction_rejected(kuzu_graph) -> None:
-    mid = _method_id_with_calls(kuzu_graph, "out")
+def test_neighbors_invalid_direction_rejected(ladybug_graph) -> None:
+    mid = _method_id_with_calls(ladybug_graph, "out")
     with pytest.raises(ValidationError):
-        neighbors_v2(mid, direction="upstream", edge_types=["CALLS"], graph=kuzu_graph)
+        neighbors_v2(mid, direction="upstream", edge_types=["CALLS"], graph=ladybug_graph)
 
 
-def test_neighbors_invalid_edge_type_rejected(kuzu_graph) -> None:
-    mid = _method_id_with_calls(kuzu_graph, "out")
+def test_neighbors_invalid_edge_type_rejected(ladybug_graph) -> None:
+    mid = _method_id_with_calls(ladybug_graph, "out")
     with pytest.raises(ValidationError):
-        neighbors_v2(mid, direction="in", edge_types=["calls"], graph=kuzu_graph)
+        neighbors_v2(mid, direction="in", edge_types=["calls"], graph=ladybug_graph)
 
 
 async def test_find_invalid_kind_rejected(mcp_server) -> None:
@@ -565,152 +565,152 @@ async def test_search_invalid_table_rejected(mcp_server) -> None:
         await mcp_server.call_tool("search", {"query": "foo", "table": "code"})
 
 
-def test_search_filter_accepts_json_string(monkeypatch, kuzu_graph) -> None:
+def test_search_filter_accepts_json_string(monkeypatch, ladybug_graph) -> None:
     monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
     want = {"microservice": "chat-assign"}
-    out_dict = search_v2("ChatService", filter=want, graph=kuzu_graph)
-    out_str = search_v2("ChatService", filter='{"microservice":"chat-assign"}', graph=kuzu_graph)
+    out_dict = search_v2("ChatService", filter=want, graph=ladybug_graph)
+    out_str = search_v2("ChatService", filter='{"microservice":"chat-assign"}', graph=ladybug_graph)
     assert out_dict.success is True
     assert out_str.success is True
     assert out_dict.results == out_str.results
 
 
-def test_search_unknown_filter_key_returns_failure(monkeypatch, kuzu_graph) -> None:
+def test_search_unknown_filter_key_returns_failure(monkeypatch, ladybug_graph) -> None:
     monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
-    out = search_v2("ChatService", filter={"typo_key": "x"}, graph=kuzu_graph)
+    out = search_v2("ChatService", filter={"typo_key": "x"}, graph=ladybug_graph)
     assert out.success is False
     assert out.message is not None
     assert "Invalid filter" in out.message
     assert "typo_key" in out.message
 
 
-def test_search_cross_kind_filter_returns_failure(monkeypatch, kuzu_graph) -> None:
+def test_search_cross_kind_filter_returns_failure(monkeypatch, ladybug_graph) -> None:
     monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
-    out = search_v2("ChatService", filter={"path_prefix": "/api"}, graph=kuzu_graph)
+    out = search_v2("ChatService", filter={"path_prefix": "/api"}, graph=ladybug_graph)
     assert out.success is False
     assert out.message is not None
     assert "path_prefix" in out.message
     assert "kind='symbol'" in out.message
 
 
-def test_search_filter_empty_string_treated_as_none(monkeypatch, kuzu_graph) -> None:
+def test_search_filter_empty_string_treated_as_none(monkeypatch, ladybug_graph) -> None:
     monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
-    baseline = search_v2("ChatService", graph=kuzu_graph)
-    empty = search_v2("ChatService", filter="", graph=kuzu_graph)
-    whitespace = search_v2("ChatService", filter="   ", graph=kuzu_graph)
+    baseline = search_v2("ChatService", graph=ladybug_graph)
+    empty = search_v2("ChatService", filter="", graph=ladybug_graph)
+    whitespace = search_v2("ChatService", filter="   ", graph=ladybug_graph)
     assert baseline.success is True
     assert empty.success is True
     assert whitespace.success is True
     assert baseline.results == empty.results == whitespace.results
 
 
-def test_search_filter_json_null_treated_as_none(monkeypatch, kuzu_graph) -> None:
+def test_search_filter_json_null_treated_as_none(monkeypatch, ladybug_graph) -> None:
     monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
-    baseline = search_v2("ChatService", graph=kuzu_graph)
-    out = search_v2("ChatService", filter="null", graph=kuzu_graph)
+    baseline = search_v2("ChatService", graph=ladybug_graph)
+    out = search_v2("ChatService", filter="null", graph=ladybug_graph)
     assert baseline.success is True
     assert out.success is True
     assert baseline.results == out.results
 
 
-def test_find_filter_json_null_treated_as_empty_filter(kuzu_graph) -> None:
-    empty = find_v2("symbol", {}, graph=kuzu_graph)
-    out = find_v2("symbol", "null", graph=kuzu_graph)
+def test_find_filter_json_null_treated_as_empty_filter(ladybug_graph) -> None:
+    empty = find_v2("symbol", {}, graph=ladybug_graph)
+    out = find_v2("symbol", "null", graph=ladybug_graph)
     assert empty.success is True
     assert out.success is True
     assert empty.results == out.results
 
 
-def test_find_filter_accepts_json_string(kuzu_graph) -> None:
-    out_dict = find_v2("symbol", {"role": "CONTROLLER"}, graph=kuzu_graph)
-    out_str = find_v2("symbol", '{"role":"CONTROLLER"}', graph=kuzu_graph)
+def test_find_filter_accepts_json_string(ladybug_graph) -> None:
+    out_dict = find_v2("symbol", {"role": "CONTROLLER"}, graph=ladybug_graph)
+    out_str = find_v2("symbol", '{"role":"CONTROLLER"}', graph=ladybug_graph)
     assert out_dict.success is True
     assert out_str.success is True
     assert out_dict.results == out_str.results
 
 
-def test_find_symbol_kind_filter_accepts_json_string(kuzu_graph) -> None:
-    out_dict = find_v2("symbol", {"symbol_kind": "method"}, graph=kuzu_graph)
-    out_str = find_v2("symbol", '{"symbol_kind":"method"}', graph=kuzu_graph)
+def test_find_symbol_kind_filter_accepts_json_string(ladybug_graph) -> None:
+    out_dict = find_v2("symbol", {"symbol_kind": "method"}, graph=ladybug_graph)
+    out_str = find_v2("symbol", '{"symbol_kind":"method"}', graph=ladybug_graph)
     assert out_dict.success is True
     assert out_str.success is True
     assert out_dict.results == out_str.results
 
 
-def test_neighbors_filter_accepts_json_string(kuzu_graph) -> None:
-    mid = _method_id_with_calls(kuzu_graph, "out")
+def test_neighbors_filter_accepts_json_string(ladybug_graph) -> None:
+    mid = _method_id_with_calls(ladybug_graph, "out")
     flt = {"role": "SERVICE"}
-    out_dict = neighbors_v2(mid, direction="out", edge_types=["CALLS"], filter=flt, graph=kuzu_graph)
-    out_str = neighbors_v2(mid, direction="out", edge_types=["CALLS"], filter='{"role":"SERVICE"}', graph=kuzu_graph)
+    out_dict = neighbors_v2(mid, direction="out", edge_types=["CALLS"], filter=flt, graph=ladybug_graph)
+    out_str = neighbors_v2(mid, direction="out", edge_types=["CALLS"], filter='{"role":"SERVICE"}', graph=ladybug_graph)
     assert out_dict.success is True
     assert out_str.success is True
     assert out_dict.results == out_str.results
 
 
-def test_neighbors_filter_unknown_key_returns_failure(kuzu_graph) -> None:
-    mid = _method_id_with_calls(kuzu_graph, "out")
-    out = neighbors_v2(mid, direction="out", edge_types=["CALLS"], filter={"typo_key": "x"}, graph=kuzu_graph)
+def test_neighbors_filter_unknown_key_returns_failure(ladybug_graph) -> None:
+    mid = _method_id_with_calls(ladybug_graph, "out")
+    out = neighbors_v2(mid, direction="out", edge_types=["CALLS"], filter={"typo_key": "x"}, graph=ladybug_graph)
     assert out.success is False
     assert out.message is not None
     assert "Invalid filter" in out.message
     assert "typo_key" in out.message
 
 
-def test_neighbors_filter_cross_kind_on_neighbor_returns_failure(kuzu_graph) -> None:
-    mid = _method_id_with_calls(kuzu_graph, "out")
-    out = neighbors_v2(mid, direction="out", edge_types=["CALLS"], filter={"path_prefix": "/api"}, graph=kuzu_graph)
+def test_neighbors_filter_cross_kind_on_neighbor_returns_failure(ladybug_graph) -> None:
+    mid = _method_id_with_calls(ladybug_graph, "out")
+    out = neighbors_v2(mid, direction="out", edge_types=["CALLS"], filter={"path_prefix": "/api"}, graph=ladybug_graph)
     assert out.success is False
     assert out.message is not None
     assert "path_prefix" in out.message
     assert "kind='symbol'" in out.message
 
 
-def test_neighbors_validate_call_still_raises(kuzu_graph) -> None:
-    mid = _method_id_with_calls(kuzu_graph, "out")
+def test_neighbors_validate_call_still_raises(ladybug_graph) -> None:
+    mid = _method_id_with_calls(ladybug_graph, "out")
     with pytest.raises(ValidationError):
-        neighbors_v2(mid, direction="upstream", edge_types=["CALLS"], graph=kuzu_graph)
+        neighbors_v2(mid, direction="upstream", edge_types=["CALLS"], graph=ladybug_graph)
 
 
-def test_filter_invalid_json_returns_failure(monkeypatch, kuzu_graph) -> None:
+def test_filter_invalid_json_returns_failure(monkeypatch, ladybug_graph) -> None:
     monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
-    out = search_v2("ChatService", filter="{not json", graph=kuzu_graph)
+    out = search_v2("ChatService", filter="{not json", graph=ladybug_graph)
     assert out.success is False
     assert out.message is not None
     assert "JSON" in out.message
 
 
-def test_wildcard_in_fqn_prefix_rejected(kuzu_graph) -> None:
-    out = find_v2("symbol", {"fqn_prefix": "com.foo.*"}, graph=kuzu_graph)
+def test_wildcard_in_fqn_prefix_rejected(ladybug_graph) -> None:
+    out = find_v2("symbol", {"fqn_prefix": "com.foo.*"}, graph=ladybug_graph)
     assert out.success is False
     assert out.message
     assert "fqn_prefix" in out.message
     assert "search(query=..." in out.message
 
 
-def test_wildcard_in_path_prefix_rejected(kuzu_graph) -> None:
-    out = find_v2("route", {"path_prefix": "/api/*"}, graph=kuzu_graph)
+def test_wildcard_in_path_prefix_rejected(ladybug_graph) -> None:
+    out = find_v2("route", {"path_prefix": "/api/*"}, graph=ladybug_graph)
     assert out.success is False
     assert out.message
     assert "path_prefix" in out.message
     assert "search(query=..." in out.message
 
 
-def test_wildcard_in_target_path_prefix_rejected(kuzu_graph) -> None:
-    out = find_v2("client", {"target_path_prefix": "/api/*"}, graph=kuzu_graph)
+def test_wildcard_in_target_path_prefix_rejected(ladybug_graph) -> None:
+    out = find_v2("client", {"target_path_prefix": "/api/*"}, graph=ladybug_graph)
     assert out.success is False
     assert out.message
     assert "target_path_prefix" in out.message
     assert "search(query=..." in out.message
 
 
-def test_wildcard_question_mark_in_fqn_prefix_rejected(kuzu_graph) -> None:
-    out = find_v2("symbol", {"fqn_prefix": "com.foo.?"}, graph=kuzu_graph)
+def test_wildcard_question_mark_in_fqn_prefix_rejected(ladybug_graph) -> None:
+    out = find_v2("symbol", {"fqn_prefix": "com.foo.?"}, graph=ladybug_graph)
     assert out.success is False
     assert out.message
     assert "fqn_prefix" in out.message
 
 
-def test_search_wildcard_in_fqn_prefix_rejected_without_run_search(monkeypatch, kuzu_graph) -> None:
+def test_search_wildcard_in_fqn_prefix_rejected_without_run_search(monkeypatch, ladybug_graph) -> None:
     calls: list[int] = []
 
     def boom(*_a, **_k):
@@ -718,14 +718,14 @@ def test_search_wildcard_in_fqn_prefix_rejected_without_run_search(monkeypatch, 
         return _fake_search_rows()
 
     monkeypatch.setattr("mcp_v2.run_search", boom)
-    out = search_v2("anything", filter={"fqn_prefix": "com.*"}, graph=kuzu_graph)
+    out = search_v2("anything", filter={"fqn_prefix": "com.*"}, graph=ladybug_graph)
     assert out.success is False
     assert out.message
     assert "fqn_prefix" in out.message
     assert calls == []
 
 
-def test_neighbors_wildcard_in_filter_rejected_before_graph_query(kuzu_graph) -> None:
+def test_neighbors_wildcard_in_filter_rejected_before_graph_query(ladybug_graph) -> None:
     class ExplodeGraph:
         def _rows(self, *_a, **_k) -> list:
             raise AssertionError("graph must not be queried when wildcard rejects filter")
@@ -742,9 +742,9 @@ def test_neighbors_wildcard_in_filter_rejected_before_graph_query(kuzu_graph) ->
     assert "fqn_prefix" in out.message
 
 
-def test_describe_by_fqn_returns_symbol(kuzu_graph) -> None:
-    symbol = kuzu_graph.list_by_role("SERVICE", limit=1)[0]
-    out = describe_v2(fqn=symbol.fqn, graph=kuzu_graph)
+def test_describe_by_fqn_returns_symbol(ladybug_graph) -> None:
+    symbol = ladybug_graph.list_by_role("SERVICE", limit=1)[0]
+    out = describe_v2(fqn=symbol.fqn, graph=ladybug_graph)
     assert out.success is True
     assert out.record is not None
     assert out.record.id == symbol.id
@@ -752,16 +752,16 @@ def test_describe_by_fqn_returns_symbol(kuzu_graph) -> None:
     assert out.message is None
 
 
-def test_describe_by_fqn_unknown_returns_error(kuzu_graph) -> None:
-    out = describe_v2(fqn="com.nonexistent.Foo", graph=kuzu_graph)
+def test_describe_by_fqn_unknown_returns_error(ladybug_graph) -> None:
+    out = describe_v2(fqn="com.nonexistent.Foo", graph=ladybug_graph)
     assert out.success is False
     assert out.message == "No Symbol found for fqn='com.nonexistent.Foo'"
 
 
-def test_describe_by_fqn_id_takes_precedence(kuzu_graph) -> None:
-    svc = kuzu_graph.list_by_role("SERVICE", limit=1)[0]
-    ctrl = kuzu_graph.list_by_role("CONTROLLER", limit=1)[0]
-    out = describe_v2(id=svc.id, fqn=ctrl.fqn, graph=kuzu_graph)
+def test_describe_by_fqn_id_takes_precedence(ladybug_graph) -> None:
+    svc = ladybug_graph.list_by_role("SERVICE", limit=1)[0]
+    ctrl = ladybug_graph.list_by_role("CONTROLLER", limit=1)[0]
+    out = describe_v2(id=svc.id, fqn=ctrl.fqn, graph=ladybug_graph)
     assert out.success is True
     assert out.record is not None
     assert out.record.id == svc.id
@@ -829,21 +829,21 @@ def test_server_tool_descriptions_no_pre_resolve_fallback() -> None:
     asyncio.run(_run())
 
 
-def test_describe_by_fqn_requires_id_or_fqn(kuzu_graph) -> None:
-    out = describe_v2(graph=kuzu_graph)
+def test_describe_by_fqn_requires_id_or_fqn(ladybug_graph) -> None:
+    out = describe_v2(graph=ladybug_graph)
     assert out.success is False
     assert out.message == "id or fqn required"
 
 
-def test_multi_value_symbol_kinds_or_semantics(kuzu_graph) -> None:
-    out = find_v2("symbol", {"symbol_kinds": ["class", "interface"]}, graph=kuzu_graph, limit=200)
+def test_multi_value_symbol_kinds_or_semantics(ladybug_graph) -> None:
+    out = find_v2("symbol", {"symbol_kinds": ["class", "interface"]}, graph=ladybug_graph, limit=200)
     assert out.success is True
     assert out.results
     assert all(r.symbol_kind in {"class", "interface"} for r in out.results)
 
 
-def test_cross_field_and_semantics(kuzu_graph) -> None:
-    controllers = find_v2("symbol", {"role": "CONTROLLER"}, graph=kuzu_graph, limit=50)
+def test_cross_field_and_semantics(ladybug_graph) -> None:
+    controllers = find_v2("symbol", {"role": "CONTROLLER"}, graph=ladybug_graph, limit=50)
     assert controllers.success is True
     assert controllers.results
     ms = next((r.microservice for r in controllers.results if r.microservice), None)
@@ -852,7 +852,7 @@ def test_cross_field_and_semantics(kuzu_graph) -> None:
     out = find_v2(
         "symbol",
         {"microservice": ms, "role": "CONTROLLER"},
-        graph=kuzu_graph,
+        graph=ladybug_graph,
         limit=200,
     )
     assert out.success is True
@@ -861,68 +861,68 @@ def test_cross_field_and_semantics(kuzu_graph) -> None:
     assert all((r.role or "") == "CONTROLLER" for r in out.results)
 
 
-def test_exclude_roles_negation_predicate(kuzu_graph) -> None:
-    out = find_v2("symbol", {"exclude_roles": ["CONTROLLER"]}, graph=kuzu_graph, limit=500)
+def test_exclude_roles_negation_predicate(ladybug_graph) -> None:
+    out = find_v2("symbol", {"exclude_roles": ["CONTROLLER"]}, graph=ladybug_graph, limit=500)
     assert out.success is True
     assert out.results
     assert not any(r.role == "CONTROLLER" for r in out.results)
 
 
-def test_empty_filter_returns_full_result_set(kuzu_graph) -> None:
-    out = find_v2("client", {}, graph=kuzu_graph)
+def test_empty_filter_returns_full_result_set(ladybug_graph) -> None:
+    out = find_v2("client", {}, graph=ladybug_graph)
     assert out.success is True
     assert out.results
 
 
-def test_fail_loud_counter_increments_on_applicability_error(kuzu_graph) -> None:
+def test_fail_loud_counter_increments_on_applicability_error(ladybug_graph) -> None:
     before = filter_frame_counters().get("applicability", 0)
-    out = find_v2("symbol", {"path_prefix": "/api"}, graph=kuzu_graph)
+    out = find_v2("symbol", {"path_prefix": "/api"}, graph=ladybug_graph)
     assert out.success is False
     assert filter_frame_counters().get("applicability", 0) == before + 1
 
 
-def test_fail_loud_counter_increments_on_wildcard_rejection(kuzu_graph) -> None:
+def test_fail_loud_counter_increments_on_wildcard_rejection(ladybug_graph) -> None:
     before = filter_frame_counters().get("wildcard", 0)
-    out = find_v2("symbol", {"fqn_prefix": "com.foo.*"}, graph=kuzu_graph)
+    out = find_v2("symbol", {"fqn_prefix": "com.foo.*"}, graph=ladybug_graph)
     assert out.success is False
     assert filter_frame_counters().get("wildcard", 0) == before + 1
 
 
-def test_fail_loud_counter_categories_are_distinct(kuzu_graph) -> None:
+def test_fail_loud_counter_categories_are_distinct(ladybug_graph) -> None:
     b_app = filter_frame_counters().get("applicability", 0)
     b_wild = filter_frame_counters().get("wildcard", 0)
-    find_v2("symbol", {"path_prefix": "/x"}, graph=kuzu_graph)
-    find_v2("symbol", {"fqn_prefix": "com.*"}, graph=kuzu_graph)
+    find_v2("symbol", {"path_prefix": "/x"}, graph=ladybug_graph)
+    find_v2("symbol", {"fqn_prefix": "com.*"}, graph=ladybug_graph)
     assert filter_frame_counters().get("applicability", 0) == b_app + 1
     assert filter_frame_counters().get("wildcard", 0) == b_wild + 1
 
 
-def test_fail_loud_counter_survives_multiple_calls(kuzu_graph) -> None:
+def test_fail_loud_counter_survives_multiple_calls(ladybug_graph) -> None:
     before = filter_frame_counters().get("applicability", 0)
-    find_v2("symbol", {"http_method": "GET"}, graph=kuzu_graph)
-    find_v2("symbol", {"http_method": "GET"}, graph=kuzu_graph)
+    find_v2("symbol", {"http_method": "GET"}, graph=ladybug_graph)
+    find_v2("symbol", {"http_method": "GET"}, graph=ladybug_graph)
     assert filter_frame_counters().get("applicability", 0) >= before + 2
 
 
 # --- resolve (PR-RESOLVE-1) ---
 
 
-def test_resolve_exact_id_symbol_returns_one(kuzu_graph) -> None:
-    seed = find_v2("symbol", {"role": "CONTROLLER"}, graph=kuzu_graph, limit=1)
+def test_resolve_exact_id_symbol_returns_one(ladybug_graph) -> None:
+    seed = find_v2("symbol", {"role": "CONTROLLER"}, graph=ladybug_graph, limit=1)
     assert seed.success and seed.results
     sym_id = seed.results[0].id
-    out = resolve_v2(sym_id, hint_kind="symbol", graph=kuzu_graph)
+    out = resolve_v2(sym_id, hint_kind="symbol", graph=ladybug_graph)
     assert out.success is True
     assert out.status == "one"
     assert out.node is not None
     assert out.node.id == sym_id
 
 
-def test_resolve_exact_fqn_symbol_returns_one(kuzu_graph) -> None:
-    controllers = find_v2("symbol", {"role": "CONTROLLER"}, graph=kuzu_graph, limit=50)
+def test_resolve_exact_fqn_symbol_returns_one(ladybug_graph) -> None:
+    controllers = find_v2("symbol", {"role": "CONTROLLER"}, graph=ladybug_graph, limit=50)
     assert controllers.success and controllers.results
     fqn = controllers.results[0].fqn
-    out = resolve_v2(fqn, hint_kind="symbol", graph=kuzu_graph)
+    out = resolve_v2(fqn, hint_kind="symbol", graph=ladybug_graph)
     assert out.success is True
     assert out.status == "one"
     assert out.node is not None
@@ -930,12 +930,12 @@ def test_resolve_exact_fqn_symbol_returns_one(kuzu_graph) -> None:
 
 
 def test_resolve_fqn_collision_across_microservices_returns_many(
-    kuzu_graph_fqn_collision_smoke,
+    ladybug_graph_fqn_collision_smoke,
 ) -> None:
     out = resolve_v2(
         "com.example.SharedDto#process()",
         hint_kind="symbol",
-        graph=kuzu_graph_fqn_collision_smoke,
+        graph=ladybug_graph_fqn_collision_smoke,
     )
     assert out.success is True
     assert out.status == "many"
@@ -945,37 +945,37 @@ def test_resolve_fqn_collision_across_microservices_returns_many(
     assert any(c.reason == "exact_fqn" for c in out.candidates)
 
 
-def test_resolve_short_name_ambiguity_returns_many(kuzu_graph) -> None:
-    rows = kuzu_graph._rows(  # noqa: SLF001
+def test_resolve_short_name_ambiguity_returns_many(ladybug_graph) -> None:
+    rows = ladybug_graph._rows(  # noqa: SLF001
         "MATCH (s:Symbol) WHERE s.kind = 'method' RETURN s.name AS name"
     )
     counts = Counter(str(r["name"]) for r in rows if r.get("name"))
     dup_name = next((name for name, c in counts.items() if c >= 2), None)
     if dup_name is None:
         pytest.skip("no duplicated method short names in bank-chat fixture")
-    out = resolve_v2(dup_name, hint_kind="symbol", graph=kuzu_graph)
+    out = resolve_v2(dup_name, hint_kind="symbol", graph=ladybug_graph)
     assert out.success is True
     assert out.status == "many"
     assert any(c.reason == "short_name" for c in out.candidates)
 
 
-def test_resolve_status_none_returns_nonempty_message(kuzu_graph) -> None:
-    out = resolve_v2("com.nonexistent.ZzzMissing", hint_kind="symbol", graph=kuzu_graph)
+def test_resolve_status_none_returns_nonempty_message(ladybug_graph) -> None:
+    out = resolve_v2("com.nonexistent.ZzzMissing", hint_kind="symbol", graph=ladybug_graph)
     assert out.success is True
     assert out.status == "none"
     assert out.message
     assert "search" in out.message.lower()
 
 
-def test_resolve_empty_identifier_success_false(kuzu_graph) -> None:
-    out = resolve_v2("", graph=kuzu_graph)
+def test_resolve_empty_identifier_success_false(ladybug_graph) -> None:
+    out = resolve_v2("", graph=ladybug_graph)
     assert out.success is False
     assert out.status == "none"
     assert out.message and out.message.startswith("Invalid identifier:")
 
 
-def test_resolve_whitespace_identifier_success_false(kuzu_graph) -> None:
-    out = resolve_v2("   ", graph=kuzu_graph)
+def test_resolve_whitespace_identifier_success_false(ladybug_graph) -> None:
+    out = resolve_v2("   ", graph=ladybug_graph)
     assert out.success is False
     assert out.status == "none"
     assert out.message and out.message.startswith("Invalid identifier:")
@@ -1055,11 +1055,11 @@ def test_resolve_dedupes_overlapping_generator_paths() -> None:
     assert out.node.id == "sym:com.fixture.DedupeMe"
 
 
-def test_resolve_route_method_path_returns_one(kuzu_graph_route_extraction_smoke) -> None:
+def test_resolve_route_method_path_returns_one(ladybug_graph_route_extraction_smoke) -> None:
     out = resolve_v2(
         "service-a GET /api/users",
         hint_kind="route",
-        graph=kuzu_graph_route_extraction_smoke,
+        graph=ladybug_graph_route_extraction_smoke,
     )
     assert out.success is True
     assert out.status == "one"
@@ -1068,11 +1068,11 @@ def test_resolve_route_method_path_returns_one(kuzu_graph_route_extraction_smoke
     assert out.node.microservice == "service-a"
 
 
-def test_resolve_route_template_returns_one_or_many(kuzu_graph_route_extraction_smoke) -> None:
+def test_resolve_route_template_returns_one_or_many(ladybug_graph_route_extraction_smoke) -> None:
     out = resolve_v2(
         "/api/users",
         hint_kind="route",
-        graph=kuzu_graph_route_extraction_smoke,
+        graph=ladybug_graph_route_extraction_smoke,
     )
     assert out.success is True
     assert out.status in {"one", "many"}
@@ -1083,14 +1083,14 @@ def test_resolve_route_template_returns_one_or_many(kuzu_graph_route_extraction_
         assert out.node is not None
 
 
-def test_resolve_client_target_service(kuzu_graph, kuzu_db_path_http_caller_smoke) -> None:
-    from kuzu_queries import KuzuGraph
+def test_resolve_client_target_service(ladybug_graph, ladybug_db_path_http_caller_smoke) -> None:
+    from ladybug_queries import LadybugGraph
 
-    graph = kuzu_graph
+    graph = ladybug_graph
     rows = graph.list_clients(limit=500)
     seed = next((r for r in rows if str(r.get("target_service") or "").strip()), None)
     if seed is None:
-        graph = KuzuGraph(str(kuzu_db_path_http_caller_smoke))
+        graph = LadybugGraph(str(ladybug_db_path_http_caller_smoke))
         rows = graph.list_clients(limit=500)
         seed = next((r for r in rows if str(r.get("target_service") or "").strip()), None)
     if seed is None:
@@ -1105,10 +1105,10 @@ def test_resolve_client_target_service(kuzu_graph, kuzu_db_path_http_caller_smok
         assert out.node is not None
 
 
-def test_resolve_client_target_path_pair(kuzu_graph, kuzu_db_path_http_caller_smoke) -> None:
-    from kuzu_queries import KuzuGraph
+def test_resolve_client_target_path_pair(ladybug_graph, ladybug_db_path_http_caller_smoke) -> None:
+    from ladybug_queries import LadybugGraph
 
-    def _seed_client(g: KuzuGraph) -> dict | None:
+    def _seed_client(g: LadybugGraph) -> dict | None:
         rows = g.list_clients(limit=500)
         return next(
             (
@@ -1120,10 +1120,10 @@ def test_resolve_client_target_path_pair(kuzu_graph, kuzu_db_path_http_caller_sm
             None,
         )
 
-    graph = kuzu_graph
+    graph = ladybug_graph
     seed = _seed_client(graph)
     if seed is None:
-        graph = KuzuGraph(str(kuzu_db_path_http_caller_smoke))
+        graph = LadybugGraph(str(ladybug_db_path_http_caller_smoke))
         seed = _seed_client(graph)
     if seed is None:
         pytest.skip("no client with target_service and path in fixture")
@@ -1140,17 +1140,17 @@ def test_resolve_client_target_path_pair(kuzu_graph, kuzu_db_path_http_caller_sm
         assert out.node is not None
 
 
-def test_resolve_natural_language_sentence_returns_none(kuzu_graph) -> None:
+def test_resolve_natural_language_sentence_returns_none(ladybug_graph) -> None:
     out = resolve_v2(
         "the client that handles smartcare assignments",
-        graph=kuzu_graph,
+        graph=ladybug_graph,
     )
     assert out.success is True
     assert out.status == "none"
 
 
-def test_resolve_wildcard_identifier_returns_none(kuzu_graph) -> None:
-    out = resolve_v2("com.foo.*Service", hint_kind="symbol", graph=kuzu_graph)
+def test_resolve_wildcard_identifier_returns_none(ladybug_graph) -> None:
+    out = resolve_v2("com.foo.*Service", hint_kind="symbol", graph=ladybug_graph)
     assert out.success is True
     assert out.status == "none"
 
@@ -1285,11 +1285,11 @@ def test_resolve_every_reason_in_closed_set_appears() -> None:
     assert seen == set(VALID_RESOLVE_REASONS)
 
 
-def test_resolve_success_output_invariants(kuzu_graph, kuzu_graph_fqn_collision_smoke) -> None:
+def test_resolve_success_output_invariants(ladybug_graph, ladybug_graph_fqn_collision_smoke) -> None:
     one = resolve_v2(
         "com.nonexistent.ZzzMissing",
         hint_kind="symbol",
-        graph=kuzu_graph,
+        graph=ladybug_graph,
     )
     assert one.success is True
     assert one.status == "none"
@@ -1300,16 +1300,16 @@ def test_resolve_success_output_invariants(kuzu_graph, kuzu_graph_fqn_collision_
     many = resolve_v2(
         "com.example.SharedDto#process()",
         hint_kind="symbol",
-        graph=kuzu_graph_fqn_collision_smoke,
+        graph=ladybug_graph_fqn_collision_smoke,
     )
     assert many.success is True
     assert many.status == "many"
     assert many.node is None
     assert len(many.candidates) >= 2
 
-    sym = find_v2("symbol", {"role": "CONTROLLER"}, graph=kuzu_graph, limit=1)
+    sym = find_v2("symbol", {"role": "CONTROLLER"}, graph=ladybug_graph, limit=1)
     assert sym.success and sym.results
-    single = resolve_v2(sym.results[0].id, hint_kind="symbol", graph=kuzu_graph)
+    single = resolve_v2(sym.results[0].id, hint_kind="symbol", graph=ladybug_graph)
     assert single.success is True
     assert single.status == "one"
     assert single.node is not None
@@ -1321,9 +1321,9 @@ _PERF_BASELINES_PATH = (
 )
 
 
-def test_neighbors_calls_ordered_by_call_site(kuzu_graph) -> None:
-    mid = client_message_processor_process_id(kuzu_graph)
-    out = neighbors_v2(mid, direction="out", edge_types=["CALLS"], limit=500, graph=kuzu_graph)
+def test_neighbors_calls_ordered_by_call_site(ladybug_graph) -> None:
+    mid = client_message_processor_process_id(ladybug_graph)
+    out = neighbors_v2(mid, direction="out", edge_types=["CALLS"], limit=500, graph=ladybug_graph)
     assert out.success is True
     assert len(out.results) >= 2
     sites = [
@@ -1333,15 +1333,15 @@ def test_neighbors_calls_ordered_by_call_site(kuzu_graph) -> None:
     assert sites == sorted(sites)
 
 
-def test_neighbors_calls_edge_filter_callee_declaring_role(kuzu_graph) -> None:
-    mid = client_message_processor_process_id(kuzu_graph)
+def test_neighbors_calls_edge_filter_callee_declaring_role(ladybug_graph) -> None:
+    mid = client_message_processor_process_id(ladybug_graph)
     out = neighbors_v2(
         mid,
         direction="out",
         edge_types=["CALLS"],
         edge_filter={"callee_declaring_role": "SERVICE"},
         limit=500,
-        graph=kuzu_graph,
+        graph=ladybug_graph,
     )
     assert out.success is True
     assert out.results
@@ -1349,22 +1349,22 @@ def test_neighbors_calls_edge_filter_callee_declaring_role(kuzu_graph) -> None:
         assert edge.attrs.get("callee_declaring_role") == "SERVICE"
 
 
-def test_neighbors_calls_edge_filter_pushdown_in_cypher(kuzu_graph, monkeypatch) -> None:
-    mid = _method_id_with_calls(kuzu_graph, "out")
+def test_neighbors_calls_edge_filter_pushdown_in_cypher(ladybug_graph, monkeypatch) -> None:
+    mid = _method_id_with_calls(ladybug_graph, "out")
     captured: list[str] = []
-    orig_rows = kuzu_graph._rows
+    orig_rows = ladybug_graph._rows
 
     def _capture_rows(query: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         captured.append(query)
         return orig_rows(query, params)
 
-    monkeypatch.setattr(kuzu_graph, "_rows", _capture_rows)
+    monkeypatch.setattr(ladybug_graph, "_rows", _capture_rows)
     out = neighbors_v2(
         mid,
         direction="out",
         edge_types=["CALLS"],
         edge_filter={"callee_declaring_role": "SERVICE", "min_confidence": 0.5},
-        graph=kuzu_graph,
+        graph=ladybug_graph,
     )
     assert out.success is True
     calls_queries = [q for q in captured if "ORDER BY e.call_site_line" in q]
@@ -1374,10 +1374,10 @@ def test_neighbors_calls_edge_filter_pushdown_in_cypher(kuzu_graph, monkeypatch)
     assert "confidence" in q
 
 
-def test_neighbors_calls_edge_filter_before_limit(kuzu_graph) -> None:
-    mid = client_message_processor_process_id(kuzu_graph)
+def test_neighbors_calls_edge_filter_before_limit(ladybug_graph) -> None:
+    mid = client_message_processor_process_id(ladybug_graph)
     unfiltered = neighbors_v2(
-        mid, direction="out", edge_types=["CALLS"], limit=500, graph=kuzu_graph
+        mid, direction="out", edge_types=["CALLS"], limit=500, graph=ladybug_graph
     )
     assert unfiltered.success is True
     non_other_total = sum(
@@ -1385,7 +1385,7 @@ def test_neighbors_calls_edge_filter_before_limit(kuzu_graph) -> None:
     )
     assert non_other_total >= 6
     unfiltered_cap = neighbors_v2(
-        mid, direction="out", edge_types=["CALLS"], limit=5, graph=kuzu_graph
+        mid, direction="out", edge_types=["CALLS"], limit=5, graph=ladybug_graph
     )
     assert unfiltered_cap.success is True
     assert len(unfiltered_cap.results) == 5
@@ -1398,7 +1398,7 @@ def test_neighbors_calls_edge_filter_before_limit(kuzu_graph) -> None:
         edge_types=["CALLS"],
         edge_filter={"exclude_callee_declaring_roles": ["OTHER"]},
         limit=5,
-        graph=kuzu_graph,
+        graph=ladybug_graph,
     )
     assert filtered.success is True
     assert len(filtered.results) == 5
@@ -1406,14 +1406,14 @@ def test_neighbors_calls_edge_filter_before_limit(kuzu_graph) -> None:
     assert other_in_cap >= 1
 
 
-def test_neighbors_calls_edge_filter_mixed_types_fail_loud(kuzu_graph) -> None:
-    mid = _method_id_with_calls(kuzu_graph, "out")
+def test_neighbors_calls_edge_filter_mixed_types_fail_loud(ladybug_graph) -> None:
+    mid = _method_id_with_calls(ladybug_graph, "out")
     out = neighbors_v2(
         mid,
         direction="out",
         edge_types=["CALLS", "OVERRIDES"],
         edge_filter={"callee_declaring_role": "SERVICE"},
-        graph=kuzu_graph,
+        graph=ladybug_graph,
     )
     assert out.success is False
     assert out.message
@@ -1421,8 +1421,8 @@ def test_neighbors_calls_edge_filter_mixed_types_fail_loud(kuzu_graph) -> None:
     assert "OVERRIDES" in out.message
 
 
-def test_neighbors_calls_edge_filter_composed_types_fail_loud(kuzu_graph) -> None:
-    rows = kuzu_graph._rows(  # noqa: SLF001
+def test_neighbors_calls_edge_filter_composed_types_fail_loud(ladybug_graph) -> None:
+    rows = ladybug_graph._rows(  # noqa: SLF001
         "MATCH (t:Symbol)-[:DECLARES]->(m:Symbol)-[e:EXPOSES]->(:Route) "
         "WHERE t.role = 'CONTROLLER' AND t.kind = 'class' "
         "RETURN t.id AS id LIMIT 1",
@@ -1434,7 +1434,7 @@ def test_neighbors_calls_edge_filter_composed_types_fail_loud(kuzu_graph) -> Non
         direction="out",
         edge_types=["CALLS", "DECLARES.EXPOSES"],
         edge_filter={"callee_declaring_role": "SERVICE"},
-        graph=kuzu_graph,
+        graph=ladybug_graph,
     )
     assert out.success is False
     assert out.message
@@ -1442,8 +1442,8 @@ def test_neighbors_calls_edge_filter_composed_types_fail_loud(kuzu_graph) -> Non
     assert "DECLARES.EXPOSES" in out.message
 
 
-def test_neighbors_calls_edge_filter_role_axes_xor(kuzu_graph) -> None:
-    mid = _method_id_with_calls(kuzu_graph, "out")
+def test_neighbors_calls_edge_filter_role_axes_xor(ladybug_graph) -> None:
+    mid = _method_id_with_calls(ladybug_graph, "out")
     out = neighbors_v2(
         mid,
         direction="out",
@@ -1452,21 +1452,21 @@ def test_neighbors_calls_edge_filter_role_axes_xor(kuzu_graph) -> None:
             "callee_declaring_role": "SERVICE",
             "exclude_callee_declaring_roles": ["OTHER"],
         },
-        graph=kuzu_graph,
+        graph=ladybug_graph,
     )
     assert out.success is False
     assert out.message
     assert "mutually exclusive" in out.message.lower()
 
 
-def test_neighbors_calls_edge_filter_strategy_xor(kuzu_graph) -> None:
-    mid = _method_id_with_calls(kuzu_graph, "out")
+def test_neighbors_calls_edge_filter_strategy_xor(ladybug_graph) -> None:
+    mid = _method_id_with_calls(ladybug_graph, "out")
     out = neighbors_v2(
         mid,
         direction="out",
         edge_types=["CALLS"],
         edge_filter={"include_strategies": ["exact"], "exclude_strategies": ["phantom"]},
-        graph=kuzu_graph,
+        graph=ladybug_graph,
     )
     assert out.success is False
     assert out.message
@@ -1477,15 +1477,15 @@ def test_neighbors_calls_edge_filter_strategy_xor(kuzu_graph) -> None:
     os.environ.get("JAVA_CODEBASE_RAG_RUN_HEAVY", "").strip() != "1",
     reason="perf gate; set JAVA_CODEBASE_RAG_RUN_HEAVY=1",
 )
-def test_neighbors_calls_perf_empty_filter_client_message_processor(kuzu_graph) -> None:
-    mid = client_message_processor_process_id(kuzu_graph)
+def test_neighbors_calls_perf_empty_filter_client_message_processor(ladybug_graph) -> None:
+    mid = client_message_processor_process_id(ladybug_graph)
     baseline = json.loads(_PERF_BASELINES_PATH.read_text())[
         "neighbors_calls_empty_filter_client_message_processor"
     ]["median_sec"]
     times: list[float] = []
     for _ in range(5):
         t0 = time.perf_counter()
-        out = neighbors_v2(mid, direction="out", edge_types=["CALLS"], limit=500, graph=kuzu_graph)
+        out = neighbors_v2(mid, direction="out", edge_types=["CALLS"], limit=500, graph=ladybug_graph)
         times.append(time.perf_counter() - t0)
         assert out.success is True
         assert out.results
@@ -1493,15 +1493,15 @@ def test_neighbors_calls_perf_empty_filter_client_message_processor(kuzu_graph) 
     assert median_sec <= float(baseline) * 1.5
 
 
-def test_neighbors_include_unresolved_interleaved_order(kuzu_graph) -> None:
-    mid = client_message_processor_process_id(kuzu_graph)
+def test_neighbors_include_unresolved_interleaved_order(ladybug_graph) -> None:
+    mid = client_message_processor_process_id(ladybug_graph)
     out = neighbors_v2(
         mid,
         direction="out",
         edge_types=["CALLS"],
         include_unresolved=True,
         limit=500,
-        graph=kuzu_graph,
+        graph=ladybug_graph,
     )
     assert out.success is True
     assert out.results
@@ -1525,22 +1525,22 @@ def test_neighbors_include_unresolved_interleaved_order(kuzu_graph) -> None:
     assert keys == sorted(keys)
 
 
-def test_neighbors_include_unresolved_edge_filter_mutex(kuzu_graph) -> None:
-    mid = client_message_processor_process_id(kuzu_graph)
+def test_neighbors_include_unresolved_edge_filter_mutex(ladybug_graph) -> None:
+    mid = client_message_processor_process_id(ladybug_graph)
     out = neighbors_v2(
         mid,
         direction="out",
         edge_types=["CALLS"],
         include_unresolved=True,
         edge_filter={"min_confidence": 0.0},
-        graph=kuzu_graph,
+        graph=ladybug_graph,
     )
     assert out.success is False
     assert "incompatible" in (out.message or "").lower()
 
 
-def test_neighbors_dedup_calls_collapses_identical_dst(kuzu_graph) -> None:
-    rows = kuzu_graph._rows(  # noqa: SLF001
+def test_neighbors_dedup_calls_collapses_identical_dst(ladybug_graph) -> None:
+    rows = ladybug_graph._rows(  # noqa: SLF001
         "MATCH (m:Symbol)-[c:CALLS]->(dst:Symbol) "
         "WITH m, dst, collect(c.call_site_line) AS lines "
         "WHERE size(lines) > 1 "
@@ -1550,7 +1550,7 @@ def test_neighbors_dedup_calls_collapses_identical_dst(kuzu_graph) -> None:
         pytest.skip("no duplicate (caller,callee) CALLS pair in bank fixture")
     mid = str(rows[0]["mid"])
     flat = neighbors_v2(
-        mid, direction="out", edge_types=["CALLS"], limit=500, graph=kuzu_graph,
+        mid, direction="out", edge_types=["CALLS"], limit=500, graph=ladybug_graph,
     )
     deduped = neighbors_v2(
         mid,
@@ -1558,7 +1558,7 @@ def test_neighbors_dedup_calls_collapses_identical_dst(kuzu_graph) -> None:
         edge_types=["CALLS"],
         dedup_calls=True,
         limit=500,
-        graph=kuzu_graph,
+        graph=ladybug_graph,
     )
     assert flat.success and deduped.success
     assert len(deduped.results) < len(flat.results)
@@ -1566,22 +1566,22 @@ def test_neighbors_dedup_calls_collapses_identical_dst(kuzu_graph) -> None:
     assert multi, "dedup_calls should emit call_site_count on collapsed rows"
 
 
-def test_describe_ucs_id_not_describable(kuzu_graph) -> None:
-    rows = kuzu_graph._rows(  # noqa: SLF001
+def test_describe_ucs_id_not_describable(ladybug_graph) -> None:
+    rows = ladybug_graph._rows(  # noqa: SLF001
         "MATCH (u:UnresolvedCallSite) RETURN u.id AS id LIMIT 1",
     )
     assert rows
     ucs_id = str(rows[0]["id"])
     assert ucs_id.startswith("ucs:")
-    out = describe_v2(ucs_id, graph=kuzu_graph)
+    out = describe_v2(ucs_id, graph=ladybug_graph)
     assert out.success is False
     assert out.record is None
     assert "not describable" in (out.message or "").lower()
     assert "unresolved-calls" in (out.message or "").lower()
 
 
-def test_neighbors_dedup_calls_include_unresolved(kuzu_graph) -> None:
-    mid = client_message_processor_process_id(kuzu_graph)
+def test_neighbors_dedup_calls_include_unresolved(ladybug_graph) -> None:
+    mid = client_message_processor_process_id(ladybug_graph)
     out = neighbors_v2(
         mid,
         direction="out",
@@ -1589,7 +1589,7 @@ def test_neighbors_dedup_calls_include_unresolved(kuzu_graph) -> None:
         include_unresolved=True,
         dedup_calls=True,
         limit=500,
-        graph=kuzu_graph,
+        graph=ladybug_graph,
     )
     assert out.success is True
     kinds = {str((e.attrs or {}).get("row_kind") or "resolved") for e in out.results}
@@ -1609,9 +1609,9 @@ def _calls_transcript_sort_key_from_edge(edge: Edge) -> tuple[int, int, int]:
     return (line, byte, kind_rank)
 
 
-def test_describe_unresolved_call_sites_rollup_cap_footer_and_total(kuzu_graph) -> None:
-    mid = client_message_processor_process_id(kuzu_graph)
-    out = describe_v2(mid, graph=kuzu_graph)
+def test_describe_unresolved_call_sites_rollup_cap_footer_and_total(ladybug_graph) -> None:
+    mid = client_message_processor_process_id(ladybug_graph)
+    out = describe_v2(mid, graph=ladybug_graph)
     assert out.success and out.record
     data = out.record.data
     total = int(data.get("unresolved_call_sites_total") or 0)
