@@ -588,15 +588,25 @@ def _load_existing_members(conn: ladybug.Connection, tables: GraphTables, exclud
         ))
 
 
+# Every Symbol->Symbol REL TABLE type in the graph schema. A Symbol node can
+# only have an INCOMING edge of one of these types, so `_find_dependents` MUST
+# walk all of them: that completeness is what makes the changed-node DETACH
+# DELETE in `_delete_file_scope` Phase 3 safe (every real caller of a changed
+# node is pulled into scope, so Phase 1 removes the edge before the node delete).
+# If you add a new Symbol->Symbol edge type to the schema, add it here too —
+# otherwise changed-node deletion would silently drop its surviving edges.
+_SYMBOL_TO_SYMBOL_EDGE_TYPES = (
+    "EXTENDS", "IMPLEMENTS", "INJECTS", "CALLS", "DECLARES", "OVERRIDES",
+)
+
+
 def _find_dependents(conn: ladybug.Connection, changed_node_ids: set[str]) -> set[str]:
     """Find files whose nodes have edges pointing into changed nodes. Returns set of filenames."""
     dependent_files: set[str] = set()
 
-    # Query each Symbol-to-Symbol edge table for incoming edges
-    edge_types = ["EXTENDS", "IMPLEMENTS", "INJECTS", "CALLS", "DECLARES", "OVERRIDES"]
     params = {"changed_ids": list(changed_node_ids)}
 
-    for edge_type in edge_types:
+    for edge_type in _SYMBOL_TO_SYMBOL_EDGE_TYPES:
         query = f"""
         MATCH (src:Symbol)-[e:{edge_type}]->(dst:Symbol)
         WHERE dst.id IN $changed_ids
@@ -612,23 +622,52 @@ def _find_dependents(conn: ladybug.Connection, changed_node_ids: set[str]) -> se
     return dependent_files
 
 
-def _delete_file_scope(conn: ladybug.Connection, filenames: set[str]) -> None:
-    """Delete all nodes and edges originating from the given files.
+def _delete_file_scope(
+    conn: ladybug.Connection,
+    changed_files: set[str],
+    dependent_files: set[str],
+) -> None:
+    """Delete nodes and edges for a scope split into changed vs dependent files.
 
-    Skip phantom nodes (filename=""). Deletes ALL edge types in Phase 1,
-    then nodes in subsequent phases. Route/Client/Producer nodes use
-    DETACH DELETE as a safety net for any edges missed in Phase 1.
+    ``changed_files`` are files whose content actually changed (added/modified/
+    removed): their Symbol nodes are deleted (and re-created by ``_scoped_write``).
+    ``dependent_files`` are files pulled in only to re-resolve their OUTGOING
+    edges against the changed nodes; their node definitions did not change, so
+    their nodes are deliberately PRESERVED (they re-MERGE in place on the same
+    deterministic ``symbol_id``). Skipping phantom nodes (filename="").
 
-    Edges are deleted in batch across all filenames first to avoid LadybugDB
-    "has connected edges" errors when edges from one file point to nodes
-    in another file within the same scope.
+    Why dependents are preserved (issue #305): the orchestrator computes
+    dependents from the *changed* nodes only, so a dependent file's node can
+    have an incoming CALLS edge from an out-of-scope caller. The ``source_file``
+    on every Symbol->Symbol edge is the CALLER's file (pinned by
+    ``test_source_file_value_matches_symbol_filename``), so Phase 1 below only
+    deletes edges ORIGINATING in scope; incoming edges from out-of-scope callers
+    survive. If we then tried to DELETE the dependent node, LadybugDB rejects it
+    ("Node ... has connected edges in table CALLS in the bwd direction, ...
+    Please delete the edges first or try DETACH DELETE") and the rebuild falls
+    back to a full rebuild. A naive fix (DETACH DELETE on dependents, or an
+    extra incoming-edge pass) would silence the crash but permanently drop those
+    out-of-scope edges, corrupting the graph. Preserving dependent nodes keeps
+    both the nodes and their incoming edges intact.
+
+    Phase 1 deletes ALL edge types across the whole scope (changed + dependent)
+    first to avoid LadybugDB "has connected edges" errors when edges from one
+    file point to nodes in another file within the same scope. Route/Client/
+    Producer nodes use DETACH DELETE as a safety net for any edges missed in
+    Phase 1.
     """
-    filename_list = list(filenames)
+    scope_files = changed_files | dependent_files
+    scope_list = list(scope_files)
+    changed_list = list(changed_files)
 
-    # Phase 1: Delete ALL edges from ALL scope files at once.
-    # This avoids ordering issues where file A has an edge from file B
-    # pointing into it; if we delete A's nodes before B's edges, LadybugDB
-    # raises "has connected edges" errors.
+    # Phase 1: Delete ALL edges ORIGINATING from any scope file (changed +
+    # dependent). Because `source_file` is the caller's file, this deletes edges
+    # whose source is in scope (including dependents' outgoing edges to changed
+    # nodes) while intentionally leaving incoming edges from out-of-scope callers
+    # intact — those must survive so the dependent nodes below can be preserved.
+    # This list is a superset of `_SYMBOL_TO_SYMBOL_EDGE_TYPES` (it also covers
+    # Symbol->Route/Client/Producer/UCS and Client/Producer->Route edges); keep
+    # both lists in sync with the schema.
     edge_tables = [
         "EXTENDS", "IMPLEMENTS", "INJECTS", "CALLS", "DECLARES", "OVERRIDES",
         "UNRESOLVED_AT", "EXPOSES", "DECLARES_CLIENT", "DECLARES_PRODUCER",
@@ -640,7 +679,7 @@ def _delete_file_scope(conn: ladybug.Connection, filenames: set[str]) -> None:
         WHERE e.source_file IN $filenames
         DELETE e
         """
-        conn.execute(query, {"filenames": filename_list})
+        conn.execute(query, {"filenames": scope_list})
 
     # Phase 2: Collect all Symbol node IDs for UnresolvedCallSite cleanup.
     symbol_ids: list[str] = []
@@ -649,12 +688,15 @@ def _delete_file_scope(conn: ladybug.Connection, filenames: set[str]) -> None:
     WHERE s.filename IN $filenames
     RETURN s.id
     """
-    result = conn.execute(symbol_ids_query, {"filenames": filename_list})
+    result = conn.execute(symbol_ids_query, {"filenames": scope_list})
     while result.has_next():
         row = result.get_next()
         symbol_ids.append(row[0])
 
-    # Delete UnresolvedCallSite nodes whose caller_id is in the collected set
+    # Delete UnresolvedCallSite nodes whose caller_id is in the collected set.
+    # These are children of scope symbols (including preserved dependents);
+    # deleting them is safe because every scope file — dependents included — is
+    # reprocessed and re-emits its UnresolvedCallSite nodes in `_scoped_write`.
     if symbol_ids:
         unresolved_query = """
         MATCH (u:UnresolvedCallSite)
@@ -663,20 +705,30 @@ def _delete_file_scope(conn: ladybug.Connection, filenames: set[str]) -> None:
         """
         conn.execute(unresolved_query, {"symbol_ids": symbol_ids})
 
-    # Phase 3: Delete Symbol nodes.
+    # Phase 3: Delete Symbol nodes ONLY for changed files (not dependents).
+    # Dependent-file nodes are deliberately PRESERVED so their incoming edges
+    # from out-of-scope callers survive; the dependents are re-MERGEd in place
+    # by `_scoped_write` on the same deterministic node id. A changed node's
+    # real incoming edges all come from dependent files (callers pulled into
+    # scope by `_find_dependents`, which walks every type in
+    # `_SYMBOL_TO_SYMBOL_EDGE_TYPES`), so Phase 1 already removed them and the
+    # dependents re-emit them when reprocessed. DETACH DELETE is only a safety
+    # net for the rare surviving edge whose source was NOT pulled into scope
+    # (e.g. a phantom caller with filename="", which `_find_dependents` skips);
+    # such an edge is stale once the node is recreated, so dropping it is fine.
     delete_symbols_query = """
     MATCH (s:Symbol)
     WHERE s.filename IN $filenames
-    DELETE s
+    DETACH DELETE s
     """
-    conn.execute(delete_symbols_query, {"filenames": filename_list})
+    conn.execute(delete_symbols_query, {"filenames": changed_list})
 
     # Phase 4: Delete Route, Client, Producer nodes.
     # Use DETACH DELETE as a safety net in case any edges were missed in Phase 1.
     for label in ["Route", "Client", "Producer"]:
         conn.execute(
             f"MATCH (n:{label}) WHERE n.filename IN $filenames DETACH DELETE n",
-            {"filenames": filename_list},
+            {"filenames": scope_list},
         )
 
 
@@ -3524,7 +3576,7 @@ def incremental_rebuild(
         # Step 4: Scoped deletion
         if verbose:
             _verbose_stderr_line("[increment] deleting outdated nodes and edges")
-        _delete_file_scope(conn, scope_files)
+        _delete_file_scope(conn, changed_files, dependent_files)
 
         # Force deletion to be applied by running a dummy query
         conn.execute("MATCH (s:Symbol) RETURN count(*)")

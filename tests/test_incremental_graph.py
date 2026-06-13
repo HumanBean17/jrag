@@ -738,7 +738,11 @@ class TestIncrementalOrchestrator:
         conn.close()
 
     def test_delete_file_scope_removes_only_matching(self, tmp_path: Path) -> None:
-        """Delete scope for one file, verify other files' nodes/edges untouched."""
+        """Delete scope for one file (changed), verify other files' nodes/edges untouched.
+
+        Uses the new (changed_files, dependent_files) signature with an empty
+        dependent set so behavior matches the legacy single-file case.
+        """
         from build_ast_graph import _delete_file_scope
 
         source_root = tmp_path / "src"
@@ -761,7 +765,7 @@ class TestIncrementalOrchestrator:
         conn.execute("MATCH (s:Symbol) RETURN count(*)")
 
         # Delete only A.java's scope
-        _delete_file_scope(conn, {"A.java"})
+        _delete_file_scope(conn, changed_files={"A.java"}, dependent_files=set())
 
         # Verify A's nodes are gone but B's remain
         a_result = conn.execute("MATCH (s:Symbol) WHERE s.fqn = 'pkg.A' RETURN count(*)")
@@ -776,5 +780,202 @@ class TestIncrementalOrchestrator:
 
         assert a_count == 0
         assert b_count > 0
+
+        conn.close()
+
+    def test_delete_file_scope_preserves_dependent_nodes(self, tmp_path: Path) -> None:
+        """Direct unit test for the #305 fix.
+
+        Build a C -> B -> A call chain (only B is a dependent of changed A; C is
+        out of scope because it has no edge into A). Then call
+        _delete_file_scope(changed_files={A}, dependent_files={B}) and assert:
+        no exception, A's node is gone, B and C nodes are preserved, and the
+        out-of-scope C->B CALLS edge survives.
+        """
+        from build_ast_graph import _delete_file_scope, write_ladybug
+
+        source_root = tmp_path / "src"
+        source_root.mkdir()
+        ladybug_path = tmp_path / "code_graph.lbug"
+
+        # C calls B.b; B calls A.a. (pass1-3 needed to produce CALLS edges.)
+        (source_root / "A.java").write_text(
+            "package pkg; class A { void a() {} }", encoding="utf-8"
+        )
+        (source_root / "B.java").write_text(
+            "package pkg; class B {\n"
+            "  void b() {\n"
+            "    A a = new A();\n"
+            "    a.a();\n"
+            "  }\n"
+            "}",
+            encoding="utf-8",
+        )
+        (source_root / "C.java").write_text(
+            "package pkg; class C {\n"
+            "  void c() {\n"
+            "    B b = new B();\n"
+            "    b.b();\n"
+            "  }\n"
+            "}",
+            encoding="utf-8",
+        )
+
+        tables = GraphTables()
+        asts = pass1_parse(source_root, tables, verbose=False)
+        pass2_edges(tables, asts, verbose=False)
+        from build_ast_graph import pass3_calls
+        pass3_calls(tables, asts, verbose=False)
+        write_ladybug(ladybug_path, tables, source_root=source_root, verbose=False)
+
+        db = ladybug.Database(str(ladybug_path))
+        conn = ladybug.Connection(db)
+
+        # Sanity: the C->B CALLS edge must exist for this test to be meaningful.
+        cb_result = conn.execute(
+            "MATCH (src:Symbol {fqn: 'pkg.C#c()'})-[e:CALLS]->(dst:Symbol {fqn: 'pkg.B#b()'}) "
+            "RETURN count(*)"
+        )
+        cb_count = 0
+        if cb_result.has_next():
+            cb_count = cb_result.get_next()[0]
+        assert cb_count > 0, "seeded graph must contain a C->B CALLS edge"
+
+        # A is changed; B is its dependent; C is out of scope.
+        _delete_file_scope(
+            conn, changed_files={"A.java"}, dependent_files={"B.java"}
+        )
+
+        # A's node must be gone.
+        a_result = conn.execute("MATCH (s:Symbol) WHERE s.fqn = 'pkg.A' RETURN count(*)")
+        a_count = 0
+        if a_result.has_next():
+            a_count = a_result.get_next()[0]
+        assert a_count == 0
+
+        # B and C nodes must survive.
+        b_result = conn.execute("MATCH (s:Symbol) WHERE s.fqn = 'pkg.B' RETURN count(*)")
+        c_result = conn.execute("MATCH (s:Symbol) WHERE s.fqn = 'pkg.C' RETURN count(*)")
+        b_count = 0
+        c_count = 0
+        if b_result.has_next():
+            b_count = b_result.get_next()[0]
+        if c_result.has_next():
+            c_count = c_result.get_next()[0]
+        assert b_count > 0
+        assert c_count > 0
+
+        # The out-of-scope C->B CALLS edge must survive.
+        cb_after_result = conn.execute(
+            "MATCH (src:Symbol {fqn: 'pkg.C#c()'})-[e:CALLS]->(dst:Symbol {fqn: 'pkg.B#b()'}) "
+            "RETURN count(*)"
+        )
+        cb_after_count = 0
+        if cb_after_result.has_next():
+            cb_after_count = cb_after_result.get_next()[0]
+        assert cb_after_count > 0
+
+        conn.close()
+
+    def test_incremental_preserves_incoming_edges_to_dependent(self, tmp_path: Path) -> None:
+        """End-to-end repro for GitHub issue #305.
+
+        Topology C -> B -> A (C.c calls B.b, B.b calls A.a). Change A.java and run
+        incremental_rebuild. On the unfixed code the dependent B is pulled into
+        scope but its out-of-scope caller C is not; the surviving C->B CALLS edge
+        crashes the dependent node delete and the rebuild falls back to full.
+
+        After the fix: mode is "incremental", B's node survives, and the C->B
+        CALLS edge is preserved.
+        """
+        from build_ast_graph import incremental_rebuild, write_ladybug
+
+        source_root = tmp_path / "src"
+        source_root.mkdir()
+        index_dir = tmp_path / "index"
+        index_dir.mkdir()
+        ladybug_path = index_dir / "code_graph.lbug"
+
+        (source_root / "A.java").write_text(
+            "package pkg; class A { void a() {} }", encoding="utf-8"
+        )
+        (source_root / "B.java").write_text(
+            "package pkg; class B {\n"
+            "  void b() {\n"
+            "    A a = new A();\n"
+            "    a.a();\n"
+            "  }\n"
+            "}",
+            encoding="utf-8",
+        )
+        (source_root / "C.java").write_text(
+            "package pkg; class C {\n"
+            "  void c() {\n"
+            "    B b = new B();\n"
+            "    b.b();\n"
+            "  }\n"
+            "}",
+            encoding="utf-8",
+        )
+
+        # Initial build (pass1-3 for CALLS edges).
+        tables = GraphTables()
+        asts = pass1_parse(source_root, tables, verbose=False)
+        pass2_edges(tables, asts, verbose=False)
+        from build_ast_graph import pass3_calls
+        pass3_calls(tables, asts, verbose=False)
+        write_ladybug(ladybug_path, tables, source_root=source_root, verbose=False)
+
+        # Sanity: C->B CALLS edge must exist in the seeded graph.
+        db = ladybug.Database(str(ladybug_path))
+        conn = ladybug.Connection(db)
+        cb_result = conn.execute(
+            "MATCH (src:Symbol {fqn: 'pkg.C#c()'})-[e:CALLS]->(dst:Symbol {fqn: 'pkg.B#b()'}) "
+            "RETURN count(*)"
+        )
+        cb_count = 0
+        if cb_result.has_next():
+            cb_count = cb_result.get_next()[0]
+        assert cb_count > 0, "seeded graph must contain a C->B CALLS edge"
+        conn.close()
+
+        # Initialize hash tracker for all files.
+        tracker = FileHashTracker(index_dir)
+        ignore = LayeredIgnore(source_root, use_gitignore=False, builtin_patterns=[])
+        tracker.detect_changes(source_root, ignore)
+        for rel_path in ["A.java", "B.java", "C.java"]:
+            tracker.update({rel_path}, source_root)
+        tracker.save()
+
+        # Change A.java.
+        (source_root / "A.java").write_text(
+            "package pkg; class A { void a() {} void a2() {} }", encoding="utf-8"
+        )
+
+        result = incremental_rebuild(source_root, ladybug_path, verbose=False)
+
+        assert result.mode == "incremental", (
+            f"expected incremental, got {result.mode!r} (likely the bwd-edge crash)"
+        )
+
+        # B's node and the C->B CALLS edge must survive.
+        db = ladybug.Database(str(ladybug_path))
+        conn = ladybug.Connection(db)
+        b_result = conn.execute(
+            "MATCH (s:Symbol) WHERE s.fqn = 'pkg.B' RETURN count(*)"
+        )
+        b_count = 0
+        if b_result.has_next():
+            b_count = b_result.get_next()[0]
+        assert b_count > 0, "dependent node B must be preserved"
+
+        cb_after_result = conn.execute(
+            "MATCH (src:Symbol {fqn: 'pkg.C#c()'})-[e:CALLS]->(dst:Symbol {fqn: 'pkg.B#b()'}) "
+            "RETURN count(*)"
+        )
+        cb_after_count = 0
+        if cb_after_result.has_next():
+            cb_after_count = cb_after_result.get_next()[0]
+        assert cb_after_count > 0, "out-of-scope C->B CALLS edge must be preserved"
 
         conn.close()
