@@ -3668,10 +3668,17 @@ def incremental_rebuild(
 
 
 def _init_hash_tracker(source_root: Path, ladybug_path: Path) -> int:
-    """Initialize hash tracker for all Java files. Returns number of files hashed."""
+    """Initialize hash tracker for all Java files. Returns number of files hashed.
+
+    Called right after a full graph rebuild (``write_ladybug``), so the store must
+    mirror exactly the files that were just indexed. We deliberately do NOT
+    ``load()`` the existing store: ``update`` re-hashes every current file anyway,
+    and preserving old entries would leave stale hashes for files that no longer
+    exist (deleted or now-ignored). Those ghosts would be re-detected as "removed"
+    on every subsequent ``increment``, sustaining an endless full-rebuild loop.
+    """
     index_dir = ladybug_path.parent
     tracker = FileHashTracker(index_dir)
-    tracker.load()
     ignore = LayeredIgnore(source_root)
     all_files: set[str] = set()
     source_root_resolved = source_root.resolve()
@@ -3742,7 +3749,7 @@ def _write_clients_producers_and_calls(conn: ladybug.Connection, tables: GraphTa
 
     # Write declares_client edges
     for row in tables.declares_client_rows:
-        source_file = member_by_id.get(row.symbol_id, MemberEntry(kind="", decl=None, parent_id="", parent_fqn="", file_path="", module="", microservice="")).file_path
+        source_file = member_by_id.get(row.symbol_id, MemberEntry(kind="", decl=None, parent_id="", parent_fqn="", file_path="", module="", microservice="", node_id="")).file_path
         conn.execute(_CREATE_DECLARES_CLIENT, {
             "sid": row.symbol_id,
             "cid": row.client_id,
@@ -3753,7 +3760,7 @@ def _write_clients_producers_and_calls(conn: ladybug.Connection, tables: GraphTa
 
     # Write declares_producer edges
     for row in tables.declares_producer_rows:
-        source_file = member_by_id.get(row.symbol_id, MemberEntry(kind="", decl=None, parent_id="", parent_fqn="", file_path="", module="", microservice="")).file_path
+        source_file = member_by_id.get(row.symbol_id, MemberEntry(kind="", decl=None, parent_id="", parent_fqn="", file_path="", module="", microservice="", node_id="")).file_path
         conn.execute(_CREATE_DECLARES_PRODUCER, {
             "sid": row.symbol_id,
             "pid": row.producer_id,

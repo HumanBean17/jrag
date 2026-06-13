@@ -544,6 +544,61 @@ def test_increment_first_run_falls_back_to_full(
 
 
 
+def test_reprocess_graph_only_then_increment_graph_is_noop(
+    corpus_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The reported scenario, exercised through the real CLI wiring.
+
+    ``reprocess --graph-only`` rebuilds the graph and seeds ``.graph_hashes.json``
+    (via ``write_ladybug`` -> ``_init_hash_tracker``); the next ``increment``'s
+    graph stage must be a no-op, NOT a second full rebuild.
+
+    cocoindex is stubbed so ``increment`` runs only its real graph stage (no
+    embedding model needed). ``reprocess --graph-only`` needs no cocoindex
+    regardless, so this test runs in the normal (non-heavy) suite.
+    """
+    idx = tmp_path / "idx_reprocess_then_increment"
+    idx.mkdir()
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_INDEX_DIR", str(idx))
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", str(corpus_root))
+
+    rc = cli_mod.main(
+        ["reprocess", "--graph-only", "--source-root", str(corpus_root), "--index-dir", str(idx), "--quiet"],
+    )
+    assert rc == 0, "reprocess --graph-only must succeed"
+    # reprocess --graph-only must seed the hash store.
+    hash_file = idx / ".graph_hashes.json"
+    assert hash_file.exists(), "hash store not seeded by reprocess --graph-only"
+
+    # Inject a ghost entry for a file that does not exist — the exact "N removed
+    # files every run" symptom. On bank-chat (which has Feign/Kafka clients) the
+    # scoped path this triggers reaches _write_clients_producers_and_calls, so a
+    # missing-field MemberEntry default here used to crash into a full fallback.
+    data = json.loads(hash_file.read_text(encoding="utf-8"))
+    data["ghost/DoesNotExist.java"] = "0" * 64
+    hash_file.write_text(json.dumps(data), encoding="utf-8")
+
+    # Stub cocoindex so increment exercises ONLY its graph stage.
+    def _noop_coco(env, *, full_reprocess, quiet, verbose=True, lance_project_root=None):
+        return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(cli_mod, "run_cocoindex_update", _noop_coco)
+
+    buf_out = io.StringIO()
+    buf_err = io.StringIO()
+    with contextlib.redirect_stdout(buf_out), contextlib.redirect_stderr(buf_err):
+        rc2 = cli_mod.main(
+            ["increment", "--source-root", str(corpus_root), "--index-dir", str(idx), "--quiet"],
+        )
+    assert rc2 == 0
+    # The graph stage must NOT have fallen back to a full rebuild.
+    assert "fell back to full graph rebuild" not in buf_err.getvalue()
+    assert "increment completed (Lance + graph updated)" in buf_out.getvalue()
+    # The ghost must be pruned, so the next increment is clean.
+    after = json.loads(hash_file.read_text(encoding="utf-8"))
+    assert "ghost/DoesNotExist.java" not in after
+
+
 @pytest.mark.skipif(not _cocoindex_available(), reason="cocoindex not installed in venv")
 def test_increment_updates_lance_after_touch_java_file(corpus_root: Path, tmp_path: Path) -> None:
     import lancedb  # noqa: PLC0415

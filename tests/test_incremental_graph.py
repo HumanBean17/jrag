@@ -4,6 +4,8 @@ Tests cover FileHashTracker behavior, edge schema source_file column, and increm
 """
 from __future__ import annotations
 
+import json
+import shutil
 from pathlib import Path
 
 import ladybug
@@ -979,3 +981,141 @@ class TestIncrementalOrchestrator:
         assert cb_after_count > 0, "out-of-scope C->B CALLS edge must be preserved"
 
         conn.close()
+
+
+class TestIncrementalRegressions:
+    """Regression tests for the ``increment`` always-fully-reprocesses loop.
+
+    Two bugs fed the loop:
+      1. ``_write_clients_producers_and_calls`` built a default ``MemberEntry``
+         missing the required ``node_id`` field. Because ``dict.get(k, default)``
+         evaluates ``default`` eagerly, the TypeError fired whenever ANY
+         ``declares_client`` / ``declares_producer`` row existed — crashing every
+         client-bearing incremental rebuild into a full-rebuild fallback.
+      2. ``_init_hash_tracker`` (run by every full reprocess AND by that fallback)
+         did ``load()`` + ``update()`` and never pruned hashes for files no longer
+         on disk, so ghost entries persisted and re-triggered the loop every run.
+    """
+
+    def test_init_hash_tracker_prunes_stale_entries(self, tmp_path: Path) -> None:
+        """A full rebuild drops hashes for files no longer on disk (ghost pruning).
+
+        Without pruning, a stale entry is re-detected as 'removed' on every
+        ``increment``, sustaining an endless full-rebuild loop.
+        """
+        from build_ast_graph import write_ladybug
+
+        source_root = tmp_path / "src"
+        source_root.mkdir()
+        (source_root / "A.java").write_text("package pkg; class A {}", encoding="utf-8")
+        index_dir = tmp_path / "index"
+        index_dir.mkdir()
+        ladybug_path = index_dir / "code_graph.lbug"
+
+        tables = GraphTables()
+        pass1_parse(source_root, tables, verbose=False)
+        write_ladybug(ladybug_path, tables, source_root=source_root, verbose=False)
+
+        # Inject a ghost hash for a file that does not exist on disk.
+        hash_file = index_dir / ".graph_hashes.json"
+        data = json.loads(hash_file.read_text(encoding="utf-8"))
+        data["ghost/Deleted.java"] = "0" * 64
+        hash_file.write_text(json.dumps(data), encoding="utf-8")
+
+        # A second full rebuild (what `reprocess --graph-only` does) re-runs
+        # _init_hash_tracker, which must drop the ghost.
+        tables2 = GraphTables()
+        pass1_parse(source_root, tables2, verbose=False)
+        write_ladybug(ladybug_path, tables2, source_root=source_root, verbose=False)
+
+        after = json.loads(hash_file.read_text(encoding="utf-8"))
+        assert "ghost/Deleted.java" not in after
+        assert "A.java" in after
+
+    def test_incremental_with_http_clients_does_not_fall_back(self, tmp_path: Path) -> None:
+        """A corpus with Feign/Kafka clients/producers rebuilds incrementally.
+
+        ``http_caller_smoke`` emits DECLARES_CLIENT / DECLARES_PRODUCER rows, so
+        the buggy eager ``MemberEntry`` default in
+        ``_write_clients_producers_and_calls`` crashed here before the fix
+        (forcing full_fallback). After the fix: mode is "incremental".
+        """
+        from _builders import build_ladybug_full_into
+        from build_ast_graph import incremental_rebuild
+
+        corpus = Path(__file__).parent / "fixtures" / "http_caller_smoke"
+        source_root = tmp_path / "src"
+        shutil.copytree(corpus, source_root)
+        index_dir = tmp_path / "index"
+        index_dir.mkdir()
+        ladybug_path = index_dir / "code_graph.lbug"
+
+        # Full build seeds .graph_hashes.json via write_ladybug -> _init_hash_tracker.
+        build_ladybug_full_into(source_root, ladybug_path)
+
+        # Mutate one file unrelated to the clients/producers.
+        target = source_root / "src" / "main" / "java" / "smoke" / "http" / "TopicNames.java"
+        target.write_text(target.read_text(encoding="utf-8") + "\n// edit\n", encoding="utf-8")
+
+        result = incremental_rebuild(source_root, ladybug_path, verbose=False)
+        assert result.mode == "incremental", (
+            f"expected incremental, got {result.mode!r} (the node_id crash in "
+            "_write_clients_producers_and_calls forces a full fallback)"
+        )
+        assert result.files_changed == 1
+
+    def test_reprocess_graph_only_then_increment_is_noop(self, tmp_path: Path) -> None:
+        """The reported scenario at the builder level: a full graph rebuild (what
+        ``reprocess --graph-only`` does) followed by ``increment`` with no source
+        changes must be a no-op, not a second full rebuild."""
+        from _builders import build_ladybug_full_into
+        from build_ast_graph import incremental_rebuild
+
+        corpus = Path(__file__).parent / "fixtures" / "http_caller_smoke"
+        source_root = tmp_path / "src"
+        shutil.copytree(corpus, source_root)
+        index_dir = tmp_path / "index"
+        index_dir.mkdir()
+        ladybug_path = index_dir / "code_graph.lbug"
+
+        # Simulate `reprocess --graph-only`: full rebuild seeds the hash store.
+        build_ladybug_full_into(source_root, ladybug_path)
+
+        # `increment` with no source changes.
+        result = incremental_rebuild(source_root, ladybug_path, verbose=False)
+        assert result.mode == "incremental"
+        assert (result.files_changed, result.files_added, result.files_removed) == (0, 0, 0)
+
+    def test_incremental_ghost_entry_then_next_run_is_noop(self, tmp_path: Path) -> None:
+        """A ghost hash entry is detected as 'removed' once, processed by the
+        scoped path (which prunes it), so the following run is a clean no-op.
+
+        Guards both fixes together: the node_id fix lets the scoped path
+        complete, and that path prunes the ghost (lines that delete `removed`
+        hashes). Before the fixes this fell back to full and preserved the ghost.
+        """
+        from _builders import build_ladybug_full_into
+        from build_ast_graph import incremental_rebuild
+
+        corpus = Path(__file__).parent / "fixtures" / "http_caller_smoke"
+        source_root = tmp_path / "src"
+        shutil.copytree(corpus, source_root)
+        index_dir = tmp_path / "index"
+        index_dir.mkdir()
+        ladybug_path = index_dir / "code_graph.lbug"
+        build_ladybug_full_into(source_root, ladybug_path)
+
+        # Inject a ghost (no source change).
+        hash_file = index_dir / ".graph_hashes.json"
+        data = json.loads(hash_file.read_text(encoding="utf-8"))
+        data["ghost/Gone.java"] = "0" * 64
+        hash_file.write_text(json.dumps(data), encoding="utf-8")
+
+        first = incremental_rebuild(source_root, ladybug_path, verbose=False)
+        assert first.mode == "incremental", f"expected incremental, got {first.mode!r}"
+        assert first.files_removed == 1
+
+        # The ghost must be gone, so the next run detects nothing.
+        second = incremental_rebuild(source_root, ladybug_path, verbose=False)
+        assert second.mode == "incremental"
+        assert (second.files_changed, second.files_added, second.files_removed) == (0, 0, 0)
