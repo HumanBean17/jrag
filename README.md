@@ -63,7 +63,7 @@ java-codebase-rag install
 java-codebase-rag install --non-interactive --agent claude-code
 ```
 
-After `pip install --upgrade java-codebase-rag`, run `java-codebase-rag update` to refresh shipped artifacts.
+After `pip install --upgrade java-codebase-rag`, run `java-codebase-rag update` to refresh shipped artifacts and catch up the index (Lance + graph).
 
 ### Manual registration
 
@@ -195,7 +195,7 @@ Run `java-codebase-rag --help` to list grouped subcommands. Operator playbook wi
 | Group | Subcommand | What it does |
 |---|---|---|
 | Setup | `install` | Interactive setup wizard: config, MCP registration, skill/agent deployment, indexing. |
-| Setup | `update` | Refresh shipped artifacts (skill, agent, MCP entry) after pip upgrade. |
+| Setup | `update` | Refresh shipped artifacts (skill, agent, MCP entry) + incremental Lance/graph catch-up after pip upgrade. |
 | Lifecycle | `init` | First-time index. Refuses if artifacts already exist. |
 | Lifecycle | `increment` | CocoIndex catch-up + incremental Kuzu update. `--vectors-only` for Lance only. |
 | Lifecycle | `reprocess` | Full Lance + Kuzu rebuild. `--vectors-only` / `--graph-only` for a single phase. |

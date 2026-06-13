@@ -1182,7 +1182,7 @@ def run_update(
         index_dir_has_existing_artifacts,
         resolve_operator_config,
     )
-    from java_codebase_rag.pipeline import run_cocoindex_update
+    from java_codebase_rag.pipeline import run_cocoindex_update, run_incremental_graph
 
     project_root = discover_project_root(cwd)
     if project_root is None:
@@ -1207,22 +1207,37 @@ def run_update(
         print("Run `java-codebase-rag install` to create one.")
         return EXIT_PARTIAL if has_artifact_failures else EXIT_SUCCESS
 
-    # Run increment (LanceDB catch-up)
+    # Run increment: LanceDB catch-up + incremental graph rebuild.
+    # Mirrors `java-codebase-rag increment` so both index layers stay current.
+    # The "graph not implemented" warning belongs only on the vectors-only path
+    # (increment --vectors-only), where the graph step is deliberately skipped.
     if not dry_run:
-        print("\nUpdating index (incremental LanceDB update)...")
+        print("\nUpdating index (Lance + graph)...")
         cfg.apply_to_os_environ()
         env = cfg.subprocess_env()
 
         coco = run_cocoindex_update(env, full_reprocess=False, quiet=True)
         if coco.returncode != 0:
-            print(f"Error: Index update failed with code {coco.returncode}")
+            print(f"Error: Lance index update failed with code {coco.returncode}")
             return 1
 
-        # Print graph staleness warning
-        from java_codebase_rag.cli import _INCREMENT_WARNING_LINES
-        print("\n" + "\n".join(_INCREMENT_WARNING_LINES))
+        g = run_incremental_graph(
+            source_root=cfg.source_root,
+            ladybug_path=cfg.ladybug_path,
+            verbose=False,
+            quiet=True,
+            env=env,
+        )
+        if g.returncode != 0:
+            # Artifacts above already refreshed; the graph catch-up is best-effort
+            # here. Surface a truthful, actionable message instead of leaving the
+            # graph silently stale or claiming the feature is unimplemented.
+            print(
+                f"\nWarning: incremental graph update failed (exit {g.returncode}). "
+                "Run `java-codebase-rag reprocess` for a full rebuild."
+            )
     else:
-        print("\nWould run incremental index update.")
+        print("\nWould run incremental index update (Lance + graph).")
 
     # Print summary
     print("\nUpdate complete.")

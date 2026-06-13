@@ -1106,6 +1106,10 @@ class TestRunUpdate:
             from subprocess import CompletedProcess
             return CompletedProcess(["build_ast_graph"], 0)
 
+        def mock_run_incremental_graph(*args, **kwargs):
+            from subprocess import CompletedProcess
+            return CompletedProcess(["build_ast_graph", "--incremental"], 0)
+
         monkeypatch.setattr(
             "java_codebase_rag.pipeline.run_cocoindex_update",
             mock_run_cocoindex_update,
@@ -1113,6 +1117,10 @@ class TestRunUpdate:
         monkeypatch.setattr(
             "java_codebase_rag.pipeline.run_build_ast_graph",
             mock_run_build_ast_graph,
+        )
+        monkeypatch.setattr(
+            "java_codebase_rag.pipeline.run_incremental_graph",
+            mock_run_incremental_graph,
         )
 
         # Change to fixture directory
