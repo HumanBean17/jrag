@@ -16,7 +16,9 @@ from java_codebase_rag.cli_progress import (
     emit_vectors_finish,
     emit_vectors_start,
 )
+from java_codebase_rag._fdlimit import raise_fd_limit
 from java_codebase_rag.config import (
+    cocoindex_subprocess_env_defaults,
     discover_project_root,
     emit_legacy_env_hints_if_present,
     resolved_sbert_model_for_process_env,
@@ -162,9 +164,10 @@ def _cocoindex_subprocess_env(project_root: Path) -> dict[str, str]:
     idx = os.environ.get("JAVA_CODEBASE_RAG_INDEX_DIR", "").strip()
     if idx:
         sub_env["JAVA_CODEBASE_RAG_INDEX_DIR"] = str(Path(idx).expanduser().resolve())
-    # Set CocoIndex concurrency limits to prevent "too many open files" error
-    # See: https://github.com/HumanBean17/java-codebase-rag/issues/293
-    sub_env.setdefault("COCOINDEX_SOURCE_MAX_INFLIGHT_ROWS", "256")
+    # Cap CocoIndex concurrency to avoid EMFILE ("too many open files") under
+    # default OS fd limits. See: https://github.com/HumanBean17/java-codebase-rag/issues/306
+    for _k, _v in cocoindex_subprocess_env_defaults().items():
+        sub_env.setdefault(_k, _v)
     return sub_env
 
 
@@ -622,6 +625,7 @@ def create_mcp_server() -> FastMCP:
 
 
 def main() -> None:
+    raise_fd_limit()
     emit_legacy_env_hints_if_present()
 
     # Load YAML config and apply embedding settings to environment

@@ -21,6 +21,7 @@ from java_codebase_rag.config import (
     index_dir_has_existing_artifacts,
     resolve_operator_config,
 )
+from java_codebase_rag._fdlimit import raise_fd_limit
 from java_codebase_rag.pipeline import clip, run_build_ast_graph, run_cocoindex_drop, run_cocoindex_update, run_incremental_graph
 from java_ontology import VALID_UNRESOLVED_CALL_REASONS
 
@@ -902,6 +903,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    raise_fd_limit()
     raw = list(argv if argv is not None else sys.argv[1:])
     if raw and raw[0] == "refresh":
         print(_REFRESH_DEPRECATION, file=sys.stderr)

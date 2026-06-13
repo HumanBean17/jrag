@@ -94,3 +94,20 @@ def test_cocoindex_subprocess_env_sets_project_root(monkeypatch, tmp_path) -> No
     env = server._cocoindex_subprocess_env(resolved)
     assert env["JAVA_CODEBASE_RAG_SOURCE_ROOT"] == str(resolved)
     assert env["PRESERVE_ME_FOR_SUBPROCESS"] == "ok"
+
+
+def test_cocoindex_subprocess_env_applies_inflight_default(monkeypatch, tmp_path) -> None:
+    """The MCP-triggered cocoindex subprocess must carry the real inflight throttle.
+
+    Regression guard for #306: the throttle env var must be CocoIndex's real
+    ``COCOINDEX_MAX_INFLIGHT_COMPONENTS`` (default 1024 -> capped to 256), not the
+    non-existent ``COCOINDEX_SOURCE_MAX_INFLIGHT_ROWS`` from the broken #293 fix.
+    """
+    import server
+
+    proj = tmp_path / "external-java-repo"
+    proj.mkdir()
+    env = server._cocoindex_subprocess_env(proj.resolve())
+
+    assert env["COCOINDEX_MAX_INFLIGHT_COMPONENTS"] == "256"
+    assert "COCOINDEX_SOURCE_MAX_INFLIGHT_ROWS" not in env
