@@ -138,12 +138,12 @@ For **`find`**, `filter` is required — `{}` means no predicates (all nodes of 
 | `microservice`, `module` | All kinds |
 | `role`, `exclude_roles`, `annotation`, `capability`, `fqn_prefix`, `symbol_kind`, `symbol_kinds` | **symbol** |
 | `http_method`, `path_prefix`, `framework` | **route** |
-| `client_kind`, `target_service`, `target_path_prefix`, `http_method` | **client** |
-| `producer_kind`, `topic_prefix` | **producer** |
+| `source_layer`, `client_kind`, `target_service`, `target_path_prefix`, `http_method` | **client** |
+| `source_layer`, `producer_kind`, `topic_prefix` | **producer** |
 
 `http_method` filters HTTP verbs on **routes** (declared method) and on **clients** (outbound call method). Not applicable to **symbol** rows.
 
-**Strict frame:** one populated field → one stored attribute for that kind. Unknown keys or inapplicable populated fields → `success=false` with a teaching `message`. No wildcards in `fqn_prefix`, `path_prefix`, or `target_path_prefix` (`*` / `?` rejected) — use `search(query=…)` for ranked text instead. `search.query` is opaque text, not a DSL.
+**Strict frame:** one populated field → one stored attribute for that kind. Unknown keys or inapplicable populated fields → `success=false` with a teaching `message`. Invalid enum values (e.g. wrong case) are rejected earlier at the schema layer with the valid set listed. No wildcards in `fqn_prefix`, `path_prefix`, or `target_path_prefix` (`*` / `?` rejected) — use `search(query=…)` for ranked text instead. `search.query` is opaque text, not a DSL.
 
 ### Identifier resolution (`resolve`)
 
@@ -245,11 +245,13 @@ Returns **edges** with `attrs` (`confidence`, `strategy`, `match`, … on cross-
 
 **Symbol kinds (`symbol_kind` / `symbol_kinds`):** `class`, `interface`, `enum`, `record`, `annotation`, `method`, `constructor`.
 
-**Route `framework` (examples on stored routes):** `spring_mvc`, `webflux`, `kafka`, `rabbitmq`, `jms`, `stream`, `codebase_async_route`, …
+**Route `framework` (closed set on stored routes):** `spring_mvc`, `webflux`, `kafka`, `rabbitmq`, `jms`, `stream`, `feign`.
 
 **Client kinds:** `feign_method`, `rest_template`, `web_client`.
 
 **Producer kinds:** `kafka_send`, `stream_bridge_send`.
+
+**Source layers (client/producer):** `builtin`, `layer_a_meta`, `layer_b_ann`, `layer_b_fqn`, `layer_c_source`.
 
 **HTTP call `attrs.match` / async `attrs.match`:** `cross_service`, `intra_service`, `ambiguous`, `phantom`, `unresolved`.
 
