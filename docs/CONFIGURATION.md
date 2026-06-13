@@ -87,7 +87,9 @@ A single file at the project root (the directory you pass as `--source-root`, or
 
 # Index directory: where Lance tables, code_graph.kuzu, and cocoindex.db live.
 # - Tilde (`~`) is expanded; `$VAR` is NOT (use absolute paths or `~`).
-# - Relative paths resolve against source_root, not cwd.
+# - Relative paths resolve against the config file's parent directory (same
+#   base as source_root), not cwd. The bare default ./.java-codebase-rag
+#   (when this key is omitted) still sits beside the resolved source_root.
 # - Env: JAVA_CODEBASE_RAG_INDEX_DIR. CLI: --index-dir. Default: ./.java-codebase-rag/
 index_dir: ./.java-codebase-rag
 
@@ -217,7 +219,7 @@ async_producer_overrides:
 
 | Field | Expanded? | Notes |
 |---|---|---|
-| `index_dir` | partial | `~` expanded; `$VAR` is NOT expanded. Relative paths resolve against `source_root`. |
+| `index_dir` | partial | `~` expanded; `$VAR` is NOT expanded. A YAML relative path resolves against the config file's directory (same base as `source_root`); the default `./.java-codebase-rag` sits beside the resolved `source_root`. |
 | `embedding.model` (when path-shaped) | yes | Path-shape = starts with `/`, `./`, `../`, `~`, or contains `$`. Plain `org/name` is treated as a hub id and passed through. Applies to the value after CLI > env > YAML > default precedence. Long-lived MCP hosts also apply the same expansion when reading `SBERT_MODEL` from the process environment (so table metadata and search agree with `index_common` defaults). |
 | `embedding.device` | n/a | Device strings (`cpu`, `cuda`, `mps`) aren't paths. |
 | `microservice_roots[*]` | no | Each entry is a directory **name** relative to `source_root`, not an arbitrary path. |
@@ -225,7 +227,7 @@ async_producer_overrides:
 
 **Tips & gotchas:**
 
-- **The file must be at `source_root`**, not in `$HOME`. The MCP server reads `JAVA_CODEBASE_RAG_SOURCE_ROOT` to find it; the CLI uses `--source-root` (else cwd).
+- **The config file may live anywhere under your project, including a subdirectory of the Java tree.** Both the CLI (`init` / `increment` / `reprocess`) and the MCP server walk up from cwd to find `.java-codebase-rag.yml`, then resolve `source_root` and `index_dir` relative to the config file's directory. So a config living in `my-context/` next to `source_root: ../` and `index_dir: ../.java-codebase-rag` resolves identically for the CLI and the MCP server. Keep the file under your project (not `$HOME`); set `JAVA_CODEBASE_RAG_SOURCE_ROOT` (MCP) or `--source-root` (CLI) only to override the discovered location.
 - **Don't commit secrets** into this YAML — it sits next to your source tree and is read by every operator who clones it.
 - **Rebuild after editing brownfield overrides.** Run a full `java-codebase-rag reprocess` (no flags) so Lance and Kuzu stay coherent, or use `--graph-only` / `--vectors-only` when you know only one store needs invalidation. Editing `embedding.model` requires a vector rebuild (`reprocess` or `--vectors-only`).
 - **Diagnose what's loaded.** `java-codebase-rag meta` prints the resolved config and each value's `*_source` (`cli` / `env` / `yaml` / `default`) — see `embedding_model_source`, `embedding_device_source`, `index_dir_source`.

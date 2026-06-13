@@ -175,6 +175,57 @@ class TestSourceRootFromYaml:
         assert result.source_root == Path(absolute_path)
 
 
+class TestIndexDirRelativeToConfigDir:
+    """YAML ``index_dir`` must resolve against the config file's directory.
+
+    ``source_root`` already resolves against the config dir (see
+    ``TestSourceRootFromYaml``). ``index_dir`` must use the SAME base so a
+    user can express both keys relative to the config file — otherwise a
+    ``../`` in ``index_dir`` gets re-applied on top of the already-resolved
+    ``source_root`` and overshoots by one level (the "init indexes ~/"
+    symptom when the config lives in a subdirectory of the Java tree).
+    """
+
+    def test_yaml_index_dir_double_dot_resolves_against_config_dir(self, tmp_path, monkeypatch):
+        """``index_dir: ../x`` is relative to the config file's directory, not source_root."""
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_INDEX_DIR", raising=False)
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", raising=False)
+
+        config_dir = tmp_path / "my-project-context"
+        config_dir.mkdir()
+        (config_dir / YAML_CONFIG_FILENAMES[0]).write_text(
+            "source_root: ../\nindex_dir: ../.java-codebase-rag\n"
+        )
+        monkeypatch.chdir(config_dir)
+
+        result = resolve_operator_config(source_root=None)
+        # source_root ../  -> tmp_path (one level above the config file)
+        assert result.source_root == tmp_path
+        # index_dir ../    -> tmp_path/.java-codebase-rag (one level above the config file),
+        # NOT tmp_path.parent/.java-codebase-rag (which is what resolving against
+        # the already-resolved source_root would produce).
+        assert result.index_dir == (tmp_path / ".java-codebase-rag").resolve()
+
+    def test_yaml_index_dir_bare_resolves_against_config_dir(self, tmp_path, monkeypatch):
+        """``index_dir: x`` (no ``../``) sits next to the config file."""
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_INDEX_DIR", raising=False)
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", raising=False)
+
+        config_dir = tmp_path / "my-project-context"
+        config_dir.mkdir()
+        (config_dir / YAML_CONFIG_FILENAMES[0]).write_text(
+            "source_root: ../\nindex_dir: .java-codebase-rag\n"
+        )
+        monkeypatch.chdir(config_dir)
+
+        result = resolve_operator_config(source_root=None)
+        assert result.source_root == tmp_path
+        # Bare path resolves against the config dir, so the index sits beside
+        # the config file — NOT beside source_root.
+        assert result.index_dir == (config_dir / ".java-codebase-rag").resolve()
+        assert result.index_dir_source == "yaml"
+
+
 class TestSourceRootPrecedence:
     """Tests for source_root precedence chain."""
 
