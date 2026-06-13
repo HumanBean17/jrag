@@ -87,6 +87,7 @@ class RefreshIndexOutput(BaseModel):
     graph_stdout: str = ""
     graph_stderr: str = ""
     phases_run: list[Literal["vectors", "graph"]] = Field(default_factory=list)
+    optimize_error: str | None = None
 
 
 class IndexInfoOutput(BaseModel):
@@ -329,9 +330,29 @@ async def run_refresh_pipeline(*, quiet: bool = False, verbose: bool = True) -> 
     graph_code: int | None = None
     graph_out = ""
     graph_err = ""
+    optimize_error: str | None = None
     if ok:
         if not quiet:
             print(file=sys.stderr, flush=True)
+        # Serialized post-flow Lance optimize: the flow disabled its background
+        # optimize, so with cocoindex returned exit 0 there are no concurrent
+        # writers — this is the safe window to compact. An optimize failure is
+        # surfaced via optimize_error / stderr and must NOT flip the success of
+        # a vectors phase that succeeded; the index is still searchable.
+        try:
+            from java_codebase_rag.lance_optimize import optimize_lance_tables
+
+            idx_raw = os.environ.get("JAVA_CODEBASE_RAG_INDEX_DIR", "").strip()
+            if idx_raw and not idx_raw.startswith(("s3://", "gs://", "az://")):
+                idx_dir = Path(idx_raw).expanduser().resolve()
+            elif idx_raw:
+                idx_dir = Path(idx_raw)
+            else:
+                idx_dir = (root / ".java-codebase-rag").resolve()
+            await optimize_lance_tables(idx_dir, quiet=quiet)
+        except Exception as exc:
+            optimize_error = f"lance optimize failed: {exc}"
+            print(f"java-codebase-rag: {optimize_error}", file=sys.stderr)
         builder = Path(__file__).resolve().parent / "build_ast_graph.py"
         if builder.is_file():
             try:
@@ -368,6 +389,10 @@ async def run_refresh_pipeline(*, quiet: bool = False, verbose: bool = True) -> 
         message = f"cocoindex exit {proc.returncode}"
     elif graph_code is not None and graph_code != 0:
         message = f"graph builder exit {graph_code}"
+    # Surface a post-flow optimize failure in the message too (success is not
+    # flipped — the vectors phase succeeded and the index is still usable).
+    if optimize_error is not None:
+        message = optimize_error if message is None else f"{message}; {optimize_error}"
     return RefreshIndexOutput(
         success=ok and (graph_code is None or graph_code == 0),
         exit_code=proc.returncode,
@@ -378,6 +403,7 @@ async def run_refresh_pipeline(*, quiet: bool = False, verbose: bool = True) -> 
         graph_stdout=graph_out[-4000:] if len(graph_out) > 4000 else graph_out,
         graph_stderr=graph_err[-4000:] if len(graph_err) > 4000 else graph_err,
         phases_run=phases_run,
+        optimize_error=optimize_error,
     )
 
 

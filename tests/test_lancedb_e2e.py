@@ -115,6 +115,16 @@ def lance_index(tmp_path_factory, corpus_root: Path) -> Path:
     assert proc.returncode == 0, (
         f"cocoindex failed: stdout={proc.stdout}\nstderr={proc.stderr}"
     )
+    # The flow disables cocoindex's concurrent background optimize (which raced
+    # table.delete() and flooded stderr with commit conflicts — issue #308).
+    # After the fix, no commit-conflict markers should appear in the flow's
+    # stderr. We assert this here because this fixture runs a real full
+    # reprocess; if the race regressed, this is where it would surface.
+    for marker in ("Retryable commit conflict", "preempted by concurrent transaction"):
+        assert marker not in proc.stderr, (
+            f"commit-conflict marker '{marker}' present in cocoindex stderr; "
+            f"the in-flow background optimize race may have regressed:\n{proc.stderr}"
+        )
 
     builder = bundle_dir / "build_ast_graph.py"
     proc = subprocess.run(
