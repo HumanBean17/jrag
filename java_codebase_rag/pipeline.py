@@ -11,6 +11,7 @@ from pathlib import Path
 
 from java_codebase_rag.cli_format import Spinner, is_noise_line, stderr_is_tty
 from java_codebase_rag.cli_progress import emit_vectors_finish, emit_vectors_start
+from java_codebase_rag.config import cocoindex_subprocess_env_defaults
 
 COCOINDEX_TARGET = "java_index_flow_lancedb.py:JavaCodeIndexLance"
 
@@ -128,10 +129,11 @@ def run_cocoindex_update(
             stdout="",
             stderr=f"java_index_flow_lancedb.py not found under {bd}",
         )
-    # Set CocoIndex concurrency limits to prevent "too many open files" error
-    # See: https://github.com/HumanBean17/java-codebase-rag/issues/293
+    # Cap CocoIndex concurrency to avoid EMFILE ("too many open files") under
+    # default OS fd limits. See: https://github.com/HumanBean17/java-codebase-rag/issues/306
     env = env.copy()
-    env.setdefault("COCOINDEX_SOURCE_MAX_INFLIGHT_ROWS", "256")
+    for _k, _v in cocoindex_subprocess_env_defaults().items():
+        env.setdefault(_k, _v)
     cmd: list[str] = [str(exe), "update", COCOINDEX_TARGET]
     if full_reprocess:
         cmd.extend(["--full-reprocess", "-f"])

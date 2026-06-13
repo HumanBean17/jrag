@@ -239,3 +239,19 @@ class TestSourceRootPrecedence:
 
         # Also test that index_dir derives from source_root
         assert result.index_dir == tmp_path / ".java-codebase-rag"
+
+
+def test_cocoindex_subprocess_env_defaults_uses_real_inflight_env_var() -> None:
+    """The throttle must use CocoIndex's REAL env var name.
+
+    The earlier #293 "fix" set ``COCOINDEX_SOURCE_MAX_INFLIGHT_ROWS``, an env
+    var CocoIndex never reads (it reads ``COCOINDEX_MAX_INFLIGHT_COMPONENTS``,
+    default 1024), so it was a no-op and the EMFILE error recurred (#306).
+    """
+    from java_codebase_rag.config import cocoindex_subprocess_env_defaults
+
+    defaults = cocoindex_subprocess_env_defaults()
+
+    assert defaults["COCOINDEX_MAX_INFLIGHT_COMPONENTS"] == "256"
+    # The bogus name from the broken #293 fix must NOT leak back in.
+    assert "COCOINDEX_SOURCE_MAX_INFLIGHT_ROWS" not in defaults

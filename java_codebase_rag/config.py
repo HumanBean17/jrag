@@ -25,6 +25,27 @@ ENV_SOURCE_ROOT = "JAVA_CODEBASE_RAG_SOURCE_ROOT"
 ENV_DEBUG_CONTEXT = "JAVA_CODEBASE_RAG_DEBUG_CONTEXT"
 ENV_RUN_HEAVY = "JAVA_CODEBASE_RAG_RUN_HEAVY"
 
+# CocoIndex inflight-component throttle. CocoIndex's default is 1024 inflight
+# components (cocoindex/_internal/app.py: ``_ENV_MAX_INFLIGHT_COMPONENTS``),
+# which spawns enough concurrent LanceDB merge-inserts to exhaust OS file
+# descriptors under default ulimits -> "Too many open files (os error 24)".
+# NOTE: this is the REAL env var. An earlier fix (#293) set the non-existent
+# ``COCOINDEX_SOURCE_MAX_INFLIGHT_ROWS`` — CocoIndex never reads it, so it was a
+# no-op and the EMFILE error recurred (#306).
+COCOINDEX_MAX_INFLIGHT_COMPONENTS_ENV = "COCOINDEX_MAX_INFLIGHT_COMPONENTS"
+COCOINDEX_DEFAULT_MAX_INFLIGHT_COMPONENTS = "256"
+
+
+def cocoindex_subprocess_env_defaults() -> dict[str, str]:
+    """Env defaults applied to every CocoIndex subprocess to bound concurrency.
+
+    Apply with ``env.setdefault(...)`` so a caller-provided (operator) value
+    always wins. See :issue:`306`.
+    """
+    return {
+        COCOINDEX_MAX_INFLIGHT_COMPONENTS_ENV: COCOINDEX_DEFAULT_MAX_INFLIGHT_COMPONENTS
+    }
+
 _DEFAULT_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
 # Matches either $VAR or ${VAR} (POSIX shell variable syntax).
