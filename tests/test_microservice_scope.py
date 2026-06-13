@@ -74,7 +74,8 @@ class TestScopeManager:
         mgr.default_scope = "microservice-a"  # Simulate detection
 
         result = mgr.apply_auto_scope(None)
-        assert result == {"microservice": "microservice-a"}
+        assert result is not None
+        assert result.microservice == "microservice-a"
 
     def test_apply_scope_when_filter_exists_no_microservice(self, tmp_path):
         """Filter without microservice gets auto-scope injected."""
@@ -82,9 +83,11 @@ class TestScopeManager:
         mgr = ScopeManager(tmp_path)
         mgr.default_scope = "microservice-b"  # Simulate detection
 
-        filter_dict = {"role": "Controller"}
-        result = mgr.apply_auto_scope(filter_dict)
-        assert result == {"role": "Controller", "microservice": "microservice-b"}
+        from mcp_v2 import NodeFilter
+        result = mgr.apply_auto_scope(NodeFilter(role="CONTROLLER"))
+        assert result is not None
+        assert result.role == "CONTROLLER"
+        assert result.microservice == "microservice-b"
 
     def test_apply_scope_preserves_explicit_microservice(self, tmp_path):
         """Explicit microservice not overridden."""
@@ -92,9 +95,10 @@ class TestScopeManager:
         mgr = ScopeManager(tmp_path)
         mgr.default_scope = "microservice-a"  # Simulate detection
 
-        filter_dict = {"microservice": "microservice-c"}
-        result = mgr.apply_auto_scope(filter_dict)
-        assert result == {"microservice": "microservice-c"}
+        from mcp_v2 import NodeFilter
+        result = mgr.apply_auto_scope(NodeFilter(microservice="microservice-c"))
+        assert result is not None
+        assert result.microservice == "microservice-c"
 
     def test_apply_scope_no_default(self, tmp_path):
         """No auto-detected scope leaves filter unchanged."""
@@ -102,9 +106,11 @@ class TestScopeManager:
         mgr = ScopeManager(tmp_path)
         mgr.default_scope = None  # No detection
 
-        filter_dict = {"role": "Controller"}
-        result = mgr.apply_auto_scope(filter_dict)
-        assert result == {"role": "Controller"}
+        from mcp_v2 import NodeFilter
+        nf = NodeFilter(role="CONTROLLER")
+        result = mgr.apply_auto_scope(nf)
+        assert result is nf
+        assert result.role == "CONTROLLER"
 
     def test_detect_scope_with_yaml_overrides(self, tmp_path):
         """Test that detect_microservice_from_path respects YAML microservice_roots."""
@@ -140,6 +146,7 @@ class TestScopeManager:
         assert mgr.default_scope is None
 
         # Test that apply_auto_scope doesn't inject when no scope detected
-        filter_dict = {"role": "Controller"}
-        result = mgr.apply_auto_scope(filter_dict)
-        assert result == {"role": "Controller"}
+        from mcp_v2 import NodeFilter
+        nf = NodeFilter(role="CONTROLLER")
+        result = mgr.apply_auto_scope(nf)
+        assert result is nf

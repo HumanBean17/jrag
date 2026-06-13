@@ -48,6 +48,22 @@ def _hints_or_skip(tool: str, payload: dict) -> tuple[list, list]:
 
 DeclarationSymbolKind = Literal["class", "interface", "enum", "record", "annotation", "method", "constructor"]
 
+# Closed value taxonomies surfaced to MCP consumers as enums. Sources of truth:
+#   Role         — VALID_ROLES in java_ontology.py + the "OTHER" inference fallback (ast_java.infer_role)
+#   Framework    — hardcoded literals across ast_java.py / build_ast_graph.py
+#   SourceLayer  — exhaustive classifier build_ast_graph._client_source_layer / _producer_source_layer
+#   ClientKind   — VALID_CLIENT_KINDS in java_ontology.py (every producer validated at index time)
+#   ProducerKind — VALID_PRODUCER_KINDS in java_ontology.py (every producer validated at index time)
+# Keep these in sync with the indexing-side taxonomies if they change.
+Role = Literal[
+    "CONTROLLER", "SERVICE", "REPOSITORY", "COMPONENT", "CONFIG",
+    "ENTITY", "CLIENT", "MAPPER", "DTO", "OTHER",
+]
+Framework = Literal["spring_mvc", "webflux", "kafka", "rabbitmq", "jms", "stream", "feign", ""]
+SourceLayer = Literal["builtin", "layer_a_meta", "layer_b_ann", "layer_b_fqn", "layer_c_source"]
+ClientKind = Literal["feign_method", "rest_template", "web_client"]
+ProducerKind = Literal["kafka_send", "stream_bridge_send"]
+
 # Stored graph edge labels for one-hop neighbors. Composed DECLARES.* and OVERRIDDEN_BY.*
 # dot-keys are separate ComposedEdgeType literals (2-hop traversal). Stored OVERRIDES is an EdgeType.
 EdgeType = Literal[
@@ -133,21 +149,30 @@ class NodeFilter(BaseModel):
 
     microservice: str | None = None
     module: str | None = None
-    source_layer: str | None = None
-    role: str | None = None
-    exclude_roles: list[str] | None = None
+    source_layer: SourceLayer | None = None
+    role: Role | None = None
+    exclude_roles: list[Role] | None = None
     annotation: str | None = None
     capability: str | None = None
     fqn_prefix: str | None = None
     symbol_kind: DeclarationSymbolKind | None = None
     symbol_kinds: list[DeclarationSymbolKind] | None = None
-    http_method: str | None = None
+    http_method: str | None = Field(
+        default=None,
+        description="HTTP verb (commonly GET/POST/PUT/DELETE/PATCH; user route annotations may yield others).",
+    )
     path_prefix: str | None = None
-    framework: str | None = None
-    client_kind: str | None = None
+    framework: Framework | None = None
+    client_kind: ClientKind | None = Field(
+        default=None,
+        description="Outbound HTTP client kind: feign_method, rest_template, or web_client.",
+    )
     target_service: str | None = None
     target_path_prefix: str | None = None
-    producer_kind: str | None = None
+    producer_kind: ProducerKind | None = Field(
+        default=None,
+        description="Outbound async producer kind: kafka_send or stream_bridge_send.",
+    )
     topic_prefix: str | None = None
 
 
@@ -157,9 +182,9 @@ class EdgeFilter(BaseModel):
     min_confidence: float | None = None
     exclude_strategies: list[str] | None = None
     include_strategies: list[str] | None = None
-    callee_declaring_role: str | None = None
-    callee_declaring_roles: list[str] | None = None
-    exclude_callee_declaring_roles: list[str] | None = None
+    callee_declaring_role: Role | None = None
+    callee_declaring_roles: list[Role] | None = None
+    exclude_callee_declaring_roles: list[Role] | None = None
 
     @model_validator(mode="after")
     def _strategy_axes_mutually_exclusive(self) -> EdgeFilter:

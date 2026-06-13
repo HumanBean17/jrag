@@ -254,6 +254,63 @@ http_client_overrides:
     assert _http_calls(db) == []
 
 
+def _client_kinds(db_path: Path) -> list[str]:
+    db = ladybug.Database(str(db_path), read_only=True)
+    conn = ladybug.Connection(db)
+    r = conn.execute("MATCH (c:Client) RETURN c.client_kind AS client_kind")
+    out: list[str] = []
+    while r.has_next():
+        out.append(str(r.get_next()[0] or ""))
+    return out
+
+
+def _producer_kinds(db_path: Path) -> list[str]:
+    db = ladybug.Database(str(db_path), read_only=True)
+    conn = ladybug.Connection(db)
+    r = conn.execute("MATCH (p:Producer) RETURN p.producer_kind AS producer_kind")
+    out: list[str] = []
+    while r.has_next():
+        out.append(str(r.get_next()[0] or ""))
+    return out
+
+
+def test_29a_unknown_source_client_kind_warns_and_ignored(tmp_path: Path) -> None:
+    """In-source @CodebaseHttpClient(clientKind=<invalid enum>) is validated at parse
+    time (source-annotation mirror of the YAML-side test_29): the bad value is ignored
+    and a warning is emitted, so client_kind stays a closed set safe to surface as an enum."""
+    java = {
+        "p/X.java": (
+            "package p; import com.example.rag.*; class X { "
+            "@CodebaseHttpClient(clientKind=CodebaseClientKind.bogus, path=\"/bad\", method=CodebaseHttpMethod.GET) "
+            "void m() {} }"
+        ),
+    }
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        db = _build(tmp_path, None, java)
+    assert "invalid clientkind" in buf.getvalue().lower()
+    assert "bogus" not in _client_kinds(db)
+
+
+def test_29b_unknown_source_producer_kind_warns_and_falls_back(tmp_path: Path) -> None:
+    """In-source @CodebaseProducer(producerKind=<invalid enum>) is validated at parse
+    time: the bad value is ignored with a warning and producer_kind falls back to the
+    kafka_send default."""
+    java = {
+        "p/X.java": (
+            "package p; import com.example.rag.*; class X { "
+            "@CodebaseProducer(topic=\"t\", producerKind=CodebaseProducerKind.bogus) void m() {} }"
+        ),
+    }
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        db = _build(tmp_path, None, java)
+    assert "invalid producerkind" in buf.getvalue().lower()
+    kinds = _producer_kinds(db)
+    assert "bogus" not in kinds
+    assert "kafka_send" in kinds
+
+
 def test_30_brownfield_percentage_counter(tmp_path: Path) -> None:
     java = {
         "p/X.java": (
