@@ -1,6 +1,7 @@
 """Subprocess helpers for cocoindex + graph builder (no heavy ML imports at import time)."""
 from __future__ import annotations
 
+import asyncio
 import os
 import shutil
 import subprocess
@@ -105,6 +106,57 @@ def _popen_capturing_stderr(
 
 
 def run_cocoindex_update(
+    env: dict[str, str],
+    *,
+    full_reprocess: bool,
+    quiet: bool,
+    verbose: bool = True,
+    lance_project_root: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
+    result = _run_cocoindex_update_impl(
+        env,
+        full_reprocess=full_reprocess,
+        quiet=quiet,
+        verbose=verbose,
+        lance_project_root=lance_project_root,
+    )
+    # After cocoindex returns exit 0 there are no concurrent writers, so this
+    # is the safe window to compact the Lance tables. The flow disabled its
+    # in-flight background optimize (see java_index_flow_lancedb.py), making
+    # this serialized pass the sole optimizer. Optimize failure does not flip
+    # the cocoindex CompletedProcess (a successful index is still usable, just
+    # not compacted); the outcome is logged to stderr only.
+    if result.returncode == 0:
+        _maybe_run_serialized_optimize(env, quiet=quiet)
+    return result
+
+
+def _maybe_run_serialized_optimize(env: dict[str, str], *, quiet: bool) -> None:
+    """Resolve the index dir from *env* and run the serialized Lance optimize.
+
+    The flow's lifespan reads ``JAVA_CODEBASE_RAG_INDEX_DIR`` (set by the CLI /
+    config.subprocess_env), so it is guaranteed present when cocoindex ran.
+    If it is somehow absent we skip optimize with a stderr warning rather than
+    crash — a successful index is still searchable un-compacted.
+    """
+    idx_raw = env.get("JAVA_CODEBASE_RAG_INDEX_DIR", "").strip()
+    if not idx_raw:
+        print(
+            "java-codebase-rag: optimize skipped — JAVA_CODEBASE_RAG_INDEX_DIR "
+            "not set in subprocess env",
+            file=sys.stderr,
+        )
+        return
+    try:
+        from java_codebase_rag.lance_optimize import optimize_lance_tables
+
+        asyncio.run(optimize_lance_tables(Path(idx_raw), quiet=quiet))
+    except Exception as exc:
+        # Never crash the CLI on an optimize failure — surface on stderr only.
+        print(f"java-codebase-rag: optimize failed: {exc}", file=sys.stderr)
+
+
+def _run_cocoindex_update_impl(
     env: dict[str, str],
     *,
     full_reprocess: bool,

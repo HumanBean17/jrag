@@ -36,6 +36,7 @@ from cocoindex.ops.text import RecursiveSplitter, detect_code_language
 from cocoindex.resources.file import PatternFilePathMatcher
 
 from java_codebase_rag.config import resolved_sbert_model_for_process_env
+from java_codebase_rag.lance_optimize import LANCE_TABLE_NAMES
 from java_index_v1_common import (
     JAVA_CHUNK,
     SBERT_MODEL,
@@ -67,6 +68,20 @@ else:
     EMBEDDER = coco.ContextKey[SentenceTransformerEmbedder]("java_lance_embedder")
 
 splitter = RecursiveSplitter()
+
+# cocoindex 1.0.7 schedules ``table.optimize()`` (a LanceDB Rewrite/compaction
+# transaction) as a *background* asyncio task after every
+# ``num_transactions_before_optimize`` mutation batches (default 50). That
+# background Rewrite races the concurrent ``table.delete()`` (Delete)
+# transactions emitted by later batches, and LanceDB does not allow a Rewrite
+# to commit concurrently with a Delete (upstream lancedb#1504), which floods
+# stderr with "Retryable commit conflict ... preempted by concurrent
+# transaction Delete". Setting this effectively to infinity disables the
+# in-flight background optimize; the serialized post-flow optimize in
+# ``lance_optimize.optimize_lance_tables`` then compacts the table with no
+# concurrent writers. ``optimize()`` is pure maintenance (compact/prune/index);
+# upsert/delete correctness via merge_insert does not depend on it.
+_NUM_TXN_BEFORE_OPTIMIZE = 10**12
 
 
 @dataclass
@@ -317,8 +332,9 @@ async def app_main() -> None:
     )
     java_table = await lancedb.mount_table_target(
         LANCE_DB,
-        "javacodeindex_java_code",
+        LANCE_TABLE_NAMES[0],
         java_schema,
+        num_transactions_before_optimize=_NUM_TXN_BEFORE_OPTIMIZE,
     )
 
     sql_schema = await lancedb.TableSchema.from_class(
@@ -327,8 +343,9 @@ async def app_main() -> None:
     )
     sql_table = await lancedb.mount_table_target(
         LANCE_DB,
-        "sqlschemaindex_sql_schema",
+        LANCE_TABLE_NAMES[1],
         sql_schema,
+        num_transactions_before_optimize=_NUM_TXN_BEFORE_OPTIMIZE,
     )
 
     yaml_schema = await lancedb.TableSchema.from_class(
@@ -337,8 +354,9 @@ async def app_main() -> None:
     )
     yaml_table = await lancedb.mount_table_target(
         LANCE_DB,
-        "yamlconfigindex_yaml_config",
+        LANCE_TABLE_NAMES[2],
         yaml_schema,
+        num_transactions_before_optimize=_NUM_TXN_BEFORE_OPTIMIZE,
     )
 
     project_root = coco.use_context(PROJECT_ROOT)
