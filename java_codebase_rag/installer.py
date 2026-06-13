@@ -325,6 +325,66 @@ def select_hosts(*, non_interactive: bool, cli_agents: list[str] | None) -> list
     return [HOSTS[name] for name in selected]
 
 
+def select_microservices(
+    java_dirs: list[Path],
+    *,
+    non_interactive: bool,
+    preselected: list[str] | None = None,
+) -> list[str] | None:
+    """Show an interactive checklist of detected microservices, all pre-checked.
+
+    Returns None when all are selected (-> microservice_roots omitted, index
+    everything) or a non-empty subset list. Never returns [].
+
+    Args:
+        java_dirs: Detected module roots (relative Path names) from
+            detect_java_directories. Caller must pass len >= 2.
+        non_interactive: If True, return None (all) without prompting.
+        preselected: On re-run, the prior microservice_roots subset to pre-check.
+    """
+    # Defensive guard: caller gates on len >= 2, but stay safe if called directly.
+    if len(java_dirs) < 2:
+        return None
+
+    dir_names = [str(d) for d in java_dirs]
+
+    if non_interactive:
+        return None
+
+    preselected_set = set(preselected) if preselected else None
+    choices = [
+        {
+            "name": name,
+            "value": name,
+            "checked": (name in preselected_set) if preselected_set is not None else True,
+        }
+        for name in dir_names
+    ]
+
+    print("Note: Select which modules to index. Toggle with Space, confirm with Enter.")
+    selected = prompt(
+        "checkbox",
+        "Select microservices to index:",
+        choices=choices,
+        default=dir_names,  # non-TTY fallback returns all -> caller omits key
+    )
+
+    if not selected:
+        retry = prompt(
+            "confirm",
+            "At least one module is required. Re-select?",
+        )
+        if retry:
+            return select_microservices(java_dirs, non_interactive=False, preselected=preselected)
+        raise SystemExit(2)
+
+    selected_set = set(selected)
+    if selected_set == set(dir_names):
+        return None
+    # Preserve detection order for deterministic YAML output.
+    return [name for name in dir_names if name in selected_set]
+
+
 def select_scope(*, non_interactive: bool, cli_scope: str | None) -> Scope:
     """Select 'project' or 'user' scope.
 
@@ -1285,6 +1345,20 @@ def run_install(
     except SystemExit as e:
         return e.code
 
+    # Stage 1 (Case B): interactive microservice selection (only when 2+ detected)
+    try:
+        selected_roots = (
+            select_microservices(
+                java_dirs,
+                non_interactive=non_interactive,
+                preselected=existing_config.get("microservice_roots") if existing_config else None,
+            )
+            if len(java_dirs) >= 2
+            else None
+        )
+    except SystemExit as e:
+        return e.code
+
     # Stage 2: Embedding model
     resolved_model = resolve_model(model, non_interactive=non_interactive)
 
@@ -1327,7 +1401,7 @@ def run_install(
     yaml_content = generate_yaml_config(
         source_root,
         resolved_model,
-        microservice_roots=[str(d) for d in java_dirs] if len(java_dirs) > 1 else None,
+        microservice_roots=selected_roots,
         existing_yaml=existing_config,
     )
 
