@@ -15,7 +15,10 @@ from ast_java import (
     _TYPE_ANN_TO_CAPABILITY,
 )
 
-# Roles: Spring stereotype values plus DTO from `infer_role_for_type`.
+# Roles assignable by indexing: Spring stereotype values plus DTO. ``OTHER`` is the
+# built-in inference fallback (ast_java.infer_role when nothing matches) and is
+# deliberately excluded here — it is a read-side value (the mcp_v2 ``Role`` enum
+# includes it) but not a role a user may set via @CodebaseRole / role_overrides.
 VALID_ROLES: frozenset[str] = frozenset((*ROLE_ANNOTATIONS.values(), "DTO"))
 
 VALID_CAPABILITIES: frozenset[str] = frozenset(

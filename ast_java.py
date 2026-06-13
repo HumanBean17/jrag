@@ -13,6 +13,7 @@ Python with no tree-sitter dependency.
 from __future__ import annotations
 
 import posixpath
+import sys
 from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Iterable
@@ -1642,9 +1643,17 @@ def _parse_codebase_http_client_annotation(
     pairs, _ = _annotation_kv_nodes(ann, src)
     client_kind = ""
     if "clientKind" in pairs:
-        val, _kind = _annotation_value(pairs["clientKind"], src)
-        if val and _kind == "enum":
-            client_kind = str(val)
+        val, vkind = _annotation_value(pairs["clientKind"], src)
+        if val and vkind == "enum":
+            kind_val = str(val)
+            from java_ontology import VALID_CLIENT_KINDS  # deferred: java_ontology imports ast_java
+            if kind_val in VALID_CLIENT_KINDS:
+                client_kind = kind_val
+            else:
+                print(
+                    f"[lancedb-mcp] CodebaseHttpClient: invalid clientKind {kind_val!r} — ignored",
+                    file=sys.stderr,
+                )
     target_service = ""
     if "targetService" in pairs:
         atoms = _string_value_atoms(pairs["targetService"], src, ctx)
@@ -1714,9 +1723,17 @@ def _parse_codebase_producer_annotation(
     client_kind = "kafka_send"
     kind_node = pairs.get("producerKind") or pairs.get("clientKind")
     if kind_node is not None:
-        val, _kind = _annotation_value(kind_node, src)
-        if val and _kind == "enum":
-            client_kind = str(val)
+        val, vkind = _annotation_value(kind_node, src)
+        if val and vkind == "enum":
+            kind_val = str(val)
+            from java_ontology import VALID_PRODUCER_KINDS  # deferred: java_ontology imports ast_java
+            if kind_val in VALID_PRODUCER_KINDS:
+                client_kind = kind_val
+            else:
+                print(
+                    f"[lancedb-mcp] CodebaseProducer: invalid producerKind {kind_val!r} — ignored",
+                    file=sys.stderr,
+                )
     topic = ""
     if "topic" in pairs:
         atoms = _string_value_atoms(pairs["topic"], src, ctx)
