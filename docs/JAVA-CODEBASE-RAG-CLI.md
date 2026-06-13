@@ -61,7 +61,7 @@ java-codebase-rag install --scope user
 
 ### `update`
 
-Post-upgrade refresh: overwrites skill and agent files with the latest shipped versions and updates the MCP command path. Requires a prior `install` run.
+Post-upgrade refresh: overwrites skill and agent files with the latest shipped versions and updates the MCP command path. If an index exists, also runs an incremental Lance + graph catch-up (same as `increment`). Requires a prior `install` run.
 
 ```bash
 # Refresh after pip upgrade
@@ -83,7 +83,7 @@ java-codebase-rag update --force
 - Detects previously configured agent hosts (scans both project-level and user-level config files).
 - Refreshes skill and agent files (versioned assets from the package).
 - Updates MCP entrypoint path if `java-codebase-rag-mcp` has moved.
-- Runs `increment` on the index if it exists (LanceDB catch-up). Prints graph staleness warning.
+- Runs an incremental index update (Lance + graph) if an index exists — same as `java-codebase-rag increment`.
 - Skips MCP config if the entry already exists and is correct.
 
 **Exit codes:**

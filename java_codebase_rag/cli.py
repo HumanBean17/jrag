@@ -775,8 +775,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Refresh shipped artifacts (skill, agent, MCP entry) after pip upgrade.",
         description=(
             "Post-upgrade refresh: overwrites skill and agent files with the latest "
-            "shipped versions and updates the MCP command path. Use --dry-run to "
-            "preview changes without writing. Requires a prior `install` run."
+            "shipped versions and updates the MCP command path. If an index exists, "
+            "also runs an incremental Lance + graph catch-up (same as `increment`). "
+            "Use --dry-run to preview changes without writing. Requires a prior `install` run."
         ),
     )
     update.add_argument(
