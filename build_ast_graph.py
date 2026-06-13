@@ -588,15 +588,25 @@ def _load_existing_members(conn: ladybug.Connection, tables: GraphTables, exclud
         ))
 
 
+# Every Symbol->Symbol REL TABLE type in the graph schema. A Symbol node can
+# only have an INCOMING edge of one of these types, so `_find_dependents` MUST
+# walk all of them: that completeness is what makes the changed-node DETACH
+# DELETE in `_delete_file_scope` Phase 3 safe (every real caller of a changed
+# node is pulled into scope, so Phase 1 removes the edge before the node delete).
+# If you add a new Symbol->Symbol edge type to the schema, add it here too —
+# otherwise changed-node deletion would silently drop its surviving edges.
+_SYMBOL_TO_SYMBOL_EDGE_TYPES = (
+    "EXTENDS", "IMPLEMENTS", "INJECTS", "CALLS", "DECLARES", "OVERRIDES",
+)
+
+
 def _find_dependents(conn: ladybug.Connection, changed_node_ids: set[str]) -> set[str]:
     """Find files whose nodes have edges pointing into changed nodes. Returns set of filenames."""
     dependent_files: set[str] = set()
 
-    # Query each Symbol-to-Symbol edge table for incoming edges
-    edge_types = ["EXTENDS", "IMPLEMENTS", "INJECTS", "CALLS", "DECLARES", "OVERRIDES"]
     params = {"changed_ids": list(changed_node_ids)}
 
-    for edge_type in edge_types:
+    for edge_type in _SYMBOL_TO_SYMBOL_EDGE_TYPES:
         query = f"""
         MATCH (src:Symbol)-[e:{edge_type}]->(dst:Symbol)
         WHERE dst.id IN $changed_ids
@@ -655,6 +665,9 @@ def _delete_file_scope(
     # whose source is in scope (including dependents' outgoing edges to changed
     # nodes) while intentionally leaving incoming edges from out-of-scope callers
     # intact — those must survive so the dependent nodes below can be preserved.
+    # This list is a superset of `_SYMBOL_TO_SYMBOL_EDGE_TYPES` (it also covers
+    # Symbol->Route/Client/Producer/UCS and Client/Producer->Route edges); keep
+    # both lists in sync with the schema.
     edge_tables = [
         "EXTENDS", "IMPLEMENTS", "INJECTS", "CALLS", "DECLARES", "OVERRIDES",
         "UNRESOLVED_AT", "EXPOSES", "DECLARES_CLIENT", "DECLARES_PRODUCER",
@@ -680,7 +693,10 @@ def _delete_file_scope(
         row = result.get_next()
         symbol_ids.append(row[0])
 
-    # Delete UnresolvedCallSite nodes whose caller_id is in the collected set
+    # Delete UnresolvedCallSite nodes whose caller_id is in the collected set.
+    # These are children of scope symbols (including preserved dependents);
+    # deleting them is safe because every scope file — dependents included — is
+    # reprocessed and re-emits its UnresolvedCallSite nodes in `_scoped_write`.
     if symbol_ids:
         unresolved_query = """
         MATCH (u:UnresolvedCallSite)
@@ -694,7 +710,8 @@ def _delete_file_scope(
     # from out-of-scope callers survive; the dependents are re-MERGEd in place
     # by `_scoped_write` on the same deterministic node id. A changed node's
     # real incoming edges all come from dependent files (callers pulled into
-    # scope by `_find_dependents`), so Phase 1 already removed them and the
+    # scope by `_find_dependents`, which walks every type in
+    # `_SYMBOL_TO_SYMBOL_EDGE_TYPES`), so Phase 1 already removed them and the
     # dependents re-emit them when reprocessed. DETACH DELETE is only a safety
     # net for the rare surviving edge whose source was NOT pulled into scope
     # (e.g. a phantom caller with filename="", which `_find_dependents` skips);
