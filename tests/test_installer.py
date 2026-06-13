@@ -153,6 +153,89 @@ class TestDetectJavaDirectories:
         assert "Error:" in captured.out and "No Java build files" in captured.out
 
 
+class TestSelectMicroservices:
+    """Test select_microservices function."""
+
+    def test_select_microservices_non_interactive_returns_none(self):
+        """non_interactive=True with 3 dirs → returns None (all)"""
+        from java_codebase_rag.installer import select_microservices
+        dirs = [Path("service-a"), Path("service-b"), Path("service-c")]
+        result = select_microservices(dirs, non_interactive=True)
+        assert result is None
+
+    def test_select_microservices_non_tty_returns_none_all_selected(self, monkeypatch):
+        """non-TTY → prompt returns default (all) → returns None"""
+        from java_codebase_rag.installer import select_microservices
+        dirs = [Path("service-a"), Path("service-b"), Path("service-c")]
+        monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+        result = select_microservices(dirs, non_interactive=False)
+        assert result is None
+
+    def test_select_microservices_subset_returns_list(self, monkeypatch):
+        """prompt checkbox returns ['service-a'] of 3 → returns ['service-a']"""
+        from java_codebase_rag.installer import select_microservices
+        dirs = [Path("service-a"), Path("service-b"), Path("service-c")]
+
+        def fake_prompt(ptype, message, **kw):
+            return ["service-a"] if ptype == "checkbox" else True
+
+        monkeypatch.setattr("java_codebase_rag.installer.prompt", fake_prompt)
+        result = select_microservices(dirs, non_interactive=False)
+        assert result == ["service-a"]
+
+    def test_select_microservices_all_selected_returns_none(self, monkeypatch):
+        """prompt returns all 3 → returns None"""
+        from java_codebase_rag.installer import select_microservices
+        dirs = [Path("service-a"), Path("service-b"), Path("service-c")]
+        all_names = ["service-a", "service-b", "service-c"]
+
+        def fake_prompt(ptype, message, **kw):
+            return all_names if ptype == "checkbox" else True
+
+        monkeypatch.setattr("java_codebase_rag.installer.prompt", fake_prompt)
+        result = select_microservices(dirs, non_interactive=False)
+        assert result is None
+
+    def test_select_microservices_empty_then_decline_exit_2(self, monkeypatch):
+        """prompt checkbox [] + confirm False → SystemExit(2)"""
+        from java_codebase_rag.installer import select_microservices
+        dirs = [Path("service-a"), Path("service-b"), Path("service-c")]
+
+        def fake_prompt(ptype, message, **kw):
+            return [] if ptype == "checkbox" else False
+
+        monkeypatch.setattr("java_codebase_rag.installer.prompt", fake_prompt)
+        with pytest.raises(SystemExit) as exc_info:
+            select_microservices(dirs, non_interactive=False)
+        assert exc_info.value.code == 2
+
+    def test_select_microservices_preselected_marks_choices(self, monkeypatch):
+        """preselected=['service-a'] → only service-a has checked=True, result == ['service-a']"""
+        from java_codebase_rag.installer import select_microservices
+        dirs = [Path("service-a"), Path("service-b"), Path("service-c")]
+        captured = {}
+
+        def fake_prompt(ptype, message, **kw):
+            if ptype == "checkbox":
+                captured["choices"] = kw["choices"]
+                return ["service-a"]
+            return True
+
+        monkeypatch.setattr("java_codebase_rag.installer.prompt", fake_prompt)
+        result = select_microservices(dirs, non_interactive=False, preselected=["service-a"])
+
+        checked_names = [c["name"] for c in captured["choices"] if c["checked"]]
+        assert checked_names == ["service-a"]
+        assert result == ["service-a"]
+
+    def test_select_microservices_single_dir_returns_none(self):
+        """len(java_dirs) < 2 → returns None"""
+        from java_codebase_rag.installer import select_microservices
+        dirs = [Path(".")]
+        result = select_microservices(dirs, non_interactive=False)
+        assert result is None
+
+
 class TestConfirmSourceRoot:
     """Test confirm_source_root function."""
 
