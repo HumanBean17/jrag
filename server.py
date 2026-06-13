@@ -7,7 +7,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal
 
 import mcp_v2
 from index_common import SBERT_MODEL
@@ -31,14 +31,14 @@ from search_lancedb import TABLES
 
 _COCOINDEX_TARGET = "java_index_flow_lancedb.py:JavaCodeIndexLance"
 _INSTRUCTIONS = (
-    "Java codebase graph navigator (LanceDB + Ladybug). "
+    "Java codebase graph navigator over an indexed Java codebase. "
     "Tools: search (NL/code locate), find (structured NodeFilter), describe (one node + edge_summary: stored edge-label counts and optional composed keys for type Symbols and override-axis virtual keys for method Symbols), "
     "neighbors (one hop; you MUST pass direction in|out AND edge_types list — no defaults), "
-    "resolve (identifier-shaped lookup for symbol/route/client/producer — three statuses one|many/none). "
-    "NodeFilter `filter` is a JSON object (preferred); a JSON-encoded string is also accepted as a fallback. "
+    "resolve (identifier-shaped lookup for symbol/route/client/producer — three statuses: one | many | none). "
     "Unknown filter keys and populated fields not applicable to the effective node kind fail with success=false and message. "
+    "Successful responses from any tool may include `hints_structured` (tool call suggestions with a `reason` field) and `advisories` (pure informational text) when hints are enabled. "
     "Edge labels: EXTENDS, IMPLEMENTS, INJECTS, OVERRIDES, DECLARES, DECLARES_CLIENT, DECLARES_PRODUCER, CALLS, EXPOSES, HTTP_CALLS, ASYNC_CALLS; "
-    "type Symbols may also use composed neighbors edge_types DECLARES.DECLARES_CLIENT, DECLARES.DECLARES_PRODUCER, DECLARES.EXPOSES (out only). "
+    "type Symbols may also use composed neighbors edge_types DECLARES.DECLARES_CLIENT, DECLARES.DECLARES_PRODUCER, DECLARES.EXPOSES (out only, type Symbol origin). "
     "Reprocess/init, meta, tables, diagnose-ignore, analyze-pr: use java-codebase-rag CLI — not MCP."
 )
 
@@ -123,19 +123,15 @@ class ScopeManager:
             print("[scope] No microservice detected (at project root)", file=sys.stderr)
             print("[scope] Queries will span all microservices", file=sys.stderr)
 
-    def apply_auto_scope(self, node_filter: dict[str, Any] | None) -> dict[str, Any] | None:
+    def apply_auto_scope(self, node_filter: mcp_v2.NodeFilter | None) -> mcp_v2.NodeFilter | None:
         """Apply auto-detected scope to filter if no explicit microservice is set."""
         if self.default_scope is None:
             return node_filter
-        # Convert to dict for manipulation
         if node_filter is None:
-            filter_dict = {}
-        else:
-            filter_dict = dict(node_filter)
-        # Only inject if user didn't specify microservice
-        if "microservice" not in filter_dict:
-            filter_dict["microservice"] = self.default_scope
-        return filter_dict
+            return mcp_v2.NodeFilter(microservice=self.default_scope)
+        if node_filter.microservice is None:
+            return node_filter.model_copy(update={"microservice": self.default_scope})
+        return node_filter
 
 
 def _resolve_lancedb_uri() -> str:
@@ -413,14 +409,15 @@ def create_mcp_server() -> FastMCP:
     @mcp.tool(
         name="search",
         description=(
-            "Ranked chunk retrieval: `query` is opaque text (natural language or code fragments); "
-            "results are score-ranked, not boolean-matched. Optional `filter` uses the same NodeFilter "
-            "schema as `find` but only **symbol-applicable** fields apply (strict frame). Wildcards "
+            "Ranked chunk retrieval over content tables (java/sql/yaml); `query` is opaque text (natural language or code "
+            "fragments) and results are score-ranked, not boolean-matched. For graph-structured listing "
+            "(symbols/routes/clients/producers) use `find`, not `search`. Optional `filter` uses the same NodeFilter "
+            "schema as `find` but only **symbol-applicable** fields apply — others return success=false. Wildcards "
             "(`*`, `?`) in prefix fields are rejected—use ranked `query` text instead. There is **no** "
             "structured DSL inside `query`; structured predicates belong in `find`. "
             "For identifier-shaped lookups (FQN, id prefix, route/client identifiers, …), use `resolve` first; "
             "use `search` for natural-language or ranked fuzzy discovery. "
-            "Successful responses echo `limit`/`offset` and may include `hints_structured` (tool call suggestions with `reason` field) and `advisories` (pure informational text)."
+            "Successful responses echo `limit`/`offset`."
         ),
     )
     async def search(
@@ -431,7 +428,7 @@ def create_mcp_server() -> FastMCP:
         ),
         hybrid: bool = Field(
             default=False,
-            description="If true, fuse FTS + vector (single-table java/sql/yaml only)",
+            description="If true, fuse FTS + vector. Requires a single table (java/sql/yaml); hybrid with table='all' returns success=false.",
         ),
         limit: int = Field(default=5, ge=1, le=50, description="Max hits to return"),
         offset: int = Field(default=0, ge=0, le=500, description="Skip this many hits (pagination)"),
@@ -439,11 +436,11 @@ def create_mcp_server() -> FastMCP:
             default=None,
             description="Substring match on file path (pre-filter from index)",
         ),
-        filter: dict[str, Any] | str | None = Field(
+        filter: mcp_v2.NodeFilter | None = Field(
             default=None,
             description=(
-                "Optional NodeFilter post-filter on symbol-oriented hit rows. Unknown keys or populated fields not "
-                "applicable to symbols return success=false. Prefer a JSON object; a JSON-encoded string is accepted."
+                "Optional NodeFilter post-filter on symbol-oriented hit rows. An empty object or omitted means no "
+                "predicate. Unknown keys or populated fields not applicable to symbols return success=false."
             ),
         ),
     ) -> mcp_v2.SearchOutput:
@@ -468,9 +465,11 @@ def create_mcp_server() -> FastMCP:
             "**route** — microservice, module, http_method, path_prefix, framework; **client** — microservice, module, "
             "source_layer, client_kind, target_service, target_path_prefix, http_method; **producer** — microservice, "
             "module, source_layer, producer_kind, topic_prefix. "
+            "`role` is singular and `exclude_roles` plural; `capability` is a functional tag assigned during indexing. "
+            "`fqn_prefix` is a prefix predicate — for exact FQN or id lookup use `resolve`/`describe`. "
             "Wildcards in prefix fields are rejected. An empty filter (`{}`) or `filter=None` means no predicate (all nodes of "
             "that kind; use pagination). Unknown keys or inapplicable populated fields return success=false. "
-            "Successful responses echo `limit`/`offset` and may include `hints_structured` (tool call suggestions with `reason` field) and `advisories` (pure informational text)."
+            "Successful responses echo `limit`/`offset`."
         ),
     )
     async def find(
@@ -481,11 +480,10 @@ def create_mcp_server() -> FastMCP:
                 "'producer' = outbound async producers."
             )
         ),
-        filter: dict[str, Any] | str = Field(
+        filter: mcp_v2.NodeFilter = Field(
             ...,
             description=(
-                "Required NodeFilter dict (extra keys forbidden). Fields must be applicable to `kind`. "
-                "Prefer a JSON object; a JSON-encoded string is accepted."
+                "Required NodeFilter object (extra keys forbidden). Fields must be applicable to `kind`."
             ),
         ),
         limit: int = Field(default=25, ge=1, le=500, description="Max nodes to return"),
@@ -497,17 +495,14 @@ def create_mcp_server() -> FastMCP:
     @mcp.tool(
         name="describe",
         description=(
-            "Full node record plus `edge_summary` (in/out counts per stored edge label, plus optional describe-time keys). Type Symbols may add "
-            "composed keys DECLARES.DECLARES_CLIENT, DECLARES.DECLARES_PRODUCER, and DECLARES.EXPOSES (navigable on type Symbols via neighbors, out only); "
-            "method Symbols may add override-axis virtual keys (OVERRIDDEN_BY, OVERRIDDEN_BY.DECLARES_CLIENT, OVERRIDDEN_BY.DECLARES_PRODUCER, "
-            "OVERRIDDEN_BY.EXPOSES, plus an `OVERRIDES` map entry that merges stored `[:OVERRIDES]` counts with the dispatch-up rollup per direction). "
-            "Override-axis virtual keys are navigable via neighbors on non-static method Symbol origins "
-            "(out only; composed keys include via_id in attrs). The stored `OVERRIDES` relationship "
-            "is also a normal edge label (e.g. direction in from declaration toward overriders). "
+            "Full node record plus `edge_summary` (in/out counts per stored edge label). For type Symbols, `edge_summary` "
+            "also exposes composed keys (DECLARES.DECLARES_CLIENT, DECLARES.DECLARES_PRODUCER, DECLARES.EXPOSES); for "
+            "non-static method Symbols it adds override-axis virtual keys (OVERRIDDEN_BY and its composed forms, plus an "
+            "`OVERRIDES` map merging stored `[:OVERRIDES]` counts with the dispatch-up rollup). These composed/override keys "
+            "are out-only and navigable via `neighbors`; the stored `OVERRIDES` is also a normal edge label (in toward declaration). "
             "Pass `id` for any kind, or exact `fqn` for Symbol lookup (`id` wins when both are set). "
             "`describe(fqn=…)` keeps the first graph row when multiple symbols share that FQN; when an FQN may collide, "
-            "prefer `resolve(identifier=…, hint_kind='symbol')` first, then `describe(id=…)` on the chosen node. "
-            "Successful responses may include `hints_structured` (tool call suggestions with `reason` field) and `advisories` (pure informational text)."
+            "prefer `resolve(identifier=…, hint_kind='symbol')` first, then `describe(id=…)` on the chosen node."
         ),
     )
     async def describe(
@@ -531,18 +526,19 @@ def create_mcp_server() -> FastMCP:
     @mcp.tool(
         name="neighbors",
         description=(
-            "Graph walk: **direction** (`in` | `out`) and non-empty **edge_types** are required (stored labels for one hop; "
-            "type Symbol origins may also pass composed DECLARES.DECLARES_CLIENT, DECLARES.DECLARES_PRODUCER, or DECLARES.EXPOSES "
-            "for 2-hop member rollups; method Symbol origins may pass OVERRIDDEN_BY, OVERRIDDEN_BY.DECLARES_CLIENT, "
-            "OVERRIDDEN_BY.DECLARES_PRODUCER, OVERRIDDEN_BY.EXPOSES for override-axis rollups — out only, via_id in "
-            "attrs on composed keys). "
+            "Graph walk: **direction** (`in` | `out`) and non-empty **edge_types** are required (one hop over stored edge "
+            "labels; type/method Symbol origins may also pass composed or override-axis keys — see `edge_types`). From a "
+            "type Symbol, `direction='out'` with EXPOSES yields route nodes and HTTP_CALLS/ASYNC_CALLS yield client/producer "
+            "nodes; `direction='in'` reverses each relationship. "
+            "`direction` and `edge_types` have no defaults; an empty `edge_types` fails. The CALLS-only features — "
+            "`edge_filter`, `include_unresolved`, `dedup_calls` — each require `edge_types=['CALLS']`; `edge_filter` and "
+            "`include_unresolved` are mutually exclusive. Violating a precondition (wrong CALLS context, composed/override "
+            "keys on an ineligible origin or with `direction='in'`, wildcards in prefix fields, unknown filter keys) returns "
+            "success=false with a message; `dedup_calls` with other edge_types is a silent no-op. "
             "Optional `filter` applies to each neighbor endpoint row; populated fields must be applicable to that "
-            "neighbor's kind—mixed-kind result sets fail on the first inapplicable neighbor (strict frame). "
-            "Optional `edge_filter` requires edge_types=['CALLS'] only (no composed dot-keys or extra stored "
-            "labels); projects the ordered CALLS stream by edge attributes (min_confidence, strategies, "
-            "callee_declaring_role). Wildcards in prefix fields are rejected. Unknown filter keys return success=false. "
-            "Successful responses echo `requested_edge_types` and may include `hints_structured` (tool call suggestions with `reason` field) and `advisories` (pure informational text). "
-            "Each edge's `attrs.strategy` indicates resolution quality (brownfield/fallback vs primary paths)."
+            "neighbor's kind—mixed-kind result sets fail on the first inapplicable neighbor (per-neighbor strict frame). "
+            "Each edge's `attrs.strategy` indicates resolution quality (brownfield/fallback vs primary paths). "
+            "Successful responses echo `requested_edge_types`."
         ),
     )
     async def neighbors(
@@ -573,19 +569,19 @@ def create_mcp_server() -> FastMCP:
             le=1000,
             description="Skip this many edges after merge (pagination)",
         ),
-        filter: dict[str, Any] | str | None = Field(
+        filter: mcp_v2.NodeFilter | None = Field(
             default=None,
             description=(
-                "Optional NodeFilter on the neighbor node. Same applicability rules as `find` for that node's kind. "
-                "Prefer a JSON object; a JSON-encoded string is accepted."
+                "Optional NodeFilter on the neighbor node. An empty object or omitted means no predicate. "
+                "Same applicability rules as `find` for that node's kind."
             ),
         ),
-        edge_filter: dict[str, Any] | str | None = Field(
+        edge_filter: mcp_v2.EdgeFilter | None = Field(
             default=None,
             description=(
                 "Optional EdgeFilter on CALLS edge attributes (edge_types=['CALLS'] only). Use "
                 "callee_declaring_role for callee stereotype projection — not NodeFilter.role on method neighbors. "
-                "Mutually exclusive with include_unresolved. Prefer a JSON object; a JSON-encoded string is accepted."
+                "Mutually exclusive with include_unresolved."
             ),
         ),
         include_unresolved: bool = Field(
@@ -627,10 +623,11 @@ def create_mcp_server() -> FastMCP:
             "status=one (single node), many (≥2 ranked candidates with reason), or none "
             "(no match — fall back to search(query=...) for natural language or fuzzy text). "
             "Optional hint_kind narrows to symbol, route, client, or producer. "
-            "Successful responses may include hints_structured (tool call suggestions with `reason` field) and advisories (pure informational text) — same contract as other v2 tools. "
             "Malformed empty/whitespace identifier returns success=false. "
             "Examples: resolve('com.foo.Bar', hint_kind='symbol'); "
             "resolve('GET /api/v1/customers', hint_kind='route'); "
+            "resolve('PaymentClient', hint_kind='client'); "
+            "resolve('order.created', hint_kind='producer'); "
             "resolve('the client that handles assignments') → none (use search instead)."
         ),
     )
