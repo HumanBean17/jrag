@@ -2,19 +2,19 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import kuzu
+import ladybug
 
-from kuzu_queries import KuzuGraph
+from ladybug_queries import LadybugGraph
 
 
 def _scalar(db_path: Path, query: str) -> int:
-    conn = kuzu.Connection(kuzu.Database(str(db_path), read_only=True))
+    conn = ladybug.Connection(ladybug.Database(str(db_path), read_only=True))
     r = conn.execute(query)
     return int(r.get_next()[0] or 0) if r.has_next() else 0
 
 
-def test_call_invariant_blocks_cross_microservice_edges(kuzu_db_path_fqn_collision_smoke: Path) -> None:
-    db = kuzu_db_path_fqn_collision_smoke
+def test_call_invariant_blocks_cross_microservice_edges(ladybug_db_path_fqn_collision_smoke: Path) -> None:
+    db = ladybug_db_path_fqn_collision_smoke
     cross_calls = _scalar(
         db,
         "MATCH (a:Symbol)-[:CALLS]->(b:Symbol) "
@@ -23,12 +23,12 @@ def test_call_invariant_blocks_cross_microservice_edges(kuzu_db_path_fqn_collisi
         "RETURN count(*)",
     )
     assert cross_calls == 0
-    assert KuzuGraph(str(db)).meta()["pass3_skipped_cross_service"] >= 1
+    assert LadybugGraph(str(db)).meta()["pass3_skipped_cross_service"] >= 1
 
 
-def test_call_invariant_inert_on_clean_fixtures(kuzu_db_path_cross_service_smoke: Path) -> None:
-    assert KuzuGraph(str(kuzu_db_path_cross_service_smoke)).meta()["pass3_skipped_cross_service"] == 0
+def test_call_invariant_inert_on_clean_fixtures(ladybug_db_path_cross_service_smoke: Path) -> None:
+    assert LadybugGraph(str(ladybug_db_path_cross_service_smoke)).meta()["pass3_skipped_cross_service"] == 0
 
 
-def test_call_invariant_inert_on_bank_chat_system(kuzu_graph: KuzuGraph) -> None:
-    assert kuzu_graph.meta()["pass3_skipped_cross_service"] == 0
+def test_call_invariant_inert_on_bank_chat_system(ladybug_graph: LadybugGraph) -> None:
+    assert ladybug_graph.meta()["pass3_skipped_cross_service"] == 0

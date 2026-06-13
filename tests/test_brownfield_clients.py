@@ -6,7 +6,7 @@ import shutil
 from contextlib import redirect_stderr
 from pathlib import Path
 
-import kuzu
+import ladybug
 import pytest
 
 from graph_enrich import _load_brownfield_overrides, collect_annotation_meta_chain
@@ -33,16 +33,16 @@ def _build(tmp: Path, yml: str | None, extra_files: dict[str, str]) -> Path:
         p = tmp / rel
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(body, encoding="utf-8")
-    from _builders import build_kuzu_imperative_into
+    from _builders import build_ladybug_imperative_into
 
-    db_path = tmp / "g.kuzu"
-    build_kuzu_imperative_into(tmp, db_path)
+    db_path = tmp / "g.lbug"
+    build_ladybug_imperative_into(tmp, db_path)
     return db_path
 
 
 def _http_calls(db_path: Path) -> list[dict]:
-    db = kuzu.Database(str(db_path), read_only=True)
-    conn = kuzu.Connection(db)
+    db = ladybug.Database(str(db_path), read_only=True)
+    conn = ladybug.Connection(db)
     r = conn.execute(
         "MATCH (c:Client)-[h:HTTP_CALLS]->(rt:Route) "
         "RETURN c.member_fqn AS fqn, h.strategy AS strategy, h.method_call AS method_call, "
@@ -64,8 +64,8 @@ def _http_calls(db_path: Path) -> list[dict]:
 
 
 def _async_calls(db_path: Path) -> list[dict]:
-    db = kuzu.Database(str(db_path), read_only=True)
-    conn = kuzu.Connection(db)
+    db = ladybug.Database(str(db_path), read_only=True)
+    conn = ladybug.Connection(db)
     r = conn.execute(
         "MATCH (pr:Producer)-[c:ASYNC_CALLS]->(rt:Route) "
         "RETURN pr.member_fqn AS fqn, c.strategy AS strategy, rt.topic AS topic ORDER BY fqn, topic",
@@ -78,11 +78,11 @@ def _async_calls(db_path: Path) -> list[dict]:
 
 
 def _meta(db_path: Path) -> dict:
-    from kuzu_queries import KuzuGraph
+    from ladybug_queries import LadybugGraph
 
-    KuzuGraph._instance = None
-    KuzuGraph._instance_path = None
-    return KuzuGraph.get(str(db_path)).meta()
+    LadybugGraph._instance = None
+    LadybugGraph._instance_path = None
+    return LadybugGraph.get(str(db_path)).meta()
 
 
 def test_20_layer_b_annotation_http_client(tmp_path: Path) -> None:

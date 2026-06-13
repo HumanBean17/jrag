@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import kuzu
+import ladybug
 
 from ast_java import ONTOLOGY_VERSION
 from build_ast_graph import FileHashTracker, GraphTables, pass1_parse, pass2_edges
@@ -163,13 +163,13 @@ class TestEdgeSchema:
 
     def test_edge_schema_has_source_file(self, tmp_path: Path) -> None:
         """Build a full graph, query each edge table for source_file column existence and non-empty values."""
-        from _builders import build_kuzu_full_into
+        from _builders import build_ladybug_full_into
 
         corpus_root = Path(__file__).parent / "bank-chat-system"
-        db_path = tmp_path / "test_graph.kuzu"
-        build_kuzu_full_into(corpus_root, db_path)
+        db_path = tmp_path / "test_graph.lbug"
+        build_ladybug_full_into(corpus_root, db_path)
 
-        conn = kuzu.Connection(kuzu.Database(str(db_path), read_only=True))
+        conn = ladybug.Connection(ladybug.Database(str(db_path), read_only=True))
 
         # All 12 edge tables should have source_file column
         edge_tables = [
@@ -190,13 +190,13 @@ class TestEdgeSchema:
 
     def test_source_file_value_matches_symbol_filename(self, tmp_path: Path) -> None:
         """For edges originating from Symbol nodes, edge's source_file equals source Symbol's filename."""
-        from _builders import build_kuzu_full_into
+        from _builders import build_ladybug_full_into
 
         corpus_root = Path(__file__).parent / "bank-chat-system"
-        db_path = tmp_path / "test_graph.kuzu"
-        build_kuzu_full_into(corpus_root, db_path)
+        db_path = tmp_path / "test_graph.lbug"
+        build_ladybug_full_into(corpus_root, db_path)
 
-        conn = kuzu.Connection(kuzu.Database(str(db_path), read_only=True))
+        conn = ladybug.Connection(ladybug.Database(str(db_path), read_only=True))
 
         # Test CALLS edge: source_file should match caller Symbol's filename
         query = """
@@ -236,7 +236,7 @@ class TestIncrementalOrchestrator:
         source_root.mkdir()
         index_dir = tmp_path / "index"
         index_dir.mkdir()
-        kuzu_path = index_dir / "code_graph.kuzu"
+        ladybug_path = index_dir / "code_graph.lbug"
 
         # Create initial files
         (source_root / "A.java").write_text("package pkg; class A {}", encoding="utf-8")
@@ -248,9 +248,9 @@ class TestIncrementalOrchestrator:
         assert len(asts) == 2
 
         # Build full graph (pass2 needed for EXTENDS edges)
-        from build_ast_graph import write_kuzu
+        from build_ast_graph import write_ladybug
         pass2_edges(tables, asts, verbose=False)
-        write_kuzu(kuzu_path, tables, source_root=source_root, verbose=False)
+        write_ladybug(ladybug_path, tables, source_root=source_root, verbose=False)
 
         # Initialize hash tracker
         tracker = FileHashTracker(index_dir)
@@ -264,7 +264,7 @@ class TestIncrementalOrchestrator:
         (source_root / "A.java").write_text("package pkg; class A { void foo() {} }", encoding="utf-8")
 
         # Run incremental
-        result = incremental_rebuild(source_root, kuzu_path, verbose=False)
+        result = incremental_rebuild(source_root, ladybug_path, verbose=False)
 
         assert result.mode == "incremental"
         assert result.files_changed == 1
@@ -278,16 +278,16 @@ class TestIncrementalOrchestrator:
         source_root.mkdir()
         index_dir = tmp_path / "index"
         index_dir.mkdir()
-        kuzu_path = index_dir / "code_graph.kuzu"
+        ladybug_path = index_dir / "code_graph.lbug"
 
         # Create initial file
         (source_root / "A.java").write_text("package pkg; class A {}", encoding="utf-8")
 
         # Initial build
-        from build_ast_graph import write_kuzu
+        from build_ast_graph import write_ladybug
         tables = GraphTables()
         pass1_parse(source_root, tables, verbose=False)
-        write_kuzu(kuzu_path, tables, source_root=source_root, verbose=False)
+        write_ladybug(ladybug_path, tables, source_root=source_root, verbose=False)
 
         # Initialize hash tracker
         tracker = FileHashTracker(index_dir)
@@ -301,7 +301,7 @@ class TestIncrementalOrchestrator:
 
         # Run incremental
         from build_ast_graph import incremental_rebuild
-        result = incremental_rebuild(source_root, kuzu_path, verbose=False)
+        result = incremental_rebuild(source_root, ladybug_path, verbose=False)
 
         assert result.mode == "incremental"
         assert result.files_changed == 0
@@ -313,17 +313,17 @@ class TestIncrementalOrchestrator:
         source_root.mkdir()
         index_dir = tmp_path / "index"
         index_dir.mkdir()
-        kuzu_path = index_dir / "code_graph.kuzu"
+        ladybug_path = index_dir / "code_graph.lbug"
 
         # Create initial files
         (source_root / "A.java").write_text("package pkg; class A {}", encoding="utf-8")
         (source_root / "B.java").write_text("package pkg; class B {}", encoding="utf-8")
 
         # Initial build
-        from build_ast_graph import write_kuzu
+        from build_ast_graph import write_ladybug
         tables = GraphTables()
         pass1_parse(source_root, tables, verbose=False)
-        write_kuzu(kuzu_path, tables, source_root=source_root, verbose=False)
+        write_ladybug(ladybug_path, tables, source_root=source_root, verbose=False)
 
         # Initialize hash tracker
         tracker = FileHashTracker(index_dir)
@@ -337,7 +337,7 @@ class TestIncrementalOrchestrator:
 
         # Run incremental
         from build_ast_graph import incremental_rebuild
-        result = incremental_rebuild(source_root, kuzu_path, verbose=False)
+        result = incremental_rebuild(source_root, ladybug_path, verbose=False)
 
         assert result.mode == "incremental"
         assert result.files_changed == 0
@@ -345,8 +345,8 @@ class TestIncrementalOrchestrator:
         assert result.files_removed == 1
 
         # Verify B's nodes are deleted
-        db = kuzu.Database(str(kuzu_path))
-        conn = kuzu.Connection(db)
+        db = ladybug.Database(str(ladybug_path))
+        conn = ladybug.Connection(db)
         check_result = conn.execute("MATCH (s:Symbol) WHERE s.fqn = 'pkg.B' RETURN count(*)")
         if check_result.has_next():
             count = check_result.get_next()[0]
@@ -358,7 +358,7 @@ class TestIncrementalOrchestrator:
         source_root.mkdir()
         index_dir = tmp_path / "index"
         index_dir.mkdir()
-        kuzu_path = index_dir / "code_graph.kuzu"
+        ladybug_path = index_dir / "code_graph.lbug"
 
         # Create file with external reference
         (source_root / "A.java").write_text(
@@ -367,14 +367,14 @@ class TestIncrementalOrchestrator:
         )
 
         # Initial build
-        from build_ast_graph import write_kuzu
+        from build_ast_graph import write_ladybug
         tables = GraphTables()
         pass1_parse(source_root, tables, verbose=False)
-        write_kuzu(kuzu_path, tables, source_root=source_root, verbose=False)
+        write_ladybug(ladybug_path, tables, source_root=source_root, verbose=False)
 
         # Count phantom nodes before
-        db = kuzu.Database(str(kuzu_path))
-        conn = kuzu.Connection(db)
+        db = ladybug.Database(str(ladybug_path))
+        conn = ladybug.Connection(db)
         phantom_count_before = 0
         phantom_result = conn.execute("MATCH (s:Symbol) WHERE s.filename = '' RETURN count(*)")
         if phantom_result.has_next():
@@ -397,11 +397,11 @@ class TestIncrementalOrchestrator:
 
         # Run incremental
         from build_ast_graph import incremental_rebuild
-        incremental_rebuild(source_root, kuzu_path, verbose=False)
+        incremental_rebuild(source_root, ladybug_path, verbose=False)
 
         # Verify phantom nodes still exist
-        db = kuzu.Database(str(kuzu_path))
-        conn = kuzu.Connection(db)
+        db = ladybug.Database(str(ladybug_path))
+        conn = ladybug.Connection(db)
         phantom_count_after = 0
         phantom_result = conn.execute("MATCH (s:Symbol) WHERE s.filename = '' RETURN count(*)")
         if phantom_result.has_next():
@@ -415,7 +415,7 @@ class TestIncrementalOrchestrator:
         source_root.mkdir()
         index_dir = tmp_path / "index"
         index_dir.mkdir()
-        kuzu_path = index_dir / "code_graph.kuzu"
+        ladybug_path = index_dir / "code_graph.lbug"
 
         # Create files with inheritance
         (source_root / "Base.java").write_text("package pkg; class Base {}", encoding="utf-8")
@@ -424,11 +424,11 @@ class TestIncrementalOrchestrator:
         )
 
         # Initial build (pass2 needed for EXTENDS edges)
-        from build_ast_graph import write_kuzu
+        from build_ast_graph import write_ladybug
         tables = GraphTables()
         asts = pass1_parse(source_root, tables, verbose=False)
         pass2_edges(tables, asts, verbose=False)
-        write_kuzu(kuzu_path, tables, source_root=source_root, verbose=False)
+        write_ladybug(ladybug_path, tables, source_root=source_root, verbose=False)
 
         # Initialize hash tracker
         tracker = FileHashTracker(index_dir)
@@ -444,7 +444,7 @@ class TestIncrementalOrchestrator:
 
         # Run incremental
         from build_ast_graph import incremental_rebuild
-        result = incremental_rebuild(source_root, kuzu_path, verbose=False)
+        result = incremental_rebuild(source_root, ladybug_path, verbose=False)
 
         # Derived.java should be reprocessed due to EXTENDS edge
         assert result.dependents_reprocessed >= 1
@@ -455,7 +455,7 @@ class TestIncrementalOrchestrator:
         source_root.mkdir()
         index_dir = tmp_path / "index"
         index_dir.mkdir()
-        kuzu_path = index_dir / "code_graph.kuzu"
+        ladybug_path = index_dir / "code_graph.lbug"
 
         # Create base class and many derived classes
         (source_root / "Base.java").write_text("package pkg; class Base {}", encoding="utf-8")
@@ -465,11 +465,11 @@ class TestIncrementalOrchestrator:
             )
 
         # Initial build
-        from build_ast_graph import write_kuzu
+        from build_ast_graph import write_ladybug
         tables = GraphTables()
         asts = pass1_parse(source_root, tables, verbose=False)
         pass2_edges(tables, asts, verbose=False)
-        write_kuzu(kuzu_path, tables, source_root=source_root, verbose=False)
+        write_ladybug(ladybug_path, tables, source_root=source_root, verbose=False)
 
         # Initialize hash tracker
         tracker = FileHashTracker(index_dir)
@@ -486,7 +486,7 @@ class TestIncrementalOrchestrator:
 
         # Run incremental with low expansion cap
         from build_ast_graph import incremental_rebuild
-        result = incremental_rebuild(source_root, kuzu_path, verbose=False, expansion_cap=2)
+        result = incremental_rebuild(source_root, ladybug_path, verbose=False, expansion_cap=2)
 
         # Should fall back to full rebuild due to cap exceeded
         assert result.mode == "full_fallback"
@@ -497,16 +497,16 @@ class TestIncrementalOrchestrator:
         source_root.mkdir()
         index_dir = tmp_path / "index"
         index_dir.mkdir()
-        kuzu_path = index_dir / "code_graph.kuzu"
+        ladybug_path = index_dir / "code_graph.lbug"
 
         # Create file
         (source_root / "A.java").write_text("package pkg; class A {}", encoding="utf-8")
 
         # Initial build
-        from build_ast_graph import write_kuzu
+        from build_ast_graph import write_ladybug
         tables = GraphTables()
         pass1_parse(source_root, tables, verbose=False)
-        write_kuzu(kuzu_path, tables, source_root=source_root, verbose=False)
+        write_ladybug(ladybug_path, tables, source_root=source_root, verbose=False)
 
         # Initialize hash tracker
         tracker = FileHashTracker(index_dir)
@@ -526,7 +526,7 @@ class TestIncrementalOrchestrator:
 
         # Run incremental - should fall back to full rebuild
         from build_ast_graph import incremental_rebuild
-        result = incremental_rebuild(source_root, kuzu_path, verbose=False)
+        result = incremental_rebuild(source_root, ladybug_path, verbose=False)
 
         assert result.mode == "full_fallback"
         # Crash marker should be removed
@@ -538,16 +538,16 @@ class TestIncrementalOrchestrator:
         source_root.mkdir()
         index_dir = tmp_path / "index"
         index_dir.mkdir()
-        kuzu_path = index_dir / "code_graph.kuzu"
+        ladybug_path = index_dir / "code_graph.lbug"
 
         # Create file
         (source_root / "A.java").write_text("package pkg; class A {}", encoding="utf-8")
 
         # Initial build
-        from build_ast_graph import write_kuzu
+        from build_ast_graph import write_ladybug
         tables = GraphTables()
         pass1_parse(source_root, tables, verbose=False)
-        write_kuzu(kuzu_path, tables, source_root=source_root, verbose=False)
+        write_ladybug(ladybug_path, tables, source_root=source_root, verbose=False)
 
         # Initialize hash tracker
         tracker = FileHashTracker(index_dir)
@@ -563,7 +563,7 @@ class TestIncrementalOrchestrator:
 
         # Run incremental
         from build_ast_graph import incremental_rebuild
-        result = incremental_rebuild(source_root, kuzu_path, verbose=False)
+        result = incremental_rebuild(source_root, ladybug_path, verbose=False)
 
         assert result.mode == "incremental"
 
@@ -577,20 +577,20 @@ class TestIncrementalOrchestrator:
         source_root.mkdir()
         index_dir = tmp_path / "index"
         index_dir.mkdir()
-        kuzu_path = index_dir / "code_graph.kuzu"
+        ladybug_path = index_dir / "code_graph.lbug"
 
         # Create file
         (source_root / "A.java").write_text("package pkg; class A {}", encoding="utf-8")
 
         # Initial build
-        from build_ast_graph import write_kuzu
+        from build_ast_graph import write_ladybug
         tables = GraphTables()
         pass1_parse(source_root, tables, verbose=False)
-        write_kuzu(kuzu_path, tables, source_root=source_root, verbose=False)
+        write_ladybug(ladybug_path, tables, source_root=source_root, verbose=False)
 
         # Get node count before
-        db = kuzu.Database(str(kuzu_path))
-        conn = kuzu.Connection(db)
+        db = ladybug.Database(str(ladybug_path))
+        conn = ladybug.Connection(db)
         count_before_result = conn.execute("MATCH (s:Symbol) RETURN count(*)")
         count_before = 0
         if count_before_result.has_next():
@@ -606,14 +606,14 @@ class TestIncrementalOrchestrator:
 
         # Run incremental with no changes
         from build_ast_graph import incremental_rebuild
-        result = incremental_rebuild(source_root, kuzu_path, verbose=False)
+        result = incremental_rebuild(source_root, ladybug_path, verbose=False)
 
         assert result.mode == "incremental"
         assert result.files_changed == 0
 
         # Verify node count unchanged
-        db = kuzu.Database(str(kuzu_path))
-        conn = kuzu.Connection(db)
+        db = ladybug.Database(str(ladybug_path))
+        conn = ladybug.Connection(db)
         count_after_result = conn.execute("MATCH (s:Symbol) RETURN count(*)")
         count_after = 0
         if count_after_result.has_next():
@@ -628,16 +628,16 @@ class TestIncrementalOrchestrator:
         source_root.mkdir()
         index_dir = tmp_path / "index"
         index_dir.mkdir()
-        kuzu_path = index_dir / "code_graph.kuzu"
+        ladybug_path = index_dir / "code_graph.lbug"
 
         # Create files
         (source_root / "A.java").write_text("package pkg; class A {}", encoding="utf-8")
 
         # Initial build
-        from build_ast_graph import write_kuzu
+        from build_ast_graph import write_ladybug
         tables = GraphTables()
         pass1_parse(source_root, tables, verbose=False)
-        write_kuzu(kuzu_path, tables, source_root=source_root, verbose=False)
+        write_ladybug(ladybug_path, tables, source_root=source_root, verbose=False)
 
         # Initialize hash tracker
         tracker = FileHashTracker(index_dir)
@@ -653,13 +653,13 @@ class TestIncrementalOrchestrator:
 
         # Run incremental
         from build_ast_graph import incremental_rebuild
-        result = incremental_rebuild(source_root, kuzu_path, verbose=False)
+        result = incremental_rebuild(source_root, ladybug_path, verbose=False)
 
         assert result.mode == "incremental"
 
         # Verify graph is still valid (Client/Producer tables exist even if empty)
-        db = kuzu.Database(str(kuzu_path))
-        conn = kuzu.Connection(db)
+        db = ladybug.Database(str(ladybug_path))
+        conn = ladybug.Connection(db)
 
         # Check that Client and Producer node tables exist by querying them
         client_result = conn.execute("MATCH (c:Client) RETURN count(*)")
@@ -675,21 +675,21 @@ class TestIncrementalOrchestrator:
 
         source_root = tmp_path / "src"
         source_root.mkdir()
-        kuzu_path = tmp_path / "code_graph.kuzu"
+        ladybug_path = tmp_path / "code_graph.lbug"
 
         # Create file
         (source_root / "A.java").write_text("package pkg; class A {}", encoding="utf-8")
 
         # Build full graph
-        from build_ast_graph import write_kuzu
+        from build_ast_graph import write_ladybug
         tables = GraphTables()
         pass1_parse(source_root, tables, verbose=False)
-        write_kuzu(kuzu_path, tables, source_root=source_root, verbose=False)
+        write_ladybug(ladybug_path, tables, source_root=source_root, verbose=False)
 
         # Load existing types into empty tables
         new_tables = GraphTables()
-        db = kuzu.Database(str(kuzu_path))
-        conn = kuzu.Connection(db)
+        db = ladybug.Database(str(ladybug_path))
+        conn = ladybug.Connection(db)
         _load_existing_types(conn, new_tables)
         conn.close()
 
@@ -704,7 +704,7 @@ class TestIncrementalOrchestrator:
 
         source_root = tmp_path / "src"
         source_root.mkdir()
-        kuzu_path = tmp_path / "code_graph.kuzu"
+        ladybug_path = tmp_path / "code_graph.lbug"
 
         # Create files
         (source_root / "Base.java").write_text("package pkg; class Base {}", encoding="utf-8")
@@ -713,15 +713,15 @@ class TestIncrementalOrchestrator:
         )
 
         # Build full graph
-        from build_ast_graph import write_kuzu
+        from build_ast_graph import write_ladybug
         tables = GraphTables()
         asts = pass1_parse(source_root, tables, verbose=False)
         pass2_edges(tables, asts, verbose=False)
-        write_kuzu(kuzu_path, tables, source_root=source_root, verbose=False)
+        write_ladybug(ladybug_path, tables, source_root=source_root, verbose=False)
 
         # Get Base node ID
-        db = kuzu.Database(str(kuzu_path))
-        conn = kuzu.Connection(db)
+        db = ladybug.Database(str(ladybug_path))
+        conn = ladybug.Connection(db)
         base_result = conn.execute("MATCH (s:Symbol) WHERE s.fqn = 'pkg.Base' RETURN s.id")
         base_id = None
         if base_result.has_next():
@@ -743,21 +743,21 @@ class TestIncrementalOrchestrator:
 
         source_root = tmp_path / "src"
         source_root.mkdir()
-        kuzu_path = tmp_path / "code_graph.kuzu"
+        ladybug_path = tmp_path / "code_graph.lbug"
 
         # Create files
         (source_root / "A.java").write_text("package pkg; class A {}", encoding="utf-8")
         (source_root / "B.java").write_text("package pkg; class B {}", encoding="utf-8")
 
         # Build full graph
-        from build_ast_graph import write_kuzu
+        from build_ast_graph import write_ladybug
         tables = GraphTables()
         pass1_parse(source_root, tables, verbose=False)
-        write_kuzu(kuzu_path, tables, source_root=source_root, verbose=False)
+        write_ladybug(ladybug_path, tables, source_root=source_root, verbose=False)
 
         # Get node count before
-        db = kuzu.Database(str(kuzu_path))
-        conn = kuzu.Connection(db)
+        db = ladybug.Database(str(ladybug_path))
+        conn = ladybug.Connection(db)
         conn.execute("MATCH (s:Symbol) RETURN count(*)")
 
         # Delete only A.java's scope

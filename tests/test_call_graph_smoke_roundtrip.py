@@ -3,18 +3,18 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import kuzu
+import ladybug
 
-from kuzu_queries import KuzuGraph
+from ladybug_queries import LadybugGraph
 
 _FIXTURE_ROOT = Path(__file__).resolve().parent / "fixtures" / "call_graph_smoke"
 
 
-def _connect(db_path: Path) -> kuzu.Connection:
-    return kuzu.Connection(kuzu.Database(str(db_path), read_only=True))
+def _connect(db_path: Path) -> ladybug.Connection:
+    return ladybug.Connection(ladybug.Database(str(db_path), read_only=True))
 
 
-def _rows(conn: kuzu.Connection, q: str) -> list:
+def _rows(conn: ladybug.Connection, q: str) -> list:
     r = conn.execute(q)
     out: list = []
     while r.has_next():
@@ -26,9 +26,9 @@ def test_smoke_fixture_root_exists() -> None:
     assert _FIXTURE_ROOT.is_dir(), _FIXTURE_ROOT
 
 
-def test_this_super_field_chain_resolves_receiver_d6(kuzu_db_path_call_graph_smoke: Path) -> None:
+def test_this_super_field_chain_resolves_receiver_d6(ladybug_db_path_call_graph_smoke: Path) -> None:
     """D6: `this.root.mid.inner.target()` / `super.root.mid.inner.target()` — field chain, no calls in receiver."""
-    db = kuzu_db_path_call_graph_smoke
+    db = ladybug_db_path_call_graph_smoke
     conn = _connect(db)
     for type_prefix, method_name in (
         ("smoke.FieldChainReceivers#", "byThisChain"),
@@ -48,9 +48,9 @@ def test_this_super_field_chain_resolves_receiver_d6(kuzu_db_path_call_graph_smo
         assert all(float(r[0]) >= 0.94 for r in rows), rows
 
 
-def test_scope_receivers_calls_resolved_import_map(kuzu_db_path_call_graph_smoke: Path) -> None:
+def test_scope_receivers_calls_resolved_import_map(ladybug_db_path_call_graph_smoke: Path) -> None:
     """§7.1 #4–6: field / param / local `Svc` receiver → `Svc.work` via scope + import_map."""
-    db = kuzu_db_path_call_graph_smoke
+    db = ladybug_db_path_call_graph_smoke
     conn = _connect(db)
     for method in ("byField", "byParam", "byLocal"):
         q = (
@@ -64,9 +64,9 @@ def test_scope_receivers_calls_resolved_import_map(kuzu_db_path_call_graph_smoke
         assert n >= 1, f"expected import_map CALLS for {method}"
 
 
-def test_local_shadows_field_same_name_resolves_receiver(kuzu_db_path_call_graph_smoke: Path) -> None:
+def test_local_shadows_field_same_name_resolves_receiver(ladybug_db_path_call_graph_smoke: Path) -> None:
     """Local `dup` shadows field `dup` (String): `dup.work()` must target smoke.Svc."""
-    db = kuzu_db_path_call_graph_smoke
+    db = ladybug_db_path_call_graph_smoke
     conn = _connect(db)
     n = int(
         _rows(
@@ -81,9 +81,9 @@ def test_local_shadows_field_same_name_resolves_receiver(kuzu_db_path_call_graph
     assert n >= 1
 
 
-def test_wildcard_static_import_strategy(kuzu_db_path_call_graph_smoke: Path) -> None:
+def test_wildcard_static_import_strategy(ladybug_db_path_call_graph_smoke: Path) -> None:
     """§7.1 #15: `import static …*` bare call → static_import_wildcard."""
-    db = kuzu_db_path_call_graph_smoke
+    db = ladybug_db_path_call_graph_smoke
     conn = _connect(db)
     rows = _rows(
         conn,
@@ -97,10 +97,10 @@ def test_wildcard_static_import_strategy(kuzu_db_path_call_graph_smoke: Path) ->
 
 
 def test_pass3_supertype_dedup_jpa_repository_save_one_row(
-    kuzu_db_path_call_graph_smoke: Path,
+    ladybug_db_path_call_graph_smoke: Path,
 ) -> None:
     """SupertypeDedupPatterns: interface + concrete save → one CALLS row, REPOSITORY role."""
-    db = kuzu_db_path_call_graph_smoke
+    db = ladybug_db_path_call_graph_smoke
     conn = _connect(db)
     rows = _rows(
         conn,
@@ -114,9 +114,9 @@ def test_pass3_supertype_dedup_jpa_repository_save_one_row(
     assert str(rows[0][1]) == "REPOSITORY", rows
 
 
-def test_pass3_overload_ambiguous_still_n_rows(kuzu_db_path_call_graph_smoke: Path) -> None:
+def test_pass3_overload_ambiguous_still_n_rows(ladybug_db_path_call_graph_smoke: Path) -> None:
     """overload_ambiguous sites keep N rows after supertype dedup (OverloadPatterns#sameArity)."""
-    db = kuzu_db_path_call_graph_smoke
+    db = ladybug_db_path_call_graph_smoke
     conn = _connect(db)
     rows = _rows(
         conn,
@@ -128,9 +128,9 @@ def test_pass3_overload_ambiguous_still_n_rows(kuzu_db_path_call_graph_smoke: Pa
     assert len(rows) == 2, f"expected 2 overload_ambiguous targets, got {rows}"
 
 
-def test_overload_sameArity_emits_two_overload_ambiguous_edges(kuzu_db_path_call_graph_smoke: Path) -> None:
+def test_overload_sameArity_emits_two_overload_ambiguous_edges(ladybug_db_path_call_graph_smoke: Path) -> None:
     """§7.1 #13: two one-arg overloads → two resolved edges tagged overload_ambiguous."""
-    db = kuzu_db_path_call_graph_smoke
+    db = ladybug_db_path_call_graph_smoke
     conn = _connect(db)
     rows = _rows(
         conn,
@@ -142,9 +142,9 @@ def test_overload_sameArity_emits_two_overload_ambiguous_edges(kuzu_db_path_call
     assert len(rows) == 2, f"expected 2 overload_ambiguous targets, got {rows}"
 
 
-def test_overload_distinct_arities_single_targets(kuzu_db_path_call_graph_smoke: Path) -> None:
+def test_overload_distinct_arities_single_targets(ladybug_db_path_call_graph_smoke: Path) -> None:
     """§7.1 #12: arity distinguishes overloads (no overload_ambiguous on arity())."""
-    db = kuzu_db_path_call_graph_smoke
+    db = ladybug_db_path_call_graph_smoke
     conn = _connect(db)
     amb = _rows(
         conn,
@@ -166,9 +166,9 @@ def test_overload_distinct_arities_single_targets(kuzu_db_path_call_graph_smoke:
     assert n == 2, "ovl(1) and ovl(1,2) should each resolve"
 
 
-def test_expr_qualified_method_ref_chained_receiver(kuzu_db_path_call_graph_smoke: Path) -> None:
+def test_expr_qualified_method_ref_chained_receiver(ladybug_db_path_call_graph_smoke: Path) -> None:
     """§7.1 #18 (graph): expression-qualified `getX()::trim` → chained_receiver UnresolvedCallSite."""
-    db = kuzu_db_path_call_graph_smoke
+    db = ladybug_db_path_call_graph_smoke
     conn = _connect(db)
     calls = _rows(
         conn,
@@ -187,9 +187,9 @@ def test_expr_qualified_method_ref_chained_receiver(kuzu_db_path_call_graph_smok
     assert any(str(r[0]) == "chained_receiver" for r in ucs), ucs
 
 
-def test_anonymous_class_calls_attributed_to_synthetic_member(kuzu_db_path_call_graph_smoke: Path) -> None:
+def test_anonymous_class_calls_attributed_to_synthetic_member(ladybug_db_path_call_graph_smoke: Path) -> None:
     """D3: `pingFromAnon()` inside `new Runnable(){ run(){...}}` → CALLS from synthetic `run()`, not NestedCalls#m."""
-    db = kuzu_db_path_call_graph_smoke
+    db = ladybug_db_path_call_graph_smoke
     conn = _connect(db)
     outer = _rows(
         conn,
@@ -208,13 +208,13 @@ def test_anonymous_class_calls_attributed_to_synthetic_member(kuzu_db_path_call_
     assert int(inner[0][0]) >= 1, "expected CALLS from synthetic anonymous run() to pingFromAnon"
 
 
-def test_find_callers_external_java_util_needle_lists_internal_callers(kuzu_db_path_call_graph_smoke: Path) -> None:
+def test_find_callers_external_java_util_needle_lists_internal_callers(ladybug_db_path_call_graph_smoke: Path) -> None:
     """exclude_external filters callers (src) only: JDK needle still returns in-repo callers."""
-    db = kuzu_db_path_call_graph_smoke
+    db = ladybug_db_path_call_graph_smoke
     try:
-        KuzuGraph._instance = None
-        KuzuGraph._instance_path = None
-        g = KuzuGraph(str(db))
+        LadybugGraph._instance = None
+        LadybugGraph._instance_path = None
+        g = LadybugGraph(str(db))
         edges = g.find_callers(
             "java.util.Objects#requireNonNull(1)",
             depth=1,
@@ -225,16 +225,16 @@ def test_find_callers_external_java_util_needle_lists_internal_callers(kuzu_db_p
         assert any("StaticImportTest" in e.src.fqn for e in edges), [e.src.fqn for e in edges]
         assert all(not e.src.fqn.startswith("java.") for e in edges)
     finally:
-        KuzuGraph._instance = None
-        KuzuGraph._instance_path = None
+        LadybugGraph._instance = None
+        LadybugGraph._instance_path = None
 
 
 # ---- B1: implicit default constructor resolution ----
 
-def test_implicit_default_ctor_is_resolved(kuzu_db_path_call_graph_smoke: Path) -> None:
+def test_implicit_default_ctor_is_resolved(ladybug_db_path_call_graph_smoke: Path) -> None:
     """B1: `new Svc()` (Svc has no explicit ctor) resolves to Svc#<init>() with
     strategy='constructor' and resolved=true, not a phantom."""
-    db = kuzu_db_path_call_graph_smoke
+    db = ladybug_db_path_call_graph_smoke
     conn = _connect(db)
     for caller_method in ("byLocal", "shadowLocalOverField"):
         rows = _rows(
@@ -254,10 +254,10 @@ def test_implicit_default_ctor_is_resolved(kuzu_db_path_call_graph_smoke: Path) 
 
 # ---- B2: implicit super to java.lang.Object ----
 
-def test_implicit_super_to_object_uses_implicit_super_strategy(kuzu_db_path_call_graph_smoke: Path) -> None:
+def test_implicit_super_to_object_uses_implicit_super_strategy(ladybug_db_path_call_graph_smoke: Path) -> None:
     """B2: WildUtils() has no extends clause; its synthesized implicit-super call must
     use strategy='implicit_super' and confidence=0.90, not phantom/0.0."""
-    db = kuzu_db_path_call_graph_smoke
+    db = ladybug_db_path_call_graph_smoke
     conn = _connect(db)
     rows = _rows(
         conn,
@@ -279,11 +279,11 @@ def test_implicit_super_to_object_uses_implicit_super_strategy(kuzu_db_path_call
 
 # ---- B3: static-import to JDK keeps high confidence ----
 
-def test_static_import_to_jdk_keeps_high_confidence(kuzu_db_path_call_graph_smoke: Path) -> None:
+def test_static_import_to_jdk_keeps_high_confidence(ladybug_db_path_call_graph_smoke: Path) -> None:
     """B3: StaticImportTest.m calls requireNonNull via explicit static import.
     The edge must carry strategy='static_import', confidence>=0.95, resolved=false
     (callee is JDK phantom), not phantom/0.0."""
-    db = kuzu_db_path_call_graph_smoke
+    db = ladybug_db_path_call_graph_smoke
     conn = _connect(db)
     rows = _rows(
         conn,
@@ -300,15 +300,15 @@ def test_static_import_to_jdk_keeps_high_confidence(kuzu_db_path_call_graph_smok
 
 
 def test_min_confidence_filter_keeps_high_confidence_static_import_callers(
-    kuzu_db_path_call_graph_smoke: Path,
+    ladybug_db_path_call_graph_smoke: Path,
 ) -> None:
     """B3: find_callers with min_confidence=0.9 must still return StaticImportTest
     for the JDK requireNonNull needle (previously returned empty because edge was 0.0)."""
-    db = kuzu_db_path_call_graph_smoke
+    db = ladybug_db_path_call_graph_smoke
     try:
-        KuzuGraph._instance = None
-        KuzuGraph._instance_path = None
-        g = KuzuGraph(str(db))
+        LadybugGraph._instance = None
+        LadybugGraph._instance_path = None
+        g = LadybugGraph(str(db))
         edges = g.find_callers(
             "java.util.Objects#requireNonNull(1)",
             depth=1,
@@ -325,13 +325,13 @@ def test_min_confidence_filter_keeps_high_confidence_static_import_callers(
             e.dst.fqn for e in edges
         ]
     finally:
-        KuzuGraph._instance = None
-        KuzuGraph._instance_path = None
+        LadybugGraph._instance = None
+        LadybugGraph._instance_path = None
 
 
-def test_d1_phantom_method_ref_and_invocation_share_symbol(kuzu_db_path_call_graph_smoke: Path) -> None:
+def test_d1_phantom_method_ref_and_invocation_share_symbol(ladybug_db_path_call_graph_smoke: Path) -> None:
     """D1: method ref (arg_count=-1) and normal call to same unindexed callee share one dst Symbol."""
-    db = kuzu_db_path_call_graph_smoke
+    db = ladybug_db_path_call_graph_smoke
     conn = _connect(db)
     rows = _rows(
         conn,
@@ -350,9 +350,9 @@ def test_d1_phantom_method_ref_and_invocation_share_symbol(kuzu_db_path_call_gra
     assert set(arities) == {-1, 0}, f"edges should keep site arities on CALLS; got {arities}"
 
 
-def test_d2_method_ref_unambiguous_emits_resolved_arity_on_calls_edge(kuzu_db_path_call_graph_smoke: Path) -> None:
+def test_d2_method_ref_unambiguous_emits_resolved_arity_on_calls_edge(ladybug_db_path_call_graph_smoke: Path) -> None:
     """D2: single matching method for a :: ref — CALLS.arg_count is the method arity, not -1."""
-    db = kuzu_db_path_call_graph_smoke
+    db = ladybug_db_path_call_graph_smoke
     conn = _connect(db)
     rows = _rows(
         conn,

@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import kuzu
+import ladybug
 
-from build_ast_graph import GraphTables, write_kuzu
-from kuzu_queries import KuzuGraph
+from build_ast_graph import GraphTables, write_ladybug
+from ladybug_queries import LadybugGraph
 
 _FIXTURE = Path(__file__).resolve().parent / "fixtures" / "cross_service_smoke"
 
@@ -65,18 +65,18 @@ def test_feign_route_node_is_not_emitted(graph_tables_cross_service_smoke: Graph
 
 
 def test_meta_reports_exposes_suppressed_feign_count(tmp_path: Path, graph_tables_cross_service_smoke: GraphTables) -> None:
-    db_path = tmp_path / "feign_meta.kuzu"
+    db_path = tmp_path / "feign_meta.lbug"
     tables = graph_tables_cross_service_smoke
-    write_kuzu(db_path, tables, source_root=_FIXTURE, verbose=False)
-    KuzuGraph._instance = None
-    KuzuGraph._instance_path = None
-    assert KuzuGraph(str(db_path)).meta()["pass4_exposes_suppressed_feign"] == 0
+    write_ladybug(db_path, tables, source_root=_FIXTURE, verbose=False)
+    LadybugGraph._instance = None
+    LadybugGraph._instance_path = None
+    assert LadybugGraph(str(db_path)).meta()["pass4_exposes_suppressed_feign"] == 0
 
 
 def test_meta_returns_none_for_old_graphs(tmp_path: Path) -> None:
-    db_path = tmp_path / "legacy_meta.kuzu"
-    db = kuzu.Database(str(db_path))
-    conn = kuzu.Connection(db)
+    db_path = tmp_path / "legacy_meta.lbug"
+    db = ladybug.Database(str(db_path))
+    conn = ladybug.Connection(db)
     conn.execute(
         "CREATE NODE TABLE GraphMeta("
         "key STRING PRIMARY KEY, "
@@ -144,9 +144,9 @@ def test_meta_returns_none_for_old_graphs(tmp_path: Path) -> None:
         },
     )
     conn.close()
-    KuzuGraph._instance = None
-    KuzuGraph._instance_path = None
-    assert KuzuGraph(str(db_path)).meta()["pass4_exposes_suppressed_feign"] is None
+    LadybugGraph._instance = None
+    LadybugGraph._instance_path = None
+    assert LadybugGraph(str(db_path)).meta()["pass4_exposes_suppressed_feign"] is None
 
 
 def test_no_change_to_async_routes(graph_tables_cross_service_smoke: GraphTables) -> None:

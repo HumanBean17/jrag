@@ -22,17 +22,17 @@ from java_codebase_rag.config import (
     resolved_sbert_model_for_process_env,
     resolve_operator_config,
 )
-from kuzu_queries import KuzuGraph, resolve_kuzu_path
+from ladybug_queries import LadybugGraph, resolve_ladybug_path
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
 from search_lancedb import TABLES
 
 _COCOINDEX_TARGET = "java_index_flow_lancedb.py:JavaCodeIndexLance"
 _INSTRUCTIONS = (
-    "Java codebase graph navigator (LanceDB + Kuzu). "
+    "Java codebase graph navigator (LanceDB + Ladybug). "
     "Tools: search (NL/code locate), find (structured NodeFilter), describe (one node + edge_summary: stored edge-label counts and optional composed keys for type Symbols and override-axis virtual keys for method Symbols), "
     "neighbors (one hop; you MUST pass direction in|out AND edge_types list — no defaults), "
-    "resolve (identifier-shaped lookup for symbol/route/client/producer — three statuses one|many|none). "
+    "resolve (identifier-shaped lookup for symbol/route/client/producer — three statuses one|many/none). "
     "NodeFilter `filter` is a JSON object (preferred); a JSON-encoded string is also accepted as a fallback. "
     "Unknown filter keys and populated fields not applicable to the effective node kind fail with success=false and message. "
     "Edge labels: EXTENDS, IMPLEMENTS, INJECTS, OVERRIDES, DECLARES, DECLARES_CLIENT, DECLARES_PRODUCER, CALLS, EXPOSES, HTTP_CALLS, ASYNC_CALLS; "
@@ -169,32 +169,32 @@ def _cocoindex_subprocess_env(project_root: Path) -> dict[str, str]:
 
 
 def _graph_enabled() -> bool:
-    return KuzuGraph.exists()
+    return LadybugGraph.exists()
 
 
 def _graph_meta_output() -> GraphMetaOutput:
-    if not KuzuGraph.exists():
+    if not LadybugGraph.exists():
         return GraphMetaOutput(
             success=True,
             enabled=False,
-            db_path=resolve_kuzu_path(),
-            message="Kuzu graph not present; run java-codebase-rag reprocess or build_ast_graph.py",
+            db_path=resolve_ladybug_path(),
+            message="Ladybug graph not present; run java-codebase-rag reprocess or build_ast_graph.py",
         )
     try:
-        graph = KuzuGraph.get()
+        graph = LadybugGraph.get()
         meta = graph.meta()
     except Exception as e:
         return GraphMetaOutput(
             success=False,
             enabled=_graph_enabled(),
-            db_path=resolve_kuzu_path(),
-            message=f"Kuzu open failed: {e}",
+            db_path=resolve_ladybug_path(),
+            message=f"Ladybug open failed: {e}",
         )
     if "error" in meta:
         return GraphMetaOutput(
             success=False,
             enabled=_graph_enabled(),
-            db_path=meta.get("db_path", resolve_kuzu_path()),
+            db_path=meta.get("db_path", resolve_ladybug_path()),
             message=str(meta["error"]),
         )
     try:
@@ -212,7 +212,7 @@ def _graph_meta_output() -> GraphMetaOutput:
     return GraphMetaOutput(
         success=True,
         enabled=_graph_enabled(),
-        db_path=meta.get("db_path", resolve_kuzu_path()),
+        db_path=meta.get("db_path", resolve_ladybug_path()),
         ontology_version=int(meta.get("ontology_version") or 0),
         built_at=int(meta.get("built_at") or 0),
         source_root=str(meta.get("source_root") or ""),
@@ -337,8 +337,8 @@ async def run_refresh_pipeline(*, quiet: bool = False, verbose: bool = True) -> 
                     str(builder),
                     "--source-root",
                     str(root),
-                    "--kuzu-path",
-                    resolve_kuzu_path(),
+                    "--ladybug-path",
+                    resolve_ladybug_path(),
                 ]
                 if not quiet:
                     graph_args.append("--verbose")

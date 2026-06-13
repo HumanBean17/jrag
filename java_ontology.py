@@ -141,7 +141,7 @@ Cardinality = Literal["many_to_many", "many_to_one", "one_to_many", "one_to_one"
 @dataclass(frozen=True)
 class EdgeAttr:
     name: str
-    kuzu_type: str
+    graph_type: str
     purpose: str
 
 

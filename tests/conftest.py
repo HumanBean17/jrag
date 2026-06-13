@@ -1,7 +1,7 @@
 """Shared pytest fixtures for the mcp_lancedb_bundle test suite.
 
 Session-scoped graphs are built once per static corpus (see ``tests/README.md``).
-The bank-chat chain ``corpus_root → kuzu_db_path → mcp_env → kuzu_graph → mcp_server``
+The bank-chat chain ``corpus_root → ladybug_db_path → mcp_env → ladybug_graph → mcp_server``
 runs pass1–5 + ``write_kuzu`` (no pass6) so Tier-1 caller-edge tests match the
 pre-refactor bank pipeline while avoiding a second full parse for MCP tests.
 
@@ -45,20 +45,20 @@ def corpus_root() -> Path:
 
 def _session_db_path(tmp_path_factory: pytest.TempPathFactory, name: str) -> Path:
     base = tmp_path_factory.mktemp(f"kuzu_{name}")
-    return base / "code_graph.kuzu"
+    return base / "code_graph.lbug"
 
 
 @pytest.fixture(scope="session")
-def kuzu_db_path(tmp_path_factory, corpus_root: Path) -> Path:
+def ladybug_db_path(tmp_path_factory, corpus_root: Path) -> Path:
     """Bank-chat Kuzu DB: pass1–5 + ``write_kuzu`` (no pass6)."""
-    import kuzu
+    import ladybug
 
-    from _builders import build_kuzu_to
+    from _builders import build_ladybug_to
 
     db_path = _session_db_path(tmp_path_factory, "bank_chat")
-    build_kuzu_to(corpus_root, db_path, max_pass=5)
+    build_ladybug_to(corpus_root, db_path, max_pass=5)
 
-    conn = kuzu.Connection(kuzu.Database(str(db_path), read_only=True))
+    conn = ladybug.Connection(ladybug.Database(str(db_path), read_only=True))
     n_types = 0
     r = conn.execute("MATCH (s:Symbol) WHERE s.kind = 'class' RETURN count(*) AS n")
     if r.has_next():
@@ -71,14 +71,14 @@ def kuzu_db_path(tmp_path_factory, corpus_root: Path) -> Path:
 
 
 @pytest.fixture(scope="session")
-def mcp_env(kuzu_db_path: Path, tmp_path_factory) -> dict[str, str]:
+def mcp_env(ladybug_db_path: Path, tmp_path_factory) -> dict[str, str]:
     """Configure env vars the MCP server reads on startup.
 
-    ``JAVA_CODEBASE_RAG_INDEX_DIR`` is the parent of ``code_graph.kuzu`` so
-    ``resolve_kuzu_path()`` matches the session graph fixture. Lance tables
+    ``JAVA_CODEBASE_RAG_INDEX_DIR`` is the parent of ``code_graph.lbug`` so
+    ``resolve_ladybug_path()`` matches the session graph fixture. Lance tables
     are not required for graph-only tools.
     """
-    idx_dir = kuzu_db_path.parent
+    idx_dir = ladybug_db_path.parent
     env = {
         "JAVA_CODEBASE_RAG_INDEX_DIR": str(idx_dir),
         "JAVA_CODEBASE_RAG_SOURCE_ROOT": str(CORPUS_ROOT),
@@ -89,17 +89,17 @@ def mcp_env(kuzu_db_path: Path, tmp_path_factory) -> dict[str, str]:
 
 
 @pytest.fixture(scope="session")
-def kuzu_graph(mcp_env, kuzu_db_path: Path):
-    """Read-only KuzuGraph singleton bound to the session DB."""
-    from kuzu_queries import KuzuGraph
+def ladybug_graph(mcp_env, ladybug_db_path: Path):
+    """Read-only LadybugGraph singleton bound to the session DB."""
+    from ladybug_queries import LadybugGraph
 
-    KuzuGraph._instance = None
-    KuzuGraph._instance_path = None
-    return KuzuGraph.get(str(kuzu_db_path))
+    LadybugGraph._instance = None
+    LadybugGraph._instance_path = None
+    return LadybugGraph.get(str(ladybug_db_path))
 
 
 @pytest.fixture(scope="session")
-def mcp_server(mcp_env, kuzu_graph):
+def mcp_server(mcp_env, ladybug_graph):
     """A FastMCP server instance with all tools registered."""
     from server import create_mcp_server
 
@@ -110,68 +110,68 @@ def mcp_server(mcp_env, kuzu_graph):
 
 
 @pytest.fixture(scope="session")
-def kuzu_db_path_call_graph_smoke(tmp_path_factory) -> Path:
-    from _builders import build_kuzu_to
+def ladybug_db_path_call_graph_smoke(tmp_path_factory) -> Path:
+    from _builders import build_ladybug_to
 
     root = TESTS_DIR / "fixtures" / "call_graph_smoke"
     assert root.is_dir(), root
     db_path = _session_db_path(tmp_path_factory, "call_graph_smoke")
-    return build_kuzu_to(root, db_path, max_pass=3)
+    return build_ladybug_to(root, db_path, max_pass=3)
 
 
 @pytest.fixture(scope="session")
-def kuzu_db_path_route_extraction_smoke(tmp_path_factory) -> Path:
-    from _builders import build_kuzu_to
+def ladybug_db_path_route_extraction_smoke(tmp_path_factory) -> Path:
+    from _builders import build_ladybug_to
 
     root = TESTS_DIR / "fixtures" / "route_extraction_smoke"
     assert root.is_dir(), root
     db_path = _session_db_path(tmp_path_factory, "route_extraction_smoke")
-    return build_kuzu_to(root, db_path, max_pass=4)
+    return build_ladybug_to(root, db_path, max_pass=4)
 
 
 @pytest.fixture(scope="session")
-def kuzu_graph_route_extraction_smoke(kuzu_db_path_route_extraction_smoke: Path):
-    """Read-only ``KuzuGraph`` for ``route_extraction_smoke`` (own DB path; not ``KuzuGraph.get``)."""
-    from kuzu_queries import KuzuGraph
+def ladybug_graph_route_extraction_smoke(ladybug_db_path_route_extraction_smoke: Path):
+    """Read-only ``LadybugGraph`` for ``route_extraction_smoke`` (own DB path; not ``LadybugGraph.get``)."""
+    from ladybug_queries import LadybugGraph
 
-    return KuzuGraph(str(kuzu_db_path_route_extraction_smoke))
+    return LadybugGraph(str(ladybug_db_path_route_extraction_smoke))
 
 
 @pytest.fixture(scope="session")
-def kuzu_db_path_cross_service_smoke(tmp_path_factory) -> Path:
-    from _builders import build_kuzu_to
+def ladybug_db_path_cross_service_smoke(tmp_path_factory) -> Path:
+    from _builders import build_ladybug_to
 
     root = TESTS_DIR / "fixtures" / "cross_service_smoke"
     assert root.is_dir(), root
     db_path = _session_db_path(tmp_path_factory, "cross_service_smoke")
-    return build_kuzu_to(root, db_path, max_pass=6)
+    return build_ladybug_to(root, db_path, max_pass=6)
 
 
 @pytest.fixture(scope="session")
-def kuzu_db_path_fqn_collision_smoke(tmp_path_factory) -> Path:
-    from _builders import build_kuzu_to
+def ladybug_db_path_fqn_collision_smoke(tmp_path_factory) -> Path:
+    from _builders import build_ladybug_to
 
     root = TESTS_DIR / "fixtures" / "fqn_collision_smoke"
     assert root.is_dir(), root
     db_path = _session_db_path(tmp_path_factory, "fqn_collision_smoke")
-    return build_kuzu_to(root, db_path, max_pass=3)
+    return build_ladybug_to(root, db_path, max_pass=3)
 
 
 @pytest.fixture(scope="session")
-def kuzu_graph_fqn_collision_smoke(kuzu_db_path_fqn_collision_smoke: Path):
-    from kuzu_queries import KuzuGraph
+def ladybug_graph_fqn_collision_smoke(ladybug_db_path_fqn_collision_smoke: Path):
+    from ladybug_queries import LadybugGraph
 
-    return KuzuGraph(str(kuzu_db_path_fqn_collision_smoke))
+    return LadybugGraph(str(ladybug_db_path_fqn_collision_smoke))
 
 
 @pytest.fixture(scope="session")
-def kuzu_db_path_http_caller_smoke(tmp_path_factory) -> Path:
-    from _builders import build_kuzu_to
+def ladybug_db_path_http_caller_smoke(tmp_path_factory) -> Path:
+    from _builders import build_ladybug_to
 
     root = TESTS_DIR / "fixtures" / "http_caller_smoke"
     assert root.is_dir(), root
     db_path = _session_db_path(tmp_path_factory, "http_caller_smoke")
-    return build_kuzu_to(root, db_path, max_pass=5)
+    return build_ladybug_to(root, db_path, max_pass=5)
 
 
 @pytest.fixture(scope="session")

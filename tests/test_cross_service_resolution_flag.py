@@ -6,10 +6,10 @@ import shutil
 from contextlib import redirect_stderr
 from pathlib import Path
 
-import kuzu
+import ladybug
 import pytest
 
-from _builders import build_graph_tables_to, build_kuzu_to
+from _builders import build_graph_tables_to, build_ladybug_to
 from build_ast_graph import GraphTables
 from graph_enrich import _load_config_cross_service_resolution
 
@@ -49,7 +49,7 @@ def _build_tables(project_root: Path) -> GraphTables:
 
 
 def _build_db(project_root: Path, db_path: Path) -> None:
-    build_kuzu_to(project_root, db_path, max_pass=6)
+    build_ladybug_to(project_root, db_path, max_pass=6)
 
 
 def test_cross_service_resolution_auto_default(tmp_path: Path) -> None:
@@ -125,7 +125,7 @@ def test_brownfield_only_suppresses_feign_auto_cross_service(tmp_path: Path) -> 
 
 
 def test_meta_reports_cross_service_resolution(tmp_path: Path) -> None:
-    from kuzu_queries import KuzuGraph
+    from ladybug_queries import LadybugGraph
 
     root = tmp_path / "proj"
     _copy_fixture(root)
@@ -133,27 +133,27 @@ def test_meta_reports_cross_service_resolution(tmp_path: Path) -> None:
         "cross_service_resolution: brownfield_only\n",
         encoding="utf-8",
     )
-    db = tmp_path / "g.kuzu"
+    db = tmp_path / "g.lbug"
     _build_db(root, db)
-    KuzuGraph._instance = None
-    KuzuGraph._instance_path = None
-    assert KuzuGraph(str(db)).meta()["cross_service_resolution"] == "brownfield_only"
+    LadybugGraph._instance = None
+    LadybugGraph._instance_path = None
+    assert LadybugGraph(str(db)).meta()["cross_service_resolution"] == "brownfield_only"
 
     root2 = tmp_path / "proj2"
     _copy_fixture(root2)
-    db2 = tmp_path / "g2.kuzu"
+    db2 = tmp_path / "g2.lbug"
     _build_db(root2, db2)
-    KuzuGraph._instance = None
-    KuzuGraph._instance_path = None
-    assert KuzuGraph(str(db2)).meta()["cross_service_resolution"] == "auto"
+    LadybugGraph._instance = None
+    LadybugGraph._instance_path = None
+    assert LadybugGraph(str(db2)).meta()["cross_service_resolution"] == "auto"
 
 
 def test_meta_resolution_null_for_old_graphs(tmp_path: Path) -> None:
-    from kuzu_queries import KuzuGraph
+    from ladybug_queries import LadybugGraph
 
-    db_path = tmp_path / "legacy.kuzu"
-    db = kuzu.Database(str(db_path))
-    conn = kuzu.Connection(db)
+    db_path = tmp_path / "legacy.lbug"
+    db = ladybug.Database(str(db_path))
+    conn = ladybug.Connection(db)
     conn.execute(
         "CREATE NODE TABLE GraphMeta("
         "key STRING PRIMARY KEY, "
@@ -218,9 +218,9 @@ def test_meta_resolution_null_for_old_graphs(tmp_path: Path) -> None:
         },
     )
     conn.close()
-    KuzuGraph._instance = None
-    KuzuGraph._instance_path = None
-    assert KuzuGraph(str(db_path)).meta()["cross_service_resolution"] is None
+    LadybugGraph._instance = None
+    LadybugGraph._instance_path = None
+    assert LadybugGraph(str(db_path)).meta()["cross_service_resolution"] is None
 
 
 def test_unknown_value_falls_back_to_auto(tmp_path: Path) -> None:

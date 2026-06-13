@@ -3,8 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
-from build_ast_graph import GraphTables, _match_call_edge, pass6_match_edges, write_kuzu
-from kuzu_queries import KuzuGraph
+from build_ast_graph import GraphTables, _match_call_edge, pass6_match_edges, write_ladybug
+from ladybug_queries import LadybugGraph
 
 _FIXTURE = Path(__file__).resolve().parent / "fixtures" / "cross_service_smoke"
 _HTTP_CALLER = Path(__file__).resolve().parent / "fixtures" / "http_caller_smoke"
@@ -66,11 +66,11 @@ def test_cross_service_match_outcome_unchanged_after_client_migration() -> None:
 def test_find_route_callers_still_returns_expected_feign_caller(tmp_path: Path) -> None:
     tables = _build_tables()
     pass6_match_edges(tables, verbose=False)
-    db_path = tmp_path / "client_hints.kuzu"
-    write_kuzu(db_path, tables, source_root=_FIXTURE, verbose=False)
-    KuzuGraph._instance = None
-    KuzuGraph._instance_path = None
-    g = KuzuGraph(str(db_path))
+    db_path = tmp_path / "client_hints.lbug"
+    write_ladybug(db_path, tables, source_root=_FIXTURE, verbose=False)
+    LadybugGraph._instance = None
+    LadybugGraph._instance_path = None
+    g = LadybugGraph(str(db_path))
     caller_id = _member_id(
         tables,
         parent_fqn="smoke.a.BFeignClient",

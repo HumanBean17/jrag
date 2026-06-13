@@ -7,21 +7,21 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import kuzu
+import ladybug
 
-from kuzu_queries import KuzuGraph
-
-
-def _connect(db_path: Path) -> kuzu.Connection:
-    return kuzu.Connection(kuzu.Database(str(db_path), read_only=True))
+from ladybug_queries import LadybugGraph
 
 
-def _scalar(conn: kuzu.Connection, query: str, params: dict | None = None) -> int:
+def _connect(db_path: Path) -> ladybug.Connection:
+    return ladybug.Connection(ladybug.Database(str(db_path), read_only=True))
+
+
+def _scalar(conn: ladybug.Connection, query: str, params: dict | None = None) -> int:
     r = conn.execute(query, params or {})
     return int(r.get_next()[0] or 0) if r.has_next() else 0
 
 
-def _column(conn: kuzu.Connection, query: str, params: dict | None = None) -> list:
+def _column(conn: ladybug.Connection, query: str, params: dict | None = None) -> list:
     r = conn.execute(query, params or {})
     out: list = []
     while r.has_next():
@@ -29,15 +29,15 @@ def _column(conn: kuzu.Connection, query: str, params: dict | None = None) -> li
     return out
 
 
-def test_bank_graph_meta_brownfield_percentages_positive(kuzu_db_path: Path) -> None:
-    meta = KuzuGraph(str(kuzu_db_path)).meta()
+def test_bank_graph_meta_brownfield_percentages_positive(ladybug_db_path: Path) -> None:
+    meta = LadybugGraph(str(ladybug_db_path)).meta()
     assert float(meta.get("routes_from_brownfield_pct") or 0.0) > 0.0
     assert float(meta.get("http_clients_from_brownfield_pct") or 0.0) > 0.0
     assert float(meta.get("async_producers_from_brownfield_pct") or 0.0) > 0.0
 
 
-def test_bank_brownfield_http_route_on_chat_events(kuzu_db_path: Path) -> None:
-    conn = _connect(kuzu_db_path)
+def test_bank_brownfield_http_route_on_chat_events(ladybug_db_path: Path) -> None:
+    conn = _connect(ladybug_db_path)
     rows = _column(
         conn,
         "MATCH (rt:Route) "
@@ -54,8 +54,8 @@ def test_bank_brownfield_http_route_on_chat_events(kuzu_db_path: Path) -> None:
     assert n_exposes >= 1
 
 
-def test_bank_codebase_http_client_on_join_operator(kuzu_db_path: Path) -> None:
-    conn = _connect(kuzu_db_path)
+def test_bank_codebase_http_client_on_join_operator(ladybug_db_path: Path) -> None:
+    conn = _connect(ladybug_db_path)
     rows = _column(
         conn,
         "MATCH (c:Client) "
@@ -69,8 +69,8 @@ def test_bank_codebase_http_client_on_join_operator(kuzu_db_path: Path) -> None:
     assert str(layer) == "layer_c_source"
 
 
-def test_bank_compliance_listener_async_route_layer_c(kuzu_db_path: Path) -> None:
-    conn = _connect(kuzu_db_path)
+def test_bank_compliance_listener_async_route_layer_c(ladybug_db_path: Path) -> None:
+    conn = _connect(ladybug_db_path)
     topics = _column(
         conn,
         "MATCH (m:Symbol)-[:EXPOSES]->(rt:Route) "
@@ -82,8 +82,8 @@ def test_bank_compliance_listener_async_route_layer_c(kuzu_db_path: Path) -> Non
     assert topic_set == {"banking.chat.compliance.review"}
 
 
-def test_bank_event_stream_bridge_codebase_producers_container(kuzu_db_path: Path) -> None:
-    conn = _connect(kuzu_db_path)
+def test_bank_event_stream_bridge_codebase_producers_container(ladybug_db_path: Path) -> None:
+    conn = _connect(ladybug_db_path)
     rows = _column(
         conn,
         "MATCH (m:Symbol)-[:DECLARES_PRODUCER]->(pr:Producer) "

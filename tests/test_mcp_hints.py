@@ -6,9 +6,9 @@ from typing import Any
 
 import pytest
 
-from _builders import build_kuzu_to
+from _builders import build_ladybug_to
 from java_ontology import FUZZY_STRATEGY_SET
-from kuzu_queries import KuzuGraph
+from ladybug_queries import LadybugGraph
 from mcp_hints import (
     _StructuredHint,
     finalize_structured_hints,
@@ -37,14 +37,14 @@ def _hints(output_kind, payload):
 
 
 @pytest.fixture
-def override_axis_graph(tmp_path: Path) -> KuzuGraph:
-    db_path = tmp_path / "code_graph.kuzu"
-    build_kuzu_to(_OVERRIDE_AXIS_FIXTURE, db_path, max_pass=5)
-    return KuzuGraph(str(db_path))
+def override_axis_graph(tmp_path: Path) -> LadybugGraph:
+    db_path = tmp_path / "code_graph.lbug"
+    build_ladybug_to(_OVERRIDE_AXIS_FIXTURE, db_path, max_pass=5)
+    return LadybugGraph(str(db_path))
 
 
-def _type_symbol_id_with_member_clients(kuzu_graph) -> str:
-    rows = kuzu_graph._rows(  # noqa: SLF001
+def _type_symbol_id_with_member_clients(ladybug_graph) -> str:
+    rows = ladybug_graph._rows(  # noqa: SLF001
         "MATCH (t:Symbol)-[:DECLARES]->(m:Symbol)-[:DECLARES_CLIENT]->(:Client) "
         "WHERE t.kind IN $kinds "
         "RETURN t.id AS id ORDER BY t.fqn LIMIT 1",
@@ -54,8 +54,8 @@ def _type_symbol_id_with_member_clients(kuzu_graph) -> str:
     return str(rows[0]["id"])
 
 
-def _controller_class_id_with_exposes(kuzu_graph) -> str:
-    rows = kuzu_graph._rows(  # noqa: SLF001
+def _controller_class_id_with_exposes(ladybug_graph) -> str:
+    rows = ladybug_graph._rows(  # noqa: SLF001
         "MATCH (t:Symbol)-[:DECLARES]->(m:Symbol)-[:EXPOSES]->(:Route) "
         "WHERE t.role = 'CONTROLLER' AND t.kind = 'class' "
         "RETURN t.id AS id LIMIT 1",
@@ -64,8 +64,8 @@ def _controller_class_id_with_exposes(kuzu_graph) -> str:
     return str(rows[0]["id"])
 
 
-def _type_symbol_id_with_member_producers(kuzu_graph) -> str:
-    rows = kuzu_graph._rows(  # noqa: SLF001
+def _type_symbol_id_with_member_producers(ladybug_graph) -> str:
+    rows = ladybug_graph._rows(  # noqa: SLF001
         "MATCH (t:Symbol)-[:DECLARES]->(m:Symbol)-[:DECLARES_PRODUCER]->(:Producer) "
         "WHERE t.kind IN $kinds "
         "RETURN t.id AS id ORDER BY t.fqn LIMIT 1",
@@ -76,8 +76,8 @@ def _type_symbol_id_with_member_producers(kuzu_graph) -> str:
     return str(rows[0]["id"])
 
 
-def _interface_method_with_override_rollups(kuzu_graph) -> str:
-    rows = kuzu_graph._rows(  # noqa: SLF001
+def _interface_method_with_override_rollups(ladybug_graph) -> str:
+    rows = ladybug_graph._rows(  # noqa: SLF001
         "MATCH (iface:Symbol {fqn: $fqn})-[:DECLARES]->(m:Symbol) "
         "WHERE m.kind = 'method' AND m.name = 'requestAssignment' "
         "RETURN m.id AS id LIMIT 1",
@@ -87,26 +87,26 @@ def _interface_method_with_override_rollups(kuzu_graph) -> str:
     return str(rows[0]["id"])
 
 
-def _method_id_declares_client_and_other_out_edge(kuzu_graph) -> str | None:
+def _method_id_declares_client_and_other_out_edge(ladybug_graph) -> str | None:
     for pattern in (
         "MATCH (m:Symbol {kind: 'method'})-[:DECLARES_CLIENT]->() MATCH (m)-[:CALLS]->() RETURN m.id AS id LIMIT 1",
         "MATCH (m:Symbol {kind: 'method'})-[:DECLARES_CLIENT]->(:Client)-[:HTTP_CALLS]->() RETURN m.id AS id LIMIT 1",
     ):
-        rows = kuzu_graph._rows(pattern)  # noqa: SLF001
+        rows = ladybug_graph._rows(pattern)  # noqa: SLF001
         if rows:
             return str(rows[0]["id"])
     return None
 
 
-def _method_declares_client(kuzu_graph) -> str:
-    mid = _method_id_declares_client_and_other_out_edge(kuzu_graph)
+def _method_declares_client(ladybug_graph) -> str:
+    mid = _method_id_declares_client_and_other_out_edge(ladybug_graph)
     if mid is None:
         pytest.skip("no method with DECLARES_CLIENT + outbound edge in fixture")
     return mid
 
 
-def _method_id_without_dispatch_rollups(kuzu_graph) -> str:
-    rows = kuzu_graph._rows(  # noqa: SLF001
+def _method_id_without_dispatch_rollups(ladybug_graph) -> str:
+    rows = ladybug_graph._rows(  # noqa: SLF001
         "MATCH (m:Symbol) "
         "WHERE m.kind = 'method' "
         "AND NOT list_contains(COALESCE(m.modifiers, []), 'static') "
@@ -124,20 +124,20 @@ def _method_id_without_dispatch_rollups(kuzu_graph) -> str:
     return str(rows[0]["id"])
 
 
-def _method_id_with_empty_describe_hints(kuzu_graph) -> str:
-    rows = kuzu_graph._rows(  # noqa: SLF001
+def _method_id_with_empty_describe_hints(ladybug_graph) -> str:
+    rows = ladybug_graph._rows(  # noqa: SLF001
         "MATCH (m:Symbol) WHERE m.kind = 'method' RETURN m.id AS id LIMIT 100",
     )
     for row in rows:
         mid = str(row["id"])
-        out = describe_v2(mid, graph=kuzu_graph)
+        out = describe_v2(mid, graph=ladybug_graph)
         if out.success and out.record and out.hints_structured == [] and out.advisories == []:
             return mid
     pytest.fail("no method with empty describe hints in fixture")
 
 
-def _controller_method_many_calls(kuzu_graph) -> str:
-    rows = kuzu_graph._rows(  # noqa: SLF001
+def _controller_method_many_calls(ladybug_graph) -> str:
+    rows = ladybug_graph._rows(  # noqa: SLF001
         "MATCH (m:Symbol)-[e:CALLS]->() WHERE m.kind = 'method' "
         "WITH m, count(e) AS nout WHERE nout >= 10 RETURN m.id AS id LIMIT 1",
     )
@@ -145,24 +145,24 @@ def _controller_method_many_calls(kuzu_graph) -> str:
     return str(rows[0]["id"])
 
 
-def _route_id(kuzu_graph) -> str:
-    rows = kuzu_graph._rows(  # noqa: SLF001
+def _route_id(ladybug_graph) -> str:
+    rows = ladybug_graph._rows(  # noqa: SLF001
         "MATCH (r:Route) RETURN r.id AS id ORDER BY r.id LIMIT 1"
     )
     assert rows
     return str(rows[0]["id"])
 
 
-def _client_id(kuzu_graph) -> str:
-    rows = kuzu_graph._rows(  # noqa: SLF001
+def _client_id(ladybug_graph) -> str:
+    rows = ladybug_graph._rows(  # noqa: SLF001
         "MATCH (c:Client) RETURN c.id AS id ORDER BY c.id LIMIT 1"
     )
     assert rows
     return str(rows[0]["id"])
 
 
-def _class_symbol_id(kuzu_graph) -> str:
-    rows = kuzu_graph._rows(  # noqa: SLF001
+def _class_symbol_id(ladybug_graph) -> str:
+    rows = ladybug_graph._rows(  # noqa: SLF001
         "MATCH (t:Symbol) WHERE t.kind = 'class' RETURN t.id AS id LIMIT 1")
     assert rows
     return str(rows[0]["id"])
@@ -255,8 +255,8 @@ def _edge_result(*, strategy: str | None = None, edge_type: str = "DECLARES_CLIE
     }
 
 
-def _method_id_with_fuzzy_calls(kuzu_graph) -> str:
-    rows = kuzu_graph._rows(  # noqa: SLF001
+def _method_id_with_fuzzy_calls(ladybug_graph) -> str:
+    rows = ladybug_graph._rows(  # noqa: SLF001
         "MATCH (m:Symbol)-[e:CALLS]->() "
         "WHERE e.strategy IN $strategies "
         "RETURN m.id AS id LIMIT 1",
@@ -269,23 +269,23 @@ def _method_id_with_fuzzy_calls(kuzu_graph) -> str:
 
 
 
-def _producer_id(kuzu_graph) -> str:
-    rows = kuzu_graph._rows("MATCH (p:Producer) RETURN p.id AS id ORDER BY p.id LIMIT 1")  # noqa: SLF001
+def _producer_id(ladybug_graph) -> str:
+    rows = ladybug_graph._rows("MATCH (p:Producer) RETURN p.id AS id ORDER BY p.id LIMIT 1")  # noqa: SLF001
     if not rows:
         pytest.fail("session fixture lacks Producer nodes (post-flip SCHEMA required)")
     return str(rows[0]["id"])
 
 
-def _method_id(kuzu_graph) -> str:
-    rows = kuzu_graph._rows(  # noqa: SLF001
+def _method_id(ladybug_graph) -> str:
+    rows = ladybug_graph._rows(  # noqa: SLF001
         "MATCH (m:Symbol) WHERE m.kind = 'method' RETURN m.id AS id LIMIT 1",
     )
     assert rows
     return str(rows[0]["id"])
 
 
-def _annotation_symbol_id(kuzu_graph) -> str | None:
-    rows = kuzu_graph._rows(  # noqa: SLF001
+def _annotation_symbol_id(ladybug_graph) -> str | None:
+    rows = ladybug_graph._rows(  # noqa: SLF001
         "MATCH (s:Symbol) WHERE s.kind = 'annotation' RETURN s.id AS id LIMIT 1",
     )
     if not rows:
@@ -313,54 +313,54 @@ def _annotation_symbol_id(kuzu_graph) -> str | None:
 
 
 
-def test_hints_clean_outputs_empty(kuzu_graph) -> None:
-    mid = _method_id_with_empty_describe_hints(kuzu_graph)
-    out = describe_v2(mid, graph=kuzu_graph)
+def test_hints_clean_outputs_empty(ladybug_graph) -> None:
+    mid = _method_id_with_empty_describe_hints(ladybug_graph)
+    out = describe_v2(mid, graph=ladybug_graph)
     assert out.success and out.record
     assert out.hints_structured == []
     assert out.advisories == []
 
-    count_rows = kuzu_graph._rows(  # noqa: SLF001
+    count_rows = ladybug_graph._rows(  # noqa: SLF001
         "MATCH (s:Symbol) WHERE s.role = 'CONTROLLER' RETURN count(*) AS n",
     )
     n_controllers = int(count_rows[0]["n"])
     assert n_controllers > 0
     assert n_controllers <= 500, "fixture has >500 CONTROLLER symbols; narrow filter for clean find hints"
-    fout = find_v2("symbol", {"role": "CONTROLLER"}, graph=kuzu_graph, limit=500, offset=0)
+    fout = find_v2("symbol", {"role": "CONTROLLER"}, graph=ladybug_graph, limit=500, offset=0)
     assert fout.success and len(fout.results) == n_controllers
     assert fout.hints_structured == []
     assert fout.advisories == []
 
 
-def _resolve_symbol_id_status_one(kuzu_graph) -> str:
-    rows = kuzu_graph._rows(  # noqa: SLF001
+def _resolve_symbol_id_status_one(ladybug_graph) -> str:
+    rows = ladybug_graph._rows(  # noqa: SLF001
         "MATCH (s:Symbol) WHERE s.kind = 'class' RETURN s.id AS id LIMIT 1",
     )
     assert rows
     sym_id = str(rows[0]["id"])
-    out = resolve_v2(sym_id, hint_kind="symbol", graph=kuzu_graph)
+    out = resolve_v2(sym_id, hint_kind="symbol", graph=ladybug_graph)
     if not (out.success and out.status == "one"):
         pytest.fail(f"expected status one for symbol id {sym_id!r}, got {out.status!r}")
     return sym_id
 
 
-def _resolve_symbol_short_name_status_many(kuzu_graph) -> str:
-    rows = kuzu_graph._rows(  # noqa: SLF001
+def _resolve_symbol_short_name_status_many(ladybug_graph) -> str:
+    rows = ladybug_graph._rows(  # noqa: SLF001
         "MATCH (s:Symbol) WHERE s.kind = 'method' RETURN s.name AS name",
     )
     counts = Counter(str(r["name"]) for r in rows if r.get("name"))
     dup_name = next((name for name, c in counts.items() if c >= 2), None)
     if dup_name is None:
         pytest.fail("no duplicated method short names in bank-chat fixture")
-    out = resolve_v2(dup_name, hint_kind="symbol", graph=kuzu_graph)
+    out = resolve_v2(dup_name, hint_kind="symbol", graph=ladybug_graph)
     if not (out.success and out.status == "many" and len(out.candidates) >= 2):
         pytest.fail(f"expected status many for short name {dup_name!r}, got {out.status!r}")
     return dup_name
 
 
-def _resolve_symbol_identifier_status_none(kuzu_graph) -> str:
+def _resolve_symbol_identifier_status_none(ladybug_graph) -> str:
     ident = "com.nonexistent.ZzzMissing"
-    out = resolve_v2(ident, hint_kind="symbol", graph=kuzu_graph)
+    out = resolve_v2(ident, hint_kind="symbol", graph=ladybug_graph)
     if not (out.success and out.status == "none"):
         pytest.fail(f"expected status none for {ident!r}, got {out.status!r}")
     return ident
@@ -381,8 +381,8 @@ def _resolve_symbol_identifier_status_none(kuzu_graph) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _interface_with_implements_in(kuzu_graph) -> str:
-    rows = kuzu_graph._rows(  # noqa: SLF001
+def _interface_with_implements_in(ladybug_graph) -> str:
+    rows = ladybug_graph._rows(  # noqa: SLF001
         "MATCH (iface:Symbol)<-[:IMPLEMENTS]-(impl:Symbol) "
         "WHERE iface.kind = 'interface' "
         "WITH iface, count(impl) AS nin WHERE nin > 0 "
@@ -393,8 +393,8 @@ def _interface_with_implements_in(kuzu_graph) -> str:
     return str(rows[0]["id"])
 
 
-def _class_with_implements_out(kuzu_graph) -> str:
-    rows = kuzu_graph._rows(  # noqa: SLF001
+def _class_with_implements_out(ladybug_graph) -> str:
+    rows = ladybug_graph._rows(  # noqa: SLF001
         "MATCH (cls:Symbol)-[:IMPLEMENTS]->(iface:Symbol) "
         "WHERE cls.kind = 'class' "
         "WITH cls, count(iface) AS nout WHERE nout > 0 "
@@ -406,7 +406,7 @@ def _class_with_implements_out(kuzu_graph) -> str:
     # (DECLARES_CLIENT/EXPOSES/DECLARES_PRODUCER suppresses IMPLEMENTS).
     for row in rows:
         tid = str(row["id"])
-        out = describe_v2(tid, graph=kuzu_graph)
+        out = describe_v2(tid, graph=ladybug_graph)
         if any(
             h.tool == "neighbors" and h.args.get("edge_types") == ["IMPLEMENTS"]
             for h in out.hints_structured
@@ -415,8 +415,8 @@ def _class_with_implements_out(kuzu_graph) -> str:
     pytest.skip("no class with unsuppressed IMPLEMENTS hint in fixture")
 
 
-def _service_with_injects_out(kuzu_graph) -> str:
-    rows = kuzu_graph._rows(  # noqa: SLF001
+def _service_with_injects_out(ladybug_graph) -> str:
+    rows = ladybug_graph._rows(  # noqa: SLF001
         "MATCH (cls:Symbol)-[:INJECTS]->(dep:Symbol) "
         "WHERE cls.kind = 'class' AND cls.role = 'SERVICE' "
         "RETURN cls.id AS id LIMIT 1",
@@ -426,8 +426,8 @@ def _service_with_injects_out(kuzu_graph) -> str:
     return str(rows[0]["id"])
 
 
-def _type_with_injects_in(kuzu_graph) -> str:
-    rows = kuzu_graph._rows(  # noqa: SLF001
+def _type_with_injects_in(ladybug_graph) -> str:
+    rows = ladybug_graph._rows(  # noqa: SLF001
         "MATCH (dep:Symbol)<-[:INJECTS]-(cls:Symbol) "
         "WHERE dep.kind IN ['interface', 'class'] "
         "RETURN DISTINCT dep.id AS id LIMIT 1",
@@ -437,8 +437,8 @@ def _type_with_injects_in(kuzu_graph) -> str:
     return str(rows[0]["id"])
 
 
-def _method_with_mid_calls_out(kuzu_graph) -> str:
-    rows = kuzu_graph._rows(  # noqa: SLF001
+def _method_with_mid_calls_out(ladybug_graph) -> str:
+    rows = ladybug_graph._rows(  # noqa: SLF001
         "MATCH (m:Symbol)-[c:CALLS]->() WHERE m.kind = 'method' "
         "WITH m, count(c) AS nout WHERE nout >= 3 AND nout <= 9 "
         "RETURN m.id AS id LIMIT 1",
@@ -448,8 +448,8 @@ def _method_with_mid_calls_out(kuzu_graph) -> str:
     return str(rows[0]["id"])
 
 
-def _method_with_overrides_out(kuzu_graph) -> str:
-    rows = kuzu_graph._rows(  # noqa: SLF001
+def _method_with_overrides_out(ladybug_graph) -> str:
+    rows = ladybug_graph._rows(  # noqa: SLF001
         "MATCH (m:Symbol)-[:OVERRIDES]->() WHERE m.kind = 'method' "
         "RETURN m.id AS id LIMIT 1",
     )
@@ -458,15 +458,15 @@ def _method_with_overrides_out(kuzu_graph) -> str:
     return str(rows[0]["id"])
 
 
-def _method_with_unresolved(kuzu_graph) -> str:
-    rows = kuzu_graph._rows(  # noqa: SLF001
+def _method_with_unresolved(ladybug_graph) -> str:
+    rows = ladybug_graph._rows(  # noqa: SLF001
         "MATCH (m:Symbol)-[c:CALLS]->() WHERE m.kind = 'method' "
         "WITH m, count(c) AS nout WHERE nout >= 1 "
         "RETURN m.id AS id, m.fqn AS fqn LIMIT 200",
     )
     for r in rows:
         mid = str(r["id"])
-        out = describe_v2(mid, graph=kuzu_graph)
+        out = describe_v2(mid, graph=ladybug_graph)
         if out.record and isinstance(out.record.data, dict):
             unc = int(out.record.data.get("unresolved_call_sites_total") or 0)
             if unc > 0:
@@ -474,8 +474,8 @@ def _method_with_unresolved(kuzu_graph) -> str:
     pytest.skip("no method with unresolved_call_sites_total > 0 in fixture")
 
 
-def _client_with_http_calls_out(kuzu_graph) -> str:
-    rows = kuzu_graph._rows(  # noqa: SLF001
+def _client_with_http_calls_out(ladybug_graph) -> str:
+    rows = ladybug_graph._rows(  # noqa: SLF001
         "MATCH (c:Client)-[:HTTP_CALLS]->() RETURN DISTINCT c.id AS id LIMIT 1",
     )
     if not rows:
@@ -483,8 +483,8 @@ def _client_with_http_calls_out(kuzu_graph) -> str:
     return str(rows[0]["id"])
 
 
-def _producer_with_async_calls_out(kuzu_graph) -> str:
-    rows = kuzu_graph._rows(  # noqa: SLF001
+def _producer_with_async_calls_out(ladybug_graph) -> str:
+    rows = ladybug_graph._rows(  # noqa: SLF001
         "MATCH (p:Producer)-[:ASYNC_CALLS]->() RETURN DISTINCT p.id AS id LIMIT 1",
     )
     if not rows:
@@ -529,9 +529,9 @@ def _struct(output_kind, payload) -> list[_StructuredHint]:
 # --- Describe structured hints ---
 
 
-def test_structured_hint_describe_type_rollup_clients(kuzu_graph) -> None:
-    tid = _type_symbol_id_with_member_clients(kuzu_graph)
-    out = describe_v2(tid, graph=kuzu_graph)
+def test_structured_hint_describe_type_rollup_clients(ladybug_graph) -> None:
+    tid = _type_symbol_id_with_member_clients(ladybug_graph)
+    out = describe_v2(tid, graph=ladybug_graph)
     assert out.success and out.record
     _assert_structured_hint(
         out.hints_structured,
@@ -541,9 +541,9 @@ def test_structured_hint_describe_type_rollup_clients(kuzu_graph) -> None:
     )
 
 
-def test_structured_hint_describe_type_rollup_routes(kuzu_graph) -> None:
-    tid = _controller_class_id_with_exposes(kuzu_graph)
-    out = describe_v2(tid, graph=kuzu_graph)
+def test_structured_hint_describe_type_rollup_routes(ladybug_graph) -> None:
+    tid = _controller_class_id_with_exposes(ladybug_graph)
+    out = describe_v2(tid, graph=ladybug_graph)
     assert out.success and out.record
     _assert_structured_hint(
         out.hints_structured,
@@ -553,9 +553,9 @@ def test_structured_hint_describe_type_rollup_routes(kuzu_graph) -> None:
     )
 
 
-def test_structured_hint_describe_type_rollup_producers(kuzu_graph) -> None:
-    tid = _type_symbol_id_with_member_producers(kuzu_graph)
-    out = describe_v2(tid, graph=kuzu_graph)
+def test_structured_hint_describe_type_rollup_producers(ladybug_graph) -> None:
+    tid = _type_symbol_id_with_member_producers(ladybug_graph)
+    out = describe_v2(tid, graph=ladybug_graph)
     assert out.success and out.record
     _assert_structured_hint(
         out.hints_structured,
@@ -565,9 +565,9 @@ def test_structured_hint_describe_type_rollup_producers(kuzu_graph) -> None:
     )
 
 
-def test_structured_hint_describe_method_overriders(kuzu_graph) -> None:
-    mid = _interface_method_with_override_rollups(kuzu_graph)
-    out = describe_v2(mid, graph=kuzu_graph)
+def test_structured_hint_describe_method_overriders(ladybug_graph) -> None:
+    mid = _interface_method_with_override_rollups(ladybug_graph)
+    out = describe_v2(mid, graph=ladybug_graph)
     assert out.success and out.record
     _assert_structured_hint(
         out.hints_structured,
@@ -577,9 +577,9 @@ def test_structured_hint_describe_method_overriders(kuzu_graph) -> None:
     )
 
 
-def test_structured_hint_describe_method_clients_in_overriders(kuzu_graph) -> None:
-    mid = _interface_method_with_override_rollups(kuzu_graph)
-    out = describe_v2(mid, graph=kuzu_graph)
+def test_structured_hint_describe_method_clients_in_overriders(ladybug_graph) -> None:
+    mid = _interface_method_with_override_rollups(ladybug_graph)
+    out = describe_v2(mid, graph=ladybug_graph)
     assert out.success and out.record
     _assert_structured_hint(
         out.hints_structured,
@@ -589,7 +589,7 @@ def test_structured_hint_describe_method_clients_in_overriders(kuzu_graph) -> No
     )
 
 
-def test_structured_hint_describe_method_producers_in_overriders(override_axis_graph: KuzuGraph) -> None:
+def test_structured_hint_describe_method_producers_in_overriders(override_axis_graph: LadybugGraph) -> None:
     rows = override_axis_graph._rows(  # noqa: SLF001
         "MATCH (t:Symbol {fqn: $fqn})-[:DECLARES]->(m:Symbol) "
         "WHERE m.kind = 'method' AND m.name = 'publish' "
@@ -608,7 +608,7 @@ def test_structured_hint_describe_method_producers_in_overriders(override_axis_g
     )
 
 
-def test_structured_hint_describe_method_routes_in_overriders(override_axis_graph: KuzuGraph) -> None:
+def test_structured_hint_describe_method_routes_in_overriders(override_axis_graph: LadybugGraph) -> None:
     rows = override_axis_graph._rows(  # noqa: SLF001
         "MATCH (t:Symbol {fqn: $fqn})-[:DECLARES]->(m:Symbol) "
         "WHERE m.kind = 'method' AND m.name = 'handle' "
@@ -627,9 +627,9 @@ def test_structured_hint_describe_method_routes_in_overriders(override_axis_grap
     )
 
 
-def test_structured_hint_describe_method_outbound_client(kuzu_graph) -> None:
-    mid = _method_declares_client(kuzu_graph)
-    out = describe_v2(mid, graph=kuzu_graph)
+def test_structured_hint_describe_method_outbound_client(ladybug_graph) -> None:
+    mid = _method_declares_client(ladybug_graph)
+    out = describe_v2(mid, graph=ladybug_graph)
     assert out.success and out.record
     _assert_structured_hint(
         out.hints_structured,
@@ -639,15 +639,15 @@ def test_structured_hint_describe_method_outbound_client(kuzu_graph) -> None:
     )
 
 
-def test_structured_hint_describe_method_outbound_producer(kuzu_graph) -> None:
-    rows = kuzu_graph._rows(  # noqa: SLF001
+def test_structured_hint_describe_method_outbound_producer(ladybug_graph) -> None:
+    rows = ladybug_graph._rows(  # noqa: SLF001
         "MATCH (m:Symbol)-[:DECLARES_PRODUCER]->(:Producer) WHERE m.kind = 'method' "
         "RETURN m.id AS id LIMIT 1",
     )
     if not rows:
         pytest.skip("no method with DECLARES_PRODUCER in fixture")
     mid = str(rows[0]["id"])
-    out = describe_v2(mid, graph=kuzu_graph)
+    out = describe_v2(mid, graph=ladybug_graph)
     assert out.success and out.record
     _assert_structured_hint(
         out.hints_structured,
@@ -657,13 +657,13 @@ def test_structured_hint_describe_method_outbound_producer(kuzu_graph) -> None:
     )
 
 
-def test_structured_hint_describe_method_inbound_route(kuzu_graph) -> None:
-    rows = kuzu_graph._rows(  # noqa: SLF001
+def test_structured_hint_describe_method_inbound_route(ladybug_graph) -> None:
+    rows = ladybug_graph._rows(  # noqa: SLF001
         "MATCH (m:Symbol)-[:EXPOSES]->(:Route) WHERE m.kind = 'method' RETURN m.id AS id LIMIT 1",
     )
     assert rows
     mid = str(rows[0]["id"])
-    out = describe_v2(mid, graph=kuzu_graph)
+    out = describe_v2(mid, graph=ladybug_graph)
     assert out.success and out.record
     _assert_structured_hint(
         out.hints_structured,
@@ -673,9 +673,9 @@ def test_structured_hint_describe_method_inbound_route(kuzu_graph) -> None:
     )
 
 
-def test_structured_hint_describe_route_declaring(kuzu_graph) -> None:
-    rid = _route_id(kuzu_graph)
-    out = describe_v2(rid, graph=kuzu_graph)
+def test_structured_hint_describe_route_declaring(ladybug_graph) -> None:
+    rid = _route_id(ladybug_graph)
+    out = describe_v2(rid, graph=ladybug_graph)
     assert out.success and out.record
     _assert_structured_hint(
         out.hints_structured,
@@ -685,9 +685,9 @@ def test_structured_hint_describe_route_declaring(kuzu_graph) -> None:
     )
 
 
-def test_structured_hint_describe_client_declaring(kuzu_graph) -> None:
-    cid = _client_id(kuzu_graph)
-    out = describe_v2(cid, graph=kuzu_graph)
+def test_structured_hint_describe_client_declaring(ladybug_graph) -> None:
+    cid = _client_id(ladybug_graph)
+    out = describe_v2(cid, graph=ladybug_graph)
     assert out.success and out.record
     _assert_structured_hint(
         out.hints_structured,
@@ -697,9 +697,9 @@ def test_structured_hint_describe_client_declaring(kuzu_graph) -> None:
     )
 
 
-def test_structured_hint_describe_producer_declaring(kuzu_graph) -> None:
-    pid = _producer_id(kuzu_graph)
-    out = describe_v2(pid, graph=kuzu_graph)
+def test_structured_hint_describe_producer_declaring(ladybug_graph) -> None:
+    pid = _producer_id(ladybug_graph)
+    out = describe_v2(pid, graph=ladybug_graph)
     assert out.success and out.record
     _assert_structured_hint(
         out.hints_structured,
@@ -712,9 +712,9 @@ def test_structured_hint_describe_producer_declaring(kuzu_graph) -> None:
 # --- Describe structural structured hints ---
 
 
-def test_structured_hints_describe_interface_implementors(kuzu_graph) -> None:
-    tid = _interface_with_implements_in(kuzu_graph)
-    out = describe_v2(tid, graph=kuzu_graph)
+def test_structured_hints_describe_interface_implementors(ladybug_graph) -> None:
+    tid = _interface_with_implements_in(ladybug_graph)
+    out = describe_v2(tid, graph=ladybug_graph)
     assert out.success and out.record
     _assert_structured_hint(
         out.hints_structured,
@@ -724,9 +724,9 @@ def test_structured_hints_describe_interface_implementors(kuzu_graph) -> None:
     )
 
 
-def test_structured_hints_describe_class_implements(kuzu_graph) -> None:
-    tid = _class_with_implements_out(kuzu_graph)
-    out = describe_v2(tid, graph=kuzu_graph)
+def test_structured_hints_describe_class_implements(ladybug_graph) -> None:
+    tid = _class_with_implements_out(ladybug_graph)
+    out = describe_v2(tid, graph=ladybug_graph)
     assert out.success and out.record
     _assert_structured_hint(
         out.hints_structured,
@@ -736,9 +736,9 @@ def test_structured_hints_describe_class_implements(kuzu_graph) -> None:
     )
 
 
-def test_structured_hints_describe_service_dependencies(kuzu_graph) -> None:
-    tid = _service_with_injects_out(kuzu_graph)
-    out = describe_v2(tid, graph=kuzu_graph)
+def test_structured_hints_describe_service_dependencies(ladybug_graph) -> None:
+    tid = _service_with_injects_out(ladybug_graph)
+    out = describe_v2(tid, graph=ladybug_graph)
     assert out.success and out.record
     _assert_structured_hint(
         out.hints_structured,
@@ -748,9 +748,9 @@ def test_structured_hints_describe_service_dependencies(kuzu_graph) -> None:
     )
 
 
-def test_structured_hints_describe_type_injectors(kuzu_graph) -> None:
-    tid = _type_with_injects_in(kuzu_graph)
-    out = describe_v2(tid, graph=kuzu_graph)
+def test_structured_hints_describe_type_injectors(ladybug_graph) -> None:
+    tid = _type_with_injects_in(ladybug_graph)
+    out = describe_v2(tid, graph=ladybug_graph)
     assert out.success and out.record
     _assert_structured_hint(
         out.hints_structured,
@@ -760,9 +760,9 @@ def test_structured_hints_describe_type_injectors(kuzu_graph) -> None:
     )
 
 
-def test_structured_hints_describe_method_outbound_calls(kuzu_graph) -> None:
-    mid = _method_with_mid_calls_out(kuzu_graph)
-    out = describe_v2(mid, graph=kuzu_graph)
+def test_structured_hints_describe_method_outbound_calls(ladybug_graph) -> None:
+    mid = _method_with_mid_calls_out(ladybug_graph)
+    out = describe_v2(mid, graph=ladybug_graph)
     assert out.success and out.record
     _assert_structured_hint(
         out.hints_structured,
@@ -772,9 +772,9 @@ def test_structured_hints_describe_method_outbound_calls(kuzu_graph) -> None:
     )
 
 
-def test_structured_hints_describe_method_super_declaration(kuzu_graph) -> None:
-    mid = _method_with_overrides_out(kuzu_graph)
-    out = describe_v2(mid, graph=kuzu_graph)
+def test_structured_hints_describe_method_super_declaration(ladybug_graph) -> None:
+    mid = _method_with_overrides_out(ladybug_graph)
+    out = describe_v2(mid, graph=ladybug_graph)
     assert out.success and out.record
     _assert_structured_hint(
         out.hints_structured,
@@ -784,9 +784,9 @@ def test_structured_hints_describe_method_super_declaration(kuzu_graph) -> None:
     )
 
 
-def test_structured_hints_describe_method_unresolved(kuzu_graph) -> None:
-    mid = _method_with_unresolved(kuzu_graph)
-    out = describe_v2(mid, graph=kuzu_graph)
+def test_structured_hints_describe_method_unresolved(ladybug_graph) -> None:
+    mid = _method_with_unresolved(ladybug_graph)
+    out = describe_v2(mid, graph=ladybug_graph)
     assert out.success and out.record
     _assert_structured_hint(
         out.hints_structured,
@@ -796,9 +796,9 @@ def test_structured_hints_describe_method_unresolved(kuzu_graph) -> None:
     )
 
 
-def test_structured_hints_describe_client_http_targets(kuzu_graph) -> None:
-    cid = _client_with_http_calls_out(kuzu_graph)
-    out = describe_v2(cid, graph=kuzu_graph)
+def test_structured_hints_describe_client_http_targets(ladybug_graph) -> None:
+    cid = _client_with_http_calls_out(ladybug_graph)
+    out = describe_v2(cid, graph=ladybug_graph)
     assert out.success and out.record
     _assert_structured_hint(
         out.hints_structured,
@@ -808,9 +808,9 @@ def test_structured_hints_describe_client_http_targets(kuzu_graph) -> None:
     )
 
 
-def test_structured_hints_describe_producer_async_targets(kuzu_graph) -> None:
-    pid = _producer_with_async_calls_out(kuzu_graph)
-    out = describe_v2(pid, graph=kuzu_graph)
+def test_structured_hints_describe_producer_async_targets(ladybug_graph) -> None:
+    pid = _producer_with_async_calls_out(ladybug_graph)
+    out = describe_v2(pid, graph=ladybug_graph)
     assert out.success and out.record
     _assert_structured_hint(
         out.hints_structured,
@@ -823,8 +823,8 @@ def test_structured_hints_describe_producer_async_targets(kuzu_graph) -> None:
 # --- Find structured hints ---
 
 
-def test_structured_hint_find_route_handler(kuzu_graph) -> None:
-    out = find_v2("route", {"path_prefix": "/api"}, graph=kuzu_graph, limit=500, offset=0)
+def test_structured_hint_find_route_handler(ladybug_graph) -> None:
+    out = find_v2("route", {"path_prefix": "/api"}, graph=ladybug_graph, limit=500, offset=0)
     assert out.success and out.results
     rid = out.results[0].id
     _assert_structured_hint(
@@ -835,8 +835,8 @@ def test_structured_hint_find_route_handler(kuzu_graph) -> None:
     )
 
 
-def test_structured_hint_find_client_http_targets(kuzu_graph) -> None:
-    out = find_v2("client", {"target_service": "smartcare-assign-chat"}, graph=kuzu_graph, limit=500)
+def test_structured_hint_find_client_http_targets(ladybug_graph) -> None:
+    out = find_v2("client", {"target_service": "smartcare-assign-chat"}, graph=ladybug_graph, limit=500)
     if not out.results:
         pytest.skip("no client with that target in fixture")
     cid = out.results[0].id
@@ -848,8 +848,8 @@ def test_structured_hint_find_client_http_targets(kuzu_graph) -> None:
     )
 
 
-def test_structured_hint_find_producer_async_targets(kuzu_graph) -> None:
-    out = find_v2("producer", {}, graph=kuzu_graph, limit=500)
+def test_structured_hint_find_producer_async_targets(ladybug_graph) -> None:
+    out = find_v2("producer", {}, graph=ladybug_graph, limit=500)
     if not out.results:
         pytest.skip("no producers in fixture")
     pid = out.results[0].id
@@ -861,8 +861,8 @@ def test_structured_hint_find_producer_async_targets(kuzu_graph) -> None:
     )
 
 
-def test_structured_hint_find_empty_resolve(kuzu_graph) -> None:
-    out = find_v2("client", {"target_service": "__no_such_target_service__"}, graph=kuzu_graph)
+def test_structured_hint_find_empty_resolve(ladybug_graph) -> None:
+    out = find_v2("client", {"target_service": "__no_such_target_service__"}, graph=ladybug_graph)
     assert out.success is True
     assert out.results == []
     _assert_structured_hint(
@@ -936,9 +936,9 @@ def test_structured_hint_neighbors_empty_wrong_kind() -> None:
             assert h.actionable is False
 
 
-def test_structured_hint_neighbors_success_declares_dot_key_clients(kuzu_graph) -> None:
-    class_id = _class_symbol_id(kuzu_graph)
-    out = neighbors_v2(class_id, direction="out", edge_types=["DECLARES"], graph=kuzu_graph, limit=50)
+def test_structured_hint_neighbors_success_declares_dot_key_clients(ladybug_graph) -> None:
+    class_id = _class_symbol_id(ladybug_graph)
+    out = neighbors_v2(class_id, direction="out", edge_types=["DECLARES"], graph=ladybug_graph, limit=50)
     assert out.success and out.results
     _assert_structured_hint(
         out.hints_structured,
@@ -948,9 +948,9 @@ def test_structured_hint_neighbors_success_declares_dot_key_clients(kuzu_graph) 
     )
 
 
-def test_structured_hint_neighbors_success_declares_dot_key_routes(kuzu_graph) -> None:
-    class_id = _class_symbol_id(kuzu_graph)
-    out = neighbors_v2(class_id, direction="out", edge_types=["DECLARES"], graph=kuzu_graph, limit=50)
+def test_structured_hint_neighbors_success_declares_dot_key_routes(ladybug_graph) -> None:
+    class_id = _class_symbol_id(ladybug_graph)
+    out = neighbors_v2(class_id, direction="out", edge_types=["DECLARES"], graph=ladybug_graph, limit=50)
     assert out.success and out.results
     _assert_structured_hint(
         out.hints_structured,
@@ -1048,9 +1048,9 @@ def test_structured_hint_prose_only_not_actionable() -> None:
     assert fanout, "expected actionable=False CALLS fanout hint"
 
 
-def test_structured_hint_describe_many_calls_not_actionable(kuzu_graph) -> None:
-    mid = _controller_method_many_calls(kuzu_graph)
-    out = describe_v2(mid, graph=kuzu_graph)
+def test_structured_hint_describe_many_calls_not_actionable(ladybug_graph) -> None:
+    mid = _controller_method_many_calls(ladybug_graph)
+    out = describe_v2(mid, graph=ladybug_graph)
     assert out.success and out.record
     _assert_structured_hint(
         out.hints_structured,
@@ -1098,10 +1098,10 @@ def test_structured_hints_dedup() -> None:
 
 
 
-def test_structured_hint_round_trip(kuzu_graph) -> None:
+def test_structured_hint_round_trip(ladybug_graph) -> None:
     """Integration: build structured hint args into an actual neighbors_v2 call."""
-    rid = _route_id(kuzu_graph)
-    out = describe_v2(rid, graph=kuzu_graph)
+    rid = _route_id(ladybug_graph)
+    out = describe_v2(rid, graph=ladybug_graph)
     assert out.success and out.record
     assert out.hints_structured
     h = out.hints_structured[0]
@@ -1113,7 +1113,7 @@ def test_structured_hint_round_trip(kuzu_graph) -> None:
         ids=h.args["ids"],
         direction=h.args["direction"],
         edge_types=h.args["edge_types"],
-        graph=kuzu_graph,
+        graph=ladybug_graph,
     )
     assert nout.success
 

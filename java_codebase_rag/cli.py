@@ -24,10 +24,10 @@ from java_codebase_rag.config import (
 from java_codebase_rag.pipeline import clip, run_build_ast_graph, run_cocoindex_drop, run_cocoindex_update, run_incremental_graph
 from java_ontology import VALID_UNRESOLVED_CALL_REASONS
 
-KUZU_INCREMENTAL_TRACKING_ISSUE_URL = "https://github.com/HumanBean17/java-codebase-rag/issues/73"
+LADYBUG_INCREMENTAL_TRACKING_ISSUE_URL = "https://github.com/HumanBean17/java-codebase-rag/issues/73"
 
 _INCREMENT_WARNING_LINES = (
-    "WARNING: AST graph (Kuzu) incremental rebuild is not yet implemented.",
+    "WARNING: AST graph (LadybugDB) incremental rebuild is not yet implemented.",
     "The graph reflects the index state from the last `init` or `reprocess`,",
     "which means `find`, `neighbors`, and `describe` may return stale results",
     "for files changed since then.",
@@ -37,8 +37,8 @@ _INCREMENT_WARNING_LINES = (
     "For an up-to-date graph, run:",
     "    java-codebase-rag reprocess",
     "",
-    "Track progress on Kuzu incremental rebuild:",
-    f"    {KUZU_INCREMENTAL_TRACKING_ISSUE_URL}",
+    "Track progress on LadybugDB incremental rebuild:",
+    f"    {LADYBUG_INCREMENTAL_TRACKING_ISSUE_URL}",
 )
 
 _REFRESH_DEPRECATION = (
@@ -47,7 +47,7 @@ _REFRESH_DEPRECATION = (
 )
 
 _REPROCESS_DRIFT_VECTORS_ONLY = (
-    "java-codebase-rag reprocess: rebuilt vectors only; graph (code_graph.kuzu) was NOT rebuilt "
+    "java-codebase-rag reprocess: rebuilt vectors only; graph (code_graph.lbug) was NOT rebuilt "
     "and may now reflect a stale source snapshot."
 )
 
@@ -178,7 +178,7 @@ def _emit(value: Any) -> None:
     print(json.dumps(payload, default=_jsonable, sort_keys=True, indent=None))
 
 
-def _emit_increment_kuzu_warning() -> None:
+def _emit_increment_ladybug_warning() -> None:
     for line in _INCREMENT_WARNING_LINES:
         print(line, file=sys.stderr)
 
@@ -289,7 +289,7 @@ def _cmd_init(args: argparse.Namespace) -> int:
             print(file=sys.stderr, flush=True)
         g = run_build_ast_graph(
             source_root=cfg.source_root,
-            kuzu_path=cfg.kuzu_path,
+            ladybug_path=cfg.ladybug_path,
             verbose=verbose,
             quiet=bool(args.quiet),
             env=env,
@@ -319,7 +319,7 @@ def _cmd_increment(args: argparse.Namespace) -> int:
     # Check for --vectors-only flag
     vectors_only = bool(getattr(args, "vectors_only", False))
     if vectors_only:
-        _emit_increment_kuzu_warning()
+        _emit_increment_ladybug_warning()
 
     def work() -> int:
         env = cfg.subprocess_env()
@@ -350,7 +350,7 @@ def _cmd_increment(args: argparse.Namespace) -> int:
         # Run incremental graph update
         g = run_incremental_graph(
             source_root=cfg.source_root,
-            kuzu_path=cfg.kuzu_path,
+            ladybug_path=cfg.ladybug_path,
             verbose=bool(args.verbose),
             quiet=bool(args.quiet),
             env=env,
@@ -437,7 +437,7 @@ def _cmd_reprocess(args: argparse.Namespace) -> int:
         if graph_only:
             g = run_build_ast_graph(
                 source_root=cfg.source_root,
-                kuzu_path=cfg.kuzu_path,
+                ladybug_path=cfg.ladybug_path,
                 verbose=verbose,
                 quiet=bool(args.quiet),
                 env=env,
@@ -509,7 +509,7 @@ def _cmd_erase(args: argparse.Namespace) -> int:
     cfg = _resolved_from_ns(args)
     _startup_hints(cfg)
     cfg.apply_to_os_environ()
-    to_describe: list[Path] = [cfg.kuzu_path, cfg.cocoindex_db]
+    to_describe: list[Path] = [cfg.ladybug_path, cfg.cocoindex_db]
     if cfg.index_dir.is_dir():
         try:
             import lancedb
@@ -546,8 +546,8 @@ def _cmd_erase(args: argparse.Namespace) -> int:
             )
         elif drop.returncode != 0:
             print(clip(drop.stderr, 4000), file=sys.stderr)
-        if cfg.kuzu_path.exists():
-            shutil.rmtree(cfg.kuzu_path, ignore_errors=True)
+        if cfg.ladybug_path.exists():
+            shutil.rmtree(cfg.ladybug_path, ignore_errors=True)
         if cfg.cocoindex_db.exists():
             try:
                 cfg.cocoindex_db.unlink()
@@ -577,17 +577,17 @@ def _cmd_meta(args: argparse.Namespace) -> int:
     cfg = _resolved_from_ns(args)
     _startup_hints(cfg)
     cfg.apply_to_os_environ()
-    from kuzu_queries import KuzuGraph  # lazy
+    from ladybug_queries import LadybugGraph  # lazy
 
-    KuzuGraph._instance = None
-    KuzuGraph._instance_path = None
+    LadybugGraph._instance = None
+    LadybugGraph._instance_path = None
     payload = server._graph_meta_output().model_dump()
     payload["embedding_model"] = cfg.embedding_model
     payload["embedding_device"] = cfg.embedding_device
     payload["embedding_model_source"] = cfg.embedding_model_source
     payload["embedding_device_source"] = cfg.embedding_device_source
     payload["index_dir"] = str(cfg.index_dir.resolve())
-    payload["kuzu_path"] = str(cfg.kuzu_path.resolve())
+    payload["ladybug_path"] = str(cfg.ladybug_path.resolve())
     payload["index_dir_source"] = cfg.index_dir_source
     payload["hints_enabled"] = cfg.hints_enabled
     payload["hints_enabled_source"] = cfg.hints_enabled_source
@@ -637,12 +637,12 @@ def _cmd_unresolved_calls_list(args: argparse.Namespace) -> int:
     cfg = _resolved_from_ns(args)
     _startup_hints(cfg)
     cfg.apply_to_os_environ()
-    from kuzu_queries import KuzuGraph  # lazy
+    from ladybug_queries import LadybugGraph  # lazy
 
-    if not KuzuGraph.exists():
+    if not LadybugGraph.exists():
         _emit({"success": False, "message": "Kuzu graph not found"})
         return 1
-    graph = KuzuGraph.get()
+    graph = LadybugGraph.get()
     rows = graph.list_unresolved_call_sites(
         method_id=args.method_id,
         reason=args.reason,
@@ -658,12 +658,12 @@ def _cmd_unresolved_calls_stats(args: argparse.Namespace) -> int:
     cfg = _resolved_from_ns(args)
     _startup_hints(cfg)
     cfg.apply_to_os_environ()
-    from kuzu_queries import KuzuGraph  # lazy
+    from ladybug_queries import LadybugGraph  # lazy
 
-    if not KuzuGraph.exists():
+    if not LadybugGraph.exists():
         _emit({"success": False, "message": "Kuzu graph not found"})
         return 1
-    graph = KuzuGraph.get()
+    graph = LadybugGraph.get()
     buckets = graph.stats_unresolved_call_sites(by=args.by)
     total = sum(int(r.get("n") or 0) for r in buckets)
     _emit({"success": True, "total": total, "by": args.by, "buckets": buckets})
@@ -683,12 +683,12 @@ def _cmd_analyze_pr(args: argparse.Namespace) -> int:
         _emit({"success": False, "message": "Diff is empty"})
         return 1
     import pr_analysis  # lazy
-    from kuzu_queries import KuzuGraph  # lazy
+    from ladybug_queries import LadybugGraph  # lazy
 
-    if not KuzuGraph.exists():
+    if not LadybugGraph.exists():
         _emit({"success": False, "message": "Kuzu graph not found"})
         return 1
-    graph = KuzuGraph.get()
+    graph = LadybugGraph.get()
     report = pr_analysis.analyze_pr_pipeline(graph, diff_text)
     _emit(pr_analysis.pr_report_to_dict(report))
     return 0

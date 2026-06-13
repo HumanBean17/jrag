@@ -9,31 +9,48 @@ node / edge counts — those will drift as the fixture grows. See
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
 
-import kuzu
+import ladybug
 import pytest
 
-from _builders import build_kuzu_to
+from _builders import build_ladybug_to
 from ast_java import ONTOLOGY_VERSION
 from graph_enrich import _load_brownfield_overrides, collect_annotation_meta_chain
 
 
-def _connect(db_path: Path) -> kuzu.Connection:
-    db = kuzu.Database(str(db_path), read_only=True)
-    return kuzu.Connection(db)
+def _parse_ladybug_json(raw: str | None) -> dict:
+    """Parse JSON from LadybugDB which returns unquoted keys like {key: value}."""
+    if not raw:
+        return {}
+    # Convert {key: value} to {"key": value}
+    quoted = re.sub(r'(\w+):', r'"\1":', raw)
+    try:
+        return json.loads(quoted)
+    except Exception:
+        try:
+            # Fallback: try parsing as-is (for standard JSON)
+            return json.loads(raw)
+        except Exception:
+            return {}
 
 
-def _scalar(conn: kuzu.Connection, query: str) -> int:
+def _connect(db_path: Path) -> ladybug.Connection:
+    db = ladybug.Database(str(db_path), read_only=True)
+    return ladybug.Connection(db)
+
+
+def _scalar(conn: ladybug.Connection, query: str) -> int:
     r = conn.execute(query)
     if not r.has_next():
         return 0
     return int(r.get_next()[0] or 0)
 
 
-def _column(conn: kuzu.Connection, query: str, idx: int = 0) -> list:
+def _column(conn: ladybug.Connection, query: str, idx: int = 0) -> list:
     r = conn.execute(query)
     out: list = []
     while r.has_next():
@@ -41,12 +58,12 @@ def _column(conn: kuzu.Connection, query: str, idx: int = 0) -> list:
     return out
 
 
-def test_kuzu_db_directory_exists(kuzu_db_path: Path) -> None:
-    assert kuzu_db_path.exists()
+def test_kuzu_db_directory_exists(ladybug_db_path: Path) -> None:
+    assert ladybug_db_path.exists()
 
 
-def test_schema_has_all_expected_tables(kuzu_db_path: Path) -> None:
-    conn = _connect(kuzu_db_path)
+def test_schema_has_all_expected_tables(ladybug_db_path: Path) -> None:
+    conn = _connect(ladybug_db_path)
     # `CALL show_tables() RETURN *;` returns rows (id, name, type, ...) — name is at index 1.
     tables = set(_column(conn, "CALL show_tables() RETURN *;", idx=1))
     # We only assert the tables we depend on are present. The builder is
@@ -60,8 +77,8 @@ def test_schema_has_all_expected_tables(kuzu_db_path: Path) -> None:
     assert not missing, f"missing schema tables: {missing}; saw {tables}"
 
 
-def test_graph_meta_unresolved_counters_present(kuzu_db_path: Path) -> None:
-    conn = _connect(kuzu_db_path)
+def test_graph_meta_unresolved_counters_present(ladybug_db_path: Path) -> None:
+    conn = _connect(ladybug_db_path)
     r = conn.execute(
         "MATCH (m:GraphMeta) RETURN m.pass3_unresolved_phantom_receiver, "
         "m.pass3_unresolved_chained"
@@ -107,7 +124,7 @@ def test_calls_callee_declaring_role_matches_parent_symbol_role_yaml_brownfield(
         "    LegacyServiceMarker: SERVICE\n",
         encoding="utf-8",
     )
-    db_path = build_kuzu_to(root, tmp_path / "g.kuzu", max_pass=3)
+    db_path = build_ladybug_to(root, tmp_path / "g.lbug", max_pass=3)
     conn = _connect(db_path)
     mismatches = _scalar(
         conn,
@@ -127,9 +144,9 @@ def test_calls_callee_declaring_role_matches_parent_symbol_role_yaml_brownfield(
     assert roles == ["SERVICE"]
 
 
-def test_pass3_callee_declaring_role_bank_annotated_types(kuzu_db_path: Path) -> None:
+def test_pass3_callee_declaring_role_bank_annotated_types(ladybug_db_path: Path) -> None:
     """CALLS to methods on @Service declaring types carry callee_declaring_role=SERVICE."""
-    conn = _connect(kuzu_db_path)
+    conn = _connect(ladybug_db_path)
     rows = _column(
         conn,
         "MATCH (src:Symbol)-[c:CALLS]->(dst:Symbol) "
@@ -150,8 +167,8 @@ def test_pass3_callee_declaring_role_bank_annotated_types(kuzu_db_path: Path) ->
         assert all(str(r) == "REPOSITORY" for r in repo_rows), repo_rows
 
 
-def test_graph_meta_present_and_versioned(kuzu_db_path: Path) -> None:
-    conn = _connect(kuzu_db_path)
+def test_graph_meta_present_and_versioned(ladybug_db_path: Path) -> None:
+    conn = _connect(ladybug_db_path)
     r = conn.execute(
         "MATCH (m:GraphMeta) RETURN m.ontology_version, m.built_at, "
         "m.source_root, m.parse_errors, m.counts_json, "
@@ -181,51 +198,51 @@ def test_graph_meta_present_and_versioned(kuzu_db_path: Path) -> None:
     # accidental tree-sitter regressions that break every file at once.
     assert int(parse_errors) <= 0  # bank-chat-system is hand-written, no errors expected
     assert counts_json and counts_json.startswith("{")
-    counts = json.loads(counts_json)
+    counts = _parse_ladybug_json(counts_json)
     assert counts.get("routes", 0) >= 1
     assert int(routes_total) >= 1
     assert int(exposes_total) >= 1
     assert float(routes_resolved_pct) >= 0.0
-    by_fw = json.loads(routes_by_framework_raw)
+    by_fw = _parse_ladybug_json(routes_by_framework_raw)
     assert isinstance(by_fw, dict)
     assert len(by_fw) >= 1
     assert float(routes_from_brownfield_pct) >= 0.0
-    by_layer = json.loads(routes_by_layer_raw)
+    by_layer = _parse_ladybug_json(routes_by_layer_raw)
     assert isinstance(by_layer, dict)
 
 
-def test_each_node_kind_present(kuzu_db_path: Path) -> None:
+def test_each_node_kind_present(ladybug_db_path: Path) -> None:
     """Builder must emit at least one node of every Phase-1 kind we care about.
 
     Exact counts are a moving target; non-zero is the meaningful invariant.
     """
-    conn = _connect(kuzu_db_path)
+    conn = _connect(ladybug_db_path)
     kinds = set(_column(conn, "MATCH (s:Symbol) RETURN DISTINCT s.kind"))
     for required in ("package", "file", "class", "interface", "method", "constructor"):
         assert required in kinds, f"missing node kind: {required}; saw {kinds}"
 
 
-def test_each_edge_type_populated(kuzu_db_path: Path) -> None:
-    conn = _connect(kuzu_db_path)
+def test_each_edge_type_populated(ladybug_db_path: Path) -> None:
+    conn = _connect(ladybug_db_path)
     assert _scalar(conn, "MATCH ()-[e:EXTENDS]->() RETURN count(e)") > 0
     assert _scalar(conn, "MATCH ()-[e:IMPLEMENTS]->() RETURN count(e)") > 0
     assert _scalar(conn, "MATCH ()-[e:INJECTS]->() RETURN count(e)") > 0
 
 
-def test_calls_and_declares_edges_populated(kuzu_db_path: Path) -> None:
-    conn = _connect(kuzu_db_path)
+def test_calls_and_declares_edges_populated(ladybug_db_path: Path) -> None:
+    conn = _connect(ladybug_db_path)
     assert _scalar(conn, "MATCH ()-[e:CALLS]->() RETURN count(e)") > 0
     assert _scalar(conn, "MATCH ()-[e:DECLARES]->() RETURN count(e)") > 0
 
 
-def test_module_inference_recognises_both_layouts(kuzu_graph) -> None:
+def test_module_inference_recognises_both_layouts(ladybug_graph) -> None:
     """`module_for_path` must find each Maven module's name.
 
     The corpus exercises both a single-module project (chat-assign) and a
     multi-module reactor (chat-core/{chat-app,chat-engine,chat-domain,
     chat-contracts}). The MCP must handle both shapes.
     """
-    counts = kuzu_graph.module_counts()
+    counts = ladybug_graph.module_counts()
     # Defensive: don't pin every module to >0 in case the corpus is
     # trimmed; instead require both styles to be represented.
     assert counts.get("chat-assign", 0) > 0, counts
@@ -237,7 +254,7 @@ def test_module_inference_recognises_both_layouts(kuzu_graph) -> None:
     )
 
 
-def test_microservice_inference_groups_multi_module_reactor(kuzu_graph) -> None:
+def test_microservice_inference_groups_multi_module_reactor(ladybug_graph) -> None:
     """Multi-module reactor child modules must collapse to one microservice key.
 
     `chat-core` is the outermost build-marker ancestor for every
@@ -246,7 +263,7 @@ def test_microservice_inference_groups_multi_module_reactor(kuzu_graph) -> None:
     `chat-assign` is single-module so its module and microservice names
     coincide.
     """
-    counts = kuzu_graph.microservice_counts()
+    counts = ladybug_graph.microservice_counts()
     assert counts.get("chat-assign", 0) > 0, counts
     assert counts.get("chat-core", 0) > 0, counts
     # Inner module names must NOT appear at the microservice level — that
@@ -255,20 +272,20 @@ def test_microservice_inference_groups_multi_module_reactor(kuzu_graph) -> None:
     assert not (inner & set(counts)), counts
 
 
-def test_phantom_nodes_for_external_types(kuzu_db_path: Path) -> None:
+def test_phantom_nodes_for_external_types(ladybug_db_path: Path) -> None:
     """Spring Data repositories extend `JpaRepository` (an external type).
 
     The builder must materialise that as a *phantom* (unresolved) Symbol so
     EXTENDS/IMPLEMENTS edges are never dangling.
     """
-    conn = _connect(kuzu_db_path)
+    conn = _connect(ladybug_db_path)
     n_phantoms = _scalar(
         conn, "MATCH (s:Symbol) WHERE s.resolved = false RETURN count(s)"
     )
     assert n_phantoms > 0, "no phantom nodes — external type resolution may be silently dropping edges"
 
 
-def test_injects_edges_have_mechanism(kuzu_db_path: Path) -> None:
+def test_injects_edges_have_mechanism(ladybug_db_path: Path) -> None:
     """Every INJECTS edge should record *how* the injection happens.
 
     The bank-chat-system uses constructor injection throughout
@@ -277,20 +294,20 @@ def test_injects_edges_have_mechanism(kuzu_db_path: Path) -> None:
     edges are constructor-injected to leave room for future Lombok / setter
     samples.
     """
-    conn = _connect(kuzu_db_path)
+    conn = _connect(ladybug_db_path)
     mechanisms = set(_column(conn, "MATCH ()-[e:INJECTS]->() RETURN DISTINCT e.mechanism"))
     assert "constructor" in mechanisms, mechanisms
 
 
-def test_routes_and_exposes_populated(kuzu_db_path: Path) -> None:
-    conn = _connect(kuzu_db_path)
+def test_routes_and_exposes_populated(ladybug_db_path: Path) -> None:
+    conn = _connect(ladybug_db_path)
     assert _scalar(conn, "MATCH (r:Route) RETURN count(r)") >= 1
     assert _scalar(conn, "MATCH ()-[e:EXPOSES]->() RETURN count(e)") >= 1
 
 
-def test_route_id_includes_microservice(kuzu_db_path_route_extraction_smoke: Path) -> None:
+def test_route_id_includes_microservice(ladybug_db_path_route_extraction_smoke: Path) -> None:
     """Same HTTP path in two declared microservices → distinct Route primary keys."""
-    db_path = kuzu_db_path_route_extraction_smoke
+    db_path = ladybug_db_path_route_extraction_smoke
     conn = _connect(db_path)
     ids = _column(
         conn,
@@ -300,8 +317,8 @@ def test_route_id_includes_microservice(kuzu_db_path_route_extraction_smoke: Pat
     assert len(set(ids)) >= 2, ids
 
 
-def test_exposes_edge_direction(kuzu_db_path_route_extraction_smoke: Path) -> None:
-    db_path = kuzu_db_path_route_extraction_smoke
+def test_exposes_edge_direction(ladybug_db_path_route_extraction_smoke: Path) -> None:
+    db_path = ladybug_db_path_route_extraction_smoke
     conn = _connect(db_path)
     fwd = _scalar(conn, "MATCH (s:Symbol)-[:EXPOSES]->(r:Route) RETURN count(*)")
     rev = _scalar(conn, "MATCH (r:Route)-[:EXPOSES]->(s:Symbol) RETURN count(*)")
@@ -309,9 +326,9 @@ def test_exposes_edge_direction(kuzu_db_path_route_extraction_smoke: Path) -> No
     assert rev == 0
 
 
-def test_symbol_has_capabilities_column(kuzu_db_path: Path) -> None:
+def test_symbol_has_capabilities_column(ladybug_db_path: Path) -> None:
     """Symbol nodes must have a `capabilities` STRING[] column (ontology v4)."""
-    conn = _connect(kuzu_db_path)
+    conn = _connect(ladybug_db_path)
     # Simply SELECT a capabilities value — if the column doesn't exist Kuzu raises.
     try:
         r = conn.execute(
@@ -330,14 +347,14 @@ def test_cli_entrypoint_runs(tmp_path: Path, corpus_root: Path) -> None:
     This is an integration smoke test — it calls the script as a user would
     (via the venv Python) and asserts a non-empty Kuzu DB is written.
     """
-    target = tmp_path / "graph.kuzu"
+    target = tmp_path / "graph.lbug"
     script = Path(__file__).resolve().parent.parent / "build_ast_graph.py"
     proc = subprocess.run(
         [
             sys.executable,
             str(script),
             "--source-root", str(corpus_root),
-            "--kuzu-path", str(target),
+            "--ladybug-path", str(target),
         ],
         capture_output=True,
         text=True,
@@ -349,9 +366,9 @@ def test_cli_entrypoint_runs(tmp_path: Path, corpus_root: Path) -> None:
     assert _scalar(conn, "MATCH (s:Symbol) RETURN count(s)") > 0
 
 
-def test_pass3_no_phantom_chained_calls_rows(kuzu_db_path: Path) -> None:
+def test_pass3_no_phantom_chained_calls_rows(ladybug_db_path: Path) -> None:
     """HV19 — receiver-failure strategies must not appear on CALLS after PR-3."""
-    conn = _connect(kuzu_db_path)
+    conn = _connect(ladybug_db_path)
     n = _scalar(
         conn,
         "MATCH ()-[c:CALLS]->() "
@@ -360,8 +377,8 @@ def test_pass3_no_phantom_chained_calls_rows(kuzu_db_path: Path) -> None:
     assert n == 0, f"expected zero phantom/chained_receiver CALLS rows, got {n}"
 
 
-def test_pass3_unresolved_call_site_emitted(kuzu_db_path: Path) -> None:
-    conn = _connect(kuzu_db_path)
+def test_pass3_unresolved_call_site_emitted(ladybug_db_path: Path) -> None:
+    conn = _connect(ladybug_db_path)
     n_ucs = _scalar(conn, "MATCH (u:UnresolvedCallSite) RETURN count(u)")
     n_rel = _scalar(conn, "MATCH ()-[:UNRESOLVED_AT]->() RETURN count(*)")
     assert n_ucs >= 1, "bank fixture should emit UnresolvedCallSite rows"
@@ -376,9 +393,9 @@ def test_pass3_unresolved_call_site_emitted(kuzu_db_path: Path) -> None:
     assert len(reasons) >= 1
 
 
-def test_pass3_known_external_calls_preserved(kuzu_db_path: Path) -> None:
+def test_pass3_known_external_calls_preserved(ladybug_db_path: Path) -> None:
     """HV37 — JDK/external callee stays on CALLS with resolved=False, not phantom strategy."""
-    conn = _connect(kuzu_db_path)
+    conn = _connect(ladybug_db_path)
     rows = conn.execute(
         "MATCH (src:Symbol)-[c:CALLS]->(dst:Symbol) "
         "WHERE c.resolved = false AND c.strategy <> 'overload_ambiguous' "

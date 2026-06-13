@@ -201,7 +201,7 @@ def run_cocoindex_drop(env: dict[str, str], *, quiet: bool) -> subprocess.Comple
 def run_build_ast_graph(
     *,
     source_root: Path,
-    kuzu_path: Path,
+    ladybug_path: Path,
     verbose: bool,
     quiet: bool = False,
     env: dict[str, str] | None = None,
@@ -219,8 +219,8 @@ def run_build_ast_graph(
         str(builder),
         "--source-root",
         str(source_root),
-        "--kuzu-path",
-        str(kuzu_path),
+        "--ladybug-path",
+        str(ladybug_path),
     ]
     # Three-tier: --quiet (silent) / default (filtered progress) / --verbose (raw).
     # Default passes --verbose so the builder emits per-pass progress lines,
@@ -254,7 +254,7 @@ def run_build_ast_graph(
 def run_incremental_graph(
     *,
     source_root: Path,
-    kuzu_path: Path,
+    ladybug_path: Path,
     verbose: bool,
     quiet: bool = False,
     env: dict[str, str] | None = None,
@@ -273,8 +273,8 @@ def run_incremental_graph(
         str(builder),
         "--source-root",
         str(source_root),
-        "--kuzu-path",
-        str(kuzu_path),
+        "--ladybug-path",
+        str(ladybug_path),
         "--incremental",
     ]
     # Three-tier: --quiet (silent) / default (filtered progress) / --verbose (raw).

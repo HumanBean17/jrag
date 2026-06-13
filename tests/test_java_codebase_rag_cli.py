@@ -34,11 +34,11 @@ def _cocoindex_available() -> bool:
     return (Path(sys.executable).parent / "cocoindex").is_file()
 
 
-def _base_env(corpus_root: Path, kuzu_db_path: Path | None = None) -> dict[str, str]:
+def _base_env(corpus_root: Path, ladybug_db_path: Path | None = None) -> dict[str, str]:
     env = os.environ.copy()
     env["JAVA_CODEBASE_RAG_SOURCE_ROOT"] = str(corpus_root)
-    if kuzu_db_path is not None:
-        env["JAVA_CODEBASE_RAG_INDEX_DIR"] = str(kuzu_db_path.parent)
+    if ladybug_db_path is not None:
+        env["JAVA_CODEBASE_RAG_INDEX_DIR"] = str(ladybug_db_path.parent)
     return env
 
 
@@ -66,7 +66,7 @@ def _run_cli(args: list[str], *, env: dict[str, str], stdin: str | None = None) 
 def test_cli_init_refuses_when_index_paths_non_empty(tmp_path: Path) -> None:
     idx = tmp_path / "idx"
     idx.mkdir()
-    (idx / "code_graph.kuzu").mkdir()
+    (idx / "code_graph.lbug").mkdir()
     env = os.environ.copy()
     env["JAVA_CODEBASE_RAG_INDEX_DIR"] = str(idx)
     env["JAVA_CODEBASE_RAG_SOURCE_ROOT"] = str(tmp_path)
@@ -287,10 +287,10 @@ def test_index_dir_precedence_cli_over_env_over_yaml_over_default(
     assert r3.index_dir == b.resolve()
 
 
-def test_kuzu_path_derived_as_index_dir_code_graph_kuzu(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ladybug_path_derived_as_index_dir_code_graph_kuzu(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("JAVA_CODEBASE_RAG_INDEX_DIR", raising=False)
     r = resolve_operator_config(source_root=tmp_path, cli_index_dir=str(tmp_path / "idx"))
-    assert r.kuzu_path == r.index_dir / "code_graph.kuzu"
+    assert r.ladybug_path == r.index_dir / "code_graph.lbug"
 
 
 def test_help_output_includes_three_group_labels() -> None:
@@ -347,11 +347,11 @@ def test_increment_emits_kuzu_stale_warning_block(
     # Should NOT contain old stale warning
     assert "WARNING: AST graph (Kuzu) incremental rebuild is not yet implemented." not in err
     assert "java-codebase-rag reprocess" not in err
-    assert cli_mod.KUZU_INCREMENTAL_TRACKING_ISSUE_URL not in err
+    assert cli_mod.LADYBUG_INCREMENTAL_TRACKING_ISSUE_URL not in err
 
 
-def test_meta_reports_embedding_setting_source(corpus_root: Path, kuzu_db_path: Path) -> None:
-    env = _base_env(corpus_root, kuzu_db_path)
+def test_meta_reports_embedding_setting_source(corpus_root: Path, ladybug_db_path: Path) -> None:
+    env = _base_env(corpus_root, ladybug_db_path)
     env["SBERT_MODEL"] = "env-model"
     proc = _run_cli(
         ["meta", "--source-root", str(corpus_root), "--embedding-model", "cli-model"],
@@ -478,9 +478,9 @@ def test_increment_vectors_only_skips_graph(
     assert rc == 0
     err = buf.getvalue()
     # Should contain stale warning
-    assert "WARNING: AST graph (Kuzu) incremental rebuild is not yet implemented." in err
+    assert "WARNING: AST graph (LadybugDB) incremental rebuild is not yet implemented." in err
     assert "java-codebase-rag reprocess" in err
-    assert cli_mod.KUZU_INCREMENTAL_TRACKING_ISSUE_URL in err
+    assert cli_mod.LADYBUG_INCREMENTAL_TRACKING_ISSUE_URL in err
 
 
 def test_increment_cli_help_mentions_vectors_only(
@@ -590,16 +590,16 @@ def test_increment_updates_lance_after_touch_java_file(corpus_root: Path, tmp_pa
     assert "CliScenariosTouchMarker" in joined
 
 
-def test_cli_meta_outputs_valid_json_when_piped(corpus_root, kuzu_db_path) -> None:
-    env = _base_env(corpus_root, kuzu_db_path)
+def test_cli_meta_outputs_valid_json_when_piped(corpus_root, ladybug_db_path) -> None:
+    env = _base_env(corpus_root, ladybug_db_path)
     proc = _run_cli(["meta", "--source-root", str(corpus_root)], env=env)
     assert proc.returncode == 0, proc.stderr
     payload = json.loads(proc.stdout)
     assert "edge_counts" in payload
 
 
-def test_cli_tables_lists_known_table(corpus_root, kuzu_db_path) -> None:
-    env = _base_env(corpus_root, kuzu_db_path)
+def test_cli_tables_lists_known_table(corpus_root, ladybug_db_path) -> None:
+    env = _base_env(corpus_root, ladybug_db_path)
     proc = _run_cli(["tables", "--source-root", str(corpus_root)], env=env)
     assert proc.returncode == 0, proc.stderr
     payload = json.loads(proc.stdout)
@@ -607,8 +607,8 @@ def test_cli_tables_lists_known_table(corpus_root, kuzu_db_path) -> None:
     assert "graph" in payload
 
 
-def test_cli_unresolved_calls_list_and_stats(corpus_root, kuzu_db_path) -> None:
-    env = _base_env(corpus_root, kuzu_db_path)
+def test_cli_unresolved_calls_list_and_stats(corpus_root, ladybug_db_path) -> None:
+    env = _base_env(corpus_root, ladybug_db_path)
     stats_proc = _run_cli(
         ["unresolved-calls", "stats", "--source-root", str(corpus_root), "--by", "reason"],
         env=env,
@@ -654,8 +654,8 @@ def test_cli_unresolved_calls_list_and_stats(corpus_root, kuzu_db_path) -> None:
     assert bad_reason.returncode != 0
 
 
-def test_cli_diagnose_ignore_walked_path(corpus_root, kuzu_db_path) -> None:
-    env = _base_env(corpus_root, kuzu_db_path)
+def test_cli_diagnose_ignore_walked_path(corpus_root, ladybug_db_path) -> None:
+    env = _base_env(corpus_root, ladybug_db_path)
     path = "chat-assign/src/main/java/com/bank/chat/assign/service/ChatManagementService.java"
     proc = _run_cli(["diagnose-ignore", "--source-root", str(corpus_root), path], env=env)
     assert proc.returncode == 0, proc.stderr
@@ -663,16 +663,16 @@ def test_cli_diagnose_ignore_walked_path(corpus_root, kuzu_db_path) -> None:
     assert payload["ignored"] is False
 
 
-def test_cli_diagnose_ignore_unconditional_prune(corpus_root, kuzu_db_path) -> None:
-    env = _base_env(corpus_root, kuzu_db_path)
+def test_cli_diagnose_ignore_unconditional_prune(corpus_root, ladybug_db_path) -> None:
+    env = _base_env(corpus_root, ladybug_db_path)
     proc = _run_cli(["diagnose-ignore", "--source-root", str(corpus_root), ".git/foo"], env=env)
     assert proc.returncode == 0, proc.stderr
     payload = json.loads(proc.stdout)
     assert payload["ignored"] is True
 
 
-def test_cli_analyze_pr_with_diff_file(corpus_root, kuzu_db_path, tmp_path) -> None:
-    env = _base_env(corpus_root, kuzu_db_path)
+def test_cli_analyze_pr_with_diff_file(corpus_root, ladybug_db_path, tmp_path) -> None:
+    env = _base_env(corpus_root, ladybug_db_path)
     diff_path = tmp_path / "sample.diff"
     diff_path.write_text(
         """diff --git a/chat-assign/src/main/java/com/bank/chat/assign/service/ChatManagementService.java b/chat-assign/src/main/java/com/bank/chat/assign/service/ChatManagementService.java
@@ -698,8 +698,8 @@ def test_cli_analyze_pr_with_diff_file(corpus_root, kuzu_db_path, tmp_path) -> N
     assert "blast_radius_total" in payload
 
 
-def test_cli_analyze_pr_with_diff_stdin(corpus_root, kuzu_db_path) -> None:
-    env = _base_env(corpus_root, kuzu_db_path)
+def test_cli_analyze_pr_with_diff_stdin(corpus_root, ladybug_db_path) -> None:
+    env = _base_env(corpus_root, ladybug_db_path)
     diff_text = """diff --git a/chat-assign/src/main/java/com/bank/chat/assign/service/ChatManagementService.java b/chat-assign/src/main/java/com/bank/chat/assign/service/ChatManagementService.java
 --- a/chat-assign/src/main/java/com/bank/chat/assign/service/ChatManagementService.java
 +++ b/chat-assign/src/main/java/com/bank/chat/assign/service/ChatManagementService.java
@@ -862,7 +862,7 @@ def test_reprocess_vectors_only_emits_graph_stale_warning(
         ["reprocess", "--source-root", str(tmp_path), "--index-dir", str(idx), "--vectors-only"],
     )
     assert rc == 0
-    assert "code_graph.kuzu" in err.getvalue()
+    assert "code_graph.lbug" in err.getvalue()
 
 
 def test_reprocess_graph_only_emits_vectors_stale_warning(
@@ -1019,7 +1019,7 @@ def test_reprocess_pretty_output_lists_rebuilt_and_skipped(
     assert "Skipped: graph" in text
 
 
-def test_cli_reprocess_builds_kuzu_path(corpus_root, tmp_path) -> None:
+def test_cli_reprocess_builds_ladybug_path(corpus_root, tmp_path) -> None:
     if not _cocoindex_available():
         pytest.skip("cocoindex CLI missing")
     idx = tmp_path / "rep_idx"
@@ -1030,7 +1030,7 @@ def test_cli_reprocess_builds_kuzu_path(corpus_root, tmp_path) -> None:
         ["erase", "--source-root", str(corpus_root), "--index-dir", str(idx), "--yes"],
         env=env,
     )
-    kuzu_path = idx / "code_graph.kuzu"
+    ladybug_path = idx / "code_graph.lbug"
     proc = _run_cli(
         [
             "reprocess",
@@ -1043,7 +1043,7 @@ def test_cli_reprocess_builds_kuzu_path(corpus_root, tmp_path) -> None:
         env=env,
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert kuzu_path.exists()
+    assert ladybug_path.exists()
     meta_proc = _run_cli(
         ["meta", "--source-root", str(corpus_root), "--index-dir", str(idx)],
         env=env,
