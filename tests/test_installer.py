@@ -1161,6 +1161,102 @@ class TestRunUpdate:
         # Should succeed (no hosts is fatal, but no index is just a warning)
         assert result == 0
 
+    def test_update_honors_yaml_source_root_for_nested_config_dir(
+        self, tmp_path, monkeypatch
+    ):
+        """run_update must resolve source_root exactly like increment.
+
+        Regression for the "update mass-deletes the index" bug. run_update passed
+        the discovered config dir as an explicit source_root, routing
+        resolve_operator_config into the branch that SKIPS the YAML source_root
+        field. With a config living in my-project-context/ next to
+        ``source_root: ../``, update then indexed my-project-context/ (no Java)
+        against the real index one level up — so cocoindex saw every indexed
+        file as removed and deleted it (the "_deletions keeps growing" symptom
+        after the run was ctrl+C'd mid-delete).
+
+        After the fix, the env handed to cocoindex carries the YAML-resolved
+        source_root (one level above the config dir), NOT the config dir itself.
+        """
+        import json
+        import shutil
+        from subprocess import CompletedProcess
+        from java_codebase_rag.installer import run_update
+
+        # Layout mirroring the reported bug:
+        #   tmp_path/
+        #     my-project-context/      <- cwd; config lives here
+        #       .java-codebase-rag.yml <- source_root: ../ ; index_dir: ../.java-codebase-rag
+        #     .java-codebase-rag/      <- real index, one level above the config
+        #       code_graph.lbug        <- marker so "index exists"
+        config_dir = tmp_path / "my-project-context"
+        config_dir.mkdir()
+        (config_dir / ".java-codebase-rag.yml").write_text(
+            "source_root: ../\nindex_dir: ../.java-codebase-rag\n",
+            encoding="utf-8",
+        )
+        index_dir = tmp_path / ".java-codebase-rag"
+        index_dir.mkdir()
+        (index_dir / "code_graph.lbug").write_text("", encoding="utf-8")
+
+        # A configured host so run_update reaches the index phase.
+        (config_dir / ".mcp.json").write_text(
+            json.dumps(
+                {
+                    "mcpServers": {
+                        "java-codebase-rag": {
+                            "command": "/usr/local/bin/java-codebase-rag-mcp",
+                            "type": "stdio",
+                        }
+                    }
+                }
+            )
+        )
+        monkeypatch.setattr(shutil, "which", lambda x: "/usr/local/bin/java-codebase-rag-mcp")
+        monkeypatch.setattr(
+            "java_codebase_rag.installer._read_package_artifact",
+            lambda path: "PACKAGE CONTENT",
+        )
+
+        # The CLI invokes update from the config dir, so the process cwd is the
+        # config dir — resolve_operator_config(source_root=None) discovers the
+        # config via Path.cwd(), exactly as increment/init/reprocess do.
+        # delenv: resolve_operator_config honors JAVA_CODEBASE_RAG_SOURCE_ROOT /
+        # _INDEX_DIR from os.environ first, and apply_to_os_environ() writes them
+        # unscoped — a sibling test can leak a value that overrides discovery.
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", raising=False)
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_INDEX_DIR", raising=False)
+        monkeypatch.chdir(config_dir)
+
+        # Capture the subprocess env run_update hands cocoindex: it carries the
+        # resolved JAVA_CODEBASE_RAG_SOURCE_ROOT / _INDEX_DIR.
+        captured: dict = {}
+
+        def capture_coco(env, *, full_reprocess, quiet, verbose=True, lance_project_root=None):
+            captured["env"] = env
+            return CompletedProcess(["cocoindex"], 0)
+
+        def noop_graph(**kwargs):
+            return CompletedProcess(["build_ast_graph", "--incremental"], 0)
+
+        monkeypatch.setattr("java_codebase_rag.pipeline.run_cocoindex_update", capture_coco)
+        monkeypatch.setattr("java_codebase_rag.pipeline.run_incremental_graph", noop_graph)
+
+        result = run_update(force=False, dry_run=False, cwd=config_dir)
+
+        # The index phase must have run (env captured), not been skipped.
+        assert "env" in captured, "run_update did not reach the cocoindex update step"
+        env = captured["env"]
+        # source_root: ../ must resolve ONE level above the config dir (the real
+        # Java tree), NOT the config dir itself.
+        assert env["JAVA_CODEBASE_RAG_SOURCE_ROOT"] == str(tmp_path.resolve())
+        assert env["JAVA_CODEBASE_RAG_SOURCE_ROOT"] != str(config_dir.resolve())
+        # index_dir lands on the real index one level above the config dir.
+        assert env["JAVA_CODEBASE_RAG_INDEX_DIR"] == str(index_dir.resolve())
+        # result is independent of the source_root assertion (artifact refresh
+        # may report partial failure unrelated to this regression); tolerate it.
+        assert result in (0, 1)
+
     def test_install_then_update_cycle(self, tmp_path, monkeypatch):
         """install then update: artifacts refreshed, no errors"""
         from java_codebase_rag.installer import run_install, run_update
