@@ -412,3 +412,52 @@ def test_progress_relay_suppresses_graph_heartbeat_in_live_mode() -> None:
     # absent (not just the ``[graph]`` markup tag, which rich would strip).
     assert "5s elapsed" not in buf.getvalue()
 
+
+# ---------------------------------------------------------------------------
+# PR-2 review hardening: survive a renderer exception in the drain thread
+# ---------------------------------------------------------------------------
+
+
+class _ExplodingRenderer:
+    """A renderer whose apply() raises on every call."""
+
+    def __init__(self) -> None:
+        self.applied: list[ProgressEvent] = []
+
+    def apply(self, ev: ProgressEvent) -> None:
+        raise RuntimeError("boom")
+
+    def start(self) -> None:
+        pass
+
+    def stop(self) -> None:
+        pass
+
+
+def test_progress_relay_survives_renderer_apply_exception(capsys) -> None:
+    """A renderer exception must NOT propagate out of feed() and must not kill
+    the drain thread (which would silently truncate the captured stderr).
+
+    Feed a JCIRAG_PROGRESS line (triggers the raise) followed by a normal
+    non-noise line; assert feed() returns cleanly and the normal line still
+    routes to the sink (console). The exception is noted to stderr instead.
+    """
+    relay = ProgressRelay(
+        renderer=_ExplodingRenderer(),
+        console=Console(file=io.StringIO(), force_terminal=False, force_interactive=False),
+    )
+    buf = io.StringIO()
+    # Swap in a console backed by a buffer we can inspect for the normal line.
+    relay._console = Console(file=buf, force_terminal=False, force_interactive=False)  # noqa: SLF001
+    # The progress line triggers renderer.apply() → RuntimeError("boom").
+    relay.feed(b"JCIRAG_PROGRESS kind=graph pass=1/6 done=10 total=100\n")
+    # A normal non-noise line after the exception must still route to the sink.
+    relay.feed(b"cocoindex: indexing batch\n")
+    relay.flush()
+    out = buf.getvalue()
+    assert "cocoindex: indexing batch" in out
+    # The exception was noted to real stderr (capsys captures sys.stderr).
+    captured = capsys.readouterr()
+    assert "progress renderer error" in captured.err
+    assert "boom" in captured.err
+

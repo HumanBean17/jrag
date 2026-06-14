@@ -885,7 +885,14 @@ def _register_type(
     return entry
 
 
-def pass1_parse(root: Path, tables: GraphTables, *, verbose: bool, scope_files: set[str] | None = None) -> dict[str, JavaFileAst]:
+def pass1_parse(
+    root: Path,
+    tables: GraphTables,
+    *,
+    verbose: bool,
+    scope_files: set[str] | None = None,
+    removed_files: set[str] | None = None,
+) -> dict[str, JavaFileAst]:
     """Walk files, parse them, populate node indexes. Returns path -> AST.
 
     Args:
@@ -893,6 +900,11 @@ def pass1_parse(root: Path, tables: GraphTables, *, verbose: bool, scope_files: 
         tables: GraphTables to populate.
         verbose: Whether to emit progress output.
         scope_files: Optional set of relative POSIX paths to parse. If None, parse all files.
+        removed_files: Optional set of relative POSIX paths that no longer exist
+            on disk (incremental deletions). These are members of ``scope_files``
+            (they were deleted, so they participate in scoped deletion) but are
+            never visited by the parse walk, so they must be excluded from the
+            pass-1 total to keep ``done`` from undercounting then two-way-clamping.
     """
     asts: dict[str, JavaFileAst] = {}
     ignore = LayeredIgnore(root)
@@ -903,10 +915,14 @@ def pass1_parse(root: Path, tables: GraphTables, *, verbose: bool, scope_files: 
     # Count-first: one filtered walk (no parsing) to set the EXACT total before
     # the parse loop ticks. Single-layer ignore → the count is exact, so the
     # rendered bar is determinate. For a scoped (incremental) parse the total is
-    # the scope size; for a full rebuild it is the non-ignored .java count.
+    # the number of files that will actually be visited: scope minus any removed
+    # files (which are members of scope for deletion but gone from disk, so the
+    # parse walk never ticks them); for a full rebuild it is the non-ignored
+    # .java count.
     if verbose:
         if scope_files is not None:
-            pass1_total = len(scope_files)
+            removed = removed_files if removed_files is not None else set()
+            pass1_total = len(scope_files - removed)
         else:
             pass1_total = sum(1 for _ in iter_java_source_files(root, ignore=ignore))
         _emit_graph_progress(
@@ -3656,7 +3672,9 @@ def incremental_rebuild(
             _verbose_stderr_line("[increment] rebuilding scoped files (passes 1-4)")
 
         tables = GraphTables()
-        asts = pass1_parse(source_root, tables, verbose=verbose, scope_files=scope_files)
+        asts = pass1_parse(
+            source_root, tables, verbose=verbose, scope_files=scope_files, removed_files=removed
+        )
 
         # Load existing types and members for cross-file resolution (only from unchanged files)
         _load_existing_types(conn, tables, exclude_files=scope_files)

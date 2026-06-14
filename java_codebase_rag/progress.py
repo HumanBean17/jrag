@@ -33,7 +33,7 @@ from __future__ import annotations
 import sys
 import time
 from dataclasses import dataclass
-from typing import Literal
+from typing import Callable, Literal
 
 from rich.console import Console
 from rich.live import Live
@@ -56,6 +56,7 @@ __all__ = [
     "IndexProgressRenderer",
     "ProgressRelay",
     "CallbackRenderer",
+    "make_relay",
 ]
 
 ProgressKind = Literal["vectors", "graph", "optimize"]
@@ -410,6 +411,28 @@ class CallbackRenderer:
         pass
 
 
+def make_relay(
+    on_progress: Callable[[ProgressEvent], None],
+    *,
+    console: object | None,
+    verbose: bool,
+) -> ProgressRelay:
+    """Build the standard drain-side :class:`ProgressRelay`.
+
+    Both subprocess drains (``pipeline._popen_capturing_stderr`` sync path and
+    ``cli_progress.accumulate_and_relay_subprocess_streams`` async path) wire a
+    ``CallbackRenderer`` that forwards parsed events to the command-level
+    ``on_progress`` callback, and route non-progress lines through the same
+    caller-supplied ``console``. Centralizing the construction here keeps the
+    sync and async wiring identical (PR-3 forks the async path further).
+    """
+    return ProgressRelay(
+        CallbackRenderer(on_progress, console),
+        console=console,
+        verbose=verbose,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Relay
 # ---------------------------------------------------------------------------
@@ -466,7 +489,18 @@ class ProgressRelay:
             # Consumed by the protocol — never echoed to any sink. It is not
             # noise, so it must not keep the suppression flag armed.
             self._suppress_next = False
-            self._renderer.apply(ev)
+            # Guard the render chain: a drain thread is a daemon, so an
+            # unhandled exception here dies silently and truncates the captured
+            # stderr, masking real bugs. Mirror the defensive ``except Exception``
+            # around the raw ``buffer.write`` path below: log a one-line note to
+            # real stderr and keep draining. Never re-raise.
+            try:
+                self._renderer.apply(ev)
+            except Exception as exc:
+                sys.stderr.write(
+                    f"java-codebase-rag: progress renderer error: {exc}\n"
+                )
+                sys.stderr.flush()
             return
         if ev is not None and self._renderer is None:
             # Parsed as progress but no renderer attached: still reset the flag
@@ -485,11 +519,13 @@ class ProgressRelay:
         self._suppress_next = False
         text = line.decode("utf-8", errors="replace")
         if self._renderer is not None and self._live_active:
-            console = self._console if self._console is not None else self._renderer._console  # noqa: SLF001
+            # The drains always construct the relay with the caller's console
+            # (see make_relay), so ``self._console`` is authoritative here.
+            assert self._console is not None  # invariant: drains always supply it
             # rich.Console over a Live region must suspend/resume to interleave
             # a one-off line without corrupting the bar redraw; print() handles
             # this correctly when the Live was started on the same console.
-            console.print(text, end="")
+            self._console.print(text, end="")
             return
         if self._verbose and self._renderer is None:
             try:

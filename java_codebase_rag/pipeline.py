@@ -14,7 +14,7 @@ from typing import Callable
 from java_codebase_rag.cli_format import Spinner, is_noise_line, stderr_is_tty
 from java_codebase_rag.cli_progress import emit_vectors_finish, emit_vectors_start
 from java_codebase_rag.config import cocoindex_subprocess_env_defaults
-from java_codebase_rag.progress import CallbackRenderer, ProgressEvent, ProgressRelay
+from java_codebase_rag.progress import ProgressEvent, ProgressRelay, make_relay
 
 COCOINDEX_TARGET = "java_index_flow_lancedb.py:JavaCodeIndexLance"
 
@@ -82,10 +82,8 @@ def _popen_capturing_stderr(
     out_buf = bytearray()
     err_buf = bytearray()
     if on_progress is not None:
-        relay = ProgressRelay(
-            CallbackRenderer(on_progress, on_progress_console),
-            console=on_progress_console,
-            verbose=verbose,
+        relay = make_relay(
+            on_progress, console=on_progress_console, verbose=verbose
         )
         filt: _LineFilter | ProgressRelay | None = relay
     else:

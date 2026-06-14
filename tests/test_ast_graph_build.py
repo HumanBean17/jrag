@@ -504,3 +504,39 @@ def test_build_ast_graph_quiet_emits_no_progress(corpus_root: Path, tmp_path: Pa
     )
     assert proc.returncode == 0, f"stderr:\n{proc.stderr}"
     assert _progress_lines(proc.stderr) == [], "quiet build must not emit JCIRAG_PROGRESS"
+
+
+def test_pass1_parse_incremental_total_excludes_removed_files(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """Incremental pass-1 total must count only files that will actually be visited.
+
+    On an incremental run, ``scope_files`` includes removed files (they were
+    deleted, so they participate in scoped deletion), but they no longer exist
+    on disk and are therefore never visited by the parse walk. Counting them in
+    ``pass1_total`` makes ``done`` undercount then two-way-clamp on completion.
+    The fix: the total is ``len(scope_files - removed_files)``.
+    """
+    import build_ast_graph
+
+    root = tmp_path / "proj"
+    java_dir = root / "src/main/java/smoke"
+    java_dir.mkdir(parents=True)
+    (java_dir / "Real.java").write_text(
+        "package smoke;\nclass Real { void go() { } }\n", encoding="utf-8"
+    )
+    tables = build_ast_graph.GraphTables()
+    # scope includes the real file plus a removed (gone-from-disk) file.
+    scope_files = {"src/main/java/smoke/Real.java", "src/main/java/smoke/Gone.java"}
+    removed_files = {"src/main/java/smoke/Gone.java"}
+    build_ast_graph.pass1_parse(
+        root, tables, verbose=True, scope_files=scope_files, removed_files=removed_files
+    )
+    captured = capsys.readouterr()
+    pass1_totals = [
+        int(m.group(1))
+        for m in re.finditer(r"pass=1/6 done=0 total=(\d+)", captured.err)
+    ]
+    assert pass1_totals, f"expected a count-first pass-1 total line; stderr:\n{captured.err}"
+    # The removed file must NOT be counted: total is 1 (only Real.java), not 2.
+    assert pass1_totals[0] == 1, (
+        f"incremental pass-1 total must exclude removed files; got {pass1_totals[0]}"
+    )

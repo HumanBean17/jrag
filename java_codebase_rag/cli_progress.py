@@ -6,7 +6,7 @@ import sys
 from typing import Callable
 
 from java_codebase_rag.cli_format import bold_cyan, is_noise_line, styled_check, styled_cross
-from java_codebase_rag.progress import CallbackRenderer, ProgressEvent, ProgressRelay
+from java_codebase_rag.progress import ProgressEvent, make_relay
 
 
 def emit_vectors_start() -> None:
@@ -80,11 +80,7 @@ async def accumulate_and_relay_subprocess_streams(
     out_buf = bytearray()
     err_buf = bytearray()
     if on_progress is not None:
-        filt = ProgressRelay(
-            CallbackRenderer(on_progress, on_progress_console),
-            console=on_progress_console,
-            verbose=verbose,
-        )
+        filt = make_relay(on_progress, console=on_progress_console, verbose=verbose)
     elif relay and not verbose:
         filt = _AsyncLineFilter()
     else:
