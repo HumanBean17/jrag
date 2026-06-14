@@ -489,6 +489,7 @@ run in the default light suite.)
 | 7 | PR-2/PR-3/PR-4 all touch the operator-command renderer context → merge conflicts | Medium | Strict landing order (PR-2 → PR-3 → PR-4); each PR rebase-merges the previous. |
 | 8 | `update` verbosity wiring changes observable behaviour for existing scripts | Low | `--quiet`/`--verbose` already existed on the parser (ignored); wiring them through matches siblings, no new flags. |
 | 9 | Heavy (cocoindex/torch) tests added to the default suite slow CI / break the segfault-isolation work | Medium | All cocoindex-flow tests gated behind `JAVA_CODEBASE_RAG_RUN_HEAVY=1`; parser/renderer/CLI tests use patched helpers and stay light. |
+| 10 | `IndexProgressRenderer.apply()` issues several locked rich calls (start→update→…→stop) that are not atomic vs. a concurrent `stop()` from the main thread — a momentary display flicker on Live teardown once the drain thread feeds it (PR-1 review Minor #6) | Low | Address in PR-2 when the drain thread is wired: gate `apply()` on `self._started` (no-op after `stop()`), or hold the Live lock across the sequence. Stress-test concurrent apply/stop. |
 
 # Out of scope
 
