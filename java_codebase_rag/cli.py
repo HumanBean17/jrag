@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import pprint
 import shutil
 import sys
@@ -930,5 +931,21 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
 
+def _console_script_main() -> None:
+    """Real CLI entry: terminate without interpreter finalization.
+
+    A pyarrow/lance worker thread (loaded via lancedb in lifecycle commands) can
+    outlive CPython finalization in a one-shot CLI subprocess and trip
+    ``PyGILState_Release`` (SIGABRT, exit -6). Flushing + ``os._exit`` skips that
+    racy teardown — the command has already done its work and emitted its result.
+    ``main()`` stays return-based so in-process test callers (``cli.main(...)``)
+    keep working.
+    """
+    rc = main()
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(rc)
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    _console_script_main()

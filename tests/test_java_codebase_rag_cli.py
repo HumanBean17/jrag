@@ -1174,3 +1174,59 @@ def test_mcp_server_yaml_config_precedence_env_over_yaml(
 
     server_mod.resolve_operator_config.assert_called_once()
     assert server_mod.resolve_operator_config.call_args.kwargs["source_root"] == server_mod._project_root()
+
+
+def test_console_script_main_propagates_rc_via_os_exit_after_flush(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The installed CLI entry must flush streams and os._exit(rc) rather than
+    return into normal interpreter finalization.
+
+    A pyarrow/lance worker thread can outlive CPython finalization in a one-shot
+    CLI subprocess and trip ``PyGILState_Release`` (SIGABRT, exit -6). Routing the
+    real entry through ``_console_script_main`` skips that racy teardown; ``main()``
+    itself stays return-based so in-process test callers keep working.
+    """
+    import os as _os
+
+    from java_codebase_rag import cli as cli
+
+    class _StubStream:
+        def __init__(self) -> None:
+            self.flushed = False
+
+        def flush(self) -> None:
+            self.flushed = True
+
+    for fake_rc in (0, 2):
+        out = _StubStream()
+        err = _StubStream()
+        snapshot: dict[str, object] = {}
+
+        monkeypatch.setattr(cli, "main", lambda rc=fake_rc: rc)
+        monkeypatch.setattr(sys, "stdout", out)
+        monkeypatch.setattr(sys, "stderr", err)
+
+        def fake_exit(code: int) -> None:
+            snapshot["exit_code"] = code
+            snapshot["out_flushed_before_exit"] = out.flushed
+            snapshot["err_flushed_before_exit"] = err.flushed
+
+        monkeypatch.setattr(_os, "_exit", fake_exit)
+
+        result = cli._console_script_main()
+
+        assert snapshot["exit_code"] == fake_rc, fake_rc
+        assert snapshot["out_flushed_before_exit"] is True, fake_rc
+        assert snapshot["err_flushed_before_exit"] is True, fake_rc
+        assert result is None, fake_rc
+
+
+def test_console_script_entry_point_routes_through_wrapper() -> None:
+    """``[project.scripts]`` must point ``java-codebase-rag`` at
+    ``_console_script_main`` (not ``main``) so the deterministic-exit path is the
+    one the installed CLI actually uses."""
+    pyproject = (Path(__file__).resolve().parent.parent / "pyproject.toml").read_text(encoding="utf-8")
+    assert 'java-codebase-rag = "java_codebase_rag.cli:_console_script_main"' in pyproject
+    assert 'java-codebase-rag = "java-codebase-rag:main"' not in pyproject
+    assert 'java-codebase-rag = "java_codebase_rag.cli:main"' not in pyproject
