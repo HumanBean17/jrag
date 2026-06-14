@@ -1230,3 +1230,134 @@ def test_console_script_entry_point_routes_through_wrapper() -> None:
     assert 'java-codebase-rag = "java_codebase_rag.cli:_console_script_main"' in pyproject
     assert 'java-codebase-rag = "java-codebase-rag:main"' not in pyproject
     assert 'java-codebase-rag = "java_codebase_rag.cli:main"' not in pyproject
+
+
+# ---------------------------------------------------------------------------
+# PR-2: graph-phase progress wiring (default vs --quiet)
+# ---------------------------------------------------------------------------
+
+
+def _make_stub_completed(*, returncode: int = 0, stderr: str = "") -> "subprocess.CompletedProcess[str]":
+    import subprocess
+
+    return subprocess.CompletedProcess(args=["stub"], returncode=returncode, stdout="", stderr=stderr)
+
+
+def _patch_pipeline_for_graph_progress(monkeypatch: pytest.MonkeyPatch, *, emit_graph: bool) -> None:
+    """Patch the cocoindex + graph pipeline helpers used by init/increment.
+
+    When ``emit_graph`` is True the patched graph helper invokes the caller's
+    ``on_progress`` callback with a synthetic ``kind=graph`` event — simulating
+    what the real subprocess drain would feed the renderer in default mode.
+    """
+    from java_codebase_rag import cli as _cli
+    from java_codebase_rag import pipeline as _pipeline
+
+    def _fake_cocoindex_update(env, *, full_reprocess, quiet, verbose=True, lance_project_root=None):
+        return _make_stub_completed(returncode=0)
+
+    def _fake_run_build_ast_graph(*, source_root, ladybug_path, verbose, quiet=False, env=None, on_progress=None, on_progress_console=None):
+        if emit_graph and on_progress is not None:
+            from java_codebase_rag.progress import ProgressEvent
+
+            on_progress(
+                ProgressEvent(
+                    kind="graph", phase=None, pass_="1/6", done=10, total=130,
+                    status="running", elapsed_s=None,
+                )
+            )
+        return _make_stub_completed(returncode=0)
+
+    def _fake_run_incremental_graph(*, source_root, ladybug_path, verbose, quiet=False, env=None, on_progress=None, on_progress_console=None):
+        if emit_graph and on_progress is not None:
+            from java_codebase_rag.progress import ProgressEvent
+
+            on_progress(
+                ProgressEvent(
+                    kind="graph", phase=None, pass_="1/6", done=3, total=130,
+                    status="running", elapsed_s=None,
+                )
+            )
+        return _make_stub_completed(returncode=0)
+
+    # Patch where cli.py imported them (module-level names in cli).
+    monkeypatch.setattr(_cli, "run_cocoindex_update", _fake_cocoindex_update)
+    monkeypatch.setattr(_cli, "run_build_ast_graph", _fake_run_build_ast_graph)
+    monkeypatch.setattr(_cli, "run_incremental_graph", _fake_run_incremental_graph)
+    # Also patch the pipeline module attributes in case anything imports there.
+    monkeypatch.setattr(_pipeline, "run_cocoindex_update", _fake_cocoindex_update)
+    monkeypatch.setattr(_pipeline, "run_build_ast_graph", _fake_run_build_ast_graph)
+    monkeypatch.setattr(_pipeline, "run_incremental_graph", _fake_run_incremental_graph)
+
+
+def test_cli_init_default_mode_graph_phase_progress_on_stderr(
+    corpus_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """In default mode a graph-phase progress event is parsed and rendered to
+    stderr; the raw ``JCIRAG_PROGRESS`` line is NOT echoed verbatim."""
+    idx = tmp_path / "idx_init_prog"
+    idx.mkdir()
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_INDEX_DIR", str(idx))
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", str(corpus_root))
+    _patch_pipeline_for_graph_progress(monkeypatch, emit_graph=True)
+    buf = io.StringIO()
+    with contextlib.redirect_stderr(buf):
+        rc = cli_mod.main(
+            ["init", "--source-root", str(corpus_root), "--index-dir", str(idx)]
+        )
+    assert rc == 0
+    err = buf.getvalue()
+    # The raw structured line is consumed by the parser, never raw-relayed.
+    assert "JCIRAG_PROGRESS kind=graph" not in err
+    # But graph-phase progress IS rendered (non-TTY concise fallback prints a
+    # "graph ..." line). The synthetic event had total=130, done=10.
+    assert "graph" in err.lower()
+
+
+def test_cli_increment_graph_phase_progress(
+    corpus_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Symmetric: increment default mode parses and renders graph progress."""
+    idx = tmp_path / "idx_inc_prog"
+    idx.mkdir()
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_INDEX_DIR", str(idx))
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", str(corpus_root))
+    # init first (quiet) to populate the index dir so increment has state.
+    _patch_pipeline_for_graph_progress(monkeypatch, emit_graph=False)
+    init_rc = cli_mod.main(
+        ["init", "--source-root", str(corpus_root), "--index-dir", str(idx), "--quiet"]
+    )
+    assert init_rc == 0
+    # Now increment in default mode with graph progress emitted.
+    _patch_pipeline_for_graph_progress(monkeypatch, emit_graph=True)
+    buf = io.StringIO()
+    with contextlib.redirect_stderr(buf):
+        rc = cli_mod.main(
+            ["increment", "--source-root", str(corpus_root), "--index-dir", str(idx)]
+        )
+    assert rc == 0
+    err = buf.getvalue()
+    assert "JCIRAG_PROGRESS kind=graph" not in err
+    assert "graph" in err.lower()
+
+
+def test_cli_graph_progress_absent_when_quiet(
+    corpus_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--quiet suppresses all progress stderr; no graph rendering occurs."""
+    idx = tmp_path / "idx_quiet_prog"
+    idx.mkdir()
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_INDEX_DIR", str(idx))
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", str(corpus_root))
+    _patch_pipeline_for_graph_progress(monkeypatch, emit_graph=True)
+    buf = io.StringIO()
+    with contextlib.redirect_stderr(buf):
+        rc = cli_mod.main(
+            ["init", "--source-root", str(corpus_root), "--index-dir", str(idx), "--quiet"]
+        )
+    assert rc == 0
+    err = buf.getvalue()
+    assert "JCIRAG_PROGRESS kind=graph" not in err
+    # In quiet mode there is no header/footer framing either.
+    assert "java-codebase-rag init" not in err
+

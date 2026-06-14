@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from typing import Callable
 
 from java_codebase_rag.cli_format import bold_cyan, is_noise_line, styled_check, styled_cross
+from java_codebase_rag.progress import CallbackRenderer, ProgressEvent, ProgressRelay
 
 
 def emit_vectors_start() -> None:
@@ -61,8 +63,15 @@ async def accumulate_and_relay_subprocess_streams(
     *,
     relay: bool,
     verbose: bool = True,
+    on_progress: Callable[[ProgressEvent], None] | None = None,
+    on_progress_console: object | None = None,
 ) -> tuple[bytes, bytes]:
-    """Read stdout and stderr until EOF; optionally copy non-noise stderr chunks to stderr."""
+    """Read stdout and stderr until EOF; optionally copy non-noise stderr chunks to stderr.
+
+    When ``on_progress`` is set, stderr is drained through a :class:`ProgressRelay`
+    so ``JCIRAG_PROGRESS`` lines are parsed and routed to ``on_progress`` (and
+    suppressed from the relay), matching the sync ``pipeline._popen_capturing_stderr``.
+    """
     stdout = proc.stdout
     stderr = proc.stderr
     if stdout is None or stderr is None:
@@ -70,7 +79,16 @@ async def accumulate_and_relay_subprocess_streams(
 
     out_buf = bytearray()
     err_buf = bytearray()
-    filt = _AsyncLineFilter() if (relay and not verbose) else None
+    if on_progress is not None:
+        filt = ProgressRelay(
+            CallbackRenderer(on_progress, on_progress_console),
+            console=on_progress_console,
+            verbose=verbose,
+        )
+    elif relay and not verbose:
+        filt = _AsyncLineFilter()
+    else:
+        filt = None
 
     async def drain_stdout(reader: asyncio.StreamReader, target: bytearray) -> None:
         while True:

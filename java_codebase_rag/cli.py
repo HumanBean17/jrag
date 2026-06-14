@@ -131,15 +131,41 @@ def _run_with_pipeline_progress(
     cfg: ResolvedOperatorConfig,
     *,
     quiet: bool,
-    work: Callable[[], int],
+    verbose: bool = False,
+    work: Callable[["PipelineProgress | None"], int],
 ) -> int:
-    if quiet:
-        return int(work())
+    """Run ``work`` under the unified progress renderer (default TTY mode only).
+
+    ``work`` receives a :class:`PipelineProgress` whose ``on_progress`` callback
+    should be forwarded to the graph/vectors pipeline helpers so their
+    ``JCIRAG_PROGRESS`` events feed the renderer. In ``--quiet`` or ``--verbose``
+    mode the context is ``None`` (no Live region: quiet is silent, verbose
+    raw-relays subprocess output).
+    """
+    if quiet or verbose:
+        return int(work(None))
+    from java_codebase_rag.progress import IndexProgressRenderer, ProgressEvent
+
+    # PR-2 owns the graph task only; vectors/optimize stay pending (PR-3).
+    phases = ["graph"]
+    renderer = IndexProgressRenderer(phases)
+    progress = PipelineProgress(renderer=renderer)
+
+    def on_progress(ev: ProgressEvent) -> None:
+        renderer.apply(ev)
+
+    progress.on_progress = on_progress
+    progress.console = renderer._console  # noqa: SLF001 — shared with the drain for Live-safe routing
+
     _pipeline_header(subcommand, cfg)
     t0 = time.perf_counter()
     code = 0
+    # start() always flips _started (the non-TTY fallback is a no-op for Live but
+    # still needs the flag so apply() routes to the concise-line printer). The
+    # TTY Live region is entered inside start() only when the console is a TTY.
+    renderer.start()
     try:
-        code = int(work())
+        code = int(work(progress))
         return code
     except BaseException as exc:
         # Keep footer aligned with process outcome (main maps unhandled Exception -> exit 2).
@@ -155,7 +181,24 @@ def _run_with_pipeline_progress(
             code = 2
         raise
     finally:
+        renderer.stop()
         _pipeline_footer(subcommand, t0, code)
+
+
+class PipelineProgress:
+    """Progress context handed to ``work``: the renderer + a ready ``on_progress``.
+
+    ``on_progress``/``console`` are wired by :func:`_run_with_pipeline_progress`
+    and should be forwarded to the pipeline helpers' ``on_progress`` /
+    ``on_progress_console`` parameters. ``console`` is the renderer's stderr
+    ``rich.Console`` so the subprocess drain routes non-progress lines through
+    ``console.print`` while the Live region is up (single-writer invariant).
+    """
+
+    def __init__(self, *, renderer: "object | None") -> None:
+        self.renderer = renderer
+        self.on_progress: "Callable | None" = None
+        self.console: "object | None" = None
 
 
 def _jsonable(value: Any) -> Any:
@@ -266,7 +309,7 @@ def _cmd_init(args: argparse.Namespace) -> int:
         return 2
     cfg.index_dir.mkdir(parents=True, exist_ok=True)
 
-    def work() -> int:
+    def work(progress: "PipelineProgress | None") -> int:
         env = cfg.subprocess_env()
         verbose = bool(args.verbose)
         coco = run_cocoindex_update(
@@ -295,6 +338,8 @@ def _cmd_init(args: argparse.Namespace) -> int:
             verbose=verbose,
             quiet=bool(args.quiet),
             env=env,
+            on_progress=progress.on_progress if progress is not None else None,
+            on_progress_console=progress.console if progress is not None else None,
         )
         if g.returncode != 0:
             _emit(
@@ -310,7 +355,9 @@ def _cmd_init(args: argparse.Namespace) -> int:
         _emit({"success": True, "message": "init completed"})
         return 0
 
-    return _run_with_pipeline_progress("init", cfg, quiet=bool(args.quiet), work=work)
+    return _run_with_pipeline_progress(
+        "init", cfg, quiet=bool(args.quiet), verbose=bool(args.verbose), work=work
+    )
 
 
 def _cmd_increment(args: argparse.Namespace) -> int:
@@ -323,7 +370,7 @@ def _cmd_increment(args: argparse.Namespace) -> int:
     if vectors_only:
         _emit_increment_ladybug_warning()
 
-    def work() -> int:
+    def work(progress: "PipelineProgress | None") -> int:
         env = cfg.subprocess_env()
         coco = run_cocoindex_update(
             env,
@@ -356,6 +403,8 @@ def _cmd_increment(args: argparse.Namespace) -> int:
             verbose=bool(args.verbose),
             quiet=bool(args.quiet),
             env=env,
+            on_progress=progress.on_progress if progress is not None else None,
+            on_progress_console=progress.console if progress is not None else None,
         )
 
         # Check if incremental fell back to full rebuild
@@ -389,7 +438,9 @@ def _cmd_increment(args: argparse.Namespace) -> int:
         _emit({"success": True, "message": "increment completed (Lance + graph updated)"})
         return 0
 
-    return _run_with_pipeline_progress("increment", cfg, quiet=bool(args.quiet), work=work)
+    return _run_with_pipeline_progress(
+        "increment", cfg, quiet=bool(args.quiet), verbose=bool(args.verbose), work=work
+    )
 
 
 def _cmd_reprocess(args: argparse.Namespace) -> int:
@@ -397,7 +448,7 @@ def _cmd_reprocess(args: argparse.Namespace) -> int:
     _startup_hints(cfg)
     cfg.apply_to_os_environ()
 
-    def work() -> int:
+    def work(progress: "PipelineProgress | None") -> int:
         env = cfg.subprocess_env()
         verbose = bool(args.verbose)
         vectors_only = bool(getattr(args, "vectors_only", False))
@@ -443,6 +494,8 @@ def _cmd_reprocess(args: argparse.Namespace) -> int:
                 verbose=verbose,
                 quiet=bool(args.quiet),
                 env=env,
+                on_progress=progress.on_progress if progress is not None else None,
+                on_progress_console=progress.console if progress is not None else None,
             )
             if _is_graph_preflight_blocker(g):
                 payload = {
@@ -482,7 +535,9 @@ def _cmd_reprocess(args: argparse.Namespace) -> int:
         _emit_reprocess_outcome(payload)
         return _reprocess_exit_code(payload)
 
-    return _run_with_pipeline_progress("reprocess", cfg, quiet=bool(args.quiet), work=work)
+    return _run_with_pipeline_progress(
+        "reprocess", cfg, quiet=bool(args.quiet), verbose=bool(args.verbose), work=work
+    )
 
 
 def _cmd_install(args: argparse.Namespace) -> int:
@@ -537,7 +592,7 @@ def _cmd_erase(args: argparse.Namespace) -> int:
             print("Aborted.", file=sys.stderr)
             return 2
 
-    def work() -> int:
+    def work(progress: "PipelineProgress | None") -> int:
         env = cfg.subprocess_env()
         drop = run_cocoindex_drop(env, quiet=bool(args.quiet))
         if drop.returncode == 127:
@@ -570,7 +625,7 @@ def _cmd_erase(args: argparse.Namespace) -> int:
         _emit({"success": True, "message": "erase completed"})
         return 0
 
-    return _run_with_pipeline_progress("erase", cfg, quiet=bool(args.quiet), work=work)
+    return _run_with_pipeline_progress("erase", cfg, quiet=bool(args.quiet), verbose=bool(getattr(args, "verbose", False)), work=work)
 
 
 def _cmd_meta(args: argparse.Namespace) -> int:

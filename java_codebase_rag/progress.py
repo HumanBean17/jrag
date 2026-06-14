@@ -55,6 +55,7 @@ __all__ = [
     "parse_progress_line",
     "IndexProgressRenderer",
     "ProgressRelay",
+    "CallbackRenderer",
 ]
 
 ProgressKind = Literal["vectors", "graph", "optimize"]
@@ -271,7 +272,16 @@ class IndexProgressRenderer:
         ``status == "failed"`` halts the task and marks the description with a
         red ``✗`` (rich renders the spinner stopped). On non-TTY consoles this
         delegates to the throttled concise-line printer.
+
+        Safe to call after :meth:`stop`: once the Live region is torn down a
+        drain thread may still feed a trailing event; this is a no-op then so
+        the apply/stop pair is atomic from the caller's view (PR-1 review
+        Minor #6 / cross-PR risk #10).
         """
+        if not self._started:
+            # After stop() the Live region is gone and rich tasks are torn down;
+            # a trailing event from the drain thread must not mutate state.
+            return
         if self._fallback:
             self._fallback_apply(ev)
             return
@@ -373,6 +383,31 @@ class IndexProgressRenderer:
         if ev.done is not None:
             return Text(f"{kind} {ev.done}")
         return Text(kind)
+
+
+class CallbackRenderer:
+    """Adapter exposing a ``renderer.apply(ev)`` surface to :class:`ProgressRelay`.
+
+    ``ProgressRelay`` calls ``renderer.apply(ev)`` for each parsed progress line.
+    This adapter forwards to a caller-supplied ``on_progress`` callback (used by
+    the sync/async subprocess drains in ``pipeline`` / ``cli_progress`` to route
+    progress events up to the command-level renderer without owning a Live region
+    themselves). It carries a ``_console`` attribute so the relay can route
+    non-progress lines through ``console.print`` while a Live region is up.
+    """
+
+    def __init__(self, on_progress, console=None) -> None:  # type: ignore[no-untyped-def]
+        self._on_progress = on_progress
+        self._console = console
+
+    def apply(self, ev: ProgressEvent) -> None:
+        self._on_progress(ev)
+
+    def start(self) -> None:
+        pass
+
+    def stop(self) -> None:
+        pass
 
 
 # ---------------------------------------------------------------------------

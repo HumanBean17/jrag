@@ -25,6 +25,14 @@ _NOISE_CONTAINS: tuple[bytes, ...] = (
     b'"event": "brownfield-',
     b"unknown producer source strategy",
     b"unknown client source strategy",
+    # Builder verbose heartbeats / pass banners: in default mode the renderer's
+    # bar subsumes these, so they must NOT also appear as raw lines above the
+    # Live region. --verbose raw-relay bypasses this filter and still shows them.
+    b"[graph] pass ",
+    b"[graph] scoped write ",
+    b"[graph] writing ",
+    b"[graph] done ",
+    b"[increment] ",
 )
 
 
