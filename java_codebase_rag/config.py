@@ -306,9 +306,19 @@ def _pick_bool(
 def _resolve_index_dir_path(
     *,
     source_root: Path,
+    config_dir: Path,
     cli_index_dir: str | None,
     yaml_dict: dict[str, Any],
 ) -> tuple[Path, SettingSource]:
+    # Bases for relative paths:
+    #   - YAML ``index_dir``  -> the config file's directory (``config_dir``),
+    #     the SAME base used for YAML ``source_root``. Paths written in the
+    #     config file are relative to the file, so both keys stay consistent.
+    #   - CLI / env ``index_dir`` -> ``source_root`` (unchanged). These are not
+    #     "in the config file"; preserving the existing base avoids a semantics
+    #     change for operators who pass ``--index-dir`` on the command line.
+    #   - Default ``./.java-codebase-rag`` -> ``source_root`` so the index sits
+    #     beside the Java tree (the layout ``discover_project_root`` anchors on).
     raw_cli = cli_index_dir.strip() if isinstance(cli_index_dir, str) else None
     if raw_cli:
         p = Path(raw_cli).expanduser()
@@ -324,7 +334,7 @@ def _resolve_index_dir_path(
     idx = yaml_dict.get("index_dir")
     if isinstance(idx, str) and idx.strip():
         p = Path(idx.strip()).expanduser()
-        out = p.resolve() if p.is_absolute() else (source_root / p).resolve()
+        out = p.resolve() if p.is_absolute() else (config_dir / p).resolve()
         return out, "yaml"
 
     return (source_root / ".java-codebase-rag").resolve(), "default"
@@ -368,7 +378,7 @@ def resolve_operator_config(
                 root = config_dir
 
     index_dir, index_src = _resolve_index_dir_path(
-        source_root=root, cli_index_dir=cli_index_dir, yaml_dict=yaml_dict
+        source_root=root, config_dir=config_dir, cli_index_dir=cli_index_dir, yaml_dict=yaml_dict
     )
     model, model_src = _pick_str(
         cli_val=cli_embedding_model,

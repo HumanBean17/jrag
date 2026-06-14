@@ -155,6 +155,27 @@ def _project_root() -> Path:
     return discovered if discovered is not None else Path.cwd().resolve()
 
 
+def _source_root_for_operator_config() -> Path | None:
+    """``source_root`` arg to hand ``resolve_operator_config`` from the MCP server.
+
+    Returns ``JAVA_CODEBASE_RAG_SOURCE_ROOT`` when set (an explicit operator
+    override that wins and suppresses the YAML ``source_root`` field, exactly
+    like CLI ``--source-root``), otherwise ``None`` — so
+    ``resolve_operator_config`` runs its OWN walk-up discovery and HONORS the
+    YAML ``source_root`` field, matching the CLI (``init`` / ``increment`` /
+    ``reprocess``) path.
+
+    Do NOT pass ``_project_root()`` (the walk-up-discovered dir) here: a
+    non-``None`` value routes into the "explicit source root" branch that
+    skips the YAML ``source_root`` field, which made the MCP server and the
+    CLI resolve different ``source_root`` / ``index_dir`` from the same config
+    file (the init-vs-MCP index_dir divergence). ``_project_root()`` is kept
+    only for the ``_resolve_lancedb_uri()`` fallback below.
+    """
+    env = os.environ.get("JAVA_CODEBASE_RAG_SOURCE_ROOT", "").strip()
+    return Path(env).expanduser().resolve() if env else None
+
+
 def _cocoindex_subprocess_env(project_root: Path) -> dict[str, str]:
     sub_env = os.environ.copy()
     sub_env["JAVA_CODEBASE_RAG_SOURCE_ROOT"] = str(project_root)
@@ -654,7 +675,7 @@ def main() -> None:
     # Load YAML config and apply embedding settings to environment
     # This ensures SBERT_MODEL and SBERT_DEVICE from .java-codebase-rag.yml are available
     # before any tool handler runs (same behavior as CLI path)
-    cfg = resolve_operator_config(source_root=_project_root())
+    cfg = resolve_operator_config(source_root=_source_root_for_operator_config())
     cfg.apply_to_os_environ()
     mcp_v2.set_hints_enabled(cfg.hints_enabled)
 
