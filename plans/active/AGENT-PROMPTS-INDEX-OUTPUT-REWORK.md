@@ -93,7 +93,7 @@ You are implementing PR-1 from `plans/active/PLAN-INDEX-OUTPUT-REWORK.md`. Read 
 over this prompt.
 
 ## Scope
-1. Add `rich>=13.7,<14` to `pyproject.toml` `dependencies`.
+1. Add `rich>=14,<15` to `pyproject.toml` `dependencies` (`cocoindex[lancedb]>=1.0.0a43` requires `rich>=14`; a `<14` cap is unsatisfiable).
 2. Create `java_codebase_rag/progress.py` with exactly these symbols:
    - `ProgressEvent` dataclass (`kind`, `phase`, `pass_`, `done`, `total`, `status`,
      `elapsed_s`).

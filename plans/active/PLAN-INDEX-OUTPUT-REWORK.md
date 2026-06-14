@@ -64,7 +64,7 @@ the spike passes; do not start PR-N+1 until PR-N is merged to `master`.
 
 | Topic | Decision |
 | --- | --- |
-| Renderer library | `rich` (`rich>=13.7,<14`); parent-process only. |
+| Renderer library | `rich` (`rich>=14,<15` — `cocoindex[lancedb]>=1.0.0a43` requires `rich>=14`, so a `<14` cap is unsatisfiable); parent-process only. |
 | New module | `java_codebase_rag/progress.py` holds `ProgressEvent`, `parse_progress_line`, `IndexProgressRenderer`, `ProgressRelay`. |
 | Protocol line | `JCIRAG_PROGRESS  kind=<vectors\|graph\|optimize>  [phase=…] [pass=N/6] [done=N] [total=N] [status=running\|done\|failed] [elapsed_s=…]` |
 | Drain integration | `pipeline._popen_capturing_stderr` and `cli_progress.accumulate_and_relay_subprocess_streams` gain an optional `on_progress` callback and route complete lines through a `ProgressRelay` (parse-first; progress lines suppressed from relay). |
@@ -133,7 +133,7 @@ No command wiring, no flow/builder emission in this PR — pure library + unit t
 ## File-by-file changes
 
 ### 1. `pyproject.toml`
-- Add `rich>=13.7,<14` to `dependencies`.
+- Add `rich>=14,<15` to `dependencies` (`cocoindex[lancedb]>=1.0.0a43` requires `rich>=14`; a `<14` cap is unsatisfiable).
 
 ### 2. `java_codebase_rag/progress.py` (new)
 - `ProgressEvent` dataclass: `kind` (`Literal["vectors","graph","optimize"]`),
@@ -189,7 +189,7 @@ No command wiring, no flow/builder emission in this PR — pure library + unit t
 
 ## Definition of done (PR-1)
 
-- [ ] `rich>=13.7,<14` in `pyproject.toml`; `.venv/bin/pip install -e .` succeeds.
+- [ ] `rich>=14,<15` in `pyproject.toml`; `.venv/bin/pip install -e .` succeeds.
 - [ ] `progress.py` exists with the four symbols above; no production caller yet.
 - [ ] All 13 `tests/test_progress.py` tests pass.
 - [ ] `.venv/bin/ruff check .` clean; `.venv/bin/python -m pytest tests -v` green

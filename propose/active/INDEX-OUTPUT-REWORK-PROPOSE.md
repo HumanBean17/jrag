@@ -377,8 +377,10 @@ the `tests/bank-chat-system/` fixture.
    for full scriptability parity? — Recommended: **no** for v1. They are interactive
    wizards; their human-readable stdout is the point. Revisit if a real automation
    ask surfaces.
-7. `rich` version pin width? — Recommended: **`rich>=13.7,<14`** (stable, broadly
-   compatible Progress API).
+7. `rich` version pin width? — Recommended: **`rich>=14,<15`**
+   (`cocoindex[lancedb]>=1.0.0a43` transitively requires `rich>=14`, so the
+   `>=13.7,<14` cap originally suggested is unsatisfiable; verified compatible with
+   the renderer's `Progress` API usage on rich 14.3.4).
 
 ## Decisions taken
 
@@ -404,7 +406,7 @@ the `tests/bank-chat-system/` fixture.
 | Risk | Mitigation |
 |---|---|
 | CocoIndex suppresses/buffers stderr written from inside `@coco.fn` flow functions → vectors ticks never reach the parent | **Throwaway spike branch first** (no PR): emit one `JCIRAG_PROGRESS` line from `process_java_file` and confirm the parent sees it. If it does not, **halt and re-propose the transport** — a progress-file tail is *not* a committed fallback (it re-introduces the denominator problem plus a writer/tailer race). Nothing else lands until the spike settles. |
-| `rich` adds a dependency the repo has avoided | Pure-Python, parent-process only (the heavy native stack still loads in the CocoIndex *child* subprocess, unaffected); pulls only `pygments`. `rich.progress` is stable across 13.x. Acceptable for a CLI dev tool whose explicit goal is beautiful output. |
+| `rich` adds a dependency the repo has avoided | Pure-Python, parent-process only (the heavy native stack still loads in the CocoIndex *child* subprocess, unaffected); pulls only `pygments`. `rich.progress` is stable across 14.x. Pinned `>=14,<15` (forced by `cocoindex[lancedb]`'s `rich>=14` requirement). Acceptable for a CLI dev tool whose explicit goal is beautiful output. |
 | `memo=True` makes the incremental denominator unknown → bar looks "stuck" at indeterminate | Intended behaviour, not a bug: indeterminate pulsing bar + "files touched: N" counter is honest. Documented in §Vectors phase. |
 | Per-file `%` over-/under-reports because files have very different chunk counts (embedding cost) | The bar reports *files* done, not embedding cost — accurate as a file counter. ETA comes from rich's rolling rate, which absorbs chunk-count variance across many files. Acceptable approximation. |
 | Two concurrent stderr writers (relay thread's raw `sys.stderr.buffer.write` + `rich` `Live`) interleave/corrupt the display | While the `Live` region is active, the relay thread routes every non-progress line through `console.print(...)` (rich reprints the live region cleanly) — never raw `buffer.write`. Raw relay runs only in `--verbose`, where there is no `Live` region. Existing `_LineFilter` noise matcher still drops `lance::`/`FutureWarning`/brownfield noise before `console.print`. Regression test: a `JCIRAG_PROGRESS` line split across two `read()` chunks parses once. |
