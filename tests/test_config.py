@@ -292,6 +292,155 @@ class TestSourceRootPrecedence:
         assert result.index_dir == tmp_path / ".java-codebase-rag"
 
 
+class TestEmbeddingModelRelativePath:
+    """``embedding.model`` relative paths resolve against a base directory.
+
+    Mirrors ``index_dir`` (see ``TestIndexDirRelativeToConfigDir``): a relative
+    model path in YAML resolves against the config file's directory; a relative
+    model path from CLI / env resolves against the resolved ``source_root``.
+    This makes a committed ``.java-codebase-rag.yml`` portable — the model loads
+    from the same absolute path for the CLI indexer and the MCP reader, instead
+    of resolving against an unreliable process CWD.
+    """
+
+    def test_yaml_relative_model_resolves_against_config_dir(self, tmp_path, monkeypatch):
+        """``embedding.model: ./models/minilm`` (YAML) -> <config_dir>/models/minilm."""
+        monkeypatch.delenv("SBERT_MODEL", raising=False)
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", raising=False)
+
+        config_dir = tmp_path / "ctx"
+        config_dir.mkdir()
+        (config_dir / YAML_CONFIG_FILENAMES[0]).write_text(
+            "embedding:\n  model: ./models/minilm\n"
+        )
+        monkeypatch.chdir(config_dir)
+
+        result = resolve_operator_config(source_root=None)
+        assert result.embedding_model == str((config_dir / "models/minilm").resolve())
+        assert result.embedding_model_source == "yaml"
+
+    def test_yaml_double_dot_model_resolves_against_config_dir(self, tmp_path, monkeypatch):
+        """``embedding.model: ../shared/minilm`` (YAML) -> <config_dir>/../shared/minilm."""
+        monkeypatch.delenv("SBERT_MODEL", raising=False)
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", raising=False)
+
+        config_dir = tmp_path / "ctx"
+        config_dir.mkdir()
+        (config_dir / YAML_CONFIG_FILENAMES[0]).write_text(
+            "embedding:\n  model: ../shared/minilm\n"
+        )
+        monkeypatch.chdir(config_dir)
+
+        result = resolve_operator_config(source_root=None)
+        assert result.embedding_model == str((tmp_path / "shared/minilm").resolve())
+
+    def test_env_relative_model_resolves_against_source_root(self, tmp_path, monkeypatch):
+        """``SBERT_MODEL=./models/minilm`` (env) -> <source_root>/models/minilm.
+
+        Config sets ``source_root: ../`` so source_root (tmp_path) differs from
+        config_dir (tmp_path/ctx); the env-sourced model must anchor on
+        source_root, not config_dir — matching ``index_dir``'s env base.
+        """
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", raising=False)
+
+        config_dir = tmp_path / "ctx"
+        config_dir.mkdir()
+        (config_dir / YAML_CONFIG_FILENAMES[0]).write_text("source_root: ../\n")
+        monkeypatch.chdir(config_dir)
+        monkeypatch.setenv("SBERT_MODEL", "./models/minilm")
+
+        result = resolve_operator_config(source_root=None)
+        assert result.source_root == tmp_path
+        assert result.embedding_model == str((tmp_path / "models/minilm").resolve())
+        assert result.embedding_model_source == "env"
+
+    def test_cli_relative_model_resolves_against_source_root(self, tmp_path, monkeypatch):
+        """``--embedding-model ./models/minilm`` (CLI) -> <source_root>/models/minilm."""
+        monkeypatch.delenv("SBERT_MODEL", raising=False)
+
+        result = resolve_operator_config(
+            source_root=tmp_path, cli_embedding_model="./models/minilm"
+        )
+        assert result.embedding_model == str((tmp_path / "models/minilm").resolve())
+        assert result.embedding_model_source == "cli"
+
+
+class TestMaybeExpandEmbeddingModelPath:
+    """Unit tests pinning the expansion/resolution helper's contract."""
+
+    def test_no_base_leaves_relative_unchanged(self):
+        """Without a base dir, relative paths are NOT resolved.
+
+        ``resolved_sbert_model_for_process_env`` (the MCP runtime read of
+        ``SBERT_MODEL``) calls this with no base; it must stay a no-op for
+        relative values so MCP behavior is unchanged there. The main resolution
+        path supplies a base, so the absolute path it produces is what reaches
+        the lazy loader in practice.
+        """
+        from java_codebase_rag.config import maybe_expand_embedding_model_path
+
+        assert maybe_expand_embedding_model_path("./models/minilm") == "./models/minilm"
+        assert maybe_expand_embedding_model_path("../shared/minilm") == "../shared/minilm"
+
+    def test_hub_id_passthrough(self):
+        from java_codebase_rag.config import maybe_expand_embedding_model_path
+
+        assert maybe_expand_embedding_model_path("org/name") == "org/name"
+        assert (
+            maybe_expand_embedding_model_path("sentence-transformers/all-MiniLM-L6-v2")
+            == "sentence-transformers/all-MiniLM-L6-v2"
+        )
+
+    def test_absolute_passthrough(self):
+        from java_codebase_rag.config import maybe_expand_embedding_model_path
+
+        assert maybe_expand_embedding_model_path("/opt/models/minilm") == "/opt/models/minilm"
+
+    def test_env_var_expansion_preserved(self, monkeypatch):
+        from java_codebase_rag.config import maybe_expand_embedding_model_path
+
+        monkeypatch.setenv("MODEL_DIR", "/opt/models")
+        assert maybe_expand_embedding_model_path("${MODEL_DIR}/minilm") == "/opt/models/minilm"
+        assert maybe_expand_embedding_model_path("$MODEL_DIR/minilm") == "/opt/models/minilm"
+
+    def test_tilde_expansion_preserved(self, monkeypatch):
+        from java_codebase_rag.config import maybe_expand_embedding_model_path
+
+        monkeypatch.setenv("HOME", "/home/user")
+        assert maybe_expand_embedding_model_path("~/models/minilm") == "/home/user/models/minilm"
+
+    def test_yaml_base_resolves_relative(self, tmp_path):
+        from java_codebase_rag.config import maybe_expand_embedding_model_path
+
+        out = maybe_expand_embedding_model_path(
+            "./models/minilm", config_dir=tmp_path, source="yaml"
+        )
+        assert out == str((tmp_path / "models/minilm").resolve())
+
+    def test_cli_env_base_is_source_root(self, tmp_path):
+        from java_codebase_rag.config import maybe_expand_embedding_model_path
+
+        for src in ("cli", "env"):
+            out = maybe_expand_embedding_model_path(
+                "./models/minilm", source_root=tmp_path, source=src
+            )
+            assert out == str((tmp_path / "models/minilm").resolve())
+
+    def test_absolute_after_env_var_not_rebased(self, tmp_path, monkeypatch):
+        """An env var that already yields an absolute path is left absolute.
+
+        Guards the ``${HUB_ID}`` edge: only ``./`` / ``../``-prefixed results are
+        re-based, so a var holding ``org/name`` or an absolute path is untouched.
+        """
+        from java_codebase_rag.config import maybe_expand_embedding_model_path
+
+        monkeypatch.setenv("MODEL_DIR", "/opt/models")
+        out = maybe_expand_embedding_model_path(
+            "${MODEL_DIR}/minilm", config_dir=tmp_path, source="yaml"
+        )
+        assert out == "/opt/models/minilm"
+
+
 def test_cocoindex_subprocess_env_defaults_uses_real_inflight_env_var() -> None:
     """The throttle must use CocoIndex's REAL env var name.
 
