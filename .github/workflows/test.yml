@@ -67,7 +67,13 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           TRANSFORMERS_CACHE: ~/.cache/huggingface
           HF_HOME: ~/.cache/huggingface
-        run: pytest tests -v
+        # Process isolation: run each test file in its own fresh worker process.
+        # Running the full suite in a single process accumulates native runtimes
+        # (cocoindex + lancedb Tokio, plus kuzu's scheduler and torch) that corrupt
+        # the heap, crashing kuzu's NodeTableScanState::scanNext with a SIGSEGV ~53%.
+        # `--dist loadfile` keeps each file in one worker, so no cross-file state
+        # accumulates. Verified: 771 passed / 9 skipped, no segfault.
+        run: pytest tests -n auto --dist loadfile -v
       - name: Skip tests (docs-only)
         if: steps.changes.outputs.code != 'true'
         run: echo "Docs-only change; pytest skipped."
