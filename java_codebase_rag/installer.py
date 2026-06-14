@@ -759,6 +759,11 @@ def generate_yaml_config(
         else:
             config["embedding"].pop("model", None)
 
+    # Seed cross-service resolution safe-by-default: only evidence-backed cross-service
+    # edges survive (see _is_brownfield_sourced in build_ast_graph). setdefault preserves
+    # an explicit user choice (e.g. `auto`) on re-run update.
+    config.setdefault("cross_service_resolution", "brownfield_only")
+
     # Keys NOT written by installer (preserved if present):
     # - source_root (config.py resolves from walk-up discovery)
     # - index_dir (config.py defaults to <source_root>/.java-codebase-rag)

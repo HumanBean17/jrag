@@ -696,6 +696,45 @@ class TestHandleRerun:
         assert result is None
 
 
+class TestGenerateYamlConfigCrossService:
+    """cross_service_resolution is seeded safe-by-default; an explicit choice is never overridden."""
+
+    def test_fresh_install_seeds_brownfield_only(self):
+        import yaml
+        from java_codebase_rag.installer import generate_yaml_config
+
+        out = generate_yaml_config(
+            Path("."), model="auto", microservice_roots=None, existing_yaml=None
+        )
+        assert yaml.safe_load(out)["cross_service_resolution"] == "brownfield_only"
+
+    def test_explicit_auto_is_preserved_on_rerun(self):
+        import yaml
+        from java_codebase_rag.installer import generate_yaml_config
+
+        out = generate_yaml_config(
+            Path("."),
+            model="auto",
+            microservice_roots=None,
+            existing_yaml={"cross_service_resolution": "auto"},
+        )
+        assert yaml.safe_load(out)["cross_service_resolution"] == "auto"
+
+    def test_absent_key_seeded_and_existing_keys_preserved_on_rerun(self):
+        import yaml
+        from java_codebase_rag.installer import generate_yaml_config
+
+        out = generate_yaml_config(
+            Path("."),
+            model="auto",
+            microservice_roots=None,
+            existing_yaml={"brownfield_overrides": {"svc-a": {}}},
+        )
+        config = yaml.safe_load(out)
+        assert config["cross_service_resolution"] == "brownfield_only"
+        assert config["brownfield_overrides"] == {"svc-a": {}}
+
+
 class TestInstallIntegration:
     """Integration tests for install command."""
 
