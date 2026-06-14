@@ -1250,9 +1250,14 @@ def run_update(
         print("Skipping index update.")
         return EXIT_PARTIAL if has_artifact_failures else EXIT_SUCCESS
 
-    # Resolve configuration
+    # Resolve configuration. Pass source_root=None so the YAML ``source_root``
+    # field is honored exactly like increment/init/reprocess — passing the
+    # discovered config dir here routes resolve_operator_config into the
+    # explicit-override branch that SKIPS the YAML field, which made `update`
+    # point cocoindex at the config dir (no Java) against the real index and
+    # mass-delete it. Discovery still runs against the CLI's cwd.
     try:
-        cfg = resolve_operator_config(source_root=project_root, cli_index_dir=None)
+        cfg = resolve_operator_config(source_root=None, cli_index_dir=None)
         index_dir = cfg.index_dir
     except Exception as e:
         print(f"\nWarning: Failed to resolve configuration: {e}")
