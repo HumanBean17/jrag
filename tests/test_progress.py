@@ -149,6 +149,28 @@ def test_progress_relay_relays_non_progress_line() -> None:
     assert len(stub.applied) == 0
 
 
+def test_progress_relay_suppresses_noise_continuation() -> None:
+    """A noise header (``FutureWarning:``) plus its indented traceback frame are
+    BOTH suppressed; a following normal line is still emitted. Mirrors
+    ``_LineFilter``/``_AsyncLineFilter``'s ``_suppress_next`` behavior."""
+    stub = _StubRenderer()
+    buf = io.StringIO()
+    relay = ProgressRelay(
+        renderer=stub, console=Console(file=buf, force_terminal=False, force_interactive=False)
+    )
+    relay.feed(b"/some/conda/env.py:1: FutureWarning: something deprecated\n")
+    relay.feed(b"    some/frame.py:42: DeprecationWarning\n")
+    relay.feed(b"cocoindex: indexing batch\n")
+    out = buf.getvalue()
+    # The noise header and its indented continuation must NOT reach the sink.
+    assert "FutureWarning" not in out
+    assert "some/frame.py:42" not in out
+    # The normal line that follows must still be emitted.
+    assert "cocoindex: indexing batch" in out
+    # No progress events were parsed.
+    assert len(stub.applied) == 0
+
+
 # ---------------------------------------------------------------------------
 # IndexProgressRenderer — TTY path (against a forced-terminal Console)
 # ---------------------------------------------------------------------------

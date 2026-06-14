@@ -224,6 +224,11 @@ class IndexProgressRenderer:
         self._live: Live | None = None
         # Non-TTY throttle bookkeeping (monotonic seconds of last concise print).
         self._last_print_at: dict[str, float] = {phase: 0.0 for phase in self._phases}
+        # Non-TTY carry-forward: a minimal ``done`` event may omit total /
+        # elapsed_s; fall back to the last-seen values so the concise terminal
+        # line never degrades (e.g. stays ``vectors done · 1240 · 42.1s``).
+        self._last_total: dict[str, int | None] = {phase: None for phase in self._phases}
+        self._last_elapsed: dict[str, float | None] = {phase: None for phase in self._phases}
         self._started: bool = False
 
     # -- lifecycle -------------------------------------------------------
@@ -257,8 +262,12 @@ class IndexProgressRenderer:
         """Route a single :class:`ProgressEvent` to its matching phase task.
 
         First event for a kind makes that task visible + started. ``total`` and
-        ``done`` are applied directly when present. ``status == "done"`` clamps
-        completed to the total (an approximate total can't stall below 100%).
+        ``done`` are applied directly when present. ``done`` is clamped to be
+        non-decreasing (producers should emit monotonically non-decreasing
+        ``done``; this defensive clamp enforces it so a stray smaller value
+        can't rewind the bar). ``status == "done"`` unconditionally clamps
+        completed to the total in both directions (an approximate total can't
+        stall below 100%, nor can an approximate pre-walk over-count exceed it).
         ``status == "failed"`` halts the task and marks the description with a
         red ``✗`` (rich renders the spinner stopped). On non-TTY consoles this
         delegates to the throttled concise-line printer.
@@ -278,11 +287,15 @@ class IndexProgressRenderer:
             self._progress.update(tid, total=ev.total)
         if ev.done is not None:
             # Set-based (not advance-based) for determinism: each event carries
-            # the absolute completed count, not a delta.
-            self._progress.update(tid, completed=ev.done)
+            # the absolute completed count, not a delta. Monotonic clamp: never
+            # let a smaller done rewind the bar.
+            new_completed = max(task.completed, ev.done)
+            self._progress.update(tid, completed=new_completed)
         if ev.status == "done":
-            # Clamp completed to total so an approximate total can't stall.
-            if task.total is not None and task.completed < task.total:
+            # Two-way clamp: completed must equal total on done. An approximate
+            # total can under-count (stall below 100%) or the propose's
+            # approximate pre-walk can over-count; both resolve to == total.
+            if task.total is not None and task.completed != task.total:
                 self._progress.update(tid, completed=task.total)
             self._progress.update(tid, description=f"{ev.kind} ✓")
             self._progress.stop_task(tid)
@@ -304,20 +317,51 @@ class IndexProgressRenderer:
         throttle_ok = (now - last) >= _FALLBACK_THROTTLE_S
         if not terminal and not throttle_ok and last != 0.0:
             # Suppressed by the throttle window. (``last != 0.0`` lets the very
-            # first event for a phase print immediately.)
+            # first event for a phase print immediately.) Still track totals so
+            # a later terminal line can carry them forward.
+            if ev.total is not None:
+                self._last_total[ev.kind] = ev.total
+            if ev.elapsed_s is not None:
+                self._last_elapsed[ev.kind] = ev.elapsed_s
             return
+        # Carry forward last-seen total / elapsed_s so a minimal ``done`` event
+        # that omits them still prints a complete terminal line.
+        carried_total = ev.total
+        if carried_total is None:
+            carried_total = self._last_total.get(ev.kind)
+        carried_elapsed = ev.elapsed_s
+        if carried_elapsed is None:
+            carried_elapsed = self._last_elapsed.get(ev.kind)
+        # Update the carry-forward state with whatever this event carried.
+        if ev.total is not None:
+            self._last_total[ev.kind] = ev.total
+        if ev.elapsed_s is not None:
+            self._last_elapsed[ev.kind] = ev.elapsed_s
         self._last_print_at[ev.kind] = now
-        self._console.print(self._format_concise(ev))
+        self._console.print(
+            self._format_concise(ev, total=carried_total, elapsed_s=carried_elapsed)
+        )
 
-    def _format_concise(self, ev: ProgressEvent) -> Text:
-        """Render one concise line for the non-TTY fallback."""
+    def _format_concise(
+        self,
+        ev: ProgressEvent,
+        *,
+        total: int | None = None,
+        elapsed_s: float | None = None,
+    ) -> Text:
+        """Render one concise line for the non-TTY fallback.
+
+        ``total`` / ``elapsed_s`` are the already-carry-forwarded values to show
+        (the caller resolves event-vs-last-seen before formatting); ``ev``'s own
+        fields are only used for status / done / phase.
+        """
         kind = ev.kind
         if ev.status == "done":
-            total = ev.total if ev.total is not None else ""
-            elapsed = f"{ev.elapsed_s:.1f}s" if ev.elapsed_s is not None else ""
+            total_str = str(total) if total is not None else ""
+            elapsed = f"{elapsed_s:.1f}s" if elapsed_s is not None else ""
             bits = [kind, "done"]
-            if total != "":
-                bits.append(str(total))
+            if total_str != "":
+                bits.append(total_str)
             if elapsed:
                 bits.append(elapsed)
             return Text(" · ".join(bits))
@@ -358,6 +402,12 @@ class ProgressRelay:
         self._buf = bytearray()
         # Live region is only meaningful when a renderer is attached.
         self._live_active: bool = renderer is not None
+        # Mirrors ``_LineFilter._suppress_next``: a noise header line (e.g. a
+        # ``FutureWarning:`` banner) suppresses the NEXT line too, which is its
+        # indented traceback frame(s). ``line[:1] in (b" ", b"\t")`` is the
+        # continuation signal. Progress lines reset this (they are consumed by
+        # the renderer, never noise).
+        self._suppress_next: bool = False
 
     def feed(self, chunk: bytes) -> None:
         """Buffer ``chunk`` and route each complete (``\\n``-terminated) line."""
@@ -370,18 +420,34 @@ class ProgressRelay:
     def flush(self) -> None:
         """Emit any trailing partial buffer (without a trailing newline)."""
         if self._buf:
-            self._route_line(bytes(self._buf), _is_partial=True)
+            # Trailing partial line: continuation suppression does not apply
+            # (there is no following line). Route it directly.
+            self._route_line(bytes(self._buf))
             self._buf.clear()
 
-    def _route_line(self, line: bytes, *, _is_partial: bool = False) -> None:
+    def _route_line(self, line: bytes) -> None:
         ev = parse_progress_line(line)
         if ev is not None and self._renderer is not None:
-            # Consumed by the protocol — never echoed to any sink.
+            # Consumed by the protocol — never echoed to any sink. It is not
+            # noise, so it must not keep the suppression flag armed.
+            self._suppress_next = False
             self._renderer.apply(ev)
             return
-        # Non-progress line: drop noise, then route to the active sink.
-        if is_noise_line(line):
+        if ev is not None and self._renderer is None:
+            # Parsed as progress but no renderer attached: still reset the flag
+            # (a progress line is never noise) and drop quietly.
+            self._suppress_next = False
             return
+        # Non-progress line: noise path, with continuation suppression.
+        if is_noise_line(line):
+            self._suppress_next = True
+            return
+        if self._suppress_next and line[:1] in (b" ", b"\t"):
+            # Indented continuation of the preceding noise header (e.g. a
+            # traceback frame). Drop without disarming: a multi-frame traceback
+            # has several such lines in a row.
+            return
+        self._suppress_next = False
         text = line.decode("utf-8", errors="replace")
         if self._renderer is not None and self._live_active:
             console = self._console if self._console is not None else self._renderer._console  # noqa: SLF001
