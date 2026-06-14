@@ -5,26 +5,8 @@ import asyncio
 import sys
 from typing import Callable
 
-from java_codebase_rag.cli_format import bold_cyan, is_noise_line, styled_check, styled_cross
+from java_codebase_rag.cli_format import is_noise_line
 from java_codebase_rag.progress import ProgressEvent, make_relay
-
-
-def emit_vectors_start() -> None:
-    print(
-        bold_cyan("[vectors]") + " running · cocoindex update",
-        file=sys.stderr,
-        flush=True,
-    )
-
-
-def emit_vectors_finish(*, elapsed_s: float, exit_code: int) -> None:
-    marker = styled_check() if exit_code == 0 else styled_cross()
-    print(
-        f"{marker} {bold_cyan('[vectors]')} finished · {elapsed_s:.2f}s"
-        + (f" (exit={exit_code})" if exit_code != 0 else ""),
-        file=sys.stderr,
-        flush=True,
-    )
 
 
 class _AsyncLineFilter:

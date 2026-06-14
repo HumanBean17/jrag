@@ -18,10 +18,13 @@ from __future__ import annotations
 
 import inspect
 import os
+import sys
+import threading
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from fnmatch import fnmatch
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -82,6 +85,128 @@ splitter = RecursiveSplitter()
 # concurrent writers. ``optimize()`` is pure maintenance (compact/prune/index);
 # upsert/delete correctness via merge_insert does not depend on it.
 _NUM_TXN_BEFORE_OPTIMIZE = 10**12
+
+
+# --- Vectors-phase progress emission (JCIRAG_PROGRESS kind=vectors) -----------
+#
+# The flow runs in a CHILD cocoindex process; it prints structured progress to
+# its stderr and the parent (pipeline._popen_capturing_stderr /
+# cli_progress.accumulate_and_relay_subprocess_streams) parses it via
+# ProgressRelay and feeds the renderer. The flow CANNOT know when all files are
+# done (cocoindex offers no "all files done" hook in the flow), so it emits:
+#   - ONE ``total=N status=running`` line from ``app_main`` (approximate
+#     pre-walk: matcher includes + LayeredIgnore), and
+#   - per-file ``done=k status=running`` ticks (throttled every ~25 files) from
+#     ``process_*_file`` (shared atomic counter).
+# The PARENT emits the terminal ``status=done``/``failed`` vectors event on
+# cocoindex exit (drives clamp-on-completion + phase transition to Optimize).
+
+# Per-file tick cadence: bound stderr volume on huge trees without making the
+# bar feel stale. Every 25th file (and the modulo boundary is enough — the
+# parent clamps to total on the terminal event anyway).
+_VECTORS_TICK_EVERY = 25
+
+# Thread-safe counter: cocoindex may call process_*_file concurrently
+# (mount_each parallelism is implementation-defined). A module-level lock guards
+# both the counter and the emission so two threads never interleave a tick.
+_vectors_done_lock = threading.Lock()
+_vectors_done_count = 0
+
+
+def _emit_vectors_progress(
+    *,
+    done: int | None = None,
+    total: int | None = None,
+    status: str = "running",
+    elapsed_s: float | None = None,
+) -> None:
+    """Emit one ``JCIRAG_PROGRESS kind=vectors …`` line to stderr (flushed).
+
+    Field order is fixed (kind, done, total, status, elapsed_s) so the parser
+    and tests can pin substrings. Omitted fields are simply absent.
+    """
+    fields = ["kind=vectors"]
+    if done is not None:
+        fields.append(f"done={done}")
+    if total is not None:
+        fields.append(f"total={total}")
+    fields.append(f"status={status}")
+    if elapsed_s is not None:
+        fields.append(f"elapsed_s={elapsed_s:.2f}")
+    print("JCIRAG_PROGRESS " + " ".join(fields), file=sys.stderr, flush=True)
+
+
+def _tick_vectors_done() -> None:
+    """Increment the shared per-file counter and emit a throttled ``done=k`` tick.
+
+    Called once per successfully-processed file (after the ignore / empty
+    early-returns). The tick is emitted every ``_VECTORS_TICK_EVERY`` files so
+    stderr volume stays bounded on huge trees; the parent clamps to total on
+    the terminal event, so the exact tick cadence is not load-bearing.
+    """
+    global _vectors_done_count
+    with _vectors_done_lock:
+        _vectors_done_count += 1
+        n = _vectors_done_count
+        if n % _VECTORS_TICK_EVERY != 0:
+            return
+    _emit_vectors_progress(done=n, status="running")
+
+
+def _approximate_vectors_total(project_root: Path) -> int:
+    """Reproduce the matchers' include globs + LayeredIgnore for an approximate total.
+
+    The flow applies two filtering layers: (1) ``PatternFilePathMatcher``
+    excludes at walk time via ``LayeredIgnore.cocoindex_excluded_patterns()``,
+    then (2) ``LayeredIgnore.is_ignored()`` plus an early-return for empty /
+    undecodable files inside each ``process_*_file``. Files that early-return
+    never tick, so this pre-walk OVERSTATES the total by the ignored / empty
+    count. The parent clamps the bar to 100% on the terminal ``status=done``
+    event, so the over-count cannot stall the bar.
+
+    Mirrors the three ``localfs.walk_dir`` matchers in ``app_main``:
+      - ``**/*.java``
+      - ``**/src/main/resources/db/migration/*.sql``
+      - ``**/src/main/resources/application*.yml`` and ``.yaml``
+    """
+    ignore = LayeredIgnore(project_root)
+    excluded = ignore.cocoindex_excluded_patterns()
+
+    def _excluded(rel_posix: str) -> bool:
+        return any(fnmatch(rel_posix, pat) for pat in excluded)
+
+    total = 0
+    for dirpath, dirnames, filenames in os.walk(project_root):
+        # Prune the same universal nuisance dirs as iter_java_source_files /
+        # cocoindex walk. (build-output pruning is matcher-dependent in the
+        # real walk; for an APPROXIMATE total this cheap prune is sufficient
+        # — the clamp absorbs any residual divergence.)
+        dirnames[:] = [
+            d for d in dirnames if d not in (".git", ".hg", ".svn", "node_modules", ".venv", "venv")
+        ]
+        for fn in filenames:
+            full = Path(dirpath) / fn
+            try:
+                rel = full.resolve().relative_to(project_root).as_posix()
+            except ValueError:
+                continue
+            if _excluded(rel):
+                continue
+            # Java: **/*.java
+            if fn.endswith(".java"):
+                if not ignore.is_ignored(full)[0]:
+                    total += 1
+                continue
+            # SQL: **/src/main/resources/db/migration/*.sql
+            if fn.endswith(".sql") and "/db/migration/" in rel:
+                if not ignore.is_ignored(full)[0]:
+                    total += 1
+                continue
+            # YAML: **/src/main/resources/application*.yml / .yaml
+            if fn.endswith((".yml", ".yaml")) and "/application" in fn and "/src/main/resources/" in rel:
+                if not ignore.is_ignored(full)[0]:
+                    total += 1
+    return total
 
 
 @dataclass
@@ -187,6 +312,8 @@ async def process_java_file(
     if not content.strip():
         return
 
+    _tick_vectors_done()
+
     language = detect_code_language(filename=file.file_path.path.name) or "text"
     cs, mn, ov = JAVA_CHUNK
     chunks = splitter.split(
@@ -251,6 +378,8 @@ async def process_sql_file(
     if not content.strip():
         return
 
+    _tick_vectors_done()
+
     language = "sql"
     cs, mn, ov = SQL_CHUNK
     chunks = splitter.split(
@@ -294,6 +423,8 @@ async def process_yaml_file(
         return
     if not content.strip():
         return
+
+    _tick_vectors_done()
 
     ext = file.file_path.path.suffix.lower()
     language = "yaml" if ext in (".yml", ".yaml") else "text"
@@ -362,6 +493,20 @@ async def app_main() -> None:
     project_root = coco.use_context(PROJECT_ROOT)
     _ignore = LayeredIgnore(project_root)
     _walk_excludes = _ignore.cocoindex_excluded_patterns()
+    # Emit ONE approximate total so the parent's renderer can show a determinate
+    # bar (clamps to 100% on the terminal vectors event the parent emits on
+    # cocoindex exit). Approximate — ignored / empty files over-state it; see
+    # ``_approximate_vectors_total``. ``--full-reprocess`` only: on incremental
+    # catch-up the @coco.fn(memo=True) cache skips unchanged files, so no total
+    # is knowable up front → the parent renders indeterminate from the absence.
+    try:
+        total = _approximate_vectors_total(project_root)
+        if total > 0:
+            _emit_vectors_progress(total=total, status="running")
+    except Exception:
+        # The pre-walk must never break indexing — a failure here just means
+        # the parent falls back to indeterminate. Swallow and continue.
+        pass
     java_files = localfs.walk_dir(
         PROJECT_ROOT,
         recursive=True,

@@ -146,8 +146,13 @@ def _run_with_pipeline_progress(
         return int(work(None))
     from java_codebase_rag.progress import IndexProgressRenderer, ProgressEvent
 
-    # PR-2 owns the graph task only; vectors/optimize stay pending (PR-3).
-    phases = ["graph"]
+    # PR-3 owns all three tasks in order: Vectors → Optimize → Graph. The vectors
+    # task is fed by the cocoindex child's per-file ticks + approximate total
+    # (subprocess transport, parsed by ProgressRelay); the optimize task is fed
+    # in-process by lance_optimize; the graph task is fed by the build_ast_graph
+    # child (subprocess transport). A task only becomes visible/running once its
+    # first event arrives.
+    phases = ["vectors", "optimize", "graph"]
     renderer = IndexProgressRenderer(phases)
     progress = PipelineProgress(renderer=renderer)
 
@@ -318,6 +323,8 @@ def _cmd_init(args: argparse.Namespace) -> int:
             quiet=bool(args.quiet),
             verbose=verbose,
             lance_project_root=None if args.quiet else cfg.source_root,
+            on_progress=progress.on_progress if progress is not None else None,
+            on_progress_console=progress.console if progress is not None else None,
         )
         if coco.returncode != 0:
             _emit(
@@ -378,6 +385,8 @@ def _cmd_increment(args: argparse.Namespace) -> int:
             quiet=bool(args.quiet),
             verbose=bool(args.verbose),
             lance_project_root=None if args.quiet else cfg.source_root,
+            on_progress=progress.on_progress if progress is not None else None,
+            on_progress_console=progress.console if progress is not None else None,
         )
         if coco.returncode != 0:
             _emit(
@@ -455,7 +464,11 @@ def _cmd_reprocess(args: argparse.Namespace) -> int:
         graph_only = bool(getattr(args, "graph_only", False))
 
         if vectors_only:
-            coco = run_cocoindex_update(env, full_reprocess=True, quiet=bool(args.quiet), verbose=verbose)
+            coco = run_cocoindex_update(
+                env, full_reprocess=True, quiet=bool(args.quiet), verbose=verbose,
+                on_progress=progress.on_progress if progress is not None else None,
+                on_progress_console=progress.console if progress is not None else None,
+            )
             if _is_cocoindex_preflight_blocker(coco):
                 payload: dict[str, Any] = {
                     "success": False,
@@ -530,7 +543,14 @@ def _cmd_reprocess(args: argparse.Namespace) -> int:
 
         import server  # lazy: pulls sentence_transformers/torch/lancedb/kuzu
 
-        result = asyncio.run(server.run_refresh_pipeline(quiet=bool(args.quiet), verbose=verbose))
+        result = asyncio.run(
+            server.run_refresh_pipeline(
+                quiet=bool(args.quiet),
+                verbose=verbose,
+                on_progress=progress.on_progress if progress is not None else None,
+                on_progress_console=progress.console if progress is not None else None,
+            )
+        )
         payload = result.model_dump()
         _emit_reprocess_outcome(payload)
         return _reprocess_exit_code(payload)
