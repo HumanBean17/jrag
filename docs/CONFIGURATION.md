@@ -98,13 +98,19 @@ index_dir: ./.java-codebase-rag
 embedding:
   # Hub id OR local directory containing the sentence-transformers model files.
   # - Hub id example: `sentence-transformers/all-MiniLM-L6-v2`
-  # - Local path examples: `/opt/models/minilm`, `~/models/minilm`, `$MODEL_DIR/minilm`
+  # - Local path examples: `/opt/models/minilm`, `~/models/minilm`, `$MODEL_DIR/minilm`, `./models/minilm`
   # - Resolution applies expanduser + expandvars when the value is path-shaped
-  #   (starts with `/`, `./`, `../`, `~`, or contains `$`). Same rule for
-  #   `SBERT_MODEL` and `--embedding-model` after precedence picks the string.
-  #   Plain `org/name` is treated as a hub id and passed through unchanged.
-  #   A relative path without `./` (e.g. `models/minilm`) is ambiguous with
-  #   hub-id shape — prepend `./` if you mean a local directory.
+  #   (starts with `/`, `./`, `../`, `~`, or contains `$`); a result still
+  #   `./` / `../`-prefixed after that expansion is then resolved to absolute.
+  #   Same rule for `SBERT_MODEL` and `--embedding-model` after precedence picks
+  #   the string. Plain `org/name` is treated as a hub id and passed through
+  #   unchanged. A relative path without `./` (e.g. `models/minilm`) is
+  #   ambiguous with hub-id shape — prepend `./` if you mean a local directory.
+  # - Relative base (mirrors `index_dir`): a YAML `model` resolves against THIS
+  #   config file's directory; `SBERT_MODEL` / `--embedding-model` resolve
+  #   against the resolved `source_root`. So a committed `model: ./models/minilm`
+  #   is portable across machines and across the CLI indexer vs the MCP reader,
+  #   regardless of process CWD.
   # - Env: SBERT_MODEL. CLI: --embedding-model. Default: sentence-transformers/all-MiniLM-L6-v2
   model: sentence-transformers/all-MiniLM-L6-v2
 
@@ -220,7 +226,7 @@ async_producer_overrides:
 | Field | Expanded? | Notes |
 |---|---|---|
 | `index_dir` | partial | `~` expanded; `$VAR` is NOT expanded. A YAML relative path resolves against the config file's directory (same base as `source_root`); the default `./.java-codebase-rag` sits beside the resolved `source_root`. |
-| `embedding.model` (when path-shaped) | yes | Path-shape = starts with `/`, `./`, `../`, `~`, or contains `$`. Plain `org/name` is treated as a hub id and passed through. Applies to the value after CLI > env > YAML > default precedence. Long-lived MCP hosts also apply the same expansion when reading `SBERT_MODEL` from the process environment (so table metadata and search agree with `index_common` defaults). |
+| `embedding.model` (when path-shaped) | yes | Path-shape = starts with `/`, `./`, `../`, `~`, or contains `$`; `~` / `$VAR` are expanded, then a result still `./` / `../`-prefixed is resolved to absolute. Plain `org/name` is treated as a hub id and passed through. Relative base (mirrors `index_dir`): a YAML `model` resolves against the config file's directory; `SBERT_MODEL` / `--embedding-model` resolve against `source_root`. Applies after CLI > env > YAML > default precedence. Long-lived MCP hosts also apply the same expansion when reading `SBERT_MODEL` from the process environment (so table metadata and search agree with `index_common` defaults). |
 | `embedding.device` | n/a | Device strings (`cpu`, `cuda`, `mps`) aren't paths. |
 | `microservice_roots[*]` | no | Each entry is a directory **name** relative to `source_root`, not an arbitrary path. |
 | Brownfield `path:` / `topic:` values | no | These are URL paths and Kafka topic names, not filesystem paths. Literal characters preserved. |

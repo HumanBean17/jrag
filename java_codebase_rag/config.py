@@ -52,14 +52,36 @@ _DEFAULT_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 _UNRESOLVED_VAR_RE = re.compile(r"\$(\w+|\{[^}]+\})")
 
 
-def maybe_expand_embedding_model_path(value: str) -> str:
-    """Expand ``~`` and ``$VAR`` when *value* is path-shaped.
+def maybe_expand_embedding_model_path(
+    value: str,
+    *,
+    config_dir: Path | None = None,
+    source_root: Path | None = None,
+    source: SettingSource | None = None,
+) -> str:
+    """Expand ``~`` / ``$VAR`` for path-shaped values and resolve relatives to absolute.
 
     Path-shape: starts with ``/``, ``./``, ``../``, ``~``, or contains ``$``.
     Plain ``org/name`` (hub id) does not match and is passed through unchanged.
 
-    Used for ``embedding.model`` after precedence resolution and for runtime
-    ``SBERT_MODEL`` reads (e.g. MCP) so the string matches ``ResolvedOperatorConfig``.
+    Relative resolution mirrors :func:`_resolve_index_dir_path` so a committed
+    config is portable regardless of process CWD:
+
+    * YAML values (``source == "yaml"``) resolve against ``config_dir`` (the
+      directory holding ``.java-codebase-rag.yml``).
+    * CLI / env values resolve against ``source_root``.
+
+    Only a result that still starts with ``./`` or ``../`` *after* ``~`` /
+    ``$VAR`` expansion is re-based — so hub ids (``org/name``), absolute paths,
+    ``~/``-expanded paths, and an env var that already yielded an absolute path
+    are all left untouched.
+
+    When no base is supplied (the runtime ``SBERT_MODEL`` read via
+    :func:`resolved_sbert_model_for_process_env`), relative resolution is
+    skipped: the value is returned ``expandvars`` / ``expanduser``-expanded but
+    not re-based, matching the prior best-effort behavior. The main resolution
+    path (:func:`resolve_operator_config`) supplies a base, so the absolute path
+    it stores is what downstream loaders receive.
     """
     needs_expand = value.startswith(("/", "./", "../", "~")) or "$" in value
     if not needs_expand:
@@ -70,7 +92,29 @@ def maybe_expand_embedding_model_path(value: str) -> str:
             f"java-codebase-rag: path-shaped model string contains unresolved variable: {expanded}",
             file=sys.stderr,
         )
+    if expanded.startswith(("./", "../")):
+        base = _embedding_model_base(
+            source=source, config_dir=config_dir, source_root=source_root
+        )
+        if base is not None:
+            return str((base / expanded).resolve())
     return expanded
+
+
+def _embedding_model_base(
+    *,
+    source: SettingSource | None,
+    config_dir: Path | None,
+    source_root: Path | None,
+) -> Path | None:
+    """Base directory for a relative ``embedding.model``.
+
+    Mirrors :func:`_resolve_index_dir_path`: YAML values anchor on the config
+    file's directory; CLI / env values anchor on the resolved ``source_root``.
+    """
+    if source == "yaml":
+        return config_dir
+    return source_root
 
 
 def resolved_sbert_model_for_process_env(import_time_default: str) -> str:
@@ -387,7 +431,12 @@ def resolve_operator_config(
         yaml_path=("embedding", "model"),
         default=_DEFAULT_EMBEDDING_MODEL,
     )
-    model = maybe_expand_embedding_model_path(model)
+    model = maybe_expand_embedding_model_path(
+        model,
+        config_dir=config_dir,
+        source_root=root,
+        source=model_src,
+    )
     device, device_src = _pick_optional_device(
         cli_val=cli_embedding_device,
         env_key="SBERT_DEVICE",
