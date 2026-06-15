@@ -43,6 +43,8 @@ java-codebase-rag install --scope user
 - `--agent {claude-code,qwen-code,gigacode}` — Agent host to configure (can be passed multiple times).
 - `--scope {project,user}` — Installation scope (default: `project`). Project scope writes to `.<host>/` in the project repo; user scope writes to `~/.<host>/` (globally available).
 - `--model MODEL` — Embedding model path or `auto` (default: `auto`, downloads `sentence-transformers/all-MiniLM-L6-v2` on first run).
+- `--quiet` / `-q` — Suppress the indexing progress stream on stderr (wizard prompts unchanged).
+- `--verbose` / `-v` — Raw-relay subprocess output during the indexing sub-step (no progress bar).
 
 **Exit codes:**
 - `0` — Success (all stages completed).
@@ -55,7 +57,7 @@ java-codebase-rag install --scope user
 3. Agent host selection — Claude Code, Qwen Code, GigaCode (multi-select).
 4. Install scope — project or user.
 5. MCP entrypoint resolution + artifact deployment — config, skill, agent files.
-6. Index + finish — YAML generation, `.gitignore` update, `init`.
+6. Index + finish — YAML generation, `.gitignore` update, `init`. Stage 6's indexing sub-step renders the unified `Vectors → Optimize → Graph` progress on **stderr** (see [Indexing progress](#indexing-progress-stderr)); the wizard's conversational stdout is unchanged.
 
 **Re-running `install`:** If `.java-codebase-rag.yml` exists, the installer shows current values and offers "Update" (pre-filled) or "Start fresh". Existing MCP entries are updated in-place (merged, not duplicated). Skill/agent files trigger overwrite confirmation.
 
@@ -78,13 +80,14 @@ java-codebase-rag update --force
 **Flags:**
 - `--force` — Overwrite all artifacts even if content matches.
 - `--dry-run` — Print changes without writing files.
+- `--quiet` / `-q` — Suppress the indexing progress stream on stderr (wizard stdout unchanged).
+- `--verbose` / `-v` — Raw-relay subprocess output during the indexing sub-step (no progress bar).
 
 **Behavior:**
 - Detects previously configured agent hosts (scans both project-level and user-level config files).
 - Refreshes skill and agent files (versioned assets from the package).
 - Updates MCP entrypoint path if `java-codebase-rag-mcp` has moved.
-- Runs an incremental index update (Lance + graph) if an index exists — same as `java-codebase-rag increment`.
-- Skips MCP config if the entry already exists and is correct.
+- Runs an incremental index update (Lance + graph) if an index exists — same as `java-codebase-rag increment`. The indexing sub-step renders the unified `Vectors → Optimize → Graph` progress on **stderr** (see [Indexing progress](#indexing-progress-stderr)); it no longer runs silently.
 
 **Exit codes:**
 - `0` — Success.
@@ -95,13 +98,44 @@ java-codebase-rag update --force
 
 - **TTY:** human-readable `pprint` of the payload on stdout (except **successful selective `reprocess`** with `--vectors-only` / `--graph-only`, which prints `Rebuilt:` / `Skipped:` lines instead of dumping the full dict).
 - **Piped / non-TTY:** **single JSON object** per invocation on stdout (no trailing noise). Use this in scripts and CI.
-- **Lifecycle stderr:** `init`, `increment`, `reprocess`, and `erase` stream subprocess progress (and relayed child stdout) to **stderr**; pass **`--quiet`** to suppress that stream. **stdout** stays the JSON/pprint payload only.
+- **Lifecycle stderr:** `init`, `increment`, `reprocess`, `install`, `update`, and `erase` stream subprocess progress (and relayed child stdout) to **stderr**; pass **`--quiet`** to suppress that stream. **stdout** stays the JSON/pprint payload (`init`/`increment`/`reprocess`) or the wizard conversational text (`install`/`update`) only.
 
 Example:
 
 ```bash
 java-codebase-rag meta --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-rag | jq .ontology_version
 ```
+
+### Indexing progress (stderr)
+
+All five lifecycle commands that build the index (`init`, `increment`, `reprocess`, `install`, `update`) render the **same unified progress** on **stderr** during indexing: a header line, a three-phase list `Vectors → Optimize → Graph`, and a footer line. The phase list is the single source of truth for "what's happening right now":
+
+- **Vectors** — the `cocoindex update` Lance catch-up / full reprocess.
+- **Optimize** — the serialized Lance table compaction that runs after a successful vectors phase.
+- **Graph** — the `build_ast_graph.py` Kuzu/LadybugDB build (full or incremental).
+
+**Determinate vs indeterminate per command:**
+
+| Phase | Determinate? |
+| ----- | ------------ |
+| `Vectors` (full `init` / `reprocess`) | Approximately determinate — a pre-walk estimates the file count; the bar **clamps to 100% on completion** (the pre-walk overstates by ignored/empty files). |
+| `Vectors` (incremental `increment` / `update`) | Indeterminate — CocoIndex's `memo=True` cache only calls the per-file function for changed files, so no denominator is known up front. A pulsing bar plus a "files touched: N" counter. |
+| `Optimize` | Always indeterminate (no item count exposed by Lance compaction). |
+| `Graph` (full `init` / `reprocess`) | Determinate — pass 1 does a count-first filtered walk for an exact total; passes 2–6 are six known steps. |
+| `Graph` (incremental `increment` / `update`) | Determinate when it runs; falls back to a full rebuild on schema change. |
+
+**Flags, TTY, and failure:**
+
+| Mode | Behaviour |
+| ---- | --------- |
+| TTY (default) | `rich` `Live` region — the multi-line phase display (spinner + bar + `%` + ETA). |
+| Non-TTY / CI | `rich` auto-disables; concise throttled stderr lines (~every 5 s per phase + a terminal line) so CI logs still show progress. |
+| `--quiet` / `-q` | Suppresses the entire progress stream (no header, phases, or footer). The stdout payload is unchanged. |
+| `--verbose` / `-v` | Bypasses parsing; relays raw subprocess output verbatim (Lance warnings, brownfield events, the raw `JCIRAG_PROGRESS` protocol lines). No `Live` region. |
+| Phase failure | The failing phase renders a red `✗`; the footer carries `(exit=N)`. The `rich` `Live` region is torn down cleanly so the error stays visible. |
+| Missing `cocoindex` / builder binary | The pre-spawn stub emits a `status=failed` line; no phase is left hung at `running`. |
+
+> **Behaviour change (this release).** `install` and `update` now emit their indexing progress on **stderr** (previously `install` printed indexing chatter to stdout, and `update` ran the whole indexing step with `quiet=True` — completely silent). The wizard conversational stdout for both commands is otherwise unchanged. `update`'s previously-ignored `--quiet` / `--verbose` flags, and `install`'s previously-ignored `--verbose` flag, are now wired through (`install` already honored `--quiet`).
 
 ## Environment variables (summary)
 

@@ -14,6 +14,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, NamedTuple
@@ -801,6 +802,38 @@ def update_gitignore(cwd: Path) -> None:
         gitignore_path.write_text("\n".join(lines), encoding="utf-8")
 
 
+def _index_progress_header(subcommand: str, source_root: Path, index_dir: Path) -> None:
+    """Print the stderr header framing the indexing sub-step (install/update).
+
+    Mirrors the operator commands' ``_pipeline_header`` but lives in the
+    installer because the wizard's stdout framing differs. This brackets ONLY
+    the indexing sub-step — the wizard's prompts stay outside it on stdout.
+    """
+    from java_codebase_rag.cli_format import bold
+
+    print(
+        bold(
+            f"java-codebase-rag {subcommand} · source={source_root.resolve()} "
+            f"· index={index_dir.resolve()}"
+        ),
+        file=sys.stderr,
+        flush=True,
+    )
+
+
+def _index_progress_footer(subcommand: str, started: float, *, ok: bool) -> None:
+    """Print the stderr footer closing the indexing sub-step framing."""
+    from java_codebase_rag.cli_format import bold, styled_check, styled_cross
+
+    elapsed = time.time() - started
+    marker = styled_check() if ok else styled_cross()
+    print(
+        f"{marker} {bold(f'java-codebase-rag {subcommand} · finished in {elapsed:.2f}s')}",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
 def run_init_if_needed(
     source_root: Path,
     index_dir: Path,
@@ -808,15 +841,25 @@ def run_init_if_needed(
     *,
     non_interactive: bool,
     quiet: bool,
+    verbose: bool = False,
 ) -> bool:
     """Run init if index directory has no artifacts. Return True if init was run.
+
+    The indexing sub-step (CocoIndex update + AST graph build) renders the
+    unified ``Vectors → Optimize → Graph`` progress on **stderr** in default
+    mode (same renderer the operator commands use); the wizard's conversational
+    stdout is untouched by this function. ``--quiet`` is silent; ``--verbose``
+    raw-relays subprocess output. The indexing chatter that used to print to
+    stdout (``Creating index…`` / ``Index created successfully.``) now lives
+    on stderr framing so stdout stays the wizard payload.
 
     Args:
         source_root: Source root directory
         index_dir: Index directory path
         model: Embedding model path or "auto"
         non_interactive: If True, suppress prompts
-        quiet: If True, suppress output
+        quiet: If True, suppress progress output
+        verbose: If True, raw-relay subprocess output (no Live region)
 
     Returns:
         True if init was run, False if skipped
@@ -832,36 +875,65 @@ def run_init_if_needed(
         print("Index already exists. Run `java-codebase-rag reprocess` to rebuild.")
         return False
 
-    print("Creating index...")
     cfg = resolve_operator_config(
         source_root=source_root,
         cli_index_dir=None,  # use default (<source_root>/.java-codebase-rag)
         cli_embedding_model=model if model != "auto" else None,
     )
     cfg.apply_to_os_environ()
-
     env = cfg.subprocess_env()
 
-    # Run CocoIndex update
-    coco = run_cocoindex_update(env, full_reprocess=False, quiet=quiet)
-    if coco.returncode != 0:
-        print(f"Error: CocoIndex update failed with code {coco.returncode}")
-        return False
+    # Indexing sub-step: render unified progress on stderr in default mode only
+    # (quiet = silent; verbose = raw relay, no Live region). The renderer wraps
+    # just this sub-step, not the surrounding wizard.
+    on_progress, on_progress_console = None, None
+    renderer = None
+    if not quiet and not verbose:
+        from java_codebase_rag.progress import build_index_progress_context
 
-    # Run AST graph build
-    g = run_build_ast_graph(
-        source_root=cfg.source_root,
-        ladybug_path=cfg.ladybug_path,
-        verbose=not quiet,
-        quiet=quiet,
-        env=env,
-    )
-    if g.returncode != 0:
-        print(f"Error: AST graph build failed with code {g.returncode}")
-        return False
+        renderer, on_progress, on_progress_console = build_index_progress_context()
 
-    print("Index created successfully.")
-    return True
+    started = time.time()
+    if renderer is not None:
+        _index_progress_header("install", cfg.source_root, cfg.index_dir)
+        renderer.start()
+    index_ok = True
+    try:
+        coco = run_cocoindex_update(
+            env,
+            full_reprocess=False,
+            quiet=quiet,
+            verbose=verbose,
+            on_progress=on_progress,
+            on_progress_console=on_progress_console,
+        )
+        if coco.returncode != 0:
+            print(
+                f"Error: CocoIndex update failed with code {coco.returncode}",
+                file=sys.stderr,
+            )
+            index_ok = False
+        else:
+            g = run_build_ast_graph(
+                source_root=cfg.source_root,
+                ladybug_path=cfg.ladybug_path,
+                verbose=verbose,
+                quiet=quiet,
+                env=env,
+                on_progress=on_progress,
+                on_progress_console=on_progress_console,
+            )
+            if g.returncode != 0:
+                print(
+                    f"Error: AST graph build failed with code {g.returncode}",
+                    file=sys.stderr,
+                )
+                index_ok = False
+    finally:
+        if renderer is not None:
+            renderer.stop()
+            _index_progress_footer("install", started, ok=index_ok)
+    return index_ok
 
 
 def handle_rerun(cwd: Path, *, non_interactive: bool) -> dict | None:
@@ -1196,13 +1268,25 @@ def run_update(
     force: bool,
     dry_run: bool,
     cwd: Path | None = None,
+    quiet: bool = False,
+    verbose: bool = False,
 ) -> int:
     """Run the update pipeline. Returns exit code.
+
+    The indexing sub-step (Lance catch-up + incremental graph) renders the
+    unified ``Vectors → Optimize → Graph`` progress on **stderr** in default
+    mode and no longer runs with ``quiet=True`` (the reason ``update`` was
+    silent). ``--quiet`` is silent; ``--verbose`` raw-relays subprocess output.
+    The wizard's host-detection / refresh / summary stdout is preserved; only
+    the indexing chatter that used to print to stdout moves onto the stderr
+    renderer framing.
 
     Args:
         force: If True, overwrite all artifacts even if matching
         dry_run: If True, print changes without writing
         cwd: Current working directory (defaults to Path.cwd())
+        quiet: If True, suppress progress output
+        verbose: If True, raw-relay subprocess output (no Live region)
 
     Returns:
         Exit code (0=success, 1=partial, 2=fatal)
@@ -1277,30 +1361,67 @@ def run_update(
     # The "graph not implemented" warning belongs only on the vectors-only path
     # (increment --vectors-only), where the graph step is deliberately skipped.
     if not dry_run:
-        print("\nUpdating index (Lance + graph)...")
         cfg.apply_to_os_environ()
         env = cfg.subprocess_env()
 
-        coco = run_cocoindex_update(env, full_reprocess=False, quiet=True)
-        if coco.returncode != 0:
-            print(f"Error: Lance index update failed with code {coco.returncode}")
-            return 1
+        # Indexing sub-step: render unified progress on stderr in default mode
+        # only (quiet = silent; verbose = raw relay). No longer runs quiet=True
+        # — that was why `update` was silent. The renderer wraps just this
+        # sub-step; the wizard's summary stdout below is outside it.
+        on_progress, on_progress_console = None, None
+        renderer = None
+        if not quiet and not verbose:
+            from java_codebase_rag.progress import build_index_progress_context
 
-        g = run_incremental_graph(
-            source_root=cfg.source_root,
-            ladybug_path=cfg.ladybug_path,
-            verbose=False,
-            quiet=True,
-            env=env,
-        )
-        if g.returncode != 0:
-            # Artifacts above already refreshed; the graph catch-up is best-effort
-            # here. Surface a truthful, actionable message instead of leaving the
-            # graph silently stale or claiming the feature is unimplemented.
-            print(
-                f"\nWarning: incremental graph update failed (exit {g.returncode}). "
-                "Run `java-codebase-rag reprocess` for a full rebuild."
+            renderer, on_progress, on_progress_console = build_index_progress_context()
+
+        started = time.time()
+        if renderer is not None:
+            _index_progress_header("update", cfg.source_root, cfg.index_dir)
+            renderer.start()
+        index_ok = True
+        try:
+            coco = run_cocoindex_update(
+                env,
+                full_reprocess=False,
+                quiet=quiet,
+                verbose=verbose,
+                on_progress=on_progress,
+                on_progress_console=on_progress_console,
             )
+            if coco.returncode != 0:
+                print(
+                    f"Error: Lance index update failed with code {coco.returncode}",
+                    file=sys.stderr,
+                )
+                index_ok = False
+            else:
+                g = run_incremental_graph(
+                    source_root=cfg.source_root,
+                    ladybug_path=cfg.ladybug_path,
+                    verbose=verbose,
+                    quiet=quiet,
+                    env=env,
+                    on_progress=on_progress,
+                    on_progress_console=on_progress_console,
+                )
+                if g.returncode != 0:
+                    # Artifacts above already refreshed; the graph catch-up is
+                    # best-effort here. Surface a truthful, actionable message
+                    # instead of leaving the graph silently stale or claiming
+                    # the feature is unimplemented. Goes to stderr (indexing
+                    # progress framing), not the wizard's stdout summary.
+                    print(
+                        f"\nWarning: incremental graph update failed (exit {g.returncode}). "
+                        "Run `java-codebase-rag reprocess` for a full rebuild.",
+                        file=sys.stderr,
+                    )
+        finally:
+            if renderer is not None:
+                renderer.stop()
+                _index_progress_footer("update", started, ok=index_ok)
+        if not index_ok:
+            return 1
     else:
         print("\nWould run incremental index update (Lance + graph).")
 
@@ -1320,6 +1441,7 @@ def run_install(
     model: str | None,
     source_root: Path | None = None,
     quiet: bool = False,
+    verbose: bool = False,
 ) -> int:
     """Run the install pipeline. Returns exit code.
 
@@ -1330,6 +1452,7 @@ def run_install(
         model: Model from CLI flag
         source_root: Source root path (defaults to cwd if None)
         quiet: If True, suppress output
+        verbose: If True, raw-relay subprocess indexing output (no Live region)
 
     Returns:
         Exit code (0=success, 1=partial, 2=fatal)
@@ -1428,6 +1551,7 @@ def run_install(
         resolved_model,
         non_interactive=non_interactive,
         quiet=quiet,
+        verbose=verbose,
     )
 
     return 0

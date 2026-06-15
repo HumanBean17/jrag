@@ -1232,7 +1232,8 @@ class TestRunUpdate:
         # resolved JAVA_CODEBASE_RAG_SOURCE_ROOT / _INDEX_DIR.
         captured: dict = {}
 
-        def capture_coco(env, *, full_reprocess, quiet, verbose=True, lance_project_root=None):
+        def capture_coco(env, *, full_reprocess, quiet, verbose=True, lance_project_root=None,
+                         on_progress=None, on_progress_console=None):
             captured["env"] = env
             return CompletedProcess(["cocoindex"], 0)
 
@@ -1362,3 +1363,221 @@ class TestRunUpdate:
         result = run_update(force=False, dry_run=False, cwd=tmp_path)
         # Should return partial failure (1) because artifact refresh failed
         assert result == 1
+
+
+# ---------------------------------------------------------------------------
+# PR-4 — install/update unified index progress (stderr renderer)
+# ---------------------------------------------------------------------------
+
+
+def _patch_pipeline_for_progress(monkeypatch, *, emit: bool = True) -> dict:
+    """Patch the three pipeline helpers the installer uses to emit progress.
+
+    Records the ``quiet``/``verbose`` kwargs each was called with so tests can
+    assert the installer no longer forces ``quiet=True``. Returns the call log.
+    """
+    import subprocess
+    from java_codebase_rag import pipeline as _pipeline
+
+    calls: dict = {"coco": [], "graph": [], "incremental": []}
+
+    def _coco(env, *, full_reprocess, quiet, verbose=True, lance_project_root=None,
+              on_progress=None, on_progress_console=None):
+        calls["coco"].append({"quiet": quiet, "verbose": verbose})
+        if emit and on_progress is not None:
+            from java_codebase_rag.progress import ProgressEvent
+            on_progress(ProgressEvent(
+                kind="vectors", phase=None, pass_=None, done=1, total=10,
+                status="running", elapsed_s=None))
+        return subprocess.CompletedProcess(args=["stub"], returncode=0, stdout="", stderr="")
+
+    def _graph(*, source_root, ladybug_path, verbose, quiet=False, env=None,
+               on_progress=None, on_progress_console=None):
+        calls["graph"].append({"quiet": quiet, "verbose": verbose})
+        if emit and on_progress is not None:
+            from java_codebase_rag.progress import ProgressEvent
+            on_progress(ProgressEvent(
+                kind="graph", phase=None, pass_="1/6", done=1, total=10,
+                status="running", elapsed_s=None))
+        return subprocess.CompletedProcess(args=["stub"], returncode=0, stdout="", stderr="")
+
+    def _incremental(*, source_root, ladybug_path, verbose, quiet=False, env=None,
+                     on_progress=None, on_progress_console=None):
+        calls["incremental"].append({"quiet": quiet, "verbose": verbose})
+        if emit and on_progress is not None:
+            from java_codebase_rag.progress import ProgressEvent
+            on_progress(ProgressEvent(
+                kind="graph", phase=None, pass_="1/6", done=1, total=10,
+                status="running", elapsed_s=None))
+        return subprocess.CompletedProcess(args=["stub"], returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(_pipeline, "run_cocoindex_update", _coco)
+    monkeypatch.setattr(_pipeline, "run_build_ast_graph", _graph)
+    monkeypatch.setattr(_pipeline, "run_incremental_graph", _incremental)
+    return calls
+
+
+class TestPR4IndexProgress:
+    """PR-4: install/update emit unified index progress on stderr."""
+
+    def _setup_repo(self, tmp_path, monkeypatch):
+        """Copy the bank-chat fixture and stub MCP discovery for install/update.
+
+        Also writes a configured ``.mcp.json`` so ``update`` (which requires a
+        prior ``install`` per its docstring) detects a configured host and
+        reaches its indexing sub-step.
+        """
+        import shutil
+        bank_chat = Path("tests/bank-chat-system")
+        if not bank_chat.is_dir():
+            pytest.skip("bank-chat-system fixture not found")
+        shutil.copytree(bank_chat, tmp_path / "bank-chat")
+        cwd = tmp_path / "bank-chat"
+        (cwd / ".git").mkdir()
+        # A configured host entry — the state `update` expects post-install.
+        (cwd / ".mcp.json").write_text(
+            json.dumps(
+                {
+                    "mcpServers": {
+                        "java-codebase-rag": {
+                            "command": "/fake/bin/java-codebase-rag-mcp",
+                            "type": "stdio",
+                        }
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(shutil, "which", lambda x: "/fake/bin/java-codebase-rag-mcp")
+        monkeypatch.setattr(
+            "java_codebase_rag.installer._read_package_artifact",
+            lambda path: "PACKAGE CONTENT",
+        )
+        monkeypatch.chdir(cwd)
+        return cwd
+
+    def test_install_emits_indexing_progress_on_stderr(self, tmp_path, monkeypatch):
+        """install drives the renderer from the patched pipeline helpers; the
+        JCIRAG_PROGRESS event is consumed by the parser and surfaces as a
+        rendered progress line on stderr. Wizard stdout prompts remain on
+        stdout."""
+        import io
+        import contextlib
+        from java_codebase_rag.installer import run_install
+
+        cwd = self._setup_repo(tmp_path, monkeypatch)
+        _patch_pipeline_for_progress(monkeypatch, emit=True)
+
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = run_install(
+                non_interactive=True,
+                agents=["claude-code"],
+                scope="project",
+                model="auto",
+                source_root=cwd,
+                quiet=False,
+            )
+        assert rc == 0
+        err_text = err.getvalue()
+        out_text = out.getvalue()
+        # The raw structured protocol line is parsed, never raw-relayed.
+        assert "JCIRAG_PROGRESS kind=vectors" not in err_text
+        # But indexing progress IS rendered on stderr (non-TTY concise fallback
+        # prints a "vectors ..." line; the patched coco helper emitted a vectors
+        # event). A graph event is emitted by the patched graph helper too.
+        assert "vectors" in err_text.lower()
+        # The wizard's conversational stdout is preserved (it writes the YAML
+        # config path when not quiet).
+        assert "Configuration written" in out_text or ".java-codebase-rag.yml" in out_text
+
+    def test_update_emits_indexing_progress_on_stderr(self, tmp_path, monkeypatch):
+        """update is no longer silent: the patched cocoindex + incremental
+        graph helpers drive the renderer, and progress surfaces on stderr."""
+        import io
+        import contextlib
+        from java_codebase_rag.installer import run_update
+
+        cwd = self._setup_repo(tmp_path, monkeypatch)
+        # A configured host + a real-looking index so run_update reaches indexing.
+        index_dir = cwd / ".java-codebase-rag"
+        index_dir.mkdir(exist_ok=True)
+        (index_dir / "code_graph.lbug").write_text("", encoding="utf-8")
+
+        _patch_pipeline_for_progress(monkeypatch, emit=True)
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", raising=False)
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_INDEX_DIR", raising=False)
+
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = run_update(force=False, dry_run=False, cwd=cwd)
+        assert rc in (0, 1)
+        err_text = err.getvalue()
+        # Progress reached the renderer (coco + incremental both emitted).
+        assert "JCIRAG_PROGRESS kind=vectors" not in err_text
+        assert "vectors" in err_text.lower()
+
+    def test_update_runs_indexing_without_quiet_true(self, tmp_path, monkeypatch):
+        """Regression: update no longer forces quiet=True on the indexing
+        helpers (the reason it was silent today). In the default path both
+        helpers are called with quiet=False."""
+        from java_codebase_rag.installer import run_update
+
+        cwd = self._setup_repo(tmp_path, monkeypatch)
+        index_dir = cwd / ".java-codebase-rag"
+        index_dir.mkdir(exist_ok=True)
+        (index_dir / "code_graph.lbug").write_text("", encoding="utf-8")
+
+        calls = _patch_pipeline_for_progress(monkeypatch, emit=False)
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", raising=False)
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_INDEX_DIR", raising=False)
+
+        rc = run_update(force=False, dry_run=False, cwd=cwd)
+        assert rc in (0, 1)
+        # Both indexing helpers ran and were NOT silenced.
+        assert calls["coco"], "run_cocoindex_update was not called"
+        assert calls["incremental"], "run_incremental_graph was not called"
+        assert calls["coco"][-1]["quiet"] is False
+        assert calls["incremental"][-1]["quiet"] is False
+
+    def test_install_update_stdout_contract_preserved(self, tmp_path, monkeypatch):
+        """The wizard's human-readable stdout shape is unchanged: NO
+        JCIRAG_PROGRESS line leaks to stdout, and the indexing chatter that
+        used to live on stdout ("Creating index..." / "Updating index...")
+        no longer appears there."""
+        import io
+        import contextlib
+        from java_codebase_rag.installer import run_install, run_update
+
+        cwd = self._setup_repo(tmp_path, monkeypatch)
+        _patch_pipeline_for_progress(monkeypatch, emit=True)
+
+        # --- install ---
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            run_install(
+                non_interactive=True, agents=["claude-code"], scope="project",
+                model="auto", source_root=cwd, quiet=False,
+            )
+        install_out = out.getvalue()
+        # No structured progress line on stdout (stdout is the wizard payload).
+        assert "JCIRAG_PROGRESS" not in install_out
+        # The old stdout indexing chatter is gone (moved to stderr framing).
+        assert "Creating index..." not in install_out
+        assert "Index created successfully." not in install_out
+
+        # --- update ---
+        index_dir = cwd / ".java-codebase-rag"
+        index_dir.mkdir(exist_ok=True)
+        (index_dir / "code_graph.lbug").write_text("", encoding="utf-8")
+        _patch_pipeline_for_progress(monkeypatch, emit=True)
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", raising=False)
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_INDEX_DIR", raising=False)
+
+        out2, err2 = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out2), contextlib.redirect_stderr(err2):
+            run_update(force=False, dry_run=False, cwd=cwd)
+        update_out = out2.getvalue()
+        assert "JCIRAG_PROGRESS" not in update_out
+        # The old stdout indexing chatter moved off stdout.
+        assert "Updating index (Lance + graph)..." not in update_out
