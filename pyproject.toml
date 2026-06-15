@@ -33,6 +33,7 @@ dependencies = [
     "pydantic>=2.0,<3",
     "PyYAML>=6.0.3,<7",
     "questionary>=2.0,<3",
+    "rich>=14,<15",
     "sentence-transformers>=5.4.0,<6",
     "tree-sitter>=0.25.2,<0.26",
     "tree-sitter-java>=0.23.5,<0.24",
