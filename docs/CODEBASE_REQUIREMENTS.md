@@ -1,7 +1,7 @@
 # Codebase requirements & MCP tuning guide
 
 This document explains how to get the best out of the `java-codebase-rag` MCP
-(LanceDB vector index + Kuzu AST graph + role-aware ranking) on a Java
+(LanceDB vector index + LadybugDB AST graph + role-aware ranking) on a Java
 codebase, and — if you cannot or will not change the codebase — exactly
 **which files in this bundle to edit** so the MCP adapts to your project.
 
@@ -33,7 +33,7 @@ inside the MCP.
     (only `*.java`).
 - **Source under `src/main/java/...`.** Test sources under
   `src/test/java/` and `src/test/resources/` are intentionally excluded
-  from both the LanceDB vector index and the Kuzu graph build.
+  from both the LanceDB vector index and the LadybugDB graph build.
   - See: `java_index_v1_common.py::COMMON_EXCLUDED_PATH_PATTERNS`.
 - **Two location concepts: `module` and `microservice`.** The MCP
   infers both by walking up from each `.java` file until it finds a
@@ -107,8 +107,8 @@ method-level local, distinct names) is fine.
 
 The checklist in `propose/completed/CALL-GRAPH-PROPOSE.md` §7.1 is covered across `tests/test_ast_java_calls.py`
 (parse-only), `tests/test_call_graph_smoke_roundtrip.py` plus `tests/fixtures/call_graph_smoke/`
-(mini Maven tree for scope / overload / wildcard / method-ref graph checks), the session Kuzu
-fixture (`tests/conftest.py`), `tests/test_ast_graph_build.py`, `tests/test_kuzu_queries.py`,
+(mini Maven tree for scope / overload / wildcard / method-ref graph checks), the session LadybugDB
+fixture (`tests/conftest.py`), `tests/test_ast_graph_build.py`, `tests/test_ladybug_queries.py`,
 `tests/test_call_graph_receiver_resolution.py`, and MCP smoke tests — not as one numbered test
 per bullet.
 
@@ -193,16 +193,16 @@ require a graph built with `ontology_version` **14** or newer — confirm with
 See **Brownfield overrides** in `README.md` for the full schema, usage
 examples, and execution order.
 
-**Layer A index sources:** Kuzu and Lance both use
+**Layer A index sources:** LadybugDB and Lance both use
 `graph_enrich.collect_annotation_meta_chain` (one disk walk: sorted
 `iter_java_source_files` + the same `COMMON_EXCLUDED_PATH_PATTERNS` as
 `build_ast_graph.py`, stderr on parse errors, first-seen FQN wins on duplicate
 simple names after sorted iteration). The graph’s `pass1` walk is still used to
 **build** `GraphTables`, but default Layer A is **not** taken from that graph in
-isolation. See `README.md` (Brownfield — Kuzu vs Lance, Limitations, full
+isolation. See `README.md` (Brownfield — LadybugDB vs Lance, Limitations, full
 rebuild).
 
-**Graph `Symbol` row scope:** in Kuzu, only **type** `Symbol` rows (class,
+**Graph `Symbol` row scope:** in LadybugDB, only **type** `Symbol` rows (class,
 interface, record, etc.) are populated with brownfield `role` /
 `capabilities`. **Method** and **constructor** `Symbol` nodes keep
 `role=OTHER` and `capabilities=[]` (the model is type-centric; per-method
@@ -320,9 +320,9 @@ The CocoIndex flow indexes only:
   parser handles syntax errors robustly (partial AST is still indexed),
   but very large files with complex nesting may produce noisy chunk
   boundaries.
-- **Kuzu graph sidecar location.** The graph defaults to
-  `<JAVA_CODEBASE_RAG_INDEX_DIR>/code_graph.kuzu` (see `docs/CONFIGURATION.md` §1 for the
-  default index dir). If Lance tables and Kuzu are split across directories
+- **LadybugDB graph sidecar location.** The graph defaults to
+  `<JAVA_CODEBASE_RAG_INDEX_DIR>/code_graph.lbug` (see `docs/CONFIGURATION.md` §1 for the
+  default index dir). If Lance tables and LadybugDB are split across directories
   by mistake, the MCP can silently operate in vector-only mode (no graph-backed
   `find` / `describe` / `neighbors`). Verify `java-codebase-rag meta` reports the
   paths you expect.
@@ -430,7 +430,7 @@ If you need a different *mechanism* (e.g. method-level Guice `@Provides`),
 you'll need to extend `build_ast_graph.py::_emit_injects` — that is
 where field/constructor/setter scanning happens.
 
-Rebuild the Kuzu graph after editing.
+Rebuild the LadybugDB graph after editing.
 
 ### B.4 Change module / microservice inference / pruning
 
@@ -562,10 +562,10 @@ This is a larger change; rough map:
 2. `build_ast_graph.py` — add a new `_emit_xxx` pass and a new
    `EdgeRow` subclass; wire it in `pass2_edges`; add a schema string
    like `_SCHEMA_KAFKA = "CREATE REL TABLE KAFKA_LISTEN(...)"`.
-3. `kuzu_queries.py` — add helper queries that traverse the new
+3. `ladybug_queries.py` — add helper queries that traverse the new
    relation.
 4. `mcp_v2.py` / `server.py` — wire the new relation into `neighbors` (and
-   document the new label in README + agent guide), or add a focused Kuzu
+   document the new label in README + agent guide), or add a focused LadybugDB
    helper called from those handlers.
 
 See `propose/completed/CALL-GRAPH-PROPOSE.md` for the shipped shape of
@@ -587,7 +587,7 @@ the same conventions.
 | Recently re-indexed but search is stale | Restart the MCP server; re-run `java-codebase-rag reprocess` |
 | `context_before` / `context_after` empty | Set `JAVA_CODEBASE_RAG_DEBUG_CONTEXT=1` (see `docs/CONFIGURATION.md` §3) |
 | Graph has lots of phantom nodes | Expected for external libs; inspect via `java-codebase-rag meta` — only worry if domain types are phantoms (means resolution is failing; check imports). Use `find` / `neighbors` and filter or interpret `resolved` flags on symbols as needed. |
-| Graph tools unavailable / silent failures | Kuzu DB missing or wrong path — verify `<index-dir>/code_graph.kuzu` exists and `JAVA_CODEBASE_RAG_INDEX_DIR` matches (see `docs/CONFIGURATION.md` §3). |
+| Graph tools unavailable / silent failures | LadybugDB DB missing or wrong path — verify `<index-dir>/code_graph.lbug` exists and `JAVA_CODEBASE_RAG_INDEX_DIR` matches (see `docs/CONFIGURATION.md` §3). |
 
 ---
 

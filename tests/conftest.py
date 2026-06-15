@@ -2,7 +2,7 @@
 
 Session-scoped graphs are built once per static corpus (see ``tests/README.md``).
 The bank-chat chain ``corpus_root → ladybug_db_path → mcp_env → ladybug_graph → mcp_server``
-runs pass1–5 + ``write_kuzu`` (no pass6) so Tier-1 caller-edge tests match the
+runs pass1–5 + ``write_ladybug`` (no pass6) so Tier-1 caller-edge tests match the
 pre-refactor bank pipeline while avoiding a second full parse for MCP tests.
 
 ⚠️  Do not bake fixture-specific assumptions into the production code under
@@ -50,7 +50,7 @@ def _session_db_path(tmp_path_factory: pytest.TempPathFactory, name: str) -> Pat
 
 @pytest.fixture(scope="session")
 def ladybug_db_path(tmp_path_factory, corpus_root: Path) -> Path:
-    """Bank-chat Kuzu DB: pass1–5 + ``write_kuzu`` (no pass6)."""
+    """Bank-chat Kuzu DB: pass1–5 + ``write_ladybug`` (no pass6)."""
     import ladybug
 
     from _builders import build_ladybug_to

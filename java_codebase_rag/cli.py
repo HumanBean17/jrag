@@ -251,7 +251,7 @@ def _startup_hints(cfg: ResolvedOperatorConfig) -> None:
 
 def _add_index_embedding_flags(p: argparse.ArgumentParser) -> None:
     p.add_argument("--source-root", type=str, default=None, help="Java repository root (default: cwd)")
-    p.add_argument("--index-dir", type=str, default=None, help="Index directory (Lance + Kuzu + cocoindex state)")
+    p.add_argument("--index-dir", type=str, default=None, help="Index directory (Lance + LadybugDB + cocoindex state)")
     p.add_argument("--embedding-model", type=str, default=None, help="Override SBERT_MODEL / YAML embedding.model")
     p.add_argument("--embedding-device", type=str, default=None, help="Override SBERT_DEVICE / YAML embedding.device")
 
@@ -536,7 +536,7 @@ def _cmd_reprocess(args: argparse.Namespace) -> int:
             _emit_reprocess_outcome(payload, selective_tty_mode="graph" if ok else None)
             return _reprocess_exit_code(payload)
 
-        import server  # lazy: pulls sentence_transformers/torch/lancedb/kuzu
+        import server  # lazy: pulls sentence_transformers/torch/lancedb/ladybug
 
         result = asyncio.run(
             server.run_refresh_pipeline(
@@ -715,7 +715,7 @@ def _cmd_unresolved_calls_list(args: argparse.Namespace) -> int:
     from ladybug_queries import LadybugGraph  # lazy
 
     if not LadybugGraph.exists():
-        _emit({"success": False, "message": "Kuzu graph not found"})
+        _emit({"success": False, "message": "LadybugDB graph not found"})
         return 1
     graph = LadybugGraph.get()
     rows = graph.list_unresolved_call_sites(
@@ -736,7 +736,7 @@ def _cmd_unresolved_calls_stats(args: argparse.Namespace) -> int:
     from ladybug_queries import LadybugGraph  # lazy
 
     if not LadybugGraph.exists():
-        _emit({"success": False, "message": "Kuzu graph not found"})
+        _emit({"success": False, "message": "LadybugDB graph not found"})
         return 1
     graph = LadybugGraph.get()
     buckets = graph.stats_unresolved_call_sites(by=args.by)
@@ -761,7 +761,7 @@ def _cmd_analyze_pr(args: argparse.Namespace) -> int:
     from ladybug_queries import LadybugGraph  # lazy
 
     if not LadybugGraph.exists():
-        _emit({"success": False, "message": "Kuzu graph not found"})
+        _emit({"success": False, "message": "LadybugDB graph not found"})
         return 1
     graph = LadybugGraph.get()
     report = pr_analysis.analyze_pr_pipeline(graph, diff_text)
@@ -801,7 +801,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Create a fresh index from a Java repository.",
         description=(
             "First-time index creation. Refuses if the resolved index directory "
-            "already contains a Kuzu graph or Lance tables. Exit 2 on refusal."
+            "already contains a LadybugDB graph or Lance tables. Exit 2 on refusal."
         ),
     )
     _add_index_embedding_flags(init)
@@ -870,7 +870,7 @@ def build_parser() -> argparse.ArgumentParser:
     increment = subparsers.add_parser(
         "increment",
         help="Pick up changes since the last index update.",
-        description="Runs cocoindex catch-up and incremental Kuzu graph update. Use --vectors-only to skip graph update.",
+        description="Runs cocoindex catch-up and incremental LadybugDB graph update. Use --vectors-only to skip graph update.",
     )
     _add_index_embedding_flags(increment)
     _add_verbosity_flags(increment)
@@ -883,9 +883,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     reprocess = subparsers.add_parser(
         "reprocess",
-        help="Rebuild vectors and/or Kuzu (default: both full phases).",
+        help="Rebuild vectors and/or LadybugDB (default: both full phases).",
         description=(
-            "Default: full Lance reprocess (cocoindex --full-reprocess) then full Kuzu graph rebuild. "
+            "Default: full Lance reprocess (cocoindex --full-reprocess) then full LadybugDB graph rebuild. "
             "Use --vectors-only or --graph-only to run a single phase (mutually exclusive)."
         ),
     )
@@ -907,7 +907,7 @@ def build_parser() -> argparse.ArgumentParser:
     erase = subparsers.add_parser(
         "erase",
         help="Delete the index from disk.",
-        description="Runs cocoindex drop, removes Kuzu, and drops Lance tables. Requires --yes or TTY confirmation.",
+        description="Runs cocoindex drop, removes LadybugDB, and drops Lance tables. Requires --yes or TTY confirmation.",
     )
     _add_index_embedding_flags(erase)
     erase.add_argument("--yes", action="store_true", help="Confirm destructive deletion (required in CI)")

@@ -4,7 +4,7 @@
 
 Vector-only RAG, as used in most CocoIndex-based setups, excels at semantic similarity but fails systematically on multi-hop architectural reasoning — `controller → service → repository` chains, interface-driven dependency injection, and inheritance trees. AST-derived GraphRAG (DKB) is the correct addition, not a replacement: it layers a deterministic structural knowledge graph on top of the existing vector index, enabling bidirectional traversal at query time to supply context that similarity search structurally cannot find. A 2026 benchmark on Java codebases (Shopizer, ThingsBoard, OpenMRS Core) confirmed DKB achieves **15/15 (100%)** answer correctness on architecture-tracing queries, compared to 6/15 for pure vector RAG, at only ~2× the query cost and with indexing times under 15 seconds.[^1][^2][^3][^4]
 
-**This repository’s reference implementation** pairs **LanceDB** (embeddings, optional full-text + vector hybrid via RRF) with a **Kuzu** sidecar graph (default `code_graph.kuzu` colocated with the LanceDB data directory). Search and the MCP server do not require a running CocoIndex process—only the built artifacts and Python dependencies (see the bundle `README`).
+**This repository’s reference implementation** pairs **LanceDB** (embeddings, optional full-text + vector hybrid via RRF) with a **LadybugDB** sidecar graph (default `code_graph.lbug` colocated with the LanceDB data directory). Search and the MCP server do not require a running CocoIndex process—only the built artifacts and Python dependencies (see the bundle `README`).
 
 ***
 
@@ -36,7 +36,7 @@ The two layers are orthogonal and complementary. A **hybrid retrieval** system t
 
 ### 2.1 Architecture overview
 
-The integration adds a **parallel graph index** alongside the **vector index**. Both are built from the same source files; the graph is derived deterministically from AST parsing, not from embeddings.[^2] In this bundle, that split is **LanceDB + Kuzu**.
+The integration adds a **parallel graph index** alongside the **vector index**. Both are built from the same source files; the graph is derived deterministically from AST parsing, not from embeddings.[^2] In this bundle, that split is **LanceDB + LadybugDB**.
 
 ```
 Java Microservices
@@ -51,7 +51,7 @@ Java Microservices
                 ├── Two-pass ontology extractor
                 │     ├── Pass 1: class/interface/enum nodes, …
                 │     └── Pass 2: injects/extends/implements (Phase 1 edges)
-                └── Kuzu (code_graph.kuzu) ──────────► Graph retriever (Cypher)
+                └── LadybugDB (code_graph.lbug) ──────────► Graph retriever (Cypher)
                                                               │
                                                     BFS + bidirectional closure
                                                     (MCP: expand, impact, …)
@@ -77,33 +77,33 @@ The DKB (Deterministic Knowledge Base) approach, as validated in the 2026 benchm
 - `EXTENDS` — class inheritance
 - `IMPLEMENTS` — interface implementation
 - `INJECTS` — field-type DI (Spring `@Autowired`, constructor injection)
-- `CALLS` — method-to-method call sites (requires call resolution) — *planned* (not yet in the Kuzu schema)
+- `CALLS` — method-to-method call sites (requires call resolution) — *shipped*
 - `HTTP_CALLS` — cross-service REST calls (Feign clients, `RestTemplate`)[^11] — *shipped*
 - `ASYNC_CALLS` — Kafka, messaging patterns[^11] — *shipped*
 
-**Shipped in the Kuzu sidecar:** `EXTENDS`, `IMPLEMENTS`, `INJECTS`, `CALLS`, `HTTP_CALLS`, `ASYNC_CALLS`.
+**Shipped in the LadybugDB sidecar:** `EXTENDS`, `IMPLEMENTS`, `INJECTS`, `CALLS`, `HTTP_CALLS`, `ASYNC_CALLS`.
 
 The two-pass extraction strategy matters: Pass 1 builds all node records (so every class/interface in the codebase is known); Pass 2 resolves edge targets using the completed node registry, eliminating forward-reference gaps.[^2]
 
 **Why deterministic extraction beats LLM-based graph construction:**
 In the benchmark, LLM-KB skipped 377 out of 1210 files (31.2% miss rate), reducing chunk coverage to 64.1% and node coverage to 72.7% of DKB's graph. Indexing time for LLM-KB was 200 seconds vs. 2.8 seconds for DKB on the same codebase, and cost was ~20× higher. For a production codebase you maintain incrementally, stochastic extraction failures create silent blind spots.[^1][^2]
 
-### 2.3 How this bundle wires CocoIndex, LanceDB, and Kuzu
+### 2.3 How this bundle wires CocoIndex, LanceDB, and LadybugDB
 
 1. **Vector / chunk index (LanceDB):** a CocoIndex flow (e.g. `java_index_flow_lancedb.py` in the repo) walks sources, applies Tree-sitter-based chunking, embeds, and writes **LanceDB** tables. At query time the MCP / CLI loads embeddings from the resolved index directory (`JAVA_CODEBASE_RAG_INDEX_DIR`, default `.java-codebase-rag/` under the Java tree) and runs vector search, optional **FTS + vector RRF** (`auto_hybrid`), and filters on enriched columns (`role`, `microservice`, `module`, …).[^6][^7]
 
-2. **Graph index (Kuzu):** `build_ast_graph.py` runs **in parallel** (same repo root, same `.java` sources). It is **not** required for read-only search if the Kuzu file already exists. Output defaults to `code_graph.kuzu` next to the LanceDB directory. Query-time access is read-only Cypher from Python (`kuzu`).
+2. **Graph index (LadybugDB):** `build_ast_graph.py` runs **in parallel** (same repo root, same `.java` sources). It is **not** required for read-only search if the LadybugDB file already exists. Output defaults to `code_graph.lbug` next to the LanceDB directory. Query-time access is read-only Cypher from Python (`ladybug`).
 
 3. **Cross-service `HTTP_CALLS` / `ASYNC_CALLS` (future):** Feign / `RestTemplate` / Kafka static patterns belong in a later pass once method- and service-level edges are modeled; see §8.[^14][^15][^11]
 
-4. **Incremental updates:** CocoIndex can incrementally update LanceDB chunks. The Kuzu build in Phase 1 is a **full rebuild** when the graph is regenerated; incremental graph diffing is a future improvement (bundle `README`).
+4. **Incremental updates:** CocoIndex can incrementally update LanceDB chunks. The LadybugDB build in Phase 1 is a **full rebuild** when the graph is regenerated; incremental graph diffing is a future improvement (bundle `README`).
 
-### 2.4 Why Kuzu (and what LanceDB covers)
+### 2.4 Why LadybugDB (and what LanceDB covers)
 
 - **LanceDB** holds dense retrieval: embeddings, optional FTS, and chunk metadata (package, FQN, role, capabilities, `microservice` / `module`, …) produced with the same Tree-sitter chunks the agent reads.
-- **Kuzu** is an **embedded** property graph with **Cypher**, no separate server process, and a small on-disk footprint beside the resolved Lance index directory (default `.java-codebase-rag/` under the Java tree). It matches the “structural retriever + parallel to vectors” model without running Neo4j or another cluster alongside the MCP process.
+- **LadybugDB** is an **embedded** property graph with **Cypher**, no separate server process, and a small on-disk footprint beside the resolved Lance index directory (default `.java-codebase-rag/` under the Java tree). It matches the “structural retriever + parallel to vectors” model without running Neo4j or another cluster alongside the MCP process.
 
-Research stacks often cite pgvector or other vector stores; functionally, **LanceDB plays that role here**, paired with Kuzu for graph traversals.[^12]
+Research stacks often cite pgvector or other vector stores; functionally, **LanceDB plays that role here**, paired with LadybugDB for graph traversals.[^12]
 
 ***
 
@@ -348,7 +348,7 @@ For complex multi-hop questions, add a self-correction loop:[^10][^23]
 ## 7. Implementation stack in this repository
 
 - **Vector store:** **LanceDB** (tables produced by the Java/SQL/Yaml CocoIndex flows the repo uses for indexing).
-- **Graph store:** **Kuzu** (`code_graph.kuzu`), populated by `build_ast_graph.py` using **tree_sitter_java** in the DKB style (two-pass ontology, phantom nodes for unresolved targets).[^2]
+- **Graph store:** **LadybugDB** (`code_graph.lbug`), populated by `build_ast_graph.py` using **tree_sitter_java** in the DKB style (two-pass ontology, phantom nodes for unresolved targets).[^2]
 - **Query / agent surface:** `server.py` (MCP) + `search_lancedb.py` (CLI); RRF in hybrid search and in `graph_expand`.[^8][^10]
 - For broader **literature and alternatives** (other parsers, third-party graph DBs, and hybrid-retrieval studies), see the DKB paper and the references list below.[^1][^16][^11]
 
@@ -364,7 +364,7 @@ The DKB benchmark paper has a public GitHub repository (`graph-based-rag-ast-vs-
 
 - Parse all 5 microservices (or a monorepo) with `tree_sitter_java`
 - Extract Class/Interface/Method nodes + `EXTENDS` / `IMPLEMENTS` / `INJECTS` edges
-- Store in **Kuzu** (`code_graph.kuzu`); run **LanceDB** + hybrid / `graph_expand` over the same project
+- Store in **LadybugDB** (`code_graph.lbug`); run **LanceDB** + hybrid / `graph_expand` over the same project
 - Verify graph completeness (node count, edge count per service)
 - *Status:* implemented via `build_ast_graph.py` + `java_index_flow_lancedb.py` + MCP; graph rebuild is currently full, not incremental.
 
@@ -391,7 +391,7 @@ The DKB benchmark paper has a public GitHub repository (`graph-based-rag-ast-vs-
 
 ## Key Takeaways
 
-- **GraphRAG is an additive layer:** keep **LanceDB** for dense retrieval; add a deterministic AST graph in **Kuzu** alongside it. The two are complementary retrieval primitives, not competitors.[^5][^1]
+- **GraphRAG is an additive layer:** keep **LanceDB** for dense retrieval; add a deterministic AST graph in **LadybugDB** alongside it. The two are complementary retrieval primitives, not competitors.[^5][^1]
 - **Use AST parsing (DKB), not LLM-based graph extraction:** LLM-KB skips ~30% of files and costs 20–45× more. Tree-sitter completes in seconds and is fully deterministic.[^2]
 - **Your 5-service topology is a first-class graph asset (roadmap):** model inter-service Feign/Kafka dependencies as `HTTP_CALLS` and `ASYNC_CALLS` edges when Phase 2 lands.[^21][^11]
 - **Bidirectional traversal is non-negotiable:** successor-only graphs miss upstream consumers (controllers that inject services); the interface-consumer expansion fixes Spring DI wiring gaps.[^1][^2]

@@ -166,7 +166,7 @@ Exclude `DTO`, `OTHER`, `MAPPER` with `exclude_roles` when tracing business logi
 
 **Symbol kinds:** `class`, `interface`, `enum`, `record`, `annotation`, `method`, `constructor`.
 
-**Route frameworks:** `spring_mvc`, `webflux`, `kafka`, `rabbitmq`, `jms`, `stream`, `feign`.
+**Route frameworks:** `spring_mvc`, `webflux`. (Route *kinds* are `http_endpoint`, `http_consumer`, `kafka_topic`, `rabbit_queue`, `jms_destination`, `stream_binding`.)
 **Client kinds:** `feign_method`, `rest_template`, `web_client`. **Producer kinds:** `kafka_send`, `stream_bridge_send`. **Source layers (client/producer):** `builtin`, `layer_a_meta`, `layer_b_ann`, `layer_b_fqn`, `layer_c_source`.
 **Match types:** `cross_service`, `intra_service`, `ambiguous`, `phantom`, `unresolved`.
 

@@ -112,7 +112,7 @@ All five lifecycle commands that build the index (`init`, `increment`, `reproces
 
 - **Vectors** — the `cocoindex update` Lance catch-up / full reprocess.
 - **Optimize** — the serialized Lance table compaction that runs after a successful vectors phase.
-- **Graph** — the `build_ast_graph.py` Kuzu/LadybugDB build (full or incremental).
+- **Graph** — the `build_ast_graph.py` LadybugDB/LadybugDB build (full or incremental).
 
 **Determinate vs indeterminate per command:**
 
@@ -141,7 +141,7 @@ All five lifecycle commands that build the index (`init`, `increment`, `reproces
 
 | Variable | Role |
 | -------- | ---- |
-| `JAVA_CODEBASE_RAG_INDEX_DIR` | Root directory for Lance tables, the Kuzu file `code_graph.kuzu`, and default cocoindex state. Default: `./.java-codebase-rag/` under the resolved Java tree root. Overridden by `--index-dir` or YAML `index_dir:`. |
+| `JAVA_CODEBASE_RAG_INDEX_DIR` | Root directory for Lance tables, the LadybugDB file `code_graph.lbug`, and default cocoindex state. Default: `./.java-codebase-rag/` under the resolved Java tree root. Overridden by `--index-dir` or YAML `index_dir:`. |
 | `SBERT_MODEL` / `SBERT_DEVICE` | Embedding model and device; must match the index. Overridden by `--embedding-model` / `--embedding-device` or YAML `embedding.model` / `embedding.device`. |
 | `JAVA_CODEBASE_RAG_DEBUG_CONTEXT` | Verbose stderr logging for context expansion (diagnostic). |
 | `JAVA_CODEBASE_RAG_RUN_HEAVY` | Test-only gate for slow end-to-end indexer tests (`pytest`). |
@@ -160,7 +160,7 @@ Every subcommand accepts (all optional unless noted):
 | `--index-dir DIR` | Index directory (default: `./.java-codebase-rag` under the resolved source root, or `JAVA_CODEBASE_RAG_INDEX_DIR`). |
 | `--embedding-model` / `--embedding-device` | Override embedding resolution for subprocesses that honor env. |
 
-Kuzu always resolves to `<index-dir>/code_graph.kuzu`.
+LadybugDB always resolves to `<index-dir>/code_graph.lbug`.
 
 Relative paths for `diagnose-ignore <path>` are resolved against the MCP/CLI project root helper (`--source-root` when given, else cwd semantics described in `--help`).
 
@@ -176,7 +176,7 @@ Relative paths for `diagnose-ignore <path>` are resolved against the MCP/CLI pro
 
 ### `init`
 
-Creates a **new** index (cocoindex catch-up from empty + full `build_ast_graph.py`). **Refuses** if `code_graph.kuzu` or `code_index_*` Lance tables already exist under the resolved index dir (exit **2**).
+Creates a **new** index (cocoindex catch-up from empty + full `build_ast_graph.py`). **Refuses** if `code_graph.lbug` or `code_index_*` Lance tables already exist under the resolved index dir (exit **2**).
 
 ```bash
 java-codebase-rag init --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-rag --quiet
@@ -184,7 +184,7 @@ java-codebase-rag init --source-root /path/to/java/repo --index-dir /path/to/.ja
 
 ### `increment`
 
-Runs cocoindex **catch-up** and **incremental Kuzu graph update**. Only changed files and their single-hop dependents are re-parsed and re-written to the graph. Passes 5–6 (client/producer extraction and cross-service matching) run globally. Falls back to full `reprocess` if:
+Runs cocoindex **catch-up** and **incremental LadybugDB graph update**. Only changed files and their single-hop dependents are re-parsed and re-written to the graph. Passes 5–6 (client/producer extraction and cross-service matching) run globally. Falls back to full `reprocess` if:
 - No previous graph exists (first run)
 - Graph schema is outdated (missing `source_file` on edges)
 - Previous incremental run crashed (crash marker detected)
@@ -201,7 +201,7 @@ java-codebase-rag increment --source-root /path/to/java/repo --index-dir /path/t
 
 ### `reprocess`
 
-**Default (no extra flags):** full **Lance** reprocess (cocoindex `--full-reprocess`) then full **Kuzu** rebuild via `build_ast_graph.py`, in that order. This remains the recommended **coherence** operation when both stores might be out of date.
+**Default (no extra flags):** full **Lance** reprocess (cocoindex `--full-reprocess`) then full **LadybugDB** rebuild via `build_ast_graph.py`, in that order. This remains the recommended **coherence** operation when both stores might be out of date.
 
 **Selective flags (mutually exclusive):**
 
@@ -240,7 +240,7 @@ java-codebase-rag reprocess --source-root /path/to/java/repo --index-dir /path/t
 
 ### `erase`
 
-Deletes cocoindex state, the Kuzu directory, and Lance tables under the index dir. Requires **`--yes`** or interactive confirmation on a TTY. Non-TTY without `--yes` exits **2**.
+Deletes cocoindex state, the LadybugDB directory, and Lance tables under the index dir. Requires **`--yes`** or interactive confirmation on a TTY. Non-TTY without `--yes` exits **2**.
 
 ```bash
 java-codebase-rag erase --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-rag --yes
@@ -254,7 +254,7 @@ java-codebase-rag erase --source-root /path/to/java/repo --index-dir /path/to/.j
 
 ### `meta`
 
-Graph metadata, ontology version, counts, `edge_counts`, plus resolved embedding fields and provenance (`embedding_model_source`, `embedding_device_source`, `index_dir`, `kuzu_path`, …).
+Graph metadata, ontology version, counts, `edge_counts`, plus resolved embedding fields and provenance (`embedding_model_source`, `embedding_device_source`, `index_dir`, `ladybug_path`, …).
 
 ```bash
 java-codebase-rag meta --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-rag
@@ -289,7 +289,7 @@ java-codebase-rag unresolved-calls list --method-id sym:... --limit 100 --source
 
 ## Analysis: `analyze-pr`
 
-Maps a **unified diff** to changed symbols, blast radius, routes touched, and risk band. Requires a **built Kuzu graph** at `<index-dir>/code_graph.kuzu`.
+Maps a **unified diff** to changed symbols, blast radius, routes touched, and risk band. Requires a **built LadybugDB graph** at `<index-dir>/code_graph.lbug`.
 
 Provide exactly one of:
 
@@ -334,10 +334,10 @@ java-codebase-rag analyze-pr --diff-file /tmp/pr.diff --source-root /path/to/jav
 
 ## Graph-only escape hatch
 
-Prefer **`java-codebase-rag reprocess --graph-only`** when you only need Kuzu rebuilt from the current Lance snapshot. To run the graph builder **without** going through the CLI (advanced / scripting):
+Prefer **`java-codebase-rag reprocess --graph-only`** when you only need LadybugDB rebuilt from the current Lance snapshot. To run the graph builder **without** going through the CLI (advanced / scripting):
 
 ```bash
-.venv/bin/python build_ast_graph.py --source-root /path/to/java/repo --kuzu-path /path/to/.java-codebase-rag/code_graph.kuzu --verbose
+.venv/bin/python build_ast_graph.py --source-root /path/to/java/repo --ladybug-path /path/to/.java-codebase-rag/code_graph.lbug --verbose
 ```
 
 ## See also

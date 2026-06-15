@@ -152,7 +152,7 @@ def _resolve_graph_filename(
     *,
     ambiguity_notes: list[str] | None = None,
 ) -> str | None:
-    """Map a diff path to `Symbol.filename` values stored in Kuzu."""
+    """Map a diff path to `Symbol.filename` values stored in LadybugDB."""
     variants = {_strip_ab_prefix(path)}
     for v in list(variants):
         if v.startswith("./"):
@@ -362,7 +362,7 @@ def _is_public_interface_method(graph: Any, sym: SymbolHit) -> bool:
 
 
 def _route_ids_for_symbol(graph: Any, symbol_id: str) -> list[str]:
-    # Note: Kuzu rejects `ORDER BY r.id` together with `RETURN DISTINCT r.id` (binder loses `r`).
+    # Note: LadybugDB rejects `ORDER BY r.id` together with `RETURN DISTINCT r.id` (binder loses `r`).
     q = (
         "MATCH (s:Symbol)-[e:EXPOSES]->(r:Route) WHERE s.id = $sid "
         "RETURN r.id AS id ORDER BY id"

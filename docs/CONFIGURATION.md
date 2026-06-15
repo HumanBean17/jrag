@@ -4,7 +4,7 @@ Everything that didn't fit in the README's 5-minute walkthrough lives here: envi
 
 For the architecture rationale (the GPS metaphor, three-layer design, future work), see [`paper/paper.pdf`](./paper/paper.pdf). For agent-facing tool shapes and recovery moves, see [`AGENT-GUIDE.md`](./AGENT-GUIDE.md). For the CLI playbook, see [`JAVA-CODEBASE-RAG-CLI.md`](./JAVA-CODEBASE-RAG-CLI.md).
 
-> **Stability disclaimer.** MCP tool contracts, env vars, Lance/Kuzu schemas, config files, and Python APIs may change without a deprecation period. Track `main` and rebuild indexes when ontology or embedding settings change (see [Re-index required when ontology changes](#re-index-required-when-ontology-changes)).
+> **Stability disclaimer.** MCP tool contracts, env vars, Lance/LadybugDB schemas, config files, and Python APIs may change without a deprecation period. Track `main` and rebuild indexes when ontology or embedding settings change (see [Re-index required when ontology changes](#re-index-required-when-ontology-changes)).
 
 ---
 
@@ -12,7 +12,7 @@ For the architecture rationale (the GPS metaphor, three-layer design, future wor
 
 1. [Environment variables](#1-environment-variables)
 2. [Project YAML reference (`.java-codebase-rag.yml`)](#2-project-yaml-reference-java-codebase-ragyml)
-3. [Graph layer — Kuzu schema, edges, capabilities, ranking](#3-graph-layer)
+3. [Graph layer — LadybugDB schema, edges, capabilities, ranking](#3-graph-layer)
 4. [Brownfield overrides — config + in-source annotations](#4-brownfield-overrides)
 5. [Ignore patterns](#5-ignore-patterns)
 
@@ -43,7 +43,7 @@ This walk-up behavior means you no longer need to set environment variables or p
 
 | Variable | Purpose |
 |---|---|
-| `JAVA_CODEBASE_RAG_INDEX_DIR` | Local filesystem **directory** for Lance tables, the Kuzu file `code_graph.kuzu`, and cocoindex state (`cocoindex.db`). Not a `lancedb://` or cloud URI — use a path. Default: `./.java-codebase-rag/` under the resolved Java tree root. |
+| `JAVA_CODEBASE_RAG_INDEX_DIR` | Local filesystem **directory** for Lance tables, the LadybugDB file `code_graph.lbug`, and cocoindex state (`cocoindex.db`). Not a `lancedb://` or cloud URI — use a path. Default: `./.java-codebase-rag/` under the resolved Java tree root. |
 | `SBERT_MODEL` | Hub id or local directory; must match indexer. Overridable via `.java-codebase-rag.yml` `embedding.model` and `--embedding-model`. |
 | `SBERT_DEVICE` | Optional: `cpu`, `cuda`, `mps`. Overridable via YAML `embedding.device` and `--embedding-device`. |
 | `JAVA_CODEBASE_RAG_DEBUG_CONTEXT` | When truthy, verbose stderr logging for chunk context expansion (diagnostics only). |
@@ -56,7 +56,7 @@ Only the names in the table above (plus `JAVA_CODEBASE_RAG_SOURCE_ROOT` for MCP 
 
 **Paths and conventions** (for scripts and operators):
 
-- **`JAVA_CODEBASE_RAG_INDEX_DIR`** — filesystem path to the index directory (not a URI). Lance opens this directory; Kuzu is always `<index-dir>/code_graph.kuzu`; cocoindex keeps **`cocoindex.db`** next to them.
+- **`JAVA_CODEBASE_RAG_INDEX_DIR`** — filesystem path to the index directory (not a URI). Lance opens this directory; LadybugDB is always `<index-dir>/code_graph.lbug`; cocoindex keeps **`cocoindex.db`** next to them.
 - **Java tree root** — CLI: `--source-root` (else cwd). MCP stdio: set `JAVA_CODEBASE_RAG_SOURCE_ROOT` when the Java repo root differs from the server process cwd.
 - **`microservice_roots`** — configure only under **`microservice_roots:`** in `.java-codebase-rag.yml` (or `.yaml`).
 - **Chunk context diagnostics / heavy tests** — `JAVA_CODEBASE_RAG_DEBUG_CONTEXT`, `JAVA_CODEBASE_RAG_RUN_HEAVY` (see the table above).
@@ -85,7 +85,7 @@ A single file at the project root (the directory you pass as `--source-root`, or
 # - Default: the directory containing this config file (for walk-up discovery).
 # source_root: ../java-project
 
-# Index directory: where Lance tables, code_graph.kuzu, and cocoindex.db live.
+# Index directory: where Lance tables, code_graph.lbug, and cocoindex.db live.
 # - Tilde (`~`) is expanded; `$VAR` is NOT (use absolute paths or `~`).
 # - Relative paths resolve against the config file's parent directory (same
 #   base as source_root), not cwd. The bare default ./.java-codebase-rag
@@ -235,7 +235,7 @@ async_producer_overrides:
 
 - **The config file may live anywhere under your project, including a subdirectory of the Java tree.** Both the CLI (`init` / `increment` / `reprocess`) and the MCP server walk up from cwd to find `.java-codebase-rag.yml`, then resolve `source_root` and `index_dir` relative to the config file's directory. So a config living in `my-context/` next to `source_root: ../` and `index_dir: ../.java-codebase-rag` resolves identically for the CLI and the MCP server. Keep the file under your project (not `$HOME`); set `JAVA_CODEBASE_RAG_SOURCE_ROOT` (MCP) or `--source-root` (CLI) only to override the discovered location.
 - **Don't commit secrets** into this YAML — it sits next to your source tree and is read by every operator who clones it.
-- **Rebuild after editing brownfield overrides.** Run a full `java-codebase-rag reprocess` (no flags) so Lance and Kuzu stay coherent, or use `--graph-only` / `--vectors-only` when you know only one store needs invalidation. Editing `embedding.model` requires a vector rebuild (`reprocess` or `--vectors-only`).
+- **Rebuild after editing brownfield overrides.** Run a full `java-codebase-rag reprocess` (no flags) so Lance and LadybugDB stay coherent, or use `--graph-only` / `--vectors-only` when you know only one store needs invalidation. Editing `embedding.model` requires a vector rebuild (`reprocess` or `--vectors-only`).
 - **Diagnose what's loaded.** `java-codebase-rag meta` prints the resolved config and each value's `*_source` (`cli` / `env` / `yaml` / `default`) — see `embedding_model_source`, `embedding_device_source`, `index_dir_source`.
 - **`embedding.model` and `$` in directory names.** `expandvars` treats `$VAR` / `${VAR}` like the shell. HuggingFace hub ids never contain `$`. If a local filesystem path contains a literal `$` in a directory name, use an absolute path that avoids `$`-expansion patterns, or expect `expandvars` to interpret `$` sequences.
 
@@ -245,7 +245,7 @@ Deeper documentation for the brownfield blocks (`role_overrides`, `route_overrid
 
 ## 3. Graph layer
 
-A deterministic property graph derived from tree-sitter Java parsing lives next to the LanceDB tables under the index directory (default `${JAVA_CODEBASE_RAG_INDEX_DIR:-./.java-codebase-rag}/code_graph.kuzu`). Current ontology version: **15** (see [`EDGE-NAVIGATION.md`](./EDGE-NAVIGATION.md) for MCP-traversable edge shapes).
+A deterministic property graph derived from tree-sitter Java parsing lives next to the LanceDB tables under the index directory (default `${JAVA_CODEBASE_RAG_INDEX_DIR:-./.java-codebase-rag}/code_graph.lbug`). Current ontology version: **17** (see [`EDGE-NAVIGATION.md`](./EDGE-NAVIGATION.md) for MCP-traversable edge shapes).
 
 ### Node kinds
 
@@ -309,7 +309,7 @@ Resolution order for `microservice`:
 
 ### Re-index required when ontology changes
 
-Current ontology version is **15**. Any index built before this version must be rebuilt via `cocoindex update ... --full-reprocess -f` or a full `java-codebase-rag reprocess` (no selective flags) so vectors and graph stay aligned. Until re-indexed, the server defensively JSON-decodes string-form list columns so nothing explodes, but filters like `array_contains` will not work.
+Current ontology version is **17**. Any index built before this version must be rebuilt via `cocoindex update ... --full-reprocess -f` or a full `java-codebase-rag reprocess` (no selective flags) so vectors and graph stay aligned. Until re-indexed, the server defensively JSON-decodes string-form list columns so nothing explodes, but filters like `array_contains` will not work.
 
 Ontology **15** (CALLS-NOISE) adds `CALLS.callee_declaring_role`, `GraphMeta.pass3_unresolved_phantom_receiver` / `pass3_unresolved_chained`, and **supertype-walk dedup** at build time. PR-2 adds `edge_filter` on `neighbors`. **PR-3 (breaking):** receiver-failure sites (`chained_receiver`, unresolved-receiver `phantom`) are no longer `CALLS` rows — they live on `UnresolvedCallSite` + `UNRESOLVED_AT`. Default `neighbors(..., ['CALLS'])` returns fewer rows; use `include_unresolved=True` for a source-ordered interleaved transcript (`row_kind`), `describe(method_id).unresolved_call_sites` (capped), or `java-codebase-rag unresolved-calls list|stats`. Known-receiver-external JDK rows stay on `CALLS` with `resolved=false`.
 
@@ -602,15 +602,15 @@ When a brownfield caller override specifies only part of what built-in detection
 - **Incremental indexing and annotation sources.** The indexer may only reprocess changed files. If you edit an `@interface` declaration (e.g. remove a `@Service` meta-annotation from a wrapper), every class that used it may need re-enrichment; the pipeline does not track that dependency automatically. **Run a full `java-codebase-rag reprocess` after changing any `@interface` used as a custom stereotype.**
 - **`Symbol` rows scope.** `role` and `capabilities` on the graph are computed for **type** nodes (classes, interfaces, etc.). Method and constructor `Symbol` rows use defaults `role=OTHER` and `capabilities=[]`.
 
-### 4.6 Lance / Kuzu consistency
+### 4.6 Lance / LadybugDB consistency
 
-Both the Kuzu graph writer and Lance chunk enrichment call **one** function — `graph_enrich.collect_annotation_meta_chain` — which scans the project with sorted `*.java` paths, the same layered ignore rules as `build_ast_graph` / `path_filtering.iter_java_source_files`, parse-error warnings on stderr, and deterministic *first wins* for duplicate annotation simple names. Kuzu and Lance **should** agree; they can still diverge if the same file is handled differently elsewhere in the pipeline (e.g. parse edge cases). If graph tools and `search` disagree on a type, run a full reindex and compare.
+Both the LadybugDB graph writer and Lance chunk enrichment call **one** function — `graph_enrich.collect_annotation_meta_chain` — which scans the project with sorted `*.java` paths, the same layered ignore rules as `build_ast_graph` / `path_filtering.iter_java_source_files`, parse-error warnings on stderr, and deterministic *first wins* for duplicate annotation simple names. LadybugDB and Lance **should** agree; they can still diverge if the same file is handled differently elsewhere in the pipeline (e.g. parse edge cases). If graph tools and `search` disagree on a type, run a full reindex and compare.
 
 ---
 
 ## 5. Ignore patterns
 
-Java file discovery for the Kuzu graph, annotation meta-chain collection, and the CocoIndex Lance pipeline share the same layered ignore model (`path_filtering.LayeredIgnore`):
+Java file discovery for the LadybugDB graph, annotation meta-chain collection, and the CocoIndex Lance pipeline share the same layered ignore model (`path_filtering.LayeredIgnore`):
 
 1. **Builtin default** — hardcoded patterns applied to every project.
 2. **Project root** — optional `<project>/.java-codebase-rag/ignore` (gitignore syntax, including negation with `!`).

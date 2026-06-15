@@ -677,8 +677,8 @@ def _graph_expand_merge(
     expand_depth: int,
     ladybug_path: str | None,
 ) -> list[dict]:
-    """Expand vector top-k through the Kuzu graph and fuse (RRF) with the original list."""
-    # Lazy import so the module works without kuzu installed when graph_expand=False.
+    """Expand vector top-k through the LadybugDB graph and fuse (RRF) with the original list."""
+    # Lazy import so the module works without ladybug installed when graph_expand=False.
     try:
         from ladybug_queries import LadybugGraph
     except Exception:

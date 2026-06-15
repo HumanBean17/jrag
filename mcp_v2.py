@@ -817,7 +817,7 @@ def _merge_overrides_edge_summary(
     """Reconcile `OVERRIDES` with `override_axis_rollup_for` without clobbering stored `in`.
 
     Rollup rows reuse the ``OVERRIDES`` key for dispatch-up counts only (``in`` is always
-    zero there). Stored ``[:OVERRIDES]`` edges contribute real ``in``/``out`` from Kuzu;
+    zero there). Stored ``[:OVERRIDES]`` edges contribute real ``in``/``out`` from LadybugDB;
     merge per direction with ``max`` so inbound override edges stay visible.
     """
     roll = _incident_counts(summary_after_rollups.get("OVERRIDES"))
@@ -1896,7 +1896,7 @@ def neighbors_v2(
                 results.extend(origin_edges)
                 continue
             if flat_labels:
-                # Kuzu 0.11.x can drop `label(e) IN $list` in WHERE; use OR of scalar equalities.
+                # Some Cypher binders can drop `label(e) IN $list` in WHERE; use OR of scalar equalities.
                 label_params = [f"l{i}" for i in range(len(flat_labels))]
                 label_predicate = "(" + " OR ".join(f"label(e) = ${name}" for name in label_params) + ")"
                 q_params = {"id": origin_id, **dict(zip(label_params, flat_labels, strict=True))}
