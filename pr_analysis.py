@@ -384,7 +384,6 @@ def compute_risk(graph: Any, changed: list[ChangedSymbol]) -> PrRiskReport:
     bump (up to +1.0) after normalization so they influence rank while
     preserving the public scalar contract.
     """
-    notes: list[str] = []
     blast_by: dict[str, int] = {}
     blast_total = 0
     routes: list[str] = []
@@ -495,7 +494,7 @@ def compute_risk(graph: Any, changed: list[ChangedSymbol]) -> PrRiskReport:
         routes_touched=routes,
         risk_score=score,
         risk_band=band,
-        notes=notes,
+        notes=[],
     )
 
 

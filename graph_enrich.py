@@ -23,7 +23,7 @@ import sys
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 from ast_java import (
     AnnotationRef,
     JavaFileAst,
@@ -820,7 +820,15 @@ def _route_path_atom(raw_value: str, value_kind: str | None) -> tuple[str, str, 
     return "", "constant_ref", 0.7, False
 
 
-def _route_hint_lookup(ann: AnnotationRef, hints: dict[str, RouteHint]) -> RouteHint | None:
+_HINT = TypeVar("_HINT")
+
+
+def _hint_lookup(ann: AnnotationRef, hints: dict[str, _HINT]) -> _HINT | None:
+    """Resolve a brownfield hint by qualified name, then simple name, then suffix.
+
+    Shared by route / http-client / async-producer hint resolution; the three
+    former copies differed only in the hint value type.
+    """
     q = ann.qualified.strip()
     if q in hints:
         return hints[q]
@@ -1118,7 +1126,7 @@ def resolve_routes_for_method(
 
     # ----- Step 2: Layer B — annotation route hints -----
     for _is_m, ann in combined_anns:
-        hint = _route_hint_lookup(ann, overrides.annotation_to_route_hint)
+        hint = _hint_lookup(ann, overrides.annotation_to_route_hint)
         if hint is None:
             continue
         working.append(
@@ -1170,36 +1178,6 @@ def resolve_routes_for_method(
         )
 
     return working
-
-
-def _client_hint_lookup(
-    ann: AnnotationRef,
-    hints: dict[str, HttpClientHint],
-) -> HttpClientHint | None:
-    q = ann.qualified.strip()
-    if q in hints:
-        return hints[q]
-    if ann.name in hints:
-        return hints[ann.name]
-    for k, h in sorted(hints.items(), key=lambda kv: kv[0]):
-        if k.endswith("." + ann.name):
-            return h
-    return None
-
-
-def _async_hint_lookup(
-    ann: AnnotationRef,
-    hints: dict[str, AsyncProducerHint],
-) -> AsyncProducerHint | None:
-    q = ann.qualified.strip()
-    if q in hints:
-        return hints[q]
-    if ann.name in hints:
-        return hints[ann.name]
-    for k, h in sorted(hints.items(), key=lambda kv: kv[0]):
-        if k.endswith("." + ann.name):
-            return h
-    return None
 
 
 def _call_from_http_hint(
@@ -1296,7 +1274,7 @@ def resolve_http_client_for_method(
     anchor = builtin_http[0] if builtin_http else (layer_c_src[0] if layer_c_src else None)
 
     for _is_m, ann in combined_anns:
-        hint = _client_hint_lookup(ann, overrides.annotation_to_http_client_hint)
+        hint = _hint_lookup(ann, overrides.annotation_to_http_client_hint)
         if hint is None:
             continue
         brownfield_calls.append(
@@ -1388,7 +1366,7 @@ def resolve_async_producer_for_method(
     anchor = builtin_async[0] if builtin_async else (layer_c_src[0] if layer_c_src else None)
 
     for _is_m, ann in combined_anns:
-        hint = _async_hint_lookup(ann, overrides.annotation_to_async_producer_hint)
+        hint = _hint_lookup(ann, overrides.annotation_to_async_producer_hint)
         if hint is None:
             continue
         brownfield_calls.append(

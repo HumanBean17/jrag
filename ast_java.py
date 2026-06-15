@@ -1565,62 +1565,20 @@ def _parse_codebase_http_route_inner_annotation(
     return out
 
 
-def _codebase_route_inner_annotation_nodes(container_ann: Node, src: bytes) -> list[Node]:
+def _inner_annotation_nodes(container_ann: Node, src: bytes, target_simple: str) -> list[Node]:
+    """Collect nested ``@<target_simple>`` annotations anywhere under ``container_ann``.
+
+    Shared by the four brownfield container walkers — ``CodebaseHttpRoute``,
+    ``CodebaseAsyncRoute``, ``CodebaseHttpClient``, ``CodebaseProducer`` — which
+    differ only by the target annotation simple name.
+    """
     found: list[Node] = []
 
     def visit(n: Node) -> None:
         if n.type == "annotation":
             name_node = n.child_by_field_name("name")
             n_simple = _txt(name_node, src).rsplit(".", 1)[-1] if name_node is not None else ""
-            if n_simple == "CodebaseHttpRoute":
-                found.append(n)
-        for c in n.children:
-            visit(c)
-
-    visit(container_ann)
-    return found
-
-
-def _codebase_async_route_inner_annotation_nodes(container_ann: Node, src: bytes) -> list[Node]:
-    found: list[Node] = []
-
-    def visit(n: Node) -> None:
-        if n.type == "annotation":
-            name_node = n.child_by_field_name("name")
-            n_simple = _txt(name_node, src).rsplit(".", 1)[-1] if name_node is not None else ""
-            if n_simple == "CodebaseAsyncRoute":
-                found.append(n)
-        for c in n.children:
-            visit(c)
-
-    visit(container_ann)
-    return found
-
-
-def _codebase_http_client_inner_annotation_nodes(container_ann: Node, src: bytes) -> list[Node]:
-    found: list[Node] = []
-
-    def visit(n: Node) -> None:
-        if n.type == "annotation":
-            name_node = n.child_by_field_name("name")
-            n_simple = _txt(name_node, src).rsplit(".", 1)[-1] if name_node is not None else ""
-            if n_simple == "CodebaseHttpClient":
-                found.append(n)
-        for c in n.children:
-            visit(c)
-
-    visit(container_ann)
-    return found
-
-
-def _codebase_producer_inner_annotation_nodes(container_ann: Node, src: bytes) -> list[Node]:
-    found: list[Node] = []
-
-    def visit(n: Node) -> None:
-        if n.type == "annotation":
-            name_node = n.child_by_field_name("name")
-            n_simple = _txt(name_node, src).rsplit(".", 1)[-1] if name_node is not None else ""
-            if n_simple == "CodebaseProducer":
+            if n_simple == target_simple:
                 found.append(n)
         for c in n.children:
             visit(c)
@@ -1842,7 +1800,7 @@ def _outgoing_calls_from_codebase_http_client_producer_annotations(
                 ),
             )
         elif simple == "CodebaseHttpClients":
-            for inner in _codebase_http_client_inner_annotation_nodes(ann, src):
+            for inner in _inner_annotation_nodes(ann, src, "CodebaseHttpClient"):
                 out.append(
                     _parse_codebase_http_client_annotation(
                         inner,
@@ -1869,7 +1827,7 @@ def _outgoing_calls_from_codebase_http_client_producer_annotations(
                 ),
             )
         elif simple == "CodebaseProducers":
-            for inner in _codebase_producer_inner_annotation_nodes(ann, src):
+            for inner in _inner_annotation_nodes(ann, src, "CodebaseProducer"):
                 out.append(
                     _parse_codebase_producer_annotation(
                         inner,
@@ -2343,7 +2301,7 @@ def _collect_routes(
                 ),
             )
         elif simple == "CodebaseHttpRoutes":
-            for inner in _codebase_route_inner_annotation_nodes(node, src):
+            for inner in _inner_annotation_nodes(node, src, "CodebaseHttpRoute"):
                 routes.extend(
                     _parse_codebase_http_route_inner_annotation(
                         inner,
@@ -2359,7 +2317,7 @@ def _collect_routes(
         elif simple in ("CodebaseAsyncRoute", "CodebaseAsyncRoutes"):
             nodes = [node]
             if simple == "CodebaseAsyncRoutes":
-                nodes = list(_codebase_async_route_inner_annotation_nodes(node, src))
+                nodes = list(_inner_annotation_nodes(node, src, "CodebaseAsyncRoute"))
             for ann in nodes:
                 pairs, _ = _annotation_kv_nodes(ann, src)
                 topic_node = pairs.get("topic")
