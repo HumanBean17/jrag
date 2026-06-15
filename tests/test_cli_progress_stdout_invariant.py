@@ -160,7 +160,7 @@ def test_cli_lifecycle_stdout_invariant_reprocess(
 
     baseline = (_FIXTURE_DIR / "reprocess_quiet_success.stdout.txt").read_text(encoding="utf-8")
 
-    async def fake_refresh(*, quiet: bool = False, verbose: bool = True) -> RefreshIndexOutput:
+    async def fake_refresh(*, quiet: bool = False, verbose: bool = True, on_progress=None, on_progress_console=None) -> RefreshIndexOutput:
         _ = quiet
         _ = verbose
         return RefreshIndexOutput(

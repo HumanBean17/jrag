@@ -13,9 +13,8 @@ import mcp_v2
 from index_common import SBERT_MODEL
 from java_codebase_rag.cli_progress import (
     accumulate_and_relay_subprocess_streams,
-    emit_vectors_finish,
-    emit_vectors_start,
 )
+from java_codebase_rag.progress import ProgressEvent
 from java_codebase_rag._fdlimit import raise_fd_limit
 from java_codebase_rag.config import (
     cocoindex_subprocess_env_defaults,
@@ -270,10 +269,20 @@ def list_code_index_tables_payload() -> IndexInfoOutput:
     )
 
 
-async def run_refresh_pipeline(*, quiet: bool = False, verbose: bool = True) -> RefreshIndexOutput:
+async def run_refresh_pipeline(
+    *,
+    quiet: bool = False,
+    verbose: bool = True,
+    on_progress=None,
+    on_progress_console: object | None = None,
+) -> RefreshIndexOutput:
     root = _project_root()
     cocoindex_bin = Path(sys.executable).parent / "cocoindex"
     if not cocoindex_bin.is_file():
+        # 127 pre-spawn: emit a terminal failed vectors event so the renderer's
+        # task doesn't hang at running (matches the sync pipeline path).
+        if on_progress is not None:
+            on_progress(ProgressEvent(kind="vectors", phase=None, pass_=None, done=None, total=None, status="failed", elapsed_s=None))
         return RefreshIndexOutput(
             success=False,
             message=f"cocoindex not found next to Python: {cocoindex_bin}",
@@ -286,6 +295,8 @@ async def run_refresh_pipeline(*, quiet: bool = False, verbose: bool = True) -> 
         if fallback.is_file():
             flow_path = fallback
         else:
+            if on_progress is not None:
+                on_progress(ProgressEvent(kind="vectors", phase=None, pass_=None, done=None, total=None, status="failed", elapsed_s=None))
             return RefreshIndexOutput(
                 success=False,
                 message=f"java_index_flow_lancedb.py not found under {root} nor {bundle_dir}",
@@ -308,13 +319,14 @@ async def run_refresh_pipeline(*, quiet: bool = False, verbose: bool = True) -> 
             )
             out_b, err_b = await proc.communicate()
         except Exception as exc:
+            if on_progress is not None:
+                on_progress(ProgressEvent(kind="vectors", phase=None, pass_=None, done=None, total=None, status="failed", elapsed_s=None))
             return RefreshIndexOutput(
                 success=False,
                 message=f"spawn failed: {exc!s}",
                 phases_run=[],
             )
     else:
-        emit_vectors_start()
         t0 = time.perf_counter()
         code_c = -1
         try:
@@ -329,16 +341,30 @@ async def run_refresh_pipeline(*, quiet: bool = False, verbose: bool = True) -> 
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            out_b, err_b = await accumulate_and_relay_subprocess_streams(proc, relay=True, verbose=verbose)
+            # The vectors task is fed by the child's per-file ticks + the
+            # approximate total line, parsed by the ProgressRelay inside the
+            # async drain and routed to on_progress.
+            out_b, err_b = await accumulate_and_relay_subprocess_streams(
+                proc, relay=True, verbose=verbose,
+                on_progress=on_progress, on_progress_console=on_progress_console,
+            )
             code_c = proc.returncode if proc.returncode is not None else -1
         except Exception as exc:
+            if on_progress is not None:
+                on_progress(ProgressEvent(kind="vectors", phase=None, pass_=None, done=None, total=None, status="failed", elapsed_s=None))
             return RefreshIndexOutput(
                 success=False,
                 message=f"spawn failed: {exc!s}",
                 phases_run=[],
             )
         finally:
-            emit_vectors_finish(elapsed_s=time.perf_counter() - t0, exit_code=code_c)
+            # The parent emits the terminal vectors event (the flow can't — no
+            # "all files done" hook). Drives clamp-on-completion + phase
+            # transition to Optimize.
+            if on_progress is not None:
+                elapsed = time.perf_counter() - t0
+                status = "done" if code_c == 0 else "failed"
+                on_progress(ProgressEvent(kind="vectors", phase=None, pass_=None, done=None, total=None, status=status, elapsed_s=elapsed))
     assert proc is not None
     out = out_b.decode(errors="replace")
     err = err_b.decode(errors="replace")
@@ -366,7 +392,7 @@ async def run_refresh_pipeline(*, quiet: bool = False, verbose: bool = True) -> 
                 idx_dir = Path(idx_raw)
             else:
                 idx_dir = (root / ".java-codebase-rag").resolve()
-            await optimize_lance_tables(idx_dir, quiet=quiet)
+            await optimize_lance_tables(idx_dir, quiet=quiet, on_progress=on_progress)
         except Exception as exc:
             optimize_error = f"lance optimize failed: {exc}"
             print(f"java-codebase-rag: {optimize_error}", file=sys.stderr)
@@ -394,7 +420,10 @@ async def run_refresh_pipeline(*, quiet: bool = False, verbose: bool = True) -> 
                 if quiet:
                     gout_b, gerr_b = await gproc.communicate()
                 else:
-                    gout_b, gerr_b = await accumulate_and_relay_subprocess_streams(gproc, relay=True, verbose=verbose)
+                    gout_b, gerr_b = await accumulate_and_relay_subprocess_streams(
+                        gproc, relay=True, verbose=verbose,
+                        on_progress=on_progress, on_progress_console=on_progress_console,
+                    )
                 graph_code = gproc.returncode
                 graph_out = gout_b.decode(errors="replace")
                 graph_err = gerr_b.decode(errors="replace")

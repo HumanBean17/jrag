@@ -579,7 +579,7 @@ def test_reprocess_graph_only_then_increment_graph_is_noop(
     hash_file.write_text(json.dumps(data), encoding="utf-8")
 
     # Stub cocoindex so increment exercises ONLY its graph stage.
-    def _noop_coco(env, *, full_reprocess, quiet, verbose=True, lance_project_root=None):
+    def _noop_coco(env, *, full_reprocess, quiet, verbose=True, lance_project_root=None, on_progress=None, on_progress_console=None):
         return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(cli_mod, "run_cocoindex_update", _noop_coco)
@@ -1017,7 +1017,7 @@ def test_reprocess_no_flag_cocoindex_failure_records_vectors_only(
     monkeypatch.setenv("JAVA_CODEBASE_RAG_INDEX_DIR", str(idx))
     monkeypatch.setenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", str(tmp_path))
 
-    async def fake_refresh(*, quiet: bool = False, verbose: bool = True) -> server_mod.RefreshIndexOutput:
+    async def fake_refresh(*, quiet: bool = False, verbose: bool = True, on_progress=None, on_progress_console=None) -> server_mod.RefreshIndexOutput:
         return server_mod.RefreshIndexOutput(
             success=False,
             exit_code=1,
@@ -1253,7 +1253,7 @@ def _patch_pipeline_for_graph_progress(monkeypatch: pytest.MonkeyPatch, *, emit_
     from java_codebase_rag import cli as _cli
     from java_codebase_rag import pipeline as _pipeline
 
-    def _fake_cocoindex_update(env, *, full_reprocess, quiet, verbose=True, lance_project_root=None):
+    def _fake_cocoindex_update(env, *, full_reprocess, quiet, verbose=True, lance_project_root=None, on_progress=None, on_progress_console=None):
         return _make_stub_completed(returncode=0)
 
     def _fake_run_build_ast_graph(*, source_root, ladybug_path, verbose, quiet=False, env=None, on_progress=None, on_progress_console=None):
