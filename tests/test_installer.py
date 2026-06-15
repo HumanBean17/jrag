@@ -1581,3 +1581,76 @@ class TestPR4IndexProgress:
         assert "JCIRAG_PROGRESS" not in update_out
         # The old stdout indexing chatter moved off stdout.
         assert "Updating index (Lance + graph)..." not in update_out
+
+    def test_update_graph_catchup_failure_is_best_effort_exit_0(self, tmp_path, monkeypatch):
+        """run_update's graph catch-up is best-effort: a graph-only failure must
+        NOT flip the exit code. Vectors (cocoindex) succeeded, so exit 0 with a
+        Warning on stderr carrying the graph caveat — matches the original
+        semantics and the output/UX-only scope of PR-4."""
+        import io
+        import contextlib
+        import subprocess
+        from java_codebase_rag.installer import run_update
+
+        cwd = self._setup_repo(tmp_path, monkeypatch)
+        index_dir = cwd / ".java-codebase-rag"
+        index_dir.mkdir(exist_ok=True)
+        (index_dir / "code_graph.lbug").write_text("", encoding="utf-8")
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", raising=False)
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_INDEX_DIR", raising=False)
+
+        # Patch at the installer import site (java_codebase_rag.pipeline).
+        # cocoindex succeeds; the incremental graph returns a non-zero exit.
+        def coco_ok(env, *, full_reprocess, quiet, verbose=True,
+                    lance_project_root=None, on_progress=None, on_progress_console=None):
+            return subprocess.CompletedProcess(args=["stub"], returncode=0, stdout="", stderr="")
+
+        def graph_fail(**kwargs):
+            return subprocess.CompletedProcess(args=["stub"], returncode=3, stdout="", stderr="")
+
+        monkeypatch.setattr("java_codebase_rag.pipeline.run_cocoindex_update", coco_ok)
+        monkeypatch.setattr("java_codebase_rag.pipeline.run_incremental_graph", graph_fail)
+
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = run_update(force=False, dry_run=False, cwd=cwd)
+
+        assert rc == 0, f"graph-only failure must be best-effort (exit 0), got {rc}"
+        err_text = err.getvalue()
+        assert "Warning:" in err_text
+        assert "incremental graph update failed" in err_text
+
+    def test_install_indexing_exception_renders_failed_footer(self, tmp_path, monkeypatch):
+        """If run_cocoindex_update raises during install's indexing sub-step,
+        the renderer bracket must render a failed (red cross) footer before the
+        exception propagates — not a green check right before the traceback.
+        Mirrors cli._run_with_pipeline_progress's BaseException handler."""
+        import io
+        import contextlib
+        from java_codebase_rag import cli_format
+        from java_codebase_rag.installer import run_install
+
+        cwd = self._setup_repo(tmp_path, monkeypatch)
+
+        def boom(env, *, full_reprocess, quiet, verbose=True,
+                 lance_project_root=None, on_progress=None, on_progress_console=None):
+            raise RuntimeError("boom from cocoindex")
+
+        monkeypatch.setattr("java_codebase_rag.pipeline.run_cocoindex_update", boom)
+
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            with pytest.raises(RuntimeError, match="boom from cocoindex"):
+                run_install(
+                    non_interactive=True,
+                    agents=["claude-code"],
+                    scope="project",
+                    model="auto",
+                    source_root=cwd,
+                    quiet=False,
+                )
+
+        err_text = err.getvalue()
+        # The footer rendered the failure marker (red cross), not the green check.
+        assert cli_format.styled_cross() in err_text
+        assert cli_format.styled_check() not in err_text

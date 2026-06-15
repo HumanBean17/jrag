@@ -825,7 +825,7 @@ def _index_progress_footer(subcommand: str, started: float, *, ok: bool) -> None
     """Print the stderr footer closing the indexing sub-step framing."""
     from java_codebase_rag.cli_format import bold, styled_check, styled_cross
 
-    elapsed = time.time() - started
+    elapsed = time.perf_counter() - started
     marker = styled_check() if ok else styled_cross()
     print(
         f"{marker} {bold(f'java-codebase-rag {subcommand} · finished in {elapsed:.2f}s')}",
@@ -893,7 +893,7 @@ def run_init_if_needed(
 
         renderer, on_progress, on_progress_console = build_index_progress_context()
 
-    started = time.time()
+    started = time.perf_counter()
     if renderer is not None:
         _index_progress_header("install", cfg.source_root, cfg.index_dir)
         renderer.start()
@@ -929,6 +929,12 @@ def run_init_if_needed(
                     file=sys.stderr,
                 )
                 index_ok = False
+    except BaseException:
+        # An exception from cocoindex/graph means the index did not succeed;
+        # flip the footer marker before re-raising so it renders a red cross
+        # (mirrors cli._run_with_pipeline_progress's BaseException handler).
+        index_ok = False
+        raise
     finally:
         if renderer is not None:
             renderer.stop()
@@ -1375,7 +1381,7 @@ def run_update(
 
             renderer, on_progress, on_progress_console = build_index_progress_context()
 
-        started = time.time()
+        started = time.perf_counter()
         if renderer is not None:
             _index_progress_header("update", cfg.source_root, cfg.index_dir)
             renderer.start()
@@ -1406,16 +1412,23 @@ def run_update(
                     on_progress_console=on_progress_console,
                 )
                 if g.returncode != 0:
-                    # Artifacts above already refreshed; the graph catch-up is
-                    # best-effort here. Surface a truthful, actionable message
-                    # instead of leaving the graph silently stale or claiming
-                    # the feature is unimplemented. Goes to stderr (indexing
-                    # progress framing), not the wizard's stdout summary.
+                    # The graph catch-up is best-effort: `update`'s primary job
+                    # is refreshing shipped artifacts + vectors (cocoindex). A
+                    # graph failure surfaces a truthful, actionable Warning on
+                    # stderr but does NOT flip index_ok (which drives both the
+                    # footer marker and the return code) — exit 0 with a green
+                    # check + the Warning line carrying the graph caveat.
                     print(
                         f"\nWarning: incremental graph update failed (exit {g.returncode}). "
                         "Run `java-codebase-rag reprocess` for a full rebuild.",
                         file=sys.stderr,
                     )
+        except BaseException:
+            # An exception from cocoindex/graph means the index did not succeed;
+            # flip the footer marker before re-raising so it renders a red cross
+            # (mirrors cli._run_with_pipeline_progress's BaseException handler).
+            index_ok = False
+            raise
         finally:
             if renderer is not None:
                 renderer.stop()
