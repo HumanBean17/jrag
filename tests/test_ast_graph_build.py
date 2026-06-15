@@ -404,3 +404,139 @@ def test_pass3_known_external_calls_preserved(ladybug_db_path: Path) -> None:
     found = [str(r[0]) for r in rows]
     assert found, "bank fixture should have known-external CALLS rows"
     assert all(s not in ("phantom", "chained_receiver") for s in found), found
+
+
+# ---------------------------------------------------------------------------
+# Graph-phase JCIRAG_PROGRESS emission (PR-2)
+# ---------------------------------------------------------------------------
+
+
+def _run_builder_verbose(corpus_root: Path, target_db: Path, *, extra_args: list[str] | None = None) -> subprocess.CompletedProcess:
+    """Run build_ast_graph.py --verbose and return the CompletedProcess."""
+    script = Path(__file__).resolve().parent.parent / "build_ast_graph.py"
+    cmd = [
+        sys.executable,
+        str(script),
+        "--source-root", str(corpus_root),
+        "--ladybug-path", str(target_db),
+        "--verbose",
+        *(extra_args or []),
+    ]
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+
+
+def _progress_lines(stderr: str) -> list[str]:
+    return [ln for ln in stderr.splitlines() if "JCIRAG_PROGRESS kind=graph" in ln]
+
+
+def _count_filtered_java_files(corpus_root: Path) -> int:
+    from path_filtering import LayeredIgnore, iter_java_source_files
+
+    return sum(1 for _ in iter_java_source_files(corpus_root.resolve(), ignore=LayeredIgnore(corpus_root.resolve())))
+
+
+def test_build_ast_graph_pass1_emits_per_file_progress(corpus_root: Path, tmp_path: Path) -> None:
+    """Pass 1 is count-first: a `total=` line precedes the first `done=` tick; ticks advance."""
+    target = tmp_path / "p1.lbug"
+    proc = _run_builder_verbose(corpus_root, target)
+    assert proc.returncode == 0, f"stderr:\n{proc.stderr}"
+    lines = _progress_lines(proc.stderr)
+    # Pass-1 lines carry pass=1/6 with a total and per-file done ticks.
+    pass1 = [ln for ln in lines if "pass=1/6" in ln]
+    assert pass1, f"expected pass 1 progress lines, got: {lines!r}"
+    # The first pass-1 line with a total must precede the first line with a done tick.
+    totals = [ln for ln in pass1 if "total=" in ln]
+    dones = [ln for ln in pass1 if "done=" in ln]
+    assert totals, f"pass 1 must emit a count-first total; lines: {pass1!r}"
+    assert dones, f"pass 1 must emit per-file done ticks; lines: {pass1!r}"
+    first_total_idx = lines.index(totals[0])
+    first_done_idx = lines.index(dones[0])
+    assert first_total_idx <= first_done_idx, "total must precede the first done tick"
+    # Done ticks advance (monotonic non-decreasing values).
+    done_vals = [int(re.search(r"done=(\d+)", ln).group(1)) for ln in dones if re.search(r"done=(\d+)", ln)]
+    assert done_vals == sorted(done_vals), f"done ticks must be monotonic: {done_vals}"
+
+
+def test_build_ast_graph_pass1_total_is_exact_filtered_count(corpus_root: Path, tmp_path: Path) -> None:
+    """The count-first pass-1 total equals the exact non-ignored .java file count."""
+    target = tmp_path / "p1total.lbug"
+    proc = _run_builder_verbose(corpus_root, target)
+    assert proc.returncode == 0, f"stderr:\n{proc.stderr}"
+    lines = _progress_lines(proc.stderr)
+    pass1_total_lines = [
+        ln for ln in lines if "pass=1/6" in ln and "total=" in ln and "done=" in ln
+    ]
+    # Fall back to any pass-1 line carrying a total.
+    if not pass1_total_lines:
+        pass1_total_lines = [ln for ln in lines if "pass=1/6" in ln and "total=" in ln]
+    assert pass1_total_lines, f"no pass-1 total line found; lines: {lines!r}"
+    totals = [int(re.search(r"total=(\d+)", ln).group(1)) for ln in pass1_total_lines if re.search(r"total=(\d+)", ln)]
+    assert totals, f"could not parse total from: {pass1_total_lines!r}"
+    expected = _count_filtered_java_files(corpus_root)
+    assert totals[0] == expected, f"pass-1 total {totals[0]} != filtered count {expected}"
+
+
+def test_build_ast_graph_passes_2_to_6_emit_step_progress(corpus_root: Path, tmp_path: Path) -> None:
+    """Each of passes 2–6 emits a `pass=N/6` step line on entry/exit."""
+    target = tmp_path / "p2to6.lbug"
+    proc = _run_builder_verbose(corpus_root, target)
+    assert proc.returncode == 0, f"stderr:\n{proc.stderr}"
+    lines = _progress_lines(proc.stderr)
+    for n in range(2, 7):
+        step_lines = [ln for ln in lines if f"pass={n}/6" in ln]
+        assert step_lines, f"pass {n}/6 emitted no progress lines; full: {lines!r}"
+
+
+def test_build_ast_graph_quiet_emits_no_progress(corpus_root: Path, tmp_path: Path) -> None:
+    """Without --verbose the builder emits no JCIRAG_PROGRESS lines."""
+    script = Path(__file__).resolve().parent.parent / "build_ast_graph.py"
+    target = tmp_path / "quiet.lbug"
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--source-root", str(corpus_root),
+            "--ladybug-path", str(target),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert proc.returncode == 0, f"stderr:\n{proc.stderr}"
+    assert _progress_lines(proc.stderr) == [], "quiet build must not emit JCIRAG_PROGRESS"
+
+
+def test_pass1_parse_incremental_total_excludes_removed_files(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """Incremental pass-1 total must count only files that will actually be visited.
+
+    On an incremental run, ``scope_files`` includes removed files (they were
+    deleted, so they participate in scoped deletion), but they no longer exist
+    on disk and are therefore never visited by the parse walk. Counting them in
+    ``pass1_total`` makes ``done`` undercount then two-way-clamp on completion.
+    The fix: the total is ``len(scope_files - removed_files)``.
+    """
+    import build_ast_graph
+
+    root = tmp_path / "proj"
+    java_dir = root / "src/main/java/smoke"
+    java_dir.mkdir(parents=True)
+    (java_dir / "Real.java").write_text(
+        "package smoke;\nclass Real { void go() { } }\n", encoding="utf-8"
+    )
+    tables = build_ast_graph.GraphTables()
+    # scope includes the real file plus a removed (gone-from-disk) file.
+    scope_files = {"src/main/java/smoke/Real.java", "src/main/java/smoke/Gone.java"}
+    removed_files = {"src/main/java/smoke/Gone.java"}
+    build_ast_graph.pass1_parse(
+        root, tables, verbose=True, scope_files=scope_files, removed_files=removed_files
+    )
+    captured = capsys.readouterr()
+    pass1_totals = [
+        int(m.group(1))
+        for m in re.finditer(r"pass=1/6 done=0 total=(\d+)", captured.err)
+    ]
+    assert pass1_totals, f"expected a count-first pass-1 total line; stderr:\n{captured.err}"
+    # The removed file must NOT be counted: total is 1 (only Real.java), not 2.
+    assert pass1_totals[0] == 1, (
+        f"incremental pass-1 total must exclude removed files; got {pass1_totals[0]}"
+    )
