@@ -272,7 +272,7 @@ def test_pipeline_footer_reflects_exception_before_propagate(tmp_path: Path, mon
 
     monkeypatch.setattr(cli_mod, "_pipeline_footer", capture_footer)
 
-    def boom(_progress) -> int:
+    def boom() -> int:
         raise RuntimeError("simulated handler failure")
 
     with pytest.raises(RuntimeError, match="simulated handler failure"):
@@ -281,7 +281,7 @@ def test_pipeline_footer_reflects_exception_before_propagate(tmp_path: Path, mon
 
     codes.clear()
 
-    def exit5(_progress) -> int:
+    def exit5() -> int:
         raise SystemExit(5)
 
     with pytest.raises(SystemExit) as excinfo:

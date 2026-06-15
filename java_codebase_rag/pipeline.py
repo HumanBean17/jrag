@@ -9,12 +9,10 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Callable
 
 from java_codebase_rag.cli_format import Spinner, is_noise_line, stderr_is_tty
 from java_codebase_rag.cli_progress import emit_vectors_finish, emit_vectors_start
 from java_codebase_rag.config import cocoindex_subprocess_env_defaults
-from java_codebase_rag.progress import ProgressEvent, ProgressRelay, make_relay
 
 COCOINDEX_TARGET = "java_index_flow_lancedb.py:JavaCodeIndexLance"
 
@@ -68,26 +66,11 @@ def _popen_capturing_stderr(
     proc: subprocess.Popen[bytes],
     *,
     verbose: bool = True,
-    on_progress: Callable[[ProgressEvent], None] | None = None,
-    on_progress_console: object | None = None,
 ) -> tuple[str, str, int]:
-    """Capture stdout/stderr; relay stderr through noise filter (or verbatim in verbose mode).
-
-    When ``on_progress`` is set, stderr is drained through a :class:`ProgressRelay`
-    instead of the bare ``_LineFilter``: progress lines are parsed first, routed to
-    ``on_progress``, and suppressed from the relay; non-progress lines follow the
-    relay's routing (``console.print`` while a Live region is up via
-    ``on_progress_console``, raw ``buffer.write`` in verbose mode).
-    """
+    """Capture stdout/stderr; relay stderr through noise filter (or verbatim in verbose mode)."""
     out_buf = bytearray()
     err_buf = bytearray()
-    if on_progress is not None:
-        relay = make_relay(
-            on_progress, console=on_progress_console, verbose=verbose
-        )
-        filt: _LineFilter | ProgressRelay | None = relay
-    else:
-        filt = _LineFilter() if not verbose else None
+    filt = _LineFilter() if not verbose else None
 
     def drain_out() -> None:
         assert proc.stdout is not None
@@ -276,8 +259,6 @@ def run_build_ast_graph(
     verbose: bool,
     quiet: bool = False,
     env: dict[str, str] | None = None,
-    on_progress: Callable[[ProgressEvent], None] | None = None,
-    on_progress_console: object | None = None,
 ) -> subprocess.CompletedProcess[str]:
     builder = bundle_dir() / "build_ast_graph.py"
     if not builder.is_file():
@@ -316,9 +297,7 @@ def run_build_ast_graph(
         stderr=subprocess.PIPE,
         bufsize=0,
     )
-    out_s, err_s, code = _popen_capturing_stderr(
-        proc, verbose=verbose, on_progress=on_progress, on_progress_console=on_progress_console
-    )
+    out_s, err_s, code = _popen_capturing_stderr(proc, verbose=verbose)
     if not verbose:
         from java_codebase_rag.cli_format import bold_cyan, styled_check, styled_cross
         marker = styled_check() if code == 0 else styled_cross()
@@ -333,8 +312,6 @@ def run_incremental_graph(
     verbose: bool,
     quiet: bool = False,
     env: dict[str, str] | None = None,
-    on_progress: Callable[[ProgressEvent], None] | None = None,
-    on_progress_console: object | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run incremental graph rebuild by passing --incremental flag to build_ast_graph.py."""
     builder = bundle_dir() / "build_ast_graph.py"
@@ -375,9 +352,7 @@ def run_incremental_graph(
         stderr=subprocess.PIPE,
         bufsize=0,
     )
-    out_s, err_s, code = _popen_capturing_stderr(
-        proc, verbose=verbose, on_progress=on_progress, on_progress_console=on_progress_console
-    )
+    out_s, err_s, code = _popen_capturing_stderr(proc, verbose=verbose)
     if not verbose:
         from java_codebase_rag.cli_format import bold_cyan, styled_check, styled_cross
         marker = styled_check() if code == 0 else styled_cross()

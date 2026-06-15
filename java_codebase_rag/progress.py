@@ -33,7 +33,7 @@ from __future__ import annotations
 import sys
 import time
 from dataclasses import dataclass
-from typing import Callable, Literal
+from typing import Literal
 
 from rich.console import Console
 from rich.live import Live
@@ -55,8 +55,6 @@ __all__ = [
     "parse_progress_line",
     "IndexProgressRenderer",
     "ProgressRelay",
-    "CallbackRenderer",
-    "make_relay",
 ]
 
 ProgressKind = Literal["vectors", "graph", "optimize"]
@@ -273,16 +271,7 @@ class IndexProgressRenderer:
         ``status == "failed"`` halts the task and marks the description with a
         red ``✗`` (rich renders the spinner stopped). On non-TTY consoles this
         delegates to the throttled concise-line printer.
-
-        Safe to call after :meth:`stop`: once the Live region is torn down a
-        drain thread may still feed a trailing event; this is a no-op then so
-        the apply/stop pair is atomic from the caller's view (PR-1 review
-        Minor #6 / cross-PR risk #10).
         """
-        if not self._started:
-            # After stop() the Live region is gone and rich tasks are torn down;
-            # a trailing event from the drain thread must not mutate state.
-            return
         if self._fallback:
             self._fallback_apply(ev)
             return
@@ -386,53 +375,6 @@ class IndexProgressRenderer:
         return Text(kind)
 
 
-class CallbackRenderer:
-    """Adapter exposing a ``renderer.apply(ev)`` surface to :class:`ProgressRelay`.
-
-    ``ProgressRelay`` calls ``renderer.apply(ev)`` for each parsed progress line.
-    This adapter forwards to a caller-supplied ``on_progress`` callback (used by
-    the sync/async subprocess drains in ``pipeline`` / ``cli_progress`` to route
-    progress events up to the command-level renderer without owning a Live region
-    themselves). It carries a ``_console`` attribute so the relay can route
-    non-progress lines through ``console.print`` while a Live region is up.
-    """
-
-    def __init__(self, on_progress, console=None) -> None:  # type: ignore[no-untyped-def]
-        self._on_progress = on_progress
-        self._console = console
-
-    def apply(self, ev: ProgressEvent) -> None:
-        self._on_progress(ev)
-
-    def start(self) -> None:
-        pass
-
-    def stop(self) -> None:
-        pass
-
-
-def make_relay(
-    on_progress: Callable[[ProgressEvent], None],
-    *,
-    console: object | None,
-    verbose: bool,
-) -> ProgressRelay:
-    """Build the standard drain-side :class:`ProgressRelay`.
-
-    Both subprocess drains (``pipeline._popen_capturing_stderr`` sync path and
-    ``cli_progress.accumulate_and_relay_subprocess_streams`` async path) wire a
-    ``CallbackRenderer`` that forwards parsed events to the command-level
-    ``on_progress`` callback, and route non-progress lines through the same
-    caller-supplied ``console``. Centralizing the construction here keeps the
-    sync and async wiring identical (PR-3 forks the async path further).
-    """
-    return ProgressRelay(
-        CallbackRenderer(on_progress, console),
-        console=console,
-        verbose=verbose,
-    )
-
-
 # ---------------------------------------------------------------------------
 # Relay
 # ---------------------------------------------------------------------------
@@ -489,18 +431,7 @@ class ProgressRelay:
             # Consumed by the protocol — never echoed to any sink. It is not
             # noise, so it must not keep the suppression flag armed.
             self._suppress_next = False
-            # Guard the render chain: a drain thread is a daemon, so an
-            # unhandled exception here dies silently and truncates the captured
-            # stderr, masking real bugs. Mirror the defensive ``except Exception``
-            # around the raw ``buffer.write`` path below: log a one-line note to
-            # real stderr and keep draining. Never re-raise.
-            try:
-                self._renderer.apply(ev)
-            except Exception as exc:
-                sys.stderr.write(
-                    f"java-codebase-rag: progress renderer error: {exc}\n"
-                )
-                sys.stderr.flush()
+            self._renderer.apply(ev)
             return
         if ev is not None and self._renderer is None:
             # Parsed as progress but no renderer attached: still reset the flag
@@ -519,13 +450,11 @@ class ProgressRelay:
         self._suppress_next = False
         text = line.decode("utf-8", errors="replace")
         if self._renderer is not None and self._live_active:
-            # The drains always construct the relay with the caller's console
-            # (see make_relay), so ``self._console`` is authoritative here.
-            assert self._console is not None  # invariant: drains always supply it
+            console = self._console if self._console is not None else self._renderer._console  # noqa: SLF001
             # rich.Console over a Live region must suspend/resume to interleave
             # a one-off line without corrupting the bar redraw; print() handles
             # this correctly when the Live was started on the same console.
-            self._console.print(text, end="")
+            console.print(text, end="")
             return
         if self._verbose and self._renderer is None:
             try:

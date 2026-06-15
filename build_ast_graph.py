@@ -25,7 +25,6 @@ The LadybugDB DB is dropped and rebuilt on every run (Phase 1 is a full rebuild)
 from __future__ import annotations
 
 import argparse
-import contextlib
 import hashlib
 import json
 import logging
@@ -83,53 +82,6 @@ _WRITE_START = "[graph] writing · LadybugDB graph to disk"
 def _verbose_stderr_line(content: str) -> None:
     with _VERBOSE_STDERR_LOCK:
         print(content, file=sys.stderr, flush=True)
-
-
-def _emit_graph_progress(parts: dict[str, object], *, verbose: bool) -> None:
-    """Emit one ``JCIRAG_PROGRESS kind=graph …`` line to stderr (gated by verbose).
-
-    The parent process (``pipeline.run_build_ast_graph`` /
-    ``run_incremental_graph``) passes ``--verbose`` in default AND verbose modes
-    (only suppressed for ``--quiet``), so this structured progress surfaces in
-    default mode (where the parent renders it) and verbose mode (raw relay). In
-    ``--quiet`` the builder is never invoked with ``--verbose`` so nothing is
-    emitted. Field order is fixed so the parser and tests can pin substrings.
-    """
-    if not verbose:
-        return
-    fields = ["kind=graph"]
-    for key in ("pass", "done", "total", "status", "elapsed_s"):
-        if key in parts:
-            fields.append(f"{key}={parts[key]}")
-    line = "JCIRAG_PROGRESS " + " ".join(fields)
-    _verbose_stderr_line(line)
-
-
-# Pass-1 per-file tick cadence: bound stderr volume on huge trees without making
-# the bar feel stale. A final tick on pass completion carries status=done.
-_PASS1_TICK_EVERY = 25
-
-
-@contextlib.contextmanager
-def _graph_pass_progress(pass_label: str, *, verbose: bool):
-    """Emit ``pass=N/6 status=running`` on entry and ``status=done elapsed_s=…``
-    on exit for passes 2–6 (each advances the rendered bar by 1/6).
-
-    Usage: ``with _graph_pass_progress("2/6", verbose=verbose): …``
-    """
-    if not verbose:
-        yield
-        return
-    _emit_graph_progress({"pass": pass_label, "status": "running"}, verbose=verbose)
-    t0 = time.time()
-    try:
-        yield
-    finally:
-        elapsed = time.time() - t0
-        _emit_graph_progress(
-            {"pass": pass_label, "status": "done", "elapsed_s": f"{elapsed:.2f}"},
-            verbose=verbose,
-        )
 
 
 class _VerbosePassHeartbeats:
@@ -885,14 +837,7 @@ def _register_type(
     return entry
 
 
-def pass1_parse(
-    root: Path,
-    tables: GraphTables,
-    *,
-    verbose: bool,
-    scope_files: set[str] | None = None,
-    removed_files: set[str] | None = None,
-) -> dict[str, JavaFileAst]:
+def pass1_parse(root: Path, tables: GraphTables, *, verbose: bool, scope_files: set[str] | None = None) -> dict[str, JavaFileAst]:
     """Walk files, parse them, populate node indexes. Returns path -> AST.
 
     Args:
@@ -900,11 +845,6 @@ def pass1_parse(
         tables: GraphTables to populate.
         verbose: Whether to emit progress output.
         scope_files: Optional set of relative POSIX paths to parse. If None, parse all files.
-        removed_files: Optional set of relative POSIX paths that no longer exist
-            on disk (incremental deletions). These are members of ``scope_files``
-            (they were deleted, so they participate in scoped deletion) but are
-            never visited by the parse walk, so they must be excluded from the
-            pass-1 total to keep ``done`` from undercounting then two-way-clamping.
     """
     asts: dict[str, JavaFileAst] = {}
     ignore = LayeredIgnore(root)
@@ -912,23 +852,6 @@ def pass1_parse(
     n_files = 0
     if verbose:
         _verbose_stderr_line(_PASS1_START)
-    # Count-first: one filtered walk (no parsing) to set the EXACT total before
-    # the parse loop ticks. Single-layer ignore → the count is exact, so the
-    # rendered bar is determinate. For a scoped (incremental) parse the total is
-    # the number of files that will actually be visited: scope minus any removed
-    # files (which are members of scope for deletion but gone from disk, so the
-    # parse walk never ticks them); for a full rebuild it is the non-ignored
-    # .java count.
-    if verbose:
-        if scope_files is not None:
-            removed = removed_files if removed_files is not None else set()
-            pass1_total = len(scope_files - removed)
-        else:
-            pass1_total = sum(1 for _ in iter_java_source_files(root, ignore=ignore))
-        _emit_graph_progress(
-            {"pass": "1/6", "done": 0, "total": pass1_total, "status": "running"},
-            verbose=verbose,
-        )
     slow_sec = 0.0
     raw_slow = os.environ.get("JAVA_CODEBASE_RAG_TEST_GRAPH_SLOW_SEC", "").strip()
     if raw_slow:
@@ -948,11 +871,6 @@ def pass1_parse(
             if scope_files is not None and rel not in scope_files:
                 continue
             n_files += 1
-            if verbose and (n_files % _PASS1_TICK_EVERY == 0):
-                _emit_graph_progress(
-                    {"pass": "1/6", "done": n_files, "status": "running"},
-                    verbose=verbose,
-                )
             try:
                 content = p.read_bytes()
             except OSError:
@@ -988,10 +906,6 @@ def pass1_parse(
 
     if verbose:
         elapsed = time.time() - t0
-        _emit_graph_progress(
-            {"pass": "1/6", "done": n_files, "status": "done", "elapsed_s": f"{elapsed:.2f}"},
-            verbose=verbose,
-        )
         _verbose_stderr_line(
             f"[graph] pass 1 · parsed {n_files} files in {elapsed:.2f}s: "
             f"{len(tables.types)} types, {len(tables.members)} members, "
@@ -1231,7 +1145,7 @@ def pass2_edges(tables: GraphTables, asts: dict[str, JavaFileAst], *, verbose: b
     seen_inj: set[tuple[str, str, str, str]] = set()
     if verbose:
         _verbose_stderr_line(_PASS2_START)
-    with _graph_pass_progress("2/6", verbose=verbose), _VerbosePassHeartbeats("[graph] pass 2", verbose=verbose):
+    with _VerbosePassHeartbeats("[graph] pass 2", verbose=verbose):
         for fqn, entry in tables.types.items():
             ast = asts.get(entry.file_path)
             if ast is None:
@@ -1904,7 +1818,7 @@ def pass3_calls(tables: GraphTables, asts: dict[str, JavaFileAst], *, verbose: b
         _verbose_stderr_line(_PASS3_START)
     _build_member_indexes(tables)
     stats = CallResolutionStats()
-    with _graph_pass_progress("3/6", verbose=verbose), _VerbosePassHeartbeats("[graph] pass 3", verbose=verbose):
+    with _VerbosePassHeartbeats("[graph] pass 3", verbose=verbose):
         for rel_path, file_ast in asts.items():
             try:
                 _process_file_calls(file_ast, rel_path, tables, stats)
@@ -2058,7 +1972,7 @@ def pass4_routes(
     meta_chain = collect_annotation_meta_chain(prs)
     if verbose:
         _verbose_stderr_line(_PASS4_START)
-    with _graph_pass_progress("4/6", verbose=verbose), _VerbosePassHeartbeats("[graph] pass 4", verbose=verbose):
+    with _VerbosePassHeartbeats("[graph] pass 4", verbose=verbose):
 
         for ast in asts.values():
             stats.routes_skipped_unresolved += ast.routes_skipped_unresolved
@@ -2235,7 +2149,7 @@ def pass5_imperative_edges(
 
     if verbose:
         _verbose_stderr_line(_PASS5_START)
-    with _graph_pass_progress("5/6", verbose=verbose), _VerbosePassHeartbeats("[graph] pass 5", verbose=verbose):
+    with _VerbosePassHeartbeats("[graph] pass 5", verbose=verbose):
         for member in sorted(tables.members, key=lambda x: x.node_id):
             if member.decl.is_constructor:
                 continue
@@ -2637,7 +2551,7 @@ def pass6_match_edges(
 
     if verbose:
         _verbose_stderr_line(_PASS6_START)
-    with _graph_pass_progress("6/6", verbose=verbose), _VerbosePassHeartbeats("[graph] pass 6", verbose=verbose):
+    with _VerbosePassHeartbeats("[graph] pass 6", verbose=verbose):
         for row in tables.http_call_rows:
             if row.match != "unresolved":
                 continue
@@ -3672,9 +3586,7 @@ def incremental_rebuild(
             _verbose_stderr_line("[increment] rebuilding scoped files (passes 1-4)")
 
         tables = GraphTables()
-        asts = pass1_parse(
-            source_root, tables, verbose=verbose, scope_files=scope_files, removed_files=removed
-        )
+        asts = pass1_parse(source_root, tables, verbose=verbose, scope_files=scope_files)
 
         # Load existing types and members for cross-file resolution (only from unchanged files)
         _load_existing_types(conn, tables, exclude_files=scope_files)
