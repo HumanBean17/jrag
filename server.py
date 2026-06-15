@@ -112,7 +112,44 @@ class ScopeManager:
 
     def _detect_scope(self) -> str | None:
         from graph_enrich import detect_microservice_from_path
-        return detect_microservice_from_path(Path.cwd(), self.source_root)
+
+        candidate = detect_microservice_from_path(Path.cwd(), self.source_root)
+        if candidate is None:
+            return None
+        # Only auto-scope to a microservice that actually has indexed code.
+        # detect_microservice_from_path can mislabel a non-microservice
+        # top-level child of source_root — most importantly the config/context
+        # directory the MCP server is launched from (no build marker, no
+        # source) — via its "first path segment under root" fallback. Scoping
+        # every query to such a name yields zero matches, so all tools return
+        # empty. A real microservice the operator is working in is, by
+        # definition, present in the index, so validating against the indexed
+        # set cannot suppress a legitimate scope. When the index is unreadable
+        # (empty known set) we keep the detected candidate rather than silently
+        # disabling auto-scope on a transient graph error.
+        known = self._indexed_microservices()
+        if known and candidate not in known:
+            return None
+        return candidate
+
+    def _indexed_microservices(self) -> set[str]:
+        """Microservice names that have indexed type symbols.
+
+        Graph-only source of truth: the graph is always built alongside Lance,
+        and a Lance-only index (no graph) is not a supported state. Any failure
+        (graph missing, open error, empty index) returns an empty set, which
+        ``_detect_scope`` treats as "cannot validate — keep detection".
+        """
+        try:
+            if not LadybugGraph.exists():
+                return set()
+            # LadybugGraph.get() opens the DB and runs meta(); it can raise
+            # (e.g. RuntimeError on ontology-version mismatch). Caught here ->
+            # empty set -> _detect_scope keeps the detected scope.
+            counts = LadybugGraph.get().microservice_counts()
+            return {name for name in counts if name}
+        except Exception:
+            return set()
 
     def _log_detection(self) -> None:
         if self.default_scope:

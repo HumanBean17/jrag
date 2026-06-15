@@ -150,3 +150,121 @@ class TestScopeManager:
         nf = NodeFilter(role="CONTROLLER")
         result = mgr.apply_auto_scope(nf)
         assert result is nf
+
+
+class TestScopeManagerAutoScopeValidation:
+    """Auto-scope must not fire for a microservice absent from the index.
+
+    Regression: launching the MCP server from the config/context directory (a
+    top-level child of source_root with no build marker and no source) made
+    ``detect_microservice_from_path`` return that directory's name via its
+    "first path segment under root" fallback. ScopeManager then auto-scoped
+    every query to a microservice with zero indexed rows, so all tools
+    returned empty results. The detected scope is now validated against the
+    indexed microservice set; a candidate with no indexed code is suppressed.
+    """
+
+    @staticmethod
+    def _stub_index(monkeypatch, microservices: set[str]) -> None:
+        """Make ScopeManager._indexed_microservices() see a fake graph."""
+        import server
+
+        class _FakeGraph:
+            def microservice_counts(self):
+                return {name: 1 for name in microservices}
+
+        monkeypatch.setattr(
+            server.LadybugGraph, "exists", lambda db_path=None: len(microservices) > 0
+        )
+        monkeypatch.setattr(
+            server.LadybugGraph, "get", lambda db_path=None: _FakeGraph()
+        )
+
+    def test_context_dir_not_detected_as_microservice(self, tmp_path, monkeypatch):
+        """Launching from a codeless context dir must NOT auto-scope (the bug)."""
+        from server import ScopeManager
+
+        # Reported layout: source_root holds both the context dir and a real
+        # microservice; the server is launched from the context dir.
+        context_dir = tmp_path / "bank-chat-context"
+        context_dir.mkdir()
+        ms_dir = tmp_path / "microservice-a"
+        (ms_dir / "src").mkdir(parents=True)
+        (ms_dir / "pom.xml").write_text("<project/>")
+
+        # The index only knows the real microservice, not the context dir.
+        self._stub_index(monkeypatch, {"microservice-a"})
+        monkeypatch.chdir(context_dir)
+
+        mgr = ScopeManager(tmp_path)
+        assert mgr.default_scope is None
+
+    def test_real_microservice_dir_still_scopes(self, tmp_path, monkeypatch):
+        """Launching from inside an indexed microservice keeps auto-scope."""
+        from server import ScopeManager
+
+        ms_dir = tmp_path / "microservice-a"
+        (ms_dir / "src").mkdir(parents=True)
+        (ms_dir / "pom.xml").write_text("<project/>")
+
+        self._stub_index(monkeypatch, {"microservice-a"})
+        monkeypatch.chdir(ms_dir)
+
+        mgr = ScopeManager(tmp_path)
+        assert mgr.default_scope == "microservice-a"
+
+    def test_empty_index_keeps_detection(self, tmp_path, monkeypatch):
+        """When the index is missing (exists()->False), keep detection."""
+        from server import ScopeManager
+
+        ms_dir = tmp_path / "microservice-a"
+        ms_dir.mkdir()
+        (ms_dir / "pom.xml").write_text("<project/>")
+
+        # Graph missing -> exists() False -> empty known set.
+        self._stub_index(monkeypatch, set())
+        monkeypatch.chdir(ms_dir)
+
+        mgr = ScopeManager(tmp_path)
+        assert mgr.default_scope == "microservice-a"
+
+    def test_empty_graph_present_keeps_detection(self, tmp_path, monkeypatch):
+        """Graph present but reporting no microservices also keeps detection.
+
+        Covers the exists()->True branch with empty microservice_counts() —
+        distinct from test_empty_index_keeps_detection (missing graph). Both
+        paths must converge to keeping the detected scope rather than silently
+        disabling auto-scope.
+        """
+        import server
+        from server import ScopeManager
+
+        ms_dir = tmp_path / "microservice-a"
+        ms_dir.mkdir()
+        (ms_dir / "pom.xml").write_text("<project/>")
+
+        class _EmptyGraph:
+            def microservice_counts(self):
+                return {}
+
+        monkeypatch.setattr(server.LadybugGraph, "exists", lambda db_path=None: True)
+        monkeypatch.setattr(server.LadybugGraph, "get", lambda db_path=None: _EmptyGraph())
+        monkeypatch.chdir(ms_dir)
+
+        mgr = ScopeManager(tmp_path)
+        assert mgr.default_scope == "microservice-a"
+
+    def test_indexed_microservices_extracts_nonempty_keys(self, tmp_path, monkeypatch):
+        """_indexed_microservices drops empty-string buckets, keeps the rest."""
+        import server
+        from server import ScopeManager
+
+        class _FakeGraph:
+            def microservice_counts(self):
+                return {"chat-core": 140, "chat-assign": 50, "": 3}
+
+        monkeypatch.setattr(server.LadybugGraph, "exists", lambda db_path=None: True)
+        monkeypatch.setattr(server.LadybugGraph, "get", lambda db_path=None: _FakeGraph())
+
+        mgr = ScopeManager(tmp_path)
+        assert mgr._indexed_microservices() == {"chat-core", "chat-assign"}
