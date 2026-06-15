@@ -2010,8 +2010,21 @@ def _producer_id(
     return f"p:{hashlib.sha1(key.encode()).hexdigest()[:16]}"
 
 
+# The four brownfield source layers — single source of truth. Consumed by the
+# client/producer source-layer classifiers, the *_from_brownfield_pct stats
+# (via brownfield_strategies), and the brownfield_only authoritativeness gate in
+# _is_brownfield_sourced. codebase_client/codebase_producer are caller-side
+# declaration strategies, not layers — they extend brownfield_strategies only.
+_BROWNFIELD_LAYERS = frozenset({
+    "layer_a_meta",
+    "layer_b_ann",
+    "layer_b_fqn",
+    "layer_c_source",
+})
+
+
 def _client_source_layer(strategy: str) -> str:
-    if strategy in {"layer_a_meta", "layer_b_ann", "layer_b_fqn", "layer_c_source"}:
+    if strategy in _BROWNFIELD_LAYERS:
         return strategy
     # Some caller extraction paths emit client kind as strategy; treat those
     # as builtin-source declarations instead of warning on every row.
@@ -2023,7 +2036,7 @@ def _client_source_layer(strategy: str) -> str:
 
 
 def _producer_source_layer(strategy: str) -> str:
-    if strategy in {"layer_a_meta", "layer_b_ann", "layer_b_fqn", "layer_c_source"}:
+    if strategy in _BROWNFIELD_LAYERS:
         return strategy
     if strategy in VALID_PRODUCER_KINDS:
         return "builtin"
@@ -2458,15 +2471,14 @@ def pass5_imperative_edges(
         tables.producer_stats.producers_by_kind = defaultdict(int)
         for row in tables.producer_rows:
             tables.producer_stats.producers_by_kind[row.producer_kind] += 1
-        brownfield_strategies = frozenset(
-            (
-                "layer_b_ann",
-                "layer_a_meta",
-                "layer_c_source",
-                "layer_b_fqn",
-                "codebase_client",
-                "codebase_producer",
-            ),
+        # brownfield_strategies = the four brownfield layers plus the two
+        # caller-side declaration strategies (@CodebaseHttpClient /
+        # @CodebaseProducer). These extend _BROWNFIELD_LAYERS deliberately:
+        # the *_from_brownfield_pct stats count annotation-declared callers as
+        # brownfield-sourced even though they are not "layers" and so do not
+        # gate brownfield_only authoritativeness in _is_brownfield_sourced.
+        brownfield_strategies = _BROWNFIELD_LAYERS | frozenset(
+            {"codebase_client", "codebase_producer"},
         )
         if tables.call_edge_stats.http_calls_total:
             n_http = sum(
@@ -2566,14 +2578,6 @@ def _match_call_edge(
     if candidates[0].microservice and candidates[0].microservice == caller_microservice:
         return "intra_service", candidates
     return "cross_service", candidates
-
-
-_BROWNFIELD_LAYERS = frozenset({
-    "layer_c_source",
-    "layer_b_ann",
-    "layer_b_fqn",
-    "layer_a_meta",
-})
 
 
 def _is_brownfield_sourced(

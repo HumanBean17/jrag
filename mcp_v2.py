@@ -1095,9 +1095,9 @@ def describe_v2(
         has_id = bool(id and str(id).strip())
         has_fqn = bool(fqn and str(fqn).strip())
         if not has_id and not has_fqn:
-            return DescribeOutput(success=False, message="id or fqn required", hints=[])
+            return DescribeOutput(success=False, message="id or fqn required")
         if has_id and str(id).strip().startswith("ucs:"):
-            return DescribeOutput(success=False, message=_DESCRIBE_UCS_ID_MESSAGE, hints=[])
+            return DescribeOutput(success=False, message=_DESCRIBE_UCS_ID_MESSAGE)
         hint_message: str | None = None
         node_id: str
         if has_id:
@@ -1109,7 +1109,7 @@ def describe_v2(
                 {"fqn": fqn_val},
             )
             if not rows:
-                return DescribeOutput(success=False, message=f"No Symbol found for fqn='{fqn_val}'", hints=[])
+                return DescribeOutput(success=False, message=f"No Symbol found for fqn='{fqn_val}'")
             node_id = str(rows[0]["id"] or "")
             if len(rows) > 1:
                 hint_message = (
@@ -1784,7 +1784,7 @@ def neighbors_v2(
             )
         except ValueError as exc:
             _log_fail_loud("edge_filter")
-            return NeighborsOutput(success=False, message=str(exc), hints=[], requested_edge_types=[])
+            return NeighborsOutput(success=False, message=str(exc), requested_edge_types=[])
         if include_unresolved and ef is not None:
             return NeighborsOutput(
                 success=False,
@@ -1792,21 +1792,18 @@ def neighbors_v2(
                     "include_unresolved=True is incompatible with edge_filter; "
                     "UnresolvedCallSite rows have no edge attributes to filter on"
                 ),
-                hints=[],
                 requested_edge_types=requested_edge_types,
             )
         if include_unresolved and requested_edge_types != ["CALLS"]:
             return NeighborsOutput(
                 success=False,
                 message="include_unresolved requires edge_types=['CALLS']",
-                hints=[],
                 requested_edge_types=requested_edge_types,
             )
         if include_unresolved and direction != "out":
             return NeighborsOutput(
                 success=False,
                 message='include_unresolved requires direction="out"',
-                hints=[],
                 requested_edge_types=requested_edge_types,
             )
         if ef and (err := _edgefilter_applicability_error(requested_edge_types, ef)):
@@ -1814,17 +1811,15 @@ def neighbors_v2(
             return NeighborsOutput(
                 success=False,
                 message=err,
-                hints=[],
                 requested_edge_types=requested_edge_types,
             )
         if nf and (err := _validate_no_wildcards(nf)):
             _log_fail_loud("wildcard")
-            return NeighborsOutput(success=False, message=err, hints=[], requested_edge_types=[])
+            return NeighborsOutput(success=False, message=err, requested_edge_types=[])
         if composed_keys and direction != "out":
             return NeighborsOutput(
                 success=False,
                 message='Composed edge types require direction="out"',
-                hints=[],
                 requested_edge_types=requested_edge_types,
             )
         use_calls_path = flat_labels == ["CALLS"] and not composed_keys
@@ -1849,7 +1844,6 @@ def neighbors_v2(
                     return NeighborsOutput(
                         success=False,
                         message=axis_msg,
-                        hints=[],
                         requested_edge_types=requested_edge_types,
                     )
                 origin_row = _load_node_record(g, origin_id, "symbol")
@@ -1865,7 +1859,6 @@ def neighbors_v2(
                     return NeighborsOutput(
                         success=False,
                         message=err,
-                        hints=[],
                         requested_edge_types=requested_edge_types,
                     )
             if use_calls_path:
@@ -1891,7 +1884,6 @@ def neighbors_v2(
                     return NeighborsOutput(
                         success=False,
                         message=str(exc),
-                        hints=[],
                         requested_edge_types=requested_edge_types,
                     )
                 if (
@@ -1941,7 +1933,7 @@ def neighbors_v2(
                     if nf and (err := _nodefilter_applicability_error(other_kind, nf)):
                         _log_fail_loud("applicability")
                         return NeighborsOutput(
-                            success=False, message=err, hints=[], requested_edge_types=[]
+                            success=False, message=err, requested_edge_types=[]
                         )
                     if not _node_matches_filter(other_kind, other_rec, nf):
                         continue
@@ -1968,7 +1960,7 @@ def neighbors_v2(
                     if nf and (err := _nodefilter_applicability_error(other_kind, nf)):
                         _log_fail_loud("applicability")
                         return NeighborsOutput(
-                            success=False, message=err, hints=[], requested_edge_types=[]
+                            success=False, message=err, requested_edge_types=[]
                         )
                     if not _node_matches_filter(other_kind, other_rec, nf):
                         continue
