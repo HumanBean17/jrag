@@ -299,11 +299,15 @@ def test_flow_emits_vectors_progress_per_file(corpus_root: Path, tmp_path: Path)
 
 @pytestmark_heavy
 def test_pre_walk_total_divergence_bounded(corpus_root: Path, tmp_path: Path) -> None:
-    """On the fixture, the approximate pre-walk total vs. the actual done count
-    differ only by the ignored / empty / undecodable count (the spike measured 0).
+    """On the fixture, the approximate pre-walk total exactly equals the number of
+    files actually processed (the spike measured gap == 0).
 
-    Asserts the gap is small/bounded — the parent clamps to total on completion,
-    so a bounded over-count is the documented, accepted behaviour."""
+    The TRUE processed count is read from the LanceDB tables (distinct
+    ``filename`` values across the three tables) rather than the throttled
+    ``done=k`` tick stream: ticks fire only every 25th file, so ``max(done)``
+    lands on a multiple of 25 and would mask the real divergence. The accepted
+    over-count on larger trees is the ignored / empty / undecodable file count
+    (the renderer clamps to total on completion regardless)."""
     index_dir = tmp_path / ".java-codebase-rag"
     index_dir.mkdir(parents=True)
     proc = _run_cocoindex_update(corpus_root, index_dir)
@@ -315,16 +319,31 @@ def test_pre_walk_total_divergence_bounded(corpus_root: Path, tmp_path: Path) ->
     total_match = re.search(r"total=(\d+)", total_lines[0])
     assert total_match, f"could not parse total from: {total_lines[0]!r}"
     pre_walk_total = int(total_match.group(1))
-    # The actual done count is the highest done value emitted (ticks are
-    # monotonic non-decreasing; the last tick is the final count).
-    ticks = [ln for ln in lines if "done=" in ln]
-    done_vals = [int(m.group(1)) for ln in ticks if (m := re.search(r"done=(\d+)", ln))]
-    actual_done = max(done_vals) if done_vals else 0
-    # The pre-walk over-states by the ignored / empty / undecodable count. The
-    # spike measured 0 on this fixture; the bar clamps regardless. Assert the
-    # gap is bounded (>= 0 and not absurdly large).
+    # The tick stream is throttled (every 25th file), so it cannot yield the
+    # true processed count. Read the ground truth from the LanceDB tables:
+    # distinct filename values across the three tables the flow populated.
+    import lancedb
+
+    db = lancedb.connect(str(index_dir.resolve()))
+    actual_done = 0
+    for tname in ("javacodeindex_java_code", "sqlschemaindex_sql_schema", "yamlconfigindex_yaml_config"):
+        try:
+            tbl = db.open_table(tname)
+        except Exception as exc:  # pragma: no cover - table missing only on a broken flow
+            raise AssertionError(f"Lance table {tname} missing after flow: {exc}") from exc
+        rows = tbl.search().select(["filename"]).limit(1_000_000).to_list()
+        actual_done += len({r["filename"] for r in rows if r.get("filename") is not None})
+    # On this fixture the pre-walk matches exactly (gap == 0): all counted
+    # files are non-empty / decodable / not-ignored, and the YAML predicate
+    # was fixed to include application*.yml. The accepted over-count on larger
+    # trees is the ignored / empty file count (the renderer clamps regardless).
     gap = pre_walk_total - actual_done
-    assert gap >= 0, f"pre-walk total {pre_walk_total} < actual done {actual_done} (under-count)"
-    # Bounded: the over-count is at most the pre-walk total itself (paranoid
-    # upper bound — in practice it is the ignored/empty count, near 0).
-    assert gap <= pre_walk_total, f"gap {gap} exceeds total {pre_walk_total}"
+    assert gap >= 0, (
+        f"pre-walk total {pre_walk_total} < actual done {actual_done} (under-count: "
+        f"a matcher predicate is dropping files the flow still processes)"
+    )
+    assert gap == 0, (
+        f"pre-walk over-count on fixture: pre_walk_total={pre_walk_total} "
+        f"actual_done={actual_done} gap={gap} (expected 0; the over-count is the "
+        f"ignored/empty/undecodable file count — the renderer clamps regardless)"
+    )

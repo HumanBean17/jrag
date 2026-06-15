@@ -23,7 +23,12 @@ import asyncio
 import sys
 import time
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Literal
+
+# Mirrors ``ProgressStatus`` in ``progress.py``; kept local (rather than imported)
+# so this module never pays the ``rich`` cost at import time — see
+# ``_make_optimize_event``.
+_OptimizeStatus = Literal["running", "done", "failed"]
 
 # Single source of truth for the three Lance table names created by the flow.
 # Keep in sync with ``search_lancedb.TABLES`` (the values there mirror these).
@@ -36,9 +41,9 @@ LANCE_TABLE_NAMES: tuple[str, ...] = (
 
 def _make_optimize_event(
     *,
-    status: str,
+    status: _OptimizeStatus,
     elapsed_s: float | None = None,
-):  # type: ignore[no-untyped-def]
+):
     """Build a ``ProgressEvent(kind="optimize", …)`` lazily (progress is parent-side).
 
     ``lance_optimize`` runs in-process in the parent (called by
@@ -56,7 +61,7 @@ def _make_optimize_event(
         pass_=None,
         done=None,
         total=None,
-        status=status,  # type: ignore[arg-type]
+        status=status,
         elapsed_s=elapsed_s,
     )
 

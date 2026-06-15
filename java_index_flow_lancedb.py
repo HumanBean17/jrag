@@ -150,7 +150,11 @@ def _tick_vectors_done() -> None:
         n = _vectors_done_count
         if n % _VECTORS_TICK_EVERY != 0:
             return
-    _emit_vectors_progress(done=n, status="running")
+        # Emit under the lock: the docstring above promises the lock guards both
+        # the counter AND the emission, so two concurrent ticks can't emit their
+        # ``done=N`` lines out of order. Contention is negligible (fires every
+        # ~25 files).
+        _emit_vectors_progress(done=n, status="running")
 
 
 def _approximate_vectors_total(project_root: Path) -> int:
@@ -203,7 +207,13 @@ def _approximate_vectors_total(project_root: Path) -> int:
                     total += 1
                 continue
             # YAML: **/src/main/resources/application*.yml / .yaml
-            if fn.endswith((".yml", ".yaml")) and "/application" in fn and "/src/main/resources/" in rel:
+            # NOTE: ``fn`` is the bare filename (e.g. ``application-cloud.yml``), so
+            # the prefix predicate must be ``fn.startswith("application")`` —
+            # ``"/application" in fn`` was always False (no leading slash in a bare
+            # name) and under-counted every application YAML, driving the pre-walk
+            # total below the actual done count. The ``rel``-based
+            # ``"/src/main/resources/"`` gate stays (full path component).
+            if fn.endswith((".yml", ".yaml")) and fn.startswith("application") and "/src/main/resources/" in rel:
                 if not ignore.is_ignored(full)[0]:
                     total += 1
     return total
