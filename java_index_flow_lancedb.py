@@ -198,12 +198,12 @@ def _approximate_vectors_total(project_root: Path) -> int:
                 continue
             # Java: **/*.java
             if fn.endswith(".java"):
-                if not ignore.is_ignored(full)[0]:
+                if not ignore.is_ignored(full):
                     total += 1
                 continue
             # SQL: **/src/main/resources/db/migration/*.sql
             if fn.endswith(".sql") and "/db/migration/" in rel:
-                if not ignore.is_ignored(full)[0]:
+                if not ignore.is_ignored(full):
                     total += 1
                 continue
             # YAML: **/src/main/resources/application*.yml / .yaml
@@ -214,7 +214,7 @@ def _approximate_vectors_total(project_root: Path) -> int:
             # total below the actual done count. The ``rel``-based
             # ``"/src/main/resources/"`` gate stays (full path component).
             if fn.endswith((".yml", ".yaml")) and fn.startswith("application") and "/src/main/resources/" in rel:
-                if not ignore.is_ignored(full)[0]:
+                if not ignore.is_ignored(full):
                     total += 1
     return total
 
@@ -313,7 +313,7 @@ async def process_java_file(
 ) -> None:
     embedder = coco.use_context(EMBEDDER)
     project_root = coco.use_context(PROJECT_ROOT)
-    if LayeredIgnore(project_root).is_ignored((project_root / file.file_path.path).resolve())[0]:
+    if LayeredIgnore(project_root).is_ignored((project_root / file.file_path.path).resolve()):
         return
     try:
         content = await file.read_text()
@@ -379,7 +379,7 @@ async def process_sql_file(
 ) -> None:
     embedder = coco.use_context(EMBEDDER)
     project_root = coco.use_context(PROJECT_ROOT)
-    if LayeredIgnore(project_root).is_ignored((project_root / file.file_path.path).resolve())[0]:
+    if LayeredIgnore(project_root).is_ignored((project_root / file.file_path.path).resolve()):
         return
     try:
         content = await file.read_text()
@@ -425,7 +425,7 @@ async def process_yaml_file(
 ) -> None:
     embedder = coco.use_context(EMBEDDER)
     project_root = coco.use_context(PROJECT_ROOT)
-    if LayeredIgnore(project_root).is_ignored((project_root / file.file_path.path).resolve())[0]:
+    if LayeredIgnore(project_root).is_ignored((project_root / file.file_path.path).resolve()):
         return
     try:
         content = await file.read_text()

@@ -342,24 +342,22 @@ class LayeredIgnore:
         )
         return mega, GitIgnoreSpec.from_lines(mega), meta
 
-    def is_ignored(self, path: Path) -> tuple[bool, IgnoreLayer | None]:
-        """Return whether ``path`` is ignored and which layer last matched."""
+    def is_ignored(self, path: Path) -> bool:
+        """Return whether ``path`` is ignored by any configured layer.
+
+        Boolean-only fast path for the per-file index walk. It deliberately does
+        not compute *which* layer/source last matched: that attribution is
+        O(rules²) via :func:`_winning_row` (one ``GitIgnoreSpec`` rebuild per
+        rule prefix) and is only needed for ``diagnose-ignore``, so it lives in
+        :meth:`diagnose_dict` and is never paid on the hot path.
+        """
         rel = self._rel_project(path)
         if rel is None:
-            return False, None
-        mega, spec, meta = self._mega(rel)
+            return False
+        mega, spec, _ = self._mega(rel)
         if not mega:
-            return False, None
-        ignored = spec.match_file(rel)
-        if not ignored:
-            return False, None
-        src, fp, ln, _pat = _winning_row(rel, mega, meta)
-        return True, IgnoreLayer(
-            root=self.project_root,
-            spec=spec,
-            source=src,
-            ignore_file=fp,
-        )
+            return False
+        return spec.match_file(rel)
 
     def diagnose(self, path: Path) -> str:
         """Human-readable, multi-line explanation of the ignore decision."""
@@ -466,7 +464,6 @@ def iter_java_source_files(
             if not fn.endswith(".java"):
                 continue
             p = Path(dirpath) / fn
-            ign, _ = ignore_ctx.is_ignored(p)
-            if ign:
+            if ignore_ctx.is_ignored(p):
                 continue
             yield p
