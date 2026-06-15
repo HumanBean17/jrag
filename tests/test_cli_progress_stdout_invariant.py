@@ -160,7 +160,7 @@ def test_cli_lifecycle_stdout_invariant_reprocess(
 
     baseline = (_FIXTURE_DIR / "reprocess_quiet_success.stdout.txt").read_text(encoding="utf-8")
 
-    async def fake_refresh(*, quiet: bool = False, verbose: bool = True) -> RefreshIndexOutput:
+    async def fake_refresh(*, quiet: bool = False, verbose: bool = True, on_progress=None, on_progress_console=None) -> RefreshIndexOutput:
         _ = quiet
         _ = verbose
         return RefreshIndexOutput(
@@ -272,7 +272,7 @@ def test_pipeline_footer_reflects_exception_before_propagate(tmp_path: Path, mon
 
     monkeypatch.setattr(cli_mod, "_pipeline_footer", capture_footer)
 
-    def boom() -> int:
+    def boom(_progress) -> int:
         raise RuntimeError("simulated handler failure")
 
     with pytest.raises(RuntimeError, match="simulated handler failure"):
@@ -281,7 +281,7 @@ def test_pipeline_footer_reflects_exception_before_propagate(tmp_path: Path, mon
 
     codes.clear()
 
-    def exit5() -> int:
+    def exit5(_progress) -> int:
         raise SystemExit(5)
 
     with pytest.raises(SystemExit) as excinfo:

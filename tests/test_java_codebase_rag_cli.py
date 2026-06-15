@@ -579,7 +579,7 @@ def test_reprocess_graph_only_then_increment_graph_is_noop(
     hash_file.write_text(json.dumps(data), encoding="utf-8")
 
     # Stub cocoindex so increment exercises ONLY its graph stage.
-    def _noop_coco(env, *, full_reprocess, quiet, verbose=True, lance_project_root=None):
+    def _noop_coco(env, *, full_reprocess, quiet, verbose=True, lance_project_root=None, on_progress=None, on_progress_console=None):
         return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(cli_mod, "run_cocoindex_update", _noop_coco)
@@ -1017,7 +1017,7 @@ def test_reprocess_no_flag_cocoindex_failure_records_vectors_only(
     monkeypatch.setenv("JAVA_CODEBASE_RAG_INDEX_DIR", str(idx))
     monkeypatch.setenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", str(tmp_path))
 
-    async def fake_refresh(*, quiet: bool = False, verbose: bool = True) -> server_mod.RefreshIndexOutput:
+    async def fake_refresh(*, quiet: bool = False, verbose: bool = True, on_progress=None, on_progress_console=None) -> server_mod.RefreshIndexOutput:
         return server_mod.RefreshIndexOutput(
             success=False,
             exit_code=1,
@@ -1230,3 +1230,227 @@ def test_console_script_entry_point_routes_through_wrapper() -> None:
     assert 'java-codebase-rag = "java_codebase_rag.cli:_console_script_main"' in pyproject
     assert 'java-codebase-rag = "java-codebase-rag:main"' not in pyproject
     assert 'java-codebase-rag = "java_codebase_rag.cli:main"' not in pyproject
+
+
+# ---------------------------------------------------------------------------
+# PR-2: graph-phase progress wiring (default vs --quiet)
+# ---------------------------------------------------------------------------
+
+
+def _make_stub_completed(*, returncode: int = 0, stderr: str = "") -> "subprocess.CompletedProcess[str]":
+    import subprocess
+
+    return subprocess.CompletedProcess(args=["stub"], returncode=returncode, stdout="", stderr=stderr)
+
+
+def _patch_pipeline_for_graph_progress(monkeypatch: pytest.MonkeyPatch, *, emit_graph: bool) -> None:
+    """Patch the cocoindex + graph pipeline helpers used by init/increment.
+
+    When ``emit_graph`` is True the patched graph helper invokes the caller's
+    ``on_progress`` callback with a synthetic ``kind=graph`` event — simulating
+    what the real subprocess drain would feed the renderer in default mode.
+    """
+    from java_codebase_rag import cli as _cli
+    from java_codebase_rag import pipeline as _pipeline
+
+    def _fake_cocoindex_update(env, *, full_reprocess, quiet, verbose=True, lance_project_root=None, on_progress=None, on_progress_console=None):
+        return _make_stub_completed(returncode=0)
+
+    def _fake_run_build_ast_graph(*, source_root, ladybug_path, verbose, quiet=False, env=None, on_progress=None, on_progress_console=None):
+        if emit_graph and on_progress is not None:
+            from java_codebase_rag.progress import ProgressEvent
+
+            on_progress(
+                ProgressEvent(
+                    kind="graph", phase=None, pass_="1/6", done=10, total=130,
+                    status="running", elapsed_s=None,
+                )
+            )
+        return _make_stub_completed(returncode=0)
+
+    def _fake_run_incremental_graph(*, source_root, ladybug_path, verbose, quiet=False, env=None, on_progress=None, on_progress_console=None):
+        if emit_graph and on_progress is not None:
+            from java_codebase_rag.progress import ProgressEvent
+
+            on_progress(
+                ProgressEvent(
+                    kind="graph", phase=None, pass_="1/6", done=3, total=130,
+                    status="running", elapsed_s=None,
+                )
+            )
+        return _make_stub_completed(returncode=0)
+
+    # Patch where cli.py imported them (module-level names in cli).
+    monkeypatch.setattr(_cli, "run_cocoindex_update", _fake_cocoindex_update)
+    monkeypatch.setattr(_cli, "run_build_ast_graph", _fake_run_build_ast_graph)
+    monkeypatch.setattr(_cli, "run_incremental_graph", _fake_run_incremental_graph)
+    # Also patch the pipeline module attributes in case anything imports there.
+    monkeypatch.setattr(_pipeline, "run_cocoindex_update", _fake_cocoindex_update)
+    monkeypatch.setattr(_pipeline, "run_build_ast_graph", _fake_run_build_ast_graph)
+    monkeypatch.setattr(_pipeline, "run_incremental_graph", _fake_run_incremental_graph)
+
+
+def test_cli_init_default_mode_graph_phase_progress_on_stderr(
+    corpus_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """In default mode a graph-phase progress event is parsed and rendered to
+    stderr; the raw ``JCIRAG_PROGRESS`` line is NOT echoed verbatim."""
+    idx = tmp_path / "idx_init_prog"
+    idx.mkdir()
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_INDEX_DIR", str(idx))
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", str(corpus_root))
+    _patch_pipeline_for_graph_progress(monkeypatch, emit_graph=True)
+    buf = io.StringIO()
+    with contextlib.redirect_stderr(buf):
+        rc = cli_mod.main(
+            ["init", "--source-root", str(corpus_root), "--index-dir", str(idx)]
+        )
+    assert rc == 0
+    err = buf.getvalue()
+    # The raw structured line is consumed by the parser, never raw-relayed.
+    assert "JCIRAG_PROGRESS kind=graph" not in err
+    # But graph-phase progress IS rendered (non-TTY concise fallback prints a
+    # "graph ..." line). The synthetic event had total=130, done=10.
+    assert "graph" in err.lower()
+
+
+def test_cli_increment_graph_phase_progress(
+    corpus_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Symmetric: increment default mode parses and renders graph progress."""
+    idx = tmp_path / "idx_inc_prog"
+    idx.mkdir()
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_INDEX_DIR", str(idx))
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", str(corpus_root))
+    # init first (quiet) to populate the index dir so increment has state.
+    _patch_pipeline_for_graph_progress(monkeypatch, emit_graph=False)
+    init_rc = cli_mod.main(
+        ["init", "--source-root", str(corpus_root), "--index-dir", str(idx), "--quiet"]
+    )
+    assert init_rc == 0
+    # Now increment in default mode with graph progress emitted.
+    _patch_pipeline_for_graph_progress(monkeypatch, emit_graph=True)
+    buf = io.StringIO()
+    with contextlib.redirect_stderr(buf):
+        rc = cli_mod.main(
+            ["increment", "--source-root", str(corpus_root), "--index-dir", str(idx)]
+        )
+    assert rc == 0
+    err = buf.getvalue()
+    assert "JCIRAG_PROGRESS kind=graph" not in err
+    assert "graph" in err.lower()
+
+
+def test_cli_graph_progress_absent_when_quiet(
+    corpus_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--quiet suppresses all progress stderr; no graph rendering occurs."""
+    idx = tmp_path / "idx_quiet_prog"
+    idx.mkdir()
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_INDEX_DIR", str(idx))
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", str(corpus_root))
+    _patch_pipeline_for_graph_progress(monkeypatch, emit_graph=True)
+    buf = io.StringIO()
+    with contextlib.redirect_stderr(buf):
+        rc = cli_mod.main(
+            ["init", "--source-root", str(corpus_root), "--index-dir", str(idx), "--quiet"]
+        )
+    assert rc == 0
+    err = buf.getvalue()
+    assert "JCIRAG_PROGRESS kind=graph" not in err
+    # In quiet mode there is no header/footer framing either.
+    assert "java-codebase-rag init" not in err
+
+
+# ---------------------------------------------------------------------------
+# PR-4 — wire --quiet/--verbose through update / install
+# ---------------------------------------------------------------------------
+
+
+def test_cmd_update_forwards_quiet_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`_cmd_update --quiet` forwards quiet=True to run_update.
+
+    Until PR-4 _cmd_update ignored both --quiet and --verbose entirely.
+    """
+    import java_codebase_rag.installer as _installer
+
+    captured: dict = {}
+
+    def _fake_run_update(*, force=False, dry_run=False, cwd=None,
+                         quiet=False, verbose=False):
+        captured["quiet"] = quiet
+        captured["verbose"] = verbose
+        captured["force"] = force
+        captured["dry_run"] = dry_run
+        return 0
+
+    monkeypatch.setattr(_installer, "run_update", _fake_run_update)
+    monkeypatch.chdir(tmp_path)
+
+    rc = cli_mod.main(["update", "--quiet"])
+    assert rc == 0
+    assert captured["quiet"] is True
+
+
+def test_cmd_update_forwards_verbose_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`_cmd_update --verbose` forwards verbose=True to run_update."""
+    import java_codebase_rag.installer as _installer
+
+    captured: dict = {}
+
+    def _fake_run_update(*, force=False, dry_run=False, cwd=None,
+                         quiet=False, verbose=False):
+        captured["quiet"] = quiet
+        captured["verbose"] = verbose
+        return 0
+
+    monkeypatch.setattr(_installer, "run_update", _fake_run_update)
+    monkeypatch.chdir(tmp_path)
+
+    rc = cli_mod.main(["update", "--verbose"])
+    assert rc == 0
+    assert captured["verbose"] is True
+    # And the default path (no flag) forwards both as False.
+    rc2 = cli_mod.main(["update"])
+    assert rc2 == 0
+    assert captured["quiet"] is False
+    assert captured["verbose"] is False
+
+
+def test_cmd_install_forwards_verbose_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`_cmd_install --verbose` forwards verbose=True to run_install.
+
+    Until PR-4 _cmd_install wired only --quiet through.
+    """
+    import java_codebase_rag.installer as _installer
+
+    captured: dict = {}
+
+    def _fake_run_install(*, non_interactive, agents, scope, model,
+                          source_root=None, quiet=False, verbose=False):
+        captured["quiet"] = quiet
+        captured["verbose"] = verbose
+        captured["non_interactive"] = non_interactive
+        return 0
+
+    monkeypatch.setattr(_installer, "run_install", _fake_run_install)
+    monkeypatch.chdir(tmp_path)
+
+    rc = cli_mod.main(
+        ["install", "--non-interactive", "--agent", "claude-code", "--verbose"]
+    )
+    assert rc == 0
+    assert captured["verbose"] is True
+    # quiet still flows through too.
+    rc2 = cli_mod.main(
+        ["install", "--non-interactive", "--agent", "claude-code", "--quiet"]
+    )
+    assert rc2 == 0
+    assert captured["quiet"] is True
+

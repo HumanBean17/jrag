@@ -311,3 +311,153 @@ def test_non_tty_fallback_emits_concise_lines() -> None:
         assert "42.1" in final
     finally:
         r.stop()
+
+
+# ---------------------------------------------------------------------------
+# PR-2: drain-thread safety (apply/stop atomicity) + heartbeat suppression
+# ---------------------------------------------------------------------------
+
+
+def test_renderer_apply_is_noop_after_stop() -> None:
+    """apply() after stop() must not raise and must not mutate task state.
+
+    Once the drain thread is wired (PR-2), a progress event can arrive just as
+    the main thread calls stop(); apply() must be a safe no-op in that window.
+    """
+    console = Console(file=io.StringIO(), force_terminal=False, width=80)
+    r = IndexProgressRenderer(["graph"], console=console)
+    assert r._fallback is True  # non-TTY path
+    r.start()
+    # A normal event before stop sets state.
+    r.apply(
+        ProgressEvent(
+            kind="graph", phase=None, pass_="1/6", done=10, total=100, status="running", elapsed_s=None
+        )
+    )
+    r.stop()
+    # Feeding events after stop must not raise and must not change state.
+    for _ in range(5):
+        r.apply(
+            ProgressEvent(
+                kind="graph", phase=None, pass_="1/6", done=50, total=100, status="running", elapsed_s=None
+            )
+        )
+    # No exception → pass. The carry-forward total stays at the last-seen value.
+    assert r._last_total["graph"] == 100
+
+
+def test_renderer_apply_stop_stress_does_not_crash() -> None:
+    """Concurrent apply()/stop() from two threads must not raise (drain-thread model)."""
+    import threading
+
+    console = Console(file=io.StringIO(), force_terminal=False, width=80)
+    r = IndexProgressRenderer(["graph"], console=console)
+    stop_flag = threading.Event()
+    errors: list[BaseException] = []
+
+    def feeder() -> None:
+        i = 0
+        while not stop_flag.is_set():
+            try:
+                r.apply(
+                    ProgressEvent(
+                        kind="graph",
+                        phase=None,
+                        pass_="1/6",
+                        done=i,
+                        total=1000,
+                        status="running",
+                        elapsed_s=None,
+                    )
+                )
+            except BaseException as exc:  # noqa: BLE001
+                errors.append(exc)
+            i += 1
+
+    t = threading.Thread(target=feeder, daemon=True)
+    t.start()
+    try:
+        for _ in range(20):
+            r.start()
+            stop_flag.clear()
+            # let the feeder run briefly
+            for _ in range(100):
+                pass
+            r.stop()
+    finally:
+        stop_flag.set()
+        t.join(timeout=2.0)
+    assert not errors, f"concurrent apply/stop raised: {errors!r}"
+
+
+def test_progress_relay_suppresses_graph_heartbeat_in_live_mode() -> None:
+    """In default (Live) mode the builder's `[graph] pass N` heartbeat must NOT
+    leak as a raw line above the Live region — the renderer's bar subsumes it.
+    The heartbeat only reappears in --verbose raw-relay mode (no Live region).
+    """
+    # Live region active (renderer attached) → heartbeat is noise-suppressed.
+    stub = _StubRenderer()
+    buf = io.StringIO()
+    relay = ProgressRelay(
+        renderer=stub, console=Console(file=buf, force_terminal=False, force_interactive=False)
+    )
+    relay.feed(b"[graph] pass 1 \xc2\xb7 5s elapsed\n")
+    relay.feed(b"JCIRAG_PROGRESS kind=graph pass=1/6 done=10 total=100\n")
+    relay.flush()
+    # The structured progress line was routed to the renderer (1 apply).
+    assert len(stub.applied) == 1
+    assert stub.applied[0].kind == "graph"
+    # The heartbeat was not echoed as a raw line above the Live region. The
+    # renderer's bar subsumes it; assert the heartbeat content is entirely
+    # absent (not just the ``[graph]`` markup tag, which rich would strip).
+    assert "5s elapsed" not in buf.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# PR-2 review hardening: survive a renderer exception in the drain thread
+# ---------------------------------------------------------------------------
+
+
+class _ExplodingRenderer:
+    """A renderer whose apply() raises on every call."""
+
+    def __init__(self) -> None:
+        self.applied: list[ProgressEvent] = []
+
+    def apply(self, ev: ProgressEvent) -> None:
+        raise RuntimeError("boom")
+
+    def start(self) -> None:
+        pass
+
+    def stop(self) -> None:
+        pass
+
+
+def test_progress_relay_survives_renderer_apply_exception(capsys) -> None:
+    """A renderer exception must NOT propagate out of feed() and must not kill
+    the drain thread (which would silently truncate the captured stderr).
+
+    Feed a JCIRAG_PROGRESS line (triggers the raise) followed by a normal
+    non-noise line; assert feed() returns cleanly and the normal line still
+    routes to the sink (console). The exception is noted to stderr instead.
+    """
+    relay = ProgressRelay(
+        renderer=_ExplodingRenderer(),
+        console=Console(file=io.StringIO(), force_terminal=False, force_interactive=False),
+    )
+    buf = io.StringIO()
+    # Swap in a console backed by a buffer we can inspect for the normal line.
+    relay._console = Console(file=buf, force_terminal=False, force_interactive=False)  # noqa: SLF001
+    # The progress line triggers renderer.apply() → RuntimeError("boom").
+    relay.feed(b"JCIRAG_PROGRESS kind=graph pass=1/6 done=10 total=100\n")
+    # A normal non-noise line after the exception must still route to the sink.
+    relay.feed(b"cocoindex: indexing batch\n")
+    relay.flush()
+    out = buf.getvalue()
+    assert "cocoindex: indexing batch" in out
+    # The exception was noted to real stderr (capsys captures sys.stderr).
+    captured = capsys.readouterr()
+    assert "progress renderer error" in captured.err
+    assert "boom" in captured.err
+

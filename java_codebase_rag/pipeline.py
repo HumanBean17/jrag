@@ -9,10 +9,11 @@ import sys
 import threading
 import time
 from pathlib import Path
+from typing import Callable
 
-from java_codebase_rag.cli_format import Spinner, is_noise_line, stderr_is_tty
-from java_codebase_rag.cli_progress import emit_vectors_finish, emit_vectors_start
+from java_codebase_rag.cli_format import is_noise_line
 from java_codebase_rag.config import cocoindex_subprocess_env_defaults
+from java_codebase_rag.progress import ProgressEvent, ProgressRelay, make_relay
 
 COCOINDEX_TARGET = "java_index_flow_lancedb.py:JavaCodeIndexLance"
 
@@ -66,11 +67,26 @@ def _popen_capturing_stderr(
     proc: subprocess.Popen[bytes],
     *,
     verbose: bool = True,
+    on_progress: Callable[[ProgressEvent], None] | None = None,
+    on_progress_console: object | None = None,
 ) -> tuple[str, str, int]:
-    """Capture stdout/stderr; relay stderr through noise filter (or verbatim in verbose mode)."""
+    """Capture stdout/stderr; relay stderr through noise filter (or verbatim in verbose mode).
+
+    When ``on_progress`` is set, stderr is drained through a :class:`ProgressRelay`
+    instead of the bare ``_LineFilter``: progress lines are parsed first, routed to
+    ``on_progress``, and suppressed from the relay; non-progress lines follow the
+    relay's routing (``console.print`` while a Live region is up via
+    ``on_progress_console``, raw ``buffer.write`` in verbose mode).
+    """
     out_buf = bytearray()
     err_buf = bytearray()
-    filt = _LineFilter() if not verbose else None
+    if on_progress is not None:
+        relay = make_relay(
+            on_progress, console=on_progress_console, verbose=verbose
+        )
+        filt: _LineFilter | ProgressRelay | None = relay
+    else:
+        filt = _LineFilter() if not verbose else None
 
     def drain_out() -> None:
         assert proc.stdout is not None
@@ -112,6 +128,8 @@ def run_cocoindex_update(
     quiet: bool,
     verbose: bool = True,
     lance_project_root: Path | None = None,
+    on_progress: Callable[[ProgressEvent], None] | None = None,
+    on_progress_console: object | None = None,
 ) -> subprocess.CompletedProcess[str]:
     result = _run_cocoindex_update_impl(
         env,
@@ -119,19 +137,25 @@ def run_cocoindex_update(
         quiet=quiet,
         verbose=verbose,
         lance_project_root=lance_project_root,
+        on_progress=on_progress,
+        on_progress_console=on_progress_console,
     )
     # After cocoindex returns exit 0 there are no concurrent writers, so this
     # is the safe window to compact the Lance tables. The flow disabled its
     # in-flight background optimize (see java_index_flow_lancedb.py), making
     # this serialized pass the sole optimizer. Optimize failure does not flip
     # the cocoindex CompletedProcess (a successful index is still usable, just
-    # not compacted); the outcome is logged to stderr only.
+    # not compacted); the outcome is logged to stderr only. Thread the
+    # in-process on_progress so the optimize phase renders via the same
+    # renderer (the flow cannot emit it — it runs in the child).
     if result.returncode == 0:
-        _maybe_run_serialized_optimize(env, quiet=quiet)
+        _maybe_run_serialized_optimize(env, quiet=quiet, on_progress=on_progress)
     return result
 
 
-def _maybe_run_serialized_optimize(env: dict[str, str], *, quiet: bool) -> None:
+def _maybe_run_serialized_optimize(
+    env: dict[str, str], *, quiet: bool, on_progress: Callable | None = None
+) -> None:
     """Resolve the index dir from *env* and run the serialized Lance optimize.
 
     The flow's lifespan reads ``JAVA_CODEBASE_RAG_INDEX_DIR`` (set by the CLI /
@@ -150,7 +174,7 @@ def _maybe_run_serialized_optimize(env: dict[str, str], *, quiet: bool) -> None:
     try:
         from java_codebase_rag.lance_optimize import optimize_lance_tables
 
-        asyncio.run(optimize_lance_tables(Path(idx_raw), quiet=quiet))
+        asyncio.run(optimize_lance_tables(Path(idx_raw), quiet=quiet, on_progress=on_progress))
     except Exception as exc:
         # Never crash the CLI on an optimize failure — surface on stderr only.
         print(f"java-codebase-rag: optimize failed: {exc}", file=sys.stderr)
@@ -163,9 +187,15 @@ def _run_cocoindex_update_impl(
     quiet: bool,
     verbose: bool = True,
     lance_project_root: Path | None = None,
+    on_progress: Callable[[ProgressEvent], None] | None = None,
+    on_progress_console: object | None = None,
 ) -> subprocess.CompletedProcess[str]:
     exe = cocoindex_bin()
     if not exe.is_file():
+        # 127 pre-spawn stub: never mark the vectors task running — emit a
+        # terminal failed event so the renderer doesn't leave it hung.
+        if on_progress is not None:
+            on_progress(ProgressEvent(kind="vectors", phase=None, pass_=None, done=None, total=None, status="failed", elapsed_s=None))
         return subprocess.CompletedProcess(
             args=[str(exe)],
             returncode=127,
@@ -175,6 +205,8 @@ def _run_cocoindex_update_impl(
     bd = bundle_dir()
     flow = bd / "java_index_flow_lancedb.py"
     if not flow.is_file():
+        if on_progress is not None:
+            on_progress(ProgressEvent(kind="vectors", phase=None, pass_=None, done=None, total=None, status="failed", elapsed_s=None))
         return subprocess.CompletedProcess(
             args=[],
             returncode=126,
@@ -201,17 +233,10 @@ def _run_cocoindex_update_impl(
             text=True,
         )
 
-    emit_progress = lance_project_root is not None
-    use_spinner = emit_progress and stderr_is_tty()
-    if emit_progress and not use_spinner:
-        emit_vectors_start()
-    spinner: Spinner | None = None
-    if use_spinner:
-        spinner = Spinner("[vectors] running · cocoindex update")
-        spinner.start()
     t0 = time.perf_counter()
     code = -1
     out_s, err_s = "", ""
+    proc: subprocess.Popen[bytes] | None = None
     try:
         proc = subprocess.Popen(
             cmd,
@@ -221,12 +246,27 @@ def _run_cocoindex_update_impl(
             stderr=subprocess.PIPE,
             bufsize=0,
         )
-        out_s, err_s, code = _popen_capturing_stderr(proc, verbose=verbose)
+        # Vectors task is marked running only AFTER Popen succeeds — the flow's
+        # per-file ticks + approximate total stream in from the child via the
+        # relay (parsed by ProgressRelay, routed to on_progress).
+        out_s, err_s, code = _popen_capturing_stderr(
+            proc, verbose=verbose, on_progress=on_progress, on_progress_console=on_progress_console
+        )
     finally:
-        if spinner is not None:
-            spinner.stop()
-        if emit_progress:
-            emit_vectors_finish(elapsed_s=time.perf_counter() - t0, exit_code=code)
+        # The flow cannot emit the terminal vectors event (no "all files done"
+        # hook in cocoindex flows), so the PARENT emits it here based on the
+        # cocoindex exit code. This drives clamp-on-completion + the phase
+        # transition to Optimize. Emitted even on a spawn failure (code stays
+        # -1 → failed) so the renderer's task never hangs at running.
+        if on_progress is not None:
+            elapsed = time.perf_counter() - t0
+            status = "done" if code == 0 else "failed"
+            on_progress(
+                ProgressEvent(
+                    kind="vectors", phase=None, pass_=None, done=None, total=None,
+                    status=status, elapsed_s=elapsed,
+                )
+            )
     return subprocess.CompletedProcess(args=cmd, returncode=code, stdout=out_s, stderr=err_s)
 
 
@@ -259,6 +299,8 @@ def run_build_ast_graph(
     verbose: bool,
     quiet: bool = False,
     env: dict[str, str] | None = None,
+    on_progress: Callable[[ProgressEvent], None] | None = None,
+    on_progress_console: object | None = None,
 ) -> subprocess.CompletedProcess[str]:
     builder = bundle_dir() / "build_ast_graph.py"
     if not builder.is_file():
@@ -297,7 +339,9 @@ def run_build_ast_graph(
         stderr=subprocess.PIPE,
         bufsize=0,
     )
-    out_s, err_s, code = _popen_capturing_stderr(proc, verbose=verbose)
+    out_s, err_s, code = _popen_capturing_stderr(
+        proc, verbose=verbose, on_progress=on_progress, on_progress_console=on_progress_console
+    )
     if not verbose:
         from java_codebase_rag.cli_format import bold_cyan, styled_check, styled_cross
         marker = styled_check() if code == 0 else styled_cross()
@@ -312,6 +356,8 @@ def run_incremental_graph(
     verbose: bool,
     quiet: bool = False,
     env: dict[str, str] | None = None,
+    on_progress: Callable[[ProgressEvent], None] | None = None,
+    on_progress_console: object | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run incremental graph rebuild by passing --incremental flag to build_ast_graph.py."""
     builder = bundle_dir() / "build_ast_graph.py"
@@ -352,7 +398,9 @@ def run_incremental_graph(
         stderr=subprocess.PIPE,
         bufsize=0,
     )
-    out_s, err_s, code = _popen_capturing_stderr(proc, verbose=verbose)
+    out_s, err_s, code = _popen_capturing_stderr(
+        proc, verbose=verbose, on_progress=on_progress, on_progress_console=on_progress_console
+    )
     if not verbose:
         from java_codebase_rag.cli_format import bold_cyan, styled_check, styled_cross
         marker = styled_check() if code == 0 else styled_cross()

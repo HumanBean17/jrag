@@ -1,10 +1,7 @@
 """TTY-aware ANSI formatting for CLI stderr progress."""
 from __future__ import annotations
 
-import itertools
 import sys
-import threading
-import time
 
 _RESET = "\033[0m"
 _BOLD = "\033[1m"
@@ -16,8 +13,6 @@ _CYAN = "\033[36m"
 CHECK = "✓"
 CROSS = "✗"
 
-_SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-
 _NOISE_CONTAINS: tuple[bytes, ...] = (
     b"lance::",
     b"FutureWarning",
@@ -25,6 +20,14 @@ _NOISE_CONTAINS: tuple[bytes, ...] = (
     b'"event": "brownfield-',
     b"unknown producer source strategy",
     b"unknown client source strategy",
+    # Builder verbose heartbeats / pass banners: in default mode the renderer's
+    # bar subsumes these, so they must NOT also appear as raw lines above the
+    # Live region. --verbose raw-relay bypasses this filter and still shows them.
+    b"[graph] pass ",
+    b"[graph] scoped write ",
+    b"[graph] writing ",
+    b"[graph] done ",
+    b"[increment] ",
 )
 
 
@@ -80,33 +83,3 @@ def styled_check() -> str:
 
 def styled_cross() -> str:
     return red(CROSS) if stderr_is_tty() else CROSS
-
-
-class Spinner:
-    """Braille spinner that overwrites the current stderr line until stopped."""
-
-    def __init__(self, label: str) -> None:
-        self._label = label
-        self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
-
-    def start(self) -> None:
-        self._thread = threading.Thread(target=self._run, name="spinner", daemon=True)
-        self._thread.start()
-
-    def stop(self) -> None:
-        self._stop.set()
-        if self._thread is not None:
-            self._thread.join(timeout=2.0)
-        sys.stderr.buffer.write(b"\r\x1b[2K")
-        sys.stderr.buffer.flush()
-
-    def _run(self) -> None:
-        frames = itertools.cycle(_SPINNER_FRAMES)
-        t0 = time.monotonic()
-        while not self._stop.wait(0.3):
-            elapsed = time.monotonic() - t0
-            frame = next(frames)
-            line = f"\r{frame} {self._label} · {elapsed:.0f}s"
-            sys.stderr.buffer.write(line.encode())
-            sys.stderr.buffer.flush()
