@@ -65,6 +65,8 @@ java-codebase-rag install --non-interactive --agent claude-code
 
 After `pip install --upgrade java-codebase-rag`, run `java-codebase-rag update` to refresh shipped artifacts and catch up the index (Lance + graph).
 
+All indexing lifecycle commands (`init`, `increment`, `reprocess`, `install`, `update`) show a unified `Vectors → Optimize → Graph` progress bar on stderr during the index build (powered by `rich`); pass `--quiet` to suppress it.
+
 ### Manual registration
 
 If you prefer manual configuration, see [`docs/JAVA-CODEBASE-RAG-CLI.md`](./docs/JAVA-CODEBASE-RAG-CLI.md) for the full CLI reference.

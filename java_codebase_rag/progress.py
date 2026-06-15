@@ -57,6 +57,7 @@ __all__ = [
     "ProgressRelay",
     "CallbackRenderer",
     "make_relay",
+    "build_index_progress_context",
 ]
 
 ProgressKind = Literal["vectors", "graph", "optimize"]
@@ -431,6 +432,38 @@ def make_relay(
         console=console,
         verbose=verbose,
     )
+
+
+# The canonical phase order shared by every lifecycle command that renders
+# progress. The operator commands (init/increment/reprocess) and the installer
+# sub-steps (install/update indexing) all render this same list so the
+# Vectors → Optimize → Graph shape is uniform across the CLI.
+_INDEX_PHASES = ["vectors", "optimize", "graph"]
+
+
+def build_index_progress_context(
+    phases: list[str] | None = None,
+) -> tuple["IndexProgressRenderer", Callable[[ProgressEvent], None], "Console"]:
+    """Construct the shared ``(renderer, on_progress, console)`` triple.
+
+    Both ``cli._run_with_pipeline_progress`` (operator commands, default TTY
+    mode) and the installer's indexing sub-step (``installer.run_init_if_needed``
+    / ``run_update``) use this so the phase list, the callback wiring, and the
+    single-writer console are defined in exactly one place. The returned
+    ``on_progress`` forwards each event to ``renderer.apply``; ``console`` is
+    the renderer's stderr ``rich.Console`` so the subprocess drain routes
+    non-progress lines through ``console.print`` while a Live region is up.
+
+    The caller owns ``renderer.start()``/``stop()`` lifecycle. In ``--quiet``
+    or ``--verbose`` mode the caller simply does not call this helper (quiet
+    is silent; verbose raw-relays).
+    """
+    renderer = IndexProgressRenderer(phases if phases is not None else _INDEX_PHASES)
+
+    def on_progress(ev: ProgressEvent) -> None:
+        renderer.apply(ev)
+
+    return renderer, on_progress, renderer._console  # noqa: SLF001 — shared console for the drain
 
 
 # ---------------------------------------------------------------------------

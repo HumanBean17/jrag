@@ -144,7 +144,7 @@ def _run_with_pipeline_progress(
     """
     if quiet or verbose:
         return int(work(None))
-    from java_codebase_rag.progress import IndexProgressRenderer, ProgressEvent
+    from java_codebase_rag.progress import build_index_progress_context
 
     # PR-3 owns all three tasks in order: Vectors → Optimize → Graph. The vectors
     # task is fed by the cocoindex child's per-file ticks + approximate total
@@ -152,15 +152,10 @@ def _run_with_pipeline_progress(
     # in-process by lance_optimize; the graph task is fed by the build_ast_graph
     # child (subprocess transport). A task only becomes visible/running once its
     # first event arrives.
-    phases = ["vectors", "optimize", "graph"]
-    renderer = IndexProgressRenderer(phases)
+    renderer, on_progress, console = build_index_progress_context()
     progress = PipelineProgress(renderer=renderer)
-
-    def on_progress(ev: ProgressEvent) -> None:
-        renderer.apply(ev)
-
     progress.on_progress = on_progress
-    progress.console = renderer._console  # noqa: SLF001 — shared with the drain for Live-safe routing
+    progress.console = console
 
     _pipeline_header(subcommand, cfg)
     t0 = time.perf_counter()
@@ -570,6 +565,7 @@ def _cmd_install(args: argparse.Namespace) -> int:
         model=args.model,
         source_root=None,  # None means cwd; installer confirms interactively
         quiet=bool(args.quiet),
+        verbose=bool(args.verbose),
     )
 
 
@@ -579,6 +575,8 @@ def _cmd_update(args: argparse.Namespace) -> int:
     return run_update(
         force=bool(args.force),
         dry_run=bool(args.dry_run),
+        quiet=bool(args.quiet),
+        verbose=bool(args.verbose),
     )
 
 

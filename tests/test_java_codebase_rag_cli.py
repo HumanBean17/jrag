@@ -1361,3 +1361,96 @@ def test_cli_graph_progress_absent_when_quiet(
     # In quiet mode there is no header/footer framing either.
     assert "java-codebase-rag init" not in err
 
+
+# ---------------------------------------------------------------------------
+# PR-4 — wire --quiet/--verbose through update / install
+# ---------------------------------------------------------------------------
+
+
+def test_cmd_update_forwards_quiet_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`_cmd_update --quiet` forwards quiet=True to run_update.
+
+    Until PR-4 _cmd_update ignored both --quiet and --verbose entirely.
+    """
+    import java_codebase_rag.installer as _installer
+
+    captured: dict = {}
+
+    def _fake_run_update(*, force=False, dry_run=False, cwd=None,
+                         quiet=False, verbose=False):
+        captured["quiet"] = quiet
+        captured["verbose"] = verbose
+        captured["force"] = force
+        captured["dry_run"] = dry_run
+        return 0
+
+    monkeypatch.setattr(_installer, "run_update", _fake_run_update)
+    monkeypatch.chdir(tmp_path)
+
+    rc = cli_mod.main(["update", "--quiet"])
+    assert rc == 0
+    assert captured["quiet"] is True
+
+
+def test_cmd_update_forwards_verbose_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`_cmd_update --verbose` forwards verbose=True to run_update."""
+    import java_codebase_rag.installer as _installer
+
+    captured: dict = {}
+
+    def _fake_run_update(*, force=False, dry_run=False, cwd=None,
+                         quiet=False, verbose=False):
+        captured["quiet"] = quiet
+        captured["verbose"] = verbose
+        return 0
+
+    monkeypatch.setattr(_installer, "run_update", _fake_run_update)
+    monkeypatch.chdir(tmp_path)
+
+    rc = cli_mod.main(["update", "--verbose"])
+    assert rc == 0
+    assert captured["verbose"] is True
+    # And the default path (no flag) forwards both as False.
+    rc2 = cli_mod.main(["update"])
+    assert rc2 == 0
+    assert captured["quiet"] is False
+    assert captured["verbose"] is False
+
+
+def test_cmd_install_forwards_verbose_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`_cmd_install --verbose` forwards verbose=True to run_install.
+
+    Until PR-4 _cmd_install wired only --quiet through.
+    """
+    import java_codebase_rag.installer as _installer
+
+    captured: dict = {}
+
+    def _fake_run_install(*, non_interactive, agents, scope, model,
+                          source_root=None, quiet=False, verbose=False):
+        captured["quiet"] = quiet
+        captured["verbose"] = verbose
+        captured["non_interactive"] = non_interactive
+        return 0
+
+    monkeypatch.setattr(_installer, "run_install", _fake_run_install)
+    monkeypatch.chdir(tmp_path)
+
+    rc = cli_mod.main(
+        ["install", "--non-interactive", "--agent", "claude-code", "--verbose"]
+    )
+    assert rc == 0
+    assert captured["verbose"] is True
+    # quiet still flows through too.
+    rc2 = cli_mod.main(
+        ["install", "--non-interactive", "--agent", "claude-code", "--quiet"]
+    )
+    assert rc2 == 0
+    assert captured["quiet"] is True
+
