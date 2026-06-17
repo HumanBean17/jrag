@@ -2,7 +2,7 @@
 
 A graph-native code intelligence layer for Java microservice estates, exposed to LLM agents via the **Model Context Protocol (MCP)**.
 
-The system extracts a deterministic property graph from Java source (tree-sitter), stores it in **Kuzu** (graph) alongside a **LanceDB** vector index (chunks), and exposes a deliberately small MCP surface — **five tools**: `search`, `find`, `describe`, `neighbors`, `resolve` — that collapse onto three primitive agent operations: **locate**, **inspect**, **walk**.
+The system extracts a deterministic property graph from Java source (tree-sitter), stores it in **LadybugDB** (graph) alongside a **LanceDB** vector index (chunks), and exposes a deliberately small MCP surface — **five tools**: `search`, `find`, `describe`, `neighbors`, `resolve` — that collapse onto three primitive agent operations: **locate**, **inspect**, **walk**.
 
 > **What this MCP is:** a **GPS for code navigation**, not a reasoning engine.
 > Agents use a simple loop:
@@ -21,9 +21,9 @@ For the design rationale, the GPS metaphor, and the full ontology, see [`docs/pa
 
 Generic code-search tools (grep, ctags, vector-only RAG) hit a ceiling on real Java microservice estates: they find files but lose the structure that makes a Spring/JAX-RS system navigable. This project is built around five choices that target that gap.
 
-- **Hybrid RAG + GraphRAG, not either-or.** Semantic recall (LanceDB chunk vectors) and structural navigation (Kuzu property graph) are composed in one surface. `search` finds candidate nodes by meaning; `neighbors` walks the exact edge you care about (`CALLS`, `IMPLEMENTS`, `INJECTS`, `DECLARES_ROUTE`, …). The agent picks the right primitive per step instead of being forced into pure-vector or pure-symbol search.
+- **Hybrid RAG + GraphRAG, not either-or.** Semantic recall (LanceDB chunk vectors) and structural navigation (LadybugDB property graph) are composed in one surface. `search` finds candidate nodes by meaning; `neighbors` walks the exact edge you care about (`CALLS`, `IMPLEMENTS`, `INJECTS`, `EXPOSES`, …). The agent picks the right primitive per step instead of being forced into pure-vector or pure-symbol search.
 
-- **A Java-tuned role model.** Symbols are labelled with stereotypes inferred from Spring and JAX-RS conventions — `CONTROLLER`, `SERVICE`, `REPOSITORY`, `CLIENT`, `PRODUCER`, `MAPPER`, `DTO`. Agents can ask "list controllers" or "who injects this repository" directly, instead of grep-ing for `@RestController` and hoping for the best. Roles drive both filtering (`find` with a `NodeFilter`) and ranking.
+- **A Java-tuned role model.** Symbols are labelled with stereotypes inferred from Spring and JAX-RS conventions — `CONTROLLER`, `SERVICE`, `REPOSITORY`, `COMPONENT`, `CONFIG`, `ENTITY`, `CLIENT`, `MAPPER`, `DTO`. Agents can ask "list controllers" or "who injects this repository" directly, instead of grep-ing for `@RestController` and hoping for the best. Roles drive both filtering (`find` with a `NodeFilter`) and ranking.
 
 - **Ranking specialized for Java codebases.** The composite ranker is aware of role, microservice, and FQN structure — not a generic BM25. A search for `"chat ingress"` surfaces controllers before utility classes; a search scoped to one microservice doesn't drown in matches from the other 19. Defaults are tuned on the bank-chat fixture and exposed in `docs/CONFIGURATION.md` for per-repo overrides.
 
@@ -71,7 +71,7 @@ All indexing lifecycle commands (`init`, `increment`, `reprocess`, `install`, `u
 
 If you prefer manual configuration, see [`docs/JAVA-CODEBASE-RAG-CLI.md`](./docs/JAVA-CODEBASE-RAG-CLI.md) for the full CLI reference.
 
-> **Stability disclaimer.** This package does **not** promise backward compatibility. MCP tool contracts, env vars, Lance/Kuzu schemas, config files, and Python APIs may change without a deprecation period. Track `main` and rebuild indexes when ontology or embedding settings change.
+> **Stability disclaimer.** This package does **not** promise backward compatibility. MCP tool contracts, env vars, Lance/LadybugDB schemas, config files, and Python APIs may change without a deprecation period. Track `main` and rebuild indexes when ontology or embedding settings change.
 
 ---
 
@@ -84,7 +84,7 @@ This repo ships a small multi-module Spring fixture under [`tests/bank-chat-syst
 git clone https://github.com/HumanBean17/java-codebase-rag
 cd java-codebase-rag
 
-# 2. Build the index (Lance vectors + Kuzu graph). First run downloads the
+# 2. Build the index (Lance vectors + LadybugDB graph). First run downloads the
 #    embedding model (~90 MB) and takes ~30-60s on the fixture.
 java-codebase-rag init --source-root tests/bank-chat-system --index-dir /tmp/bank-chat-index
 
@@ -99,7 +99,7 @@ Smoke-test the index with two checks (`search_lancedb` ships with the package):
 JAVA_CODEBASE_RAG_INDEX_DIR=/tmp/bank-chat-index \
   python -m search_lancedb "chat ingress controller" --table java --limit 3
 
-# Vector + graph expansion — proves Kuzu is wired in
+# Vector + graph expansion — proves LadybugDB is wired in
 JAVA_CODEBASE_RAG_INDEX_DIR=/tmp/bank-chat-index \
   python -m search_lancedb "chat ingress controller" --table java --limit 3 \
     --graph-expand --expand-depth 2
@@ -199,8 +199,8 @@ Run `java-codebase-rag --help` to list grouped subcommands. Operator playbook wi
 | Setup | `install` | Interactive setup wizard: config, MCP registration, skill/agent deployment, indexing. |
 | Setup | `update` | Refresh shipped artifacts (skill, agent, MCP entry) + incremental Lance/graph catch-up after pip upgrade. |
 | Lifecycle | `init` | First-time index. Refuses if artifacts already exist. |
-| Lifecycle | `increment` | CocoIndex catch-up + incremental Kuzu update. `--vectors-only` for Lance only. |
-| Lifecycle | `reprocess` | Full Lance + Kuzu rebuild. `--vectors-only` / `--graph-only` for a single phase. |
+| Lifecycle | `increment` | CocoIndex catch-up + incremental LadybugDB update. `--vectors-only` for Lance only. |
+| Lifecycle | `reprocess` | Full Lance + LadybugDB rebuild. `--vectors-only` / `--graph-only` for a single phase. |
 | Lifecycle | `erase` | Delete index artifacts. Requires `--yes` or TTY confirm. |
 | Introspection | `meta`, `tables`, `diagnose-ignore`, `unresolved-calls` | Health, table listing, ignore-layer diagnostics, receiver-failure call sites. |
 | Analysis | `analyze-pr` | Blast-radius / risk from a unified diff. |
@@ -235,7 +235,7 @@ python3 -m venv .venv
 
 The `cocoindex` package powers lifecycle commands that run the indexer (`init`, `increment`, `reprocess`, `erase`). Search and MCP navigation do not invoke it directly.
 
-The default embedding model is `sentence-transformers/all-MiniLM-L6-v2` (downloaded on first `init`). Override via the `EMBEDDING_MODEL` env var — see [`docs/CONFIGURATION.md` §1](./docs/CONFIGURATION.md#1-environment-variables).
+The default embedding model is `sentence-transformers/all-MiniLM-L6-v2` (downloaded on first `init`). Override via the `SBERT_MODEL` env var — see [`docs/CONFIGURATION.md` §1](./docs/CONFIGURATION.md#1-environment-variables).
 
 ---
 

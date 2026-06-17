@@ -47,7 +47,7 @@ rm -rf "$JAVA_CODEBASE_RAG_INDEX_DIR"
 mkdir -p "$JAVA_CODEBASE_RAG_INDEX_DIR"
 .venv/bin/python build_ast_graph.py \
   --source-root "$JAVA_CODEBASE_RAG_SOURCE_ROOT" \
-  --kuzu-path "$JAVA_CODEBASE_RAG_INDEX_DIR/code_graph.kuzu" --verbose 2>&1 | tee /tmp/verify_build.log
+  --ladybug-path "$JAVA_CODEBASE_RAG_INDEX_DIR/code_graph.lbug" --verbose 2>&1 | tee /tmp/verify_build.log
 
 # 2. Read the summary lines (last ~10 lines of the log)
 tail -12 /tmp/verify_build.log
@@ -515,11 +515,11 @@ cd /path/to/java-codebase-rag
 rm -rf /tmp/calib_index
 .venv/bin/python build_ast_graph.py \
   --source-root tests/bank-chat-system \
-  --kuzu-path /tmp/calib_index/code_graph.kuzu \
+  --ladybug-path /tmp/calib_index/code_graph.lbug \
   --verbose
 java-codebase-rag meta --source-root tests/bank-chat-system --index-dir /tmp/calib_index
 ```
 
-`build_ast_graph.py` still takes `--kuzu-path` (the Kuzu file). Point it at `<index-dir>/code_graph.kuzu` so it matches the layout `java-codebase-rag meta --index-dir` expects under that directory.
+`build_ast_graph.py` still takes `--ladybug-path` (the LadybugDB file). Point it at `<index-dir>/code_graph.lbug` so it matches the layout `java-codebase-rag meta --index-dir` expects under that directory.
 
 Current snapshot: `tests/bank-chat-system`, `chore/docs-sync @ 1fa1b28`, ontology **13**.

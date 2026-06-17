@@ -1161,8 +1161,11 @@ class LadybugGraph:
         )
         return [str(r["id"]) for r in rows2 if r.get("id")]
 
-    def find_callers(
-        self, needle: str, *,
+    def _walk_calls(
+        self,
+        needle: str,
+        *,
+        side: str,
         depth: int = 1,
         limit: int = 100,
         min_confidence: float = 0.0,
@@ -1170,6 +1173,17 @@ class LadybugGraph:
         module: str | None = None,
         microservice: str | None = None,
     ) -> list[CallEdge]:
+        """BFS the CALLS graph outward from ``needle`` along one relationship end.
+
+        ``side="callers"`` treats the needle as the callee: the frontier matches
+        the ``callee`` end and discovered/expanded/external-filtered nodes are the
+        ``caller`` (src) end. ``side="callees"`` is the mirror. The two public
+        methods differ only in that orientation, so the BFS body is shared here.
+        """
+        if side == "callers":
+            scope_alias, frontier_end, discovered = "caller", "callee", "src"
+        else:
+            scope_alias, frontier_end, discovered = "callee", "caller", "dst"
         frontier = self._method_ids_for_call_graph_needle(needle, limit=max(limit, 50))
         if not frontier:
             return []
@@ -1182,8 +1196,8 @@ class LadybugGraph:
                 "frontier": list(frontier),
                 "minc": float(min_confidence),
             }
-            sc = _scope_filters("caller", module=module, microservice=microservice, params=params)
-            wh_parts = ["callee.id IN $frontier", "c.confidence >= $minc"]
+            sc = _scope_filters(scope_alias, module=module, microservice=microservice, params=params)
+            wh_parts = [f"{frontier_end}.id IN $frontier", "c.confidence >= $minc"]
             wh_parts.extend(sc)
             wh = " AND ".join(wh_parts)
             q = (
@@ -1197,22 +1211,40 @@ class LadybugGraph:
             next_frontier: list[str] = []
             for row in self._rows(q, params):
                 ce = _row_to_call_edge(row)
-                # Filter only discovered callers (src). Needle may be external
-                # (e.g. java.util.List#add) while still listing internal callers.
-                if exclude_external and _is_external_fqn(ce.src.fqn):
+                # The needle itself may be external (e.g. java.util.List#add);
+                # filter only the discovered end so internal callers/callees
+                # that touch it are still surfaced.
+                disc_fqn = ce.src.fqn if discovered == "src" else ce.dst.fqn
+                disc_id = ce.src.id if discovered == "src" else ce.dst.id
+                if exclude_external and _is_external_fqn(disc_fqn):
                     continue
                 key = (ce.src.id, ce.dst.id, ce.call_site_line, ce.call_site_byte)
                 if key in seen:
                     continue
                 seen.add(key)
                 out.append(ce)
-                next_frontier.append(ce.src.id)
+                next_frontier.append(disc_id)
                 if len(out) >= limit:
                     return out
             frontier = list(dict.fromkeys(next_frontier))
             if not frontier:
                 break
         return out
+
+    def find_callers(
+        self, needle: str, *,
+        depth: int = 1,
+        limit: int = 100,
+        min_confidence: float = 0.0,
+        exclude_external: bool = True,
+        module: str | None = None,
+        microservice: str | None = None,
+    ) -> list[CallEdge]:
+        return self._walk_calls(
+            needle, side="callers", depth=depth, limit=limit,
+            min_confidence=min_confidence, exclude_external=exclude_external,
+            module=module, microservice=microservice,
+        )
 
     def find_callees(
         self, needle: str, *,
@@ -1223,49 +1255,11 @@ class LadybugGraph:
         module: str | None = None,
         microservice: str | None = None,
     ) -> list[CallEdge]:
-        frontier = self._method_ids_for_call_graph_needle(needle, limit=max(limit, 50))
-        if not frontier:
-            return []
-        caller_proj = ", ".join(f"caller.{c} AS caller_{c}" for c in _SYM_COLS)
-        callee_proj = ", ".join(f"callee.{c} AS callee_{c}" for c in _SYM_COLS)
-        out: list[CallEdge] = []
-        seen: set[tuple[str, str, int, int]] = set()
-        for _ in range(max(1, int(depth))):
-            params: dict[str, Any] = {
-                "frontier": list(frontier),
-                "minc": float(min_confidence),
-            }
-            sc = _scope_filters("callee", module=module, microservice=microservice, params=params)
-            wh_parts = ["caller.id IN $frontier", "c.confidence >= $minc"]
-            wh_parts.extend(sc)
-            wh = " AND ".join(wh_parts)
-            q = (
-                f"MATCH (caller:Symbol)-[c:CALLS]->(callee:Symbol) WHERE {wh} "
-                f"RETURN {caller_proj}, {callee_proj}, "
-                f"c.call_site_line AS call_site_line, c.call_site_byte AS call_site_byte, "
-                f"c.arg_count AS arg_count, c.confidence AS confidence, c.strategy AS strategy, "
-                f"c.source AS source, c.resolved AS resolved "
-                f"LIMIT {int(limit) * 8}"
-            )
-            next_frontier: list[str] = []
-            for row in self._rows(q, params):
-                ce = _row_to_call_edge(row)
-                # Filter only discovered callees (dst). Needle may be external while
-                # still listing non-external outbound calls when any exist.
-                if exclude_external and _is_external_fqn(ce.dst.fqn):
-                    continue
-                key = (ce.src.id, ce.dst.id, ce.call_site_line, ce.call_site_byte)
-                if key in seen:
-                    continue
-                seen.add(key)
-                out.append(ce)
-                next_frontier.append(ce.dst.id)
-                if len(out) >= limit:
-                    return out
-            frontier = list(dict.fromkeys(next_frontier))
-            if not frontier:
-                break
-        return out
+        return self._walk_calls(
+            needle, side="callees", depth=depth, limit=limit,
+            min_confidence=min_confidence, exclude_external=exclude_external,
+            module=module, microservice=microservice,
+        )
 
     def expand_methods(
         self, fqns: list[str], *, depth: int = 1,

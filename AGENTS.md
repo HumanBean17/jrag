@@ -74,8 +74,8 @@ when needed.
 |------|------|
 | `server.py` | MCP stdio server. Every `@mcp.tool` lives here. |
 | `search_lancedb.py` | Vector / hybrid / graph-expanded search; ranking. |
-| `build_ast_graph.py` | Tree-sitter → Kuzu graph builder (full rebuild). Owns `pass1`–`pass6` (`pass5` emits `HTTP_CALLS` / `ASYNC_CALLS` caller edges; `pass6_match_edges` resolves cross-service / intra-service / ambiguous / phantom / unresolved match outcomes — ontology 7). |
-| `kuzu_queries.py` | Read-only Cypher helpers used by the server. Includes `meta()` decoder for the Kuzu MAP-as-STRING JSON-blob columns. |
+| `build_ast_graph.py` | Tree-sitter → LadybugDB graph builder (full rebuild). Owns `pass1`–`pass6` (`pass5` emits `HTTP_CALLS` / `ASYNC_CALLS` caller edges; `pass6_match_edges` resolves cross-service / intra-service / ambiguous / phantom / unresolved match outcomes — ontology 7). |
+| `ladybug_queries.py` | Read-only Cypher helpers used by the server. Includes `meta()` decoder for the LadybugDB MAP-as-STRING JSON-blob columns. |
 | `ast_java.py` | Tree-sitter Java parsing, role/capability inference, `_string_value_atoms` helper (shared by route/client/producer extractors), `_collect_outgoing_calls` for caller-side detection. |
 | `graph_enrich.py` | `module` / `microservice` resolution, `BrownfieldOverrides` (route + role + capability + http client + async producer), meta-annotation walk, `resolve_routes_for_method` / `resolve_http_client_for_method` / `resolve_async_producer_for_method`. |
 | `java_ontology.py` | Source of truth for `VALID_ROLES`, `VALID_CAPABILITIES`, `VALID_CLIENT_KINDS`, `VALID_HTTP_CALL_STRATEGIES`, `VALID_ASYNC_CALL_STRATEGIES`, `VALID_HTTP_CALL_MATCHES`. |
@@ -90,7 +90,7 @@ when needed.
 
 ## Test layout
 
-- `tests/conftest.py` — session-scoped Kuzu graph fixture.
+- `tests/conftest.py` — session-scoped LadybugDB graph fixture.
 - `tests/bank-chat-system/` — deterministic Java corpus (fixture, not production model).
 - `tests/fixtures/call_graph_smoke/` — mini Maven tree calibrated against the call-graph resolver.
 - `tests/fixtures/brownfield_route_stubs/` — `@CodebaseRoute` / `@CodebaseRoutes` source stubs (PR-A3).
@@ -188,7 +188,7 @@ template):
   `VALID_ASYNC_CALL_STRATEGIES`, `VALID_HTTP_CALL_MATCHES`,
   `VALID_ROUTE_FRAMEWORKS`, `VALID_ROUTE_KINDS`, `VALID_PRODUCER_KINDS`,
   `VALID_RESOLVE_REASONS`, `VALID_UNRESOLVED_CALL_REASONS`.
-- Schema changes that affect the Lance index or Kuzu graph need a
+- Schema changes that affect the Lance index or LadybugDB graph need a
   matching update to the README "Re-index required" callout. Bump
   `ontology_version` when enrichment semantics change (currently **17**).
 - Brownfield is a first-class surface: any new auto-detection (route,
@@ -199,10 +199,10 @@ template):
   union when any brownfield layer fires on a method (single network packet
   → single edge). See `plans/completed/PLAN-TIER1B-COMPLETION.md` §
   "Caller-side composition divergence".
-- Kuzu's Python binder rejects `dict` for `MAP` columns. Store all
+- LadybugDB's Python binder rejects `dict` for `MAP` columns. Store all
   map-shaped graph_meta data (`routes_by_framework`, `routes_by_layer`,
   `http_calls_by_strategy`, `async_calls_by_strategy`, etc.) as `STRING`
-  JSON blobs and decode in `kuzu_queries.meta()`.
+  JSON blobs and decode in `ladybug_queries.meta()`.
 - `server.py` is a stdio MCP server: anything reachable from a tool
   handler must not write to **stdout** (that's the JSON-RPC transport).
   Diagnostics go to stderr.
@@ -216,10 +216,10 @@ template):
   support. `BrownfieldOverrides` already holds route, role, capability,
   http client, and async producer dicts — extend it in place.
 
-## Kuzu Cypher pitfalls
+## LadybugDB Cypher pitfalls
 
-When adding or editing Cypher run against Kuzu (for example in
-`kuzu_queries.py`, `mcp_v2.py`, or any `KuzuGraph._rows` caller):
+When adding or editing Cypher run against LadybugDB (for example in
+`ladybug_queries.py`, `mcp_v2.py`, or any `LadybugGraph._rows` caller):
 
 - **Do not filter relationship types with** `label(e) IN $list` **or**
   `label(e) IN ["A","B"]` **in** `WHERE`. On supported versions this can
@@ -252,7 +252,7 @@ When adding or editing Cypher run against Kuzu (for example in
   ```bash
   rm -rf /tmp/check && .venv/bin/python build_ast_graph.py \
     --source-root tests/bank-chat-system \
-    --kuzu-path /tmp/check/code_graph.kuzu --verbose
+    --ladybug-path /tmp/check/code_graph.lbug --verbose
   ```
 
 ## Commit and PR
@@ -289,7 +289,7 @@ When adding or editing Cypher run against Kuzu (for example in
 ## Cursor Cloud specific instructions
 
 This is a self-contained Python project — no external services
-(no Postgres, Kafka, Docker) are needed. All storage (Kuzu, LanceDB,
+(no Postgres, Kafka, Docker) are needed. All storage (LadybugDB, LanceDB,
 CocoIndex state) is embedded/file-based.
 
 ### Environment
@@ -317,12 +317,12 @@ first run. They are not required for normal development.
 
 ### Hello-world verification
 
-Build the Kuzu graph from the test fixture and inspect it:
+Build the LadybugDB graph from the test fixture and inspect it:
 
 ```bash
 rm -rf /tmp/check && .venv/bin/python build_ast_graph.py \
   --source-root tests/bank-chat-system \
-  --kuzu-path /tmp/check/code_graph.kuzu --verbose
+  --ladybug-path /tmp/check/code_graph.lbug --verbose
 .venv/bin/java-codebase-rag meta \
   --source-root tests/bank-chat-system --index-dir /tmp/check
 ```

@@ -125,15 +125,15 @@ Use these strings **verbatim** in `neighbors(..., edge_types=[...])`.
 
 ### NodeFilter (`find`, `search.filter`, `neighbors.filter`)
 
-For `find`, `filter` is required — `{}` means no predicates. **Strict frame:** unknown keys or inapplicable populated fields → `success=false`.
+For `find`, `filter` is required — `{}` means no predicates. **Strict frame:** unknown keys or inapplicable populated fields → `success=false`; invalid enum values (e.g. wrong case) are rejected earlier at the schema layer with the valid set listed.
 
 | Applicable to | Keys |
 | ------------- | ---- |
 | All kinds | `microservice`, `module` |
 | **symbol** only | `role`, `exclude_roles`, `annotation`, `capability`, `fqn_prefix`, `symbol_kind`, `symbol_kinds` |
 | **route** only | `http_method`, `path_prefix`, `framework` |
-| **client** only | `client_kind`, `target_service`, `target_path_prefix`, `http_method` |
-| **producer** only | `producer_kind`, `topic_prefix` |
+| **client** only | `source_layer`, `client_kind`, `target_service`, `target_path_prefix`, `http_method` |
+| **producer** only | `source_layer`, `producer_kind`, `topic_prefix` |
 
 No wildcards in prefix fields — use `search(query=…)` for ranked text.
 
@@ -166,8 +166,8 @@ Exclude `DTO`, `OTHER`, `MAPPER` with `exclude_roles` when tracing business logi
 
 **Symbol kinds:** `class`, `interface`, `enum`, `record`, `annotation`, `method`, `constructor`.
 
-**Route frameworks:** `spring_mvc`, `webflux`, `kafka`, `rabbitmq`, `jms`, `stream`, `codebase_async_route`, …
-**Client kinds:** `feign_method`, `rest_template`, `web_client`. **Producer kinds:** `kafka_send`, `stream_bridge_send`.
+**Route frameworks:** `spring_mvc`, `webflux`. (Route *kinds* are `http_endpoint`, `http_consumer`, `kafka_topic`, `rabbit_queue`, `jms_destination`, `stream_binding`.)
+**Client kinds:** `feign_method`, `rest_template`, `web_client`. **Producer kinds:** `kafka_send`, `stream_bridge_send`. **Source layers (client/producer):** `builtin`, `layer_a_meta`, `layer_b_ann`, `layer_b_fqn`, `layer_c_source`.
 **Match types:** `cross_service`, `intra_service`, `ambiguous`, `phantom`, `unresolved`.
 
 ---

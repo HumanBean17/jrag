@@ -55,10 +55,9 @@ def test_39_builtin_default_ignores_class_file(tmp_path: Path) -> None:
     f = root / "Foo.class"
     f.write_text("", encoding="utf-8")
     li = LayeredIgnore(root, use_gitignore=False)
-    ign, layer = li.is_ignored(f)
-    assert ign is True
-    assert layer is not None
-    assert layer.source == "builtin_default"
+    assert li.is_ignored(f) is True
+    d = li.diagnose_dict(f)
+    assert d["layer"] == "builtin_default"
 
 
 def test_40_project_root_negation_unignores(tmp_path: Path) -> None:
@@ -70,7 +69,7 @@ def test_40_project_root_negation_unignores(tmp_path: Path) -> None:
     f = root / "Foo.class"
     f.write_text("", encoding="utf-8")
     li = LayeredIgnore(root, use_gitignore=False)
-    assert li.is_ignored(f)[0] is False
+    assert li.is_ignored(f) is False
 
 
 def test_41_nested_ignore_only_under_subtree(tmp_path: Path) -> None:
@@ -84,8 +83,8 @@ def test_41_nested_ignore_only_under_subtree(tmp_path: Path) -> None:
     sibling.parent.mkdir(parents=True)
     sibling.write_text("class GeneratedBar {}\n", encoding="utf-8")
     li = LayeredIgnore(root, use_gitignore=False)
-    assert li.is_ignored(hit)[0] is True
-    assert li.is_ignored(sibling)[0] is False
+    assert li.is_ignored(hit) is True
+    assert li.is_ignored(sibling) is False
 
 
 def test_42_innermost_nested_reincludes(tmp_path: Path) -> None:
@@ -100,7 +99,7 @@ def test_42_innermost_nested_reincludes(tmp_path: Path) -> None:
     f.parent.mkdir(parents=True, exist_ok=True)
     f.write_text("class GeneratedX {}\n", encoding="utf-8")
     li = LayeredIgnore(root, use_gitignore=False)
-    assert li.is_ignored(f)[0] is False
+    assert li.is_ignored(f) is False
 
 
 def test_43_gitignore_layer(tmp_path: Path) -> None:
@@ -111,9 +110,10 @@ def test_43_gitignore_layer(tmp_path: Path) -> None:
     f.parent.mkdir(parents=True)
     f.write_text("class X {}\n", encoding="utf-8")
     li_on = LayeredIgnore(root, use_gitignore=True)
-    assert li_on.is_ignored(f)[0] is True
-    assert li_on.is_ignored(f)[1] is not None
-    assert li_on.is_ignored(f)[1].source == "gitignore"
+    assert li_on.is_ignored(f) is True
+    d = li_on.diagnose_dict(f)
+    assert d["ignored"] is True
+    assert d["layer"] == "gitignore"
 
 
 def test_44_gitignore_disabled(tmp_path: Path) -> None:
@@ -124,7 +124,7 @@ def test_44_gitignore_disabled(tmp_path: Path) -> None:
     f.parent.mkdir(parents=True)
     f.write_text("class X {}\n", encoding="utf-8")
     li = LayeredIgnore(root, use_gitignore=False)
-    assert li.is_ignored(f)[0] is False
+    assert li.is_ignored(f) is False
 
 
 def test_45_diagnose_nested_cites_line(tmp_path: Path) -> None:
@@ -151,7 +151,7 @@ def test_46_outside_project_not_ignored(tmp_path: Path) -> None:
     outside = tmp_path / "outside" / "Foo.java"
     outside.parent.mkdir(parents=True)
     outside.write_text("class Foo {}\n", encoding="utf-8")
-    assert li.is_ignored(outside) == (False, None)
+    assert li.is_ignored(outside) is False
 
 
 def test_bank_chat_java_count_no_lancedb_ignore_gitignore_off_matches_legacy(
@@ -195,7 +195,7 @@ def test_out_as_java_package_dir_is_walked_when_no_build_indicator_sibling(
     li = LayeredIgnore(root, use_gitignore=False)
     files = list(iter_java_source_files(root, ignore=li))
     assert f in files
-    ign, _ = li.is_ignored(f)
+    ign = li.is_ignored(f)
     assert ign is False
 
 

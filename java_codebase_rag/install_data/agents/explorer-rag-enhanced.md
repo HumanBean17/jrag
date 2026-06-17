@@ -151,15 +151,15 @@ Simple types in parentheses; generics erased. No spaces after commas. No-arg: `(
 
 ### Shared NodeFilter
 
-For `find`, `filter` is required — `{}` means no predicates. **Strict frame:** unknown keys or inapplicable populated fields → `success=false`.
+For `find`, `filter` is required — `{}` means no predicates. **Strict frame:** unknown keys or inapplicable populated fields → `success=false`; invalid enum values (e.g. wrong case) are rejected earlier at the schema layer with the valid set listed.
 
 | Keys | Applies to |
 | ---- | ---------- |
 | `microservice`, `module` | All kinds |
 | `role`, `exclude_roles`, `annotation`, `capability`, `fqn_prefix`, `symbol_kind`, `symbol_kinds` | **symbol** |
 | `http_method`, `path_prefix`, `framework` | **route** |
-| `client_kind`, `target_service`, `target_path_prefix`, `http_method` | **client** |
-| `producer_kind`, `topic_prefix` | **producer** |
+| `source_layer`, `client_kind`, `target_service`, `target_path_prefix`, `http_method` | **client** |
+| `source_layer`, `producer_kind`, `topic_prefix` | **producer** |
 
 No wildcards in prefix fields — use `search(query=…)` for fuzzy text.
 
