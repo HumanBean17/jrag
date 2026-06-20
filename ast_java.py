@@ -14,8 +14,8 @@ from __future__ import annotations
 
 import posixpath
 import sys
+import threading
 from dataclasses import dataclass, field
-from functools import lru_cache
 from typing import Iterable
 
 import tree_sitter_java as _ts_java
@@ -215,10 +215,23 @@ _ANON_SUPER_AS_INTERFACE: frozenset[str] = frozenset({
 })
 
 
-@lru_cache(maxsize=1)
+# tree-sitter's ``Parser`` mutates internal state during ``parse()`` and is NOT
+# thread-safe, so each OS thread gets its own instance. ``parse_java`` is called
+# concurrently from worker threads when indexing runs with cocoindex's inflight
+# parallelism — both directly (java_index_flow_lancedb.py: process_java_file
+# offloads parse+enrich to asyncio.to_thread) and transitively
+# (graph_enrich.collect_annotation_meta_chain -> _collect_annotation_decl_index
+# -> parse_java, reached from enrich_chunk). The ``Language`` is immutable and
+# shared; per-thread ``Parser`` construction is lazy and cheap (once per thread),
+# which also preserves parse parallelism instead of serializing it.
+_parser_tls = threading.local()
+
+
 def _parser() -> Parser:
-    lang = Language(_ts_java.language())
-    return Parser(lang)
+    p = getattr(_parser_tls, "parser", None)
+    if p is None:
+        _parser_tls.parser = p = Parser(Language(_ts_java.language()))
+    return p
 
 
 # ---------- dataclasses ----------

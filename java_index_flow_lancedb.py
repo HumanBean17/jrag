@@ -73,16 +73,6 @@ else:
 
 splitter = RecursiveSplitter()
 
-# ``parse_java`` (ast_java.parse_java) reuses a process-wide, lru-cached
-# tree-sitter ``Parser`` (ast_java._parser) whose ``parse()`` mutates internal
-# parser state and is NOT safe to call concurrently from multiple threads.
-# ``process_java_file`` runs parsing + per-chunk enrichment off the event loop
-# (vectors perf lever #2) so the loop stays free to feed the embedder's batching
-# queue while a file is being parsed; this lock serializes the non-reentrant
-# Parser across those worker threads. Parsing is cheap (ms-scale) so the cost
-# of serializing it is negligible — the win is event-loop responsiveness.
-_PARSE_LOCK = threading.Lock()
-
 # cocoindex 1.0.7 schedules ``table.optimize()`` (a LanceDB Rewrite/compaction
 # transaction) as a *background* asyncio task after every
 # ``num_transactions_before_optimize`` mutation batches (default 50). That
@@ -331,13 +321,14 @@ def _parse_and_enrich_java(
     parses + enriches, the event loop is free to drive other files and keep the
     embedder's batching queue fed.
 
-    ``parse_java`` is serialized by ``_PARSE_LOCK`` (shared non-thread-safe
-    tree-sitter ``Parser``). ``enrich_chunk`` is pure-Python over the now
-    immutable AST — its ``lru_cache`` reads are thread-safe under the GIL — so
-    it runs outside the lock and can overlap across files.
+    Thread-safety: ``parse_java`` uses a per-thread tree-sitter ``Parser``
+    (see ``ast_java._parser``), so it is safe to call concurrently from these
+    worker threads — including the transitive ``parse_java`` that ``enrich_chunk``
+    triggers via ``collect_annotation_meta_chain`` → ``_collect_annotation_decl_index``.
+    ``enrich_chunk`` is otherwise pure-Python over the now-immutable AST; its
+    ``lru_cache`` reads are thread-safe under the GIL.
     """
-    with _PARSE_LOCK:
-        ast = parse_java(content_bytes)
+    ast = parse_java(content_bytes)
     return [
         enrich_chunk(
             ast,
@@ -385,7 +376,7 @@ async def process_java_file(
 
     # (vectors perf lever #2) parse + enrich off the event loop so the loop can
     # keep the embedder's batching queue fed while this file is being parsed.
-    # ``parse_java`` is lock-serialized internally (shared tree-sitter Parser).
+    # parse_java is thread-safe (per-thread tree-sitter Parser in ast_java).
     enrichments = await asyncio.to_thread(
         _parse_and_enrich_java, content_bytes, chunks, rel, project_root
     )
