@@ -16,6 +16,7 @@ Usage:
 """
 from __future__ import annotations
 
+import asyncio
 import inspect
 import os
 import sys
@@ -71,6 +72,16 @@ else:
     EMBEDDER = coco.ContextKey[SentenceTransformerEmbedder]("java_lance_embedder")
 
 splitter = RecursiveSplitter()
+
+# ``parse_java`` (ast_java.parse_java) reuses a process-wide, lru-cached
+# tree-sitter ``Parser`` (ast_java._parser) whose ``parse()`` mutates internal
+# parser state and is NOT safe to call concurrently from multiple threads.
+# ``process_java_file`` runs parsing + per-chunk enrichment off the event loop
+# (vectors perf lever #2) so the loop stays free to feed the embedder's batching
+# queue while a file is being parsed; this lock serializes the non-reentrant
+# Parser across those worker threads. Parsing is cheap (ms-scale) so the cost
+# of serializing it is negligible — the win is event-loop responsiveness.
+_PARSE_LOCK = threading.Lock()
 
 # cocoindex 1.0.7 schedules ``table.optimize()`` (a LanceDB Rewrite/compaction
 # transaction) as a *background* asyncio task after every
@@ -306,6 +317,39 @@ async def coco_lifespan(builder: coco.EnvironmentBuilder) -> AsyncIterator[None]
     yield
 
 
+def _parse_and_enrich_java(
+    content_bytes: bytes,
+    chunks: list[Any],
+    rel: str,
+    project_root: Path,
+) -> list[Any]:
+    """Parse one Java file and enrich every chunk, off the event loop.
+
+    Returns a list of :class:`graph_enrich.ChunkEnrichment` aligned 1:1 with
+    ``chunks``. Intended to run via ``asyncio.to_thread`` from
+    ``process_java_file`` (vectors perf lever #2): while the worker thread
+    parses + enriches, the event loop is free to drive other files and keep the
+    embedder's batching queue fed.
+
+    ``parse_java`` is serialized by ``_PARSE_LOCK`` (shared non-thread-safe
+    tree-sitter ``Parser``). ``enrich_chunk`` is pure-Python over the now
+    immutable AST — its ``lru_cache`` reads are thread-safe under the GIL — so
+    it runs outside the lock and can overlap across files.
+    """
+    with _PARSE_LOCK:
+        ast = parse_java(content_bytes)
+    return [
+        enrich_chunk(
+            ast,
+            chunk_start_byte=ch.start.byte_offset,
+            chunk_end_byte=ch.end.byte_offset,
+            file_path=rel,
+            project_root=project_root,
+        )
+        for ch in chunks
+    ]
+
+
 @coco.fn(memo=True)
 async def process_java_file(
     file: localfs.File,
@@ -326,6 +370,9 @@ async def process_java_file(
 
     language = detect_code_language(filename=file.file_path.path.name) or "text"
     cs, mn, ov = JAVA_CHUNK
+    # ``splitter.split`` stays inline: the module-level ``RecursiveSplitter``
+    # shares one Rust object, so keeping split on the event loop preserves its
+    # existing single-threaded access (no new cross-file concurrency hazard).
     chunks = splitter.split(
         content,
         cs,
@@ -335,18 +382,21 @@ async def process_java_file(
     )
     rel = file.file_path.path.as_posix()
     content_bytes = content.encode("utf-8", errors="replace")
-    ast = parse_java(content_bytes)
 
-    for ch in chunks:
+    # (vectors perf lever #2) parse + enrich off the event loop so the loop can
+    # keep the embedder's batching queue fed while this file is being parsed.
+    # ``parse_java`` is lock-serialized internally (shared tree-sitter Parser).
+    enrichments = await asyncio.to_thread(
+        _parse_and_enrich_java, content_bytes, chunks, rel, project_root
+    )
+    # (vectors perf lever #1) embed all chunks concurrently so the batched
+    # embedder groups them into one ``model.encode(...)`` (max_batch_size=64)
+    # instead of N serial batch-of-1 calls. Dominant win for ``increment``
+    # (few changed files → little cross-file concurrency → otherwise no batching).
+    embeddings = await asyncio.gather(*(embedder.embed(ch.text) for ch in chunks))
+
+    for ch, enrich, emb in zip(chunks, enrichments, embeddings):
         rs, re = chunk_key_range(ch)
-        enrich = enrich_chunk(
-            ast,
-            chunk_start_byte=ch.start.byte_offset,
-            chunk_end_byte=ch.end.byte_offset,
-            file_path=rel,
-            project_root=project_root,
-        )
-        emb = await embedder.embed(ch.text)
         table.declare_row(
             row=JavaLanceChunk(
                 id=str(uuid.uuid4()),
@@ -401,9 +451,11 @@ async def process_sql_file(
     )
     rel = file.file_path.path.as_posix()
 
-    for ch in chunks:
+    # (vectors perf lever #1) embed chunks concurrently → batched encode.
+    embeddings = await asyncio.gather(*(embedder.embed(ch.text) for ch in chunks))
+
+    for ch, emb in zip(chunks, embeddings):
         rs, re = chunk_key_range(ch)
-        emb = await embedder.embed(ch.text)
         table.declare_row(
             row=SqlLanceChunk(
                 id=str(uuid.uuid4()),
@@ -448,9 +500,11 @@ async def process_yaml_file(
     )
     rel = file.file_path.path.as_posix()
 
-    for ch in chunks:
+    # (vectors perf lever #1) embed chunks concurrently → batched encode.
+    embeddings = await asyncio.gather(*(embedder.embed(ch.text) for ch in chunks))
+
+    for ch, emb in zip(chunks, embeddings):
         rs, re = chunk_key_range(ch)
-        emb = await embedder.embed(ch.text)
         table.declare_row(
             row=YamlLanceChunk(
                 id=str(uuid.uuid4()),
