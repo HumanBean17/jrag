@@ -51,7 +51,7 @@ from java_index_v1_common import (
 )
 from path_filtering import LayeredIgnore
 from ast_java import ONTOLOGY_VERSION, parse_java
-from graph_enrich import enrich_chunk
+from graph_enrich import collect_annotation_meta_chain, enrich_chunk, load_brownfield_overrides
 
 # Older cocoindex (e.g. 1.0.0a43) uses ``tracked=False``; newer releases renamed
 # the flag to ``detect_change`` (default False) and reject ``tracked``.
@@ -546,6 +546,26 @@ async def app_main() -> None:
     )
 
     project_root = coco.use_context(PROJECT_ROOT)
+    # Warm per-project enrichment caches ONCE on the event-loop thread, BEFORE
+    # coco.mount_each fans files into worker threads. collect_annotation_meta_chain
+    # and load_brownfield_overrides are lru_cached per (resolved) project root;
+    # without warming, the first wave of concurrent process_java_file worker
+    # threads each cold-miss and redundantly walk+parse the ENTIRE project (a
+    # thundering herd that would offset the embedding-batching win on large
+    # repos — perf lever #2 made enrich concurrent). With warming, every worker
+    # hits a populated cache (lru_cache reads are thread-safe). Key derivation
+    # mirrors enrich_chunk exactly so the warmed entries are the ones workers hit.
+    try:
+        load_brownfield_overrides(project_root)
+        try:
+            prs = str(Path(project_root).resolve())
+        except OSError:
+            prs = str(project_root)
+        collect_annotation_meta_chain(prs)
+    except Exception:
+        # Warm-up must never break indexing — a failure just means workers
+        # cold-miss lazily (the pre-warming behavior). Swallow and continue.
+        pass
     _ignore = LayeredIgnore(project_root)
     _walk_excludes = _ignore.cocoindex_excluded_patterns()
     # Emit ONE approximate total so the parent's renderer can show a determinate
