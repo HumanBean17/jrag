@@ -1,0 +1,514 @@
+{
+  "node_count": 959,
+  "edge_counts": {
+    "EXTENDS": 18,
+    "IMPLEMENTS": 21,
+    "INJECTS": 94,
+    "DECLARES": 606,
+    "OVERRIDES": 38,
+    "CALLS": 678,
+    "UNRESOLVED_AT": 227
+  },
+  "graph_meta": {
+    "ontology_version": 17,
+    "built_at": 1782110216,
+    "source_root": "/Users/dmitry/Desktop/CursorProjects/java-enterprise-codebase-rag/tests/bank-chat-system",
+    "counts_json": "{packages: 29, files: 130, types: 140, members: 606, phantoms: 54, extends: 18, implements: 21, injects: 94, declares: 606, overrides: 38, calls: 678, routes: 29, exposes: 15, clients: 8, declares_client: 8, producers: 9, declares_producer: 9, http_calls: 8, async_calls: 9}"
+  },
+  "sampled_edges": {
+    "EXTENDS": [
+      [
+        "ad9f9b25470043e863941d7623f4281fd1643934",
+        "f479db6c7da16352b33070ec9b13ee11e88176f0",
+        {
+          "_SRC": {
+            "offset": 190,
+            "table": 0
+          },
+          "_DST": {
+            "offset": 909,
+            "table": 0
+          },
+          "_LABEL": "EXTENDS",
+          "_ID": {
+            "offset": 0,
+            "table": 6
+          },
+          "source_file": "chat-assign/src/main/java/com/bank/chat/assign/repo/AssignChatRepository.java",
+          "dst_name": "JpaRepository",
+          "dst_fqn": "org.springframework.data.jpa.repository.JpaRepository",
+          "resolved": false
+        }
+      ],
+      [
+        "8e04e698d01026f86d860ac8e5edf808dfdffdb9",
+        "f479db6c7da16352b33070ec9b13ee11e88176f0",
+        {
+          "_SRC": {
+            "offset": 191,
+            "table": 0
+          },
+          "_DST": {
+            "offset": 909,
+            "table": 0
+          },
+          "_LABEL": "EXTENDS",
+          "_ID": {
+            "offset": 1,
+            "table": 6
+          },
+          "source_file": "chat-assign/src/main/java/com/bank/chat/assign/repo/AssignSplitRepository.java",
+          "dst_name": "JpaRepository",
+          "dst_fqn": "org.springframework.data.jpa.repository.JpaRepository",
+          "resolved": false
+        }
+      ],
+      [
+        "2152d3eeccb9cc139bd2f41259ff193e30ebffc2",
+        "f479db6c7da16352b33070ec9b13ee11e88176f0",
+        {
+          "_SRC": {
+            "offset": 192,
+            "table": 0
+          },
+          "_DST": {
+            "offset": 909,
+            "table": 0
+          },
+          "_LABEL": "EXTENDS",
+          "_ID": {
+            "offset": 2,
+            "table": 6
+          },
+          "source_file": "chat-assign/src/main/java/com/bank/chat/assign/repo/AssignOperatorSessionRepository.java",
+          "dst_name": "JpaRepository",
+          "dst_fqn": "org.springframework.data.jpa.repository.JpaRepository",
+          "resolved": false
+        }
+      ]
+    ],
+    "IMPLEMENTS": [
+      [
+        "cabe9aec56202fdedae6ad64bde83a01449b9d84",
+        "3d3a9d206733cdc298529a59963e04b7ea6ec19d",
+        {
+          "_SRC": {
+            "offset": 187,
+            "table": 0
+          },
+          "_DST": {
+            "offset": 908,
+            "table": 0
+          },
+          "_LABEL": "IMPLEMENTS",
+          "_ID": {
+            "offset": 0,
+            "table": 8
+          },
+          "source_file": "chat-assign/src/main/java/com/bank/chat/assign/domain/AssignOperatorSplitEntity.java",
+          "dst_name": "Serializable",
+          "dst_fqn": "java.io.Serializable",
+          "resolved": false
+        }
+      ],
+      [
+        "3137c0434a3514545193ca7a89f2ee05bfc83bc8",
+        "9d2db7ab6598890c122e081ba40fe0d28c6f6f0f",
+        {
+          "_SRC": {
+            "offset": 220,
+            "table": 0
+          },
+          "_DST": {
+            "offset": 222,
+            "table": 0
+          },
+          "_LABEL": "IMPLEMENTS",
+          "_ID": {
+            "offset": 1,
+            "table": 8
+          },
+          "source_file": "chat-core/chat-engine/src/main/java/com/bank/chat/engine/pipeline/ClientSegmentFilter.java",
+          "dst_name": "EventFilter",
+          "dst_fqn": "com.bank.chat.engine.pipeline.EventFilter",
+          "resolved": true
+        }
+      ],
+      [
+        "a1aed4824d920460874f718d400b51b9e4e6d306",
+        "9d2db7ab6598890c122e081ba40fe0d28c6f6f0f",
+        {
+          "_SRC": {
+            "offset": 221,
+            "table": 0
+          },
+          "_DST": {
+            "offset": 222,
+            "table": 0
+          },
+          "_LABEL": "IMPLEMENTS",
+          "_ID": {
+            "offset": 2,
+            "table": 8
+          },
+          "source_file": "chat-core/chat-engine/src/main/java/com/bank/chat/engine/pipeline/EventTypeFilter.java",
+          "dst_name": "EventFilter",
+          "dst_fqn": "com.bank.chat.engine.pipeline.EventFilter",
+          "resolved": true
+        }
+      ]
+    ],
+    "INJECTS": [
+      [
+        "4d6ea83c3054e046135b09af4f84c24f62a0d704",
+        "a0af47515c78a6f764922496fc865c3ab7ba2f59",
+        {
+          "_SRC": {
+            "offset": 165,
+            "table": 0
+          },
+          "_DST": {
+            "offset": 182,
+            "table": 0
+          },
+          "_LABEL": "INJECTS",
+          "_ID": {
+            "offset": 0,
+            "table": 10
+          },
+          "source_file": "chat-assign/src/main/java/com/bank/chat/assign/web/ChatManagementController.java",
+          "dst_name": "ChatManagementService",
+          "dst_fqn": "com.bank.chat.assign.service.ChatManagementService",
+          "resolved": true,
+          "mechanism": "constructor",
+          "annotation": "",
+          "field_or_param": "chatManagementService"
+        }
+      ],
+      [
+        "1ea660dcf51af165d14d919b274e176cf9a710e4",
+        "70b6c32695b7438d46a58b22d06d7921be13a21e",
+        {
+          "_SRC": {
+            "offset": 166,
+            "table": 0
+          },
+          "_DST": {
+            "offset": 181,
+            "table": 0
+          },
+          "_LABEL": "INJECTS",
+          "_ID": {
+            "offset": 1,
+            "table": 10
+          },
+          "source_file": "chat-assign/src/main/java/com/bank/chat/assign/web/OperatorManagementController.java",
+          "dst_name": "OperatorSessionService",
+          "dst_fqn": "com.bank.chat.assign.service.OperatorSessionService",
+          "resolved": true,
+          "mechanism": "constructor",
+          "annotation": "",
+          "field_or_param": "operatorSessionService"
+        }
+      ],
+      [
+        "52a49d3785a9dc6cabf3e3f44f2b3c0ff5730400",
+        "78911dbd1d5d92491fe3c7db4f7c128c5dd27a56",
+        {
+          "_SRC": {
+            "offset": 167,
+            "table": 0
+          },
+          "_DST": {
+            "offset": 905,
+            "table": 0
+          },
+          "_LABEL": "INJECTS",
+          "_ID": {
+            "offset": 2,
+            "table": 10
+          },
+          "source_file": "chat-assign/src/main/java/com/bank/chat/assign/web/dto/OpenSessionResponse.java",
+          "dst_name": "UUID",
+          "dst_fqn": "java.util.UUID",
+          "resolved": false,
+          "mechanism": "constructor",
+          "annotation": "",
+          "field_or_param": "sessionId"
+        }
+      ]
+    ],
+    "DECLARES": [
+      [
+        "7f7f0196f0a30df9bdefe8b9110b11823a83dd43",
+        "3ec7518715fe2cb5adc53a39e63568565784ade6",
+        {
+          "_SRC": {
+            "offset": 159,
+            "table": 0
+          },
+          "_DST": {
+            "offset": 300,
+            "table": 0
+          },
+          "_LABEL": "DECLARES",
+          "_ID": {
+            "offset": 1,
+            "table": 12
+          },
+          "source_file": "chat-assign/src/main/java/com/bank/chat/assign/ChatAssignApplication.java"
+        }
+      ],
+      [
+        "7f7f0196f0a30df9bdefe8b9110b11823a83dd43",
+        "1dae8ba1e800d8a1857bf827ce5d1551cff71f2a",
+        {
+          "_SRC": {
+            "offset": 159,
+            "table": 0
+          },
+          "_DST": {
+            "offset": 299,
+            "table": 0
+          },
+          "_LABEL": "DECLARES",
+          "_ID": {
+            "offset": 0,
+            "table": 12
+          },
+          "source_file": "chat-assign/src/main/java/com/bank/chat/assign/ChatAssignApplication.java"
+        }
+      ],
+      [
+        "51ef46974d13f727df02f0676cf4e71e98fcca6",
+        "5cb62af6786770e9d1a092f7b617ade0fdefa837",
+        {
+          "_SRC": {
+            "offset": 160,
+            "table": 0
+          },
+          "_DST": {
+            "offset": 304,
+            "table": 0
+          },
+          "_LABEL": "DECLARES",
+          "_ID": {
+            "offset": 5,
+            "table": 12
+          },
+          "source_file": "chat-assign/src/main/java/com/bank/chat/assign/config/AssignProperties.java"
+        }
+      ]
+    ],
+    "OVERRIDES": [
+      [
+        "82fd431d700c06ee03a5363bb34318f161576245",
+        "e04896a3cde61f301de034b4ac99ea9300243ee9",
+        {
+          "_SRC": {
+            "offset": 550,
+            "table": 0
+          },
+          "_DST": {
+            "offset": 556,
+            "table": 0
+          },
+          "_LABEL": "OVERRIDES",
+          "_ID": {
+            "offset": 19,
+            "table": 14
+          },
+          "source_file": "chat-core/chat-engine/src/main/java/com/bank/chat/engine/pipeline/ClientSegmentFilter.java"
+        }
+      ],
+      [
+        "dbdebee186edbebca462b814cf4915e42b4a7cc9",
+        "e04896a3cde61f301de034b4ac99ea9300243ee9",
+        {
+          "_SRC": {
+            "offset": 553,
+            "table": 0
+          },
+          "_DST": {
+            "offset": 556,
+            "table": 0
+          },
+          "_LABEL": "OVERRIDES",
+          "_ID": {
+            "offset": 27,
+            "table": 14
+          },
+          "source_file": "chat-core/chat-engine/src/main/java/com/bank/chat/engine/pipeline/EventTypeFilter.java"
+        }
+      ],
+      [
+        "78a014fc9824b97e391f0500541628d1fa7a793f",
+        "10affb1d65bce6f92eab774e4d16a238f042de8",
+        {
+          "_SRC": {
+            "offset": 605,
+            "table": 0
+          },
+          "_DST": {
+            "offset": 612,
+            "table": 0
+          },
+          "_LABEL": "OVERRIDES",
+          "_ID": {
+            "offset": 14,
+            "table": 14
+          },
+          "source_file": "chat-core/chat-engine/src/main/java/com/bank/chat/engine/notification/EmailNotificationSender.java"
+        }
+      ]
+    ],
+    "CALLS": [
+      [
+        "1dae8ba1e800d8a1857bf827ce5d1551cff71f2a",
+        "fe8b772e63e5f8c95dce52fd32792cf832828a62",
+        {
+          "_SRC": {
+            "offset": 299,
+            "table": 0
+          },
+          "_DST": {
+            "offset": 914,
+            "table": 0
+          },
+          "_LABEL": "CALLS",
+          "_ID": {
+            "offset": 0,
+            "table": 16
+          },
+          "source_file": "chat-assign/src/main/java/com/bank/chat/assign/ChatAssignApplication.java",
+          "call_site_line": 12,
+          "call_site_byte": 336,
+          "arg_count": 2,
+          "confidence": 0.95,
+          "strategy": "import_map",
+          "source": "static",
+          "resolved": false,
+          "callee_declaring_role": "OTHER"
+        }
+      ],
+      [
+        "a805ff9fd7051f13a0a17fd6e558b4309629d55b",
+        "edc937715937310a41ef39028ff36630e87f05b9",
+        {
+          "_SRC": {
+            "offset": 320,
+            "table": 0
+          },
+          "_DST": {
+            "offset": 915,
+            "table": 0
+          },
+          "_LABEL": "CALLS",
+          "_ID": {
+            "offset": 1,
+            "table": 16
+          },
+          "source_file": "chat-assign/src/main/java/com/bank/chat/assign/web/ChatManagementController.java",
+          "call_site_line": 21,
+          "call_site_byte": 738,
+          "arg_count": 0,
+          "confidence": 0.9,
+          "strategy": "implicit_super",
+          "source": "static",
+          "resolved": false,
+          "callee_declaring_role": "OTHER"
+        }
+      ],
+      [
+        "20d6b583bb28a9b84cd289bc46c6615f9348604a",
+        "8214d23f9241f03a88e438d9833ac1b26a2fd648",
+        {
+          "_SRC": {
+            "offset": 321,
+            "table": 0
+          },
+          "_DST": {
+            "offset": 916,
+            "table": 0
+          },
+          "_LABEL": "CALLS",
+          "_ID": {
+            "offset": 3,
+            "table": 16
+          },
+          "source_file": "chat-assign/src/main/java/com/bank/chat/assign/web/ChatManagementController.java",
+          "call_site_line": 28,
+          "call_site_byte": 1056,
+          "arg_count": 0,
+          "confidence": 0.95,
+          "strategy": "import_map",
+          "source": "static",
+          "resolved": false,
+          "callee_declaring_role": "OTHER"
+        }
+      ]
+    ],
+    "UNRESOLVED_AT": [
+      [
+        "6fa62d6eb64b6fc96824fd597e230c3d07f53757",
+        "ucs:6fa62d6eb64b6fc96824fd597e230c3d07f53757:14:464",
+        {
+          "_SRC": {
+            "offset": 318,
+            "table": 0
+          },
+          "_DST": {
+            "offset": 0,
+            "table": 1
+          },
+          "_LABEL": "UNRESOLVED_AT",
+          "_ID": {
+            "offset": 0,
+            "table": 18
+          },
+          "source_file": "chat-assign/src/main/java/com/bank/chat/assign/config/AssignConfiguration.java"
+        }
+      ],
+      [
+        "20d6b583bb28a9b84cd289bc46c6615f9348604a",
+        "ucs:20d6b583bb28a9b84cd289bc46c6615f9348604a:28:1056",
+        {
+          "_SRC": {
+            "offset": 321,
+            "table": 0
+          },
+          "_DST": {
+            "offset": 1,
+            "table": 1
+          },
+          "_LABEL": "UNRESOLVED_AT",
+          "_ID": {
+            "offset": 1,
+            "table": 18
+          },
+          "source_file": "chat-assign/src/main/java/com/bank/chat/assign/web/ChatManagementController.java"
+        }
+      ],
+      [
+        "945ab963e7c38edb72d7ad35d22931274293848b",
+        "ucs:945ab963e7c38edb72d7ad35d22931274293848b:34:1292",
+        {
+          "_SRC": {
+            "offset": 322,
+            "table": 0
+          },
+          "_DST": {
+            "offset": 2,
+            "table": 1
+          },
+          "_LABEL": "UNRESOLVED_AT",
+          "_ID": {
+            "offset": 2,
+            "table": 18
+          },
+          "source_file": "chat-assign/src/main/java/com/bank/chat/assign/web/ChatManagementController.java"
+        }
+      ]
+    ]
+  }
+}
