@@ -554,11 +554,20 @@ def _load_baseline() -> dict:
         return json.load(f)
 
 
-def test_bulk_write_edges_match_per_row_baseline(ladybug_db_path: Path) -> None:
-    """Bulk COPY FROM produces identical graph to the per-row baseline.
+def test_bank_chat_bulk_build_matches_committed_baseline(ladybug_db_path: Path) -> None:
+    """Bank-chat full build matches the committed baseline (a drift anchor).
 
-    Asserts node count, per-type edge counts, GraphMeta counters, and sampled edge
-    properties match the baseline generated from the last per-row _write_edges build.
+    Asserts node count, per-type edge counts, GraphMeta counters, and sampled
+    CALLS properties match ``graph_baseline_bank_chat.json``.
+
+    This is a **regression anchor**, not a per-row equivalence proof: the legacy
+    per-row ``_write_edges`` was removed in PR-P1, so there is no per-row
+    reference to compare against, and this fixture was itself generated from a
+    bulk build (commit 8261acf). It guards against unintended drift in the
+    bank-chat full-build graph. The actual write-mechanism equivalence gates are
+    ``test_bulk_write_is_deterministic_double_build`` (two bulk builds identical)
+    and ``test_incremental_bulk_write_equivalent_to_full_rebuild`` (incremental
+    matches a full rebuild of the same state).
     """
     baseline = _load_baseline()
     conn = _connect(ladybug_db_path)

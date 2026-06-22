@@ -137,7 +137,7 @@ lines vs the pre-PR baseline.
 - [ ] Step-1 spike result recorded in `_bulk_copy` docstring.
 - [ ] `_write_edges` stages per-type rows (CALLS dedup + callee_declaring_role at staging); UnresolvedCallSite bulk-loaded before UNRESOLVED_AT.
 - [ ] `_CREATE_EXT/IMPL/INJ/DECL/OVERRIDES/CALL` + local `_CREATE_UNRESOLVED/_UNRESOLVED_AT` deleted.
-- [ ] `test_bulk_write_edges_match_per_row_baseline`, `test_bulk_write_is_deterministic_double_build`, `test_bulk_write_preserves_calls_dedup_and_callee_declaring_role`, `test_bulk_write_empty_rel_table_is_noop` pass.
+- [ ] `test_bank_chat_bulk_build_matches_committed_baseline` (renamed from `test_bulk_write_edges_match_per_row_baseline` in PR-P4), `test_bulk_write_is_deterministic_double_build`, `test_bulk_write_preserves_calls_dedup_and_callee_declaring_role`, `test_bulk_write_empty_rel_table_is_noop` pass.
 - [ ] Full `test_ast_graph_build.py` + `test_incremental_graph.py` pass unchanged.
 - [ ] Sentinel greps: zero where required, non-zero where required.
 - [ ] `.venv/bin/ruff check .` clean; benchmark in PR description.

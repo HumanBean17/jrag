@@ -989,7 +989,8 @@ class TestIncrementalOrchestrator:
         state (bulk) and asserts node count, per-type edge counts, and GraphMeta
         counters are identical.
         """
-        from build_ast_graph import incremental_rebuild, write_ladybug
+        from build_ast_graph import incremental_rebuild
+        from _builders import build_ladybug_full_into
 
         source_root = tmp_path / "src"
         source_root.mkdir()
@@ -1001,72 +1002,151 @@ class TestIncrementalOrchestrator:
         (source_root / "A.java").write_text("package pkg; class A { void foo() {} }", encoding="utf-8")
         (source_root / "B.java").write_text("package pkg; class B { void bar() {} }", encoding="utf-8")
 
-        # Initial full build
-        tables = GraphTables()
-        asts = pass1_parse(source_root, tables, verbose=False)
-        pass2_edges(tables, asts, verbose=False)
-        write_ladybug(ladybug_path, tables, source_root=source_root, verbose=False)
+        # Initial full build (pass1–6). write_ladybug initializes the hash
+        # tracker, so incremental_rebuild can detect the change below.
+        build_ladybug_full_into(source_root, ladybug_path)
 
-        # Initialize hash tracker
-        tracker = FileHashTracker(index_dir)
-        ignore = LayeredIgnore(source_root, use_gitignore=False, builtin_patterns=[])
-        tracker.detect_changes(source_root, ignore)
-        for rel_path in ["A.java", "B.java"]:
-            tracker.update({rel_path}, source_root)
-        tracker.save()
-
-        # Modify A.java
-        (source_root / "A.java").write_text("package pkg; class A { void foo() {} void baz() {} }", encoding="utf-8")
-
-        # Run incremental (bulk)
+        # Modify A.java, then run the incremental path.
+        (source_root / "A.java").write_text(
+            "package pkg; class A { void foo() {} void baz() {} }", encoding="utf-8"
+        )
         result = incremental_rebuild(source_root, ladybug_path, verbose=False)
         assert result.mode == "incremental"
 
-        # Read incremental graph state
-        import ladybug
+        def _graph_state(c: ladybug.Connection) -> tuple[int, dict[str, int], dict[str, str]]:
+            nc = c.execute("MATCH (n) RETURN count(n)")
+            node_count = nc.get_next()[0] if nc.has_next() else 0
+            edge_counts: dict[str, int] = {}
+            for rel_type in ["EXTENDS", "IMPLEMENTS", "INJECTS", "DECLARES", "OVERRIDES",
+                             "CALLS", "EXPOSES", "DECLARES_CLIENT", "DECLARES_PRODUCER",
+                             "HTTP_CALLS", "ASYNC_CALLS"]:
+                ec = c.execute(f"MATCH ()-[r:{rel_type}]->() RETURN count(r)")
+                edge_counts[rel_type] = ec.get_next()[0] if ec.has_next() else 0
+            # Type roles catch property staleness: role/capabilities depend on
+            # project-wide inputs and must match a full rebuild of the same state.
+            roles: dict[str, str] = {}
+            rr = c.execute(
+                "MATCH (n:Symbol) WHERE n.kind IN ['class','interface','enum','annotation','record'] "
+                "RETURN n.fqn, n.role"
+            )
+            while rr.has_next():
+                fqn, role = rr.get_next()
+                roles[fqn] = role
+            return node_count, edge_counts, roles
+
         db = ladybug.Database(str(ladybug_path))
         conn = ladybug.Connection(db)
-
-        def _read_graph_state(conn: ladybug.Connection) -> tuple[int, dict[str, int]]:
-            node_count = 0
-            nc_result = conn.execute("MATCH (n) RETURN count(n)")
-            if nc_result.has_next():
-                node_count = nc_result.get_next()[0]
-
-            edge_counts: dict[str, int] = {}
-            for rel_type in ["EXTENDS", "IMPLEMENTS", "INJECTS", "DECLARES", "OVERRIDES", "CALLS", "EXPOSES", "DECLARES_CLIENT", "DECLARES_PRODUCER", "HTTP_CALLS", "ASYNC_CALLS"]:
-                ec_result = conn.execute(f"MATCH ()-[r:{rel_type}]->() RETURN count(r)")
-                if ec_result.has_next():
-                    edge_counts[rel_type] = ec_result.get_next()[0]
-
-            conn.close()
-            return node_count, edge_counts
-
-        incremental_state = _read_graph_state(conn)
-
-        # Full rebuild the same state (drop and recreate)
-        import shutil
+        incremental_state = _graph_state(conn)
         conn.close()
         db.close()
-        shutil.rmtree(index_dir)
-        index_dir.mkdir()
 
-        tables2 = GraphTables()
-        asts2 = pass1_parse(source_root, tables2, verbose=False)
-        pass2_edges(tables2, asts2, verbose=False)
-        ladybug_path2 = index_dir / "code_graph.lbug"
-        write_ladybug(ladybug_path2, tables2, source_root=source_root, verbose=False)
+        # Full rebuild the identical final state into a fresh index dir.
+        full_dir = tmp_path / "full"
+        full_dir.mkdir()
+        full_path = full_dir / "code_graph.lbug"
+        build_ladybug_full_into(source_root, full_path)
 
-        db2 = ladybug.Database(str(ladybug_path2))
+        db2 = ladybug.Database(str(full_path))
         conn2 = ladybug.Connection(db2)
-        full_state = _read_graph_state(conn2)
+        full_state = _graph_state(conn2)
+        conn2.close()
+        db2.close()
 
-        # Assert equivalence (node count and edge types should match)
-        # Note: exact counts may differ slightly due to incremental's dependent expansion
-        assert incremental_state[0] > 0, "incremental should have nodes"
-        assert full_state[0] > 0, "full rebuild should have nodes"
-        # Both should have the same edge types present (even if counts differ)
-        assert set(incremental_state[1].keys()) == set(full_state[1].keys()), "edge types should match"
+        # Equivalence invariant: an incremental rebuild of a state must produce
+        # the same graph as a full rebuild of that state. The previous form
+        # asserted only `count > 0` and `set(edge_type_keys) == set(edge_type_keys)`
+        # — a no-op, since every rel type yields a count row even at 0.
+        assert incremental_state[0] == full_state[0], (
+            f"node count diverged: incremental={incremental_state[0]} full={full_state[0]}"
+        )
+        assert incremental_state[1] == full_state[1], (
+            f"edge counts diverged:\nincremental={incremental_state[1]}\nfull={full_state[1]}"
+        )
+        assert incremental_state[2] == full_state[2], (
+            f"type roles diverged:\nincremental={incremental_state[2]}\nfull={full_state[2]}"
+        )
+
+    def test_incremental_refreshes_dependent_role_on_meta_chain_change(
+        self, tmp_path: Path
+    ) -> None:
+        """A preserved dependent's role is refreshed when its meta-chain shifts.
+
+        Regression guard for the PR-P4 fix: `_write_nodes_impl` switched from a
+        per-row `MERGE … SET role=…` upsert to bulk `COPY FROM` + skip-if-exists,
+        which dropped the property refresh on preserved dependent type nodes. A
+        dependent type's `role`/`capabilities` depend on project-wide inputs (the
+        meta-annotation chain) and can shift without the dependent's own source
+        changing — so the increment must re-SET them to stay byte-equivalent with
+        a full rebuild.
+
+        Corpus: `@MyService class Svc` (a dependent of `Target`, which it calls);
+        `@interface MyService` is edited from no meta-annotation to `@Service`, so
+        the chain maps `MyService → Service` and `Svc`'s role flips `OTHER → SERVICE`.
+        `Target` is also edited (a real content change) so the dependency walk
+        pulls `Svc` into the incremental scope as a preserved dependent (it has a
+        CALLS edge into the changed `Target`) — exactly the case the refresh must
+        handle. The CLI runs each increment as a fresh process (cold meta-chain
+        cache); the test mirrors that so the increment sees the updated chain.
+        """
+        from build_ast_graph import incremental_rebuild
+        from graph_enrich import collect_annotation_meta_chain
+        from _builders import build_ladybug_full_into
+
+        source_root = tmp_path / "src"
+        source_root.mkdir()
+        index_dir = tmp_path / "index"
+        index_dir.mkdir()
+        ladybug_path = index_dir / "code_graph.lbug"
+        java = source_root / "pkg"
+        java.mkdir(parents=True)
+
+        svc_src = (
+            "package pkg;\n@MyService\n"
+            "public class Svc { public void go(Target t) { t.foo(); } }\n"
+        )
+
+        # V1: MyService has no meta-annotation → Svc.role = OTHER.
+        (java / "MyService.java").write_text(
+            "package pkg; public @interface MyService {}\n", encoding="utf-8"
+        )
+        (java / "Svc.java").write_text(svc_src, encoding="utf-8")
+        (java / "Target.java").write_text(
+            "package pkg; public class Target { public void foo() {} }\n", encoding="utf-8"
+        )
+        build_ladybug_full_into(source_root, ladybug_path)
+
+        # V2: shift the role lever (MyService becomes @Service-meta-annotated) AND
+        # edit Target's body (add a method) so Svc is pulled in as a preserved
+        # dependent via its CALLS edge into Target.
+        (java / "MyService.java").write_text(
+            "package pkg;\nimport org.springframework.stereotype.Service;\n"
+            "@Service\npublic @interface MyService {}\n",
+            encoding="utf-8",
+        )
+        (java / "Target.java").write_text(
+            "package pkg; public class Target { public void foo() {} public void bar() {} }\n",
+            encoding="utf-8",
+        )
+        collect_annotation_meta_chain.cache_clear()
+        result = incremental_rebuild(source_root, ladybug_path, verbose=False)
+        assert result.mode == "incremental", f"expected incremental, got {result.mode}"
+        assert result.dependents_reprocessed >= 1, "Svc should be pulled in as a dependent"
+
+        def role_of(fqn: str) -> str:
+            db = ladybug.Database(str(ladybug_path))
+            conn = ladybug.Connection(db)
+            r = conn.execute("MATCH (n:Symbol {fqn: $fqn}) RETURN n.role", {"fqn": fqn})
+            v = r.get_next()[0] if r.has_next() else None
+            conn.close()
+            db.close()
+            return v
+
+        # Svc was a preserved dependent (in scope via Target, not deleted); its
+        # role must refresh to SERVICE to match a full rebuild of this state.
+        assert role_of("pkg.Svc") == "SERVICE", (
+            "preserved dependent role not refreshed after meta-chain change "
+            "(PR-P4 regression: skip-if-exists dropped the upsert)"
+        )
 
     def test_incremental_route_merge_dedup_preserved(self, tmp_path: Path) -> None:
         """Pass5/6 Route MERGE dedup is preserved after bulk conversion.

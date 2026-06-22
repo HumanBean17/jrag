@@ -188,6 +188,12 @@ class TypeIndexEntry:
     package: str
     outer_fqn: str | None
     node_id: str
+    # True when this entry was loaded from the existing graph by
+    # `_load_existing_types` (an unchanged-file stub used only for cross-file
+    # resolution). Its `decl` is a placeholder (no annotations/methods), so its
+    # recomputed role/capabilities must never be written back over the real
+    # stored values. See `_write_nodes_impl`.
+    loaded_from_db: bool = False
 
 
 @dataclass
@@ -200,6 +206,11 @@ class MemberEntry:
     module: str
     microservice: str
     node_id: str
+    # True when loaded from the existing graph by `_load_existing_members`
+    # (an unchanged-file stub used only for cross-file call resolution). Its
+    # DECLARES edge already persists in the graph, so it must not be re-emitted
+    # by `_populate_declares_rows` (REL tables have no PK → would duplicate).
+    loaded_from_db: bool = False
 
 
 @dataclass
@@ -556,7 +567,7 @@ def _load_existing_types(conn: ladybug.Connection, tables: GraphTables, exclude_
     if exclude_files is not None and not exclude_files:
         return
 
-    where = "WHERE s.kind IN ['class', 'interface', 'enum', 'annotation', 'record']"
+    where = f"WHERE s.kind IN {list(_TYPE_KINDS)}"
     params: dict = {}
     if exclude_files:
         where += "\n    AND NOT (s.filename IN $exclude_files)"
@@ -586,6 +597,7 @@ def _load_existing_types(conn: ladybug.Connection, tables: GraphTables, exclude_
             package=package,
             outer_fqn=None,
             node_id=node_id,
+            loaded_from_db=True,
         )
         tables.types[fqn] = entry
         tables.by_simple_name.setdefault(name, []).append(entry)
@@ -634,6 +646,7 @@ def _load_existing_members(conn: ladybug.Connection, tables: GraphTables, exclud
             module="",
             microservice="",
             node_id=node_id,
+            loaded_from_db=True,
         ))
 
 
@@ -3044,19 +3057,6 @@ def _existing_node_ids(conn: ladybug.Connection) -> set[str]:
     return ids
 
 
-def _existing_symbol_ids(conn: ladybug.Connection) -> set[str]:
-    """Return every Symbol node id currently in the graph.
-
-    Deprecated: use _existing_node_ids for filtering all node types.
-    Kept for compatibility with existing _write_edges implementation.
-    """
-    result = conn.execute("MATCH (n:Symbol) RETURN n.id")
-    ids: set[str] = set()
-    while result.has_next():
-        ids.add(result.get_next()[0])
-    return ids
-
-
 # Column-order constants for bulk COPY FROM.
 # For REL tables, the first two entries are FROM/TO node primary keys (kuzu requirement).
 # Order matches the corresponding _SCHEMA_* declarations above.
@@ -3065,6 +3065,29 @@ _NODE_COLUMNS = [
     "filename", "start_line", "end_line", "start_byte", "end_byte",
     "modifiers", "annotations", "capabilities", "role", "signature", "parent_id", "resolved"
 ]
+
+# Type declaration kinds. Tuple (not set) so the rendered SQL `IN` clause is
+# deterministic. Used to (a) load type stubs for cross-file resolution and
+# (b) scope the incremental property-refresh SET to type nodes.
+_TYPE_KINDS: tuple[str, ...] = ("class", "interface", "enum", "annotation", "record")
+
+# Update every mutable Symbol field on an existing node by primary key. Used on
+# the incremental path to refresh preserved dependent type nodes whose
+# `role`/`capabilities` (and other project-wide-derived fields) can shift
+# without their own source changing — restoring the upsert the legacy per-row
+# `MERGE (n:Symbol {id:$id}) SET …` provided. Field list mirrors `_NODE_COLUMNS`
+# minus `id`.
+_SET_SYMBOL_BY_ID = (
+    "MATCH (n:Symbol {id: $id}) "
+    "SET n.kind = $kind, n.name = $name, n.fqn = $fqn, "
+    "n.package = $package, n.module = $module, n.microservice = $microservice, "
+    "n.filename = $filename, "
+    "n.start_line = $start_line, n.end_line = $end_line, "
+    "n.start_byte = $start_byte, n.end_byte = $end_byte, "
+    "n.modifiers = $modifiers, n.annotations = $annotations, "
+    "n.capabilities = $capabilities, n.role = $role, "
+    "n.signature = $signature, n.parent_id = $parent_id, n.resolved = $resolved"
+)
 
 _REL_EXTENDS_COLUMNS = ["FROM", "TO", "source_file", "dst_name", "dst_fqn", "resolved"]
 _REL_IMPLEMENTS_COLUMNS = ["FROM", "TO", "source_file", "dst_name", "dst_fqn", "resolved"]
@@ -3106,6 +3129,10 @@ def _write_nodes_impl(
 
     # Stage all Symbol rows
     rows: list[dict] = []
+    # Node ids loaded from the existing graph as resolution-only stubs
+    # (`_load_existing_types`); their staged rows carry placeholder values and
+    # must never be written back over the real nodes.
+    stub_ids: set[str] = set()
 
     # packages
     for pkg, pid in tables.packages.items():
@@ -3119,6 +3146,8 @@ def _write_nodes_impl(
         ))
     # types
     for entry in tables.types.values():
+        if entry.loaded_from_db:
+            stub_ids.add(entry.node_id)
         d = entry.decl
         role, capabilities = resolve_role_and_capabilities(
             d,
@@ -3158,13 +3187,33 @@ def _write_nodes_impl(
     for pid, row in tables.phantoms.items():
         rows.append(row)
 
-    # For incremental path, filter out nodes that already exist to avoid duplicate primary key errors
-    # The full rebuild path starts with an empty database, so all rows are new
+    # Bulk-load new Symbol rows. The full-rebuild path starts from an empty
+    # database (`_drop_all`), so every row is new. The incremental path reaches
+    # here with a populated database: changed-file nodes were deleted by
+    # `_delete_file_scope` (absent here → new), while dependent-file nodes are
+    # deliberately preserved (see `_delete_file_scope` / issue #305).
     existing_ids = _existing_node_ids(conn)
     new_rows = [row for row in rows if row["id"] not in existing_ids]
-
-    # Bulk-load only new Symbol rows
     _bulk_copy(conn, "Symbol", _NODE_COLUMNS, new_rows)
+
+    # Refresh mutable properties on preserved dependent TYPE nodes (incremental
+    # path only; `update_rows` is empty on the full path). `role`/`capabilities`
+    # — and any other field derived from project-wide inputs (meta-annotation
+    # chain, brownfield overrides) — can shift without the type's own source
+    # changing, so a preserved dependent must be re-SET to stay byte-equivalent
+    # with a full rebuild. The legacy per-row `_MERGE_SYMBOL` upserted every
+    # staged node and did this implicitly; bulk `COPY FROM` only appends, so the
+    # SET is explicit here. Stubs (`stub_ids`) are skipped: their decl is a
+    # placeholder and their stored values are authoritative. Non-type kinds
+    # carry no mutable role/capabilities, so they are skipped too.
+    update_rows = [
+        row for row in rows
+        if row["id"] in existing_ids
+        and row["id"] not in stub_ids
+        and row["kind"] in _TYPE_KINDS
+    ]
+    for row in update_rows:
+        conn.execute(_SET_SYMBOL_BY_ID, row)
 
 
 def _write_nodes(
@@ -3180,8 +3229,15 @@ def _write_nodes(
 
 
 def _populate_declares_rows(tables: GraphTables) -> None:
+    # Skip members loaded from the existing graph for cross-file resolution: a
+    # DECLARES edge for an unchanged-file member already persists (its
+    # source_file is out of scope, so `_delete_file_scope` left it), and
+    # re-emitting it would append a duplicate (REL tables carry no primary key).
+    # Full-rebuild never loads members, so this is a no-op there.
     tables.declares_rows = [
-        DeclaresRow(src_id=m.parent_id, dst_id=m.node_id) for m in tables.members
+        DeclaresRow(src_id=m.parent_id, dst_id=m.node_id)
+        for m in tables.members
+        if not m.loaded_from_db
     ]
 
 
@@ -3884,8 +3940,12 @@ def _write_clients_producers_and_calls(conn: ladybug.Connection, tables: GraphTa
     Route nodes (created by pass5 for cross-service calls) that wouldn't
     otherwise exist in LadybugDB.
     """
-    # Write phantom routes that don't already exist (pass5 creates these for cross-service calls)
-    # Intentionally retained MERGE for dedup against routes written during scoped step
+    # Upsert every route via MERGE. `tables.routes_rows` is the full route set
+    # (pass4 routes + pass5 phantom routes), not just phantoms; MERGE is
+    # idempotent against routes already written during the scoped step, so it
+    # neither duplicates nor drops them. This is the one remaining per-row graph
+    # write — converting it to bulk COPY requires filtering against existing
+    # route ids to reproduce the dedup, and is left as a future optimization.
     for row in tables.routes_rows:
         conn.execute(
             "MERGE (r:Route {id: $id}) "
