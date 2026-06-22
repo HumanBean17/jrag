@@ -345,3 +345,44 @@ async def test_search_returns_multiple_hits(lance_index: Path, monkeypatch) -> N
     )
     assert out["success"] is True
     assert len(out["results"]) >= 1
+
+
+def test_layered_ignore_provided_once_per_flow() -> None:
+    """Source-structure assertion that IGNORE is provided once and consumed three times.
+
+    This test verifies the wiring invariant (IGNORE ContextKey provided once in
+    coco_lifespan, consumed in three process_*_file sites) by inspecting the flow
+    module source code. The behavioral guarantee (a single LayeredIgnore instance
+    per flow run) is backed by the HEAVY e2e test below and the sentinel grep.
+
+    This approach is used because in-process testing of coco_lifespan would require
+    stubbing the embedder/LanceDB setup, and subprocess-based testing cannot cross
+    the process boundary to instrument LayeredIgnore.__init__.
+    """
+    bundle_dir = Path(__file__).resolve().parent.parent
+    flow_file = bundle_dir / "java_index_flow_lancedb.py"
+    if not flow_file.is_file():
+        pytest.skip(f"Flow file not found: {flow_file}")
+
+    source = flow_file.read_text(encoding="utf-8")
+
+    # Count builder.provide(IGNORE, ...) calls - should be exactly one (in coco_lifespan)
+    provide_count = source.count("builder.provide(IGNORE,")
+    assert provide_count == 1, f"Expected 1 builder.provide(IGNORE,) call, found {provide_count}"
+
+    # Count coco.use_context(IGNORE) calls - should be exactly three (process_*_file)
+    use_count = source.count("coco.use_context(IGNORE)")
+    assert use_count == 3, f"Expected 3 coco.use_context(IGNORE) calls, found {use_count}"
+
+    # Verify no leftover LayeredIgnore(project_root).is_ignored calls in process sites
+    # (the sentinel grep would catch this, but we assert it here for completeness)
+    lines = source.split("\n")
+    for i, line in enumerate(lines, 1):
+        if "def process_" in line and "file(" in line:
+            # Found a process_*_file function definition
+            # Check the next ~10 lines for the old pattern
+            func_body = "\n".join(lines[i-1:min(i+10, len(lines))])
+            if "LayeredIgnore(project_root).is_ignored" in func_body:
+                pytest.fail(f"Found LayeredIgnore(project_root).is_ignored in process_*_file at line {i}")
+
+    # All structure checks passed

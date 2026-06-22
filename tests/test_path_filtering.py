@@ -258,3 +258,99 @@ def test_unconditional_prune_dirs_remain_pruned_anywhere(tmp_path: Path) -> None
     li = LayeredIgnore(root, use_gitignore=False)
     files = list(iter_java_source_files(root, ignore=li))
     assert files == []
+
+
+def test_is_ignored_mega_caches_by_directory(tmp_path: Path) -> None:
+    """Assert _mega is computed once per directory and subsequent same-dir calls hit cache."""
+    root = tmp_path / "p"
+    root.mkdir()
+    (root / ".java-codebase-rag" / "ignore").parent.mkdir(parents=True)
+    (root / ".java-codebase-rag" / "ignore").write_text("**/Generated*.java\n", encoding="utf-8")
+
+    dir1 = root / "src" / "main"
+    dir1.mkdir(parents=True)
+    file1 = dir1 / "GeneratedFoo.java"
+    file1.write_text("class GeneratedFoo {}\n", encoding="utf-8")
+
+    file2 = dir1 / "GeneratedBar.java"
+    file2.write_text("class GeneratedBar {}\n", encoding="utf-8")
+
+    dir2 = root / "src" / "test"
+    dir2.mkdir(parents=True)
+    file3 = dir2 / "GeneratedTest.java"
+    file3.write_text("class GeneratedTest {}\n", encoding="utf-8")
+
+    li = LayeredIgnore(root, use_gitignore=False)
+
+    # Clear the cache to start fresh
+    li._mega_cache.clear()
+
+    # First call for file1 in dir1 should cache the result
+    assert li.is_ignored(file1) is True
+    # Second call for file2 in same dir should hit cache (same cache key)
+    assert li.is_ignored(file2) is True
+    # Call for file3 in different dir should compute and cache separately
+    assert li.is_ignored(file3) is True
+
+    # Should have exactly 2 cache entries (one per directory)
+    assert len(li._mega_cache) == 2
+    # Cache keys should be the parent directories
+    assert "src/main" in li._mega_cache
+    assert "src/test" in li._mega_cache
+
+
+def test_layered_ignore_memo_preserves_decisions(tmp_path: Path) -> None:
+    """For a corpus with nested ignore + gitignore negations, assert is_ignored is
+    identical with and without the cache."""
+    root = tmp_path / "p"
+    root.mkdir()
+
+    # Project root ignores all Generated*.java
+    pr = root / ".java-codebase-rag" / "ignore"
+    pr.parent.mkdir(parents=True)
+    pr.write_text("**/Generated*.java\n", encoding="utf-8")
+
+    # Nested dir negates for a specific subdirectory
+    nested = root / "svc" / ".java-codebase-rag" / "ignore"
+    nested.parent.mkdir(parents=True)
+    nested.write_text("!**/Generated*.java\n", encoding="utf-8")
+
+    # Gitignore at root adds another pattern
+    (root / ".gitignore").write_text("**/customout/**\n", encoding="utf-8")
+
+    # Create test files
+    dir1 = root / "svc" / "src"
+    dir1.mkdir(parents=True)
+    hit1 = dir1 / "GeneratedFoo.java"
+    hit1.write_text("class GeneratedFoo {}\n", encoding="utf-8")
+
+    dir2 = root / "svc" / "customout"
+    dir2.mkdir(parents=True)
+    hit2 = dir2 / "X.java"
+    hit2.write_text("class X {}\n", encoding="utf-8")
+
+    dir3 = root / "other" / "src"
+    dir3.mkdir(parents=True)
+    hit3 = dir3 / "GeneratedBar.java"
+    hit3.write_text("class GeneratedBar {}\n", encoding="utf-8")
+
+    # Test with gitignore enabled (cached)
+    li_cached = LayeredIgnore(root, use_gitignore=True)
+    assert li_cached.is_ignored(hit1) is False  # negated by nested
+    assert li_cached.is_ignored(hit2) is True  # gitignore pattern
+    assert li_cached.is_ignored(hit3) is True  # project-root pattern
+
+    # Test without cache by creating a fresh instance each time (simulates old behavior)
+    li_uncached1 = LayeredIgnore(root, use_gitignore=True)
+    assert li_uncached1.is_ignored(hit1) is False
+
+    li_uncached2 = LayeredIgnore(root, use_gitignore=True)
+    assert li_uncached2.is_ignored(hit2) is True
+
+    li_uncached3 = LayeredIgnore(root, use_gitignore=True)
+    assert li_uncached3.is_ignored(hit3) is True
+
+    # Verify cached vs uncached results match
+    assert li_cached.is_ignored(hit1) == li_uncached1.is_ignored(hit1)
+    assert li_cached.is_ignored(hit2) == li_uncached2.is_ignored(hit2)
+    assert li_cached.is_ignored(hit3) == li_uncached3.is_ignored(hit3)
