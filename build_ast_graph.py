@@ -3021,6 +3021,27 @@ def _bulk_copy(conn: ladybug.Connection, table_name: str, columns: list[str], ro
     conn.execute(f"COPY {table_name} FROM $rows", {"rows": tbl})
 
 
+def _existing_symbol_ids(conn: ladybug.Connection) -> set[str]:
+    """Return every Symbol node id currently in the graph.
+
+    Bulk ``COPY FROM`` enforces referential integrity: a REL row whose FROM/TO
+    endpoint isn't a loaded node raises ``Unable to find primary key value``. The
+    legacy per-row ``MERGE (a:Symbol {id:$src}),(b:Symbol {id:$dst})`` silently
+    dropped such edges (a ``MATCH`` against a missing endpoint creates nothing).
+    ``_write_edges`` filters edge rows against this set to reproduce that exactly.
+
+    This queries the live DB rather than just ``tables`` because ``_write_edges``
+    is shared with the incremental path, whose edges legitimately reference nodes
+    written in prior runs. Both paths call ``_write_nodes`` before ``_write_edges``,
+    so freshly written nodes are included.
+    """
+    result = conn.execute("MATCH (n:Symbol) RETURN n.id")
+    ids: set[str] = set()
+    while result.has_next():
+        ids.add(result.get_next()[0])
+    return ids
+
+
 # Column-order constants for bulk COPY FROM.
 # For REL tables, the first two entries are FROM/TO node primary keys (kuzu requirement).
 # Order matches the corresponding _SCHEMA_* declarations above.
@@ -3252,6 +3273,13 @@ def _write_edges(conn: ladybug.Connection, tables: GraphTables, _file_by_node_id
     if _file_by_node_id is None:
         _file_by_node_id = _build_file_by_node_id(tables)
 
+    # Bulk COPY FROM enforces referential integrity — a REL row whose endpoint
+    # node isn't loaded raises "Unable to find primary key value". The legacy
+    # per-row MERGE silently skipped such edges; drop them here to preserve the
+    # per-row graph exactly. _existing_symbol_ids reads the live DB (not just
+    # `tables`) so the incremental path's references to prior-run nodes still hold.
+    valid_ids = _existing_symbol_ids(conn)
+
     # Stage EXTENDS rows
     extends_rows = [
         {
@@ -3260,6 +3288,7 @@ def _write_edges(conn: ladybug.Connection, tables: GraphTables, _file_by_node_id
             "dst_name": r.dst_name, "dst_fqn": r.dst_fqn, "resolved": r.resolved,
         }
         for r in tables.extends_rows
+        if r.src_id in valid_ids and r.dst_id in valid_ids
     ]
     _bulk_copy(conn, "EXTENDS", _REL_EXTENDS_COLUMNS, extends_rows)
 
@@ -3271,6 +3300,7 @@ def _write_edges(conn: ladybug.Connection, tables: GraphTables, _file_by_node_id
             "dst_name": r.dst_name, "dst_fqn": r.dst_fqn, "resolved": r.resolved,
         }
         for r in tables.implements_rows
+        if r.src_id in valid_ids and r.dst_id in valid_ids
     ]
     _bulk_copy(conn, "IMPLEMENTS", _REL_IMPLEMENTS_COLUMNS, implements_rows)
 
@@ -3284,6 +3314,7 @@ def _write_edges(conn: ladybug.Connection, tables: GraphTables, _file_by_node_id
             "field_or_param": r.field_or_param,
         }
         for r in tables.injects_rows
+        if r.src_id in valid_ids and r.dst_id in valid_ids
     ]
     _bulk_copy(conn, "INJECTS", _REL_INJECTS_COLUMNS, injects_rows)
 
@@ -3294,6 +3325,7 @@ def _write_edges(conn: ladybug.Connection, tables: GraphTables, _file_by_node_id
             "source_file": _file_by_node_id.get(row.src_id, ""),
         }
         for row in tables.declares_rows
+        if row.src_id in valid_ids and row.dst_id in valid_ids
     ]
     _bulk_copy(conn, "DECLARES", _REL_DECLARES_COLUMNS, declares_rows)
 
@@ -3304,6 +3336,7 @@ def _write_edges(conn: ladybug.Connection, tables: GraphTables, _file_by_node_id
             "source_file": _file_by_node_id.get(row.src_id, ""),
         }
         for row in tables.overrides_rows
+        if row.src_id in valid_ids and row.dst_id in valid_ids
     ]
     _bulk_copy(conn, "OVERRIDES", _REL_OVERRIDES_COLUMNS, overrides_rows)
 
@@ -3312,6 +3345,8 @@ def _write_edges(conn: ladybug.Connection, tables: GraphTables, _file_by_node_id
     calls_rows: list[dict] = []
     member_by_id = {m.node_id: m for m in tables.members}
     for row in tables.calls_rows:
+        if row.src_id not in valid_ids or row.dst_id not in valid_ids:
+            continue
         key = (row.src_id, row.dst_id, row.arg_count, row.call_site_line)
         if key in seen_calls:
             continue
@@ -3355,6 +3390,7 @@ def _write_edges(conn: ladybug.Connection, tables: GraphTables, _file_by_node_id
             "source_file": _file_by_node_id.get(ucs_row["caller_id"], ""),
         }
         for ucs_row in ucs_rows
+        if ucs_row["caller_id"] in valid_ids
     ]
     _bulk_copy(conn, "UNRESOLVED_AT", _REL_UNRESOLVED_AT_COLUMNS, unresolved_at_rows)
 

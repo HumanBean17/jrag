@@ -98,7 +98,10 @@ def test_edge_schema_calls_registers_callee_declaring_role() -> None:
 def test_calls_edge_has_callee_declaring_role_column() -> None:
     text = _BUILD_AST_GRAPH.read_text(encoding="utf-8")
     assert "callee_declaring_role STRING" in text
-    assert "callee_declaring_role: $callee_declaring_role" in text
+    # PR-P1: CALLS is bulk-loaded via COPY FROM. The column must be declared in the
+    # schema (above) AND materialized in the bulk write path — either the column
+    # constant or the staging dict (previously the per-row "$callee_declaring_role" param).
+    assert '"callee_declaring_role"' in text, "bulk CALLS write must materialize callee_declaring_role"
 
 
 def test_brownfield_resolver_strategy_literals_emitted_in_builder_subset() -> None:
