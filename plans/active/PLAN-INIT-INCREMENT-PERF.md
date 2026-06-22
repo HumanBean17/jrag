@@ -161,9 +161,12 @@ phase delta. Not packaged; documents the measured speedup in the PR description.
 
 ## Tests for PR-P1
 
-1. `test_bulk_write_edges_match_per_row_baseline` — build `tests/bank-chat-system`
-   via the bulk path, assert node count, per-type edge counts, `GraphMeta`
-   counters, and sampled edge rows equal `graph_baseline_bank_chat.json`.
+1. `test_bank_chat_bulk_build_matches_committed_baseline` (renamed from
+   `test_bulk_write_edges_match_per_row_baseline` in PR-P4 once the per-row
+   reference was gone) — build `tests/bank-chat-system` via the bulk path,
+   assert node count, per-type edge counts, `GraphMeta` counters, and sampled
+   edge rows equal `graph_baseline_bank_chat.json` (a drift anchor, not a
+   per-row equivalence proof).
 2. `test_bulk_write_is_deterministic_double_build` — build bank-chat twice to two
    DBs via the bulk path, assert identical counts + query battery. Models on
    `tests/test_brownfield_routes.py::test_29_determinism_pass4_route_ids` and
@@ -183,7 +186,7 @@ phase delta. Not packaged; documents the measured speedup in the PR description.
 - [ ] `_bulk_copy` helper added; step-1 spike result in its docstring.
 - [ ] `_write_edges` stages per-type rows (CALLS dedup + `callee_declaring_role` at staging) and bulk-loads UnresolvedCallSite before UNRESOLVED_AT.
 - [ ] `_CREATE_EXT/IMPL/INJ/DECL/OVERRIDES/CALL` deleted; local `_CREATE_UNRESOLVED/_UNRESOLVED_AT` gone with the rewrite.
-- [ ] `test_bulk_write_edges_match_per_row_baseline`,
+- [ ] `test_bank_chat_bulk_build_matches_committed_baseline`,
       `test_bulk_write_is_deterministic_double_build`,
       `test_bulk_write_preserves_calls_dedup_and_callee_declaring_role`,
       `test_bulk_write_empty_rel_table_is_noop` pass.
