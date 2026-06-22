@@ -11,7 +11,7 @@ from pathlib import Path
 import ladybug
 
 from ast_java import ONTOLOGY_VERSION
-from build_ast_graph import FileHashTracker, GraphTables, pass1_parse, pass2_edges, pass4_routes, write_ladybug
+from build_ast_graph import FileHashTracker, GraphTables, pass1_parse, pass2_edges, pass4_routes
 from path_filtering import LayeredIgnore
 
 
@@ -1221,6 +1221,22 @@ class TestIncrementalRegressions:
             "_write_clients_producers_and_calls forces a full fallback)"
         )
         assert result.files_changed == 1
+
+        # Regression guard: the incremental global pass DETACH-DELETEs then
+        # rewrites every Client/Producer node. They must survive the rewrite —
+        # filtering node rows against the pre-load id set (the edge-filter pattern
+        # mis-applied to nodes) silently dropped ALL of them on each increment.
+        import ladybug as _ladybug
+        _db = _ladybug.Database(str(ladybug_path))
+        _conn = _ladybug.Connection(_db)
+        try:
+            for _nt in ("Client", "Producer"):
+                _r = _conn.execute(f"MATCH (n:{_nt}) RETURN count(n)")
+                _n = _r.get_next()[0] if _r.has_next() else 0
+                assert _n > 0, f"{_nt} nodes dropped to 0 by incremental rebuild"
+        finally:
+            _conn.close()
+            _db.close()
 
     def test_reprocess_graph_only_then_increment_is_noop(self, tmp_path: Path) -> None:
         """The reported scenario at the builder level: a full graph rebuild (what

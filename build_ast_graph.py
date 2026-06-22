@@ -3904,18 +3904,20 @@ def _write_clients_producers_and_calls(conn: ladybug.Connection, tables: GraphTa
     client_by_id = {c.id: c for c in tables.client_rows}
     producer_by_id = {p.id: p for p in tables.producer_rows}
 
-    # Bulk COPY FROM enforces referential integrity — get all valid node IDs
-    valid_ids = _existing_node_ids(conn)
-
-    # Stage Client node rows (bulk-load before edges that reference them)
-    client_rows = [asdict(row) for row in tables.client_rows if row.id in valid_ids]
+    # Stage Client + Producer NODE rows unconditionally. The caller DETACH-DELETEs
+    # every Client/Producer node immediately before calling this (see the global
+    # pass 5-6 block), so none are in the DB yet and COPY-ing them fresh is safe.
+    # Do NOT filter node rows against the existing-id set — that is the EDGE filter
+    # pattern mis-applied to nodes, and would drop every node being created (the
+    # caller's delete makes the pre-load set empty by construction).
+    client_rows = [asdict(row) for row in tables.client_rows]
     _bulk_copy(conn, "Client", _CLIENT_COLUMNS, client_rows)
-
-    # Stage Producer node rows (bulk-load before edges that reference them)
-    producer_rows = [asdict(row) for row in tables.producer_rows if row.id in valid_ids]
+    producer_rows = [asdict(row) for row in tables.producer_rows]
     _bulk_copy(conn, "Producer", _PRODUCER_COLUMNS, producer_rows)
 
-    # Re-fetch valid IDs after loading nodes (now includes Clients and Producers)
+    # Endpoint filtering applies to EDGES only: re-fetch the live node set (now
+    # includes the Clients/Producers just loaded) and drop edge rows whose
+    # endpoints still aren't materialized — reproduces per-row MERGE silent-drop.
     valid_ids = _existing_node_ids(conn)
 
     # Stage DECLARES_CLIENT edge rows (Symbol -> Client)
