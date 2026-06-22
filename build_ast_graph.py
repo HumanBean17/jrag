@@ -684,6 +684,54 @@ def _find_dependents(conn: ladybug.Connection, changed_node_ids: set[str]) -> se
     return dependent_files
 
 
+def _find_annotation_dependents(conn: ladybug.Connection, changed_node_ids: set[str]) -> set[str]:
+    """Find files that USE an annotation whose DEFINITION is among the changed nodes.
+
+    Annotation usage is a node property (``annotations`` STRING[]), not a
+    Symbol->Symbol edge, so `_find_dependents` — which walks edges — never pulls
+    annotation users into scope. When an annotation definition changes (e.g.
+    ``@interface Foo`` gains a meta-annotation that shifts the Layer-A chain in
+    `resolve_role_and_capabilities`), every type carrying ``@Foo`` may need its
+    ``role``/``capabilities`` recomputed or it goes stale until the next full
+    rebuild. Return those users' files so the orchestrator treats them as
+    dependents (re-parsed, role re-SET); the expansion cap bounds the scope.
+
+    Scope is direct usage only: a user of an annotation that transitively
+    composes the changed one (e.g. ``@A`` where ``@A`` is meta-annotated with the
+    changed ``@B``) is NOT pulled in — that reverse-chain walk is left to a
+    future hardening pass. The direct case covers the dominant real-world shape
+    (a stereotype annotation applied directly to many types).
+    """
+    if not changed_node_ids:
+        return set()
+    # Changed annotation definitions → the simple names users reference them by.
+    # Runs before `_delete_file_scope`, so the def nodes still exist.
+    name_result = conn.execute(
+        "MATCH (s:Symbol) WHERE s.id IN $ids AND s.kind = 'annotation' RETURN s.name",
+        {"ids": list(changed_node_ids)},
+    )
+    names: list[str] = []
+    while name_result.has_next():
+        nm = name_result.get_next()[0]
+        if nm:
+            names.append(nm)
+    if not names:
+        return set()
+    dependent_files: set[str] = set()
+    for nm in names:
+        user_result = conn.execute(
+            "MATCH (s:Symbol) "
+            "WHERE list_contains(s.annotations, $nm) AND s.filename <> '' "
+            "RETURN DISTINCT s.filename",
+            {"nm": nm},
+        )
+        while user_result.has_next():
+            fn = user_result.get_next()[0]
+            if fn:
+                dependent_files.add(fn)
+    return dependent_files
+
+
 def _delete_file_scope(
     conn: ladybug.Connection,
     changed_files: set[str],
@@ -3089,6 +3137,19 @@ _SET_SYMBOL_BY_ID = (
     "n.signature = $signature, n.parent_id = $parent_id, n.resolved = $resolved"
 )
 
+# Refresh every mutable Route field on an existing Route node by id. Mirrors the
+# `_write_nodes_impl` Symbol pattern (bulk COPY new rows + per-row SET existing
+# ones) so the global pass 5-6 step no longer needs a per-row MERGE upsert.
+# Field list mirrors `_ROUTE_COLUMNS` minus `id`.
+_SET_ROUTE_BY_ID = (
+    "MATCH (r:Route {id: $id}) "
+    "SET r.kind = $kind, r.framework = $framework, r.method = $method, "
+    "r.path = $path, r.path_template = $path_template, r.path_regex = $path_regex, "
+    "r.topic = $topic, r.broker = $broker, r.feign_name = $feign_name, r.feign_url = $feign_url, "
+    "r.microservice = $microservice, r.module = $module, r.filename = $filename, "
+    "r.start_line = $start_line, r.end_line = $end_line, r.resolved = $resolved"
+)
+
 _REL_EXTENDS_COLUMNS = ["FROM", "TO", "source_file", "dst_name", "dst_fqn", "resolved"]
 _REL_IMPLEMENTS_COLUMNS = ["FROM", "TO", "source_file", "dst_name", "dst_fqn", "resolved"]
 _REL_INJECTS_COLUMNS = ["FROM", "TO", "source_file", "dst_name", "dst_fqn", "resolved", "mechanism", "annotation", "field_or_param"]
@@ -3776,6 +3837,12 @@ def incremental_rebuild(
         # Find dependents
         dependent_files = _find_dependents(conn, changed_node_ids)
 
+        # Annotation-definition change: also pull in files that USE the changed
+        # annotation. Annotation usage is a node property, not a Symbol->Symbol
+        # edge, so `_find_dependents` misses them and their role (derived from
+        # the project-wide meta-chain) would go stale. See PR-P5b.
+        dependent_files |= _find_annotation_dependents(conn, changed_node_ids)
+
         # Union changed files with dependents
         scope_files = changed_files | dependent_files
 
@@ -3940,22 +4007,21 @@ def _write_clients_producers_and_calls(conn: ladybug.Connection, tables: GraphTa
     Route nodes (created by pass5 for cross-service calls) that wouldn't
     otherwise exist in LadybugDB.
     """
-    # Upsert every route via MERGE. `tables.routes_rows` is the full route set
-    # (pass4 routes + pass5 phantom routes), not just phantoms; MERGE is
-    # idempotent against routes already written during the scoped step, so it
-    # neither duplicates nor drops them. This is the one remaining per-row graph
-    # write — converting it to bulk COPY requires filtering against existing
-    # route ids to reproduce the dedup, and is left as a future optimization.
-    for row in tables.routes_rows:
-        conn.execute(
-            "MERGE (r:Route {id: $id}) "
-            "SET r.kind = $kind, r.framework = $framework, r.method = $method, "
-            "r.path = $path, r.path_template = $path_template, r.path_regex = $path_regex, "
-            "r.topic = $topic, r.broker = $broker, r.feign_name = $feign_name, r.feign_url = $feign_url, "
-            "r.microservice = $microservice, r.module = $module, r.filename = $filename, "
-            "r.start_line = $start_line, r.end_line = $end_line, r.resolved = $resolved",
-            asdict(row),
-        )
+    # Bulk-write routes, mirroring `_write_nodes_impl`: COPY the rows that are new
+    # to the DB, and SET every mutable field on the routes already present (the
+    # caller does NOT delete routes, only Clients/Producers — see the global
+    # pass 5-6 block). `tables.routes_rows` is the full route set (pass4 routes +
+    # pass5 phantom routes), not just phantoms, so the SET keeps existing routes'
+    # properties in sync with pass5's cross-service enrichment while the COPY
+    # materializes phantoms that have no node yet. Replaces the last per-row
+    # graph write (MERGE upsert).
+    route_rows = [asdict(row) for row in tables.routes_rows]
+    existing_route_ids = _existing_node_ids(conn)
+    new_route_rows = [r for r in route_rows if r["id"] not in existing_route_ids]
+    _bulk_copy(conn, "Route", _ROUTE_COLUMNS, new_route_rows)
+    for r in route_rows:
+        if r["id"] in existing_route_ids:
+            conn.execute(_SET_ROUTE_BY_ID, r)
 
     # Build node_id lookup for members and types
     member_by_id = {m.node_id: m for m in tables.members}
