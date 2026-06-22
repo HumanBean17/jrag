@@ -60,21 +60,21 @@ if "detect_change" in _ck_params:
     PROJECT_ROOT = coco.ContextKey[Path]("java_lance_project_root")
     LANCE_DB = coco.ContextKey("java_lance_async_conn")
     EMBEDDER = coco.ContextKey[SentenceTransformerEmbedder]("java_lance_embedder")
-    IGNORE = coco.ContextKey["path_filtering.LayeredIgnore"]("java_lance_layered_ignore")
+    IGNORE = coco.ContextKey[LayeredIgnore]("java_lance_layered_ignore")
 elif "tracked" in _ck_params:
     PROJECT_ROOT = coco.ContextKey[Path]("java_lance_project_root", tracked=False)
     LANCE_DB = coco.ContextKey("java_lance_async_conn", tracked=False)
     EMBEDDER = coco.ContextKey[SentenceTransformerEmbedder](
         "java_lance_embedder", tracked=False
     )
-    IGNORE = coco.ContextKey["path_filtering.LayeredIgnore"](
+    IGNORE = coco.ContextKey[LayeredIgnore](
         "java_lance_layered_ignore", tracked=False
     )
 else:
     PROJECT_ROOT = coco.ContextKey[Path]("java_lance_project_root")
     LANCE_DB = coco.ContextKey("java_lance_async_conn")
     EMBEDDER = coco.ContextKey[SentenceTransformerEmbedder]("java_lance_embedder")
-    IGNORE = coco.ContextKey["path_filtering.LayeredIgnore"]("java_lance_layered_ignore")
+    IGNORE = coco.ContextKey[LayeredIgnore]("java_lance_layered_ignore")
 
 splitter = RecursiveSplitter()
 
