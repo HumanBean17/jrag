@@ -60,16 +60,21 @@ if "detect_change" in _ck_params:
     PROJECT_ROOT = coco.ContextKey[Path]("java_lance_project_root")
     LANCE_DB = coco.ContextKey("java_lance_async_conn")
     EMBEDDER = coco.ContextKey[SentenceTransformerEmbedder]("java_lance_embedder")
+    IGNORE = coco.ContextKey["path_filtering.LayeredIgnore"]("java_lance_layered_ignore")
 elif "tracked" in _ck_params:
     PROJECT_ROOT = coco.ContextKey[Path]("java_lance_project_root", tracked=False)
     LANCE_DB = coco.ContextKey("java_lance_async_conn", tracked=False)
     EMBEDDER = coco.ContextKey[SentenceTransformerEmbedder](
         "java_lance_embedder", tracked=False
     )
+    IGNORE = coco.ContextKey["path_filtering.LayeredIgnore"](
+        "java_lance_layered_ignore", tracked=False
+    )
 else:
     PROJECT_ROOT = coco.ContextKey[Path]("java_lance_project_root")
     LANCE_DB = coco.ContextKey("java_lance_async_conn")
     EMBEDDER = coco.ContextKey[SentenceTransformerEmbedder]("java_lance_embedder")
+    IGNORE = coco.ContextKey["path_filtering.LayeredIgnore"]("java_lance_layered_ignore")
 
 splitter = RecursiveSplitter()
 
@@ -292,6 +297,7 @@ async def coco_lifespan(builder: coco.EnvironmentBuilder) -> AsyncIterator[None]
         trust_remote_code=True,
     )
     builder.provide(EMBEDDER, embedder)
+    builder.provide(IGNORE, LayeredIgnore(root))
 
     uri = str(index_dir)
 
@@ -348,7 +354,8 @@ async def process_java_file(
 ) -> None:
     embedder = coco.use_context(EMBEDDER)
     project_root = coco.use_context(PROJECT_ROOT)
-    if LayeredIgnore(project_root).is_ignored((project_root / file.file_path.path).resolve()):
+    ignore = coco.use_context(IGNORE)
+    if ignore.is_ignored((project_root / file.file_path.path).resolve()):
         return
     try:
         content = await file.read_text()
@@ -420,7 +427,8 @@ async def process_sql_file(
 ) -> None:
     embedder = coco.use_context(EMBEDDER)
     project_root = coco.use_context(PROJECT_ROOT)
-    if LayeredIgnore(project_root).is_ignored((project_root / file.file_path.path).resolve()):
+    ignore = coco.use_context(IGNORE)
+    if ignore.is_ignored((project_root / file.file_path.path).resolve()):
         return
     try:
         content = await file.read_text()
@@ -468,7 +476,8 @@ async def process_yaml_file(
 ) -> None:
     embedder = coco.use_context(EMBEDDER)
     project_root = coco.use_context(PROJECT_ROOT)
-    if LayeredIgnore(project_root).is_ignored((project_root / file.file_path.path).resolve()):
+    ignore = coco.use_context(IGNORE)
+    if ignore.is_ignored((project_root / file.file_path.path).resolve()):
         return
     try:
         content = await file.read_text()

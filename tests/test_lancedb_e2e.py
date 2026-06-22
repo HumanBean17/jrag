@@ -345,3 +345,64 @@ async def test_search_returns_multiple_hits(lance_index: Path, monkeypatch) -> N
     )
     assert out["success"] is True
     assert len(out["results"]) >= 1
+
+
+@pytest.mark.skipif(
+    not HEAVY,
+    reason="set JAVA_CODEBASE_RAG_RUN_HEAVY=1 to run the once-per-flow LayeredIgnore test",
+)
+def test_layered_ignore_provided_once_per_flow(tmp_path_factory, corpus_root: Path) -> None:
+    """Assert a single LayeredIgnore instance (identity check) per flow run, not per-file."""
+    from unittest.mock import patch
+
+    _require_cocoindex_runtime_deps()
+    bundle_dir = Path(__file__).resolve().parent.parent
+    cocoindex_bin = Path(sys.executable).parent / "cocoindex"
+    if not cocoindex_bin.is_file():
+        pytest.skip(f"cocoindex CLI not found: {cocoindex_bin}")
+
+    work = tmp_path_factory.mktemp("lance_e2e_ignore")
+    index_dir = work / ".java-codebase-rag"
+    index_dir.mkdir(parents=True)
+
+    app_spec = _cocoindex_flow_specifier(bundle_dir, Path(corpus_root))
+
+    env = {
+        **os.environ,
+        "JAVA_CODEBASE_RAG_INDEX_DIR": str(index_dir.resolve()),
+        "JAVA_CODEBASE_RAG_SOURCE_ROOT": str(Path(corpus_root).resolve()),
+    }
+
+    # Instrument LayeredIgnore.__init__ to track instance identities
+    instances_created = []
+    original_init = None
+
+    def track_instances(self, *args, **kwargs):
+        nonlocal original_init
+        instances_created.append(id(self))
+        return original_init(self, *args, **kwargs)
+
+    # Patch LayeredIgnore.__init__ in the flow module
+    import java_index_flow_lancedb
+
+    with patch.object(java_index_flow_lancedb.LayeredIgnore, "__init__", track_instances):
+        original_init = java_index_flow_lancedb.LayeredIgnore.__init__
+
+        proc = subprocess.run(
+            [
+                str(cocoindex_bin),
+                "update",
+                app_spec,
+                "--full-reprocess",
+                "-f",
+            ],
+            cwd=str(corpus_root),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=900,
+        )
+        assert proc.returncode == 0, f"stdout: {proc.stdout}\nstderr: {proc.stderr}"
+
+    # Should have created exactly one LayeredIgnore instance per flow run
+    assert len(instances_created) == 1, f"Expected 1 LayeredIgnore instance, got {len(instances_created)}"

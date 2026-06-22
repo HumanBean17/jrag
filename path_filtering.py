@@ -300,6 +300,7 @@ class LayeredIgnore:
             _scan_negation_any_bundle_ignore(self.project_root)
             or (use_gitignore and _scan_negation_any_gitignore(self.project_root))
         )
+        self._mega_cache: dict[str, tuple[list[str], GitIgnoreSpec, list[tuple[str, Path | None, int, str]]]] = {}
 
     def cocoindex_excluded_patterns(self) -> list[str]:
         """Patterns for CocoIndex ``PatternFilePathMatcher.excluded_patterns``.
@@ -332,6 +333,11 @@ class LayeredIgnore:
                 return path.as_posix()
 
     def _mega(self, rel_project: str) -> tuple[list[str], GitIgnoreSpec, list[tuple[str, Path | None, int, str]]]:
+        # Cache by directory (parent of rel_project). _mega_build_for_rel reads only dir_parts,
+        # so files in the same directory share the same mega/spec/meta tuple.
+        cache_key = Path(rel_project).parent.as_posix()
+        if cache_key in self._mega_cache:
+            return self._mega_cache[cache_key]
         mega, meta = _mega_build_for_rel(
             self.project_root,
             rel_project,
@@ -340,7 +346,9 @@ class LayeredIgnore:
             project_ignore_path=self._project_ignore_path,
             project_lines=self._project_lines,
         )
-        return mega, GitIgnoreSpec.from_lines(mega), meta
+        result = (mega, GitIgnoreSpec.from_lines(mega), meta)
+        self._mega_cache[cache_key] = result
+        return result
 
     def is_ignored(self, path: Path) -> bool:
         """Return whether ``path`` is ignored by any configured layer.
