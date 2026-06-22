@@ -1148,12 +1148,166 @@ class TestIncrementalOrchestrator:
             "(PR-P4 regression: skip-if-exists dropped the upsert)"
         )
 
-    def test_incremental_route_merge_dedup_preserved(self, tmp_path: Path) -> None:
-        """Pass5/6 Route MERGE dedup is preserved after bulk conversion.
+    def test_incremental_pulls_in_annotation_users_on_def_change(
+        self, tmp_path: Path
+    ) -> None:
+        """Editing an annotation definition refreshes its direct users' roles.
 
-       Creates a corpus where pass5/6 re-emits an existing route and verifies
-        no duplicate Route rows after incremental rebuild (the retained MERGE
-        dedups against routes written during the scoped step).
+        Regression guard for the PR-P5b fix. Annotation usage is a node property
+        (``annotations`` STRING[]), not a Symbol->Symbol edge, so `_find_dependents`
+        — which walks edges — never pulls annotation users into scope. When an
+        annotation definition changes (e.g. ``@interface MyService`` gains a
+        ``@Service`` meta-annotation that shifts the Layer-A chain), types
+        carrying ``@MyService`` need their ``role`` recomputed or they go stale.
+
+        Unlike `test_incremental_refreshes_dependent_role_on_meta_chain_change`
+        (PR-P4), the user here has NO edge to any changed node: it is pulled in
+        purely by the annotation-usage expansion (`_find_annotation_dependents`),
+        so this isolates the scope-tracking fix from the preserved-dependent
+        property refresh.
+        """
+        from build_ast_graph import incremental_rebuild
+        from graph_enrich import collect_annotation_meta_chain
+        from _builders import build_ladybug_full_into
+
+        source_root = tmp_path / "src"
+        source_root.mkdir()
+        index_dir = tmp_path / "index"
+        index_dir.mkdir()
+        ladybug_path = index_dir / "code_graph.lbug"
+        java = source_root / "pkg"
+        java.mkdir(parents=True)
+
+        # Svc carries @MyService but calls/extends nothing — no edge to any other
+        # node, so `_find_dependents` cannot pull it in. Only annotation usage can.
+        (java / "MyService.java").write_text(
+            "package pkg; public @interface MyService {}\n", encoding="utf-8"
+        )
+        (java / "Svc.java").write_text(
+            "package pkg;\n@MyService\npublic class Svc {}\n", encoding="utf-8"
+        )
+        build_ladybug_full_into(source_root, ladybug_path)
+
+        # Edit ONLY the annotation definition: add a @Service meta-annotation so
+        # the chain maps MyService → Service and Svc's role flips OTHER → SERVICE.
+        (java / "MyService.java").write_text(
+            "package pkg;\nimport org.springframework.stereotype.Service;\n"
+            "@Service\npublic @interface MyService {}\n",
+            encoding="utf-8",
+        )
+        collect_annotation_meta_chain.cache_clear()
+        result = incremental_rebuild(source_root, ladybug_path, verbose=False)
+        assert result.mode == "incremental", f"expected incremental, got {result.mode}"
+        assert result.dependents_reprocessed >= 1, (
+            "Svc should be pulled in as an annotation-dependent, not just the def file"
+        )
+
+        def role_of(fqn: str) -> str:
+            db = ladybug.Database(str(ladybug_path))
+            conn = ladybug.Connection(db)
+            r = conn.execute("MATCH (n:Symbol {fqn: $fqn}) RETURN n.role", {"fqn": fqn})
+            v = r.get_next()[0] if r.has_next() else None
+            conn.close()
+            db.close()
+            return v
+
+        # Svc was pulled in by annotation usage (no edge to the changed def); its
+        # role must refresh to SERVICE to match a full rebuild of this state.
+        assert role_of("pkg.Svc") == "SERVICE", (
+            "annotation user's role not refreshed after annotation-def change "
+            "(PR-P5b regression: annotation users not pulled into incremental scope)"
+        )
+
+    def test_incremental_overrides_not_duplicated_for_non_scope_subtype(
+        self, tmp_path: Path
+    ) -> None:
+        """A non-scope subtype's OVERRIDES edge is not duplicated on increment.
+
+        Invariant guard for the OVERRIDES path. Unlike DECLARES (derived purely
+        from a member's own ``parent_id``/``node_id``, which is why a loaded
+        non-scope member could duplicate it — fixed in PR-P4), an OVERRIDES pair
+        needs the subtype's supertype via `_direct_supertype_ids`, which reads
+        `tables.extends_rows`/`implements_rows`. Those edge tables are populated
+        only by `pass2_edges` over *parsed* files; cross-file resolution stubs
+        (`loaded_from_db`) load nodes but NOT edges, so a loaded subtype has no
+        derivable supertype and `_populate_overrides_rows` never re-emits its
+        OVERRIDES — the edge (``source_file`` = its out-of-scope file) survives
+        untouched, matching a full rebuild.
+
+        This test pins that behavior down. If stub edge-loading is ever added as
+        an optimization, this guard will catch the resulting duplication (the
+        same class of bug PR-P4 fixed for DECLARES).
+
+        Corpus: `TImpl implements T` overrides `foo()` in non-scope files; an
+        unrelated `Other.java` change triggers the increment so `TImpl`/`T` are
+        loaded as stubs. The increment must keep exactly one OVERRIDES edge.
+        """
+        from build_ast_graph import incremental_rebuild
+        from _builders import build_ladybug_full_into
+
+        source_root = tmp_path / "src"
+        source_root.mkdir()
+        index_dir = tmp_path / "index"
+        index_dir.mkdir()
+        ladybug_path = index_dir / "code_graph.lbug"
+        java = source_root / "pkg"
+        java.mkdir(parents=True)
+
+        (java / "T.java").write_text(
+            "package pkg; public interface T { void foo(); }\n", encoding="utf-8"
+        )
+        (java / "TImpl.java").write_text(
+            "package pkg; public class TImpl implements T { public void foo() {} }\n",
+            encoding="utf-8",
+        )
+        (java / "Other.java").write_text(
+            "package pkg; public class Other { public void go() {} }\n", encoding="utf-8"
+        )
+        build_ladybug_full_into(source_root, ladybug_path)
+
+        # Change Other.java only. Nothing references Other, so the scope is just
+        # {Other.java}; TImpl/T are non-scope and loaded as resolution stubs.
+        (java / "Other.java").write_text(
+            "package pkg; public class Other { public void go() {} public void more() {} }\n",
+            encoding="utf-8",
+        )
+        result = incremental_rebuild(source_root, ladybug_path, verbose=False)
+        assert result.mode == "incremental", f"expected incremental, got {result.mode}"
+
+        def overrides_count(path: Path) -> int:
+            db = ladybug.Database(str(path))
+            conn = ladybug.Connection(db)
+            r = conn.execute("MATCH ()-[o:OVERRIDES]->() RETURN count(o)")
+            n = r.get_next()[0] if r.has_next() else 0
+            conn.close()
+            db.close()
+            return n
+
+        # Exactly one override relationship exists (TImpl.foo → T.foo); a
+        # duplicate (2) is the bug. Cross-check against a fresh full rebuild of
+        # the identical final state — the increment must match it.
+        full_dir = tmp_path / "full"
+        full_dir.mkdir()
+        full_path = full_dir / "code_graph.lbug"
+        build_ladybug_full_into(source_root, full_path)
+
+        assert overrides_count(ladybug_path) == 1, (
+            "non-scope OVERRIDES edge duplicated on increment "
+            "(PR-P5a regression: loaded subtype method re-emitted)"
+        )
+        assert overrides_count(ladybug_path) == overrides_count(full_path), (
+            "incremental OVERRIDES count diverged from full rebuild"
+        )
+
+    def test_incremental_route_merge_dedup_preserved(self, tmp_path: Path) -> None:
+        """Pass5/6 Route write does not duplicate existing routes.
+
+        Creates a corpus where pass5/6 re-emits an existing route and verifies
+        no duplicate Route rows after incremental rebuild. The global step now
+        bulk-writes routes (COPY new ids + SET existing ids — see PR-P5c),
+        replacing the per-row MERGE upsert this test was originally written for;
+        the name is kept for plan-reference continuity. The SET branch is what
+        dedups against routes written during the scoped step here.
         """
         from build_ast_graph import incremental_rebuild, write_ladybug
 
@@ -1216,7 +1370,7 @@ class TestIncrementalOrchestrator:
             route_count = route_count_result.get_next()[0]
 
         # Should be exactly 1 route (no duplicates)
-        assert route_count == 1, f"Expected 1 route, found {route_count} (MERGE dedup failed)"
+        assert route_count == 1, f"Expected 1 route, found {route_count} (route dedup failed)"
 
         conn.close()
 
