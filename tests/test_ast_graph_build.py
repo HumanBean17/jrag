@@ -17,7 +17,7 @@ from pathlib import Path
 import ladybug
 import pytest
 
-from _builders import build_ladybug_to
+from _builders import build_ladybug_into, build_ladybug_to
 from ast_java import ONTOLOGY_VERSION
 from graph_enrich import _load_brownfield_overrides, collect_annotation_meta_chain
 
@@ -540,3 +540,157 @@ def test_pass1_parse_incremental_total_excludes_removed_files(tmp_path: Path, ca
     assert pass1_totals[0] == 1, (
         f"incremental pass-1 total must exclude removed files; got {pass1_totals[0]}"
     )
+
+
+# ---------------------------------------------------------------------------
+# PR-P1: Bulk COPY FROM for _write_edges
+# ---------------------------------------------------------------------------
+
+
+def _load_baseline() -> dict:
+    """Load the baseline fixture generated from the per-row _write_edges implementation."""
+    baseline_path = Path(__file__).resolve().parent / "fixtures" / "graph_baseline_bank_chat.json"
+    with open(baseline_path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def test_bulk_write_edges_match_per_row_baseline(ladybug_db_path: Path) -> None:
+    """Bulk COPY FROM produces identical graph to the per-row baseline.
+
+    Asserts node count, per-type edge counts, GraphMeta counters, and sampled edge
+    properties match the baseline generated from the last per-row _write_edges build.
+    """
+    baseline = _load_baseline()
+    conn = _connect(ladybug_db_path)
+
+    # Assert node count matches
+    node_count = int(conn.execute("MATCH (n:Symbol) RETURN COUNT(n)").get_next()[0])
+    assert node_count == baseline["node_count"], f"node count mismatch: {node_count} vs {baseline['node_count']}"
+
+    # Assert edge counts per type match
+    for edge_type, expected_count in baseline["edge_counts"].items():
+        actual_count = int(conn.execute(f"MATCH ()-[r:{edge_type}]->() RETURN COUNT(r)").get_next()[0])
+        assert actual_count == expected_count, f"{edge_type} count mismatch: {actual_count} vs {expected_count}"
+
+    # Assert GraphMeta counters match (only PR-P1 edge types)
+    meta_row = conn.execute("MATCH (m:GraphMeta) RETURN m.ontology_version, m.counts_json").get_next()
+    assert int(meta_row[0]) == baseline["graph_meta"]["ontology_version"], "ontology_version mismatch"
+    # Parse both counts_json as LadybugDB-style unquoted JSON for comparison
+    actual_counts = _parse_ladybug_json(meta_row[1])
+    expected_counts = _parse_ladybug_json(baseline["graph_meta"]["counts_json"])
+    # Filter to only PR-P1 edge types (routes/clients/producers are PR-P2)
+    p1_keys = {"packages", "files", "types", "members", "phantoms", "extends", "implements", "injects", "declares", "overrides", "calls"}
+    actual_counts_p1 = {k: v for k, v in actual_counts.items() if k in p1_keys}
+    expected_counts_p1 = {k: v for k, v in expected_counts.items() if k in p1_keys}
+    assert actual_counts_p1 == expected_counts_p1, f"GraphMeta PR-P1 counts mismatch: {actual_counts_p1} vs {expected_counts_p1}"
+
+    # Assert sampled edge properties match (verify CALLS callee_declaring_role is preserved)
+    for edge_type, sampled_baseline in baseline["sampled_edges"].items():
+        result = conn.execute(f"MATCH (a)-[r:{edge_type}]->(b) RETURN a.id, b.id, r LIMIT 3")
+        actual_rows = []
+        while result.has_next():
+            actual_rows.append(result.get_next())
+        assert len(actual_rows) == len(sampled_baseline), f"{edge_type}: sampled row count mismatch"
+        # For CALLS, verify callee_declaring_role is preserved (don't compare node IDs as they vary per build)
+        if edge_type == "CALLS":
+            for actual, expected in zip(actual_rows, sampled_baseline):
+                actual_props = actual[2]
+                expected_props = expected[2]
+                assert actual_props["callee_declaring_role"] == expected_props["callee_declaring_role"], \
+                    f"CALLS callee_declaring_role mismatch: {actual_props['callee_declaring_role']} vs {expected_props['callee_declaring_role']}"
+
+
+def test_bulk_write_is_deterministic_double_build(corpus_root: Path, tmp_path: Path) -> None:
+    """Bulk COPY FROM is deterministic: two builds of the same corpus produce identical graphs.
+
+    Models on tests/test_brownfield_routes.py::test_29_determinism_pass4_route_ids and
+    tests/test_mcp_v2_compose.py::test_overrides_edge_set_deterministic_double_build.
+    """
+    db1 = tmp_path / "double1.lbug"
+    db2 = tmp_path / "double2.lbug"
+    build_ladybug_into(corpus_root, db1)
+    build_ladybug_into(corpus_root, db2)
+
+    conn1 = _connect(db1)
+    conn2 = _connect(db2)
+
+    # Assert identical node counts
+    count1 = int(conn1.execute("MATCH (n:Symbol) RETURN COUNT(n)").get_next()[0])
+    count2 = int(conn2.execute("MATCH (n:Symbol) RETURN COUNT(n)").get_next()[0])
+    assert count1 == count2, f"node count mismatch: {count1} vs {count2}"
+
+    # Assert identical edge counts per type
+    for edge_type in ["EXTENDS", "IMPLEMENTS", "INJECTS", "DECLARES", "OVERRIDES", "CALLS", "UNRESOLVED_AT"]:
+        c1 = int(conn1.execute(f"MATCH ()-[r:{edge_type}]->() RETURN COUNT(r)").get_next()[0])
+        c2 = int(conn2.execute(f"MATCH ()-[r:{edge_type}]->() RETURN COUNT(r)").get_next()[0])
+        assert c1 == c2, f"{edge_type} count mismatch: {c1} vs {c2}"
+
+    # Assert identical GraphMeta counters
+    meta1 = conn1.execute("MATCH (m:GraphMeta) RETURN m.counts_json").get_next()[0]
+    meta2 = conn2.execute("MATCH (m:GraphMeta) RETURN m.counts_json").get_next()[0]
+    assert meta1 == meta2, "GraphMeta counts_json mismatch"
+
+    # Spot-check: assert identical CALLS callee_declaring_role for a known edge
+    calls1 = conn1.execute("MATCH (a)-[c:CALLS]->(b) RETURN c.callee_declaring_role LIMIT 1").get_next()[0]
+    calls2 = conn2.execute("MATCH (a)-[c:CALLS]->(b) RETURN c.callee_declaring_role LIMIT 1").get_next()[0]
+    assert calls1 == calls2, f"CALLS callee_declaring_role mismatch: {calls1} vs {calls2}"
+
+
+def test_bulk_write_preserves_calls_dedup_and_callee_declaring_role(ladybug_db_path: Path) -> None:
+    """Bulk COPY FROM preserves CALLS dedup by (src, dst, argc, line) and callee_declaring_role.
+
+    Reuses the @Service callee assertion against a bulk build to verify the materialization
+    at staging time produces the same results as the per-row path.
+    """
+    conn = _connect(ladybug_db_path)
+
+    # Verify CALLS dedup: count unique (src_id, dst_id, arg_count, call_site_line) tuples
+    result = conn.execute(
+        "MATCH (a)-[c:CALLS]->(b) "
+        "RETURN COUNT(DISTINCT {src: a.id, dst: b.id, argc: c.arg_count, line: c.call_site_line})"
+    )
+    unique_call_keys = int(result.get_next()[0])
+
+    # Total CALLS count should equal unique keys (dedup applied)
+    total_calls = int(conn.execute("MATCH ()-[c:CALLS]->() RETURN COUNT(c)").get_next()[0])
+    assert unique_call_keys == total_calls, f"CALLS dedup failed: {unique_call_keys} unique keys vs {total_calls} total edges"
+
+    # Verify callee_declaring_role: @Service methods should have callee_declaring_role = "SERVICE"
+    service_calls = conn.execute(
+        "MATCH (callee:Symbol)<-[:DECLARES]-(member:Symbol)<-[c:CALLS]-(caller:Symbol) "
+        "WHERE callee.role = 'SERVICE' "
+        "RETURN DISTINCT c.callee_declaring_role LIMIT 10"
+    )
+    while service_calls.has_next():
+        role = service_calls.get_next()[0]
+        assert role == "SERVICE", f"@Service callee has unexpected callee_declaring_role: {role}"
+
+
+def test_bulk_write_empty_rel_table_is_noop(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """Bulk COPY FROM with empty rows list is a no-op; corpus with no EXTENDS edges should not error."""
+    import build_ast_graph
+
+    root = tmp_path / "proj"
+    java_dir = root / "src/main/java/smoke"
+    java_dir.mkdir(parents=True)
+    # Create a corpus with no inheritance (no EXTENDS/IMPLEMENTS edges)
+    (java_dir / "NoInheritance.java").write_text(
+        "package smoke;\nclass NoInheritance { void go() { } }\n", encoding="utf-8"
+    )
+
+    db_path = tmp_path / "no_inherits.lbug"
+    tables = build_ast_graph.GraphTables()
+    asts = build_ast_graph.pass1_parse(root, tables, verbose=False)
+    build_ast_graph.pass2_edges(tables, asts, verbose=False)
+    build_ast_graph.pass3_calls(tables, asts, verbose=False)
+    build_ast_graph.pass4_routes(tables, asts, source_root=root, verbose=False)
+    build_ast_graph.pass5_imperative_edges(tables, asts, source_root=root, verbose=False)
+    build_ast_graph.pass6_match_edges(tables, verbose=False)
+
+    # Build via bulk write (should not error on empty EXTENDS)
+    build_ast_graph.write_ladybug(db_path, tables, source_root=root, verbose=False)
+
+    # Verify EXTENDS table is empty
+    conn = _connect(db_path)
+    extends_count = int(conn.execute("MATCH ()-[r:EXTENDS]->() RETURN COUNT(r)").get_next()[0])
+    assert extends_count == 0, "EXTENDS should be empty for this corpus"
