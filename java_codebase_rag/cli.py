@@ -580,11 +580,33 @@ def _cmd_update(args: argparse.Namespace) -> int:
     )
 
 
+def _rm_any(path: Path) -> None:
+    """Remove ``path`` whether it is a regular file, directory, or symlink.
+
+    ``code_graph.lbug`` is a single regular file in this repo, but kuzu may lay
+    the graph out as a directory; ``cocoindex.db`` is always a directory.
+    ``shutil.rmtree`` is a silent no-op on a regular file and ``Path.unlink``
+    raises ``IsADirectoryError`` on a directory, so a type-blind delete left
+    index artifacts on disk (issue #346). A symlinked directory is unlinked, not
+    recursed into, so the link target is never followed. Failures are warned to
+    stderr rather than swallowed, so erase does not report success while leaving
+    an artifact behind (the exact failure mode issue #346 reported).
+    """
+    try:
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path)
+        elif path.exists() or path.is_symlink():
+            path.unlink(missing_ok=True)
+    except OSError as exc:
+        print(f"warning: failed to remove {path}: {exc}", file=sys.stderr)
+
+
 def _cmd_erase(args: argparse.Namespace) -> int:
     cfg = _resolved_from_ns(args)
     _startup_hints(cfg)
     cfg.apply_to_os_environ()
-    to_describe: list[Path] = [cfg.ladybug_path, cfg.cocoindex_db]
+    graph_hashes_path = cfg.ladybug_path.parent / ".graph_hashes.json"
+    to_describe: list[Path] = [cfg.ladybug_path, cfg.cocoindex_db, graph_hashes_path]
     if cfg.index_dir.is_dir():
         try:
             import lancedb
@@ -621,13 +643,15 @@ def _cmd_erase(args: argparse.Namespace) -> int:
             )
         elif drop.returncode != 0:
             print(clip(drop.stderr, 4000), file=sys.stderr)
-        if cfg.ladybug_path.exists():
-            shutil.rmtree(cfg.ladybug_path, ignore_errors=True)
-        if cfg.cocoindex_db.exists():
-            try:
-                cfg.cocoindex_db.unlink()
-            except OSError:
-                pass
+        # Remove the LadybugDB graph, the cocoindex state store, and the graph
+        # builder's content-hash store. Each is removed by type (see _rm_any):
+        # code_graph.lbug is a file here but may be a dir under kuzu, while
+        # cocoindex.db is a directory — a type-blind delete silently no-oped on
+        # one or the other, and .graph_hashes.json was never targeted at all
+        # (issue #346).
+        _rm_any(cfg.ladybug_path)
+        _rm_any(cfg.cocoindex_db)
+        _rm_any(graph_hashes_path)
         if cfg.index_dir.is_dir():
             try:
                 import lancedb
