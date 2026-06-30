@@ -109,6 +109,35 @@ def test_cli_erase_succeeds_with_yes_flag(tmp_path: Path) -> None:
     assert proc.returncode == 0, proc.stderr + proc.stdout
 
 
+def test_erase_removes_graph_file_cocoindex_dir_and_hash_store(tmp_path: Path) -> None:
+    """erase must delete code_graph.lbug (file), cocoindex.db (dir), .graph_hashes.json.
+
+    Regression for issue #346: a type-blind delete left both on disk.
+    shutil.rmtree is a silent no-op on a regular file (code_graph.lbug), and
+    Path.unlink raises IsADirectoryError on cocoindex.db (a directory) — both
+    swallowed — and .graph_hashes.json was never targeted. The follow-up init
+    then refused because code_graph.lbug survived.
+    """
+    idx = tmp_path / "erase_artifacts"
+    idx.mkdir()
+    # Real on-disk layout: graph is a single FILE, cocoindex state is a DIR.
+    (idx / "code_graph.lbug").write_bytes(b"fake-kuzu-db")
+    (idx / "cocoindex.db").mkdir()
+    (idx / "cocoindex.db" / "state.json").write_text("{}", encoding="utf-8")
+    (idx / ".graph_hashes.json").write_text("{}", encoding="utf-8")
+    env = os.environ.copy()
+    env["JAVA_CODEBASE_RAG_INDEX_DIR"] = str(idx)
+    env["JAVA_CODEBASE_RAG_SOURCE_ROOT"] = str(tmp_path)
+    proc = _run_cli(
+        ["erase", "--source-root", str(tmp_path), "--index-dir", str(idx), "--yes"],
+        env=env,
+    )
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert not (idx / "code_graph.lbug").exists(), "erase left code_graph.lbug on disk"
+    assert not (idx / "cocoindex.db").exists(), "erase left cocoindex.db/ on disk"
+    assert not (idx / ".graph_hashes.json").exists(), "erase left .graph_hashes.json on disk"
+
+
 def test_embedding_model_precedence_cli_over_env_over_yaml_over_default(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -377,21 +406,34 @@ def test_legacy_env_var_set_emits_stderr_hint(monkeypatch: pytest.MonkeyPatch, t
 
 @pytest.mark.skipif(not _cocoindex_available(), reason="cocoindex not installed in venv")
 def test_init_after_erase_succeeds(corpus_root: Path, tmp_path: Path) -> None:
+    """Build a real index, erase it, then init again from a clean slate.
+
+    Regression for issue #346: the previous body erased an *empty* index dir and
+    then inited, so it never exercised "erase a real graph -> re-init" and stayed
+    green while erase silently left code_graph.lbug on disk.
+    """
     idx = tmp_path / "lifecycle_idx"
     idx.mkdir(parents=True)
     env = os.environ.copy()
     env["JAVA_CODEBASE_RAG_INDEX_DIR"] = str(idx)
     env["JAVA_CODEBASE_RAG_SOURCE_ROOT"] = str(corpus_root.resolve())
+    init1 = _run_cli(
+        ["init", "--source-root", str(corpus_root), "--index-dir", str(idx), "--quiet"],
+        env=env,
+    )
+    assert init1.returncode == 0, init1.stdout + init1.stderr
+    assert (idx / "code_graph.lbug").exists(), "init did not build code_graph.lbug"
     e1 = _run_cli(
         ["erase", "--source-root", str(corpus_root), "--index-dir", str(idx), "--yes"],
         env=env,
     )
     assert e1.returncode == 0, e1.stderr
-    init = _run_cli(
+    assert not (idx / "code_graph.lbug").exists(), "erase left code_graph.lbug on disk"
+    init2 = _run_cli(
         ["init", "--source-root", str(corpus_root), "--index-dir", str(idx), "--quiet"],
         env=env,
     )
-    assert init.returncode == 0, init.stdout + init.stderr
+    assert init2.returncode == 0, init2.stdout + init2.stderr
 
 
 @pytest.mark.skipif(not _cocoindex_available(), reason="cocoindex not installed in venv")

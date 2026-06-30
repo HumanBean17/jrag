@@ -240,7 +240,7 @@ java-codebase-rag reprocess --source-root /path/to/java/repo --index-dir /path/t
 
 ### `erase`
 
-Deletes cocoindex state, the LadybugDB directory, and Lance tables under the index dir. Requires **`--yes`** or interactive confirmation on a TTY. Non-TTY without `--yes` exits **2**.
+Deletes cocoindex state, the LadybugDB graph (`code_graph.lbug`), the graph builder's content-hash store (`.graph_hashes.json`), and Lance tables under the index dir. Requires **`--yes`** or interactive confirmation on a TTY. Non-TTY without `--yes` exits **2**.
 
 ```bash
 java-codebase-rag erase --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-rag --yes
