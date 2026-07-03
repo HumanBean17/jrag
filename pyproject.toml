@@ -23,7 +23,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries",
 ]
 dependencies = [
-    "cocoindex[lancedb]>=1.0.0a43,<2",
+    "cocoindex[lancedb]>=1.0.7,<2",
     "ladybug>=0.17.1,<0.18",
     "lancedb>=0.25.3,<0.31",
     "mcp>=1.27.0,<2",
