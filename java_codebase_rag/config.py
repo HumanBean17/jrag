@@ -237,7 +237,11 @@ def load_yaml_mapping(source_root: Path) -> dict[str, Any]:
         return {}
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except Exception:
+    except yaml.YAMLError as exc:
+        print(
+            f"java-codebase-rag: failed to parse {path}: {exc}; ignoring config.",
+            file=sys.stderr,
+        )
         return {}
     return data if isinstance(data, dict) else {}
 
@@ -476,7 +480,7 @@ def index_dir_has_existing_artifacts(index_dir: Path) -> tuple[bool, list[str]]:
             import lancedb
 
             db = lancedb.connect(str(index_dir.resolve()))
-            for name in db.table_names():
+            for name in db.list_tables():
                 paths.append(str((index_dir / name).resolve()) + " (Lance table)")
         except Exception:
             pass

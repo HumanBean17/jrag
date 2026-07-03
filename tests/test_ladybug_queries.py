@@ -516,3 +516,22 @@ def test_trace_request_flow_inbound_includes_caller_node_id(ladybug_db_path_cros
     inbound = flow.get("inbound") or []
     assert inbound
     assert any(row.get("caller_node_id") for row in inbound)
+
+
+def test_parse_ladybug_json_handles_colon_in_values() -> None:
+    """_parse_ladybug_json quotes only key positions, so a value containing a
+    word-colon run (e.g. a URL) is not corrupted (issue #359). The prior regex
+    matched ``(\\w+):`` anywhere, which turned {url: "https://x"} into junk and
+    fell back to {}."""
+    from ladybug_queries import _parse_ladybug_json
+
+    # Standard unquoted keys (LadybugDB style).
+    assert _parse_ladybug_json("{packages: 1, files: 2}") == {"packages": 1, "files": 2}
+    # A quoted-string value containing https:// must survive intact.
+    parsed = _parse_ladybug_json('{base_url: "https://example.com", n: 3}')
+    assert parsed == {"base_url": "https://example.com", "n": 3}
+    # Nested unquoted keys are quoted at both levels.
+    assert _parse_ladybug_json("{outer: {inner: 1}}") == {"outer": {"inner": 1}}
+    # Empty / None are safe.
+    assert _parse_ladybug_json("") == {}
+    assert _parse_ladybug_json(None) == {}
