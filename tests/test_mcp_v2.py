@@ -584,6 +584,26 @@ def test_search_unknown_filter_key_returns_failure(monkeypatch, ladybug_graph) -
     assert "typo_key" in out.message
 
 
+def test_search_no_lance_index_returns_failure_envelope(monkeypatch, ladybug_graph, tmp_path) -> None:
+    """Real search error path (issue #358): every other search test monkeypatches
+    run_search, so the genuine `except Exception` envelope in search_v2 was never
+    exercised. With no Lance vector index present, search returns a structured
+    failure (success=False, non-empty message, no traceback) while the graph-only
+    tools still succeed against the same graph — proving the failure is
+    vector-specific, not a crash."""
+    empty_index = tmp_path / "no-lance-index"
+    empty_index.mkdir()
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_INDEX_DIR", str(empty_index))
+    out = search_v2("ChatService", graph=ladybug_graph)
+    assert out.success is False
+    assert out.message is not None and out.message.strip()
+    # Graph-only tools still work (the failure is vector-specific, not a crash).
+    found = find_v2("symbol", {"role": "CONTROLLER"}, graph=ladybug_graph)
+    assert found.success is True
+    assert found.results
+
+
+
 def test_search_cross_kind_filter_returns_failure(monkeypatch, ladybug_graph) -> None:
     monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
     out = search_v2("ChatService", filter={"path_prefix": "/api"}, graph=ladybug_graph)
