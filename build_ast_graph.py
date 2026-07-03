@@ -576,7 +576,7 @@ def _load_existing_types(conn: ladybug.Connection, tables: GraphTables, exclude_
     query = f"""
     MATCH (s:Symbol)
     {where}
-    RETURN s.kind, s.fqn, s.name, s.filename, s.module, s.microservice, s.id
+    RETURN s.kind, s.fqn, s.name, s.filename, s.module, s.microservice, s.id, s.role
     """
     result = conn.execute(query, params)
     while result.has_next():
@@ -585,6 +585,7 @@ def _load_existing_types(conn: ladybug.Connection, tables: GraphTables, exclude_
         module = row[4] if len(row) > 4 else ""
         microservice = row[5] if len(row) > 5 else ""
         node_id = row[6] if len(row) > 6 else ""
+        role = row[7] if len(row) > 7 else ""
 
         decl = TypeDecl(name, kind, fqn)
         package = fqn[: -(len(name) + 1)] if fqn.endswith("." + name) else ""
@@ -602,6 +603,10 @@ def _load_existing_types(conn: ladybug.Connection, tables: GraphTables, exclude_
         tables.types[fqn] = entry
         tables.by_simple_name.setdefault(name, []).append(entry)
         tables.by_package.setdefault(package, []).append(entry)
+        # Seed the persisted role so the annotation-less stub is not recomputed to
+        # the default during node staging (issue #352 divergence #2).
+        if role:
+            tables.type_role_by_node_id[node_id] = role
 
 
 def _load_existing_members(conn: ladybug.Connection, tables: GraphTables, exclude_files: set[str] | None = None) -> None:
@@ -3207,15 +3212,24 @@ def _write_nodes_impl(
         ))
     # types
     for entry in tables.types.values():
-        if entry.loaded_from_db:
-            stub_ids.add(entry.node_id)
         d = entry.decl
         role, capabilities = resolve_role_and_capabilities(
             d,
             overrides=overrides,
             meta_chain=mch,
         )
-        tables.type_role_by_node_id[entry.node_id] = role
+        if entry.loaded_from_db:
+            stub_ids.add(entry.node_id)
+            # Out-of-scope stub: its annotation-less decl collapses role to the
+            # default. The real node's role was persisted at index time and seeded
+            # into type_role_by_node_id by _load_existing_types; trust it so CALLS
+            # edges into this type keep the correct callee_declaring_role (#352).
+            # The staged row is filtered out of the write via stub_ids, so its
+            # capabilities placeholder never reaches the graph.
+            role = tables.type_role_by_node_id.get(entry.node_id, role)
+            capabilities = []
+        else:
+            tables.type_role_by_node_id[entry.node_id] = role
         rows.append(_node_row(
             id=entry.node_id, kind=d.kind, name=d.name, fqn=d.fqn,
             package=entry.package,
@@ -3896,6 +3910,11 @@ def incremental_rebuild(
         # Rebuild full tables for global pass 5-6 (pass1 populates members from scratch)
         tables_for_global = GraphTables()
         global_asts = pass1_parse(source_root, tables_for_global, verbose=verbose)
+        # pass4 (routes/EXPOSES) must run on the global pass5/6 tables too (issue
+        # #352): pass5 links Feign HTTP_CALLS to routes via exposes_rows, and pass6
+        # matches against routes_rows. Without pass4 both stay empty and the
+        # HTTP_CALLS match outcome drifts from a full rebuild. Mirrors main().
+        pass4_routes(tables_for_global, global_asts, source_root=source_root, verbose=verbose)
 
         pass5_imperative_edges(tables_for_global, global_asts, source_root=source_root, verbose=verbose)
 

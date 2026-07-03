@@ -998,22 +998,67 @@ class TestIncrementalOrchestrator:
         index_dir.mkdir()
         ladybug_path = index_dir / "code_graph.lbug"
 
-        # Create initial files
-        (source_root / "A.java").write_text("package pkg; class A { void foo() {} }", encoding="utf-8")
-        (source_root / "B.java").write_text("package pkg; class B { void bar() {} }", encoding="utf-8")
+        # Corpus exercising both #352 divergences:
+        #  - Cal: @RestController (CONTROLLER role) + a route; left OUT OF SCOPE so
+        #    it is loaded as an annotation-less stub. Its method is a CALLS callee
+        #    of Caller, so callee_declaring_role must stay CONTROLLER (#352 #2).
+        #  - Feign: a Feign client whose HTTP_CALLS match outcome depends on
+        #    routes/EXPOSES (pass4) being run on the global pass5/6 tables (#352 #1).
+        #  - Caller: the in-scope file we touch.
+        (source_root / "Cal.java").write_text(
+            "package pkg;\n"
+            "import org.springframework.web.bind.annotation.RestController;\n"
+            "import org.springframework.web.bind.annotation.GetMapping;\n"
+            "@RestController\n"
+            "public class Cal {\n"
+            "    @GetMapping(\"/things\")\n"
+            "    public String thing() { return \"\"; }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        (source_root / "Feign.java").write_text(
+            "package pkg;\n"
+            "import org.springframework.cloud.openfeign.FeignClient;\n"
+            "import org.springframework.web.bind.annotation.GetMapping;\n"
+            "@FeignClient(name = \"cal\")\n"
+            "public interface Feign {\n"
+            "    @GetMapping(\"/things\")\n"
+            "    String thing();\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        (source_root / "Caller.java").write_text(
+            "package pkg;\n"
+            "public class Caller {\n"
+            "    public void doCall() {\n"
+            "        Cal c = new Cal();\n"
+            "        c.thing();\n"
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+        )
 
         # Initial full build (pass1–6). write_ladybug initializes the hash
         # tracker, so incremental_rebuild can detect the change below.
         build_ladybug_full_into(source_root, ladybug_path)
 
-        # Modify A.java, then run the incremental path.
-        (source_root / "A.java").write_text(
-            "package pkg; class A { void foo() {} void baz() {} }", encoding="utf-8"
+        # Modify Caller.java, then run the incremental path. Cal + Feign stay
+        # unchanged (out of scope).
+        (source_root / "Caller.java").write_text(
+            "package pkg;\n"
+            "public class Caller {\n"
+            "    public void doCall() {\n"
+            "        Cal c = new Cal();\n"
+            "        c.thing();\n"
+            "    }\n"
+            "    public void extra() {}\n"
+            "}\n",
+            encoding="utf-8",
         )
         result = incremental_rebuild(source_root, ladybug_path, verbose=False)
         assert result.mode == "incremental"
 
-        def _graph_state(c: ladybug.Connection) -> tuple[int, dict[str, int], dict[str, str]]:
+        def _graph_state(c: ladybug.Connection) -> dict:
             nc = c.execute("MATCH (n) RETURN count(n)")
             node_count = nc.get_next()[0] if nc.has_next() else 0
             edge_counts: dict[str, int] = {}
@@ -1032,7 +1077,38 @@ class TestIncrementalOrchestrator:
             while rr.has_next():
                 fqn, role = rr.get_next()
                 roles[fqn] = role
-            return node_count, edge_counts, roles
+
+            # HTTP_CALLS / ASYNC_CALLS match histograms (issue #352 divergence #1):
+            # incremental must reproduce the full-rebuild match breakdown, which
+            # requires pass4 (routes/EXPOSES) on the global pass5/6 tables.
+            def _match_hist(rel: str) -> dict[str, int]:
+                hist: dict[str, int] = {}
+                res = c.execute(f"MATCH ()-[r:{rel}]->() RETURN r.match AS m, count(r) AS n")
+                while res.has_next():
+                    m, n = res.get_next()
+                    hist[str(m) if m else "<none>"] = n
+                return hist
+
+            # CALLS callee_declaring_role multiset (issue #352 divergence #2): an
+            # out-of-scope callee's declaring-type role must be preserved, not
+            # recomputed from an annotation-less stub.
+            callee_roles: dict[str, int] = {}
+            cr = c.execute(
+                "MATCH ()-[r:CALLS]->() RETURN r.callee_declaring_role AS role, count(r) AS n"
+            )
+            while cr.has_next():
+                role, n = cr.get_next()
+                key = str(role) if role else "<none>"
+                callee_roles[key] = callee_roles.get(key, 0) + n
+
+            return {
+                "nodes": node_count,
+                "edges": edge_counts,
+                "roles": roles,
+                "http_calls_match": _match_hist("HTTP_CALLS"),
+                "async_calls_match": _match_hist("ASYNC_CALLS"),
+                "calls_callee_declaring_role": callee_roles,
+            }
 
         db = ladybug.Database(str(ladybug_path))
         conn = ladybug.Connection(db)
@@ -1056,14 +1132,27 @@ class TestIncrementalOrchestrator:
         # the same graph as a full rebuild of that state. The previous form
         # asserted only `count > 0` and `set(edge_type_keys) == set(edge_type_keys)`
         # — a no-op, since every rel type yields a count row even at 0.
-        assert incremental_state[0] == full_state[0], (
-            f"node count diverged: incremental={incremental_state[0]} full={full_state[0]}"
+        assert incremental_state["nodes"] == full_state["nodes"], (
+            f"node count diverged: incremental={incremental_state['nodes']} full={full_state['nodes']}"
         )
-        assert incremental_state[1] == full_state[1], (
-            f"edge counts diverged:\nincremental={incremental_state[1]}\nfull={full_state[1]}"
+        assert incremental_state["edges"] == full_state["edges"], (
+            f"edge counts diverged:\nincremental={incremental_state['edges']}\nfull={full_state['edges']}"
         )
-        assert incremental_state[2] == full_state[2], (
-            f"type roles diverged:\nincremental={incremental_state[2]}\nfull={full_state[2]}"
+        assert incremental_state["roles"] == full_state["roles"], (
+            f"type roles diverged:\nincremental={incremental_state['roles']}\nfull={full_state['roles']}"
+        )
+        assert incremental_state["http_calls_match"] == full_state["http_calls_match"], (
+            "HTTP_CALLS match histogram diverged (missing pass4 on global pass5/6 tables, #352):\n"
+            f"incremental={incremental_state['http_calls_match']}\nfull={full_state['http_calls_match']}"
+        )
+        assert incremental_state["async_calls_match"] == full_state["async_calls_match"], (
+            "ASYNC_CALLS match histogram diverged (#352):\n"
+            f"incremental={incremental_state['async_calls_match']}\nfull={full_state['async_calls_match']}"
+        )
+        assert incremental_state["calls_callee_declaring_role"] == full_state["calls_callee_declaring_role"], (
+            "CALLS callee_declaring_role multiset diverged (out-of-scope stub role collapsed, #352):\n"
+            f"incremental={incremental_state['calls_callee_declaring_role']}\n"
+            f"full={full_state['calls_callee_declaring_role']}"
         )
 
     def test_incremental_refreshes_dependent_role_on_meta_chain_change(
