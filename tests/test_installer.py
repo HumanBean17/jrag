@@ -1693,3 +1693,39 @@ class TestPR4IndexProgress:
         # The footer rendered the failure marker (red cross), not the green check.
         assert cli_format.styled_cross() in err_text
         assert cli_format.styled_check() not in err_text
+
+    def test_install_indexing_failure_returns_nonzero(self, tmp_path, monkeypatch):
+        """A non-exception indexing failure (cocoindex exits non-zero) must NOT
+        report install success. Regression for issue #351: run_install discarded
+        run_init_if_needed's return value and unconditionally returned 0, so a
+        broken or empty index reported exit 0 in CI/automation while the most
+        important install step failed silently. (The exception path was already
+        covered; this covers the returncode != 0 path.)"""
+        import io
+        import contextlib
+        import subprocess
+        from java_codebase_rag.installer import run_install
+
+        cwd = self._setup_repo(tmp_path, monkeypatch)
+
+        def failing_coco(env, *, full_reprocess, quiet, verbose=True,
+                         lance_project_root=None, on_progress=None, on_progress_console=None):
+            return subprocess.CompletedProcess(args=["stub"], returncode=1, stdout="", stderr="boom")
+
+        monkeypatch.setattr("java_codebase_rag.pipeline.run_cocoindex_update", failing_coco)
+
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = run_install(
+                non_interactive=True,
+                agents=["claude-code"],
+                scope="project",
+                model="auto",
+                source_root=cwd,
+                quiet=False,
+            )
+        assert rc == 1, (
+            f"install reported success (exit {rc}) despite cocoindex failure (#351)"
+        )
+        # The failure was surfaced on stderr, not swallowed.
+        assert "CocoIndex update failed" in err.getvalue()

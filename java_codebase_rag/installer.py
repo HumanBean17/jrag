@@ -847,8 +847,8 @@ def run_init_if_needed(
     non_interactive: bool,
     quiet: bool,
     verbose: bool = False,
-) -> bool:
-    """Run init if index directory has no artifacts. Return True if init was run.
+) -> bool | None:
+    """Run init if index directory has no artifacts.
 
     The indexing sub-step (CocoIndex update + AST graph build) renders the
     unified ``Vectors → Optimize → Graph`` progress on **stderr** in default
@@ -867,7 +867,10 @@ def run_init_if_needed(
         verbose: If True, raw-relay subprocess output (no Live region)
 
     Returns:
-        True if init was run, False if skipped
+        True if init ran and succeeded; False if it ran and failed (cocoindex or
+        graph build returned non-zero); None if skipped because the index already
+        exists. Callers must distinguish ``False`` (failure) from ``None`` (skip)
+        so a failed index does not report success (issue #351).
     """
     from java_codebase_rag.config import (
         index_dir_has_existing_artifacts,
@@ -878,7 +881,7 @@ def run_init_if_needed(
     has_existing, _ = index_dir_has_existing_artifacts(index_dir)
     if has_existing:
         print("Index already exists. Run `java-codebase-rag reprocess` to rebuild.")
-        return False
+        return None  # skipped, not failed
 
     cfg = resolve_operator_config(
         source_root=source_root,
@@ -1561,9 +1564,12 @@ def run_install(
     if not quiet:
         print("Configuration written to", config_path)
 
-    # Run init if index directory is empty
+    # Run init if index directory is empty. run_init_if_needed returns True (ran
+    # OK), False (ran and failed — cocoindex/graph non-zero exit), or None
+    # (skipped: index already exists). A failed index must NOT report success in
+    # CI/automation; a skip is not a failure (issue #351).
     index_dir = (source_root / ".java-codebase-rag").resolve()
-    run_init_if_needed(
+    init_outcome = run_init_if_needed(
         source_root,
         index_dir,
         resolved_model,
@@ -1571,5 +1577,6 @@ def run_install(
         quiet=quiet,
         verbose=verbose,
     )
-
+    if init_outcome is False:
+        return 1
     return 0
