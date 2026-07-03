@@ -450,6 +450,7 @@ class NodeRef(BaseModel):
     id: str
     kind: Literal["symbol", "route", "client", "producer", "unresolved_call_site"]
     fqn: str
+    name: str | None = None
     symbol_kind: str | None = None
     microservice: str | None = None
     module: str | None = None
@@ -517,6 +518,11 @@ class FindOutput(BaseModel):
         default=None,
         description="Echoed from the request — the page offset the server applied. None on success=False.",
     )
+    has_more_results: bool | None = Field(
+        default=None,
+        description="True when additional pages remain beyond offset+limit (more matches exist). "
+        "None when unset (e.g. success=False).",
+    )
     advisories: list[str] = Field(default_factory=list, description="Pure informational text with no tool call suggestion")
     hints_structured: list[StructuredHint] = Field(default_factory=list, description=MCP_HINTS_STRUCTURED_FIELD_DESCRIPTION)
 
@@ -536,6 +542,12 @@ class NeighborsOutput(BaseModel):
     requested_edge_types: list[str] = Field(
         default_factory=list,
         description="Echo of neighbors(edge_types=...) from the request; empty when success=False.",
+    )
+    has_more_results: bool | None = Field(
+        default=None,
+        description="True when additional pages remain beyond offset+limit. None when unset or "
+        "when the single-origin CALLS path paginated in SQL (use unfiltered_calls_count / "
+        "calls_row_count there).",
     )
     advisories: list[str] = Field(default_factory=list, description="Pure informational text with no tool call suggestion")
     hints_structured: list[StructuredHint] = Field(default_factory=list, description=MCP_HINTS_STRUCTURED_FIELD_DESCRIPTION)
@@ -958,6 +970,17 @@ def search_v2(
             model_name=model_name,
             device=device,
             model=model,
+            # Push the NodeFilter structural predicates into the LanceDB query so
+            # they apply BEFORE pagination (issue #353) — previously they were only
+            # a post-filter on the already-paginated page, which could shrink or
+            # empty filtered pages even when many matches existed deeper in the
+            # ranking. _node_matches_filter below still re-checks every row (it
+            # covers the non-pushdownable fields and is the contract guarantee).
+            role=nf.role if nf else None,
+            module=nf.module if nf else None,
+            microservice=nf.microservice if nf else None,
+            capability=nf.capability if nf else None,
+            exclude_roles=nf.exclude_roles if nf else None,
         )
         hits: list[SearchHit] = []
         for row in rows:
@@ -1071,6 +1094,7 @@ def find_v2(
             results=refs,
             limit=limit,
             offset=offset,
+            has_more_results=has_more_results,
             advisories=raw_advisories,
             hints_structured=_to_structured_hints(raw_struct),
         )
@@ -1534,6 +1558,28 @@ def resolve_v2(
         return out
 
 
+# Per-edge-type attribute columns selected by the generic (flat-label) neighbors
+# query (issue #356). RETURNing a fixed superset of columns regardless of which
+# edge type matched is the typed-union RETURN anti-pattern: a stricter binder
+# (e.g. Kùzu) errors when a RETURNed column does not exist on the matched type.
+# Selecting columns per edge type keeps the query portable; _neighbor_edge_attrs
+# still drops None/"" so each edge exposes only the attrs that exist for its type.
+# Aligned with the REL TABLE schemas in build_ast_graph.py.
+_FLAT_EDGE_ATTR_COLUMNS: dict[str, tuple[str, ...]] = {
+    "CALLS": ("confidence", "strategy", "source", "call_site_line", "call_site_byte", "arg_count", "resolved"),
+    "HTTP_CALLS": ("confidence", "strategy", "match"),
+    "ASYNC_CALLS": ("confidence", "strategy", "match"),
+    "EXPOSES": ("confidence", "strategy"),
+    "DECLARES_CLIENT": ("confidence", "strategy"),
+    "DECLARES_PRODUCER": ("confidence", "strategy"),
+    "INJECTS": ("mechanism", "annotation", "field_or_param", "resolved"),
+    "EXTENDS": ("resolved",),
+    "IMPLEMENTS": ("resolved",),
+    "DECLARES": (),
+    "OVERRIDES": (),
+}
+
+
 def _neighbor_edge_attrs(row: dict[str, Any]) -> dict[str, Any]:
     attrs = {
         k: v
@@ -1896,33 +1942,25 @@ def neighbors_v2(
                 results.extend(origin_edges)
                 continue
             if flat_labels:
-                # Some Cypher binders can drop `label(e) IN $list` in WHERE; use OR of scalar equalities.
-                label_params = [f"l{i}" for i in range(len(flat_labels))]
-                label_predicate = "(" + " OR ".join(f"label(e) = ${name}" for name in label_params) + ")"
-                q_params = {"id": origin_id, **dict(zip(label_params, flat_labels, strict=True))}
-                if direction == "out":
-                    rows = g._rows(  # noqa: SLF001
-                        "MATCH (a)-[e]->(b) WHERE a.id = $id AND "
-                        f"{label_predicate} "
-                        "RETURN b.id AS other_id, label(e) AS edge_type, e.confidence AS confidence, "
-                        "e.strategy AS strategy, e.match AS match, e.mechanism AS mechanism, "
-                        "e.annotation AS annotation, e.field_or_param AS field_or_param, "
-                        "e.source AS source, e.call_site_line AS call_site_line, "
-                        "e.call_site_byte AS call_site_byte, e.arg_count AS arg_count, "
-                        "e.resolved AS resolved",
-                        q_params,
-                    )
-                else:
-                    rows = g._rows(  # noqa: SLF001
-                        "MATCH (a)<-[e]-(b) WHERE a.id = $id AND "
-                        f"{label_predicate} "
-                        "RETURN b.id AS other_id, label(e) AS edge_type, e.confidence AS confidence, "
-                        "e.strategy AS strategy, e.match AS match, e.mechanism AS mechanism, "
-                        "e.annotation AS annotation, e.field_or_param AS field_or_param, "
-                        "e.source AS source, e.call_site_line AS call_site_line, "
-                        "e.call_site_byte AS call_site_byte, e.arg_count AS arg_count, "
-                        "e.resolved AS resolved",
-                        q_params,
+                # Select attribute columns per edge type (issue #356). A single
+                # multi-label query RETURNing a fixed column superset references
+                # columns that don't exist on every matched type — the typed-union
+                # RETURN anti-pattern, which errors on stricter binders (e.g. Kùzu).
+                # Run one single-label query per type, RETURNing only that type's
+                # columns, and merge the rows. `label(e) = $label` scalar equality
+                # (not `label(e) IN [...]`) per the AGENTS.md Cypher note.
+                rows: list[dict[str, Any]] = []
+                match_clause = "MATCH (a)-[e]->(b)" if direction == "out" else "MATCH (a)<-[e]-(b)"
+                for label in flat_labels:
+                    cols = _FLAT_EDGE_ATTR_COLUMNS.get(label, ())
+                    select = "b.id AS other_id, label(e) AS edge_type"
+                    if cols:
+                        select += ", " + ", ".join(f"e.{c} AS {c}" for c in cols)
+                    rows.extend(
+                        g._rows(  # noqa: SLF001
+                            f"{match_clause} WHERE a.id = $id AND label(e) = $label RETURN {select}",
+                            {"id": origin_id, "label": label},
+                        )
                     )
                 for row in rows:
                     other_id = str(row.get("other_id") or "")
@@ -1979,8 +2017,15 @@ def neighbors_v2(
                     )
         if use_calls_path and len(origins) > 1:
             sliced = results[offset : offset + limit]
+            neighbors_has_more = len(results) > offset + limit
+        elif use_calls_path:
+            # Single-origin CALLS path already paginated in SQL; the row/unfiltered
+            # counts are the pagination signal there, so has_more stays None.
+            sliced = results
+            neighbors_has_more = None
         else:
-            sliced = results if use_calls_path else results[offset : offset + limit]
+            sliced = results[offset : offset + limit]
+            neighbors_has_more = len(results) > offset + limit
         first_origin = origins[0]
         origin_kind = _resolve_node_kind(g, first_origin)
         subject_record = _load_node_record(g, first_origin, origin_kind)
@@ -2006,6 +2051,7 @@ def neighbors_v2(
             success=True,
             results=sliced,
             requested_edge_types=requested_edge_types,
+            has_more_results=neighbors_has_more,
             advisories=raw_advisories,
             hints_structured=_to_structured_hints(raw_struct),
         )
