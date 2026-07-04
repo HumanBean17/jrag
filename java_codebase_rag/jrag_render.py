@@ -96,28 +96,35 @@ def _render_listing(envelope: Envelope, *, noun: str) -> str:
     return "\n".join(lines)
 
 
+def _format_edge_line(edge: dict, nodes: dict[str, dict]) -> str:
+    """Format a single edge row as an indented line (shared across render modes).
+
+    Emits ``  <tiered name>`` plus a ``conf=N.NN`` suffix when the edge type
+    carries confidence (CALLS-family). The caller is responsible for any
+    grouping header above this line.
+    """
+    target_id = _node_id(edge)
+    label = tiered_name(target_id, nodes) if target_id else "(missing)"
+    line = f"  {label}"
+    edge_type = _edge_label(edge)
+    # conf: only on CALLS-family edges (PR-JRAG-1a test 12).
+    if edge_type in _CALLS_FAMILY_EDGES:
+        conf = edge.get("confidence")
+        if conf is not None:
+            try:
+                line += f"  conf={float(conf):.2f}"
+            except (TypeError, ValueError):
+                pass
+    return line
+
+
 def _render_traversal(envelope: Envelope, *, noun: str) -> str:
     lines: list[str] = []
     root_id = envelope.root or ""
     if root_id:
         # root: tiered name (simple name + @service)
         lines.append(f"root: {tiered_name(root_id, envelope.nodes)}")
-    if envelope.edges:
-        for edge in envelope.edges:
-            target_id = _node_id(edge)
-            label = tiered_name(target_id, envelope.nodes) if target_id else "(missing)"
-            line = f"  {label}"
-            edge_type = _edge_label(edge)
-            # conf: only on CALLS-family edges (PR-JRAG-1a test 12).
-            if edge_type in _CALLS_FAMILY_EDGES:
-                conf = edge.get("confidence")
-                if conf is not None:
-                    try:
-                        line += f"  conf={float(conf):.2f}"
-                    except (TypeError, ValueError):
-                        pass
-            lines.append(line)
-    else:
+    if not envelope.edges:
         # Zero-results line for a traversal: "0 <noun>  <fqn>  @<service>".
         # The fqn + service come from the root node (the resolved subject).
         parts = [f"0 {noun}".rstrip()]
@@ -129,6 +136,59 @@ def _render_traversal(envelope: Envelope, *, noun: str) -> str:
         if root_svc:
             parts.append(f"@{root_svc}")
         lines.append("  ".join(parts))
+        return "\n".join(lines)
+
+    # Grouped rendering fires ONLY when the producer attached the grouping
+    # key (hierarchy sets `direction`; decompose sets `stage`). Other
+    # traversals (callers/callees/dependents/...) leave both unset and fall
+    # through to the flat list below — current behavior unchanged (Fix 1).
+    has_stages = any(e.get("stage") is not None for e in envelope.edges)
+    has_direction = any(e.get("direction") for e in envelope.edges)
+
+    if has_stages:
+        # decompose role-waterfall: group edges under `stage N` headers.
+        # The role on each edge (carried from StageSymbol) labels the stage
+        # when homogeneous; otherwise we just number it.
+        stage_order: list[int] = []
+        by_stage: dict[int, list[dict]] = {}
+        for e in envelope.edges:
+            s = int(e.get("stage") or 0)
+            if s not in by_stage:
+                by_stage[s] = []
+                stage_order.append(s)
+            by_stage[s].append(e)
+        for s in stage_order:
+            stage_edges = by_stage[s]
+            roles = {str(e.get("role") or "").upper() for e in stage_edges if e.get("role")}
+            if s == 0:
+                header = "stage 0 (seed):"
+            elif len(roles) == 1:
+                header = f"stage {s} ({next(iter(roles)).lower()}):"
+            else:
+                header = f"stage {s}:"
+            lines.append(header)
+            for e in stage_edges:
+                lines.append(_format_edge_line(e, envelope.nodes))
+        return "\n".join(lines)
+
+    if has_direction:
+        # hierarchy tree: group under ↑ supertypes / ↓ subtypes headers.
+        up = [e for e in envelope.edges if e.get("direction") == "up"]
+        dn = [e for e in envelope.edges if e.get("direction") == "down"]
+        if up:
+            lines.append("↑ supertypes:")
+            for e in up:
+                lines.append(_format_edge_line(e, envelope.nodes))
+        if dn:
+            lines.append("↓ subtypes:")
+            for e in dn:
+                lines.append(_format_edge_line(e, envelope.nodes))
+        return "\n".join(lines)
+
+    # Flat: callers / callees / implementations / subclasses / overrides /
+    # overridden-by / dependents / impact / flow (current behavior).
+    for edge in envelope.edges:
+        lines.append(_format_edge_line(edge, envelope.nodes))
     return "\n".join(lines)
 
 

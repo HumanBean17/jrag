@@ -201,12 +201,20 @@ def test_callers_and_callees_support_include_external(
 def test_hierarchy_renders_tree_both_directions(
     corpus_root: Path, ladybug_db_path: Path
 ) -> None:
-    """hierarchy walks EXTENDS/IMPLEMENTS both directions.
+    """hierarchy walks EXTENDS/IMPLEMENTS both directions AND renders a tree.
 
     AbstractNotificationSender: UP = NotificationSender (implements),
     DOWN = EmailNotificationSender + PushNotificationSender (extends).
+
+    Asserts BOTH the data (JSON: up/down edge presence) AND the rendered
+    structure (text: the ↑ supertypes / ↓ subtypes group headers that
+    `_render_traversal` emits for direction-carrying edges). The text
+    assertion is non-vacuous: it fails if the renderer ever regresses to a
+    flat list.
     """
     env = _env_for(corpus_root, ladybug_db_path)
+
+    # --- data (JSON): up/down edges carry the expected FQNs ---
     proc = _run_jrag(["hierarchy", _ABS_NOTIFICATION, "--format", "json"], env=env)
     assert proc.returncode == 0, (
         f"hierarchy failed: rc={proc.returncode}\nstdout={proc.stdout}\nstderr={proc.stderr}"
@@ -228,6 +236,26 @@ def test_hierarchy_renders_tree_both_directions(
     assert any("PushNotificationSender" in fqn for fqn in other_fqns), (
         f"expected PushNotificationSender subtype in {other_fqns}"
     )
+
+    # --- rendered structure (text): the ↑/↓ group headers must appear ---
+    proc_text = _run_jrag(["hierarchy", _ABS_NOTIFICATION], env=env)
+    assert proc_text.returncode == 0, f"text hierarchy failed: {proc_text.stderr}"
+    text = proc_text.stdout
+    assert "↑ supertypes:" in text, (
+        f"expected '↑ supertypes:' header in text output, got:\n{text}"
+    )
+    assert "↓ subtypes:" in text, (
+        f"expected '↓ subtypes:' header in text output, got:\n{text}"
+    )
+    # The supertypes group must contain NotificationSender and NOT the subtypes.
+    up_section = text.split("↓ subtypes:", 1)[0]
+    assert "NotificationSender" in up_section and "Abstract" not in up_section.replace(
+        "AbstractNotificationSender", ""
+    ), f"up section wrong:\n{up_section}"
+    # The subtypes group must contain Email + Push.
+    dn_section = text.split("↓ subtypes:", 1)[1]
+    assert "EmailNotificationSender" in dn_section, f"Email missing from down section:\n{dn_section}"
+    assert "PushNotificationSender" in dn_section, f"Push missing from down section:\n{dn_section}"
 
 
 # ----- Test 6: implementations uses find_implementors -----
@@ -468,11 +496,18 @@ def test_impact_service_post_filter_emits_warning(
 def test_decompose_renders_role_waterfall(
     corpus_root: Path, ladybug_db_path: Path
 ) -> None:
-    """decompose on an entrypoint returns the role-waterfall stages.
+    """decompose on an entrypoint returns the role-waterfall stages AND renders them.
 
     ChatIngressController (CONTROLLER) -> stage 1 with COMPONENT/SERVICE roles.
+
+    Asserts BOTH the data (JSON: stage field + reached engine components) AND
+    the rendered structure (text: `stage 0 (seed):` and `stage 1 ...:` group
+    headers that `_render_traversal` emits for stage-carrying edges). The text
+    assertion is non-vacuous: it fails if the renderer regresses to flat.
     """
     env = _env_for(corpus_root, ladybug_db_path)
+
+    # --- data (JSON): stages + reached engine components ---
     proc = _run_jrag(["decompose", _INGRESS_CTRL, "--format", "json"], env=env)
     assert proc.returncode == 0, (
         f"decompose failed: rc={proc.returncode}\nstdout={proc.stdout}\nstderr={proc.stderr}"
@@ -500,6 +535,24 @@ def test_decompose_renders_role_waterfall(
         "Processor" in fqn or "Publisher" in fqn or "RateLimiter" in fqn
         for fqn in reached_fqns
     ), f"expected engine component in reached fqns {reached_fqns}"
+
+    # --- rendered structure (text): the stage group headers must appear ---
+    proc_text = _run_jrag(["decompose", _INGRESS_CTRL], env=env)
+    assert proc_text.returncode == 0, f"text decompose failed: {proc_text.stderr}"
+    text = proc_text.stdout
+    # stage 0 is the seed (the entrypoint itself).
+    assert "stage 0 (seed):" in text, (
+        f"expected 'stage 0 (seed):' header in text output, got:\n{text}"
+    )
+    # At least one later stage header must be present (the waterfall has >=2 stages).
+    assert "stage 1" in text, (
+        f"expected 'stage 1' header in text output, got:\n{text}"
+    )
+    # The seed stage must list the controller; a later stage lists engine components.
+    seed_section = text.split("stage 1", 1)[0]
+    assert "ChatIngressController" in seed_section, (
+        f"expected ChatIngressController in seed section:\n{seed_section}"
+    )
 
 
 # ----- Test 15: flow outbound is intra-service on the fixture (data property) -----
@@ -603,3 +656,86 @@ def test_traversal_rejects_offset() -> None:
         assert (
             "unrecognized arguments: --offset" in proc.stderr or "usage:" in proc.stderr
         ), f"{cmd}: expected usage error, got stderr={proc.stderr!r}"
+
+
+# ----- Test 18: inapplicable --service/--module/--limit surface warnings -----
+# (Fix 3 + Fix 4 follow-up: plan principle "inapplicable flags never silently ignored".
+
+
+def test_inapplicable_flags_emit_warnings(
+    corpus_root: Path, ladybug_db_path: Path
+) -> None:
+    """--service/--module on hierarchy/overrides/overridden-by/flow and --limit
+    on decompose surface a warnings[] entry rather than being silently dropped.
+
+    These commands walk structural edges or carry no microservice predicate;
+    --service/--module cannot be applied. decompose's real cap is --max-stage,
+    not --limit. Each must emit a warning naming the flag so the agent gets a
+    signal (plan principle: inapplicable flags never silently ignored).
+    """
+    env = _env_for(corpus_root, ladybug_db_path)
+
+    # hierarchy: --service/--module not applied (structural EXTENDS/IMPLEMENTS).
+    proc = _run_jrag(
+        ["hierarchy", _ABS_NOTIFICATION, "--service", "chat-core", "--module", "chat-engine", "--format", "json"],
+        env=env,
+    )
+    assert proc.returncode == 0, f"hierarchy failed: {proc.stderr}"
+    payload = json.loads(proc.stdout)
+    warnings = payload.get("warnings", [])
+    assert any("--service is not applied" in w for w in warnings), (
+        f"hierarchy: expected --service warning, got {warnings}"
+    )
+    assert any("--module is not applied" in w for w in warnings), (
+        f"hierarchy: expected --module warning, got {warnings}"
+    )
+
+    # overrides: --service not applied (structural method-to-method edge).
+    proc = _run_jrag(
+        ["overrides", _IMPL_METHOD, "--service", "chat-core", "--format", "json"], env=env
+    )
+    assert proc.returncode == 0, f"overrides failed: {proc.stderr}"
+    payload = json.loads(proc.stdout)
+    assert any("--service is not applied" in w for w in payload.get("warnings", [])), (
+        f"overrides: expected --service warning, got {payload.get('warnings')}"
+    )
+
+    # overridden-by: --module not applied.
+    proc = _run_jrag(
+        ["overridden-by", _PORT_METHOD, "--module", "chat-engine", "--format", "json"], env=env
+    )
+    assert proc.returncode == 0, f"overridden-by failed: {proc.stderr}"
+    payload = json.loads(proc.stdout)
+    assert any("--module is not applied" in w for w in payload.get("warnings", [])), (
+        f"overridden-by: expected --module warning, got {payload.get('warnings')}"
+    )
+
+    # flow: --service not applied (no microservice predicate; data property).
+    proc = _run_jrag(
+        ["flow", "/chat/assign", "--service", "chat-assign", "--format", "json"], env=env
+    )
+    assert proc.returncode == 0, f"flow failed: {proc.stderr}"
+    payload = json.loads(proc.stdout)
+    assert any("--service is not applied" in w for w in payload.get("warnings", [])), (
+        f"flow: expected --service warning, got {payload.get('warnings')}"
+    )
+
+    # decompose: --limit (non-default) does not apply; --max-stage is the knob.
+    proc = _run_jrag(
+        ["decompose", _INGRESS_CTRL, "--limit", "5", "--format", "json"], env=env
+    )
+    assert proc.returncode == 0, f"decompose --limit failed: {proc.stderr}"
+    payload = json.loads(proc.stdout)
+    assert any("--limit does not apply to decompose" in w for w in payload.get("warnings", [])), (
+        f"decompose: expected --limit warning, got {payload.get('warnings')}"
+    )
+
+    # Sanity: decompose with the DEFAULT --limit (20, not explicitly set) is silent.
+    proc_default = _run_jrag(
+        ["decompose", _INGRESS_CTRL, "--format", "json"], env=env
+    )
+    assert proc_default.returncode == 0
+    payload_default = json.loads(proc_default.stdout)
+    assert not any("--limit" in w for w in payload_default.get("warnings", [])), (
+        f"decompose default should not warn about --limit, got {payload_default.get('warnings')}"
+    )

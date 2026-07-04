@@ -1350,6 +1350,52 @@ def _emit_traversal(
     return 0
 
 
+def _require_kind(
+    node,
+    *,
+    expected: str,
+    kinds: tuple[str, ...],
+    args: argparse.Namespace,
+    hint: str = "",
+) -> int | None:
+    """Kind guard shared by traversal handlers (DRY for the 11x guard block).
+
+    Returns ``None`` when ``node.kind`` is in ``kinds`` (caller proceeds). On
+    mismatch, prints a ``status: error`` envelope and returns 2. ``expected``
+    is the human-readable root description (e.g. ``"overrides expects a method
+    Symbol root"``); ``hint`` is an optional trailing suggestion (e.g. ``"Use
+    --kind symbol to narrow resolve."``). Callers whose kind-dispatch is more
+    complex (e.g. ``callers`` accepts Symbol OR Route and routes between them)
+    keep an inline guard.
+    """
+    if node.kind in kinds:
+        return None
+    from java_codebase_rag.jrag_envelope import Envelope
+    from java_codebase_rag.jrag_render import render
+
+    msg = f"{expected}; resolved kind is {node.kind!r}."
+    if hint:
+        msg = f"{msg} {hint}"
+    print(render(Envelope(status="error", message=msg), fmt=args.format))
+    return 2
+
+
+def _warn_unapplied_scope(args: argparse.Namespace, *, reason: str) -> list[str]:
+    """Build warnings[] for --service/--module that cannot be applied.
+
+    Used by hierarchy/overrides/overridden-by/flow, where the backend query
+    has no microservice/module predicate (structural edges / index-time data
+    property). The plan principle "inapplicable flags never silently ignored"
+    requires surfacing these as warnings rather than dropping them.
+    """
+    warnings: list[str] = []
+    if args.service:
+        warnings.append(f"--service is not applied on this command ({reason})")
+    if getattr(args, "module", None):
+        warnings.append(f"--module is not applied on this command ({reason})")
+    return warnings
+
+
 def _cmd_callers(args: argparse.Namespace) -> int:
     cfg, graph, rc = _load_graph_or_error(args)
     if rc:
@@ -1461,19 +1507,14 @@ def _cmd_callees(args: argparse.Namespace) -> int:
         return rrc
     limit = _clamped_limit(args)
 
-    from java_codebase_rag.jrag_envelope import Envelope, mark_truncated
-    from java_codebase_rag.jrag_render import render
+    guard = _require_kind(
+        node, expected="callees expects a Symbol root", kinds=("symbol",), args=args,
+        hint="Use --kind symbol to narrow resolve.",
+    )
+    if guard is not None:
+        return guard
 
-    if node.kind != "symbol":
-        env = Envelope(
-            status="error",
-            message=(
-                f"callees expects a Symbol root; resolved node kind is {node.kind!r}. "
-                "Use --kind symbol to narrow resolve."
-            ),
-        )
-        print(render(env, fmt=args.format))
-        return 2
+    from java_codebase_rag.jrag_envelope import mark_truncated
 
     depth = getattr(args, "depth", 1)
     min_conf = getattr(args, "min_confidence", 0.0)
@@ -1513,18 +1554,15 @@ def _cmd_hierarchy(args: argparse.Namespace) -> int:
         return rrc
     limit = _clamped_limit(args)
 
-    from java_codebase_rag.jrag_envelope import Envelope
-    from java_codebase_rag.jrag_render import render
+    guard = _require_kind(
+        node, expected="hierarchy expects a type Symbol root", kinds=("symbol",), args=args,
+    )
+    if guard is not None:
+        return guard
 
-    if node.kind != "symbol":
-        env = Envelope(
-            status="error",
-            message=(
-                f"hierarchy expects a type Symbol root; resolved node kind is {node.kind!r}."
-            ),
-        )
-        print(render(env, fmt=args.format))
-        return 2
+    warnings = _warn_unapplied_scope(
+        args, reason="neighbors_v2 walks structural EXTENDS/IMPLEMENTS edges with no microservice predicate"
+    )
 
     root_id = node.id
     # Fetch both directions with limit+1 for +1-fetch truncation on each axis.
@@ -1537,29 +1575,37 @@ def _cmd_hierarchy(args: argparse.Namespace) -> int:
         [root_id], direction="in", edge_types=["EXTENDS", "IMPLEMENTS"],
         limit=fetch, graph=graph,
     )
+    from java_codebase_rag.jrag_envelope import Envelope
+    from java_codebase_rag.jrag_render import render
+
     if not up.success:
         print(render(Envelope(status="error", message=up.message or "neighbors_v2 failed"), fmt=args.format))
         return 2
 
     nodes: dict[str, dict] = {root_id: _noderef_to_node_dict(node)}
-    edges: list[dict] = []
+    # Build up/down edges separately so the limit applies PER DIRECTION
+    # (Fix 5: combined-list truncation could starve `down` behind a full `up`).
+    up_edges: list[dict] = []
     for e in up.results:
         nodes[e.other.id] = _noderef_to_node_dict(e.other)
-        edges.append({"other_id": e.other.id, "edge_type": e.edge_type, "direction": "up"})
+        up_edges.append({"other_id": e.other.id, "edge_type": e.edge_type, "direction": "up"})
+    dn_edges: list[dict] = []
     for e in dn.results:
         nodes[e.other.id] = _noderef_to_node_dict(e.other)
-        edges.append({"other_id": e.other.id, "edge_type": e.edge_type, "direction": "down"})
+        dn_edges.append({"other_id": e.other.id, "edge_type": e.edge_type, "direction": "down"})
 
-    # +1-fetch truncation on the combined edge list (up then down).
-    from java_codebase_rag.jrag_envelope import mark_truncated
-
-    display_edges, truncated = mark_truncated(edges, limit)
-    # Drop nodes that are no longer referenced after truncation (keep root).
+    # Per-direction +1-fetch truncation: each side independently drops its
+    # overflow row and flags truncation if it had limit+1 rows.
+    truncated = len(up_edges) > limit or len(dn_edges) > limit
+    up_display = up_edges[:limit]
+    dn_display = dn_edges[:limit]
+    display_edges = up_display + dn_display
+    # Drop nodes no longer referenced after per-direction truncation (keep root).
     referenced = {root_id} | {e["other_id"] for e in display_edges}
     nodes = {nid: nd for nid, nd in nodes.items() if nid in referenced}
     return _emit_traversal(
         args, root_id=root_id, nodes=nodes, edges=display_edges,
-        noun="hierarchy", truncated=truncated,
+        noun="hierarchy", warnings=warnings, truncated=truncated,
     )
 
 
@@ -1572,18 +1618,13 @@ def _cmd_implementations(args: argparse.Namespace) -> int:
         return rrc
     limit = _clamped_limit(args)
 
-    from java_codebase_rag.jrag_envelope import Envelope, mark_truncated
-    from java_codebase_rag.jrag_render import render
+    guard = _require_kind(
+        node, expected="implementations expects an interface Symbol root", kinds=("symbol",), args=args,
+    )
+    if guard is not None:
+        return guard
 
-    if node.kind != "symbol":
-        env = Envelope(
-            status="error",
-            message=(
-                f"implementations expects an interface Symbol root; resolved kind is {node.kind!r}."
-            ),
-        )
-        print(render(env, fmt=args.format))
-        return 2
+    from java_codebase_rag.jrag_envelope import mark_truncated
 
     # ADAPTATION: find_implementors DOES accept a `capability` kwarg (brief
     # claimed otherwise). Push --capability down (matches the global principle
@@ -1617,18 +1658,13 @@ def _cmd_subclasses(args: argparse.Namespace) -> int:
         return rrc
     limit = _clamped_limit(args)
 
-    from java_codebase_rag.jrag_envelope import Envelope, mark_truncated
-    from java_codebase_rag.jrag_render import render
+    guard = _require_kind(
+        node, expected="subclasses expects a class Symbol root", kinds=("symbol",), args=args,
+    )
+    if guard is not None:
+        return guard
 
-    if node.kind != "symbol":
-        env = Envelope(
-            status="error",
-            message=(
-                f"subclasses expects a class Symbol root; resolved kind is {node.kind!r}."
-            ),
-        )
-        print(render(env, fmt=args.format))
-        return 2
+    from java_codebase_rag.jrag_envelope import mark_truncated
 
     subs = graph.find_subclasses(
         node.fqn,
@@ -1663,13 +1699,15 @@ def _cmd_overrides(args: argparse.Namespace) -> int:
     from java_codebase_rag.jrag_envelope import Envelope
     from java_codebase_rag.jrag_render import render
 
-    if node.kind != "symbol":
-        env = Envelope(
-            status="error",
-            message=f"overrides expects a method Symbol root; resolved kind is {node.kind!r}.",
-        )
-        print(render(env, fmt=args.format))
-        return 2
+    guard = _require_kind(
+        node, expected="overrides expects a method Symbol root", kinds=("symbol",), args=args,
+    )
+    if guard is not None:
+        return guard
+
+    warnings = _warn_unapplied_scope(
+        args, reason="OVERRIDES is a structural method-to-method edge with no microservice predicate"
+    )
 
     root_id = node.id
     # OVERRIDES edge runs overrider -> declaration (subtype -> supertype method).
@@ -1692,7 +1730,7 @@ def _cmd_overrides(args: argparse.Namespace) -> int:
         edges = edges[:limit]
     return _emit_traversal(
         args, root_id=root_id, nodes=nodes, edges=edges,
-        noun="overrides", truncated=truncated,
+        noun="overrides", warnings=warnings, truncated=truncated,
     )
 
 
@@ -1710,13 +1748,15 @@ def _cmd_overridden_by(args: argparse.Namespace) -> int:
     from java_codebase_rag.jrag_envelope import Envelope
     from java_codebase_rag.jrag_render import render
 
-    if node.kind != "symbol":
-        env = Envelope(
-            status="error",
-            message=f"overridden-by expects a method Symbol root; resolved kind is {node.kind!r}.",
-        )
-        print(render(env, fmt=args.format))
-        return 2
+    guard = _require_kind(
+        node, expected="overridden-by expects a method Symbol root", kinds=("symbol",), args=args,
+    )
+    if guard is not None:
+        return guard
+
+    warnings = _warn_unapplied_scope(
+        args, reason="OVERRIDES is a structural method-to-method edge with no microservice predicate"
+    )
 
     root_id = node.id
     # direction="in" on OVERRIDES = virtual OVERRIDDEN_BY out (dispatch DOWN:
@@ -1739,7 +1779,7 @@ def _cmd_overridden_by(args: argparse.Namespace) -> int:
         edges = edges[:limit]
     return _emit_traversal(
         args, root_id=root_id, nodes=nodes, edges=edges,
-        noun="overridden-by", truncated=truncated,
+        noun="overridden-by", warnings=warnings, truncated=truncated,
     )
 
 
@@ -1752,16 +1792,13 @@ def _cmd_dependents(args: argparse.Namespace) -> int:
         return rrc
     limit = _clamped_limit(args)
 
-    from java_codebase_rag.jrag_envelope import Envelope, mark_truncated
-    from java_codebase_rag.jrag_render import render
+    guard = _require_kind(
+        node, expected="dependents expects a type Symbol root", kinds=("symbol",), args=args,
+    )
+    if guard is not None:
+        return guard
 
-    if node.kind != "symbol":
-        env = Envelope(
-            status="error",
-            message=f"dependents expects a type Symbol root; resolved kind is {node.kind!r}.",
-        )
-        print(render(env, fmt=args.format))
-        return 2
+    from java_codebase_rag.jrag_envelope import mark_truncated
 
     inj = graph.find_injectors(
         node.fqn,
@@ -1832,16 +1869,11 @@ def _cmd_decompose(args: argparse.Namespace) -> int:
     if rrc or node is None:
         return rrc
 
-    from java_codebase_rag.jrag_envelope import Envelope
-    from java_codebase_rag.jrag_render import render
-
-    if node.kind != "symbol":
-        env = Envelope(
-            status="error",
-            message=f"decompose expects an entrypoint Symbol root; resolved kind is {node.kind!r}.",
-        )
-        print(render(env, fmt=args.format))
-        return 2
+    guard = _require_kind(
+        node, expected="decompose expects an entrypoint Symbol root", kinds=("symbol",), args=args,
+    )
+    if guard is not None:
+        return guard
 
     # trace_flow clamps depth internally to 1..3; mirror here for the help text.
     depth = max(1, min(3, getattr(args, "depth", 2)))
@@ -1863,15 +1895,29 @@ def _cmd_decompose(args: argparse.Namespace) -> int:
             nodes[ss.symbol.id] = _symbol_hit_to_dict(ss.symbol)
             via = ss.via[0] if ss.via else None
             edge_type = via.edge_type if via else ("SEED" if stage_idx == 0 else "STAGE")
-            edge_row = {"other_id": ss.symbol.id, "edge_type": edge_type, "stage": stage_idx}
+            edge_row = {
+                "other_id": ss.symbol.id,
+                "edge_type": edge_type,
+                "stage": stage_idx,
+                # Role carries through to the renderer so the waterfall can
+                # label each stage with the role allow-list it matched.
+                "role": ss.symbol.role or "",
+            }
             if via and via.from_fqn:
                 edge_row["from_fqn"] = via.from_fqn
             edges.append(edge_row)
-    # No +1-fetch truncation here: trace_flow is stage-limited internally
-    # (stage_limit); the user-facing --limit does not apply.
+    # --limit is inherited from common but does not cap decompose (trace_flow
+    # is stage-limited via --max-stage, not a total edge count). Warn when the
+    # user explicitly set --limit away from the default so they get a signal
+    # rather than a silent multi-stage dump (Fix 4).
+    warnings: list[str] = []
+    if args.limit is not None and args.limit != 20:
+        warnings.append(
+            "--limit does not apply to decompose; use --max-stage to cap per-stage breadth"
+        )
     return _emit_traversal(
         args, root_id=root_id, nodes=nodes, edges=edges,
-        noun="decompose",
+        noun="decompose", warnings=warnings,
     )
 
 
@@ -1885,19 +1931,16 @@ def _cmd_flow(args: argparse.Namespace) -> int:
         return rrc
     limit = _clamped_limit(args)
 
-    from java_codebase_rag.jrag_envelope import Envelope
-    from java_codebase_rag.jrag_render import render
+    guard = _require_kind(
+        node, expected="flow requires a Route root", kinds=("route",), args=args,
+        hint="Pass a route path (e.g. /chat/assign).",
+    )
+    if guard is not None:
+        return guard
 
-    if node.kind != "route":
-        env = Envelope(
-            status="error",
-            message=(
-                f"flow requires a Route root; resolved kind is {node.kind!r}. "
-                "Pass a route path (e.g. /chat/assign)."
-            ),
-        )
-        print(render(env, fmt=args.format))
-        return 2
+    warnings = _warn_unapplied_scope(
+        args, reason="trace_request_flow carries no microservice predicate; intra-codebase is an index-time data property"
+    )
 
     max_hops = max(1, min(8, getattr(args, "max_hops", 5)))
     flow_data = graph.trace_request_flow(entry_route_id=node.id, max_hops=max_hops)
@@ -1943,7 +1986,7 @@ def _cmd_flow(args: argparse.Namespace) -> int:
         edges = edges[:limit]
     return _emit_traversal(
         args, root_id=root_id, nodes=nodes, edges=edges,
-        noun="flow", truncated=truncated,
+        noun="flow", warnings=warnings, truncated=truncated,
     )
 
 
