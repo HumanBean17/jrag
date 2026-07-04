@@ -7,8 +7,20 @@ on:
 
 jobs:
   test:
-    name: test
-    runs-on: ubuntu-latest
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # Ubuntu is the required gate (blocks merges). macOS + Windows run on
+        # every code-change PR to surface platform regressions, but stay
+        # non-blocking (continue-on-error below) until each has been green
+        # across several merges — the fast test suite exercises the native
+        # kuzu/ladybug graph layer, which had never been run on these OSes
+        # before this matrix. Promote an OS to a hard gate by dropping it from
+        # the continue-on-error expression once it is reliably green.
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    continue-on-error: ${{ matrix.os != 'ubuntu-latest' }}
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
         with:

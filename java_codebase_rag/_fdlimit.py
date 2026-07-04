@@ -22,7 +22,15 @@ See https://github.com/HumanBean17/java-codebase-rag/issues/306
 
 from __future__ import annotations
 
-import resource
+try:
+    # Unix-only: the ``resource`` module does not exist on Windows. Importing it
+    # unconditionally at module scope crashes on Windows, which (because
+    # ``cli.py`` and ``server.py`` both import ``raise_fd_limit``) made the
+    # entire CLI and MCP server fail to start there. Guard the import so the
+    # module loads everywhere; the function below no-ops when it's absent.
+    import resource
+except ImportError:  # pragma: no cover - Windows lacks the resource module
+    resource = None  # type: ignore[assignment]
 
 # Safe ceiling well above LanceDB's appetite, comfortably below macOS libc
 # quirks. The hard limit caps it further if lower (locked-down servers).
@@ -35,7 +43,7 @@ def raise_fd_limit(cap: int = _DEFAULT_CAP) -> None:
     Best-effort and silent: never raises. No-op where ``RLIMIT_NOFILE`` is
     unsupported (Windows) or where the soft limit already meets ``min(hard, cap)``.
     """
-    if not hasattr(resource, "RLIMIT_NOFILE"):
+    if resource is None or not hasattr(resource, "RLIMIT_NOFILE"):
         return
     soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
     target = min(hard, cap)

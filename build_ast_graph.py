@@ -3816,6 +3816,7 @@ def incremental_rebuild(
                 if verbose:
                     _verbose_stderr_line(f"[increment] ontology version {version} < 17; falling back to full rebuild")
                 conn.close()
+                db.close()
                 del conn, db
                 return _fallback_to_full(source_root, ladybug_path, verbose, t_start)
     except Exception as e:
@@ -3823,6 +3824,7 @@ def incremental_rebuild(
             _verbose_stderr_line(f"[increment] failed to read ontology version: {e}; falling back to full rebuild")
         try:
             conn.close()
+            db.close()
         except Exception:
             pass
         del conn, db
@@ -3841,6 +3843,7 @@ def incremental_rebuild(
         if verbose:
             _verbose_stderr_line("[increment] no changes detected; no-op")
         conn.close()
+        db.close()
         return IncrementalResult(
             mode="incremental",
             files_changed=0,
@@ -3859,6 +3862,7 @@ def incremental_rebuild(
         if verbose:
             _verbose_stderr_line("[increment] crash marker exists; falling back to full rebuild")
         conn.close()
+        db.close()
         crash_marker_path.unlink(missing_ok=True)
         return _fallback_to_full(source_root, ladybug_path, verbose, t_start)
 
@@ -3893,6 +3897,7 @@ def incremental_rebuild(
             if verbose:
                 _verbose_stderr_line(f"[increment] dependent expansion cap ({expansion_cap}) exceeded ({len(scope_files)} files); falling back to full rebuild")
             conn.close()
+            db.close()
             crash_marker_path.unlink(missing_ok=True)
             return _fallback_to_full(source_root, ladybug_path, verbose, t_start)
 
@@ -3977,6 +3982,7 @@ def incremental_rebuild(
         crash_marker_path.unlink(missing_ok=True)
 
         conn.close()
+        db.close()
 
         elapsed = time.time() - t_start
         if verbose:
@@ -3996,6 +4002,7 @@ def incremental_rebuild(
         if verbose:
             _verbose_stderr_line(f"[increment] error during incremental rebuild: {e}; falling back to full rebuild")
         conn.close()
+        db.close()
         crash_marker_path.unlink(missing_ok=True)
         return _fallback_to_full(source_root, ladybug_path, verbose, t_start)
 
@@ -4200,6 +4207,7 @@ def write_ladybug(
             _verbose_stderr_line(f"[graph] writing · routes/exposes written in {time.time() - t2:.2f}s")
         _write_meta(conn, tables, source_root)
         conn.close()
+        db.close()
     _init_hash_tracker(source_root, db_path)
 
 

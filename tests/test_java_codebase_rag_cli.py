@@ -205,12 +205,13 @@ def test_embedding_model_yaml_expands_tilde(
 ) -> None:
     monkeypatch.delenv("SBERT_MODEL", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))  # Windows expanduser uses %USERPROFILE%
     (tmp_path / ".java-codebase-rag.yml").write_text(
         "embedding:\n  model: ~/models/minilm\n",
         encoding="utf-8",
     )
     cfg = resolve_operator_config(source_root=tmp_path)
-    assert cfg.embedding_model == str(tmp_path / "home" / "models" / "minilm")
+    assert Path(cfg.embedding_model) == tmp_path / "home" / "models" / "minilm"
     assert cfg.embedding_model_source == "yaml"
 
 
@@ -247,11 +248,12 @@ def test_embedding_model_cli_quoted_tilde_expanded(
     """UC10b: quoted CLI argument bypasses shell expansion; helper canonicalises."""
     monkeypatch.delenv("SBERT_MODEL", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))  # Windows expanduser uses %USERPROFILE%
     cfg = resolve_operator_config(
         source_root=tmp_path,
         cli_embedding_model="~/cli/x",  # quoted in shell → arrives literal
     )
-    assert cfg.embedding_model == str(tmp_path / "home" / "cli" / "x")
+    assert Path(cfg.embedding_model) == tmp_path / "home" / "cli" / "x"
     assert cfg.embedding_model_source == "cli"
 
 

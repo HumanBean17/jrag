@@ -151,6 +151,7 @@ class TestDiscoverProjectRoot:
         (stray_idx / "code_graph.lbug").write_bytes(b"\x00" * 16)
 
         monkeypatch.setenv("HOME", str(fake_home))
+        monkeypatch.setenv("USERPROFILE", str(fake_home))  # Windows: Path.home() uses %USERPROFILE%
 
         result = discover_project_root(project_dir)
         assert result is None, "stray ~/.java-codebase-rag/ must not anchor at $HOME (#357)"
@@ -212,9 +213,11 @@ class TestSourceRootFromYaml:
         # Change cwd to tmp_path so walk-up finds this config
         monkeypatch.chdir(tmp_path)
 
-        # source_root=None triggers walk-up discovery + YAML parsing
+        # source_root=None triggers walk-up discovery + YAML parsing.
+        # .resolve() on both sides normalises drive-relative anchoring:
+        # Windows sees "/some/absolute/path" as C:/some/absolute/path.
         result = resolve_operator_config(source_root=None)
-        assert result.source_root == Path(absolute_path)
+        assert Path(result.source_root).resolve() == Path(absolute_path).resolve()
 
 
 class TestIndexDirRelativeToConfigDir:
@@ -297,8 +300,9 @@ class TestSourceRootPrecedence:
 
         # source_root=None triggers walk-up discovery
         result = resolve_operator_config(source_root=None)
-        # YAML should override the discovered config dir
-        assert result.source_root == Path("/yaml/root")
+        # YAML should override the discovered config dir. .resolve() normalises
+        # drive-relative anchoring on Windows ("/yaml/root" -> C:/yaml/root).
+        assert Path(result.source_root).resolve() == Path("/yaml/root").resolve()
 
     def test_source_root_precedence_env_over_yaml(self, tmp_path, monkeypatch):
         """env var wins over YAML source_root."""
@@ -449,6 +453,7 @@ class TestMaybeExpandEmbeddingModelPath:
         from java_codebase_rag.config import maybe_expand_embedding_model_path
 
         monkeypatch.setenv("HOME", "/home/user")
+        monkeypatch.setenv("USERPROFILE", "/home/user")  # Windows expanduser uses %USERPROFILE%
         assert maybe_expand_embedding_model_path("~/models/minilm") == "/home/user/models/minilm"
 
     def test_yaml_base_resolves_relative(self, tmp_path):

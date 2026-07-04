@@ -632,7 +632,17 @@ def _cmd_erase(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 2
-        ans = input("Delete these paths? [y/N]: ").strip().lower()
+        try:
+            ans = input("Delete these paths? [y/N]: ").strip().lower()
+        except EOFError:
+            # Non-interactive stdin that nonetheless reported isatty() == True
+            # (the Windows NUL device is a character device, so isatty() lies).
+            # Treat it as a refusal instead of crashing with an EOF traceback.
+            print(
+                "java-codebase-rag erase: non-interactive stdin; pass --yes to confirm.",
+                file=sys.stderr,
+            )
+            return 2
         if ans not in ("y", "yes"):
             print("Aborted.", file=sys.stderr)
             return 2

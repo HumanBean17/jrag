@@ -11,7 +11,19 @@ See https://github.com/HumanBean17/java-codebase-rag/issues/306
 
 from __future__ import annotations
 
+import sys
+
+import pytest
+
 from java_codebase_rag import _fdlimit
+
+# These tests exercise the Unix-only ``resource.RLIMIT_NOFILE`` raising path.
+# ``raise_fd_limit`` no-ops on Windows (where the ``resource`` module is absent),
+# so there is nothing to assert there.
+pytestmark = pytest.mark.skipif(
+    sys.platform.startswith("win"),
+    reason="resource.RLIMIT_NOFILE is Unix-only; raise_fd_limit no-ops on Windows",
+)
 
 
 def test_raises_soft_limit_up_to_cap(monkeypatch):

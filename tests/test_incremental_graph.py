@@ -383,6 +383,7 @@ class TestIncrementalOrchestrator:
             phantom_count_before = phantom_result.get_next()[0]
 
         conn.close()
+        db.close()
 
         # Initialize hash tracker
         tracker = FileHashTracker(index_dir)
@@ -598,6 +599,7 @@ class TestIncrementalOrchestrator:
         if count_before_result.has_next():
             count_before = count_before_result.get_next()[0]
         conn.close()
+        db.close()
 
         # Initialize hash tracker
         tracker = FileHashTracker(index_dir)
@@ -940,6 +942,7 @@ class TestIncrementalOrchestrator:
             cb_count = cb_result.get_next()[0]
         assert cb_count > 0, "seeded graph must contain a C->B CALLS edge"
         conn.close()
+        db.close()
 
         # Initialize hash tracker for all files.
         tracker = FileHashTracker(index_dir)

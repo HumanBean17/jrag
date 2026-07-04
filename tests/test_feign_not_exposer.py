@@ -144,6 +144,7 @@ def test_meta_returns_none_for_old_graphs(tmp_path: Path) -> None:
         },
     )
     conn.close()
+    db.close()
     LadybugGraph._instance = None
     LadybugGraph._instance_path = None
     assert LadybugGraph(str(db_path)).meta()["pass4_exposes_suppressed_feign"] is None
