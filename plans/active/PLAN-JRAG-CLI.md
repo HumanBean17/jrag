@@ -963,6 +963,13 @@ Plus: `tests/test_agent_skills_static.py` updated and green.
   method (v1 composes `neighbors_v2`); standalone `jrag resolve`; `jrag source`;
   moving operator lifecycle commands into `jrag`; ontology bump/re-index; the
   actual PyPI publish (PR-JRAG-4 bumps version only).
+- **`--fuzzy` on `find`** (faithful name-prefix/name-contains fallback). The backend
+  `find_by_name_or_fqn` is Symbol-only and exact-only
+  (`MATCH (s:Symbol) WHERE s.name=$needle OR s.fqn=$needle`); `NodeFilter` only has
+  `fqn_prefix` (FQN STARTS WITH), with no name-prefix/contains anywhere. Implementing
+  the brief's exact→prefix→contains fallback would require backend changes that are
+  out of scope for the thin-CLI PRs. The `--fuzzy` flag was removed from the `find`
+  subparser; tracked as a GitHub follow-up issue for the real implementation.
 
 # Whole-plan done definition
 

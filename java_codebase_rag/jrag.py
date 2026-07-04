@@ -124,18 +124,15 @@ def build_parser() -> argparse.ArgumentParser:
         parents=[common],
         description=(
             "Find nodes by query or filter. Two modes:\n"
-            "  Query mode (positional <query>): search by name/FQN with optional fuzzy fallback.\n"
+            "  Query mode (positional <query>): search by exact name/FQN (symbols only).\n"
             "  Filter mode (no positional): apply structured filters (NodeFilter flags).\n"
             "Kind inference: domain flags (--http-method, --client-kind, --producer-kind) imply\n"
-            "route/client/producer when --kind is omitted. Contradiction emits an error envelope."
+            "route/client/producer when --kind is omitted. Contradiction emits an error envelope.\n"
+            "Query mode + non-symbol kind (explicit or inferred) errors: name/FQN lookup only\n"
+            "searches symbols; drop the positional <query> and use filter mode for routes/clients/producers."
         ),
     )
     find.add_argument("query", nargs="?", default=None, help="Search query (name/FQN). Omit for filter mode.")
-    find.add_argument(
-        "--fuzzy",
-        action="store_true",
-        help="Enable fuzzy fallback (exact → prefix → contains) when exact returns nothing.",
-    )
     find.add_argument(
         "--kind",
         choices=("symbol", "route", "client", "producer"),
@@ -358,7 +355,25 @@ def _cmd_find(args: argparse.Namespace) -> int:
 
     # Query mode: positional <query> present
     if args.query:
-        return _cmd_find_query_mode(args, cfg, graph, inferred, limit)
+        # find_by_name_or_fqn is Symbol-only (MATCH (s:Symbol) WHERE s.name=$needle
+        # OR s.fqn=$needle). A positional <query> with a non-symbol kind (explicit
+        # OR inferred from --http-method/--client-kind/--producer-kind/etc.) is a
+        # usage contract violation -> status: error envelope (NOT argparse exit),
+        # telling the user to drop the positional and use filter mode.
+        effective_kind = inferred or "symbol"
+        if effective_kind != "symbol":
+            env = Envelope(
+                status="error",
+                message=(
+                    f"query mode (positional <query>) only searches Symbols, but kind "
+                    f"'{effective_kind}' was {'inferred from domain flags' if args.kind is None else 'set via --kind'}. "
+                    "Drop the positional <query> and use filter mode (the domain flags) "
+                    "for route/client/producer searches."
+                ),
+            )
+            print(render(env, fmt=args.format))
+            return 2
+        return _cmd_find_query_mode(args, cfg, graph, limit)
 
     # Filter mode: build NodeFilter and call find_v2
     return _cmd_find_filter_mode(args, cfg, graph, inferred or "symbol", limit)
@@ -368,26 +383,32 @@ def _cmd_find_query_mode(
     args: argparse.Namespace,
     cfg,
     graph,
-    inferred: str | None,
     limit: int,
 ) -> int:
-    """Find query mode: g.find_by_name_or_fqn with optional fuzzy fallback."""
+    """Find query mode: g.find_by_name_or_fqn (Symbol-only, exact name/FQN match).
+
+    ``find_by_name_or_fqn`` runs ``MATCH (s:Symbol) WHERE s.name=$needle OR
+    s.fqn=$needle`` — Symbol-only, exact-only. There is no fuzzy/prefix/contains
+    path; ``--fuzzy`` was deferred (see plans/active/PLAN-JRAG-CLI.md Out of
+    scope). Query mode is gated to ``effective_kind == "symbol"`` upstream in
+    ``_cmd_find``, so the only ``kinds`` filter we may pass is symbol sub-kinds
+    derived from ``--java-kind``.
+    """
     from java_codebase_rag.jrag_envelope import Envelope, mark_truncated, next_actions_hook, normalize_enum
     from java_codebase_rag.jrag_render import render
 
-    kind = inferred or "symbol"
     query = args.query
 
-    # Map kind to LadybugGraph kinds list (lowercase for symbols)
-    kind_map = {
-        "symbol": ["class", "interface", "method", "field"],
-        "route": ["ROUTE"],
-        "client": ["CLIENT"],
-        "producer": ["PRODUCER"],
-    }
-    kinds = kind_map.get(kind, [])
+    # find_by_name_or_fqn is always Symbol; the only valid kinds filter is the
+    # symbol sub-kind derived from --java-kind (lowercase, matching s.kind).
+    # route/client/producer kinds were removed: they would never match Symbols.
+    if args.java_kind:
+        java_kind_norm = normalize_enum(args.java_kind, kind="java_kind")
+        kinds = [java_kind_norm.lower()]
+    else:
+        kinds = None
 
-    # Call find_by_name_or_fqn
+    # Call find_by_name_or_fqn (exact name OR fqn match).
     rows = graph.find_by_name_or_fqn(
         query,
         kinds=kinds,
@@ -396,55 +417,38 @@ def _cmd_find_query_mode(
         limit=limit + 1,  # +1 for truncated detection
     )
 
-    # Fuzzy fallback: if exact returns nothing and --fuzzy given
-    if not rows and args.fuzzy:
-        # Prefix match
-        rows = graph.find_by_name_or_fqn(
-            query,
-            kinds=kinds,
-            module=args.module,
-            microservice=args.service,
-            limit=limit + 1,
-        )
-        if not rows:
-            # Contains match (simulate via iterating over all symbols - this is expensive, so limit to 100)
-            # Actually, find_by_name_or_fqn doesn't support contains, so we skip this tier
-            # The brief says "exact → prefix → contains on the identifier string", but the backend
-            # method only supports exact (name=FQN or name=needle). We'll implement prefix/contains
-            # by manually filtering the exact results (which already includes prefix matches via name=).
-            # Actually, looking at the SQL in find_by_name_or_fqn: "(s.name = $needle OR s.fqn = $needle)"
-            # This is exact only. For prefix, we'd need a different query. For now, we'll just do exact.
-            pass
-
-    # Post-filter by role/java-kind/annotation/capability/framework/source-layer
+    # Post-filter by role/annotation/capability (SymbolHit carries these).
     if args.role:
         role_norm = normalize_enum(args.role, kind="role")
         rows = [r for r in rows if (r.role or "").upper().replace("-", "_") == role_norm.upper()]
     if args.exclude_role:
         exclude_role_norm = normalize_enum(args.exclude_role, kind="role")
         rows = [r for r in rows if (r.role or "").upper().replace("-", "_") != exclude_role_norm.upper()]
-    if args.java_kind:
-        java_kind_norm = normalize_enum(args.java_kind, kind="java_kind")
-        rows = [r for r in rows if (r.kind or "").upper().replace("-", "_") == java_kind_norm.upper()]
     if args.annotation:
         rows = [r for r in rows if args.annotation in (r.annotations or [])]
     if args.capability:
         rows = [r for r in rows if args.capability in (r.capabilities or [])]
-    if args.framework:
-        # SymbolHit doesn't have framework field; this filter only applies to routes/clients/producers
-        # For symbols, we can't filter by framework
-        pass
-    if args.source_layer:
-        # SymbolHit doesn't have source_layer field; this filter only applies to routes
-        pass
 
-    # Convert to NodeRef-like dicts for the envelope
+    # Build warnings for filters that cannot apply in query mode. SymbolHit
+    # carries no framework/source_layer fields; rather than silently dropping
+    # the user's filter, surface a warning so they know to switch to filter mode.
+    warnings: list[str] = []
+    if args.framework:
+        warnings.append(
+            "--framework ignored in query mode (applies to routes/clients/producers; use filter mode)"
+        )
+    if args.source_layer:
+        warnings.append(
+            "--source-layer ignored in query mode (applies to routes; use filter mode)"
+        )
+
+    # Convert SymbolHit rows to NodeRef-like dicts for the envelope.
     nodes = {}
-    for i, row in enumerate(rows):
+    for row in rows:
         node_id = row.id
         nodes[node_id] = {
             "id": node_id,
-            "kind": kind,
+            "kind": "symbol",
             "fqn": row.fqn,
             "name": row.name,
             "symbol_kind": row.kind,
@@ -453,18 +457,19 @@ def _cmd_find_query_mode(
             "role": row.role,
         }
 
-    # Truncation check - apply to the list of node dicts
+    # mark_truncated operates on a list; envelope.nodes is a dict keyed by id.
+    # Round-trip dict -> list -> truncate -> dict to apply the +1-fetch drop
+    # (the truncated flag is computed off the list length, which equals the
+    # dict size, so this is sound).
     node_list = list(nodes.values())
     display_nodes_list, truncated = mark_truncated(node_list, limit)
-
-    # Convert back to dict for the envelope
     display_nodes = {node["id"]: node for node in display_nodes_list}
 
-    env = Envelope(status="ok", nodes=display_nodes, truncated=truncated)
+    env = Envelope(status="ok", nodes=display_nodes, truncated=truncated, warnings=warnings)
     next_actions_hook(env)
 
-    # Offset is not supported in query mode (per brief)
-    print(render(env, fmt=args.format, noun=kind))
+    # Offset is not supported in query mode (find_by_name_or_fqn has no offset).
+    print(render(env, fmt=args.format, noun="symbol"))
     return 0
 
 

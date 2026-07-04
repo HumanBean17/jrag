@@ -6,14 +6,18 @@ Tests:
 3. test_find_by_capability - --capability scheduled-task, symbol inferred
 4. test_find_kind_inference_from_http_method - route inferred
 5. test_find_kind_contradiction_is_error - --kind symbol --http-method GET
-6. test_find_fuzzy_falls_back_to_prefix - --fuzzy fallback
+6. test_find_query_mode_with_non_symbol_kind_returns_error - query mode + route/client/producer errors
 7. test_find_annotation_flag_filters - --annotation post-filter
 8. test_find_exclude_role_flag_filters - --exclude-role post-filter
 9. test_find_offset_paginates - --offset works on find
 10. test_find_limit_capped_under_500 - --limit 600 behaves as ≤499
-11. test_inspect_returns_edge_summary_with_composed_keys - OVERRIDDEN_BY virtual key
-12. test_inspect_ambiguous_returns_candidates - resolve returns many
-13. test_inspect_populates_file_location - file_location set by resolve
+11. test_find_query_mode_framework_and_source_layer_warn - dropped filters warn
+12. test_inspect_returns_edge_summary_with_composed_keys - OVERRIDDEN_BY virtual key
+13. test_inspect_ambiguous_returns_candidates - resolve returns many
+14. test_inspect_populates_file_location - file_location set by resolve
+
+Note: --fuzzy was deferred (backend find_by_name_or_fqn is exact-only; see
+plans/active/PLAN-JRAG-CLI.md Out of scope).
 """
 from __future__ import annotations
 
@@ -154,22 +158,40 @@ def test_find_kind_contradiction_is_error(corpus_root: Path, ladybug_db_path: Pa
     assert "contradiction" in payload.get("message", "").lower() or "conflict" in payload.get("message", "").lower()
 
 
-# ----- Test 6: find fuzzy falls back to prefix -----
+# ----- Test 6: find query mode + non-symbol kind errors -----
 
 
-def test_find_fuzzy_falls_back_to_prefix(corpus_root: Path, ladybug_db_path: Path) -> None:
-    """--fuzzy enables prefix fallback when exact returns nothing."""
+def test_find_query_mode_with_non_symbol_kind_returns_error(
+    corpus_root: Path, ladybug_db_path: Path
+) -> None:
+    """Query mode (positional <query>) + non-symbol kind -> status: error.
+
+    find_by_name_or_fqn is Symbol-only (exact name/FQN match). A positional
+    <query> with explicit --kind route OR a domain flag that infers a non-symbol
+    kind (--http-method -> route) must error (NOT silently return empty),
+    telling the user to drop the positional and use filter mode.
+    """
     env = os.environ.copy()
     env["JAVA_CODEBASE_RAG_SOURCE_ROOT"] = str(corpus_root)
     env["JAVA_CODEBASE_RAG_INDEX_DIR"] = str(ladybug_db_path.parent)
 
-    # Use a partial prefix that won't match exactly but should match with prefix
-    proc = _run_jrag(["find", "Account", "--fuzzy", "--format", "json", "--limit", "5"], env=env)
-    assert proc.returncode == 0, f"find failed: rc={proc.returncode}\nstdout={proc.stdout}\nstderr={proc.stderr}"
-
+    # Explicit --kind route + positional query
+    proc = _run_jrag(["find", "--kind", "route", "SomeQuery", "--format", "json"], env=env)
+    assert proc.returncode == 2, f"explicit route: expected exit 2, got {proc.returncode}"
     payload = json.loads(proc.stdout)
-    assert payload["status"] == "ok"
-    # Should return results with Account prefix
+    assert payload["status"] == "error", f"explicit route: {payload}"
+    msg = payload.get("message", "")
+    assert "Symbol" in msg, f"explicit route msg should mention Symbol: {msg!r}"
+    assert "filter mode" in msg, f"explicit route msg should mention filter mode: {msg!r}"
+
+    # Inferred route (--http-method) + positional query
+    proc = _run_jrag(
+        ["find", "--http-method", "GET", "SomeName", "--format", "json"], env=env
+    )
+    assert proc.returncode == 2, f"inferred route: expected exit 2, got {proc.returncode}"
+    payload = json.loads(proc.stdout)
+    assert payload["status"] == "error", f"inferred route: {payload}"
+    assert "Symbol" in payload.get("message", ""), "inferred route should mention Symbol"
 
 
 # ----- Test 7: find annotation flag filters -----
@@ -262,34 +284,80 @@ def test_find_limit_capped_under_500(corpus_root: Path, ladybug_db_path: Path) -
     assert len(nodes) <= 500, f"expected ≤500 results, got {len(nodes)}"
 
 
-# ----- Test 11: inspect returns edge_summary with composed keys -----
+# ----- Test 11: find query mode framework/source-layer warn when dropped -----
+
+
+def test_find_query_mode_framework_and_source_layer_warn(
+    corpus_root: Path, ladybug_db_path: Path
+) -> None:
+    """--framework/--source-layer in query mode are dropped (SymbolHit lacks those
+    fields) but surface a warnings[] entry so the user knows their filter had no effect.
+    """
+    env = os.environ.copy()
+    env["JAVA_CODEBASE_RAG_SOURCE_ROOT"] = str(corpus_root)
+    env["JAVA_CODEBASE_RAG_INDEX_DIR"] = str(ladybug_db_path.parent)
+
+    proc = _run_jrag(
+        ["find", "com.bank.chat.assign.ChatAssignApplication", "--framework", "spring-mvc", "--format", "json"],
+        env=env,
+    )
+    assert proc.returncode == 0, f"find failed: rc={proc.returncode}\nstdout={proc.stdout}\nstderr={proc.stderr}"
+    payload = json.loads(proc.stdout)
+    assert payload["status"] == "ok"
+    warnings = payload.get("warnings", [])
+    assert any("--framework" in w and "ignored" in w for w in warnings), (
+        f"expected --framework ignored warning, got warnings={warnings}"
+    )
+
+    # --source-layer in query mode
+    proc = _run_jrag(
+        ["find", "com.bank.chat.assign.ChatAssignApplication", "--source-layer", "layer-a", "--format", "json"],
+        env=env,
+    )
+    assert proc.returncode == 0, f"find failed: rc={proc.returncode}\nstdout={proc.stdout}\nstderr={proc.stderr}"
+    payload = json.loads(proc.stdout)
+    assert payload["status"] == "ok"
+    warnings = payload.get("warnings", [])
+    assert any("--source-layer" in w and "ignored" in w for w in warnings), (
+        f"expected --source-layer ignored warning, got warnings={warnings}"
+    )
+
+
+# ----- Test 12: inspect returns edge_summary with composed keys -----
 
 
 def test_inspect_returns_edge_summary_with_composed_keys(
     corpus_root: Path, ladybug_db_path: Path
 ) -> None:
-    """Inspect returns edge_summary with OVERRIDDEN_BY virtual key."""
+    """Inspect returns edge_summary with the virtual OVERRIDDEN_BY composed key.
+
+    The abstract port method ``ChatAssignmentPort#requestAssignment`` has one
+    implementor in the bank-chat fixture (verified via test_mcp_v2_compose.
+    test_describe_abstract_port_emits_overridden_by_rollup), so its
+    edge_summary must carry ``OVERRIDDEN_BY = {"in": 0, "out": 1}``.
+    """
     env = os.environ.copy()
     env["JAVA_CODEBASE_RAG_SOURCE_ROOT"] = str(corpus_root)
     env["JAVA_CODEBASE_RAG_INDEX_DIR"] = str(ladybug_db_path.parent)
 
-    # Find a method that overrides another (if any exist in the fixture)
-    # For now, just inspect any known node
-    proc = _run_jrag(["inspect", "com.bank.chat.assign.ChatAssignApplication", "--format", "json"], env=env)
+    method_fqn = "com.bank.chat.engine.assign.ChatAssignmentPort#requestAssignment(AssignmentRequest)"
+    proc = _run_jrag(["inspect", method_fqn, "--format", "json"], env=env)
     assert proc.returncode == 0, f"inspect failed: rc={proc.returncode}\nstdout={proc.stdout}\nstderr={proc.stderr}"
 
     payload = json.loads(proc.stdout)
-    assert payload["status"] == "ok"
+    assert payload["status"] == "ok", f"expected ok, got {payload}"
     nodes = payload.get("nodes", {})
     assert len(nodes) == 1, f"expected 1 node, got {len(nodes)}"
-    # Check that edge_summary is present (may be empty if no edges)
-    for node_id, node in nodes.items():
-        # edge_summary might not exist for all nodes, but the structure should be valid
-        if "edge_summary" in node:
-            edge_summary = node["edge_summary"]
-            # If present, it should be a dict
-            assert isinstance(edge_summary, dict), "edge_summary should be a dict"
-    # Success if we got here without crashing
+    node = next(iter(nodes.values()))
+    edge_summary = node.get("edge_summary")
+    assert isinstance(edge_summary, dict), f"edge_summary should be a dict, got {type(edge_summary)}"
+    # The OVERRIDDEN_BY virtual composed key must be present with out > 0
+    # (override_axis_rollup_for feeds this; see describe_v2 / mcp_v2_compose test).
+    assert "OVERRIDDEN_BY" in edge_summary, (
+        f"expected OVERRIDDEN_BY composed key, got keys={list(edge_summary.keys())}"
+    )
+    ob = edge_summary["OVERRIDDEN_BY"]
+    assert int(ob.get("out", 0)) > 0, f"expected OVERRIDDEN_BY out > 0, got {ob}"
 
 
 # ----- Test 12: inspect ambiguous returns candidates -----
@@ -323,19 +391,20 @@ def test_inspect_ambiguous_returns_candidates(corpus_root: Path, ladybug_db_path
 
 
 def test_inspect_populates_file_location(corpus_root: Path, ladybug_db_path: Path) -> None:
-    """Inspect populates file_location from resolve_query."""
+    """Inspect populates file_location from resolve_query (filename:start_line)."""
     env = os.environ.copy()
     env["JAVA_CODEBASE_RAG_SOURCE_ROOT"] = str(corpus_root)
     env["JAVA_CODEBASE_RAG_INDEX_DIR"] = str(ladybug_db_path.parent)
 
-    # Inspect a specific known symbol
+    # Inspect a specific known symbol that resolves cleanly and has a file location.
     proc = _run_jrag(["inspect", "com.bank.chat.assign.ChatAssignApplication", "--format", "json"], env=env)
     assert proc.returncode == 0, f"inspect failed: rc={proc.returncode}\nstdout={proc.stdout}\nstderr={proc.stderr}"
 
     payload = json.loads(proc.stdout)
-    assert payload["status"] == "ok"
-    # file_location should be populated
+    assert payload["status"] == "ok", f"expected ok, got {payload}"
+    # file_location is populated by resolve_query from the resolved node's
+    # filename + start_line (jrag_envelope._node_file_location).
     file_location = payload.get("file_location")
-    if file_location:
-        # Should be in format "filename:line" or "filename"
-        assert ":" in file_location or isinstance(file_location, str), f"invalid file_location: {file_location}"
+    assert file_location is not None, "expected file_location to be populated for a real symbol"
+    # Should be in format "filename:start_line" (start_line present for symbols).
+    assert "ChatAssignApplication.java" in file_location, f"unexpected file_location: {file_location}"
