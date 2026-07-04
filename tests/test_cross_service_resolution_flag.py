@@ -218,6 +218,7 @@ def test_meta_resolution_null_for_old_graphs(tmp_path: Path) -> None:
         },
     )
     conn.close()
+    db.close()
     LadybugGraph._instance = None
     LadybugGraph._instance_path = None
     assert LadybugGraph(str(db_path)).meta()["cross_service_resolution"] is None
