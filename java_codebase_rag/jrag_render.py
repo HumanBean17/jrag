@@ -10,12 +10,7 @@ invariant.
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from java_codebase_rag.jrag_envelope import Envelope, simple_name
-
-if TYPE_CHECKING:
-    pass
 
 __all__ = ["render", "tiered_name"]
 
@@ -138,15 +133,24 @@ def _render_traversal(envelope: Envelope, *, noun: str) -> str:
 
 
 def _render_inspect(envelope: Envelope) -> str:
+    """kv-block renderer for nodes carrying one or more nested dict sections.
+
+    Generic: ANY dict-typed value on a node renders as a header line plus
+    indented sorted sub-keys. This is the dispatch signal for the inspect
+    shape (PR-JRAG-1a status uses it for ``counts`` / ``edges``; PR-JRAG-3
+    ``inspect`` will use it for ``edge_summary`` and other rollups). The
+    ``edge_summary`` key is NOT special here - it is reserved for real edge
+    data in PR-JRAG-3 and is one of many possible section sources.
+    """
     lines: list[str] = []
     for _node_id, node in envelope.nodes.items():
-        # ALL dict keys alphabetical (PR-JRAG-1a test 13). The ``edge_summary``
-        # key, if present, is rendered in its alphabetical position with a
-        # header line followed by indented sorted keys.
+        # ALL dict keys alphabetical (PR-JRAG-1a test 13). A dict-typed value
+        # renders in its alphabetical position with a header line followed by
+        # indented sorted sub-keys; scalars render inline as ``key: value``.
         for key in sorted(node.keys()):
             val = node[key]
-            if key == "edge_summary" and isinstance(val, dict) and val:
-                lines.append("edge_summary:")
+            if isinstance(val, dict) and val:
+                lines.append(f"{key}:")
                 for ek in sorted(val.keys()):
                     lines.append(f"  {ek}: {val[ek]}")
             else:
@@ -191,15 +195,24 @@ def _render_text_shape(envelope: Envelope, *, noun: str) -> str:
     if envelope.status == "ambiguous":
         return _render_ambiguous(envelope, noun=noun)
     # status == "ok": dispatch on envelope shape.
+    #
     # Traversal shape: a root subject is set (the resolved node the edges are
     # relative to). This is true even when the traversal produced zero edges
     # — the zero-edges traversal line is "0 <noun>  <fqn>  @<service>", NOT
     # the scalar fallback.
+    #
+    # Precedence: `ok + root` wins over `ok + nested-dict nodes` by design.
+    # A future envelope carrying BOTH a root and inspect-shaped nodes routes
+    # to traversal (the root signals "edges are the story", not "kv block").
     if envelope.root is not None:
         return _render_traversal(envelope, noun=noun)
-    # Inspect shape: at least one node carries edge_summary.
+    # Inspect shape: at least one node carries a nested dict value (structural
+    # signal, NOT name-based - any dict-typed value triggers this). PR-JRAG-1a
+    # status uses it for ``counts`` / ``edges``; PR-JRAG-3 ``inspect`` will use
+    # it for ``edge_summary`` and other rollups. ``edge_summary`` is NOT the
+    # dispatch key - it is reserved for real edge data in PR-JRAG-3.
     if envelope.nodes and any(
-        isinstance(n.get("edge_summary"), dict) for n in envelope.nodes.values()
+        any(isinstance(v, dict) for v in n.values()) for n in envelope.nodes.values()
     ):
         return _render_inspect(envelope)
     # Listing shape: zero or more node rows. Empty listing renders "0 <noun>".

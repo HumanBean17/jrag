@@ -69,12 +69,18 @@ def test_status_reports_ontology_version_and_counts(
     assert payload["status"] == "ok"
     index = payload["nodes"]["index"]
     assert index["ontology_version"] == 17
-    # Counts is nested under edge_summary (the inspect-shape nesting key).
-    counts = index["edge_summary"]["counts"]
+    # Counts is a top-level nested dict on the index node (the generic
+    # nested-sections dispatch signal - any dict-typed value renders as an
+    # indented alphabetical section; edge_summary is NOT used as the dispatch
+    # key, it is reserved for real edge data in PR-JRAG-3 inspect).
+    counts = index["counts"]
     # Counts is non-empty and has at least one positive counter (the fixture
     # has real Symbols / EXTENDS / INJECTS — see conftest ladybug_db_path).
     assert counts, f"counts dict empty: {payload}"
     assert any(int(v or 0) > 0 for v in counts.values()), f"all counts zero: {counts}"
+    # edge_summary is NOT populated by status (reserved for real inspect edge
+    # data in PR-JRAG-3).
+    assert "edge_summary" not in index
 
 
 # ----- Test 21: missing index -> actionable error envelope -----
@@ -114,28 +120,24 @@ def test_missing_index_text_format_emits_actionable_envelope(tmp_path: Path) -> 
 
 
 # ----- Test 22: --offset is NOT a global flag -----
-
-
-def test_offset_is_not_a_global_flag() -> None:
-    """``jrag callers --offset 5`` is a usage error.
-
-    ``--offset`` is intentionally NOT a global flag (PR-JRAG-1a contract): in
-    1a no subparser has it, and in later PRs it is added ONLY to ``find`` /
-    ``search`` (PR-JRAG-1b / PR-JRAG-4). ``callers`` is not yet registered, so
-    argparse rejects it as an invalid choice; either way ``--offset`` is never
-    silently accepted as a global.
-    """
-    env = os.environ.copy()
-    proc = _run_jrag(["callers", "--offset", "5"], env=env)
-    assert proc.returncode != 0, f"expected usage error, got rc=0\nstdout={proc.stdout}"
-    # No traceback leak: argparse surfaces a clean message via our handler.
-    assert "Traceback" not in proc.stderr
-    # The rejection message names the offending input.
-    assert "callers" in proc.stderr or "--offset" in proc.stderr
+#
+# The original brief listed `test_offset_is_not_a_global_flag` as
+# `jrag callers --offset 5`, but `callers` is not a registered subcommand in
+# 1a, so argparse rejects the *subcommand* (invalid choice) before it ever
+# sees `--offset`. That test would pass for the WRONG reason and would not
+# catch a regression that added `--offset` to the `common` parent parser.
+#
+# The contract ("offset is not global") is honestly covered by the three
+# siblings below plus `test_jrag_help_lists_status_subcommand` (which asserts
+# `--offset` is absent from the rendered `--help`).
 
 
 def test_offset_not_accepted_on_status_subparser() -> None:
-    """`jrag status --offset 5` is a usage error: status has no --offset."""
+    """`jrag status --offset 5` is a usage error: status has no --offset.
+
+    `status` IS a registered subcommand in 1a, so this is the honest test that
+    `--offset` is not on the per-command common parser.
+    """
     env = os.environ.copy()
     proc = _run_jrag(["status", "--offset", "5"], env=env)
     assert proc.returncode != 0
@@ -146,9 +148,10 @@ def test_offset_not_accepted_on_status_subparser() -> None:
 def test_offset_not_accepted_before_subcommand() -> None:
     """`jrag --offset 5 status` is a usage error: --offset is not a top-level flag.
 
-    argparse sees the unknown ``--offset`` and then treats ``5`` as the
-    subcommand choice, which is invalid - either way the command is rejected
-    with a clean message (no traceback) and non-zero exit.
+    This is the key "not on the parent parser" test. argparse sees the unknown
+    ``--offset`` and then treats ``5`` as the subcommand choice, which is
+    invalid - either way the command is rejected with a clean message (no
+    traceback) and non-zero exit.
     """
     env = os.environ.copy()
     proc = _run_jrag(["--offset", "5", "status"], env=env)

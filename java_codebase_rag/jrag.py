@@ -188,8 +188,11 @@ def _cmd_status(args: argparse.Namespace) -> int:
     counts = meta.get("counts") or {}
     edge_counts = meta.get("edge_counts") or {}
     # Single notional "index" node carrying kv fields + nested counts/edges
-    # under edge_summary so the renderer dispatches to inspect (kv-block +
-    # indented nested section, keys alphabetical). See jrag_render._render_inspect.
+    # as top-level dict-valued fields. The renderer's inspect-shape dispatch
+    # fires on ANY dict-typed value (structural signal, not name-based), so
+    # ``counts`` / ``edges`` render as indented alphabetical sections without
+    # abusing ``edge_summary`` (which is reserved for PR-JRAG-3 real edge
+    # data). See jrag_render._render_inspect / _render_text_shape.
     env = Envelope(
         status="ok",
         nodes={
@@ -201,10 +204,8 @@ def _cmd_status(args: argparse.Namespace) -> int:
                 "parse_errors": int(meta.get("parse_errors") or 0),
                 "index_dir": str(cfg.index_dir.resolve()),
                 "ladybug_path": str(cfg.ladybug_path.resolve()),
-                "edge_summary": {
-                    "counts": dict(counts),
-                    "edges": dict(edge_counts),
-                },
+                "counts": dict(counts),
+                "edges": dict(edge_counts),
             },
         },
     )

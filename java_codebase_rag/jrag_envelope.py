@@ -101,17 +101,26 @@ class Envelope:
     message: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize to a JSON-ready dict, omitting empty optionals.
+
+        All collection-typed fields are shallow-copied so the returned dict
+        is a stable snapshot at call time (a caller mutating the envelope
+        after ``to_dict()`` cannot corrupt the previously-returned dict).
+        Copy semantics are uniform across all collection fields - noisier
+        than reference assignment but predictable, and the envelope is
+        short-lived so the cost is negligible.
+        """
         out: dict[str, Any] = {"status": self.status}
         if self.nodes:
-            out["nodes"] = self.nodes
+            out["nodes"] = dict(self.nodes)
         if self.edges:
-            out["edges"] = self.edges
+            out["edges"] = list(self.edges)
         if self.root is not None:
             out["root"] = self.root
         if self.candidates:
-            out["candidates"] = self.candidates
+            out["candidates"] = list(self.candidates)
         if self.agent_next_actions:
-            out["agent_next_actions"] = self.agent_next_actions
+            out["agent_next_actions"] = list(self.agent_next_actions)
         if self.warnings:
             out["warnings"] = list(self.warnings)
         if self.truncated:
@@ -141,7 +150,11 @@ def simple_name(node_dict: dict[str, Any]) -> str:
 def to_envelope_rows(pydantic_results: list[Any]) -> list[dict[str, Any]]:
     """Pydantic -> dict boundary: ``.model_dump()`` each item exactly once.
 
-    Non-pydantic items (already-dicts) pass through unchanged.
+    Accepts pydantic models (``.model_dump()``) or plain dicts (passthrough).
+    Any other type raises ``TypeError`` rather than silently coercing - the
+    boundary is a single-shape conversion, not a best-effort adapter, and a
+    non-dict/non-pydantic item signals a backend-contract bug we want to
+    surface immediately.
     """
     out: list[dict[str, Any]] = []
     for item in pydantic_results:
@@ -150,8 +163,9 @@ def to_envelope_rows(pydantic_results: list[Any]) -> list[dict[str, Any]]:
         elif isinstance(item, dict):
             out.append(item)
         else:
-            # Best-effort: dict() falls back to dataclass-asdict for Any-style.
-            out.append(dict(item))
+            raise TypeError(
+                f"to_envelope_rows: expected pydantic model or dict, got {type(item).__name__}"
+            )
     return out
 
 
