@@ -1142,8 +1142,12 @@ class TestIncrementalOrchestrator:
             f"type roles diverged:\nincremental={incremental_state['roles']}\nfull={full_state['roles']}"
         )
         assert incremental_state["http_calls_match"] == full_state["http_calls_match"], (
-            "HTTP_CALLS match histogram diverged (missing pass4 on global pass5/6 tables, #352):\n"
-            f"incremental={incremental_state['http_calls_match']}\nfull={full_state['http_calls_match']}"
+            "HTTP_CALLS match histogram diverged between incremental and full rebuild (#352):\n"
+            f"incremental={incremental_state['http_calls_match']}\nfull={full_state['http_calls_match']}\n"
+            "Consistency guard: with this microservice-less corpus the Feign edge resolves to "
+            "'phantom' in both paths, so divergence #1 (missing pass4 on the global tables) cannot "
+            "trip here -- it is guarded structurally in "
+            "test_incremental_global_pass_runs_pass4_on_global_tables."
         )
         assert incremental_state["async_calls_match"] == full_state["async_calls_match"], (
             "ASYNC_CALLS match histogram diverged (#352):\n"
@@ -1153,6 +1157,65 @@ class TestIncrementalOrchestrator:
             "CALLS callee_declaring_role multiset diverged (out-of-scope stub role collapsed, #352):\n"
             f"incremental={incremental_state['calls_callee_declaring_role']}\n"
             f"full={full_state['calls_callee_declaring_role']}"
+        )
+
+    def test_incremental_global_pass_runs_pass4_on_global_tables(self, tmp_path: Path) -> None:
+        """Structural guard for issue #352 divergence #1: incremental_rebuild must
+        run pass4_routes on the GLOBAL pass5/6 tables (the full-source rebuild at
+        step 6), not only on the changed-files tables. Without it, Feign
+        HTTP_CALLS route linkage drifts from a full rebuild.
+
+        The equivalence test's http_calls_match histogram cannot trip on this with
+        a microservice-less corpus (the route resolves to 'phantom' in both the
+        incremental and full paths), so this spy asserts the invariant directly:
+        pass4_routes receives a DISTINCT global tables instance alongside the
+        changed-files one. Removing the global pass4 call (incremental_rebuild
+        step 6) leaves only one tables instance -> failure.
+        """
+        import build_ast_graph as bag
+        from build_ast_graph import incremental_rebuild
+        from _builders import build_ladybug_full_into
+
+        source_root = tmp_path / "src"
+        source_root.mkdir()
+        index_dir = tmp_path / "index"
+        index_dir.mkdir()
+        ladybug_path = index_dir / "code_graph.lbug"
+
+        (source_root / "Cal.java").write_text("package pkg;\npublic class Cal {}\n", encoding="utf-8")
+        (source_root / "Caller.java").write_text("package pkg;\npublic class Caller {}\n", encoding="utf-8")
+        build_ladybug_full_into(source_root, ladybug_path)
+        # Touch the in-scope file so incremental_rebuild takes the incremental path
+        # (not the no-graph fallback) and reaches its global pass5/6 step.
+        (source_root / "Caller.java").write_text(
+            "package pkg;\npublic class Caller { int _touched; }\n", encoding="utf-8"
+        )
+
+        seen_tables: list = []
+        real_pass4 = bag.pass4_routes
+
+        def spy(tables, *args, **kwargs):
+            seen_tables.append(tables)
+            return real_pass4(tables, *args, **kwargs)
+
+        bag.pass4_routes = spy
+        try:
+            result = incremental_rebuild(source_root, ladybug_path, verbose=False)
+        finally:
+            bag.pass4_routes = real_pass4
+
+        assert result.mode == "incremental", f"expected incremental mode, got {result.mode}"
+        # pass4 must run on at least two DISTINCT tables instances: the changed-files
+        # tables and the global (full-source) tables. Removing the global call leaves
+        # only the changed-files call -> this fails.
+        assert len(seen_tables) >= 2, (
+            f"pass4_routes ran {len(seen_tables)} time(s); expected >=2 (changed-files + global) "
+            "-- the global pass5/6 step must run pass4 on the full-source tables (#352 #1)"
+        )
+        distinct = {id(t) for t in seen_tables}
+        assert len(distinct) >= 2, (
+            "pass4_routes must run on a DISTINCT global tables instance, not reuse the "
+            "changed-files tables -- otherwise out-of-scope routes/EXPOSES are missing (#352 #1)"
         )
 
     def test_incremental_refreshes_dependent_role_on_meta_chain_change(
