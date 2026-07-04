@@ -237,9 +237,15 @@ def load_yaml_mapping(source_root: Path) -> dict[str, Any]:
         return {}
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except yaml.YAMLError as exc:
+    except (yaml.YAMLError, OSError, UnicodeDecodeError) as exc:
+        # Best-effort loader: a missing/unreadable/malformed config must NOT abort
+        # startup — return {} and proceed with defaults. Narrowing this to
+        # ``yaml.YAMLError`` alone let OSError (chmod 000, stat/read TOCTOU) and
+        # UnicodeDecodeError (non-UTF-8 config) propagate to the caller; the broader
+        # tuple restores the graceful-degradation contract while still surfacing the
+        # problem on stderr.
         print(
-            f"java-codebase-rag: failed to parse {path}: {exc}; ignoring config.",
+            f"java-codebase-rag: could not load config {path}: {exc}; ignoring config.",
             file=sys.stderr,
         )
         return {}
