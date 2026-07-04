@@ -1313,7 +1313,7 @@ def test_resolve_wildcard_identifier_rejected(ladybug_graph) -> None:
 
 
 def test_resolve_every_reason_in_closed_set_appears() -> None:
-    from mcp_v2 import (
+    from resolve_service import (
         _resolve_client_candidates,
         _resolve_producer_candidates,
         _resolve_route_candidates,
