@@ -103,12 +103,13 @@ class Envelope:
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a JSON-ready dict, omitting empty optionals.
 
-        All collection-typed fields are shallow-copied so the returned dict
-        is a stable snapshot at call time (a caller mutating the envelope
-        after ``to_dict()`` cannot corrupt the previously-returned dict).
-        Copy semantics are uniform across all collection fields - noisier
-        than reference assignment but predictable, and the envelope is
-        short-lived so the cost is negligible.
+        Top-level collection fields are shallow-copied (``list(...)`` /
+        ``dict(...)``); their VALUES are shared references - mutating a node
+        dict in place will propagate to a prior snapshot. Callers that need
+        true snapshot isolation across subsequent mutation should
+        ``copy.deepcopy`` the result. (In practice the envelope is short-lived:
+        built, rendered via ``to_json()`` in the same call site, then discarded
+        - so shared references are not a hazard.)
         """
         out: dict[str, Any] = {"status": self.status}
         if self.nodes:

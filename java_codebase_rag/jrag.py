@@ -209,7 +209,7 @@ def _cmd_status(args: argparse.Namespace) -> int:
             },
         },
     )
-    print(render(env, fmt=args.format, noun="status"))
+    print(render(env, fmt=args.format, noun="status", shape="inspect"))
     return 0
 
 

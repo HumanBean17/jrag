@@ -187,34 +187,33 @@ def _render_scalar(envelope: Envelope) -> str:
     return envelope.status
 
 
-def _render_text_shape(envelope: Envelope, *, noun: str) -> str:
+def _render_text_shape(envelope: Envelope, *, noun: str, shape: str | None) -> str:
     if envelope.status == "error":
         return _render_error(envelope)
     if envelope.status == "not_found":
         return _render_not_found(envelope)
     if envelope.status == "ambiguous":
         return _render_ambiguous(envelope, noun=noun)
-    # status == "ok": dispatch on envelope shape.
+    # status == "ok": dispatch on EXPLICIT shape hint first, then envelope
+    # structure. The shape hint is the only path to ``_render_inspect`` -
+    # listing nodes typically carry dict-valued fields after ``.model_dump()``
+    # (Symbol nodes have ``source_range`` / ``annotations`` / ``capabilities``
+    # / ``metadata`` etc.), so inferring inspect from "any node has a dict
+    # value" would silently mis-render listings as inspect (FQN alphabetical).
+    # Inspect is declared by the caller, never guessed from node contents.
     #
     # Traversal shape: a root subject is set (the resolved node the edges are
     # relative to). This is true even when the traversal produced zero edges
     # — the zero-edges traversal line is "0 <noun>  <fqn>  @<service>", NOT
     # the scalar fallback.
     #
-    # Precedence: `ok + root` wins over `ok + nested-dict nodes` by design.
-    # A future envelope carrying BOTH a root and inspect-shaped nodes routes
-    # to traversal (the root signals "edges are the story", not "kv block").
+    # Precedence: explicit ``shape="inspect"`` wins over ``root``/listing
+    # by intent (callers declare what they want); then ``root`` wins over
+    # listing (a root signals "edges are the story").
+    if shape == "inspect":
+        return _render_inspect(envelope)
     if envelope.root is not None:
         return _render_traversal(envelope, noun=noun)
-    # Inspect shape: at least one node carries a nested dict value (structural
-    # signal, NOT name-based - any dict-typed value triggers this). PR-JRAG-1a
-    # status uses it for ``counts`` / ``edges``; PR-JRAG-3 ``inspect`` will use
-    # it for ``edge_summary`` and other rollups. ``edge_summary`` is NOT the
-    # dispatch key - it is reserved for real edge data in PR-JRAG-3.
-    if envelope.nodes and any(
-        any(isinstance(v, dict) for v in n.values()) for n in envelope.nodes.values()
-    ):
-        return _render_inspect(envelope)
     # Listing shape: zero or more node rows. Empty listing renders "0 <noun>".
     if envelope.nodes or noun:
         return _render_listing(envelope, noun=noun)
@@ -227,6 +226,7 @@ def render(
     fmt: str = "text",
     noun: str = "",
     next_offset: int | None = None,
+    shape: str | None = None,
 ) -> str:
     """Dispatch on ``fmt`` (text default; json emits the envelope verbatim).
 
@@ -234,10 +234,18 @@ def render(
     ``"matches"``); used in zero-results and ambiguous headers. ``next_offset``
     selects the truncated hint: ``None`` -> ``narrow your query`` (no offset
     support on this command); a number -> ``use --offset <N>`` (find/search).
+
+    ``shape`` is the EXPLICIT render-shape hint. The only accepted value today
+    is ``"inspect"`` (kv-block + indented alphabetical sections); callers that
+    need it declare it (PR-JRAG-1a ``status``, future PR-JRAG-1b/3 ``inspect``).
+    ``None`` falls back to structural inference: ``root`` -> traversal,
+    ``nodes``/``noun`` -> listing, else scalar. Listing nodes frequently carry
+    dict-valued fields after ``.model_dump()``, so inspect is NEVER inferred
+    from node contents - only an explicit ``shape="inspect"`` routes there.
     """
     if fmt == "json":
         return envelope.to_json()
-    body = _render_text_shape(envelope, noun=noun)
+    body = _render_text_shape(envelope, noun=noun, shape=shape)
     if envelope.truncated:
         hint = _truncated_hint(next_offset=next_offset)
         body = f"{body}\n{hint}" if body else hint

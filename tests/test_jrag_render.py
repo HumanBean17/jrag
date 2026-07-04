@@ -87,7 +87,13 @@ def test_render_traversal_root_line_present() -> None:
 
 
 def test_render_inspect_edge_summary_alphabetical() -> None:
-    """Inspect renders ALL dict keys alphabetically; edge_summary is indented + sorted."""
+    """Inspect renders ALL dict keys alphabetically; edge_summary is indented + sorted.
+
+    Inspect is now declared via the explicit ``shape="inspect"`` hint (no
+    longer inferred from node contents - a listing node with dict-valued
+    fields must NOT route to inspect). Callers like ``jrag status`` and the
+    future ``jrag inspect`` declare their shape; the renderer does not guess.
+    """
     env = Envelope(
         status="ok",
         nodes={
@@ -106,7 +112,7 @@ def test_render_inspect_edge_summary_alphabetical() -> None:
             }
         },
     )
-    out = render(env, fmt="text", noun="inspect")
+    out = render(env, fmt="text", noun="inspect", shape="inspect")
     lines = out.splitlines()
     # Top-level keys appear in alphabetical order.
     keys_in_output = [ln.split(":", 1)[0] for ln in lines if ":" in ln and not ln.startswith(" ")]
@@ -118,6 +124,32 @@ def test_render_inspect_edge_summary_alphabetical() -> None:
     summary_lines = [ln.strip() for ln in lines[summary_idx + 1 :] if ln.startswith("  ")]
     summary_keys = [ln.split(":", 1)[0] for ln in summary_lines]
     assert summary_keys == ["CALLS", "EXTENDS", "OVERRIDES"], f"summary not sorted: {summary_keys}"
+
+
+def test_render_listing_with_dict_valued_node_does_not_route_to_inspect() -> None:
+    """A listing node carrying dict-valued fields (typical after .model_dump())
+    must NOT silently route to inspect - dispatch is explicit via shape hint.
+    Regression for the structural-dispatch foot-gun flagged in re-review.
+    """
+    env = Envelope(
+        status="ok",
+        nodes={
+            "sym:1": {
+                "fqn": "com.foo.Bar.doStuff",
+                "microservice": "svc",
+                # Symbol nodes typically carry dict-valued fields after
+                # .model_dump(): source_range, annotations, capabilities, etc.
+                "annotations": {"@Override": True},
+                "source_range": {"start": 1, "end": 10},
+            }
+        },
+    )
+    out = render(env, fmt="text", noun="matches")
+    # Listing shape: FQN is omitted (test 11 contract); only name + @service.
+    assert "com.foo.Bar.doStuff" not in out, (
+        f"listing leaked FQN - routed to inspect by mistake: {out!r}"
+    )
+    assert "doStuff  @svc" in out.splitlines()
 
 
 # ----- Test 14: ambiguous lists reason, no file/score -----
