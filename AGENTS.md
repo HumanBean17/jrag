@@ -14,8 +14,10 @@ gitignored).
 | Directory | Audience | Purpose |
 |-----------|----------|---------|
 | **`.agents/skills/`** (`.claude/skills/`, `.cursor/skills/`) | Agents **developing** this repo | propose, plan-prompts, pr-open, pr-review |
-| **`skills/explore-codebase/`** (project root) | Agents **using** this tool on their own codebase | /explore-codebase — complete MCP operating manual |
-| **`agents/explorer-rag-enhanced.md`** (project root) | Agents **using** this tool on their own codebase | Claude Code subagent combining RAG graph navigation with file-system search |
+| **`skills/explore-codebase/`** (project root) | Agents **using** this tool on their own codebase | /explore-codebase — complete MCP operating manual (MCP surface) |
+| **`skills/explore-codebase-cli/`** (project root) | Agents **using** this tool on their own codebase | /explore-codebase-cli — operating manual for the `jrag` CLI (CLI surface; PR-JRAG-5) |
+| **`agents/explorer-rag-enhanced.md`** (project root) | Agents **using** this tool on their own codebase | Claude Code subagent combining RAG graph navigation with file-system search (MCP surface) |
+| **`agents/explorer-rag-cli.md`** (project root) | Agents **using** this tool on their own codebase | Claude Code subagent driving the `jrag` CLI (CLI surface; PR-JRAG-5) |
 
 `.agents/` skills are loaded by the agent working *on* java-codebase-rag source
 code. `skills/` and `agents/` are shipped to consumers — they instruct an agent
@@ -56,8 +58,10 @@ when needed.
 - `docs/CODEBASE_REQUIREMENTS.md` — Java-repo assumptions and per-file map of
   what to edit when a target tree doesn't match defaults.
 - `tests/README.md` — testing philosophy.
-- **`skills/explore-codebase/`** — user-facing skill shipped to java-codebase-rag consumers. Single self-contained operating manual for the 5-tool MCP. Developer workflow skills live in **`.agents/skills/`**, not here.
-- **`agents/explorer-rag-enhanced.md`** — user-facing Claude Code subagent shipped to consumers. Combines RAG graph navigation with file-system search for universal codebase exploration.
+- **`skills/explore-codebase/`** — user-facing skill shipped to java-codebase-rag consumers (MCP surface). Single self-contained operating manual for the 5-tool MCP. Developer workflow skills live in **`.agents/skills/`**, not here.
+- **`skills/explore-codebase-cli/`** — user-facing skill shipped to java-codebase-rag consumers (CLI surface, PR-JRAG-5). Operating manual for the `jrag` shell CLI.
+- **`agents/explorer-rag-enhanced.md`** — user-facing Claude Code subagent shipped to consumers (MCP surface). Combines RAG graph navigation with file-system search for universal codebase exploration.
+- **`agents/explorer-rag-cli.md`** — user-facing Claude Code subagent shipped to consumers (CLI surface, PR-JRAG-5). Drives the `jrag` shell CLI with file-system search fallback.
 - **`propose/`** — design proposes. **In-flight** proposes live in
   **`propose/active/`**. **`propose/completed/`** — landed work and rationale.
   **List or search this tree** for current filenames; do not rely on enumerated

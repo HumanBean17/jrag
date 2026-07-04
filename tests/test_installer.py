@@ -910,9 +910,12 @@ class TestDetectConfiguredHosts:
 
         detected = detect_configured_hosts(tmp_path)
         assert len(detected) == 1
-        host_config, scope = detected[0]
-        assert host_config.name == "claude-code"
-        assert scope == "project"
+        # PR-JRAG-5: detect_configured_hosts returns ConfiguredHost (3-field).
+        # The legacy MCP-entry fallback path always carries surface="mcp".
+        configured = detected[0]
+        assert configured.host.name == "claude-code"
+        assert configured.scope == "project"
+        assert configured.surface == "mcp"
 
     def test_detect_hosts_user_claude_json(self, tmp_path, monkeypatch):
         """~/.claude.json with entry → detects claude-code user scope"""
@@ -940,9 +943,11 @@ class TestDetectConfiguredHosts:
 
         detected = detect_configured_hosts(tmp_path)
         assert len(detected) == 1
-        host_config, scope = detected[0]
-        assert host_config.name == "claude-code"
-        assert scope == "user"
+        # PR-JRAG-5: 3-field NamedTuple (legacy MCP-entry scan → surface="mcp").
+        configured = detected[0]
+        assert configured.host.name == "claude-code"
+        assert configured.scope == "user"
+        assert configured.surface == "mcp"
 
     def test_detect_hosts_multiple_hosts(self, tmp_path, monkeypatch):
         """both .mcp.json and ~/.qwen/settings.json → returns both"""
@@ -987,16 +992,18 @@ class TestDetectConfiguredHosts:
         detected = detect_configured_hosts(tmp_path)
         assert len(detected) == 2
 
-        # Sort by scope for consistent ordering
-        detected_sorted = sorted(detected, key=lambda x: x[1])
+        # Sort by scope for consistent ordering (PR-JRAG-5: NamedTuple fields).
+        detected_sorted = sorted(detected, key=lambda ch: ch.scope)
 
         # First should be project scope claude-code
-        assert detected_sorted[0][0].name == "claude-code"
-        assert detected_sorted[0][1] == "project"
+        assert detected_sorted[0].host.name == "claude-code"
+        assert detected_sorted[0].scope == "project"
+        assert detected_sorted[0].surface == "mcp"
 
         # Second should be user scope qwen-code
-        assert detected_sorted[1][0].name == "qwen-code"
-        assert detected_sorted[1][1] == "user"
+        assert detected_sorted[1].host.name == "qwen-code"
+        assert detected_sorted[1].scope == "user"
+        assert detected_sorted[1].surface == "mcp"
 
     def test_detect_hosts_no_config_returns_empty(self, tmp_path):
         """no MCP configs → empty list"""

@@ -149,11 +149,15 @@ See [`mcp.json.example`](./mcp.json.example) for the same shape in `.mcp.json` (
 
 ### Driving the MCP from an agent
 
-Pick **one** of two options (not both — they cover the same navigation intents):
+Pick **one** of two surfaces (`java-codebase-rag install --surface mcp|cli`; default `mcp`). Within the MCP surface, pick **one** delivery mechanism (not both — they cover the same navigation intents):
 
 1. **[`docs/AGENT-GUIDE.md`](./docs/AGENT-GUIDE.md)** (recommended for most) — standalone MCP operating manual. Copy-paste the `BEGIN`/`END` block into your project's `QWEN.md`, `CLAUDE.md`, or `AGENTS.md`. Contains: five-tool reference, `NodeFilter` / edge taxonomy, ontology glossary, recovery playbook, and navigation patterns. Self-contained — no external file dependencies.
 
 2. **[`/explore-codebase`](./skills/explore-codebase/SKILL.md)** (for hosts with skill discovery) — single self-contained skill with the complete operating manual. If your MCP host supports skill discovery (Claude Code, Qwen Code, Cursor), load `/explore-codebase` to get the full tool reference, edge taxonomy, decision tree, and recovery playbook in one shot.
+
+Alternatively, for hosts that prefer shell-driven exploration (no MCP server), use the **CLI surface**:
+
+3. **`--surface cli`** — `java-codebase-rag install --surface cli` deploys the **[`/explore-codebase-cli`](./skills/explore-codebase-cli/SKILL.md)** skill + **[`explorer-rag-cli`](./agents/explorer-rag-cli.md)** subagent instead of the MCP entry. The agent drives the `jrag` CLI (`jrag callers`, `jrag inspect`, `jrag search`, …) — one command per engineering intent, no MCP tools. Same graph underneath; picks this surface when the host cannot run a stdio MCP server or you prefer the CLI vocabulary.
 
 Also: **[`docs/MANUAL-VERIFICATION-CHECKLIST.md`](./docs/MANUAL-VERIFICATION-CHECKLIST.md)** — 7-phase agent-driven verification you run after indexing your real project.
 
@@ -173,7 +177,7 @@ Full schemas, `NodeFilter` / `EdgeFilter` semantics, and the hints contract live
 
 ### Three-layer architecture
 
-Layer 1 (storage) → Layer 2 (5 MCP tools) → Layer 3 (skill). The [`/explore-codebase`](./skills/explore-codebase/SKILL.md) skill provides the full operating manual for Layer 2. See the [architecture diagram in `skills/README.md`](./skills/README.md#three-layer-architecture).
+Layer 1 (storage) → Layer 2 (5 MCP tools **or** the `jrag` CLI) → Layer 3 (skill). The MCP-surface skill **[`/explore-codebase`](./skills/explore-codebase/SKILL.md)** documents the 5-tool MCP; the CLI-surface skill **[`/explore-codebase-cli`](./skills/explore-codebase-cli/SKILL.md)** documents the `jrag` CLI (PR-JRAG-5). See the [architecture diagram in `skills/README.md`](./skills/README.md#three-layer-architecture).
 
 ---
 
@@ -326,7 +330,7 @@ full design and per-PR breakdown.
 | [`docs/CONFIGURATION.md`](./docs/CONFIGURATION.md) | Environment variables, project YAML, graph ontology, brownfield overrides, ignore patterns. |
 | [`docs/JAVA-CODEBASE-RAG-CLI.md`](./docs/JAVA-CODEBASE-RAG-CLI.md) | CLI operator playbook: workflows, exit codes, env alignment. |
 | [`docs/EDGE-NAVIGATION.md`](./docs/EDGE-NAVIGATION.md) | MCP-traversable edges, directions, dot-key composition. |
-| [`skills/`](./skills/) | Single `/explore-codebase` skill — complete MCP operating manual for hosts with skill discovery (alternative to copy-pasting AGENT-GUIDE). See [`skills/README.md`](./skills/README.md). |
+| [`skills/`](./skills/) | `/explore-codebase` (MCP surface) + `/explore-codebase-cli` (CLI surface) skills — operating manuals for hosts with skill discovery (alternative to copy-pasting AGENT-GUIDE). See [`skills/README.md`](./skills/README.md). |
 | [`docs/MANUAL-VERIFICATION-CHECKLIST.md`](./docs/MANUAL-VERIFICATION-CHECKLIST.md) | 7-phase agent-driven verification after indexing your project. |
 | [`docs/CODEBASE_REQUIREMENTS.md`](./docs/CODEBASE_REQUIREMENTS.md) | Assumptions about your Java repo + per-file edit map for non-conforming codebases. |
 | [`automation/cursor_propose_only/README.md`](./automation/cursor_propose_only/README.md) | Optional proposal orchestration workflow (single-command autopilot, planning bundles, automated execution/review loops). |

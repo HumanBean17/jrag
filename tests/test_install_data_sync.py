@@ -60,6 +60,49 @@ def test_install_data_artifacts_in_sync_with_dev_source():
     )
 
 
+def _seed_dev_source(tmp_path: Path, *, cli_skill_content: str = "# test") -> None:
+    """Create the canonical dev source tree the SYNC_MAP expects.
+
+    The sync script walks ``SYNC_MAP`` source dirs; PR-JRAG-5 added
+    ``skills/explore-codebase-cli`` to that map, so synthetic temp workspaces
+    used by the drift tests must seed it too.
+    """
+    tmp_agents = tmp_path / "agents"
+    tmp_agents.mkdir(parents=True, exist_ok=True)
+    (tmp_agents / "explorer-rag-enhanced.md").write_text("# test")
+
+    tmp_skills = tmp_path / "skills" / "explore-codebase"
+    tmp_skills.mkdir(parents=True, exist_ok=True)
+    (tmp_skills / "SKILL.md").write_text("# test")
+
+    tmp_cli_skills = tmp_path / "skills" / "explore-codebase-cli"
+    tmp_cli_skills.mkdir(parents=True, exist_ok=True)
+    (tmp_cli_skills / "SKILL.md").write_text(cli_skill_content)
+
+
+def _seed_install_data(tmp_path: Path, *, extra: list[Path] | None = None) -> None:
+    """Create the matching install_data tree (no drift) for the SYNC_MAP."""
+    tmp_install_agents = tmp_path / "java_codebase_rag" / "install_data" / "agents"
+    tmp_install_agents.mkdir(parents=True, exist_ok=True)
+    (tmp_install_agents / "explorer-rag-enhanced.md").write_text("# test")
+
+    tmp_install_mcp_skill = (
+        tmp_path / "java_codebase_rag" / "install_data" / "skills" / "explore-codebase"
+    )
+    tmp_install_mcp_skill.mkdir(parents=True, exist_ok=True)
+    (tmp_install_mcp_skill / "SKILL.md").write_text("# test")
+
+    tmp_install_cli_skill = (
+        tmp_path / "java_codebase_rag" / "install_data" / "skills" / "explore-codebase-cli"
+    )
+    tmp_install_cli_skill.mkdir(parents=True, exist_ok=True)
+    (tmp_install_cli_skill / "SKILL.md").write_text("# test")
+
+    for path in extra or []:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# this should not be here")
+
+
 def test_sync_script_detects_drift():
     """Verify --check exits non-zero when dev source and install_data differ.
 
@@ -100,6 +143,11 @@ def test_sync_script_detects_drift():
         tmp_skills.mkdir(parents=True)
         (tmp_skills / "SKILL.md").write_bytes(real_skill_file.read_bytes())
 
+        # PR-JRAG-5: SYNC_MAP also walks skills/explore-codebase-cli — seed it.
+        tmp_cli_skills = tmp_path / "skills" / "explore-codebase-cli"
+        tmp_cli_skills.mkdir(parents=True)
+        (tmp_cli_skills / "SKILL.md").write_text("# test")
+
         # Also create the install_data directory structure in temp
         # so the script has something to compare against
         tmp_install = tmp_path / "java_codebase_rag" / "install_data" / "agents"
@@ -111,6 +159,12 @@ def test_sync_script_detects_drift():
         tmp_install_skills = tmp_path / "java_codebase_rag" / "install_data" / "skills" / "explore-codebase"
         tmp_install_skills.mkdir(parents=True)
         (tmp_install_skills / "SKILL.md").write_bytes(real_skill_file.read_bytes())
+
+        tmp_install_cli_skills = (
+            tmp_path / "java_codebase_rag" / "install_data" / "skills" / "explore-codebase-cli"
+        )
+        tmp_install_cli_skills.mkdir(parents=True)
+        (tmp_install_cli_skills / "SKILL.md").write_text("# test")
 
         # Run the sync script from temp directory (so it sees the mutated file)
         result = run_sync_script(check=True, cwd=tmp_path)
@@ -135,24 +189,14 @@ def test_sync_script_detects_extra_files():
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir)
 
-        # Create dev source (agents and skills)
-        tmp_agents = tmp_path / "agents"
-        tmp_agents.mkdir()
-        (tmp_agents / "explorer-rag-enhanced.md").write_text("# test")
-
-        tmp_skills = tmp_path / "skills" / "explore-codebase"
-        tmp_skills.mkdir(parents=True)
-        (tmp_skills / "SKILL.md").write_text("# test")
+        # Create dev source (agents + both skills — PR-JRAG-5 added CLI skill).
+        _seed_dev_source(tmp_path)
 
         # Create install_data with an extra file
-        tmp_install = tmp_path / "java_codebase_rag" / "install_data" / "agents"
-        tmp_install.mkdir(parents=True)
-        (tmp_install / "explorer-rag-enhanced.md").write_text("# test")
-        (tmp_install / "extra_file.md").write_text("# this should not be here")
-
-        tmp_install_skills = tmp_path / "java_codebase_rag" / "install_data" / "skills" / "explore-codebase"
-        tmp_install_skills.mkdir(parents=True)
-        (tmp_install_skills / "SKILL.md").write_text("# test")
+        _seed_install_data(
+            tmp_path,
+            extra=[tmp_path / "java_codebase_rag" / "install_data" / "agents" / "extra_file.md"],
+        )
 
         result = run_sync_script(check=True, cwd=tmp_path)
 
@@ -174,14 +218,8 @@ def test_sync_script_detects_missing_files():
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir)
 
-        # Create dev source (agents and skills)
-        tmp_agents = tmp_path / "agents"
-        tmp_agents.mkdir()
-        (tmp_agents / "explorer-rag-enhanced.md").write_text("# test")
-
-        tmp_skills = tmp_path / "skills" / "explore-codebase"
-        tmp_skills.mkdir(parents=True)
-        (tmp_skills / "SKILL.md").write_text("# test")
+        # Create dev source (agents + both skills — PR-JRAG-5 added CLI skill).
+        _seed_dev_source(tmp_path)
 
         # Create empty install_data (missing the files)
         tmp_install = tmp_path / "java_codebase_rag" / "install_data" / "agents"
@@ -189,6 +227,11 @@ def test_sync_script_detects_missing_files():
 
         tmp_install_skills = tmp_path / "java_codebase_rag" / "install_data" / "skills" / "explore-codebase"
         tmp_install_skills.mkdir(parents=True)
+
+        tmp_install_cli_skills = (
+            tmp_path / "java_codebase_rag" / "install_data" / "skills" / "explore-codebase-cli"
+        )
+        tmp_install_cli_skills.mkdir(parents=True)
 
         result = run_sync_script(check=True, cwd=tmp_path)
 

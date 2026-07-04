@@ -22,9 +22,18 @@ from typing import Literal, NamedTuple
 import yaml
 
 Scope = Literal["project", "user"]
+Surface = Literal["mcp", "cli"]
 
 # MCP server name constant
 _MCP_SERVER_NAME = "java-codebase-rag"
+
+# Marker file written at install time so a CLI-only install (no MCP entry) is
+# still visible to ``update``. Lives at the project/source root alongside
+# ``.java-codebase-rag.yml``. JSON shape:
+#   {"version": 1, "hosts": [{"host": "claude-code", "scope": "project",
+#                             "surface": "mcp"|"cli"}, ...]}
+_MARKER_FILE_NAME = ".java-codebase-rag.hosts"
+_MARKER_FILE_VERSION = 1
 
 # Exit code constants
 EXIT_SUCCESS = 0
@@ -38,6 +47,20 @@ class ArtifactResult(NamedTuple):
     path: Path
     success: bool
     error: str | None
+
+
+class ConfiguredHost(NamedTuple):
+    """A host installed on this machine: which host, which scope, which surface.
+
+    Replaces the prior 2-tuple ``(HostConfig, scope)`` returned by
+    ``detect_configured_hosts`` so ``update`` can route the refresh through the
+    correct ``Surface`` (an MCP-surface install refreshes MCP+skill+agent; a
+    CLI-surface install refreshes the CLI skill+agent only).
+    """
+
+    host: "HostConfig"
+    scope: Scope
+    surface: Surface
 
 
 @dataclass(frozen=True)
@@ -91,6 +114,37 @@ HOSTS: dict[str, HostConfig] = {
         mcp_project=".gigacode/settings.json",
         mcp_user=".gigacode/settings.json",
     ),
+}
+
+
+# ---------------------------------------------------------------------------
+# ArtifactManifest — single source of truth for which artifacts each surface
+# ships. Iterated by both ``deploy_artifacts`` and ``refresh_artifacts`` so
+# adding/removing an artifact is one edit, not two.
+#
+# Each entry is a 3-tuple ``(kind, package_path, dest_relative)``:
+#   - ``kind``: "mcp" dispatches to ``_deploy_mcp_config`` / ``_refresh_mcp_config``
+#     (the MCP config path is host/scope-resolved inside those helpers —
+#     ``package_path`` and ``dest_relative`` are unused for this kind).
+#   - ``kind``: "skill" | "agent" dispatches to ``_deploy_file`` / ``_refresh_file``.
+#   - ``package_path``: relative path under ``install_data/``.
+#   - ``dest_relative``: relative path under ``host.scope_path(scope, cwd)``.
+#
+# The ``mcp`` surface carries the MCP config entry; the ``cli`` surface does
+# NOT (a CLI install never registers an MCP server).
+# ---------------------------------------------------------------------------
+ArtifactManifestEntry = tuple[str, str, str]
+
+ARTIFACT_MANIFEST: dict[Surface, list[ArtifactManifestEntry]] = {
+    "mcp": [
+        ("mcp", "", ""),
+        ("skill", "skills/explore-codebase/SKILL.md", "skills/explore-codebase/SKILL.md"),
+        ("agent", "agents/explorer-rag-enhanced.md", "agents/explorer-rag-enhanced.md"),
+    ],
+    "cli": [
+        ("skill", "skills/explore-codebase-cli/SKILL.md", "skills/explore-codebase-cli/SKILL.md"),
+        ("agent", "agents/explorer-rag-cli.md", "agents/explorer-rag-cli.md"),
+    ],
 }
 
 
@@ -421,36 +475,117 @@ def select_scope(*, non_interactive: bool, cli_scope: str | None) -> Scope:
     return selected  # type: ignore
 
 
-def resolve_mcp_command(*, non_interactive: bool) -> str:
-    """Resolve the absolute path to java-codebase-rag-mcp.
+def select_surface(
+    *,
+    non_interactive: bool,
+    cli_surface: str | None,
+    prefill: Surface | None = None,
+) -> Surface:
+    """Select 'mcp' or 'cli' surface (PR-JRAG-5).
 
-    Returns the path string for use as MCP 'command' value.
+    The MCP surface registers the stdio MCP server (today's behavior). The CLI
+    surface ships the ``jrag`` console-script skill+subagent instead — no MCP
+    entry is registered.
 
     Args:
-        non_interactive: If True, exit with code 2 when not found
+        non_interactive: If True, honor ``cli_surface`` (default ``"mcp"``).
+        cli_surface: Surface from the ``--surface`` CLI flag.
+        prefill: On re-run, the surface recorded in the existing marker file.
+            When set and the user does not pick otherwise, this is preserved.
 
     Returns:
-        Absolute path to java-codebase-rag-mcp executable
+        Selected surface (``"mcp"`` or ``"cli"``).
 
     Raises:
-        SystemExit(2): If not found and non-interactive, or user aborts
+        SystemExit(2): if ``cli_surface`` is invalid.
     """
-    mcp_path = shutil.which("java-codebase-rag-mcp")
+    if cli_surface:
+        if cli_surface not in ("mcp", "cli"):
+            print(f"Error: Invalid surface '{cli_surface}'. Must be 'mcp' or 'cli'.")
+            raise SystemExit(2)
+        return cli_surface  # type: ignore
 
-    if mcp_path:
-        return mcp_path
+    if non_interactive:
+        # Default to MCP for back-comat when no flag is passed.
+        return "mcp"
+
+    print(
+        "Note: 'mcp' surface registers the java-codebase-rag MCP server (5 tools: "
+        "search/find/describe/neighbors/resolve)."
+    )
+    print(
+        "      'cli' surface deploys the `jrag` console-script skill+subagent "
+        "(one command per intent, no MCP server)."
+    )
+
+    choices = ["mcp", "cli"]
+    if prefill is not None:
+        # Surface the prior choice first so the user can keep it with Enter.
+        choices = [prefill] + [c for c in ("mcp", "cli") if c != prefill]
+        default = prefill
+    else:
+        default = "mcp"
+
+    selected = prompt(
+        "select",
+        "Select agent surface:",
+        choices=choices,
+        default=default,
+    )
+
+    if not selected:
+        return default
+    return selected  # type: ignore
+
+
+def resolve_mcp_command(*, non_interactive: bool, surface: Surface = "mcp") -> str:
+    """Resolve the absolute path to the runtime binary for the chosen surface.
+
+    - ``surface="mcp"`` (today's behavior): resolve ``java-codebase-rag-mcp``;
+      on missing + non-interactive, exit with code 2.
+    - ``surface="cli"``: resolve the ``jrag`` console script instead. The CLI
+      surface registers no MCP server, so the MCP binary is irrelevant —
+      never raise ``SystemExit(2)`` for a missing MCP binary on this surface.
+      If ``jrag`` is missing, fall through to the interactive prompt (or
+      non-interactive exit) parameterized for ``jrag``.
+
+    Args:
+        non_interactive: If True, exit with code 2 when the target binary
+            is not found.
+        surface: Which surface's binary to resolve.
+
+    Returns:
+        Absolute path to the resolved executable.
+
+    Raises:
+        SystemExit(2): If not found and non-interactive, or user aborts.
+    """
+    binary_name, display_name = _surface_binary(surface)
+    resolved = shutil.which(binary_name)
+
+    if resolved:
+        return resolved
 
     # Not found on PATH
     if non_interactive:
-        print("Error: `java-codebase-rag-mcp` not found on PATH.")
-        print("Ensure `java-codebase-rag` is installed, then re-run with `--non-interactive --agent <host>`.")
+        print(f"Error: `{display_name}` not found on PATH.")
+        if surface == "mcp":
+            print(
+                "Ensure `java-codebase-rag` is installed, then re-run with "
+                "`--non-interactive --agent <host>`."
+            )
+        else:
+            print(
+                "Ensure `java-codebase-rag` is installed (provides the `jrag` "
+                "console script), then re-run with `--non-interactive --agent <host>`."
+            )
         raise SystemExit(2)
 
     # Interactive: prompt user for path
-    print("Warning: `java-codebase-rag-mcp` not found on PATH.")
+    print(f"Warning: `{display_name}` not found on PATH.")
     user_path = prompt(
         "text",
-        "Enter the full path to java-codebase-rag-mcp (or 'abort'):",
+        f"Enter the full path to {display_name} (or 'abort'):",
         default="abort",
     )
 
@@ -466,7 +601,7 @@ def resolve_mcp_command(*, non_interactive: bool) -> str:
         print(f"Error: Path {path_obj} does not exist or is not a file.")
         user_path = prompt(
             "text",
-            "Enter the full path to java-codebase-rag-mcp (or 'abort'):",
+            f"Enter the full path to {display_name} (or 'abort'):",
             default="abort",
         )
         if user_path == "abort" or not user_path:
@@ -480,6 +615,18 @@ def resolve_mcp_command(*, non_interactive: bool) -> str:
         print(f"Warning: {path_obj} is not executable. This may cause issues.")
 
     return str(path_obj.resolve())
+
+
+def _surface_binary(surface: Surface) -> tuple[str, str]:
+    """Return ``(shutil_which_target, user_display_name)`` for a surface.
+
+    The CLI surface resolves the ``jrag`` console script (no MCP server is
+    registered, so the MCP binary is irrelevant). The MCP surface keeps
+    today's behavior.
+    """
+    if surface == "cli":
+        return ("jrag", "jrag")
+    return ("java-codebase-rag-mcp", "java-codebase-rag-mcp")
 
 
 def merge_mcp_config(config_path: Path, host: HostConfig, *, mcp_command: str) -> bool:
@@ -562,53 +709,52 @@ def deploy_artifacts(
     *,
     non_interactive: bool,
     mcp_command: str,
+    surface: Surface = "mcp",
 ) -> list[ArtifactResult]:
     """Deploy artifacts (MCP config, skill, agent) to selected hosts.
+
+    Iterates ``ARTIFACT_MANIFEST[surface]`` so both surfaces share one source
+    of truth. The keyword-only ``surface`` defaults to ``"mcp"`` so existing
+    direct-call sites in tests keep working unchanged.
 
     Args:
         hosts: List of HostConfig objects to deploy to
         scope: Installation scope ("project" or "user")
         cwd: Current working directory
         non_interactive: If True, skip overwrite prompts
-        mcp_command: Resolved absolute path to java-codebase-rag-mcp
+        mcp_command: Resolved absolute path to the runtime binary
+            (``java-codebase-rag-mcp`` for ``mcp`` surface; ``jrag`` for
+            ``cli`` surface — unused for the latter since CLI ships no MCP
+            config).
+        surface: Which artifact set to deploy (default ``"mcp"`` for back-comat).
 
     Returns:
         List of ArtifactResult objects for each deployment
     """
     results = []
+    manifest = ARTIFACT_MANIFEST[surface]
 
     for host in hosts:
-        # Deploy MCP config
-        mcp_config_path = host.mcp_config_path(scope, cwd)
-        mcp_result = _deploy_mcp_config(
-            mcp_config_path,
-            host,
-            non_interactive=non_interactive,
-            mcp_command=mcp_command,
-        )
-        results.append(mcp_result)
-
-        # Deploy skill
-        skills_dir = host.skills_dir(scope, cwd)
-        skill_dest = skills_dir / "explore-codebase" / "SKILL.md"
-        skill_result = _deploy_file(
-            skill_dest,
-            "skills/explore-codebase/SKILL.md",
-            artifact_type="skill",
-            non_interactive=non_interactive,
-        )
-        results.append(skill_result)
-
-        # Deploy agent
-        agents_dir = host.agents_dir(scope, cwd)
-        agent_dest = agents_dir / "explorer-rag-enhanced.md"
-        agent_result = _deploy_file(
-            agent_dest,
-            "agents/explorer-rag-enhanced.md",
-            artifact_type="agent",
-            non_interactive=non_interactive,
-        )
-        results.append(agent_result)
+        for kind, package_path, dest_relative in manifest:
+            if kind == "mcp":
+                # Only the MCP surface carries this entry; the CLI manifest
+                # has no "mcp" row by construction.
+                mcp_config_path = host.mcp_config_path(scope, cwd)
+                result = _deploy_mcp_config(
+                    mcp_config_path,
+                    host,
+                    non_interactive=non_interactive,
+                    mcp_command=mcp_command,
+                )
+            else:
+                dest_path = host.scope_path(scope, cwd) / dest_relative
+                result = _deploy_file(
+                    dest_path,
+                    package_path,
+                    artifact_type=kind,
+                    non_interactive=non_interactive,
+                )
+            results.append(result)
 
     return results
 
@@ -1001,30 +1147,131 @@ def handle_rerun(cwd: Path, *, non_interactive: bool) -> dict | None:
         return existing_config
 
 
-def detect_configured_hosts(cwd: Path) -> list[tuple[HostConfig, str]]:
-    """Scan project + user config files for java-codebase-rag MCP entries.
+def detect_configured_hosts(cwd: Path) -> list[ConfiguredHost]:
+    """Detect hosts installed under ``cwd`` (project) and ``$HOME`` (user).
+
+    Reads the marker file (``.java-codebase-rag.hosts``) written at install
+    time. Falls back to the legacy MCP-entry scan with ``surface="mcp"`` when
+    the marker is absent (pre-marker installs from earlier versions).
+
+    The marker is the single source of truth for CLI-surface installs (which
+    register no MCP entry); without it, a CLI-only install would be invisible
+    to ``update`` (the legacy scan only finds MCP entries).
 
     Args:
-        cwd: Current working directory (for project-scope configs)
+        cwd: Current working directory (project root for project-scope configs)
 
     Returns:
-        List of (host_config, scope) tuples where scope is "project" or "user"
+        List of ``ConfiguredHost(host, scope, surface)`` tuples in marker order
+        (or MCP-scan order in the legacy fallback path).
     """
-    detected = []
+    marker_hosts = _read_hosts_marker(cwd)
+    if marker_hosts is not None:
+        return marker_hosts
 
-    # Check all hosts in both project and user scopes
+    # Legacy fallback: scan MCP entries + assume ``mcp`` surface. Pre-marker
+    # installs only ever shipped the MCP surface, so this back-comat mapping
+    # is exact.
+    detected: list[ConfiguredHost] = []
     for host_name, host_config in HOSTS.items():
         # Check project scope
         project_mcp_path = host_config.mcp_config_path("project", cwd)
         if _has_java_codebase_rag_entry(project_mcp_path):
-            detected.append((host_config, "project"))
+            detected.append(ConfiguredHost(host_config, "project", "mcp"))
 
         # Check user scope
         user_mcp_path = host_config.mcp_config_path("user", cwd)
         if _has_java_codebase_rag_entry(user_mcp_path):
-            detected.append((host_config, "user"))
+            detected.append(ConfiguredHost(host_config, "user", "mcp"))
 
     return detected
+
+
+def _marker_path(cwd: Path) -> Path:
+    """Return the marker file path for a project root."""
+    return cwd / _MARKER_FILE_NAME
+
+
+def _write_hosts_marker(
+    project_root: Path, configured: list[ConfiguredHost]
+) -> None:
+    """Write the marker file recording the installed host/scope/surface set.
+
+    Round-trips with ``_read_hosts_marker``. Silently overwrites an existing
+    marker so re-runs (install over an existing install) reflect the latest
+    wizard answers.
+    """
+    payload = {
+        "version": _MARKER_FILE_VERSION,
+        "hosts": [
+            {"host": ch.host.name, "scope": ch.scope, "surface": ch.surface}
+            for ch in configured
+        ],
+    }
+    tmp_name = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            dir=project_root,
+            prefix=f".{_MARKER_FILE_NAME}.",
+            delete=False,
+        ) as tmp:
+            json.dump(payload, tmp, indent=2)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+            tmp_name = tmp.name
+        os.rename(tmp_name, _marker_path(project_root))
+    except (IOError, OSError) as e:
+        if tmp_name:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+        # Non-fatal: ``update`` will fall back to the MCP-entry scan. Surface
+        # a warning so the operator notices, but do not abort the install.
+        print(f"Warning: failed to write {_marker_path(project_root)}: {e}")
+
+
+def _read_hosts_marker(cwd: Path) -> list[ConfiguredHost] | None:
+    """Read the marker file. Return ``None`` if missing or unparseable.
+
+    On parse/version errors, returns ``None`` so the caller falls back to the
+    MCP-entry scan rather than crashing mid-update.
+    """
+    marker = _marker_path(cwd)
+    if not marker.is_file():
+        return None
+    try:
+        with open(marker, "r") as f:
+            payload = json.load(f)
+    except (json.JSONDecodeError, IOError, OSError):
+        return None
+
+    if not isinstance(payload, dict):
+        return None
+
+    raw_hosts = payload.get("hosts", [])
+    if not isinstance(raw_hosts, list):
+        return None
+
+    configured: list[ConfiguredHost] = []
+    for entry in raw_hosts:
+        if not isinstance(entry, dict):
+            return None
+        host_name = entry.get("host")
+        scope = entry.get("scope")
+        surface = entry.get("surface", "mcp")
+        if host_name not in HOSTS:
+            return None
+        if scope not in ("project", "user"):
+            return None
+        if surface not in ("mcp", "cli"):
+            return None
+        configured.append(
+            ConfiguredHost(HOSTS[host_name], scope, surface)  # type: ignore[arg-type]
+        )
+
+    return configured
 
 
 def _has_java_codebase_rag_entry(config_path: Path) -> bool:
@@ -1056,8 +1303,13 @@ def refresh_artifacts(
     *,
     force: bool,
     dry_run: bool,
+    surface: Surface = "mcp",
 ) -> list[ArtifactResult]:
     """Overwrite skill and agent files from package data. Skip MCP if entry is correct.
+
+    Iterates ``ARTIFACT_MANIFEST[surface]`` so both surfaces share one source
+    of truth (PR-JRAG-5). The keyword-only ``surface`` defaults to ``"mcp"``
+    so existing direct-call sites in tests keep working unchanged.
 
     Args:
         host: HostConfig for the agent host
@@ -1065,40 +1317,33 @@ def refresh_artifacts(
         cwd: Current working directory
         force: If True, overwrite all files even if matching
         dry_run: If True, print changes without writing
+        surface: Which artifact set to refresh (default ``"mcp"`` for back-comat).
 
     Returns:
         List of ArtifactResult objects for each artifact
     """
     results = []
+    manifest = ARTIFACT_MANIFEST[surface]
 
-    # Refresh skill file
-    skills_dir = host.skills_dir(scope, cwd)
-    skill_dest = skills_dir / "explore-codebase" / "SKILL.md"
-    skill_result = _refresh_file(
-        skill_dest,
-        "skills/explore-codebase/SKILL.md",
-        artifact_type="skill",
-        force=force,
-        dry_run=dry_run,
-    )
-    results.append(skill_result)
-
-    # Refresh agent file
-    agents_dir = host.agents_dir(scope, cwd)
-    agent_dest = agents_dir / "explorer-rag-enhanced.md"
-    agent_result = _refresh_file(
-        agent_dest,
-        "agents/explorer-rag-enhanced.md",
-        artifact_type="agent",
-        force=force,
-        dry_run=dry_run,
-    )
-    results.append(agent_result)
-
-    # Refresh MCP config (update command path if needed)
-    mcp_config_path = host.mcp_config_path(scope, cwd)
-    mcp_result = _refresh_mcp_config(mcp_config_path, host, force=force, dry_run=dry_run)
-    results.append(mcp_result)
+    for kind, package_path, dest_relative in manifest:
+        if kind == "mcp":
+            # Refresh MCP config (update command path if needed).
+            # NOTE: only the MCP surface has a "mcp" row in its manifest —
+            # ``_refresh_mcp_config`` (and therefore ``resolve_mcp_command``)
+            # is NEVER reached on the CLI surface by construction. The CLI
+            # surface ships no MCP entry, so there is nothing to refresh.
+            mcp_config_path = host.mcp_config_path(scope, cwd)
+            result = _refresh_mcp_config(mcp_config_path, host, force=force, dry_run=dry_run)
+        else:
+            dest_path = host.scope_path(scope, cwd) / dest_relative
+            result = _refresh_file(
+                dest_path,
+                package_path,
+                artifact_type=kind,
+                force=force,
+                dry_run=dry_run,
+            )
+        results.append(result)
 
     return results
 
@@ -1321,9 +1566,16 @@ def run_update(
 
     # Refresh artifacts for each host
     all_results = []
-    for host_config, scope in configured_hosts:
-        print(f"\nRefreshing {host_config.name} ({scope} scope)...")
-        results = refresh_artifacts(host_config, scope, cwd, force=force, dry_run=dry_run)
+    for host_config, scope, surface in configured_hosts:
+        print(f"\nRefreshing {host_config.name} ({scope} scope, surface={surface})...")
+        results = refresh_artifacts(
+            host_config,
+            scope,
+            cwd,
+            force=force,
+            dry_run=dry_run,
+            surface=surface,
+        )
         all_results.extend(results)
 
     # Check for partial failures
@@ -1460,6 +1712,7 @@ def run_install(
     agents: list[str] | None,
     scope: str | None,
     model: str | None,
+    surface: str | None = None,
     source_root: Path | None = None,
     quiet: bool = False,
     verbose: bool = False,
@@ -1471,6 +1724,7 @@ def run_install(
         agents: List of agent names from CLI flags
         scope: Scope from CLI flag
         model: Model from CLI flag
+        surface: Surface from CLI flag (``"mcp"`` or ``"cli"``; default ``"mcp"``)
         source_root: Source root path (defaults to cwd if None)
         quiet: If True, suppress output
         verbose: If True, raw-relay subprocess indexing output (no Live region)
@@ -1511,21 +1765,30 @@ def run_install(
     # Stage 2: Embedding model
     resolved_model = resolve_model(model, non_interactive=non_interactive)
 
-    # Stage 3-4: Agent host + scope selection
+    # Stage 3-4: Agent host + scope + surface selection
+    prior_surface = _prior_surface_from_marker(cwd)
     try:
         hosts = select_hosts(non_interactive=non_interactive, cli_agents=agents)
         selected_scope = select_scope(non_interactive=non_interactive, cli_scope=scope)
+        selected_surface = select_surface(
+            non_interactive=non_interactive,
+            cli_surface=surface,
+            prefill=prior_surface,
+        )
     except SystemExit as e:
         return e.code
 
-    # Stage 5: Artifact deployment
-    mcp_command = resolve_mcp_command(non_interactive=non_interactive)
+    # Stage 5: Artifact deployment (manifest iterates the chosen surface)
+    mcp_command = resolve_mcp_command(
+        non_interactive=non_interactive, surface=selected_surface
+    )
     results = deploy_artifacts(
         hosts,
         selected_scope,
         source_root,
         non_interactive=non_interactive,
         mcp_command=mcp_command,
+        surface=selected_surface,
     )
 
     # Check for partial failures
@@ -1551,6 +1814,14 @@ def run_install(
         else:
             # Critical failures
             return 1
+
+    # Record the host/scope/surface set so a later ``update`` can route the
+    # refresh through the right surface — critical for CLI-only installs (no
+    # MCP entry to scan).
+    configured = [
+        ConfiguredHost(h, selected_scope, selected_surface) for h in hosts
+    ]
+    _write_hosts_marker(source_root, configured)
 
     # Stage 6: Index + finish
     # Generate YAML config
@@ -1587,3 +1858,17 @@ def run_install(
     if init_outcome is False:
         return 1
     return 0
+
+
+def _prior_surface_from_marker(cwd: Path) -> Surface | None:
+    """Return the (single) surface recorded in the existing marker, if any.
+
+    On multi-surface installs (rare but possible across hosts), returns the
+    first recorded surface — the wizard prefill is a UX nicety, not a contract.
+    Returns ``None`` when no marker exists (fresh install) or the marker is
+    unparseable.
+    """
+    configured = _read_hosts_marker(cwd)
+    if not configured:
+        return None
+    return configured[0].surface
