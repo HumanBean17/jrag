@@ -117,12 +117,20 @@ def build_parser() -> argparse.ArgumentParser:
     """
     description = (
         "jrag - agent-facing CLI for graph-native code intelligence.\n\n"
-        "Every <query> command resolves the identifier (resolve_v2) as the first\n"
-        "step and maps one/many/none onto a single envelope. Default output is\n"
-        "compact text; `--format json` emits the envelope verbatim.\n\n"
-        "Status command (PR-JRAG-1a):\n"
-        "  status            Print index freshness, ontology version, and counts.\n"
-        "\n"
+        "Every <query> command resolves the identifier (FQN / simple name /\n"
+        "route path / topic) as the first step and maps one/many/none onto a\n"
+        "single envelope. Default output is compact text; `--format json` emits\n"
+        "the envelope verbatim.\n\n"
+        "Commands by group:\n"
+        "  health:      status\n"
+        "  locate:      find, inspect\n"
+        "  listings:    routes, clients, producers, topics, jobs, listeners,\n"
+        "               entities\n"
+        "  traversal:   callers, callees, hierarchy, implementations, subclasses,\n"
+        "               overrides, overridden-by, dependents, impact, decompose,\n"
+        "               flow, dependencies, connection, outline, imports\n"
+        "  orientation: microservices, map, conventions, overview\n"
+        "  search:      search\n\n"
         "Run `jrag <command> --help` for command-specific options."
     )
     parser = argparse.ArgumentParser(
@@ -562,10 +570,10 @@ def build_parser() -> argparse.ArgumentParser:
     # text; we patch its description here to advertise the new variant without
     # duplicating the parser construction.)
     callees.epilog = (
-        "PR-JRAG-3b adds Client/Producer variants:\n"
-        "  Client root  -> neighbors_v2([id], 'out', ['HTTP_CALLS']) reaching :Route\n"
-        "  Producer root-> neighbors_v2([id], 'out', ['ASYNC_CALLS']) reaching :Route\n"
-        "                 (the kafka_topic Route this producer publishes to, NOT :Producer)\n"
+        "Symbol root lists the methods this code calls (CALLS out). Client and\n"
+        "Producer roots follow their call edge to the Route they target:\n"
+        "  Client root   -> the :Route it requests (HTTP_CALLS out)\n"
+        "  Producer root -> the :Route (kafka_topic) it publishes to (ASYNC_CALLS out)\n"
         "--include-external applies to the Symbol path; Client/Producer edges are\n"
         "structural (Client/Producer -> :Route) and have no external-exclusion analog."
     )

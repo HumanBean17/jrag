@@ -38,6 +38,74 @@ def test_render_listing_zero_nodes_emits_zero_line() -> None:
     assert out.strip() == "0 matches"
 
 
+def test_display_name_handles_routes_clients_producers() -> None:
+    """display_name picks the identifying field per node kind (not FQN-only).
+
+    Regression for routes rendering blank: routes have ``path``/``method``, not
+    ``fqn``; the old ``simple_name`` returned ``''`` and listings showed a bare
+    ``@service`` with no name. The same gap affected clients/producers.
+    """
+    from java_codebase_rag.jrag_render import display_name
+
+    # Route: METHOD path (no FQN at all).
+    route = {"kind": "http_endpoint", "method": "POST", "path": "/api/chat/send"}
+    assert display_name(route) == "POST /api/chat/send"
+    # Route with no method: bare path.
+    assert display_name({"kind": "http_endpoint", "path": "/health"}) == "/health"
+    # Client: member simple-name -> target service.
+    client = {
+        "client_kind": "feign_method",
+        "target_service": "chat-assign",
+        "member_fqn": "com.bchat.Proc.send",
+    }
+    assert display_name(client) == "send → chat-assign"
+    # Producer: member simple-name -> topic.
+    producer = {
+        "producer_kind": "kafka_send",
+        "topic": "chat-messages",
+        "member_fqn": "com.bchat.Prod.send",
+    }
+    assert display_name(producer) == "send → chat-messages"
+    # Symbol fallback unchanged.
+    assert display_name({"fqn": "com.foo.Bar"}) == "Bar"
+    # Topic-only node (topics command grouping).
+    assert display_name({"topic": "chat-messages"}) == "chat-messages"
+
+
+def test_render_listing_routes_shows_method_path_not_blank() -> None:
+    """A route listing row renders `METHOD path  @service`, never a bare `@service`.
+
+    Regression: routes carry no FQN; before ``display_name`` the listing emitted
+    ``  @chat-core`` with a blank name (confusing — the user couldn't tell
+    routes apart across services).
+    """
+    env = Envelope(
+        status="ok",
+        nodes={
+            "r:1": {
+                "kind": "http_endpoint",
+                "method": "POST",
+                "path": "/api/chat/send",
+                "microservice": "chat-core",
+            },
+            "r:2": {
+                "kind": "http_endpoint",
+                "method": "GET",
+                "path": "/api/chat/history",
+                "microservice": "chat-assign",
+            },
+        },
+    )
+    out = render(env, fmt="text", noun="route")
+    lines = out.splitlines()
+    assert "POST /api/chat/send  @chat-core" in lines, f"route row missing: {out!r}"
+    assert "GET /api/chat/history  @chat-assign" in lines, f"route row missing: {out!r}"
+    # No bare `@service` line (the bug signature: blank name + service suffix).
+    assert not any(line.strip().startswith("@") for line in lines), (
+        f"blank-name listing line leaked: {out!r}"
+    )
+
+
 # ----- Test 12: traversal conf: only on CALLS-family -----
 
 

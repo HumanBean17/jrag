@@ -887,12 +887,12 @@ def build_parser() -> argparse.ArgumentParser:
     install.add_argument(
         "--surface",
         choices=["mcp", "cli"],
-        default="mcp",
+        default=None,
         help=(
-            "Agent surface to install (default: mcp). "
-            "'mcp' deploys the stdio MCP server + explore-codebase skill + "
-            "explorer-rag-enhanced subagent. 'cli' deploys the jrag "
-            "console-script skill + explorer-rag-cli subagent (no MCP entry)."
+            "Agent surface to install: 'mcp' (stdio MCP server + explore-codebase "
+            "skill + explorer-rag-enhanced subagent) or 'cli' (jrag console-script "
+            "skill + explorer-rag-cli subagent, no MCP entry). Omit to choose "
+            "interactively; non-interactive mode defaults to 'mcp'."
         ),
     )
     _add_verbosity_flags(install)

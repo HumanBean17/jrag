@@ -1513,7 +1513,7 @@ def test_cmd_install_forwards_verbose_flag(
     captured: dict = {}
 
     def _fake_run_install(*, non_interactive, agents, scope, model,
-                          source_root=None, quiet=False, verbose=False, surface="mcp"):
+                          source_root=None, quiet=False, verbose=False, surface=None):
         captured["quiet"] = quiet
         captured["verbose"] = verbose
         captured["non_interactive"] = non_interactive
@@ -1528,7 +1528,10 @@ def test_cmd_install_forwards_verbose_flag(
     )
     assert rc == 0
     assert captured["verbose"] is True
-    assert captured["surface"] == "mcp"
+    # Omitting --surface forwards None so the interactive select_surface wizard
+    # prompts (non-interactive falls back to "mcp" inside select_surface). The
+    # operator never picking a surface implicitly is the bug-#1 contract.
+    assert captured["surface"] is None
     # quiet still flows through too.
     rc2 = cli_mod.main(
         ["install", "--non-interactive", "--agent", "claude-code", "--quiet"]

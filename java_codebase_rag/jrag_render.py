@@ -10,9 +10,11 @@ invariant.
 """
 from __future__ import annotations
 
+from typing import Any
+
 from java_codebase_rag.jrag_envelope import Envelope, simple_name
 
-__all__ = ["render", "tiered_name"]
+__all__ = ["render", "tiered_name", "display_name"]
 
 
 # Edge labels that carry a ``confidence`` column (CALLS-family). ``conf:`` is
@@ -36,16 +38,57 @@ def _next_action_lines(envelope: Envelope) -> list[str]:
     return [f"next: {hint}" for hint in envelope.agent_next_actions[:2]]
 
 
-def tiered_name(node_id: str, nodes: dict[str, dict]) -> str:
-    """Tiered label: simple name -> ``name @service`` -> FQN.
+def display_name(node: dict[str, Any]) -> str:
+    """Best short label for a node across all kinds (symbol + route/client/producer).
 
-    Falls back through the tiers based on what data the node carries: simple
-    name is always available (derived from FQN); ``@service`` is appended when
-    ``microservice`` is present; if neither simple name nor service is present,
-    the raw FQN is returned.
+    Listing rows and traversal targets carry different identifying fields per
+    kind; this picks the most informative one rather than assuming every node
+    has an FQN (routes have ``path``/``method``; clients/producers have
+    ``member_fqn`` + ``topic``/``target_service``). Precedence:
+
+      * explicit ``name``  -> symbols (SymbolHit carries one)
+      * ``member_fqn``     -> the member making the call/emit, with
+                              ``→ topic`` / ``→ target_service`` when present
+      * ``path``           -> ``METHOD path`` (route) or ``path`` (client)
+      * ``topic``          -> bare topic (producer without a member)
+      * ``fqn``            -> fqn-derived simple name (classes/methods)
+
+    Returns ``""`` only when nothing identifiable is present.
+    """
+    name = str(node.get("name") or "").strip()
+    if name:
+        return name
+    member_fqn = str(node.get("member_fqn") or "").strip()
+    if member_fqn:
+        base = member_fqn.rsplit(".", 1)[-1]
+        topic = str(node.get("topic") or "").strip()
+        if topic:
+            return f"{base} → {topic}"
+        target = str(node.get("target_service") or "").strip()
+        if target:
+            return f"{base} → {target}"
+        return base
+    path = str(node.get("path") or "").strip()
+    if path:
+        method = str(node.get("method") or "").strip()
+        return f"{method} {path}" if method else path
+    topic = str(node.get("topic") or "").strip()
+    if topic:
+        return topic
+    # Symbol / fallback: fqn-derived simple name.
+    return simple_name(node)
+
+
+def tiered_name(node_id: str, nodes: dict[str, dict]) -> str:
+    """Tiered label: ``display_name @service`` -> display_name -> FQN -> id.
+
+    ``display_name`` covers symbols (fqn) AND route/client/producer nodes
+    (path/member_fqn/topic). ``@service`` is appended when ``microservice`` is
+    present; if the node still yields no label, the raw FQN (then the id) is
+    returned so a traversal target is never rendered empty.
     """
     node = nodes.get(node_id) or {}
-    name = simple_name(node)
+    name = display_name(node)
     service = str(node.get("microservice") or "").strip()
     if name and service:
         return f"{name} @{service}"
@@ -95,8 +138,10 @@ def _render_not_found(envelope: Envelope) -> str:
 def _render_listing(envelope: Envelope, *, noun: str) -> str:
     lines: list[str] = []
     for _node_id, node in envelope.nodes.items():
-        # Listing omits FQN (PR-JRAG-1a test 11): name + @service only.
-        name = simple_name(node)
+        # Listing omits FQN (PR-JRAG-1a test 11): display_name + @service only.
+        # display_name handles routes (METHOD path) / clients / producers, which
+        # carry no FQN — simple_name would render them blank.
+        name = display_name(node)
         service = str(node.get("microservice") or "").strip()
         line = name
         if service:
@@ -274,7 +319,7 @@ def _render_ambiguous(envelope: Envelope, *, noun: str) -> str:
     lines = [header, "Narrow with --kind --java-kind --role --fqn-prefix:"]
     for cand in envelope.candidates:
         # Ambiguous candidates carry reason; NO file / score (PR-JRAG-1a test 14).
-        name = simple_name(cand) or str(cand.get("id") or "")
+        name = display_name(cand) or str(cand.get("id") or "")
         service = str(cand.get("microservice") or "").strip()
         reason = str(cand.get("reason") or "").strip()
         line = f"  {name}"

@@ -441,7 +441,12 @@ def test_artifact_manifest_single_source_for_deploy_and_refresh():
 
 
 def test_install_subparser_registers_surface_flag():
-    """``--surface`` is registered on the install subparser with default 'mcp'."""
+    """``--surface`` is registered on the install subparser.
+
+    Default is ``None`` so the interactive ``select_surface`` wizard prompts
+    when the flag is omitted (the proposal's CLI-vs-MCP choice); non-interactive
+    installs fall back to ``'mcp'`` inside ``select_surface`` for back-comat.
+    """
     import argparse
 
     from java_codebase_rag.cli import build_parser  # operator CLI
@@ -458,5 +463,5 @@ def test_install_subparser_registers_surface_flag():
         a for a in install_parser._actions if "--surface" in (a.option_strings or [])
     )
     assert surface_action.choices == ["mcp", "cli"]
-    assert surface_action.default == "mcp"
+    assert surface_action.default is None
     assert surface_action.dest == "surface"

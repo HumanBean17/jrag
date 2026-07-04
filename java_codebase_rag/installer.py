@@ -1220,7 +1220,11 @@ def _write_hosts_marker(
             tmp.flush()
             os.fsync(tmp.fileno())
             tmp_name = tmp.name
-        os.rename(tmp_name, _marker_path(project_root))
+        # os.replace (not os.rename): on Windows, os.rename raises when the
+        # destination exists — the documented re-run path overwrites the prior
+        # marker. os.replace atomically overwrites cross-platform (PR #371
+        # fixed this same pattern elsewhere).
+        os.replace(tmp_name, _marker_path(project_root))
     except (IOError, OSError) as e:
         if tmp_name:
             try:
