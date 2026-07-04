@@ -209,6 +209,39 @@ Run `java-codebase-rag --help` to list grouped subcommands. Operator playbook wi
 
 ---
 
+## jrag (agent CLI, preview)
+
+`jrag` is a separate console script (alongside `java-codebase-rag`) built for AI
+coding agents. It gives the agent **one command per engineering intent** and
+takes human-readable identifiers (FQN / simple name / route path / topic) —
+never raw node IDs. Every `<query>` command resolves the identifier via
+`resolve_v2` as the first step; on `many` it returns candidates and stops, on
+`none` it returns `not_found`. Auto-pick is forbidden.
+
+```bash
+jrag status                 # index health (ontology version, freshness, counts)
+jrag --format json status   # emit the envelope verbatim
+```
+
+The default output is compact text (a deliberate divergence from the operator
+CLI's TTY heuristic — `jrag` is agent-facing/non-TTY). `--format json` emits
+the shared envelope verbatim.
+
+**Preview (PR-JRAG-1a):** only `status` ships today. `find`, `inspect`,
+`callers`/`callees`/`dependencies`/`overrides`, `search`, and
+`agent_next_actions` hints land in subsequent PRs (see
+`plans/active/PLAN-JRAG-CLI.md`). The envelope shape, `resolve_query` contract,
+and renderer are the frozen foundation every later PR builds on.
+
+A missing or stale index produces an actionable `status: error` envelope (exit
+2) rather than a traceback:
+
+```
+error: No index at /path/to/code_graph.lbug. Run: java-codebase-rag init --source-root <root>
+```
+
+---
+
 ## Further reading
 
 | Document | What's in it |

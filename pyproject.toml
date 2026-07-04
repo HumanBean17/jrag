@@ -59,6 +59,7 @@ Issues = "https://github.com/HumanBean17/java-codebase-rag/issues"
 [project.scripts]
 java-codebase-rag = "java_codebase_rag.cli:_console_script_main"
 java-codebase-rag-mcp = "server:main"
+jrag = "java_codebase_rag.jrag:_console_script_main"
 
 [tool.setuptools]
 packages = ["java_codebase_rag"]
