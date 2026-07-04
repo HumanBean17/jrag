@@ -1082,7 +1082,12 @@ def find_v2(
         hint_payload: dict[str, Any] = {
             "success": True,
             "kind": kind,
-            "results": [r.model_dump() for r in refs],
+            # exclude_none: this dict feeds generate_hints (which reads fields
+            # defensively via .get), not the tool result (FindOutput below holds the
+            # pydantic objects). Drop null fields -- including the NodeRef.name field
+            # that is None for every structured ref -- to match filter_dump above and
+            # avoid spurious "name": null noise in the hint input.
+            "results": [r.model_dump(exclude_none=True) for r in refs],
             "limit": limit,
             "offset": offset,
             "filter": filter_dump,
@@ -2035,7 +2040,7 @@ def neighbors_v2(
         subject_record = _load_node_record(g, first_origin, origin_kind)
         neigh_payload = {
             "success": True,
-            "results": [e.model_dump() for e in sliced],
+            "results": [e.model_dump(exclude_none=True) for e in sliced],
             "requested_edge_types": requested_edge_types,
             "requested_direction": direction,
             "offset": offset,
