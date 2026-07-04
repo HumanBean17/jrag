@@ -2019,10 +2019,14 @@ def neighbors_v2(
             sliced = results[offset : offset + limit]
             neighbors_has_more = len(results) > offset + limit
         elif use_calls_path:
-            # Single-origin CALLS path already paginated in SQL; the row/unfiltered
-            # counts are the pagination signal there, so has_more stays None.
+            # Single-origin CALLS path. When paginate_in_sql is True the SQL did
+            # the OFFSET/LIMIT and the row/unfiltered counts carry the has-more
+            # signal, so this field stays None (unknown). When paginate_in_sql is
+            # False (a node_filter is set, include_unresolved, or dedup_calls) we
+            # loaded the FULL matching set with no pushdown, so the client already
+            # has every edge -> False (not None), so a paging client need not probe.
             sliced = results
-            neighbors_has_more = None
+            neighbors_has_more = None if paginate_in_sql else False
         else:
             sliced = results[offset : offset + limit]
             neighbors_has_more = len(results) > offset + limit

@@ -755,6 +755,32 @@ def test_neighbors_filter_accepts_json_string(ladybug_graph) -> None:
     assert out_dict.results == out_str.results
 
 
+def test_neighbors_calls_has_more_results_reflects_pagination_mode(ladybug_graph) -> None:
+    """Single-origin CALLS has_more_results depends on whether SQL paginated.
+
+    Regression for the #355 has_more_results field on NeighborsOutput. When a
+    node_filter forces the in-memory (non-SQL-paginated) path, the full filtered
+    CALLS set is returned, so has_more_results must be False (the client has
+    everything and need not probe) -- not None ("unknown"). With no filter the
+    single-origin SQL path paginates and the row/unfiltered counts carry the
+    signal, so the field stays None.
+    """
+    mid = _method_id_with_calls(ladybug_graph, "out")
+    # node_filter set -> paginate_in_sql False -> full set returned -> has_more False
+    filtered = neighbors_v2(
+        mid, direction="out", edge_types=["CALLS"], filter={"role": "SERVICE"}, graph=ladybug_graph
+    )
+    assert filtered.success is True
+    assert filtered.has_more_results is False, (
+        "non-SQL-paginated CALLS returned the full set; has_more_results must be "
+        "False so a paging client does not issue a redundant probe (#355)"
+    )
+    # No filter, single origin -> SQL-paginated -> has-more signal is the row count.
+    paginated = neighbors_v2(mid, direction="out", edge_types=["CALLS"], graph=ladybug_graph)
+    assert paginated.success is True
+    assert paginated.has_more_results is None
+
+
 def test_neighbors_filter_unknown_key_returns_failure(ladybug_graph) -> None:
     mid = _method_id_with_calls(ladybug_graph, "out")
     out = neighbors_v2(mid, direction="out", edge_types=["CALLS"], filter={"typo_key": "x"}, graph=ladybug_graph)
