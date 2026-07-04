@@ -41,7 +41,7 @@ The rest of this README is the install, walkthrough, and tool cheat sheet for pu
 pip install java-codebase-rag
 ```
 
-Python **3.11+** required. After install, `java-codebase-rag --help` should print the CLI groups.
+Python **3.11+** required, on **Linux, macOS, and Windows** — every native dependency (LanceDB, LadybugDB/kuzu, CocoIndex) ships a wheel for each platform. After install, `java-codebase-rag --help` should print the CLI groups.
 The package includes the CocoIndex lifecycle dependency used by `init`, `increment`, `reprocess`, and `erase`.
 
 ### Interactive setup (recommended)
@@ -86,21 +86,23 @@ cd java-codebase-rag
 
 # 2. Build the index (Lance vectors + LadybugDB graph). First run downloads the
 #    embedding model (~90 MB) and takes ~30-60s on the fixture.
-java-codebase-rag init --source-root tests/bank-chat-system --index-dir /tmp/bank-chat-index
+java-codebase-rag init --source-root tests/bank-chat-system --index-dir tmp/bank-chat-index
 
 # 3. Inspect what landed (resolved config, edge counts, ontology version)
-java-codebase-rag meta --source-root tests/bank-chat-system --index-dir /tmp/bank-chat-index
+java-codebase-rag meta --source-root tests/bank-chat-system --index-dir tmp/bank-chat-index
 ```
+
+> **Windows users:** these smoke-test snippets use POSIX shell syntax (`VAR=value` prefix, `\` line continuations). Run them under **Git Bash** or **WSL**, or skip straight to `java-codebase-rag install`, which wires up MCP registration and configuration without a shell.
 
 Smoke-test the index with two checks (`search_lancedb` ships with the package):
 
 ```bash
 # Vector search — proves the LanceDB side works
-JAVA_CODEBASE_RAG_INDEX_DIR=/tmp/bank-chat-index \
+JAVA_CODEBASE_RAG_INDEX_DIR=tmp/bank-chat-index \
   python -m search_lancedb "chat ingress controller" --table java --limit 3
 
 # Vector + graph expansion — proves LadybugDB is wired in
-JAVA_CODEBASE_RAG_INDEX_DIR=/tmp/bank-chat-index \
+JAVA_CODEBASE_RAG_INDEX_DIR=tmp/bank-chat-index \
   python -m search_lancedb "chat ingress controller" --table java --limit 3 \
     --graph-expand --expand-depth 2
 ```
