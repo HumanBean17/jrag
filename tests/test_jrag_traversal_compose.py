@@ -24,6 +24,8 @@ Tests (bank-chat fixture):
 10. test_outline_empty_for_missing_file
 11. test_imports_resolves_graph_nodes
 12. test_outline_and_import_reject_offset_or_document_unbounded
+13. test_connection_calls_service_outbound_excludes_unresolved_clients  (review Fix 2)
+14. test_imports_text_mode_marks_unresolved                               (review Fix 3)
 
 Backend signatures verified against source at PR-JRAG-3b time:
  * neighbors_v2 (mcp_v2.py:1284) returns NeighborsOutput.results: list[Edge]
@@ -186,9 +188,10 @@ def test_dependencies_composes_neighbors_out_injects(
 ) -> None:
     """dependencies on a type returns the types it injects (INJECTS out).
 
-    ConfigurableChatAssignment injects ChatAssignmentPort (verified in the
-    fixture). INJECTS is Symbol -> Symbol (java_ontology.py:216), so 'out'
-    dispatches to the injected types. The endpoint MUST be a Symbol.
+    ClientMessageProcessor injects ChatAssignmentPort (verified in the fixture;
+    also ComplianceScanner, ClientMessageRateLimiter, etc). INJECTS is Symbol ->
+    Symbol (java_ontology.py:216), so 'out' dispatches to the injected types.
+    The endpoint MUST be a Symbol.
     """
     env = _env_for(corpus_root, ladybug_db_path)
     proc = _run_jrag(
@@ -216,7 +219,7 @@ def test_dependencies_composes_neighbors_out_injects(
             f"expected edge endpoint kind=symbol, got {ep.get('kind')!r}"
         )
         injected_fqns.append(ep.get("fqn", ""))
-    # ConfigurableChatAssignment injects ChatAssignmentPort.
+    # ClientMessageProcessor injects ChatAssignmentPort.
     assert any("ChatAssignmentPort" in fqn for fqn in injected_fqns), (
         f"expected ChatAssignmentPort in injected types, got {injected_fqns}"
     )
@@ -311,19 +314,22 @@ def test_connection_outbound_lists_this_service_clients(
     assert len(http_out) >= 1, f"expected >=1 outbound HTTP_CALLS, got {http_out}"
 
 
-# ----- Test 6: connection --both is the default -----
+# ----- Test 6: connection default direction is --inbound (brief-faithful) -----
 
 
 def test_connection_both_default(corpus_root: Path, ladybug_db_path: Path) -> None:
-    """connection with no direction flag defaults to --both.
+    """connection with no direction flag defaults to --inbound (per the brief).
 
-    The default action for --inbound/--outbound/--both is `store_const` with
-    default=None; the handler maps None to 'both'. So `connection <svc>` (no
-    flag) MUST produce both inbound and outbound sections.
+    PR-JRAG-3b review Fix 1: the brief says `--inbound (default)`, but the
+    initial implementation defaulted to `--both`. The default is now inbound:
+    `connection <svc>` (no flag) MUST produce ONLY inbound edges (no outbound),
+    matching `connection <svc> --inbound`. `--both` is the explicit opt-in for
+    both sections.
     """
     env = _env_for(corpus_root, ladybug_db_path)
+    # Default (no flag) MUST equal explicit --inbound.
     proc_default = _run_jrag(
-        ["connection", "chat-assign", "--format", "json"],
+        ["connection", "chat-core", "--format", "json"],
         env=env,
     )
     assert proc_default.returncode == 0, (
@@ -332,11 +338,27 @@ def test_connection_both_default(corpus_root: Path, ladybug_db_path: Path) -> No
     payload_default = json.loads(proc_default.stdout)
     assert payload_default["status"] == "ok"
     sections_default = {e.get("section") for e in payload_default.get("edges", [])}
-    assert "outbound" in sections_default, (
-        f"default mode missing outbound, got sections={sections_default}"
+
+    proc_inbound = _run_jrag(
+        ["connection", "chat-core", "--inbound", "--format", "json"],
+        env=env,
+    )
+    assert proc_inbound.returncode == 0
+    payload_inbound = json.loads(proc_inbound.stdout)
+    sections_inbound = {e.get("section") for e in payload_inbound.get("edges", [])}
+
+    assert sections_default == sections_inbound, (
+        f"default {sections_default} != explicit --inbound {sections_inbound}"
+    )
+    # Default MUST be inbound-only (no outbound leakage).
+    assert "outbound" not in sections_default, (
+        f"default direction should be --inbound (no outbound), got {sections_default}"
+    )
+    assert "inbound" in sections_default or payload_default.get("edges", []) == [], (
+        f"default direction should produce inbound section (or empty), got {sections_default}"
     )
 
-    # Compare with explicit --both.
+    # --both still renders both sections (explicit opt-in).
     proc_both = _run_jrag(
         ["connection", "chat-assign", "--both", "--format", "json"],
         env=env,
@@ -344,8 +366,8 @@ def test_connection_both_default(corpus_root: Path, ladybug_db_path: Path) -> No
     assert proc_both.returncode == 0
     payload_both = json.loads(proc_both.stdout)
     sections_both = {e.get("section") for e in payload_both.get("edges", [])}
-    assert sections_default == sections_both, (
-        f"default {sections_default} != explicit --both {sections_both}"
+    assert "inbound" in sections_both or "outbound" in sections_both, (
+        f"--both should render at least one section, got {sections_both}"
     )
 
 
@@ -579,3 +601,120 @@ def test_outline_and_import_reject_offset_or_document_unbounded() -> None:
         assert (
             "unrecognized arguments: --offset" in proc.stderr or "usage:" in proc.stderr
         ), f"{cmd}: expected usage error, got stderr={proc.stderr!r}"
+
+
+# ----- Test 13 (review Fix 2): --calls-service outbound excludes unresolved clients -----
+
+
+def test_connection_calls_service_outbound_excludes_unresolved_clients(
+    corpus_root: Path, ladybug_db_path: Path
+) -> None:
+    """--calls-service on outbound uses STRICT target_service matching for clients.
+
+    PR-JRAG-3b review Fix 2: the initial predicate
+    `(target_service == calls_service) or not target_service` was a loophole —
+    the `or not target_service` escape was meant for producers (genuinely no
+    service target) but ALSO matched unresolved clients (empty target_service,
+    e.g. AuditLogClient#logAssignment in the fixture). The tightened predicate
+    keeps producers (with a warning) and EXCLUDES unresolved clients.
+
+    Fixture pair (verified by reviewer):
+      * chat-assign's ChatCoreFeignClient#joinOperator — target_service=chat-core (KEEP)
+      * chat-assign's AuditLogClient#logAssignment       — target_service='' (EXCLUDE)
+      * chat-assign's producers (e.g. DistributionTriggerPublisher) — KEPT w/ warning
+    """
+    env = _env_for(corpus_root, ladybug_db_path)
+    proc = _run_jrag(
+        ["connection", "chat-assign", "--outbound", "--calls-service", "chat-core", "--format", "json"],
+        env=env,
+    )
+    assert proc.returncode == 0, (
+        f"connection --calls-service failed: rc={proc.returncode}\nstderr={proc.stderr}"
+    )
+    payload = json.loads(proc.stdout)
+    assert payload["status"] == "ok", f"expected ok, got {payload}"
+    nodes = payload.get("nodes", {})
+    edges = payload.get("edges", [])
+    outbound = [e for e in edges if e.get("section") == "outbound"]
+
+    # (a) Clients with target_service == chat-core MUST be present.
+    client_edges = [e for e in outbound if e.get("edge_type") == "HTTP_CALLS"]
+    assert len(client_edges) >= 1, f"expected >=1 chat-core client edge, got {client_edges}"
+    for e in client_edges:
+        node = nodes.get(e.get("other_id"), {})
+        assert (node.get("target_service") or "") == "chat-core", (
+            f"strict --calls-service leak: client target_service={node.get('target_service')!r}"
+        )
+
+    # (b) The UNRESOLVED client (AuditLogClient#logAssignment, empty target_service)
+    # MUST NOT appear anywhere in the result. The fixture's AuditLogClient has
+    # no @CodebaseHttpClient annotation, so its target_service is empty.
+    for nid, node in nodes.items():
+        if node.get("kind") == "client":
+            fqn = node.get("fqn", "") or ""
+            assert "AuditLogClient" not in fqn, (
+                f"AuditLogClient MUST be excluded under --calls-service chat-core "
+                f"(empty target_service); got node={node}"
+            )
+
+    # (c) Producers are KEPT (async channel stays visible) AND a warning fires
+    # explaining producers bypass --calls-service.
+    producer_edges = [e for e in outbound if e.get("edge_type") == "ASYNC_CALLS"]
+    warnings = payload.get("warnings", [])
+    if producer_edges:
+        # Warning MUST mention producers bypass the filter.
+        assert any("--calls-service" in w and "producer" in w.lower() for w in warnings), (
+            f"expected --calls-service producer-bypass warning, got {warnings}"
+        )
+    # Sanity: at least one producer edge is present on chat-assign (the fixture
+    # has DistributionTriggerPublisher + AuditLogClient async stub).
+    assert len(producer_edges) >= 1, (
+        f"expected >=1 producer edge kept under --calls-service, got {producer_edges}"
+    )
+
+
+# ----- Test 14 (review Fix 3): text-mode imports distinguishes resolved vs unresolved -----
+
+
+def test_imports_text_mode_marks_unresolved(
+    corpus_root: Path, ladybug_db_path: Path
+) -> None:
+    """Text-mode imports MUST visually distinguish resolved vs unresolved.
+
+    PR-JRAG-3b review Fix 3: the handler sets kind="unresolved_import" + edge
+    `resolved: bool`, but text mode dispatched to _render_listing which shows
+    only simple_name + @service — resolved and unresolved looked identical
+    (only JSON distinguished). The renderer now appends " (unresolved)" to
+    nodes with kind="unresolved_import".
+
+    ChatCoreFeignClient has mixed resolution:
+      * com.bank.chat.app.web.JoinOperatorRequest — IN GRAPH (resolved Symbol)
+      * org.springframework.*                       — NOT IN GRAPH (unresolved)
+    """
+    env = _env_for(corpus_root, ladybug_db_path)
+    proc = _run_jrag(
+        ["imports", _OUTLINE_FILE],  # default text mode
+        env=env,
+    )
+    assert proc.returncode == 0, (
+        f"imports text failed: rc={proc.returncode}\nstderr={proc.stderr}"
+    )
+    text = proc.stdout
+    # The "(unresolved)" marker MUST appear (the file has unresolved imports).
+    assert "(unresolved)" in text, (
+        f"expected (unresolved) marker in text output, got:\n{text}"
+    )
+    # Resolved Symbol nodes MUST NOT carry the marker. JoinOperatorRequest is
+    # resolved; its line should NOT have the suffix.
+    lines = text.splitlines()
+    join_line = next((ln for ln in lines if "JoinOperatorRequest" in ln), None)
+    assert join_line is not None, f"expected JoinOperatorRequest in text output:\n{text}"
+    assert "(unresolved)" not in join_line, (
+        f"resolved import JoinOperatorRequest MUST NOT carry (unresolved): {join_line!r}"
+    )
+    # At least one Spring import line MUST carry the marker.
+    spring_line = next((ln for ln in lines if "springframework" in ln.lower() or "FeignClient" in ln), None)
+    assert spring_line is not None, f"expected a spring import line in:\n{text}"
+    assert "(unresolved)" in spring_line, (
+        f"unresolved Spring import MUST carry (unresolved): {spring_line!r}"
+    )

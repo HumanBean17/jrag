@@ -90,6 +90,14 @@ def _render_listing(envelope: Envelope, *, noun: str) -> str:
         line = name
         if service:
             line += f"  @{service}"
+        # PR-JRAG-3b: distinguish unresolved imports from resolved graph nodes
+        # in TEXT mode. Without this marker, `imports <file>` renders resolved
+        # Symbols and unresolved placeholders identically (only JSON carries
+        # the resolved flag), leaving a text-mode agent unable to tell which
+        # imports resolved. The marker is gated on the synthetic
+        # `kind="unresolved_import"` set by _cmd_imports.
+        if node.get("kind") == "unresolved_import":
+            line += "  (unresolved)"
         lines.append(line)
     if not lines:
         lines.append(f"0 {noun}".rstrip())

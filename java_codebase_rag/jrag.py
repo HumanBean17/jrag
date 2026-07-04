@@ -595,10 +595,17 @@ def build_parser() -> argparse.ArgumentParser:
             "Symbol -> Symbol (declaring type -> injected type), so 'out' traverses "
             "from the injector to its dependencies. --service/--module are NOT "
             "applied (INJECTS is a structural edge with no microservice predicate); "
-            "they surface as warnings[]."
+            "they surface as warnings[]. --include-external is accepted for surface "
+            "symmetry with callers/callees but is a warned no-op here (INJECTS has "
+            "no external-exclusion analog at the neighbors_v2 layer)."
         ),
     )
     dependencies.add_argument("query", help="Symbol FQN or name (e.g. 'pkg.Svc').")
+    dependencies.add_argument(
+        "--include-external",
+        action="store_true",
+        help="Accepted for symmetry; warned no-op on dependencies (INJECTS is structural).",
+    )
     dependencies.set_defaults(handler=_cmd_dependencies)
 
     connection = subparsers.add_parser(
@@ -609,14 +616,17 @@ def build_parser() -> argparse.ArgumentParser:
             "RESOLVE-FIRST EXCEPTION: the first positional is a microservice NAME "
             "(e.g. 'chat-core'), NOT a query — it is passed literally to list_clients/"
             "list_producers/find_route_callers; resolve_v2 is NEVER run on it.\n\n"
-            "Inbound (default): clients/producers in OTHER services targeting this "
-            "service. HTTP via list_clients(target_service=<svc>) + async via "
-            "find_route_callers on this service's topic Routes. --http-method filters "
-            "HTTP callers by method.\n"
-            "Outbound: clients/producers IN this service and the routes/topics they "
-            "call. HTTP via list_clients(microservice=<svc>) + producers via "
+            "Direction (default --inbound): clients/producers in OTHER services "
+            "targeting this service. HTTP via list_clients(target_service=<svc>) + "
+            "async via find_route_callers on this service's topic Routes.\n"
+            "--outbound: clients/producers IN this service. HTTP via "
+            "list_clients(microservice=<svc>) + producers via "
             "list_producers(microservice=<svc>).\n"
-            "--both (or no direction flag) renders both sections."
+            "--both: render both inbound and outbound sections.\n\n"
+            "--http-method and --calls-service filter HTTP callers only (clients "
+            "have a target_service; producers do not). Producers are KEPT under "
+            "--calls-service so the async channel stays visible; a warnings[] entry "
+            "is emitted when --calls-service bypasses producers."
         ),
     )
     connection.add_argument(
@@ -629,33 +639,37 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_const",
         const="inbound",
         default=None,
-        help="Show only inbound connections (default both when no flag given).",
+        help="Show only inbound connections (this is the default).",
     )
     connection.add_argument(
         "--outbound",
         dest="direction",
         action="store_const",
         const="outbound",
-        help="Show only outbound connections (default both when no flag given).",
+        help="Show only outbound connections (default is --inbound).",
     )
     connection.add_argument(
         "--both",
         dest="direction",
         action="store_const",
         const="both",
-        help="Show both inbound and outbound (this is the default).",
+        help="Show both inbound and outbound sections (default is --inbound).",
     )
     connection.add_argument(
         "--http-method",
         type=str,
         default=None,
-        help="Filter HTTP routes/callers by method (e.g. POST).",
+        help="Filter HTTP callers by method (e.g. POST). Applies to clients only.",
     )
     connection.add_argument(
         "--calls-service",
         type=str,
         default=None,
-        help="Further filter to edges involving this other service (target for outbound, source for inbound).",
+        help=(
+            "Narrow to edges involving this other service. Outbound: clients with "
+            "target_service == <svc> (producers kept with a warning — no service "
+            "target on ASYNC channels). Inbound: callers from microservice == <svc>."
+        ),
     )
     connection.set_defaults(handler=_cmd_connection)
 
@@ -2213,6 +2227,14 @@ def _cmd_dependencies(args: argparse.Namespace) -> int:
     warnings = _warn_unapplied_scope(
         args, reason="neighbors_v2 walks structural INJECTS edges with no microservice predicate"
     )
+    # --include-external is accepted for surface symmetry with callers/callees
+    # but is a warned no-op here (INJECTS has no external-exclusion analog at
+    # the neighbors_v2 layer; the edge is structural Symbol -> Symbol).
+    if getattr(args, "include_external", False):
+        warnings.append(
+            "--include-external does not apply to dependencies "
+            "(INJECTS is structural Symbol -> Symbol with no external-exclusion analog)"
+        )
 
     root_id = node.id
     out = mcp_v2.neighbors_v2(
@@ -2292,8 +2314,9 @@ def _cmd_connection(args: argparse.Namespace) -> int:
 
     microservice = args.microservice
     # argparse stores --inbound/--outbound/--both into `direction` via
-    # action="store_const"; default is None when no flag is given (-> both).
-    direction = getattr(args, "direction", None) or "both"
+    # action="store_const"; default is None when no flag is given (-> inbound,
+    # per the brief: --inbound is the default direction).
+    direction = getattr(args, "direction", None) or "inbound"
     http_method = (args.http_method or "").upper() or None
     calls_service = args.calls_service
 
@@ -2310,18 +2333,27 @@ def _cmd_connection(args: argparse.Namespace) -> int:
     if args.module:
         warnings.append("--module is not applied on connection (use --calls-service to narrow)")
 
+    # --calls-service on outbound: clients are filtered STRICTLY (target_service
+    # == calls_service); producers have no service target (they target topics),
+    # so they bypass the filter and we emit a single warning so the agent knows
+    # the async channel wasn't narrowed. The previous `or not target_service`
+    # escape hatch matched unresolved clients (empty target_service, e.g.
+    # AuditLogClient#logAssignment) — that was silent-wrong-results.
+    producers_bypass_calls_service = bool(calls_service) and show_outbound
+
     def _http_method_match(row: dict) -> bool:
         if not http_method:
             return True
         return (str(row.get("method") or "").upper()) == http_method
 
-    def _calls_service_match_out(row: dict) -> bool:
+    def _calls_service_match_out_client(row: dict) -> bool:
+        # STRICT: a client is kept iff target_service == calls_service exactly.
+        # Unresolved clients (empty target_service) are EXCLUDED — they did not
+        # resolve to a specific target service, so we cannot confirm they call
+        # --calls-service and must not surface them as a match.
         if not calls_service:
             return True
-        # Outbound: --calls-service narrows to clients targeting that service.
-        # Producers have no service target (they target topics); keep them
-        # unconditional so the async channel isn't silently hidden.
-        return (str(row.get("target_service") or "") == calls_service) or not row.get("target_service")
+        return str(row.get("target_service") or "") == calls_service
 
     def _calls_service_match_in(caller_microservice: str) -> bool:
         if not calls_service:
@@ -2368,6 +2400,9 @@ def _cmd_connection(args: argparse.Namespace) -> int:
                 rid = str(r.get("rid") or "")
                 if rid:
                     topic_route_ids.add(rid)
+        # Cache list_producers() per caller_microservice so the inbound-async
+        # loop issues ONE fetch per external service (not one per producer id).
+        producer_cache: dict[str, list[dict]] = {}
         for rid in topic_route_ids:
             callers = graph.find_route_callers(route_id=rid)
             for c in callers:
@@ -2382,9 +2417,13 @@ def _cmd_connection(args: argparse.Namespace) -> int:
                     # Already rendered (e.g. duplicated via multiple topic routes)
                     edges.append({"other_id": pid, "edge_type": "ASYNC_CALLS", "section": "inbound", "confidence": c.confidence})
                     continue
-                # Fetch producer dict for richer node data.
-                prod_rows = graph.list_producers(microservice=c.caller_microservice or None, limit=_CONSUMER_FETCH_LIMIT)
-                prod_dict = next((p for p in prod_rows if p.get("id") == pid), None)
+                # Fetch producer dict for richer node data (cached per service).
+                caller_ms = c.caller_microservice or ""
+                if caller_ms not in producer_cache:
+                    producer_cache[caller_ms] = graph.list_producers(
+                        microservice=caller_ms or None, limit=_CONSUMER_FETCH_LIMIT,
+                    )
+                prod_dict = next((p for p in producer_cache[caller_ms] if p.get("id") == pid), None)
                 if prod_dict:
                     nodes[pid] = _producer_dict_to_node(prod_dict)
                 else:
@@ -2402,13 +2441,22 @@ def _cmd_connection(args: argparse.Namespace) -> int:
     # --- Outbound: clients/producers IN this microservice (calling out) ---
     if show_outbound:
         clients_out = graph.list_clients(microservice=microservice, limit=limit + 1)
-        clients_out = [c for c in clients_out if _http_method_match(c) and _calls_service_match_out(c)]
+        # Clients: apply --http-method AND --calls-service strictly (no empty-
+        # target escape; unresolved clients are EXCLUDED under --calls-service).
+        clients_out = [c for c in clients_out if _http_method_match(c) and _calls_service_match_out_client(c)]
         for c in clients_out[:limit + 1]:
             cid = c["id"]
             nodes[cid] = _client_dict_to_node(c)
             edges.append({"other_id": cid, "edge_type": "HTTP_CALLS", "section": "outbound"})
 
         producers_out = graph.list_producers(microservice=microservice, limit=limit + 1)
+        # Producers bypass --calls-service (no service target on ASYNC channels);
+        # emit ONE warning so the agent knows the async channel wasn't narrowed.
+        if producers_bypass_calls_service and producers_out:
+            warnings.append(
+                f"--calls-service does not filter producers (no target_service on "
+                f"ASYNC channels); {len(producers_out)} producer(s) kept visible"
+            )
         for p in producers_out[:limit + 1]:
             pid = p["id"]
             nodes[pid] = _producer_dict_to_node(p)
@@ -2570,6 +2618,11 @@ def _cmd_imports(args: argparse.Namespace) -> int:
     nodes: dict[str, dict] = {}
     edges: list[dict] = []
     warnings: list[str] = []
+    # Mirror outline: --limit is accepted (common flag) but imports returns the
+    # full import block; surface a warning when the user explicitly set --limit
+    # away from the default so they know it has no effect.
+    if args.limit is not None and args.limit != 20:
+        warnings.append("--limit does not apply to imports (the full import block is returned)")
 
     # Static + wildcard imports: rendered as unresolved rows (resolve_v2 only
     # matches type Symbols, not methods or wildcards).
