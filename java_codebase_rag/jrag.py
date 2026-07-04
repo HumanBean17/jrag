@@ -705,6 +705,114 @@ def build_parser() -> argparse.ArgumentParser:
     imports.add_argument("file", help="File path (POSIX-relative to source root, or absolute).")
     imports.set_defaults(handler=_cmd_imports)
 
+    # ---- Orientation commands (PR-JRAG-4) ----
+    microservices = subparsers.add_parser(
+        "microservices",
+        help="List microservices with resolved type counts.",
+        parents=[common],
+        description=(
+            "List every microservice with its resolved type-symbol count. "
+            "Calls g.microservice_counts(). Renders as a counts listing."
+        ),
+    )
+    microservices.set_defaults(handler=_cmd_microservices)
+
+    map_cmd = subparsers.add_parser(
+        "map",
+        help="Symbol counts per kind, grouped by service or module.",
+        parents=[common],
+        description=(
+            "Count resolved type Symbols (class/interface/enum/record/annotation) "
+            "grouped by microservice (--service narrows to one) or module (--module "
+            "switches the grouping axis to modules)."
+        ),
+    )
+    map_cmd.set_defaults(handler=_cmd_map)
+
+    conventions = subparsers.add_parser(
+        "conventions",
+        help="Dominant roles + framework tallies.",
+        parents=[common],
+        description=(
+            "Report the dominant roles among resolved Symbols and the route framework "
+            "distribution. --service narrows the role tally to one microservice."
+        ),
+    )
+    conventions.set_defaults(handler=_cmd_conventions)
+
+    overview = subparsers.add_parser(
+        "overview",
+        help="Bundle for a microservice, route, or topic.",
+        parents=[common],
+        description=(
+            "Dispatch on the positional <subject>:\n"
+            "  Route path (starts with '/')  -> trace_request_flow (same as `flow`).\n"
+            "  Microservice name             -> routes + clients + producers bundle.\n"
+            "  Topic string                  -> producers + consumers for the topic.\n"
+            "--as {microservice,route,topic} overrides auto-detection.\n"
+            "Auto-detection: starts with '/' -> route; matches a known microservice -> "
+            "microservice; otherwise -> topic."
+        ),
+    )
+    overview.add_argument("subject", help="Microservice name, route path, or topic string.")
+    overview.add_argument(
+        "--as",
+        dest="as_type",
+        choices=("microservice", "route", "topic"),
+        default=None,
+        help="Override auto-detection of subject type.",
+    )
+    overview.set_defaults(handler=_cmd_overview)
+
+    # ---- Search command (PR-JRAG-4) ----
+    search = subparsers.add_parser(
+        "search",
+        help="Semantic search over Lance tables.",
+        parents=[common],
+        description=(
+            "Semantic search via search_v2 over the Lance index (java/sql/yaml tables). "
+            "--table all searches all three. --hybrid enables vector+keyword hybrid. "
+            "--offset paginates. --path-contains narrows by file path substring. "
+            "Filters (NodeFilter flags) narrow results.\n\n"
+            "--fuzzy is accepted but rejected IN-HANDLER with status: error (search is "
+            "inherently semantic; --fuzzy is a no-op synonym). Registering the flag "
+            "prevents argparse from exiting 2 before the handler can produce the envelope."
+        ),
+    )
+    search.add_argument("query", help="Natural-language search query.")
+    search.add_argument(
+        "--table",
+        choices=("java", "sql", "yaml", "all"),
+        default="java",
+        help="Lance table to search (default: java; all = java+sql+yaml).",
+    )
+    search.add_argument(
+        "--hybrid", action="store_true", help="Enable vector+keyword hybrid search."
+    )
+    search.add_argument(
+        "--path-contains", type=str, default=None, dest="path_contains",
+        help="Narrow to chunks whose filename contains this substring.",
+    )
+    search.add_argument(
+        "--fuzzy", action="store_true",
+        help="Accepted but rejected in-handler (search is semantic; --fuzzy is implicit).",
+    )
+    # NodeFilter flags (same set as `find` filter mode, minus the query-only ones).
+    search.add_argument("--role", type=str, default=None, help="Filter by role.")
+    search.add_argument("--exclude-role", type=str, default=None, dest="exclude_role", help="Exclude by role.")
+    search.add_argument("--java-kind", type=str, default=None, dest="java_kind", help="Filter by Java symbol kind.")
+    search.add_argument("--annotation", type=str, default=None, help="Filter by annotation.")
+    search.add_argument("--capability", type=str, default=None, help="Filter by capability.")
+    search.add_argument("--framework", type=str, default=None, help="Filter by framework.")
+    search.add_argument("--fqn-prefix", type=str, default=None, dest="fqn_prefix", help="Filter by FQN prefix.")
+    search.add_argument(
+        "--offset",
+        type=int,
+        default=0,
+        help="Page offset (passed to search_v2; paginated via +1-fetch).",
+    )
+    search.set_defaults(handler=_cmd_search)
+
     return parser
 
 
@@ -2680,6 +2788,422 @@ def _cmd_imports(args: argparse.Namespace) -> int:
     env = Envelope(status="ok", nodes=nodes, edges=edges, warnings=warnings)
     next_actions_hook(env, result_edges=edges)
     print(render(env, fmt=args.format, noun="import"))
+    return 0
+
+
+# ============================================================================
+# PR-JRAG-4: orientation commands (microservices / map / conventions / overview)
+# + semantic search.
+#
+# Orientation commands compose counts and listings from LadybugGraph methods
+# and focused Cypher lookups (graph._rows). They render as inspect-shape
+# (kv-block + nested dict sections) so the agent sees compact structured data.
+#
+# Search dispatches to search_v2 (mcp_v2.search_v2) after building a NodeFilter
+# from flags. --fuzzy is registered on the parser but rejected IN-HANDLER with
+# status: error (not argparse exit) so the envelope carries the message.
+# ============================================================================
+
+
+def _cmd_microservices(args: argparse.Namespace) -> int:
+    """microservices — list every microservice with its resolved type count."""
+    from java_codebase_rag.jrag_envelope import Envelope, next_actions_hook
+    from java_codebase_rag.jrag_render import render
+
+    _, graph, rc = _load_graph_or_error(args)
+    if rc:
+        return rc
+
+    counts = graph.microservice_counts()
+    env = Envelope(
+        status="ok",
+        nodes={"microservices": {"counts": dict(counts)}},
+    )
+    next_actions_hook(env)
+    print(render(env, fmt=args.format, noun="microservices", shape="inspect"))
+    return 0
+
+
+def _cmd_map(args: argparse.Namespace) -> int:
+    """map [--service] [--module] — counts per kind per service/module.
+
+    ``--module`` (from the common parent) doubles as the grouping-axis switch:
+    when set, the map groups by module; otherwise by microservice. If it carries
+    a value, the results also narrow to that module. ``--service`` narrows to
+    one microservice (does not switch the axis unless ``--module`` is also set).
+    """
+    from java_codebase_rag.jrag_envelope import Envelope, next_actions_hook
+    from java_codebase_rag.jrag_render import render
+
+    _, graph, rc = _load_graph_or_error(args)
+    if rc:
+        return rc
+
+    # Grouping axis: --module present → group by module; else microservice.
+    group_col = "module" if args.module is not None else "microservice"
+    scope_clauses: list[str] = []
+    params: dict = {}
+    if args.service:
+        scope_clauses.append("s.microservice = $ms")
+        params["ms"] = args.service
+    if args.module:
+        scope_clauses.append("s.module = $mod")
+        params["mod"] = args.module
+    scope_clause = " AND " + " AND ".join(scope_clauses) if scope_clauses else ""
+
+    rows = graph._rows(  # noqa: SLF001 - counts compose query (same pattern as _scope_counts)
+        f"MATCH (s:Symbol) WHERE s.resolved "
+        f"AND s.kind IN ['class','interface','enum','record','annotation']"
+        f"{scope_clause} "
+        f"RETURN s.{group_col} AS scope, s.kind AS kind, count(*) AS n",
+        params,
+    )
+    grouped: dict[str, dict[str, int]] = {}
+    for r in rows:
+        scope = str(r.get("scope") or "(unscoped)")
+        kind = str(r.get("kind") or "(unknown)")
+        grouped.setdefault(scope, {})[kind] = int(r.get("n") or 0)
+
+    env = Envelope(
+        status="ok",
+        nodes={"map": {"group_by": group_col, "counts": grouped}},
+    )
+    next_actions_hook(env)
+    print(render(env, fmt=args.format, noun="map", shape="inspect"))
+    return 0
+
+
+def _cmd_conventions(args: argparse.Namespace) -> int:
+    """conventions [--service] — dominant roles + framework tallies."""
+    from java_codebase_rag.jrag_envelope import Envelope, next_actions_hook
+    from java_codebase_rag.jrag_render import render
+
+    _, graph, rc = _load_graph_or_error(args)
+    if rc:
+        return rc
+
+    scope_clause = ""
+    params: dict = {}
+    if args.service:
+        scope_clause = " AND s.microservice = $ms"
+        params["ms"] = args.service
+
+    role_rows = graph._rows(  # noqa: SLF001 - counts compose query
+        f"MATCH (s:Symbol) WHERE s.resolved AND s.role IS NOT NULL AND s.role <> ''"
+        f"{scope_clause} "
+        f"RETURN s.role AS role, count(*) AS n ORDER BY n DESC",
+        params,
+    )
+    role_counts: dict[str, int] = {}
+    for r in role_rows:
+        role = str(r.get("role") or "")
+        if role:
+            role_counts[role] = int(r.get("n") or 0)
+
+    # Framework tallies: reuse meta().routes_by_framework (already computed) plus
+    # a direct count of route nodes by framework for accuracy.
+    fw_rows = graph._rows(  # noqa: SLF001 - counts compose query
+        "MATCH (r:Route) WHERE r.framework IS NOT NULL AND r.framework <> '' "
+        "RETURN r.framework AS framework, count(*) AS n ORDER BY n DESC"
+    )
+    framework_counts: dict[str, int] = {}
+    for r in fw_rows:
+        fw = str(r.get("framework") or "")
+        if fw:
+            framework_counts[fw] = int(r.get("n") or 0)
+
+    env = Envelope(
+        status="ok",
+        nodes={"conventions": {"roles": role_counts, "frameworks": framework_counts}},
+    )
+    next_actions_hook(env)
+    print(render(env, fmt=args.format, noun="conventions", shape="inspect"))
+    return 0
+
+
+def _overview_detect_type(subject: str, graph) -> str:
+    """Auto-detect the subject type for `overview`.
+
+    Returns "route" | "microservice" | "topic". Heuristics:
+      * Starts with '/' → route.
+      * Matches a known microservice name (microservice_counts keys) → microservice.
+      * Else → topic (catch-all for messaging strings).
+    """
+    if subject.startswith("/"):
+        return "route"
+    try:
+        ms_counts = graph.microservice_counts()
+    except Exception:
+        ms_counts = {}
+    if subject in ms_counts:
+        return "microservice"
+    return "topic"
+
+
+def _overview_microservice(args: argparse.Namespace, graph, microservice: str) -> int:
+    """overview microservice bundle: counts + routes + clients + producers."""
+    from java_codebase_rag.jrag_envelope import Envelope, next_actions_hook
+    from java_codebase_rag.jrag_render import render
+
+    limit = _clamped_limit(args)
+    routes = graph.list_routes(microservice=microservice, limit=limit + 1)
+    clients = graph.list_clients(microservice=microservice, limit=limit + 1)
+    producers = graph.list_producers(microservice=microservice, limit=limit + 1)
+
+    bundle = {
+        "microservice": microservice,
+        "routes": len(routes),
+        "clients": len(clients),
+        "producers": len(producers),
+    }
+    # Include sample entities (entities + listeners + jobs) for the service.
+    try:
+        entities = graph.list_by_role(
+            role="ENTITY", microservice=microservice, limit=limit + 1
+        )
+        bundle["entities"] = len(entities)
+    except Exception:
+        pass
+
+    env = Envelope(
+        status="ok",
+        nodes={f"microservice:{microservice}": {
+            "kind": "microservice",
+            "fqn": microservice,
+            "name": microservice,
+            "microservice": microservice,
+            "bundle": bundle,
+            "route_sample": [{"path": r.get("path", ""), "framework": r.get("framework", "")} for r in routes[:5]],
+            "client_sample": [{"fqn": c.get("member_fqn", ""), "target_service": c.get("target_service", "")} for c in clients[:5]],
+            "producer_sample": [{"topic": p.get("topic", ""), "producer_kind": p.get("producer_kind", "")} for p in producers[:5]],
+        }},
+    )
+    next_actions_hook(env)
+    print(render(env, fmt=args.format, noun="overview", shape="inspect"))
+    return 0
+
+
+def _overview_route(args: argparse.Namespace, cfg, graph, route_path: str) -> int:
+    """overview route: resolve + trace_request_flow (same as `flow`)."""
+    from java_codebase_rag.jrag_envelope import Envelope, next_actions_hook, resolve_query
+    from java_codebase_rag.jrag_render import render
+
+    limit = _clamped_limit(args)
+    node, renv = resolve_query(
+        route_path, hint_kind="route", java_kind=None, role=None, fqn_prefix=None,
+        cfg=cfg, graph=graph,
+    )
+    if renv.status != "ok" or node is None:
+        print(render(renv, fmt=args.format))
+        return 2 if renv.status == "error" else 0
+
+    if node.kind != "route":
+        env = Envelope(
+            status="error",
+            message=f"overview --as route expects a Route; resolved kind is {node.kind!r}.",
+        )
+        print(render(env, fmt=args.format))
+        return 2
+
+    max_hops = max(1, min(8, 5))
+    flow_data = graph.trace_request_flow(entry_route_id=node.id, max_hops=max_hops)
+    root_id = node.id
+    nodes_dict: dict[str, dict] = {root_id: _noderef_to_node_dict(node)}
+    edges: list[dict] = []
+    for row in flow_data.get("inbound", []):
+        caller_id = str(row.get("caller_node_id") or "")
+        if not caller_id:
+            continue
+        kind = str(row.get("caller_node_kind") or "")
+        nodes_dict[caller_id] = {
+            "id": caller_id, "kind": kind,
+            "fqn": str(row.get("declaring_symbol_fqn") or ""),
+            "microservice": str(row.get("microservice") or ""),
+        }
+        edges.append({
+            "other_id": caller_id,
+            "edge_type": "HTTP_CALLS" if kind == "client" else "ASYNC_CALLS",
+            "confidence": float(row.get("confidence") or 0.0),
+        })
+    for row in flow_data.get("outbound", []):
+        next_id = str(row.get("next_symbol_id") or "")
+        if not next_id:
+            continue
+        nodes_dict[next_id] = {
+            "id": next_id, "kind": "symbol",
+            "fqn": str(row.get("next_fqn") or ""),
+            "microservice": str(row.get("next_microservice") or ""),
+        }
+        edges.append({"other_id": next_id, "edge_type": "CALLS"})
+    truncated = len(edges) > limit
+    if truncated:
+        edges = edges[:limit]
+    env = Envelope(status="ok", nodes=nodes_dict, edges=edges, root=root_id, truncated=truncated)
+    next_actions_hook(env, root=root_id, result_edges=edges)
+    print(render(env, fmt=args.format, noun="overview"))
+    return 0
+
+
+def _overview_topic(args: argparse.Namespace, graph, topic: str) -> int:
+    """overview topic: producers + consumers for a topic string."""
+    from java_codebase_rag.jrag_envelope import Envelope, next_actions_hook
+    from java_codebase_rag.jrag_render import render
+
+    limit = _clamped_limit(args)
+    # Producers: exact topic match first, then prefix match as fallback.
+    producers = graph.list_producers(topic_prefix=topic, limit=limit + 1)
+    if not producers and len(topic) >= 3:
+        # Try a shorter prefix if the exact topic yields nothing.
+        producers = graph.list_producers(topic_prefix=topic[:3], limit=limit + 1)
+        producers = [p for p in producers if topic in str(p.get("topic") or "")]
+
+    # Consumers: listener classes consuming this topic via EXPOSES on Route.
+    consumers = _resolve_topic_consumers(graph, topic=topic, prefix=False)
+    if not consumers:
+        consumers = _resolve_topic_consumers(graph, topic=topic, prefix=True)
+
+    topic_node = {
+        "kind": "topic",
+        "fqn": topic,
+        "name": topic,
+        "topic": topic,
+        "producers": [
+            {
+                "fqn": str(p.get("member_fqn") or ""),
+                "topic": str(p.get("topic") or ""),
+                "producer_kind": str(p.get("producer_kind") or ""),
+                "microservice": str(p.get("microservice") or ""),
+            }
+            for p in producers[:limit]
+        ],
+        "consumers": [
+            {
+                "id": c.get("id", ""),
+                "fqn": c.get("fqn", ""),
+                "kind": c.get("kind", "symbol"),
+                "microservice": c.get("microservice", ""),
+            }
+            for c in consumers[:limit]
+        ],
+    }
+    env = Envelope(
+        status="ok",
+        nodes={f"topic:{topic}": topic_node},
+    )
+    next_actions_hook(env)
+    print(render(env, fmt=args.format, noun="overview", shape="inspect"))
+    return 0
+
+
+def _cmd_overview(args: argparse.Namespace) -> int:
+    """overview <microservice|route-path|topic> [--as ...] — dispatch on type."""
+    cfg, graph, rc = _load_graph_or_error(args)
+    if rc:
+        return rc
+
+    subject = args.subject
+    as_type = getattr(args, "as_type", None)
+    if as_type is None:
+        as_type = _overview_detect_type(subject, graph)
+
+    if as_type == "route":
+        return _overview_route(args, cfg, graph, subject)
+    if as_type == "microservice":
+        return _overview_microservice(args, graph, subject)
+    return _overview_topic(args, graph, subject)
+
+
+# ============================================================================
+# Search (PR-JRAG-4)
+# ============================================================================
+
+
+def _cmd_search(args: argparse.Namespace) -> int:
+    """search <query> — semantic search via search_v2 over Lance tables.
+
+    Builds a NodeFilter from flags, calls search_v2 with limit+1 for +1-fetch
+    truncation, and renders. --fuzzy is rejected IN-HANDLER (not argparse-exit)
+    so the error carries the canonical envelope shape.
+    """
+    import mcp_v2
+
+    from java_codebase_rag.jrag_envelope import Envelope, mark_truncated, next_actions_hook, normalize_enum
+    from java_codebase_rag.jrag_render import render
+
+    # --fuzzy: registered on the parser (so argparse doesn't exit 2), but rejected
+    # IN-HANDLER with status: error (search is inherently semantic; --fuzzy is
+    # a no-op synonym, not a real mode toggle).
+    if getattr(args, "fuzzy", False):
+        env = Envelope(
+            status="error",
+            message="search is semantic; --fuzzy is implicit",
+        )
+        print(render(env, fmt=args.format))
+        return 2
+
+    cfg, graph, rc = _load_graph_or_error(args)
+    if rc:
+        return rc
+
+    limit = min(args.limit if args.limit is not None else 20, 499)
+
+    # Build NodeFilter from flags (same set as `find` filter mode).
+    filter_dict: dict = {}
+    if args.service:
+        filter_dict["microservice"] = args.service
+    if args.module:
+        filter_dict["module"] = args.module
+    if args.role:
+        filter_dict["role"] = normalize_enum(args.role, kind="role")
+    if args.exclude_role:
+        filter_dict["exclude_roles"] = [normalize_enum(args.exclude_role, kind="role")]
+    if args.annotation:
+        filter_dict["annotation"] = args.annotation
+    if args.capability:
+        filter_dict["capability"] = args.capability
+    if args.fqn_prefix:
+        filter_dict["fqn_prefix"] = args.fqn_prefix
+    if args.java_kind:
+        filter_dict["symbol_kind"] = normalize_enum(args.java_kind, kind="java_kind")
+    if args.framework:
+        filter_dict["framework"] = normalize_enum(args.framework, kind="framework")
+    node_filter = mcp_v2.NodeFilter.model_validate(filter_dict) if filter_dict else None
+
+    out = mcp_v2.search_v2(
+        args.query,
+        table=args.table,
+        hybrid=args.hybrid,
+        limit=limit + 1,  # +1 for truncated detection
+        offset=args.offset,
+        path_contains=args.path_contains,
+        filter=node_filter,
+        graph=graph,
+    )
+
+    if not out.success:
+        env = Envelope(status="error", message=out.message or "search failed")
+        print(render(env, fmt=args.format))
+        return 2
+
+    # Convert SearchHit list to envelope node dicts.
+    hit_dicts: list[dict] = []
+    for hit in out.results:
+        d = hit.model_dump() if hasattr(hit, "model_dump") else dict(hit)
+        # Ensure an `id` key for envelope nodes (SearchHit carries chunk_id +
+        # optional symbol_id; use chunk_id as the envelope node id).
+        if "id" not in d:
+            d["id"] = d.get("chunk_id") or d.get("symbol_id") or d.get("fqn") or ""
+        if "kind" not in d:
+            d["kind"] = "search_hit"
+        hit_dicts.append(d)
+
+    display, truncated = mark_truncated(hit_dicts, limit)
+    nodes = {n["id"]: n for n in display} if display else {}
+
+    env = Envelope(status="ok", nodes=nodes, truncated=truncated)
+    next_actions_hook(env)
+    next_offset = args.offset + limit if truncated else None
+    print(render(env, fmt=args.format, noun="search", next_offset=next_offset))
     return 0
 
 

@@ -209,7 +209,7 @@ Run `java-codebase-rag --help` to list grouped subcommands. Operator playbook wi
 
 ---
 
-## jrag (agent CLI, preview)
+## jrag — agent CLI
 
 `jrag` is a separate console script (alongside `java-codebase-rag`) built for AI
 coding agents. It gives the agent **one command per engineering intent** and
@@ -218,20 +218,92 @@ never raw node IDs. Every `<query>` command resolves the identifier via
 `resolve_v2` as the first step; on `many` it returns candidates and stops, on
 `none` it returns `not_found`. Auto-pick is forbidden.
 
-```bash
-jrag status                 # index health (ontology version, freshness, counts)
-jrag --format json status   # emit the envelope verbatim
+The default output is compact text (a deliberate divergence from the operator
+CLI's TTY heuristic — `jrag` is agent-facing/non-TTY). `--format json` emits the
+shared envelope verbatim. Every command emits the same envelope shape:
+
+```json
+{
+  "status": "ok",
+  "nodes": {"<id>": {"id": "...", "kind": "...", "fqn": "..."}},
+  "edges": [{"other_id": "...", "edge_type": "CALLS", "confidence": 0.9}],
+  "root": "<resolved-id>",
+  "agent_next_actions": ["jrag callees com.example.Foo#bar()"],
+  "truncated": false
+}
 ```
 
-The default output is compact text (a deliberate divergence from the operator
-CLI's TTY heuristic — `jrag` is agent-facing/non-TTY). `--format json` emits
-the shared envelope verbatim.
+`agent_next_actions` carries up to 5 contextual next-step hints (e.g. after
+`inspect`, the agent sees `jrag callers <fqn>`, `jrag callees <fqn>`, etc. for
+the edges the root actually has). Omitted from JSON when empty.
 
-**Preview (PR-JRAG-1a):** only `status` ships today. `find`, `inspect`,
-`callers`/`callees`/`dependencies`/`overrides`, `search`, and
-`agent_next_actions` hints land in subsequent PRs (see
-`plans/active/PLAN-JRAG-CLI.md`). The envelope shape, `resolve_query` contract,
-and renderer are the frozen foundation every later PR builds on.
+### Commands
+
+```bash
+# Orientation
+jrag status                    # index health (ontology version, freshness, counts)
+jrag microservices             # microservices with resolved type counts
+jrag map                       # counts per kind per service/module
+jrag map --module              # group by module instead
+jrag conventions               # dominant roles + framework tallies
+jrag overview chat-core        # bundle for a microservice
+jrag overview /chat/assign     # route flow (inbound callers + outbound CALLS)
+jrag overview banking.chat     # topic producers + consumers
+jrag overview chat-core --as microservice  # override auto-detection
+
+# Locate
+jrag find ChatService          # exact name/FQN lookup (symbols)
+jrag find --role CONTROLLER    # filter mode (NodeFilter flags)
+jrag inspect ChatService       # full node details + edge_summary
+jrag outline src/main/.../Foo.java  # all symbols declared in a file
+jrag imports src/main/.../Foo.java   # imports resolved to graph nodes
+
+# Listings
+jrag routes                    # HTTP routes
+jrag clients                   # HTTP clients (Feign / RestTemplate / WebClient)
+jrag producers                 # async message producers (Kafka / StreamBridge)
+jrag topics                    # message topics grouped by producer
+jrag jobs                      # scheduled tasks (@Scheduled)
+jrag listeners                 # message listeners (@KafkaListener etc.)
+jrag entities                  # JPA entities
+
+# Traversals (all resolve-first)
+jrag callers ChatService#assign(Request)   # who calls me?
+jrag callees ChatService#assign(Request)   # what do I call?
+jrag hierarchy AbstractBase               # type tree (parents + children)
+jrag implementations PaymentProcessor     # classes implementing an interface
+jrag subclasses AbstractRepository        # classes extending a type
+jrag overrides Impl#run()                 # methods this overrides (dispatch UP)
+jrag overridden-by Iface#run()            # methods overriding this (dispatch DOWN)
+jrag dependents PaymentGateway            # who injects this type?
+jrag dependencies ChatService             # types this injects
+jrag impact PaymentGateway                # fleet-wide blast radius
+jrag decompose ChatIngressController#assign   # role-waterfall flow
+jrag flow /chat/assign                    # request flow through a route
+jrag connection chat-core                 # cross-service connections
+
+# Semantic search
+jrag search "assign a chat agent"         # semantic over Lance (java table)
+jrag search "kafka" --table all           # java + sql + yaml tables
+jrag search "audit" --hybrid              # vector + keyword hybrid
+jrag search "audit" --offset 5            # paginated
+```
+
+### Flags
+
+| Flag | Scope | Effect |
+|------|-------|--------|
+| `--format text\|json` | all | output format (default: text) |
+| `--service <name>` | listings/traversals | filter by microservice |
+| `--module <name>` | listings/traversals | filter by module |
+| `--limit <n>` | listings/traversals | cap results (default 20; `limit+1` fetch detects truncation) |
+| `--offset <n>` | `find`, `search` only | paginate (other commands reject it) |
+| `--kind symbol\|route\|client\|producer` | `<query>` commands | resolve hint |
+| `--java-kind`, `--role`, `--fqn-prefix` | `<query>` commands | client-side post-filters |
+| `--index-dir <path>` | all | override index directory |
+
+`--offset` is intentionally NOT a global flag: only `find` and `search` route
+through backends that accept it. Every other command rejects it.
 
 A missing or stale index produces an actionable `status: error` envelope (exit
 2) rather than a traceback:
@@ -239,6 +311,9 @@ A missing or stale index produces an actionable `status: error` envelope (exit
 ```
 error: No index at /path/to/code_graph.lbug. Run: java-codebase-rag init --source-root <root>
 ```
+
+See [`plans/active/PLAN-JRAG-CLI.md`](./plans/active/PLAN-JRAG-CLI.md) for the
+full design and per-PR breakdown.
 
 ---
 

@@ -374,18 +374,54 @@ def next_actions_hook(
     edge_summary: dict[str, Any] | None = None,
     result_edges: list[dict[str, Any]] | None = None,
 ) -> list[str]:
-    """No-op stub for PR-JRAG-1b/1c/3; filled by PR-JRAG-4 agent_next_actions.
+    """Populate ``envelope.agent_next_actions`` via :mod:`jrag_hints` (PR-JRAG-4).
 
-    Every command that produces edges or an edge_summary calls this hook so PR-4
-    can inject contextual next-action hints. For now, it returns an empty list.
+    Every command that produces edges or an edge_summary calls this hook. The
+    hook extracts the root node's FQN from ``envelope.nodes[root]`` and delegates
+    to :func:`jrag_hints.next_actions`, which maps edge labels → ``jrag <cmd>
+    <fqn>`` hints (≤5, zero-direction suppressed, dot-keys covered). The result
+    is assigned to ``envelope.agent_next_actions`` (auto-omitted from
+    ``to_dict()`` when empty — see :meth:`Envelope.to_dict`).
+
+    Skipped (returns ``[]``) when:
+      * ``root`` is ``None`` (listing / find / outline commands — no single root).
+      * The root node is absent from ``envelope.nodes`` (defensive).
+      * The root node's ``fqn`` is empty/missing.
+      * The root node is a synthetic kind (``microservice`` / ``topic`` /
+        ``unresolved_import``) — hints targeting a synthetic id would never
+        resolve and would mislead the agent.
 
     Args:
-        envelope: The output envelope (may be mutated in place by PR-4).
+        envelope: The output envelope (mutated in place: ``agent_next_actions``
+            is set on success).
         root: The root node id (for commands that resolve a single node).
         edge_summary: The edge_summary from describe_v2 (inspect command only).
-        result_edges: Raw edge rows from traversal commands.
+        result_edges: Raw edge rows from traversal commands (used when
+            ``edge_summary`` is ``None``).
 
     Returns:
-        A list of command hint strings (empty for now; PR-4 fills this).
+        The list of hint strings assigned to ``envelope.agent_next_actions``
+        (empty when the hook was a no-op for this call).
     """
-    return []
+    if root is None:
+        return []
+    root_node = envelope.nodes.get(root)
+    if root_node is None:
+        return []
+    root_fqn = str(root_node.get("fqn") or "").strip()
+    if not root_fqn:
+        return []
+    # Suppress hints for synthetic roots (microservice connection view, topic
+    # grouping, unresolved imports) — these would produce ``jrag callees <name>``
+    # style hints that would never resolve.
+    kind = str(root_node.get("kind") or "")
+    if kind in ("microservice", "topic", "unresolved_import"):
+        return []
+    from java_codebase_rag.jrag_hints import next_actions
+
+    envelope.agent_next_actions = next_actions(
+        root_fqn=root_fqn,
+        edge_summary=edge_summary,
+        result_edges=result_edges if result_edges is not None else list(envelope.edges),
+    )
+    return envelope.agent_next_actions
