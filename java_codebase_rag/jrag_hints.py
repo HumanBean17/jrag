@@ -40,12 +40,6 @@ _LABEL_COMMANDS: dict[str, dict[str, str]] = {
     "ASYNC_CALLS": {"out": "callees"},
 }
 
-# Composed dot-key prefixes (mirrors mcp_hints._COMPOSED_DOT_KEY_PREFIXES).
-# Labels starting with these are decomposed: the prefix gives the semantic axis
-# (OVERRIDDEN_BY → overridden-by) and the suffix gives the terminal edge type.
-_DECLARES_PREFIX = "DECLARES."
-_OVERRIDDEN_BY_PREFIX = "OVERRIDDEN_BY."
-
 # Cap on returned hints (brief: ≤5). Matches the Envelope.agent_next_actions
 # contract and mcp_hints' own cap.
 _MAX_HINTS = 5
@@ -86,7 +80,7 @@ def next_actions(
     *,
     root_fqn: str,
     edge_summary: dict[str, Any] | None = None,
-    result_edges: list[dict[str, Any]] | None = None,
+    result_edges: list[dict[str, Any]],
     graph: Any = None,  # noqa: ARG001 — reserved for future use (brief contract)
 ) -> list[str]:
     """Build ``agent_next_actions`` hints for a resolved root.

@@ -447,6 +447,62 @@ def test_next_actions_omitted_when_empty() -> None:
     assert hints2 == [], f"expected empty hints for no edges, got {hints2}"
 
 
+# ===== Test 17a/17b: e2e hook wiring on real inspect =====
+
+# Seed FQN verified against the bank-chat fixture: resolves to "one" and carries
+# INJECTS edges (ChatManagementService injects repositories and is injected by
+# controllers). See test_jrag_traversal_direct.py for resolve verification.
+_SEED_CLASS_FQN = "com.bank.chat.assign.service.ChatManagementService"
+
+
+def test_inspect_populates_agent_next_actions_json(
+    corpus_root: Path, ladybug_db_path: Path
+) -> None:
+    """e2e: `jrag inspect <fqn> --format json` populates agent_next_actions.
+
+    Tests the full hook wiring: resolve → describe_v2 → edge_summary → hook →
+    jrag_hints.next_actions → envelope.agent_next_actions. The unit tests
+    (13–17) test the mapper directly; this verifies the fqn extraction from
+    envelope.nodes[root] and the synthetic-kind guard in the hook.
+    """
+    env = _env_for(corpus_root, ladybug_db_path)
+    proc = _run_jrag(["inspect", _SEED_CLASS_FQN, "--format", "json"], env=env)
+    assert proc.returncode == 0, (
+        f"inspect failed: rc={proc.returncode}\nstdout={proc.stdout}\nstderr={proc.stderr}"
+    )
+    payload = json.loads(proc.stdout)
+    assert payload["status"] == "ok", f"expected ok, got {payload}"
+    actions = payload.get("agent_next_actions", [])
+    assert actions, (
+        f"agent_next_actions empty — hook wiring broken: {payload}"
+    )
+    # At least one hint must be `jrag <cmd> <fqn>`.
+    fqn = _SEED_CLASS_FQN
+    found_runnable = any(
+        a.startswith("jrag ") and a.endswith(fqn) for a in actions
+    )
+    assert found_runnable, f"no `jrag <cmd> {fqn}` in actions: {actions}"
+
+
+def test_inspect_renders_next_actions_in_text(
+    corpus_root: Path, ladybug_db_path: Path
+) -> None:
+    """e2e: `jrag inspect <fqn>` (text mode) renders `next:` hint lines.
+
+    After Fix 1, the inspect text renderer appends up to 2 `next: <hint>` lines
+    when agent_next_actions is non-empty. This test verifies the text rendering
+    path (the JSON path is covered by the test above).
+    """
+    env = _env_for(corpus_root, ladybug_db_path)
+    proc = _run_jrag(["inspect", _SEED_CLASS_FQN], env=env)
+    assert proc.returncode == 0, (
+        f"inspect (text) failed: rc={proc.returncode}\nstdout={proc.stdout}\nstderr={proc.stderr}"
+    )
+    assert "next:" in proc.stdout, (
+        f"expected `next:` hint line in text output, got:\n{proc.stdout}"
+    )
+
+
 # ===== Test 18: build_parser lazy-import sentinel =====
 
 
@@ -454,40 +510,28 @@ def test_build_parser_imports_no_backend_modules() -> None:
     """build_parser() imports NO backend modules (torch / sentence_transformers / mcp_v2).
 
     Pins the lazy-import invariant: `jrag --help` stays fast and free of heavy
-    deps. After build_parser(), none of these may appear in sys.modules.
+    deps. Uses a snapshot-diff approach: snapshot sys.modules keys before and
+    after build_parser(), then assert the delta contains no heavy modules. This
+    is robust under same-session pre-load pollution (other tests may have
+    already imported heavy deps; we only care that build_parser doesn't ADD
+    them).
     """
-    # Purge any already-imported backend modules so we measure only what
-    # build_parser() pulls in. (They may be imported by other tests in the
-    # session; we snapshot the delta, not the absolute set.)
-    import gc
-    # If backend modules are already loaded (from other tests), note them
+    heavy = {"torch", "sentence_transformers", "mcp_v2", "ladybug_queries", "resolve_service"}
 
-    # If backend modules are already loaded (from other tests), note them
-    # as pre-existing so we don't false-positive.
-    heavy_modules = ("torch", "sentence_transformers", "mcp_v2", "ladybug_queries", "resolve_service")
-    pre_loaded = {m for m in heavy_modules if m in sys.modules}
+    # Snapshot module keys before build_parser().
+    before = set(sys.modules.keys())
 
-    # Temporarily remove pre-loaded heavy modules to get a clean measurement.
-    # This is safe because we only check that build_parser doesn't ADD them.
-    saved: dict[str, object] = {}
-    for m in heavy_modules:
-        if m in sys.modules:
-            saved[m] = sys.modules.pop(m)
+    from java_codebase_rag.jrag import build_parser
+    build_parser()
 
-    try:
-        from java_codebase_rag.jrag import build_parser
-        build_parser()
-    finally:
-        # Restore any modules we temporarily removed.
-        for m, mod in saved.items():
-            sys.modules[m] = mod
-        gc.collect()
-
-    # Assert none of the heavy modules were imported by build_parser().
-    for m in heavy_modules:
-        assert m not in sys.modules or m in pre_loaded, (
-            f"build_parser() imported backend module {m!r} — lazy-import invariant broken"
-        )
+    # Delta = modules added by build_parser().
+    after = set(sys.modules.keys())
+    added = after - before
+    leaked = added & heavy
+    assert not leaked, (
+        f"build_parser() imported backend module(s): {sorted(leaked)} — "
+        "lazy-import invariant broken"
+    )
 
     # Verify the parser lists the new commands.
     parser = build_parser()

@@ -25,6 +25,17 @@ __all__ = ["render", "tiered_name"]
 _CALLS_FAMILY_EDGES = frozenset({"CALLS", "HTTP_CALLS", "ASYNC_CALLS"})
 
 
+def _next_action_lines(envelope: Envelope) -> list[str]:
+    """Build up to 2 ``next: <hint>`` lines from ``agent_next_actions``.
+
+    Cap at 2 to keep text-mode output token-lean (consistent with the ambiguous
+    renderer at :func:`_render_ambiguous`); JSON carries all ≤5. Returns an empty
+    list when ``agent_next_actions`` is empty (commands with no root produce no
+    hints → nothing appended).
+    """
+    return [f"next: {hint}" for hint in envelope.agent_next_actions[:2]]
+
+
 def tiered_name(node_id: str, nodes: dict[str, dict]) -> str:
     """Tiered label: simple name -> ``name @service`` -> FQN.
 
@@ -144,6 +155,7 @@ def _render_traversal(envelope: Envelope, *, noun: str) -> str:
         if root_svc:
             parts.append(f"@{root_svc}")
         lines.append("  ".join(parts))
+        lines.extend(_next_action_lines(envelope))
         return "\n".join(lines)
 
     # Grouped rendering fires ONLY when the producer attached the grouping
@@ -176,6 +188,7 @@ def _render_traversal(envelope: Envelope, *, noun: str) -> str:
             if section:
                 lines.append(f"{section}:")
             lines.append(_format_edge_line(e, envelope.nodes))
+        lines.extend(_next_action_lines(envelope))
         return "\n".join(lines)
 
     if has_stages:
@@ -202,6 +215,7 @@ def _render_traversal(envelope: Envelope, *, noun: str) -> str:
             lines.append(header)
             for e in stage_edges:
                 lines.append(_format_edge_line(e, envelope.nodes))
+        lines.extend(_next_action_lines(envelope))
         return "\n".join(lines)
 
     if has_direction:
@@ -216,12 +230,14 @@ def _render_traversal(envelope: Envelope, *, noun: str) -> str:
             lines.append("↓ subtypes:")
             for e in dn:
                 lines.append(_format_edge_line(e, envelope.nodes))
+        lines.extend(_next_action_lines(envelope))
         return "\n".join(lines)
 
     # Flat: callers / callees / implementations / subclasses / overrides /
     # overridden-by / dependents / impact / flow (current behavior).
     for edge in envelope.edges:
         lines.append(_format_edge_line(edge, envelope.nodes))
+    lines.extend(_next_action_lines(envelope))
     return "\n".join(lines)
 
 
@@ -248,6 +264,7 @@ def _render_inspect(envelope: Envelope) -> str:
                     lines.append(f"  {ek}: {val[ek]}")
             else:
                 lines.append(f"{key}: {val}")
+    lines.extend(_next_action_lines(envelope))
     return "\n".join(lines)
 
 
