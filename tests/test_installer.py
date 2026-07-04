@@ -1693,3 +1693,87 @@ class TestPR4IndexProgress:
         # The footer rendered the failure marker (red cross), not the green check.
         assert cli_format.styled_cross() in err_text
         assert cli_format.styled_check() not in err_text
+
+    def test_install_indexing_failure_returns_nonzero(self, tmp_path, monkeypatch):
+        """A non-exception indexing failure (cocoindex exits non-zero) must NOT
+        report install success. Regression for issue #351: run_install discarded
+        run_init_if_needed's return value and unconditionally returned 0, so a
+        broken or empty index reported exit 0 in CI/automation while the most
+        important install step failed silently. (The exception path was already
+        covered; this covers the returncode != 0 path.)"""
+        import io
+        import contextlib
+        import subprocess
+        from java_codebase_rag.installer import run_install
+
+        cwd = self._setup_repo(tmp_path, monkeypatch)
+
+        def failing_coco(env, *, full_reprocess, quiet, verbose=True,
+                         lance_project_root=None, on_progress=None, on_progress_console=None):
+            return subprocess.CompletedProcess(args=["stub"], returncode=1, stdout="", stderr="boom")
+
+        monkeypatch.setattr("java_codebase_rag.pipeline.run_cocoindex_update", failing_coco)
+
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = run_install(
+                non_interactive=True,
+                agents=["claude-code"],
+                scope="project",
+                model="auto",
+                source_root=cwd,
+                quiet=False,
+            )
+        assert rc == 1, (
+            f"install reported success (exit {rc}) despite cocoindex failure (#351)"
+        )
+        # The failure was surfaced on stderr, not swallowed.
+        assert "CocoIndex update failed" in err.getvalue()
+
+    def test_install_over_existing_index_skips_init_and_exits_zero(self, tmp_path, monkeypatch):
+        """A re-run of install over an existing index skips init (the index build)
+        and still exits 0. Regression guard for the None branch of
+        run_init_if_needed (issue #351): run_install uses ``if init_outcome is
+        False: return 1`` precisely so a SKIP (None) stays exit 0 -- a future
+        ``if not init_outcome`` simplification would collapse None into the
+        failure branch and break idempotent re-runs in CI/automation."""
+        import io
+        import contextlib
+        import subprocess
+        from java_codebase_rag.installer import run_install
+
+        cwd = self._setup_repo(tmp_path, monkeypatch)
+
+        # Pre-create an existing index so index_dir_has_existing_artifacts is True
+        # -> run_init_if_needed returns None (skip), not True/False.
+        index_dir = cwd / ".java-codebase-rag"
+        index_dir.mkdir()
+        (index_dir / "code_graph.lbug").write_bytes(b"\x00" * 16)
+
+        coco_called = []
+
+        def coco_should_not_run(env, *, full_reprocess, quiet, verbose=True,
+                                lance_project_root=None, on_progress=None, on_progress_console=None):
+            coco_called.append(True)
+            return subprocess.CompletedProcess(args=["stub"], returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr("java_codebase_rag.pipeline.run_cocoindex_update", coco_should_not_run)
+
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = run_install(
+                non_interactive=True,
+                agents=["claude-code"],
+                scope="project",
+                model="auto",
+                source_root=cwd,
+                quiet=False,
+            )
+        assert rc == 0, (
+            f"install over an existing index should skip init and exit 0, got exit {rc} "
+            "(#351 None branch: a skip must not be treated as failure)"
+        )
+        # init was genuinely skipped, not silently succeeded.
+        assert not coco_called, "init should have been SKIPPED (index exists) but cocoindex ran"
+        # run_init_if_needed prints the skip notice to stdout (no file=sys.stderr).
+        assert "Index already exists" in out.getvalue()
