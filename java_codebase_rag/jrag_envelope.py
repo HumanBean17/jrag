@@ -27,6 +27,7 @@ __all__ = [
     "mark_truncated",
     "simple_name",
     "to_envelope_rows",
+    "next_actions_hook",
 ]
 
 
@@ -365,3 +366,26 @@ def resolve_query(
     if "jrag search" not in raw_msg:
         raw_msg = f"{raw_msg} Use `jrag search <query>` for ranked fuzzy lookup."
     return None, Envelope(status="not_found", message=raw_msg)
+
+
+def next_actions_hook(
+    envelope: Envelope,
+    root: str | None = None,
+    edge_summary: dict[str, Any] | None = None,
+    result_edges: list[dict[str, Any]] | None = None,
+) -> list[str]:
+    """No-op stub for PR-JRAG-1b/1c/3; filled by PR-JRAG-4 agent_next_actions.
+
+    Every command that produces edges or an edge_summary calls this hook so PR-4
+    can inject contextual next-action hints. For now, it returns an empty list.
+
+    Args:
+        envelope: The output envelope (may be mutated in place by PR-4).
+        root: The root node id (for commands that resolve a single node).
+        edge_summary: The edge_summary from describe_v2 (inspect command only).
+        result_edges: Raw edge rows from traversal commands.
+
+    Returns:
+        A list of command hint strings (empty for now; PR-4 fills this).
+    """
+    return []
