@@ -56,7 +56,6 @@ def test_rrf_merge_reinforced_row_across_lists_outranks_singleton() -> None:
     assert merged[0]["filename"] == "a.java"
 
 
-
 def test_java_enriched_columns_include_symbol_identity_fields() -> None:
     assert "symbol_id" in JAVA_ENRICHED_COLUMNS
     assert "metadata" in JAVA_ENRICHED_COLUMNS

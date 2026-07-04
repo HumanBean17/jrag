@@ -603,7 +603,6 @@ def test_search_no_lance_index_returns_failure_envelope(monkeypatch, ladybug_gra
     assert found.results
 
 
-
 def test_search_cross_kind_filter_returns_failure(monkeypatch, ladybug_graph) -> None:
     monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
     out = search_v2("ChatService", filter={"path_prefix": "/api"}, graph=ladybug_graph)
