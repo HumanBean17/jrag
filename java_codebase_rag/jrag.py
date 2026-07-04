@@ -303,7 +303,7 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "List message topics grouped by producer. "
             "No :Topic node exists; this command groups producers by topic name. "
-            "--consumer-in resolves consumers via ASYNC_CALLS edges."
+            "--consumer-in resolves consumers (listener methods) via EXPOSES edges to Route(topic)."
         ),
     )
     topics.add_argument("--topic-prefix", type=str, default=None, help="Filter by topic prefix.")
