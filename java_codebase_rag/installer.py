@@ -1534,6 +1534,13 @@ def run_install(
         print("Warning: Some artifacts failed to deploy:")
         for r in partial_failures:
             print(f"  {r.path}: {r.error}")
+        # Severity model: only MCP config (.json/.yml/.yaml) deploy failures are
+        # critical (return 1) -- a broken MCP config means the server cannot start.
+        # Skill/agent (.md / dir) failures are downgraded to non-critical: the
+        # server still runs and the affected host simply lacks those hints. Issue
+        # #351's "treat skill/agent deploy failures as critical for the affected
+        # host" is intentionally DEFERRED here -- promoting them to critical is a
+        # product decision (recoverable vs. fatal) best made explicitly, not bundled.
         if all(
             r.success
             for r in results
