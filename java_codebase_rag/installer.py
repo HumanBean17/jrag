@@ -536,7 +536,7 @@ def merge_mcp_config(config_path: Path, host: HostConfig, *, mcp_command: str) -
             tmp_name = tmp.name
 
         # Atomic rename
-        os.rename(tmp_name, config_path)
+        os.replace(tmp_name, config_path)
         return True
     except (IOError, OSError) as e:
         if tmp_name:
@@ -1258,7 +1258,7 @@ def _refresh_mcp_config(
                 tmp_name = tmp.name
 
             # Atomic rename
-            os.rename(tmp_name, config_path)
+            os.replace(tmp_name, config_path)
             print(f"Updated MCP config at {config_path}")
             return ArtifactResult(path=config_path, success=True, error=None)
 
