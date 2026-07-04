@@ -56,10 +56,6 @@ Run `jrag --help` for the canonical list. Groups:
 --module <name>       Filter by module
 --limit <N>           Cap on results (default 20; 10 for fan-out commands)
 --format text|json    Output format (default: text)
---brief               Compact output
---fields a,b,c        Field allowlist
---count               Return only the count
---exists              Return only an exists boolean (exit 0/2)
 --index-dir <path>    Index directory override
 ```
 

@@ -154,21 +154,6 @@ def build_parser() -> argparse.ArgumentParser:
         default="text",
         help="Output format (default: text).",
     )
-    common.add_argument(
-        "--brief", action="store_true", help="Compact output (fewer fields per node)."
-    )
-    common.add_argument(
-        "--fields",
-        type=str,
-        default=None,
-        help="Comma-separated field allowlist for node projections.",
-    )
-    common.add_argument(
-        "--count", action="store_true", help="Return only the count (no node rows)."
-    )
-    common.add_argument(
-        "--exists", action="store_true", help="Return only an exists boolean (exit 0/2)."
-    )
 
     status = subparsers.add_parser(
         "status",

@@ -62,10 +62,6 @@ Run `jrag --help` for the canonical list. Groups (PR-JRAG-1a..4):
 --module <name>       Filter by module
 --limit <N>           Cap on results (default 20; 10 for fan-out commands)
 --format text|json    Output format (default: text)
---brief               Compact output (fewer fields per node)
---fields a,b,c        Field allowlist for node projections
---count               Return only the count (no node rows)
---exists              Return only an exists boolean (exit 0/2)
 --index-dir <path>    Index directory override (default: discovered from cwd)
 ```
 
