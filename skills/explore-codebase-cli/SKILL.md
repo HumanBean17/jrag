@@ -24,7 +24,7 @@ Any time you need to search, locate, navigate, or explore the codebase. **Do NOT
 | --- | --- | --- |
 | Surface | Shell — one command per intent | 5 stdio MCP tools (`search` / `find` / `describe` / `neighbors` / `resolve`) |
 | Resolve | **Internalized** — every `<query>` command runs `resolve_v2` first | Explicit — agent calls `resolve` then `describe` / `neighbors` |
-| Output | Compact text by default; `--format json` for the envelope | JSON-RPC envelope |
+| Output | Compact text by default; `--format json` for the envelope; `--detail brief\|normal\|full` (orthogonal to format) | JSON-RPC envelope |
 | Host fit | Any agent that can run shell commands | MCP-aware hosts (Claude Code, Claude Desktop, Qwen Code, GigaCode) |
 | Index | Reuses the operator's `~/.java-codebase-rag` / `.java-codebase-rag/` index | Same |
 
@@ -62,6 +62,11 @@ Run `jrag --help` for the canonical list. Groups (PR-JRAG-1a..4):
 --module <name>       Filter by module
 --limit <N>           Cap on results (default 20; 10 for fan-out commands)
 --format text|json    Output format (default: text)
+--detail brief|normal|full  Output detail (default: normal) — orthogonal to --format;
+                      both modes honor it. brief=name @service; normal=+module/role/
+                      file/score; full=+signature/annotations/snippet. inspect and the
+                      orientation commands (status/microservices/map/conventions/overview)
+                      default to full.
 --index-dir <path>    Index directory override (default: discovered from cwd)
 ```
 
@@ -136,7 +141,20 @@ Only `--kind` is a true resolve input (`hint_kind`). The other narrowing flags (
 
 ## Output envelope
 
-Default is compact text. `--format json` emits the envelope verbatim:
+`--format` (text|json) and `--detail` (brief|normal|full) are **orthogonal**:
+`--format` picks the representation, `--detail` picks how much of each node/edge is
+shown, and **both modes honor the same detail level** through one projection seam.
+
+- Default is `text` + `normal`: a one-line-per-row listing that includes
+  `name @service module=… role=… file=… score=…` (the cheap, high-value fields).
+  `inspect` and the orientation commands default to `full` (their purpose is detail).
+- `--detail brief` reproduces the ultra-terse `name @service` line (escape hatch).
+- `--detail full` adds an indented block per row (`signature`, `annotations`,
+  `snippet` for search, `data`/`edge_summary` for inspect).
+- `--format json` emits the **projected** envelope (same field set as the text at
+  that detail level). Empty fields are dropped at every level (no `null` noise).
+
+`--format json` envelope shape (fields omitted when empty):
 
 ```json
 {

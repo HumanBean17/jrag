@@ -15,6 +15,9 @@ from java_codebase_rag.jrag_envelope import (
     Envelope,
     mark_truncated,
     normalize_enum,
+    project_edge,
+    project_envelope,
+    project_node,
     resolve_query,
     to_envelope_rows,
 )
@@ -429,3 +432,176 @@ def test_mark_truncated_zero_limit() -> None:
 def test_mark_truncated_negative_limit_raises() -> None:
     with pytest.raises(ValueError):
         mark_truncated([1, 2], limit=-1)
+
+
+# ----- Tests 11-18: detail projection (PR-JRAG-6) -----
+#
+# `--detail brief|normal|full` is orthogonal to `--format text|json`. The
+# projector is the single seam: the renderer applies it once, then both the
+# JSON path and the text renderers consume the trimmed dict. These tests pin
+# the field sets + the empty-field dropping + the file composition directly.
+
+
+def _full_symbol_node() -> dict:
+    """A node carrying the full SymbolHit-derived field set."""
+    return {
+        "id": "sym:1",
+        "kind": "symbol",
+        "fqn": "com.foo.Svc.find",
+        "name": "find",
+        "symbol_kind": "method",
+        "microservice": "chat",
+        "module": "core",
+        "role": "SERVICE",
+        "framework": "spring",
+        "filename": "src/Svc.java",
+        "start_line": 42,
+        "end_line": 60,
+        "signature": "find(Long)",
+        "annotations": ["@Override"],
+        "capabilities": ["TX"],
+        "modifiers": ["public"],
+        "package": "com.foo",
+        "parent_id": "sym:0",
+        "resolved": True,
+        "score": 0.91,
+    }
+
+
+def test_project_node_brief_keeps_identity_drops_extras() -> None:
+    """brief == today's terse identity set; location/ranking/content dropped."""
+    out = project_node(_full_symbol_node(), "brief")
+    # Identity keys survive.
+    for key in ("id", "kind", "fqn", "name", "microservice", "resolved"):
+        assert key in out, f"brief dropped identity key {key!r}"
+    # file/score (ranking/location) and content fields are dropped.
+    for key in ("module", "role", "symbol_kind", "file", "score", "signature",
+                "annotations", "capabilities", "package", "parent_id"):
+        assert key not in out, f"brief leaked {key!r}"
+    # Raw location columns are folded away (no filename/start_line at any level).
+    assert "filename" not in out and "start_line" not in out
+
+
+def test_project_node_normal_adds_location_and_ranking() -> None:
+    """normal adds module/role/symbol_kind/framework/file/score over brief.
+
+    This is the fix for the 'text too terse' complaint: file + score become
+    visible. Content fields (signature/annotations/...) still dropped.
+    """
+    out = project_node(_full_symbol_node(), "normal")
+    for key in ("id", "kind", "fqn", "name", "microservice",
+                "module", "role", "symbol_kind", "framework", "score", "resolved"):
+        assert key in out, f"normal dropped {key!r}"
+    # file is composed from filename+start_line.
+    assert out["file"] == "src/Svc.java:42"
+    # Content still suppressed at normal.
+    for key in ("signature", "annotations", "capabilities", "modifiers", "package", "parent_id"):
+        assert key not in out, f"normal leaked content {key!r}"
+
+
+def test_project_node_full_keeps_everything() -> None:
+    """full keeps every present key (still composes file + drops empties)."""
+    out = project_node(_full_symbol_node(), "full")
+    for key in ("signature", "annotations", "capabilities", "modifiers",
+                "package", "parent_id", "score", "file", "role", "module"):
+        assert key in out, f"full dropped {key!r}"
+    assert out["file"] == "src/Svc.java:42"
+    # Raw location columns are folded into `file` even at full.
+    assert "filename" not in out and "start_line" not in out and "end_line" not in out
+
+
+def test_project_node_drops_empty_fields_at_all_levels() -> None:
+    """None / '' / [] / {} vanish at every level (the '10 empty fields' fix).
+
+    A SearchHit dump used to serialize ``symbol_id: null, role: null, module: null``.
+    The projector drops them. ``False`` and ``0.0`` are NOT empty (meaningful).
+    """
+    node = {
+        "id": "chunk:1",
+        "kind": "search_hit",
+        "fqn": "com.foo.Bar",
+        "name": "Bar",
+        "microservice": "chat",
+        "score": 0.0,          # NOT empty
+        "snippet": "body",     # only at full
+        "module": None,        # empty
+        "role": "",            # empty
+        "symbol_id": None,     # empty
+        "capabilities": [],    # empty
+        "resolved": False,     # NOT empty (meaningful)
+    }
+    for detail in ("brief", "normal", "full"):
+        out = project_node(node, detail)
+        # Empty values dropped at every level.
+        assert "module" not in out and "role" not in out, f"{detail}: empty kept"
+        assert "symbol_id" not in out and "capabilities" not in out, f"{detail}: empty kept"
+        # 0.0 / False are NOT empty (meaningful) — survive when in the level's set.
+        # `resolved` is identity (in brief); `score` is normal/full only.
+        assert out.get("resolved") is False, f"{detail}: False resolved wrongly dropped"
+        if detail in ("normal", "full"):
+            assert out.get("score") == 0.0, f"{detail}: 0.0 score wrongly dropped"
+        else:
+            assert "score" not in out, f"{detail}: score is not a brief field"
+
+
+def test_compose_file_from_filename_and_start_line() -> None:
+    """file = 'filename:start_line'; bare filename when no line; absent when no filename."""
+    assert project_node({"id": "1", "kind": "symbol", "fqn": "x", "name": "x",
+                         "filename": "A.java", "start_line": 7}, "normal")["file"] == "A.java:7"
+    assert project_node({"id": "1", "kind": "symbol", "fqn": "x", "name": "x",
+                         "filename": "A.java"}, "normal")["file"] == "A.java"
+    out = project_node({"id": "1", "kind": "symbol", "fqn": "x", "name": "x"}, "normal")
+    assert "file" not in out
+
+
+def test_project_envelope_passes_through_envelope_level_fields() -> None:
+    """status/root/warnings/truncated/file_location/message/agent_next_actions
+    are envelope-level — projected through unchanged (no detail axis on them)."""
+    env = Envelope(
+        status="ok",
+        nodes={"sym:1": _full_symbol_node()},
+        root="sym:1",
+        warnings=["w1"],
+        truncated=True,
+        file_location="src/Svc.java:42",
+        message=None,
+    )
+    env.agent_next_actions = ["jrag inspect Svc"]
+    p = project_envelope(env, "brief")
+    assert p.status == "ok"
+    assert p.root == "sym:1"
+    assert p.warnings == ["w1"]
+    assert p.truncated is True
+    assert p.file_location == "src/Svc.java:42"
+    assert p.agent_next_actions == ["jrag inspect Svc"]
+    # Nodes ARE projected (brief drops the content).
+    assert "signature" not in p.nodes["sym:1"]
+
+
+def test_project_edge_brief_normal_full_attr_sets() -> None:
+    edge = {
+        "other_id": "sym:2",
+        "edge_type": "INJECTS",
+        "confidence": 0.5,
+        "mechanism": "field",
+        "annotation": "@Inject",
+        "field_or_param": "repo",
+        "from_fqn": "com.foo.Svc",
+        "role": "REPOSITORY",
+    }
+    brief = project_edge(edge, "brief")
+    assert "other_id" in brief and "edge_type" in brief
+    assert "mechanism" not in brief and "annotation" not in brief
+    normal = project_edge(edge, "normal")
+    assert normal.get("mechanism") == "field"
+    assert "annotation" not in normal and "field_or_param" not in normal
+    full = project_edge(edge, "full")
+    for key in ("mechanism", "annotation", "field_or_param", "from_fqn", "role"):
+        assert key in full, f"full edge dropped {key!r}"
+
+
+def test_project_envelope_bad_detail_raises() -> None:
+    """A typo must raise, not silently behave like full."""
+    env = Envelope(status="ok", nodes={"sym:1": {"id": "1", "kind": "symbol", "fqn": "x"}})
+    with pytest.raises(ValueError):
+        project_envelope(env, "bogus")

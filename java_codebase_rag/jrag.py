@@ -62,7 +62,7 @@ def _load_graph_or_error(args: argparse.Namespace):
         graph = _load_graph(cfg)
     except (_IndexNotFound, _IndexStale) as exc:
         env = Envelope(status="error", message=str(exc))
-        print(render(env, fmt=args.format))
+        print(render(env, fmt=args.format, detail=args.detail))
         return cfg, None, 2
     return cfg, graph, 0
 
@@ -89,12 +89,24 @@ def _render_listing(rows, *, limit: int, args: argparse.Namespace, noun: str) ->
 
     env = Envelope(status="ok", nodes=display_nodes, truncated=truncated)
     next_actions_hook(env)
-    print(render(env, fmt=args.format, noun=noun))
+    print(render(env, fmt=args.format, detail=args.detail, noun=noun))
     return 0
 
 
 def _symbol_hit_to_dict(hit) -> dict:
-    """Convert a ``SymbolHit`` (dataclass) to the envelope node dict shape."""
+    """Convert a ``SymbolHit`` (dataclass) to the envelope node dict shape.
+
+    Carries the FULL ``SymbolHit``: ``filename`` / ``start_line`` so the
+    projector can compose the ``file`` field at ``--detail normal``, and
+    ``signature`` / ``annotations`` / ``capabilities`` / ``modifiers`` /
+    ``package`` / ``parent_id`` / ``resolved`` so ``--detail full`` is genuinely
+    rich. The projector (:func:`jrag_envelope.project_node`) trims per detail
+    level at render time — callers build rich and let the seam trim, inverting
+    the old "trim at construction" that coupled detail to format. Empty values
+    are dropped by the projector, so carrying them here is harmless. Byte
+    offsets (``start_byte`` / ``end_byte``) are intentionally dropped — pure
+    noise, never a display field.
+    """
     return {
         "id": hit.id,
         "kind": "symbol",
@@ -104,6 +116,16 @@ def _symbol_hit_to_dict(hit) -> dict:
         "microservice": hit.microservice,
         "module": hit.module,
         "role": hit.role,
+        "filename": hit.filename,
+        "start_line": hit.start_line,
+        "end_line": hit.end_line,
+        "signature": hit.signature,
+        "annotations": list(hit.annotations or []),
+        "capabilities": list(hit.capabilities or []),
+        "modifiers": list(hit.modifiers or []),
+        "package": hit.package,
+        "parent_id": hit.parent_id,
+        "resolved": hit.resolved,
     }
 
 
@@ -162,6 +184,16 @@ def build_parser() -> argparse.ArgumentParser:
         default="text",
         help="Output format (default: text).",
     )
+    common.add_argument(
+        "--detail",
+        choices=("brief", "normal", "full"),
+        default="normal",
+        help=(
+            "Output detail level (default normal) — ORTHOGONAL to --format: both "
+            "text and json honor it. brief = identity only (name @service); "
+            "normal = +module/role/file/score; full = +signature/annotations/snippet."
+        ),
+    )
 
     status = subparsers.add_parser(
         "status",
@@ -174,7 +206,7 @@ def build_parser() -> argparse.ArgumentParser:
             "missing or stale."
         ),
     )
-    status.set_defaults(handler=_cmd_status)
+    status.set_defaults(handler=_cmd_status, detail="full")
 
     # find subparser (PR-JRAG-1b)
     find = subparsers.add_parser(
@@ -242,7 +274,7 @@ def build_parser() -> argparse.ArgumentParser:
     inspect.add_argument("--java-kind", type=str, default=None, help="Post-filter by Java symbol kind.")
     inspect.add_argument("--role", type=str, default=None, help="Post-filter by role.")
     inspect.add_argument("--fqn-prefix", type=str, default=None, help="Post-filter by FQN prefix.")
-    inspect.set_defaults(handler=_cmd_inspect)
+    inspect.set_defaults(handler=_cmd_inspect, detail="full")
 
     # routes subparser (PR-JRAG-2)
     routes = subparsers.add_parser(
@@ -708,7 +740,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Calls g.microservice_counts(). Renders as a counts listing."
         ),
     )
-    microservices.set_defaults(handler=_cmd_microservices)
+    microservices.set_defaults(handler=_cmd_microservices, detail="full")
 
     map_cmd = subparsers.add_parser(
         "map",
@@ -728,7 +760,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="microservice",
         help="Grouping axis: microservice (default) or module.",
     )
-    map_cmd.set_defaults(handler=_cmd_map)
+    map_cmd.set_defaults(handler=_cmd_map, detail="full")
 
     conventions = subparsers.add_parser(
         "conventions",
@@ -739,7 +771,7 @@ def build_parser() -> argparse.ArgumentParser:
             "distribution. --service narrows the role tally to one microservice."
         ),
     )
-    conventions.set_defaults(handler=_cmd_conventions)
+    conventions.set_defaults(handler=_cmd_conventions, detail="full")
 
     overview = subparsers.add_parser(
         "overview",
@@ -768,7 +800,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Override auto-detection of subject type.",
     )
-    overview.set_defaults(handler=_cmd_overview)
+    overview.set_defaults(handler=_cmd_overview, detail="full")
 
     # ---- Search command (PR-JRAG-4) ----
     search = subparsers.add_parser(
@@ -875,7 +907,7 @@ def _cmd_status(args: argparse.Namespace) -> int:
             status="error",
             message=str(exc),
         )
-        print(render(env, fmt=args.format))
+        print(render(env, fmt=args.format, detail=args.detail))
         return 2
 
     meta = graph.meta()
@@ -884,7 +916,7 @@ def _cmd_status(args: argparse.Namespace) -> int:
             status="error",
             message=f"Index meta read failed: {meta['error']}",
         )
-        print(render(env, fmt=args.format))
+        print(render(env, fmt=args.format, detail=args.detail))
         return 2
 
     counts = meta.get("counts") or {}
@@ -913,7 +945,7 @@ def _cmd_status(args: argparse.Namespace) -> int:
         },
         warnings=warnings,
     )
-    print(render(env, fmt=args.format, noun="status", shape="inspect"))
+    print(render(env, fmt=args.format, detail=args.detail, noun="status", shape="inspect"))
     return 0
 
 
@@ -973,7 +1005,7 @@ def _cmd_find(args: argparse.Namespace) -> int:
         graph = _load_graph(cfg)
     except (_IndexNotFound, _IndexStale) as exc:
         env = Envelope(status="error", message=str(exc))
-        print(render(env, fmt=args.format))
+        print(render(env, fmt=args.format, detail=args.detail))
         return 2
 
     # Check kind contradiction first (before any backend work)
@@ -981,7 +1013,7 @@ def _cmd_find(args: argparse.Namespace) -> int:
     is_contradiction, error_msg = _check_kind_contradiction(args, inferred)
     if is_contradiction:
         env = Envelope(status="error", message=error_msg or "kind contradiction")
-        print(render(env, fmt=args.format))
+        print(render(env, fmt=args.format, detail=args.detail))
         return 2
 
     # Cap at 499 so limit+1 <= 500 (backend clamp)
@@ -1007,7 +1039,7 @@ def _cmd_find(args: argparse.Namespace) -> int:
                     "for route/client/producer searches."
                 ),
             )
-            print(render(env, fmt=args.format))
+            print(render(env, fmt=args.format, detail=args.detail))
             return 2
         return _cmd_find_query_mode(args, cfg, graph, limit)
 
@@ -1116,7 +1148,7 @@ def _cmd_find_query_mode(
     next_actions_hook(env)
 
     # Offset is not supported in query mode (find_by_name_or_fqn has no offset).
-    print(render(env, fmt=args.format, noun="symbol"))
+    print(render(env, fmt=args.format, detail=args.detail, noun="symbol"))
     return 0
 
 
@@ -1199,7 +1231,7 @@ def _cmd_find_filter_mode(
 
     node_filter, err_env = _build_node_filter_or_error(filter_dict)
     if err_env is not None:
-        print(render(err_env, fmt=args.format))
+        print(render(err_env, fmt=args.format, detail=args.detail))
         return 2
 
     # Call find_v2
@@ -1213,7 +1245,7 @@ def _cmd_find_filter_mode(
 
     if not out.success:
         env = Envelope(status="error", message=out.message)
-        print(render(env, fmt=args.format))
+        print(render(env, fmt=args.format, detail=args.detail))
         return 2
 
     # Convert results to envelope rows. Slice to `limit`: find_v2 was called with
@@ -1230,7 +1262,7 @@ def _cmd_find_filter_mode(
 
     # Render with offset hint if truncated
     next_offset = args.offset + limit if truncated else None
-    print(render(env, fmt=args.format, noun=kind, next_offset=next_offset))
+    print(render(env, fmt=args.format, detail=args.detail, noun=kind, next_offset=next_offset))
     return 0
 
 
@@ -1245,7 +1277,7 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
         graph = _load_graph(cfg)
     except (_IndexNotFound, _IndexStale) as exc:
         env = Envelope(status="error", message=str(exc))
-        print(render(env, fmt=args.format))
+        print(render(env, fmt=args.format, detail=args.detail))
         return 2
 
     # Resolve the query
@@ -1260,7 +1292,7 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
     )
 
     if env.status != "ok":
-        print(render(env, fmt=args.format))
+        print(render(env, fmt=args.format, detail=args.detail))
         return 2 if env.status == "error" else 0
 
     # Node resolved successfully - call describe_v2
@@ -1268,7 +1300,7 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
 
     if not desc_out.success or desc_out.record is None:
         env = Envelope(status="error", message=desc_out.message or "describe failed")
-        print(render(env, fmt=args.format))
+        print(render(env, fmt=args.format, detail=args.detail))
         return 2
 
     # Convert NodeRecord to envelope format
@@ -1283,7 +1315,7 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
     next_actions_hook(env, root=node_id, edge_summary=record_dict.get("edge_summary"))
 
     # Render with inspect shape
-    print(render(env, fmt=args.format, shape="inspect"))
+    print(render(env, fmt=args.format, detail=args.detail, shape="inspect"))
     return 0
 
 
@@ -1453,7 +1485,7 @@ def _cmd_topics(args: argparse.Namespace) -> int:
 
     env = Envelope(status="ok", nodes=nodes, truncated=truncated, warnings=warnings)
     next_actions_hook(env)
-    print(render(env, fmt=args.format, noun="topic"))
+    print(render(env, fmt=args.format, detail=args.detail, noun="topic"))
     return 0
 
 
@@ -1638,7 +1670,7 @@ def _resolve_traversal_node(
         graph=graph,
     )
     if env.status != "ok":
-        print(render(env, fmt=args.format))
+        print(render(env, fmt=args.format, detail=args.detail))
         return None, env, 2 if env.status == "error" else 0
     return node, env, 0
 
@@ -1676,7 +1708,7 @@ def _emit_traversal(
         truncated=truncated,
     )
     next_actions_hook(env, root=root_id, result_edges=edges, command=getattr(args, "command", None))
-    print(render(env, fmt=args.format, noun=noun))
+    print(render(env, fmt=args.format, detail=args.detail, noun=noun))
     return 0
 
 
@@ -1706,7 +1738,7 @@ def _require_kind(
     msg = f"{expected}; resolved kind is {node.kind!r}."
     if hint:
         msg = f"{msg} {hint}"
-    print(render(Envelope(status="error", message=msg), fmt=args.format))
+    print(render(Envelope(status="error", message=msg), fmt=args.format, detail=args.detail))
     return 2
 
 
@@ -1820,7 +1852,7 @@ def _cmd_callers(args: argparse.Namespace) -> int:
                 f"{node.kind!r}. Use --kind to narrow resolve."
             ),
         )
-        print(render(env, fmt=args.format))
+        print(render(env, fmt=args.format, detail=args.detail))
         return 2
 
     depth = getattr(args, "depth", 1)
@@ -1888,7 +1920,7 @@ def _cmd_callees(args: argparse.Namespace) -> int:
             limit=limit + 1, graph=graph,
         )
         if not out.success:
-            print(render(Envelope(status="error", message=out.message or "neighbors_v2 failed"), fmt=args.format))
+            print(render(Envelope(status="error", message=out.message or "neighbors_v2 failed"), fmt=args.format, detail=args.detail))
             return 2
         root_id = node.id
         nodes: dict[str, dict] = {root_id: _noderef_to_node_dict(node)}
@@ -1983,7 +2015,7 @@ def _cmd_hierarchy(args: argparse.Namespace) -> int:
     from java_codebase_rag.jrag_render import render
 
     if not up.success:
-        print(render(Envelope(status="error", message=up.message or "neighbors_v2 failed"), fmt=args.format))
+        print(render(Envelope(status="error", message=up.message or "neighbors_v2 failed"), fmt=args.format, detail=args.detail))
         return 2
 
     nodes: dict[str, dict] = {root_id: _noderef_to_node_dict(node)}
@@ -2121,7 +2153,7 @@ def _cmd_overrides(args: argparse.Namespace) -> int:
         limit=limit + 1, graph=graph,
     )
     if not out.success:
-        print(render(Envelope(status="error", message=out.message or "neighbors_v2 failed"), fmt=args.format))
+        print(render(Envelope(status="error", message=out.message or "neighbors_v2 failed"), fmt=args.format, detail=args.detail))
         return 2
 
     nodes: dict[str, dict] = {root_id: _noderef_to_node_dict(node)}
@@ -2173,7 +2205,7 @@ def _cmd_overridden_by(args: argparse.Namespace) -> int:
         limit=limit + 1, graph=graph,
     )
     if not out.success:
-        print(render(Envelope(status="error", message=out.message or "neighbors_v2 failed"), fmt=args.format))
+        print(render(Envelope(status="error", message=out.message or "neighbors_v2 failed"), fmt=args.format, detail=args.detail))
         return 2
 
     nodes: dict[str, dict] = {root_id: _noderef_to_node_dict(node)}
@@ -2484,7 +2516,7 @@ def _cmd_dependencies(args: argparse.Namespace) -> int:
         limit=limit + 1, graph=graph,
     )
     if not out.success:
-        print(render(Envelope(status="error", message=out.message or "neighbors_v2 failed"), fmt=args.format))
+        print(render(Envelope(status="error", message=out.message or "neighbors_v2 failed"), fmt=args.format, detail=args.detail))
         return 2
 
     nodes: dict[str, dict] = {root_id: _noderef_to_node_dict(node)}
@@ -2744,7 +2776,7 @@ def _cmd_connection(args: argparse.Namespace) -> int:
         truncated=truncated,
     )
     next_actions_hook(env, root=root_id, result_edges=display_edges)
-    print(render(env, fmt=args.format, noun="connection"))
+    print(render(env, fmt=args.format, detail=args.detail, noun="connection"))
     return 0
 
 
@@ -2796,7 +2828,7 @@ def _cmd_outline(args: argparse.Namespace) -> int:
         )
     except Exception as exc:
         env = Envelope(status="error", message=f"outline failed: {exc}")
-        print(render(env, fmt=args.format))
+        print(render(env, fmt=args.format, detail=args.detail))
         return 2
 
     nodes: dict[str, dict] = {}
@@ -2813,7 +2845,7 @@ def _cmd_outline(args: argparse.Namespace) -> int:
 
     env = Envelope(status="ok", nodes=nodes, warnings=warnings)
     next_actions_hook(env)
-    print(render(env, fmt=args.format, noun="symbol"))
+    print(render(env, fmt=args.format, detail=args.detail, noun="symbol"))
     return 0
 
 
@@ -2845,14 +2877,14 @@ def _cmd_imports(args: argparse.Namespace) -> int:
                 f"<source_root>/{args.file})"
             ),
         )
-        print(render(env, fmt=args.format))
+        print(render(env, fmt=args.format, detail=args.detail))
         return 2
 
     try:
         src = file_path.read_bytes()
     except OSError as exc:
         env = Envelope(status="error", message=f"could not read {file_path}: {exc}")
-        print(render(env, fmt=args.format))
+        print(render(env, fmt=args.format, detail=args.detail))
         return 2
 
     # parse_java is robust to invalid source (returns an empty JavaFileAst on
@@ -2927,7 +2959,7 @@ def _cmd_imports(args: argparse.Namespace) -> int:
 
     env = Envelope(status="ok", nodes=nodes, edges=edges, warnings=warnings)
     next_actions_hook(env, result_edges=edges)
-    print(render(env, fmt=args.format, noun="import"))
+    print(render(env, fmt=args.format, detail=args.detail, noun="import"))
     return 0
 
 
@@ -2962,7 +2994,7 @@ def _cmd_microservices(args: argparse.Namespace) -> int:
         warnings=warnings,
     )
     next_actions_hook(env)
-    print(render(env, fmt=args.format, noun="microservices", shape="inspect"))
+    print(render(env, fmt=args.format, detail=args.detail, noun="microservices", shape="inspect"))
     return 0
 
 
@@ -3015,7 +3047,7 @@ def _cmd_map(args: argparse.Namespace) -> int:
         warnings=warnings,
     )
     next_actions_hook(env)
-    print(render(env, fmt=args.format, noun="map", shape="inspect"))
+    print(render(env, fmt=args.format, detail=args.detail, noun="map", shape="inspect"))
     return 0
 
 
@@ -3067,7 +3099,7 @@ def _cmd_conventions(args: argparse.Namespace) -> int:
         warnings=warnings,
     )
     next_actions_hook(env)
-    print(render(env, fmt=args.format, noun="conventions", shape="inspect"))
+    print(render(env, fmt=args.format, detail=args.detail, noun="conventions", shape="inspect"))
     return 0
 
 
@@ -3129,7 +3161,7 @@ def _overview_microservice(args: argparse.Namespace, graph, microservice: str) -
         }},
     )
     next_actions_hook(env)
-    print(render(env, fmt=args.format, noun="overview", shape="inspect"))
+    print(render(env, fmt=args.format, detail=args.detail, noun="overview", shape="inspect"))
     return 0
 
 
@@ -3144,7 +3176,7 @@ def _overview_route(args: argparse.Namespace, cfg, graph, route_path: str) -> in
         cfg=cfg, graph=graph,
     )
     if renv.status != "ok" or node is None:
-        print(render(renv, fmt=args.format))
+        print(render(renv, fmt=args.format, detail=args.detail))
         return 2 if renv.status == "error" else 0
 
     if node.kind != "route":
@@ -3152,7 +3184,7 @@ def _overview_route(args: argparse.Namespace, cfg, graph, route_path: str) -> in
             status="error",
             message=f"overview --as route expects a Route; resolved kind is {node.kind!r}.",
         )
-        print(render(env, fmt=args.format))
+        print(render(env, fmt=args.format, detail=args.detail))
         return 2
 
     max_hops = max(1, min(8, 5))
@@ -3190,7 +3222,7 @@ def _overview_route(args: argparse.Namespace, cfg, graph, route_path: str) -> in
         edges = edges[:limit]
     env = Envelope(status="ok", nodes=nodes_dict, edges=edges, root=root_id, truncated=truncated)
     next_actions_hook(env, root=root_id, result_edges=edges)
-    print(render(env, fmt=args.format, noun="overview"))
+    print(render(env, fmt=args.format, detail=args.detail, noun="overview"))
     return 0
 
 
@@ -3241,7 +3273,7 @@ def _overview_topic(args: argparse.Namespace, graph, topic: str) -> int:
         nodes={f"topic:{topic}": topic_node},
     )
     next_actions_hook(env)
-    print(render(env, fmt=args.format, noun="overview", shape="inspect"))
+    print(render(env, fmt=args.format, detail=args.detail, noun="overview", shape="inspect"))
     return 0
 
 
@@ -3266,7 +3298,7 @@ def _cmd_overview(args: argparse.Namespace) -> int:
             "(e.g. 'banking.chat.audit'). Use --as {microservice,route,topic} to "
             "override auto-detection."
         )
-        print(render(Envelope(status="error", message=msg), fmt=args.format))
+        print(render(Envelope(status="error", message=msg), fmt=args.format, detail=args.detail))
         return 2
     as_type = getattr(args, "as_type", None)
     if as_type is None:
@@ -3304,7 +3336,7 @@ def _cmd_search(args: argparse.Namespace) -> int:
             status="error",
             message="search is semantic; --fuzzy is implicit",
         )
-        print(render(env, fmt=args.format))
+        print(render(env, fmt=args.format, detail=args.detail))
         return 2
 
     cfg, graph, rc = _load_graph_or_error(args)
@@ -3335,7 +3367,7 @@ def _cmd_search(args: argparse.Namespace) -> int:
         filter_dict["framework"] = normalize_enum(args.framework, kind="framework")
     node_filter, err_env = _build_node_filter_or_error(filter_dict)
     if err_env is not None:
-        print(render(err_env, fmt=args.format))
+        print(render(err_env, fmt=args.format, detail=args.detail))
         return 2
 
     out = mcp_v2.search_v2(
@@ -3351,7 +3383,7 @@ def _cmd_search(args: argparse.Namespace) -> int:
 
     if not out.success:
         env = Envelope(status="error", message=out.message or "search failed")
-        print(render(env, fmt=args.format))
+        print(render(env, fmt=args.format, detail=args.detail))
         return 2
 
     # Convert SearchHit list to envelope node dicts.
@@ -3372,7 +3404,7 @@ def _cmd_search(args: argparse.Namespace) -> int:
     env = Envelope(status="ok", nodes=nodes, truncated=truncated)
     next_actions_hook(env)
     next_offset = args.offset + limit if truncated else None
-    print(render(env, fmt=args.format, noun="search", next_offset=next_offset))
+    print(render(env, fmt=args.format, detail=args.detail, noun="search", next_offset=next_offset))
     return 0
 
 

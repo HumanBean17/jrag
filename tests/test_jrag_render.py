@@ -230,7 +230,7 @@ def test_render_inspect_edge_summary_alphabetical() -> None:
             }
         },
     )
-    out = render(env, fmt="text", noun="inspect", shape="inspect")
+    out = render(env, fmt="text", noun="inspect", shape="inspect", detail="full")
     lines = out.splitlines()
     # Top-level keys appear in alphabetical order.
     keys_in_output = [ln.split(":", 1)[0] for ln in lines if ":" in ln and not ln.startswith(" ")]
@@ -348,18 +348,24 @@ def test_render_truncated_offset_hint_for_offset_commands() -> None:
     assert "truncated: more results — use --offset 40" in out
 
 
-# ----- Test 18: json emits envelope verbatim -----
+# ----- Test 18: json path (now via projection — PR-JRAG-6) -----
 
 
-def test_render_json_emits_envelope_verbatim() -> None:
+def test_render_json_full_is_envelope_verbatim_for_projection_invariant_data() -> None:
+    """``render(fmt="json")`` now projects the envelope to the requested detail
+    level (orthogonal to text). For projection-invariant data (only identity
+    fields) and ``detail="full"``, the output still equals ``env.to_json()`` —
+    pinning that the json path is a plain ``json.dumps`` of the projected dict
+    with no extra decoration. Field-set trimming itself is pinned by the
+    orthogonality test below.
+    """
     env = Envelope(
         status="ok",
         root="sym:1",
         nodes={"sym:1": {"fqn": "com.foo.Bar"}},
         warnings=["partial"],
     )
-    out = render(env, fmt="json")
-    # Output is exactly json.dumps(env.to_dict()) — no extra decoration.
+    out = render(env, fmt="json", detail="full")
     assert out == env.to_json()
     parsed = json.loads(out)
     assert parsed["status"] == "ok"
@@ -404,3 +410,134 @@ def test_tiered_name_falls_back_to_fqn_when_no_service() -> None:
 
 def test_tiered_name_unknown_id_returns_id() -> None:
     assert tiered_name("sym:unknown", {}) == "sym:unknown"
+
+
+# ----- PR-JRAG-6: --detail orthogonality (text & json share the field set) -----
+
+
+def _search_listing_env() -> Envelope:
+    """A search-results envelope carrying score + snippet + empty fields."""
+    return Envelope(
+        status="ok",
+        nodes={
+            "chunk:1": {
+                "id": "chunk:1",
+                "kind": "search_hit",
+                "fqn": "com.foo.Bar",
+                "name": "Bar",
+                "microservice": "chat",
+                "module": "core",
+                "role": "SERVICE",
+                "score": 0.91,
+                "snippet": "public class Bar {\n  void x();\n}",
+                "symbol_id": None,  # empty — must vanish in json
+            }
+        },
+    )
+
+
+def test_json_and_text_share_field_set_at_each_detail() -> None:
+    """Core orthogonality: at a given detail level, the SAME node keys appear
+    behind both ``--format json`` and ``--format text`` (the projector is the
+    single seam). The text line shows identity; the json dict shows the exact
+    projected key set. This is the whole point of PR-JRAG-6.
+    """
+    env = _search_listing_env()
+    for detail, expected_keys in (
+        ("brief", {"id", "kind", "fqn", "name", "microservice"}),
+        ("normal", {"id", "kind", "fqn", "name", "microservice",
+                    "module", "role", "score"}),  # +file only if filename present
+        ("full", {"id", "kind", "fqn", "name", "microservice",
+                  "module", "role", "score", "snippet"}),
+    ):
+        parsed = json.loads(render(env, fmt="json", detail=detail))
+        assert set(parsed["nodes"]["chunk:1"].keys()) == expected_keys, (
+            f"{detail}: json key set {set(parsed['nodes']['chunk:1'].keys())} != {expected_keys}"
+        )
+        # The text output at the same level shows the same identity label, and
+        # does NOT show keys the projector dropped (snippet at brief/normal).
+        text = render(env, fmt="text", noun="search", detail=detail)
+        assert "Bar  @chat" in text, f"{detail}: identity label missing in text"
+        if detail == "full":
+            assert "void x();" in text, f"{detail}: snippet should render in full text"
+        else:
+            assert "void x();" not in text, f"{detail}: snippet leaked into {detail} text"
+
+
+def test_listing_normal_appends_file_role_score_inline() -> None:
+    """normal text appends module/role/score/file inline on the SAME line.
+
+    Direct fix for the 'text too terse (no file/score)' complaint.
+    """
+    env = Envelope(
+        status="ok",
+        nodes={
+            "sym:1": {
+                "id": "sym:1", "kind": "symbol", "fqn": "com.foo.Svc.find", "name": "find",
+                "microservice": "chat", "module": "core", "role": "SERVICE", "score": 0.77,
+                "filename": "src/Svc.java", "start_line": 12,
+            }
+        },
+    )
+    line = render(env, fmt="text", noun="symbol", detail="normal").splitlines()[0]
+    assert line.startswith("find  @chat")
+    assert "module=core" in line and "role=SERVICE" in line and "score=0.77" in line
+    assert "file=src/Svc.java:12" in line
+
+
+def test_listing_full_appends_indented_block() -> None:
+    """full text appends a per-row indented kv-block of the content fields."""
+    env = Envelope(
+        status="ok",
+        nodes={
+            "sym:1": {
+                "id": "sym:1", "kind": "symbol", "fqn": "com.foo.Svc.find", "name": "find",
+                "microservice": "chat", "module": "core", "role": "SERVICE",
+                "signature": "find(Long)", "annotations": ["@Override"],
+                "filename": "src/Svc.java", "start_line": 12,
+            }
+        },
+    )
+    out = render(env, fmt="text", noun="symbol", detail="full")
+    lines = out.splitlines()
+    assert lines[0].startswith("find  @chat")
+    # Content fields render as an indented block under the row.
+    assert "  signature: find(Long)" in lines, f"full block missing signature: {out!r}"
+    assert "  annotations:" in out, f"full block missing annotations: {out!r}"
+
+
+def test_edge_line_normal_appends_mechanism() -> None:
+    """normal edge line appends mechanism over the brief conf-only form."""
+    env = Envelope(
+        status="ok",
+        root="sym:0",
+        nodes={
+            "sym:0": {"fqn": "com.foo.Svc", "microservice": "svc"},
+            "sym:1": {"fqn": "com.foo.Repo", "microservice": "svc"},
+        },
+        edges=[{"other_id": "sym:1", "edge_type": "INJECTS", "mechanism": "field"}],
+    )
+    normal = render(env, fmt="text", noun="dependencies", detail="normal")
+    brief = render(env, fmt="text", noun="dependencies", detail="brief")
+    assert "mechanism=field" in normal, f"normal edge missing mechanism: {normal!r}"
+    assert "mechanism=" not in brief, f"brief edge leaked mechanism: {brief!r}"
+
+
+def test_search_text_normal_shows_score_not_snippet() -> None:
+    """Regression for the complaint: text used to drop BOTH score and snippet.
+
+    At normal, score is now visible; the snippet stays opt-in (full only).
+    """
+    out = render(_search_listing_env(), fmt="text", noun="search", detail="normal")
+    assert "score=0.91" in out, f"normal search text missing score: {out!r}"
+    assert "void x();" not in out, f"normal search text leaked snippet: {out!r}"
+
+
+def test_search_json_normal_omits_snippet_drops_empty_fields() -> None:
+    """Regression for the complaint: json used to dump the full snippet + every
+    None field. At normal, snippet is gone AND symbol_id (None) is dropped."""
+    parsed = json.loads(render(_search_listing_env(), fmt="json", detail="normal"))
+    node = parsed["nodes"]["chunk:1"]
+    assert "snippet" not in node, f"normal json leaked snippet: {node!r}"
+    assert "symbol_id" not in node, f"normal json kept empty symbol_id: {node!r}"
+    assert node["score"] == 0.91

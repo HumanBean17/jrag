@@ -930,6 +930,165 @@ Plus: `tests/test_agent_skills_static.py` updated and green.
 
 ---
 
+# PR-JRAG-6 — Output detail orthogonality (`--detail`)
+
+**Goal:** split the concern currently conflated by `--format {text,json}` into two
+orthogonal axes. `--format` keeps its meaning (representation: text vs json). A new
+`--detail {brief,normal,full}` axis controls **how much of each node/edge** is
+materialized, and **both modes honor it through one projection seam**. This fixes
+the two halves of the design complaint: text is too terse (no `file`/`score`),
+and JSON is too verbose (dumps the full `snippet` + every `None` field).
+
+**Root cause (verified):** detail is decided per-handler at node-dict construction,
+not by the renderer. `_symbol_hit_to_dict` (`jrag.py:96`) hand-trims `SymbolHit` to
+8 fields (drops `filename`/`start_line`/`signature`/`annotations`/`capabilities`);
+`SearchHit.model_dump()` (`jrag.py` `_cmd_search`) carries the full `snippet`+`score`
+— so text (via `_render_listing` `jrag_render.py:144`) drops both, while JSON
+(`Envelope.to_json`) dumps the snippet verbatim. `Envelope.to_dict()`
+(`jrag_envelope.py:104`) strips empty optionals only at the **top level**, so empty
+fields inside node dicts (`symbol_id: null`, `role: null`) serialize in JSON. The
+prior `--brief`/`--fields`/`--count`/`--exists` flags (removed in `45318ae`) were
+registered but never read — the lesson: a detail flag must flow through ONE seam.
+
+**Key decision:** invert "trim at construction" → **carry full, trim at one seam**.
+Handlers build the fullest node the backend gives; a single projector trims to the
+requested level; both `to_json` (via projection) and the text renderers consume the
+projected dict. This makes `--format json --detail brief` and `--format text --detail
+brief` go through the **same field set**.
+
+**Decisions (locked with user):**
+- Default `--detail normal` (directly fixes the "text too terse" complaint; `normal`
+  is still one line/row, no snippet, so token budget stays close). `--detail brief`
+  is the escape hatch reproducing today's exact text.
+- `--fields` allowlist **deferred** (avoid scope creep + the dead-flag trap; can be
+  layered on the same projector later).
+
+## File-by-file changes
+
+### 1. `java_codebase_rag/jrag_envelope.py` — projection layer
+- Three category key-sets (intersected with each node's present keys, so they are
+  kind-agnostic and auto-handle new kinds):
+  - `_BRIEF_NODE_KEYS` — identity only == the fields `display_name`/`tiered_name`
+    consult (`id, kind, fqn, name, microservice, path, method, topic, member_fqn,
+    target_service, broker, client_kind, producer_kind, import_simple, import_fqn`).
+  - `_NORMAL_NODE_KEYS = _BRIEF | {module, role, symbol_kind, framework, file, score}`.
+  - full = sentinel: keep every present key.
+- `_compose_file(node)`: derive `"file" = "filename:start_line"` (or `"filename"`)
+  from the `SymbolHit`-carried `filename`+`start_line` so `normal` can show location
+  as one stable field; drops the raw `filename`/`start_line`/`end_line`/`start_byte`/
+  `end_byte` from the output (they are not display fields).
+- `_drop_empty(node)`: extend the "omit empty optionals" rule from `to_dict()` DOWN
+  into each node dict — drop `None`/`""`/`[]`/`{}` valued keys (fixes the JSON
+  "10 empty fields"). Applied at every detail level.
+- `project_node(node, detail)`, `project_edge(edge, detail)`, `project_envelope(env,
+  detail) -> Envelope`: return trimmed **copies** (nodes, edges, candidates
+  projected; `status`/`root`/`warnings`/`truncated`/`file_location`/`message`/
+  `agent_next_actions` passed through). `Envelope.to_dict()`/`to_json()` stay
+  **verbatim** (no `detail` param) — projection is a separate transform applied by
+  the renderer, preserving their meaning and existing tests.
+- Edge key-sets: brief = `{other_id, edge_type, confidence, direction, section,
+  stage}` (what today's text reads); normal += `{mechanism, role, from_fqn}`;
+  full = all keys.
+
+### 2. `java_codebase_rag/jrag_render.py` — thread `detail` through
+- `render(envelope, *, fmt="text", detail="normal", noun="", next_offset=None,
+  shape=None)`: apply `project_envelope(envelope, detail)` ONCE, then dispatch on
+  `fmt`. json path: `projected.to_json()`. text path: pass `detail` down.
+- `_render_listing(envelope, *, noun, detail)`: identity line unchanged for `brief`;
+  `normal` appends inline ` module:M role:R kind:K framework:F file:L score:S` (only
+  the non-empty ones, fixed order); `full` appends an indented kv-block of all
+  remaining keys (reusing `_render_inspect_block` minus the identity keys).
+- `_format_edge_line(edge, nodes, *, detail)`: brief = `  label  conf=X.XX`;
+  normal += `  mechanism:M`; full appends an indented block of every edge attr
+  (`confidence`/`mechanism`/`annotation`/`field_or_param`/`from_fqn`/…).
+- `_render_inspect` needs **no** `detail` param — projection already trimmed the
+  node; it renders whatever keys survived (few at `brief`, all at `full`).
+- `_render_traversal`/`_render_ambiguous` pass `detail` through to `_format_edge_line`
+  / edge formatting.
+
+### 3. `java_codebase_rag/jrag.py` — flag, defaults, carry full
+- Add `--detail {brief,normal,full}` (default `normal`) to the `common` parent parser
+  right after `--format` (`jrag.py:160-163`).
+- `set_defaults(detail="full")` on the inspect-shape subparsers: `status`, `inspect`,
+  `microservices`, `map_cmd`, `conventions`, `overview` (their purpose IS detail; the
+  flag still overrides). Implemented by adding `detail="full"` to each existing
+  `.set_defaults(handler=...)` call.
+- Thread `detail` through every render call: replace `fmt=args.format` →
+  `fmt=args.format, detail=args.detail` (45 call sites; all are `render(...)` calls —
+  verified). The top-level `main()` error render uses `getattr(args,"format",...)`
+  and is left on the `normal` default (error envelopes have no nodes → projection
+  no-op).
+- `_symbol_hit_to_dict` (`jrag.py:96`): carry the **full** `SymbolHit` — add
+  `filename, start_line, end_line, signature, annotations, capabilities, modifiers,
+  package, parent_id, resolved` (so `normal` shows `file` and `full` is genuinely
+  rich for the ~15 commands that route through it).
+- `_client_dict_to_node`/`_producer_dict_to_node`: left as-is. Their explicit field
+  sets are already reasonable, and `_drop_empty` cleans the empty ones (the actual
+  JSON complaint). A raw-extras merge was considered and deferred — it risks
+  subtly changing `display_name` precedence for edge-case (empty-path) clients, and
+  the gain (one or two extra fields at `full`) is marginal.
+
+## Tests for PR-JRAG-6
+
+`tests/test_jrag_envelope.py` (projector):
+1. `test_project_node_brief_keeps_identity_drops_extras`
+2. `test_project_node_normal_adds_location_and_ranking`
+3. `test_project_node_full_keeps_everything`
+4. `test_project_node_drops_empty_fields_at_all_levels` (no `None`/`""`/`[]`/`{}`)
+5. `test_compose_file_from_filename_and_start_line`
+6. `test_project_envelope_passes_through_status_root_warnings_truncated`
+7. `test_project_edge_brief_normal_full_attr_sets`
+
+`tests/test_jrag_render.py` (orthogonality + text levels):
+8. `test_json_and_text_share_field_set_at_each_detail` (the core orthogonality
+   assertion — same projected keys behind both)
+9. `test_listing_normal_appends_file_role_score_inline`
+10. `test_listing_full_appends_indented_block`
+11. `test_edge_line_normal_appends_mechanism`
+12. `test_search_text_normal_shows_score_not_snippet` (regression for the complaint)
+13. `test_search_json_normal_omits_snippet_drops_empty_fields`
+
+Updated existing tests:
+- `test_render_json_emits_envelope_verbatim` → assert via `detail="full"` (full +
+  projection-invariant data == verbatim); note projection is the new json path.
+- `test_render_inspect_edge_summary_alphabetical` → pass `detail="full"` (inspect
+  defaults to full in production; projection would otherwise trim `edge_summary`).
+- `test_render_listing_*` / `test_render_traversal_*` → default is now `normal`, but
+  their nodes carry only identity fields, so output is unchanged; add a one-line
+  comment that they rely on identity-only data being projection-invariant.
+
+## Definition of done (PR-JRAG-6)
+
+- [ ] Projection layer in `jrag_envelope.py` (`project_node`/`project_edge`/
+      `project_envelope`/`_drop_empty`/`_compose_file`); `to_dict`/`to_json` unchanged.
+- [ ] `render()` applies projection once; json + text share the projected dict.
+- [ ] `--detail` flag (default `normal`); inspect/orientation `set_defaults(detail="full")`.
+- [ ] All 45 render calls thread `detail=args.detail`.
+- [ ] `_symbol_hit_to_dict` carries full `SymbolHit`; client/producer dict
+      builders unchanged (explicit fields + `_drop_empty` is sufficient).
+- [ ] `normal` text shows `file`/`score`/`role`/`module` inline; `full` shows blocks.
+- [ ] JSON drops empty node-internal fields at all levels.
+- [ ] Named projector + renderer tests green; updated existing render tests green.
+- [ ] PR-JRAG-4 token-budget assertion re-pinned under `normal` default (risk #20).
+- [ ] `skills/explore-codebase-cli/SKILL.md` + `agents/explorer-rag-cli.md` document
+      `--detail`; `scripts/sync_agent_artifacts.py` run; drift test green.
+- [ ] `.venv/bin/ruff check .` clean; full suite green.
+- [ ] PR title: `feat(cli): --detail orthogonality (brief|normal|full) for text+json (PR-JRAG-6)`.
+
+## Implementation step list
+
+| # | Step | File(s) | Done when |
+| --- | --- | --- | --- |
+| 1 | Projection layer (`project_node`/`edge`/`envelope`, `_drop_empty`, `_compose_file`, key-sets) | `jrag_envelope.py` | tests 1–7 pass |
+| 2 | `render()` applies projection; thread `detail` into listing/edge renderers | `jrag_render.py` | tests 8–13 pass; existing render tests green |
+| 3 | `--detail` flag + `set_defaults(detail="full")` on inspect-shape subparsers | `jrag.py` | `--help` shows flag; inspect defaults full |
+| 4 | Thread `detail=args.detail` through 45 render calls (`replace_all`) | `jrag.py` | grep shows 0 un-threaded calls |
+| 5 | Enrich `_symbol_hit_to_dict` to carry full `SymbolHit` (client/producer unchanged) | `jrag.py` | `full` shows signature/file/annotations |
+| 6 | Re-pin token-budget assertion under `normal`; update skill/agent docs + sync | tests, `skills/`, `agents/` | token test green; drift test green |
+| 7 | ruff + full suite | repo | clean + green |
+
+---
+
 # Cross-PR risks and mitigations
 
 | # | Risk | Severity | Mitigation |
@@ -953,7 +1112,9 @@ Plus: `tests/test_agent_skills_static.py` updated and green.
 | 17 | PR-5 breaks `test_agent_skills_static.py` / direct-call installer tests | High | Update `EXPECTED_SKILL_DIRS`; `surface="mcp"` kw default (PR-5 tests 8,10). |
 | 18 | Dual-copy artifacts drift when CLI skill/subagent land | Medium | PR-0a first (single-source + drift test); PR-5 depends on it. |
 | 19 | Enum kinds (`client_kind`/`producer_kind`/`source_layer`) reject | Medium | Lookup tables (not case conversion); tests 8,9,11. |
-| 20 | Token budget regresses as fields accrete | Low | PR-4 token-budget assertion on the fixture. |
+| 20 | Token budget regresses as fields accrete | Low | PR-4 token-budget assertion on the fixture. PR-JRAG-6 re-pins it under the new `normal` default; `brief` is the escape hatch if `normal` blows the ceiling. |
+| 21 | PR-JRAG-6 default `normal` churns every command's text output / renderer tests | Medium | `normal` adds inline fields only when present; existing render-test nodes carry identity-only data (projection-invariant), so most pass unchanged. Inspect-shape commands floor at `full` via `set_defaults`. Token-budget + render tests explicitly re-pinned (PR-JRAG-6 step 6). |
+| 22 | PR-JRAG-6 reintroduces a dead flag (`--detail` registered, unread) | Medium | `detail` flows through ONE projection seam (`render` → `project_envelope`), not 30 handlers; the 45 render calls are threaded via a single `replace_all`; projector unit tests assert each level changes output. |
 
 # Out of scope
 
@@ -979,7 +1140,8 @@ Plus: `tests/test_agent_skills_static.py` updated and green.
    candidates+stop, `none`→`not_found`); raw IDs never required.
 3. Every command emits the canonical envelope (`--format json`) + token-lean text
    by default; `truncated` via +1-fetch (or "narrow" for non-offset commands);
-   `agent_next_actions` ≤5.
+   `agent_next_actions` ≤5. `--detail brief|normal|full` (default `normal`) is
+   orthogonal to `--format` — both modes honor the same projected field set.
 4. `--offset` works only on `find`/`search`; all other commands reject it.
 5. `jrag search` loads the YAML-configured embedding model (via `apply_to_os_environ`).
 6. `java-codebase-rag install --surface cli` deploys the CLI skill + subagent and
@@ -998,6 +1160,7 @@ Plus: `tests/test_agent_skills_static.py` updated and green.
 - `PR-JRAG-3b`: _pending_ (blocked by PR-JRAG-3a)
 - `PR-JRAG-4`: _pending_ (blocked by PR-JRAG-1a, PR-JRAG-3b)
 - `PR-JRAG-5`: _pending_ (blocked by PR-JRAG-0a; soft-depends on PR-JRAG-4)
+- `PR-JRAG-6`: _pending_ (blocked by PR-JRAG-1a; touches envelope/render/jrag.py)
 
 # Notes
 

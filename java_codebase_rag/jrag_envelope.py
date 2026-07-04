@@ -28,6 +28,9 @@ __all__ = [
     "simple_name",
     "to_envelope_rows",
     "next_actions_hook",
+    "project_node",
+    "project_edge",
+    "project_envelope",
 ]
 
 
@@ -491,3 +494,206 @@ def next_actions_hook(
         current_command=command,
     )
     return envelope.agent_next_actions
+
+
+# ---------------------------------------------------------------------------
+# Output detail projection (PR-JRAG-6).
+#
+# ``--detail brief|normal|full`` is ORTHOGONAL to ``--format text|json``. The
+# renderer calls :func:`project_envelope` once, then BOTH the JSON path and the
+# text renderers consume the trimmed dict — so ``--format json --detail brief``
+# and ``--format text --detail brief`` go through the SAME field set.
+#
+# Detail was previously decided per-handler at node-dict construction
+# (``_symbol_hit_to_dict`` trimmed; ``SearchHit.model_dump()`` carried the full
+# snippet), which coupled "how much" to "which format" and made JSON dump 50-
+# line snippets + 10 empty fields while text showed only ``Name @service``.
+# Inverting to "carry full, trim at one seam" makes the two axes independent.
+#
+# Key-sets are CATEGORY-based (intersected with each node's present keys), so
+# they are kind-agnostic and auto-handle new node kinds: a route at ``normal``
+# shows the same categories of fields as a symbol at ``normal``.
+# ---------------------------------------------------------------------------
+
+# Raw location columns carried by SymbolHit; folded into the display field
+# ``file`` by :func:`_compose_file`. They are NOT display fields themselves.
+_RAW_LOCATION_KEYS = frozenset(
+    {"filename", "start_line", "end_line", "start_byte", "end_byte"}
+)
+
+# Identity only == the keys the text renderers' display_name / tiered_name read.
+# Reproduces today's terse text output exactly at ``brief``. ``reason`` is
+# candidate-structural (the ambiguous narrowing hint), so it survives at every
+# level — a candidate without its reason is useless.
+_BRIEF_NODE_KEYS: frozenset[str] = frozenset(
+    {
+        "id",
+        "kind",
+        "fqn",
+        "name",
+        "microservice",
+        "path",
+        "method",
+        "topic",
+        "member_fqn",
+        "target_service",
+        "broker",
+        "client_kind",
+        "producer_kind",
+        "import_simple",
+        "import_fqn",
+        "import_kind",
+        "resolved",
+        "reason",
+    }
+)
+
+# brief + location / classification / ranking. ``file`` is the composed
+# ``filename:start_line`` display field (see :func:`_compose_file`).
+_NORMAL_NODE_KEYS: frozenset[str] = _BRIEF_NODE_KEYS | frozenset(
+    {"module", "role", "symbol_kind", "framework", "file", "score"}
+)
+
+# Edge attrs the text renderers read at the default level (target id variants
+# across backends + the grouping/confidence keys).
+_BRIEF_EDGE_KEYS: frozenset[str] = frozenset(
+    {
+        "other_id",
+        "dst_id",
+        "target_id",
+        "term_id",
+        "edge_type",
+        "stored_edge_type",
+        "label",
+        "type",
+        "confidence",
+        "direction",
+        "section",
+        "stage",
+        "resolved",
+    }
+)
+
+# brief + the cheap edge attrs (injection mechanism, role label, origin fqn).
+_NORMAL_EDGE_KEYS: frozenset[str] = _BRIEF_EDGE_KEYS | frozenset(
+    {"mechanism", "role", "from_fqn"}
+)
+
+
+def _is_empty(value: Any) -> bool:
+    """True for values that carry no information: ``None`` / ``""`` / ``[]`` / ``{}``.
+
+    ``False`` and ``0`` / ``0.0`` are NOT empty (they are meaningful: an
+    unresolved ``resolved=False`` flag, a ``0.0`` confidence). Only None and
+    zero-length containers are dropped.
+    """
+    if value is None:
+        return True
+    if isinstance(value, (str, list, dict)) and len(value) == 0:
+        return True
+    return False
+
+
+def _drop_empty(node: dict[str, Any]) -> dict[str, Any]:
+    """Drop keys whose value is ``None`` / ``""`` / ``[]`` / ``{}``.
+
+    Extends the "omit empty optionals" rule from :meth:`Envelope.to_dict` DOWN
+    into each node/edge dict so JSON stops serializing ``"symbol_id": null`` /
+    ``"role": null`` (the "10 empty fields" complaint). Applied at every detail
+    level — no consumer benefits from empty fields, and the text renderers
+    already skip missing keys, so this only changes JSON (for the better).
+    """
+    return {k: v for k, v in node.items() if not _is_empty(v)}
+
+
+def _compose_file(node: dict[str, Any]) -> dict[str, Any]:
+    """Fold raw ``filename`` + ``start_line`` into a display ``file`` field.
+
+    SymbolHit-derived nodes carry ``filename`` / ``start_line`` (raw graph
+    columns) that are not display fields. Compose them into one
+    ``"filename:start_line"`` string (or just ``filename`` when no line) so the
+    ``normal`` tier can show location as a single stable field, then drop the
+    raw location columns. Returns the node unchanged (minus raw columns) when
+    no ``filename`` is present. Returns a new dict; the input is not mutated.
+    """
+    filename = str(node.get("filename") or "").strip()
+    if not filename:
+        return {k: v for k, v in node.items() if k not in _RAW_LOCATION_KEYS}
+    start_line = node.get("start_line")
+    try:
+        file_value = f"{filename}:{int(start_line)}" if start_line not in (None, "") else filename
+    except (TypeError, ValueError):
+        file_value = filename
+    out = {k: v for k, v in node.items() if k not in _RAW_LOCATION_KEYS}
+    out["file"] = file_value
+    return out
+
+
+def project_node(node: dict[str, Any], detail: str) -> dict[str, Any]:
+    """Project a node dict to the field set for ``detail``.
+
+    * ``"full"``   -> keep every present key (still :func:`_compose_file` +
+      :func:`_drop_empty`, so raw location columns become ``file`` and empties
+      vanish).
+    * ``"normal"`` -> keep ``_NORMAL_NODE_KEYS`` (identity + location +
+      classification + ranking). This is the default and the fix for the
+      "text too terse" complaint: adds ``file`` / ``score`` / ``role`` /
+      ``module``.
+    * ``"brief"``  -> keep ``_BRIEF_NODE_KEYS`` (identity only == today's text).
+
+    ``file`` is composed before selection so it is available at ``normal`` /
+    ``full``. Empty values are dropped at every level. Returns a new dict.
+    """
+    composed = _compose_file(node)
+    if detail == "full":
+        selected = composed
+    else:
+        allow = _NORMAL_NODE_KEYS if detail == "normal" else _BRIEF_NODE_KEYS
+        selected = {k: v for k, v in composed.items() if k in allow}
+    return _drop_empty(selected)
+
+
+def project_edge(edge: dict[str, Any], detail: str) -> dict[str, Any]:
+    """Project an edge row to the attr set for ``detail`` (mirrors :func:`project_node`).
+
+    * ``"full"``   -> all attrs.
+    * ``"normal"`` -> ``_NORMAL_EDGE_KEYS`` (adds ``mechanism`` / ``role`` /
+      ``from_fqn`` over brief).
+    * ``"brief"``  -> ``_BRIEF_EDGE_KEYS`` (target id + label + confidence +
+      grouping keys == what the text renderers read today).
+    """
+    if detail == "full":
+        selected = edge
+    else:
+        allow = _NORMAL_EDGE_KEYS if detail == "normal" else _BRIEF_EDGE_KEYS
+        selected = {k: v for k, v in edge.items() if k in allow}
+    return _drop_empty(selected)
+
+
+def project_envelope(envelope: Envelope, detail: str) -> Envelope:
+    """Return a new Envelope with nodes/edges/candidates projected to ``detail``.
+
+    The single projection seam: :func:`jrag_render.render` calls this once,
+    then both the JSON path (``to_json``) and the text renderers consume the
+    result. Envelope-level fields (``status`` / ``root`` / ``warnings`` /
+    ``truncated`` / ``file_location`` / ``message`` / ``agent_next_actions``)
+    are passed through unchanged — they are not node-level and have no detail
+    axis. ``detail`` is validated up front so a typo raises instead of
+    silently behaving like ``full``.
+    """
+    if detail not in ("brief", "normal", "full"):
+        raise ValueError(
+            f"project_envelope: detail must be brief|normal|full, got {detail!r}"
+        )
+    return Envelope(
+        status=envelope.status,
+        nodes={nid: project_node(n, detail) for nid, n in envelope.nodes.items()},
+        edges=[project_edge(e, detail) for e in envelope.edges],
+        root=envelope.root,
+        candidates=[project_node(c, detail) for c in envelope.candidates],
+        agent_next_actions=list(envelope.agent_next_actions),
+        warnings=list(envelope.warnings),
+        truncated=envelope.truncated,
+        file_location=envelope.file_location,
+        message=envelope.message,
+    )

@@ -56,6 +56,10 @@ Run `jrag --help` for the canonical list. Groups:
 --module <name>       Filter by module
 --limit <N>           Cap on results (default 20; 10 for fan-out commands)
 --format text|json    Output format (default: text)
+--detail brief|normal|full  Output detail (default: normal) — orthogonal to --format;
+                      both modes honor it. brief=name @service; normal=+module/role/
+                      file/score; full=+signature/annotations/snippet. inspect and the
+                      orientation commands default to full.
 --index-dir <path>    Index directory override
 ```
 
@@ -123,7 +127,11 @@ Only `--kind` is a true resolve input. `--role`, `--java-kind`, `--fqn-prefix`, 
 
 ## Output envelope
 
-Default is compact text. `--format json` emits the envelope verbatim:
+`--format` (text|json) and `--detail` (brief|normal|full) are **orthogonal**:
+`--format` picks the representation, `--detail` picks how much of each node/edge is
+shown, and both modes honor the same detail level. Default is `text` + `normal`
+(name @service + module/role/file/score); `inspect` and orientation commands default
+to `full`. `--format json` emits the projected envelope (empty fields dropped).
 
 ```json
 {

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from java_codebase_rag.jrag_envelope import Envelope, simple_name
+from java_codebase_rag.jrag_envelope import Envelope, project_envelope, simple_name
 
 __all__ = ["render", "tiered_name", "display_name"]
 
@@ -31,6 +31,50 @@ _CALLS_FAMILY_EDGES = frozenset({"CALLS", "HTTP_CALLS", "ASYNC_CALLS"})
 # Only route kinds are tagged; symbol/client/producer rows carry other kinds (or
 # none) and are left untagged.
 _ROUTE_KIND_TAGS: dict[str, str] = {"kafka_topic": "kafka", "http_endpoint": "http"}
+
+# Identity keys already represented in a listing line (display_name + @service +
+# kind tag). At ``--detail full`` the per-row kv-block skips these (they are in
+# the header line) and renders every OTHER key, so full listing == per-row
+# inspect block. Must agree with the identity half of the envelope projector's
+# ``_BRIEF_NODE_KEYS`` (see jrag_envelope.py).
+_LISTING_LINE_KEYS: frozenset[str] = frozenset(
+    {
+        "id",
+        "kind",
+        "fqn",
+        "name",
+        "microservice",
+        "path",
+        "method",
+        "topic",
+        "member_fqn",
+        "target_service",
+        "broker",
+        "client_kind",
+        "producer_kind",
+        "import_simple",
+        "import_fqn",
+        "import_kind",
+    }
+)
+
+# Fixed left-to-right order for the inline extras appended at ``--detail normal``
+# (only the non-empty ones are rendered). Equals the envelope projector's
+# ``_NORMAL_NODE_KEYS - _BRIEF_NODE_KEYS``.
+_NORMAL_INLINE_EXTRAS: tuple[str, ...] = (
+    "module",
+    "role",
+    "symbol_kind",
+    "framework",
+    "file",
+    "score",
+)
+
+# Edge attrs the edge line already renders (label/confidence); at ``--detail
+# full`` these are skipped when appending the remaining attrs inline.
+_EDGE_LINE_KEYS: frozenset[str] = frozenset(
+    {"other_id", "dst_id", "target_id", "term_id", "edge_type", "stored_edge_type", "label", "type", "confidence"}
+)
 
 
 def _next_action_lines(envelope: Envelope) -> list[str]:
@@ -141,7 +185,7 @@ def _render_not_found(envelope: Envelope) -> str:
     return f"not found: {msg}"
 
 
-def _render_listing(envelope: Envelope, *, noun: str) -> str:
+def _render_listing(envelope: Envelope, *, noun: str, detail: str = "normal") -> str:
     lines: list[str] = []
     for _node_id, node in envelope.nodes.items():
         # Listing omits FQN (PR-JRAG-1a test 11): display_name + @service only.
@@ -150,10 +194,19 @@ def _render_listing(envelope: Envelope, *, noun: str) -> str:
         name = display_name(node)
         if not name:
             # Unresolved brownfield routes can carry empty path+topic+member;
-            # fall back to the filename basename (then a placeholder) so the row
-            # never renders as a blank line or a bare ``@service``.
-            fn = str(node.get("filename") or "").strip()
-            name = (fn.rsplit("/", 1)[-1] if fn else "") or "(no identifier)"
+            # fall back to the file basename (then a placeholder) so the row
+            # never renders as a blank line or a bare ``@service``. The
+            # projector composes raw filename+start_line into ``file``, so check
+            # both ``file`` and the raw ``filename`` (present pre-projection /
+            # when no start_line was carried).
+            label = ""
+            for key in ("file", "filename"):
+                raw = str(node.get(key) or "").strip()
+                if raw:
+                    base = raw.rsplit(":", 1)[0] if raw.rsplit(":", 1)[-1].isdigit() else raw
+                    label = base.rsplit("/", 1)[-1]
+                    break
+            name = label or "(no identifier)"
         service = str(node.get("microservice") or "").strip()
         tag = _ROUTE_KIND_TAGS.get(str(node.get("kind") or ""))
         parts: list[str] = [f"[{tag}]", name] if tag else [name]
@@ -168,18 +221,42 @@ def _render_listing(envelope: Envelope, *, noun: str) -> str:
         # `kind="unresolved_import"` set by _cmd_imports.
         if node.get("kind") == "unresolved_import":
             line += "  (unresolved)"
+        # detail > brief: surface the fields the terse line drops. The projector
+        # has already trimmed the node to the requested field set, so we only
+        # decide PRESENTATION. normal = append inline location/classification/
+        # ranking extras to the SAME line (one line per row — the fix for "text
+        # too terse": adds module/role/file/score). full = per-row inspect block
+        # of every non-identity key (signature/annotations/snippet/...).
+        if detail == "normal":
+            extras = [
+                f"{key}={node[key]}"
+                for key in _NORMAL_INLINE_EXTRAS
+                if key in node and node[key] not in ("", None)
+            ]
+            if extras:
+                line += "  " + "  ".join(extras)
         lines.append(line)
+        if detail == "full":
+            rest = {k: v for k, v in node.items() if k not in _LISTING_LINE_KEYS}
+            if rest:
+                lines.extend(_render_inspect_block(rest, 1))
     if not lines:
         lines.append(f"0 {noun}".rstrip())
     return "\n".join(lines)
 
 
-def _format_edge_line(edge: dict, nodes: dict[str, dict]) -> str:
+def _format_edge_line(edge: dict, nodes: dict[str, dict], *, detail: str = "normal") -> str:
     """Format a single edge row as an indented line (shared across render modes).
 
     Emits ``  <tiered name>`` plus a ``conf=N.NN`` suffix when the edge type
     carries confidence (CALLS-family). The caller is responsible for any
     grouping header above this line.
+
+    ``detail > brief`` appends the edge attrs the terse line drops (the
+    projector has already trimmed the edge to the requested attr set; this only
+    decides presentation): ``normal`` adds ``mechanism``; ``full`` adds every
+    remaining attr inline (``annotation`` / ``field_or_param`` / ``from_fqn`` /
+    …), skipping the keys already represented in the label/conf prefix.
     """
     target_id = _node_id(edge)
     label = tiered_name(target_id, nodes) if target_id else "(missing)"
@@ -193,10 +270,22 @@ def _format_edge_line(edge: dict, nodes: dict[str, dict]) -> str:
                 line += f"  conf={float(conf):.2f}"
             except (TypeError, ValueError):
                 pass
+    if detail == "normal":
+        mech = edge.get("mechanism")
+        if mech not in ("", None):
+            line += f"  mechanism={mech}"
+    elif detail == "full":
+        for key in edge:
+            if key in _EDGE_LINE_KEYS:
+                continue
+            val = edge.get(key)
+            if val in ("", None):
+                continue
+            line += f"  {key}={val}"
     return line
 
 
-def _render_traversal(envelope: Envelope, *, noun: str) -> str:
+def _render_traversal(envelope: Envelope, *, noun: str, detail: str = "normal") -> str:
     lines: list[str] = []
     root_id = envelope.root or ""
     if root_id:
@@ -237,16 +326,16 @@ def _render_traversal(envelope: Envelope, *, noun: str) -> str:
         if in_sec:
             lines.append("inbound:")
             for e in in_sec:
-                lines.append(_format_edge_line(e, envelope.nodes))
+                lines.append(_format_edge_line(e, envelope.nodes, detail=detail))
         if out_sec:
             lines.append("outbound:")
             for e in out_sec:
-                lines.append(_format_edge_line(e, envelope.nodes))
+                lines.append(_format_edge_line(e, envelope.nodes, detail=detail))
         for e in other:
             section = str(e.get("section") or "")
             if section:
                 lines.append(f"{section}:")
-            lines.append(_format_edge_line(e, envelope.nodes))
+            lines.append(_format_edge_line(e, envelope.nodes, detail=detail))
         lines.extend(_next_action_lines(envelope))
         return "\n".join(lines)
 
@@ -273,7 +362,7 @@ def _render_traversal(envelope: Envelope, *, noun: str) -> str:
                 header = f"stage {s}:"
             lines.append(header)
             for e in stage_edges:
-                lines.append(_format_edge_line(e, envelope.nodes))
+                lines.append(_format_edge_line(e, envelope.nodes, detail=detail))
         lines.extend(_next_action_lines(envelope))
         return "\n".join(lines)
 
@@ -284,18 +373,18 @@ def _render_traversal(envelope: Envelope, *, noun: str) -> str:
         if up:
             lines.append("↑ supertypes:")
             for e in up:
-                lines.append(_format_edge_line(e, envelope.nodes))
+                lines.append(_format_edge_line(e, envelope.nodes, detail=detail))
         if dn:
             lines.append("↓ subtypes:")
             for e in dn:
-                lines.append(_format_edge_line(e, envelope.nodes))
+                lines.append(_format_edge_line(e, envelope.nodes, detail=detail))
         lines.extend(_next_action_lines(envelope))
         return "\n".join(lines)
 
     # Flat: callers / callees / implementations / subclasses / overrides /
     # overridden-by / dependents / impact / flow (current behavior).
     for edge in envelope.edges:
-        lines.append(_format_edge_line(edge, envelope.nodes))
+        lines.append(_format_edge_line(edge, envelope.nodes, detail=detail))
     lines.extend(_next_action_lines(envelope))
     return "\n".join(lines)
 
@@ -394,7 +483,7 @@ def _render_scalar(envelope: Envelope) -> str:
     return envelope.status
 
 
-def _render_text_shape(envelope: Envelope, *, noun: str, shape: str | None) -> str:
+def _render_text_shape(envelope: Envelope, *, noun: str, shape: str | None, detail: str = "normal") -> str:
     if envelope.status == "error":
         return _render_error(envelope)
     if envelope.status == "not_found":
@@ -417,13 +506,20 @@ def _render_text_shape(envelope: Envelope, *, noun: str, shape: str | None) -> s
     # Precedence: explicit ``shape="inspect"`` wins over ``root``/listing
     # by intent (callers declare what they want); then ``root`` wins over
     # listing (a root signals "edges are the story").
+    #
+    # detail: the envelope passed in is ALREADY projected (see :func:`render`),
+    # so each renderer sees only the keys for its detail level. ``detail`` is
+    # threaded in only to choose PRESENTATION (inline vs block / which edge
+    # attrs to print) — the field-set decision was made once, up front, by
+    # :func:`project_envelope`. ``_render_inspect`` needs no ``detail`` kwarg:
+    # it renders whatever keys survived projection (few at brief, all at full).
     if shape == "inspect":
         return _render_inspect(envelope)
     if envelope.root is not None:
-        return _render_traversal(envelope, noun=noun)
+        return _render_traversal(envelope, noun=noun, detail=detail)
     # Listing shape: zero or more node rows. Empty listing renders "0 <noun>".
     if envelope.nodes or noun:
-        return _render_listing(envelope, noun=noun)
+        return _render_listing(envelope, noun=noun, detail=detail)
     return _render_scalar(envelope)
 
 
@@ -431,11 +527,22 @@ def render(
     envelope: Envelope,
     *,
     fmt: str = "text",
+    detail: str = "normal",
     noun: str = "",
     next_offset: int | None = None,
     shape: str | None = None,
 ) -> str:
-    """Dispatch on ``fmt`` (text default; json emits the envelope verbatim).
+    """Dispatch on ``fmt`` (text default; json emits the projected envelope).
+
+    ``detail`` (``brief`` / ``normal`` / ``full``, default ``normal``) is
+    ORTHOGONAL to ``fmt``: the envelope is projected to the requested field set
+    ONCE via :func:`project_envelope`, then BOTH the JSON path (``to_json``)
+    and the text renderers consume the projected result. So ``--format json
+    --detail brief`` and ``--format text --detail brief`` go through the same
+    field set. ``brief`` reproduces today's terse text; ``normal`` adds
+    ``module``/``role``/``symbol_kind``/``framework``/``file``/``score`` (the
+    fix for "text too terse"); ``full`` keeps everything (incl. ``snippet`` /
+    ``signature`` / ``annotations``) and drops empty fields at all levels.
 
     ``noun`` is the human-readable noun for the result kind (e.g. ``"callers"``,
     ``"matches"``); used in zero-results and ambiguous headers. ``next_offset``
@@ -450,10 +557,11 @@ def render(
     dict-valued fields after ``.model_dump()``, so inspect is NEVER inferred
     from node contents - only an explicit ``shape="inspect"`` routes there.
     """
+    projected = project_envelope(envelope, detail)
     if fmt == "json":
-        return envelope.to_json()
-    body = _render_text_shape(envelope, noun=noun, shape=shape)
-    if envelope.truncated:
+        return projected.to_json()
+    body = _render_text_shape(projected, noun=noun, shape=shape, detail=detail)
+    if projected.truncated:
         hint = _truncated_hint(next_offset=next_offset)
         body = f"{body}\n{hint}" if body else hint
     # Warnings are rendered in text mode (one ``warning:`` line each) so an
@@ -461,7 +569,7 @@ def render(
     # post-filter notices. Without this the warnings[] field was JSON-only and
     # the "inapplicable flags never silently ignored" spec was effectively
     # unenforced for text consumers.
-    if envelope.warnings:
-        warning_lines = "\n".join(f"warning: {w}" for w in envelope.warnings)
+    if projected.warnings:
+        warning_lines = "\n".join(f"warning: {w}" for w in projected.warnings)
         body = f"{body}\n{warning_lines}" if body else warning_lines
     return body
