@@ -646,17 +646,19 @@ def test_bulk_write_is_deterministic_double_build(corpus_root: Path, tmp_path: P
 
 
 def test_bulk_write_preserves_calls_dedup_and_callee_declaring_role(ladybug_db_path: Path) -> None:
-    """Bulk COPY FROM preserves CALLS dedup by (src, dst, argc, line) and callee_declaring_role.
+    """Bulk COPY FROM preserves CALLS dedup by (src, dst, argc, line, byte) and callee_declaring_role.
 
     Reuses the @Service callee assertion against a bulk build to verify the materialization
     at staging time produces the same results as the per-row path.
     """
     conn = _connect(ladybug_db_path)
 
-    # Verify CALLS dedup: count unique (src_id, dst_id, arg_count, call_site_line) tuples
+    # Verify CALLS dedup: count unique (src_id, dst_id, arg_count, call_site_line,
+    # call_site_byte) tuples — byte is included so two call sites of the same
+    # method on the same source line are kept distinct (issue #359).
     result = conn.execute(
         "MATCH (a)-[c:CALLS]->(b) "
-        "RETURN COUNT(DISTINCT {src: a.id, dst: b.id, argc: c.arg_count, line: c.call_site_line})"
+        "RETURN COUNT(DISTINCT {src: a.id, dst: b.id, argc: c.arg_count, line: c.call_site_line, byte: c.call_site_byte})"
     )
     unique_call_keys = int(result.get_next()[0])
 

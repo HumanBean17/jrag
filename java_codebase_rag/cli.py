@@ -617,7 +617,7 @@ def _cmd_erase(args: argparse.Namespace) -> int:
             import lancedb
 
             db = lancedb.connect(str(cfg.index_dir.resolve()))
-            for name in db.table_names():
+            for name in db.list_tables():
                 to_describe.append(cfg.index_dir / name)
         except Exception:
             pass
@@ -665,7 +665,7 @@ def _cmd_erase(args: argparse.Namespace) -> int:
                 import lancedb
 
                 db = lancedb.connect(str(cfg.index_dir.resolve()))
-                for name in list(db.table_names()):
+                for name in list(db.list_tables()):
                     try:
                         db.drop_table(name)
                     except Exception as exc:

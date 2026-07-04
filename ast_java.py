@@ -1868,6 +1868,11 @@ def _collect_outgoing_calls(
     file_rel: str,
 ) -> list[OutgoingCallDecl]:
     del project_root
+    from java_ontology import (  # deferred: java_ontology imports ast_java
+        CLIENT_KIND_FEIGN_METHOD,
+        CLIENT_KIND_REST_TEMPLATE,
+        CLIENT_KIND_WEB_CLIENT,
+    )
     out: list[OutgoingCallDecl] = []
     method_fqn = f"{type_fqn}#{method_decl.signature}"
     type_mods = _find_modifiers_child(type_node) if type_node is not None else None
@@ -1899,7 +1904,7 @@ def _collect_outgoing_calls(
             OutgoingCallDecl(
                 method_fqn=method_fqn,
                 method_sig=method_decl.signature,
-                client_kind="feign_method",
+                client_kind=CLIENT_KIND_FEIGN_METHOD,
                 channel="http",
                 feign_target_name=feign_target_name,
                 feign_target_url=feign_target_url,
@@ -1998,7 +2003,7 @@ def _collect_outgoing_calls(
                     OutgoingCallDecl(
                         method_fqn=method_fqn,
                         method_sig=method_decl.signature,
-                        client_kind="rest_template",
+                        client_kind=CLIENT_KIND_REST_TEMPLATE,
                         channel="http",
                         feign_target_name="",
                         feign_target_url="",
@@ -2051,7 +2056,7 @@ def _collect_outgoing_calls(
                     OutgoingCallDecl(
                         method_fqn=method_fqn,
                         method_sig=method_decl.signature,
-                        client_kind="web_client",
+                        client_kind=CLIENT_KIND_WEB_CLIENT,
                         channel="http",
                         feign_target_name="",
                         feign_target_url="",

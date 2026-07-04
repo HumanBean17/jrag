@@ -853,7 +853,7 @@ def run_search(
         capability=capability, capability_in=capability_in,
     ) if "java" in table_keys else []
 
-    skip_role_weight = bool(role or role_in)
+    skip_role_weight = bool(role or role_in or exclude_roles)
     query_toks = _query_tokens(query)
 
     if len(table_keys) == 1:

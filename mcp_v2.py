@@ -1533,7 +1533,18 @@ def resolve_v2(
 
         assert trimmed is not None
         if "*" in trimmed or "?" in trimmed:
-            return _resolve_finalize_success(trimmed, hint_kind, [])
+            out = ResolveOutput(
+                success=False,
+                status="none",
+                message=(
+                    "Wildcards (* and ?) are not supported in resolve; "
+                    "use search(query=...) for ranked text search."
+                ),
+                advisories=[],
+                resolved_identifier=trimmed,
+            )
+            _resolve_assert_invariants(out)
+            return out
 
         g = graph or LadybugGraph.get()
         raw: list[tuple[NodeRef, ResolveReason, int]] = []

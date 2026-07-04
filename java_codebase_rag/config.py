@@ -244,7 +244,17 @@ def load_yaml_mapping(source_root: Path) -> dict[str, Any]:
         return {}
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except Exception:
+    except (yaml.YAMLError, OSError, UnicodeDecodeError) as exc:
+        # Best-effort loader: a missing/unreadable/malformed config must NOT abort
+        # startup — return {} and proceed with defaults. Narrowing this to
+        # ``yaml.YAMLError`` alone let OSError (chmod 000, stat/read TOCTOU) and
+        # UnicodeDecodeError (non-UTF-8 config) propagate to the caller; the broader
+        # tuple restores the graceful-degradation contract while still surfacing the
+        # problem on stderr.
+        print(
+            f"java-codebase-rag: could not load config {path}: {exc}; ignoring config.",
+            file=sys.stderr,
+        )
         return {}
     return data if isinstance(data, dict) else {}
 
@@ -483,7 +493,7 @@ def index_dir_has_existing_artifacts(index_dir: Path) -> tuple[bool, list[str]]:
             import lancedb
 
             db = lancedb.connect(str(index_dir.resolve()))
-            for name in db.table_names():
+            for name in db.list_tables():
                 paths.append(str((index_dir / name).resolve()) + " (Lance table)")
         except Exception:
             pass

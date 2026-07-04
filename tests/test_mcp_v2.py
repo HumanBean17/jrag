@@ -1283,10 +1283,14 @@ def test_resolve_natural_language_sentence_returns_none(ladybug_graph) -> None:
     assert out.status == "none"
 
 
-def test_resolve_wildcard_identifier_returns_none(ladybug_graph) -> None:
+def test_resolve_wildcard_identifier_rejected(ladybug_graph) -> None:
+    """resolve rejects wildcards (* and ?) consistently with search/find/neighbors
+    (issue #359): previously it silently returned status='none', hiding a likely
+    user mistake. Now it returns success=False with a message pointing to search."""
     out = resolve_v2("com.foo.*Service", hint_kind="symbol", graph=ladybug_graph)
-    assert out.success is True
+    assert out.success is False
     assert out.status == "none"
+    assert out.message and "search" in out.message.lower()
 
 
 def test_resolve_every_reason_in_closed_set_appears() -> None:
