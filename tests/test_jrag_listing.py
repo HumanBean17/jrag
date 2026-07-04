@@ -230,6 +230,60 @@ def test_listeners_lists_message_listener(corpus_root: Path, ladybug_db_path: Pa
         assert node.get("kind") == "symbol", f"listeners returned non-symbol: {node.get('kind')}"
 
 
+# ----- Test 7a: listeners --topic-prefix narrows (real filter) -----
+
+
+def test_listeners_topic_prefix_narrows(corpus_root: Path, ladybug_db_path: Path) -> None:
+    """listeners --topic-prefix filters via listener_method -EXPOSES-> Route(topic).
+
+    The bank-chat fixture has 3 MESSAGE_LISTENER symbols:
+      - ComplianceReviewListener   (topic=banking.chat.compliance.review)
+      - ChatKafkaListener          (topic=ChatTopics.INCOMING — unresolved constant)
+      - DistributionTriggerListener(topic=${assign.kafka.distribution-topic} — placeholder)
+    Filtering by 'banking.chat' must narrow to the proper subset containing
+    only ComplianceReviewListener, proving --topic-prefix is a real filter
+    (not the previous include-all stub).
+    """
+    env = os.environ.copy()
+    env["JAVA_CODEBASE_RAG_SOURCE_ROOT"] = str(corpus_root)
+    env["JAVA_CODEBASE_RAG_INDEX_DIR"] = str(ladybug_db_path.parent)
+
+    # All listeners (no filter)
+    proc_all = _run_jrag(["listeners", "--format", "json"], env=env)
+    assert proc_all.returncode == 0
+    payload_all = json.loads(proc_all.stdout)
+    all_nodes = payload_all.get("nodes", {})
+    all_count = len(all_nodes)
+    assert all_count >= 1, "expected at least one listener in fixture"
+
+    # Filtered by 'banking.chat' — known resolved prefix on this fixture
+    proc_filtered = _run_jrag(["listeners", "--topic-prefix", "banking.chat", "--format", "json"], env=env)
+    assert proc_filtered.returncode == 0, (
+        f"listeners --topic-prefix failed: rc={proc_filtered.returncode}\n"
+        f"stdout={proc_filtered.stdout}\nstderr={proc_filtered.stderr}"
+    )
+    payload_filtered = json.loads(proc_filtered.stdout)
+    filtered_nodes = payload_filtered.get("nodes", {})
+
+    # Proper subset: strictly fewer than the unfiltered set.
+    assert len(filtered_nodes) < all_count, (
+        f"--topic-prefix did not narrow: all={all_count}, filtered={len(filtered_nodes)}"
+    )
+
+    # The known listener-topic pair on this fixture: ComplianceReviewListener
+    # consumes 'banking.chat.compliance.review' (resolved topic literal).
+    found_compliance = False
+    for node_id, node in filtered_nodes.items():
+        fqn = node.get("fqn", "")
+        if "ComplianceReviewListener" in fqn:
+            found_compliance = True
+            break
+    assert found_compliance, (
+        f"ComplianceReviewListener not in filtered set; got: "
+        f"{[n.get('fqn') for n in filtered_nodes.values()]}"
+    )
+
+
 # ----- Test 8: entities lists entity role -----
 
 

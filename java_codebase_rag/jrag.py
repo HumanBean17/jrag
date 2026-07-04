@@ -41,6 +41,72 @@ class _IndexStale(RuntimeError):
     """Raised when the on-disk graph's ontology is older than required."""
 
 
+# Generous limit for the topics --consumer-in / listeners --topic-prefix
+# compose fetches (these resolve cross-topic edges and should not silently
+# truncate the listener/consumer set under typical fixture sizes).
+_CONSUMER_FETCH_LIMIT = 200
+
+
+def _load_graph_or_error(args: argparse.Namespace):
+    """Resolve config + load graph; on missing/stale index, print an error
+    envelope and return ``(cfg, graph_or_None, rc)``.
+
+    Shared by every listing command so the cfg/load/error frame is not
+    hand-copied. ``rc`` is 2 on error (envelope already printed), 0 on success.
+    """
+    from java_codebase_rag.jrag_envelope import Envelope
+    from java_codebase_rag.jrag_render import render
+
+    cfg = _resolve_cfg(args)
+    try:
+        graph = _load_graph(cfg)
+    except (_IndexNotFound, _IndexStale) as exc:
+        env = Envelope(status="error", message=str(exc))
+        print(render(env, fmt=args.format))
+        return cfg, None, 2
+    return cfg, graph, 0
+
+
+def _clamped_limit(args: argparse.Namespace) -> int:
+    """Return the limit clamped so ``limit+1 <= 500`` (backend clamp)."""
+    raw_limit = args.limit if args.limit is not None else 20
+    return min(raw_limit, 499)
+
+
+def _render_listing(rows, *, limit: int, args: argparse.Namespace, noun: str) -> int:
+    """Apply +1-fetch truncation, build the envelope, render as a listing.
+
+    Shared by the listing commands whose backend returns a flat row list
+    (routes / clients / producers). ``rows`` must already be the limit+1
+    fetch. Renders as the default shape (no ``shape=``).
+    """
+    from java_codebase_rag.jrag_envelope import Envelope, mark_truncated, next_actions_hook, to_envelope_rows
+    from java_codebase_rag.jrag_render import render
+
+    node_list = to_envelope_rows(rows) if rows and not isinstance(rows[0], dict) else list(rows)
+    display_nodes_list, truncated = mark_truncated(node_list, limit)
+    display_nodes = {node["id"]: node for node in display_nodes_list}
+
+    env = Envelope(status="ok", nodes=display_nodes, truncated=truncated)
+    next_actions_hook(env)
+    print(render(env, fmt=args.format, noun=noun))
+    return 0
+
+
+def _symbol_hit_to_dict(hit) -> dict:
+    """Convert a ``SymbolHit`` (dataclass) to the envelope node dict shape."""
+    return {
+        "id": hit.id,
+        "kind": "symbol",
+        "fqn": hit.fqn,
+        "name": hit.name,
+        "symbol_kind": hit.kind,
+        "microservice": hit.microservice,
+        "module": hit.module,
+        "role": hit.role,
+    }
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Argparse builder. Imports no backend modules.
 
@@ -705,25 +771,16 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
 
 
 def _cmd_routes(args: argparse.Namespace) -> int:
-    from java_codebase_rag.jrag_envelope import Envelope, mark_truncated, next_actions_hook, normalize_enum, to_envelope_rows
-    from java_codebase_rag.jrag_render import render
+    from java_codebase_rag.jrag_envelope import normalize_enum
 
-    cfg = _resolve_cfg(args)
-    try:
-        graph = _load_graph(cfg)
-    except (_IndexNotFound, _IndexStale) as exc:
-        env = Envelope(status="error", message=str(exc))
-        print(render(env, fmt=args.format))
-        return 2
-
-    # Cap at 499 so limit+1 <= 500 (backend clamp)
-    raw_limit = args.limit if args.limit is not None else 20
-    limit = min(raw_limit, 499)
+    _, graph, rc = _load_graph_or_error(args)
+    if rc:
+        return rc
+    limit = _clamped_limit(args)
 
     # Normalize framework if provided
     framework = normalize_enum(args.framework, kind="framework") if args.framework else None
 
-    # Call list_routes
     rows = graph.list_routes(
         microservice=args.service,
         framework=framework,
@@ -731,38 +788,20 @@ def _cmd_routes(args: argparse.Namespace) -> int:
         method=args.method,
         limit=limit + 1,  # +1 for truncated detection
     )
-
-    # Convert to envelope rows and mark truncated
-    node_list = to_envelope_rows(rows)
-    display_nodes_list, truncated = mark_truncated(node_list, limit)
-    display_nodes = {node["id"]: node for node in display_nodes_list}
-
-    env = Envelope(status="ok", nodes=display_nodes, truncated=truncated)
-    next_actions_hook(env)
-    print(render(env, fmt=args.format, noun="route"))
-    return 0
+    return _render_listing(rows, limit=limit, args=args, noun="route")
 
 
 def _cmd_clients(args: argparse.Namespace) -> int:
-    from java_codebase_rag.jrag_envelope import Envelope, mark_truncated, next_actions_hook, normalize_enum, to_envelope_rows
-    from java_codebase_rag.jrag_render import render
+    from java_codebase_rag.jrag_envelope import normalize_enum
 
-    cfg = _resolve_cfg(args)
-    try:
-        graph = _load_graph(cfg)
-    except (_IndexNotFound, _IndexStale) as exc:
-        env = Envelope(status="error", message=str(exc))
-        print(render(env, fmt=args.format))
-        return 2
+    _, graph, rc = _load_graph_or_error(args)
+    if rc:
+        return rc
+    limit = _clamped_limit(args)
 
-    # Cap at 499 so limit+1 <= 500 (backend clamp)
-    raw_limit = args.limit if args.limit is not None else 20
-    limit = min(raw_limit, 499)
-
-    # Normalize client_kind if provided
+    # Normalize client_kind via lookup table (feign → feign_method, etc.)
     client_kind = normalize_enum(args.client_kind, kind="client_kind") if args.client_kind else None
 
-    # Call list_clients
     rows = graph.list_clients(
         microservice=args.service,
         client_kind=client_kind,
@@ -770,54 +809,27 @@ def _cmd_clients(args: argparse.Namespace) -> int:
         path_prefix=args.path_prefix,
         limit=limit + 1,  # +1 for truncated detection
     )
-
-    # Convert to envelope rows and mark truncated
-    node_list = to_envelope_rows(rows)
-    display_nodes_list, truncated = mark_truncated(node_list, limit)
-    display_nodes = {node["id"]: node for node in display_nodes_list}
-
-    env = Envelope(status="ok", nodes=display_nodes, truncated=truncated)
-    next_actions_hook(env)
-    print(render(env, fmt=args.format, noun="client"))
-    return 0
+    return _render_listing(rows, limit=limit, args=args, noun="client")
 
 
 def _cmd_producers(args: argparse.Namespace) -> int:
-    from java_codebase_rag.jrag_envelope import Envelope, mark_truncated, next_actions_hook, normalize_enum, to_envelope_rows
-    from java_codebase_rag.jrag_render import render
+    from java_codebase_rag.jrag_envelope import normalize_enum
 
-    cfg = _resolve_cfg(args)
-    try:
-        graph = _load_graph(cfg)
-    except (_IndexNotFound, _IndexStale) as exc:
-        env = Envelope(status="error", message=str(exc))
-        print(render(env, fmt=args.format))
-        return 2
+    _, graph, rc = _load_graph_or_error(args)
+    if rc:
+        return rc
+    limit = _clamped_limit(args)
 
-    # Cap at 499 so limit+1 <= 500 (backend clamp)
-    raw_limit = args.limit if args.limit is not None else 20
-    limit = min(raw_limit, 499)
-
-    # Normalize producer_kind if provided
+    # Normalize producer_kind via lookup table (kafka → kafka_send, etc.)
     producer_kind = normalize_enum(args.producer_kind, kind="producer_kind") if args.producer_kind else None
 
-    # Call list_producers
     rows = graph.list_producers(
         microservice=args.service,
         producer_kind=producer_kind,
         topic_prefix=args.topic_prefix,
         limit=limit + 1,  # +1 for truncated detection
     )
-
-    # Convert to envelope rows and mark truncated
-    node_list = to_envelope_rows(rows)
-    display_nodes_list, truncated = mark_truncated(node_list, limit)
-    display_nodes = {node["id"]: node for node in display_nodes_list}
-
-    env = Envelope(status="ok", nodes=display_nodes, truncated=truncated)
-    next_actions_hook(env)
-    print(render(env, fmt=args.format, noun="producer"))
-    return 0
+    return _render_listing(rows, limit=limit, args=args, noun="producer")
 
 
 def _cmd_topics(args: argparse.Namespace) -> int:
@@ -826,19 +838,12 @@ def _cmd_topics(args: argparse.Namespace) -> int:
     from java_codebase_rag.jrag_envelope import Envelope, mark_truncated, next_actions_hook
     from java_codebase_rag.jrag_render import render
 
-    cfg = _resolve_cfg(args)
-    try:
-        graph = _load_graph(cfg)
-    except (_IndexNotFound, _IndexStale) as exc:
-        env = Envelope(status="error", message=str(exc))
-        print(render(env, fmt=args.format))
-        return 2
+    _, graph, rc = _load_graph_or_error(args)
+    if rc:
+        return rc
+    limit = _clamped_limit(args)
 
-    # Cap at 499 so limit+1 <= 500 (backend clamp)
-    raw_limit = args.limit if args.limit is not None else 20
-    limit = min(raw_limit, 499)
-
-    # Scope producers by --producer-in if provided
+    # Scope producers by --producer-in if provided (else --service push-down).
     producer_microservice = args.producer_in or args.service
 
     # Call list_producers to get producers (grouped by topic)
@@ -848,12 +853,15 @@ def _cmd_topics(args: argparse.Namespace) -> int:
         limit=limit + 1,  # +1 for truncated detection
     )
 
-    # Group by topic name
+    # Group by topic name. Track no-topic producers so they surface as a
+    # warning (distinguishable from "no producers at all").
     topics_dict: dict[str, dict] = {}
     producer_ids: list[str] = []
+    no_topic_count = 0
     for producer in rows:
         topic = producer.get("topic") or ""
         if not topic:
+            no_topic_count += 1
             continue
         if topic not in topics_dict:
             topics_dict[topic] = {
@@ -866,13 +874,24 @@ def _cmd_topics(args: argparse.Namespace) -> int:
         if producer_id:
             producer_ids.append(producer_id)
 
-    # If --consumer-in is provided, resolve consumers via neighbors_v2
+    warnings: list[str] = []
+    if no_topic_count:
+        warnings.append(
+            f"{no_topic_count} producer(s) had no topic and were excluded"
+        )
+
+    # If --consumer-in is provided, resolve consumers via neighbors_v2.
+    # NOTE: ASYNC_CALLS edges run Producer -> Route (outbound from producer).
+    # direction="in" on producers returns consumers that point INTO producers;
+    # on this fixture that set is empty (the graph models async messaging as
+    # Producer -> Route, with no inbound ASYNC_CALLS to Producer nodes). The
+    # --consumer-in path is retained for graphs where inbound ASYNC_CALLS exist.
     if args.consumer_in and producer_ids:
         consumer_out = mcp_v2.neighbors_v2(
             ids=producer_ids,
             direction="in",
             edge_types=["ASYNC_CALLS"],
-            limit=100,  # Generous limit for consumers
+            limit=_CONSUMER_FETCH_LIMIT,
             filter={"microservice": args.consumer_in} if args.consumer_in else None,
             graph=graph,
         )
@@ -891,7 +910,6 @@ def _cmd_topics(args: argparse.Namespace) -> int:
                         if topic and source_id:
                             if topic not in topic_consumers:
                                 topic_consumers[topic] = []
-                            # Add consumer as dict
                             topic_consumers[topic].append({
                                 "id": source_id,
                                 "fqn": consumer_node.fqn,
@@ -915,164 +933,95 @@ def _cmd_topics(args: argparse.Namespace) -> int:
         node_id = f"topic:{i}"
         nodes[node_id] = topic
 
-    env = Envelope(status="ok", nodes=nodes, truncated=truncated)
+    env = Envelope(status="ok", nodes=nodes, truncated=truncated, warnings=warnings)
     next_actions_hook(env)
     print(render(env, fmt=args.format, noun="topic"))
     return 0
 
 
 def _cmd_jobs(args: argparse.Namespace) -> int:
-    from java_codebase_rag.jrag_envelope import Envelope, mark_truncated, next_actions_hook
-    from java_codebase_rag.jrag_render import render
+    _, graph, rc = _load_graph_or_error(args)
+    if rc:
+        return rc
+    limit = _clamped_limit(args)
 
-    cfg = _resolve_cfg(args)
-    try:
-        graph = _load_graph(cfg)
-    except (_IndexNotFound, _IndexStale) as exc:
-        env = Envelope(status="error", message=str(exc))
-        print(render(env, fmt=args.format))
-        return 2
-
-    # Cap at 499 so limit+1 <= 500 (backend clamp)
-    raw_limit = args.limit if args.limit is not None else 20
-    limit = min(raw_limit, 499)
-
-    # Call list_by_capability for SCHEDULED_TASK
     symbol_hits = graph.list_by_capability(
         capability="SCHEDULED_TASK",
         module=args.module,
         microservice=args.service,
         limit=limit + 1,  # +1 for truncated detection
     )
+    rows = [_symbol_hit_to_dict(h) for h in symbol_hits]
+    return _render_listing(rows, limit=limit, args=args, noun="symbol")
 
-    # Convert SymbolHit to dict format (like to_envelope_rows)
-    rows = []
-    for hit in symbol_hits:
-        rows.append({
-            "id": hit.id,
-            "kind": "symbol",
-            "fqn": hit.fqn,
-            "name": hit.name,
-            "symbol_kind": hit.kind,
-            "microservice": hit.microservice,
-            "module": hit.module,
-            "role": hit.role,
-        })
 
-    # Mark truncated
-    display_rows_list, truncated = mark_truncated(rows, limit)
-    display_nodes = {row["id"]: row for row in display_rows_list}
+def _listener_ids_for_topic_prefix(graph, listener_ids: list[str], prefix: str) -> set[str]:
+    """Resolve which listener classes consume a topic with the given prefix.
 
-    env = Envelope(status="ok", nodes=display_nodes, truncated=truncated)
-    next_actions_hook(env)
-    print(render(env, fmt=args.format, noun="symbol"))
-    return 0
+    The graph models the listener→topic edge path as:
+        listener_class -[:DECLARES]-> listener_method -[:EXPOSES]-> Route(topic)
+
+    ``neighbors_v2`` does not project the Route's ``topic`` property onto the
+    returned NodeRef, so a single-purpose Cypher lookup is used here — the same
+    pattern as ``jrag_envelope._node_file_location`` (``graph._rows`` for a
+    focused property fetch). This is a CLI-layer compose query, not a
+    reimplementation of backend traversal logic.
+    """
+    if not listener_ids or not prefix:
+        return set(listener_ids)
+    rows = graph._rows(  # noqa: SLF001 - focused property lookup (same as _node_file_location)
+        "MATCH (cls:Symbol)-[:DECLARES]->(mth:Symbol)-[:EXPOSES]->(r:Route) "
+        "WHERE cls.id IN $ids AND r.topic IS NOT NULL AND r.topic <> '' "
+        "AND r.topic STARTS WITH $prefix "
+        "RETURN DISTINCT cls.id AS cid",
+        {"ids": listener_ids, "prefix": prefix},
+    )
+    return {str(r.get("cid") or "") for r in rows if r.get("cid")}
 
 
 def _cmd_listeners(args: argparse.Namespace) -> int:
-    from java_codebase_rag.jrag_envelope import Envelope, mark_truncated, next_actions_hook
-    from java_codebase_rag.jrag_render import render
+    _, graph, rc = _load_graph_or_error(args)
+    if rc:
+        return rc
+    limit = _clamped_limit(args)
 
-    cfg = _resolve_cfg(args)
-    try:
-        graph = _load_graph(cfg)
-    except (_IndexNotFound, _IndexStale) as exc:
-        env = Envelope(status="error", message=str(exc))
-        print(render(env, fmt=args.format))
-        return 2
-
-    # Cap at 499 so limit+1 <= 500 (backend clamp)
-    raw_limit = args.limit if args.limit is not None else 20
-    limit = min(raw_limit, 499)
-
-    # Call list_by_capability for MESSAGE_LISTENER
     symbol_hits = graph.list_by_capability(
         capability="MESSAGE_LISTENER",
         module=args.module,
         microservice=args.service,
-        limit=limit + 1,  # +1 for truncated detection
+        limit=_CONSUMER_FETCH_LIMIT,  # generous pre-filter fetch; truncation applies after
     )
 
-    # Post-filter by --topic-prefix if provided (check the producer member's topic)
-    if args.topic_prefix:
-        filtered_hits = []
-        for hit in symbol_hits:
-            # Check if this symbol is a listener by looking at its member relationship
-            # We need to find the producer that declares this listener and check its topic
-            # For now, we'll include all hits and let the user filter via the producer
-            filtered_hits.append(hit)
-        symbol_hits = filtered_hits
+    # --topic-prefix: narrow to listeners consuming a topic with that prefix.
+    # The listener class itself carries no topic; its listener method EXPOSES
+    # a Route whose ``topic`` property holds the consumed topic name (resolved
+    # or as a constant reference). See _listener_ids_for_topic_prefix.
+    if args.topic_prefix and symbol_hits:
+        matching_ids = _listener_ids_for_topic_prefix(
+            graph, [h.id for h in symbol_hits], args.topic_prefix
+        )
+        symbol_hits = [h for h in symbol_hits if h.id in matching_ids]
 
-    # Convert SymbolHit to dict format
-    rows = []
-    for hit in symbol_hits:
-        rows.append({
-            "id": hit.id,
-            "kind": "symbol",
-            "fqn": hit.fqn,
-            "name": hit.name,
-            "symbol_kind": hit.kind,
-            "microservice": hit.microservice,
-            "module": hit.module,
-            "role": hit.role,
-        })
-
-    # Mark truncated
-    display_rows_list, truncated = mark_truncated(rows, limit)
-    display_nodes = {row["id"]: row for row in display_rows_list}
-
-    env = Envelope(status="ok", nodes=display_nodes, truncated=truncated)
-    next_actions_hook(env)
-    print(render(env, fmt=args.format, noun="symbol"))
-    return 0
+    # Apply the user-facing limit + 1 truncation AFTER the topic filter.
+    capped = symbol_hits[: limit + 1]
+    rows = [_symbol_hit_to_dict(h) for h in capped]
+    return _render_listing(rows, limit=limit, args=args, noun="symbol")
 
 
 def _cmd_entities(args: argparse.Namespace) -> int:
-    from java_codebase_rag.jrag_envelope import Envelope, mark_truncated, next_actions_hook
-    from java_codebase_rag.jrag_render import render
+    _, graph, rc = _load_graph_or_error(args)
+    if rc:
+        return rc
+    limit = _clamped_limit(args)
 
-    cfg = _resolve_cfg(args)
-    try:
-        graph = _load_graph(cfg)
-    except (_IndexNotFound, _IndexStale) as exc:
-        env = Envelope(status="error", message=str(exc))
-        print(render(env, fmt=args.format))
-        return 2
-
-    # Cap at 499 so limit+1 <= 500 (backend clamp)
-    raw_limit = args.limit if args.limit is not None else 20
-    limit = min(raw_limit, 499)
-
-    # Call list_by_role for ENTITY
     symbol_hits = graph.list_by_role(
         role="ENTITY",
         module=args.module,
         microservice=args.service,
         limit=limit + 1,  # +1 for truncated detection
     )
-
-    # Convert SymbolHit to dict format
-    rows = []
-    for hit in symbol_hits:
-        rows.append({
-            "id": hit.id,
-            "kind": "symbol",
-            "fqn": hit.fqn,
-            "name": hit.name,
-            "symbol_kind": hit.kind,
-            "microservice": hit.microservice,
-            "module": hit.module,
-            "role": hit.role,
-        })
-
-    # Mark truncated
-    display_rows_list, truncated = mark_truncated(rows, limit)
-    display_nodes = {row["id"]: row for row in display_rows_list}
-
-    env = Envelope(status="ok", nodes=display_nodes, truncated=truncated)
-    next_actions_hook(env)
-    print(render(env, fmt=args.format, noun="symbol"))
-    return 0
+    rows = [_symbol_hit_to_dict(h) for h in symbol_hits]
+    return _render_listing(rows, limit=limit, args=args, noun="symbol")
 
 
 def main(argv: list[str] | None = None) -> int:
