@@ -202,20 +202,27 @@ def discover_project_root(start: Path) -> Path | None:
     First match wins (closest to start). Config file takes priority over index
     directory at the same level. Stops at $HOME inclusive — checks $HOME itself
     but does not walk past it. Returns None if no marker found.
+
+    A bare ``.java-codebase-rag/`` index directory at ``$HOME`` is intentionally
+    NOT treated as an anchor (issue #357): a stray home-level index (e.g. an
+    accidental ``init`` run from home) would otherwise hijack resolution for any
+    command run from a ``$HOME`` subdir without its own marker, silently reading
+    and writing the home-level index. A config file at ``$HOME`` still anchors.
     """
     start = start.resolve()
     home = Path.home().resolve()
 
     current = start
     while True:
-        # Config file is the primary anchor
+        # Config file is the primary anchor (valid at every level, including $HOME).
         if find_yaml_config_file(current) is not None:
             return current
-        # Index directory is the secondary anchor (supports indexes without config)
-        if _has_index_dir(current):
+        # Index directory is the secondary anchor (supports indexes without config),
+        # but NOT at $HOME — see the docstring for the cross-project hijack rationale.
+        if current != home and _has_index_dir(current):
             return current
 
-        # Stop if we've reached home (check home itself, but don't walk past it)
+        # Stop if we've reached home (config-file check above already handled home)
         if current == home:
             return None
 
@@ -237,7 +244,17 @@ def load_yaml_mapping(source_root: Path) -> dict[str, Any]:
         return {}
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except Exception:
+    except (yaml.YAMLError, OSError, UnicodeDecodeError) as exc:
+        # Best-effort loader: a missing/unreadable/malformed config must NOT abort
+        # startup — return {} and proceed with defaults. Narrowing this to
+        # ``yaml.YAMLError`` alone let OSError (chmod 000, stat/read TOCTOU) and
+        # UnicodeDecodeError (non-UTF-8 config) propagate to the caller; the broader
+        # tuple restores the graceful-degradation contract while still surfacing the
+        # problem on stderr.
+        print(
+            f"java-codebase-rag: could not load config {path}: {exc}; ignoring config.",
+            file=sys.stderr,
+        )
         return {}
     return data if isinstance(data, dict) else {}
 
@@ -476,7 +493,7 @@ def index_dir_has_existing_artifacts(index_dir: Path) -> tuple[bool, list[str]]:
             import lancedb
 
             db = lancedb.connect(str(index_dir.resolve()))
-            for name in db.table_names():
+            for name in db.list_tables():
                 paths.append(str((index_dir / name).resolve()) + " (Lance table)")
         except Exception:
             pass

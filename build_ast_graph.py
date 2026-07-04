@@ -66,7 +66,13 @@ from graph_enrich import (
     symbol_id,
 )
 from path_filtering import LayeredIgnore, iter_java_source_files
-from java_ontology import VALID_CLIENT_KINDS, VALID_HTTP_CALL_MATCHES, VALID_PRODUCER_KINDS
+from java_ontology import (
+    CLIENT_KIND_FEIGN_METHOD,
+    CLIENT_KIND_REST_TEMPLATE,
+    VALID_CLIENT_KINDS,
+    VALID_HTTP_CALL_MATCHES,
+    VALID_PRODUCER_KINDS,
+)
 
 log = logging.getLogger(__name__)
 
@@ -472,10 +478,26 @@ class IncrementalResult:
     elapsed_sec: float
 
 
+# --- Builder-owned files in the index dir (single source of truth) ---------------
+# Every artifact the graph builder writes next to code_graph.lbug. The lifecycle
+# CLI's `erase` clears all of these from one list so the builder and erase cannot
+# drift (issues #349 / #350): previously erase hardcoded ".graph_hashes.json" only
+# and left the crash marker (.graph_increment_in_progress) and the atomic-write
+# temp (.graph_hashes.json.tmp) behind on disk.
+GRAPH_HASHES_FILENAME = ".graph_hashes.json"
+GRAPH_HASHES_TMP_FILENAME = ".graph_hashes.json.tmp"
+GRAPH_INCREMENT_MARKER_FILENAME = ".graph_increment_in_progress"
+BUILDER_OWNED_INDEX_FILES: tuple[str, ...] = (
+    GRAPH_HASHES_FILENAME,
+    GRAPH_HASHES_TMP_FILENAME,
+    GRAPH_INCREMENT_MARKER_FILENAME,
+)
+
+
 class FileHashTracker:
     """Track content hashes for incremental graph rebuild."""
     def __init__(self, index_dir: Path):
-        self._path = index_dir / ".graph_hashes.json"
+        self._path = index_dir / GRAPH_HASHES_FILENAME
         self._hashes: dict[str, str] = {}  # rel_path -> sha256_hex
 
     def load(self) -> None:
@@ -491,7 +513,7 @@ class FileHashTracker:
 
     def save(self) -> None:
         """Persist hashes to disk atomically (write .tmp, rename)."""
-        tmp_path = self._path.with_suffix(".json.tmp")
+        tmp_path = self._path.parent / GRAPH_HASHES_TMP_FILENAME
         try:
             with open(tmp_path, "w", encoding="utf-8") as f:
                 json.dump(self._hashes, f, sort_keys=True)
@@ -576,7 +598,7 @@ def _load_existing_types(conn: ladybug.Connection, tables: GraphTables, exclude_
     query = f"""
     MATCH (s:Symbol)
     {where}
-    RETURN s.kind, s.fqn, s.name, s.filename, s.module, s.microservice, s.id
+    RETURN s.kind, s.fqn, s.name, s.filename, s.module, s.microservice, s.id, s.role
     """
     result = conn.execute(query, params)
     while result.has_next():
@@ -585,6 +607,7 @@ def _load_existing_types(conn: ladybug.Connection, tables: GraphTables, exclude_
         module = row[4] if len(row) > 4 else ""
         microservice = row[5] if len(row) > 5 else ""
         node_id = row[6] if len(row) > 6 else ""
+        role = row[7] if len(row) > 7 else ""
 
         decl = TypeDecl(name, kind, fqn)
         package = fqn[: -(len(name) + 1)] if fqn.endswith("." + name) else ""
@@ -602,6 +625,10 @@ def _load_existing_types(conn: ladybug.Connection, tables: GraphTables, exclude_
         tables.types[fqn] = entry
         tables.by_simple_name.setdefault(name, []).append(entry)
         tables.by_package.setdefault(package, []).append(entry)
+        # Seed the persisted role so the annotation-less stub is not recomputed to
+        # the default during node staging (issue #352 divergence #2).
+        if role:
+            tables.type_role_by_node_id[node_id] = role
 
 
 def _load_existing_members(conn: ladybug.Connection, tables: GraphTables, exclude_files: set[str] | None = None) -> None:
@@ -2382,7 +2409,7 @@ def pass5_imperative_edges(
                         )
                     rid = ""
                     strategy = call.resolution_strategy
-                    if call.client_kind == "feign_method":
+                    if call.client_kind == CLIENT_KIND_FEIGN_METHOD:
                         exposing = next((e for e in tables.exposes_rows if e.symbol_id == member.node_id), None)
                         if exposing is not None:
                             rid = exposing.route_id
@@ -2585,7 +2612,7 @@ def _match_call_edge(
         return "unresolved", []
 
     candidates: list[RouteRow] = []
-    if call.client_kind == "feign_method":
+    if call.client_kind == CLIENT_KIND_FEIGN_METHOD:
         # Prefer endpoint matching by target service + path/method for Feign declarations.
         path_value = call.path_template_call
         method_value = call.method_call
@@ -2714,7 +2741,7 @@ def pass6_match_edges(
             if src_route is None and member is not None:
                 # Recover feign caller hints from persisted caller-side Client declarations.
                 for client in client_hints_by_member.get(member.node_id, ()):
-                    if client.client_kind != "feign_method":
+                    if client.client_kind != CLIENT_KIND_FEIGN_METHOD:
                         continue
                     path_template, path_regex = _normalize_path(client.path)
                     src_route = RouteRow(
@@ -2750,7 +2777,7 @@ def pass6_match_edges(
             call = OutgoingCallDecl(
                 method_fqn=f"{member.parent_fqn}#{member.decl.signature}" if member else "",
                 method_sig=member.decl.signature if member else "",
-                client_kind="feign_method" if _feign_like else "rest_template",
+                client_kind=CLIENT_KIND_FEIGN_METHOD if _feign_like else CLIENT_KIND_REST_TEMPLATE,
                 channel="http",
                 feign_target_name=src_route.feign_name if src_route else "",
                 feign_target_url=src_route.feign_url if src_route else "",
@@ -3207,15 +3234,24 @@ def _write_nodes_impl(
         ))
     # types
     for entry in tables.types.values():
-        if entry.loaded_from_db:
-            stub_ids.add(entry.node_id)
         d = entry.decl
         role, capabilities = resolve_role_and_capabilities(
             d,
             overrides=overrides,
             meta_chain=mch,
         )
-        tables.type_role_by_node_id[entry.node_id] = role
+        if entry.loaded_from_db:
+            stub_ids.add(entry.node_id)
+            # Out-of-scope stub: its annotation-less decl collapses role to the
+            # default. The real node's role was persisted at index time and seeded
+            # into type_role_by_node_id by _load_existing_types; trust it so CALLS
+            # edges into this type keep the correct callee_declaring_role (#352).
+            # The staged row is filtered out of the write via stub_ids, so its
+            # capabilities placeholder never reaches the graph.
+            role = tables.type_role_by_node_id.get(entry.node_id, role)
+            capabilities = []
+        else:
+            tables.type_role_by_node_id[entry.node_id] = role
         rows.append(_node_row(
             id=entry.node_id, kind=d.kind, name=d.name, fqn=d.fqn,
             package=entry.package,
@@ -3424,13 +3460,15 @@ def _write_edges(conn: ladybug.Connection, tables: GraphTables, _file_by_node_id
     _bulk_copy(conn, "OVERRIDES", _REL_OVERRIDES_COLUMNS, overrides_rows)
 
     # Stage CALLS rows with dedup and callee_declaring_role materialization
-    seen_calls: set[tuple[str, str, int, int]] = set()
+    seen_calls: set[tuple[str, str, int, int, int]] = set()
     calls_rows: list[dict] = []
     member_by_id = {m.node_id: m for m in tables.members}
     for row in tables.calls_rows:
         if row.src_id not in valid_ids or row.dst_id not in valid_ids:
             continue
-        key = (row.src_id, row.dst_id, row.arg_count, row.call_site_line)
+        # Include call_site_byte so two call sites of the same method on the same
+        # source line (same arg_count) are kept as distinct edges (issue #359).
+        key = (row.src_id, row.dst_id, row.arg_count, row.call_site_line, row.call_site_byte)
         if key in seen_calls:
             continue
         seen_calls.add(key)
@@ -3606,10 +3644,15 @@ def _write_routes_and_exposes(conn: ladybug.Connection, tables: GraphTables, _fi
 
 
 def _write_meta(conn: ladybug.Connection, tables: GraphTables, source_root: Path) -> None:
-    seen_calls: set[tuple[str, str, int, int]] = set()
+    # Dedup key MUST match _write_edges (build_ast_graph.py, _REL_CALLS writer): the
+    # 5-tuple includes call_site_byte so two call sites of the same method on the
+    # same source line are counted separately. A previous version used the 4-tuple
+    # here, which made counts['calls'] (678) diverge from the real CALLS edge count
+    # (684) that _write_edges actually persisted — describe/stats then undercounted.
+    seen_calls: set[tuple[str, str, int, int, int]] = set()
     calls_unique = 0
     for row in tables.calls_rows:
-        key = (row.src_id, row.dst_id, row.arg_count, row.call_site_line)
+        key = (row.src_id, row.dst_id, row.arg_count, row.call_site_line, row.call_site_byte)
         if key not in seen_calls:
             seen_calls.add(key)
             calls_unique += 1
@@ -3811,7 +3854,7 @@ def incremental_rebuild(
         _verbose_stderr_line(f"[increment] detected {len(added)} added, {len(changed)} changed, {len(removed)} removed files")
 
     # Step 2: Crash marker check
-    crash_marker_path = index_dir / ".graph_increment_in_progress"
+    crash_marker_path = index_dir / GRAPH_INCREMENT_MARKER_FILENAME
     if crash_marker_path.exists():
         if verbose:
             _verbose_stderr_line("[increment] crash marker exists; falling back to full rebuild")
@@ -3896,6 +3939,11 @@ def incremental_rebuild(
         # Rebuild full tables for global pass 5-6 (pass1 populates members from scratch)
         tables_for_global = GraphTables()
         global_asts = pass1_parse(source_root, tables_for_global, verbose=verbose)
+        # pass4 (routes/EXPOSES) must run on the global pass5/6 tables too (issue
+        # #352): pass5 links Feign HTTP_CALLS to routes via exposes_rows, and pass6
+        # matches against routes_rows. Without pass4 both stay empty and the
+        # HTTP_CALLS match outcome drifts from a full rebuild. Mirrors main().
+        pass4_routes(tables_for_global, global_asts, source_root=source_root, verbose=verbose)
 
         pass5_imperative_edges(tables_for_global, global_asts, source_root=source_root, verbose=verbose)
 

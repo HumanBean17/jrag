@@ -30,21 +30,27 @@ log = logging.getLogger(__name__)
 
 
 def _parse_ladybug_json(raw: str | None) -> dict[str, Any]:
-    """Parse JSON from LadybugDB which returns unquoted keys like {key: value}."""
+    """Parse JSON from LadybugDB which returns unquoted keys like {key: value}.
+
+    Only quote keys at key positions (after ``{``, ``,`` or ``[``) so values
+    containing word-colon patterns (e.g. a URL ``https://...`` inside a quoted
+    string) are not corrupted. The previous ``(\\w+):`` regex matched ``word:``
+    anywhere, including inside values (issue #359).
+    """
     if not raw:
         return {}
-    # LadybugDB returns JSON without quotes around keys: {packages: 1, files: 2}
-    # Convert to standard JSON: {"packages": 1, "files": 2}
-    # This regex matches word characters followed by ':' at the start of a key
-    quoted = re.sub(r'(\w+):', r'"\1":', raw)
+    # Quote unquoted keys only where a key is expected: preceded by '{', ',' or
+    # '[' (with optional whitespace). This leaves word-colon runs inside values
+    # untouched.
+    quoted = re.sub(r'([,{\[]\s*)(\w+):', lambda m: f'{m.group(1)}"{m.group(2)}":', raw)
     try:
         return json.loads(quoted)
     except Exception:
         try:
-            # Fallback: try parsing as-is (for standard JSON)
+            # Fallback: try parsing as-is (for standard JSON).
             return json.loads(raw)
         except Exception:
-            log.warning("Failed to parse counts_json: %s", raw[:100])
+            log.warning("Failed to parse graph_meta JSON blob: %s", raw[:100])
             return {}
 
 # Composed describe / neighbors dot-keys (not stored graph edge labels).

@@ -138,6 +138,42 @@ def test_erase_removes_graph_file_cocoindex_dir_and_hash_store(tmp_path: Path) -
     assert not (idx / ".graph_hashes.json").exists(), "erase left .graph_hashes.json on disk"
 
 
+def test_erase_removes_increment_marker_and_hash_store_tmp(tmp_path: Path) -> None:
+    """erase must also clear the rest of the builder's bookkeeping files.
+
+    Regression for issues #349 / #350: erase removed code_graph.lbug,
+    cocoindex.db, and .graph_hashes.json but left the incremental crash marker
+    (``.graph_increment_in_progress``) and the atomic-write temp
+    (``.graph_hashes.json.tmp``) on disk. The marker surviving erase -> init then
+    forced the next ``increment`` into a silent full rebuild (explained only under
+    ``--verbose``); the ``.tmp`` was pure cruft that defeated erase's "clean slate".
+    Both are builder-owned files (``build_ast_graph.BUILDER_OWNED_INDEX_FILES``),
+    so erase clears them from the same source of truth instead of hardcoding names.
+    """
+    idx = tmp_path / "erase_builder_state"
+    idx.mkdir()
+    (idx / "code_graph.lbug").write_bytes(b"fake-kuzu-db")
+    (idx / ".graph_hashes.json").write_text("{}", encoding="utf-8")
+    # Simulate a crashed increment (marker left behind) + a crashed hash-store
+    # save (atomic-write temp orphaned before the os.replace).
+    (idx / ".graph_increment_in_progress").write_text("", encoding="utf-8")
+    (idx / ".graph_hashes.json.tmp").write_text("partial", encoding="utf-8")
+    env = os.environ.copy()
+    env["JAVA_CODEBASE_RAG_INDEX_DIR"] = str(idx)
+    env["JAVA_CODEBASE_RAG_SOURCE_ROOT"] = str(tmp_path)
+    proc = _run_cli(
+        ["erase", "--source-root", str(tmp_path), "--index-dir", str(idx), "--yes"],
+        env=env,
+    )
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert not (idx / ".graph_increment_in_progress").exists(), (
+        "erase left .graph_increment_in_progress; next increment would silently full-rebuild (#349)"
+    )
+    assert not (idx / ".graph_hashes.json.tmp").exists(), (
+        "erase left .graph_hashes.json.tmp orphan (#350)"
+    )
+
+
 def test_embedding_model_precedence_cli_over_env_over_yaml_over_default(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

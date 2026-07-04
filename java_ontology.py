@@ -49,6 +49,11 @@ VALID_CLIENT_KINDS: frozenset[str] = frozenset((
     "rest_template",
     "web_client",
 ))
+# Named members of VALID_CLIENT_KINDS — reference these at emit/match sites so a
+# rename in the set above cannot silently desync callers (issue #359).
+CLIENT_KIND_FEIGN_METHOD = "feign_method"
+CLIENT_KIND_REST_TEMPLATE = "rest_template"
+CLIENT_KIND_WEB_CLIENT = "web_client"
 
 VALID_PRODUCER_KINDS: frozenset[str] = frozenset((
     "kafka_send",
@@ -433,6 +438,9 @@ __all__ = [
     "VALID_ROUTE_FRAMEWORKS",
     "VALID_ROUTE_KINDS",
     "VALID_CLIENT_KINDS",
+    "CLIENT_KIND_FEIGN_METHOD",
+    "CLIENT_KIND_REST_TEMPLATE",
+    "CLIENT_KIND_WEB_CLIENT",
     "VALID_PRODUCER_KINDS",
     "VALID_HTTP_CALL_STRATEGIES",
     "VALID_ASYNC_CALL_STRATEGIES",
