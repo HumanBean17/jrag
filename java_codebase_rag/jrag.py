@@ -348,6 +348,225 @@ def build_parser() -> argparse.ArgumentParser:
     )
     entities.set_defaults(handler=_cmd_entities)
 
+    # ---- Traversal commands (PR-JRAG-3a) ----
+    # Shared resolve-disambiguation flags (PR-JRAG-1a contract: only --kind is a
+    # true resolve input; the rest are client-side post-filters on resolve's
+    # candidate set). Traversals are resolve-first; --offset is NOT registered
+    # on any traversal subparser (none of the backends take offset).
+    resolve_parent = argparse.ArgumentParser(add_help=False)
+    resolve_parent.add_argument(
+        "--kind",
+        choices=("symbol", "route", "client", "producer"),
+        default=None,
+        help="Hint for resolve (omit for broad search).",
+    )
+    resolve_parent.add_argument("--java-kind", type=str, default=None, help="Post-filter by Java symbol kind.")
+    resolve_parent.add_argument("--role", type=str, default=None, help="Post-filter by role.")
+    resolve_parent.add_argument("--fqn-prefix", type=str, default=None, help="Post-filter by FQN prefix.")
+
+    callers = subparsers.add_parser(
+        "callers",
+        help="Who calls this symbol or route?",
+        parents=[common, resolve_parent],
+        description=(
+            "Resolve <query> then traverse the call graph inbound (who calls me?). "
+            "Symbol -> g.find_callers (CALLS edges, --service/--module pushed down). "
+            "Route -> g.find_route_callers; --service is a CLIENT-SIDE post-filter on "
+            "caller_microservice (the backend kwarg is ignored once route_id is set), "
+            "surfaced as a warnings[] entry. --include-external controls whether "
+            "external (JDK/Spring/Lombok) callers are excluded (default: excluded)."
+        ),
+    )
+    callers.add_argument("query", help="Symbol FQN/name (e.g. 'pkg.Svc#method(Arg)') or route path.")
+    callers.add_argument("--depth", type=int, default=1, help="Call-graph depth (default 1).")
+    callers.add_argument(
+        "--min-confidence",
+        type=float,
+        default=0.0,
+        dest="min_confidence",
+        help="Minimum CALLS edge confidence in [0.0, 1.0].",
+    )
+    callers.add_argument(
+        "--include-external",
+        action="store_true",
+        help="Include external (JDK/Spring/Lombok) callers/callees (default excluded).",
+    )
+    callers.set_defaults(handler=_cmd_callers)
+
+    callees = subparsers.add_parser(
+        "callees",
+        help="What does this symbol call?",
+        parents=[common, resolve_parent],
+        description=(
+            "Resolve <query> (Symbol) then traverse the call graph outbound (what do I "
+            "call?). Calls g.find_callees; --include-external is symmetric with callers."
+        ),
+    )
+    callees.add_argument("query", help="Symbol FQN/name (e.g. 'pkg.Svc#method(Arg)').")
+    callees.add_argument("--depth", type=int, default=1, help="Call-graph depth (default 1).")
+    callees.add_argument(
+        "--min-confidence",
+        type=float,
+        default=0.0,
+        dest="min_confidence",
+        help="Minimum CALLS edge confidence in [0.0, 1.0].",
+    )
+    callees.add_argument(
+        "--include-external",
+        action="store_true",
+        help="Include external (JDK/Spring/Lombok) callees (default excluded).",
+    )
+    callees.set_defaults(handler=_cmd_callees)
+
+    hierarchy = subparsers.add_parser(
+        "hierarchy",
+        help="Type hierarchy (parents and children).",
+        parents=[common, resolve_parent],
+        description=(
+            "Resolve <query> (type Symbol) then walk EXTENDS/IMPLEMENTS both directions: "
+            "out = supertypes (parents), in = subtypes (children). No --service/--module "
+            "push-down (structural edges)."
+        ),
+    )
+    hierarchy.add_argument("query", help="Class/interface FQN or name.")
+    hierarchy.set_defaults(handler=_cmd_hierarchy)
+
+    implementations = subparsers.add_parser(
+        "implementations",
+        help="Classes implementing an interface.",
+        parents=[common, resolve_parent],
+        description=(
+            "Resolve <query> (interface Symbol) then call g.find_implementors. "
+            "--service/--module pushed down; --capability pushed down to the backend "
+            "(find_implementors accepts a capability filter)."
+        ),
+    )
+    implementations.add_argument("query", help="Interface FQN or name.")
+    implementations.add_argument("--capability", type=str, default=None, help="Filter implementors by capability.")
+    implementations.set_defaults(handler=_cmd_implementations)
+
+    subclasses = subparsers.add_parser(
+        "subclasses",
+        help="Classes extending a type.",
+        parents=[common, resolve_parent],
+        description=(
+            "Resolve <query> (class Symbol) then call g.find_subclasses (EXTENDS inbound). "
+            "--service/--module pushed down."
+        ),
+    )
+    subclasses.add_argument("query", help="Class FQN or name.")
+    subclasses.set_defaults(handler=_cmd_subclasses)
+
+    overrides = subparsers.add_parser(
+        "overrides",
+        help="Methods this method overrides (dispatch UP to declaration).",
+        parents=[common, resolve_parent],
+        description=(
+            "Resolve <query> (method Symbol) then neighbors_v2([id], 'out', ['OVERRIDES']). "
+            "The stored OVERRIDES edge runs overrider -> declaration (subtype method -> "
+            "supertype declared method), so 'out' dispatches UP the hierarchy."
+        ),
+    )
+    overrides.add_argument("query", help="Method FQN or name (e.g. 'pkg.Impl#method(Arg)').")
+    overrides.set_defaults(handler=_cmd_overrides)
+
+    overridden_by = subparsers.add_parser(
+        "overridden-by",
+        help="Methods overriding this one (dispatch DOWN to overriders).",
+        parents=[common, resolve_parent],
+        description=(
+            "Resolve <query> (method Symbol) then neighbors_v2([id], 'in', ['OVERRIDES']) "
+            "(= virtual OVERRIDDEN_BY out). 'in' traverses the stored OVERRIDES edge "
+            "backward, dispatching DOWN from declaration to overriders."
+        ),
+    )
+    overridden_by.add_argument("query", help="Method FQN or name (e.g. 'pkg.Iface#method(Arg)').")
+    overridden_by.set_defaults(handler=_cmd_overridden_by)
+
+    dependents = subparsers.add_parser(
+        "dependents",
+        help="Who injects this type?",
+        parents=[common, resolve_parent],
+        description=(
+            "Resolve <query> (type Symbol) then call g.find_injectors (INJECTS inbound: "
+            "classes that inject this type). --service/--module pushed down."
+        ),
+    )
+    dependents.add_argument("query", help="Type FQN or name.")
+    dependents.set_defaults(handler=_cmd_dependents)
+
+    impact = subparsers.add_parser(
+        "impact",
+        help="Fleet-wide blast radius (INJECTS/IMPLEMENTS/EXTENDS reverse closure).",
+        parents=[common, resolve_parent],
+        description=(
+            "Resolve <query> then call g.impact_analysis (reverse closure over "
+            "INJECTS+IMPLEMENTS+EXTENDS: who breaks if this changes). --service is a "
+            "CLIENT-SIDE post-filter (impact_analysis has no microservice param); "
+            "surfaced as a warnings[] entry."
+        ),
+    )
+    impact.add_argument("query", help="Symbol FQN or name.")
+    impact.add_argument("--depth", type=int, default=2, help="Closure depth (default 2).")
+    impact.set_defaults(handler=_cmd_impact)
+
+    decompose = subparsers.add_parser(
+        "decompose",
+        help="Role-waterfall flow from an entrypoint.",
+        parents=[common, resolve_parent],
+        description=(
+            "Resolve <query> (entrypoint Symbol) then call g.trace_flow. Walks "
+            "CONTROLLER -> SERVICE/COMPONENT -> CLIENT/REPOSITORY/MAPPER stages via "
+            "INJECTS+EXTENDS+IMPLEMENTS (optionally + CALLS hops). --service/--module "
+            "pushed down; --depth clamped to 1..3."
+        ),
+    )
+    decompose.add_argument("query", help="Entrypoint symbol FQN or name.")
+    decompose.add_argument("--depth", type=int, default=2, help="Neighbour hop count per stage (clamped 1..3, default 2).")
+    decompose.add_argument(
+        "--follow-calls",
+        action="store_true",
+        dest="follow_calls",
+        help="Follow DECLARES+CALLS type-to-type hops to top up each stage.",
+    )
+    decompose.add_argument(
+        "--max-stage",
+        type=int,
+        default=20,
+        dest="max_stage",
+        help="Cap on symbols per stage (stage_limit, default 20).",
+    )
+    decompose.add_argument(
+        "--min-confidence",
+        type=float,
+        default=0.0,
+        dest="min_confidence",
+        help="Min CALLS confidence when --follow-calls is on.",
+    )
+    decompose.add_argument(
+        "--include-external",
+        action="store_true",
+        help="Include external types reached via the CALLS hop (default excluded).",
+    )
+    decompose.set_defaults(handler=_cmd_decompose)
+
+    flow = subparsers.add_parser(
+        "flow",
+        help="Request flow through a route (inbound callers + outbound CALLS hops).",
+        parents=[common],
+        description=(
+            "Resolve <query> to a Route then call g.trace_request_flow. Inbound = "
+            "cross-service HTTP/async callers (Client/Producer two-hop); outbound = "
+            "CALLS hops from the route handler. Intra-service is an INDEX-TIME data "
+            "property: CALLS edges are intra-codebase by construction, and the query "
+            "carries no microservice predicate, so the result reflects whatever the "
+            "fixture indexed (no query-time constraint). --max-hops clamped to 1..8."
+        ),
+    )
+    flow.add_argument("query", help="Route path (e.g. '/chat/assign'). Resolved with hint_kind=route.")
+    flow.add_argument("--max-hops", type=int, default=5, dest="max_hops", help="Max CALLS hops (clamped 1..8, default 5).")
+    flow.set_defaults(handler=_cmd_flow)
+
     return parser
 
 
@@ -1040,6 +1259,692 @@ def _cmd_entities(args: argparse.Namespace) -> int:
     )
     rows = [_symbol_hit_to_dict(h) for h in symbol_hits]
     return _render_listing(rows, limit=limit, args=args, noun="symbol")
+
+
+# ============================================================================
+# PR-JRAG-3a: traversal helpers + 11 traversal command handlers.
+#
+# Every traversal is resolve-first (resolve_query), then calls a LadybugGraph
+# method (or neighbors_v2 for the override axis), then renders via the
+# traversal shape (envelope.root + edge rows). --offset is NOT supported on
+# any traversal subparser. --limit uses +1-fetch where the method takes a
+# limit; client-side slice otherwise.
+#
+# Backend signatures verified against source (ladybug_queries.py / mcp_v2.py /
+# java_ontology.py) at PR-JRAG-3a time. Adaptations from the brief:
+#  * find_implementors / find_subclasses / find_injectors DO accept a
+#    `capability` kwarg (the brief claimed they did not); --capability is
+#    PUSHED DOWN on `implementations` (more efficient + matches the global
+#    principle "pushed down where the method takes it").
+#  * OVERRIDES edge direction confirmed: overrider -> declaration (subtype
+#    method -> supertype method), so `out`=dispatch UP (overrides) and
+#    `in`=dispatch DOWN (overridden-by). Brief was correct.
+# ============================================================================
+
+
+def _resolve_traversal_node(
+    args: argparse.Namespace,
+    *,
+    cfg,
+    graph,
+    hint_kind,
+):
+    """Resolve-first frame shared by every traversal command.
+
+    Returns ``(node, env, rc)``. On resolve failure (ambiguous / not_found /
+    error), renders the envelope and returns ``(None, env, rc)`` with rc=2 on
+    error, 0 on ambiguous/not_found (matches the inspect command convention).
+    """
+    from java_codebase_rag.jrag_envelope import resolve_query
+    from java_codebase_rag.jrag_render import render
+
+    node, env = resolve_query(
+        args.query,
+        hint_kind=hint_kind,
+        java_kind=getattr(args, "java_kind", None),
+        role=getattr(args, "role", None),
+        fqn_prefix=getattr(args, "fqn_prefix", None),
+        cfg=cfg,
+        graph=graph,
+    )
+    if env.status != "ok":
+        print(render(env, fmt=args.format))
+        return None, env, 2 if env.status == "error" else 0
+    return node, env, 0
+
+
+def _noderef_to_node_dict(ref) -> dict:
+    """NodeRef (pydantic, from neighbors_v2 / resolve) -> envelope node dict."""
+    return ref.model_dump()
+
+
+def _emit_traversal(
+    args: argparse.Namespace,
+    *,
+    root_id: str,
+    nodes: dict[str, dict],
+    edges: list[dict],
+    noun: str,
+    warnings: list[str] | None = None,
+    truncated: bool = False,
+) -> int:
+    """Build the traversal envelope (root + nodes + edges) and render.
+
+    The traversal shape requires ``envelope.root`` so the renderer uses the
+    traversal shape (root + edge rows). ``next_offset`` is left None on every
+    traversal (non-offset -> "truncated: more results - narrow your query").
+    """
+    from java_codebase_rag.jrag_envelope import Envelope, next_actions_hook
+    from java_codebase_rag.jrag_render import render
+
+    env = Envelope(
+        status="ok",
+        nodes=dict(nodes),
+        edges=list(edges),
+        root=root_id,
+        warnings=warnings or [],
+        truncated=truncated,
+    )
+    next_actions_hook(env, root=root_id, result_edges=edges)
+    print(render(env, fmt=args.format, noun=noun))
+    return 0
+
+
+def _cmd_callers(args: argparse.Namespace) -> int:
+    cfg, graph, rc = _load_graph_or_error(args)
+    if rc:
+        return rc
+    node, _renv, rrc = _resolve_traversal_node(args, cfg=cfg, graph=graph, hint_kind=args.kind)
+    if rrc or node is None:
+        return rrc
+    limit = _clamped_limit(args)
+
+    root_dict = _noderef_to_node_dict(node)
+    root_id = node.id
+
+    # Route root -> find_route_callers (client-side --service post-filter).
+    if node.kind == "route":
+        route_callers = graph.find_route_callers(route_id=root_id)
+        warnings: list[str] = []
+        if args.service:
+            # find_route_callers ignores microservice once route_id is set
+            # (microservice is only used to *resolve* the route_id when not
+            # given). Surface that as a warning so the user knows the filter
+            # was applied client-side, not pushed down.
+            warnings.append(
+                "--service is a post-filter on route callers "
+                "(find_route_callers ignores microservice once route_id is set)"
+            )
+            route_callers = [
+                rc for rc in route_callers if (rc.caller_microservice or "") == args.service
+            ]
+        # No backend limit on find_route_callers; client-side slice for truncation.
+        truncated = len(route_callers) > limit
+        display = route_callers[:limit]
+        nodes: dict[str, dict] = {}
+        edges: list[dict] = []
+        for rc in display:
+            caller_id = rc.caller_node_id
+            if rc.caller_node_kind == "client":
+                fqn = rc.raw_uri or rc.target_service or "(client)"
+                edge_type = "HTTP_CALLS"
+            else:
+                fqn = rc.topic or "(producer)"
+                edge_type = "ASYNC_CALLS"
+            nodes[caller_id] = {
+                "id": caller_id,
+                "kind": rc.caller_node_kind,
+                "fqn": fqn,
+                "microservice": rc.caller_microservice,
+            }
+            edges.append(
+                {"other_id": caller_id, "edge_type": edge_type, "confidence": rc.confidence}
+            )
+        # Include the root (Route) node so the zero-callers rendering surfaces
+        # the route path rather than a bare "0 callers" line.
+        nodes[root_id] = root_dict
+        return _emit_traversal(
+            args, root_id=root_id, nodes=nodes, edges=edges,
+            noun="callers", warnings=warnings, truncated=truncated,
+        )
+
+    # Symbol root -> find_callers (push down --service/--module/depth/etc.).
+    if node.kind != "symbol":
+        from java_codebase_rag.jrag_envelope import Envelope
+        from java_codebase_rag.jrag_render import render
+
+        env = Envelope(
+            status="error",
+            message=(
+                f"callers expects a Symbol or Route root; resolved node kind is "
+                f"{node.kind!r}. Use --kind to narrow resolve."
+            ),
+        )
+        print(render(env, fmt=args.format))
+        return 2
+
+    depth = getattr(args, "depth", 1)
+    min_conf = getattr(args, "min_confidence", 0.0)
+    exclude_external = not getattr(args, "include_external", False)
+    call_edges = graph.find_callers(
+        node.fqn,
+        depth=depth,
+        limit=limit + 1,
+        min_confidence=min_conf,
+        exclude_external=exclude_external,
+        module=args.module,
+        microservice=args.service,
+    )
+    from java_codebase_rag.jrag_envelope import mark_truncated
+
+    display, truncated = mark_truncated(call_edges, limit)
+    nodes = {}
+    edges = []
+    for ce in display:
+        nodes[ce.src.id] = _symbol_hit_to_dict(ce.src)
+        edges.append(
+            {"other_id": ce.src.id, "edge_type": "CALLS", "confidence": ce.confidence}
+        )
+    nodes[root_id] = root_dict
+    return _emit_traversal(
+        args, root_id=root_id, nodes=nodes, edges=edges,
+        noun="callers", truncated=truncated,
+    )
+
+
+def _cmd_callees(args: argparse.Namespace) -> int:
+    cfg, graph, rc = _load_graph_or_error(args)
+    if rc:
+        return rc
+    node, _renv, rrc = _resolve_traversal_node(args, cfg=cfg, graph=graph, hint_kind=args.kind)
+    if rrc or node is None:
+        return rrc
+    limit = _clamped_limit(args)
+
+    from java_codebase_rag.jrag_envelope import Envelope, mark_truncated
+    from java_codebase_rag.jrag_render import render
+
+    if node.kind != "symbol":
+        env = Envelope(
+            status="error",
+            message=(
+                f"callees expects a Symbol root; resolved node kind is {node.kind!r}. "
+                "Use --kind symbol to narrow resolve."
+            ),
+        )
+        print(render(env, fmt=args.format))
+        return 2
+
+    depth = getattr(args, "depth", 1)
+    min_conf = getattr(args, "min_confidence", 0.0)
+    exclude_external = not getattr(args, "include_external", False)
+    call_edges = graph.find_callees(
+        node.fqn,
+        depth=depth,
+        limit=limit + 1,
+        min_confidence=min_conf,
+        exclude_external=exclude_external,
+        module=args.module,
+        microservice=args.service,
+    )
+    display, truncated = mark_truncated(call_edges, limit)
+    root_id = node.id
+    nodes: dict[str, dict] = {root_id: _noderef_to_node_dict(node)}
+    edges: list[dict] = []
+    for ce in display:
+        nodes[ce.dst.id] = _symbol_hit_to_dict(ce.dst)
+        edges.append(
+            {"other_id": ce.dst.id, "edge_type": "CALLS", "confidence": ce.confidence}
+        )
+    return _emit_traversal(
+        args, root_id=root_id, nodes=nodes, edges=edges,
+        noun="callees", truncated=truncated,
+    )
+
+
+def _cmd_hierarchy(args: argparse.Namespace) -> int:
+    import mcp_v2
+
+    cfg, graph, rc = _load_graph_or_error(args)
+    if rc:
+        return rc
+    node, _renv, rrc = _resolve_traversal_node(args, cfg=cfg, graph=graph, hint_kind=args.kind)
+    if rrc or node is None:
+        return rrc
+    limit = _clamped_limit(args)
+
+    from java_codebase_rag.jrag_envelope import Envelope
+    from java_codebase_rag.jrag_render import render
+
+    if node.kind != "symbol":
+        env = Envelope(
+            status="error",
+            message=(
+                f"hierarchy expects a type Symbol root; resolved node kind is {node.kind!r}."
+            ),
+        )
+        print(render(env, fmt=args.format))
+        return 2
+
+    root_id = node.id
+    # Fetch both directions with limit+1 for +1-fetch truncation on each axis.
+    fetch = limit + 1
+    up = mcp_v2.neighbors_v2(
+        [root_id], direction="out", edge_types=["EXTENDS", "IMPLEMENTS"],
+        limit=fetch, graph=graph,
+    )
+    dn = mcp_v2.neighbors_v2(
+        [root_id], direction="in", edge_types=["EXTENDS", "IMPLEMENTS"],
+        limit=fetch, graph=graph,
+    )
+    if not up.success:
+        print(render(Envelope(status="error", message=up.message or "neighbors_v2 failed"), fmt=args.format))
+        return 2
+
+    nodes: dict[str, dict] = {root_id: _noderef_to_node_dict(node)}
+    edges: list[dict] = []
+    for e in up.results:
+        nodes[e.other.id] = _noderef_to_node_dict(e.other)
+        edges.append({"other_id": e.other.id, "edge_type": e.edge_type, "direction": "up"})
+    for e in dn.results:
+        nodes[e.other.id] = _noderef_to_node_dict(e.other)
+        edges.append({"other_id": e.other.id, "edge_type": e.edge_type, "direction": "down"})
+
+    # +1-fetch truncation on the combined edge list (up then down).
+    from java_codebase_rag.jrag_envelope import mark_truncated
+
+    display_edges, truncated = mark_truncated(edges, limit)
+    # Drop nodes that are no longer referenced after truncation (keep root).
+    referenced = {root_id} | {e["other_id"] for e in display_edges}
+    nodes = {nid: nd for nid, nd in nodes.items() if nid in referenced}
+    return _emit_traversal(
+        args, root_id=root_id, nodes=nodes, edges=display_edges,
+        noun="hierarchy", truncated=truncated,
+    )
+
+
+def _cmd_implementations(args: argparse.Namespace) -> int:
+    cfg, graph, rc = _load_graph_or_error(args)
+    if rc:
+        return rc
+    node, _renv, rrc = _resolve_traversal_node(args, cfg=cfg, graph=graph, hint_kind=args.kind)
+    if rrc or node is None:
+        return rrc
+    limit = _clamped_limit(args)
+
+    from java_codebase_rag.jrag_envelope import Envelope, mark_truncated
+    from java_codebase_rag.jrag_render import render
+
+    if node.kind != "symbol":
+        env = Envelope(
+            status="error",
+            message=(
+                f"implementations expects an interface Symbol root; resolved kind is {node.kind!r}."
+            ),
+        )
+        print(render(env, fmt=args.format))
+        return 2
+
+    # ADAPTATION: find_implementors DOES accept a `capability` kwarg (brief
+    # claimed otherwise). Push --capability down (matches the global principle
+    # "pushed down where the method takes it"); --service/--module also pushed.
+    impls = graph.find_implementors(
+        node.fqn,
+        microservice=args.service,
+        module=args.module,
+        capability=args.capability,
+        limit=limit + 1,
+    )
+    display, truncated = mark_truncated(impls, limit)
+    root_id = node.id
+    nodes: dict[str, dict] = {root_id: _noderef_to_node_dict(node)}
+    edges: list[dict] = []
+    for hit in display:
+        nodes[hit.id] = _symbol_hit_to_dict(hit)
+        edges.append({"other_id": hit.id, "edge_type": "IMPLEMENTS"})
+    return _emit_traversal(
+        args, root_id=root_id, nodes=nodes, edges=edges,
+        noun="implementations", truncated=truncated,
+    )
+
+
+def _cmd_subclasses(args: argparse.Namespace) -> int:
+    cfg, graph, rc = _load_graph_or_error(args)
+    if rc:
+        return rc
+    node, _renv, rrc = _resolve_traversal_node(args, cfg=cfg, graph=graph, hint_kind=args.kind)
+    if rrc or node is None:
+        return rrc
+    limit = _clamped_limit(args)
+
+    from java_codebase_rag.jrag_envelope import Envelope, mark_truncated
+    from java_codebase_rag.jrag_render import render
+
+    if node.kind != "symbol":
+        env = Envelope(
+            status="error",
+            message=(
+                f"subclasses expects a class Symbol root; resolved kind is {node.kind!r}."
+            ),
+        )
+        print(render(env, fmt=args.format))
+        return 2
+
+    subs = graph.find_subclasses(
+        node.fqn,
+        microservice=args.service,
+        module=args.module,
+        limit=limit + 1,
+    )
+    display, truncated = mark_truncated(subs, limit)
+    root_id = node.id
+    nodes: dict[str, dict] = {root_id: _noderef_to_node_dict(node)}
+    edges: list[dict] = []
+    for hit in display:
+        nodes[hit.id] = _symbol_hit_to_dict(hit)
+        edges.append({"other_id": hit.id, "edge_type": "EXTENDS"})
+    return _emit_traversal(
+        args, root_id=root_id, nodes=nodes, edges=edges,
+        noun="subclasses", truncated=truncated,
+    )
+
+
+def _cmd_overrides(args: argparse.Namespace) -> int:
+    import mcp_v2
+
+    cfg, graph, rc = _load_graph_or_error(args)
+    if rc:
+        return rc
+    node, _renv, rrc = _resolve_traversal_node(args, cfg=cfg, graph=graph, hint_kind=args.kind)
+    if rrc or node is None:
+        return rrc
+    limit = _clamped_limit(args)
+
+    from java_codebase_rag.jrag_envelope import Envelope
+    from java_codebase_rag.jrag_render import render
+
+    if node.kind != "symbol":
+        env = Envelope(
+            status="error",
+            message=f"overrides expects a method Symbol root; resolved kind is {node.kind!r}.",
+        )
+        print(render(env, fmt=args.format))
+        return 2
+
+    root_id = node.id
+    # OVERRIDES edge runs overrider -> declaration (subtype -> supertype method).
+    # direction="out" dispatches UP (the declarations this method overrides).
+    out = mcp_v2.neighbors_v2(
+        [root_id], direction="out", edge_types=["OVERRIDES"],
+        limit=limit + 1, graph=graph,
+    )
+    if not out.success:
+        print(render(Envelope(status="error", message=out.message or "neighbors_v2 failed"), fmt=args.format))
+        return 2
+
+    nodes: dict[str, dict] = {root_id: _noderef_to_node_dict(node)}
+    edges: list[dict] = []
+    for e in out.results:
+        nodes[e.other.id] = _noderef_to_node_dict(e.other)
+        edges.append({"other_id": e.other.id, "edge_type": "OVERRIDES", "direction": "up"})
+    truncated = bool(out.has_more_results) or len(edges) > limit
+    if len(edges) > limit:
+        edges = edges[:limit]
+    return _emit_traversal(
+        args, root_id=root_id, nodes=nodes, edges=edges,
+        noun="overrides", truncated=truncated,
+    )
+
+
+def _cmd_overridden_by(args: argparse.Namespace) -> int:
+    import mcp_v2
+
+    cfg, graph, rc = _load_graph_or_error(args)
+    if rc:
+        return rc
+    node, _renv, rrc = _resolve_traversal_node(args, cfg=cfg, graph=graph, hint_kind=args.kind)
+    if rrc or node is None:
+        return rrc
+    limit = _clamped_limit(args)
+
+    from java_codebase_rag.jrag_envelope import Envelope
+    from java_codebase_rag.jrag_render import render
+
+    if node.kind != "symbol":
+        env = Envelope(
+            status="error",
+            message=f"overridden-by expects a method Symbol root; resolved kind is {node.kind!r}.",
+        )
+        print(render(env, fmt=args.format))
+        return 2
+
+    root_id = node.id
+    # direction="in" on OVERRIDES = virtual OVERRIDDEN_BY out (dispatch DOWN:
+    # from declaration to its overriders).
+    out = mcp_v2.neighbors_v2(
+        [root_id], direction="in", edge_types=["OVERRIDES"],
+        limit=limit + 1, graph=graph,
+    )
+    if not out.success:
+        print(render(Envelope(status="error", message=out.message or "neighbors_v2 failed"), fmt=args.format))
+        return 2
+
+    nodes: dict[str, dict] = {root_id: _noderef_to_node_dict(node)}
+    edges: list[dict] = []
+    for e in out.results:
+        nodes[e.other.id] = _noderef_to_node_dict(e.other)
+        edges.append({"other_id": e.other.id, "edge_type": "OVERRIDES", "direction": "down"})
+    truncated = bool(out.has_more_results) or len(edges) > limit
+    if len(edges) > limit:
+        edges = edges[:limit]
+    return _emit_traversal(
+        args, root_id=root_id, nodes=nodes, edges=edges,
+        noun="overridden-by", truncated=truncated,
+    )
+
+
+def _cmd_dependents(args: argparse.Namespace) -> int:
+    cfg, graph, rc = _load_graph_or_error(args)
+    if rc:
+        return rc
+    node, _renv, rrc = _resolve_traversal_node(args, cfg=cfg, graph=graph, hint_kind=args.kind)
+    if rrc or node is None:
+        return rrc
+    limit = _clamped_limit(args)
+
+    from java_codebase_rag.jrag_envelope import Envelope, mark_truncated
+    from java_codebase_rag.jrag_render import render
+
+    if node.kind != "symbol":
+        env = Envelope(
+            status="error",
+            message=f"dependents expects a type Symbol root; resolved kind is {node.kind!r}.",
+        )
+        print(render(env, fmt=args.format))
+        return 2
+
+    inj = graph.find_injectors(
+        node.fqn,
+        microservice=args.service,
+        module=args.module,
+        limit=limit + 1,
+    )
+    display, truncated = mark_truncated(inj, limit)
+    root_id = node.id
+    nodes: dict[str, dict] = {root_id: _noderef_to_node_dict(node)}
+    edges: list[dict] = []
+    for eh in display:
+        nodes[eh.src.id] = _symbol_hit_to_dict(eh.src)
+        edges.append(
+            {
+                "other_id": eh.src.id,
+                "edge_type": "INJECTS",
+                "mechanism": eh.mechanism,
+                "annotation": eh.annotation,
+                "field_or_param": eh.field_or_param,
+            }
+        )
+    return _emit_traversal(
+        args, root_id=root_id, nodes=nodes, edges=edges,
+        noun="dependents", truncated=truncated,
+    )
+
+
+def _cmd_impact(args: argparse.Namespace) -> int:
+    cfg, graph, rc = _load_graph_or_error(args)
+    if rc:
+        return rc
+    node, _renv, rrc = _resolve_traversal_node(args, cfg=cfg, graph=graph, hint_kind=args.kind)
+    if rrc or node is None:
+        return rrc
+    limit = _clamped_limit(args)
+    depth = getattr(args, "depth", 2)
+
+    from java_codebase_rag.jrag_envelope import mark_truncated
+
+    impacts = graph.impact_analysis(node.fqn, depth=depth, limit=limit + 1)
+    warnings: list[str] = []
+    if args.service:
+        # impact_analysis has no microservice param (verified); filter
+        # client-side and surface a warning so the user knows.
+        warnings.append(
+            "--service is a post-filter on impact (impact_analysis has no microservice param)"
+        )
+        impacts = [h for h in impacts if (h.microservice or "") == args.service]
+    display, truncated = mark_truncated(impacts, limit)
+    root_id = node.id
+    nodes: dict[str, dict] = {root_id: _noderef_to_node_dict(node)}
+    edges: list[dict] = []
+    for hit in display:
+        nodes[hit.id] = _symbol_hit_to_dict(hit)
+        edges.append({"other_id": hit.id, "edge_type": "IMPACTS"})
+    return _emit_traversal(
+        args, root_id=root_id, nodes=nodes, edges=edges,
+        noun="impact", warnings=warnings, truncated=truncated,
+    )
+
+
+def _cmd_decompose(args: argparse.Namespace) -> int:
+    cfg, graph, rc = _load_graph_or_error(args)
+    if rc:
+        return rc
+    node, _renv, rrc = _resolve_traversal_node(args, cfg=cfg, graph=graph, hint_kind=args.kind)
+    if rrc or node is None:
+        return rrc
+
+    from java_codebase_rag.jrag_envelope import Envelope
+    from java_codebase_rag.jrag_render import render
+
+    if node.kind != "symbol":
+        env = Envelope(
+            status="error",
+            message=f"decompose expects an entrypoint Symbol root; resolved kind is {node.kind!r}.",
+        )
+        print(render(env, fmt=args.format))
+        return 2
+
+    # trace_flow clamps depth internally to 1..3; mirror here for the help text.
+    depth = max(1, min(3, getattr(args, "depth", 2)))
+    stages = graph.trace_flow(
+        seed_fqns=[node.fqn],
+        depth=depth,
+        follow_calls=getattr(args, "follow_calls", False),
+        stage_limit=getattr(args, "max_stage", 20),
+        min_call_confidence=getattr(args, "min_confidence", 0.0),
+        exclude_external=not getattr(args, "include_external", False),
+        microservice=args.service,
+        module=args.module,
+    )
+    root_id = node.id
+    nodes: dict[str, dict] = {root_id: _noderef_to_node_dict(node)}
+    edges: list[dict] = []
+    for stage_idx, stage in enumerate(stages):
+        for ss in stage:
+            nodes[ss.symbol.id] = _symbol_hit_to_dict(ss.symbol)
+            via = ss.via[0] if ss.via else None
+            edge_type = via.edge_type if via else ("SEED" if stage_idx == 0 else "STAGE")
+            edge_row = {"other_id": ss.symbol.id, "edge_type": edge_type, "stage": stage_idx}
+            if via and via.from_fqn:
+                edge_row["from_fqn"] = via.from_fqn
+            edges.append(edge_row)
+    # No +1-fetch truncation here: trace_flow is stage-limited internally
+    # (stage_limit); the user-facing --limit does not apply.
+    return _emit_traversal(
+        args, root_id=root_id, nodes=nodes, edges=edges,
+        noun="decompose",
+    )
+
+
+def _cmd_flow(args: argparse.Namespace) -> int:
+    cfg, graph, rc = _load_graph_or_error(args)
+    if rc:
+        return rc
+    # flow requires a Route root; force hint_kind="route".
+    node, _renv, rrc = _resolve_traversal_node(args, cfg=cfg, graph=graph, hint_kind="route")
+    if rrc or node is None:
+        return rrc
+    limit = _clamped_limit(args)
+
+    from java_codebase_rag.jrag_envelope import Envelope
+    from java_codebase_rag.jrag_render import render
+
+    if node.kind != "route":
+        env = Envelope(
+            status="error",
+            message=(
+                f"flow requires a Route root; resolved kind is {node.kind!r}. "
+                "Pass a route path (e.g. /chat/assign)."
+            ),
+        )
+        print(render(env, fmt=args.format))
+        return 2
+
+    max_hops = max(1, min(8, getattr(args, "max_hops", 5)))
+    flow_data = graph.trace_request_flow(entry_route_id=node.id, max_hops=max_hops)
+
+    root_id = node.id
+    nodes: dict[str, dict] = {root_id: _noderef_to_node_dict(node)}
+    edges: list[dict] = []
+    # Inbound: cross-service HTTP/async callers (Client/Producer two-hop).
+    for row in flow_data.get("inbound", []):
+        caller_id = str(row.get("caller_node_id") or "")
+        if not caller_id:
+            continue
+        kind = str(row.get("caller_node_kind") or "")
+        nodes[caller_id] = {
+            "id": caller_id,
+            "kind": kind,
+            "fqn": str(row.get("declaring_symbol_fqn") or ""),
+            "microservice": str(row.get("microservice") or ""),
+        }
+        edges.append(
+            {
+                "other_id": caller_id,
+                "edge_type": "HTTP_CALLS" if kind == "client" else "ASYNC_CALLS",
+                "confidence": float(row.get("confidence") or 0.0),
+            }
+        )
+    # Outbound: CALLS hops from the route handler (intra-service by construction).
+    for row in flow_data.get("outbound", []):
+        next_id = str(row.get("next_symbol_id") or "")
+        if not next_id:
+            continue
+        nodes[next_id] = {
+            "id": next_id,
+            "kind": "symbol",
+            "fqn": str(row.get("next_fqn") or ""),
+            "microservice": str(row.get("next_microservice") or ""),
+        }
+        edges.append({"other_id": next_id, "edge_type": "CALLS"})
+
+    # Client-side slice for truncation (trace_request_flow has no limit param).
+    truncated = len(edges) > limit
+    if truncated:
+        edges = edges[:limit]
+    return _emit_traversal(
+        args, root_id=root_id, nodes=nodes, edges=edges,
+        noun="flow", truncated=truncated,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
