@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-# Heavy imports (`server`, `pr_analysis`, `path_filtering.LayeredIgnore`) stay lazy
-# inside handlers so `java-codebase-rag --help` stays fast.
+# Heavy imports (`server`, `pr_analysis`, `path_filtering.LayeredIgnore`,
+# `build_ast_graph`) stay lazy inside handlers so `java-codebase-rag --help` stays fast.
 
 import argparse
 import asyncio
@@ -24,7 +24,6 @@ from java_codebase_rag.config import (
 )
 from java_codebase_rag._fdlimit import raise_fd_limit
 from java_codebase_rag.pipeline import clip, run_build_ast_graph, run_cocoindex_drop, run_cocoindex_update, run_incremental_graph
-from build_ast_graph import BUILDER_OWNED_INDEX_FILES
 from java_ontology import VALID_UNRESOLVED_CALL_REASONS
 
 LADYBUG_INCREMENTAL_TRACKING_ISSUE_URL = "https://github.com/HumanBean17/java-codebase-rag/issues/73"
@@ -606,6 +605,11 @@ def _cmd_erase(args: argparse.Namespace) -> int:
     cfg = _resolved_from_ns(args)
     _startup_hints(cfg)
     cfg.apply_to_os_environ()
+    # Lazy import: build_ast_graph transitively pulls numpy/ladybug/pyarrow/
+    # tree_sitter (~54ms), and these filenames are only needed on the erase path.
+    # Keeping it out of the top-level import lets `java-codebase-rag --help` (and
+    # every other command) stay fast -- see the lazy-import invariant atop this file.
+    from build_ast_graph import BUILDER_OWNED_INDEX_FILES
     builder_paths = [cfg.ladybug_path.parent / name for name in BUILDER_OWNED_INDEX_FILES]
     to_describe: list[Path] = [cfg.ladybug_path, cfg.cocoindex_db, *builder_paths]
     if cfg.index_dir.is_dir():
