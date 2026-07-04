@@ -833,8 +833,6 @@ def _cmd_producers(args: argparse.Namespace) -> int:
 
 
 def _cmd_topics(args: argparse.Namespace) -> int:
-    import mcp_v2
-
     from java_codebase_rag.jrag_envelope import Envelope, mark_truncated, next_actions_hook
     from java_codebase_rag.jrag_render import render
 
@@ -856,7 +854,6 @@ def _cmd_topics(args: argparse.Namespace) -> int:
     # Group by topic name. Track no-topic producers so they surface as a
     # warning (distinguishable from "no producers at all").
     topics_dict: dict[str, dict] = {}
-    producer_ids: list[str] = []
     no_topic_count = 0
     for producer in rows:
         topic = producer.get("topic") or ""
@@ -870,9 +867,6 @@ def _cmd_topics(args: argparse.Namespace) -> int:
                 "broker": producer.get("broker") or "",
             }
         topics_dict[topic]["producers"].append(producer)
-        producer_id = producer.get("id")
-        if producer_id:
-            producer_ids.append(producer_id)
 
     warnings: list[str] = []
     if no_topic_count:
@@ -880,48 +874,23 @@ def _cmd_topics(args: argparse.Namespace) -> int:
             f"{no_topic_count} producer(s) had no topic and were excluded"
         )
 
-    # If --consumer-in is provided, resolve consumers via neighbors_v2.
-    # NOTE: ASYNC_CALLS edges run Producer -> Route (outbound from producer).
-    # direction="in" on producers returns consumers that point INTO producers;
-    # on this fixture that set is empty (the graph models async messaging as
-    # Producer -> Route, with no inbound ASYNC_CALLS to Producer nodes). The
-    # --consumer-in path is retained for graphs where inbound ASYNC_CALLS exist.
-    if args.consumer_in and producer_ids:
-        consumer_out = mcp_v2.neighbors_v2(
-            ids=producer_ids,
-            direction="in",
-            edge_types=["ASYNC_CALLS"],
-            limit=_CONSUMER_FETCH_LIMIT,
-            filter={"microservice": args.consumer_in} if args.consumer_in else None,
-            graph=graph,
-        )
-        if consumer_out.success:
-            # Map consumers to topics
-            topic_consumers: dict[str, list] = {}
-            for edge in consumer_out.results or []:
-                # Edge structure: origin_id (producer), edge_type, direction, other (consumer NodeRef)
-                consumer_node = edge.other
-                source_id = consumer_node.id
-                target_id = edge.origin_id
-                # Find which topic this producer belongs to
-                for producer in rows:
-                    if producer.get("id") == target_id:
-                        topic = producer.get("topic") or ""
-                        if topic and source_id:
-                            if topic not in topic_consumers:
-                                topic_consumers[topic] = []
-                            topic_consumers[topic].append({
-                                "id": source_id,
-                                "fqn": consumer_node.fqn,
-                                "kind": consumer_node.kind,
-                                "microservice": consumer_node.microservice,
-                            })
-                            break
-
-            # Add consumers to topics_dict
-            for topic, consumers in topic_consumers.items():
-                if topic in topics_dict:
-                    topics_dict[topic]["consumers"] = consumers
+    # If --consumer-in is provided, resolve consumers for each topic group.
+    # A consumer of a topic IS a listener: the edge path is
+    #   listener_class -[:DECLARES]-> listener_method -[:EXPOSES]-> Route(topic)
+    # (ASYNC_CALLS run Producer -> Route per java_ontology.py:415-416, so the
+    # inbound-ASYNC_CALLS traversal the original PR shipped returned empty on
+    # every graph — corrected here to use the EXPOSES-based resolver shared
+    # with `listeners --topic-prefix`.)
+    if args.consumer_in and topics_dict:
+        for topic_name, topic_group in topics_dict.items():
+            consumers = _resolve_topic_consumers(
+                graph,
+                topic=topic_name,
+                microservice=args.consumer_in,
+                prefix=False,  # exact match on the producer's topic literal
+            )
+            if consumers:
+                topic_group["consumers"] = consumers
 
     # Convert to list and apply truncation
     topic_list = list(topics_dict.values())
@@ -955,28 +924,77 @@ def _cmd_jobs(args: argparse.Namespace) -> int:
     return _render_listing(rows, limit=limit, args=args, noun="symbol")
 
 
-def _listener_ids_for_topic_prefix(graph, listener_ids: list[str], prefix: str) -> set[str]:
-    """Resolve which listener classes consume a topic with the given prefix.
+def _resolve_topic_consumers(
+    graph,
+    *,
+    topic: str,
+    microservice: str | None = None,
+    prefix: bool = False,
+) -> list[dict]:
+    """Resolve listener classes that consume a topic via EXPOSES on Route.
 
     The graph models the listener→topic edge path as:
         listener_class -[:DECLARES]-> listener_method -[:EXPOSES]-> Route(topic)
 
-    ``neighbors_v2`` does not project the Route's ``topic`` property onto the
-    returned NodeRef, so a single-purpose Cypher lookup is used here — the same
-    pattern as ``jrag_envelope._node_file_location`` (``graph._rows`` for a
-    focused property fetch). This is a CLI-layer compose query, not a
-    reimplementation of backend traversal logic.
+    This is the correct consumer-resolution path for async messaging topics:
+    ``ASYNC_CALLS`` run ``Producer → Route`` (java_ontology.py:415-416), so
+    there is no inbound ``ASYNC_CALLS`` edge into Producer nodes to traverse
+    via ``neighbors_v2(direction="in")``. The ``Route.topic`` property is not
+    projected onto the ``NodeRef`` returned by ``neighbors_v2``, so a
+    single-purpose Cypher lookup is used here — the same pattern as
+    ``jrag_envelope._node_file_location`` (``graph._rows`` for a focused
+    property fetch). This is a CLI-layer compose query, not a reimplementation
+    of backend traversal logic.
+
+    Args:
+        topic: Topic string to match (exact unless ``prefix=True``).
+        microservice: Optional microservice filter on the listener class.
+        prefix: If True, match topic as a prefix (``STARTS WITH``);
+            if False (default), exact equality.
+
+    Returns:
+        List of consumer dicts (``id``, ``fqn``, ``kind``, ``microservice``).
+    """
+    if not topic:
+        return []
+    match_clause = "r.topic STARTS WITH $topic" if prefix else "r.topic = $topic"
+    params: dict = {"topic": topic}
+    ms_clause = ""
+    if microservice:
+        ms_clause = " AND cls.microservice = $ms"
+        params["ms"] = microservice
+    rows = graph._rows(  # noqa: SLF001 - focused property lookup (same as _node_file_location)
+        f"MATCH (cls:Symbol)-[:DECLARES]->(mth:Symbol)-[:EXPOSES]->(r:Route) "
+        f"WHERE {match_clause}{ms_clause} "
+        f"RETURN DISTINCT cls.id AS cid, cls.fqn AS cfqn, cls.microservice AS cms",
+        params,
+    )
+    return [
+        {
+            "id": str(r.get("cid") or ""),
+            "fqn": str(r.get("cfqn") or ""),
+            "kind": "symbol",
+            "microservice": str(r.get("cms") or ""),
+        }
+        for r in rows
+        if r.get("cid")
+    ]
+
+
+def _listener_ids_for_topic_prefix(graph, listener_ids: list[str], prefix: str) -> set[str]:
+    """Resolve which listener classes consume a topic with the given prefix.
+
+    Thin wrapper over :func:`_resolve_topic_consumers` intersected with the
+    pre-fetched ``listener_ids`` (from ``list_by_capability``). Retained as a
+    separate function so ``_cmd_listeners`` can narrow the SymbolHit list in
+    place (the capability fetch carries SymbolHit fields the resolver does not
+    project). See ``_resolve_topic_consumers`` for the edge-model rationale.
     """
     if not listener_ids or not prefix:
         return set(listener_ids)
-    rows = graph._rows(  # noqa: SLF001 - focused property lookup (same as _node_file_location)
-        "MATCH (cls:Symbol)-[:DECLARES]->(mth:Symbol)-[:EXPOSES]->(r:Route) "
-        "WHERE cls.id IN $ids AND r.topic IS NOT NULL AND r.topic <> '' "
-        "AND r.topic STARTS WITH $prefix "
-        "RETURN DISTINCT cls.id AS cid",
-        {"ids": listener_ids, "prefix": prefix},
-    )
-    return {str(r.get("cid") or "") for r in rows if r.get("cid")}
+    consumers = _resolve_topic_consumers(graph, topic=prefix, prefix=True)
+    matching = {c["id"] for c in consumers}
+    return {lid for lid in listener_ids if lid in matching}
 
 
 def _cmd_listeners(args: argparse.Namespace) -> int:

@@ -160,34 +160,53 @@ def test_topics_groups_producers_by_topic(corpus_root: Path, ladybug_db_path: Pa
         assert isinstance(node["producers"], list), "producers should be a list"
 
 
-# ----- Test 5: topics consumer-in uses neighbors_v2 -----
+# ----- Test 5: topics --consumer-in resolves consumers via EXPOSES -----
 
 
-def test_topics_consumer_in_uses_neighbors_in_async_calls(corpus_root: Path, ladybug_db_path: Path) -> None:
-    """topics --consumer-in resolves consumers via neighbors_v2(in, ASYNC_CALLS)."""
-    env = os.environ.copy()
-    env["JAVA_CODEBASE_RAG_SOURCE_ROOT"] = str(corpus_root)
-    env["JAVA_CODEBASE_RAG_INDEX_DIR"] = str(ladybug_db_path.parent)
+def test_topics_consumer_in_resolves_consumers_via_exposes(ladybug_graph) -> None:
+    """topics --consumer-in resolves listener consumers via EXPOSES on Route.
 
-    # First get all topics
-    proc = _run_jrag(["topics", "--format", "json"], env=env)
-    assert proc.returncode == 0
-    payload = json.loads(proc.stdout)
-    nodes = payload.get("nodes", {})
+    The original PR-JRAG-2 implementation traversed ASYNC_CALLS inbound to
+    Producer nodes, which is the wrong edge model (ASYNC_CALLS run
+    Producer -> Route per java_ontology.py:415-416). This test exercises the
+    corrected resolver directly.
 
-    # If we have topics and producers, try with --consumer-in
-    if len(nodes) > 0:
-        first_topic = next(iter(nodes.values()))
-        producers = first_topic.get("producers", [])
-        if len(producers) > 0:
-            # Use the first producer's microservice for --consumer-in
-            producer_ms = producers[0].get("microservice")
-            if producer_ms:
-                proc_consumer = _run_jrag(["topics", "--consumer-in", producer_ms, "--format", "json"], env=env)
-                # Should succeed (even if no consumers found)
-                assert proc_consumer.returncode == 0
-                payload_consumer = json.loads(proc_consumer.stdout)
-                assert payload_consumer["status"] == "ok"
+    Fixture reality: no producer topic literal overlaps a listener topic
+    literal (producers carry unresolved constants like 'ChatTopics.*' or
+    resolved 'banking.chat.audit'; listeners carry different forms). So
+    `topics --consumer-in` will not attach consumers to producer-grouped topics
+    on THIS fixture — but the EXPOSES-based resolver does resolve a known
+    listener for a known resolved topic. We assert the resolver returns that
+    listener for the exact topic 'banking.chat.compliance.review' consumed by
+    ComplianceReviewListener in microservice 'chat-core'.
+    """
+    from java_codebase_rag.jrag import _resolve_topic_consumers
+
+    consumers = _resolve_topic_consumers(
+        ladybug_graph,
+        topic="banking.chat.compliance.review",
+        microservice="chat-core",
+        prefix=False,
+    )
+    assert len(consumers) >= 1, (
+        f"expected ComplianceReviewListener resolved for "
+        f"'banking.chat.compliance.review' in 'chat-core'; got {consumers}"
+    )
+    found = any("ComplianceReviewListener" in c.get("fqn", "") for c in consumers)
+    assert found, (
+        f"ComplianceReviewListener not in resolver result; got {[c.get('fqn') for c in consumers]}"
+    )
+
+    # Prefix match should also find it under 'banking.chat'.
+    consumers_prefix = _resolve_topic_consumers(
+        ladybug_graph,
+        topic="banking.chat",
+        prefix=True,
+    )
+    assert any("ComplianceReviewListener" in c.get("fqn", "") for c in consumers_prefix), (
+        f"ComplianceReviewListener not in prefix resolver result; "
+        f"got {[c.get('fqn') for c in consumers_prefix]}"
+    )
 
 
 # ----- Test 6: jobs lists scheduled-task -----
