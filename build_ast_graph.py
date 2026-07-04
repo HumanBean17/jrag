@@ -472,10 +472,26 @@ class IncrementalResult:
     elapsed_sec: float
 
 
+# --- Builder-owned files in the index dir (single source of truth) ---------------
+# Every artifact the graph builder writes next to code_graph.lbug. The lifecycle
+# CLI's `erase` clears all of these from one list so the builder and erase cannot
+# drift (issues #349 / #350): previously erase hardcoded ".graph_hashes.json" only
+# and left the crash marker (.graph_increment_in_progress) and the atomic-write
+# temp (.graph_hashes.json.tmp) behind on disk.
+GRAPH_HASHES_FILENAME = ".graph_hashes.json"
+GRAPH_HASHES_TMP_FILENAME = ".graph_hashes.json.tmp"
+GRAPH_INCREMENT_MARKER_FILENAME = ".graph_increment_in_progress"
+BUILDER_OWNED_INDEX_FILES: tuple[str, ...] = (
+    GRAPH_HASHES_FILENAME,
+    GRAPH_HASHES_TMP_FILENAME,
+    GRAPH_INCREMENT_MARKER_FILENAME,
+)
+
+
 class FileHashTracker:
     """Track content hashes for incremental graph rebuild."""
     def __init__(self, index_dir: Path):
-        self._path = index_dir / ".graph_hashes.json"
+        self._path = index_dir / GRAPH_HASHES_FILENAME
         self._hashes: dict[str, str] = {}  # rel_path -> sha256_hex
 
     def load(self) -> None:
@@ -491,7 +507,7 @@ class FileHashTracker:
 
     def save(self) -> None:
         """Persist hashes to disk atomically (write .tmp, rename)."""
-        tmp_path = self._path.with_suffix(".json.tmp")
+        tmp_path = self._path.parent / GRAPH_HASHES_TMP_FILENAME
         try:
             with open(tmp_path, "w", encoding="utf-8") as f:
                 json.dump(self._hashes, f, sort_keys=True)
@@ -3811,7 +3827,7 @@ def incremental_rebuild(
         _verbose_stderr_line(f"[increment] detected {len(added)} added, {len(changed)} changed, {len(removed)} removed files")
 
     # Step 2: Crash marker check
-    crash_marker_path = index_dir / ".graph_increment_in_progress"
+    crash_marker_path = index_dir / GRAPH_INCREMENT_MARKER_FILENAME
     if crash_marker_path.exists():
         if verbose:
             _verbose_stderr_line("[increment] crash marker exists; falling back to full rebuild")

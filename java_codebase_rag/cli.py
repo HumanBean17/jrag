@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-# Heavy imports (`server`, `pr_analysis`, `path_filtering.LayeredIgnore`) stay lazy
-# inside handlers so `java-codebase-rag --help` stays fast.
+# Heavy imports (`server`, `pr_analysis`, `path_filtering.LayeredIgnore`,
+# `build_ast_graph`) stay lazy inside handlers so `java-codebase-rag --help` stays fast.
 
 import argparse
 import asyncio
@@ -605,8 +605,13 @@ def _cmd_erase(args: argparse.Namespace) -> int:
     cfg = _resolved_from_ns(args)
     _startup_hints(cfg)
     cfg.apply_to_os_environ()
-    graph_hashes_path = cfg.ladybug_path.parent / ".graph_hashes.json"
-    to_describe: list[Path] = [cfg.ladybug_path, cfg.cocoindex_db, graph_hashes_path]
+    # Lazy import: build_ast_graph transitively pulls numpy/ladybug/pyarrow/
+    # tree_sitter (~54ms), and these filenames are only needed on the erase path.
+    # Keeping it out of the top-level import lets `java-codebase-rag --help` (and
+    # every other command) stay fast -- see the lazy-import invariant atop this file.
+    from build_ast_graph import BUILDER_OWNED_INDEX_FILES
+    builder_paths = [cfg.ladybug_path.parent / name for name in BUILDER_OWNED_INDEX_FILES]
+    to_describe: list[Path] = [cfg.ladybug_path, cfg.cocoindex_db, *builder_paths]
     if cfg.index_dir.is_dir():
         try:
             import lancedb
@@ -643,15 +648,18 @@ def _cmd_erase(args: argparse.Namespace) -> int:
             )
         elif drop.returncode != 0:
             print(clip(drop.stderr, 4000), file=sys.stderr)
-        # Remove the LadybugDB graph, the cocoindex state store, and the graph
-        # builder's content-hash store. Each is removed by type (see _rm_any):
-        # code_graph.lbug is a file here but may be a dir under kuzu, while
-        # cocoindex.db is a directory — a type-blind delete silently no-oped on
-        # one or the other, and .graph_hashes.json was never targeted at all
-        # (issue #346).
+        # Remove the LadybugDB graph, the cocoindex state store, and every
+        # builder-owned bookkeeping file next to code_graph.lbug (the content-hash
+        # store, its atomic-write temp, and the incremental crash marker). Each is
+        # removed by type (see _rm_any): code_graph.lbug is a file here but may be
+        # a dir under kuzu, while cocoindex.db is a directory — a type-blind delete
+        # silently no-oped on one or the other, and the builder files were never
+        # targeted at all (issues #346 / #349 / #350). The list comes from
+        # build_ast_graph.BUILDER_OWNED_INDEX_FILES so erase and the builder cannot drift.
         _rm_any(cfg.ladybug_path)
         _rm_any(cfg.cocoindex_db)
-        _rm_any(graph_hashes_path)
+        for builder_path in builder_paths:
+            _rm_any(builder_path)
         if cfg.index_dir.is_dir():
             try:
                 import lancedb
