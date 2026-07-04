@@ -136,6 +136,48 @@ class TestDiscoverProjectRoot:
         result = discover_project_root(tmp_path)
         assert result == tmp_path
 
+    def test_discover_project_root_ignores_stray_index_dir_at_home(self, tmp_path, monkeypatch):
+        """A bare .java-codebase-rag/ index dir at $HOME must not anchor project
+        root (issue #357). Otherwise a command run from any $HOME subdir without
+        its own marker silently resolves to $HOME and reads/writes the home-level
+        index (cross-project resolution)."""
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        project_dir = fake_home / "project"
+        project_dir.mkdir()
+        # Stray index dir at $HOME (e.g. an accidental `init` run from home).
+        stray_idx = fake_home / ".java-codebase-rag"
+        stray_idx.mkdir()
+        (stray_idx / "code_graph.lbug").write_bytes(b"\x00" * 16)
+
+        monkeypatch.setenv("HOME", str(fake_home))
+
+        result = discover_project_root(project_dir)
+        assert result is None, "stray ~/.java-codebase-rag/ must not anchor at $HOME (#357)"
+
+    def test_discover_project_root_config_at_home_still_anchors(self, tmp_path, monkeypatch):
+        """A config file at $HOME still anchors even with a stray index dir beside
+        it — the #357 fix only demotes the bare index-dir signal at $HOME, not the
+        config-file anchor (a deliberate ~/.java-codebase-rag.yml is intentional)."""
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        project_dir = fake_home / "project"
+        project_dir.mkdir()
+        # Stray index dir at $HOME, NON-empty: a real accidental `init` leaves
+        # code_graph.lbug behind, so _has_index_dir (which requires non-empty)
+        # actually sees it. An empty mkdir() would be invisible to the index-anchor
+        # check and would not represent the documented "stray index dir beside it"
+        # scenario -- mirrors test_discover_project_root_ignores_stray_index_dir_at_home.
+        stray_idx = fake_home / ".java-codebase-rag"
+        stray_idx.mkdir()
+        (stray_idx / "code_graph.lbug").write_bytes(b"\x00" * 16)
+        (fake_home / YAML_CONFIG_FILENAMES[0]).write_text("# home config")
+
+        monkeypatch.setenv("HOME", str(fake_home))
+
+        result = discover_project_root(project_dir)
+        assert result == fake_home
+
 
 class TestSourceRootFromYaml:
     """Tests for source_root YAML field parsing and resolution."""
