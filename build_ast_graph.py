@@ -3614,10 +3614,15 @@ def _write_routes_and_exposes(conn: ladybug.Connection, tables: GraphTables, _fi
 
 
 def _write_meta(conn: ladybug.Connection, tables: GraphTables, source_root: Path) -> None:
-    seen_calls: set[tuple[str, str, int, int]] = set()
+    # Dedup key MUST match _write_edges (build_ast_graph.py, _REL_CALLS writer): the
+    # 5-tuple includes call_site_byte so two call sites of the same method on the
+    # same source line are counted separately. A previous version used the 4-tuple
+    # here, which made counts['calls'] (678) diverge from the real CALLS edge count
+    # (684) that _write_edges actually persisted — describe/stats then undercounted.
+    seen_calls: set[tuple[str, str, int, int, int]] = set()
     calls_unique = 0
     for row in tables.calls_rows:
-        key = (row.src_id, row.dst_id, row.arg_count, row.call_site_line)
+        key = (row.src_id, row.dst_id, row.arg_count, row.call_site_line, row.call_site_byte)
         if key not in seen_calls:
             seen_calls.add(key)
             calls_unique += 1
