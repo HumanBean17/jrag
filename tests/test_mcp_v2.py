@@ -451,10 +451,14 @@ def test_neighbors_route_in_exposes_returns_handler(ladybug_graph) -> None:
 def test_neighbors_route_in_http_calls_returns_callers(ladybug_graph) -> None:
     class FakeGraph:
         def _rows(self, query: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+            # The generic flat-label path now queries one edge type at a time and
+            # passes label(e) = $label (issue #356); model that only HTTP_CALLS
+            # callers exist in this fixture so the ASYNC_CALLS label returns none.
             if (
                 "MATCH (a)<-[e]-(b)" in query
                 and "WHERE a.id" in query
                 and "RETURN b.id AS other_id" in query
+                and (params or {}).get("label") == "HTTP_CALLS"
             ):
                 return [{"other_id": "client:caller", "edge_type": "HTTP_CALLS", "confidence": 0.8, "match": "cross_service"}]
             if "MATCH (n:Client)" in query:
@@ -584,6 +588,110 @@ def test_search_unknown_filter_key_returns_failure(monkeypatch, ladybug_graph) -
     assert "typo_key" in out.message
 
 
+def test_search_pushes_nodefilter_into_run_search(monkeypatch, ladybug_graph) -> None:
+    """search forwards NodeFilter structural fields into run_search so the filter
+    applies BEFORE pagination, not as a post-filter on the already-paginated page
+    (issue #353) — previously a filtered page could shrink to 0-2 results even
+    when many matches existed deeper in the ranking."""
+    captured: dict[str, Any] = {}
+
+    def fake_run_search(query, **kwargs):
+        captured.update(kwargs)
+        return _fake_search_rows()
+
+    monkeypatch.setattr("mcp_v2.run_search", fake_run_search)
+    out = search_v2(
+        "ChatService",
+        filter={
+            "role": "SERVICE",
+            "module": "chat-assign",
+            "microservice": "chat-assign",
+            "capability": "c",
+            "exclude_roles": ["CONTROLLER"],
+        },
+        graph=ladybug_graph,
+    )
+    assert out.success is True
+    assert captured.get("role") == "SERVICE"
+    assert captured.get("module") == "chat-assign"
+    assert captured.get("microservice") == "chat-assign"
+    assert captured.get("capability") == "c"
+    assert captured.get("exclude_roles") == ["CONTROLLER"]
+
+
+def test_unresolved_call_site_noderef_carries_callee_name() -> None:
+    """The unresolved-call-site NodeRef must carry the callee identifier in `name`
+    (issue #354) — NodeRef previously had no `name` field, so pydantic's default
+    extra='ignore' silently dropped `name=callee`, leaving the structured ref with
+    fqn='' and no human-readable callee (clients had to dig into attrs)."""
+    from mcp_v2 import _unresolved_site_to_edge
+
+    edge = _unresolved_site_to_edge(
+        "origin:1",
+        {
+            "id": "ucs:1",
+            "callee_simple": "Foo.bar",
+            "call_site_line": 42,
+            "call_site_byte": 7,
+            "arg_count": 2,
+            "reason": "phantom",
+            "receiver_expr": "x",
+        },
+    )
+    assert edge.other.kind == "unresolved_call_site"
+    assert edge.other.name == "Foo.bar"
+    # callee is also still carried in attrs for clients that read attrs
+    assert edge.attrs["callee_simple"] == "Foo.bar"
+
+
+def test_find_exposes_has_more_results(ladybug_graph) -> None:
+    """find surfaces has_more_results on FindOutput so a paging client can tell
+    whether another page exists without a probe call (issue #355). The value was
+    computed and placed in the hint payload but absent from the output model."""
+    out = find_v2("symbol", {"symbol_kind": "method"}, limit=1, offset=0, graph=ladybug_graph)
+    assert out.success is True
+    assert out.has_more_results is True  # bank-chat has more than one method
+
+    # Past the end: no rows remain, so has_more is False.
+    out_last = find_v2("symbol", {"symbol_kind": "method"}, limit=1, offset=1_000_000, graph=ladybug_graph)
+    assert out_last.success is True
+    assert out_last.has_more_results is False
+
+
+def test_neighbors_flat_labels_select_columns_per_edge_type() -> None:
+    """The generic flat-label neighbors query issues one Cypher per edge type and
+    RETURNs only that type's columns (issue #356) — never a fixed superset that
+    references columns absent on some matched type (the typed-union RETURN
+    anti-pattern that errors on stricter binders like Kuzu)."""
+    from mcp_v2 import _FLAT_EDGE_ATTR_COLUMNS
+
+    issued: list[tuple[str, dict[str, Any]]] = []
+
+    class FakeGraph:
+        def _rows(self, query: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+            if "RETURN b.id AS other_id" in query:
+                issued.append((query, params or {}))
+            return []
+
+    out = neighbors_v2(
+        "sym:origin",
+        direction="out",
+        edge_types=["CALLS", "DECLARES", "INJECTS", "EXPOSES"],
+        graph=FakeGraph(),  # type: ignore[arg-type]
+    )
+    assert out.success is True
+    # One flat-label query per edge type, each tagged with its label param.
+    labels = [p.get("label") for _, p in issued]
+    assert set(labels) == {"CALLS", "DECLARES", "INJECTS", "EXPOSES"}
+    for query, params in issued:
+        label = params["label"]
+        allowed = set(_FLAT_EDGE_ATTR_COLUMNS.get(label, ()))
+        referenced = set(re.findall(r"e\.(\w+) AS ", query))
+        assert referenced <= allowed, (
+            f"label {label}: RETURN references {referenced}, only {allowed} are valid"
+        )
+
+
 def test_search_cross_kind_filter_returns_failure(monkeypatch, ladybug_graph) -> None:
     monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
     out = search_v2("ChatService", filter={"path_prefix": "/api"}, graph=ladybug_graph)
@@ -645,6 +753,32 @@ def test_neighbors_filter_accepts_json_string(ladybug_graph) -> None:
     assert out_dict.success is True
     assert out_str.success is True
     assert out_dict.results == out_str.results
+
+
+def test_neighbors_calls_has_more_results_reflects_pagination_mode(ladybug_graph) -> None:
+    """Single-origin CALLS has_more_results depends on whether SQL paginated.
+
+    Regression for the #355 has_more_results field on NeighborsOutput. When a
+    node_filter forces the in-memory (non-SQL-paginated) path, the full filtered
+    CALLS set is returned, so has_more_results must be False (the client has
+    everything and need not probe) -- not None ("unknown"). With no filter the
+    single-origin SQL path paginates and the row/unfiltered counts carry the
+    signal, so the field stays None.
+    """
+    mid = _method_id_with_calls(ladybug_graph, "out")
+    # node_filter set -> paginate_in_sql False -> full set returned -> has_more False
+    filtered = neighbors_v2(
+        mid, direction="out", edge_types=["CALLS"], filter={"role": "SERVICE"}, graph=ladybug_graph
+    )
+    assert filtered.success is True
+    assert filtered.has_more_results is False, (
+        "non-SQL-paginated CALLS returned the full set; has_more_results must be "
+        "False so a paging client does not issue a redundant probe (#355)"
+    )
+    # No filter, single origin -> SQL-paginated -> has-more signal is the row count.
+    paginated = neighbors_v2(mid, direction="out", edge_types=["CALLS"], graph=ladybug_graph)
+    assert paginated.success is True
+    assert paginated.has_more_results is None
 
 
 def test_neighbors_filter_unknown_key_returns_failure(ladybug_graph) -> None:
