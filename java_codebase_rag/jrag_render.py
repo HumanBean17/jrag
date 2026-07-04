@@ -139,11 +139,36 @@ def _render_traversal(envelope: Envelope, *, noun: str) -> str:
         return "\n".join(lines)
 
     # Grouped rendering fires ONLY when the producer attached the grouping
-    # key (hierarchy sets `direction`; decompose sets `stage`). Other
-    # traversals (callers/callees/dependents/...) leave both unset and fall
-    # through to the flat list below — current behavior unchanged (Fix 1).
+    # key (hierarchy sets `direction`; decompose sets `stage`; connection sets
+    # `section`). Other traversals (callers/callees/dependents/...) leave all
+    # three unset and fall through to the flat list below — current behavior
+    # unchanged (Fix 1).
     has_stages = any(e.get("stage") is not None for e in envelope.edges)
     has_direction = any(e.get("direction") for e in envelope.edges)
+    has_section = any(e.get("section") for e in envelope.edges)
+
+    if has_section:
+        # connection: group under inbound:/outbound: headers. Edges carry a
+        # `section` key set to "inbound" or "outbound" by _cmd_connection.
+        # Unknown section values are rendered under their literal name so the
+        # agent sees the data even if a future caller adds a new section.
+        in_sec = [e for e in envelope.edges if e.get("section") == "inbound"]
+        out_sec = [e for e in envelope.edges if e.get("section") == "outbound"]
+        other = [e for e in envelope.edges if e.get("section") not in ("inbound", "outbound")]
+        if in_sec:
+            lines.append("inbound:")
+            for e in in_sec:
+                lines.append(_format_edge_line(e, envelope.nodes))
+        if out_sec:
+            lines.append("outbound:")
+            for e in out_sec:
+                lines.append(_format_edge_line(e, envelope.nodes))
+        for e in other:
+            section = str(e.get("section") or "")
+            if section:
+                lines.append(f"{section}:")
+            lines.append(_format_edge_line(e, envelope.nodes))
+        return "\n".join(lines)
 
     if has_stages:
         # decompose role-waterfall: group edges under `stage N` headers.

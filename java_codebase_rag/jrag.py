@@ -567,6 +567,130 @@ def build_parser() -> argparse.ArgumentParser:
     flow.add_argument("--max-hops", type=int, default=5, dest="max_hops", help="Max CALLS hops (clamped 1..8, default 5).")
     flow.set_defaults(handler=_cmd_flow)
 
+    # ---- Compose traversals + file inspection (PR-JRAG-3b) ----
+    # callees (Client/Producer variant) re-uses the existing _cmd_callees
+    # handler from PR-JRAG-3a; the help text below updates to advertise the
+    # Client/Producer dispatch (Symbol path is unchanged). --kind picks the
+    # resolve hint; the handler dispatches on the resolved node's kind.
+    #
+    # (The callees subparser was registered above with the Symbol-only help
+    # text; we patch its description here to advertise the new variant without
+    # duplicating the parser construction.)
+    callees.epilog = (
+        "PR-JRAG-3b adds Client/Producer variants:\n"
+        "  Client root  -> neighbors_v2([id], 'out', ['HTTP_CALLS']) reaching :Route\n"
+        "  Producer root-> neighbors_v2([id], 'out', ['ASYNC_CALLS']) reaching :Route\n"
+        "                 (the kafka_topic Route this producer publishes to, NOT :Producer)\n"
+        "--include-external applies to the Symbol path; Client/Producer edges are\n"
+        "structural (Client/Producer -> :Route) and have no external-exclusion analog."
+    )
+
+    dependencies = subparsers.add_parser(
+        "dependencies",
+        help="Types this Symbol injects (INJECTS out).",
+        parents=[common, resolve_parent],
+        description=(
+            "Resolve <query> (type Symbol) then neighbors_v2([id], 'out', ['INJECTS']) "
+            "= the types this class injects (its direct dependencies). INJECTS is "
+            "Symbol -> Symbol (declaring type -> injected type), so 'out' traverses "
+            "from the injector to its dependencies. --service/--module are NOT "
+            "applied (INJECTS is a structural edge with no microservice predicate); "
+            "they surface as warnings[]."
+        ),
+    )
+    dependencies.add_argument("query", help="Symbol FQN or name (e.g. 'pkg.Svc').")
+    dependencies.set_defaults(handler=_cmd_dependencies)
+
+    connection = subparsers.add_parser(
+        "connection",
+        help="Cross-service connections for a microservice (inbound/outbound).",
+        parents=[common],
+        description=(
+            "RESOLVE-FIRST EXCEPTION: the first positional is a microservice NAME "
+            "(e.g. 'chat-core'), NOT a query — it is passed literally to list_clients/"
+            "list_producers/find_route_callers; resolve_v2 is NEVER run on it.\n\n"
+            "Inbound (default): clients/producers in OTHER services targeting this "
+            "service. HTTP via list_clients(target_service=<svc>) + async via "
+            "find_route_callers on this service's topic Routes. --http-method filters "
+            "HTTP callers by method.\n"
+            "Outbound: clients/producers IN this service and the routes/topics they "
+            "call. HTTP via list_clients(microservice=<svc>) + producers via "
+            "list_producers(microservice=<svc>).\n"
+            "--both (or no direction flag) renders both sections."
+        ),
+    )
+    connection.add_argument(
+        "microservice",
+        help="Microservice NAME (literal — NOT resolved as a query).",
+    )
+    connection.add_argument(
+        "--inbound",
+        dest="direction",
+        action="store_const",
+        const="inbound",
+        default=None,
+        help="Show only inbound connections (default both when no flag given).",
+    )
+    connection.add_argument(
+        "--outbound",
+        dest="direction",
+        action="store_const",
+        const="outbound",
+        help="Show only outbound connections (default both when no flag given).",
+    )
+    connection.add_argument(
+        "--both",
+        dest="direction",
+        action="store_const",
+        const="both",
+        help="Show both inbound and outbound (this is the default).",
+    )
+    connection.add_argument(
+        "--http-method",
+        type=str,
+        default=None,
+        help="Filter HTTP routes/callers by method (e.g. POST).",
+    )
+    connection.add_argument(
+        "--calls-service",
+        type=str,
+        default=None,
+        help="Further filter to edges involving this other service (target for outbound, source for inbound).",
+    )
+    connection.set_defaults(handler=_cmd_connection)
+
+    outline = subparsers.add_parser(
+        "outline",
+        help="List symbols declared in a file.",
+        parents=[common],
+        description=(
+            "List all Symbol nodes whose declared location is in <file>. Calls "
+            "find_symbols_in_file_range(graph, filename=<file>, start_line=1, "
+            "end_line=2**31-1) — the start_line=1 is required (the backend returns "
+            "[] for start_line<1). UNBOUNDED: there is no --limit cap (the entire "
+            "file's symbol table is returned); --limit is accepted (common flag) "
+            "but does not truncate. --offset is rejected (the backend takes no offset)."
+        ),
+    )
+    outline.add_argument("file", help="File path as stored in the graph (POSIX-relative to source root).")
+    outline.set_defaults(handler=_cmd_outline)
+
+    imports = subparsers.add_parser(
+        "imports",
+        help="List imports declared in a file (tree-sitter parse + resolve_v2).",
+        parents=[common],
+        description=(
+            "Parse <file> with tree-sitter (ast_java.parse_java), walk its "
+            "import_declaration nodes, and resolve each imported FQN via resolve_v2 "
+            "against the graph. Returns one node per import: resolved graph Symbol "
+            "when resolve_v2 hits, or an unresolved placeholder carrying the raw FQN "
+            "otherwise. Static and wildcard imports are included (marked in the row)."
+            " --offset is rejected."
+        ),
+    )
+    imports.add_argument("file", help="File path (POSIX-relative to source root, or absolute).")
+    imports.set_defaults(handler=_cmd_imports)
+
     return parser
 
 
@@ -1507,14 +1631,64 @@ def _cmd_callees(args: argparse.Namespace) -> int:
         return rrc
     limit = _clamped_limit(args)
 
+    # PR-JRAG-3b: accept Symbol (CALLS), Client (HTTP_CALLS), and Producer
+    # (ASYNC_CALLS) roots. The Symbol path is unchanged from PR-JRAG-3a.
     guard = _require_kind(
-        node, expected="callees expects a Symbol root", kinds=("symbol",), args=args,
-        hint="Use --kind symbol to narrow resolve.",
+        node,
+        expected="callees expects a Symbol, Client, or Producer root",
+        kinds=("symbol", "client", "producer"),
+        args=args,
+        hint="Use --kind to narrow resolve.",
     )
     if guard is not None:
         return guard
 
-    from java_codebase_rag.jrag_envelope import mark_truncated
+    from java_codebase_rag.jrag_envelope import Envelope, mark_truncated
+    from java_codebase_rag.jrag_render import render
+
+    # Client root -> HTTP_CALLS out (Client -> :Route).
+    # Producer root -> ASYNC_CALLS out (Producer -> :Route, the kafka_topic
+    # Route this producer publishes to — NOT a :Producer node).
+    if node.kind in ("client", "producer"):
+        import mcp_v2
+
+        edge_types = ["HTTP_CALLS"] if node.kind == "client" else ["ASYNC_CALLS"]
+        out = mcp_v2.neighbors_v2(
+            [node.id], direction="out", edge_types=edge_types,
+            limit=limit + 1, graph=graph,
+        )
+        if not out.success:
+            print(render(Envelope(status="error", message=out.message or "neighbors_v2 failed"), fmt=args.format))
+            return 2
+        root_id = node.id
+        nodes: dict[str, dict] = {root_id: _noderef_to_node_dict(node)}
+        edges: list[dict] = []
+        for e in out.results:
+            nodes[e.other.id] = _noderef_to_node_dict(e.other)
+            edges.append(
+                {
+                    "other_id": e.other.id,
+                    "edge_type": e.edge_type,
+                    "confidence": e.attrs.get("confidence"),
+                }
+            )
+        truncated = bool(out.has_more_results) or len(edges) > limit
+        if len(edges) > limit:
+            edges = edges[:limit]
+        # --include-external is accepted but does not apply on Client/Producer
+        # roots (the edges are to :Route, which is always in-graph; there is no
+        # external-exclusion analog). Surface as a warning so the flag is not
+        # silently dropped (plan principle: inapplicable flags never silently ignored).
+        warnings: list[str] = []
+        if getattr(args, "include_external", False):
+            warnings.append(
+                "--include-external does not apply to Client/Producer roots "
+                "(HTTP_CALLS/ASYNC_CALLS reach :Route, which is always in-graph)"
+            )
+        return _emit_traversal(
+            args, root_id=root_id, nodes=nodes, edges=edges,
+            noun="callees", warnings=warnings, truncated=truncated,
+        )
 
     depth = getattr(args, "depth", 1)
     min_conf = getattr(args, "min_confidence", 0.0)
@@ -1530,8 +1704,8 @@ def _cmd_callees(args: argparse.Namespace) -> int:
     )
     display, truncated = mark_truncated(call_edges, limit)
     root_id = node.id
-    nodes: dict[str, dict] = {root_id: _noderef_to_node_dict(node)}
-    edges: list[dict] = []
+    nodes = {root_id: _noderef_to_node_dict(node)}
+    edges = []
     for ce in display:
         nodes[ce.dst.id] = _symbol_hit_to_dict(ce.dst)
         edges.append(
@@ -1988,6 +2162,472 @@ def _cmd_flow(args: argparse.Namespace) -> int:
         args, root_id=root_id, nodes=nodes, edges=edges,
         noun="flow", warnings=warnings, truncated=truncated,
     )
+
+
+# ============================================================================
+# PR-JRAG-3b: compose traversals + connection + outline/imports.
+#
+# callees Client/Producer variant (above) re-uses _cmd_callees. The four new
+# handlers below cover: dependencies (INJECTS out), connection (multi-section
+# microservice view, resolve-first EXCEPTION), outline (file -> symbols),
+# imports (file -> tree-sitter parse -> resolve_v2 per FQN).
+#
+# Backend signatures verified at PR-JRAG-3b time:
+#  * neighbors_v2(ids, direction, edge_types, limit=25, offset=0, ...) returns
+#    NeighborsOutput.results: list[Edge] where Edge.other: NodeRef,
+#    Edge.edge_type: str, Edge.attrs: dict (mcp_v2.py:1284).
+#  * find_symbols_in_file_range(graph, *, filename, start_line, end_line)
+#    returns list[SymbolHit]; start_line<1 returns [] (ladybug_queries.py:302).
+#  * parse_java(source, *, filename, verbose) -> JavaFileAst with
+#    explicit_imports: dict[str, str] (simple_name -> FQN) (ast_java.py:2612).
+#  * INJECTS is Symbol -> Symbol (java_ontology.py:216); out = types this
+#    symbol injects = direct dependencies.
+#  * HTTP_CALLS is Client -> Route (java_ontology.py:352); ASYNC_CALLS is
+#    Producer -> Route (java_ontology.py:386). Both confirmed.
+# ============================================================================
+
+
+def _cmd_dependencies(args: argparse.Namespace) -> int:
+    import mcp_v2
+
+    cfg, graph, rc = _load_graph_or_error(args)
+    if rc:
+        return rc
+    node, _renv, rrc = _resolve_traversal_node(args, cfg=cfg, graph=graph, hint_kind=args.kind)
+    if rrc or node is None:
+        return rrc
+    limit = _clamped_limit(args)
+
+    from java_codebase_rag.jrag_envelope import Envelope
+    from java_codebase_rag.jrag_render import render
+
+    # INJECTS is Symbol -> Symbol; Client/Producer/Route roots have no
+    # injection edges (the edge type only fires on type Symbols).
+    guard = _require_kind(
+        node, expected="dependencies expects a Symbol root (INJECTS is Symbol -> Symbol)",
+        kinds=("symbol",), args=args,
+    )
+    if guard is not None:
+        return guard
+
+    warnings = _warn_unapplied_scope(
+        args, reason="neighbors_v2 walks structural INJECTS edges with no microservice predicate"
+    )
+
+    root_id = node.id
+    out = mcp_v2.neighbors_v2(
+        [root_id], direction="out", edge_types=["INJECTS"],
+        limit=limit + 1, graph=graph,
+    )
+    if not out.success:
+        print(render(Envelope(status="error", message=out.message or "neighbors_v2 failed"), fmt=args.format))
+        return 2
+
+    nodes: dict[str, dict] = {root_id: _noderef_to_node_dict(node)}
+    edges: list[dict] = []
+    for e in out.results:
+        nodes[e.other.id] = _noderef_to_node_dict(e.other)
+        # Carry the injection metadata from the edge attrs (mechanism/annotation/
+        # field_or_param) so the renderer and JSON consumers see how the dep is
+        # injected.
+        edge_row = {"other_id": e.other.id, "edge_type": "INJECTS"}
+        for k in ("mechanism", "annotation", "field_or_param", "dst_fqn", "resolved"):
+            if k in e.attrs:
+                edge_row[k] = e.attrs[k]
+        edges.append(edge_row)
+    truncated = bool(out.has_more_results) or len(edges) > limit
+    if len(edges) > limit:
+        edges = edges[:limit]
+    return _emit_traversal(
+        args, root_id=root_id, nodes=nodes, edges=edges,
+        noun="dependencies", warnings=warnings, truncated=truncated,
+    )
+
+
+def _client_dict_to_node(c: dict) -> dict:
+    """list_clients dict -> envelope node dict (kind=client)."""
+    return {
+        "id": str(c.get("id") or ""),
+        "kind": "client",
+        "fqn": str(c.get("member_fqn") or c.get("path") or ""),
+        "name": str(c.get("path") or ""),
+        "client_kind": str(c.get("client_kind") or ""),
+        "target_service": str(c.get("target_service") or ""),
+        "method": str(c.get("method") or ""),
+        "path": str(c.get("path") or ""),
+        "microservice": str(c.get("microservice") or ""),
+        "module": str(c.get("module") or ""),
+    }
+
+
+def _producer_dict_to_node(p: dict) -> dict:
+    """list_producers dict -> envelope node dict (kind=producer)."""
+    return {
+        "id": str(p.get("id") or ""),
+        "kind": "producer",
+        "fqn": str(p.get("member_fqn") or p.get("topic") or ""),
+        "name": str(p.get("topic") or ""),
+        "producer_kind": str(p.get("producer_kind") or ""),
+        "topic": str(p.get("topic") or ""),
+        "broker": str(p.get("broker") or ""),
+        "microservice": str(p.get("microservice") or ""),
+        "module": str(p.get("module") or ""),
+    }
+
+
+def _cmd_connection(args: argparse.Namespace) -> int:
+    """connection <microservice> — multi-section inbound:/outbound: view.
+
+    RESOLVE-FIRST EXCEPTION: the first positional is a microservice NAME (used
+    literally for list_clients / list_producers / find_route_callers); resolve_v2
+    is NEVER run on it (the agent spec calls this out loudly in --help).
+    """
+    cfg, graph, rc = _load_graph_or_error(args)
+    if rc:
+        return rc
+    limit = _clamped_limit(args)
+
+    from java_codebase_rag.jrag_envelope import Envelope, next_actions_hook
+    from java_codebase_rag.jrag_render import render
+
+    microservice = args.microservice
+    # argparse stores --inbound/--outbound/--both into `direction` via
+    # action="store_const"; default is None when no flag is given (-> both).
+    direction = getattr(args, "direction", None) or "both"
+    http_method = (args.http_method or "").upper() or None
+    calls_service = args.calls_service
+
+    show_inbound = direction in ("inbound", "both")
+    show_outbound = direction in ("outbound", "both")
+
+    nodes: dict[str, dict] = {}
+    edges: list[dict] = []
+    warnings: list[str] = []
+
+    # Filter predicates (applied client-side; --module is the only structural
+    # common flag that's a bit meaningful here, but list_clients/list_producers
+    # already take microservice; --module has no analog and is warned).
+    if args.module:
+        warnings.append("--module is not applied on connection (use --calls-service to narrow)")
+
+    def _http_method_match(row: dict) -> bool:
+        if not http_method:
+            return True
+        return (str(row.get("method") or "").upper()) == http_method
+
+    def _calls_service_match_out(row: dict) -> bool:
+        if not calls_service:
+            return True
+        # Outbound: --calls-service narrows to clients targeting that service.
+        # Producers have no service target (they target topics); keep them
+        # unconditional so the async channel isn't silently hidden.
+        return (str(row.get("target_service") or "") == calls_service) or not row.get("target_service")
+
+    def _calls_service_match_in(caller_microservice: str) -> bool:
+        if not calls_service:
+            return True
+        return caller_microservice == calls_service
+
+    # --- Inbound: clients/producers in OTHER services targeting <microservice> ---
+    if show_inbound:
+        # HTTP: list_clients(target_service=microservice) gives every client
+        # declaring a call into this service. Filter out clients IN this
+        # microservice (those are intra-service, not inbound).
+        http_in = graph.list_clients(target_service=microservice, limit=limit + 1)
+        http_in = [c for c in http_in if (c.get("microservice") or "") != microservice]
+        http_in = [c for c in http_in if _http_method_match(c) and _calls_service_match_in(c.get("microservice") or "")]
+        for c in http_in[:limit + 1]:
+            cid = c["id"]
+            nodes[cid] = _client_dict_to_node(c)
+            edges.append({"other_id": cid, "edge_type": "HTTP_CALLS", "section": "inbound"})
+
+        # Async: topic Routes consumed by this microservice's listeners are
+        # reached by producers in OTHER services via ASYNC_CALLS. The path is
+        #   listener_method -[:EXPOSES]-> Route(topic) <-[:ASYNC_CALLS]- Producer
+        # find_route_callers gives both client and producer callers for a route,
+        # so we (a) enumerate this service's listener classes, (b) for each,
+        # resolve the Route(s) it EXPOSES, (c) call find_route_callers on each
+        # topic Route, (d) keep producer callers from other services.
+        try:
+            listener_hits = graph.list_by_capability(
+                capability="MESSAGE_LISTENER",
+                microservice=microservice,
+                limit=_CONSUMER_FETCH_LIMIT,
+            )
+        except Exception:
+            listener_hits = []
+        topic_route_ids: set[str] = set()
+        for h in listener_hits:
+            # listener method -> EXPOSES -> Route(topic). Resolve via a focused
+            # Cypher lookup (Route.id for the EXPOSES target).
+            rows = graph._rows(  # noqa: SLF001 - focused lookup, same pattern as _node_file_location
+                "MATCH (mth:Symbol)-[:EXPOSES]->(r:Route) WHERE mth.id = $mid RETURN r.id AS rid",
+                {"mid": h.id},
+            )
+            for r in rows:
+                rid = str(r.get("rid") or "")
+                if rid:
+                    topic_route_ids.add(rid)
+        for rid in topic_route_ids:
+            callers = graph.find_route_callers(route_id=rid)
+            for c in callers:
+                if c.caller_node_kind != "producer":
+                    continue
+                if (c.caller_microservice or "") == microservice:
+                    continue  # intra-service
+                if not _calls_service_match_in(c.caller_microservice or ""):
+                    continue
+                pid = c.caller_node_id
+                if pid in nodes:
+                    # Already rendered (e.g. duplicated via multiple topic routes)
+                    edges.append({"other_id": pid, "edge_type": "ASYNC_CALLS", "section": "inbound", "confidence": c.confidence})
+                    continue
+                # Fetch producer dict for richer node data.
+                prod_rows = graph.list_producers(microservice=c.caller_microservice or None, limit=_CONSUMER_FETCH_LIMIT)
+                prod_dict = next((p for p in prod_rows if p.get("id") == pid), None)
+                if prod_dict:
+                    nodes[pid] = _producer_dict_to_node(prod_dict)
+                else:
+                    nodes[pid] = {
+                        "id": pid,
+                        "kind": "producer",
+                        "fqn": c.topic or "",
+                        "name": c.topic or "",
+                        "topic": c.topic or "",
+                        "broker": c.broker or "",
+                        "microservice": c.caller_microservice or "",
+                    }
+                edges.append({"other_id": pid, "edge_type": "ASYNC_CALLS", "section": "inbound", "confidence": c.confidence})
+
+    # --- Outbound: clients/producers IN this microservice (calling out) ---
+    if show_outbound:
+        clients_out = graph.list_clients(microservice=microservice, limit=limit + 1)
+        clients_out = [c for c in clients_out if _http_method_match(c) and _calls_service_match_out(c)]
+        for c in clients_out[:limit + 1]:
+            cid = c["id"]
+            nodes[cid] = _client_dict_to_node(c)
+            edges.append({"other_id": cid, "edge_type": "HTTP_CALLS", "section": "outbound"})
+
+        producers_out = graph.list_producers(microservice=microservice, limit=limit + 1)
+        for p in producers_out[:limit + 1]:
+            pid = p["id"]
+            nodes[pid] = _producer_dict_to_node(p)
+            edges.append({"other_id": pid, "edge_type": "ASYNC_CALLS", "section": "outbound"})
+
+    # Synthesize a microservice "root" node so the renderer uses the traversal
+    # shape (root + edges) and the section-grouped rendering fires. The synthetic
+    # id is namespaced to avoid colliding with real node ids.
+    root_id = f"microservice:{microservice}"
+    nodes[root_id] = {
+        "id": root_id,
+        "kind": "microservice",
+        "fqn": microservice,
+        "name": microservice,
+        "microservice": microservice,
+    }
+
+    # Per-section truncation: cap each section at `limit` (drop overflow rows
+    # and flag truncation if either side overflowed). We collected limit+1
+    # rows above; slice here.
+    inbound_edges = [e for e in edges if e.get("section") == "inbound"]
+    outbound_edges = [e for e in edges if e.get("section") == "outbound"]
+    truncated = len(inbound_edges) > limit or len(outbound_edges) > limit
+    inbound_edges = inbound_edges[:limit]
+    outbound_edges = outbound_edges[:limit]
+    display_edges = inbound_edges + outbound_edges
+    # Drop unreferenced node ids (keep the synthetic root).
+    referenced = {root_id} | {e["other_id"] for e in display_edges}
+    nodes = {nid: nd for nid, nd in nodes.items() if nid in referenced}
+
+    env = Envelope(
+        status="ok",
+        nodes=nodes,
+        edges=display_edges,
+        root=root_id,
+        warnings=warnings,
+        truncated=truncated,
+    )
+    next_actions_hook(env, root=root_id, result_edges=display_edges)
+    print(render(env, fmt=args.format, noun="connection"))
+    return 0
+
+
+def _resolve_source_path(cfg, file_arg: str) -> Path | None:
+    """Resolve <file> to an existing path: absolute, else cfg.source_root/<file>.
+
+    Returns None when neither exists (callers render a graceful envelope).
+    """
+    p = Path(file_arg)
+    if p.is_absolute() and p.is_file():
+        return p
+    src = Path(cfg.source_root) if cfg.source_root else Path.cwd()
+    candidate = src / file_arg
+    if candidate.is_file():
+        return candidate
+    return None
+
+
+def _cmd_outline(args: argparse.Namespace) -> int:
+    """outline <file> — list every Symbol whose declared location is in <file>.
+
+    Calls find_symbols_in_file_range(graph, filename=<file>, start_line=1,
+    end_line=2**31-1). start_line MUST be >=1 (the backend returns [] for
+    start_line<1). UNBOUNDED: no --limit cap (the entire file's symbol table
+    is returned). --limit is accepted (inherited common flag) but does not
+    truncate; the agent spec calls this out in --help.
+    """
+    from ladybug_queries import find_symbols_in_file_range
+
+    from java_codebase_rag.jrag_envelope import Envelope, next_actions_hook
+    from java_codebase_rag.jrag_render import render
+
+    cfg, graph, rc = _load_graph_or_error(args)
+    if rc:
+        return rc
+
+    filename = args.file
+    # find_symbols_in_file_range matches s.filename = $fn exactly. The graph
+    # stores filenames as POSIX-relative paths from source root (build_ast_graph
+    # line 534: `rel_path = abs_path_resolved.relative_to(source_root).as_posix()`).
+    # We pass the user's input through directly; if no match, the result is []
+    # (graceful, not crash).
+    try:
+        hits = find_symbols_in_file_range(
+            graph,
+            filename=filename,
+            start_line=1,
+            end_line=2**31 - 1,
+        )
+    except Exception as exc:
+        env = Envelope(status="error", message=f"outline failed: {exc}")
+        print(render(env, fmt=args.format))
+        return 2
+
+    nodes: dict[str, dict] = {}
+    for h in hits:
+        nodes[h.id] = _symbol_hit_to_dict(h)
+
+    warnings: list[str] = []
+    # --limit is accepted (common flag) but outline is documented unbounded;
+    # surface a warning when the user explicitly set --limit away from the
+    # default so they know it has no effect (plan principle: inapplicable flags
+    # never silently ignored).
+    if args.limit is not None and args.limit != 20:
+        warnings.append("--limit does not apply to outline (unbounded by design)")
+
+    env = Envelope(status="ok", nodes=nodes, warnings=warnings)
+    next_actions_hook(env)
+    print(render(env, fmt=args.format, noun="symbol"))
+    return 0
+
+
+def _cmd_imports(args: argparse.Namespace) -> int:
+    """imports <file> — tree-sitter parse + resolve_v2 per imported FQN.
+
+    Reads <file> from disk (cfg.source_root / <file> for relative paths),
+    parses with ast_java.parse_java, walks explicit_imports (dict: simple_name
+    -> FQN), then resolves each FQN via resolve_v2 against the graph. Returns
+    a node per import: resolved graph Symbol when resolve_v2 hits (status=one),
+    or an unresolved placeholder carrying the raw FQN otherwise.
+    """
+    from ast_java import parse_java
+    from resolve_service import resolve_v2
+
+    from java_codebase_rag.jrag_envelope import Envelope, next_actions_hook
+    from java_codebase_rag.jrag_render import render
+
+    cfg, graph, rc = _load_graph_or_error(args)
+    if rc:
+        return rc
+
+    file_path = _resolve_source_path(cfg, args.file)
+    if file_path is None:
+        env = Envelope(
+            status="error",
+            message=(
+                f"file not found: {args.file!r} (looked at the literal path and at "
+                f"<source_root>/{args.file})"
+            ),
+        )
+        print(render(env, fmt=args.format))
+        return 2
+
+    try:
+        src = file_path.read_bytes()
+    except OSError as exc:
+        env = Envelope(status="error", message=f"could not read {file_path}: {exc}")
+        print(render(env, fmt=args.format))
+        return 2
+
+    # parse_java is robust to invalid source (returns an empty JavaFileAst on
+    # parse errors, never raises). It builds imports from the
+    # `import_declaration` tree-sitter nodes via `_import_declaration_is_static`
+    # (ast_java.py:905) and the scoped_identifier child walk (ast_java.py:2658).
+    # explicit_imports: dict[str, str] = simple_name -> FQN (non-wildcard,
+    # non-static); we also surface wildcard/static imports as unresolved rows so
+    # the agent sees the full import block.
+    ast = parse_java(src, filename=args.file)
+    nodes: dict[str, dict] = {}
+    edges: list[dict] = []
+    warnings: list[str] = []
+
+    # Static + wildcard imports: rendered as unresolved rows (resolve_v2 only
+    # matches type Symbols, not methods or wildcards).
+    unresolved_imports: list[dict] = []
+    for ident in ast.wildcard_imports:
+        unresolved_imports.append({"fqn": f"{ident}.*", "kind": "wildcard"})
+    for simple, fqn in ast.file_imports.static_methods.items():
+        unresolved_imports.append({"fqn": fqn, "kind": "static_method", "name": simple})
+    for prefix in ast.file_imports.static_wildcards:
+        unresolved_imports.append({"fqn": f"{prefix}.*", "kind": "static_wildcard"})
+
+    # Explicit type imports: resolve each via resolve_v2.
+    resolved_count = 0
+    unresolved_count = 0
+    for simple, fqn in ast.explicit_imports.items():
+        out = resolve_v2(fqn, hint_kind="symbol", graph=graph)
+        if out.status == "one" and out.node is not None:
+            ref = out.node
+            node_dict = _noderef_to_node_dict(ref)
+            node_dict["import_fqn"] = fqn
+            node_dict["import_simple"] = simple
+            nodes[ref.id] = node_dict
+            edges.append({"other_id": ref.id, "edge_type": "IMPORTS", "resolved": True})
+            resolved_count += 1
+        else:
+            # Use a stable synthetic id so unresolved imports round-trip JSON.
+            synthetic_id = f"import:{fqn}"
+            nodes[synthetic_id] = {
+                "id": synthetic_id,
+                "kind": "unresolved_import",
+                "fqn": fqn,
+                "name": simple,
+                "import_simple": simple,
+                "import_fqn": fqn,
+            }
+            edges.append({"other_id": synthetic_id, "edge_type": "IMPORTS", "resolved": False})
+            unresolved_count += 1
+
+    # Append unresolved static/wildcard imports as additional rows.
+    for entry in unresolved_imports:
+        fqn = entry["fqn"]
+        synthetic_id = f"import:{fqn}"
+        nodes[synthetic_id] = {
+            "id": synthetic_id,
+            "kind": "unresolved_import",
+            "fqn": fqn,
+            "name": fqn.rsplit(".", 1)[-1],
+            "import_kind": entry.get("kind", ""),
+        }
+        edges.append({"other_id": synthetic_id, "edge_type": "IMPORTS", "resolved": False})
+
+    if ast.parse_error:
+        warnings.append("tree-sitter reported a parse_error for this file (imports extracted best-effort)")
+
+    env = Envelope(status="ok", nodes=nodes, edges=edges, warnings=warnings)
+    next_actions_hook(env, result_edges=edges)
+    print(render(env, fmt=args.format, noun="import"))
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
