@@ -351,6 +351,18 @@ def resolve_query(
             if loc is not None:
                 env.file_location = loc
             return node, env
+        if not survivors:
+            # Every `many` candidate was rejected by the post-filters — there is
+            # nothing left to disambiguate, so this is not_found, NOT an empty
+            # ambiguous list (which would render as "0 ambiguous matches" with no
+            # narrowing value). Same message as the `one` post-filter-fail branch.
+            return None, Envelope(
+                status="not_found",
+                message=(
+                    f"No matches for {identifier!r} after applying --java-kind/--role/--fqn-prefix "
+                    "filters; use `jrag search <query>` for ranked fuzzy lookup."
+                ),
+            )
         capped = survivors[:10]
         env = Envelope(
             status="ambiguous",
@@ -373,6 +385,7 @@ def next_actions_hook(
     root: str | None = None,
     edge_summary: dict[str, Any] | None = None,
     result_edges: list[dict[str, Any]] | None = None,
+    command: str | None = None,
 ) -> list[str]:
     """Populate ``envelope.agent_next_actions`` via :mod:`jrag_hints` (PR-JRAG-4).
 
@@ -423,5 +436,6 @@ def next_actions_hook(
         root_fqn=root_fqn,
         edge_summary=edge_summary,
         result_edges=result_edges if result_edges is not None else list(envelope.edges),
+        current_command=command,
     )
     return envelope.agent_next_actions

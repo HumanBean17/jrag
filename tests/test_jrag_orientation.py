@@ -175,27 +175,31 @@ def test_overview_topic_lists_producers_and_consumers(corpus_root: Path, ladybug
 
 
 def test_overview_as_overrides_polymorphic_inference(corpus_root: Path, ladybug_db_path: Path) -> None:
-    """overview --as {microservice,route,topic} overrides auto-detection."""
+    """overview --as microservice forces the microservice dispatch path even for
+    a subject that auto-detects as a route (/chat/assign).
+
+    The node shape is a bundle (inspect), NOT a traversal (root + edges). The
+    prior `if payload["status"] == "ok":` guard made this test vacuously pass on
+    any non-ok status — now the dispatch is asserted unconditionally.
+    """
     env = _env_for(corpus_root, ladybug_db_path)
-    # "/chat/assign" auto-detects as route. Force it to microservice with --as.
-    # The microservice overview returns a bundle shape (inspect), NOT a route flow.
     proc = _run_jrag(
         ["overview", "/chat/assign", "--as", "microservice", "--format", "json"], env=env
     )
-    # This will likely fail to find a microservice named "/chat/assign" and
-    # return an empty-ish bundle, but the dispatch must go to the microservice
-    # path (bundle node), not the route path (traversal with root+edges).
+    assert proc.returncode == 0, (
+        f"overview --as microservice failed: rc={proc.returncode}\nstdout={proc.stdout}\nstderr={proc.stderr}"
+    )
     payload = json.loads(proc.stdout)
-    # The key assertion: with --as microservice, the node shape is a bundle
-    # (has "bundle" key), NOT a traversal (no root + edges).
-    if payload["status"] == "ok":
-        node = next(iter(payload["nodes"].values()), {})
-        assert "bundle" in node or node.get("kind") == "microservice", (
-            f"--as microservice should dispatch to microservice path, got: {node}"
-        )
-        assert "root" not in payload or not payload.get("root"), (
-            "--as microservice should NOT produce traversal shape (root+edges)"
-        )
+    assert payload["status"] == "ok", f"expected ok, got: {payload}"
+    node = next(iter(payload["nodes"].values()), {})
+    # --as microservice dispatches to the microservice path (bundle node), NOT
+    # the route path (traversal with root + edges).
+    assert "bundle" in node or node.get("kind") == "microservice", (
+        f"--as microservice should dispatch to microservice path, got: {node}"
+    )
+    assert not payload.get("root"), (
+        f"--as microservice must NOT produce traversal shape (root+edges): {payload}"
+    )
 
 
 # ===== Tests 8–12: semantic search =====
@@ -429,6 +433,33 @@ def test_next_actions_falls_back_to_result_edges_when_no_edge_summary() -> None:
     assert f"jrag callees {fqn}" in hints, f"CALLS out missing from fallback: {hints}"
     assert f"jrag dependents {fqn}" in hints, f"INJECTS in missing from fallback: {hints}"
     assert f"jrag dependencies {fqn}" in hints, f"INJECTS out missing from fallback: {hints}"
+
+
+def test_next_actions_skips_self_command_in_fallback() -> None:
+    """Regression (review finding E): the result_edges fallback must not emit a
+    self-hint (the command just run).
+
+    After `callers`, the CALLS edges present would yield ``jrag callers`` (self)
+    + ``jrag callees`` (inverse). Only the inverse is useful — the self-hint is
+    dropped when ``current_command`` is supplied (the inverse remains).
+    """
+    from java_codebase_rag.jrag_hints import next_actions
+
+    fqn = "com.example.Foo"
+    result_edges = [{"other_id": "a", "edge_type": "CALLS"}]
+    # Without current_command: both directions (back-comat with test 16).
+    both = next_actions(root_fqn=fqn, edge_summary=None, result_edges=result_edges)
+    assert f"jrag callers {fqn}" in both, f"CALLS in missing: {both}"
+    assert f"jrag callees {fqn}" in both, f"CALLS out missing: {both}"
+    # With current_command="callers": self dropped, inverse kept.
+    skipped = next_actions(
+        root_fqn=fqn,
+        edge_summary=None,
+        result_edges=result_edges,
+        current_command="callers",
+    )
+    assert f"jrag callers {fqn}" not in skipped, f"self-hint not skipped: {skipped}"
+    assert f"jrag callees {fqn}" in skipped, f"inverse hint dropped: {skipped}"
 
 
 def test_next_actions_omitted_when_empty() -> None:

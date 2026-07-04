@@ -69,10 +69,11 @@ def test_routes_returns_route_kind(corpus_root: Path, ladybug_db_path: Path) -> 
     nodes = payload.get("nodes", {})
     # At least some routes should exist
     assert len(nodes) >= 1, "expected at least one route node"
-    # Verify routes have route-like structure
+    # Routes carry a `path` (the defining field). The prior `or "id"` fallback
+    # was an always-true tautology (every node has an id) and masked a missing
+    # `path`. Routes MUST have path.
     for node_id, node in nodes.items():
-        # Routes should have path, framework, method
-        assert "path" in node or "id" in node, f"route missing path/id: {node}"
+        assert "path" in node, f"route {node_id} missing path field: {node}"
 
 
 # ----- Test 2: clients filters by calls-service -----
@@ -352,28 +353,38 @@ def test_listing_service_scope_pushes_down(corpus_root: Path, ladybug_db_path: P
 
 
 def test_listing_truncated_fires_at_limit(corpus_root: Path, ladybug_db_path: Path) -> None:
-    """+1-fetch trick: truncated=True when backend returns limit+1 results."""
+    """+1-fetch trick: truncated=True when the corpus has more routes than `limit`.
+
+    The prior assertion only checked the field exists when exactly 2 rows
+    returned — it never verified ``truncated is True``. This learns the true
+    route count first, then asserts truncation actually fires when limit < total
+    (and that exactly `limit` rows are returned).
+    """
     env = os.environ.copy()
     env["JAVA_CODEBASE_RAG_SOURCE_ROOT"] = str(corpus_root)
     env["JAVA_CODEBASE_RAG_INDEX_DIR"] = str(ladybug_db_path.parent)
 
-    # Use a small limit to trigger truncation if enough data exists
+    # Learn the true route count (high limit -> no truncation expected).
+    proc_all = _run_jrag(["routes", "--limit", "499", "--format", "json"], env=env)
+    assert proc_all.returncode == 0, f"routes --limit 499 failed: {proc_all.stderr}"
+    total = len(json.loads(proc_all.stdout).get("nodes", {}))
+
     proc = _run_jrag(["routes", "--limit", "2", "--format", "json"], env=env)
     assert proc.returncode == 0, f"routes --limit failed: rc={proc.returncode}\nstdout={proc.stdout}\nstderr={proc.stderr}"
 
     payload = json.loads(proc.stdout)
     assert payload["status"] == "ok"
-    # Check truncated flag
     nodes = payload.get("nodes", {})
-    # If we got exactly 2 results and there are more, truncated should be True
-    # If we got fewer than 2, truncated should be False
-    if len(nodes) == 2:
-        # truncated may or may not be True depending on actual data count
-        # Just check the field exists
-        assert "truncated" in payload, "missing truncated field"
+    if total > 2:
+        assert len(nodes) == 2, f"expected exactly 2 rows (limit), got {len(nodes)} of {total}"
+        assert payload.get("truncated") is True, (
+            f"expected truncated=True when total={total} > limit=2; payload={payload.get('truncated')}"
+        )
     else:
-        # Fewer results than limit means no truncation
-        assert not payload.get("truncated", False), "should not be truncated with fewer results than limit"
+        # Corpus has ≤2 routes total: no truncation; all returned.
+        assert not payload.get("truncated", False), (
+            f"should not be truncated with total={total} ≤ limit=2"
+        )
 
 
 # ----- Test 11: listing client-kind enum lookup -----
@@ -391,13 +402,16 @@ def test_listing_client_kind_enum_lookup(corpus_root: Path, ladybug_db_path: Pat
 
     payload = json.loads(proc.stdout)
     assert payload["status"] == "ok"
-    # If results exist, they should have client_kind = feign_method (normalized)
+    # Results must carry the NORMALIZED client_kind. The backend stores
+    # `feign_method`, never the raw `feign` the user typed — the prior assertion
+    # accepted the un-normalized "feign", which would mask a normalization
+    # regression (the lookup table is the whole point of this test).
     nodes = payload.get("nodes", {})
     for node_id, node in nodes.items():
-        # The backend stores feign_method, not feign
         client_kind = node.get("client_kind", "")
-        # Should be the normalized form
-        assert client_kind in ["feign_method", "", "feign"], f"unexpected client_kind: {client_kind}"
+        assert client_kind in ("feign_method", ""), (
+            f"unexpected/un-normalized client_kind: {client_kind!r} (raw 'feign' must normalize to 'feign_method')"
+        )
 
 
 # ----- Test 12: listing rejects offset -----

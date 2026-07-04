@@ -404,4 +404,12 @@ def render(
     if envelope.truncated:
         hint = _truncated_hint(next_offset=next_offset)
         body = f"{body}\n{hint}" if body else hint
+    # Warnings are rendered in text mode (one ``warning:`` line each) so an
+    # agent running without ``--format json`` still sees inapplicable-flag /
+    # post-filter notices. Without this the warnings[] field was JSON-only and
+    # the "inapplicable flags never silently ignored" spec was effectively
+    # unenforced for text consumers.
+    if envelope.warnings:
+        warning_lines = "\n".join(f"warning: {w}" for w in envelope.warnings)
+        body = f"{body}\n{warning_lines}" if body else warning_lines
     return body

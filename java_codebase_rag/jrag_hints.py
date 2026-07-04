@@ -82,6 +82,7 @@ def next_actions(
     edge_summary: dict[str, Any] | None = None,
     result_edges: list[dict[str, Any]],
     graph: Any = None,  # noqa: ARG001 — reserved for future use (brief contract)
+    current_command: str | None = None,
 ) -> list[str]:
     """Build ``agent_next_actions`` hints for a resolved root.
 
@@ -142,7 +143,11 @@ def next_actions(
                 _add(cmds["out"])
     else:
         # traversal path: infer from result_edges labels.
-        # No per-direction counts → emit both directions for recognized labels.
+        # No per-direction counts → emit both directions for recognized labels,
+        # then drop the self-hint (the command an agent just ran). The inverse
+        # direction (e.g. `callees` after `callers`) is the useful exploration
+        # signal and is kept; only the exact command just run is redundant.
+        # ``current_command`` is the jrag subcommand name (``args.command``).
         labels_seen: set[str] = set()
         for edge in result_edges or []:
             et = str(edge.get("edge_type") or "").strip()
@@ -152,9 +157,8 @@ def next_actions(
             cmds = _LABEL_COMMANDS.get(label)
             if cmds is None:
                 continue
-            if "in" in cmds:
-                _add(cmds["in"])
-            if "out" in cmds:
-                _add(cmds["out"])
+            for d in ("in", "out"):
+                if d in cmds and cmds[d] != current_command:
+                    _add(cmds[d])
 
     return hints[:_MAX_HINTS]

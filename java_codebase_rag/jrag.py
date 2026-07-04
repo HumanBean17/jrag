@@ -882,6 +882,7 @@ def _cmd_status(args: argparse.Namespace) -> int:
     # ``counts`` / ``edges`` render as indented alphabetical sections without
     # abusing ``edge_summary`` (which is reserved for PR-JRAG-3 real edge
     # data). See jrag_render._render_inspect / _render_text_shape.
+    warnings = _warn_inapplicable_common(args, service=True, module=True, limit=True)
     env = Envelope(
         status="ok",
         nodes={
@@ -897,6 +898,7 @@ def _cmd_status(args: argparse.Namespace) -> int:
                 "edges": dict(edge_counts),
             },
         },
+        warnings=warnings,
     )
     print(render(env, fmt=args.format, noun="status", shape="inspect"))
     return 0
@@ -1015,7 +1017,7 @@ def _cmd_find_query_mode(
     ``_cmd_find``, so the only ``kinds`` filter we may pass is symbol sub-kinds
     derived from ``--java-kind``.
     """
-    from java_codebase_rag.jrag_envelope import Envelope, mark_truncated, next_actions_hook, normalize_enum
+    from java_codebase_rag.jrag_envelope import Envelope, next_actions_hook, normalize_enum
     from java_codebase_rag.jrag_render import render
 
     query = args.query
@@ -1037,17 +1039,27 @@ def _cmd_find_query_mode(
         microservice=args.service,
         limit=limit + 1,  # +1 for truncated detection
     )
+    # Truncation is decided by the RAW name/FQN fetch (limit+1), BEFORE
+    # post-filters reduce the set — otherwise a post-filter that drops rows
+    # would silently clear `truncated` even though more name matches may exist
+    # beyond the fetch (silent wrong-results).
+    raw_truncated = len(rows) > limit
 
     # Post-filter by role/annotation/capability (SymbolHit carries these).
+    post_filter_active = False
     if args.role:
+        post_filter_active = True
         role_norm = normalize_enum(args.role, kind="role")
         rows = [r for r in rows if (r.role or "").upper().replace("-", "_") == role_norm.upper()]
     if args.exclude_role:
+        post_filter_active = True
         exclude_role_norm = normalize_enum(args.exclude_role, kind="role")
         rows = [r for r in rows if (r.role or "").upper().replace("-", "_") != exclude_role_norm.upper()]
     if args.annotation:
+        post_filter_active = True
         rows = [r for r in rows if args.annotation in (r.annotations or [])]
     if args.capability:
+        post_filter_active = True
         rows = [r for r in rows if args.capability in (r.capabilities or [])]
 
     # Build warnings for filters that cannot apply in query mode. SymbolHit
@@ -1062,10 +1074,19 @@ def _cmd_find_query_mode(
         warnings.append(
             "--source-layer ignored in query mode (applies to routes; use filter mode)"
         )
+    # When post-filters apply after a capped fetch, `truncated` reflects the
+    # pre-filter name-match count and cannot know whether MORE filtered matches
+    # exist beyond the fetch — surface that honestly.
+    if raw_truncated and post_filter_active:
+        warnings.append(
+            "results truncated before --role/--annotation/--capability filters; "
+            "additional filtered matches may exist beyond the fetch"
+        )
 
-    # Convert SymbolHit rows to NodeRef-like dicts for the envelope.
+    # Display at most `limit` of the (post-filtered) rows.
+    display_rows = rows[:limit]
     nodes = {}
-    for row in rows:
+    for row in display_rows:
         node_id = row.id
         nodes[node_id] = {
             "id": node_id,
@@ -1078,15 +1099,7 @@ def _cmd_find_query_mode(
             "role": row.role,
         }
 
-    # mark_truncated operates on a list; envelope.nodes is a dict keyed by id.
-    # Round-trip dict -> list -> truncate -> dict to apply the +1-fetch drop
-    # (the truncated flag is computed off the list length, which equals the
-    # dict size, so this is sound).
-    node_list = list(nodes.values())
-    display_nodes_list, truncated = mark_truncated(node_list, limit)
-    display_nodes = {node["id"]: node for node in display_nodes_list}
-
-    env = Envelope(status="ok", nodes=display_nodes, truncated=truncated, warnings=warnings)
+    env = Envelope(status="ok", nodes=nodes, truncated=raw_truncated, warnings=warnings)
     next_actions_hook(env)
 
     # Offset is not supported in query mode (find_by_name_or_fqn has no offset).
@@ -1162,9 +1175,14 @@ def _cmd_find_filter_mode(
         print(render(env, fmt=args.format))
         return 2
 
-    # Convert results to envelope rows
-    nodes_dict = {ref.id: to_envelope_rows([ref])[0] for ref in out.results}
-    truncated = out.has_more_results or False
+    # Convert results to envelope rows. Slice to `limit`: find_v2 was called with
+    # limit+1, so when exactly user_limit+1 matches exist `out.results` carries
+    # one extra row that must be dropped (off-by-one guard). `truncated` is True
+    # when the backend reports more OR the +1 row is present.
+    results = list(out.results)
+    truncated = bool(out.has_more_results) or len(results) > limit
+    display_refs = results[:limit]
+    nodes_dict = {ref.id: to_envelope_rows([ref])[0] for ref in display_refs}
 
     env = Envelope(status="ok", nodes=nodes_dict, truncated=truncated)
     next_actions_hook(env)
@@ -1330,6 +1348,13 @@ def _cmd_topics(args: argparse.Namespace) -> int:
     if no_topic_count:
         warnings.append(
             f"{no_topic_count} producer(s) had no topic and were excluded"
+        )
+    # list_producers has no module kwarg (only microservice/topic_prefix); --module
+    # would be silently dropped — surface it (use --producer-in to scope by svc).
+    if getattr(args, "module", None):
+        warnings.append(
+            "--module is not applied on topics (list_producers has no module param; "
+            "use --producer-in to scope producers by microservice)"
         )
 
     # If --consumer-in is provided, resolve consumers for each topic group.
@@ -1584,7 +1609,7 @@ def _emit_traversal(
         warnings=warnings or [],
         truncated=truncated,
     )
-    next_actions_hook(env, root=root_id, result_edges=edges)
+    next_actions_hook(env, root=root_id, result_edges=edges, command=getattr(args, "command", None))
     print(render(env, fmt=args.format, noun=noun))
     return 0
 
@@ -1632,6 +1657,30 @@ def _warn_unapplied_scope(args: argparse.Namespace, *, reason: str) -> list[str]
         warnings.append(f"--service is not applied on this command ({reason})")
     if getattr(args, "module", None):
         warnings.append(f"--module is not applied on this command ({reason})")
+    return warnings
+
+
+def _warn_inapplicable_common(
+    args: argparse.Namespace, *, service: bool, module: bool, limit: bool
+) -> list[str]:
+    """Warn when common flags that don't apply to a command are set.
+
+    Companion to :func:`_warn_unapplied_scope` for the aggregate / orientation
+    commands (status / microservices / map / conventions) which inherit the
+    ``common`` parent parser (``--service`` / ``--module`` / ``--limit``) but
+    don't apply all of them. Each kwarg names whether THAT flag is inapplicable
+    for this command (``True`` -> warn if the user set it). The plan principle
+    "inapplicable flags never silently ignored" requires the warning; with the
+    renderer now printing ``warning:`` lines, this is visible to text consumers
+    too (not just ``--format json``).
+    """
+    warnings: list[str] = []
+    if service and args.service:
+        warnings.append("--service is not applied on this command")
+    if module and getattr(args, "module", None):
+        warnings.append("--module is not applied on this command")
+    if limit and getattr(args, "limit", None) is not None and args.limit != 20:
+        warnings.append("--limit is not applied on this command")
     return warnings
 
 
@@ -2013,7 +2062,10 @@ def _cmd_overrides(args: argparse.Namespace) -> int:
     edges: list[dict] = []
     for e in out.results:
         nodes[e.other.id] = _noderef_to_node_dict(e.other)
-        edges.append({"other_id": e.other.id, "edge_type": "OVERRIDES", "direction": "up"})
+        # No `direction` key: overrides is a flat list, not a tree. Setting
+        # direction="up" would trip the renderer's has_direction guard and
+        # mis-label these rows as `↑ supertypes:` (hierarchy). Flat is correct.
+        edges.append({"other_id": e.other.id, "edge_type": "OVERRIDES"})
     truncated = bool(out.has_more_results) or len(edges) > limit
     if len(edges) > limit:
         edges = edges[:limit]
@@ -2062,7 +2114,10 @@ def _cmd_overridden_by(args: argparse.Namespace) -> int:
     edges: list[dict] = []
     for e in out.results:
         nodes[e.other.id] = _noderef_to_node_dict(e.other)
-        edges.append({"other_id": e.other.id, "edge_type": "OVERRIDES", "direction": "down"})
+        # No `direction` key — see _cmd_overrides: a `direction` value would
+        # route these into the hierarchy renderer (`↓ subtypes:`), mis-labeling
+        # a flat overridden-by list.
+        edges.append({"other_id": e.other.id, "edge_type": "OVERRIDES"})
     truncated = bool(out.has_more_results) or len(edges) > limit
     if len(edges) > limit:
         edges = edges[:limit]
@@ -2137,6 +2192,11 @@ def _cmd_impact(args: argparse.Namespace) -> int:
             "--service is a post-filter on impact (impact_analysis has no microservice param)"
         )
         impacts = [h for h in impacts if (h.microservice or "") == args.service]
+    if getattr(args, "module", None):
+        # impact_analysis has no module param either; warn rather than drop silently.
+        warnings.append(
+            "--module is not applied on impact (impact_analysis has no module param)"
+        )
     display, truncated = mark_truncated(impacts, limit)
     root_id = node.id
     nodes: dict[str, dict] = {root_id: _noderef_to_node_dict(node)}
@@ -2487,7 +2547,13 @@ def _cmd_connection(args: argparse.Namespace) -> int:
                 microservice=microservice,
                 limit=_CONSUMER_FETCH_LIMIT,
             )
-        except Exception:
+        except Exception as e:  # noqa: BLE001 - best-effort multi-section view
+            # Don't swallow silently: surface the failure so an empty async
+            # inbound section is distinguishable from "no listeners". HTTP
+            # inbound above is unaffected; the command still returns its other
+            # sections. (The bare `except: listener_hits = []` this replaces
+            # produced silent wrong-results — status:ok with no async + no clue.)
+            warnings.append(f"listener lookup failed; async inbound section skipped: {e}")
             listener_hits = []
         topic_route_ids: set[str] = set()
         for h in listener_hits:
@@ -2808,9 +2874,11 @@ def _cmd_microservices(args: argparse.Namespace) -> int:
         return rc
 
     counts = graph.microservice_counts()
+    warnings = _warn_inapplicable_common(args, service=True, module=True, limit=True)
     env = Envelope(
         status="ok",
         nodes={"microservices": {"counts": dict(counts)}},
+        warnings=warnings,
     )
     next_actions_hook(env)
     print(render(env, fmt=args.format, noun="microservices", shape="inspect"))
@@ -2857,9 +2925,13 @@ def _cmd_map(args: argparse.Namespace) -> int:
         kind = str(r.get("kind") or "(unknown)")
         grouped.setdefault(scope, {})[kind] = int(r.get("n") or 0)
 
+    # --service/--module are applied above (scope_clauses); --limit is not (this
+    # is an aggregate count, not a row fetch).
+    warnings = _warn_inapplicable_common(args, service=False, module=False, limit=True)
     env = Envelope(
         status="ok",
         nodes={"map": {"group_by": group_col, "counts": grouped}},
+        warnings=warnings,
     )
     next_actions_hook(env)
     print(render(env, fmt=args.format, noun="map", shape="inspect"))
@@ -2905,9 +2977,13 @@ def _cmd_conventions(args: argparse.Namespace) -> int:
         if fw:
             framework_counts[fw] = int(r.get("n") or 0)
 
+    # --service is applied above; --module/--limit are not (no module clause;
+    # aggregate count).
+    warnings = _warn_inapplicable_common(args, service=False, module=True, limit=True)
     env = Envelope(
         status="ok",
         nodes={"conventions": {"roles": role_counts, "frameworks": framework_counts}},
+        warnings=warnings,
     )
     next_actions_hook(env)
     print(render(env, fmt=args.format, noun="conventions", shape="inspect"))

@@ -269,6 +269,48 @@ def test_resolve_query_many_caps_candidates_at_ten(monkeypatch: pytest.MonkeyPat
     assert len(env.candidates) == 10  # capped
 
 
+def test_resolve_query_many_post_filter_rejects_all_is_not_found(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression (review finding A): when a post-filter rejects EVERY `many`
+    candidate, the result is not_found — NOT an empty ambiguous list.
+
+    An empty ambiguous list would render as '0 ambiguous matches' with no
+    narrowing value; not_found with the filter-failure message is the honest,
+    actionable result (same message as the `one` post-filter-fail branch).
+    """
+    n1 = _make_node(id="sym:1", fqn="com.foo.Bar.doStuff", microservice="foo", role="SERVICE")
+    n2 = _make_node(id="sym:2", fqn="com.foo.Baz.doStuff", microservice="bar", role="SERVICE")
+    fake_output = ResolveOutput(
+        success=True,
+        status="many",
+        candidates=[
+            ResolveCandidate(node=n1, score=0.9, reason="fqn_suffix"),
+            ResolveCandidate(node=n2, score=0.5, reason="short_name"),
+        ],
+    )
+    monkeypatch.setattr("resolve_service.resolve_v2", lambda *a, **kw: fake_output)
+    graph = MagicMock()
+    cfg = MagicMock()
+
+    result_node, env = resolve_query(
+        "doStuff",
+        hint_kind="symbol",
+        java_kind=None,
+        role="CONTROLLER",  # neither candidate is CONTROLLER -> all rejected
+        fqn_prefix=None,
+        cfg=cfg,
+        graph=graph,
+    )
+    assert result_node is None
+    assert env.status == "not_found", (
+        f"empty-many must be not_found (not {env.status!r}); candidates={env.candidates}"
+    )
+    assert env.candidates == []
+    assert env.message is not None
+    assert "filters" in env.message.lower() or "post-filter" in env.message.lower()
+
+
 def test_resolve_query_none_is_not_found_with_search_hint(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_output = ResolveOutput(
         success=True,

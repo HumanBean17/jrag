@@ -151,6 +151,54 @@ def test_render_traversal_root_line_present() -> None:
     assert out.splitlines()[0].startswith("root: ")
 
 
+def test_render_overrides_does_not_mislabel_as_supertypes() -> None:
+    """Regression (review finding D): overrides/overridden-by edges must NOT
+    render under `↑ supertypes:`/`↓ subtypes:` hierarchy headers.
+
+    The producers used to set ``direction='up'/'down'`` on the edge rows, which
+    tripped the renderer's ``has_direction`` guard and routed them into the
+    hierarchy branch. The fix dropped the direction key; overrides is a flat
+    list. Tests previously asserted JSON only, so the mis-label was invisible.
+    """
+    env = Envelope(
+        status="ok",
+        root="sym:0",
+        nodes={
+            "sym:0": {"fqn": "com.foo.Impl", "microservice": "svc"},
+            "sym:1": {"fqn": "com.foo.Base", "microservice": "svc"},
+        },
+        edges=[{"other_id": "sym:1", "edge_type": "OVERRIDES"}],
+    )
+    out = render(env, fmt="text", noun="overrides")
+    assert "supertype" not in out.lower(), f"overrides mislabeled as supertypes: {out!r}"
+    assert "subtype" not in out.lower(), f"overrides mislabeled as subtypes: {out!r}"
+    # The overridden declaration IS rendered (flat row), not swallowed.
+    assert "Base" in out, f"overrides target not rendered: {out!r}"
+
+
+def test_render_warnings_visible_in_text() -> None:
+    """Regression (review finding F): warnings[] render as `warning:` lines in
+    text mode.
+
+    Previously warnings were JSON-only — the listing/inspect/traversal shapes
+    never emitted them, so the 'inapplicable flags never silently ignored' spec
+    was effectively unenforced for text consumers. The renderer now appends one
+    ``warning:`` line per warning after the body.
+    """
+    env = Envelope(
+        status="ok",
+        nodes={"sym:1": {"fqn": "com.foo.Bar", "microservice": "svc"}},
+        warnings=["--service is not applied on this command", "--limit is not applied on this command"],
+    )
+    out = render(env, fmt="text", noun="matches")
+    assert "warning: --service is not applied on this command" in out, (
+        f"warning not rendered in text mode: {out!r}"
+    )
+    assert "warning: --limit is not applied on this command" in out, (
+        f"second warning missing: {out!r}"
+    )
+
+
 # ----- Test 13: inspect edge_summary alphabetical -----
 
 

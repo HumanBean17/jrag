@@ -105,17 +105,41 @@ def test_find_filter_mode_by_role(corpus_root: Path, ladybug_db_path: Path) -> N
 
 
 def test_find_by_capability(corpus_root: Path, ladybug_db_path: Path) -> None:
-    """--capability scheduled-task with symbol kind inferred."""
+    """--capability scheduled-task narrows vs. unfiltered (a real filter, not a no-op).
+
+    The prior test asserted only ``status == 'ok'`` — it would pass even if
+    ``--capability`` were silently ignored. Now: the filtered set must be a
+    subset of all symbols, and a STRICT subset when the fixture has any
+    scheduled-task symbols.
+    """
     env = os.environ.copy()
     env["JAVA_CODEBASE_RAG_SOURCE_ROOT"] = str(corpus_root)
     env["JAVA_CODEBASE_RAG_INDEX_DIR"] = str(ladybug_db_path.parent)
 
-    proc = _run_jrag(["find", "--capability", "scheduled-task", "--format", "json"], env=env)
+    proc_all = _run_jrag(["find", "--limit", "499", "--format", "json"], env=env)
+    assert proc_all.returncode == 0, f"find (all) failed: {proc_all.stderr}"
+    all_count = len(json.loads(proc_all.stdout).get("nodes", {}))
+
+    proc = _run_jrag(
+        ["find", "--capability", "scheduled-task", "--limit", "499", "--format", "json"], env=env
+    )
     assert proc.returncode == 0, f"find failed: rc={proc.returncode}\nstdout={proc.stdout}\nstderr={proc.stderr}"
 
     payload = json.loads(proc.stdout)
     assert payload["status"] == "ok"
-    # Should return symbols with scheduled-task capability
+    nodes = payload.get("nodes", {})
+    # Filtered set must not exceed the unfiltered set.
+    assert len(nodes) <= all_count, (
+        f"--capability did not narrow: filtered={len(nodes)} > all={all_count}"
+    )
+    for node in nodes.values():
+        assert node.get("kind") == "symbol", f"--capability returned non-symbol: {node.get('kind')}"
+    # If the fixture has any scheduled-task symbols, the filter is a STRICT subset
+    # (proving the capability predicate was applied, not ignored).
+    if len(nodes) > 0 and all_count > 0:
+        assert len(nodes) < all_count, (
+            f"--capability returned the full set ({len(nodes)} == {all_count}); filter is a no-op"
+        )
 
 
 # ----- Test 4: find kind inference from http_method -----
@@ -198,20 +222,35 @@ def test_find_query_mode_with_non_symbol_kind_returns_error(
 
 
 def test_find_annotation_flag_filters(corpus_root: Path, ladybug_db_path: Path) -> None:
-    """--annotation post-filters results."""
+    """--annotation narrows vs. unfiltered (a real filter, not a no-op).
+
+    The prior test asserted only ``status == 'ok'``. Now: the annotated set must
+    be a subset, and a strict subset when the fixture has any @RestController.
+    """
     env = os.environ.copy()
     env["JAVA_CODEBASE_RAG_SOURCE_ROOT"] = str(corpus_root)
     env["JAVA_CODEBASE_RAG_INDEX_DIR"] = str(ladybug_db_path.parent)
 
+    proc_all = _run_jrag(["find", "--limit", "499", "--format", "json"], env=env)
+    assert proc_all.returncode == 0, f"find (all) failed: {proc_all.stderr}"
+    all_count = len(json.loads(proc_all.stdout).get("nodes", {}))
+
     # Find symbols with @RestController annotation
     proc = _run_jrag(
-        ["find", "--annotation", "RestController", "--format", "json", "--limit", "10"], env=env
+        ["find", "--annotation", "RestController", "--limit", "499", "--format", "json"], env=env
     )
     assert proc.returncode == 0, f"find failed: rc={proc.returncode}\nstdout={proc.stdout}\nstderr={proc.stderr}"
 
     payload = json.loads(proc.stdout)
     assert payload["status"] == "ok"
-    # Results should have RestController in annotations
+    nodes = payload.get("nodes", {})
+    assert len(nodes) <= all_count, (
+        f"--annotation did not narrow: filtered={len(nodes)} > all={all_count}"
+    )
+    if len(nodes) > 0 and all_count > 0:
+        assert len(nodes) < all_count, (
+            f"--annotation returned the full set ({len(nodes)} == {all_count}); filter is a no-op"
+        )
 
 
 # ----- Test 8: find exclude_role flag filters -----
@@ -364,7 +403,11 @@ def test_inspect_returns_edge_summary_with_composed_keys(
 
 
 def test_inspect_ambiguous_returns_candidates(corpus_root: Path, ladybug_db_path: Path) -> None:
-    """Inspect on ambiguous query returns candidates (no auto-pick)."""
+    """Inspect on a query that may match multiple nodes returns `ambiguous` with
+    candidates (no auto-pick). Each outcome asserts something real — the prior
+    ``elif status == 'ok': pass`` made the test vacuous for the most common
+    outcome (a clean resolve).
+    """
     env = os.environ.copy()
     env["JAVA_CODEBASE_RAG_SOURCE_ROOT"] = str(corpus_root)
     env["JAVA_CODEBASE_RAG_INDEX_DIR"] = str(ladybug_db_path.parent)
@@ -375,16 +418,20 @@ def test_inspect_ambiguous_returns_candidates(corpus_root: Path, ladybug_db_path
     assert proc.returncode in (0, 2), f"unexpected exit code: {proc.returncode}"
 
     payload = json.loads(proc.stdout)
-    if payload["status"] == "ambiguous":
-        # Should have candidates list
+    status = payload["status"]
+    if status == "ambiguous":
         candidates = payload.get("candidates", [])
-        assert len(candidates) > 0, "ambiguous should have candidates"
-        # Each candidate should have reason
+        assert len(candidates) > 0, "ambiguous must carry candidates"
         for cand in candidates:
-            assert "reason" in cand, "candidate should have reason"
-    elif payload["status"] == "ok":
-        # Unambiguously resolved - that's fine too
-        pass
+            assert "reason" in cand, "candidate must carry reason"
+    elif status == "ok":
+        # A clean resolve must yield exactly ONE node (not a silent multi-return).
+        assert len(payload.get("nodes", {})) == 1, (
+            f"ok must mean a single resolved node, got {len(payload.get('nodes', {}))}: {payload}"
+        )
+    else:
+        assert status == "not_found", f"unexpected status: {status}"
+        assert payload.get("message"), "not_found must carry a message"
 
 
 # ----- Test 13: inspect populates file_location -----
