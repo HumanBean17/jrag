@@ -43,6 +43,7 @@ from ast_java import (
     _TYPE_ANN_TO_CAPABILITY,
 )
 from java_ontology import (
+    CLIENT_KIND_REST_TEMPLATE,
     VALID_CAPABILITIES,
     VALID_CLIENT_KINDS,
     VALID_PRODUCER_KINDS,
@@ -1301,7 +1302,7 @@ def resolve_http_client_for_method(
             hint = overrides.annotation_to_http_client_hint.get("CodebaseHttpClient")
             if hint is None:
                 hint = HttpClientHint(
-                    client_kind=anchor.client_kind if anchor else "rest_template",
+                    client_kind=anchor.client_kind if anchor else CLIENT_KIND_REST_TEMPLATE,
                     target_service=anchor.feign_target_name if anchor else "",
                     path=anchor.path_template_call if anchor else "",
                     method=anchor.method_call if anchor else "",
