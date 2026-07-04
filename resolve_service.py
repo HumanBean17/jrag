@@ -159,6 +159,20 @@ def _resolve_symbol_candidates(
     for row in rows:
         out.append((_node_ref_from_row("symbol", row), "exact_fqn", len(identifier)))
 
+    # Method FQN without arg signature (e.g. "pkg.Cls#method"): the stored method
+    # fqn is "pkg.Cls#method(Type,Type)", so an argless identifier misses the
+    # exact match above. Prefix-match on "<identifier>(" so the agent doesn't
+    # have to type the exact "(Type,Type)" signature. Multiple overloads → the
+    # resolve "many" path surfaces them honestly as ambiguous candidates.
+    if "#" in identifier and "(" not in identifier:
+        rows = g._rows(  # noqa: SLF001
+            f"MATCH (s:Symbol) WHERE s.fqn STARTS WITH $mp "
+            f"RETURN {_SYMBOL_RESOLVE_RETURN} LIMIT $lim",
+            {"mp": identifier + "(", "lim": lim},
+        )
+        for row in rows:
+            out.append((_node_ref_from_row("symbol", row), "fqn_suffix", len(identifier) + 1))
+
     suffix = f".{identifier}"
     rows = g._rows(  # noqa: SLF001
         f"MATCH (s:Symbol) WHERE s.fqn = $ident OR s.fqn ENDS WITH $suffix "

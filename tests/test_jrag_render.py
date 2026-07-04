@@ -98,8 +98,10 @@ def test_render_listing_routes_shows_method_path_not_blank() -> None:
     )
     out = render(env, fmt="text", noun="route")
     lines = out.splitlines()
-    assert "POST /api/chat/send  @chat-core" in lines, f"route row missing: {out!r}"
-    assert "GET /api/chat/history  @chat-assign" in lines, f"route row missing: {out!r}"
+    # Route rows are prefixed with a [http]/[kafka] type tag so an agent can tell
+    # HTTP endpoints apart from Kafka topics in a mixed listing.
+    assert "[http]  POST /api/chat/send  @chat-core" in lines, f"route row missing: {out!r}"
+    assert "[http]  GET /api/chat/history  @chat-assign" in lines, f"route row missing: {out!r}"
     # No bare `@service` line (the bug signature: blank name + service suffix).
     assert not any(line.strip().startswith("@") for line in lines), (
         f"blank-name listing line leaked: {out!r}"
@@ -235,11 +237,17 @@ def test_render_inspect_edge_summary_alphabetical() -> None:
     # Filter out only the known top-level keys.
     expected_top = ["edge_summary", "fqn", "kind", "name", "role"]
     assert keys_in_output == expected_top, f"top keys not alphabetical: {keys_in_output}"
-    # edge_summary line is followed by sorted indented keys.
+    # edge_summary recurses (dict-of-dicts): each edge type is an indent-2 header
+    # (alphabetical) with its in/out counts indented one more level beneath.
     summary_idx = next(i for i, ln in enumerate(lines) if ln.startswith("edge_summary:"))
-    summary_lines = [ln.strip() for ln in lines[summary_idx + 1 :] if ln.startswith("  ")]
-    summary_keys = [ln.split(":", 1)[0] for ln in summary_lines]
-    assert summary_keys == ["CALLS", "EXTENDS", "OVERRIDES"], f"summary not sorted: {summary_keys}"
+    header_lines = [
+        ln for ln in lines[summary_idx + 1:]
+        if ln.startswith("  ") and not ln.startswith("    ")
+    ]
+    header_keys = [ln.split(":", 1)[0].strip() for ln in header_lines]
+    assert header_keys == ["CALLS", "EXTENDS", "OVERRIDES"], f"summary not sorted: {header_keys}"
+    # Each edge-type header is followed by its nested in/out counts.
+    assert "    in: 5" in lines and "    out: 2" in lines, f"nested counts missing: {out!r}"
 
 
 def test_render_listing_with_dict_valued_node_does_not_route_to_inspect() -> None:

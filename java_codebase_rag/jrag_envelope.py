@@ -213,6 +213,14 @@ def normalize_enum(value: str, *, kind: str) -> str:
         # Fall through to UPPER_SNAKE for unknown values; the command layer
         # validates against VALID_CLIENT_KINDS / VALID_PRODUCER_KINDS / the
         # source_layer set and emits an actionable error envelope.
+    # framework / java_kind (symbol_kind) literals are stored LOWERCASE — both
+    # in the graph (Route.framework, Symbol.kind) and in the NodeFilter Literal
+    # types (mcp_v2.Framework / DeclarationSymbolKind). Uppercasing them broke
+    # `routes --framework`, `find --java-kind` filter mode, and crashed
+    # `search --framework` with a pydantic ValidationError. role / capability
+    # stay UPPER_SNAKE (those ARE stored uppercase).
+    if kind in ("framework", "java_kind"):
+        return raw.lower().replace("-", "_").replace(" ", "_")
     return raw.upper().replace("-", "_").replace(" ", "_")
 
 
@@ -226,7 +234,10 @@ def _matches_post_filters(
     """Client-side post-filter on a resolved node (PR-JRAG-1a resolve-first)."""
     if java_kind is not None:
         want = normalize_enum(java_kind, kind="java_kind")
-        actual = (node.symbol_kind or "").upper().replace("-", "_")
+        # symbol_kind is stored LOWERCASE (DeclarationSymbolKind: class/method/...);
+        # normalize_enum now returns lowercase for java_kind, so compare on the
+        # lowercased actual (was upper-vs-upper, which only worked by accident).
+        actual = (node.symbol_kind or "").lower().replace("-", "_")
         if actual != want:
             return False
     if role is not None:
@@ -257,6 +268,27 @@ def _candidate_to_dict(node: NodeRef, reason: str) -> dict[str, Any]:
         "symbol_kind": node.symbol_kind,
         "reason": reason,
     }
+
+
+def _constructor_owner_fqn(node: NodeRef) -> str | None:
+    """If ``node`` is a constructor, return its owning class FQN; else None.
+
+    A constructor's FQN is ``<classFqn>#<simpleName>(args)`` where the member
+    name equals the class's simple name (``com.x.Foo#Foo(...)``). ``symbol_kind``
+    may be ``"constructor"`` or, on older nodes, ``"method"`` — the FQN shape is
+    authoritative. Used by the class-vs-constructor auto-pick in
+    :func:`resolve_query` so ``inspect/callers/callees <ClassName>`` does not
+    bounce to "ambiguous" just because the class shares its name with its ctor.
+    """
+    fqn = (node.fqn or "").strip()
+    if "#" not in fqn:
+        return None
+    head, rest = fqn.split("#", 1)
+    member = rest.split("(", 1)[0].strip()
+    class_simple = head.rsplit(".", 1)[-1]
+    if member and member == class_simple:
+        return head
+    return None
 
 
 def _node_file_location(graph: Any, node_id: str) -> str | None:
@@ -363,6 +395,26 @@ def resolve_query(
                     "filters; use `jrag search <query>` for ranked fuzzy lookup."
                 ),
             )
+        # Class-vs-constructor auto-pick: a class and its constructor share a
+        # simple name, so resolve_v2 returns "many" for ANY
+        # `inspect/callers/callees/decompose/dependencies <ClassName>`. When the
+        # survivors are exactly ONE type (FQN with no '#') plus one-or-more
+        # constructors OF THAT SAME TYPE, auto-pick the type. The constructor
+        # stays reachable via its explicit FQN or `--java-kind constructor`.
+        # Two genuinely-different types (same simple name across services) still
+        # surface as ambiguous — we never silently guess across distinct classes.
+        if len(survivors) >= 2:
+            type_survivors = [c for c in survivors if "#" not in (c.node.fqn or "")]
+            member_survivors = [c for c in survivors if "#" in (c.node.fqn or "")]
+            if len(type_survivors) == 1 and member_survivors:
+                type_fqn = (type_survivors[0].node.fqn or "").strip()
+                if all(_constructor_owner_fqn(c.node) == type_fqn for c in member_survivors):
+                    node = type_survivors[0].node
+                    env = Envelope(status="ok", root=node.id)
+                    loc = _node_file_location(graph, node.id)
+                    if loc is not None:
+                        env.file_location = loc
+                    return node, env
         capped = survivors[:10]
         env = Envelope(
             status="ambiguous",

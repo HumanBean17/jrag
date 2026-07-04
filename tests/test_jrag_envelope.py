@@ -341,15 +341,27 @@ def test_resolve_query_none_is_not_found_with_search_hint(monkeypatch: pytest.Mo
 
 
 def test_normalize_enum_role_uppercase() -> None:
-    """role/capability/framework/java_kind: case + kebab -> UPPER_SNAKE."""
+    """role/capability: case + kebab -> UPPER_SNAKE (stored uppercase).
+
+    framework / java_kind are stored LOWERCASE (NodeFilter Literal values +
+    graph node fields), so they normalize to lowercase regardless of input case
+    — uppercasing them crashed `search --framework` (pydantic ValidationError)
+    and made `routes --framework` return 0 results.
+    """
     for input_val in ("controller", "Controller", "CONTROLLER"):
         assert normalize_enum(input_val, kind="role") == "CONTROLLER"
-    # Kebab-case becomes UPPER_SNAKE.
-    assert normalize_enum("web-flux", kind="framework") == "WEB_FLUX"
+    # role kebab-case becomes UPPER_SNAKE.
     assert normalize_enum("rest-controller", kind="role") == "REST_CONTROLLER"
-    # java_kind uses the same path.
-    assert normalize_enum("class", kind="java_kind") == "CLASS"
-    assert normalize_enum("method", kind="java_kind") == "METHOD"
+
+    # framework -> lowercase snake (matches NodeFilter.Framework Literal).
+    assert normalize_enum("spring-mvc", kind="framework") == "spring_mvc"
+    assert normalize_enum("SPRING_MVC", kind="framework") == "spring_mvc"
+    assert normalize_enum("web-flux", kind="framework") == "web_flux"
+    assert normalize_enum("kafka", kind="framework") == "kafka"
+    # java_kind -> lowercase (matches DeclarationSymbolKind Literal).
+    assert normalize_enum("class", kind="java_kind") == "class"
+    assert normalize_enum("METHOD", kind="java_kind") == "method"
+    assert normalize_enum("interface", kind="java_kind") == "interface"
 
 
 def test_normalize_enum_client_kind_lookup() -> None:

@@ -318,16 +318,15 @@ def test_connection_outbound_lists_this_service_clients(
 
 
 def test_connection_both_default(corpus_root: Path, ladybug_db_path: Path) -> None:
-    """connection with no direction flag defaults to --inbound (per the brief).
+    """connection with no direction flag defaults to --both (full picture).
 
-    PR-JRAG-3b review Fix 1: the brief says `--inbound (default)`, but the
-    initial implementation defaulted to `--both`. The default is now inbound:
-    `connection <svc>` (no flag) MUST produce ONLY inbound edges (no outbound),
-    matching `connection <svc> --inbound`. `--both` is the explicit opt-in for
-    both sections.
+    The default is --both so `connection <svc>` shows inbound + outbound: an
+    inbound-only default hid a service's outbound HTTP clients unless the agent
+    remembered `--both`, making services look connectionless. `--inbound` /
+    `--outbound` remain explicit opt-ins for a single direction.
     """
     env = _env_for(corpus_root, ladybug_db_path)
-    # Default (no flag) MUST equal explicit --inbound.
+    # Default (no flag) MUST equal explicit --both.
     proc_default = _run_jrag(
         ["connection", "chat-core", "--format", "json"],
         env=env,
@@ -339,6 +338,23 @@ def test_connection_both_default(corpus_root: Path, ladybug_db_path: Path) -> No
     assert payload_default["status"] == "ok"
     sections_default = {e.get("section") for e in payload_default.get("edges", [])}
 
+    proc_both = _run_jrag(
+        ["connection", "chat-core", "--both", "--format", "json"],
+        env=env,
+    )
+    assert proc_both.returncode == 0
+    payload_both = json.loads(proc_both.stdout)
+    sections_both = {e.get("section") for e in payload_both.get("edges", [])}
+
+    assert sections_default == sections_both, (
+        f"default {sections_default} != explicit --both {sections_both}"
+    )
+    # Default MUST include outbound (the whole point: show the full picture).
+    assert "outbound" in sections_default, (
+        f"default direction should be --both (include outbound), got {sections_default}"
+    )
+
+    # --inbound is the explicit opt-in for inbound-only (no outbound leakage).
     proc_inbound = _run_jrag(
         ["connection", "chat-core", "--inbound", "--format", "json"],
         env=env,
@@ -346,28 +362,8 @@ def test_connection_both_default(corpus_root: Path, ladybug_db_path: Path) -> No
     assert proc_inbound.returncode == 0
     payload_inbound = json.loads(proc_inbound.stdout)
     sections_inbound = {e.get("section") for e in payload_inbound.get("edges", [])}
-
-    assert sections_default == sections_inbound, (
-        f"default {sections_default} != explicit --inbound {sections_inbound}"
-    )
-    # Default MUST be inbound-only (no outbound leakage).
-    assert "outbound" not in sections_default, (
-        f"default direction should be --inbound (no outbound), got {sections_default}"
-    )
-    assert "inbound" in sections_default or payload_default.get("edges", []) == [], (
-        f"default direction should produce inbound section (or empty), got {sections_default}"
-    )
-
-    # --both still renders both sections (explicit opt-in).
-    proc_both = _run_jrag(
-        ["connection", "chat-assign", "--both", "--format", "json"],
-        env=env,
-    )
-    assert proc_both.returncode == 0
-    payload_both = json.loads(proc_both.stdout)
-    sections_both = {e.get("section") for e in payload_both.get("edges", [])}
-    assert "inbound" in sections_both or "outbound" in sections_both, (
-        f"--both should render at least one section, got {sections_both}"
+    assert "outbound" not in sections_inbound, (
+        f"--inbound should be inbound-only, got {sections_inbound}"
     )
 
 

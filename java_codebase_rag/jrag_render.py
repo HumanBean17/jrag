@@ -26,6 +26,12 @@ __all__ = ["render", "tiered_name", "display_name"]
 # CALLS-family is what the agent-facing ``conf:`` road-sign is reserved for.
 _CALLS_FAMILY_EDGES = frozenset({"CALLS", "HTTP_CALLS", "ASYNC_CALLS"})
 
+# Route node kinds → short text tag so the routes listing distinguishes HTTP
+# endpoints from Kafka topics (otherwise they mash together with no indicator).
+# Only route kinds are tagged; symbol/client/producer rows carry other kinds (or
+# none) and are left untagged.
+_ROUTE_KIND_TAGS: dict[str, str] = {"kafka_topic": "kafka", "http_endpoint": "http"}
+
 
 def _next_action_lines(envelope: Envelope) -> list[str]:
     """Build up to 2 ``next: <hint>`` lines from ``agent_next_actions``.
@@ -142,8 +148,16 @@ def _render_listing(envelope: Envelope, *, noun: str) -> str:
         # display_name handles routes (METHOD path) / clients / producers, which
         # carry no FQN — simple_name would render them blank.
         name = display_name(node)
+        if not name:
+            # Unresolved brownfield routes can carry empty path+topic+member;
+            # fall back to the filename basename (then a placeholder) so the row
+            # never renders as a blank line or a bare ``@service``.
+            fn = str(node.get("filename") or "").strip()
+            name = (fn.rsplit("/", 1)[-1] if fn else "") or "(no identifier)"
         service = str(node.get("microservice") or "").strip()
-        line = name
+        tag = _ROUTE_KIND_TAGS.get(str(node.get("kind") or ""))
+        parts: list[str] = [f"[{tag}]", name] if tag else [name]
+        line = "  ".join(parts)
         if service:
             line += f"  @{service}"
         # PR-JRAG-3b: distinguish unresolved imports from resolved graph nodes
@@ -286,29 +300,67 @@ def _render_traversal(envelope: Envelope, *, noun: str) -> str:
     return "\n".join(lines)
 
 
+def _inspect_inline(val: Any) -> str:
+    """One-line rendering for a leaf value or a collapsed list/dict item.
+
+    Scalars render as themselves; a list of scalars joins with ``, ``; a dict
+    collapses to ``k: v, k: v`` (used for list-of-dict sample items, which are
+    short). Empty list/dict render as ``[]`` / ``{}``.
+    """
+    if isinstance(val, list):
+        return ", ".join(_inspect_inline(x) for x in val) if val else "[]"
+    if isinstance(val, dict):
+        return ", ".join(f"{k}: {_inspect_inline(v)}" for k, v in val.items()) if val else "{}"
+    if isinstance(val, str):
+        return val
+    return str(val)
+
+
+def _is_dict_list(v: Any) -> bool:
+    """True for a non-empty list whose every item is a dict (rendered as blocks)."""
+    return isinstance(v, list) and bool(v) and all(isinstance(x, dict) for x in v)
+
+
+def _render_inspect_block(node: dict[str, Any], indent: int) -> list[str]:
+    """Recursively render a dict's keys as indented kv lines.
+
+    dict -> header + recurse (so ``counts: {svc: {kind: n}}`` nests fully);
+    non-empty list-of-dicts -> header + one ``- <inline item>`` line per entry
+    (sample lists like ``client_sample``/``route_sample``); other lists and
+    scalars -> inline. Replaces the old single-level renderer that printed
+    nested dicts and list-of-dicts as Python ``repr()``.
+    """
+    pad = "  " * indent
+    out: list[str] = []
+    for key in sorted(node.keys(), key=str):
+        val = node[key]
+        if isinstance(val, dict) and val:
+            out.append(f"{pad}{key}:")
+            out.extend(_render_inspect_block(val, indent + 1))
+        elif _is_dict_list(val):
+            out.append(f"{pad}{key}:")
+            for item in val:
+                out.append(f"{pad}  - {_inspect_inline(item)}")
+        else:
+            out.append(f"{pad}{key}: {_inspect_inline(val)}")
+    return out
+
+
 def _render_inspect(envelope: Envelope) -> str:
     """kv-block renderer for nodes carrying one or more nested dict sections.
 
     Generic: ANY dict-typed value on a node renders as a header line plus
-    indented sorted sub-keys. This is the dispatch signal for the inspect
-    shape (PR-JRAG-1a status uses it for ``counts`` / ``edges``; PR-JRAG-3
-    ``inspect`` will use it for ``edge_summary`` and other rollups). The
+    indented sorted sub-keys, recursing fully. This is the dispatch signal for
+    the inspect shape (PR-JRAG-1a status uses it for ``counts`` / ``edges``;
+    PR-JRAG-3 ``inspect`` uses it for ``edge_summary`` and other rollups). The
     ``edge_summary`` key is NOT special here - it is reserved for real edge
     data in PR-JRAG-3 and is one of many possible section sources.
     """
     lines: list[str] = []
     for _node_id, node in envelope.nodes.items():
-        # ALL dict keys alphabetical (PR-JRAG-1a test 13). A dict-typed value
-        # renders in its alphabetical position with a header line followed by
-        # indented sorted sub-keys; scalars render inline as ``key: value``.
-        for key in sorted(node.keys()):
-            val = node[key]
-            if isinstance(val, dict) and val:
-                lines.append(f"{key}:")
-                for ek in sorted(val.keys()):
-                    lines.append(f"  {ek}: {val[ek]}")
-            else:
-                lines.append(f"{key}: {val}")
+        # ALL dict keys alphabetical (PR-JRAG-1a test 13); nested dicts and
+        # list-of-dicts recurse via _render_inspect_block instead of repr().
+        lines.extend(_render_inspect_block(node, 0))
     lines.extend(_next_action_lines(envelope))
     return "\n".join(lines)
 

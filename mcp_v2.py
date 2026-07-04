@@ -136,11 +136,18 @@ _fail_loud_lock = threading.Lock()
 
 
 def _log_fail_loud(category: str) -> None:
-    """Increment process-local fail-loud counter and emit one stderr line (PR-FRAME-3)."""
+    """Increment process-local fail-loud counter and emit one stderr line (PR-FRAME-3).
+
+    The stderr line is gated on ``JAVA_CODEBASE_RAG_FAIL_LOUD`` (default ``"1"`` =
+    emit) so the MCP server keeps its operator diagnostic while the agent-facing
+    ``jrag`` CLI (which surfaces the same failure as a clean status:error
+    envelope) can run it with the diagnostic silenced.
+    """
     with _fail_loud_lock:
         _fail_loud_counts[category] = _fail_loud_counts.get(category, 0) + 1
         n = _fail_loud_counts[category]
-    print(f"[filter-frame] fail-loud category={category} count={n}", file=sys.stderr, flush=True)
+    if os.environ.get("JAVA_CODEBASE_RAG_FAIL_LOUD", "1") != "0":
+        print(f"[filter-frame] fail-loud category={category} count={n}", file=sys.stderr, flush=True)
 
 
 def filter_frame_counters() -> dict[str, int]:

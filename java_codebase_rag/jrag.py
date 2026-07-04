@@ -609,7 +609,7 @@ def build_parser() -> argparse.ArgumentParser:
             "RESOLVE-FIRST EXCEPTION: the first positional is a microservice NAME "
             "(e.g. 'chat-core'), NOT a query — it is passed literally to list_clients/"
             "list_producers/find_route_callers; resolve_v2 is NEVER run on it.\n\n"
-            "Direction (default --inbound): clients/producers in OTHER services "
+            "Direction (default --both): clients/producers in OTHER services "
             "targeting this service. HTTP via list_clients(target_service=<svc>) + "
             "async via find_route_callers on this service's topic Routes.\n"
             "--outbound: clients/producers IN this service. HTTP via "
@@ -632,21 +632,21 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_const",
         const="inbound",
         default=None,
-        help="Show only inbound connections (this is the default).",
+        help="Show only inbound connections (default is --both).",
     )
     connection.add_argument(
         "--outbound",
         dest="direction",
         action="store_const",
         const="outbound",
-        help="Show only outbound connections (default is --inbound).",
+        help="Show only outbound connections (default is --both).",
     )
     connection.add_argument(
         "--both",
         dest="direction",
         action="store_const",
         const="both",
-        help="Show both inbound and outbound sections (default is --inbound).",
+        help="Show both inbound and outbound sections (this is the default).",
     )
     connection.add_argument(
         "--http-method",
@@ -716,9 +716,17 @@ def build_parser() -> argparse.ArgumentParser:
         parents=[common],
         description=(
             "Count resolved type Symbols (class/interface/enum/record/annotation) "
-            "grouped by microservice (--service narrows to one) or module (--module "
-            "switches the grouping axis to modules)."
+            "grouped by microservice or module. --by {microservice,module} selects "
+            "the grouping axis (default microservice); --service / --module narrow "
+            "the count to one service or module (filters, independent of --by)."
         ),
+    )
+    map_cmd.add_argument(
+        "--by",
+        dest="by",
+        choices=("microservice", "module"),
+        default="microservice",
+        help="Grouping axis: microservice (default) or module.",
     )
     map_cmd.set_defaults(handler=_cmd_map)
 
@@ -747,7 +755,12 @@ def build_parser() -> argparse.ArgumentParser:
             "microservice; otherwise -> topic."
         ),
     )
-    overview.add_argument("subject", help="Microservice name, route path, or topic string.")
+    overview.add_argument(
+        "subject",
+        nargs="?",
+        default=None,
+        help="Microservice name, route path (starts with '/'), or topic string.",
+    )
     overview.add_argument(
         "--as",
         dest="as_type",
@@ -1107,6 +1120,33 @@ def _cmd_find_query_mode(
     return 0
 
 
+def _build_node_filter_or_error(filter_dict: dict):
+    """Build a ``NodeFilter`` from ``filter_dict``; on pydantic validation
+    failure return ``(None, error_envelope)`` so the caller can render a clean
+    ``status: error`` envelope instead of letting the ValidationError propagate
+    to the top-level handler (which renders "internal error" + a traceback).
+
+    A bad enum (e.g. ``--role FOO``) should be a user-facing validation error,
+    not an internal crash. Returns ``(node_filter, None)`` on success.
+    """
+    import mcp_v2
+
+    from java_codebase_rag.jrag_envelope import Envelope
+    from pydantic import ValidationError
+
+    try:
+        nf = mcp_v2.NodeFilter.model_validate(filter_dict) if filter_dict else mcp_v2.NodeFilter()
+        return nf, None
+    except ValidationError as exc:
+        parts: list[str] = []
+        for err in exc.errors():
+            loc = ".".join(str(x) for x in err.get("loc", []) if x != "")
+            msg = str(err.get("msg") or "").strip()
+            parts.append(f"{loc}: {msg}" if loc else msg)
+        message = "; ".join(parts) if parts else str(exc)
+        return None, Envelope(status="error", message=f"invalid filter: {message}")
+
+
 def _cmd_find_filter_mode(
     args: argparse.Namespace,
     cfg,
@@ -1119,8 +1159,6 @@ def _cmd_find_filter_mode(
 
     from java_codebase_rag.jrag_envelope import Envelope, next_actions_hook, normalize_enum, to_envelope_rows
     from java_codebase_rag.jrag_render import render
-
-    NodeFilter = mcp_v2.NodeFilter
 
     # Build NodeFilter from args
     filter_dict: dict = {}
@@ -1159,7 +1197,10 @@ def _cmd_find_filter_mode(
     if args.topic_prefix:
         filter_dict["topic_prefix"] = args.topic_prefix
 
-    node_filter = NodeFilter.model_validate(filter_dict) if filter_dict else NodeFilter()
+    node_filter, err_env = _build_node_filter_or_error(filter_dict)
+    if err_env is not None:
+        print(render(err_env, fmt=args.format))
+        return 2
 
     # Call find_v2
     out = mcp_v2.find_v2(
@@ -1246,6 +1287,29 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
     return 0
 
 
+def _backfill_service_from_filename(row: dict) -> None:
+    """Derive ``microservice`` / ``module`` from ``filename`` when empty.
+
+    Kafka-topic Route nodes are created without ``microservice``/``module`` in
+    the graph builder, so the routes listing rendered them with no ``@service``
+    (or as blank lines when the topic was also empty). The filename carries the
+    info reliably (``<microservice>/<module>/src/...`` or
+    ``<microservice>/src/...``) — the same path-based resolution graph_enrich
+    uses — so backfill from it for display without forcing a reindex.
+    """
+    fn = str(row.get("filename") or "").strip()
+    if not fn:
+        return
+    parts = fn.split("/")
+    if "src" not in parts:
+        return
+    idx = parts.index("src")
+    if idx >= 1 and not (row.get("microservice") or "").strip():
+        row["microservice"] = parts[0]
+    if idx >= 2 and not (row.get("module") or "").strip():
+        row["module"] = parts[1]
+
+
 def _cmd_routes(args: argparse.Namespace) -> int:
     from java_codebase_rag.jrag_envelope import normalize_enum
 
@@ -1264,6 +1328,8 @@ def _cmd_routes(args: argparse.Namespace) -> int:
         method=args.method,
         limit=limit + 1,  # +1 for truncated detection
     )
+    for row in rows:
+        _backfill_service_from_filename(row)
     return _render_listing(rows, limit=limit, args=args, noun="route")
 
 
@@ -2226,8 +2292,24 @@ def _cmd_decompose(args: argparse.Namespace) -> int:
 
     # trace_flow clamps depth internally to 1..3; mirror here for the help text.
     depth = max(1, min(3, getattr(args, "depth", 2)))
+    # decompose walks a TYPE role-waterfall (CONTROLLER -> SERVICE/COMPONENT ->
+    # CLIENT/REPOSITORY/MAPPER) via INJECTS/EXTENDS/IMPLEMENTS, which are
+    # type-to-type edges. A METHOD seed has no such edges, so trace_flow would
+    # return only stage 0 (the seed itself). Promote a method seed to its owning
+    # type so the waterfall is meaningful; point the agent at `callees` for the
+    # method's direct call chain. (root stays the resolved method node.)
+    seed_fqn = node.fqn
+    warnings: list[str] = []
+    if seed_fqn and "#" in seed_fqn:
+        owning_type = seed_fqn.split("#", 1)[0]
+        warnings.append(
+            f"decompose is a type role-waterfall; promoted method seed "
+            f"'{seed_fqn}' to its owning type '{owning_type}'. "
+            f"Use `jrag callees {seed_fqn}` for the method's direct call chain."
+        )
+        seed_fqn = owning_type
     stages = graph.trace_flow(
-        seed_fqns=[node.fqn],
+        seed_fqns=[seed_fqn],
         depth=depth,
         follow_calls=getattr(args, "follow_calls", False),
         stage_limit=getattr(args, "max_stage", 20),
@@ -2259,7 +2341,6 @@ def _cmd_decompose(args: argparse.Namespace) -> int:
     # is stage-limited via --max-stage, not a total edge count). Warn when the
     # user explicitly set --limit away from the default so they get a signal
     # rather than a silent multi-stage dump (Fix 4).
-    warnings: list[str] = []
     if args.limit is not None and args.limit != 20:
         warnings.append(
             "--limit does not apply to decompose; use --max-stage to cap per-stage breadth"
@@ -2477,7 +2558,7 @@ def _cmd_connection(args: argparse.Namespace) -> int:
     # argparse stores --inbound/--outbound/--both into `direction` via
     # action="store_const"; default is None when no flag is given (-> inbound,
     # per the brief: --inbound is the default direction).
-    direction = getattr(args, "direction", None) or "inbound"
+    direction = getattr(args, "direction", None) or "both"
     http_method = (args.http_method or "").upper() or None
     calls_service = args.calls_service
 
@@ -2886,12 +2967,12 @@ def _cmd_microservices(args: argparse.Namespace) -> int:
 
 
 def _cmd_map(args: argparse.Namespace) -> int:
-    """map [--service] [--module] — counts per kind per service/module.
+    """map [--by microservice|module] [--service] [--module] — counts per kind.
 
-    ``--module`` (from the common parent) doubles as the grouping-axis switch:
-    when set, the map groups by module; otherwise by microservice. If it carries
-    a value, the results also narrow to that module. ``--service`` narrows to
-    one microservice (does not switch the axis unless ``--module`` is also set).
+    ``--by`` selects the grouping axis (default microservice). ``--service`` /
+    ``--module`` narrow the count to one service / module (filters, independent
+    of the axis). Previously ``--module`` was overloaded to also switch the
+    axis, which made "group by ALL modules" unreachable.
     """
     from java_codebase_rag.jrag_envelope import Envelope, next_actions_hook
     from java_codebase_rag.jrag_render import render
@@ -2900,8 +2981,8 @@ def _cmd_map(args: argparse.Namespace) -> int:
     if rc:
         return rc
 
-    # Grouping axis: --module present → group by module; else microservice.
-    group_col = "module" if args.module is not None else "microservice"
+    # Grouping axis: --by (validated by argparse choices). --module is a filter only.
+    group_col = args.by
     scope_clauses: list[str] = []
     params: dict = {}
     if args.service:
@@ -3171,6 +3252,22 @@ def _cmd_overview(args: argparse.Namespace) -> int:
         return rc
 
     subject = args.subject
+    if not subject:
+        # Subject is optional on the parser (nargs='?') so we can emit a helpful
+        # explanation instead of argparse's opaque "the following arguments are
+        # required: subject". Prints to stderr (usage guidance) + a status:error
+        # envelope to stdout, exit 2.
+        from java_codebase_rag.jrag_envelope import Envelope
+        from java_codebase_rag.jrag_render import render
+
+        msg = (
+            "overview requires a <subject>: a microservice name (e.g. 'chat-core'), "
+            "a route path (e.g. '/api/v1/chat/events'), or a topic string "
+            "(e.g. 'banking.chat.audit'). Use --as {microservice,route,topic} to "
+            "override auto-detection."
+        )
+        print(render(Envelope(status="error", message=msg), fmt=args.format))
+        return 2
     as_type = getattr(args, "as_type", None)
     if as_type is None:
         as_type = _overview_detect_type(subject, graph)
@@ -3236,7 +3333,10 @@ def _cmd_search(args: argparse.Namespace) -> int:
         filter_dict["symbol_kind"] = normalize_enum(args.java_kind, kind="java_kind")
     if args.framework:
         filter_dict["framework"] = normalize_enum(args.framework, kind="framework")
-    node_filter = mcp_v2.NodeFilter.model_validate(filter_dict) if filter_dict else None
+    node_filter, err_env = _build_node_filter_or_error(filter_dict)
+    if err_env is not None:
+        print(render(err_env, fmt=args.format))
+        return 2
 
     out = mcp_v2.search_v2(
         args.query,
@@ -3276,6 +3376,44 @@ def _cmd_search(args: argparse.Namespace) -> int:
     return 0
 
 
+def _suppress_runtime_stderr_noise() -> None:
+    """Silence known-benign stderr noise from the embedding/LanceDB stack.
+
+    The CLI loads sentence_transformers + LanceDB per invocation; both emit
+    benign stderr noise that an agent-facing tool should not dump on the caller:
+
+      * tqdm ``Loading weights`` progress bar (sentence_transformers model load)
+      * HuggingFace hub progress bars / telemetry
+      * torch multiprocessing ``leaked semaphore objects`` ``resource_tracker``
+        UserWarning emitted at shutdown
+
+    Real diagnostics (the top-level handler's ``traceback.format_exc()``) still
+    go to stderr. Env vars are set with ``setdefault`` so an explicit caller
+    override wins. The ``resource_tracker`` warning is raised inside a spawned
+    child process; under the spawn start method (macOS default) the child
+    re-initializes ``warnings`` and does NOT inherit the parent's
+    ``warnings.filterwarnings``, so we route it through ``PYTHONWARNINGS`` (env
+    vars ARE inherited by spawned children) as well as the parent filter.
+    """
+    for key, val in (
+        ("TQDM_DISABLE", "1"),
+        ("TRANSFORMERS_VERBOSITY", "error"),
+        ("HF_HUB_DISABLE_PROGRESS_BARS", "1"),
+        ("HF_HUB_DISABLE_TELEMETRY", "1"),
+        # mcp_v2._log_fail_loud operator diagnostic — the CLI surfaces the same
+        # failure as a clean status:error envelope, so silence the stderr line.
+        ("JAVA_CODEBASE_RAG_FAIL_LOUD", "0"),
+    ):
+        os.environ.setdefault(key, val)
+    existing_pw = os.environ.get("PYTHONWARNINGS", "")
+    extra_pw = "ignore:resource_tracker:UserWarning"
+    if extra_pw not in existing_pw:
+        os.environ["PYTHONWARNINGS"] = f"{existing_pw},{extra_pw}" if existing_pw else extra_pw
+    import warnings
+
+    warnings.filterwarnings("ignore", message=r"resource_tracker.*", category=UserWarning)
+
+
 def main(argv: list[str] | None = None) -> int:
     """Process-level entry. Returns the exit code.
 
@@ -3287,6 +3425,7 @@ def main(argv: list[str] | None = None) -> int:
     deliberate divergence from the operator CLI which swallows tracebacks.
     """
     raise_fd_limit()
+    _suppress_runtime_stderr_noise()
     parser = build_parser()
     raw = list(argv if argv is not None else sys.argv[1:])
     try:
