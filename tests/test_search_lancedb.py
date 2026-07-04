@@ -37,6 +37,25 @@ def test_rrf_merge_weights_second_list_by_row() -> None:
     assert by_file["b.java"] > by_file["c.java"]
 
 
+def test_rrf_merge_reinforced_row_across_lists_outranks_singleton() -> None:
+    """Multi-list RRF (issue #358): a row reinforced across two ranked lists
+    accumulates score and outranks a row appearing in only one list. Merging
+    dedups by (filename, range_start, range_end) and orders by summed score —
+    the core of multi-table fused ranking, previously covered only for the
+    weighted two-list case."""
+    list_a = [{"filename": "a.java", "range_start": 1, "range_end": 5}]
+    list_b = [{"filename": "a.java", "range_start": 1, "range_end": 5}]  # same key, distinct row
+    list_c = [{"filename": "z.java", "range_start": 9, "range_end": 99}]  # singleton, rank 0
+    merged = _rrf_merge([list_a, list_b, list_c], k=60)
+    by_file = {m["filename"]: float(m["_rrf_score"]) for m in merged}
+    # 'a.java' (rank 0 in two lists) sums two contributions; 'z.java' only one.
+    assert by_file["a.java"] > by_file["z.java"]
+    # The two a.java entries collapse to one (dedup by row key).
+    assert len(merged) == 2
+    # Highest summed score first.
+    assert merged[0]["filename"] == "a.java"
+
+
 def test_java_enriched_columns_include_symbol_identity_fields() -> None:
     assert "symbol_id" in JAVA_ENRICHED_COLUMNS
     assert "metadata" in JAVA_ENRICHED_COLUMNS
