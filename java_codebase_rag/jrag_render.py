@@ -87,6 +87,13 @@ _EDGE_LINE_KEYS: frozenset[str] = frozenset(
 )
 
 
+def _format_inline_value(value: Any) -> str:
+    """Format a value for inline rendering: round floats to 3 decimals, others verbatim."""
+    if isinstance(value, float):
+        return f"{value:.3f}"
+    return str(value)
+
+
 def _next_action_lines(envelope: Envelope) -> list[str]:
     """Build up to 2 ``next: <hint>`` lines from ``agent_next_actions``.
 
@@ -266,7 +273,7 @@ def _render_listing(envelope: Envelope, *, noun: str, detail: str = "normal") ->
         # of every non-identity key (signature/annotations/snippet/...).
         if detail == "brief":
             extras = [
-                f"{key}={node[key]}"
+                f"{key}={_format_inline_value(node[key])}"
                 for key in _BRIEF_INLINE_EXTRAS
                 if key in node and node[key] not in ("", None)
             ]
@@ -274,7 +281,7 @@ def _render_listing(envelope: Envelope, *, noun: str, detail: str = "normal") ->
                 line += "  " + "  ".join(extras)
         elif detail == "normal":
             extras = [
-                f"{key}={node[key]}"
+                f"{key}={_format_inline_value(node[key])}"
                 for key in _NORMAL_INLINE_EXTRAS
                 if key in node and node[key] not in ("", None)
             ]

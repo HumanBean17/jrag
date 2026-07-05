@@ -361,11 +361,10 @@ def test_search_fuzzy_rejected_in_handler_as_status_error(
 def test_search_min_score_drops_negative_noise(
     monkeypatch, capsys, corpus_root: Path, ladybug_db_path: Path
 ) -> None:
-    """--min-score (default 0.0) drops negative-score hits (noise).
+    """--min-score (default 0.0) drops low-score hits below the floor.
 
-    A nonsense query yields only negative-score chunks (l2_distance_to_score <
-    0 = farther than orthogonal). The default floor of 0.0 drops them all. The
-    floor is overrideable: --min-score -1 keeps them.
+    Scores are now unified to [0,1] across all modes. The default floor of 0.0
+    drops weak hits; --min-score 0.5 keeps only the stronger half.
     """
     import mcp_v2
     from java_codebase_rag.jrag import main
@@ -374,13 +373,13 @@ def test_search_min_score_drops_negative_noise(
     monkeypatch.setenv("JAVA_CODEBASE_RAG_INDEX_DIR", env_index)
     monkeypatch.setenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", str(corpus_root))
 
-    noise = mcp_v2.SearchHit(
-        chunk_id="c1", symbol_id="sym1", fqn="com.example.Noise",
-        score=-0.5, snippet="noise", microservice="chat-core",
+    weak = mcp_v2.SearchHit(
+        chunk_id="c1", symbol_id="sym1", fqn="com.example.Weak",
+        score=0.1, snippet="weak", microservice="chat-core",
     )
     signal = mcp_v2.SearchHit(
         chunk_id="c2", symbol_id="sym2", fqn="com.example.Signal",
-        score=0.4, snippet="signal", microservice="chat-core",
+        score=0.6, snippet="signal", microservice="chat-core",
     )
 
     def make_mock(hits):
@@ -392,23 +391,24 @@ def test_search_min_score_drops_negative_noise(
             )
         return mock_search_v2
 
-    # Default floor (0.0): only the positive-score signal survives.
-    monkeypatch.setattr(mcp_v2, "search_v2", make_mock([noise, signal]))
+    # Default floor (0.0): both survive (both are ≥ 0).
+    monkeypatch.setattr(mcp_v2, "search_v2", make_mock([weak, signal]))
     rc = main(["search", "--index-dir", env_index, "q", "--format", "json"])
     out = capsys.readouterr().out
     assert rc == 0, out
     payload = json.loads(out)
     fqns = {n.get("fqn") for n in payload.get("nodes", {}).values()}
     assert "com.example.Signal" in fqns
-    assert "com.example.Noise" not in fqns, "negative-score noise must be dropped by default floor"
+    assert "com.example.Weak" in fqns, "weak hit (0.1) should survive default floor 0.0"
 
-    # Override floor to -1: both survive.
-    monkeypatch.setattr(mcp_v2, "search_v2", make_mock([noise, signal]))
-    rc = main(["search", "--index-dir", env_index, "q", "--min-score", "-1", "--format", "json"])
+    # Floor 0.5: only the strong signal survives.
+    monkeypatch.setattr(mcp_v2, "search_v2", make_mock([weak, signal]))
+    rc = main(["search", "--index-dir", env_index, "q", "--min-score", "0.5", "--format", "json"])
     out = capsys.readouterr().out
     payload = json.loads(out)
     fqns = {n.get("fqn") for n in payload.get("nodes", {}).values()}
-    assert "com.example.Noise" in fqns and "com.example.Signal" in fqns
+    assert "com.example.Signal" in fqns
+    assert "com.example.Weak" not in fqns, "weak hit (0.1) must be dropped by floor 0.5"
 
 
 def test_search_hit_carries_file_path(

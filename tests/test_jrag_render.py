@@ -535,9 +535,10 @@ def test_search_text_normal_shows_score_not_snippet() -> None:
     """Regression for the complaint: text used to drop BOTH score and snippet.
 
     At normal, score is now visible; the snippet stays opt-in (full only).
+    Score is rounded to 3 decimals (e.g., 0.910).
     """
     out = render(_search_listing_env(), fmt="text", noun="search", detail="normal")
-    assert "score=0.91" in out, f"normal search text missing score: {out!r}"
+    assert "score=0.910" in out, f"normal search text missing score: {out!r}"
     assert "void x();" not in out, f"normal search text leaked snippet: {out!r}"
 
 

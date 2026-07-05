@@ -403,6 +403,27 @@ def l2_distance_to_score(distance: float) -> float:
     return 1.0 - distance * distance / 2.0
 
 
+def _effective_distance(comps: dict[str, float]) -> float:
+    """Compute the adjusted distance used for sorting.
+
+    Matches _vector_sort_key logic: distance + import_penalty - role_weight - symbol_bonus.
+    """
+    d = comps.get("distance", 0.0)
+    d += comps.get("import_penalty", 0.0)
+    d -= comps.get("role_weight", 0.0)
+    d -= comps.get("symbol_bonus", 0.0)
+    return d
+
+
+def _clamp01(x: float) -> float:
+    """Clamp a value to the [0.0, 1.0] range."""
+    if x < 0.0:
+        return 0.0
+    if x > 1.0:
+        return 1.0
+    return x
+
+
 def _escape_like_fragment(s: str) -> str:
     return s.replace("'", "''")
 
@@ -790,6 +811,16 @@ def _rrf_merge(
                 existing["_rrf_score"] = float(existing.get("_rrf_score", 0.0)) + contribution
     merged = list(pool.values())
     merged.sort(key=lambda r: -float(r.get("_rrf_score", 0.0)))
+    # Normalize displayed _rrf_score to [0,1] by theoretical max
+    # RRF max = Σ weight·1/(k+rank+1); theoretical max when all rows are rank 0
+    # with weight 1.0 = num_lists / (k + 1)
+    num_lists = len(lists)
+    max_rrf = num_lists / (k + 1)
+    for r in merged:
+        raw_score = float(r.get("_rrf_score", 0.0))
+        comps = r.setdefault("_score_components", {})
+        comps["rrf_raw"] = raw_score
+        r["_rrf_score"] = _clamp01(raw_score / max_rrf)
     return merged
 
 
@@ -887,8 +918,23 @@ def run_search(
         _apply_symbol_bonus(rows, query_toks)
         if effective_hybrid:
             rows.sort(key=_hybrid_sort_key)
+            # Hybrid: normalize displayed _score to [0,1]
+            # LanceDB hybrid fuses vector + FTS (2 lists) with RRF k=60
+            # Theoretical max = 2/(60+1) ≈ 0.0328
+            rrf_k = 60
+            max_rrf = 2.0 / (rrf_k + 1)
+            for r in rows:
+                comps = r.setdefault("_score_components", {})
+                raw_score = float(r.get("_score", 0.0))
+                comps["rrf_raw"] = raw_score
+                r["_score"] = _clamp01(raw_score / max_rrf)
         else:
             rows.sort(key=_vector_sort_key)
+            # Vector: set honest displayed score from adjusted distance, clamped to [0,1]
+            for r in rows:
+                comps = r.setdefault("_score_components", {})
+                effective_dist = _effective_distance(comps)
+                r["_score"] = _clamp01(l2_distance_to_score(effective_dist))
 
         if graph_expand and key == "java" and expand_depth > 0:
             rows = _graph_expand_merge(
@@ -931,6 +977,11 @@ def run_search(
             r["_skip_role_weight"] = True
     _apply_symbol_bonus(merged, query_toks)
     merged.sort(key=_vector_sort_key)
+    # Vector: set honest displayed score from adjusted distance, clamped to [0,1]
+    for r in merged:
+        comps = r.setdefault("_score_components", {})
+        effective_dist = _effective_distance(comps)
+        r["_score"] = _clamp01(l2_distance_to_score(effective_dist))
     window = merged[offset : offset + limit]
     if context_neighbors > 0:
         _attach_neighbor_context(window, db=db, neighbors=context_neighbors, uri=uri)

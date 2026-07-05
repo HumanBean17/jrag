@@ -118,3 +118,118 @@ def test_search_one_table_selects_symbol_identity_columns_when_schema_has_them(m
     )
     assert "symbol_id" in selected
     assert "metadata" in selected
+
+
+def test_vector_displayed_score_is_rank_monotonic() -> None:
+    """Vector search displayed score is non-increasing with rank and clamped to [0,1].
+
+    The honest score uses the adjusted distance (distance + import_penalty - role_weight - symbol_bonus).
+    This matches the sort key, so the displayed score is monotonic. After clamping, scores are in [0,1].
+    """
+    from search_lancedb import _effective_distance, l2_distance_to_score, _clamp01
+
+    # Build controlled rows with varying distances and bonuses
+    rows = [
+        {
+            "filename": "a.java",
+            "range_start": 1,
+            "range_end": 10,
+            "_distance": 0.3,
+            "_score_components": {"distance": 0.3},
+        },
+        {
+            "filename": "b.java",
+            "range_start": 2,
+            "range_end": 20,
+            "_distance": 0.5,
+            "_score_components": {
+                "distance": 0.5,
+                "role_weight": 0.1,
+            },  # role_weight reduces distance
+        },
+        {
+            "filename": "c.java",
+            "range_start": 3,
+            "range_end": 30,
+            "_distance": 0.7,
+            "_score_components": {
+                "distance": 0.7,
+                "import_penalty": 0.2,
+                "symbol_bonus": 0.15,
+            },
+        },
+        {
+            "filename": "d.java",
+            "range_start": 4,
+            "range_end": 40,
+            "_distance": 1.2,
+            "_score_components": {"distance": 1.2},
+        },
+    ]
+
+    # Simulate the post-sort honest-score pass
+    for r in rows:
+        comps = r["_score_components"]
+        effective_dist = _effective_distance(comps)
+        r["_score"] = _clamp01(l2_distance_to_score(effective_dist))
+
+    # Verify scores are in [0,1]
+    for r in rows:
+        assert 0.0 <= r["_score"] <= 1.0, f"score {r['_score']} not in [0,1]"
+
+    # Verify scores are non-increasing (rank monotonic)
+    scores = [r["_score"] for r in rows]
+    for i in range(len(scores) - 1):
+        assert (
+            scores[i] >= scores[i + 1]
+        ), f"score not monotonic: {scores[i]} < {scores[i + 1]}"
+
+
+def test_hybrid_score_normalized_to_unit_range() -> None:
+    """Hybrid search raw RRF scores (~0.016-0.032) are normalized to [0,1].
+
+    LanceDB hybrid uses RRF with k=60; theoretical max for 2 lists is 2/(60+1) ≈ 0.0328.
+    After normalization, top hits should score ≥ 0.5 and all scores in [0,1].
+    """
+    from search_lancedb import _clamp01
+
+    # Theoretical max for 2-list RRF with k=60
+    rrf_k = 60
+    max_rrf = 2.0 / (rrf_k + 1)  # ≈ 0.0328
+
+    # Simulate hybrid rows with raw RRF scores
+    rows = [
+        {
+            "filename": "a.java",
+            "range_start": 1,
+            "range_end": 10,
+            "_score": 0.032,  # top hit
+            "_score_components": {"hybrid_rrf": 0.032, "rrf_raw": 0.032},
+        },
+        {
+            "filename": "b.java",
+            "range_start": 2,
+            "range_end": 20,
+            "_score": 0.016,  # mid-tier hit
+            "_score_components": {"hybrid_rrf": 0.016, "rrf_raw": 0.016},
+        },
+        {
+            "filename": "c.java",
+            "range_start": 3,
+            "range_end": 30,
+            "_score": 0.008,  # lower hit
+            "_score_components": {"hybrid_rrf": 0.008, "rrf_raw": 0.008},
+        },
+    ]
+
+    # Normalize displayed scores
+    for r in rows:
+        raw = r["_score_components"]["rrf_raw"]
+        r["_score"] = _clamp01(raw / max_rrf)
+
+    # Verify all scores in [0,1]
+    for r in rows:
+        assert 0.0 <= r["_score"] <= 1.0, f"normalized score {r['_score']} not in [0,1]"
+
+    # Verify top hit scores high (≥ 0.5 since it's near the max)
+    assert rows[0]["_score"] >= 0.5, f"top hit score {rows[0]['_score']} < 0.5"
