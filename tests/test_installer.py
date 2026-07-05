@@ -1502,31 +1502,35 @@ class TestPR4IndexProgress:
         monkeypatch.chdir(cwd)
         return cwd
 
-    def test_install_emits_indexing_progress_on_stderr(self, tmp_path, monkeypatch):
+    def test_install_emits_indexing_progress_on_stderr(self, tmp_path, monkeypatch, capfd):
         """install drives the renderer from the patched pipeline helpers; the
         JCIRAG_PROGRESS event is consumed by the parser and surfaces as a
         rendered progress line on stderr. Wizard stdout prompts remain on
-        stdout."""
-        import io
-        import contextlib
+        stdout.
+
+        Captured at the fd level (``capfd``) because the progress renderer
+        writes through a ``rich.Console(stderr=True)`` — fd 2 — which pytest's
+        default fd capture redirects underneath ``contextlib.redirect_stderr``
+        (the latter only patches the ``sys.stderr`` Python object, so the
+        renderer's bytes bypass an ``io.StringIO`` under default capture)."""
         from java_codebase_rag.installer import run_install
 
         cwd = self._setup_repo(tmp_path, monkeypatch)
         _patch_pipeline_for_progress(monkeypatch, emit=True)
 
-        out, err = io.StringIO(), io.StringIO()
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            rc = run_install(
-                non_interactive=True,
-                agents=["claude-code"],
-                scope="project",
-                model="auto",
-                source_root=cwd,
-                quiet=False,
-            )
+        capfd.readouterr()  # discard setup chatter
+        rc = run_install(
+            non_interactive=True,
+            agents=["claude-code"],
+            scope="project",
+            model="auto",
+            source_root=cwd,
+            quiet=False,
+        )
         assert rc == 0
-        err_text = err.getvalue()
-        out_text = out.getvalue()
+        captured = capfd.readouterr()
+        err_text = captured.err
+        out_text = captured.out
         # The raw structured protocol line is parsed, never raw-relayed.
         assert "JCIRAG_PROGRESS kind=vectors" not in err_text
         # But indexing progress IS rendered on stderr (non-TTY concise fallback
@@ -1586,26 +1590,24 @@ class TestPR4IndexProgress:
         assert calls["coco"][-1]["quiet"] is False
         assert calls["incremental"][-1]["quiet"] is False
 
-    def test_install_update_stdout_contract_preserved(self, tmp_path, monkeypatch):
+    def test_install_update_stdout_contract_preserved(self, tmp_path, monkeypatch, capfd):
         """The wizard's human-readable stdout shape is unchanged: NO
         JCIRAG_PROGRESS line leaks to stdout, and the indexing chatter that
         used to live on stdout ("Creating index..." / "Updating index...")
-        no longer appears there."""
-        import io
-        import contextlib
+        no longer appears there. Captured at fd level (see
+        test_install_emits_indexing_progress_on_stderr for why)."""
         from java_codebase_rag.installer import run_install, run_update
 
         cwd = self._setup_repo(tmp_path, monkeypatch)
         _patch_pipeline_for_progress(monkeypatch, emit=True)
 
         # --- install ---
-        out, err = io.StringIO(), io.StringIO()
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            run_install(
-                non_interactive=True, agents=["claude-code"], scope="project",
-                model="auto", source_root=cwd, quiet=False,
-            )
-        install_out = out.getvalue()
+        capfd.readouterr()
+        run_install(
+            non_interactive=True, agents=["claude-code"], scope="project",
+            model="auto", source_root=cwd, quiet=False,
+        )
+        install_out = capfd.readouterr().out
         # No structured progress line on stdout (stdout is the wizard payload).
         assert "JCIRAG_PROGRESS" not in install_out
         # The old stdout indexing chatter is gone (moved to stderr framing).
@@ -1620,10 +1622,9 @@ class TestPR4IndexProgress:
         monkeypatch.delenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", raising=False)
         monkeypatch.delenv("JAVA_CODEBASE_RAG_INDEX_DIR", raising=False)
 
-        out2, err2 = io.StringIO(), io.StringIO()
-        with contextlib.redirect_stdout(out2), contextlib.redirect_stderr(err2):
-            run_update(force=False, dry_run=False, cwd=cwd)
-        update_out = out2.getvalue()
+        capfd.readouterr()
+        run_update(force=False, dry_run=False, cwd=cwd)
+        update_out = capfd.readouterr().out
         assert "JCIRAG_PROGRESS" not in update_out
         # The old stdout indexing chatter moved off stdout.
         assert "Updating index (Lance + graph)..." not in update_out
@@ -1666,13 +1667,12 @@ class TestPR4IndexProgress:
         assert "Warning:" in err_text
         assert "incremental graph update failed" in err_text
 
-    def test_install_indexing_exception_renders_failed_footer(self, tmp_path, monkeypatch):
+    def test_install_indexing_exception_renders_failed_footer(self, tmp_path, monkeypatch, capfd):
         """If run_cocoindex_update raises during install's indexing sub-step,
         the renderer bracket must render a failed (red cross) footer before the
         exception propagates — not a green check right before the traceback.
-        Mirrors cli._run_with_pipeline_progress's BaseException handler."""
-        import io
-        import contextlib
+        Mirrors cli._run_with_pipeline_progress's BaseException handler. fd
+        capture (capfd) — see test_install_emits_indexing_progress_on_stderr."""
         from java_codebase_rag import cli_format
         from java_codebase_rag.installer import run_install
 
@@ -1684,32 +1684,30 @@ class TestPR4IndexProgress:
 
         monkeypatch.setattr("java_codebase_rag.pipeline.run_cocoindex_update", boom)
 
-        out, err = io.StringIO(), io.StringIO()
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            with pytest.raises(RuntimeError, match="boom from cocoindex"):
-                run_install(
-                    non_interactive=True,
-                    agents=["claude-code"],
-                    scope="project",
-                    model="auto",
-                    source_root=cwd,
-                    quiet=False,
-                )
+        capfd.readouterr()
+        with pytest.raises(RuntimeError, match="boom from cocoindex"):
+            run_install(
+                non_interactive=True,
+                agents=["claude-code"],
+                scope="project",
+                model="auto",
+                source_root=cwd,
+                quiet=False,
+            )
 
-        err_text = err.getvalue()
+        err_text = capfd.readouterr().err
         # The footer rendered the failure marker (red cross), not the green check.
         assert cli_format.styled_cross() in err_text
         assert cli_format.styled_check() not in err_text
 
-    def test_install_indexing_failure_returns_nonzero(self, tmp_path, monkeypatch):
+    def test_install_indexing_failure_returns_nonzero(self, tmp_path, monkeypatch, capfd):
         """A non-exception indexing failure (cocoindex exits non-zero) must NOT
         report install success. Regression for issue #351: run_install discarded
         run_init_if_needed's return value and unconditionally returned 0, so a
         broken or empty index reported exit 0 in CI/automation while the most
         important install step failed silently. (The exception path was already
-        covered; this covers the returncode != 0 path.)"""
-        import io
-        import contextlib
+        covered; this covers the returncode != 0 path.) fd capture (capfd) — see
+        test_install_emits_indexing_progress_on_stderr."""
         import subprocess
         from java_codebase_rag.installer import run_install
 
@@ -1721,31 +1719,29 @@ class TestPR4IndexProgress:
 
         monkeypatch.setattr("java_codebase_rag.pipeline.run_cocoindex_update", failing_coco)
 
-        out, err = io.StringIO(), io.StringIO()
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            rc = run_install(
-                non_interactive=True,
-                agents=["claude-code"],
-                scope="project",
-                model="auto",
-                source_root=cwd,
-                quiet=False,
-            )
+        capfd.readouterr()
+        rc = run_install(
+            non_interactive=True,
+            agents=["claude-code"],
+            scope="project",
+            model="auto",
+            source_root=cwd,
+            quiet=False,
+        )
         assert rc == 1, (
             f"install reported success (exit {rc}) despite cocoindex failure (#351)"
         )
         # The failure was surfaced on stderr, not swallowed.
-        assert "CocoIndex update failed" in err.getvalue()
+        assert "CocoIndex update failed" in capfd.readouterr().err
 
-    def test_install_over_existing_index_skips_init_and_exits_zero(self, tmp_path, monkeypatch):
+    def test_install_over_existing_index_skips_init_and_exits_zero(self, tmp_path, monkeypatch, capfd):
         """A re-run of install over an existing index skips init (the index build)
         and still exits 0. Regression guard for the None branch of
         run_init_if_needed (issue #351): run_install uses ``if init_outcome is
         False: return 1`` precisely so a SKIP (None) stays exit 0 -- a future
         ``if not init_outcome`` simplification would collapse None into the
-        failure branch and break idempotent re-runs in CI/automation."""
-        import io
-        import contextlib
+        failure branch and break idempotent re-runs in CI/automation. fd capture
+        (capfd) — see test_install_emits_indexing_progress_on_stderr."""
         import subprocess
         from java_codebase_rag.installer import run_install
 
@@ -1766,16 +1762,15 @@ class TestPR4IndexProgress:
 
         monkeypatch.setattr("java_codebase_rag.pipeline.run_cocoindex_update", coco_should_not_run)
 
-        out, err = io.StringIO(), io.StringIO()
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            rc = run_install(
-                non_interactive=True,
-                agents=["claude-code"],
-                scope="project",
-                model="auto",
-                source_root=cwd,
-                quiet=False,
-            )
+        capfd.readouterr()
+        rc = run_install(
+            non_interactive=True,
+            agents=["claude-code"],
+            scope="project",
+            model="auto",
+            source_root=cwd,
+            quiet=False,
+        )
         assert rc == 0, (
             f"install over an existing index should skip init and exit 0, got exit {rc} "
             "(#351 None branch: a skip must not be treated as failure)"
@@ -1783,4 +1778,4 @@ class TestPR4IndexProgress:
         # init was genuinely skipped, not silently succeeded.
         assert not coco_called, "init should have been SKIPPED (index exists) but cocoindex ran"
         # run_init_if_needed prints the skip notice to stdout (no file=sys.stderr).
-        assert "Index already exists" in out.getvalue()
+        assert "Index already exists" in capfd.readouterr().out
