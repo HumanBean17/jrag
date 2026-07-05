@@ -230,7 +230,7 @@ The full command catalog lives in [Tools & commands at a glance](#tools--command
 | `--limit <n>` | listings/traversals | cap results (default 20; `limit+1` fetch detects truncation) |
 | `--offset <n>` | `find`, `search` only | paginate (other commands reject it) |
 | `--kind symbol\|route\|client\|producer` | `<query>` commands | resolve hint |
-| `--java-kind`, `--role`, `--fqn-prefix` | `<query>` commands | client-side post-filters |
+| `--java-kind`, `--role`, `--fqn-contains` | `<query>` commands | client-side post-filters |
 | `--index-dir <path>` | all | override index directory |
 
 `--offset` is intentionally NOT a global flag: only `find` and `search` route

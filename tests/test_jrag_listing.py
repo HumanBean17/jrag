@@ -3,7 +3,7 @@
 Tests:
 1. test_routes_returns_route_kind - routes command returns route nodes
 2. test_clients_filters_by_calls_service - clients --calls-service filters
-3. test_producers_filter_by_topic_prefix - producers --topic-prefix filters
+3. test_producers_filter_by_topic_contains - producers --topic-contains filters
 4. test_topics_groups_producers_by_topic - topics groups producers by topic name
 5. test_topics_consumer_in_uses_neighbors_in_async_calls - topics --consumer-in uses neighbors_v2
 6. test_jobs_lists_scheduled_task - jobs lists SCHEDULED_TASK symbols
@@ -111,11 +111,11 @@ def test_clients_filters_by_calls_service(corpus_root: Path, ladybug_db_path: Pa
                 assert node.get("target_service") == target_service, f"client {node_id} has wrong target_service"
 
 
-# ----- Test 3: producers filter by topic-prefix -----
+# ----- Test 3: producers filter by topic-contains -----
 
 
-def test_producers_filter_by_topic_prefix(corpus_root: Path, ladybug_db_path: Path) -> None:
-    """producers --topic-prefix filters by topic prefix."""
+def test_producers_filter_by_topic_contains(corpus_root: Path, ladybug_db_path: Path) -> None:
+    """producers --topic-contains filters by topic substring."""
     env = os.environ.copy()
     env["JAVA_CODEBASE_RAG_SOURCE_ROOT"] = str(corpus_root)
     env["JAVA_CODEBASE_RAG_INDEX_DIR"] = str(ladybug_db_path.parent)
@@ -126,21 +126,21 @@ def test_producers_filter_by_topic_prefix(corpus_root: Path, ladybug_db_path: Pa
     payload_all = json.loads(proc_all.stdout)
     all_producers = payload_all.get("nodes", {})
 
-    # Now filter by topic prefix (if any producers exist)
+    # Now filter by topic substring (if any producers exist)
     if len(all_producers) > 0:
-        # Pick the first producer's topic to use as prefix
+        # Pick the first producer's topic to use as substring
         first_producer = next(iter(all_producers.values()))
         topic = first_producer.get("topic")
         if topic:
-            # Use first character as prefix
-            prefix = topic[0]
-            proc_filtered = _run_jrag(["producers", "--topic-prefix", prefix, "--format", "json"], env=env)
+            # Use first character as substring
+            needle = topic[0]
+            proc_filtered = _run_jrag(["producers", "--topic-contains", needle, "--format", "json"], env=env)
             assert proc_filtered.returncode == 0
             payload_filtered = json.loads(proc_filtered.stdout)
             filtered_producers = payload_filtered.get("nodes", {})
-            # All filtered producers should have topics starting with the prefix
+            # All filtered producers should have topics containing the substring
             for node_id, node in filtered_producers.items():
-                assert node.get("topic", "").startswith(prefix), f"producer {node_id} topic doesn't start with {prefix}"
+                assert needle in node.get("topic", ""), f"producer {node_id} topic doesn't contain {needle}"
 
 
 # ----- Test 4: topics groups producers by topic -----
@@ -192,7 +192,7 @@ def test_topics_consumer_in_resolves_consumers_via_exposes(ladybug_graph) -> Non
         ladybug_graph,
         topic="banking.chat.compliance.review",
         microservice="chat-core",
-        prefix=False,
+        contains=False,
     )
     assert len(consumers) >= 1, (
         f"expected ComplianceReviewListener resolved for "
@@ -203,14 +203,14 @@ def test_topics_consumer_in_resolves_consumers_via_exposes(ladybug_graph) -> Non
         f"ComplianceReviewListener not in resolver result; got {[c.get('fqn') for c in consumers]}"
     )
 
-    # Prefix match should also find it under 'banking.chat'.
+    # Substring match should also find it under 'banking.chat'.
     consumers_prefix = _resolve_topic_consumers(
         ladybug_graph,
         topic="banking.chat",
-        prefix=True,
+        contains=True,
     )
     assert any("ComplianceReviewListener" in c.get("fqn", "") for c in consumers_prefix), (
-        f"ComplianceReviewListener not in prefix resolver result; "
+        f"ComplianceReviewListener not in substring resolver result; "
         f"got {[c.get('fqn') for c in consumers_prefix]}"
     )
 
@@ -255,18 +255,18 @@ def test_listeners_lists_message_listener(corpus_root: Path, ladybug_db_path: Pa
         assert node.get("kind") == "symbol", f"listeners returned non-symbol: {node.get('kind')}"
 
 
-# ----- Test 7a: listeners --topic-prefix narrows (real filter) -----
+# ----- Test 7a: listeners --topic-contains narrows (real filter) -----
 
 
-def test_listeners_topic_prefix_narrows(corpus_root: Path, ladybug_db_path: Path) -> None:
-    """listeners --topic-prefix filters via listener_method -EXPOSES-> Route(topic).
+def test_listeners_topic_contains_narrows(corpus_root: Path, ladybug_db_path: Path) -> None:
+    """listeners --topic-contains filters via listener_method -EXPOSES-> Route(topic).
 
     The bank-chat fixture has 3 MESSAGE_LISTENER symbols:
       - ComplianceReviewListener   (topic=banking.chat.compliance.review)
       - ChatKafkaListener          (topic=ChatTopics.INCOMING — unresolved constant)
       - DistributionTriggerListener(topic=${assign.kafka.distribution-topic} — placeholder)
     Filtering by 'banking.chat' must narrow to the proper subset containing
-    only ComplianceReviewListener, proving --topic-prefix is a real filter
+    only ComplianceReviewListener, proving --topic-contains is a real filter
     (not the previous include-all stub).
     """
     env = os.environ.copy()
@@ -281,10 +281,10 @@ def test_listeners_topic_prefix_narrows(corpus_root: Path, ladybug_db_path: Path
     all_count = len(all_nodes)
     assert all_count >= 1, "expected at least one listener in fixture"
 
-    # Filtered by 'banking.chat' — known resolved prefix on this fixture
-    proc_filtered = _run_jrag(["listeners", "--topic-prefix", "banking.chat", "--format", "json"], env=env)
+    # Filtered by 'banking.chat' — known resolved substring on this fixture
+    proc_filtered = _run_jrag(["listeners", "--topic-contains", "banking.chat", "--format", "json"], env=env)
     assert proc_filtered.returncode == 0, (
-        f"listeners --topic-prefix failed: rc={proc_filtered.returncode}\n"
+        f"listeners --topic-contains failed: rc={proc_filtered.returncode}\n"
         f"stdout={proc_filtered.stdout}\nstderr={proc_filtered.stderr}"
     )
     payload_filtered = json.loads(proc_filtered.stdout)
@@ -292,7 +292,7 @@ def test_listeners_topic_prefix_narrows(corpus_root: Path, ladybug_db_path: Path
 
     # Proper subset: strictly fewer than the unfiltered set.
     assert len(filtered_nodes) < all_count, (
-        f"--topic-prefix did not narrow: all={all_count}, filtered={len(filtered_nodes)}"
+        f"--topic-contains did not narrow: all={all_count}, filtered={len(filtered_nodes)}"
     )
 
     # The known listener-topic pair on this fixture: ComplianceReviewListener

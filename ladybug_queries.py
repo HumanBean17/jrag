@@ -1672,7 +1672,7 @@ class LadybugGraph:
         *,
         microservice: str | None = None,
         framework: str | None = None,
-        path_prefix: str | None = None,
+        path_contains: str | None = None,
         method: str | None = None,
         limit: int = 100,
         server_exposed: bool = False,
@@ -1687,9 +1687,9 @@ class LadybugGraph:
         if framework:
             params["framework"] = framework
             preds.append("r.framework = $framework")
-        if path_prefix:
-            params["path_prefix"] = path_prefix
-            preds.append("r.path STARTS WITH $path_prefix")
+        if path_contains:
+            params["path_contains"] = path_contains
+            preds.append("r.path CONTAINS $path_contains")
         if method is not None and method != "":
             params["method"] = method
             preds.append("r.method = $method")
@@ -2062,7 +2062,7 @@ class LadybugGraph:
         microservice: str | None = None,
         client_kind: str | None = None,
         target_service: str | None = None,
-        path_prefix: str | None = None,
+        path_contains: str | None = None,
         method: str | None = None,
         limit: int = 100,
     ) -> list[dict[str, Any]]:
@@ -2078,9 +2078,9 @@ class LadybugGraph:
         if target_service:
             params["target_service"] = target_service
             preds.append("c.target_service = $target_service")
-        if path_prefix:
-            params["path_prefix"] = path_prefix
-            preds.append("c.path STARTS WITH $path_prefix")
+        if path_contains:
+            params["path_contains"] = path_contains
+            preds.append("c.path CONTAINS $path_contains")
         if method is not None and method != "":
             params["method"] = method
             preds.append("c.method = $method")
@@ -2123,7 +2123,7 @@ class LadybugGraph:
         *,
         microservice: str | None = None,
         producer_kind: str | None = None,
-        topic_prefix: str | None = None,
+        topic_contains: str | None = None,
         limit: int = 100,
     ) -> list[dict[str, Any]]:
         lim = max(1, min(int(limit), 500))
@@ -2135,9 +2135,9 @@ class LadybugGraph:
         if producer_kind:
             params["producer_kind"] = producer_kind
             preds.append("p.producer_kind = $producer_kind")
-        if topic_prefix:
-            params["topic_prefix"] = topic_prefix
-            preds.append("p.topic STARTS WITH $topic_prefix")
+        if topic_contains:
+            params["topic_contains"] = topic_contains
+            preds.append("p.topic CONTAINS $topic_contains")
         where = (" WHERE " + " AND ".join(preds)) if preds else ""
         q = (
             f"MATCH (p:Producer){where} RETURN {self._PRODUCER_RETURN} "

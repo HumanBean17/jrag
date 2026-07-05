@@ -150,9 +150,9 @@ _BROWNFIELD_ABSENCE_SUBJECT_LABELS = frozenset({"Client", "Producer", "Route"})
 _REQUIRED_TRAVERSAL_ROLE_KEYS = frozenset({"type_subject", "member_subject", "alien_subject"})
 
 _IDENTIFIER_FILTER_FIELDS: dict[str, tuple[str, ...]] = {
-    "symbol": ("fqn_prefix",),
-    "route": ("path_prefix",),
-    "client": ("target_service", "target_path_prefix"),
+    "symbol": ("fqn_contains",),
+    "route": ("path_contains",),
+    "client": ("target_service", "target_path_contains"),
 }
 
 
@@ -541,11 +541,11 @@ def generate_hints(
             if hint_kind == "route":
                 seed = payload.get("path_prefix_seed")
                 if isinstance(seed, str) and seed.strip():
-                    advisories.append((PRIORITY_META, f"no match — try find(kind='route', filter={{path_prefix: '{seed}'}})"))
+                    advisories.append((PRIORITY_META, f"no match — try find(kind='route', filter={{path_contains: '{seed}'}})"))
                     struct_pairs.append(_StructuredHint(
-                        "find", {"kind": "route", "filter": {"path_prefix": seed}}, True, PRIORITY_META,
+                        "find", {"kind": "route", "filter": {"path_contains": seed}}, True, PRIORITY_META,
                         LABEL_TRY_FIND_ROUTE,
-                        "no route found for path prefix seed",
+                        "no route found for path seed",
                     ))
             elif hint_kind == "client":
                 seed = payload.get("target_service_seed")

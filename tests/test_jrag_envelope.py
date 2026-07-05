@@ -141,7 +141,7 @@ def test_resolve_query_one_proceeds_and_sets_file_location(monkeypatch: pytest.M
         hint_kind="symbol",
         java_kind=None,
         role=None,
-        fqn_prefix=None,
+        fqn_contains=None,
         cfg=cfg,
         graph=graph,
     )
@@ -167,7 +167,7 @@ def test_resolve_query_one_blocked_by_post_filter_returns_not_found(
         hint_kind="symbol",
         java_kind=None,
         role="CONTROLLER",  # mismatch -> post-filter fails
-        fqn_prefix=None,
+        fqn_contains=None,
         cfg=cfg,
         graph=graph,
     )
@@ -198,7 +198,7 @@ def test_resolve_query_many_returns_candidates_with_reason(monkeypatch: pytest.M
         hint_kind="symbol",
         java_kind=None,
         role=None,
-        fqn_prefix=None,
+        fqn_contains=None,
         cfg=cfg,
         graph=graph,
     )
@@ -237,7 +237,7 @@ def test_resolve_query_many_post_filter_collapses_to_one(monkeypatch: pytest.Mon
         hint_kind="symbol",
         java_kind=None,
         role="controller",  # mixed-case; normalize_enum -> CONTROLLER
-        fqn_prefix=None,
+        fqn_contains=None,
         cfg=cfg,
         graph=graph,
     )
@@ -265,7 +265,7 @@ def test_resolve_query_many_caps_candidates_at_ten(monkeypatch: pytest.MonkeyPat
     cfg = MagicMock()
 
     result_node, env = resolve_query(
-        "doStuff", hint_kind="symbol", java_kind=None, role=None, fqn_prefix=None, cfg=cfg, graph=graph
+        "doStuff", hint_kind="symbol", java_kind=None, role=None, fqn_contains=None, cfg=cfg, graph=graph
     )
     assert result_node is None
     assert env.status == "ambiguous"
@@ -301,7 +301,7 @@ def test_resolve_query_many_post_filter_rejects_all_is_not_found(
         hint_kind="symbol",
         java_kind=None,
         role="CONTROLLER",  # neither candidate is CONTROLLER -> all rejected
-        fqn_prefix=None,
+        fqn_contains=None,
         cfg=cfg,
         graph=graph,
     )
@@ -329,7 +329,7 @@ def test_resolve_query_none_is_not_found_with_search_hint(monkeypatch: pytest.Mo
         hint_kind="symbol",
         java_kind=None,
         role=None,
-        fqn_prefix=None,
+        fqn_contains=None,
         cfg=cfg,
         graph=graph,
     )

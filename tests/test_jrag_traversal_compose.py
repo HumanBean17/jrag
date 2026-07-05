@@ -84,7 +84,7 @@ def _env_for(corpus_root: Path, ladybug_db_path: Path) -> dict[str, str]:
 
 
 # Seed identifiers verified against the bank-chat fixture (PR-JRAG-3b probe).
-# Client resolve: resolve_v2 accepts "<target_service> <path_prefix>" (the
+# Client resolve: resolve_v2 accepts "<target_service> <path>" (the
 # `client_target_path` reason); "chat-core /api/v1/chat/sessions" resolves
 # cleanly to ONE FeignClient (the getSession method), avoiding the
 # /chat/joinOperator ambiguity (Feign + RestTemplate both target that path).

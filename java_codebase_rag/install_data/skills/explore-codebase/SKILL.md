@@ -130,12 +130,12 @@ For `find`, `filter` is required — `{}` means no predicates. **Strict frame:**
 | Applicable to | Keys |
 | ------------- | ---- |
 | All kinds | `microservice`, `module` |
-| **symbol** only | `role`, `exclude_roles`, `annotation`, `capability`, `fqn_prefix`, `symbol_kind`, `symbol_kinds` |
-| **route** only | `http_method`, `path_prefix`, `framework` |
-| **client** only | `source_layer`, `client_kind`, `target_service`, `target_path_prefix`, `http_method` |
-| **producer** only | `source_layer`, `producer_kind`, `topic_prefix` |
+| **symbol** only | `role`, `exclude_roles`, `annotation`, `capability`, `fqn_contains`, `symbol_kind`, `symbol_kinds` |
+| **route** only | `http_method`, `path_contains`, `framework` |
+| **client** only | `source_layer`, `client_kind`, `target_service`, `target_path_contains`, `http_method` |
+| **producer** only | `source_layer`, `producer_kind`, `topic_contains` |
 
-No wildcards in prefix fields — use `search(query=…)` for ranked text.
+Substring fields (`fqn_contains`, `path_contains`, `target_path_contains`, `topic_contains`) match literally via `CONTAINS` — no `*`/`?` metacharacters; use `search(query=…)` for ranked text.
 
 ### `resolve` — identifier lookup
 
@@ -180,9 +180,9 @@ Exclude `DTO`, `OTHER`, `MAPPER` with `exclude_roles` when tracing business logi
 | ------- | --- |
 | `neighbors` validation error | Add both `direction` and `edge_types` explicitly |
 | Empty `neighbors` | Read `describe.edge_summary`; check edge type and direction |
-| Cannot find symbol | `resolve`/`search`; `find` with `fqn_prefix`; fallback `Grep` |
-| `find` returns too much | Add `microservice`, `fqn_prefix`, `path_prefix`, `topic_prefix` |
-| Empty `search` | Try `table="all"`; `find` with `fqn_prefix`; `Grep` directly |
+| Cannot find symbol | `resolve`/`search`; `find` with `fqn_contains`; fallback `Grep` |
+| `find` returns too much | Add `microservice`, `fqn_contains`, `path_contains`, `topic_contains` |
+| Empty `search` | Try `table="all"`; `find` with `fqn_contains`; `Grep` directly |
 | Empty results across tools | Index missing/stale → `Grep`/`Glob`/`Read`; ask operator to rebuild |
 | Graph vs file disagree | **Trust the file**; report stale index |
 | Mixed composed families on one id | Split calls — type keys need type id; override keys need method id |

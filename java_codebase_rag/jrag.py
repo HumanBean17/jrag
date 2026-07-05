@@ -42,7 +42,7 @@ class _IndexStale(RuntimeError):
     """Raised when the on-disk graph's ontology is older than required."""
 
 
-# Generous limit for the topics --consumer-in / listeners --topic-prefix
+# Generous limit for the topics --consumer-in / listeners --topic-contains
 # compose fetches (these resolve cross-topic edges and should not silently
 # truncate the listener/consumer set under typical fixture sizes).
 _CONSUMER_FETCH_LIMIT = 200
@@ -247,14 +247,14 @@ def build_parser() -> argparse.ArgumentParser:
     find.add_argument("--capability", type=str, default=None, help="Filter by capability.")
     find.add_argument("--framework", type=str, default=None, help="Filter by framework.")
     find.add_argument("--source-layer", type=str, default=None, help="Filter by source layer.")
-    find.add_argument("--fqn-prefix", type=str, default=None, help="Filter by FQN prefix.")
+    find.add_argument("--fqn-contains", type=str, default=None, help="Filter by FQN substring.")
     find.add_argument("--http-method", type=str, default=None, help="Filter by HTTP method (route).")
-    find.add_argument("--path-prefix", type=str, default=None, help="Filter by path prefix (route).")
+    find.add_argument("--path-contains", type=str, default=None, help="Filter by path substring (route).")
     find.add_argument("--client-kind", type=str, default=None, help="Filter by client kind (client).")
     find.add_argument("--calls-service", type=str, default=None, help="Filter by target service (client).")
-    find.add_argument("--calls-path-prefix", type=str, default=None, help="Filter by target path prefix (client).")
+    find.add_argument("--calls-path-contains", type=str, default=None, help="Filter by target path substring (client).")
     find.add_argument("--producer-kind", type=str, default=None, help="Filter by producer kind (producer).")
-    find.add_argument("--topic-prefix", type=str, default=None, help="Filter by topic prefix (producer).")
+    find.add_argument("--topic-contains", type=str, default=None, help="Filter by topic substring (producer).")
     find.add_argument(
         "--offset",
         type=int,
@@ -283,7 +283,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     inspect.add_argument("--java-kind", type=str, default=None, help="Post-filter by Java symbol kind.")
     inspect.add_argument("--role", type=str, default=None, help="Post-filter by role.")
-    inspect.add_argument("--fqn-prefix", type=str, default=None, help="Post-filter by FQN prefix.")
+    inspect.add_argument("--fqn-contains", type=str, default=None, help="Post-filter by FQN substring.")
     inspect.set_defaults(handler=_cmd_inspect, detail="full")
 
     # routes subparser (PR-JRAG-2)
@@ -292,12 +292,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="List HTTP routes.",
         parents=[_common_parser()],
         description=(
-            "List HTTP routes by microservice, framework, path prefix, or method. "
+            "List HTTP routes by microservice, framework, path substring, or method. "
             "Returns route nodes (no resolve step)."
         ),
     )
     routes.add_argument("--framework", type=str, default=None, help="Filter by framework.")
-    routes.add_argument("--path-prefix", type=str, default=None, help="Filter by path prefix.")
+    routes.add_argument("--path-contains", type=str, default=None, help="Filter by path substring.")
     routes.add_argument("--method", type=str, default=None, help="Filter by HTTP method.")
     routes.add_argument(
         "--include-kafka",
@@ -316,13 +316,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="List HTTP clients.",
         parents=[_common_parser()],
         description=(
-            "List HTTP clients by microservice, client kind, target service, or path prefix. "
+            "List HTTP clients by microservice, client kind, target service, or path substring. "
             "Returns client nodes (no resolve step)."
         ),
     )
     clients.add_argument("--client-kind", type=str, default=None, help="Filter by client kind.")
     clients.add_argument("--calls-service", type=str, default=None, help="Filter by target service.")
-    clients.add_argument("--path-prefix", type=str, default=None, help="Filter by path prefix.")
+    clients.add_argument("--path-contains", type=str, default=None, help="Filter by path substring.")
     clients.set_defaults(handler=_cmd_clients, detail="full")
 
     # producers subparser (PR-JRAG-2)
@@ -331,12 +331,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="List async message producers.",
         parents=[_common_parser()],
         description=(
-            "List async message producers by microservice, producer kind, or topic prefix. "
+            "List async message producers by microservice, producer kind, or topic substring. "
             "Returns producer nodes (no resolve step)."
         ),
     )
     producers.add_argument("--producer-kind", type=str, default=None, help="Filter by producer kind.")
-    producers.add_argument("--topic-prefix", type=str, default=None, help="Filter by topic prefix.")
+    producers.add_argument("--topic-contains", type=str, default=None, help="Filter by topic substring.")
     producers.set_defaults(handler=_cmd_producers, detail="full")
 
     # topics subparser (PR-JRAG-2)
@@ -350,7 +350,7 @@ def build_parser() -> argparse.ArgumentParser:
             "--consumer-in resolves consumers (listener methods) via EXPOSES edges to Route(topic)."
         ),
     )
-    topics.add_argument("--topic-prefix", type=str, default=None, help="Filter by topic prefix.")
+    topics.add_argument("--topic-contains", type=str, default=None, help="Filter by topic substring.")
     topics.add_argument("--producer-in", type=str, default=None, help="Scope producers to this microservice.")
     topics.add_argument("--consumer-in", type=str, default=None, help="Show consumers from this microservice.")
     topics.set_defaults(handler=_cmd_topics, detail="full")
@@ -377,7 +377,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Returns Symbol nodes with the MESSAGE_LISTENER capability."
         ),
     )
-    listeners.add_argument("--topic-prefix", type=str, default=None, help="Filter by topic prefix (on producer member).")
+    listeners.add_argument("--topic-contains", type=str, default=None, help="Filter by topic substring (on producer member).")
     listeners.set_defaults(handler=_cmd_listeners, detail="full")
 
     # entities subparser (PR-JRAG-2)
@@ -406,7 +406,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     resolve_parent.add_argument("--java-kind", type=str, default=None, help="Post-filter by Java symbol kind.")
     resolve_parent.add_argument("--role", type=str, default=None, help="Post-filter by role.")
-    resolve_parent.add_argument("--fqn-prefix", type=str, default=None, help="Post-filter by FQN prefix.")
+    resolve_parent.add_argument("--fqn-contains", type=str, default=None, help="Post-filter by FQN substring.")
 
     callers = subparsers.add_parser(
         "callers",
@@ -870,7 +870,7 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("--annotation", type=str, default=None, help="Filter by annotation.")
     search.add_argument("--capability", type=str, default=None, help="Filter by capability.")
     search.add_argument("--framework", type=str, default=None, help="Filter by framework.")
-    search.add_argument("--fqn-prefix", type=str, default=None, dest="fqn_prefix", help="Filter by FQN prefix.")
+    search.add_argument("--fqn-contains", type=str, default=None, dest="fqn_contains", help="Filter by FQN substring.")
     search.add_argument(
         "--offset",
         type=int,
@@ -981,19 +981,19 @@ def _infer_kind(args: argparse.Namespace) -> str | None:
     """Infer kind from domain flags when --kind is omitted.
 
     Inference rules (PR-JRAG-1b):
-      - --http-method or --path-prefix → route
-      - --client-kind or --calls-service or --calls-path-prefix → client
-      - --producer-kind or --topic-prefix → producer
+      - --http-method or --path-contains → route
+      - --client-kind or --calls-service or --calls-path-contains → client
+      - --producer-kind or --topic-contains → producer
       - else → symbol (default)
     Returns None if no flags are set (symbol default in callers).
     """
     if args.kind is not None:
         return args.kind
-    if args.http_method or args.path_prefix:
+    if args.http_method or args.path_contains:
         return "route"
-    if args.client_kind or args.calls_service or args.calls_path_prefix:
+    if args.client_kind or args.calls_service or args.calls_path_contains:
         return "client"
-    if args.producer_kind or args.topic_prefix:
+    if args.producer_kind or args.topic_contains:
         return "producer"
     return "symbol"
 
@@ -1002,17 +1002,17 @@ def _check_kind_contradiction(args: argparse.Namespace, inferred: str | None) ->
     """Check if domain flags contradict explicit --kind.
 
     Returns (is_contradiction, error_message). Contradiction pairs:
-      - --kind symbol + any route flag (--http-method, --path-prefix)
-      - --kind symbol + any client flag (--client-kind, --calls-service, --calls-path-prefix)
-      - --kind symbol + any producer flag (--producer-kind, --topic-prefix)
+      - --kind symbol + any route flag (--http-method, --path-contains)
+      - --kind symbol + any client flag (--client-kind, --calls-service, --calls-path-contains)
+      - --kind symbol + any producer flag (--producer-kind, --topic-contains)
       - (and similarly for route + non-route flags, etc.)
     """
     if args.kind is None:
         return False, None
     explicit = args.kind
-    route_flags = args.http_method or args.path_prefix
-    client_flags = args.client_kind or args.calls_service or args.calls_path_prefix
-    producer_flags = args.producer_kind or args.topic_prefix
+    route_flags = args.http_method or args.path_contains
+    client_flags = args.client_kind or args.calls_service or args.calls_path_contains
+    producer_flags = args.producer_kind or args.topic_contains
     if explicit == "symbol" and (route_flags or client_flags or producer_flags):
         return True, "--kind symbol conflicts with domain flags (route/client/producer flags require matching --kind)"
     if explicit == "route" and (client_flags or producer_flags):
@@ -1234,8 +1234,8 @@ def _cmd_find_filter_mode(
         filter_dict["annotation"] = args.annotation
     if args.capability:
         filter_dict["capability"] = args.capability
-    if args.fqn_prefix:
-        filter_dict["fqn_prefix"] = args.fqn_prefix
+    if args.fqn_contains:
+        filter_dict["fqn_contains"] = args.fqn_contains
     if args.java_kind:
         filter_dict["symbol_kind"] = normalize_enum(args.java_kind, kind="java_kind")
     if args.framework:
@@ -1244,18 +1244,18 @@ def _cmd_find_filter_mode(
         filter_dict["source_layer"] = normalize_enum(args.source_layer, kind="source_layer")
     if args.http_method:
         filter_dict["http_method"] = args.http_method.upper()
-    if args.path_prefix:
-        filter_dict["path_prefix"] = args.path_prefix
+    if args.path_contains:
+        filter_dict["path_contains"] = args.path_contains
     if args.client_kind:
         filter_dict["client_kind"] = normalize_enum(args.client_kind, kind="client_kind")
     if args.calls_service:
         filter_dict["target_service"] = args.calls_service
-    if args.calls_path_prefix:
-        filter_dict["target_path_prefix"] = args.calls_path_prefix
+    if args.calls_path_contains:
+        filter_dict["target_path_contains"] = args.calls_path_contains
     if args.producer_kind:
         filter_dict["producer_kind"] = normalize_enum(args.producer_kind, kind="producer_kind")
-    if args.topic_prefix:
-        filter_dict["topic_prefix"] = args.topic_prefix
+    if args.topic_contains:
+        filter_dict["topic_contains"] = args.topic_contains
 
     node_filter, err_env = _build_node_filter_or_error(filter_dict)
     if err_env is not None:
@@ -1314,7 +1314,7 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
         hint_kind=args.kind,
         java_kind=args.java_kind,
         role=args.role,
-        fqn_prefix=args.fqn_prefix,
+        fqn_contains=args.fqn_contains,
         cfg=cfg,
         graph=graph,
     )
@@ -1384,7 +1384,7 @@ def _cmd_routes(args: argparse.Namespace) -> int:
     rows = graph.list_routes(
         microservice=args.service,
         framework=framework,
-        path_prefix=args.path_prefix,
+        path_contains=args.path_contains,
         method=args.method,
         limit=limit + 1,  # +1 for truncated detection
         # `routes` is the HTTP-server-route surface (external entrypoints you'd
@@ -1413,7 +1413,7 @@ def _cmd_clients(args: argparse.Namespace) -> int:
         microservice=args.service,
         client_kind=client_kind,
         target_service=args.calls_service,
-        path_prefix=args.path_prefix,
+        path_contains=args.path_contains,
         limit=limit + 1,  # +1 for truncated detection
     )
     return _render_listing(rows, limit=limit, args=args, noun="client")
@@ -1433,7 +1433,7 @@ def _cmd_producers(args: argparse.Namespace) -> int:
     rows = graph.list_producers(
         microservice=args.service,
         producer_kind=producer_kind,
-        topic_prefix=args.topic_prefix,
+        topic_contains=args.topic_contains,
         limit=limit + 1,  # +1 for truncated detection
     )
     return _render_listing(rows, limit=limit, args=args, noun="producer")
@@ -1454,7 +1454,7 @@ def _cmd_topics(args: argparse.Namespace) -> int:
     # Call list_producers to get producers (grouped by topic)
     rows = graph.list_producers(
         microservice=producer_microservice,
-        topic_prefix=args.topic_prefix,
+        topic_contains=args.topic_contains,
         limit=limit + 1,  # +1 for truncated detection
     )
 
@@ -1480,7 +1480,7 @@ def _cmd_topics(args: argparse.Namespace) -> int:
         warnings.append(
             f"{no_topic_count} producer(s) had no topic and were excluded"
         )
-    # list_producers has no module kwarg (only microservice/topic_prefix); --module
+    # list_producers has no module kwarg (only microservice/topic_contains); --module
     # would be silently dropped — surface it (use --producer-in to scope by svc).
     if getattr(args, "module", None):
         warnings.append(
@@ -1494,14 +1494,14 @@ def _cmd_topics(args: argparse.Namespace) -> int:
     # (ASYNC_CALLS run Producer -> Route per java_ontology.py:415-416, so the
     # inbound-ASYNC_CALLS traversal the original PR shipped returned empty on
     # every graph — corrected here to use the EXPOSES-based resolver shared
-    # with `listeners --topic-prefix`.)
+    # with `listeners --topic-contains`.)
     if args.consumer_in and topics_dict:
         for topic_name, topic_group in topics_dict.items():
             consumers = _resolve_topic_consumers(
                 graph,
                 topic=topic_name,
                 microservice=args.consumer_in,
-                prefix=False,  # exact match on the producer's topic literal
+                contains=False,  # exact match on the producer's topic literal
             )
             if consumers:
                 topic_group["consumers"] = consumers
@@ -1543,7 +1543,7 @@ def _resolve_topic_consumers(
     *,
     topic: str,
     microservice: str | None = None,
-    prefix: bool = False,
+    contains: bool = False,
 ) -> list[dict]:
     """Resolve listener classes that consume a topic via EXPOSES on Route.
 
@@ -1561,9 +1561,9 @@ def _resolve_topic_consumers(
     of backend traversal logic.
 
     Args:
-        topic: Topic string to match (exact unless ``prefix=True``).
+        topic: Topic string to match (exact unless ``contains=True``).
         microservice: Optional microservice filter on the listener class.
-        prefix: If True, match topic as a prefix (``STARTS WITH``);
+        contains: If True, match topic as a substring (``CONTAINS``);
             if False (default), exact equality.
 
     Returns:
@@ -1571,7 +1571,7 @@ def _resolve_topic_consumers(
     """
     if not topic:
         return []
-    match_clause = "r.topic STARTS WITH $topic" if prefix else "r.topic = $topic"
+    match_clause = "r.topic CONTAINS $topic" if contains else "r.topic = $topic"
     params: dict = {"topic": topic}
     ms_clause = ""
     if microservice:
@@ -1595,8 +1595,8 @@ def _resolve_topic_consumers(
     ]
 
 
-def _listener_ids_for_topic_prefix(graph, listener_ids: list[str], prefix: str) -> set[str]:
-    """Resolve which listener classes consume a topic with the given prefix.
+def _listener_ids_for_topic_contains(graph, listener_ids: list[str], contains: str) -> set[str]:
+    """Resolve which listener classes consume a topic containing the given substring.
 
     Thin wrapper over :func:`_resolve_topic_consumers` intersected with the
     pre-fetched ``listener_ids`` (from ``list_by_capability``). Retained as a
@@ -1604,9 +1604,9 @@ def _listener_ids_for_topic_prefix(graph, listener_ids: list[str], prefix: str) 
     place (the capability fetch carries SymbolHit fields the resolver does not
     project). See ``_resolve_topic_consumers`` for the edge-model rationale.
     """
-    if not listener_ids or not prefix:
+    if not listener_ids or not contains:
         return set(listener_ids)
-    consumers = _resolve_topic_consumers(graph, topic=prefix, prefix=True)
+    consumers = _resolve_topic_consumers(graph, topic=contains, contains=True)
     matching = {c["id"] for c in consumers}
     return {lid for lid in listener_ids if lid in matching}
 
@@ -1624,13 +1624,13 @@ def _cmd_listeners(args: argparse.Namespace) -> int:
         limit=_CONSUMER_FETCH_LIMIT,  # generous pre-filter fetch; truncation applies after
     )
 
-    # --topic-prefix: narrow to listeners consuming a topic with that prefix.
+    # --topic-contains: narrow to listeners consuming a topic containing that substring.
     # The listener class itself carries no topic; its listener method EXPOSES
     # a Route whose ``topic`` property holds the consumed topic name (resolved
-    # or as a constant reference). See _listener_ids_for_topic_prefix.
-    if args.topic_prefix and symbol_hits:
-        matching_ids = _listener_ids_for_topic_prefix(
-            graph, [h.id for h in symbol_hits], args.topic_prefix
+    # or as a constant reference). See _listener_ids_for_topic_contains.
+    if args.topic_contains and symbol_hits:
+        matching_ids = _listener_ids_for_topic_contains(
+            graph, [h.id for h in symbol_hits], args.topic_contains
         )
         symbol_hits = [h for h in symbol_hits if h.id in matching_ids]
 
@@ -1707,7 +1707,7 @@ def _resolve_traversal_node(
         hint_kind=hint_kind,
         java_kind=getattr(args, "java_kind", None),
         role=getattr(args, "role", None),
-        fqn_prefix=getattr(args, "fqn_prefix", None),
+        fqn_contains=getattr(args, "fqn_contains", None),
         cfg=cfg,
         graph=graph,
         microservice=(getattr(args, "service", None) or "") if apply_scope else "",
@@ -3428,7 +3428,7 @@ def _overview_route(args: argparse.Namespace, cfg, graph, route_path: str) -> in
 
     limit = _clamped_limit(args)
     node, renv = resolve_query(
-        route_path, hint_kind="route", java_kind=None, role=None, fqn_prefix=None,
+        route_path, hint_kind="route", java_kind=None, role=None, fqn_contains=None,
         cfg=cfg, graph=graph,
     )
     if renv.status != "ok" or node is None:
@@ -3488,17 +3488,17 @@ def _overview_topic(args: argparse.Namespace, graph, topic: str) -> int:
     from java_codebase_rag.jrag_render import render
 
     limit = _clamped_limit(args)
-    # Producers: exact topic match first, then prefix match as fallback.
-    producers = graph.list_producers(topic_prefix=topic, limit=limit + 1)
+    # Producers: exact topic match first, then substring match as fallback.
+    producers = graph.list_producers(topic_contains=topic, limit=limit + 1)
     if not producers and len(topic) >= 3:
-        # Try a shorter prefix if the exact topic yields nothing.
-        producers = graph.list_producers(topic_prefix=topic[:3], limit=limit + 1)
+        # Try a shorter substring if the exact topic yields nothing.
+        producers = graph.list_producers(topic_contains=topic[:3], limit=limit + 1)
         producers = [p for p in producers if topic in str(p.get("topic") or "")]
 
     # Consumers: listener classes consuming this topic via EXPOSES on Route.
-    consumers = _resolve_topic_consumers(graph, topic=topic, prefix=False)
+    consumers = _resolve_topic_consumers(graph, topic=topic, contains=False)
     if not consumers:
-        consumers = _resolve_topic_consumers(graph, topic=topic, prefix=True)
+        consumers = _resolve_topic_consumers(graph, topic=topic, contains=True)
 
     topic_node = {
         "kind": "topic",
@@ -3633,8 +3633,8 @@ def _cmd_search(args: argparse.Namespace) -> int:
         filter_dict["annotation"] = args.annotation
     if args.capability:
         filter_dict["capability"] = args.capability
-    if args.fqn_prefix:
-        filter_dict["fqn_prefix"] = args.fqn_prefix
+    if args.fqn_contains:
+        filter_dict["fqn_contains"] = args.fqn_contains
     if args.java_kind:
         filter_dict["symbol_kind"] = normalize_enum(args.java_kind, kind="java_kind")
     if args.framework:

@@ -482,7 +482,7 @@ def test_find_route_handlers_endpoint_route(ladybug_graph_route_extraction_smoke
     rows = g.list_routes(
         framework="spring_mvc",
         microservice="service-a",
-        path_prefix="/api/users",
+        path_contains="/api/users",
         method="GET",
         limit=10,
     )
@@ -496,7 +496,7 @@ def test_find_route_handlers_endpoint_route(ladybug_graph_route_extraction_smoke
 
 def test_find_route_handlers_feign_route_returns_empty(ladybug_graph_route_extraction_smoke) -> None:
     g = ladybug_graph_route_extraction_smoke
-    rows = g.list_routes(framework="feign", path_prefix="/dupbase/same", limit=10)
+    rows = g.list_routes(framework="feign", path_contains="/dupbase/same", limit=10)
     assert rows == []
 
 

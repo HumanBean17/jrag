@@ -4,9 +4,9 @@ Strict frame contract
 ---------------------
 NodeFilter is a typed predicate bag: each populated field maps to one stored graph
 attribute for the selected kind; inapplicable fields fail loud with a teaching message.
-The ``search`` tool's ``query`` parameter is the ranked-text carve-out; structured
-prefix fields (``fqn_prefix``, ``path_prefix``, ``target_path_prefix``) reject ``*``
-and ``?`` — see ``_validate_no_wildcards``.
+The ``search`` tool's ``query`` parameter is the ranked-text carve-out; the substring
+fields (``fqn_contains``, ``path_contains``, ``target_path_contains``, ``topic_contains``)
+match literally (Cypher ``CONTAINS``) — no wildcard/metacharacter handling.
 
 Revisit trigger (``propose/completed/MCP-FILTER-FRAME-PROPOSE.md`` section 3.4.6)
 --------------------------------------------------------------
@@ -178,26 +178,26 @@ class NodeFilter(BaseModel):
     exclude_roles: list[Role] | None = None
     annotation: str | None = None
     capability: str | None = None
-    fqn_prefix: str | None = None
+    fqn_contains: str | None = None
     symbol_kind: DeclarationSymbolKind | None = None
     symbol_kinds: list[DeclarationSymbolKind] | None = None
     http_method: str | None = Field(
         default=None,
         description="HTTP verb (commonly GET/POST/PUT/DELETE/PATCH; user route annotations may yield others).",
     )
-    path_prefix: str | None = None
+    path_contains: str | None = None
     framework: Framework | None = None
     client_kind: ClientKind | None = Field(
         default=None,
         description="Outbound HTTP client kind: feign_method, rest_template, or web_client.",
     )
     target_service: str | None = None
-    target_path_prefix: str | None = None
+    target_path_contains: str | None = None
     producer_kind: ProducerKind | None = Field(
         default=None,
         description="Outbound async producer kind: kafka_send or stream_bridge_send.",
     )
-    topic_prefix: str | None = None
+    topic_contains: str | None = None
 
 
 class EdgeFilter(BaseModel):
@@ -260,7 +260,7 @@ _NODEFILTER_APPLICABLE_FIELDS: dict[Literal["symbol", "route", "client", "produc
         "exclude_roles",
         "annotation",
         "capability",
-        "fqn_prefix",
+        "fqn_contains",
         "symbol_kind",
         "symbol_kinds",
     ),
@@ -268,7 +268,7 @@ _NODEFILTER_APPLICABLE_FIELDS: dict[Literal["symbol", "route", "client", "produc
         "microservice",
         "module",
         "http_method",
-        "path_prefix",
+        "path_contains",
         "framework",
     ),
     "client": (
@@ -277,7 +277,7 @@ _NODEFILTER_APPLICABLE_FIELDS: dict[Literal["symbol", "route", "client", "produc
         "source_layer",
         "client_kind",
         "target_service",
-        "target_path_prefix",
+        "target_path_contains",
         "http_method",
     ),
     "producer": (
@@ -285,7 +285,7 @@ _NODEFILTER_APPLICABLE_FIELDS: dict[Literal["symbol", "route", "client", "produc
         "module",
         "source_layer",
         "producer_kind",
-        "topic_prefix",
+        "topic_contains",
     ),
 }
 
@@ -326,20 +326,6 @@ def _nodefilter_applicability_error(
         f"Invalid filter for kind='{kind}': populated field(s) not applicable: [{bad}]. "
         f"Applicable field(s): [{applicable}]"
     )
-
-
-def _validate_no_wildcards(nf: NodeFilter) -> str | None:
-    """Reject ``*`` / ``?`` in prefix-match fields; wildcards belong in ``search(query=…)``."""
-    for field_name in ("fqn_prefix", "path_prefix", "target_path_prefix"):
-        val = getattr(nf, field_name)
-        if val is None:
-            continue
-        if "*" in val or "?" in val:
-            return (
-                f"Wildcards (* and ?) are not supported in structured filter field `{field_name}`; "
-                "use search(query=...) for ranked text match instead."
-            )
-    return None
 
 
 def _filter_validation_error_message(exc: ValidationError) -> str:
@@ -648,9 +634,9 @@ def _symbol_where_from_filter(f: NodeFilter) -> tuple[str, dict[str, Any]]:
     if f.capability:
         preds.append("$capability IN s.capabilities")
         params["capability"] = f.capability
-    if f.fqn_prefix:
-        preds.append("s.fqn STARTS WITH $fqn_prefix")
-        params["fqn_prefix"] = f.fqn_prefix
+    if f.fqn_contains:
+        preds.append("s.fqn CONTAINS $fqn_contains")
+        params["fqn_contains"] = f.fqn_contains
     if f.symbol_kind:
         preds.append("s.kind = $symbol_kind")
         params["symbol_kind"] = f.symbol_kind
@@ -775,7 +761,7 @@ def _node_matches_filter(
             return False
         if f.capability and f.capability not in list(row.get("capabilities") or []):
             return False
-        if f.fqn_prefix and not fqn_val.startswith(f.fqn_prefix):
+        if f.fqn_contains and f.fqn_contains not in fqn_val:
             return False
         if f.symbol_kind and symbol_kind_val != f.symbol_kind:
             return False
@@ -784,9 +770,9 @@ def _node_matches_filter(
     elif kind == "route":
         if f.http_method and str(row.get("method") or "") != f.http_method:
             return False
-        if f.path_prefix:
+        if f.path_contains:
             path = str(row.get("path") or "")
-            if not path.startswith(f.path_prefix):
+            if f.path_contains not in path:
                 return False
         if f.framework and str(row.get("framework") or "") != f.framework:
             return False
@@ -795,18 +781,18 @@ def _node_matches_filter(
             return False
         if f.target_service and str(row.get("target_service") or "") != f.target_service:
             return False
-        if f.target_path_prefix:
+        if f.target_path_contains:
             path = str(row.get("path") or "")
-            if not path.startswith(f.target_path_prefix):
+            if f.target_path_contains not in path:
                 return False
         if f.http_method and str(row.get("method") or "") != f.http_method:
             return False
     else:
         if f.producer_kind and str(row.get("producer_kind") or "") != f.producer_kind:
             return False
-        if f.topic_prefix:
+        if f.topic_contains:
             topic = str(row.get("topic") or "")
-            if not topic.startswith(f.topic_prefix):
+            if f.topic_contains not in topic:
                 return False
     return True
 
@@ -840,9 +826,6 @@ def search_v2(
             )
         if nf and (err := _nodefilter_applicability_error("symbol", nf)):
             _log_fail_loud("applicability")
-            return SearchOutput(success=False, message=err, advisories=[], limit=None, offset=None)
-        if nf and (err := _validate_no_wildcards(nf)):
-            _log_fail_loud("wildcard")
             return SearchOutput(success=False, message=err, advisories=[], limit=None, offset=None)
         model_name = resolved_sbert_model_for_process_env(SBERT_MODEL)
         device = os.environ.get("SBERT_DEVICE") or None
@@ -931,9 +914,6 @@ def find_v2(
         if err := _nodefilter_applicability_error(kind, nf):
             _log_fail_loud("applicability")
             return FindOutput(success=False, message=err, advisories=[], limit=None, offset=None)
-        if err := _validate_no_wildcards(nf):
-            _log_fail_loud("wildcard")
-            return FindOutput(success=False, message=err, advisories=[], limit=None, offset=None)
         fetch_cap = int(limit) + int(offset) + 1
         if kind == "symbol":
             where, params = _symbol_where_from_filter(nf)
@@ -947,7 +927,7 @@ def find_v2(
             rows = g.list_routes(
                 microservice=nf.microservice,
                 framework=nf.framework,
-                path_prefix=nf.path_prefix,
+                path_contains=nf.path_contains,
                 method=nf.http_method,
                 limit=max(500, fetch_cap),
             )
@@ -957,7 +937,7 @@ def find_v2(
                 microservice=nf.microservice,
                 client_kind=nf.client_kind,
                 target_service=nf.target_service,
-                path_prefix=nf.target_path_prefix,
+                path_contains=nf.target_path_contains,
                 method=nf.http_method,
                 limit=max(500, fetch_cap),
             )
@@ -966,7 +946,7 @@ def find_v2(
             rows = g.list_producers(
                 microservice=nf.microservice,
                 producer_kind=nf.producer_kind,
-                topic_prefix=nf.topic_prefix,
+                topic_contains=nf.topic_contains,
                 limit=max(500, fetch_cap),
             )
             rows = [r for r in rows if _node_matches_filter("producer", r, nf)]
@@ -1386,9 +1366,6 @@ def neighbors_v2(
                 message=err,
                 requested_edge_types=requested_edge_types,
             )
-        if nf and (err := _validate_no_wildcards(nf)):
-            _log_fail_loud("wildcard")
-            return NeighborsOutput(success=False, message=err, requested_edge_types=[])
         if composed_keys and direction != "out":
             return NeighborsOutput(
                 success=False,

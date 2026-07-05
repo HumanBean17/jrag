@@ -93,8 +93,8 @@ Run `jrag --help` for the canonical list. Groups (PR-JRAG-1a..4):
 | Interfaces in service S | `jrag find --java-kind interface --service S` | `implementations` |
 | HTTP / messaging entry points | `jrag routes [--framework …] [--method …]` | `inspect <route>` |
 | Outbound HTTP clients | `jrag clients [--calls-service …]` | `callees <client>` |
-| Outbound async producers | `jrag producers [--topic-prefix …]` | `callees <producer>` |
-| Topics + consumers/producers | `jrag topics [--topic-prefix …]` | — |
+| Outbound async producers | `jrag producers [--topic-contains …]` | `callees <producer>` |
+| Topics + consumers/producers | `jrag topics [--topic-contains …]` | — |
 | Who calls method M? | `jrag callers <M>` | `inspect <caller>` |
 | What does M call? | `jrag callees <M>` | `inspect <callee>` |
 | Who hits this route? | `jrag callers <route>` | — |
@@ -128,14 +128,14 @@ Every `jrag` command that takes a `<query>` runs `resolve_v2` internally and map
 | `resolve_v2` status | `jrag` behavior |
 | --- | --- |
 | `one` | Run the traversal/listing against the resolved node. |
-| `many` | Return the candidate list and stop. **No auto-pick.** Disambiguate with `--kind`, `--role`, `--fqn-prefix`, etc. |
+| `many` | Return the candidate list and stop. **No auto-pick.** Disambiguate with `--kind`, `--role`, `--fqn-contains`, etc. |
 | `none` | Emit `status: not_found` envelope (exit 2). Fall back to `search` or `Grep`. |
 
 You never need to look up a raw node ID. Pass an FQN, simple name, `sym:`/`route:`/`client:`/`producer:` id (from a prior call), route path, topic, etc.
 
 ### Disambiguation flags
 
-Only `--kind` is a true resolve input (`hint_kind`). The other narrowing flags (`--role`, `--java-kind`, `--fqn-prefix`, `--service`, `--module`) post-filter the resolve result client-side. If a post-filter collapses `many` → `one`, the command proceeds; if it still leaves `many`, the narrowed candidates are returned.
+Only `--kind` is a true resolve input (`hint_kind`). The other narrowing flags (`--role`, `--java-kind`, `--fqn-contains`, `--service`, `--module`) post-filter the resolve result client-side. If a post-filter collapses `many` → `one`, the command proceeds; if it still leaves `many`, the narrowed candidates are returned.
 
 ---
 
@@ -224,10 +224,10 @@ shown, and **both modes honor the same detail level** through one projection sea
 | Symptom | Fix |
 | ------- | --- |
 | `status: error` "No index at …" | Run `java-codebase-rag init --source-root <root>` then retry |
-| `status: not_found` | Try `jrag search "<query>"`; or `find --fqn-prefix …`; fallback `Grep` |
-| `many` candidates returned | Add `--kind`/`--role`/`--fqn-prefix`/`--service`; re-run |
-| `find` returns too much | Add `--service`, `--fqn-prefix`, `--path-prefix`, `--topic-prefix` |
-| Empty `search` | Try `--table all`; `find --fqn-prefix`; `Grep` directly |
+| `status: not_found` | Try `jrag search "<query>"`; or `find --fqn-contains …`; fallback `Grep` |
+| `many` candidates returned | Add `--kind`/`--role`/`--fqn-contains`/`--service`; re-run |
+| `find` returns too much | Add `--service`, `--fqn-contains`, `--path-contains`, `--topic-contains` |
+| Empty `search` | Try `--table all`; `find --fqn-contains`; `Grep` directly |
 | `truncated: true` | Narrow the query, or page with `--offset` (`find`/`search` only) |
 | Empty results across commands | Index missing/stale → `Grep`/`Glob`/`Read`; ask operator to rebuild (`java-codebase-rag reprocess`) |
 | CLI vs file disagree | **Trust the file**; report stale index |

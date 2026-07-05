@@ -114,14 +114,14 @@ Every `jrag` command that takes a `<query>` runs `resolve_v2` internally. Map th
 | `resolve_v2` status | `jrag` behavior | Your action |
 | --- | --- | --- |
 | `one` | Run the traversal/listing against the resolved node. | Read the result. |
-| `many` | Return the candidate list and stop. **No auto-pick.** | Disambiguate with `--kind`/`--role`/`--fqn-prefix`/`--service`; re-run. |
+| `many` | Return the candidate list and stop. **No auto-pick.** | Disambiguate with `--kind`/`--role`/`--fqn-contains`/`--service`; re-run. |
 | `none` | `status: not_found` envelope (exit 2). | Fall back to `jrag search` or `Grep`. |
 
 Never look up a raw node ID manually. Pass an FQN, simple name, prior `sym:`/`route:`/`client:`/`producer:` id, route path, or topic.
 
 ### Disambiguation flags
 
-Only `--kind` is a true resolve input. `--role`, `--java-kind`, `--fqn-prefix`, `--service`, `--module` post-filter the resolve result client-side.
+Only `--kind` is a true resolve input. `--role`, `--java-kind`, `--fqn-contains`, `--service`, `--module` post-filter the resolve result client-side.
 
 ---
 
@@ -240,10 +240,10 @@ Use `Read` with `offset`/`limit` for large files — read relevant sections, not
 | Symptom | Fix |
 | ------- | --- |
 | `jrag status` exits 2 | Run `java-codebase-rag init --source-root <root>`; retry |
-| `status: not_found` | Try `jrag search "<query>"`; or `find --fqn-prefix`; fallback `Grep` |
-| `many` candidates | Add `--kind`/`--role`/`--fqn-prefix`/`--service`; re-run |
-| `find` returns too much | Add `--service`, `--fqn-prefix`, `--path-prefix`, `--topic-prefix` |
-| Empty `search` | Try `--table all`; `find --fqn-prefix`; `Grep` directly |
+| `status: not_found` | Try `jrag search "<query>"`; or `find --fqn-contains`; fallback `Grep` |
+| `many` candidates | Add `--kind`/`--role`/`--fqn-contains`/`--service`; re-run |
+| `find` returns too much | Add `--service`, `--fqn-contains`, `--path-contains`, `--topic-contains` |
+| Empty `search` | Try `--table all`; `find --fqn-contains`; `Grep` directly |
 | `truncated: true` | Narrow the query, or page with `--offset` (`find`/`search` only) |
 | Empty results across commands | Index missing/stale → `Grep`/`Glob`/`Read`; ask operator to rebuild |
 | CLI vs file disagree | Trust the file; report stale index |

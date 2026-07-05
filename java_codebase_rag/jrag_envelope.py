@@ -400,7 +400,7 @@ def _matches_post_filters(
     *,
     java_kind: str | None,
     role: str | None,
-    fqn_prefix: str | None,
+    fqn_contains: str | None,
 ) -> bool:
     """Client-side post-filter on a resolved node (PR-JRAG-1a resolve-first)."""
     if java_kind is not None:
@@ -416,8 +416,8 @@ def _matches_post_filters(
         actual = (node.role or "").upper().replace("-", "_")
         if actual != want:
             return False
-    if fqn_prefix is not None:
-        if not (node.fqn or "").startswith(fqn_prefix):
+    if fqn_contains is not None:
+        if fqn_contains not in (node.fqn or ""):
             return False
     return True
 
@@ -495,7 +495,7 @@ def resolve_query(
     hint_kind: Literal["symbol", "route", "client", "producer"] | None,
     java_kind: str | None,
     role: str | None,
-    fqn_prefix: str | None,
+    fqn_contains: str | None,
     cfg: Any,
     graph: Any | None = None,
     microservice: str = "",
@@ -503,7 +503,7 @@ def resolve_query(
 ) -> tuple[NodeRef | None, Envelope]:
     """Resolve-first mapper: runs ``resolve_v2`` and maps its contract to the envelope.
 
-    * ``one`` -> apply post-filters (``java_kind`` / ``role`` / ``fqn_prefix``)
+    * ``one`` -> apply post-filters (``java_kind`` / ``role`` / ``fqn_contains``)
       to the resolved node. If pass: ``(node, env ok)`` with
       ``env.file_location`` set from the node's ``filename`` + ``start_line``
       and ``env.root = node.id``. If fail: ``(None, env not_found)``.
@@ -538,7 +538,7 @@ def resolve_query(
 
     if out.status == "one" and out.node is not None:
         node = out.node
-        if _matches_post_filters(node, java_kind=java_kind, role=role, fqn_prefix=fqn_prefix):
+        if _matches_post_filters(node, java_kind=java_kind, role=role, fqn_contains=fqn_contains):
             env = Envelope(status="ok", root=node.id)
             loc = _node_file_location(graph, node.id)
             if loc is not None:
@@ -547,7 +547,7 @@ def resolve_query(
         return None, Envelope(
             status="not_found",
             message=(
-                f"No matches for {identifier!r} after applying --java-kind/--role/--fqn-prefix "
+                f"No matches for {identifier!r} after applying --java-kind/--role/--fqn-contains "
                 "filters; use `jrag search <query>` for ranked fuzzy lookup."
             ),
         )
@@ -555,7 +555,7 @@ def resolve_query(
     if out.status == "many" and out.candidates:
         survivors = [
             c for c in out.candidates
-            if _matches_post_filters(c.node, java_kind=java_kind, role=role, fqn_prefix=fqn_prefix)
+            if _matches_post_filters(c.node, java_kind=java_kind, role=role, fqn_contains=fqn_contains)
         ]
         if len(survivors) == 1:
             node = survivors[0].node
@@ -572,7 +572,7 @@ def resolve_query(
             return None, Envelope(
                 status="not_found",
                 message=(
-                    f"No matches for {identifier!r} after applying --java-kind/--role/--fqn-prefix "
+                    f"No matches for {identifier!r} after applying --java-kind/--role/--fqn-contains "
                     "filters; use `jrag search <query>` for ranked fuzzy lookup."
                 ),
             )

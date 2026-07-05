@@ -136,14 +136,14 @@ For **`find`**, `filter` is required — `{}` means no predicates (all nodes of 
 | Keys | Applies to |
 | ---- | ---------- |
 | `microservice`, `module` | All kinds |
-| `role`, `exclude_roles`, `annotation`, `capability`, `fqn_prefix`, `symbol_kind`, `symbol_kinds` | **symbol** |
-| `http_method`, `path_prefix`, `framework` | **route** |
-| `source_layer`, `client_kind`, `target_service`, `target_path_prefix`, `http_method` | **client** |
-| `source_layer`, `producer_kind`, `topic_prefix` | **producer** |
+| `role`, `exclude_roles`, `annotation`, `capability`, `fqn_contains`, `symbol_kind`, `symbol_kinds` | **symbol** |
+| `http_method`, `path_contains`, `framework` | **route** |
+| `source_layer`, `client_kind`, `target_service`, `target_path_contains`, `http_method` | **client** |
+| `source_layer`, `producer_kind`, `topic_contains` | **producer** |
 
 `http_method` filters HTTP verbs on **routes** (declared method) and on **clients** (outbound call method). Not applicable to **symbol** rows.
 
-**Strict frame:** one populated field → one stored attribute for that kind. Unknown keys or inapplicable populated fields → `success=false` with a teaching `message`. Invalid enum values (e.g. wrong case) are rejected earlier at the schema layer with the valid set listed. No wildcards in `fqn_prefix`, `path_prefix`, or `target_path_prefix` (`*` / `?` rejected) — use `search(query=…)` for ranked text instead. `search.query` is opaque text, not a DSL.
+**Strict frame:** one populated field → one stored attribute for that kind. Unknown keys or inapplicable populated fields → `success=false` with a teaching `message`. Invalid enum values (e.g. wrong case) are rejected earlier at the schema layer with the valid set listed. The substring fields (`fqn_contains`, `path_contains`, `target_path_contains`, `topic_contains`) match literally via `CONTAINS` — no `*`/`?` metacharacters; use `search(query=…)` for ranked text instead. `search.query` is opaque text, not a DSL.
 
 ### Identifier resolution (`resolve`)
 
@@ -261,10 +261,10 @@ Returns **edges** with `attrs` (`confidence`, `strategy`, `match`, … on cross-
 | ------- | ------------ | --- |
 | `neighbors` validation error | Missing `direction` or `edge_types` | Add both explicitly |
 | Empty `neighbors` | Wrong edge type or direction | Read `describe.edge_summary`; `EXPOSES` is Symbol→Route; `OVERRIDES` is method↔method only; `HTTP_CALLS` starts from **Client** ids |
-| Cannot find symbol | Wrong id or empty index | `resolve` / `search`; try `find` with `fqn_prefix` |
-| `find` returns too much | Broad filter | Add `microservice`, `fqn_prefix`, `path_prefix`, `topic_prefix`, … |
-| Route not found | Path mismatch | `find(kind="route", filter={"path_prefix":…})` |
-| Empty `search` | Wrong `table`, no index, or chunk miss | Try `table="all"`; `find` with `fqn_prefix`; read source files directly |
+| Cannot find symbol | Wrong id or empty index | `resolve` / `search`; try `find` with `fqn_contains` |
+| `find` returns too much | Broad filter | Add `microservice`, `fqn_contains`, `path_contains`, `topic_contains`, … |
+| Route not found | Path mismatch | `find(kind="route", filter={"path_contains":…})` |
+| Empty `search` | Wrong `table`, no index, or chunk miss | Try `table="all"`; `find` with `fqn_contains`; read source files directly |
 | Empty results across several tools | Index missing, stale, or wrong project | You cannot rebuild the index via MCP — ask the operator; meanwhile use open files / `rg` |
 | Result vs open file disagree | Stale or partial index | Trust the file; say index may be stale |
 | Mixed composed families on one id | `DECLARES.*` + `OVERRIDDEN_BY.*` together | Split calls — type keys need a type id; override keys need a method id |

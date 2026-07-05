@@ -549,7 +549,7 @@ def _render_inspect(envelope: Envelope) -> str:
 def _render_ambiguous(envelope: Envelope, *, noun: str) -> str:
     count = len(envelope.candidates)
     header = f"{count} ambiguous matches for {noun!r}" if noun else f"{count} ambiguous matches"
-    lines = [header, "Narrow with --kind --java-kind --role --fqn-prefix:"]
+    lines = [header, "Narrow with --kind --java-kind --role --fqn-contains:"]
     for cand in envelope.candidates:
         # Ambiguous candidates carry reason; NO file / score (PR-JRAG-1a test 14).
         # display_name only — graph id is NOT a fallback (the envelope projector
