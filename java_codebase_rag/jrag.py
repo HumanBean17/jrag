@@ -93,6 +93,76 @@ def _framework_type_fqns(graph, framework: str) -> set[str]:
     return {str(r.get("fqn") or "") for r in rows if r.get("fqn")}
 
 
+def _apply_auto_scope(args: argparse.Namespace, cfg, graph) -> None:
+    """Default ``args.service`` to the microservice implied by cwd (MCP parity).
+
+    Mirrors ``server.py`` ``ScopeManager``: when cwd sits inside one
+    microservice of a system-level index, behave as if the agent had typed
+    ``--service <that microservice>`` so the other services' results do not
+    leak in. No-op unless the command opted in via
+    ``set_defaults(auto_scope=True)`` and the caller did not pass ``--service``.
+
+    Detection reuses ``graph_enrich.detect_microservice_from_path``; the
+    candidate is validated against ``graph.microservice_counts()`` and dropped
+    if absent (a mislabeled non-microservice dir would otherwise yield zero
+    matches). When the known set is empty/unreadable we KEEP the candidate
+    (transient graph error) — same as ``server.py:130-132``. Detection returns
+    ``None`` at the system root or outside it, so auto-scope never fires for
+    estate-wide work.
+
+    Records ``args._service_user`` (caller passed ``--service``) for warning
+    distinction and ``args._service_auto`` (detected name) for the
+    transparency notice.
+
+    NOTE: three commands inline their graph load and bypass
+    ``_load_graph_or_error`` — ``find``, ``inspect``, ``status``. ``find`` is
+    opted in and calls this helper itself; ``inspect``/``status`` are NOT
+    opted in (they don't use ``--service`` as a result filter today). If
+    either is ever opted in, it must call this helper in its own load path.
+    """
+    # ``--service`` lives on the ``_common_parser``; a few commands (status,
+    # microservices) use a bare ``_core_parser`` without it. Gate on opt-in
+    # FIRST so those never reach the ``args.service`` read below.
+    if not getattr(args, "auto_scope", False):
+        return
+    args._service_user = getattr(args, "service", None) is not None
+    if getattr(args, "service", None) is not None:  # explicit --service wins
+        return
+    if getattr(args, "no_auto_scope", False) or os.environ.get("JRAG_NO_AUTO_SCOPE"):
+        return
+    source_root = cfg.source_root if cfg.source_root else None
+    if not source_root:
+        return
+    from graph_enrich import detect_microservice_from_path
+
+    candidate = detect_microservice_from_path(Path.cwd(), Path(source_root))
+    if not candidate:
+        return
+    try:
+        known = {name for name in (graph.microservice_counts() or {}) if name}
+    except Exception:
+        known = set()
+    if known and candidate not in known:
+        return
+    args.service = candidate
+    args._service_auto = candidate
+    print(f"[jrag] auto-scope: --service {candidate} (cwd)", file=sys.stderr)
+
+
+def _auto_scope_notice(args: argparse.Namespace) -> list[str]:
+    """Envelope ``warnings[]`` line telling the agent results are auto-scoped.
+
+    Models often do not see stderr (where the ``[jrag] auto-scope`` line goes),
+    so this also surfaces the scope in the rendered output. Returns ``[]`` when
+    auto-scope did not fire (no detected service) or the command opted out.
+    """
+    svc = getattr(args, "_service_auto", None)
+    if not svc:
+        return []
+    return [
+        f"auto-scope: --service {svc} (inferred from cwd; "
+        f"pass --no-auto-scope to disable)"
+    ]
 
 
 def _load_graph_or_error(args: argparse.Namespace):
@@ -112,6 +182,9 @@ def _load_graph_or_error(args: argparse.Namespace):
         env = Envelope(status="error", message=str(exc))
         print(render(env, fmt=args.format, detail=args.detail))
         return cfg, None, 2
+    # Default --service from cwd before the handler reads it (MCP parity).
+    # No-op unless the command opted in via set_defaults(auto_scope=True).
+    _apply_auto_scope(args, cfg, graph)
     return cfg, graph, 0
 
 
@@ -141,7 +214,10 @@ def _render_listing(rows, *, limit: int, args: argparse.Namespace, noun: str,
     display_nodes_list, truncated = mark_truncated(node_list, limit)
     display_nodes = {node["id"]: node for node in display_nodes_list}
 
-    env = Envelope(status="ok", nodes=display_nodes, truncated=truncated)
+    env = Envelope(
+        status="ok", nodes=display_nodes, truncated=truncated,
+        warnings=_auto_scope_notice(args),
+    )
     next_actions_hook(env, command=getattr(args, "command", None))
     if extra_hints:
         seen = set(env.agent_next_actions)
@@ -274,6 +350,16 @@ def build_parser() -> argparse.ArgumentParser:
         common.add_argument("--service", type=str, default=None, help="Filter by microservice.")
         common.add_argument("--module", type=str, default=None, help="Filter by module.")
         common.add_argument(
+            "--no-auto-scope",
+            dest="no_auto_scope",
+            action="store_true",
+            default=False,
+            help=(
+                "Disable cwd-derived auto --service scoping so cross-service "
+                "results are visible (also disabled via JRAG_NO_AUTO_SCOPE=1)."
+            ),
+        )
+        common.add_argument(
             "--limit", type=int, default=20, help="Cap on results (default 20; 10 for fan-out)."
         )
         common.add_argument(
@@ -390,7 +476,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=0,
         help="Page offset (filter mode only; ignored in query mode).",
     )
-    find.set_defaults(handler=_cmd_find)
+    find.set_defaults(handler=_cmd_find, auto_scope=True)
 
     # inspect subparser (PR-JRAG-1b)
     inspect = subparsers.add_parser(
@@ -429,7 +515,7 @@ def build_parser() -> argparse.ArgumentParser:
     http_routes.add_argument("--framework", type=str, default=None, help="Filter by framework.")
     http_routes.add_argument("--path-contains", type=str, default=None, help="Filter by path substring.")
     http_routes.add_argument("--method", type=str, default=None, help="Filter by HTTP method.")
-    http_routes.set_defaults(handler=_cmd_routes, detail="full")
+    http_routes.set_defaults(handler=_cmd_routes, detail="full", auto_scope=True)
 
     # http-clients subparser (PR-JRAG-2)
     http_clients = subparsers.add_parser(
@@ -444,7 +530,7 @@ def build_parser() -> argparse.ArgumentParser:
     http_clients.add_argument("--client-kind", type=str, default=None, help="Filter by client kind.")
     http_clients.add_argument("--calls-service", type=str, default=None, help="Filter by target service.")
     http_clients.add_argument("--path-contains", type=str, default=None, help="Filter by path substring.")
-    http_clients.set_defaults(handler=_cmd_clients, detail="full")
+    http_clients.set_defaults(handler=_cmd_clients, detail="full", auto_scope=True)
 
     # producers subparser (PR-JRAG-2)
     producers = subparsers.add_parser(
@@ -458,7 +544,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     producers.add_argument("--producer-kind", type=str, default=None, help="Filter by producer kind.")
     producers.add_argument("--topic-contains", type=str, default=None, help="Filter by topic substring.")
-    producers.set_defaults(handler=_cmd_producers, detail="full")
+    producers.set_defaults(handler=_cmd_producers, detail="full", auto_scope=True)
 
     # topics subparser (PR-JRAG-2)
     topics = subparsers.add_parser(
@@ -474,7 +560,7 @@ def build_parser() -> argparse.ArgumentParser:
     topics.add_argument("--topic-contains", type=str, default=None, help="Filter by topic substring.")
     topics.add_argument("--producer-in", type=str, default=None, help="Scope producers to this microservice.")
     topics.add_argument("--consumer-in", type=str, default=None, help="Show consumers from this microservice.")
-    topics.set_defaults(handler=_cmd_topics, detail="full")
+    topics.set_defaults(handler=_cmd_topics, detail="full", auto_scope=True)
 
     # jobs subparser (PR-JRAG-2)
     jobs = subparsers.add_parser(
@@ -486,7 +572,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Returns Symbol nodes with the SCHEDULED_TASK capability."
         ),
     )
-    jobs.set_defaults(handler=_cmd_jobs, detail="full")
+    jobs.set_defaults(handler=_cmd_jobs, detail="full", auto_scope=True)
 
     # listeners subparser (PR-JRAG-2)
     listeners = subparsers.add_parser(
@@ -499,7 +585,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     listeners.add_argument("--topic-contains", type=str, default=None, help="Filter by topic substring (on producer member).")
-    listeners.set_defaults(handler=_cmd_listeners, detail="full")
+    listeners.set_defaults(handler=_cmd_listeners, detail="full", auto_scope=True)
 
     # entities subparser (PR-JRAG-2)
     entities = subparsers.add_parser(
@@ -511,7 +597,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Returns Symbol nodes with the ENTITY role."
         ),
     )
-    entities.set_defaults(handler=_cmd_entities, detail="full")
+    entities.set_defaults(handler=_cmd_entities, detail="full", auto_scope=True)
 
     # ---- Traversal commands (PR-JRAG-3a) ----
     # Shared resolve-disambiguation flags (PR-JRAG-1a contract: only --kind is a
@@ -557,7 +643,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Include external (JDK/Spring/Lombok) callers/callees (default excluded).",
     )
-    callers.set_defaults(handler=_cmd_callers)
+    callers.set_defaults(handler=_cmd_callers, auto_scope=True)
 
     callees = subparsers.add_parser(
         "callees",
@@ -582,7 +668,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Include external (JDK/Spring/Lombok) callees (default excluded).",
     )
-    callees.set_defaults(handler=_cmd_callees)
+    callees.set_defaults(handler=_cmd_callees, auto_scope=True)
 
     hierarchy = subparsers.add_parser(
         "hierarchy",
@@ -609,7 +695,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     implementations.add_argument("query", help="Interface FQN or name.")
     implementations.add_argument("--capability", type=str, default=None, help="Filter implementors by capability.")
-    implementations.set_defaults(handler=_cmd_implementations)
+    implementations.set_defaults(handler=_cmd_implementations, auto_scope=True)
 
     subclasses = subparsers.add_parser(
         "subclasses",
@@ -621,7 +707,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     subclasses.add_argument("query", help="Class FQN or name.")
-    subclasses.set_defaults(handler=_cmd_subclasses)
+    subclasses.set_defaults(handler=_cmd_subclasses, auto_scope=True)
 
     overrides = subparsers.add_parser(
         "overrides",
@@ -659,7 +745,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     dependents.add_argument("query", help="Type FQN or name.")
-    dependents.set_defaults(handler=_cmd_dependents)
+    dependents.set_defaults(handler=_cmd_dependents, auto_scope=True)
 
     impact = subparsers.add_parser(
         "impact",
@@ -674,7 +760,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     impact.add_argument("query", help="Symbol FQN or name.")
     impact.add_argument("--depth", type=int, default=2, help="Closure depth (default 2).")
-    impact.set_defaults(handler=_cmd_impact)
+    impact.set_defaults(handler=_cmd_impact, auto_scope=True)
 
     decompose = subparsers.add_parser(
         "decompose",
@@ -714,7 +800,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Include external types reached via the CALLS hop (default excluded).",
     )
-    decompose.set_defaults(handler=_cmd_decompose)
+    decompose.set_defaults(handler=_cmd_decompose, auto_scope=True)
 
     flow = subparsers.add_parser(
         "flow",
@@ -1002,7 +1088,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=0,
         help="Page offset (passed to search_v2; paginated via +1-fetch).",
     )
-    search.set_defaults(handler=_cmd_search)
+    search.set_defaults(handler=_cmd_search, auto_scope=True)
 
     return parser
 
@@ -1161,6 +1247,10 @@ def _cmd_find(args: argparse.Namespace) -> int:
         print(render(env, fmt=args.format, detail=args.detail))
         return 2
 
+    # find inlines its graph load (not via _load_graph_or_error), so wire the
+    # auto-scope default here too (MCP parity).
+    _apply_auto_scope(args, cfg, graph)
+
     # Check kind contradiction first (before any backend work)
     inferred = _infer_kind(args)
     is_contradiction, error_msg = _check_kind_contradiction(args, inferred)
@@ -1312,7 +1402,10 @@ def _cmd_find_query_mode(
             "end_line": row.end_line,
         }
 
-    env = Envelope(status="ok", nodes=nodes, truncated=raw_truncated, warnings=warnings)
+    env = Envelope(
+        status="ok", nodes=nodes, truncated=raw_truncated,
+        warnings=warnings + _auto_scope_notice(args),
+    )
     next_actions_hook(env)
 
     # Empty-result discoverability: query mode is exact-match only (name OR fqn),
@@ -1437,7 +1530,10 @@ def _cmd_find_filter_mode(
     display_refs = results[:limit]
     nodes_dict = {ref.id: to_envelope_rows([ref])[0] for ref in display_refs}
 
-    env = Envelope(status="ok", nodes=nodes_dict, truncated=truncated)
+    env = Envelope(
+        status="ok", nodes=nodes_dict, truncated=truncated,
+        warnings=_auto_scope_notice(args),
+    )
     next_actions_hook(env)
 
     # Render with offset hint if truncated
@@ -1719,7 +1815,10 @@ def _cmd_topics(args: argparse.Namespace) -> int:
         node_id = f"topic:{i}"
         nodes[node_id] = topic
 
-    env = Envelope(status="ok", nodes=nodes, truncated=truncated, warnings=warnings)
+    env = Envelope(
+        status="ok", nodes=nodes, truncated=truncated,
+        warnings=warnings + _auto_scope_notice(args),
+    )
     next_actions_hook(env, command=getattr(args, "command", None))
     print(render(env, fmt=args.format, detail=args.detail, noun="topic"))
     return 0
@@ -2007,7 +2106,7 @@ def _emit_traversal(
         nodes=dict(nodes),
         edges=list(edges),
         root=root_id,
-        warnings=warnings or [],
+        warnings=(warnings or []) + _auto_scope_notice(args),
         truncated=truncated,
         is_external_entrypoint=is_external_entrypoint,
     )
@@ -2754,12 +2853,17 @@ def _cmd_impact(args: argparse.Namespace) -> int:
     impacts = graph.impact_analysis(node.fqn, depth=depth, limit=limit + 1)
     warnings: list[str] = []
     if args.service:
-        # impact_analysis has no microservice param (verified); filter
-        # client-side and surface a warning so the user knows.
-        warnings.append(
-            "--service is a post-filter on impact (impact_analysis has no microservice param)"
-        )
+        # Filter client-side (impact_analysis has no microservice param). The
+        # explanatory warning fires only when the caller EXPLICITLY passed
+        # --service: under cwd-derived auto-scope the filter still applies
+        # (that's the point — keep the blast-radius inside the working
+        # service) but the "post-filter" caveat would be noise the agent
+        # didn't ask for, so it's gated on ``_service_user``.
         impacts = [h for h in impacts if (h.microservice or "") == args.service]
+        if getattr(args, "_service_user", False):
+            warnings.append(
+                "--service is a post-filter on impact (impact_analysis has no microservice param)"
+            )
     if getattr(args, "module", None):
         # impact_analysis has no module param either; warn rather than drop silently.
         warnings.append(
@@ -4043,7 +4147,10 @@ def _cmd_search(args: argparse.Namespace) -> int:
             f"--framework {framework_want!r} filtered out all {framework_dropped} hit(s); "
             f"no symbol's declaring type matched the framework's characteristic annotations"
         )
-    env = Envelope(status="ok", nodes=nodes, truncated=truncated, warnings=warnings)
+    env = Envelope(
+        status="ok", nodes=nodes, truncated=truncated,
+        warnings=warnings + _auto_scope_notice(args),
+    )
     next_actions_hook(env)
     # Per-hit drill-down: the top search hit's primary type is the natural
     # thing to inspect (signature, edges, callers). Two visible hints in text,
