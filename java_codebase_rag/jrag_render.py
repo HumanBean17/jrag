@@ -106,7 +106,23 @@ def display_name(node: dict[str, Any]) -> str:
       * ``fqn``            -> fqn-derived simple name (classes/methods)
 
     Returns ``""`` only when nothing identifiable is present.
+
+    For a method symbol (``pkg.Class#method(args)``) the label is
+    ``Class#method``, NOT the bare ``name``: ``getId`` / ``process`` / ``create``
+    collide across classes, so a traversal/listing row reduced to the bare
+    method name is ambiguous (the SlaService callees example — four ``getId``,
+    five ``process``). The declaring class is identity-level disambiguation, so
+    it folds into the label at every detail tier (brief included). ``name`` (the
+    clean method name, no args) is preferred when present; the FQN-derived method
+    name is the fallback when ``name`` is absent.
     """
+    fqn = str(node.get("fqn") or "").strip()
+    if "#" in fqn:
+        head, _, tail = fqn.partition("#")
+        cls = head.rsplit(".", 1)[-1]
+        method = str(node.get("name") or "").strip() or tail.split("(", 1)[0]
+        if cls and method:
+            return f"{cls}#{method}"
     name = str(node.get("name") or "").strip()
     if name:
         return name
@@ -247,20 +263,59 @@ def _render_listing(envelope: Envelope, *, noun: str, detail: str = "normal") ->
     return "\n".join(lines)
 
 
-def _format_edge_line(edge: dict, nodes: dict[str, dict], *, detail: str = "normal") -> str:
-    """Format a single edge row as an indented line (shared across render modes).
+def _node_normal_extras(node: dict[str, Any]) -> str:
+    """Inline ``key=value`` extras for a node at ``normal`` detail.
 
-    Emits ``  <tiered name>`` plus a ``conf=N.NN`` suffix when the edge type
-    carries confidence (CALLS-family). The caller is responsible for any
-    grouping header above this line.
+    Mirrors :func:`_render_listing`'s normal-tier inline append exactly (same
+    ``_NORMAL_INLINE_EXTRAS`` key list / format) so a traversal row and a listing
+    row show the SAME fields at the same level, and so text matches the field
+    set JSON carries at ``normal``. Returns ``""`` when none of the extras are
+    present (the line is left unchanged).
+    """
+    extras = [
+        f"{key}={node[key]}"
+        for key in _NORMAL_INLINE_EXTRAS
+        if key in node and node[key] not in ("", None)
+    ]
+    return ("  " + "  ".join(extras)) if extras else ""
 
-    ``detail > brief`` appends the edge attrs the terse line drops (the
-    projector has already trimmed the edge to the requested attr set; this only
-    decides presentation): ``normal`` adds ``mechanism``; ``full`` adds every
-    remaining attr inline (``annotation`` / ``field_or_param`` / ``from_fqn`` /
-    …), skipping the keys already represented in the label/conf prefix.
+
+def _node_full_rows(node: dict[str, Any], indent: int) -> list[str]:
+    """Indented kv-block of a node's non-identity fields at ``full`` detail.
+
+    Mirrors :func:`_render_listing`'s full-tier block: identity keys
+    (``_LISTING_LINE_KEYS`` — already represented in the label/@service line) are
+    skipped, the rest recurse via :func:`_render_inspect_block` so
+    signature / annotations / modifiers / package render as readable nested kv
+    lines. Returns ``[]`` when the node has no content fields.
+    """
+    rest = {k: v for k, v in node.items() if k not in _LISTING_LINE_KEYS}
+    return _render_inspect_block(rest, indent) if rest else []
+
+
+def _format_edge_rows(edge: dict, nodes: dict[str, dict], *, detail: str = "normal") -> list[str]:
+    """Format an edge as one header line plus (at ``full``) a per-edge block.
+
+    Shared across all render modes (flat + grouped). The header is
+    ``  <tiered name>`` plus ``conf=N.NN`` for CALLS-family edges. The caller is
+    responsible for any grouping header above these rows.
+
+    NODE-level detail is honored symmetrically with :func:`_render_listing`
+    (PR-JRAG-6 fixed listings but not traversals; this closes that gap so
+    ``jrag callees`` text carries the same fields as its JSON, and ``--detail
+    full`` is no longer a no-op):
+
+    * ``brief``  -> header only (label + conf). Identity only; the label already
+      carries the declaring class for methods via :func:`display_name`.
+    * ``normal`` -> header + edge ``mechanism`` + the target node's
+      ``_NORMAL_INLINE_EXTRAS`` (module/role/symbol_kind/framework/file/score)
+      inline — the same inline append listings use.
+    * ``full``   -> header + every remaining EDGE attr inline (annotation /
+      field_or_param / from_fqn / …) + a per-edge indented block of the target
+      node's content fields (signature/annotations/modifiers/...).
     """
     target_id = _node_id(edge)
+    target = nodes.get(target_id) or {}
     label = tiered_name(target_id, nodes) if target_id else "(missing)"
     line = f"  {label}"
     edge_type = _edge_label(edge)
@@ -276,7 +331,9 @@ def _format_edge_line(edge: dict, nodes: dict[str, dict], *, detail: str = "norm
         mech = edge.get("mechanism")
         if mech not in ("", None):
             line += f"  mechanism={mech}"
-    elif detail == "full":
+        line += _node_normal_extras(target)
+        return [line]
+    if detail == "full":
         for key in edge:
             if key in _EDGE_LINE_KEYS:
                 continue
@@ -284,15 +341,30 @@ def _format_edge_line(edge: dict, nodes: dict[str, dict], *, detail: str = "norm
             if val in ("", None):
                 continue
             line += f"  {key}={val}"
-    return line
+        rows = [line]
+        rows.extend(_node_full_rows(target, 2))
+        return rows
+    return [line]
 
 
 def _render_traversal(envelope: Envelope, *, noun: str, detail: str = "normal") -> str:
     lines: list[str] = []
     root_id = envelope.root or ""
     if root_id:
-        # root: tiered name (simple name + @service)
-        lines.append(f"root: {tiered_name(root_id, envelope.nodes)}")
+        # root: tiered name (Class / Class#method + @service). At normal the
+        # root node's module/role/file/score append inline; at full a kv-block
+        # renders under it — the SAME detail contract as an edge-target row, so
+        # the resolved-subject line carries the same fields JSON shows (parity
+        # with the listing/edge detail work; pre-fix the root was always bare).
+        root_node = envelope.nodes.get(root_id, {})
+        root_label = tiered_name(root_id, envelope.nodes)
+        if detail == "normal":
+            lines.append(f"root: {root_label}{_node_normal_extras(root_node)}")
+        elif detail == "full":
+            lines.append(f"root: {root_label}")
+            lines.extend(_node_full_rows(root_node, 1))
+        else:
+            lines.append(f"root: {root_label}")
     if not envelope.edges:
         # Zero-results line for a traversal: "0 <noun>  <fqn>  @<service>".
         # The fqn + service come from the root node (the resolved subject).
@@ -328,16 +400,16 @@ def _render_traversal(envelope: Envelope, *, noun: str, detail: str = "normal") 
         if in_sec:
             lines.append("inbound:")
             for e in in_sec:
-                lines.append(_format_edge_line(e, envelope.nodes, detail=detail))
+                lines.extend(_format_edge_rows(e, envelope.nodes, detail=detail))
         if out_sec:
             lines.append("outbound:")
             for e in out_sec:
-                lines.append(_format_edge_line(e, envelope.nodes, detail=detail))
+                lines.extend(_format_edge_rows(e, envelope.nodes, detail=detail))
         for e in other:
             section = str(e.get("section") or "")
             if section:
                 lines.append(f"{section}:")
-            lines.append(_format_edge_line(e, envelope.nodes, detail=detail))
+            lines.extend(_format_edge_rows(e, envelope.nodes, detail=detail))
         lines.extend(_next_action_lines(envelope))
         return "\n".join(lines)
 
@@ -364,7 +436,7 @@ def _render_traversal(envelope: Envelope, *, noun: str, detail: str = "normal") 
                 header = f"stage {s}:"
             lines.append(header)
             for e in stage_edges:
-                lines.append(_format_edge_line(e, envelope.nodes, detail=detail))
+                lines.extend(_format_edge_rows(e, envelope.nodes, detail=detail))
         lines.extend(_next_action_lines(envelope))
         return "\n".join(lines)
 
@@ -375,18 +447,18 @@ def _render_traversal(envelope: Envelope, *, noun: str, detail: str = "normal") 
         if up:
             lines.append("↑ supertypes:")
             for e in up:
-                lines.append(_format_edge_line(e, envelope.nodes, detail=detail))
+                lines.extend(_format_edge_rows(e, envelope.nodes, detail=detail))
         if dn:
             lines.append("↓ subtypes:")
             for e in dn:
-                lines.append(_format_edge_line(e, envelope.nodes, detail=detail))
+                lines.extend(_format_edge_rows(e, envelope.nodes, detail=detail))
         lines.extend(_next_action_lines(envelope))
         return "\n".join(lines)
 
     # Flat: callers / callees / implementations / subclasses / overrides /
     # overridden-by / dependents / impact / flow (current behavior).
     for edge in envelope.edges:
-        lines.append(_format_edge_line(edge, envelope.nodes, detail=detail))
+        lines.extend(_format_edge_rows(edge, envelope.nodes, detail=detail))
     lines.extend(_next_action_lines(envelope))
     return "\n".join(lines)
 

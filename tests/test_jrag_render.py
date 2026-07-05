@@ -545,3 +545,118 @@ def test_search_json_normal_omits_snippet_drops_empty_fields() -> None:
     assert "snippet" not in node, f"normal json leaked snippet: {node!r}"
     assert "symbol_id" not in node, f"normal json kept empty symbol_id: {node!r}"
     assert node["score"] == 0.91
+
+
+# ----- Traversal label disambiguation + text/json detail parity -----
+#
+# Regression for the `jrag callees/callers "SlaService"` complaint: the text
+# rows were bare method names (getId x4, process x5, create x2) with no
+# declaring class, and text/json diverged at the same --detail level (json
+# carried module/role/file; text showed only `name @service conf`). Two fixes:
+#   1. display_name renders method symbols as `Class#method`.
+#   2. _format_edge_rows honors --detail symmetrically with _render_listing.
+
+
+def test_display_name_method_includes_declaring_class() -> None:
+    """A method symbol (``pkg.Class#method(args)``) renders as ``Class#method``.
+
+    Bare method names collide across classes (getId / process / create); the
+    declaring class is identity-level disambiguation and folds into the label.
+    """
+    from java_codebase_rag.jrag_render import display_name
+
+    # Method FQN with carried name -> Class#name (args stripped, name preferred).
+    assert display_name({
+        "fqn": "com.bank.chat.contracts.InternalEvent#create(String,EventType)",
+        "name": "create",
+    }) == "InternalEvent#create"
+    # name absent -> method name derived from the FQN tail (args stripped).
+    assert display_name({"fqn": "com.foo.Repo#findById(Long)"}) == "Repo#findById"
+    # Class FQN (no '#') is unchanged -> simple name.
+    assert display_name({"fqn": "com.foo.SlaService", "name": "SlaService"}) == "SlaService"
+    assert display_name({"fqn": "com.foo.SlaService"}) == "SlaService"
+
+
+def _traversal_env() -> Envelope:
+    """root class Symbol -> one CALLS edge to a method Symbol callee.
+
+    Carries module/role/file (normal-tier) AND signature/annotations/modifiers
+    (full-tier) so the text/json parity at each level is assertable.
+    """
+    return Envelope(
+        status="ok",
+        root="sym:0",
+        nodes={
+            "sym:0": {
+                "kind": "symbol", "fqn": "com.foo.Svc", "name": "Svc",
+                "microservice": "chat", "module": "core", "role": "SERVICE",
+                "symbol_kind": "class",
+            },
+            "sym:1": {
+                "kind": "symbol",
+                "fqn": "com.foo.Repo#findById(Long)",
+                "name": "findById",
+                "microservice": "chat", "module": "domain", "role": "REPOSITORY",
+                "symbol_kind": "method",
+                "signature": "findById(Long)",
+                "annotations": ["@Override"],
+                "modifiers": ["public"],
+                "package": "com.foo",
+                "filename": "src/Repo.java", "start_line": 42,
+            },
+        },
+        edges=[{"edge_type": "CALLS", "other_id": "sym:1", "confidence": 0.88}],
+    )
+
+
+def test_traversal_normal_text_carries_same_fields_as_json() -> None:
+    """At normal, a callees/callers text line shows the SAME node fields JSON
+    shows (module/role/file), and the label is the disambiguated Class#method.
+
+    Pre-fix the text line was ``findById @chat  conf=0.88`` only — no declaring
+    class, no module, no file — while JSON carried all three.
+    """
+    env = _traversal_env()
+    text = render(env, fmt="text", noun="callees", detail="normal")
+    # Declaring class disambiguates the method target.
+    assert "Repo#findById @chat" in text, f"Class#method label missing: {text!r}"
+    # Inline extras match the listing normal-tier set (and JSON normal node keys).
+    assert "module=domain" in text, f"module missing: {text!r}"
+    assert "role=REPOSITORY" in text, f"role missing: {text!r}"
+    assert "file=src/Repo.java:42" in text, f"file missing: {text!r}"
+    assert "conf=0.88" in text
+    # Root line is enriched the same way.
+    assert "root: Svc @chat" in text and "module=core" in text, f"root not enriched: {text!r}"
+    # signature/annotations stay out of normal (they are full-tier) — JSON parity.
+    assert "@Override" not in text, f"annotation leaked into normal: {text!r}"
+    # JSON at the same level carries exactly these keys on the callee node.
+    parsed = json.loads(render(env, fmt="json", detail="normal"))
+    callee = parsed["nodes"]["com.foo.Repo#findById(Long)"]
+    assert {"module", "role", "file"} <= set(callee.keys()), callee
+    assert "signature" not in callee, f"json normal leaked signature: {callee!r}"
+
+
+def test_traversal_full_text_renders_per_edge_content_block() -> None:
+    """At full, a per-edge indented block renders the callee's content fields
+    (signature/annotations/modifiers/package), matching listing full and JSON
+    full.
+
+    Pre-fix ``--detail full`` was byte-identical to brief for traversals: the
+    full branch walked edge attrs only (confidence, already shown), never node
+    attrs, so the promised signature/annotations never appeared in text.
+    """
+    env = _traversal_env()
+    text = render(env, fmt="text", noun="callees", detail="full")
+    lines = text.splitlines()
+    # Header line: disambiguated label + conf (no inline extras at full).
+    assert any(ln.startswith("  Repo#findById @chat") and "conf=0.88" in ln for ln in lines), text
+    # Content fields render as a block NESTED under the edge row (4-space indent).
+    assert "    signature: findById(Long)" in lines, f"full block missing signature: {text!r}"
+    assert "    annotations: @Override" in lines, f"full block missing annotations: {text!r}"
+    assert "    modifiers: public" in lines, f"full block missing modifiers: {text!r}"
+    # Root also gets a nested block at full.
+    assert "  role: SERVICE" in lines, f"root block missing: {text!r}"
+    # JSON full carries the same content fields on the callee node.
+    parsed = json.loads(render(env, fmt="json", detail="full"))
+    callee = parsed["nodes"]["com.foo.Repo#findById(Long)"]
+    assert {"signature", "annotations", "modifiers", "package"} <= set(callee.keys()), callee
