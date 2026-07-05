@@ -37,8 +37,12 @@ _ALL_EDGE_TYPES: frozenset[str] = frozenset(get_args(EdgeType)) | frozenset(get_
 
 SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"
 SKILL_NAME = "explore-codebase"
-EXPECTED_SKILL_DIRS = {"explore-codebase"}
+# PR-JRAG-5: the CLI surface ships its own skill (explore-codebase-cli) with a
+# shell vocabulary, not the MCP vocabulary. The static-validation tests in this
+# file (tool-ref/kind/edge allowlists) gate to the MCP skill (SKILL_NAME) only.
+EXPECTED_SKILL_DIRS = {"explore-codebase", "explore-codebase-cli"}
 SKILL_PATH = SKILLS_DIR / SKILL_NAME / "SKILL.md"
+CLI_SKILL_PATH = SKILLS_DIR / "explore-codebase-cli" / "SKILL.md"
 
 
 def _parse_frontmatter(text: str) -> dict[str, str]:
@@ -121,6 +125,31 @@ class TestSkillFrontmatter:
         assert "name" in fm, "SKILL.md missing frontmatter 'name'"
         assert fm["name"] == SKILL_NAME, f"name={fm['name']!r}, expected {SKILL_NAME!r}"
         assert "description" in fm, "SKILL.md missing frontmatter 'description'"
+        assert len(fm["description"]) >= 20, (
+            f"description too short ({len(fm['description'])} chars)"
+        )
+
+
+class TestCliSkillFrontmatter:
+    """PR-JRAG-5: the explore-codebase-cli skill ships its own frontmatter.
+
+    The MCP-vocabulary static-validation tests below (tool-ref / kind / edge
+    allowlists) do NOT apply to this skill — it documents the `jrag` shell
+    vocabulary, not the 5-tool MCP. Only frontmatter + existence are checked
+    here.
+    """
+
+    def test_cli_skill_file_exists(self):
+        assert CLI_SKILL_PATH.is_file(), f"Missing {CLI_SKILL_PATH}"
+
+    def test_cli_frontmatter_has_name_and_description(self):
+        text = CLI_SKILL_PATH.read_text(encoding="utf-8")
+        fm = _parse_frontmatter(text)
+        assert "name" in fm, "CLI SKILL.md missing frontmatter 'name'"
+        assert fm["name"] == "explore-codebase-cli", (
+            f"name={fm['name']!r}, expected 'explore-codebase-cli'"
+        )
+        assert "description" in fm, "CLI SKILL.md missing frontmatter 'description'"
         assert len(fm["description"]) >= 20, (
             f"description too short ({len(fm['description'])} chars)"
         )

@@ -824,7 +824,7 @@ def test_structured_hints_describe_producer_async_targets(ladybug_graph) -> None
 
 
 def test_structured_hint_find_route_handler(ladybug_graph) -> None:
-    out = find_v2("route", {"path_prefix": "/api"}, graph=ladybug_graph, limit=500, offset=0)
+    out = find_v2("route", {"path_contains": "/api"}, graph=ladybug_graph, limit=500, offset=0)
     assert out.success and out.results
     rid = out.results[0].id
     _assert_structured_hint(
@@ -895,7 +895,7 @@ def test_structured_hint_resolve_none_find_route() -> None:
         },
     )
     _assert_structured_hint(
-        struct, tool="find", args_subset={"kind": "route", "filter": {"path_prefix": "/v1/test"}},
+        struct, tool="find", args_subset={"kind": "route", "filter": {"path_contains": "/v1/test"}},
     )
 
 

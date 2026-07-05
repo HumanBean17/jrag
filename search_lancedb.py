@@ -534,6 +534,15 @@ def _search_one_table(
     for r in rows:
         r["_kind"] = kind
         r["_hybrid"] = False
+        # Populate `_score` from `_distance` so the SearchHit.score reflects
+        # relevance. The hybrid branch sets `_score` from `_relevance_score`
+        # above; without this, non-hybrid (default) search left `_score` unset
+        # and mcp_v2._row_to_search_hit fell back to 0.0 for EVERY hit —
+        # ranking still worked (the sort key uses `_distance` directly) but the
+        # exposed score was always 0.0, making results look unranked.
+        d = r.get("_distance")
+        if d is not None:
+            r["_score"] = l2_distance_to_score(float(d))
         r["start"] = coerce_position_field(r.get("start"))
         r["end"] = coerce_position_field(r.get("end"))
     return rows

@@ -184,6 +184,7 @@ class RouteCaller:
     declaring_symbol_id: str
     confidence: float
     match: str
+    declaring_symbol_fqn: str = ""
     target_service: str = ""
     raw_uri: str = ""
     topic: str = ""
@@ -1671,9 +1672,11 @@ class LadybugGraph:
         *,
         microservice: str | None = None,
         framework: str | None = None,
-        path_prefix: str | None = None,
+        path_contains: str | None = None,
         method: str | None = None,
         limit: int = 100,
+        server_exposed: bool = False,
+        include_kafka: bool = True,
     ) -> list[dict[str, Any]]:
         lim = max(1, min(int(limit), 500))
         params: dict[str, Any] = {"lim": lim}
@@ -1684,12 +1687,28 @@ class LadybugGraph:
         if framework:
             params["framework"] = framework
             preds.append("r.framework = $framework")
-        if path_prefix:
-            params["path_prefix"] = path_prefix
-            preds.append("r.path STARTS WITH $path_prefix")
+        if path_contains:
+            params["path_contains"] = path_contains
+            preds.append("r.path CONTAINS $path_contains")
         if method is not None and method != "":
             params["method"] = method
             preds.append("r.method = $method")
+        if server_exposed:
+            # `routes` CLI surface: only server-exposed entrypoints. The inbound
+            # EXPOSES clause is what makes a route "exposed" by a Symbol — a
+            # client http_endpoint mirror is a call-site reached via HTTP_CALLS,
+            # never EXPOSES'd, so it drops out here regardless of include_kafka.
+            # Kafka topics (kind=kafka_topic) live under the `topics` command;
+            # include_kafka=False (the CLI default) excludes them, while the
+            # OR-branch lets `--include-kafka` opt them back in (still excluding
+            # client mirrors, which never carry an inbound EXPOSES).
+            if include_kafka:
+                preds.append(
+                    "(r.kind = 'kafka_topic' OR EXISTS { MATCH (s:Symbol)-[:EXPOSES]->(r) })"
+                )
+            else:
+                preds.append("r.kind = 'http_endpoint'")
+                preds.append("EXISTS { MATCH (s:Symbol)-[:EXPOSES]->(r) }")
         where = (" WHERE " + " AND ".join(preds)) if preds else ""
         q = (
             f"MATCH (r:Route){where} RETURN {self._ROUTE_RETURN} "
@@ -1743,7 +1762,20 @@ class LadybugGraph:
         path_template: str = "",
         method: str = "",
     ) -> list[RouteCaller]:
-        """HTTP callers via Client; async callers via Producer (two-hop each)."""
+        """HTTP callers via Client; async callers via Producer (two-hop each).
+
+        Mirror-agnostic: cross-service ``HTTP_CALLS``/``ASYNC_CALLS`` edges
+        sometimes terminate at a client-side mirror Route rather than the
+        server Route by id (the enrichment links a Client to whichever Route
+        node it could resolve — a mirror when the server route wasn't found),
+        so the strict edge query can return 0 rows for genuine cross-service
+        callers. We therefore UNION edge-based results (which carry
+        confidence/match/raw_uri metadata) with path/topic-based results that
+        match ``Client``/``Producer`` nodes directly against the entry route's
+        ``microservice`` + ``path_template``/``topic``, deduping by
+        ``caller_node_id`` so edge-based rows win and path-matched rows only
+        fill the gaps (default ``confidence=1.0``, ``match='path_template'``).
+        """
         rid = route_id or ""
         if not rid:
             params: dict[str, Any] = {
@@ -1762,77 +1794,220 @@ class LadybugGraph:
             rid = str(rows[0].get("id") or "")
             if not rid:
                 return []
-        http_rows = self._rows(
+        # Edge-based HTTP callers — carry confidence/match/raw_uri metadata.
+        http_edge_rows = self._rows(
             "MATCH (s:Symbol)-[:DECLARES_CLIENT]->(c:Client)-[e:HTTP_CALLS]->(r:Route {id: $rid}) "
             "RETURN c.id AS caller_node_id, c.microservice AS caller_microservice, "
-            "s.id AS declaring_symbol_id, e.confidence AS confidence, e.match AS match, "
-            "c.target_service AS target_service, e.raw_uri AS raw_uri "
-            "ORDER BY e.confidence DESC, c.id",
+            "s.id AS declaring_symbol_id, s.fqn AS declaring_symbol_fqn, e.confidence AS confidence, e.match AS match, "
+            "c.target_service AS target_service, e.raw_uri AS raw_uri",
             {"rid": rid},
         )
-        async_rows = self._rows(
+        # Path-based HTTP callers (mirror-agnostic): match Client nodes by the
+        # entry route's microservice + path_template + method regardless of
+        # whether an HTTP_CALLS edge reaches this Route node.
+        http_path_rows = self._rows(
+            "MATCH (entry:Route {id: $rid}) "
+            "MATCH (s:Symbol)-[:DECLARES_CLIENT]->(c:Client) "
+            "WHERE (entry.microservice = '' OR c.target_service = entry.microservice) "
+            "AND ("
+            "(entry.path_template <> '' AND c.path_template = entry.path_template) OR "
+            "(entry.path <> '' AND c.path = entry.path) OR "
+            "(entry.path_template <> '' AND c.path = entry.path_template) OR "
+            "(entry.path <> '' AND c.path_template = entry.path)"
+            ") "
+            "AND (entry.method = '' OR c.method = entry.method OR c.method = '') "
+            "RETURN c.id AS caller_node_id, c.microservice AS caller_microservice, "
+            "s.id AS declaring_symbol_id, s.fqn AS declaring_symbol_fqn, c.target_service AS target_service, "
+            "c.path AS raw_uri",
+            {"rid": rid},
+        )
+        # Edge-based async callers — carry confidence/match metadata.
+        async_edge_rows = self._rows(
             "MATCH (s:Symbol)-[:DECLARES_PRODUCER]->(p:Producer)-[e:ASYNC_CALLS]->(r:Route {id: $rid}) "
             "RETURN p.id AS caller_node_id, p.microservice AS caller_microservice, "
-            "s.id AS declaring_symbol_id, e.confidence AS confidence, e.match AS match, "
-            "p.topic AS topic, p.broker AS broker "
-            "ORDER BY e.confidence DESC, p.id",
+            "s.id AS declaring_symbol_id, s.fqn AS declaring_symbol_fqn, e.confidence AS confidence, e.match AS match, "
+            "p.topic AS topic, p.broker AS broker",
             {"rid": rid},
         )
+        # Topic-based async callers (mirror-agnostic): match Producer nodes by
+        # the entry route's topic (kafka_topic routes).
+        async_path_rows = self._rows(
+            "MATCH (entry:Route {id: $rid}) "
+            "MATCH (s:Symbol)-[:DECLARES_PRODUCER]->(p:Producer) "
+            "WHERE entry.topic <> '' AND p.topic = entry.topic "
+            "RETURN p.id AS caller_node_id, p.microservice AS caller_microservice, "
+            "s.id AS declaring_symbol_id, s.fqn AS declaring_symbol_fqn, p.topic AS topic, p.broker AS broker",
+            {"rid": rid},
+        )
+
+        # Dedup by caller_node_id: edge-based rows (with metadata) win; the
+        # path/topic-based rows only fill gaps with default metadata so the
+        # same caller is never reported twice.
+        http_by_id: dict[str, dict[str, Any]] = {}
+        for row in http_edge_rows:
+            cid = str(row.get("caller_node_id") or "")
+            if not cid:
+                continue
+            http_by_id[cid] = {
+                "caller_node_id": cid,
+                "caller_microservice": str(row.get("caller_microservice") or ""),
+                "declaring_symbol_id": str(row.get("declaring_symbol_id") or ""),
+                "declaring_symbol_fqn": str(row.get("declaring_symbol_fqn") or ""),
+                "confidence": float(row.get("confidence") or 0.0),
+                "match": str(row.get("match") or ""),
+                "target_service": str(row.get("target_service") or ""),
+                "raw_uri": str(row.get("raw_uri") or ""),
+            }
+        for row in http_path_rows:
+            cid = str(row.get("caller_node_id") or "")
+            if not cid or cid in http_by_id:
+                continue
+            http_by_id[cid] = {
+                "caller_node_id": cid,
+                "caller_microservice": str(row.get("caller_microservice") or ""),
+                "declaring_symbol_id": str(row.get("declaring_symbol_id") or ""),
+                "declaring_symbol_fqn": str(row.get("declaring_symbol_fqn") or ""),
+                "confidence": 1.0,
+                "match": "path_template",
+                "target_service": str(row.get("target_service") or ""),
+                "raw_uri": str(row.get("raw_uri") or ""),
+            }
+        async_by_id: dict[str, dict[str, Any]] = {}
+        for row in async_edge_rows:
+            pid = str(row.get("caller_node_id") or "")
+            if not pid:
+                continue
+            async_by_id[pid] = {
+                "caller_node_id": pid,
+                "caller_microservice": str(row.get("caller_microservice") or ""),
+                "declaring_symbol_id": str(row.get("declaring_symbol_id") or ""),
+                "declaring_symbol_fqn": str(row.get("declaring_symbol_fqn") or ""),
+                "confidence": float(row.get("confidence") or 0.0),
+                "match": str(row.get("match") or ""),
+                "topic": str(row.get("topic") or ""),
+                "broker": str(row.get("broker") or ""),
+            }
+        for row in async_path_rows:
+            pid = str(row.get("caller_node_id") or "")
+            if not pid or pid in async_by_id:
+                continue
+            async_by_id[pid] = {
+                "caller_node_id": pid,
+                "caller_microservice": str(row.get("caller_microservice") or ""),
+                "declaring_symbol_id": str(row.get("declaring_symbol_id") or ""),
+                "declaring_symbol_fqn": str(row.get("declaring_symbol_fqn") or ""),
+                "confidence": 1.0,
+                "match": "topic",
+                "topic": str(row.get("topic") or ""),
+                "broker": str(row.get("broker") or ""),
+            }
+
         out: list[RouteCaller] = []
-        for row in http_rows:
+        for row in sorted(http_by_id.values(), key=lambda r: (-r["confidence"], r["caller_node_id"])):
             out.append(
                 RouteCaller(
-                    caller_node_id=str(row.get("caller_node_id") or ""),
+                    caller_node_id=row["caller_node_id"],
                     caller_node_kind="client",
-                    caller_microservice=str(row.get("caller_microservice") or ""),
-                    declaring_symbol_id=str(row.get("declaring_symbol_id") or ""),
-                    confidence=float(row.get("confidence") or 0.0),
-                    match=str(row.get("match") or ""),
-                    target_service=str(row.get("target_service") or ""),
-                    raw_uri=str(row.get("raw_uri") or ""),
+                    caller_microservice=row["caller_microservice"],
+                    declaring_symbol_id=row["declaring_symbol_id"],
+                    declaring_symbol_fqn=row["declaring_symbol_fqn"],
+                    confidence=row["confidence"],
+                    match=row["match"],
+                    target_service=row["target_service"],
+                    raw_uri=row["raw_uri"],
                 ),
             )
-        for row in async_rows:
+        for row in sorted(async_by_id.values(), key=lambda r: (-r["confidence"], r["caller_node_id"])):
             out.append(
                 RouteCaller(
-                    caller_node_id=str(row.get("caller_node_id") or ""),
+                    caller_node_id=row["caller_node_id"],
                     caller_node_kind="producer",
-                    caller_microservice=str(row.get("caller_microservice") or ""),
-                    declaring_symbol_id=str(row.get("declaring_symbol_id") or ""),
-                    confidence=float(row.get("confidence") or 0.0),
-                    match=str(row.get("match") or ""),
-                    topic=str(row.get("topic") or ""),
-                    broker=str(row.get("broker") or ""),
+                    caller_microservice=row["caller_microservice"],
+                    declaring_symbol_id=row["declaring_symbol_id"],
+                    declaring_symbol_fqn=row["declaring_symbol_fqn"],
+                    confidence=row["confidence"],
+                    match=row["match"],
+                    topic=row["topic"],
+                    broker=row["broker"],
                 ),
             )
         return out
 
     def trace_request_flow(self, entry_route_id: str, max_hops: int = 5) -> dict[str, Any]:
-        """Inbound HTTP via Client; async inbound via Producer (two-hop each)."""
+        """Inbound HTTP via Client; async inbound via Producer (two-hop each).
+
+        Mirror-agnostic (see ``find_route_callers``): cross-service
+        ``HTTP_CALLS``/``ASYNC_CALLS`` edges may land on a client-side mirror
+        Route rather than the server Route by id, so the edge-based inbound
+        query is UNIONED with a path/topic-based query that matches
+        ``Client``/``Producer`` nodes against the entry route's
+        ``microservice`` + ``path_template``/``topic``. Rows are deduped by
+        ``caller_node_id`` (edge-based win) so each inbound caller appears once.
+        """
         hops = max(1, min(int(max_hops), 8))
-        inbound_http = self._rows(
+        inbound_http_edge = self._rows(
             f"MATCH (entry:Route {{id: $rid}})<-[e:HTTP_CALLS]-(caller:Client)"
             "<-[:DECLARES_CLIENT]-(decl:Symbol) "
             f"OPTIONAL MATCH (origin:Symbol)-[:CALLS*0..{hops}]->(decl) "
             "RETURN DISTINCT caller.id AS caller_node_id, 'client' AS caller_node_kind, "
             "decl.id AS declaring_symbol_id, decl.fqn AS declaring_symbol_fqn, "
             "caller.microservice AS microservice, e.confidence AS confidence, "
-            "e.match AS match, origin.id AS origin_symbol_id, origin.fqn AS origin_fqn "
-            "ORDER BY confidence DESC, caller_node_id",
+            "e.match AS match, origin.id AS origin_symbol_id, origin.fqn AS origin_fqn",
             {"rid": entry_route_id},
         )
-        inbound_async = self._rows(
+        inbound_http_path = self._rows(
+            "MATCH (entry:Route {id: $rid}) "
+            "MATCH (caller:Client)<-[:DECLARES_CLIENT]-(decl:Symbol) "
+            "WHERE (entry.microservice = '' OR caller.target_service = entry.microservice) "
+            "AND ("
+            "(entry.path_template <> '' AND caller.path_template = entry.path_template) OR "
+            "(entry.path <> '' AND caller.path = entry.path) OR "
+            "(entry.path_template <> '' AND caller.path = entry.path_template) OR "
+            "(entry.path <> '' AND caller.path_template = entry.path)"
+            ") "
+            "AND (entry.method = '' OR caller.method = entry.method OR caller.method = '') "
+            f"OPTIONAL MATCH (origin:Symbol)-[:CALLS*0..{hops}]->(decl) "
+            "RETURN DISTINCT caller.id AS caller_node_id, 'client' AS caller_node_kind, "
+            "decl.id AS declaring_symbol_id, decl.fqn AS declaring_symbol_fqn, "
+            "caller.microservice AS microservice, 1.0 AS confidence, "
+            "'path_template' AS match, origin.id AS origin_symbol_id, origin.fqn AS origin_fqn",
+            {"rid": entry_route_id},
+        )
+        inbound_async_edge = self._rows(
             f"MATCH (entry:Route {{id: $rid}})<-[e:ASYNC_CALLS]-(caller:Producer)"
             "<-[:DECLARES_PRODUCER]-(decl:Symbol) "
             f"OPTIONAL MATCH (origin:Symbol)-[:CALLS*0..{hops}]->(decl) "
             "RETURN DISTINCT caller.id AS caller_node_id, 'producer' AS caller_node_kind, "
             "decl.id AS declaring_symbol_id, decl.fqn AS declaring_symbol_fqn, "
             "caller.microservice AS microservice, e.confidence AS confidence, "
-            "e.match AS match, origin.id AS origin_symbol_id, origin.fqn AS origin_fqn "
-            "ORDER BY confidence DESC, caller_node_id",
+            "e.match AS match, origin.id AS origin_symbol_id, origin.fqn AS origin_fqn",
             {"rid": entry_route_id},
         )
-        inbound = inbound_http + inbound_async
+        inbound_async_path = self._rows(
+            "MATCH (entry:Route {id: $rid}) "
+            "MATCH (caller:Producer)<-[:DECLARES_PRODUCER]-(decl:Symbol) "
+            "WHERE entry.topic <> '' AND caller.topic = entry.topic "
+            f"OPTIONAL MATCH (origin:Symbol)-[:CALLS*0..{hops}]->(decl) "
+            "RETURN DISTINCT caller.id AS caller_node_id, 'producer' AS caller_node_kind, "
+            "decl.id AS declaring_symbol_id, decl.fqn AS declaring_symbol_fqn, "
+            "caller.microservice AS microservice, 1.0 AS confidence, "
+            "'topic' AS match, origin.id AS origin_symbol_id, origin.fqn AS origin_fqn",
+            {"rid": entry_route_id},
+        )
+        # Dedup by caller_node_id (edge-based rows carry real confidence/match;
+        # path-based rows fill gaps). Preserve the origin columns from whichever
+        # row wins (the OPTIONAL MATCH over CALLS is the same for both).
+        inbound: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for row in inbound_http_edge + inbound_http_path + inbound_async_edge + inbound_async_path:
+            cid = str(row.get("caller_node_id") or "")
+            if not cid or cid in seen:
+                continue
+            seen.add(cid)
+            inbound.append(row)
+        inbound.sort(
+            key=lambda r: (-float(r.get("confidence") or 0.0), str(r.get("caller_node_id") or ""))
+        )
         outbound = self._rows(
             f"MATCH (handler:Symbol)-[:EXPOSES]->(entry:Route {{id: $rid}}) "
             f"OPTIONAL MATCH (handler)-[:CALLS*0..{hops}]->(next:Symbol) "
@@ -1887,7 +2062,7 @@ class LadybugGraph:
         microservice: str | None = None,
         client_kind: str | None = None,
         target_service: str | None = None,
-        path_prefix: str | None = None,
+        path_contains: str | None = None,
         method: str | None = None,
         limit: int = 100,
     ) -> list[dict[str, Any]]:
@@ -1903,9 +2078,9 @@ class LadybugGraph:
         if target_service:
             params["target_service"] = target_service
             preds.append("c.target_service = $target_service")
-        if path_prefix:
-            params["path_prefix"] = path_prefix
-            preds.append("c.path STARTS WITH $path_prefix")
+        if path_contains:
+            params["path_contains"] = path_contains
+            preds.append("c.path CONTAINS $path_contains")
         if method is not None and method != "":
             params["method"] = method
             preds.append("c.method = $method")
@@ -1948,7 +2123,7 @@ class LadybugGraph:
         *,
         microservice: str | None = None,
         producer_kind: str | None = None,
-        topic_prefix: str | None = None,
+        topic_contains: str | None = None,
         limit: int = 100,
     ) -> list[dict[str, Any]]:
         lim = max(1, min(int(limit), 500))
@@ -1960,9 +2135,9 @@ class LadybugGraph:
         if producer_kind:
             params["producer_kind"] = producer_kind
             preds.append("p.producer_kind = $producer_kind")
-        if topic_prefix:
-            params["topic_prefix"] = topic_prefix
-            preds.append("p.topic STARTS WITH $topic_prefix")
+        if topic_contains:
+            params["topic_contains"] = topic_contains
+            preds.append("p.topic CONTAINS $topic_contains")
         where = (" WHERE " + " AND ".join(preds)) if preds else ""
         q = (
             f"MATCH (p:Producer){where} RETURN {self._PRODUCER_RETURN} "

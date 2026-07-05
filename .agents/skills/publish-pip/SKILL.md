@@ -47,28 +47,34 @@ adding a runtime dependency to `pyproject.toml`.
    ```bash
    rm -rf dist build *.egg-info
    ```
-4. **Build** sdist + wheel:
+4. **Sync agent artifacts** — ensure install_data copies match dev source:
+   ```bash
+   .venv/bin/python scripts/sync_agent_artifacts.py --check
+   ```
+   If this fails, run `.venv/bin/python scripts/sync_agent_artifacts.py` to sync,
+   then commit the changes before publishing.
+5. **Build** sdist + wheel:
    ```bash
    .venv/bin/python -m build
    ```
    Expect `dist/java_codebase_rag-<ver>-py3-none-any.whl` and `.tar.gz`.
-5. **Verify the built version** before upload (catches a forgotten bump):
+6. **Verify the built version** before upload (catches a forgotten bump):
    ```bash
    .venv/bin/python -c "import zipfile,glob; w=glob.glob('dist/*.whl')[0]; z=zipfile.ZipFile(w); m=[n for n in z.namelist() if n.endswith('METADATA')][0]; print([l for l in z.read(m).decode().splitlines() if l.startswith('Version')][0])"
    ```
-6. **Upload** (permanent — confirm the version is right first):
+7. **Upload** (permanent — confirm the version is right first):
    ```bash
    .venv/bin/twine upload dist/*
    ```
    twine prints the live URL on success:
    `https://pypi.org/project/java-codebase-rag/<ver>/`.
-7. **Verify on PyPI** via the JSON API. ⚠️ Python's `urllib`/`requests` SSL
+8. **Verify on PyPI** via the JSON API. ⚠️ Python's `urllib`/`requests` SSL
    verification fails locally (missing CA bundle) — set `SSL_CERT_FILE`:
    ```bash
    CERT=$(.venv/bin/python -c "import certifi; print(certifi.where())")
    SSL_CERT_FILE="$CERT" .venv/bin/python -c "import urllib.request,json; d=json.load(urllib.request.urlopen('https://pypi.org/pypi/java-codebase-rag/json')); print('latest:', d['info']['version'])"
    ```
-8. **Commit + push the version bump** so the repo matches what was published
+9. **Commit + push the version bump** so the repo matches what was published
    (commit convention: `bump version to X.Y.Z`). `dist/`, `build/`, and
    `*.egg-info` are gitignored — do not commit them.
 
@@ -79,6 +85,7 @@ adding a runtime dependency to `pyproject.toml`.
 | Bump | edit `pyproject.toml` `version` |
 | Tooling | `.venv/bin/pip install build twine` |
 | Clean | `rm -rf dist build *.egg-info` |
+| Sync | `.venv/bin/python scripts/sync_agent_artifacts.py --check` |
 | Build | `.venv/bin/python -m build` |
 | Verify wheel | read `Version:` from `dist/*.whl` METADATA |
 | Upload | `.venv/bin/twine upload dist/*` |

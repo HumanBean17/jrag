@@ -441,12 +441,48 @@ def test_list_routes_filter_by_framework(ladybug_graph_route_extraction_smoke) -
     assert all(r["framework"] == "spring_mvc" for r in mvc)
 
 
+def test_list_routes_server_exposed_filters_kafka_and_client_mirrors(
+    ladybug_graph_route_extraction_smoke,
+) -> None:
+    """Regression (T8): the `routes` CLI surface (``server_exposed=True``) is the
+    HTTP-server-route listing.
+
+    ``include_kafka=False`` (the CLI default) excludes ``kafka_topic`` rows
+    (they belong to ``topics``); client ``http_endpoint`` mirrors (call-sites
+    with no inbound EXPOSES from a Symbol) never appear in either mode.
+    ``include_kafka=True`` admits kafka topics back while still excluding mirrors.
+    The library default (``server_exposed=False``) is unchanged.
+    """
+    g = ladybug_graph_route_extraction_smoke
+
+    all_routes = g.list_routes(limit=200)  # library default: every Route
+    http_only = g.list_routes(limit=200, server_exposed=True, include_kafka=False)
+    assert http_only, "expected at least one server-exposed HTTP route"
+    assert all(r["kind"] == "http_endpoint" for r in http_only), (
+        f"include_kafka=False leaked a non-http_endpoint route: {http_only}"
+    )
+    assert len(http_only) <= len(all_routes)
+
+    with_kafka = g.list_routes(limit=200, server_exposed=True, include_kafka=True)
+    assert len(with_kafka) >= len(http_only)
+
+    # No http_endpoint without an inbound EXPOSES (a client mirror) is ever
+    # returned in either server_exposed mode — mirrors are call-sites, not routes.
+    for mode_rows in (http_only, with_kafka):
+        for r in mode_rows:
+            if r["kind"] == "http_endpoint":
+                assert g.find_route_handlers(route_id=r["id"]), (
+                    f"server_exposed returned an http_endpoint with no inbound EXPOSES "
+                    f"(client mirror leaked): {r}"
+                )
+
+
 def test_find_route_handlers_endpoint_route(ladybug_graph_route_extraction_smoke) -> None:
     g = ladybug_graph_route_extraction_smoke
     rows = g.list_routes(
         framework="spring_mvc",
         microservice="service-a",
-        path_prefix="/api/users",
+        path_contains="/api/users",
         method="GET",
         limit=10,
     )
@@ -460,7 +496,7 @@ def test_find_route_handlers_endpoint_route(ladybug_graph_route_extraction_smoke
 
 def test_find_route_handlers_feign_route_returns_empty(ladybug_graph_route_extraction_smoke) -> None:
     g = ladybug_graph_route_extraction_smoke
-    rows = g.list_routes(framework="feign", path_prefix="/dupbase/same", limit=10)
+    rows = g.list_routes(framework="feign", path_contains="/dupbase/same", limit=10)
     assert rows == []
 
 
@@ -500,6 +536,9 @@ def test_find_route_callers_returns_route_caller_client_node(ladybug_db_path_cro
     http_callers = [c for c in callers if c.match]
     assert any(c.caller_node_kind == "client" for c in http_callers)
     assert all(c.caller_node_id for c in http_callers)
+    # Caller identity is the declaring Symbol fqn (the method owning the
+    # Client), not the call-site path — so `callers <route>` can name WHO calls.
+    assert all(c.declaring_symbol_fqn for c in http_callers)
 
 
 def test_trace_request_flow_inbound_includes_caller_node_id(ladybug_db_path_cross_service_smoke: Path) -> None:

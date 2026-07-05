@@ -563,6 +563,7 @@ def _cmd_install(args: argparse.Namespace) -> int:
         agents=args.agent,  # list of str (may be empty)
         scope=args.scope,
         model=args.model,
+        surface=args.surface,
         source_root=None,  # None means cwd; installer confirms interactively
         quiet=bool(args.quiet),
         verbose=bool(args.verbose),
@@ -882,6 +883,17 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         help="Embedding model path or 'auto' (default: auto).",
+    )
+    install.add_argument(
+        "--surface",
+        choices=["mcp", "cli"],
+        default=None,
+        help=(
+            "Agent surface to install: 'mcp' (stdio MCP server + explore-codebase "
+            "skill + explorer-rag-enhanced subagent) or 'cli' (jrag console-script "
+            "skill + explorer-rag-cli subagent, no MCP entry). Omit to choose "
+            "interactively; non-interactive mode defaults to 'mcp'."
+        ),
     )
     _add_verbosity_flags(install)
     install.set_defaults(handler=_cmd_install)

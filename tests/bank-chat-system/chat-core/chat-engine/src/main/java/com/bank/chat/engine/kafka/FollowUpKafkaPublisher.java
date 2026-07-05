@@ -24,6 +24,7 @@ public class FollowUpKafkaPublisher {
         kafkaTemplate.send(ChatTopics.OPERATOR_NOTIFICATIONS, event.getConversationId(), event);
     }
 
+    @CodebaseProducer(topic = "banking.chat.compliance.review", producerKind = "kafka_send")
     public void publishComplianceReview(InternalEvent event) {
         kafkaTemplate.send(ChatTopics.COMPLIANCE_REVIEW, event.getConversationId(), event);
     }

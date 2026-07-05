@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "java-codebase-rag"
-version = "0.6.7"
+version = "0.7.0"
 description = "MCP server for semantic + structural search over Java codebases"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -59,6 +59,7 @@ Issues = "https://github.com/HumanBean17/java-codebase-rag/issues"
 [project.scripts]
 java-codebase-rag = "java_codebase_rag.cli:_console_script_main"
 java-codebase-rag-mcp = "server:main"
+jrag = "java_codebase_rag.jrag:_console_script_main"
 
 [tool.setuptools]
 packages = ["java_codebase_rag"]
@@ -68,6 +69,7 @@ py-modules = [
     "build_ast_graph",
     "chunk_heuristics",
     "graph_enrich",
+    "graph_types",
     "index_common",
     "java_index_flow_lancedb",
     "java_index_v1_common",
@@ -77,6 +79,7 @@ py-modules = [
     "mcp_v2",
     "path_filtering",
     "pr_analysis",
+    "resolve_service",
     "search_lancedb",
     "server",
 ]

@@ -92,6 +92,8 @@ VALID_RESOLVE_REASONS: frozenset[str] = frozenset((
     "route_method_path",
     "client_target",
     "client_target_path",
+    "client_name",
+    "client_fqn",
     "producer_topic",
     "producer_topic_prefix",
 ))
@@ -428,6 +430,8 @@ ResolveReason = Literal[
     "route_method_path",
     "client_target",
     "client_target_path",
+    "client_name",
+    "client_fqn",
     "producer_topic",
     "producer_topic_prefix",
 ]

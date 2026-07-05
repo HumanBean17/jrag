@@ -470,7 +470,7 @@ expect Feign → README §3c brownfield.
 **Verification prompt:**
 
 > Rebuild, then `find` with
-> `{"kind":"route","filter":{"path_prefix":"<your-prefix>","http_method":"<METHOD>"},"limit":20}`.
+> `{"kind":"route","filter":{"path_contains":"<your-substring>","http_method":"<METHOD>"},"limit":20}`.
 > `describe` the route; `neighbors` `in` / `EXPOSES` should reach your
 > handler.
 

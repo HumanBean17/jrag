@@ -156,12 +156,12 @@ For `find`, `filter` is required — `{}` means no predicates. **Strict frame:**
 | Keys | Applies to |
 | ---- | ---------- |
 | `microservice`, `module` | All kinds |
-| `role`, `exclude_roles`, `annotation`, `capability`, `fqn_prefix`, `symbol_kind`, `symbol_kinds` | **symbol** |
-| `http_method`, `path_prefix`, `framework` | **route** |
-| `source_layer`, `client_kind`, `target_service`, `target_path_prefix`, `http_method` | **client** |
-| `source_layer`, `producer_kind`, `topic_prefix` | **producer** |
+| `role`, `exclude_roles`, `annotation`, `capability`, `fqn_contains`, `symbol_kind`, `symbol_kinds` | **symbol** |
+| `http_method`, `path_contains`, `framework` | **route** |
+| `source_layer`, `client_kind`, `target_service`, `target_path_contains`, `http_method` | **client** |
+| `source_layer`, `producer_kind`, `topic_contains` | **producer** |
 
-No wildcards in prefix fields — use `search(query=…)` for fuzzy text.
+Substring fields match literally via `CONTAINS` — no `*`/`?` metacharacters; use `search(query=…)` for fuzzy text.
 
 ### Identifier resolution (`resolve`)
 
@@ -260,9 +260,9 @@ Use `Grep` for content search across files:
 | ------- | --- |
 | Graph returns empty | Verify with `Grep`/`Read` against source files; index may be stale |
 | `neighbors` validation error | Ensure `direction` and `edge_types` are set |
-| Cannot find symbol via graph | Try `resolve`, then `search`, then `find` with `fqn_prefix`; fallback `Grep` |
-| `find` returns too much | Add `microservice`, `fqn_prefix`, `path_prefix`, `topic_prefix` |
-| Empty `search` | Try `table="all"`; `find` with `fqn_prefix`; `Grep` directly |
+| Cannot find symbol via graph | Try `resolve`, then `search`, then `find` with `fqn_contains`; fallback `Grep` |
+| `find` returns too much | Add `microservice`, `fqn_contains`, `path_contains`, `topic_contains` |
+| Empty `search` | Try `table="all"`; `find` with `fqn_contains`; `Grep` directly |
 | Empty results across tools | Index missing/stale → `Grep`/`Glob`/`Read`; ask operator to rebuild |
 | Graph vs file disagree | Trust the file; report stale index |
 | Mixed composed families on one id | Split calls — type keys need type id; override keys need method id |

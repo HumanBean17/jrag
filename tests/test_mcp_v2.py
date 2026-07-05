@@ -184,8 +184,8 @@ def test_find_symbol_projection_includes_symbol_kind(ladybug_graph) -> None:
     assert all(isinstance(r.symbol_kind, str) and r.symbol_kind for r in out.results)
 
 
-def test_find_route_by_path_prefix(ladybug_graph) -> None:
-    out = find_v2("route", {"path_prefix": "/api"}, graph=ladybug_graph)
+def test_find_route_by_path_contains(ladybug_graph) -> None:
+    out = find_v2("route", {"path_contains": "/api"}, graph=ladybug_graph)
     assert out.success is True
     assert isinstance(out.results, list)
 
@@ -239,7 +239,7 @@ def test_find_client_by_target_service(ladybug_graph) -> None:
     assert all(r.fqn.startswith(f"{target_service} ") for r in out.results)
 
 
-def test_find_client_by_path_prefix(ladybug_graph) -> None:
+def test_find_client_by_path_contains(ladybug_graph) -> None:
     all_clients = find_v2("client", {}, graph=ladybug_graph)
     assert all_clients.success is True
     sample = next((r for r in all_clients.results if "/" in r.fqn), None)
@@ -249,21 +249,21 @@ def test_find_client_by_path_prefix(ladybug_graph) -> None:
     path = parts[-1] if parts else ""
     if not path.startswith("/"):
         pytest.skip("sample client path is unavailable")
-    prefix = path[: min(len(path), 5)]
-    out = find_v2("client", {"target_path_prefix": prefix}, graph=ladybug_graph)
+    needle = path[: min(len(path), 5)]
+    out = find_v2("client", {"target_path_contains": needle}, graph=ladybug_graph)
     assert out.success is True
     assert out.results
     for ref in out.results:
         bits = ref.fqn.split(" ")
         assert bits
-        assert bits[-1].startswith(prefix)
+        assert needle in bits[-1]
 
 
 def test_find_cross_kind_filter_fields_return_failure(ladybug_graph) -> None:
-    out = find_v2("symbol", {"path_prefix": "/api"}, graph=ladybug_graph)
+    out = find_v2("symbol", {"path_contains": "/api"}, graph=ladybug_graph)
     assert out.success is False
     assert out.message is not None
-    assert "path_prefix" in out.message
+    assert "path_contains" in out.message
     assert "kind='symbol'" in out.message
 
 
@@ -276,10 +276,10 @@ def test_find_unknown_filter_key_returns_failure(ladybug_graph) -> None:
 
 
 def test_find_symbol_only_field_with_kind_client_returns_failure(ladybug_graph) -> None:
-    out = find_v2("client", {"fqn_prefix": "com.example"}, graph=ladybug_graph)
+    out = find_v2("client", {"fqn_contains": "com.example"}, graph=ladybug_graph)
     assert out.success is False
     assert out.message is not None
-    assert "fqn_prefix" in out.message
+    assert "fqn_contains" in out.message
     assert "kind='client'" in out.message
 
 
@@ -713,10 +713,10 @@ def test_neighbors_flat_labels_select_columns_per_edge_type() -> None:
 
 def test_search_cross_kind_filter_returns_failure(monkeypatch, ladybug_graph) -> None:
     monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
-    out = search_v2("ChatService", filter={"path_prefix": "/api"}, graph=ladybug_graph)
+    out = search_v2("ChatService", filter={"path_contains": "/api"}, graph=ladybug_graph)
     assert out.success is False
     assert out.message is not None
-    assert "path_prefix" in out.message
+    assert "path_contains" in out.message
     assert "kind='symbol'" in out.message
 
 
@@ -811,10 +811,10 @@ def test_neighbors_filter_unknown_key_returns_failure(ladybug_graph) -> None:
 
 def test_neighbors_filter_cross_kind_on_neighbor_returns_failure(ladybug_graph) -> None:
     mid = _method_id_with_calls(ladybug_graph, "out")
-    out = neighbors_v2(mid, direction="out", edge_types=["CALLS"], filter={"path_prefix": "/api"}, graph=ladybug_graph)
+    out = neighbors_v2(mid, direction="out", edge_types=["CALLS"], filter={"path_contains": "/api"}, graph=ladybug_graph)
     assert out.success is False
     assert out.message is not None
-    assert "path_prefix" in out.message
+    assert "path_contains" in out.message
     assert "kind='symbol'" in out.message
 
 
@@ -830,69 +830,6 @@ def test_filter_invalid_json_returns_failure(monkeypatch, ladybug_graph) -> None
     assert out.success is False
     assert out.message is not None
     assert "JSON" in out.message
-
-
-def test_wildcard_in_fqn_prefix_rejected(ladybug_graph) -> None:
-    out = find_v2("symbol", {"fqn_prefix": "com.foo.*"}, graph=ladybug_graph)
-    assert out.success is False
-    assert out.message
-    assert "fqn_prefix" in out.message
-    assert "search(query=..." in out.message
-
-
-def test_wildcard_in_path_prefix_rejected(ladybug_graph) -> None:
-    out = find_v2("route", {"path_prefix": "/api/*"}, graph=ladybug_graph)
-    assert out.success is False
-    assert out.message
-    assert "path_prefix" in out.message
-    assert "search(query=..." in out.message
-
-
-def test_wildcard_in_target_path_prefix_rejected(ladybug_graph) -> None:
-    out = find_v2("client", {"target_path_prefix": "/api/*"}, graph=ladybug_graph)
-    assert out.success is False
-    assert out.message
-    assert "target_path_prefix" in out.message
-    assert "search(query=..." in out.message
-
-
-def test_wildcard_question_mark_in_fqn_prefix_rejected(ladybug_graph) -> None:
-    out = find_v2("symbol", {"fqn_prefix": "com.foo.?"}, graph=ladybug_graph)
-    assert out.success is False
-    assert out.message
-    assert "fqn_prefix" in out.message
-
-
-def test_search_wildcard_in_fqn_prefix_rejected_without_run_search(monkeypatch, ladybug_graph) -> None:
-    calls: list[int] = []
-
-    def boom(*_a, **_k):
-        calls.append(1)
-        return _fake_search_rows()
-
-    monkeypatch.setattr("mcp_v2.run_search", boom)
-    out = search_v2("anything", filter={"fqn_prefix": "com.*"}, graph=ladybug_graph)
-    assert out.success is False
-    assert out.message
-    assert "fqn_prefix" in out.message
-    assert calls == []
-
-
-def test_neighbors_wildcard_in_filter_rejected_before_graph_query(ladybug_graph) -> None:
-    class ExplodeGraph:
-        def _rows(self, *_a, **_k) -> list:
-            raise AssertionError("graph must not be queried when wildcard rejects filter")
-
-    out = neighbors_v2(
-        "sym:unused",
-        direction="out",
-        edge_types=["CALLS"],
-        filter={"fqn_prefix": "com.*"},
-        graph=ExplodeGraph(),  # type: ignore[arg-type]
-    )
-    assert out.success is False
-    assert out.message
-    assert "fqn_prefix" in out.message
 
 
 def test_describe_by_fqn_returns_symbol(ladybug_graph) -> None:
@@ -1029,25 +966,18 @@ def test_empty_filter_returns_full_result_set(ladybug_graph) -> None:
 
 def test_fail_loud_counter_increments_on_applicability_error(ladybug_graph) -> None:
     before = filter_frame_counters().get("applicability", 0)
-    out = find_v2("symbol", {"path_prefix": "/api"}, graph=ladybug_graph)
+    out = find_v2("symbol", {"path_contains": "/api"}, graph=ladybug_graph)
     assert out.success is False
     assert filter_frame_counters().get("applicability", 0) == before + 1
 
 
-def test_fail_loud_counter_increments_on_wildcard_rejection(ladybug_graph) -> None:
-    before = filter_frame_counters().get("wildcard", 0)
-    out = find_v2("symbol", {"fqn_prefix": "com.foo.*"}, graph=ladybug_graph)
-    assert out.success is False
-    assert filter_frame_counters().get("wildcard", 0) == before + 1
-
-
 def test_fail_loud_counter_categories_are_distinct(ladybug_graph) -> None:
     b_app = filter_frame_counters().get("applicability", 0)
-    b_wild = filter_frame_counters().get("wildcard", 0)
-    find_v2("symbol", {"path_prefix": "/x"}, graph=ladybug_graph)
-    find_v2("symbol", {"fqn_prefix": "com.*"}, graph=ladybug_graph)
+    b_unknown = filter_frame_counters().get("unknown_key", 0)
+    find_v2("symbol", {"path_contains": "/x"}, graph=ladybug_graph)  # applicability
+    find_v2("symbol", {"typo_key": "x"}, graph=ladybug_graph)  # unknown_key
     assert filter_frame_counters().get("applicability", 0) == b_app + 1
-    assert filter_frame_counters().get("wildcard", 0) == b_wild + 1
+    assert filter_frame_counters().get("unknown_key", 0) == b_unknown + 1
 
 
 def test_fail_loud_counter_survives_multiple_calls(ladybug_graph) -> None:
@@ -1313,7 +1243,7 @@ def test_resolve_wildcard_identifier_rejected(ladybug_graph) -> None:
 
 
 def test_resolve_every_reason_in_closed_set_appears() -> None:
-    from mcp_v2 import (
+    from resolve_service import (
         _resolve_client_candidates,
         _resolve_producer_candidates,
         _resolve_route_candidates,
