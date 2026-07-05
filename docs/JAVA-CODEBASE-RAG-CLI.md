@@ -345,3 +345,42 @@ Prefer **`java-codebase-rag reprocess --graph-only`** when you only need Ladybug
 - [README.md](../README.md) — env vars, MCP tool table, ignore layout.
 - [CODEBASE_REQUIREMENTS.md](./CODEBASE_REQUIREMENTS.md) — repo layout, brownfield, when to rebuild.
 - [MANUAL-VERIFICATION-CHECKLIST.md](./MANUAL-VERIFICATION-CHECKLIST.md) — phased checks that mix CLI + MCP.
+
+## `jrag` command — search CLI
+
+The **`jrag`** command provides semantic search over the LanceDB index. This is the CLI surface for search (see MCP `search` tool in AGENT-GUIDE.md for the programmatic interface).
+
+### `jrag search`
+
+Semantic search via natural language queries. Returns one row per symbol/type by default; use `--chunks` to restore chunk-level output.
+
+```bash
+# Basic search (deduped by default)
+jrag search "authentication service"
+
+# Show all chunks (no dedup)
+jrag search "authentication service" --chunks
+
+# Hybrid search (vector + keyword)
+jrag search "login" --hybrid
+
+# With score breakdown
+jrag search "controller" --explain
+
+# With pagination
+jrag search "service" --limit 20 --offset 20
+```
+
+**Key flags:**
+- `--table {java,sql,yaml,all}` — Which content table to search (default: `java`).
+- `--hybrid` — Enable vector + keyword hybrid search (single table only).
+- `--explain` — Include score breakdown (distance, role weight, symbol bonus).
+- `--chunks` — Show every chunk (default collapses to one row per symbol/type).
+- `--limit N` — Max hits to return (default 10).
+- `--offset N` — Skip N hits (pagination).
+- `--min-score N` — Drop hits below this score floor (default 0.0).
+- `--path-contains SUBSTR` — Narrow to chunks whose filename contains this substring.
+- `--role ROLE` — Filter by role (e.g., `CONTROLLER`, `SERVICE`).
+- `--framework FRAMEWORK` — Filter by framework (e.g., `spring_mvc`, `webflux`).
+
+**Breaking change (PR-SEARCH-2):** By default, `jrag search` now returns one row per `primary_type_fqn` (symbol/type) to prevent a single type from flooding the page. The `--chunks` flag restores the previous chunk-level output. When deduped, each hit shows a `chunks=N` field indicating how many chunks were collapsed into that hit.

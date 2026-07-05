@@ -1830,3 +1830,96 @@ def test_search_explain_false_omits_score_components(monkeypatch, ladybug_graph)
     assert hit2.score_components is None
 
 
+
+
+def test_search_dedup_default_is_true(monkeypatch, ladybug_graph) -> None:
+    """search tool defaults to dedup=True (per-symbol dedup enabled)."""
+    captured_kwargs: dict = {}
+
+    def mock_run_search(query, **kwargs):
+        captured_kwargs.update(kwargs)
+        captured_kwargs["query"] = query
+        return [
+            {
+                "id": "chunk:1",
+                "symbol_id": "sym:1",
+                "primary_type_fqn": "com.example.TypeA",
+                "_score": 0.95,
+                "text": "TypeA sample",
+                "microservice": "ms",
+                "module": "mod",
+                "role": "SERVICE",
+                "filename": "a.java",
+                "start": {"line": 10},
+                "end": {"line": 20},
+            }
+        ]
+
+    monkeypatch.setattr("mcp_v2.run_search", mock_run_search)
+
+    out = search_v2("TypeA", graph=ladybug_graph)
+    assert out.success is True
+    # Default should be dedup=True
+    assert captured_kwargs.get("dedup_by_fqn") is True, f"expected dedup_by_fqn=True by default, got {captured_kwargs.get('dedup_by_fqn')}"
+
+
+def test_search_chunks_field_present_when_deduped(monkeypatch, ladybug_graph) -> None:
+    """SearchHit.chunks field is present when rows have _chunks_collapsed."""
+    def mock_run_search(query, **kwargs):
+        # Return a row with _chunks_collapsed (simulating dedup output)
+        return [
+            {
+                "id": "chunk:1",
+                "symbol_id": "sym:1",
+                "primary_type_fqn": "com.example.TypeA",
+                "_score": 0.95,
+                "_chunks_collapsed": 3,  # Dedup collapsed 3 chunks into this one
+                "text": "TypeA sample",
+                "microservice": "ms",
+                "module": "mod",
+                "role": "SERVICE",
+                "filename": "a.java",
+                "start": {"line": 10},
+                "end": {"line": 20},
+            }
+        ]
+
+    monkeypatch.setattr("mcp_v2.run_search", mock_run_search)
+
+    out = search_v2("TypeA", graph=ladybug_graph)
+    assert out.success is True
+    assert len(out.results) == 1
+    hit = out.results[0]
+    # chunks field should be present and equal to _chunks_collapsed
+    assert hasattr(hit, "chunks"), "SearchHit should have chunks field"
+    assert hit.chunks == 3, f"expected chunks=3, got {hit.chunks}"
+
+
+def test_search_chunks_flag_sets_dedup_false(monkeypatch, ladybug_graph) -> None:
+    """chunks=True parameter sets dedup=False (opt-out of per-symbol dedup)."""
+    captured_kwargs: dict = {}
+
+    def mock_run_search(query, **kwargs):
+        captured_kwargs.update(kwargs)
+        captured_kwargs["query"] = query
+        return [
+            {
+                "id": "chunk:1",
+                "symbol_id": "sym:1",
+                "primary_type_fqn": "com.example.TypeA",
+                "_score": 0.95,
+                "text": "TypeA sample",
+                "microservice": "ms",
+                "module": "mod",
+                "role": "SERVICE",
+                "filename": "a.java",
+                "start": {"line": 10},
+                "end": {"line": 20},
+            }
+        ]
+
+    monkeypatch.setattr("mcp_v2.run_search", mock_run_search)
+
+    out = search_v2("TypeA", dedup=False, graph=ladybug_graph)
+    assert out.success is True
+    assert captured_kwargs.get("dedup_by_fqn") is False, f"expected dedup_by_fqn=False with dedup=False, got {captured_kwargs.get('dedup_by_fqn')}"

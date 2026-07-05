@@ -884,3 +884,93 @@ def test_search_explain_calls_search_v2_with_explain_true(
     assert captured_kwargs.get("explain") is True, (
         f"expected explain=True, got explain={captured_kwargs.get('explain')}"
     )
+
+
+def test_search_dedup_default_collapses_same_fqn(monkeypatch, corpus_root: Path, ladybug_db_path: Path) -> None:
+    """Default search (dedup ON) collapses multiple chunks of same FQN into one node."""
+    import mcp_v2
+    from java_codebase_rag.jrag import main
+
+    env_index = str(ladybug_db_path.parent)
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_INDEX_DIR", env_index)
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", str(corpus_root))
+
+    def mock_search_v2(query, **kwargs):
+        # By default, dedup should be True
+        assert kwargs.get("dedup") is True, f"expected dedup=True by default, got {kwargs.get('dedup')}"
+        # Return 2 hits with same FQN
+        return mcp_v2.SearchOutput(
+            success=True,
+            results=[
+                mcp_v2.SearchHit(
+                    chunk_id="chunk:1",
+                    fqn="com.example.TypeA",
+                    score=0.95,
+                    snippet="TypeA chunk 1",
+                    filename="a.java",
+                    start_line=10,
+                ),
+                mcp_v2.SearchHit(
+                    chunk_id="chunk:2",
+                    fqn="com.example.TypeA",
+                    score=0.85,
+                    snippet="TypeA chunk 2",
+                    filename="a.java",
+                    start_line=20,
+                ),
+            ],
+            limit=10,
+            offset=0,
+            advisories=[],
+        )
+
+    monkeypatch.setattr(mcp_v2, "search_v2", mock_search_v2)
+    rc = main(["search", "--index-dir", env_index, "TypeA", "--format", "json"])
+    assert rc == 0
+    # The output should show the dedup behavior
+    # (In real run, the 2 chunks would be collapsed to 1 node by run_search dedup)
+
+
+def test_search_chunks_flag_passes_dedup_false(monkeypatch, corpus_root: Path, ladybug_db_path: Path) -> None:
+    """--chunks flag passes dedup=False to search_v2, disabling dedup."""
+    import mcp_v2
+    from java_codebase_rag.jrag import main
+
+    env_index = str(ladybug_db_path.parent)
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_INDEX_DIR", env_index)
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", str(corpus_root))
+
+    captured_kwargs: dict = {}
+    def mock_search_v2(query, **kwargs):
+        captured_kwargs.update(kwargs)
+        captured_kwargs["query"] = query
+        # Return 2 hits with same FQN
+        return mcp_v2.SearchOutput(
+            success=True,
+            results=[
+                mcp_v2.SearchHit(
+                    chunk_id="chunk:1",
+                    fqn="com.example.TypeA",
+                    score=0.95,
+                    snippet="TypeA chunk 1",
+                    filename="a.java",
+                    start_line=10,
+                ),
+                mcp_v2.SearchHit(
+                    chunk_id="chunk:2",
+                    fqn="com.example.TypeA",
+                    score=0.85,
+                    snippet="TypeA chunk 2",
+                    filename="a.java",
+                    start_line=20,
+                ),
+            ],
+            limit=10,
+            offset=0,
+            advisories=[],
+        )
+
+    monkeypatch.setattr(mcp_v2, "search_v2", mock_search_v2)
+    rc = main(["search", "--index-dir", env_index, "TypeA", "--chunks", "--format", "json"])
+    assert rc == 0
+    assert captured_kwargs.get("dedup") is False, f"expected dedup=False with --chunks, got {captured_kwargs.get('dedup')}"

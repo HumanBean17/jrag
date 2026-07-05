@@ -543,6 +543,10 @@ def create_mcp_server() -> FastMCP:
             default=False,
             description="If true, include score_components in each SearchHit (breakdown of distance/rrf, role, symbol, import_penalty).",
         ),
+        chunks: bool = Field(
+            default=False,
+            description="If true, show every chunk (default collapses to one row per symbol/type).",
+        ),
     ) -> mcp_v2.SearchOutput:
         scoped_filter = _scope_manager.apply_auto_scope(filter) if _scope_manager else filter
         return await asyncio.to_thread(
@@ -556,6 +560,7 @@ def create_mcp_server() -> FastMCP:
             scoped_filter,
             explain,
             None,
+            not chunks,  # dedup=True by default; chunks=True opts out
         )
 
     @mcp.tool(

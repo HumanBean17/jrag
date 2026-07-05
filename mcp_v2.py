@@ -467,6 +467,7 @@ class SearchHit(BaseModel):
     filename: str | None = None
     start_line: int | None = None
     score_components: dict[str, float] | None = None
+    chunks: int | None = None
 
 
 # NodeRef is now defined in graph_types.py and imported above
@@ -596,6 +597,8 @@ def _row_to_search_hit(row: dict[str, Any], explain: bool = False) -> SearchHit:
                 start_line = int(ln)
             except (TypeError, ValueError):
                 start_line = None
+    chunks = row.get("_chunks_collapsed")
+    chunks_int = int(chunks) if chunks is not None else None
     return SearchHit(
         chunk_id=_chunk_id_from_row(row),
         symbol_id=_chunk_to_symbol_id(row),
@@ -608,6 +611,7 @@ def _row_to_search_hit(row: dict[str, Any], explain: bool = False) -> SearchHit:
         filename=filename,
         start_line=start_line,
         score_components=row.get("_score_components") if explain else None,
+        chunks=chunks_int,
     )
 
 
@@ -824,6 +828,7 @@ def search_v2(
     filter: NodeFilter | dict[str, Any] | str | None = None,
     explain: bool = False,
     graph: LadybugGraph | None = None,
+    dedup: bool = True,
 ) -> SearchOutput:
     try:
         raw_filter = _coerce_filter(filter)
@@ -887,6 +892,7 @@ def search_v2(
             microservice=nf.microservice if nf else None,
             capability=nf.capability if nf else None,
             exclude_roles=nf.exclude_roles if nf else None,
+            dedup_by_fqn=dedup,
         )
         hits: list[SearchHit] = []
         for row in rows:

@@ -1091,6 +1091,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=0,
         help="Page offset (passed to search_v2; paginated via +1-fetch).",
     )
+    search.add_argument(
+        "--chunks",
+        action="store_true",
+        help="Show every chunk (default collapses to one row per symbol/type).",
+    )
     search.set_defaults(handler=_cmd_search, auto_scope=True)
 
     return parser
@@ -4112,6 +4117,7 @@ def _cmd_search(args: argparse.Namespace) -> int:
         filter=node_filter,
         explain=args.explain,
         graph=graph,
+        dedup=not getattr(args, "chunks", False),
     )
 
     if not out.success:

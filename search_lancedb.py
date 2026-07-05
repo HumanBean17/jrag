@@ -41,6 +41,11 @@ JAVA_ENRICHED_COLUMNS: tuple[str, ...] = (
     "capabilities",
 )
 
+# Over-fetch multiplier for dedup: fetch 4x to absorb per-FQN chunk multiplicity
+# so that after collapsing by primary_type_fqn, a page stays full and the +1
+# truncation sentinel survives. The formula: need = max((limit + offset) * 4, limit + offset + 1)
+DEDUP_OVERFETCH = 4
+
 VECTOR_COLUMN = "embedding"
 _FTS_READY: set[tuple[str, str]] = set()
 _FTS_LOCK = threading.Lock()
@@ -852,6 +857,59 @@ def _rrf_merge(
     return merged
 
 
+def _dedup_by_fqn(rows: list[dict], dedup_by_fqn: bool = True) -> list[dict]:
+    """Deduplicate rows by primary_type_fqn (java table only).
+
+    When dedup_by_fqn is True, collapses multiple chunks of the same
+    primary_type_fqn into one row (first-seen-wins, since rows are pre-sorted
+    so the first is the best chunk). Each survivor gets a _chunks_collapsed
+    field (>=1) counting how many rows were collapsed into it.
+
+    Rows without primary_type_fqn (sql/yaml tables) get a unique __id:<id>
+    key so they pass through unchanged (each row is unique).
+
+    When dedup_by_fqn is False, returns rows unchanged (regression guard).
+    """
+    if not dedup_by_fqn:
+        # Non-dedup path: return unchanged, byte-identical to prior behavior
+        return rows
+
+    deduped: list[dict] = []
+    seen_keys: dict[str, dict] = {}
+    collapsed_counts: dict[str, int] = {}
+
+    for row in rows:
+        # Build dedup key: primary_type_fqn for java rows, unique __id:<id> for sql/yaml
+        fqn = row.get("primary_type_fqn")
+        if fqn:
+            key = str(fqn)
+        else:
+            # sql/yaml rows have no primary_type_fqn → unique key per row
+            row_id = row.get("id") or id(row)
+            key = f"__id:{row_id}"
+
+        if key not in seen_keys:
+            # First occurrence: keep it
+            seen_keys[key] = row
+            collapsed_counts[key] = 1
+            deduped.append(row)
+        else:
+            # Duplicate: increment collapse count, discard this row
+            collapsed_counts[key] += 1
+
+    # Annotate each survivor with _chunks_collapsed
+    for row in deduped:
+        fqn = row.get("primary_type_fqn")
+        if fqn:
+            key = str(fqn)
+        else:
+            row_id = row.get("id") or id(row)
+            key = f"__id:{row_id}"
+        row["_chunks_collapsed"] = collapsed_counts[key]
+
+    return deduped
+
+
 def run_search(
     query: str,
     *,
@@ -878,6 +936,7 @@ def run_search(
     exclude_roles: list[str] | None = None,
     capability: str | None = None,
     capability_in: list[str] | None = None,
+    dedup_by_fqn: bool = False,
 ) -> list[dict]:
     effective_hybrid = hybrid
     effective_fts = fts_text
@@ -911,7 +970,13 @@ def run_search(
     fts_for_hybrid = effective_fts if effective_fts is not None else query
 
     db = lancedb.connect(uri)
-    need = max(limit + offset, 1)
+    if dedup_by_fqn:
+        # Over-fetch to absorb per-FQN chunk multiplicity: fetch 4x so that
+        # after collapsing, the page stays full and the +1 truncation sentinel survives
+        need = max((limit + offset) * DEDUP_OVERFETCH, limit + offset + 1)
+    else:
+        # Non-dedup path: exact fetch as before
+        need = max(limit + offset, 1)
 
     extra_java = _build_extra_predicates(
         columns=_table_columns(uri, TABLES["java"], db),
@@ -968,6 +1033,9 @@ def run_search(
                 ladybug_path=ladybug_path,
             )
 
+        # Dedup by primary_type_fqn after all sorting/merging, before windowing
+        rows = _dedup_by_fqn(rows, dedup_by_fqn=dedup_by_fqn)
+
         window = rows[offset : offset + limit]
         if context_neighbors > 0 and key == "java":
             _attach_neighbor_context(window, db=db, neighbors=context_neighbors, uri=uri)
@@ -1002,6 +1070,10 @@ def run_search(
         comps = r.setdefault("_score_components", {})
         effective_dist = _effective_distance(comps)
         r["_score"] = _clamp01(l2_distance_to_score(effective_dist))
+
+    # Dedup by primary_type_fqn after all sorting/merging, before windowing
+    merged = _dedup_by_fqn(merged, dedup_by_fqn=dedup_by_fqn)
+
     window = merged[offset : offset + limit]
     if context_neighbors > 0:
         _attach_neighbor_context(window, db=db, neighbors=context_neighbors, uri=uri)

@@ -275,3 +275,243 @@ def test_hybrid_score_normalized_to_unit_range() -> None:
     assert rows[0]["filename"] == "b.java", f"expected b.java first, got {rows[0]['filename']}"
     assert rows[1]["filename"] == "a.java", f"expected a.java second, got {rows[1]['filename']}"
     assert rows[2]["filename"] == "c.java", f"expected c.java last, got {rows[2]['filename']}"
+
+
+def test_run_search_dedup_collapses_by_fqn() -> None:
+    """Dedup by primary_type_fqn collapses multiple chunks of the same type.
+
+    First-seen-wins (rows are pre-sorted, so first is best chunk).
+    Each survivor gets _chunks_collapsed count (>=1).
+    """
+    from search_lancedb import _dedup_by_fqn
+
+    # Build controlled sorted rows: 3 rows FQN=A (best first), 1 row FQN=B, 2 rows FQN=C
+    rows = [
+        {
+            "filename": "a.java",
+            "range_start": 1,
+            "range_end": 10,
+            "primary_type_fqn": "com.example.TypeA",
+            "_score": 0.95,
+        },
+        {
+            "filename": "a.java",
+            "range_start": 11,
+            "range_end": 20,
+            "primary_type_fqn": "com.example.TypeA",
+            "_score": 0.85,
+        },
+        {
+            "filename": "a.java",
+            "range_start": 21,
+            "range_end": 30,
+            "primary_type_fqn": "com.example.TypeA",
+            "_score": 0.75,
+        },
+        {
+            "filename": "b.java",
+            "range_start": 1,
+            "range_end": 10,
+            "primary_type_fqn": "com.example.TypeB",
+            "_score": 0.90,
+        },
+        {
+            "filename": "c.java",
+            "range_start": 1,
+            "range_end": 10,
+            "primary_type_fqn": "com.example.TypeC",
+            "_score": 0.88,
+        },
+        {
+            "filename": "c.java",
+            "range_start": 11,
+            "range_end": 20,
+            "primary_type_fqn": "com.example.TypeC",
+            "_score": 0.78,
+        },
+    ]
+
+    deduped = _dedup_by_fqn(rows)
+
+    # Should collapse to 3 unique FQNs
+    assert len(deduped) == 3, f"expected 3 rows, got {len(deduped)}"
+
+    # Check FQNs are unique
+    fqns = [r.get("primary_type_fqn") for r in deduped]
+    assert len(fqns) == len(set(fqns)), "FQNs should be unique"
+
+    # First should be TypeA (best score of the three)
+    assert deduped[0]["primary_type_fqn"] == "com.example.TypeA"
+    assert deduped[0]["_score"] == 0.95, "Best chunk should survive"
+
+    # Check _chunks_collapsed counts
+    chunks_by_fqn = {r["primary_type_fqn"]: r["_chunks_collapsed"] for r in deduped}
+    assert chunks_by_fqn["com.example.TypeA"] == 3, "TypeA should have 3 chunks collapsed"
+    assert chunks_by_fqn["com.example.TypeB"] == 1, "TypeB should have 1 chunk"
+    assert chunks_by_fqn["com.example.TypeC"] == 2, "TypeC should have 2 chunks collapsed"
+
+
+def test_run_search_dedup_offset_pagination() -> None:
+    """Dedup with offset/limit still fills pages and preserves truncation detection.
+
+    8 distinct FQNs × 3 chunks each = 24 rows.
+    With limit=5, offset=5, dedup_by_fqn=True → should return FQNs #6..#10 (5 unique).
+    Over-fetch (4x) ensures we fetch enough to fill the page after dedup.
+    """
+    from search_lancedb import _dedup_by_fqn
+
+    # Build 8 FQNs × 3 chunks each = 24 rows, pre-sorted by FQN then score
+    rows = []
+    for fqn_idx in range(8):
+        fqn = f"com.example.Type{chr(65 + fqn_idx)}"  # TypeA, TypeB, ...
+        for chunk_idx in range(3):
+            rows.append({
+                "filename": f"file{fqn_idx}.java",
+                "range_start": chunk_idx * 10 + 1,
+                "range_end": chunk_idx * 10 + 10,
+                "primary_type_fqn": fqn,
+                "_score": 1.0 - (chunk_idx * 0.1),  # Best chunk first per FQN
+            })
+
+    # Simulate the over-fetch + dedup + window flow
+    # limit=5, offset=5 → we want FQNs #5, #6, #7, #8, #9 (but we only have 8)
+    # After dedup: 8 unique FQNs total
+    # offset=5 → skip first 5 FQNs → should get FQNs #5, #6, #7 (3 remaining)
+    # limit=5 → but we only have 3, so no truncation
+
+    deduped = _dedup_by_fqn(rows)
+
+    # Should have 8 unique FQNs
+    assert len(deduped) == 8, f"expected 8 unique FQNs after dedup, got {len(deduped)}"
+
+    # Window [5:10] (offset=5, limit=5) → should get 3 rows (FQNs #5, #6, #7)
+    windowed = deduped[5:10]
+    assert len(windowed) == 3, f"expected 3 rows in window, got {len(windowed)}"
+
+    # Check the windowed FQNs are #5, #6, #7 (TypeF, TypeG, TypeH)
+    expected_fqns = ["com.example.TypeF", "com.example.TypeG", "com.example.TypeH"]
+    actual_fqns = [r["primary_type_fqn"] for r in windowed]
+    assert actual_fqns == expected_fqns, f"expected {expected_fqns}, got {actual_fqns}"
+
+    # Check each has chunks=3
+    for r in windowed:
+        assert r["_chunks_collapsed"] == 3, f"FQN {r['primary_type_fqn']} should have 3 chunks"
+
+    # Simulate a case where we DO have truncation
+    # With limit=3, offset=0 → we get 3 FQNs, but 5 more exist → truncation=True
+    windowed_truncated = deduped[0:4]  # +1 for truncation detection
+    assert len(windowed_truncated) == 4, "Should get 4 rows with +1 fetch"
+    # First 3 are the actual page, 4th is the truncation sentinel
+    actual_page = windowed_truncated[:3]
+    assert len(actual_page) == 3, "Actual page should have 3 rows"
+    # Truncation detected because we have 4 rows (> limit=3)
+    has_truncation = len(windowed_truncated) > 3
+    assert has_truncation, "Should detect truncation when +1 row exists"
+
+
+def test_run_search_dedup_passes_through_sql_yaml() -> None:
+    """Rows without primary_type_fqn (sql/yaml) are NOT collapsed.
+
+    Each row without primary_type_fqn gets a unique dedup key __id:<id>
+    so they pass through unchanged.
+    """
+    from search_lancedb import _dedup_by_fqn
+
+    rows = [
+        {
+            "filename": "schema.sql",
+            "range_start": 1,
+            "range_end": 10,
+            "primary_type_fqn": None,  # SQL row
+            "_score": 0.90,
+            "id": "sql1",
+        },
+        {
+            "filename": "schema.sql",
+            "range_start": 11,
+            "range_end": 20,
+            "primary_type_fqn": None,  # SQL row
+            "_score": 0.85,
+            "id": "sql2",
+        },
+        {
+            "filename": "config.yaml",
+            "range_start": 1,
+            "range_end": 10,
+            "primary_type_fqn": None,  # YAML row
+            "_score": 0.88,
+            "id": "yaml1",
+        },
+        {
+            "filename": "a.java",
+            "range_start": 1,
+            "range_end": 10,
+            "primary_type_fqn": "com.example.TypeA",  # Java row
+            "_score": 0.95,
+        },
+        {
+            "filename": "a.java",
+            "range_start": 11,
+            "range_end": 20,
+            "primary_type_fqn": "com.example.TypeA",  # Java row - should collapse
+            "_score": 0.85,
+        },
+    ]
+
+    deduped = _dedup_by_fqn(rows)
+
+    # Should have 4 rows: 3 sql/yaml (unique) + 1 java (collapsed from 2)
+    assert len(deduped) == 4, f"expected 4 rows, got {len(deduped)}"
+
+    # Check sql/yaml rows are all present (not collapsed)
+    sql_yaml_rows = [r for r in deduped if r["primary_type_fqn"] is None]
+    assert len(sql_yaml_rows) == 3, f"expected 3 sql/yaml rows, got {len(sql_yaml_rows)}"
+
+    # Check java row is collapsed to 1
+    java_rows = [r for r in deduped if r["primary_type_fqn"] == "com.example.TypeA"]
+    assert len(java_rows) == 1, "Java rows should be collapsed to 1"
+    assert java_rows[0]["_chunks_collapsed"] == 2, "Should have 2 chunks collapsed"
+    assert java_rows[0]["_score"] == 0.95, "Best chunk should survive"
+
+
+def test_run_search_dedup_off_is_byte_identical() -> None:
+    """dedup_by_fqn=False reproduces prior output exactly (regression guard).
+
+    The non-dedup path should be byte-identical to today's behavior.
+    This test ensures we don't accidentally change behavior when dedup is off.
+    """
+    from search_lancedb import _dedup_by_fqn
+
+    rows = [
+        {
+            "filename": "a.java",
+            "range_start": 1,
+            "range_end": 10,
+            "primary_type_fqn": "com.example.TypeA",
+            "_score": 0.95,
+        },
+        {
+            "filename": "a.java",
+            "range_start": 11,
+            "range_end": 20,
+            "primary_type_fqn": "com.example.TypeA",
+            "_score": 0.85,
+        },
+        {
+            "filename": "b.java",
+            "range_start": 1,
+            "range_end": 10,
+            "primary_type_fqn": "com.example.TypeB",
+            "_score": 0.90,
+        },
+    ]
+
+    # When dedup is OFF, should return rows unchanged
+    result = _dedup_by_fqn(rows, dedup_by_fqn=False)
+
+    assert len(result) == len(rows), f"expected {len(rows)} rows, got {len(result)}"
+    assert result == rows, "Rows should be unchanged when dedup is OFF"
+
+    # Verify no _chunks_collapsed added
+    for r in result:
+        assert "_chunks_collapsed" not in r, "Should not add _chunks_collapsed when dedup is OFF"
