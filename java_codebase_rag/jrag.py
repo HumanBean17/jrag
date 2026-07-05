@@ -1556,7 +1556,10 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
         print(render(env, fmt=args.format, detail=args.detail))
         return 2
 
-    # Resolve the query
+    # Resolve the query. Forward --service/--module so an ambiguous name
+    # (same name across services) disambiguates by microservice/module, the
+    # same way find and the traversal commands do. Without this, inspect
+    # silently ignored these inherited flags (resolve_query accepts them).
     node, env = resolve_query(
         args.query,
         hint_kind=args.kind,
@@ -1565,6 +1568,8 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
         fqn_contains=args.fqn_contains,
         cfg=cfg,
         graph=graph,
+        microservice=args.service or "",
+        module=args.module or "",
     )
 
     if env.status != "ok":

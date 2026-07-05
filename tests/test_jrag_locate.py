@@ -434,6 +434,64 @@ def test_inspect_ambiguous_returns_candidates(corpus_root: Path, ladybug_db_path
         assert payload.get("message"), "not_found must carry a message"
 
 
+# ----- Test 12b: inspect --service disambiguates a cross-service name collision -----
+
+
+def test_inspect_service_flag_disambiguates_collision(
+    ladybug_db_path_route_extraction_smoke: Path,
+) -> None:
+    """--service is forwarded to resolve_query (regression: inspect used to
+    silently ignore the inherited --service/--module flags).
+
+    The route_extraction_smoke corpus has ``UserController`` as two DISTINCT
+    types across services — ``smoke.a.UserController`` (service-a) and
+    ``smoke.b.UserController`` (service-b). By simple name the resolve is
+    ``ambiguous`` (two genuinely-different types; the class-vs-constructor
+    auto-pick never collapses two distinct classes). Passing
+    ``--service service-a`` must narrow resolve_v2 to smoke.a.UserController
+    and yield ``ok`` with exactly that one resolved node.
+
+    (The fqn_collision_smoke fixture does NOT work here: both copies share the
+    SAME fqn ``com.example.SharedDto``, so the graph builder merges them into a
+    single node and the baseline resolve is already ``ok``.)
+    """
+    fixture_root = Path(__file__).parent / "fixtures" / "route_extraction_smoke"
+    env = os.environ.copy()
+    env["JAVA_CODEBASE_RAG_SOURCE_ROOT"] = str(fixture_root)
+    env["JAVA_CODEBASE_RAG_INDEX_DIR"] = str(ladybug_db_path_route_extraction_smoke.parent)
+
+    # Baseline: by simple name, UserController is ambiguous across the two services.
+    base = _run_jrag(["inspect", "UserController", "--format", "json"], env=env)
+    assert base.returncode in (0, 2), f"baseline rc={base.returncode}\n{base.stdout}"
+    base_payload = json.loads(base.stdout)
+    assert base_payload["status"] == "ambiguous", (
+        f"expected ambiguous baseline, got {base_payload['status']}: {base.stdout}"
+    )
+    assert len(base_payload.get("candidates", [])) > 1, (
+        f"baseline must expose >1 candidate: {base.stdout}"
+    )
+
+    # Fix under test: --service narrows resolve_v2 to the service-a node.
+    scoped = _run_jrag(
+        ["inspect", "UserController", "--service", "service-a", "--format", "json"], env=env
+    )
+    assert scoped.returncode == 0, (
+        f"inspect --service failed: rc={scoped.returncode}\nstdout={scoped.stdout}\nstderr={scoped.stderr}"
+    )
+    scoped_payload = json.loads(scoped.stdout)
+    assert scoped_payload["status"] == "ok", (
+        f"--service service-a should disambiguate to ok, got {scoped_payload['status']}: {scoped.stdout}"
+    )
+    nodes = scoped_payload.get("nodes", {})
+    assert len(nodes) == 1, (
+        f"expected exactly one resolved node, got {len(nodes)}: {scoped.stdout}"
+    )
+    resolved_fqn = next(iter(nodes.values())).get("fqn", "")
+    assert resolved_fqn == "smoke.a.UserController", (
+        f"--service service-a should resolve smoke.a.UserController, got {resolved_fqn}"
+    )
+
+
 # ----- Test 13: inspect populates file_location -----
 
 
