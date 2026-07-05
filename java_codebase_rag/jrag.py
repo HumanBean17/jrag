@@ -205,28 +205,25 @@ class _EnvelopeArgumentParser(argparse.ArgumentParser):
         raise argparse.ArgumentError(None, message)
 
 
-def _detect_flag(raw: list[str], flag: str) -> str | None:
-    """Best-effort scan of raw argv for a ``--flag <value>`` / ``--flag=<value>``.
+_PREPARSE_PARSER = argparse.ArgumentParser(add_help=False)
+_PREPARSE_PARSER.add_argument("--format", default=None)
+_PREPARSE_PARSER.add_argument("--detail", default=None)
 
-    Used by :func:`main` to honor ``--format`` / ``--detail`` when argparse
-    bailed before populating ``args`` (missing required positional). Returns
-    ``None`` when absent. Stops at the first positional after the subcommand
-    name to avoid picking up a token that is itself a positional value.
+
+def _preparse_render_flags(raw: list[str]) -> tuple[str | None, str | None, list[str]]:
+    """Extract ``--format`` / ``--detail`` from raw argv via a minimal parser.
+
+    Used by :func:`main` to honor render flags when argparse bailed before
+    populating ``args`` (missing required positional, unknown subcommand).
+    Returns ``(format, detail, leftover_argv)`` where ``leftover_argv`` has the
+    consumed flag tokens stripped so the first remaining non-dash token is the
+    subcommand name (not a flag value like the ``json`` in ``--format json``).
     """
-    i = 0
-    # Skip the subcommand name (first non-dash token).
-    while i < len(raw) and raw[i].startswith("-"):
-        i += 1
-    if i < len(raw):
-        i += 1  # consume the subcommand name
-    while i < len(raw):
-        tok = raw[i]
-        if tok == flag and i + 1 < len(raw):
-            return raw[i + 1]
-        if tok.startswith(f"{flag}="):
-            return tok.split("=", 1)[1]
-        i += 1
-    return None
+    try:
+        ns, leftover = _PREPARSE_PARSER.parse_known_args(raw)
+        return ns.format, ns.detail, list(leftover)
+    except Exception:
+        return None, None, list(raw)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -4132,11 +4129,13 @@ def main(argv: list[str] | None = None) -> int:
         from java_codebase_rag.jrag_envelope import Envelope
         from java_codebase_rag.jrag_render import render
 
-        fmt = _detect_flag(raw, "--format") or "text"
-        detail = _detect_flag(raw, "--detail") or "normal"
-        # argparse's message is the bare clause (e.g. "the following arguments
-        # are required: query"); prefix with the subcommand context when we can.
-        cmd = next((t for t in raw if not t.startswith("-")), None)
+        fmt, detail, leftover = _preparse_render_flags(raw)
+        fmt = fmt or "text"
+        detail = detail or "normal"
+        # The subcommand is the first non-dash token in the leftover (flag
+        # values already consumed by the pre-parser), so we don't mis-prefix
+        # with a value like ``json`` from ``--format json``.
+        cmd = next((t for t in leftover if not t.startswith("-")), None)
         msg = str(exc).strip() or "usage error"
         if cmd and not msg.startswith(cmd):
             msg = f"{cmd}: {msg}"
