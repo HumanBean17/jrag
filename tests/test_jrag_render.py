@@ -448,7 +448,11 @@ def test_json_and_text_share_field_set_at_each_detail() -> None:
     for detail, expected_keys in (
         # ``id`` is stripped at every level (graph ids are not agent-facing);
         # nodes are keyed by their natural key (FQN), so look up "com.foo.Bar".
-        ("brief", {"kind", "fqn", "name", "microservice"}),
+        # ``score`` is in the brief set: for ranked result sets (search) the
+        # score IS the point, so it is identity-adjacent and shown at every
+        # tier (listing/traversal rows built from NodeRef carry no ``score``
+        # field, so this only affects search hits).
+        ("brief", {"kind", "fqn", "name", "microservice", "score"}),
         ("normal", {"kind", "fqn", "name", "microservice",
                     "module", "role", "score"}),  # +file only if filename present
         ("full", {"kind", "fqn", "name", "microservice",

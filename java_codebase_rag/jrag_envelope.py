@@ -740,6 +740,13 @@ _RAW_LOCATION_KEYS = frozenset(
 # candidate-structural (the ambiguous narrowing hint), so it survives at every
 # level — a candidate without its reason is useless.
 #
+# ``score`` is included at brief because for ranked result sets (``search``)
+# the score IS the point — dropping it at brief made ``jrag search --detail
+# brief`` indistinguishable from unranked listings, hiding the relevance signal
+# an agent needs to pick a hit. ``score`` is identity-adjacent (a per-node
+# ranking), and listing/traversal rows built from NodeRef carry no ``score``
+# field at all (only SearchHit does), so including it here only affects search.
+#
 # NOTE: ``id`` is intentionally ABSENT. Graph node ids (40-hex SHAs) are an
 # internal join key, never an agent-facing identifier — the CLI is resolve-first
 # (agents pass FQN / simple name / route / topic). :func:`project_node` drops
@@ -764,6 +771,7 @@ _BRIEF_NODE_KEYS: frozenset[str] = frozenset(
         "import_kind",
         "resolved",
         "reason",
+        "score",
     }
 )
 
@@ -922,6 +930,67 @@ def _compose_file(node: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _is_structural_section(value: Any) -> bool:
+    """True for a non-empty dict or a non-empty list-of-dicts (structural payload).
+
+    Inspect-shape aggregate nodes carry their payload as nested sections:
+    ``counts``/``edges`` (dict) on status, ``services`` (dict) on microservices,
+    ``roles``/``frameworks`` (dict) on conventions, ``bundle`` (dict) +
+    ``route_sample``/``client_sample`` (list-of-dicts) on overview microservice,
+    ``producers``/``consumers`` (list-of-dicts) on overview topic. Keeping these
+    at brief/normal restores the inspect payload that the scalar-only
+    allow-list otherwise strips to empty.
+
+    A scalar list (e.g. ``annotations: list[str]``) is NOT a structural section
+    — it stays gated by the scalar allow-list, so an inspect subject's
+    ``annotations`` only appears at ``full`` (per the inspect brief/normal/full
+    contract).
+    """
+    if isinstance(value, dict) and value:
+        return True
+    if isinstance(value, list) and bool(value) and all(isinstance(x, dict) for x in value):
+        return True
+    return False
+
+
+# Identity-bearing keys whose presence marks a node as a SUBJECT (symbol/route/
+# client/producer/topic) rather than a pure rollup. ``project_node`` uses this
+# to distinguish inspect-subject nodes (fqn/name carry identity; rich detail
+# fields gated to ``full``) from rollup aggregates (no identity — the nested
+# sections ARE the data, kept at every level).
+#
+# ``kind`` is intentionally ABSENT: it is a type tag, not identity (an
+# overview microservice/topic bundle carries ``kind`` for self-identification
+# but is still a rollup whose payload is the nested ``bundle`` dict + sample
+# lists). ``microservice`` is also absent: classification, not identity.
+_ROLLUP_IDENTITY_KEYS: tuple[str, ...] = (
+    "fqn", "name", "path", "topic", "member_fqn",
+)
+
+
+def _is_rollup_node(node: dict[str, Any]) -> bool:
+    """True for an aggregate/rollup node carrying no symbol/route/topic identity.
+
+    Rollup nodes (status/microservices/map/conventions, and overview bundles
+    built without top-level identity) have their entire payload as nested
+    dict/list sections and carry no fqn/kind/name/path/topic/member_fqn. For
+    such nodes :func:`project_node` keeps nested sections at brief/normal too —
+    otherwise the projection strips them to ``{}`` and ``jrag status --detail
+    brief`` emits nothing (the sections ARE the data; there is nothing else to
+    show). Subject nodes keep the strict scalar allow-list so their rich
+    detail fields (signature/annotations/edge_summary/...) stay gated to
+    ``full``.
+    """
+    for k in _ROLLUP_IDENTITY_KEYS:
+        v = node.get(k)
+        if isinstance(v, str):
+            if v.strip():
+                return False
+        elif v:
+            return False
+    return True
+
+
 def project_node(node: dict[str, Any], detail: str) -> dict[str, Any]:
     """Project a node dict to the field set for ``detail``.
 
@@ -934,6 +1003,15 @@ def project_node(node: dict[str, Any], detail: str) -> dict[str, Any]:
       ``module``.
     * ``"brief"``  -> keep ``_BRIEF_NODE_KEYS`` (identity only == today's text).
 
+    For rollup (aggregate) nodes — those with no fqn/kind/name/path/topic/
+    member_fqn — nested dict sections and list-of-dict sections (counts/edges/
+    services/roles/bundle/samples/...) are kept at brief/normal too. Without
+    this, ``jrag status --detail brief`` (and microservices/map/conventions/
+    overview) emit empty nodes because the entire payload is dict/list-valued
+    and none of it is in the scalar allow-list. Subject nodes (inspect/
+    traversal/listing rows) carry identity and go through the strict scalar
+    allow-list, so their rich detail stays gated to ``full``.
+
     ``file`` is composed before selection so it is available at ``normal`` /
     ``full``. Empty values are dropped at every level. Graph-id fields (``id``,
     ``*_id``) are stripped at every level via :func:`_strip_graph_id_fields` —
@@ -945,7 +1023,18 @@ def project_node(node: dict[str, Any], detail: str) -> dict[str, Any]:
         selected = composed
     else:
         allow = _NORMAL_NODE_KEYS if detail == "normal" else _BRIEF_NODE_KEYS
-        selected = {k: v for k, v in composed.items() if k in allow}
+        if _is_rollup_node(composed):
+            # Keep allowed scalars + structural sections (dict / list-of-dicts).
+            # The sections are the rollup's payload; without them brief/normal
+            # would render an empty node. Listing/traversal/inspect-subject
+            # nodes (with identity) take the strict-scalar branch below.
+            selected = {
+                k: v
+                for k, v in composed.items()
+                if k in allow or _is_structural_section(v)
+            }
+        else:
+            selected = {k: v for k, v in composed.items() if k in allow}
     return _drop_empty(_strip_graph_id_fields(selected))
 
 

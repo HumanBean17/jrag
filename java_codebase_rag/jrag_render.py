@@ -72,6 +72,14 @@ _NORMAL_INLINE_EXTRAS: tuple[str, ...] = (
     "score",
 )
 
+# Identity-adjacent extras shown inline at ``--detail brief``. ``score`` is the
+# ONLY brief-tier extra because for ranked result sets (``search``) the score
+# IS the point — hiding it at brief made ``jrag search --detail brief`` show an
+# unranked-looking list. Listing/traversal rows built from NodeRef carry no
+# ``score`` field (only SearchHit does), so this is a no-op for non-search
+# listings (``find``, routes/clients/producers, traversal target rows).
+_BRIEF_INLINE_EXTRAS: tuple[str, ...] = ("score",)
+
 # Edge attrs the edge line already renders (label/confidence); at ``--detail
 # full`` these are skipped when appending the remaining attrs inline.
 _EDGE_LINE_KEYS: frozenset[str] = frozenset(
@@ -250,11 +258,21 @@ def _render_listing(envelope: Envelope, *, noun: str, detail: str = "normal") ->
             line += "  (unresolved)"
         # detail > brief: surface the fields the terse line drops. The projector
         # has already trimmed the node to the requested field set, so we only
-        # decide PRESENTATION. normal = append inline location/classification/
+        # decide PRESENTATION. brief = append identity-adjacent extras that
+        # matter even at the terse tier (score on search hits — without it the
+        # ranking is invisible). normal = append inline location/classification/
         # ranking extras to the SAME line (one line per row — the fix for "text
         # too terse": adds module/role/file/score). full = per-row inspect block
         # of every non-identity key (signature/annotations/snippet/...).
-        if detail == "normal":
+        if detail == "brief":
+            extras = [
+                f"{key}={node[key]}"
+                for key in _BRIEF_INLINE_EXTRAS
+                if key in node and node[key] not in ("", None)
+            ]
+            if extras:
+                line += "  " + "  ".join(extras)
+        elif detail == "normal":
             extras = [
                 f"{key}={node[key]}"
                 for key in _NORMAL_INLINE_EXTRAS

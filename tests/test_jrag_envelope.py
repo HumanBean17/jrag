@@ -469,17 +469,22 @@ def _full_symbol_node() -> dict:
 
 
 def test_project_node_brief_keeps_identity_drops_extras() -> None:
-    """brief == today's terse identity set; location/ranking/content dropped.
+    """brief == today's terse identity set; location/classification/content dropped.
 
-    Graph-id fields (``id`` / ``parent_id``) are stripped at every level — the
-    CLI is resolve-first, so no raw graph id reaches the agent.
+    ``score`` IS retained at brief because for ranked result sets (``search``)
+    the score is the point — dropping it hid the relevance signal. Listing and
+    traversal rows built from NodeRef carry no ``score`` field, so this only
+    affects search hits. Graph-id fields (``id`` / ``parent_id``) are stripped
+    at every level — the CLI is resolve-first, so no raw graph id reaches the
+    agent.
     """
     out = project_node(_full_symbol_node(), "brief")
     # Identity keys survive (``id`` is NOT among them — stripped at the boundary).
-    for key in ("kind", "fqn", "name", "microservice", "resolved"):
+    for key in ("kind", "fqn", "name", "microservice", "resolved", "score"):
         assert key in out, f"brief dropped identity key {key!r}"
-    # file/score (ranking/location), content fields, AND graph-id fields are dropped.
-    for key in ("module", "role", "symbol_kind", "file", "score", "signature",
+    # file/classification (ranking/location), content fields, AND graph-id
+    # fields are dropped at brief.
+    for key in ("module", "role", "symbol_kind", "file", "signature",
                 "annotations", "capabilities", "package",
                 "id", "parent_id"):
         assert key not in out, f"brief leaked {key!r}"
@@ -548,12 +553,11 @@ def test_project_node_drops_empty_fields_at_all_levels() -> None:
         assert "module" not in out and "role" not in out, f"{detail}: empty kept"
         assert "symbol_id" not in out and "capabilities" not in out, f"{detail}: empty kept"
         # 0.0 / False are NOT empty (meaningful) — survive when in the level's set.
-        # `resolved` is identity (in brief); `score` is normal/full only.
+        # `resolved` and `score` are identity-adjacent (in brief); 0.0 / False
+        # survive at every level. The non-zero score on a search hit is the
+        # relevance signal an agent needs to pick a hit at brief.
         assert out.get("resolved") is False, f"{detail}: False resolved wrongly dropped"
-        if detail in ("normal", "full"):
-            assert out.get("score") == 0.0, f"{detail}: 0.0 score wrongly dropped"
-        else:
-            assert "score" not in out, f"{detail}: score is not a brief field"
+        assert out.get("score") == 0.0, f"{detail}: 0.0 score wrongly dropped"
 
 
 def test_compose_file_from_filename_and_start_line() -> None:

@@ -1153,6 +1153,13 @@ def _cmd_find_query_mode(
     nodes = {}
     for row in display_rows:
         node_id = row.id
+        # Carry the full SymbolHit field set (signature/annotations/modifiers/
+        # package/raw location columns). The projector trims to the requested
+        # detail level (signature/annotations/... appear only at ``full``),
+        # so populating them here is what makes ``find <fqn> --detail full``
+        # honor the contract (jrag_render keeps signature/annotations at full).
+        # Without this, find --detail full showed only identity+classification
+        # because the node never carried the content fields.
         nodes[node_id] = {
             "id": node_id,
             "kind": "symbol",
@@ -1162,6 +1169,14 @@ def _cmd_find_query_mode(
             "microservice": row.microservice,
             "module": row.module,
             "role": row.role,
+            "package": row.package,
+            "signature": row.signature,
+            "annotations": list(row.annotations or []),
+            "capabilities": list(row.capabilities or []),
+            "modifiers": list(row.modifiers or []),
+            "filename": row.filename,
+            "start_line": row.start_line,
+            "end_line": row.end_line,
         }
 
     env = Envelope(status="ok", nodes=nodes, truncated=raw_truncated, warnings=warnings)
@@ -1323,12 +1338,62 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
         print(render(env, fmt=args.format, detail=args.detail))
         return 2
 
-    # Convert NodeRecord to envelope format
+    # Convert NodeRecord to envelope format.
+    #
+    # NodeRecord nests the symbol's payload inside a ``data`` sub-dict (kind,
+    # name, package, module, microservice, role, signature, annotations,
+    # capabilities, modifiers, filename, start_line, ...). The envelope
+    # projector's identity/classification keys (``_BRIEF_NODE_KEYS`` /
+    # ``_NORMAL_NODE_KEYS``) live at the TOP level, so without flattening they
+    # never reach the nested data and inspect renders only the outer kind/fqn
+    # at every level (brief == normal, the bug). Flatten ``data`` to the top
+    # level so:
+    #   * brief picks up kind/fqn/name/microservice (identity).
+    #   * normal additionally picks up module/role/symbol_kind/file
+    #     (classification + location).
+    #   * full additionally keeps signature/annotations/modifiers/package/
+    #     capabilities/edge_summary (content).
+    #
+    # The outer ``kind`` is the node category ("symbol"); the inner
+    # ``data.kind`` is the symbol sub-kind ("class"/"interface"/"method"/...),
+    # renamed ``symbol_kind`` to match find/search/listings (which use
+    # ``symbol_kind`` for the sub-kind and reserve ``kind`` for the category).
     record_dict = desc_out.record.model_dump()
     node_id = record_dict.get("id") or node.id
+    data = record_dict.get("data") or {}
+    flat: dict[str, Any] = {
+        "kind": record_dict.get("kind") or "symbol",
+        "fqn": record_dict.get("fqn") or data.get("fqn") or node.fqn,
+    }
+    # Promote inner data fields. Skip ``kind`` here — renamed to symbol_kind.
+    for src_key, dest_key in (
+        ("name", "name"),
+        ("kind", "symbol_kind"),
+        ("package", "package"),
+        ("module", "module"),
+        ("microservice", "microservice"),
+        ("role", "role"),
+        ("signature", "signature"),
+        ("annotations", "annotations"),
+        ("capabilities", "capabilities"),
+        ("modifiers", "modifiers"),
+        ("filename", "filename"),
+        ("start_line", "start_line"),
+        ("end_line", "end_line"),
+    ):
+        val = data.get(src_key)
+        if val not in (None, "", [], {}):
+            flat[dest_key] = val
+    # edge_summary is a top-level field on NodeRecord (not inside data) — keep
+    # it so --detail full renders it as a nested kv-block (brief/normal drop
+    # it via the scalar allow-list since the inspect subject has identity and
+    # so takes the strict-scalar projection branch).
+    if record_dict.get("edge_summary"):
+        flat["edge_summary"] = record_dict["edge_summary"]
+
     env = Envelope(
         status="ok",
-        nodes={node_id: record_dict},
+        nodes={node_id: flat},
         root=node_id,
         file_location=env.file_location,  # Preserve file_location from resolve
     )
@@ -3372,7 +3437,17 @@ def _overview_detect_type(subject: str, graph) -> str:
 
 
 def _overview_microservice(args: argparse.Namespace, graph, microservice: str) -> int:
-    """overview microservice bundle: counts + routes + clients + producers."""
+    """overview microservice bundle: counts + routes + clients + producers.
+
+    The node is built WITHOUT top-level identity (kind/fqn/name) on purpose:
+    that makes it a rollup to the envelope projector, which then keeps the
+    nested dict/list sections (``bundle`` + sample lists) at every detail
+    level. The command-side sample sizing below is what varies the output by
+    detail: brief = bundle counts only, normal = +3 samples, full = +5 samples.
+    Without both (rollup detection AND command-side sizing), brief/normal/full
+    would all render identically because the projection would either strip the
+    bundle to empty (subject node) or keep all samples equally (rollup node).
+    """
     from java_codebase_rag.jrag_envelope import Envelope, next_actions_hook
     from java_codebase_rag.jrag_render import render
 
@@ -3396,18 +3471,36 @@ def _overview_microservice(args: argparse.Namespace, graph, microservice: str) -
     except Exception:
         pass
 
+    # Sample sizing by detail: brief drops samples entirely (counts only);
+    # normal caps at 3 (signal of what's there); full keeps 5 (richer picture).
+    detail = args.detail
+    sample_cap = 0 if detail == "brief" else (3 if detail == "normal" else 5)
+    # No fqn/name/path/topic/member_fqn → project_node treats this as a rollup
+    # and keeps the nested sections (bundle + sample lists) at every detail
+    # level. ``kind`` stays for self-identification (it's a type tag, not in
+    # the rollup-identity check).
+    node: dict = {
+        "kind": "microservice",
+        "microservice": microservice,
+        "bundle": bundle,
+    }
+    if sample_cap:
+        node["route_sample"] = [
+            {"path": r.get("path", ""), "framework": r.get("framework", "")}
+            for r in routes[:sample_cap]
+        ]
+        node["client_sample"] = [
+            {"fqn": c.get("member_fqn", ""), "target_service": c.get("target_service", "")}
+            for c in clients[:sample_cap]
+        ]
+        node["producer_sample"] = [
+            {"topic": p.get("topic", ""), "producer_kind": p.get("producer_kind", "")}
+            for p in producers[:sample_cap]
+        ]
+
     env = Envelope(
         status="ok",
-        nodes={f"microservice:{microservice}": {
-            "kind": "microservice",
-            "fqn": microservice,
-            "name": microservice,
-            "microservice": microservice,
-            "bundle": bundle,
-            "route_sample": [{"path": r.get("path", ""), "framework": r.get("framework", "")} for r in routes[:5]],
-            "client_sample": [{"fqn": c.get("member_fqn", ""), "target_service": c.get("target_service", "")} for c in clients[:5]],
-            "producer_sample": [{"topic": p.get("topic", ""), "producer_kind": p.get("producer_kind", "")} for p in producers[:5]],
-        }},
+        nodes={f"microservice:{microservice}": node},
     )
     next_actions_hook(env)
     print(render(env, fmt=args.format, detail=args.detail, noun="overview", shape="inspect"))
@@ -3476,7 +3569,14 @@ def _overview_route(args: argparse.Namespace, cfg, graph, route_path: str) -> in
 
 
 def _overview_topic(args: argparse.Namespace, graph, topic: str) -> int:
-    """overview topic: producers + consumers for a topic string."""
+    """overview topic: producers + consumers for a topic string.
+
+    Built without top-level identity (kind/fqn/name) so the projector treats
+    the node as a rollup and keeps the nested sections (``bundle`` +
+    producers/consumers lists) at every detail level. Command-side sample
+    sizing varies the output by detail: brief = counts only, normal = +3
+    samples, full = +limit samples.
+    """
     from java_codebase_rag.jrag_envelope import Envelope, next_actions_hook
     from java_codebase_rag.jrag_render import render
 
@@ -3493,30 +3593,40 @@ def _overview_topic(args: argparse.Namespace, graph, topic: str) -> int:
     if not consumers:
         consumers = _resolve_topic_consumers(graph, topic=topic, contains=True)
 
-    topic_node = {
+    detail = args.detail
+    sample_cap = 0 if detail == "brief" else (3 if detail == "normal" else limit)
+    # NOTE: no top-level ``topic``/fqn/name here — ``topic`` IS a rollup-
+    # identity key, so its presence would make project_node treat this as a
+    # subject and strip the bundle/producers/consumers sections at brief/
+    # normal. ``kind`` is fine (type tag, not in the rollup-identity check),
+    # so it stays for self-identification. The topic name travels in the dict
+    # key ("topic:<name>") and inside ``bundle.topic``.
+    topic_node: dict = {
         "kind": "topic",
-        "fqn": topic,
-        "name": topic,
-        "topic": topic,
-        "producers": [
+        "bundle": {
+            "topic": topic,
+            "producers": len(producers),
+            "consumers": len(consumers),
+        },
+    }
+    if sample_cap:
+        topic_node["producers"] = [
             {
                 "fqn": str(p.get("member_fqn") or ""),
                 "topic": str(p.get("topic") or ""),
                 "producer_kind": str(p.get("producer_kind") or ""),
                 "microservice": str(p.get("microservice") or ""),
             }
-            for p in producers[:limit]
-        ],
-        "consumers": [
+            for p in producers[:sample_cap]
+        ]
+        topic_node["consumers"] = [
             {
-                "id": c.get("id", ""),
                 "fqn": c.get("fqn", ""),
                 "kind": c.get("kind", "symbol"),
                 "microservice": c.get("microservice", ""),
             }
-            for c in consumers[:limit]
-        ],
-    }
+            for c in consumers[:sample_cap]
+        ]
     env = Envelope(
         status="ok",
         nodes={f"topic:{topic}": topic_node},
