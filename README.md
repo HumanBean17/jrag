@@ -113,8 +113,8 @@ jrag outline src/main/.../Foo.java  # all symbols declared in a file
 jrag imports src/main/.../Foo.java   # imports resolved to graph nodes
 
 # Listings
-jrag routes                    # HTTP routes
-jrag clients                   # HTTP clients (Feign / RestTemplate / WebClient)
+jrag http-routes               # HTTP routes
+jrag http-clients              # HTTP clients (Feign / RestTemplate / WebClient)
 jrag producers                 # async message producers (Kafka / StreamBridge)
 jrag topics                    # message topics grouped by producer
 jrag jobs                      # scheduled tasks (@Scheduled)

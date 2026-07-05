@@ -93,8 +93,8 @@ def test_no_default_output_exceeds_token_ceiling(
         ("outline", ["outline", _SEED_FILE]),
         ("imports", ["imports", _SEED_FILE]),
         # Listings
-        ("routes", ["routes"]),
-        ("clients", ["clients"]),
+        ("http-routes", ["http-routes"]),
+        ("http-clients", ["http-clients"]),
         ("producers", ["producers"]),
         ("topics", ["topics"]),
         ("jobs", ["jobs"]),

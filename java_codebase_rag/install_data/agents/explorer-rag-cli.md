@@ -85,7 +85,7 @@ Run `jrag --help` for the canonical list. Groups:
 | "What does M call?" | `jrag callees <M>` |
 | "Where is class X?" | `jrag inspect <X>`; fallback `Grep`/`Glob` |
 | "All controllers in service S" | `jrag find --role CONTROLLER --service S` |
-| "Routes/endpoints in service S" | `jrag routes --service S` |
+| "Routes/endpoints in service S" | `jrag http-routes --service S` |
 | "Who implements interface T?" | `jrag implementations <T>` |
 | "Where is T injected?" | `jrag dependencies <T>` |
 | "Who depends on T?" | `jrag dependents <T>` |
@@ -288,4 +288,4 @@ After two failed attempts on the same intent, stop and report what was tried and
 1. `jrag overview <S>` (bundle of routes/clients/producers)
 2. `jrag conventions --service <S>` (dominant roles + framework tallies)
 3. `jrag map --service <S>` (type counts)
-4. `jrag routes --service <S>` (entry points)
+4. `jrag http-routes --service <S>` (entry points)

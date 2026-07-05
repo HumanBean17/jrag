@@ -632,12 +632,12 @@ def test_next_actions_hook_listing_breadcrumbs() -> None:
     from java_codebase_rag.jrag_envelope import next_actions_hook
 
     env = Envelope(status="ok")
-    out = next_actions_hook(env, root=None, command="routes")
-    assert out == ["jrag callers '<path>'", "jrag flow '<path>'"], f"routes crumbs: {out}"
+    out = next_actions_hook(env, root=None, command="http-routes")
+    assert out == ["jrag callers '<path>'", "jrag flow '<path>'"], f"http-routes crumbs: {out}"
     assert env.agent_next_actions == out
 
     env2 = Envelope(status="ok")
-    assert next_actions_hook(env2, root=None, command="clients") == ["jrag callees '<client>'"]
+    assert next_actions_hook(env2, root=None, command="http-clients") == ["jrag callees '<client>'"]
     env3 = Envelope(status="ok")
     assert next_actions_hook(env3, root=None, command="producers") == ["jrag callees '<producer>'"]
     env4 = Envelope(status="ok")
@@ -690,18 +690,18 @@ def test_next_actions_hook_listing_breadcrumb_drops_current_command() -> None:
 
     # Simulate a breadcrumb map that includes the current command.
     env = Envelope(status="ok")
-    orig = _LISTING_BREADCRUMBS.get("routes")
+    orig = _LISTING_BREADCRUMBS.get("http-routes")
     try:
-        _LISTING_BREADCRUMBS["routes"] = [
-            "jrag callers '<path>'", "jrag flow '<path>'", "jrag routes '<path>'"
+        _LISTING_BREADCRUMBS["http-routes"] = [
+            "jrag callers '<path>'", "jrag flow '<path>'", "jrag http-routes '<path>'"
         ]
-        out = next_actions_hook(env, root=None, command="routes")
-        assert "jrag routes '<path>'" not in out, (
+        out = next_actions_hook(env, root=None, command="http-routes")
+        assert "jrag http-routes '<path>'" not in out, (
             f"current command not filtered from crumbs: {out}"
         )
         assert "jrag callers '<path>'" in out
     finally:
         if orig is None:
-            _LISTING_BREADCRUMBS.pop("routes", None)
+            _LISTING_BREADCRUMBS.pop("http-routes", None)
         else:
-            _LISTING_BREADCRUMBS["routes"] = orig
+            _LISTING_BREADCRUMBS["http-routes"] = orig

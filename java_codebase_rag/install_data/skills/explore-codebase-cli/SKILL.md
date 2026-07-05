@@ -91,8 +91,8 @@ Run `jrag --help` for the canonical list. Groups (PR-JRAG-1a..4):
 | Fuzzy / NL "where is X" | `jrag search "<text>"` | `inspect <hit>` |
 | All controllers in service S | `jrag find --role CONTROLLER --service S` | `callees` |
 | Interfaces in service S | `jrag find --java-kind interface --service S` | `implementations` |
-| HTTP / messaging entry points | `jrag routes [--framework …] [--method …]` | `inspect <route>` |
-| Outbound HTTP clients | `jrag clients [--calls-service …]` | `callees <client>` |
+| HTTP / messaging entry points | `jrag http-routes [--framework …] [--method …]` | `inspect <route>` |
+| Outbound HTTP clients | `jrag http-clients [--calls-service …]` | `callees <client>` |
 | Outbound async producers | `jrag producers [--topic-contains …]` | `callees <producer>` |
 | Topics + consumers/producers | `jrag topics [--topic-contains …]` | — |
 | Who calls method M? | `jrag callers <M>` | `inspect <caller>` |
@@ -108,7 +108,7 @@ Run `jrag --help` for the canonical list. Groups (PR-JRAG-1a..4):
 | Trace request flow A→B | `jrag flow <route>` | `connection <A> <B>` |
 | File outline | `jrag outline <file>` | `inspect <row>` |
 | File imports | `jrag imports <file>` | — |
-| "Explain service S" | `jrag overview <service>` | `routes` / `clients` / `producers` |
+| "Explain service S" | `jrag overview <service>` | `http-routes` / `http-clients` / `producers` |
 | "Explain route /topic" | `jrag overview <subject>` | `flow` |
 | Find files matching pattern | `Glob` | `Read` |
 | Search for text in files | `Grep` | `Read` |
@@ -248,4 +248,4 @@ shown, and **both modes honor the same detail level** through one projection sea
 
 **"How is this configured?":** `Glob` for `**/application*.yml` → `Grep` for the key → `Read` sections → `jrag search "<key>" --table yaml` supplement.
 
-**"Orient in a new service":** `jrag overview <service>` (bundle) → `jrag conventions --service <service>` (dominant roles) → `jrag map --service <service>` (counts) → `jrag routes --service <service>` (entry points).
+**"Orient in a new service":** `jrag overview <service>` (bundle) → `jrag conventions --service <service>` (dominant roles) → `jrag map --service <service>` (counts) → `jrag http-routes --service <service>` (entry points).

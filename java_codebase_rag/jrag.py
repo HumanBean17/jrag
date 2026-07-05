@@ -286,33 +286,25 @@ def build_parser() -> argparse.ArgumentParser:
     inspect.add_argument("--fqn-contains", type=str, default=None, help="Post-filter by FQN substring.")
     inspect.set_defaults(handler=_cmd_inspect, detail="full")
 
-    # routes subparser (PR-JRAG-2)
-    routes = subparsers.add_parser(
-        "routes",
+    # http-routes subparser (PR-JRAG-2)
+    http_routes = subparsers.add_parser(
+        "http-routes",
         help="List HTTP routes.",
         parents=[_common_parser()],
         description=(
             "List HTTP routes by microservice, framework, path substring, or method. "
-            "Returns route nodes (no resolve step)."
+            "Returns route nodes (no resolve step). HTTP-server-route surface only — "
+            "kafka topics live under `topics`."
         ),
     )
-    routes.add_argument("--framework", type=str, default=None, help="Filter by framework.")
-    routes.add_argument("--path-contains", type=str, default=None, help="Filter by path substring.")
-    routes.add_argument("--method", type=str, default=None, help="Filter by HTTP method.")
-    routes.add_argument(
-        "--include-kafka",
-        action="store_true",
-        default=False,
-        help=(
-            "Also list kafka topic routes (excluded by default — topics belong to "
-            "the `topics` command). Client http_endpoint mirrors are always excluded."
-        ),
-    )
-    routes.set_defaults(handler=_cmd_routes, detail="full")
+    http_routes.add_argument("--framework", type=str, default=None, help="Filter by framework.")
+    http_routes.add_argument("--path-contains", type=str, default=None, help="Filter by path substring.")
+    http_routes.add_argument("--method", type=str, default=None, help="Filter by HTTP method.")
+    http_routes.set_defaults(handler=_cmd_routes, detail="full")
 
-    # clients subparser (PR-JRAG-2)
-    clients = subparsers.add_parser(
-        "clients",
+    # http-clients subparser (PR-JRAG-2)
+    http_clients = subparsers.add_parser(
+        "http-clients",
         help="List HTTP clients.",
         parents=[_common_parser()],
         description=(
@@ -320,10 +312,10 @@ def build_parser() -> argparse.ArgumentParser:
             "Returns client nodes (no resolve step)."
         ),
     )
-    clients.add_argument("--client-kind", type=str, default=None, help="Filter by client kind.")
-    clients.add_argument("--calls-service", type=str, default=None, help="Filter by target service.")
-    clients.add_argument("--path-contains", type=str, default=None, help="Filter by path substring.")
-    clients.set_defaults(handler=_cmd_clients, detail="full")
+    http_clients.add_argument("--client-kind", type=str, default=None, help="Filter by client kind.")
+    http_clients.add_argument("--calls-service", type=str, default=None, help="Filter by target service.")
+    http_clients.add_argument("--path-contains", type=str, default=None, help="Filter by path substring.")
+    http_clients.set_defaults(handler=_cmd_clients, detail="full")
 
     # producers subparser (PR-JRAG-2)
     producers = subparsers.add_parser(
@@ -1387,11 +1379,12 @@ def _cmd_routes(args: argparse.Namespace) -> int:
         path_contains=args.path_contains,
         method=args.method,
         limit=limit + 1,  # +1 for truncated detection
-        # `routes` is the HTTP-server-route surface (external entrypoints you'd
-        # run `callers` on): exclude kafka topics (→ `topics`) and client
-        # http_endpoint mirrors (call-sites). --include-kafka opts kafka back in.
+        # `http-routes` is the HTTP-server-route surface (external entrypoints
+        # you'd run `callers` on): exclude kafka topics (→ `topics`) and client
+        # http_endpoint mirrors (call-sites). Pinned to include_kafka=False —
+        # the backend default (True) would re-admit kafka topics.
         server_exposed=True,
-        include_kafka=bool(getattr(args, "include_kafka", False)),
+        include_kafka=False,
     )
     for row in rows:
         _backfill_service_from_filename(row)

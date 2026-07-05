@@ -61,8 +61,8 @@ def test_routes_returns_route_kind(corpus_root: Path, ladybug_db_path: Path) -> 
     env["JAVA_CODEBASE_RAG_SOURCE_ROOT"] = str(corpus_root)
     env["JAVA_CODEBASE_RAG_INDEX_DIR"] = str(ladybug_db_path.parent)
 
-    proc = _run_jrag(["routes", "--format", "json"], env=env)
-    assert proc.returncode == 0, f"routes failed: rc={proc.returncode}\nstdout={proc.stdout}\nstderr={proc.stderr}"
+    proc = _run_jrag(["http-routes", "--format", "json"], env=env)
+    assert proc.returncode == 0, f"http-routes failed: rc={proc.returncode}\nstdout={proc.stdout}\nstderr={proc.stderr}"
 
     payload = json.loads(proc.stdout)
     assert payload["status"] == "ok"
@@ -85,13 +85,13 @@ def test_routes_returns_route_kind(corpus_root: Path, ladybug_db_path: Path) -> 
 
 
 def test_clients_filters_by_calls_service(corpus_root: Path, ladybug_db_path: Path) -> None:
-    """clients --calls-service filters by target service."""
+    """http-clients --calls-service filters by target service."""
     env = os.environ.copy()
     env["JAVA_CODEBASE_RAG_SOURCE_ROOT"] = str(corpus_root)
     env["JAVA_CODEBASE_RAG_INDEX_DIR"] = str(ladybug_db_path.parent)
 
     # First get all clients
-    proc_all = _run_jrag(["clients", "--format", "json"], env=env)
+    proc_all = _run_jrag(["http-clients", "--format", "json"], env=env)
     assert proc_all.returncode == 0
     payload_all = json.loads(proc_all.stdout)
     all_clients = payload_all.get("nodes", {})
@@ -102,7 +102,7 @@ def test_clients_filters_by_calls_service(corpus_root: Path, ladybug_db_path: Pa
         first_client = next(iter(all_clients.values()))
         target_service = first_client.get("target_service")
         if target_service:
-            proc_filtered = _run_jrag(["clients", "--calls-service", target_service, "--format", "json"], env=env)
+            proc_filtered = _run_jrag(["http-clients", "--calls-service", target_service, "--format", "json"], env=env)
             assert proc_filtered.returncode == 0
             payload_filtered = json.loads(proc_filtered.stdout)
             filtered_clients = payload_filtered.get("nodes", {})
@@ -340,10 +340,10 @@ def test_listing_service_scope_pushes_down(corpus_root: Path, ladybug_db_path: P
     env["JAVA_CODEBASE_RAG_SOURCE_ROOT"] = str(corpus_root)
     env["JAVA_CODEBASE_RAG_INDEX_DIR"] = str(ladybug_db_path.parent)
 
-    # Test with routes command
-    proc = _run_jrag(["routes", "--service", "chatassign", "--format", "json"], env=env)
+    # Test with http-routes command
+    proc = _run_jrag(["http-routes", "--service", "chatassign", "--format", "json"], env=env)
     # May return empty results if service doesn't exist, but should not error
-    assert proc.returncode == 0, f"routes --service failed: rc={proc.returncode}\nstdout={proc.stdout}\nstderr={proc.stderr}"
+    assert proc.returncode == 0, f"http-routes --service failed: rc={proc.returncode}\nstdout={proc.stdout}\nstderr={proc.stderr}"
 
     payload = json.loads(proc.stdout)
     assert payload["status"] == "ok"
@@ -370,12 +370,12 @@ def test_listing_truncated_fires_at_limit(corpus_root: Path, ladybug_db_path: Pa
     env["JAVA_CODEBASE_RAG_INDEX_DIR"] = str(ladybug_db_path.parent)
 
     # Learn the true route count (high limit -> no truncation expected).
-    proc_all = _run_jrag(["routes", "--limit", "499", "--format", "json"], env=env)
-    assert proc_all.returncode == 0, f"routes --limit 499 failed: {proc_all.stderr}"
+    proc_all = _run_jrag(["http-routes", "--limit", "499", "--format", "json"], env=env)
+    assert proc_all.returncode == 0, f"http-routes --limit 499 failed: {proc_all.stderr}"
     total = len(json.loads(proc_all.stdout).get("nodes", {}))
 
-    proc = _run_jrag(["routes", "--limit", "2", "--format", "json"], env=env)
-    assert proc.returncode == 0, f"routes --limit failed: rc={proc.returncode}\nstdout={proc.stdout}\nstderr={proc.stderr}"
+    proc = _run_jrag(["http-routes", "--limit", "2", "--format", "json"], env=env)
+    assert proc.returncode == 0, f"http-routes --limit failed: rc={proc.returncode}\nstdout={proc.stdout}\nstderr={proc.stderr}"
 
     payload = json.loads(proc.stdout)
     assert payload["status"] == "ok"
@@ -402,8 +402,8 @@ def test_listing_client_kind_enum_lookup(corpus_root: Path, ladybug_db_path: Pat
     env["JAVA_CODEBASE_RAG_INDEX_DIR"] = str(ladybug_db_path.parent)
 
     # Test with --client-kind feign (should map to feign_method)
-    proc = _run_jrag(["clients", "--client-kind", "feign", "--format", "json"], env=env)
-    assert proc.returncode == 0, f"clients --client-kind feign failed: rc={proc.returncode}\nstdout={proc.stdout}\nstderr={proc.stderr}"
+    proc = _run_jrag(["http-clients", "--client-kind", "feign", "--format", "json"], env=env)
+    assert proc.returncode == 0, f"http-clients --client-kind feign failed: rc={proc.returncode}\nstdout={proc.stdout}\nstderr={proc.stderr}"
 
     payload = json.loads(proc.stdout)
     assert payload["status"] == "ok"
@@ -426,16 +426,16 @@ def test_listing_rejects_offset() -> None:
     """--offset is NOT registered on listing commands (unrecognized argument error)."""
     env = os.environ.copy()
 
-    # Test that --offset is rejected on routes
-    proc = _run_jrag(["routes", "--offset", "5"], env=env)
+    # Test that --offset is rejected on http-routes
+    proc = _run_jrag(["http-routes", "--offset", "5"], env=env)
     # argparse should reject this with exit code 2 (usage error)
-    assert proc.returncode != 0, "routes --offset should be rejected"
+    assert proc.returncode != 0, "http-routes --offset should be rejected"
     assert "unrecognized arguments: --offset" in proc.stderr or "usage:" in proc.stderr, \
         f"expected usage error, got: {proc.stderr}"
 
-    # Same for clients
-    proc = _run_jrag(["clients", "--offset", "5"], env=env)
-    assert proc.returncode != 0, "clients --offset should be rejected"
+    # Same for http-clients
+    proc = _run_jrag(["http-clients", "--offset", "5"], env=env)
+    assert proc.returncode != 0, "http-clients --offset should be rejected"
 
     # Same for producers
     proc = _run_jrag(["producers", "--offset", "5"], env=env)

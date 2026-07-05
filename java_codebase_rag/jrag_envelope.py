@@ -619,8 +619,8 @@ def resolve_query(
 # requires a resolved root fqn). Other listings (microservices, map, ...) get no
 # breadcrumb: don't over-build.
 _LISTING_BREADCRUMBS: dict[str, list[str]] = {
-    "routes": ["jrag callers '<path>'", "jrag flow '<path>'"],
-    "clients": ["jrag callees '<client>'"],
+    "http-routes": ["jrag callers '<path>'", "jrag flow '<path>'"],
+    "http-clients": ["jrag callees '<client>'"],
     "producers": ["jrag callees '<producer>'"],
     "topics": ["jrag listeners '<topic>'"],
 }
@@ -644,8 +644,8 @@ def next_actions_hook(
 
     Listing mode (``root is None``): emits 1–2 template breadcrumbs from
     :data:`_LISTING_BREADCRUMBS` when ``command`` is a known listing
-    (``routes`` / ``clients`` / ``producers`` / ``topics``), so the agent sees
-    the natural follow-up form. Other listings get nothing.
+    (``http-routes`` / ``http-clients`` / ``producers`` / ``topics``), so the
+    agent sees the natural follow-up form. Other listings get nothing.
 
     Skipped (returns ``[]``) when:
       * ``root`` is ``None`` and ``command`` is not a breadcrumb listing.
