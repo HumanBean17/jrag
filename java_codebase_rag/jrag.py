@@ -1059,6 +1059,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--hybrid", action="store_true", help="Enable vector+keyword hybrid search."
     )
     search.add_argument(
+        "--explain", action="store_true", help="Show score breakdown per hit."
+    )
+    search.add_argument(
         "--path-contains", type=str, default=None, dest="path_contains",
         help="Narrow to chunks whose filename contains this substring.",
     )
@@ -4107,6 +4110,7 @@ def _cmd_search(args: argparse.Namespace) -> int:
         offset=args.offset,
         path_contains=args.path_contains,
         filter=node_filter,
+        explain=args.explain,
         graph=graph,
     )
 
@@ -4134,6 +4138,16 @@ def _cmd_search(args: argparse.Namespace) -> int:
             d["id"] = d.get("chunk_id") or d.get("symbol_id") or d.get("fqn") or ""
         if "kind" not in d:
             d["kind"] = "search_hit"
+        # Add explain token when --explain is set
+        if args.explain:
+            from search_lancedb import explain_score_components
+            comps = d.get("score_components")
+            d["explain"] = explain_score_components(
+                comps,
+                role=d.get("role"),
+                hybrid=bool(args.hybrid),
+                graph_expanded=False,
+            )
         hit_dicts.append(d)
 
     # --framework POST-filter: the graph stores `framework` only on Route nodes,

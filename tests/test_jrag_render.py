@@ -717,3 +717,38 @@ def test_traversal_full_text_renders_per_edge_content_block() -> None:
     parsed = json.loads(render(env, fmt="json", detail="full"))
     callee = parsed["nodes"]["com.foo.Repo#findById(Long)"]
     assert {"signature", "annotations", "modifiers", "package"} <= set(callee.keys()), callee
+
+
+def test_listing_normal_renders_explain_token() -> None:
+    """normal text renders explain= token inline when present on node."""
+    env = Envelope(
+        status="ok",
+        nodes={
+            "sym:1": {
+                "id": "sym:1", "kind": "symbol", "fqn": "com.foo.Svc.find", "name": "find",
+                "microservice": "chat", "module": "core", "role": "SERVICE", "score": 0.77,
+                "filename": "src/Svc.java", "start_line": 12,
+                "explain": "dist=0.42 role:+0.05 symbol:+0.03",
+            }
+        },
+    )
+    line = render(env, fmt="text", noun="symbol", detail="normal").splitlines()[0]
+    assert "explain=" in line, f"explain token should render in normal text: {line}"
+    assert "dist=0.42" in line
+    assert "role:+0.05" in line
+
+
+def test_listing_normal_without_explain_omits_token() -> None:
+    """normal text without explain key renders no explain= token."""
+    env = Envelope(
+        status="ok",
+        nodes={
+            "sym:1": {
+                "id": "sym:1", "kind": "symbol", "fqn": "com.foo.Svc.find", "name": "find",
+                "microservice": "chat", "module": "core", "role": "SERVICE", "score": 0.77,
+                "filename": "src/Svc.java", "start_line": 12,
+            }
+        },
+    )
+    line = render(env, fmt="text", noun="symbol", detail="normal").splitlines()[0]
+    assert "explain=" not in line, f"explain token should not render when absent: {line}"

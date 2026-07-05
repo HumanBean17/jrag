@@ -70,6 +70,7 @@ _NORMAL_INLINE_EXTRAS: tuple[str, ...] = (
     "framework",
     "file",
     "score",
+    "explain",
 )
 
 # Identity-adjacent extras shown inline at ``--detail brief``. ``score`` is the

@@ -856,3 +856,31 @@ def test_build_parser_imports_no_backend_modules() -> None:
         commands = set(sub_actions[0].choices.keys())
         for expected in ("microservices", "map", "conventions", "overview", "search"):
             assert expected in commands, f"missing {expected} in parser subcommands: {commands}"
+
+
+def test_search_explain_calls_search_v2_with_explain_true(
+    monkeypatch, capsys, corpus_root: Path, ladybug_db_path: Path
+) -> None:
+    """--explain flag passes explain=True to search_v2."""
+    import mcp_v2
+    from java_codebase_rag.jrag import main
+
+    env_index = str(ladybug_db_path.parent)
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_INDEX_DIR", env_index)
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", str(corpus_root))
+
+    captured_kwargs: dict = {}
+    def mock_search_v2(query, **kwargs):
+        captured_kwargs.update(kwargs)
+        captured_kwargs["query"] = query
+        return mcp_v2.SearchOutput(
+            success=True, results=[], limit=kwargs.get("limit", 5),
+            offset=kwargs.get("offset", 0), advisories=[],
+        )
+    monkeypatch.setattr(mcp_v2, "search_v2", mock_search_v2)
+
+    rc = main(["search", "--index-dir", env_index, "audit", "--explain", "--format", "json"])
+    assert rc == 0
+    assert captured_kwargs.get("explain") is True, (
+        f"expected explain=True, got explain={captured_kwargs.get('explain')}"
+    )

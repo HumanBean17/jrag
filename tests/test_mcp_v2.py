@@ -1739,3 +1739,94 @@ def test_describe_unresolved_call_sites_rollup_cap_footer_and_total(ladybug_grap
         assert mid in footer
 
 
+def test_search_hit_has_score_components_field() -> None:
+    """SearchHit model includes score_components field (default None)."""
+    from mcp_v2 import SearchHit
+    hit = SearchHit(
+        chunk_id="chunk:1",
+        symbol_id="sym:1",
+        score=0.9,
+        snippet="test",
+    )
+    assert hasattr(hit, "score_components")
+    assert hit.score_components is None
+
+
+def test_search_explain_true_includes_score_components(monkeypatch, ladybug_graph) -> None:
+    """search with explain=True returns hits with score_components."""
+    def fake_rows_with_components():
+        return [
+            {
+                "id": "chunk:1",
+                "symbol_id": "sym:1",
+                "primary_type_fqn": "com.example.ChatService",
+                "_score": 0.85,
+                "_score_components": {
+                    "distance": 0.3,
+                    "role_weight": 0.1,
+                    "symbol_bonus": 0.05,
+                },
+                "text": "ChatService sample",
+                "microservice": "chat-assign",
+                "module": "chat-assign",
+                "role": "SERVICE",
+                "filename": "ChatAssignService.java",
+                "start": {"line": 10},
+                "end": {"line": 20},
+            }
+        ]
+
+    monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: fake_rows_with_components())
+    out = search_v2("ChatService", explain=True, graph=ladybug_graph)
+    assert out.success is True
+    assert out.results
+    assert len(out.results) == 1
+    hit = out.results[0]
+    assert hit.score_components is not None
+    assert "distance" in hit.score_components
+    assert hit.score_components["distance"] == 0.3
+    assert "role_weight" in hit.score_components
+    assert hit.score_components["role_weight"] == 0.1
+
+
+def test_search_explain_false_omits_score_components(monkeypatch, ladybug_graph) -> None:
+    """search with explain=False (or omitted) returns hits with score_components=None."""
+    def fake_rows_with_components():
+        return [
+            {
+                "id": "chunk:1",
+                "symbol_id": "sym:1",
+                "primary_type_fqn": "com.example.ChatService",
+                "_score": 0.85,
+                "_score_components": {
+                    "distance": 0.3,
+                    "role_weight": 0.1,
+                },
+                "text": "ChatService sample",
+                "microservice": "chat-assign",
+                "module": "chat-assign",
+                "role": "SERVICE",
+                "filename": "ChatAssignService.java",
+                "start": {"line": 10},
+                "end": {"line": 20},
+            }
+        ]
+
+    monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: fake_rows_with_components())
+    # Test with explain=False explicitly
+    out = search_v2("ChatService", explain=False, graph=ladybug_graph)
+    assert out.success is True
+    assert out.results
+    assert len(out.results) == 1
+    hit = out.results[0]
+    assert hit.score_components is None
+
+    # Test with explain omitted (default False)
+    out2 = search_v2("ChatService", graph=ladybug_graph)
+    assert out2.success is True
+    assert out2.results
+    assert len(out2.results) == 1
+    hit2 = out2.results[0]
+    assert hit2.score_components is None
+
+

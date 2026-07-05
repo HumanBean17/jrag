@@ -466,6 +466,7 @@ class SearchHit(BaseModel):
     role: str | None = None
     filename: str | None = None
     start_line: int | None = None
+    score_components: dict[str, float] | None = None
 
 
 # NodeRef is now defined in graph_types.py and imported above
@@ -583,7 +584,7 @@ def _chunk_id_from_row(row: dict[str, Any]) -> str:
     return f"{filename}:{sb}:{eb}"
 
 
-def _row_to_search_hit(row: dict[str, Any]) -> SearchHit:
+def _row_to_search_hit(row: dict[str, Any], explain: bool = False) -> SearchHit:
     score = float(row.get("_rrf_score") or row.get("_score") or 0.0)
     filename = str(row.get("filename") or "") or None
     start_line: int | None = None
@@ -606,6 +607,7 @@ def _row_to_search_hit(row: dict[str, Any]) -> SearchHit:
         role=str(row.get("role")) if row.get("role") else None,
         filename=filename,
         start_line=start_line,
+        score_components=row.get("_score_components") if explain else None,
     )
 
 
@@ -820,6 +822,7 @@ def search_v2(
     offset: int = 0,
     path_contains: str | None = None,
     filter: NodeFilter | dict[str, Any] | str | None = None,
+    explain: bool = False,
     graph: LadybugGraph | None = None,
 ) -> SearchOutput:
     try:
@@ -893,7 +896,7 @@ def search_v2(
                 row_kind = "symbol"
                 if not _node_matches_filter(row_kind, row, nf):
                     continue
-            hits.append(_row_to_search_hit(row))
+            hits.append(_row_to_search_hit(row, explain=explain))
         hint_payload = {
             "success": True,
             "results": [h.model_dump() for h in hits],

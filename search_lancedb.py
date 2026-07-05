@@ -384,7 +384,8 @@ def explain_score_components(
         comps = {}
     parts: list[str] = []
     if hybrid:
-        rrf = comps.get("hybrid_rrf")
+        # Prefer rrf_raw (added by PR-SEARCH-1a) for explanation
+        rrf = comps.get("rrf_raw") or comps.get("hybrid_rrf")
         if rrf is not None:
             parts.append(f"rrf={float(rrf):.3f}")
     else:
