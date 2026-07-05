@@ -201,6 +201,14 @@ _ROLE_SCORE_WEIGHTS: dict[str, float] = {
     "DTO": -0.08,
 }
 
+# Theoretical maximum for hybrid composite score (used for display normalization).
+# Hybrid sort metric: raw_rrf * (import_factor if import_heavy else 1)
+#                   + role_weight + symbol_bonus
+# where raw_rrf ≤ 2/(k+1) for 2-list RRF, role_weight ≤ max(_ROLE_SCORE_WEIGHTS),
+# and symbol_bonus ≤ _SYMBOL_MATCH_BONUS_CAP + _TYPE_MATCH_BONUS_CAP + _ACTION_VERB_BONUS.
+# The import factor is ≤ 1, so we use the raw max (2/61).
+_HYBRID_SCORE_MAX = (2.0 / 61.0) + max(_ROLE_SCORE_WEIGHTS.values()) + _SYMBOL_MATCH_BONUS_CAP + _TYPE_MATCH_BONUS_CAP + _ACTION_VERB_BONUS
+
 
 def _query_tokens(query: str) -> set[str]:
     """Lowercased alpha-only tokens from the query, minus stopwords, len >= 3.
@@ -422,6 +430,25 @@ def _clamp01(x: float) -> float:
     if x > 1.0:
         return 1.0
     return x
+
+
+def _hybrid_post_sort_normalization(rows: list[dict]) -> None:
+    """Set honest displayed scores for hybrid search after sorting.
+
+    Reconstructs the composite score (raw_rrf * import_factor + role_weight + symbol_bonus)
+    and normalizes by _HYBRID_SCORE_MAX to ensure rank-monotonicity.
+
+    Mutates rows in-place, replacing _score with the normalized value.
+    """
+    for r in rows:
+        comps = r.setdefault("_score_components", {})
+        raw = comps.get("hybrid_rrf", 0.0)
+        comps["rrf_raw"] = raw  # preserve raw RRF for --explain
+        s = raw
+        if r.get("_hints", {}).get("import_heavy"):
+            s *= _IMPORT_HYBRID_SCORE_FACTOR
+        s += comps.get("role_weight", 0.0) + comps.get("symbol_bonus", 0.0)
+        r["_score"] = _clamp01(s / _HYBRID_SCORE_MAX)
 
 
 def _escape_like_fragment(s: str) -> str:
@@ -918,16 +945,8 @@ def run_search(
         _apply_symbol_bonus(rows, query_toks)
         if effective_hybrid:
             rows.sort(key=_hybrid_sort_key)
-            # Hybrid: normalize displayed _score to [0,1]
-            # LanceDB hybrid fuses vector + FTS (2 lists) with RRF k=60
-            # Theoretical max = 2/(60+1) ≈ 0.0328
-            rrf_k = 60
-            max_rrf = 2.0 / (rrf_k + 1)
-            for r in rows:
-                comps = r.setdefault("_score_components", {})
-                raw_score = float(r.get("_score", 0.0))
-                comps["rrf_raw"] = raw_score
-                r["_score"] = _clamp01(raw_score / max_rrf)
+            # Hybrid: set honest displayed score from composite sort metric, clamped to [0,1]
+            _hybrid_post_sort_normalization(rows)
         else:
             rows.sort(key=_vector_sort_key)
             # Vector: set honest displayed score from adjusted distance, clamped to [0,1]

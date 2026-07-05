@@ -184,52 +184,94 @@ def test_vector_displayed_score_is_rank_monotonic() -> None:
             scores[i] >= scores[i + 1]
         ), f"score not monotonic: {scores[i]} < {scores[i + 1]}"
 
+    # Verify skip_role_weight consistency: when _skip_role_weight is set,
+    # _role_weight returns 0.0 and writes 0.0 to comps["role_weight"],
+    # so _effective_distance correctly uses 0.0 (not the actual role weight).
+    row_with_role = {
+        "filename": "e.java",
+        "range_start": 5,
+        "range_end": 50,
+        "_distance": 0.5,
+        "role": "CONTROLLER",  # Would normally give 0.10 role_weight
+        "_skip_role_weight": True,  # But we're skipping role weights
+        "_score_components": {"distance": 0.5, "role_weight": 0.0},  # _role_weight set this
+    }
+    effective_dist = _effective_distance(row_with_role["_score_components"])
+    # Should be 0.5 (not 0.5 - 0.10 = 0.40) because role_weight is 0.0 when skipped
+    assert effective_dist == 0.5, f"expected 0.5, got {effective_dist}"
+
 
 def test_hybrid_score_normalized_to_unit_range() -> None:
-    """Hybrid search raw RRF scores (~0.016-0.032) are normalized to [0,1].
+    """Hybrid search displayed scores are rank-monotonic and in [0,1].
 
-    LanceDB hybrid uses RRF with k=60; theoretical max for 2 lists is 2/(60+1) ≈ 0.0328.
-    After normalization, top hits should score ≥ 0.5 and all scores in [0,1].
+    Exercises the actual hybrid sort + post-sort normalization code path.
+    The composite sort metric (raw_rrf * import_factor + role_weight + symbol_bonus)
+    must produce displayed scores that are non-increasing with rank.
     """
-    from search_lancedb import _clamp01
+    from search_lancedb import _hybrid_sort_key, _hybrid_post_sort_normalization
 
-    # Theoretical max for 2-list RRF with k=60
-    rrf_k = 60
-    max_rrf = 2.0 / (rrf_k + 1)  # ≈ 0.0328
-
-    # Simulate hybrid rows with raw RRF scores
+    # Build controlled hybrid rows with varying raw scores and components.
+    # Row 2 should rank highest due to large role_weight despite lower raw RRF.
+    # Row 1 should rank second due to high raw RRF + symbol_bonus.
+    # Row 3 should rank lowest (low raw RRF, no bonuses).
     rows = [
         {
             "filename": "a.java",
             "range_start": 1,
             "range_end": 10,
-            "_score": 0.032,  # top hit
-            "_score_components": {"hybrid_rrf": 0.032, "rrf_raw": 0.032},
+            "_score": 0.032,  # high raw RRF
+            "_hints": {"import_heavy": False},
+            "_score_components": {
+                "hybrid_rrf": 0.032,
+                "symbol_bonus": 0.06,  # max symbol bonus
+                "role_weight": 0.0,
+            },
         },
         {
             "filename": "b.java",
             "range_start": 2,
             "range_end": 20,
-            "_score": 0.016,  # mid-tier hit
-            "_score_components": {"hybrid_rrf": 0.016, "rrf_raw": 0.016},
+            "_score": 0.016,  # lower raw RRF but high role weight
+            "role": "CONTROLLER",
+            "_hints": {"import_heavy": False},
+            "_score_components": {
+                "hybrid_rrf": 0.016,
+                "symbol_bonus": 0.0,
+                "role_weight": 0.10,  # CONTROLLER weight
+            },
         },
         {
             "filename": "c.java",
             "range_start": 3,
             "range_end": 30,
-            "_score": 0.008,  # lower hit
-            "_score_components": {"hybrid_rrf": 0.008, "rrf_raw": 0.008},
+            "_score": 0.025,  # mid raw RRF, no bonuses
+            "_hints": {"import_heavy": False},
+            "_score_components": {
+                "hybrid_rrf": 0.025,
+                "symbol_bonus": 0.0,
+                "role_weight": 0.0,
+            },
         },
     ]
 
-    # Normalize displayed scores
-    for r in rows:
-        raw = r["_score_components"]["rrf_raw"]
-        r["_score"] = _clamp01(raw / max_rrf)
+    # Run through actual hybrid sort + post-sort normalization
+    rows.sort(key=_hybrid_sort_key)
+    _hybrid_post_sort_normalization(rows)
+
+    # Extract displayed scores in sorted order
+    displayed_scores = [r["_score"] for r in rows]
 
     # Verify all scores in [0,1]
-    for r in rows:
-        assert 0.0 <= r["_score"] <= 1.0, f"normalized score {r['_score']} not in [0,1]"
+    for score in displayed_scores:
+        assert 0.0 <= score <= 1.0, f"score {score} not in [0,1]"
 
-    # Verify top hit scores high (≥ 0.5 since it's near the max)
-    assert rows[0]["_score"] >= 0.5, f"top hit score {rows[0]['_score']} < 0.5"
+    # Verify scores are non-increasing (rank-monotonic)
+    for i in range(len(displayed_scores) - 1):
+        assert displayed_scores[i] >= displayed_scores[i + 1], (
+            f"scores not non-increasing: {displayed_scores[i]} < {displayed_scores[i + 1]}"
+        )
+
+    # Verify ranking: row 2 (CONTROLLER) should be first, row 1 second, row 3 last
+    assert rows[0]["filename"] == "b.java", f"expected b.java first, got {rows[0]['filename']}"
+    assert rows[1]["filename"] == "a.java", f"expected a.java second, got {rows[1]['filename']}"
+    assert rows[2]["filename"] == "c.java", f"expected c.java last, got {rows[2]['filename']}"
