@@ -14,6 +14,7 @@ not need any backend module.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -31,6 +32,7 @@ __all__ = [
     "project_node",
     "project_edge",
     "project_envelope",
+    "node_key",
 ]
 
 
@@ -89,6 +91,14 @@ class Envelope:
     (``to_envelope_rows``); the renderer and ``to_json()`` operate on dicts
     only. ``to_dict()`` omits empty optionals so a clean status=ok envelope
     stays small.
+
+    Internal vs agent-facing: ``nodes`` is keyed by the graph node id internally
+    (handlers build ``nodes[h.id] = ...``), and ``to_dict()`` preserves that
+    id-keyed shape for debugging / internal use. ``to_json()`` — the CLI output
+    boundary — is id-free: it re-keys ``nodes`` to each node's natural key
+    (FQN / path / topic / literal), strips graph-id fields (``id`` / ``*_id``),
+    and collapses edge id-refs into ``target``. The CLI is resolve-first, so no
+    raw graph id ever reaches an agent on either the text or the JSON surface.
     """
 
     status: EnvelopeStatus
@@ -137,7 +147,109 @@ class Envelope:
         return out
 
     def to_json(self) -> str:
-        return json.dumps(self.to_dict())
+        """Serialize to the AGENT-FACING id-free JSON string.
+
+        This is the CLI output boundary: it does NOT delegate to
+        :meth:`to_dict` (which stays id-keyed for internal/debug use and is
+        unit-tested as such). Instead it builds a fresh, id-free dict:
+
+          * ``nodes`` is re-keyed from raw graph ids to each node's natural key
+            via :func:`node_key`; when ``node_key`` returns ``None`` (no
+            identity field — e.g. status/orientation rollup nodes) the existing
+            dict key is kept unchanged. Each node value is stripped of graph-id
+            fields (``id`` / ``*_id``).
+          * each edge's ``other_id`` / ``dst_id`` / ``target_id`` / ``term_id``
+            (only ``other_id`` is ever emitted by handlers) collapses to a
+            single ``"target"`` holding the referenced node's natural key. A
+            dangling ref (no matching node) keeps its literal value — never
+            null, never silently dropped.
+          * ``root`` becomes the root node's natural key (omitted when absent).
+          * ``candidates`` are stripped of graph-id fields.
+          * Envelope-level scalars (``status`` / ``warnings`` / ``truncated`` /
+            ``file_location`` / ``message`` / ``agent_next_actions``) pass
+            through unchanged.
+
+        Builds NEW dicts throughout (no in-place mutation of ``self``).
+        """
+        return json.dumps(self._to_idfree_dict())
+
+    def _to_idfree_dict(self) -> dict[str, Any]:
+        """Build the id-free agent-facing dict (see :meth:`to_json`)."""
+        # 1. id -> natural key map (falls back to the existing key when node_key
+        #    returns None, preserving literal keys like "index"/"microservices").
+        id_to_key: dict[str, str] = {}
+        used: set[str] = set()
+        for id_key, node in self.nodes.items():
+            natural = node_key(node)
+            if natural is None:
+                # No semantic identity. Keep the existing dict key ONLY when it
+                # is not a raw graph id (e.g. the literal "index" / "microservices"
+                # rollup keys). If it IS a raw id (40-hex SHA or a prefixed hash
+                # form like r:phantom:<hex> / ucs:<hex>), synthesize an opaque
+                # positional key so no graph id ever leaks as a JSON key.
+                if _looks_like_raw_graph_id(id_key):
+                    key = f"node-{len(used)}"
+                else:
+                    key = id_key
+            else:
+                key = natural
+                # Collision suffix: first occurrence unsuffixed, then #2, #3, ...
+                if key in used:
+                    base = key
+                    n = 2
+                    while key in used:
+                        key = f"{base}#{n}"
+                        n += 1
+            used.add(key)
+            id_to_key[id_key] = key
+
+        out: dict[str, Any] = {"status": self.status}
+
+        if self.nodes:
+            out["nodes"] = {
+                id_to_key[nid]: _strip_graph_id_fields(dict(node))
+                for nid, node in self.nodes.items()
+            }
+        if self.edges:
+            out["edges"] = [self._edge_to_idfree(e, id_to_key) for e in self.edges]
+        if self.root is not None:
+            # The root's natural key (falls back to the raw root id only if the
+            # root node isn't in self.nodes — a defensive no-op in practice).
+            out["root"] = id_to_key.get(self.root, self.root)
+        if self.candidates:
+            out["candidates"] = [_strip_graph_id_fields(dict(c)) for c in self.candidates]
+        if self.agent_next_actions:
+            out["agent_next_actions"] = list(self.agent_next_actions)
+        if self.warnings:
+            out["warnings"] = list(self.warnings)
+        if self.truncated:
+            out["truncated"] = True
+        if self.file_location is not None:
+            out["file_location"] = self.file_location
+        if self.message is not None:
+            out["message"] = self.message
+        return out
+
+    @staticmethod
+    def _edge_to_idfree(edge: dict[str, Any], id_to_key: dict[str, str]) -> dict[str, Any]:
+        """Copy an edge, collapsing id-ref variants into one ``target`` key.
+
+        Mirrors :func:`jrag_render._node_id`'s variant list. Only ``other_id``
+        is emitted by handlers in practice; the others are defensive. The
+        remaining raw id-ref keys are dropped; all other edge attrs pass through.
+        """
+        out: dict[str, Any] = {}
+        ref_value: str | None = None
+        for k, v in edge.items():
+            if k in ("other_id", "dst_id", "target_id", "term_id"):
+                if ref_value is None and isinstance(v, str) and v:
+                    ref_value = v
+                # skip (don't copy the raw id-ref key)
+            elif not _is_graph_id_field(k):
+                out[k] = v
+        if ref_value is not None:
+            out["target"] = id_to_key.get(ref_value, ref_value)
+        return out
 
 
 def simple_name(node_dict: dict[str, Any]) -> str:
@@ -150,6 +262,53 @@ def simple_name(node_dict: dict[str, Any]) -> str:
     if not fqn:
         return ""
     return fqn.rsplit(".", 1)[-1]
+
+
+def node_key(node: dict[str, Any]) -> str | None:
+    """Derive a stable, agent-meaningful, NON-graph-id key for a node.
+
+    Used by :meth:`Envelope.to_json` to re-key ``nodes`` (away from raw graph
+    ids) and to translate edge ``other_id`` refs. Returns ``None`` when no
+    identity field is derivable, in which case :meth:`Envelope.to_json` keeps
+    the existing dict key unchanged (this preserves already-id-free literal
+    keys such as ``"index"`` / ``"microservices"`` / ``"map"`` / ``"conventions"``
+    that status / orientation commands build).
+
+    Precedence (first non-empty wins):
+      * ``fqn``           -> symbols AND route roots. Route roots come from
+                             ``NodeRef.model_dump()`` whose ``fqn`` already
+                             carries ``"METHOD path"`` (no separate path/method
+                             fields), so this single branch covers them.
+      * ``member_fqn``    -> clients: ``member_fqn->target_service`` (disambiguates
+                             a client member from a symbol of the same name).
+      * ``topic``         -> producers/topics: ``topic:<name>`` (the ``topic:``
+                             prefix matches the existing _cmd_topics key shape).
+      * ``name``          -> fallback for any other named node.
+      * ``file``          -> unresolved/phantom routes carry no fqn/path/topic/name
+                             but DO carry a composed ``file`` location; keying by
+                             it avoids leaking the raw graph id (e.g.
+                             ``r:phantom:<hash>``) when no semantic id exists.
+      * else              -> ``None`` (caller keeps the existing dict key — safe
+                             only when that key is already a non-id literal, e.g.
+                             the ``"index"`` / ``"microservices"`` rollup keys).
+    """
+    fqn = str(node.get("fqn") or "").strip()
+    if fqn:
+        return fqn
+    member_fqn = str(node.get("member_fqn") or "").strip()
+    if member_fqn:
+        target = str(node.get("target_service") or "").strip()
+        return f"{member_fqn}->{target}" if target else member_fqn
+    topic = str(node.get("topic") or "").strip()
+    if topic:
+        return f"topic:{topic}"
+    name = str(node.get("name") or "").strip()
+    if name:
+        return name
+    file_loc = str(node.get("file") or "").strip()
+    if file_loc:
+        return file_loc
+    return None
 
 
 def to_envelope_rows(pydantic_results: list[Any]) -> list[dict[str, Any]]:
@@ -525,9 +684,14 @@ _RAW_LOCATION_KEYS = frozenset(
 # Reproduces today's terse text output exactly at ``brief``. ``reason`` is
 # candidate-structural (the ambiguous narrowing hint), so it survives at every
 # level — a candidate without its reason is useless.
+#
+# NOTE: ``id`` is intentionally ABSENT. Graph node ids (40-hex SHAs) are an
+# internal join key, never an agent-facing identifier — the CLI is resolve-first
+# (agents pass FQN / simple name / route / topic). :func:`project_node` drops
+# ``id`` and every ``*_id`` graph foreign key at every detail level via
+# :func:`_is_graph_id_field`; see the boundary-strip rule there.
 _BRIEF_NODE_KEYS: frozenset[str] = frozenset(
     {
-        "id",
         "kind",
         "fqn",
         "name",
@@ -594,6 +758,80 @@ def _is_empty(value: Any) -> bool:
     return False
 
 
+def _is_graph_id_field(key: str) -> bool:
+    """True for raw graph node-id fields stripped at the CLI boundary.
+
+    Boundary-strip rule for the agent-facing surface: the CLI is resolve-first
+    (agents pass FQN / simple name / route / topic — never a raw id), so no
+    graph-internal id or graph foreign-key column reaches text or JSON. The rule
+    is ``key == "id" or key.endswith("_id")``, which catches ``id``,
+    ``parent_id`` (SymbolHit), ``chunk_id`` / ``symbol_id`` (SearchHit), and
+    ``member_id`` (raw list_clients/list_producers rows), plus any future graph
+    FK. No agent-meaningful field in this domain uses the ``_id`` suffix —
+    topics are keyed by name, routes by path — so the suffix rule is safe.
+
+    Applied in :func:`project_node` (fields) and :meth:`Envelope.to_json`
+    (boundary reshape); the internal envelope + :meth:`Envelope.to_dict` stay
+    id-keyed for join/debug use.
+    """
+    return key == "id" or key.endswith("_id")
+
+
+def _strip_graph_id_fields(node: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy of ``node`` with graph-id fields removed (see :func:`_is_graph_id_field`).
+
+    RECURSES into nested dicts and list-of-dicts values so ids embedded in
+    sub-records are stripped too — e.g. the ``data`` sub-dict on a
+    ``NodeRecord.model_dump()`` (the ``inspect`` envelope node) carries its own
+    ``id`` / ``parent_id``; a top-level-only strip would leave them. Scalars and
+    non-dict lists pass through unchanged.
+    """
+    out: dict[str, Any] = {}
+    for k, v in node.items():
+        if _is_graph_id_field(k):
+            continue
+        out[k] = _strip_nested_ids(v)
+    return out
+
+
+def _looks_like_raw_graph_id(key: str) -> bool:
+    """Heuristic: does this string look like a raw graph node id?
+
+    Used by :meth:`Envelope._to_idfree_dict` to decide whether to synthesize an
+    opaque positional key when a node has no semantic identity (see
+    :func:`node_key` returning ``None``). Matches 40-hex SHA-1 ids and the
+    prefixed hash forms the graph builder emits (``r:phantom:<hex>``,
+    ``ucs:<hex>``, ``sym:<hex>``, ``chunk:<hex>``). Meaningful literal keys
+    (``"index"``, ``"microservices"``) and handler-built synthetics
+    (``microservice:<name>``, ``import:<fqn>``, ``topic:<name>``) do NOT match.
+    """
+    if not key:
+        return False
+    if _SHA1_RE.fullmatch(key):
+        return True
+    # prefixed hash forms: "<prefix>:<optional sub>:<hex-ish>"
+    if ":" in key:
+        head = key.split(":", 1)[0]
+        tail = key.rsplit(":", 1)[-1]
+        if head in _GRAPH_ID_PREFIXES and _HEX_TAIL_RE.search(tail):
+            return True
+    return False
+
+
+_GRAPH_ID_PREFIXES = frozenset({"r", "ucs", "sym", "chunk", "route", "member"})
+_SHA1_RE = re.compile(r"[0-9a-f]{40}")
+_HEX_TAIL_RE = re.compile(r"[0-9a-f]{8,}")
+
+
+def _strip_nested_ids(value: Any) -> Any:
+    """Recursively strip graph-id fields from nested dicts / list-of-dicts."""
+    if isinstance(value, dict):
+        return _strip_graph_id_fields(value)
+    if isinstance(value, list):
+        return [_strip_nested_ids(item) for item in value]
+    return value
+
+
 def _drop_empty(node: dict[str, Any]) -> dict[str, Any]:
     """Drop keys whose value is ``None`` / ``""`` / ``[]`` / ``{}``.
 
@@ -642,7 +880,10 @@ def project_node(node: dict[str, Any], detail: str) -> dict[str, Any]:
     * ``"brief"``  -> keep ``_BRIEF_NODE_KEYS`` (identity only == today's text).
 
     ``file`` is composed before selection so it is available at ``normal`` /
-    ``full``. Empty values are dropped at every level. Returns a new dict.
+    ``full``. Empty values are dropped at every level. Graph-id fields (``id``,
+    ``*_id``) are stripped at every level via :func:`_strip_graph_id_fields` —
+    the CLI is resolve-first, so raw graph ids never reach the agent. Returns a
+    new dict.
     """
     composed = _compose_file(node)
     if detail == "full":
@@ -650,7 +891,7 @@ def project_node(node: dict[str, Any], detail: str) -> dict[str, Any]:
     else:
         allow = _NORMAL_NODE_KEYS if detail == "normal" else _BRIEF_NODE_KEYS
         selected = {k: v for k, v in composed.items() if k in allow}
-    return _drop_empty(selected)
+    return _drop_empty(_strip_graph_id_fields(selected))
 
 
 def project_edge(edge: dict[str, Any], detail: str) -> dict[str, Any]:

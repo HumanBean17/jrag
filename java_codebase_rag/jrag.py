@@ -163,42 +163,51 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command")
 
-    # Common flags applied per command via parents=[common]. NOT global so
-    # commands can override defaults (e.g. fan-out commands use limit=10).
-    common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--service", type=str, default=None, help="Filter by microservice.")
-    common.add_argument("--module", type=str, default=None, help="Filter by module.")
-    common.add_argument(
-        "--limit", type=int, default=20, help="Cap on results (default 20; 10 for fan-out)."
-    )
-    common.add_argument(
-        "--index-dir",
-        type=str,
-        default=None,
-        dest="index_dir",
-        help="Index directory override (default: discovered from cwd).",
-    )
-    common.add_argument(
-        "--format",
-        choices=("text", "json"),
-        default="text",
-        help="Output format (default: text).",
-    )
-    common.add_argument(
-        "--detail",
-        choices=("brief", "normal", "full"),
-        default="normal",
-        help=(
-            "Output detail level (default normal) — ORTHOGONAL to --format: both "
-            "text and json honor it. brief = identity only (name @service); "
-            "normal = +module/role/file/score; full = +signature/annotations/snippet."
-        ),
-    )
+    # Common flags applied per command via parents=[_common_parser()]. NOT
+    # global so commands can override defaults (e.g. fan-out commands use
+    # limit=10). The helper builds a FRESH parser each call so every subparser
+    # owns its own --detail Action object — argparse `parents` shares Action
+    # objects by reference, and `set_defaults(detail=...)` mutates the shared
+    # action's default (CPython walks `self._actions`), so a single shared
+    # `common` made `status.set_defaults(detail="full")` poison every other
+    # subparser into defaulting to "full". A fresh parser per subparser isolates
+    # the override to the command that asked for it.
+    def _common_parser() -> argparse.ArgumentParser:
+        common = argparse.ArgumentParser(add_help=False)
+        common.add_argument("--service", type=str, default=None, help="Filter by microservice.")
+        common.add_argument("--module", type=str, default=None, help="Filter by module.")
+        common.add_argument(
+            "--limit", type=int, default=20, help="Cap on results (default 20; 10 for fan-out)."
+        )
+        common.add_argument(
+            "--index-dir",
+            type=str,
+            default=None,
+            dest="index_dir",
+            help="Index directory override (default: discovered from cwd).",
+        )
+        common.add_argument(
+            "--format",
+            choices=("text", "json"),
+            default="text",
+            help="Output format (default: text).",
+        )
+        common.add_argument(
+            "--detail",
+            choices=("brief", "normal", "full"),
+            default="normal",
+            help=(
+                "Output detail level (default normal) — ORTHOGONAL to --format: both "
+                "text and json honor it. brief = identity only (name @service); "
+                "normal = +module/role/file/score; full = +signature/annotations/snippet."
+            ),
+        )
+        return common
 
     status = subparsers.add_parser(
         "status",
         help="Print index freshness, ontology version, and counts.",
-        parents=[common],
+        parents=[_common_parser()],
         description=(
             "Index health and freshness. Reports ontology version, source root, "
             "built_at, parse_errors, edge counts, and the counts dictionary from "
@@ -212,7 +221,7 @@ def build_parser() -> argparse.ArgumentParser:
     find = subparsers.add_parser(
         "find",
         help="Find nodes by query or filter.",
-        parents=[common],
+        parents=[_common_parser()],
         description=(
             "Find nodes by query or filter. Two modes:\n"
             "  Query mode (positional <query>): search by exact name/FQN (symbols only).\n"
@@ -257,7 +266,7 @@ def build_parser() -> argparse.ArgumentParser:
     inspect = subparsers.add_parser(
         "inspect",
         help="Inspect a node by query.",
-        parents=[common],
+        parents=[_common_parser()],
         description=(
             "Inspect a node by resolving a query (name/FQN) and returning its full details\n"
             "including edge_summary. Uses resolve_v2 internally; on ambiguous candidates,\n"
@@ -280,7 +289,7 @@ def build_parser() -> argparse.ArgumentParser:
     routes = subparsers.add_parser(
         "routes",
         help="List HTTP routes.",
-        parents=[common],
+        parents=[_common_parser()],
         description=(
             "List HTTP routes by microservice, framework, path prefix, or method. "
             "Returns route nodes (no resolve step)."
@@ -289,13 +298,13 @@ def build_parser() -> argparse.ArgumentParser:
     routes.add_argument("--framework", type=str, default=None, help="Filter by framework.")
     routes.add_argument("--path-prefix", type=str, default=None, help="Filter by path prefix.")
     routes.add_argument("--method", type=str, default=None, help="Filter by HTTP method.")
-    routes.set_defaults(handler=_cmd_routes)
+    routes.set_defaults(handler=_cmd_routes, detail="full")
 
     # clients subparser (PR-JRAG-2)
     clients = subparsers.add_parser(
         "clients",
         help="List HTTP clients.",
-        parents=[common],
+        parents=[_common_parser()],
         description=(
             "List HTTP clients by microservice, client kind, target service, or path prefix. "
             "Returns client nodes (no resolve step)."
@@ -304,13 +313,13 @@ def build_parser() -> argparse.ArgumentParser:
     clients.add_argument("--client-kind", type=str, default=None, help="Filter by client kind.")
     clients.add_argument("--calls-service", type=str, default=None, help="Filter by target service.")
     clients.add_argument("--path-prefix", type=str, default=None, help="Filter by path prefix.")
-    clients.set_defaults(handler=_cmd_clients)
+    clients.set_defaults(handler=_cmd_clients, detail="full")
 
     # producers subparser (PR-JRAG-2)
     producers = subparsers.add_parser(
         "producers",
         help="List async message producers.",
-        parents=[common],
+        parents=[_common_parser()],
         description=(
             "List async message producers by microservice, producer kind, or topic prefix. "
             "Returns producer nodes (no resolve step)."
@@ -318,13 +327,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     producers.add_argument("--producer-kind", type=str, default=None, help="Filter by producer kind.")
     producers.add_argument("--topic-prefix", type=str, default=None, help="Filter by topic prefix.")
-    producers.set_defaults(handler=_cmd_producers)
+    producers.set_defaults(handler=_cmd_producers, detail="full")
 
     # topics subparser (PR-JRAG-2)
     topics = subparsers.add_parser(
         "topics",
         help="List message topics (producer-grouped).",
-        parents=[common],
+        parents=[_common_parser()],
         description=(
             "List message topics grouped by producer. "
             "No :Topic node exists; this command groups producers by topic name. "
@@ -334,44 +343,44 @@ def build_parser() -> argparse.ArgumentParser:
     topics.add_argument("--topic-prefix", type=str, default=None, help="Filter by topic prefix.")
     topics.add_argument("--producer-in", type=str, default=None, help="Scope producers to this microservice.")
     topics.add_argument("--consumer-in", type=str, default=None, help="Show consumers from this microservice.")
-    topics.set_defaults(handler=_cmd_topics)
+    topics.set_defaults(handler=_cmd_topics, detail="full")
 
     # jobs subparser (PR-JRAG-2)
     jobs = subparsers.add_parser(
         "jobs",
         help="List scheduled tasks.",
-        parents=[common],
+        parents=[_common_parser()],
         description=(
             "List scheduled task symbols (capability=SCHEDULED_TASK). "
             "Returns Symbol nodes with the SCHEDULED_TASK capability."
         ),
     )
-    jobs.set_defaults(handler=_cmd_jobs)
+    jobs.set_defaults(handler=_cmd_jobs, detail="full")
 
     # listeners subparser (PR-JRAG-2)
     listeners = subparsers.add_parser(
         "listeners",
         help="List message listeners.",
-        parents=[common],
+        parents=[_common_parser()],
         description=(
             "List message listener symbols (capability=MESSAGE_LISTENER). "
             "Returns Symbol nodes with the MESSAGE_LISTENER capability."
         ),
     )
     listeners.add_argument("--topic-prefix", type=str, default=None, help="Filter by topic prefix (on producer member).")
-    listeners.set_defaults(handler=_cmd_listeners)
+    listeners.set_defaults(handler=_cmd_listeners, detail="full")
 
     # entities subparser (PR-JRAG-2)
     entities = subparsers.add_parser(
         "entities",
         help="List JPA entities.",
-        parents=[common],
+        parents=[_common_parser()],
         description=(
             "List JPA entity symbols (role=ENTITY). "
             "Returns Symbol nodes with the ENTITY role."
         ),
     )
-    entities.set_defaults(handler=_cmd_entities)
+    entities.set_defaults(handler=_cmd_entities, detail="full")
 
     # ---- Traversal commands (PR-JRAG-3a) ----
     # Shared resolve-disambiguation flags (PR-JRAG-1a contract: only --kind is a
@@ -392,7 +401,7 @@ def build_parser() -> argparse.ArgumentParser:
     callers = subparsers.add_parser(
         "callers",
         help="Who calls this symbol or route?",
-        parents=[common, resolve_parent],
+        parents=[_common_parser(), resolve_parent],
         description=(
             "Resolve <query> then traverse the call graph inbound (who calls me?). "
             "Symbol -> g.find_callers (CALLS edges, --service/--module pushed down). "
@@ -421,7 +430,7 @@ def build_parser() -> argparse.ArgumentParser:
     callees = subparsers.add_parser(
         "callees",
         help="What does this symbol call?",
-        parents=[common, resolve_parent],
+        parents=[_common_parser(), resolve_parent],
         description=(
             "Resolve <query> (Symbol) then traverse the call graph outbound (what do I "
             "call?). Calls g.find_callees; --include-external is symmetric with callers."
@@ -446,7 +455,7 @@ def build_parser() -> argparse.ArgumentParser:
     hierarchy = subparsers.add_parser(
         "hierarchy",
         help="Type hierarchy (parents and children).",
-        parents=[common, resolve_parent],
+        parents=[_common_parser(), resolve_parent],
         description=(
             "Resolve <query> (type Symbol) then walk EXTENDS/IMPLEMENTS both directions: "
             "out = supertypes (parents), in = subtypes (children). No --service/--module "
@@ -459,7 +468,7 @@ def build_parser() -> argparse.ArgumentParser:
     implementations = subparsers.add_parser(
         "implementations",
         help="Classes implementing an interface.",
-        parents=[common, resolve_parent],
+        parents=[_common_parser(), resolve_parent],
         description=(
             "Resolve <query> (interface Symbol) then call g.find_implementors. "
             "--service/--module pushed down; --capability pushed down to the backend "
@@ -473,7 +482,7 @@ def build_parser() -> argparse.ArgumentParser:
     subclasses = subparsers.add_parser(
         "subclasses",
         help="Classes extending a type.",
-        parents=[common, resolve_parent],
+        parents=[_common_parser(), resolve_parent],
         description=(
             "Resolve <query> (class Symbol) then call g.find_subclasses (EXTENDS inbound). "
             "--service/--module pushed down."
@@ -485,7 +494,7 @@ def build_parser() -> argparse.ArgumentParser:
     overrides = subparsers.add_parser(
         "overrides",
         help="Methods this method overrides (dispatch UP to declaration).",
-        parents=[common, resolve_parent],
+        parents=[_common_parser(), resolve_parent],
         description=(
             "Resolve <query> (method Symbol) then neighbors_v2([id], 'out', ['OVERRIDES']). "
             "The stored OVERRIDES edge runs overrider -> declaration (subtype method -> "
@@ -498,7 +507,7 @@ def build_parser() -> argparse.ArgumentParser:
     overridden_by = subparsers.add_parser(
         "overridden-by",
         help="Methods overriding this one (dispatch DOWN to overriders).",
-        parents=[common, resolve_parent],
+        parents=[_common_parser(), resolve_parent],
         description=(
             "Resolve <query> (method Symbol) then neighbors_v2([id], 'in', ['OVERRIDES']) "
             "(= virtual OVERRIDDEN_BY out). 'in' traverses the stored OVERRIDES edge "
@@ -511,7 +520,7 @@ def build_parser() -> argparse.ArgumentParser:
     dependents = subparsers.add_parser(
         "dependents",
         help="Who injects this type?",
-        parents=[common, resolve_parent],
+        parents=[_common_parser(), resolve_parent],
         description=(
             "Resolve <query> (type Symbol) then call g.find_injectors (INJECTS inbound: "
             "classes that inject this type). --service/--module pushed down."
@@ -523,7 +532,7 @@ def build_parser() -> argparse.ArgumentParser:
     impact = subparsers.add_parser(
         "impact",
         help="Fleet-wide blast radius (INJECTS/IMPLEMENTS/EXTENDS reverse closure).",
-        parents=[common, resolve_parent],
+        parents=[_common_parser(), resolve_parent],
         description=(
             "Resolve <query> then call g.impact_analysis (reverse closure over "
             "INJECTS+IMPLEMENTS+EXTENDS: who breaks if this changes). --service is a "
@@ -538,7 +547,7 @@ def build_parser() -> argparse.ArgumentParser:
     decompose = subparsers.add_parser(
         "decompose",
         help="Role-waterfall flow from an entrypoint.",
-        parents=[common, resolve_parent],
+        parents=[_common_parser(), resolve_parent],
         description=(
             "Resolve <query> (entrypoint Symbol) then call g.trace_flow. Walks "
             "CONTROLLER -> SERVICE/COMPONENT -> CLIENT/REPOSITORY/MAPPER stages via "
@@ -578,7 +587,7 @@ def build_parser() -> argparse.ArgumentParser:
     flow = subparsers.add_parser(
         "flow",
         help="Request flow through a route (inbound callers + outbound CALLS hops).",
-        parents=[common],
+        parents=[_common_parser()],
         description=(
             "Resolve <query> to a Route then call g.trace_request_flow. Inbound = "
             "cross-service HTTP/async callers (Client/Producer two-hop); outbound = "
@@ -613,7 +622,7 @@ def build_parser() -> argparse.ArgumentParser:
     dependencies = subparsers.add_parser(
         "dependencies",
         help="Types this Symbol injects (INJECTS out).",
-        parents=[common, resolve_parent],
+        parents=[_common_parser(), resolve_parent],
         description=(
             "Resolve <query> (type Symbol) then neighbors_v2([id], 'out', ['INJECTS']) "
             "= the types this class injects (its direct dependencies). INJECTS is "
@@ -636,7 +645,7 @@ def build_parser() -> argparse.ArgumentParser:
     connection = subparsers.add_parser(
         "connection",
         help="Cross-service connections for a microservice (inbound/outbound).",
-        parents=[common],
+        parents=[_common_parser()],
         description=(
             "RESOLVE-FIRST EXCEPTION: the first positional is a microservice NAME "
             "(e.g. 'chat-core'), NOT a query — it is passed literally to list_clients/"
@@ -701,7 +710,7 @@ def build_parser() -> argparse.ArgumentParser:
     outline = subparsers.add_parser(
         "outline",
         help="List symbols declared in a file.",
-        parents=[common],
+        parents=[_common_parser()],
         description=(
             "List all Symbol nodes whose declared location is in <file>. Calls "
             "find_symbols_in_file_range(graph, filename=<file>, start_line=1, "
@@ -717,7 +726,7 @@ def build_parser() -> argparse.ArgumentParser:
     imports = subparsers.add_parser(
         "imports",
         help="List imports declared in a file (tree-sitter parse + resolve_v2).",
-        parents=[common],
+        parents=[_common_parser()],
         description=(
             "Parse <file> with tree-sitter (ast_java.parse_java), walk its "
             "import_declaration nodes, and resolve each imported FQN via resolve_v2 "
@@ -734,7 +743,7 @@ def build_parser() -> argparse.ArgumentParser:
     microservices = subparsers.add_parser(
         "microservices",
         help="List microservices with resolved type counts.",
-        parents=[common],
+        parents=[_common_parser()],
         description=(
             "List every microservice with its resolved type-symbol count. "
             "Calls g.microservice_counts(). Renders as a counts listing."
@@ -745,7 +754,7 @@ def build_parser() -> argparse.ArgumentParser:
     map_cmd = subparsers.add_parser(
         "map",
         help="Symbol counts per kind, grouped by service or module.",
-        parents=[common],
+        parents=[_common_parser()],
         description=(
             "Count resolved type Symbols (class/interface/enum/record/annotation) "
             "grouped by microservice or module. --by {microservice,module} selects "
@@ -765,7 +774,7 @@ def build_parser() -> argparse.ArgumentParser:
     conventions = subparsers.add_parser(
         "conventions",
         help="Dominant roles + framework tallies.",
-        parents=[common],
+        parents=[_common_parser()],
         description=(
             "Report the dominant roles among resolved Symbols and the route framework "
             "distribution. --service narrows the role tally to one microservice."
@@ -776,7 +785,7 @@ def build_parser() -> argparse.ArgumentParser:
     overview = subparsers.add_parser(
         "overview",
         help="Bundle for a microservice, route, or topic.",
-        parents=[common],
+        parents=[_common_parser()],
         description=(
             "Dispatch on the positional <subject>:\n"
             "  Route path (starts with '/')  -> trace_request_flow (same as `flow`).\n"
@@ -806,7 +815,7 @@ def build_parser() -> argparse.ArgumentParser:
     search = subparsers.add_parser(
         "search",
         help="Semantic search over Lance tables.",
-        parents=[common],
+        parents=[_common_parser()],
         description=(
             "Semantic search via search_v2 over the Lance index (java/sql/yaml tables). "
             "--table all searches all three. --hybrid enables vector+keyword hybrid. "

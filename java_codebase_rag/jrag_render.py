@@ -35,11 +35,13 @@ _ROUTE_KIND_TAGS: dict[str, str] = {"kafka_topic": "kafka", "http_endpoint": "ht
 # Identity keys already represented in a listing line (display_name + @service +
 # kind tag). At ``--detail full`` the per-row kv-block skips these (they are in
 # the header line) and renders every OTHER key, so full listing == per-row
-# inspect block. Must agree with the identity half of the envelope projector's
+# inspect block. ``id`` is absent here AND stripped by the envelope projector's
+# graph-id-field rule (see jrag_envelope._strip_graph_id_fields) — listed for
+# documentation of the identity set, but the projector is the authoritative
+# strip seam. Must agree with the identity half of the envelope projector's
 # ``_BRIEF_NODE_KEYS`` (see jrag_envelope.py).
 _LISTING_LINE_KEYS: frozenset[str] = frozenset(
     {
-        "id",
         "kind",
         "fqn",
         "name",
@@ -460,7 +462,10 @@ def _render_ambiguous(envelope: Envelope, *, noun: str) -> str:
     lines = [header, "Narrow with --kind --java-kind --role --fqn-prefix:"]
     for cand in envelope.candidates:
         # Ambiguous candidates carry reason; NO file / score (PR-JRAG-1a test 14).
-        name = display_name(cand) or str(cand.get("id") or "")
+        # display_name only — graph id is NOT a fallback (the envelope projector
+        # strips id/parent_id at every detail level; an unidentified candidate
+        # renders with "(no identifier)" rather than leaking a raw SHA).
+        name = display_name(cand) or "(no identifier)"
         service = str(cand.get("microservice") or "").strip()
         reason = str(cand.get("reason") or "").strip()
         line = f"  {name}"

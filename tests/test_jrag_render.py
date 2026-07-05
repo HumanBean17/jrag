@@ -351,7 +351,7 @@ def test_render_truncated_offset_hint_for_offset_commands() -> None:
 # ----- Test 18: json path (now via projection — PR-JRAG-6) -----
 
 
-def test_render_json_full_is_envelope_verbatim_for_projection_invariant_data() -> None:
+def test_render_json_full_is_idfree_envelope_for_projection_invariant_data() -> None:
     """``render(fmt="json")`` now projects the envelope to the requested detail
     level (orthogonal to text). For projection-invariant data (only identity
     fields) and ``detail="full"``, the output still equals ``env.to_json()`` —
@@ -362,15 +362,17 @@ def test_render_json_full_is_envelope_verbatim_for_projection_invariant_data() -
     env = Envelope(
         status="ok",
         root="sym:1",
-        nodes={"sym:1": {"fqn": "com.foo.Bar"}},
+        nodes={"sym:1": {"id": "sym:1", "fqn": "com.foo.Bar"}},
         warnings=["partial"],
     )
     out = render(env, fmt="json", detail="full")
     assert out == env.to_json()
     parsed = json.loads(out)
     assert parsed["status"] == "ok"
-    assert parsed["root"] == "sym:1"
-    assert parsed["nodes"] == {"sym:1": {"fqn": "com.foo.Bar"}}
+    # root + node key are the FQN (the node's natural key), NOT the graph id;
+    # the internal ``id`` field is stripped at the boundary.
+    assert parsed["root"] == "com.foo.Bar"
+    assert parsed["nodes"] == {"com.foo.Bar": {"fqn": "com.foo.Bar"}}
     assert parsed["warnings"] == ["partial"]
 
 
@@ -444,15 +446,17 @@ def test_json_and_text_share_field_set_at_each_detail() -> None:
     """
     env = _search_listing_env()
     for detail, expected_keys in (
-        ("brief", {"id", "kind", "fqn", "name", "microservice"}),
-        ("normal", {"id", "kind", "fqn", "name", "microservice",
+        # ``id`` is stripped at every level (graph ids are not agent-facing);
+        # nodes are keyed by their natural key (FQN), so look up "com.foo.Bar".
+        ("brief", {"kind", "fqn", "name", "microservice"}),
+        ("normal", {"kind", "fqn", "name", "microservice",
                     "module", "role", "score"}),  # +file only if filename present
-        ("full", {"id", "kind", "fqn", "name", "microservice",
+        ("full", {"kind", "fqn", "name", "microservice",
                   "module", "role", "score", "snippet"}),
     ):
         parsed = json.loads(render(env, fmt="json", detail=detail))
-        assert set(parsed["nodes"]["chunk:1"].keys()) == expected_keys, (
-            f"{detail}: json key set {set(parsed['nodes']['chunk:1'].keys())} != {expected_keys}"
+        assert set(parsed["nodes"]["com.foo.Bar"].keys()) == expected_keys, (
+            f"{detail}: json key set {set(parsed['nodes']['com.foo.Bar'].keys())} != {expected_keys}"
         )
         # The text output at the same level shows the same identity label, and
         # does NOT show keys the projector dropped (snippet at brief/normal).
@@ -537,7 +541,7 @@ def test_search_json_normal_omits_snippet_drops_empty_fields() -> None:
     """Regression for the complaint: json used to dump the full snippet + every
     None field. At normal, snippet is gone AND symbol_id (None) is dropped."""
     parsed = json.loads(render(_search_listing_env(), fmt="json", detail="normal"))
-    node = parsed["nodes"]["chunk:1"]
+    node = parsed["nodes"]["com.foo.Bar"]  # keyed by natural key (FQN), not chunk_id
     assert "snippet" not in node, f"normal json leaked snippet: {node!r}"
     assert "symbol_id" not in node, f"normal json kept empty symbol_id: {node!r}"
     assert node["score"] == 0.91

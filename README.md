@@ -229,13 +229,20 @@ shared envelope verbatim. Every command emits the same envelope shape:
 ```json
 {
   "status": "ok",
-  "nodes": {"<id>": {"id": "...", "kind": "...", "fqn": "..."}},
-  "edges": [{"other_id": "...", "edge_type": "CALLS", "confidence": 0.9}],
-  "root": "<resolved-id>",
+  "nodes": {"com.example.Foo": {"kind": "symbol", "fqn": "com.example.Foo"}},
+  "edges": [{"edge_type": "CALLS", "confidence": 0.9, "target": "com.example.Bar#baz()"}],
+  "root": "com.example.Foo",
   "agent_next_actions": ["jrag callees com.example.Foo#bar()"],
   "truncated": false
 }
 ```
+
+No raw graph node id ever appears on either surface: `nodes` is keyed by each
+node's natural identifier (FQN for symbols, `METHOD path` for routes,
+`member_fqn->target` for clients, `topic:<name>` for topics), `root` is the
+root's natural identifier, and each edge carries `target` (the referenced node's
+identifier) instead of a graph id. The agent reuses these identifiers directly
+as the next command's `<query>` — there is nothing else to pass.
 
 `agent_next_actions` carries up to 5 contextual next-step hints (e.g. after
 `inspect`, the agent sees `jrag callers <fqn>`, `jrag callees <fqn>`, etc. for

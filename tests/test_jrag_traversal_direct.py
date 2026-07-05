@@ -97,7 +97,7 @@ def test_callers_symbol_uses_find_callers(corpus_root: Path, ladybug_db_path: Pa
     assert len(edges) >= 1, f"expected at least one caller edge, got {edges}"
     nodes = payload.get("nodes", {})
     # At least one edge endpoint should be the ChatManagementController#assign caller.
-    caller_fqns = [nodes.get(e.get("other_id"), {}).get("fqn", "") for e in edges]
+    caller_fqns = [nodes.get(e.get("target"), {}).get("fqn", "") for e in edges]
     assert any("ChatManagementController#assign" in fqn for fqn in caller_fqns), (
         f"ChatManagementController#assign not in caller fqns {caller_fqns}"
     )
@@ -224,7 +224,7 @@ def test_hierarchy_renders_tree_both_directions(
     assert payload.get("root"), "expected root id"
     edges = payload.get("edges", [])
     nodes = payload.get("nodes", {})
-    other_fqns = {nodes.get(e.get("other_id"), {}).get("fqn", "") for e in edges}
+    other_fqns = {nodes.get(e.get("target"), {}).get("fqn", "") for e in edges}
     # UP: NotificationSender (the interface AbstractNotificationSender implements).
     assert any("NotificationSender" in fqn and "Abstract" not in fqn for fqn in other_fqns), (
         f"expected NotificationSender supertype in {other_fqns}"
@@ -275,7 +275,7 @@ def test_implementations_uses_find_implementors(
     assert payload.get("root"), "expected root id"
     edges = payload.get("edges", [])
     nodes = payload.get("nodes", {})
-    impl_fqns = [nodes.get(e.get("other_id"), {}).get("fqn", "") for e in edges]
+    impl_fqns = [nodes.get(e.get("target"), {}).get("fqn", "") for e in edges]
     # ConfigurableChatAssignment implements ChatAssignmentPort.
     assert any("ConfigurableChatAssignment" in fqn for fqn in impl_fqns), (
         f"ConfigurableChatAssignment not in implementors {impl_fqns}"
@@ -340,7 +340,7 @@ def test_subclasses_uses_find_subclasses(
     assert payload.get("root"), "expected root id"
     edges = payload.get("edges", [])
     nodes = payload.get("nodes", {})
-    sub_fqns = [nodes.get(e.get("other_id"), {}).get("fqn", "") for e in edges]
+    sub_fqns = [nodes.get(e.get("target"), {}).get("fqn", "") for e in edges]
     # Both Email and Push extend AbstractNotificationSender.
     assert any("EmailNotificationSender" in fqn for fqn in sub_fqns), (
         f"EmailNotificationSender not in subclasses {sub_fqns}"
@@ -373,7 +373,7 @@ def test_overrides_dispatches_up_via_neighbors_out_overrides(
     assert payload.get("root"), "expected root id"
     edges = payload.get("edges", [])
     nodes = payload.get("nodes", {})
-    target_fqns = [nodes.get(e.get("other_id"), {}).get("fqn", "") for e in edges]
+    target_fqns = [nodes.get(e.get("target"), {}).get("fqn", "") for e in edges]
     assert any("ChatAssignmentPort#requestAssignment" in fqn for fqn in target_fqns), (
         f"expected ChatAssignmentPort#requestAssignment declaration in {target_fqns}"
     )
@@ -401,7 +401,7 @@ def test_overridden_by_dispatches_down_via_neighbors_in_overrides(
     assert payload.get("root"), "expected root id"
     edges = payload.get("edges", [])
     nodes = payload.get("nodes", {})
-    target_fqns = [nodes.get(e.get("other_id"), {}).get("fqn", "") for e in edges]
+    target_fqns = [nodes.get(e.get("target"), {}).get("fqn", "") for e in edges]
     assert any("ConfigurableChatAssignment#requestAssignment" in fqn for fqn in target_fqns), (
         f"expected ConfigurableChatAssignment#requestAssignment overrider in {target_fqns}"
     )
@@ -424,7 +424,7 @@ def test_dependents_uses_find_injectors(
     assert payload.get("root"), "expected root id"
     edges = payload.get("edges", [])
     nodes = payload.get("nodes", {})
-    inj_fqns = [nodes.get(e.get("other_id"), {}).get("fqn", "") for e in edges]
+    inj_fqns = [nodes.get(e.get("target"), {}).get("fqn", "") for e in edges]
     # Three processors inject ChatAssignmentPort in the fixture.
     assert any("ClientMessageProcessor" in fqn for fqn in inj_fqns), (
         f"ClientMessageProcessor not in injectors {inj_fqns}"
@@ -481,7 +481,7 @@ def test_impact_service_post_filter_emits_warning(
     edges = payload.get("edges", [])
     nodes = payload.get("nodes", {})
     for e in edges:
-        node = nodes.get(e.get("other_id"), {})
+        node = nodes.get(e.get("target"), {})
         svc = (node.get("microservice") or "").strip()
         # The post-filter keeps only chat-core matches; skip root (the target itself).
         if svc:
@@ -528,7 +528,7 @@ def test_decompose_renders_role_waterfall(
     assert all("stage" in e for e in edges), (
         f"expected 'stage' field on every decompose edge, got {edges[:2]}"
     )
-    reached_fqns = [nodes.get(e.get("other_id"), {}).get("fqn", "") for e in edges]
+    reached_fqns = [nodes.get(e.get("target"), {}).get("fqn", "") for e in edges]
     # Stage 1 includes the engine components (COMPONENT role) — at least one
     # processor/publisher/ratelimiter should be reached from the controller.
     assert any(
@@ -594,7 +594,7 @@ def test_flow_outbound_intra_service_on_fixture(
     # edges are intra-codebase (java_ontology.py:286), not intra-service.
     endpoint_services = set()
     for e in outbound:
-        ep = nodes.get(e.get("other_id"), {})
+        ep = nodes.get(e.get("target"), {})
         svc = (ep.get("microservice") or "").strip()
         if svc:
             endpoint_services.add(svc)

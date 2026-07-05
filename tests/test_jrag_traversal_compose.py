@@ -135,7 +135,7 @@ def test_callees_client_reaches_route_via_http_calls(
     # Every edge endpoint MUST be a :Route (the kafka_topic analog for HTTP).
     nodes = payload.get("nodes", {})
     for e in edges:
-        ep = nodes.get(e.get("other_id"), {})
+        ep = nodes.get(e.get("target"), {})
         assert ep.get("kind") == "route", (
             f"expected edge endpoint kind=route, got {ep.get('kind')!r} on {ep}"
         )
@@ -174,7 +174,7 @@ def test_callees_producer_reaches_route_topic_via_async_calls(
     # The endpoint MUST be a :Route (the kafka_topic), NOT a :Producer.
     nodes = payload.get("nodes", {})
     for e in edges:
-        ep = nodes.get(e.get("other_id"), {})
+        ep = nodes.get(e.get("target"), {})
         assert ep.get("kind") == "route", (
             f"expected edge endpoint kind=route (kafka_topic), got {ep.get('kind')!r}"
         )
@@ -214,7 +214,7 @@ def test_dependencies_composes_neighbors_out_injects(
     nodes = payload.get("nodes", {})
     injected_fqns = []
     for e in edges:
-        ep = nodes.get(e.get("other_id"), {})
+        ep = nodes.get(e.get("target"), {})
         assert ep.get("kind") == "symbol", (
             f"expected edge endpoint kind=symbol, got {ep.get('kind')!r}"
         )
@@ -269,7 +269,7 @@ def test_connection_inbound_lists_external_callers(
     )
     # At least one chat-assign caller MUST be present (the test's main invariant).
     caller_services = {
-        nodes.get(e.get("other_id"), {}).get("microservice", "")
+        nodes.get(e.get("target"), {}).get("microservice", "")
         for e in inbound
     }
     assert "chat-assign" in caller_services, (
@@ -400,7 +400,7 @@ def test_connection_http_method_filter(
     nodes_post = payload_post.get("nodes", {})
     for e in inbound_post:
         if e.get("edge_type") == "HTTP_CALLS":
-            ep = nodes_post.get(e.get("other_id"), {})
+            ep = nodes_post.get(e.get("target"), {})
             assert (ep.get("method") or "").upper() == "POST", (
                 f"expected POST after --http-method POST, got {ep.get('method')!r} on {ep}"
             )
@@ -436,8 +436,15 @@ def test_connection_first_positional_is_microservice_not_query(
     assert payload["status"] == "ok", (
         f"expected ok (resolve_v2 was NOT run on the positional), got {payload.get('status')}"
     )
-    assert payload.get("root", "").startswith("microservice:"), (
-        f"expected synthetic microservice: root, got {payload.get('root')}"
+    # The synthetic microservice root is keyed by the microservice NAME (its
+    # natural key after the id-free boundary strip), not a `microservice:`-
+    # prefixed synthetic id and not a resolved symbol id.
+    assert payload.get("root") == "chat-core", (
+        f"expected root == 'chat-core' (microservice natural key), got {payload.get('root')}"
+    )
+    root_node = payload["nodes"]["chat-core"]
+    assert root_node.get("kind") == "microservice", (
+        f"expected synthetic microservice root kind, got {root_node.get('kind')}"
     )
 
     # Sanity: a clearly-not-real-microservice still returns status=ok (empty
@@ -561,7 +568,7 @@ def test_imports_resolves_graph_nodes(
     # The resolved import MUST be the JoinOperatorRequest graph Symbol.
     resolved_fqns = []
     for e in resolved_edges:
-        node = nodes.get(e.get("other_id"), {})
+        node = nodes.get(e.get("target"), {})
         resolved_fqns.append(node.get("fqn", ""))
     assert any("JoinOperatorRequest" in fqn for fqn in resolved_fqns), (
         f"expected JoinOperatorRequest resolved, got {resolved_fqns}"
@@ -569,7 +576,7 @@ def test_imports_resolves_graph_nodes(
 
     # Unresolved imports carry the raw FQN and kind=unresolved_import.
     for e in unresolved_edges:
-        node = nodes.get(e.get("other_id"), {})
+        node = nodes.get(e.get("target"), {})
         assert node.get("kind") == "unresolved_import", (
             f"expected kind=unresolved_import, got {node.get('kind')!r} on {node}"
         )
@@ -637,7 +644,7 @@ def test_connection_calls_service_outbound_excludes_unresolved_clients(
     client_edges = [e for e in outbound if e.get("edge_type") == "HTTP_CALLS"]
     assert len(client_edges) >= 1, f"expected >=1 chat-core client edge, got {client_edges}"
     for e in client_edges:
-        node = nodes.get(e.get("other_id"), {})
+        node = nodes.get(e.get("target"), {})
         assert (node.get("target_service") or "") == "chat-core", (
             f"strict --calls-service leak: client target_service={node.get('target_service')!r}"
         )

@@ -469,14 +469,19 @@ def _full_symbol_node() -> dict:
 
 
 def test_project_node_brief_keeps_identity_drops_extras() -> None:
-    """brief == today's terse identity set; location/ranking/content dropped."""
+    """brief == today's terse identity set; location/ranking/content dropped.
+
+    Graph-id fields (``id`` / ``parent_id``) are stripped at every level — the
+    CLI is resolve-first, so no raw graph id reaches the agent.
+    """
     out = project_node(_full_symbol_node(), "brief")
-    # Identity keys survive.
-    for key in ("id", "kind", "fqn", "name", "microservice", "resolved"):
+    # Identity keys survive (``id`` is NOT among them — stripped at the boundary).
+    for key in ("kind", "fqn", "name", "microservice", "resolved"):
         assert key in out, f"brief dropped identity key {key!r}"
-    # file/score (ranking/location) and content fields are dropped.
+    # file/score (ranking/location), content fields, AND graph-id fields are dropped.
     for key in ("module", "role", "symbol_kind", "file", "score", "signature",
-                "annotations", "capabilities", "package", "parent_id"):
+                "annotations", "capabilities", "package",
+                "id", "parent_id"):
         assert key not in out, f"brief leaked {key!r}"
     # Raw location columns are folded away (no filename/start_line at any level).
     assert "filename" not in out and "start_line" not in out
@@ -489,25 +494,32 @@ def test_project_node_normal_adds_location_and_ranking() -> None:
     visible. Content fields (signature/annotations/...) still dropped.
     """
     out = project_node(_full_symbol_node(), "normal")
-    for key in ("id", "kind", "fqn", "name", "microservice",
+    for key in ("kind", "fqn", "name", "microservice",
                 "module", "role", "symbol_kind", "framework", "score", "resolved"):
         assert key in out, f"normal dropped {key!r}"
     # file is composed from filename+start_line.
     assert out["file"] == "src/Svc.java:42"
-    # Content still suppressed at normal.
-    for key in ("signature", "annotations", "capabilities", "modifiers", "package", "parent_id"):
-        assert key not in out, f"normal leaked content {key!r}"
+    # Content + graph-id fields suppressed at normal.
+    for key in ("signature", "annotations", "capabilities", "modifiers", "package",
+                "id", "parent_id"):
+        assert key not in out, f"normal leaked content/id {key!r}"
 
 
 def test_project_node_full_keeps_everything() -> None:
-    """full keeps every present key (still composes file + drops empties)."""
+    """full keeps every present key (still composes file + drops empties).
+
+    The ONLY keys dropped at full are raw graph-id fields (``id`` / ``parent_id``)
+    and the raw location columns folded into ``file`` — everything else the
+    SymbolHit carries is kept.
+    """
     out = project_node(_full_symbol_node(), "full")
     for key in ("signature", "annotations", "capabilities", "modifiers",
-                "package", "parent_id", "score", "file", "role", "module"):
+                "package", "score", "file", "role", "module"):
         assert key in out, f"full dropped {key!r}"
     assert out["file"] == "src/Svc.java:42"
-    # Raw location columns are folded into `file` even at full.
-    assert "filename" not in out and "start_line" not in out and "end_line" not in out
+    # Raw location columns folded into `file`; graph-id fields stripped at full.
+    for key in ("filename", "start_line", "end_line", "id", "parent_id"):
+        assert key not in out, f"full leaked {key!r}"
 
 
 def test_project_node_drops_empty_fields_at_all_levels() -> None:

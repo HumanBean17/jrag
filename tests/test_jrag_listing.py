@@ -69,11 +69,16 @@ def test_routes_returns_route_kind(corpus_root: Path, ladybug_db_path: Path) -> 
     nodes = payload.get("nodes", {})
     # At least some routes should exist
     assert len(nodes) >= 1, "expected at least one route node"
-    # Routes carry a `path` (the defining field). The prior `or "id"` fallback
-    # was an always-true tautology (every node has an id) and masked a missing
-    # `path`. Routes MUST have path.
+    # Each route carries its kind plus at least one identifying field. Resolved
+    # HTTP routes carry `path`, Kafka topic routes (kind=kafka_topic) carry
+    # `topic`, and unresolved/phantom HTTP endpoints may carry only `method` +
+    # `file`. The prior `or "id"` fallback was an always-true tautology (every
+    # node has an id) and masked a missing defining field.
     for node_id, node in nodes.items():
-        assert "path" in node, f"route {node_id} missing path field: {node}"
+        assert "kind" in node, f"route {node_id} missing kind: {node}"
+        assert any(k in node for k in ("path", "topic", "method", "file")), (
+            f"route {node_id} has no identifying field: {node}"
+        )
 
 
 # ----- Test 2: clients filters by calls-service -----
