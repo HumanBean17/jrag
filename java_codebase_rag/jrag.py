@@ -299,6 +299,15 @@ def build_parser() -> argparse.ArgumentParser:
     routes.add_argument("--framework", type=str, default=None, help="Filter by framework.")
     routes.add_argument("--path-prefix", type=str, default=None, help="Filter by path prefix.")
     routes.add_argument("--method", type=str, default=None, help="Filter by HTTP method.")
+    routes.add_argument(
+        "--include-kafka",
+        action="store_true",
+        default=False,
+        help=(
+            "Also list kafka topic routes (excluded by default — topics belong to "
+            "the `topics` command). Client http_endpoint mirrors are always excluded."
+        ),
+    )
     routes.set_defaults(handler=_cmd_routes, detail="full")
 
     # clients subparser (PR-JRAG-2)
@@ -1369,6 +1378,11 @@ def _cmd_routes(args: argparse.Namespace) -> int:
         path_prefix=args.path_prefix,
         method=args.method,
         limit=limit + 1,  # +1 for truncated detection
+        # `routes` is the HTTP-server-route surface (external entrypoints you'd
+        # run `callers` on): exclude kafka topics (→ `topics`) and client
+        # http_endpoint mirrors (call-sites). --include-kafka opts kafka back in.
+        server_exposed=True,
+        include_kafka=bool(getattr(args, "include_kafka", False)),
     )
     for row in rows:
         _backfill_service_from_filename(row)
@@ -1699,12 +1713,16 @@ def _emit_traversal(
     noun: str,
     warnings: list[str] | None = None,
     truncated: bool = False,
+    is_external_entrypoint: bool = False,
 ) -> int:
     """Build the traversal envelope (root + nodes + edges) and render.
 
     The traversal shape requires ``envelope.root`` so the renderer uses the
     traversal shape (root + edge rows). ``next_offset`` is left None on every
     traversal (non-offset -> "truncated: more results - narrow your query").
+    ``is_external_entrypoint`` flags a server-exposed route with zero in-repo
+    callers so the renderer emits an honest "external entrypoint" note instead
+    of a bare, bug-looking ``0 callers`` line.
     """
     from java_codebase_rag.jrag_envelope import Envelope, next_actions_hook
     from java_codebase_rag.jrag_render import render
@@ -1716,6 +1734,7 @@ def _emit_traversal(
         root=root_id,
         warnings=warnings or [],
         truncated=truncated,
+        is_external_entrypoint=is_external_entrypoint,
     )
     next_actions_hook(env, root=root_id, result_edges=edges, command=getattr(args, "command", None))
     print(render(env, fmt=args.format, detail=args.detail, noun=noun))
@@ -1845,9 +1864,27 @@ def _cmd_callers(args: argparse.Namespace) -> int:
         # Include the root (Route) node so the zero-callers rendering surfaces
         # the route path rather than a bare "0 callers" line.
         nodes[root_id] = root_dict
+        # External-entrypoint detection: a server-exposed HTTP route (kind
+        # http_endpoint with an inbound EXPOSES edge from a controller Symbol)
+        # genuinely has zero in-repo callers — the route IS the entrypoint. Flag
+        # it so the renderer says so instead of emitting a bug-looking bare
+        # "0 callers". NodeRef.kind is the node label ("route"), not the stored
+        # http_endpoint/kafka_topic property, so fetch the property directly.
+        # Kafka topics are excluded: their empty-callers case has different
+        # semantics (a topic with no producers is not an HTTP entrypoint).
+        is_external_entrypoint = False
+        if not display:
+            kind_row = graph._rows(  # noqa: SLF001 - same pattern as jrag_envelope._node_file_location
+                "MATCH (r:Route) WHERE r.id = $rid RETURN r.kind AS kind LIMIT 1",
+                {"rid": root_id},
+            )
+            route_kind = str(kind_row[0].get("kind") or "") if kind_row else ""
+            if route_kind == "http_endpoint" and graph.find_route_handlers(route_id=root_id):
+                is_external_entrypoint = True
         return _emit_traversal(
             args, root_id=root_id, nodes=nodes, edges=edges,
             noun="callers", warnings=warnings, truncated=truncated,
+            is_external_entrypoint=is_external_entrypoint,
         )
 
     # Symbol root -> find_callers (push down --service/--module/depth/etc.).

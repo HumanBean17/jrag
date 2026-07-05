@@ -120,7 +120,16 @@ def display_name(node: dict[str, Any]) -> str:
     if "#" in fqn:
         head, _, tail = fqn.partition("#")
         cls = head.rsplit(".", 1)[-1]
-        method = str(node.get("name") or "").strip() or tail.split("(", 1)[0]
+        raw_name = str(node.get("name") or "").strip()
+        # Some backends populate `name` with the full ``Class#method(args)``
+        # form already (ambiguous-resolve candidates do this). Prepending
+        # ``cls`` would double it (``Class#Class#method``); use it verbatim —
+        # it already carries the declaring class plus args, so it stays
+        # identity-unique. Traversal method nodes carry the bare clean name
+        # (no ``#``), so they still take the ``Class#method`` path below.
+        if raw_name and "#" in raw_name:
+            return raw_name
+        method = raw_name or tail.split("(", 1)[0]
         if cls and method:
             return f"{cls}#{method}"
     name = str(node.get("name") or "").strip()
@@ -367,11 +376,17 @@ def _render_traversal(envelope: Envelope, *, noun: str, detail: str = "normal") 
             lines.append(f"root: {root_label}")
     if not envelope.edges:
         # Zero-results line for a traversal: "0 <noun>  <fqn>  @<service>".
-        # The fqn + service come from the root node (the resolved subject).
-        parts = [f"0 {noun}".rstrip()]
+        # The fqn + service come from the root node (the resolved subject). When
+        # the producer flagged the root as a server-exposed entrypoint with no
+        # in-repo callers, lead with that honest note instead of the bare,
+        # bug-looking "0 <noun>" — the empty result is correct here.
         root_node = envelope.nodes.get(root_id, {})
         root_fqn = str(root_node.get("fqn") or "").strip()
         root_svc = str(root_node.get("microservice") or "").strip()
+        if envelope.is_external_entrypoint:
+            parts = ["external entrypoint — no in-repo callers"]
+        else:
+            parts = [f"0 {noun}".rstrip()]
         if root_fqn:
             parts.append(root_fqn)
         if root_svc:

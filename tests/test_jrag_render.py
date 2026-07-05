@@ -577,6 +577,58 @@ def test_display_name_method_includes_declaring_class() -> None:
     assert display_name({"fqn": "com.foo.SlaService"}) == "SlaService"
 
 
+def test_display_name_does_not_double_class_when_name_carries_member_ref() -> None:
+    """Regression (T7): a candidate whose ``name`` already carries the full
+    ``Class#method(args)`` form must not be re-prefixed with the class.
+
+    Ambiguous-resolve candidates populate ``name`` with the member reference
+    (``JoinOperatorController#joinOperator(JoinOperatorRequest,String)``); the
+    prior code prepended ``cls`` again, producing
+    ``JoinOperatorController#JoinOperatorController#joinOperator(...)``. The
+    verbatim name is identity-unique (class + args), so it is returned as-is.
+    """
+    from java_codebase_rag.jrag_render import display_name
+
+    assert display_name({
+        "fqn": "com.bank.chat.app.web.JoinOperatorController#joinOperator(JoinOperatorRequest,String)",
+        "name": "JoinOperatorController#joinOperator(JoinOperatorRequest,String)",
+    }) == "JoinOperatorController#joinOperator(JoinOperatorRequest,String)"
+    # Traversal method nodes still carry the bare clean name -> Class#method.
+    assert display_name({
+        "fqn": "com.foo.Repo#findById(Long)",
+        "name": "findById",
+    }) == "Repo#findById"
+
+
+def test_render_traversal_external_entrypoint_zero_callers_is_honest() -> None:
+    """Regression (T5): a server-exposed route with zero in-repo callers must
+    say so, not emit a bug-looking bare ``0 callers``.
+
+    Text leads with ``external entrypoint — no in-repo callers``; JSON carries
+    ``is_external_entrypoint: true`` (status stays ``ok``).
+    """
+    env = Envelope(
+        status="ok",
+        root="POST /chat/assign",
+        nodes={"POST /chat/assign": {
+            "kind": "route", "fqn": "POST /chat/assign", "microservice": "chat-assign",
+        }},
+        is_external_entrypoint=True,
+    )
+
+    text_out = render(env, fmt="text", noun="callers")
+    assert "external entrypoint — no in-repo callers" in text_out, (
+        f"external-entrypoint note missing: {text_out!r}"
+    )
+    assert "0 callers" not in text_out, (
+        f"external entrypoint still renders bare '0 callers': {text_out!r}"
+    )
+
+    json_out = json.loads(render(env, fmt="json", noun="callers"))
+    assert json_out["status"] == "ok"
+    assert json_out.get("is_external_entrypoint") is True
+
+
 def _traversal_env() -> Envelope:
     """root class Symbol -> one CALLS edge to a method Symbol callee.
 

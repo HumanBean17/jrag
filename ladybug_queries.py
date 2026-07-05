@@ -1674,6 +1674,8 @@ class LadybugGraph:
         path_prefix: str | None = None,
         method: str | None = None,
         limit: int = 100,
+        server_exposed: bool = False,
+        include_kafka: bool = True,
     ) -> list[dict[str, Any]]:
         lim = max(1, min(int(limit), 500))
         params: dict[str, Any] = {"lim": lim}
@@ -1690,6 +1692,22 @@ class LadybugGraph:
         if method is not None and method != "":
             params["method"] = method
             preds.append("r.method = $method")
+        if server_exposed:
+            # `routes` CLI surface: only server-exposed entrypoints. The inbound
+            # EXPOSES clause is what makes a route "exposed" by a Symbol — a
+            # client http_endpoint mirror is a call-site reached via HTTP_CALLS,
+            # never EXPOSES'd, so it drops out here regardless of include_kafka.
+            # Kafka topics (kind=kafka_topic) live under the `topics` command;
+            # include_kafka=False (the CLI default) excludes them, while the
+            # OR-branch lets `--include-kafka` opt them back in (still excluding
+            # client mirrors, which never carry an inbound EXPOSES).
+            if include_kafka:
+                preds.append(
+                    "(r.kind = 'kafka_topic' OR EXISTS { MATCH (s:Symbol)-[:EXPOSES]->(r) })"
+                )
+            else:
+                preds.append("r.kind = 'http_endpoint'")
+                preds.append("EXISTS { MATCH (s:Symbol)-[:EXPOSES]->(r) }")
         where = (" WHERE " + " AND ".join(preds)) if preds else ""
         q = (
             f"MATCH (r:Route){where} RETURN {self._ROUTE_RETURN} "

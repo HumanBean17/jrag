@@ -113,6 +113,11 @@ class Envelope:
     # Used to carry the resolve ``message`` for not_found / error envelopes
     # (the renderer surfaces it as ``not found: <message>``). None on ok/ambiguous.
     message: str | None = None
+    # Set when a traversal root is a server-exposed entrypoint (an HTTP route
+    # with an inbound EXPOSES edge from a controller Symbol) that genuinely has
+    # zero in-repo callers. Distinguishes the *correct* empty result ("external
+    # entrypoint — no in-repo callers") from a bug-looking bare "0 callers".
+    is_external_entrypoint: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a JSON-ready dict, omitting empty optionals.
@@ -144,6 +149,8 @@ class Envelope:
             out["file_location"] = self.file_location
         if self.message is not None:
             out["message"] = self.message
+        if self.is_external_entrypoint:
+            out["is_external_entrypoint"] = True
         return out
 
     def to_json(self) -> str:
@@ -228,6 +235,8 @@ class Envelope:
             out["file_location"] = self.file_location
         if self.message is not None:
             out["message"] = self.message
+        if self.is_external_entrypoint:
+            out["is_external_entrypoint"] = True
         return out
 
     @staticmethod
@@ -937,4 +946,5 @@ def project_envelope(envelope: Envelope, detail: str) -> Envelope:
         truncated=envelope.truncated,
         file_location=envelope.file_location,
         message=envelope.message,
+        is_external_entrypoint=envelope.is_external_entrypoint,
     )
