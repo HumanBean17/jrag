@@ -48,6 +48,53 @@ class _IndexStale(RuntimeError):
 _CONSUMER_FETCH_LIMIT = 200
 
 
+# Framework tag -> the type-level annotations a Symbol's declaring type carries
+# when it participates in that framework. The graph stores `framework` only on
+# Route nodes (Route.framework = spring_mvc | webflux | kafka | ...); Symbol
+# nodes have no framework field, so `search --framework <name>` (a symbol result
+# set) maps the framework back onto the declaring type via these annotations and
+# post-filters. Mirrors the indexer's own classification heuristic.
+_FRAMEWORK_ANNOTATIONS: dict[str, frozenset[str]] = {
+    "spring_mvc": frozenset({
+        "RestController", "Controller", "RestControllerAdvice", "RequestMapping",
+        "GetMapping", "PostMapping", "PutMapping", "DeleteMapping", "PatchMapping",
+    }),
+    "webflux": frozenset({
+        "RestController", "Controller", "RequestMapping",
+    }),
+    "kafka": frozenset({"EnableKafka", "KafkaStreams", "KafkaStream"}),
+    "rabbitmq": frozenset({"EnableRabbit", "RabbitListener"}),
+    "jms": frozenset({"EnableJms", "JmsListener"}),
+    "stream": frozenset({"EnableBinding", "StreamBridge", "EnableStream"}),
+    "feign": frozenset({"FeignClient", "EnableFeignClients"}),
+}
+
+
+def _framework_type_fqns(graph, framework: str) -> set[str]:
+    """Return the set of type-level Symbol FQNs whose annotations match the
+    given framework tag (per :data:`_FRAMEWORK_ANNOTATIONS`).
+
+    One focused Cypher lookup, cached implicitly per-process (the CLI is
+    short-lived). Used by ``search --framework`` as a post-filter on the
+    primary-type FQN each SearchHit carries.
+    """
+    anns = _FRAMEWORK_ANNOTATIONS.get(framework)
+    if not anns:
+        return set()
+    # Ladybug has no parameterized list membership; expand the fixed annotation
+    # set as ORed ``list_contains`` predicates (same pattern as trace_flow's
+    # capability expansion).
+    predicates = " OR ".join(f"list_contains(s.annotations, '{a}')" for a in anns)
+    rows = graph._rows(  # noqa: SLF001 - focused lookup (same pattern as _resolve_topic_consumers)
+        f"MATCH (s:Symbol) WHERE s.kind IN ['class','interface','annotation'] "
+        f"AND ({predicates}) RETURN DISTINCT s.fqn AS fqn",
+        {},
+    )
+    return {str(r.get("fqn") or "") for r in rows if r.get("fqn")}
+
+
+
+
 def _load_graph_or_error(args: argparse.Namespace):
     """Resolve config + load graph; on missing/stale index, print an error
     envelope and return ``(cfg, graph_or_None, rc)``.
@@ -74,12 +121,18 @@ def _clamped_limit(args: argparse.Namespace) -> int:
     return min(raw_limit, 499)
 
 
-def _render_listing(rows, *, limit: int, args: argparse.Namespace, noun: str) -> int:
+def _render_listing(rows, *, limit: int, args: argparse.Namespace, noun: str,
+                    extra_hints: list[str] | None = None) -> int:
     """Apply +1-fetch truncation, build the envelope, render as a listing.
 
     Shared by the listing commands whose backend returns a flat row list
     (routes / clients / producers). ``rows`` must already be the limit+1
     fetch. Renders as the default shape (no ``shape=``).
+
+    ``extra_hints`` are merged into ``agent_next_actions`` AFTER the
+    edge/breadcrumb-derived hints (deduped, capped at 5). Used by listings
+    whose rows map to a natural ``jrag inspect <fqn>`` drill-down
+    (jobs / listeners / entities).
     """
     from java_codebase_rag.jrag_envelope import Envelope, mark_truncated, next_actions_hook, to_envelope_rows
     from java_codebase_rag.jrag_render import render
@@ -90,6 +143,13 @@ def _render_listing(rows, *, limit: int, args: argparse.Namespace, noun: str) ->
 
     env = Envelope(status="ok", nodes=display_nodes, truncated=truncated)
     next_actions_hook(env, command=getattr(args, "command", None))
+    if extra_hints:
+        seen = set(env.agent_next_actions)
+        for h in extra_hints:
+            if h and h not in seen:
+                seen.add(h)
+                env.agent_next_actions.append(h)
+        env.agent_next_actions = env.agent_next_actions[:5]
     print(render(env, fmt=args.format, detail=args.detail, noun=noun))
     return 0
 
@@ -130,6 +190,45 @@ def _symbol_hit_to_dict(hit) -> dict:
     }
 
 
+class _EnvelopeArgumentParser(argparse.ArgumentParser):
+    """ArgumentParser subclass that routes ``error()`` to a raised exception.
+
+    Stock argparse ``error()`` prints ``usage:`` to stderr and calls SystemExit
+    — a raw, non-envelope shape that ignores ``--format json``. With
+    ``exit_on_error=False`` the base class raises :class:`argparse.ArgumentError`
+    instead, but STILL prints the usage text first. This override suppresses the
+    usage dump so :func:`main` can emit a clean ``status: error`` envelope
+    honoring ``--format`` (consistent with not_found / missing-index errors).
+    """
+
+    def error(self, message: str) -> None:  # type: ignore[override]
+        raise argparse.ArgumentError(None, message)
+
+
+def _detect_flag(raw: list[str], flag: str) -> str | None:
+    """Best-effort scan of raw argv for a ``--flag <value>`` / ``--flag=<value>``.
+
+    Used by :func:`main` to honor ``--format`` / ``--detail`` when argparse
+    bailed before populating ``args`` (missing required positional). Returns
+    ``None`` when absent. Stops at the first positional after the subcommand
+    name to avoid picking up a token that is itself a positional value.
+    """
+    i = 0
+    # Skip the subcommand name (first non-dash token).
+    while i < len(raw) and raw[i].startswith("-"):
+        i += 1
+    if i < len(raw):
+        i += 1  # consume the subcommand name
+    while i < len(raw):
+        tok = raw[i]
+        if tok == flag and i + 1 < len(raw):
+            return raw[i + 1]
+        if tok.startswith(f"{flag}="):
+            return tok.split("=", 1)[1]
+        i += 1
+    return None
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Argparse builder. Imports no backend modules.
 
@@ -156,13 +255,13 @@ def build_parser() -> argparse.ArgumentParser:
         "  search:      search\n\n"
         "Run `jrag <command> --help` for command-specific options."
     )
-    parser = argparse.ArgumentParser(
+    parser = _EnvelopeArgumentParser(
         prog="jrag",
         description=description,
         formatter_class=argparse.RawDescriptionHelpFormatter,
         exit_on_error=False,
     )
-    subparsers = parser.add_subparsers(dest="command")
+    subparsers = parser.add_subparsers(dest="command", parser_class=_EnvelopeArgumentParser)
 
     # Common flags applied per command via parents=[_common_parser()]. NOT
     # global so commands can override defaults (e.g. fan-out commands use
@@ -205,15 +304,48 @@ def build_parser() -> argparse.ArgumentParser:
         )
         return common
 
+    # Core-only parser for AGGREGATE commands (status / microservices) that have
+    # no per-row filtering surface. Excludes --service / --module / --limit so
+    # the surface is honest: those flags are REJECTED at parse time (clean
+    # error envelope) rather than accepted-then-warned-as-no-op. Keeps
+    # --index-dir / --format / --detail.
+    def _core_parser() -> argparse.ArgumentParser:
+        core = argparse.ArgumentParser(add_help=False)
+        core.add_argument(
+            "--index-dir",
+            type=str,
+            default=None,
+            dest="index_dir",
+            help="Index directory override (default: discovered from cwd).",
+        )
+        core.add_argument(
+            "--format",
+            choices=("text", "json"),
+            default="text",
+            help="Output format (default: text).",
+        )
+        core.add_argument(
+            "--detail",
+            choices=("brief", "normal", "full"),
+            default="normal",
+            help=(
+                "Output detail level (default normal) — ORTHOGONAL to --format: both "
+                "text and json honor it. brief = identity only (name @service); "
+                "normal = +module/role/file/score; full = +signature/annotations/snippet."
+            ),
+        )
+        return core
+
     status = subparsers.add_parser(
         "status",
         help="Print index freshness, ontology version, and counts.",
-        parents=[_common_parser()],
+        parents=[_core_parser()],
         description=(
             "Index health and freshness. Reports ontology version, source root, "
             "built_at, parse_errors, edge counts, and the counts dictionary from "
             "GraphMeta. Exits 2 with an actionable envelope if the index is "
-            "missing or stale."
+            "missing or stale. An aggregate view: --service / --module / --limit "
+            "are NOT accepted (rejected at parse time)."
         ),
     )
     status.set_defaults(handler=_cmd_status, detail="full")
@@ -718,9 +850,9 @@ def build_parser() -> argparse.ArgumentParser:
             "List all Symbol nodes whose declared location is in <file>. Calls "
             "find_symbols_in_file_range(graph, filename=<file>, start_line=1, "
             "end_line=2**31-1) — the start_line=1 is required (the backend returns "
-            "[] for start_line<1). UNBOUNDED: there is no --limit cap (the entire "
-            "file's symbol table is returned); --limit is accepted (common flag) "
-            "but does not truncate. --offset is rejected (the backend takes no offset)."
+            "[] for start_line<1). --limit caps the entry count (the file's "
+            "symbol table is otherwise unbounded); truncated is set when more "
+            "entries exist. --offset is rejected (the backend takes no offset)."
         ),
     )
     outline.add_argument("file", help="File path as stored in the graph (POSIX-relative to source root).")
@@ -746,10 +878,12 @@ def build_parser() -> argparse.ArgumentParser:
     microservices = subparsers.add_parser(
         "microservices",
         help="List microservices with resolved type counts.",
-        parents=[_common_parser()],
+        parents=[_core_parser()],
         description=(
             "List every microservice with its resolved type-symbol count. "
-            "Calls g.microservice_counts(). Renders as a counts listing."
+            "Calls g.microservice_counts(). Renders as a counts listing. "
+            "An aggregate view: --service / --module / --limit are NOT accepted "
+            "(rejected at parse time)."
         ),
     )
     microservices.set_defaults(handler=_cmd_microservices, detail="full")
@@ -769,8 +903,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--by",
         dest="by",
         choices=("microservice", "module"),
-        default="microservice",
-        help="Grouping axis: microservice (default) or module.",
+        default=None,
+        help="Grouping axis: microservice (default) or module. When --module is "
+        "set without --by, the axis defaults to module (the user's focus is the "
+        "module axis); pass --by microservice to keep microservice grouping.",
     )
     map_cmd.set_defaults(handler=_cmd_map, detail="full")
 
@@ -947,7 +1083,8 @@ def _cmd_status(args: argparse.Namespace) -> int:
     # ``counts`` / ``edges`` render as indented alphabetical sections without
     # abusing ``edge_summary`` (which is reserved for PR-JRAG-3 real edge
     # data). See jrag_render._render_inspect / _render_text_shape.
-    warnings = _warn_inapplicable_common(args, service=True, module=True, limit=True)
+    # --service / --module / --limit are rejected at the argparse layer
+    # (status uses _core_parser), so no no-op warning is needed here.
     env = Envelope(
         status="ok",
         nodes={
@@ -963,7 +1100,6 @@ def _cmd_status(args: argparse.Namespace) -> int:
                 "edges": dict(edge_counts),
             },
         },
-        warnings=warnings,
     )
     print(render(env, fmt=args.format, detail=args.detail, noun="status", shape="inspect"))
     return 0
@@ -1181,6 +1317,18 @@ def _cmd_find_query_mode(
 
     env = Envelope(status="ok", nodes=nodes, truncated=raw_truncated, warnings=warnings)
     next_actions_hook(env)
+
+    # Empty-result discoverability: query mode is exact-match only (name OR fqn),
+    # so a partial like `find ChatManagement` legitimately returns 0. Surface a
+    # cross-ref so the agent knows the substring fallback exists instead of
+    # seeing a bare `0 symbol`. Carried as both a `message` (renders inline) and
+    # an `agent_next_action` (renders as `next:` / JSON). A literal FQN-shaped
+    # query (contains '.') almost certainly won't substring-match either, so the
+    # hint applies regardless of shape.
+    if not nodes and query:
+        hint = f"no exact match for {query!r} — try `jrag find --fqn-contains {query}` for substring"
+        env.message = hint
+        env.agent_next_actions = [f"jrag find --fqn-contains {query}"]
 
     # Offset is not supported in query mode (find_by_name_or_fqn has no offset).
     print(render(env, fmt=args.format, detail=args.detail, noun="symbol"))
@@ -1580,6 +1728,22 @@ def _cmd_topics(args: argparse.Namespace) -> int:
     return 0
 
 
+def _inspect_hints_for_rows(rows: list[dict], *, limit: int = 2) -> list[str]:
+    """Build ``jrag inspect <fqn>`` hints for the first ``limit`` rows that
+    carry an FQN. Used by jobs/listeners/entities to surface a per-row
+    drill-down (text renderer shows up to 2 as ``next:`` lines; JSON carries
+    up to 5 — callers pass ``limit=2`` for the visible cap).
+    """
+    hints: list[str] = []
+    for r in rows:
+        fqn = r.get("fqn") if isinstance(r, dict) else getattr(r, "fqn", None)
+        if fqn:
+            hints.append(f"jrag inspect {fqn}")
+        if len(hints) >= limit:
+            break
+    return hints
+
+
 def _cmd_jobs(args: argparse.Namespace) -> int:
     _, graph, rc = _load_graph_or_error(args)
     if rc:
@@ -1593,7 +1757,11 @@ def _cmd_jobs(args: argparse.Namespace) -> int:
         limit=limit + 1,  # +1 for truncated detection
     )
     rows = [_symbol_hit_to_dict(h) for h in symbol_hits]
-    return _render_listing(rows, limit=limit, args=args, noun="symbol")
+    # Per-row drill-down: the agent's natural next step on a job/listener/entity
+    # is to inspect it (signature, edges, callers). Cap visible hints at 2 so
+    # text output stays tight; the JSON cap (5) is applied in _render_listing.
+    hints = _inspect_hints_for_rows(rows[:limit], limit=2)
+    return _render_listing(rows, limit=limit, args=args, noun="symbol", extra_hints=hints)
 
 
 def _resolve_topic_consumers(
@@ -1695,7 +1863,8 @@ def _cmd_listeners(args: argparse.Namespace) -> int:
     # Apply the user-facing limit + 1 truncation AFTER the topic filter.
     capped = symbol_hits[: limit + 1]
     rows = [_symbol_hit_to_dict(h) for h in capped]
-    return _render_listing(rows, limit=limit, args=args, noun="symbol")
+    hints = _inspect_hints_for_rows(rows[:limit], limit=2)
+    return _render_listing(rows, limit=limit, args=args, noun="symbol", extra_hints=hints)
 
 
 def _cmd_entities(args: argparse.Namespace) -> int:
@@ -1711,7 +1880,8 @@ def _cmd_entities(args: argparse.Namespace) -> int:
         limit=limit + 1,  # +1 for truncated detection
     )
     rows = [_symbol_hit_to_dict(h) for h in symbol_hits]
-    return _render_listing(rows, limit=limit, args=args, noun="symbol")
+    hints = _inspect_hints_for_rows(rows[:limit], limit=2)
+    return _render_listing(rows, limit=limit, args=args, noun="symbol", extra_hints=hints)
 
 
 # ============================================================================
@@ -1816,6 +1986,7 @@ def _emit_traversal(
     warnings: list[str] | None = None,
     truncated: bool = False,
     is_external_entrypoint: bool = False,
+    extra_hints: list[str] | None = None,
 ) -> int:
     """Build the traversal envelope (root + nodes + edges) and render.
 
@@ -1825,6 +1996,11 @@ def _emit_traversal(
     ``is_external_entrypoint`` flags a server-exposed route with zero in-repo
     callers so the renderer emits an honest "external entrypoint" note instead
     of a bare, bug-looking ``0 callers`` line.
+
+    ``extra_hints`` are merged into ``agent_next_actions`` AFTER the
+    edge-derived hints (deduped, capped at 5). Used by commands with a known
+    cross-ref for an empty/edge case (e.g. ``subclasses <interface>`` ->
+    ``jrag implementations <fqn>``).
     """
     from java_codebase_rag.jrag_envelope import Envelope, next_actions_hook
     from java_codebase_rag.jrag_render import render
@@ -1839,6 +2015,13 @@ def _emit_traversal(
         is_external_entrypoint=is_external_entrypoint,
     )
     next_actions_hook(env, root=root_id, result_edges=edges, command=getattr(args, "command", None))
+    if extra_hints:
+        seen = set(env.agent_next_actions)
+        for h in extra_hints:
+            if h and h not in seen:
+                seen.add(h)
+                env.agent_next_actions.append(h)
+        env.agent_next_actions = env.agent_next_actions[:5]
     print(render(env, fmt=args.format, detail=args.detail, noun=noun))
     return 0
 
@@ -2394,9 +2577,18 @@ def _cmd_subclasses(args: argparse.Namespace) -> int:
     for hit in display:
         nodes[hit.id] = _symbol_hit_to_dict(hit)
         edges.append({"other_id": hit.id, "edge_type": "EXTENDS"})
+    # Cross-ref hint: when the root is an interface, classes implementing it
+    # arrive via IMPLEMENTS (not EXTENDS) — `find_subclasses` (EXTENDS inbound)
+    # only catches sub-interfaces, so the common agent question "what classes
+    # implement this interface?" is answered by `implementations <fqn>`. Surface
+    # that as a `next:` hint whenever the root is an interface (helpful even
+    # when a few sub-interfaces exist, and essential when results are empty).
+    extra_hints: list[str] | None = None
+    if (node.symbol_kind or "").lower() == "interface":
+        extra_hints = [f"jrag implementations {node.fqn}"]
     return _emit_traversal(
         args, root_id=root_id, nodes=nodes, edges=edges,
-        noun="subclasses", truncated=truncated,
+        noun="subclasses", truncated=truncated, extra_hints=extra_hints,
     )
 
 
@@ -3089,13 +3281,12 @@ def _cmd_outline(args: argparse.Namespace) -> int:
 
     Calls find_symbols_in_file_range(graph, filename=<file>, start_line=1,
     end_line=2**31-1). start_line MUST be >=1 (the backend returns [] for
-    start_line<1). UNBOUNDED: no --limit cap (the entire file's symbol table
-    is returned). --limit is accepted (inherited common flag) but does not
-    truncate; the agent spec calls this out in --help.
+    start_line<1). ``--limit`` caps the entry count (the file's symbol table
+    is otherwise unbounded); ``truncated`` is set when more entries exist.
     """
     from ladybug_queries import find_symbols_in_file_range
 
-    from java_codebase_rag.jrag_envelope import Envelope, next_actions_hook
+    from java_codebase_rag.jrag_envelope import Envelope, mark_truncated, next_actions_hook
     from java_codebase_rag.jrag_render import render
 
     cfg, graph, rc = _load_graph_or_error(args)
@@ -3139,20 +3330,17 @@ def _cmd_outline(args: argparse.Namespace) -> int:
         print(render(env, fmt=args.format, detail=args.detail))
         return 2
 
-    nodes: dict[str, dict] = {}
-    for h in hits:
-        nodes[h.id] = _symbol_hit_to_dict(h)
+    rows = [_symbol_hit_to_dict(h) for h in hits]
+    limit = _clamped_limit(args)
+    display, truncated = mark_truncated(rows, limit)
+    nodes = {n["id"]: n for n in display}
 
-    warnings: list[str] = []
-    # --limit is accepted (common flag) but outline is documented unbounded;
-    # surface a warning when the user explicitly set --limit away from the
-    # default so they know it has no effect (plan principle: inapplicable flags
-    # never silently ignored).
-    if args.limit is not None and args.limit != 20:
-        warnings.append("--limit does not apply to outline (unbounded by design)")
-
-    env = Envelope(status="ok", nodes=nodes, warnings=warnings)
+    env = Envelope(status="ok", nodes=nodes, truncated=truncated)
     next_actions_hook(env)
+    # Drill-down: the first declared symbol (class/interface) is the natural
+    # thing to inspect from an outline. Per-row inspect hints for the leading
+    # entries give the agent a concrete next step.
+    env.agent_next_actions = _inspect_hints_for_rows(display, limit=2)
     print(render(env, fmt=args.format, detail=args.detail, noun="symbol"))
     return 0
 
@@ -3295,13 +3483,16 @@ def _cmd_microservices(args: argparse.Namespace) -> int:
         return rc
 
     counts = graph.microservice_counts()
-    warnings = _warn_inapplicable_common(args, service=True, module=True, limit=True)
+    # --service / --module / --limit are rejected at the argparse layer
+    # (microservices uses _core_parser), so no no-op warning is needed here.
     env = Envelope(
         status="ok",
         nodes={"microservices": {"counts": dict(counts)}},
-        warnings=warnings,
     )
     next_actions_hook(env)
+    # Natural follow-ups: drill into one service's structure (map) or its
+    # conventions (role/framework distribution).
+    env.agent_next_actions = ["jrag map", "jrag conventions"][:5]
     print(render(env, fmt=args.format, detail=args.detail, noun="microservices", shape="inspect"))
     return 0
 
@@ -3321,8 +3512,12 @@ def _cmd_map(args: argparse.Namespace) -> int:
     if rc:
         return rc
 
-    # Grouping axis: --by (validated by argparse choices). --module is a filter only.
-    group_col = args.by
+    # Grouping axis: explicit --by wins; otherwise --module implies module axis
+    # (the user's focus is the module they named), else default microservice.
+    # This keeps the `group_by` label honest about the actual grouping: before,
+    # `map --module X` labeled `group_by: microservice` while the user was
+    # asking about a module — the label now matches what they see.
+    group_col = args.by or ("module" if args.module else "microservice")
     scope_clauses: list[str] = []
     params: dict = {}
     if args.service:
@@ -3355,6 +3550,16 @@ def _cmd_map(args: argparse.Namespace) -> int:
         warnings=warnings,
     )
     next_actions_hook(env)
+    # Drill-down: the agent's next step on a count is to inspect the structure
+    # of a specific scope. Suggest `jrag overview <first scope>` (or the explicit
+    # --service scope when present) so the agent has a concrete next command.
+    first_scope = next(iter(grouped), None) if grouped else None
+    drill_scope = args.service or (first_scope if group_col == "microservice" else None)
+    hints: list[str] = []
+    if drill_scope:
+        hints.append(f"jrag overview {drill_scope}")
+    hints.append("jrag conventions")
+    env.agent_next_actions = hints[:5]
     print(render(env, fmt=args.format, detail=args.detail, noun="map", shape="inspect"))
     return 0
 
@@ -3413,6 +3618,17 @@ def _cmd_conventions(args: argparse.Namespace) -> int:
         warnings=warnings,
     )
     next_actions_hook(env)
+    # Drill-down: list the concrete symbols behind the dominant role so the
+    # agent can inspect one (e.g. the top role's instances).
+    hints: list[str] = []
+    top_role = next(iter(role_counts), None) if role_counts else None
+    drill_scope = args.service or ""
+    if top_role:
+        # Suggest finding symbols of the top role (scoped when --service set).
+        scope_suffix = f" --service {drill_scope}" if drill_scope else ""
+        hints.append(f"jrag find --role {top_role}{scope_suffix}")
+    hints.append("jrag map")
+    env.agent_next_actions = hints[:5]
     print(render(env, fmt=args.format, detail=args.detail, noun="conventions", shape="inspect"))
     return 0
 
@@ -3740,8 +3956,28 @@ def _cmd_search(args: argparse.Namespace) -> int:
         filter_dict["fqn_contains"] = args.fqn_contains
     if args.java_kind:
         filter_dict["symbol_kind"] = normalize_enum(args.java_kind, kind="java_kind")
-    if args.framework:
-        filter_dict["framework"] = normalize_enum(args.framework, kind="framework")
+    # NOTE: --framework is intentionally NOT placed in the NodeFilter. The graph
+    # stores `framework` only on Route nodes (Route.framework), so the
+    # NodeFilter `framework` field is validated against the route-only Framework
+    # Literal AND rejected by the symbol-kind applicability guard. Applying it to
+    # a symbol result set requires mapping the framework tag back onto the
+    # declaring type via its annotations — done as a client-side POST-filter
+    # below (`_framework_post_filter`) after the search hits come back.
+    framework_want = normalize_enum(args.framework, kind="framework") if args.framework else None
+    if framework_want and framework_want not in _FRAMEWORK_ANNOTATIONS:
+        # Catch an unknown framework BEFORE the search runs (saves the embedding
+        # model load + Lance scan). The valid set is the same one NodeFilter
+        # validates against for routes — surfaced as a clean error envelope.
+        valid = ", ".join(sorted(_FRAMEWORK_ANNOTATIONS))
+        env = Envelope(
+            status="error",
+            message=(
+                f"invalid framework: {args.framework!r} (normalized to {framework_want!r}); "
+                f"expected one of: {valid}"
+            ),
+        )
+        print(render(env, fmt=args.format, detail=args.detail))
+        return 2
     node_filter, err_env = _build_node_filter_or_error(filter_dict)
     if err_env is not None:
         print(render(err_env, fmt=args.format, detail=args.detail))
@@ -3784,11 +4020,39 @@ def _cmd_search(args: argparse.Namespace) -> int:
             d["kind"] = "search_hit"
         hit_dicts.append(d)
 
+    # --framework POST-filter: the graph stores `framework` only on Route nodes,
+    # so we map the requested framework tag back onto the symbol's declaring
+    # type via its annotations (e.g. spring_mvc -> @RestController) and keep
+    # only hits whose primary type declares one of those annotations. Applied
+    # BEFORE truncation so the cap bounds the visible (filtered) page.
+    framework_dropped = 0
+    if framework_want and hit_dicts:
+        framework_fqns = _framework_type_fqns(graph, framework_want)
+        kept: list[dict] = []
+        for d in hit_dicts:
+            type_fqn = d.get("fqn") or ""
+            if type_fqn and type_fqn in framework_fqns:
+                kept.append(d)
+            else:
+                framework_dropped += 1
+        hit_dicts = kept
+
     display, truncated = mark_truncated(hit_dicts, limit)
     nodes = {n["id"]: n for n in display} if display else {}
 
-    env = Envelope(status="ok", nodes=nodes, truncated=truncated)
+    warnings: list[str] = []
+    if framework_want and framework_dropped and not display:
+        warnings.append(
+            f"--framework {framework_want!r} filtered out all {framework_dropped} hit(s); "
+            f"no symbol's declaring type matched the framework's characteristic annotations"
+        )
+    env = Envelope(status="ok", nodes=nodes, truncated=truncated, warnings=warnings)
     next_actions_hook(env)
+    # Per-hit drill-down: the top search hit's primary type is the natural
+    # thing to inspect (signature, edges, callers). Two visible hints in text,
+    # up to 5 in JSON.
+    if display:
+        env.agent_next_actions = _inspect_hints_for_rows(display, limit=2)
     next_offset = args.offset + limit if truncated else None
     print(render(env, fmt=args.format, detail=args.detail, noun="search", next_offset=next_offset))
     return 0
@@ -3856,11 +4120,30 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         return 1
     except argparse.ArgumentError as exc:
-        # exit_on_error=False routes argparse usage errors here. We deliberately
-        # surface them on stderr (no envelope to stdout) and exit 1 - the agent
-        # gets a clear "usage error" signal distinct from internal failures (2).
-        print(f"jrag: {exc}", file=sys.stderr)
-        return 1
+        # exit_on_error=False + _EnvelopeArgumentParser routes argparse usage
+        # errors here (missing required positional, unrecognized flag, bad
+        # choices) WITHOUT dumping usage text. We emit a clean status:error
+        # envelope to STDOUT honoring --format so JSON consumers get a
+        # parseable result (parity with overview/find missing-arg paths), AND
+        # mirror a terse line to STDERR so shell users / `2>&1` pipelines and
+        # the existing "non-empty stderr on usage error" tests still see it.
+        # Exit non-zero: this is a usage error, distinct from a not_found
+        # envelope (exit 0, the resolve found nothing).
+        from java_codebase_rag.jrag_envelope import Envelope
+        from java_codebase_rag.jrag_render import render
+
+        fmt = _detect_flag(raw, "--format") or "text"
+        detail = _detect_flag(raw, "--detail") or "normal"
+        # argparse's message is the bare clause (e.g. "the following arguments
+        # are required: query"); prefix with the subcommand context when we can.
+        cmd = next((t for t in raw if not t.startswith("-")), None)
+        msg = str(exc).strip() or "usage error"
+        if cmd and not msg.startswith(cmd):
+            msg = f"{cmd}: {msg}"
+        env = Envelope(status="error", message=msg)
+        print(render(env, fmt=fmt, detail=detail))
+        print(f"jrag: error: {msg}", file=sys.stderr)
+        return 2
     handler = getattr(args, "handler", None)
     if handler is None:
         # No subcommand: print help to stderr, return usage error.
