@@ -355,7 +355,157 @@ def test_search_fuzzy_rejected_in_handler_as_status_error(
     assert "semantic" in msg.lower(), f"expected 'semantic' in message: {msg!r}"
 
 
-# ===== Tests 13–17: jrag_hints.next_actions =====
+# ===== Phase 3 regressions: search score floor + file path (T5-rem) =====
+
+
+def test_search_min_score_drops_negative_noise(
+    monkeypatch, capsys, corpus_root: Path, ladybug_db_path: Path
+) -> None:
+    """--min-score (default 0.0) drops negative-score hits (noise).
+
+    A nonsense query yields only negative-score chunks (l2_distance_to_score <
+    0 = farther than orthogonal). The default floor of 0.0 drops them all. The
+    floor is overrideable: --min-score -1 keeps them.
+    """
+    import mcp_v2
+    from java_codebase_rag.jrag import main
+
+    env_index = str(ladybug_db_path.parent)
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_INDEX_DIR", env_index)
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", str(corpus_root))
+
+    noise = mcp_v2.SearchHit(
+        chunk_id="c1", symbol_id="sym1", fqn="com.example.Noise",
+        score=-0.5, snippet="noise", microservice="chat-core",
+    )
+    signal = mcp_v2.SearchHit(
+        chunk_id="c2", symbol_id="sym2", fqn="com.example.Signal",
+        score=0.4, snippet="signal", microservice="chat-core",
+    )
+
+    def make_mock(hits):
+        def mock_search_v2(query, **kwargs):
+            return mcp_v2.SearchOutput(
+                success=True, results=hits,
+                limit=kwargs.get("limit", 5), offset=kwargs.get("offset", 0),
+                advisories=[],
+            )
+        return mock_search_v2
+
+    # Default floor (0.0): only the positive-score signal survives.
+    monkeypatch.setattr(mcp_v2, "search_v2", make_mock([noise, signal]))
+    rc = main(["search", "--index-dir", env_index, "q", "--format", "json"])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    payload = json.loads(out)
+    fqns = {n.get("fqn") for n in payload.get("nodes", {}).values()}
+    assert "com.example.Signal" in fqns
+    assert "com.example.Noise" not in fqns, "negative-score noise must be dropped by default floor"
+
+    # Override floor to -1: both survive.
+    monkeypatch.setattr(mcp_v2, "search_v2", make_mock([noise, signal]))
+    rc = main(["search", "--index-dir", env_index, "q", "--min-score", "-1", "--format", "json"])
+    out = capsys.readouterr().out
+    payload = json.loads(out)
+    fqns = {n.get("fqn") for n in payload.get("nodes", {}).values()}
+    assert "com.example.Noise" in fqns and "com.example.Signal" in fqns
+
+
+def test_search_hit_carries_file_path(
+    monkeypatch, capsys, corpus_root: Path, ladybug_db_path: Path
+) -> None:
+    """Each rendered search hit includes a `file` locator (filename:start_line)
+    so an agent can jump to the hit. SearchHit now carries filename/start_line;
+    the projector folds them into the `file` display field."""
+    import mcp_v2
+    from java_codebase_rag.jrag import main
+
+    env_index = str(ladybug_db_path.parent)
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_INDEX_DIR", env_index)
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", str(corpus_root))
+
+    hit = mcp_v2.SearchHit(
+        chunk_id="c1", symbol_id="sym1", fqn="com.example.Hit",
+        score=0.9, snippet="s", microservice="chat-core",
+        filename="src/main/java/Hit.java", start_line=42,
+    )
+    def mock_search_v2(query, **kwargs):
+        return mcp_v2.SearchOutput(
+            success=True, results=[hit],
+            limit=kwargs.get("limit", 5), offset=kwargs.get("offset", 0),
+            advisories=[],
+        )
+    monkeypatch.setattr(mcp_v2, "search_v2", mock_search_v2)
+
+    rc = main(["search", "--index-dir", env_index, "q", "--format", "json"])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    payload = json.loads(out)
+    node = next(iter(payload.get("nodes", {}).values()))
+    assert node.get("file") == "src/main/java/Hit.java:42", (
+        f"expected composed file locator, got {node.get('file')!r}"
+    )
+
+    # Text mode surfaces it inline as file=...
+    monkeypatch.setattr(mcp_v2, "search_v2", mock_search_v2)
+    rc = main(["search", "--index-dir", env_index, "q"])
+    out = capsys.readouterr().out
+    assert "file=src/main/java/Hit.java:42" in out, f"expected file= in text output:\n{out}"
+
+
+# ===== Phase 3 regressions: conventions scope + overview validation (T8/T5) =====
+
+
+def test_conventions_service_scopes_frameworks(
+    corpus_root: Path, ladybug_db_path: Path
+) -> None:
+    """conventions --service scopes BOTH roles and frameworks.
+
+    Previously --service narrowed the role tally but the route-framework tally
+    was global (half-scoped output). Phase 3 T8 forwards --service to the
+    framework query too, so a single-service scope shows fewer frameworks than
+    the whole-fleet view.
+    """
+    env = _env_for(corpus_root, ladybug_db_path)
+    proc_global = _run_jrag(["conventions", "--format", "json"], env=env)
+    assert proc_global.returncode == 0
+    global_fw = json.loads(proc_global.stdout)["nodes"]["conventions"]["frameworks"]
+
+    proc_scoped = _run_jrag(["conventions", "--service", "chat-assign", "--format", "json"], env=env)
+    assert proc_scoped.returncode == 0, f"conventions --service failed: {proc_scoped.stderr}"
+    scoped_fw = json.loads(proc_scoped.stdout)["nodes"]["conventions"]["frameworks"]
+
+    # The scoped framework tallies must be <= the global ones per framework and
+    # strictly smaller in total (chat-assign is a strict subset of the fleet).
+    total_global = sum(global_fw.values())
+    total_scoped = sum(scoped_fw.values())
+    assert total_scoped < total_global, (
+        f"scoped frameworks ({scoped_fw}) should total less than global ({global_fw})"
+    )
+    for fw, n in scoped_fw.items():
+        assert n <= global_fw.get(fw, 0), f"scoped {fw}={n} exceeds global {global_fw.get(fw)}"
+
+
+def test_overview_unknown_service_errors(corpus_root: Path, ladybug_db_path: Path) -> None:
+    """overview --service <bogus> surfaces 'unknown microservice' (not a silent
+    empty bundle). --service is also wired as the subject when no positional is
+    given, so `overview --service <valid>` works like `overview <valid>`."""
+    env = _env_for(corpus_root, ladybug_db_path)
+    proc = _run_jrag(["overview", "--service", "bogus-service", "--format", "json"], env=env)
+    assert proc.returncode == 2, (
+        f"overview --service <bogus> should error: rc={proc.returncode}\nstdout={proc.stdout}"
+    )
+    payload = json.loads(proc.stdout)
+    assert payload["status"] == "error"
+    assert "unknown microservice" in payload.get("message", ""), (
+        f"expected 'unknown microservice' message, got {payload.get('message')!r}"
+    )
+
+    # Valid service with no positional still works (subject defaults to service).
+    proc_ok = _run_jrag(["overview", "--service", "chat-assign", "--format", "json"], env=env)
+    assert proc_ok.returncode == 0, f"overview --service chat-assign failed: {proc_ok.stderr}"
+    payload_ok = json.loads(proc_ok.stdout)
+    assert payload_ok["status"] == "ok"
 
 
 def test_next_actions_valid_runnable_commands_capped_at_5() -> None:

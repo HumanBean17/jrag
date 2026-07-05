@@ -463,6 +463,8 @@ class SearchHit(BaseModel):
     microservice: str | None = None
     module: str | None = None
     role: str | None = None
+    filename: str | None = None
+    start_line: int | None = None
 
 
 # NodeRef is now defined in graph_types.py and imported above
@@ -582,6 +584,16 @@ def _chunk_id_from_row(row: dict[str, Any]) -> str:
 
 def _row_to_search_hit(row: dict[str, Any]) -> SearchHit:
     score = float(row.get("_rrf_score") or row.get("_score") or 0.0)
+    filename = str(row.get("filename") or "") or None
+    start_line: int | None = None
+    start = row.get("start")
+    if isinstance(start, dict):
+        ln = start.get("line")
+        if ln is not None:
+            try:
+                start_line = int(ln)
+            except (TypeError, ValueError):
+                start_line = None
     return SearchHit(
         chunk_id=_chunk_id_from_row(row),
         symbol_id=_chunk_to_symbol_id(row),
@@ -591,6 +603,8 @@ def _row_to_search_hit(row: dict[str, Any]) -> SearchHit:
         microservice=str(row.get("microservice")) if row.get("microservice") else None,
         module=str(row.get("module")) if row.get("module") else None,
         role=str(row.get("role")) if row.get("role") else None,
+        filename=filename,
+        start_line=start_line,
     )
 
 

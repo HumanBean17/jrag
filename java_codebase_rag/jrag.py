@@ -855,6 +855,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--fuzzy", action="store_true",
         help="Accepted but rejected in-handler (search is semantic; --fuzzy is implicit).",
     )
+    search.add_argument(
+        "--min-score", type=float, default=0.0, dest="min_score",
+        help=(
+            "Drop hits with a relevance score below this floor. Default 0.0 drops "
+            "negative-score noise (chunks farther than orthogonal to the query); "
+            "raise to tighten precision."
+        ),
+    )
     # NodeFilter flags (same set as `find` filter mode, minus the query-only ones).
     search.add_argument("--role", type=str, default=None, help="Filter by role.")
     search.add_argument("--exclude-role", type=str, default=None, dest="exclude_role", help="Exclude by role.")
@@ -1716,6 +1724,30 @@ def _noderef_to_node_dict(ref) -> dict:
     return ref.model_dump()
 
 
+def _dedupe_traversal_edges(edges: list[dict]) -> list[dict]:
+    """Drop edges with an empty ``other_id`` and dedupe by ``(other_id, edge_type)``.
+
+    ``find_callees`` can emit the same callee twice (a method reached via
+    multiple call sites / strategies), and a CLIENT-role aggregation can surface
+    a Client row whose id never resolved. Both produce noisy traversal rows:
+    duplicates inflate the count, and an empty ``other_id`` becomes a phantom
+    edge the id-free renderer cannot key. Keep the FIRST occurrence (results are
+    confidence-sorted, so the first is the highest-confidence edge).
+    """
+    seen: set[tuple[str, str]] = set()
+    out: list[dict] = []
+    for e in edges:
+        oid = e.get("other_id")
+        if not oid:
+            continue
+        key = (str(oid), str(e.get("edge_type") or ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(e)
+    return out
+
+
 def _emit_traversal(
     args: argparse.Namespace,
     *,
@@ -1760,6 +1792,8 @@ def _require_kind(
     kinds: tuple[str, ...],
     args: argparse.Namespace,
     hint: str = "",
+    java_kinds: tuple[str, ...] | None = None,
+    roles: tuple[str, ...] | None = None,
 ) -> int | None:
     """Kind guard shared by traversal handlers (DRY for the 11x guard block).
 
@@ -1770,15 +1804,69 @@ def _require_kind(
     --kind symbol to narrow resolve."``). Callers whose kind-dispatch is more
     complex (e.g. ``callers`` accepts Symbol OR Route and routes between them)
     keep an inline guard.
+
+    ``java_kinds`` / ``roles`` add an OPTIONAL Java-level check applied AFTER
+    the graph-label check passes. Graph ``kind=="symbol"`` covers class,
+    interface, enum, AND method alike, so a label-only guard lets a class
+    through a command that expects an interface (e.g. ``implementations``).
+    When provided, ``node.symbol_kind`` must be in ``java_kinds`` (lowercased,
+    dashes->underscores; e.g. ``("interface",)``) and ``node.role`` in
+    ``roles`` (case-insensitive); otherwise a clear ``status: error`` is
+    emitted instead of the silent empty result the backend returns.
     """
-    if node.kind in kinds:
-        return None
     from java_codebase_rag.jrag_envelope import Envelope
     from java_codebase_rag.jrag_render import render
 
-    msg = f"{expected}; resolved kind is {node.kind!r}."
-    if hint:
-        msg = f"{msg} {hint}"
+    def _emit(msg: str) -> int:
+        if hint:
+            msg = f"{msg} {hint}"
+        print(render(Envelope(status="error", message=msg), fmt=args.format, detail=args.detail))
+        return 2
+
+    if node.kind not in kinds:
+        return _emit(f"{expected}; resolved kind is {node.kind!r}.")
+
+    # Java-level guard (optional): symbol_kind / role on the resolved NodeRef.
+    # symbol_kind is stored LOWERCASE (class/method/interface/...); normalize
+    # both sides to lowercase + dashes->underscores before comparing.
+    if java_kinds:
+        actual = (node.symbol_kind or "").lower().replace("-", "_")
+        want = tuple(k.lower().replace("-", "_") for k in java_kinds)
+        if actual not in want:
+            return _emit(
+                f"{expected}; resolved Java kind is {node.symbol_kind!r} "
+                f"(expected {' or '.join(java_kinds)})."
+            )
+    if roles:
+        actual_role = (node.role or "").upper()
+        want_roles = tuple(r.upper() for r in roles)
+        if actual_role not in want_roles:
+            return _emit(
+                f"{expected}; resolved role is {node.role!r} "
+                f"(expected {' or '.join(roles)})."
+            )
+    return None
+
+
+def _validate_known_microservice(graph, name: str, args: argparse.Namespace) -> int | None:
+    """Return ``None`` when ``name`` is a known microservice; else emit a
+    ``status: error`` envelope and return 2.
+
+    Used by ``connection``/``overview`` so a BOGUS microservice surfaces a clear
+    "unknown microservice 'X'; run `jrag microservices`" error instead of an
+    empty ``status: ok`` (which reads as "this service genuinely has no
+    connections/entries" — a silent wrong answer).
+    """
+    from java_codebase_rag.jrag_envelope import Envelope
+    from java_codebase_rag.jrag_render import render
+
+    try:
+        known = graph.microservice_counts()
+    except Exception:
+        known = {}
+    if name in known:
+        return None
+    msg = f"unknown microservice {name!r}; run `jrag microservices` to list known services"
     print(render(Envelope(status="error", message=msg), fmt=args.format, detail=args.detail))
     return 2
 
@@ -2010,6 +2098,9 @@ def _cmd_callees(args: argparse.Namespace) -> int:
                 "--include-external does not apply to Client/Producer roots "
                 "(HTTP_CALLS/ASYNC_CALLS reach :Route, which is always in-graph)"
             )
+        edges = _dedupe_traversal_edges(edges)
+        truncated = truncated or len(edges) > limit
+        edges = edges[:limit]
         return _emit_traversal(
             args, root_id=root_id, nodes=nodes, edges=edges,
             noun="callees", warnings=warnings, truncated=truncated,
@@ -2072,6 +2163,7 @@ def _cmd_callees(args: argparse.Namespace) -> int:
                 "edge_type": edge_type,
                 "confidence": float(row.get("conf") or 0.0) or None,
             })
+        edges = _dedupe_traversal_edges(edges)
         truncated = len(edges) > limit
         edges = edges[:limit]
         return _emit_traversal(
@@ -2097,6 +2189,9 @@ def _cmd_callees(args: argparse.Namespace) -> int:
         edges.append(
             {"other_id": ce.dst.id, "edge_type": "CALLS", "confidence": ce.confidence}
         )
+    edges = _dedupe_traversal_edges(edges)
+    truncated = truncated or len(edges) > limit
+    edges = edges[:limit]
     return _emit_traversal(
         args, root_id=root_id, nodes=nodes, edges=edges,
         noun="callees", truncated=truncated,
@@ -2179,7 +2274,8 @@ def _cmd_implementations(args: argparse.Namespace) -> int:
     limit = _clamped_limit(args)
 
     guard = _require_kind(
-        node, expected="implementations expects an interface Symbol root", kinds=("symbol",), args=args,
+        node, expected="implementations expects an interface Symbol root", kinds=("symbol",),
+        java_kinds=("interface",), args=args,
     )
     if guard is not None:
         return guard
@@ -2219,7 +2315,8 @@ def _cmd_subclasses(args: argparse.Namespace) -> int:
     limit = _clamped_limit(args)
 
     guard = _require_kind(
-        node, expected="subclasses expects a class Symbol root", kinds=("symbol",), args=args,
+        node, expected="subclasses expects a class Symbol root", kinds=("symbol",),
+        java_kinds=("class", "interface"), args=args,
     )
     if guard is not None:
         return guard
@@ -2260,7 +2357,8 @@ def _cmd_overrides(args: argparse.Namespace) -> int:
     from java_codebase_rag.jrag_render import render
 
     guard = _require_kind(
-        node, expected="overrides expects a method Symbol root", kinds=("symbol",), args=args,
+        node, expected="overrides expects a method Symbol root", kinds=("symbol",),
+        java_kinds=("method",), args=args,
     )
     if guard is not None:
         return guard
@@ -2312,7 +2410,8 @@ def _cmd_overridden_by(args: argparse.Namespace) -> int:
     from java_codebase_rag.jrag_render import render
 
     guard = _require_kind(
-        node, expected="overridden-by expects a method Symbol root", kinds=("symbol",), args=args,
+        node, expected="overridden-by expects a method Symbol root", kinds=("symbol",),
+        java_kinds=("method",), args=args,
     )
     if guard is not None:
         return guard
@@ -2710,6 +2809,14 @@ def _cmd_connection(args: argparse.Namespace) -> int:
     from java_codebase_rag.jrag_envelope import Envelope, next_actions_hook
     from java_codebase_rag.jrag_render import render
 
+    # Validate the microservice against the known set so a bogus name surfaces a
+    # clear error instead of an empty inbound:/outbound: view (silent wrong
+    # answer). Done AFTER graph load so `jrag connection X --format json` on a
+    # missing index still reports the index error, not the microservice error.
+    rc_ms = _validate_known_microservice(graph, args.microservice, args)
+    if rc_ms is not None:
+        return rc_ms
+
     microservice = args.microservice
     # argparse stores --inbound/--outbound/--both into `direction` via
     # action="store_const"; default is None when no flag is given (-> inbound,
@@ -2937,12 +3044,31 @@ def _cmd_outline(args: argparse.Namespace) -> int:
     if rc:
         return rc
 
+    # PARITY with `imports`: resolve <file> via _resolve_source_path so a bare
+    # class name or non-existent path yields the SAME "file not found" error
+    # instead of a silent empty success. The graph stores filenames as
+    # POSIX-relative paths from source root, so once the path resolves on disk
+    # we re-derive that relative form for the exact-match query.
+    file_path = _resolve_source_path(cfg, args.file)
+    if file_path is None:
+        env = Envelope(
+            status="error",
+            message=(
+                f"file not found: {args.file!r} (looked at the literal path and at "
+                f"<source_root>/{args.file})"
+            ),
+        )
+        print(render(env, fmt=args.format, detail=args.detail))
+        return 2
     filename = args.file
-    # find_symbols_in_file_range matches s.filename = $fn exactly. The graph
-    # stores filenames as POSIX-relative paths from source root (build_ast_graph
-    # line 534: `rel_path = abs_path_resolved.relative_to(source_root).as_posix()`).
-    # We pass the user's input through directly; if no match, the result is []
-    # (graceful, not crash).
+    src_root = Path(cfg.source_root) if cfg.source_root else None
+    if src_root is not None:
+        try:
+            filename = file_path.resolve().relative_to(src_root.resolve()).as_posix()
+        except ValueError:
+            # File lives outside source_root (e.g. an absolute path elsewhere);
+            # fall back to the user's literal input — the graph may still match.
+            filename = args.file
     try:
         hits = find_symbols_in_file_range(
             graph,
@@ -3202,11 +3328,17 @@ def _cmd_conventions(args: argparse.Namespace) -> int:
         if role:
             role_counts[role] = int(r.get("n") or 0)
 
-    # Framework tallies: reuse meta().routes_by_framework (already computed) plus
-    # a direct count of route nodes by framework for accuracy.
+    # Framework tallies: a direct count of route nodes by framework for
+    # accuracy. --service is forwarded here too (previously the route framework
+    # tally was global even when --service narrowed the role tally — half-scoped
+    # output). Frameworks are NOT hardcoded; they are derived from the data
+    # (r.framework on Route nodes).
+    fw_scope = " AND r.microservice = $ms" if args.service else ""
     fw_rows = graph._rows(  # noqa: SLF001 - counts compose query
-        "MATCH (r:Route) WHERE r.framework IS NOT NULL AND r.framework <> '' "
-        "RETURN r.framework AS framework, count(*) AS n ORDER BY n DESC"
+        f"MATCH (r:Route) WHERE r.framework IS NOT NULL AND r.framework <> ''"
+        f"{fw_scope} "
+        f"RETURN r.framework AS framework, count(*) AS n ORDER BY n DESC",
+        params,
     )
     framework_counts: dict[str, int] = {}
     for r in fw_rows:
@@ -3407,15 +3539,27 @@ def _cmd_overview(args: argparse.Namespace) -> int:
     if rc:
         return rc
 
+    from java_codebase_rag.jrag_envelope import Envelope
+    from java_codebase_rag.jrag_render import render
+
     subject = args.subject
+    # --service is inherited from the common parser. Treat a provided --service
+    # as the subject when no positional was given (so `overview --service
+    # chat-assign` works like `overview chat-assign`), and ALWAYS validate it
+    # against the known set so a bogus name errors clearly instead of producing
+    # an empty bundle that reads as "service has no entries".
+    if args.service and not subject:
+        subject = args.service
+    if args.service:
+        rc_ms = _validate_known_microservice(graph, args.service, args)
+        if rc_ms is not None:
+            return rc_ms
+
     if not subject:
         # Subject is optional on the parser (nargs='?') so we can emit a helpful
         # explanation instead of argparse's opaque "the following arguments are
         # required: subject". Prints to stderr (usage guidance) + a status:error
         # envelope to stdout, exit 2.
-        from java_codebase_rag.jrag_envelope import Envelope
-        from java_codebase_rag.jrag_render import render
-
         msg = (
             "overview requires a <subject>: a microservice name (e.g. 'chat-core'), "
             "a route path (e.g. '/api/v1/chat/events'), or a topic string "
@@ -3428,6 +3572,12 @@ def _cmd_overview(args: argparse.Namespace) -> int:
     if as_type is None:
         as_type = _overview_detect_type(subject, graph)
 
+    # NOTE: we do NOT validate `subject` against the known microservice set here.
+    # Auto-detect only returns "microservice" when the subject IS in
+    # microservice_counts, so that path is already known-good; and an explicit
+    # `--as microservice` is a deliberate force (e.g. on a route-shaped string)
+    # that must NOT be rejected. The bogus-microservice guard for overview is
+    # carried entirely by the --service flag validation above.
     if as_type == "route":
         return _overview_route(args, cfg, graph, subject)
     if as_type == "microservice":
@@ -3511,8 +3661,17 @@ def _cmd_search(args: argparse.Namespace) -> int:
         return 2
 
     # Convert SearchHit list to envelope node dicts.
+    # Score floor (default 0.0): drop negative-score noise — chunks farther than
+    # orthogonal to the query (l2_distance_to_score < 0) are never a real match.
+    # Applied BEFORE truncation so the floor tightens precision without the +1
+    # row leaking past it. SearchHit now carries filename/start_line; the
+    # envelope projector (_compose_file) folds those into the `file` display
+    # field so each rendered hit shows its file path (filename:start_line).
+    min_score = getattr(args, "min_score", 0.0) or 0.0
     hit_dicts: list[dict] = []
     for hit in out.results:
+        if float(getattr(hit, "score", 0.0)) < min_score:
+            continue
         d = hit.model_dump() if hasattr(hit, "model_dump") else dict(hit)
         # Ensure an `id` key for envelope nodes (SearchHit carries chunk_id +
         # optional symbol_id; use chunk_id as the envelope node id).

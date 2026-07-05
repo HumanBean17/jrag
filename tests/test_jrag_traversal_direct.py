@@ -750,3 +750,67 @@ def test_inapplicable_flags_emit_warnings(
     assert not any("--limit" in w for w in payload_default.get("warnings", [])), (
         f"decompose default should not warn about --limit, got {payload_default.get('warnings')}"
     )
+
+
+# ===== Phase 3 regression: Java-kind enforcement (T6) =====
+
+
+def test_implementations_rejects_class_root(corpus_root: Path, ladybug_db_path: Path) -> None:
+    """implementations expects an INTERFACE; a class root must error (not silently
+    return empty). Graph kind=symbol covers class+interface+method, so the label
+    guard alone let a class through (Phase 3 T6)."""
+    env = _env_for(corpus_root, ladybug_db_path)
+    # _ABS_NOTIFICATION is an abstract CLASS (symbol_kind=class).
+    proc = _run_jrag(["implementations", _ABS_NOTIFICATION, "--format", "json"], env=env)
+    assert proc.returncode == 2, (
+        f"implementations <class> should error: rc={proc.returncode}\nstdout={proc.stdout}"
+    )
+    payload = json.loads(proc.stdout)
+    assert payload["status"] == "error", f"expected error, got {payload}"
+    assert "Java kind" in payload.get("message", ""), (
+        f"expected Java-kind message, got {payload.get('message')!r}"
+    )
+
+
+def test_subclasses_rejects_method_root(corpus_root: Path, ladybug_db_path: Path) -> None:
+    """subclasses expects a class/interface; a method root must error."""
+    env = _env_for(corpus_root, ladybug_db_path)
+    proc = _run_jrag(["subclasses", _SVC_ASSIGN, "--format", "json"], env=env)
+    assert proc.returncode == 2, f"subclasses <method> should error: rc={proc.returncode}"
+    payload = json.loads(proc.stdout)
+    assert payload["status"] == "error"
+    assert "Java kind" in payload.get("message", "")
+
+
+def test_overrides_rejects_class_root(corpus_root: Path, ladybug_db_path: Path) -> None:
+    """overrides expects a method; a class root must error."""
+    env = _env_for(corpus_root, ladybug_db_path)
+    proc = _run_jrag(["overrides", _ABS_NOTIFICATION, "--format", "json"], env=env)
+    assert proc.returncode == 2, f"overrides <class> should error: rc={proc.returncode}"
+    payload = json.loads(proc.stdout)
+    assert payload["status"] == "error"
+    assert "Java kind" in payload.get("message", "")
+
+
+# ===== Phase 3 regression: callee edge dedup (T7) =====
+
+
+def test_callees_dedupes_duplicate_targets(corpus_root: Path, ladybug_db_path: Path) -> None:
+    """callees must not emit duplicate edges for the same callee.
+
+    ChatManagementService#assign reaches some callees via multiple call sites
+    (find_callees emits one CallEdge per call site). Without dedup the JSON
+    carried repeats; the id-free renderer then showed the same target twice.
+    Phase 3 T7 dedupes by (other_id, edge_type) and drops empty other_id.
+    """
+    env = _env_for(corpus_root, ladybug_db_path)
+    proc = _run_jrag(["callees", _SVC_ASSIGN, "--format", "json"], env=env)
+    assert proc.returncode == 0
+    payload = json.loads(proc.stdout)
+    edges = payload.get("edges", [])
+    targets = [e.get("target") for e in edges]
+    # No None/empty targets survive (phantom edges dropped).
+    assert all(targets), f"expected every edge to have a target, got {targets}"
+    # No duplicate targets.
+    dupes = [t for t in targets if targets.count(t) > 1]
+    assert not dupes, f"expected no duplicate callee targets, got duplicates: {set(dupes)}"

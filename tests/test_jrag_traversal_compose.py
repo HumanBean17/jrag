@@ -447,21 +447,24 @@ def test_connection_first_positional_is_microservice_not_query(
         f"expected synthetic microservice root kind, got {root_node.get('kind')}"
     )
 
-    # Sanity: a clearly-not-real-microservice still returns status=ok (empty
-    # but not not_found). This proves resolve_v2 was not invoked.
+    # Sanity: a clearly-not-real-microservice now returns status:error (Phase 3
+    # consistency sweep — validate the positional against the known set so a
+    # bogus name surfaces a clear error instead of an empty ok that reads as
+    # "this service genuinely has no connections"). resolve_v2 is STILL not
+    # invoked (the error is a microservice-name check, not a resolve).
     proc_unknown = _run_jrag(
         ["connection", "definitely-not-a-real-microservice", "--format", "json"],
         env=env,
     )
-    assert proc_unknown.returncode == 0, (
-        f"unknown microservice failed: {proc_unknown.stderr}"
+    assert proc_unknown.returncode == 2, (
+        f"unknown microservice should error: rc={proc_unknown.returncode}\nstderr={proc_unknown.stderr}"
     )
     payload_unknown = json.loads(proc_unknown.stdout)
-    assert payload_unknown["status"] == "ok", (
-        f"expected ok for unknown microservice (no resolve), got {payload_unknown.get('status')}"
+    assert payload_unknown["status"] == "error", (
+        f"expected error for unknown microservice, got {payload_unknown.get('status')}"
     )
-    assert payload_unknown.get("edges", []) == [], (
-        f"expected 0 edges for unknown microservice, got {payload_unknown.get('edges')}"
+    assert "unknown microservice" in payload_unknown.get("message", ""), (
+        f"expected 'unknown microservice' message, got {payload_unknown.get('message')!r}"
     )
 
 
@@ -507,24 +510,25 @@ def test_outline_lists_file_symbols(
 def test_outline_empty_for_missing_file(
     corpus_root: Path, ladybug_db_path: Path
 ) -> None:
-    """outline on a non-existent filename returns status=ok with 0 nodes.
+    """outline on a non-existent filename returns a clean status:error.
 
-    find_symbols_in_file_range matches s.filename = $fn exactly. A filename
-    that doesn't exist in the graph returns [] (the underlying query has no
-    matches). The command MUST return status=ok with empty nodes, not crash.
+    Parity with `imports`: outline resolves <file> via _resolve_source_path, so
+    a missing file surfaces a "file not found" error instead of a silent empty
+    success (which reads as "this file has no symbols" — a silent wrong answer).
+    The exit code is 2 (envelope-shape error), not a crash.
     """
     env = _env_for(corpus_root, ladybug_db_path)
     proc = _run_jrag(
         ["outline", "does/not/exist/Nope.java", "--format", "json"],
         env=env,
     )
-    assert proc.returncode == 0, (
-        f"outline missing file failed: rc={proc.returncode}\nstderr={proc.stderr}"
+    assert proc.returncode == 2, (
+        f"outline missing file should error: rc={proc.returncode}\nstderr={proc.stderr}"
     )
     payload = json.loads(proc.stdout)
-    assert payload["status"] == "ok", f"expected ok, got {payload}"
-    assert payload.get("nodes", {}) == {}, (
-        f"expected 0 nodes for missing file, got {payload.get('nodes')}"
+    assert payload["status"] == "error", f"expected error, got {payload}"
+    assert "file not found" in payload.get("message", ""), (
+        f"expected 'file not found' message, got {payload.get('message')!r}"
     )
 
 
