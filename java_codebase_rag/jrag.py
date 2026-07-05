@@ -415,10 +415,11 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "Resolve <query> then traverse the call graph inbound (who calls me?). "
             "Symbol -> g.find_callers (CALLS edges, --service/--module pushed down). "
-            "Route -> g.find_route_callers; --service is a CLIENT-SIDE post-filter on "
-            "caller_microservice (the backend kwarg is ignored once route_id is set), "
-            "surfaced as a warnings[] entry. --include-external controls whether "
-            "external (JDK/Spring/Lombok) callers are excluded (default: excluded)."
+            "Route -> g.find_route_callers; route callers are cross-service by "
+            "construction, so --service narrows WHICH route resolves (a resolve-time "
+            "filter) rather than filtering the resulting callers. "
+            "--include-external controls whether external (JDK/Spring/Lombok) callers "
+            "are excluded (default: excluded)."
         ),
     )
     callers.add_argument("query", help="Symbol FQN/name (e.g. 'pkg.Svc#method(Arg)') or route path.")
@@ -1674,12 +1675,21 @@ def _resolve_traversal_node(
     cfg,
     graph,
     hint_kind,
+    apply_scope: bool = False,
 ):
     """Resolve-first frame shared by every traversal command.
 
     Returns ``(node, env, rc)``. On resolve failure (ambiguous / not_found /
     error), renders the envelope and returns ``(None, env, rc)`` with rc=2 on
     error, 0 on ambiguous/not_found (matches the inspect command convention).
+
+    ``apply_scope`` opts a command into pushing ``--service``/``--module`` down
+    into resolve as resolve-time filters (via :func:`resolve_query`). Most
+    traversal commands keep the default ``False`` to preserve their existing
+    resolve semantics (structural-edge commands warn-and-ignore ``--service``;
+    symbol traversals use ``--service`` as a result filter via find_callers/
+    find_callees). ``callers`` opts in so ``--service`` narrows WHICH route
+    resolves for the cross-service route-caller flow.
     """
     from java_codebase_rag.jrag_envelope import resolve_query
     from java_codebase_rag.jrag_render import render
@@ -1692,6 +1702,8 @@ def _resolve_traversal_node(
         fqn_prefix=getattr(args, "fqn_prefix", None),
         cfg=cfg,
         graph=graph,
+        microservice=(getattr(args, "service", None) or "") if apply_scope else "",
+        module=(getattr(args, "module", None) or "") if apply_scope else "",
     )
     if env.status != "ok":
         print(render(env, fmt=args.format, detail=args.detail))
@@ -1815,7 +1827,9 @@ def _cmd_callers(args: argparse.Namespace) -> int:
     cfg, graph, rc = _load_graph_or_error(args)
     if rc:
         return rc
-    node, _renv, rrc = _resolve_traversal_node(args, cfg=cfg, graph=graph, hint_kind=args.kind)
+    node, _renv, rrc = _resolve_traversal_node(
+        args, cfg=cfg, graph=graph, hint_kind=args.kind, apply_scope=True
+    )
     if rrc or node is None:
         return rrc
     limit = _clamped_limit(args)
@@ -1823,22 +1837,14 @@ def _cmd_callers(args: argparse.Namespace) -> int:
     root_dict = _noderef_to_node_dict(node)
     root_id = node.id
 
-    # Route root -> find_route_callers (client-side --service post-filter).
+    # Route root -> find_route_callers. Route callers are inherently cross-
+    # service (a Client in microservice A calls a server Route in microservice B),
+    # so --service is NOT applied as a caller-microservice post-filter here;
+    # it has already narrowed resolve (which route was selected) via
+    # _resolve_traversal_node -> resolve_query.
     if node.kind == "route":
         route_callers = graph.find_route_callers(route_id=root_id)
         warnings: list[str] = []
-        if args.service:
-            # find_route_callers ignores microservice once route_id is set
-            # (microservice is only used to *resolve* the route_id when not
-            # given). Surface that as a warning so the user knows the filter
-            # was applied client-side, not pushed down.
-            warnings.append(
-                "--service is a post-filter on route callers "
-                "(find_route_callers ignores microservice once route_id is set)"
-            )
-            route_callers = [
-                rc for rc in route_callers if (rc.caller_microservice or "") == args.service
-            ]
         # No backend limit on find_route_callers; client-side slice for truncation.
         truncated = len(route_callers) > limit
         display = route_callers[:limit]
@@ -1847,17 +1853,27 @@ def _cmd_callers(args: argparse.Namespace) -> int:
         for rc in display:
             caller_id = rc.caller_node_id
             if rc.caller_node_kind == "client":
-                fqn = rc.raw_uri or rc.target_service or "(client)"
                 edge_type = "HTTP_CALLS"
             else:
-                fqn = rc.topic or "(producer)"
                 edge_type = "ASYNC_CALLS"
-            nodes[caller_id] = {
+            # The caller's identity is the declaring Symbol (the method that owns
+            # the Client/Producer), not the call-site path — mirrors
+            # trace_request_flow, which surfaces declaring_symbol_fqn. The
+            # path/topic the caller hits is kept as raw_uri/topic so the agent
+            # sees both WHO calls and WHAT they hit.
+            node = {
                 "id": caller_id,
                 "kind": rc.caller_node_kind,
-                "fqn": fqn,
+                "fqn": rc.declaring_symbol_fqn or caller_id,
                 "microservice": rc.caller_microservice,
             }
+            if rc.target_service:
+                node["target_service"] = rc.target_service
+            if rc.caller_node_kind == "client" and rc.raw_uri:
+                node["raw_uri"] = rc.raw_uri
+            elif rc.caller_node_kind != "client" and rc.topic:
+                node["topic"] = rc.topic
+            nodes[caller_id] = node
             edges.append(
                 {"other_id": caller_id, "edge_type": edge_type, "confidence": rc.confidence}
             )
@@ -2002,6 +2018,67 @@ def _cmd_callees(args: argparse.Namespace) -> int:
     depth = getattr(args, "depth", 1)
     min_conf = getattr(args, "min_confidence", 0.0)
     exclude_external = not getattr(args, "include_external", False)
+    # CLIENT-role type Symbol (e.g. a Feign client interface): its "callees" are
+    # the outbound HTTP endpoints its declared client methods call, NOT CALLS
+    # edges from the interface (a Feign interface declares methods but its
+    # methods' HTTP_CALLS edges carry the real outbound surface). Aggregate the
+    # declared Client nodes and their HTTP_CALLS targets so `jrag callees
+    # 'ChatCoreFeignClient'` shows the routes it hits.
+    if (node.role or "") == "CLIENT":
+        root_id = node.id
+        client_rows = graph._rows(  # noqa: SLF001 - one-shot aggregation query
+            "MATCH (iface:Symbol {id: $sid})-[:DECLARES]->(m:Symbol)"
+            "-[:DECLARES_CLIENT]->(c:Client) "
+            "OPTIONAL MATCH (c)-[e:HTTP_CALLS]->(r:Route) "
+            "RETURN c.id AS cid, c.member_fqn AS cfqn, c.path AS cpath, "
+            "c.method AS cmethod, c.microservice AS cms, "
+            "r.id AS rid, r.method AS rmethod, r.path AS rpath, "
+            "r.path_template AS rpt, r.microservice AS rms, "
+            "e.confidence AS conf",
+            {"sid": root_id},
+        )
+        nodes = {root_id: _noderef_to_node_dict(node)}
+        edges: list[dict] = []
+        for row in client_rows:
+            rid = str(row.get("rid") or "")
+            if rid:
+                target_id = rid
+                rmethod = str(row.get("rmethod") or "")
+                rpath = str(row.get("rpt") or row.get("rpath") or "")
+                nodes[target_id] = {
+                    "id": target_id,
+                    "kind": "route",
+                    "fqn": f"{rmethod} {rpath}".strip(),
+                    "microservice": str(row.get("rms") or ""),
+                }
+                edge_type = "HTTP_CALLS"
+            else:
+                # Client with no resolved HTTP_CALLS edge: surface the client
+                # node + its declared path so the outbound intent is visible.
+                target_id = str(row.get("cid") or "")
+                if not target_id:
+                    continue
+                cmethod = str(row.get("cmethod") or "")
+                cpath = str(row.get("cpath") or "")
+                nodes[target_id] = {
+                    "id": target_id,
+                    "kind": "client",
+                    "fqn": f"{cmethod} {cpath}".strip() or str(row.get("cfqn") or ""),
+                    "microservice": str(row.get("cms") or ""),
+                }
+                edge_type = "HTTP_CALLS"
+            edges.append({
+                "other_id": target_id,
+                "edge_type": edge_type,
+                "confidence": float(row.get("conf") or 0.0) or None,
+            })
+        truncated = len(edges) > limit
+        edges = edges[:limit]
+        return _emit_traversal(
+            args, root_id=root_id, nodes=nodes, edges=edges,
+            noun="callees", truncated=truncated,
+        )
+
     call_edges = graph.find_callees(
         node.fqn,
         depth=depth,

@@ -104,31 +104,41 @@ def test_callers_symbol_uses_find_callers(corpus_root: Path, ladybug_db_path: Pa
     )
 
 
-# ----- Test 2: callers (Route) --service is a client-side post-filter -----
+# ----- Test 2: callers (Route) --service narrows resolve (no post-filter) -----
 
 
-def test_callers_route_service_is_post_filter_with_warning(
+def test_callers_route_service_narrows_resolve_no_post_filter(
     corpus_root: Path, ladybug_db_path: Path
 ) -> None:
-    """callers on a Route with --service emits a post-filter warning.
+    """callers on a Route with --service narrows resolve; no post-filter warning.
 
-    find_route_callers ignores microservice once route_id is set (verified
-    against ladybug_queries.py:1738); --service is applied client-side on
-    RouteCaller.caller_microservice and surfaced via warnings[].
+    Phase 1 changed --service to a resolve-time filter (it pushes down into
+    resolve_query so `callers '/path' --service <ms>` selects that
+    microservice's route). Route callers are cross-service by construction, so
+    --service is NOT applied as a caller-microservice post-filter and no
+    post-filter warning fires. Verified on /chat/joinOperator: --service
+    chat-core resolves the chat-core route and still returns the chat-assign
+    cross-service callers.
     """
     env = _env_for(corpus_root, ladybug_db_path)
-    proc = _run_jrag(["callers", "/chat/assign", "--service", "chat-assign", "--format", "json"], env=env)
+    proc = _run_jrag(
+        ["callers", "/chat/joinOperator", "--service", "chat-core", "--format", "json"],
+        env=env,
+    )
     assert proc.returncode == 0, (
         f"callers route failed: rc={proc.returncode}\nstdout={proc.stdout}\nstderr={proc.stderr}"
     )
     payload = json.loads(proc.stdout)
     assert payload["status"] == "ok", f"expected ok, got {payload}"
     assert payload.get("root"), "expected root id (the Route)"
-    # The warning MUST fire (even with zero callers, the --service-as-post-filter
-    # signal is unconditional on the route-caller path).
+    # The cross-service callers from chat-assign MUST survive --service chat-core
+    # (they are NOT filtered out by --service on the route-caller path).
+    edges = payload.get("edges", [])
+    assert len(edges) >= 1, f"expected cross-service route callers, got edges={edges}"
+    # No post-filter warning: --service now narrows resolve, not caller results.
     warnings = payload.get("warnings", [])
-    assert any("--service" in w and "post-filter" in w for w in warnings), (
-        f"expected --service post-filter warning, got warnings={warnings}"
+    assert not any("post-filter" in w for w in warnings), (
+        f"--service should not emit a post-filter warning, got warnings={warnings}"
     )
 
 

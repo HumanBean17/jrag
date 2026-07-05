@@ -498,6 +498,8 @@ def resolve_query(
     fqn_prefix: str | None,
     cfg: Any,
     graph: Any | None = None,
+    microservice: str = "",
+    module: str = "",
 ) -> tuple[NodeRef | None, Envelope]:
     """Resolve-first mapper: runs ``resolve_v2`` and maps its contract to the envelope.
 
@@ -515,6 +517,11 @@ def resolve_query(
     cocoindex-free and to avoid importing the operator config layer here).
     ``graph`` is optional for testability; in production the caller passes the
     graph it loaded via :func:`jrag._load_graph`.
+
+    ``microservice`` / ``module`` are optional resolve-time filters (pushed
+    down from ``--service`` / ``--module``) that narrow candidate resolution
+    rather than acting only as traversal post-filters. For a Route root this
+    means ``--service`` disambiguates which microservice's route is selected.
     """
     # Lazy imports — keeps build_parser() / `jrag --help` free of resolve/ladybug.
     from resolve_service import resolve_v2
@@ -524,7 +531,10 @@ def resolve_query(
 
         graph = LadybugGraph.get(str(cfg.ladybug_path))
 
-    out = resolve_v2(identifier, hint_kind=hint_kind, graph=graph)
+    out = resolve_v2(
+        identifier, hint_kind=hint_kind, graph=graph,
+        microservice=microservice, module=module,
+    )
 
     if out.status == "one" and out.node is not None:
         node = out.node

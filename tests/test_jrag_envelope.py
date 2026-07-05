@@ -127,7 +127,7 @@ def test_resolve_query_one_proceeds_and_sets_file_location(monkeypatch: pytest.M
     node = _make_node()
     fake_output = ResolveOutput(success=True, status="one", node=node, resolved_identifier="doStuff")
 
-    def fake_resolve_v2(identifier, hint_kind=None, graph=None):
+    def fake_resolve_v2(identifier, hint_kind=None, graph=None, **kwargs):
         assert identifier == "doStuff"
         return fake_output
 

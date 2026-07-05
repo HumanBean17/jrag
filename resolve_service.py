@@ -43,8 +43,10 @@ _RESOLVE_REASON_PRIORITY: dict[ResolveReason, int] = {
     "producer_topic_prefix": 1,
     "fqn_suffix": 2,
     "route_template": 2,
+    "client_fqn": 2,
     "short_name": 3,
     "client_target": 3,
+    "client_name": 3,
     "producer_topic": 3,
 }
 
@@ -79,6 +81,31 @@ _PRODUCER_RESOLVE_RETURN = (
 )
 
 _RESOLVE_PRE_DEDUP_LIMIT = 50
+
+
+def _scope_clause(
+    alias: str,
+    microservice: str = "",
+    module: str = "",
+) -> tuple[str, dict[str, str]]:
+    """Build a Cypher AND-clause scoping a node alias by microservice/module.
+
+    Returns ``(clause, params)`` where ``clause`` is ``""`` or
+    ``" AND <alias>.microservice = $ms AND <alias>.module = $mod"`` and
+    ``params`` carries only the bound scope values. Used by the candidate
+    matchers to push ``--service``/``--module`` down into resolve so they act
+    as resolve-time filters (not just traversal post-filters).
+    """
+    preds: list[str] = []
+    params: dict[str, str] = {}
+    if microservice:
+        preds.append(f"{alias}.microservice = $ms")
+        params["ms"] = microservice
+    if module:
+        preds.append(f"{alias}.module = $mod")
+        params["mod"] = module
+    clause = (" AND " + " AND ".join(preds)) if preds else ""
+    return clause, params
 
 
 class ResolveCandidate(BaseModel):
@@ -141,20 +168,24 @@ def _resolve_parse_microservice_route(identifier: str) -> tuple[str, str, str] |
 def _resolve_symbol_candidates(
     g: LadybugGraph,
     identifier: str,
+    *,
+    microservice: str = "",
+    module: str = "",
 ) -> list[tuple[NodeRef, ResolveReason, int]]:
     out: list[tuple[NodeRef, ResolveReason, int]] = []
     lim = _RESOLVE_PRE_DEDUP_LIMIT
+    scope, scope_params = _scope_clause("s", microservice, module)
 
     rows = g._rows(  # noqa: SLF001
-        f"MATCH (s:Symbol) WHERE s.id = $id RETURN {_SYMBOL_RESOLVE_RETURN} LIMIT $lim",
-        {"id": identifier, "lim": lim},
+        f"MATCH (s:Symbol) WHERE s.id = $id{scope} RETURN {_SYMBOL_RESOLVE_RETURN} LIMIT $lim",
+        {"id": identifier, "lim": lim, **scope_params},
     )
     for row in rows:
         out.append((_node_ref_from_row("symbol", row), "exact_id", len(identifier)))
 
     rows = g._rows(  # noqa: SLF001
-        f"MATCH (s:Symbol) WHERE s.fqn = $fqn RETURN {_SYMBOL_RESOLVE_RETURN} LIMIT $lim",
-        {"fqn": identifier, "lim": lim},
+        f"MATCH (s:Symbol) WHERE s.fqn = $fqn{scope} RETURN {_SYMBOL_RESOLVE_RETURN} LIMIT $lim",
+        {"fqn": identifier, "lim": lim, **scope_params},
     )
     for row in rows:
         out.append((_node_ref_from_row("symbol", row), "exact_fqn", len(identifier)))
@@ -166,18 +197,35 @@ def _resolve_symbol_candidates(
     # resolve "many" path surfaces them honestly as ambiguous candidates.
     if "#" in identifier and "(" not in identifier:
         rows = g._rows(  # noqa: SLF001
-            f"MATCH (s:Symbol) WHERE s.fqn STARTS WITH $mp "
+            f"MATCH (s:Symbol) WHERE s.fqn STARTS WITH $mp{scope} "
             f"RETURN {_SYMBOL_RESOLVE_RETURN} LIMIT $lim",
-            {"mp": identifier + "(", "lim": lim},
+            {"mp": identifier + "(", "lim": lim, **scope_params},
         )
         for row in rows:
             out.append((_node_ref_from_row("symbol", row), "fqn_suffix", len(identifier) + 1))
+        # Short "Cls#method" form (no package): the identifier is "<Class>#<method>"
+        # with no dot in the class part. Match symbols whose fqn contains
+        # "<Class>#<method>(" so overloads surface honestly as ambiguous.
+        if "." not in identifier.split("#", 1)[0]:
+            class_part, _, method_part = identifier.partition("#")
+            if class_part and method_part:
+                contains = f".{class_part}#{method_part}("
+                rows = g._rows(  # noqa: SLF001
+                    f"MATCH (s:Symbol) WHERE s.fqn CONTAINS $mp{scope} "
+                    f"RETURN {_SYMBOL_RESOLVE_RETURN} LIMIT $lim",
+                    {"mp": contains, "lim": lim, **scope_params},
+                )
+                for row in rows:
+                    fqn = str(row.get("fqn") or "")
+                    out.append(
+                        (_node_ref_from_row("symbol", row), "fqn_suffix", len(identifier) + 1)
+                    )
 
     suffix = f".{identifier}"
     rows = g._rows(  # noqa: SLF001
-        f"MATCH (s:Symbol) WHERE s.fqn = $ident OR s.fqn ENDS WITH $suffix "
+        f"MATCH (s:Symbol) WHERE s.fqn = $ident OR s.fqn ENDS WITH $suffix{scope} "
         f"RETURN {_SYMBOL_RESOLVE_RETURN} LIMIT $lim",
-        {"ident": identifier, "suffix": suffix, "lim": lim},
+        {"ident": identifier, "suffix": suffix, "lim": lim, **scope_params},
     )
     for row in rows:
         fqn = str(row.get("fqn") or "")
@@ -185,8 +233,8 @@ def _resolve_symbol_candidates(
         out.append((_node_ref_from_row("symbol", row), "fqn_suffix", spec))
 
     rows = g._rows(  # noqa: SLF001
-        f"MATCH (s:Symbol) WHERE s.name = $name RETURN {_SYMBOL_RESOLVE_RETURN} LIMIT $lim",
-        {"name": identifier, "lim": lim},
+        f"MATCH (s:Symbol) WHERE s.name = $name{scope} RETURN {_SYMBOL_RESOLVE_RETURN} LIMIT $lim",
+        {"name": identifier, "lim": lim, **scope_params},
     )
     for row in rows:
         out.append((_node_ref_from_row("symbol", row), "short_name", len(identifier)))
@@ -197,25 +245,29 @@ def _resolve_symbol_candidates(
 def _resolve_route_candidates(
     g: LadybugGraph,
     identifier: str,
+    *,
+    microservice: str = "",
+    module: str = "",
 ) -> list[tuple[NodeRef, ResolveReason, int]]:
     out: list[tuple[NodeRef, ResolveReason, int]] = []
     lim = _RESOLVE_PRE_DEDUP_LIMIT
+    scope, scope_params = _scope_clause("r", microservice, module)
 
     rows = g._rows(  # noqa: SLF001
-        f"MATCH (r:Route) WHERE r.id = $id RETURN {_ROUTE_RESOLVE_RETURN} LIMIT $lim",
-        {"id": identifier, "lim": lim},
+        f"MATCH (r:Route) WHERE r.id = $id{scope} RETURN {_ROUTE_RESOLVE_RETURN} LIMIT $lim",
+        {"id": identifier, "lim": lim, **scope_params},
     )
     for row in rows:
         out.append((_node_ref_from_row("route", row), "exact_id", len(identifier)))
 
     ms_route = _resolve_parse_microservice_route(identifier)
     if ms_route is not None:
-        microservice, method, path = ms_route
+        microservice_ms, method, path = ms_route
         rows = g._rows(  # noqa: SLF001
             f"MATCH (r:Route) WHERE r.microservice = $ms AND r.method = $method "
-            f"AND (r.path = $path OR r.path_template = $path) "
+            f"AND (r.path = $path OR r.path_template = $path){scope} "
             f"RETURN {_ROUTE_RESOLVE_RETURN} LIMIT $lim",
-            {"ms": microservice, "method": method, "path": path, "lim": lim},
+            {"ms": microservice_ms, "method": method, "path": path, "lim": lim, **scope_params},
         )
         for row in rows:
             spec = len(path)
@@ -226,36 +278,88 @@ def _resolve_route_candidates(
         method, path = method_path
         rows = g._rows(  # noqa: SLF001
             f"MATCH (r:Route) WHERE r.method = $method "
-            f"AND (r.path = $path OR r.path_template = $path) "
+            f"AND (r.path = $path OR r.path_template = $path){scope} "
             f"RETURN {_ROUTE_RESOLVE_RETURN} LIMIT $lim",
-            {"method": method, "path": path, "lim": lim},
+            {"method": method, "path": path, "lim": lim, **scope_params},
         )
         for row in rows:
             out.append((_node_ref_from_row("route", row), "route_method_path", len(path)))
 
     if identifier.startswith("/"):
         rows = g._rows(  # noqa: SLF001
-            f"MATCH (r:Route) WHERE r.path = $path OR r.path_template = $path "
+            f"MATCH (r:Route) WHERE r.path = $path OR r.path_template = $path{scope} "
             f"RETURN {_ROUTE_RESOLVE_RETURN} LIMIT $lim",
-            {"path": identifier, "lim": lim},
+            {"path": identifier, "lim": lim, **scope_params},
         )
         for row in rows:
             path_val = str(row.get("path_template") or row.get("path") or "")
             out.append((_node_ref_from_row("route", row), "route_template", len(path_val)))
 
-    return out
+    return _drop_route_mirrors(g, out)
+
+
+def _drop_route_mirrors(
+    g: LadybugGraph,
+    cands: list[tuple[NodeRef, ResolveReason, int]],
+) -> list[tuple[NodeRef, ResolveReason, int]]:
+    """Drop client-side Route mirrors that collide with a server-exposed route.
+
+    A path can resolve to TWO Route nodes: the server route (exposed by a
+    controller via an inbound ``EXPOSES`` edge, ``microservice`` set) and a
+    client-side mirror (no ``EXPOSES``, often ``microservice=''``) created when
+    a Client's HTTP call couldn't be linked to the server route. The mirror is
+    an artifact — drop it when a server-exposed route shares the same
+    ``(method, path_template)`` so the no-flags ``jrag callers '/path'`` flow
+    resolves to the single server route instead of stalling on "ambiguous".
+    GENUINE ambiguity (two server-exposed routes in different microservices
+    sharing a path) is preserved — both have ``EXPOSES`` and survive.
+    """
+    if len(cands) < 2:
+        return cands
+    ids = [c[0].id for c in cands if c[0].id]
+    if not ids:
+        return cands
+    id_list = ", ".join("'" + cid.replace("'", "''") + "'" for cid in ids)
+    exposed_rows = g._rows(  # noqa: SLF001
+        "MATCH (s:Symbol)-[:EXPOSES]->(r:Route) "
+        f"WHERE r.id IN [{id_list}] "
+        "RETURN r.id AS rid",
+        {},
+    )
+    exposed_ids = {str(r.get("rid") or "") for r in exposed_rows}
+    if not exposed_ids:
+        return cands
+
+    # Group candidates by their route fqn ("METHOD path"); within a colliding
+    # group, drop non-exposed (mirror) entries only when an exposed entry exists.
+    groups: dict[str, list[tuple[NodeRef, ResolveReason, int]]] = {}
+    for node, reason, spec in cands:
+        groups.setdefault(str(node.fqn or ""), []).append((node, reason, spec))
+
+    keep: list[tuple[NodeRef, ResolveReason, int]] = []
+    for group in groups.values():
+        has_exposed = any(c[0].id in exposed_ids for c in group)
+        for node, reason, spec in group:
+            if has_exposed and node.id not in exposed_ids:
+                continue  # mirror colliding with a server route — drop
+            keep.append((node, reason, spec))
+    return keep
 
 
 def _resolve_client_candidates(
     g: LadybugGraph,
     identifier: str,
+    *,
+    microservice: str = "",
+    module: str = "",
 ) -> list[tuple[NodeRef, ResolveReason, int]]:
     out: list[tuple[NodeRef, ResolveReason, int]] = []
     lim = _RESOLVE_PRE_DEDUP_LIMIT
+    scope, scope_params = _scope_clause("c", microservice, module)
 
     rows = g._rows(  # noqa: SLF001
-        f"MATCH (c:Client) WHERE c.id = $id RETURN {_CLIENT_RESOLVE_RETURN} LIMIT $lim",
-        {"id": identifier, "lim": lim},
+        f"MATCH (c:Client) WHERE c.id = $id{scope} RETURN {_CLIENT_RESOLVE_RETURN} LIMIT $lim",
+        {"id": identifier, "lim": lim, **scope_params},
     )
     for row in rows:
         out.append((_node_ref_from_row("client", row), "exact_id", len(identifier)))
@@ -267,20 +371,55 @@ def _resolve_client_candidates(
         if target and path_prefix:
             rows = g._rows(  # noqa: SLF001
                 f"MATCH (c:Client) WHERE c.target_service = $target "
-                f"AND (c.path STARTS WITH $path OR c.path_template STARTS WITH $path) "
+                f"AND (c.path STARTS WITH $path OR c.path_template STARTS WITH $path){scope} "
                 f"RETURN {_CLIENT_RESOLVE_RETURN} LIMIT $lim",
-                {"target": target, "path": path_prefix, "lim": lim},
+                {"target": target, "path": path_prefix, "lim": lim, **scope_params},
             )
             for row in rows:
                 spec = len(path_prefix)
                 out.append((_node_ref_from_row("client", row), "client_target_path", spec))
     elif not identifier.startswith("/"):
         rows = g._rows(  # noqa: SLF001
-            f"MATCH (c:Client) WHERE c.target_service = $target RETURN {_CLIENT_RESOLVE_RETURN} LIMIT $lim",
-            {"target": identifier, "lim": lim},
+            f"MATCH (c:Client) WHERE c.target_service = $target{scope} "
+            f"RETURN {_CLIENT_RESOLVE_RETURN} LIMIT $lim",
+            {"target": identifier, "lim": lim, **scope_params},
         )
         for row in rows:
             out.append((_node_ref_from_row("client", row), "client_target", len(identifier)))
+
+    # Client-by-name/FQN: reach a Client root via its declaring Symbol (the
+    # method that declares the client). Only SUFFIX/NAME matches are used — a
+    # full method FQN identifier (e.g. 'pkg.Cls#method(Arg)') is intentionally
+    # left to resolve to the method Symbol (exact_fqn) rather than ALSO matching
+    # the Client declared by that same method, which would surface a spurious
+    # "ambiguous" result. A bare class name (no '#') does not suffix-match a
+    # Client's member_fqn (which carries '#method(args)'), so it resolves to the
+    # type Symbol; a bare method name ('joinOperator') matches Client(s) via the
+    # declaring symbol name and surfaces honest ambiguity across clients.
+    if " " not in identifier and not identifier.startswith("/"):
+        sym_scope, sym_scope_params = _scope_clause("s", microservice, module)
+        # Declaring symbol name match (e.g. 'joinOperator').
+        rows = g._rows(  # noqa: SLF001
+            "MATCH (s:Symbol)-[:DECLARES_CLIENT]->(c:Client) "
+            f"WHERE s.name = $name{sym_scope} "
+            f"RETURN {_CLIENT_RESOLVE_RETURN} LIMIT $lim",
+            {"name": identifier, "lim": lim, **sym_scope_params},
+        )
+        for row in rows:
+            out.append((_node_ref_from_row("client", row), "client_name", len(identifier)))
+        # Declaring symbol FQN / member_fqn SUFFIX match (safe: a full method
+        # FQN with args never suffix-matches because stored fqns carry the arg
+        # suffix; '.<identifier>' only matches a class-level identifier).
+        suffix = "." + identifier
+        rows = g._rows(  # noqa: SLF001
+            "MATCH (s:Symbol)-[:DECLARES_CLIENT]->(c:Client) "
+            f"WHERE s.fqn ENDS WITH $suffix OR c.member_fqn ENDS WITH $suffix{sym_scope} "
+            f"RETURN {_CLIENT_RESOLVE_RETURN} LIMIT $lim",
+            {"suffix": suffix, "lim": lim, **sym_scope_params},
+        )
+        for row in rows:
+            fqn = str(row.get("member_fqn") or "")
+            out.append((_node_ref_from_row("client", row), "client_fqn", len(fqn) or len(identifier)))
 
     return out
 
@@ -288,28 +427,33 @@ def _resolve_client_candidates(
 def _resolve_producer_candidates(
     g: LadybugGraph,
     identifier: str,
+    *,
+    microservice: str = "",
+    module: str = "",
 ) -> list[tuple[NodeRef, ResolveReason, int]]:
     out: list[tuple[NodeRef, ResolveReason, int]] = []
     lim = _RESOLVE_PRE_DEDUP_LIMIT
+    scope, scope_params = _scope_clause("p", microservice, module)
 
     rows = g._rows(  # noqa: SLF001
-        f"MATCH (p:Producer) WHERE p.id = $id RETURN {_PRODUCER_RESOLVE_RETURN} LIMIT $lim",
-        {"id": identifier, "lim": lim},
+        f"MATCH (p:Producer) WHERE p.id = $id{scope} RETURN {_PRODUCER_RESOLVE_RETURN} LIMIT $lim",
+        {"id": identifier, "lim": lim, **scope_params},
     )
     for row in rows:
         out.append((_node_ref_from_row("producer", row), "exact_id", len(identifier)))
 
     rows = g._rows(  # noqa: SLF001
-        f"MATCH (p:Producer) WHERE p.topic = $topic RETURN {_PRODUCER_RESOLVE_RETURN} LIMIT $lim",
-        {"topic": identifier, "lim": lim},
+        f"MATCH (p:Producer) WHERE p.topic = $topic{scope} RETURN {_PRODUCER_RESOLVE_RETURN} LIMIT $lim",
+        {"topic": identifier, "lim": lim, **scope_params},
     )
     for row in rows:
         out.append((_node_ref_from_row("producer", row), "producer_topic", len(identifier)))
 
     if not identifier.startswith("/"):
         rows = g._rows(  # noqa: SLF001
-            f"MATCH (p:Producer) WHERE p.topic STARTS WITH $topic RETURN {_PRODUCER_RESOLVE_RETURN} LIMIT $lim",
-            {"topic": identifier, "lim": lim},
+            f"MATCH (p:Producer) WHERE p.topic STARTS WITH $topic{scope} "
+            f"RETURN {_PRODUCER_RESOLVE_RETURN} LIMIT $lim",
+            {"topic": identifier, "lim": lim, **scope_params},
         )
         for row in rows:
             out.append((_node_ref_from_row("producer", row), "producer_topic_prefix", len(identifier)))
@@ -445,6 +589,9 @@ def resolve_v2(
     identifier: str,
     hint_kind: Literal["symbol", "route", "client", "producer"] | None = None,
     graph: LadybugGraph | None = None,
+    *,
+    microservice: str = "",
+    module: str = "",
 ) -> ResolveOutput:
     try:
         trimmed, err = _resolve_validate_identifier(identifier)
@@ -478,13 +625,13 @@ def resolve_v2(
         raw: list[tuple[NodeRef, ResolveReason, int]] = []
         for kind in _resolve_kinds_to_search(hint_kind):
             if kind == "symbol":
-                raw.extend(_resolve_symbol_candidates(g, trimmed))
+                raw.extend(_resolve_symbol_candidates(g, trimmed, microservice=microservice, module=module))
             elif kind == "route":
-                raw.extend(_resolve_route_candidates(g, trimmed))
+                raw.extend(_resolve_route_candidates(g, trimmed, microservice=microservice, module=module))
             elif kind == "client":
-                raw.extend(_resolve_client_candidates(g, trimmed))
+                raw.extend(_resolve_client_candidates(g, trimmed, microservice=microservice, module=module))
             else:
-                raw.extend(_resolve_producer_candidates(g, trimmed))
+                raw.extend(_resolve_producer_candidates(g, trimmed, microservice=microservice, module=module))
 
         deduped = _resolve_dedupe_candidates(raw)
         ranked = _resolve_rank_candidates(deduped)

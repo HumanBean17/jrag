@@ -536,6 +536,9 @@ def test_find_route_callers_returns_route_caller_client_node(ladybug_db_path_cro
     http_callers = [c for c in callers if c.match]
     assert any(c.caller_node_kind == "client" for c in http_callers)
     assert all(c.caller_node_id for c in http_callers)
+    # Caller identity is the declaring Symbol fqn (the method owning the
+    # Client), not the call-site path — so `callers <route>` can name WHO calls.
+    assert all(c.declaring_symbol_fqn for c in http_callers)
 
 
 def test_trace_request_flow_inbound_includes_caller_node_id(ladybug_db_path_cross_service_smoke: Path) -> None:
