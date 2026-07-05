@@ -29,6 +29,7 @@ import traceback
 from pathlib import Path
 
 from java_codebase_rag._fdlimit import raise_fd_limit
+from java_codebase_rag._stdio import force_utf8_stdio
 
 __all__ = ["build_parser", "main", "_console_script_main"]
 
@@ -3514,6 +3515,7 @@ def _console_script_main() -> None:
     command has already done its work and emitted its result. ``main()`` stays
     return-based so in-process test callers keep working.
     """
+    force_utf8_stdio()
     rc = main()
     sys.stdout.flush()
     sys.stderr.flush()

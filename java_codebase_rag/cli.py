@@ -23,6 +23,7 @@ from java_codebase_rag.config import (
     resolve_operator_config,
 )
 from java_codebase_rag._fdlimit import raise_fd_limit
+from java_codebase_rag._stdio import force_utf8_stdio
 from java_codebase_rag.pipeline import clip, run_build_ast_graph, run_cocoindex_drop, run_cocoindex_update, run_incremental_graph
 from java_ontology import VALID_UNRESOLVED_CALL_REASONS
 
@@ -1068,6 +1069,7 @@ def _console_script_main() -> None:
     ``main()`` stays return-based so in-process test callers (``cli.main(...)``)
     keep working.
     """
+    force_utf8_stdio()
     rc = main()
     sys.stdout.flush()
     sys.stderr.flush()

@@ -176,6 +176,13 @@ def sync_all(check_only: bool, repo_root: Path | None = None) -> int:
 
 def main() -> int:
     """CLI entry point."""
+    # Success messages use '✓' (U+2713); on Windows cp1252 stdout that crashes
+    # with UnicodeEncodeError. Force UTF-8 (no-op on Unix). Standalone reconfigure
+    # rather than importing java_codebase_rag._stdio — this dev script is stdlib-only.
+    for _stream in (sys.stdout, sys.stderr):
+        _reconfigure = getattr(_stream, "reconfigure", None)
+        if _reconfigure is not None:
+            _reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(
         description="Sync agent artifacts from dev source to install_data"
     )

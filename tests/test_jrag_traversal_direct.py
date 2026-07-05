@@ -55,6 +55,7 @@ def _run_jrag(
         [_jrag_exe(), *args],
         capture_output=True,
         text=True,
+        encoding="utf-8",  # jrag emits UTF-8 (↑/↓ tree headers); decode as such, not the locale ANSI codepage (cp1252 on Windows).
         env=env,
         input=stdin,
         check=False,

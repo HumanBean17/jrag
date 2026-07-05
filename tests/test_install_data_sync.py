@@ -41,6 +41,7 @@ def run_sync_script(*, check: bool = False, cwd: Path | None = None) -> subproce
         cwd=cwd,
         capture_output=True,
         text=True,
+        encoding="utf-8",  # Script emits UTF-8 (✓ marker); decode as such, not the locale ANSI codepage (cp1252 on Windows).
     )
 
 
