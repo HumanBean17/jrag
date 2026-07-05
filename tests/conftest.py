@@ -35,6 +35,41 @@ def pytest_configure(config) -> None:
         "markers",
         "lance_e2e: end-to-end cocoindex + Lance (optional; also gate with JAVA_CODEBASE_RAG_RUN_HEAVY).",
     )
+    _enforce_editable_install()
+
+
+def _enforce_editable_install() -> None:
+    """Fail collection if the `jrag`/`java-codebase-rag` console scripts would
+    not resolve to this repo source.
+
+    pytest itself never sees staleness because this conftest inserts the repo
+    onto ``sys.path[0]`` — but the console scripts (no conftest, no sys.path
+    insert) then import a stale non-editable copy from site-packages. Mirror
+    their view by importing in a clean subprocess (cwd outside the repo, no
+    ``PYTHONPATH``) and require the resolved file to live under the repo. This
+    is dev-only (end users never run this conftest), so it can't false-positive
+    on a legitimate PyPI install.
+    """
+    import subprocess
+
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    res = subprocess.run(
+        [sys.executable, "-c", "from java_codebase_rag import jrag; print(jrag.__file__)"],
+        capture_output=True, text=True, cwd=str(Path.home()), env=env,
+    )
+    resolved = res.stdout.strip() if res.returncode == 0 else ""
+    # Check against the source package dir, NOT BUNDLE_DIR: the venv lives at
+    # BUNDLE_DIR/.venv, so a site-packages copy is also "under" BUNDLE_DIR and
+    # would pass a naive is_relative_to(BUNDLE_DIR) check.
+    src_pkg = BUNDLE_DIR / "java_codebase_rag"
+    if resolved and Path(resolved).resolve().is_relative_to(src_pkg):
+        return
+    where = resolved or f"import failed (rc={res.returncode}): {res.stderr.strip()}"
+    pytest.exit(
+        f"\n[install] `jrag`/`java-codebase-rag` resolve to a stale/non-editable copy "
+        f"({where}).\n  Fix once: .venv/bin/pip install -e .  then re-run pytest.\n",
+        returncode=4,
+    )
 
 
 @pytest.fixture(scope="session")

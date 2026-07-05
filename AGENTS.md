@@ -5,6 +5,10 @@
 Use `.venv/bin/python` and `.venv/bin/pip` (repo root) for all Python commands.
 Invoke the `.venv/bin` executables directly — never system `python`/`pip`.
 
+Editable install only. If `jrag`/`java-codebase-rag` serve stale behavior
+while pytest passes, run `.venv/bin/pip install -e .` — don't report it.
+`tests/conftest.py` enforces this.
+
 ## Tests
 
 - Erase stale manual indexes first — they hijack project-root discovery:
