@@ -269,6 +269,9 @@ def _render_listing(envelope: Envelope, *, noun: str, detail: str = "normal") ->
                 lines.extend(_render_inspect_block(rest, 1))
     if not lines:
         lines.append(f"0 {noun}".rstrip())
+    # Listing breadcrumbs (Phase 2): <=2 `next:` hint lines when the listing
+    # command emitted agent_next_actions (routes/clients/producers/topics).
+    lines.extend(_next_action_lines(envelope))
     return "\n".join(lines)
 
 

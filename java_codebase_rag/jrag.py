@@ -89,7 +89,7 @@ def _render_listing(rows, *, limit: int, args: argparse.Namespace, noun: str) ->
     display_nodes = {node["id"]: node for node in display_nodes_list}
 
     env = Envelope(status="ok", nodes=display_nodes, truncated=truncated)
-    next_actions_hook(env)
+    next_actions_hook(env, command=getattr(args, "command", None))
     print(render(env, fmt=args.format, detail=args.detail, noun=noun))
     return 0
 
@@ -1509,7 +1509,7 @@ def _cmd_topics(args: argparse.Namespace) -> int:
         nodes[node_id] = topic
 
     env = Envelope(status="ok", nodes=nodes, truncated=truncated, warnings=warnings)
-    next_actions_hook(env)
+    next_actions_hook(env, command=getattr(args, "command", None))
     print(render(env, fmt=args.format, detail=args.detail, noun="topic"))
     return 0
 

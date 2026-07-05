@@ -38,6 +38,24 @@ _LABEL_COMMANDS: dict[str, dict[str, str]] = {
     "OVERRIDDEN_BY": {"in": "overridden-by"},
     "HTTP_CALLS": {"out": "callees"},
     "ASYNC_CALLS": {"out": "callees"},
+    # Phase 2: a Symbol declaring a Client/Producer has a useful `callees`
+    # surface — `callees` on a CLIENT-role Symbol aggregates the declared
+    # Client's HTTP_CALLS targets (and analogously for producers), so this
+    # is a valid, runnable follow-up. EXPOSES is intentionally unmapped (no
+    # clean traversal command for "routes this controller exposes"; `inspect`
+    # already shows them).
+    "DECLARES_CLIENT": {"out": "callees"},
+    "DECLARES_PRODUCER": {"out": "callees"},
+}
+
+# Per-root-kind command allowlist. Label-derived hints are filtered through
+# this so a root never suggests a command whose kind guard would reject it.
+# Route roots are special-cased in :func:`next_actions` (the label path would
+# map HTTP_CALLS → `callees`, which is invalid on routes — `flow` is the
+# correct escalation). Symbol (and unknown/None) → no filtering.
+_KIND_ALLOWLIST: dict[str, frozenset[str]] = {
+    "client": frozenset({"callees", "inspect"}),
+    "producer": frozenset({"callees", "inspect"}),
 }
 
 # Cap on returned hints (brief: ≤5). Matches the Envelope.agent_next_actions
@@ -83,6 +101,7 @@ def next_actions(
     result_edges: list[dict[str, Any]],
     graph: Any = None,  # noqa: ARG001 — reserved for future use (brief contract)
     current_command: str | None = None,
+    root_kind: str | None = None,
 ) -> list[str]:
     """Build ``agent_next_actions`` hints for a resolved root.
 
@@ -97,12 +116,28 @@ def next_actions(
       direction; the hints surface the *other* edges the root has, encouraging
       orthogonal exploration.)
 
+    ``root_kind`` filters hints through :data:`_KIND_ALLOWLIST` so a root never
+    suggests a command whose kind guard would reject it (e.g. a Client root no
+    longer suggests ``callers``). Route roots are special-cased: the label path
+    would map HTTP_CALLS → ``callees`` (invalid on routes — ``_cmd_callees``
+    rejects route roots), so routes instead get ``[flow, inspect]`` minus the
+    command just run. ``flow`` is the natural escalation from ``callers``
+    (full inbound+outbound chain).
+
     De-dups and caps at ``_MAX_HINTS`` (5). ``graph`` is accepted for forward
     compatibility but not read — all needed data comes from ``edge_summary`` or
     ``result_edges``.
     """
     if not root_fqn:
         return []
+
+    # Route root: special-case. The label path would map HTTP_CALLS → `callees`,
+    # but `_cmd_callees` rejects route roots (kind guard). `flow` is the natural
+    # escalation (full inbound+outbound chain). Invariant: a route root never
+    # gets `callees`, and gets `flow` when not the current command.
+    if root_kind == "route":
+        route_cmds = [c for c in ("flow", "inspect") if c != current_command]
+        return [f"jrag {cmd} {root_fqn}" for cmd in route_cmds][:_MAX_HINTS]
 
     # Lazy import so build_parser() stays pure (PR-JRAG-4 sentinel test).
     # EDGE_SCHEMA is the canonical label set; we use it to skip labels we don't
@@ -117,10 +152,15 @@ def next_actions(
         base = label.split(".")[0]
         return base in EDGE_SCHEMA or base in _VIRTUAL_LABELS
 
+    # Per-root-kind command allowlist (None → no filtering for symbol/unknown).
+    allowed = _KIND_ALLOWLIST.get(root_kind or "")
+
     hints: list[str] = []
     seen: set[str] = set()
 
     def _add(cmd: str) -> None:
+        if allowed is not None and cmd not in allowed:
+            return
         hint = f"jrag {cmd} {root_fqn}"
         if hint not in seen:
             seen.add(hint)

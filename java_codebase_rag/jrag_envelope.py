@@ -613,6 +613,19 @@ def resolve_query(
     return None, Envelope(status="not_found", message=raw_msg)
 
 
+# Listing breadcrumbs (root is None): 1–2 template hints pointing at the natural
+# follow-up form for a listing command. These are guidance with a placeholder,
+# NOT runnable verbatim — they do NOT go through jrag_hints.next_actions (which
+# requires a resolved root fqn). Other listings (microservices, map, ...) get no
+# breadcrumb: don't over-build.
+_LISTING_BREADCRUMBS: dict[str, list[str]] = {
+    "routes": ["jrag callers '<path>'", "jrag flow '<path>'"],
+    "clients": ["jrag callees '<client>'"],
+    "producers": ["jrag callees '<producer>'"],
+    "topics": ["jrag listeners '<topic>'"],
+}
+
+
 def next_actions_hook(
     envelope: Envelope,
     root: str | None = None,
@@ -625,12 +638,17 @@ def next_actions_hook(
     Every command that produces edges or an edge_summary calls this hook. The
     hook extracts the root node's FQN from ``envelope.nodes[root]`` and delegates
     to :func:`jrag_hints.next_actions`, which maps edge labels → ``jrag <cmd>
-    <fqn>`` hints (≤5, zero-direction suppressed, dot-keys covered). The result
-    is assigned to ``envelope.agent_next_actions`` (auto-omitted from
-    ``to_dict()`` when empty — see :meth:`Envelope.to_dict`).
+    <fqn>`` hints (≤5, zero-direction suppressed, dot-keys covered,
+    root-kind-aware). The result is assigned to ``envelope.agent_next_actions``
+    (auto-omitted from ``to_dict()`` when empty — see :meth:`Envelope.to_dict`).
+
+    Listing mode (``root is None``): emits 1–2 template breadcrumbs from
+    :data:`_LISTING_BREADCRUMBS` when ``command`` is a known listing
+    (``routes`` / ``clients`` / ``producers`` / ``topics``), so the agent sees
+    the natural follow-up form. Other listings get nothing.
 
     Skipped (returns ``[]``) when:
-      * ``root`` is ``None`` (listing / find / outline commands — no single root).
+      * ``root`` is ``None`` and ``command`` is not a breadcrumb listing.
       * The root node is absent from ``envelope.nodes`` (defensive).
       * The root node's ``fqn`` is empty/missing.
       * The root node is a synthetic kind (``microservice`` / ``topic`` /
@@ -644,13 +662,30 @@ def next_actions_hook(
         edge_summary: The edge_summary from describe_v2 (inspect command only).
         result_edges: Raw edge rows from traversal commands (used when
             ``edge_summary`` is ``None``).
+        command: The current jrag subcommand name (``args.command``), used to
+            drop self-hints and to key listing breadcrumbs.
 
     Returns:
         The list of hint strings assigned to ``envelope.agent_next_actions``
         (empty when the hook was a no-op for this call).
     """
     if root is None:
-        return []
+        # Listing breadcrumb: template hints for the natural follow-up form.
+        crumbs = _LISTING_BREADCRUMBS.get(command or "")
+        if not crumbs:
+            return []
+        # Filter out the current command if it appears in any breadcrumb;
+        # de-dup and cap at _MAX_HINTS (5).
+        filtered: list[str] = []
+        for c in crumbs:
+            if c in filtered:
+                continue
+            parts = c.split()
+            if len(parts) >= 2 and parts[1] == command:
+                continue
+            filtered.append(c)
+        envelope.agent_next_actions = filtered[:5]
+        return envelope.agent_next_actions
     root_node = envelope.nodes.get(root)
     if root_node is None:
         return []
@@ -670,6 +705,7 @@ def next_actions_hook(
         edge_summary=edge_summary,
         result_edges=result_edges if result_edges is not None else list(envelope.edges),
         current_command=command,
+        root_kind=kind,
     )
     return envelope.agent_next_actions
 

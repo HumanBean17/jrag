@@ -617,3 +617,91 @@ def test_project_envelope_bad_detail_raises() -> None:
     env = Envelope(status="ok", nodes={"sym:1": {"id": "1", "kind": "symbol", "fqn": "x"}})
     with pytest.raises(ValueError):
         project_envelope(env, "bogus")
+
+
+# ----- Tests 19–22: Phase 2 — listing breadcrumbs + root_kind threading -----
+
+
+def test_next_actions_hook_listing_breadcrumbs() -> None:
+    """root=None + a known listing command → template breadcrumb hints.
+
+    The breadcrumb map gives the agent the natural follow-up form for
+    routes/clients/producers/topics listings. These are guidance strings with a
+    placeholder, NOT runnable verbatim.
+    """
+    from java_codebase_rag.jrag_envelope import next_actions_hook
+
+    env = Envelope(status="ok")
+    out = next_actions_hook(env, root=None, command="routes")
+    assert out == ["jrag callers '<path>'", "jrag flow '<path>'"], f"routes crumbs: {out}"
+    assert env.agent_next_actions == out
+
+    env2 = Envelope(status="ok")
+    assert next_actions_hook(env2, root=None, command="clients") == ["jrag callees '<client>'"]
+    env3 = Envelope(status="ok")
+    assert next_actions_hook(env3, root=None, command="producers") == ["jrag callees '<producer>'"]
+    env4 = Envelope(status="ok")
+    assert next_actions_hook(env4, root=None, command="topics") == ["jrag listeners '<topic>'"]
+
+
+def test_next_actions_hook_listing_no_breadcrumb_for_other_commands() -> None:
+    """root=None + a non-breadcrumb listing (microservices/map/...) → []."""
+    from java_codebase_rag.jrag_envelope import next_actions_hook
+
+    env = Envelope(status="ok")
+    assert next_actions_hook(env, root=None, command="microservices") == []
+    assert next_actions_hook(env, root=None, command="search") == []
+    assert next_actions_hook(env, root=None, command=None) == []
+    # agent_next_actions stays unset (empty) → omitted from to_dict().
+    assert env.to_dict().get("agent_next_actions") is None
+
+
+def test_next_actions_hook_threads_root_kind_to_next_actions() -> None:
+    """The hook passes the resolved root kind into next_actions (route special-case).
+
+    A route root node with HTTP_CALLS edges would naively yield `callees`; with
+    root_kind threaded, the hook produces `flow` + `inspect` instead.
+    """
+    from java_codebase_rag.jrag_envelope import next_actions_hook
+
+    env = Envelope(
+        status="ok",
+        nodes={"r1": {"id": "r1", "kind": "route", "fqn": "POST /chat/joinOperator"}},
+        edges=[{"other_id": "c1", "edge_type": "HTTP_CALLS"}],
+        root="r1",
+    )
+    out = next_actions_hook(env, root="r1", command="callers")
+    assert out == [
+        "jrag flow POST /chat/joinOperator",
+        "jrag inspect POST /chat/joinOperator",
+    ], f"route root_kind not threaded: {out}"
+    # `callees` must NOT appear (kind guard in _cmd_callees rejects routes).
+    assert all("callees" not in h for h in out), f"route root leaked `callees`: {out}"
+
+
+def test_next_actions_hook_listing_breadcrumb_drops_current_command() -> None:
+    """If a breadcrumb's command matches the current command, it is filtered out.
+
+    Defensive: breadcrumbs point at *follow-up* commands, so the current command
+    normally won't appear — but the filter guarantees correctness if the map is
+    ever extended to include the same command.
+    """
+    from java_codebase_rag.jrag_envelope import _LISTING_BREADCRUMBS, next_actions_hook
+
+    # Simulate a breadcrumb map that includes the current command.
+    env = Envelope(status="ok")
+    orig = _LISTING_BREADCRUMBS.get("routes")
+    try:
+        _LISTING_BREADCRUMBS["routes"] = [
+            "jrag callers '<path>'", "jrag flow '<path>'", "jrag routes '<path>'"
+        ]
+        out = next_actions_hook(env, root=None, command="routes")
+        assert "jrag routes '<path>'" not in out, (
+            f"current command not filtered from crumbs: {out}"
+        )
+        assert "jrag callers '<path>'" in out
+    finally:
+        if orig is None:
+            _LISTING_BREADCRUMBS.pop("routes", None)
+        else:
+            _LISTING_BREADCRUMBS["routes"] = orig

@@ -478,6 +478,140 @@ def test_next_actions_omitted_when_empty() -> None:
     assert hints2 == [], f"expected empty hints for no edges, got {hints2}"
 
 
+# ===== Tests 17c–17g: Phase 2 — root-kind-aware hints (T4) =====
+#
+# Pins the corrected behavior: a route root never suggests `callees` (the kind
+# guard rejects it), DECLARES_CLIENT/DECLARES_PRODUCER map to `callees`, and the
+# per-kind allowlist filters invalid commands for Client/Producer roots.
+
+
+def test_next_actions_route_root_emits_flow_not_callees() -> None:
+    """A route root gets [flow, inspect] — never `callees` (Phase 2 T4).
+
+    The label path would map HTTP_CALLS → `callees`, but `_cmd_callees` rejects
+    route roots (kind guard). The route special-case emits `flow` (the natural
+    escalation: full inbound+outbound chain) + `inspect`, minus current_command.
+    """
+    from java_codebase_rag.jrag_hints import next_actions
+
+    fqn = "POST /chat/joinOperator"
+    # result_edges carry HTTP_CALLS (callers on a route) — would naively map to
+    # `callees` out, which is invalid on a route root.
+    result_edges = [{"other_id": "c1", "edge_type": "HTTP_CALLS"}]
+    hints = next_actions(
+        root_fqn=fqn, result_edges=result_edges,
+        current_command="callers", root_kind="route",
+    )
+    assert f"jrag flow {fqn}" in hints, f"route root missing `flow`: {hints}"
+    assert f"jrag inspect {fqn}" in hints, f"route root missing `inspect`: {hints}"
+    assert f"jrag callees {fqn}" not in hints, (
+        f"route root must NOT suggest `callees` (kind guard rejects it): {hints}"
+    )
+
+
+def test_next_actions_route_root_after_flow_drops_flow() -> None:
+    """After `flow` on a route, only `inspect` remains (current_command dropped)."""
+    from java_codebase_rag.jrag_hints import next_actions
+
+    fqn = "POST /chat/joinOperator"
+    hints = next_actions(
+        root_fqn=fqn, result_edges=[],
+        current_command="flow", root_kind="route",
+    )
+    assert hints == [f"jrag inspect {fqn}"], (
+        f"route after flow should only suggest inspect: {hints}"
+    )
+
+
+def test_next_actions_declares_client_maps_to_callees() -> None:
+    """DECLARES_CLIENT (and the composed DECLARES.DECLARES_CLIENT form) → `callees`.
+
+    A Symbol that declares a Client has a useful `callees` surface: `callees` on
+    a CLIENT-role Symbol aggregates the declared Client's HTTP_CALLS targets.
+    """
+    from java_codebase_rag.jrag_hints import next_actions
+
+    fqn = "com.example.ChatCoreFeignClient"
+    # Composed form (as produced by describe_v2's edge_summary rollup).
+    hints = next_actions(
+        root_fqn=fqn,
+        edge_summary={"DECLARES.DECLARES_CLIENT": {"in": 0, "out": 2}},
+        result_edges=[],
+    )
+    assert f"jrag callees {fqn}" in hints, (
+        f"DECLARES.DECLARES_CLIENT should map to `callees`: {hints}"
+    )
+    # Plain form (defensive — if the label ever appears un-split).
+    hints2 = next_actions(
+        root_fqn=fqn,
+        edge_summary={"DECLARES_CLIENT": {"in": 0, "out": 1}},
+        result_edges=[],
+    )
+    assert f"jrag callees {fqn}" in hints2, (
+        f"DECLARES_CLIENT should map to `callees`: {hints2}"
+    )
+
+
+def test_next_actions_declares_producer_maps_to_callees() -> None:
+    """DECLARES_PRODUCER → `callees` (analogous to DECLARES_CLIENT for producers)."""
+    from java_codebase_rag.jrag_hints import next_actions
+
+    fqn = "com.example.ChatEventPublisher"
+    hints = next_actions(
+        root_fqn=fqn,
+        edge_summary={"DECLARES.DECLARES_PRODUCER": {"in": 0, "out": 1}},
+        result_edges=[],
+    )
+    assert f"jrag callees {fqn}" in hints, (
+        f"DECLARES.DECLARES_PRODUCER should map to `callees`: {hints}"
+    )
+
+
+def test_next_actions_client_kind_allowlist_filters_invalid_commands() -> None:
+    """A Client-kind root filters out commands outside {callees, inspect}.
+
+    The allowlist ensures a root never suggests a command whose kind guard would
+    reject it. A Client root with CALLS edges (which would naively yield
+    `callers` + `callees`) only surfaces `callees`.
+    """
+    from java_codebase_rag.jrag_hints import next_actions
+
+    fqn = "some.client.id"
+    # CALLS would naively map to both `callers` (in) and `callees` (out).
+    hints = next_actions(
+        root_fqn=fqn,
+        edge_summary={"CALLS": {"in": 3, "out": 2}},
+        result_edges=[],
+        root_kind="client",
+    )
+    assert f"jrag callees {fqn}" in hints, f"client root missing `callees`: {hints}"
+    assert f"jrag callers {fqn}" not in hints, (
+        f"client root must NOT suggest `callers` (filtered by allowlist): {hints}"
+    )
+
+
+def test_next_actions_symbol_root_unfiltered() -> None:
+    """Symbol roots (and unknown/None root_kind) apply NO allowlist filtering."""
+    from java_codebase_rag.jrag_hints import next_actions
+
+    fqn = "com.example.Svc"
+    hints = next_actions(
+        root_fqn=fqn,
+        edge_summary={"CALLS": {"in": 3, "out": 2}},
+        result_edges=[],
+        root_kind="symbol",
+    )
+    assert f"jrag callers {fqn}" in hints, f"symbol root missing `callers`: {hints}"
+    assert f"jrag callees {fqn}" in hints, f"symbol root missing `callees`: {hints}"
+    # None root_kind (back-comat: caller didn't pass it) → also unfiltered.
+    hints2 = next_actions(
+        root_fqn=fqn,
+        edge_summary={"CALLS": {"in": 3, "out": 2}},
+        result_edges=[],
+    )
+    assert f"jrag callers {fqn}" in hints2
+
+
 # ===== Test 17a/17b: e2e hook wiring on real inspect =====
 
 # Seed FQN verified against the bank-chat fixture: resolves to "one" and carries
