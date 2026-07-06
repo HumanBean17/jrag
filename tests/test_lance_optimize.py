@@ -123,29 +123,90 @@ async def test_optimize_builds_fts_index_after_success(monkeypatch, tmp_path) ->
     table = _FakeTable(name, [None])  # optimize succeeds on first try
     conn = _FakeConnection(table_names={name}, tables={name: table})
     _install_fake_lancedb(monkeypatch, conn)
-    # Make ``from lancedb.index import FTS`` resolve against a stand-in module.
+    fts_cls, _btree_cls = _install_fake_lancedb_index(monkeypatch)
+
+    results = await lance_optimize.optimize_lance_tables(tmp_path, quiet=True)
+
+    assert results[name] == "ok"
+    # optimize now builds TWO indices (BTREE on "id" + FTS on "text"); find the
+    # FTS one by column rather than asserting on call count / order.
+    fts_calls = [
+        c for c in table.create_index_calls if c["args"] and c["args"][0] == "text"
+    ]
+    assert len(fts_calls) == 1, (
+        f"expected one FTS create_index on 'text', got {table.create_index_calls}"
+    )
+    call = fts_calls[0]
+    assert call["kwargs"].get("replace") is True, (
+        f"FTS index must be built with replace=True, got kwargs={call['kwargs']}"
+    )
+    assert isinstance(call["kwargs"].get("config"), fts_cls), (
+        f"FTS index config must be a lancedb.index.FTS, got kwargs={call['kwargs']}"
+    )
+    assert conn.closed is True
+
+
+async def test_optimize_builds_btree_pk_index_after_success(monkeypatch, tmp_path) -> None:
+    """A successful optimize builds a BTREE scalar index on the ``id`` PK.
+
+    cocoindex's ``merge_insert`` defaults to ``use_index=True`` but never creates
+    a scalar PK index itself (declaring ``primary_key`` does NOT auto-build a
+    lance index), so without this every ``merge_insert`` — increment included —
+    is a forced full scan of the PK column (O(existing rows)). The BTREE index
+    flips that to ~O(batch*log N) lookups. Guards the path against silent
+    regression under the broad ``except`` that swallows index-build failures.
+    """
+    import types
+
+    from java_codebase_rag import lance_optimize
+
+    name = lance_optimize.LANCE_TABLE_NAMES[0]
+    table = _FakeTable(name, [None])  # optimize succeeds on first try
+    conn = _FakeConnection(table_names={name}, tables={name: table})
+    _install_fake_lancedb(monkeypatch, conn)
+    _fts_cls, btree_cls = _install_fake_lancedb_index(monkeypatch)
+
+    results = await lance_optimize.optimize_lance_tables(tmp_path, quiet=True)
+
+    assert results[name] == "ok"
+    id_calls = [
+        c for c in table.create_index_calls if c["args"] and c["args"][0] == "id"
+    ]
+    assert len(id_calls) == 1, (
+        f"expected one BTREE create_index on 'id', got {table.create_index_calls}"
+    )
+    call = id_calls[0]
+    assert call["kwargs"].get("replace") is True, (
+        f"BTREE PK index must be built with replace=True, got kwargs={call['kwargs']}"
+    )
+    assert isinstance(call["kwargs"].get("config"), btree_cls), (
+        f"BTREE PK index config must be a lancedb.index.BTree, got kwargs={call['kwargs']}"
+    )
+
+
+def _install_fake_lancedb_index(monkeypatch):
+    """Make ``from lancedb.index import FTS, BTree`` resolve to stand-in classes.
+
+    Returns the ``(FTS, BTree)`` config stand-ins so a test can assert the right
+    config object was passed. Both the FTS path (PR-SEARCH-3) and the BTREE PK
+    path build their index config via a local ``from lancedb.index import ...``;
+    without a stand-in those imports hit the broad ``except`` and silently no-op,
+    leaving the path unexercised.
+    """
+    import types
+
     index_mod = types.ModuleType("lancedb.index")
 
     class FTS:  # stands in for lancedb.index.FTS config object
         pass
 
+    class BTree:  # stands in for lancedb.index.BTree config object
+        pass
+
     index_mod.FTS = FTS
+    index_mod.BTree = BTree
     monkeypatch.setitem(sys.modules, "lancedb.index", index_mod)
-
-    results = await lance_optimize.optimize_lance_tables(tmp_path, quiet=True)
-
-    assert results[name] == "ok"
-    assert len(table.create_index_calls) == 1, (
-        f"expected FTS create_index once after optimize, got {table.create_index_calls}"
-    )
-    call = table.create_index_calls[0]
-    assert call["args"] and call["args"][0] == "text", (
-        f"FTS index must target the 'text' column, got args={call['args']}"
-    )
-    assert call["kwargs"].get("replace") is True, (
-        f"FTS index must be built with replace=True, got kwargs={call['kwargs']}"
-    )
-    assert conn.closed is True
+    return FTS, BTree
 
 
 async def test_optimize_does_not_retry_non_conflict_error(monkeypatch, tmp_path) -> None:

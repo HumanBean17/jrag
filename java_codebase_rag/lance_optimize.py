@@ -184,6 +184,31 @@ async def optimize_lance_tables(
 
                 if last_exc is None:
                     results[name] = "ok"
+                    # Best-effort BTREE scalar index on the primary key ("id").
+                    # cocoindex's merge_insert defaults to use_index=True but
+                    # never creates a scalar PK index itself (declaring
+                    # primary_key in the schema does NOT auto-build a lance
+                    # index), so without this every merge_insert — increment
+                    # included — is a forced full scan of the PK column,
+                    # O(existing rows). On a large repo that scan dominates
+                    # increment wall-clock; with the index present the join does
+                    # lookups (~O(batch*log N)). Failure is non-fatal (the table
+                    # is still correct, just un-indexed) and never alters the
+                    # "ok" status, mirroring the FTS block below. ``replace=True``
+                    # keeps it idempotent across runs; table.optimize() above
+                    # maintains it on subsequent runs.
+                    try:
+                        from lancedb.index import BTree
+                        await table.create_index("id", config=BTree(), replace=True)
+                    except Exception as exc:
+                        low = str(exc).lower()
+                        if not any(
+                            w in low for w in ("exist", "duplicate", "already", "same name")
+                        ) and not quiet:
+                            print(
+                                f"java-codebase-rag: optimize: {name} id-index skipped: {exc}",
+                                file=sys.stderr,
+                            )
                     # Best-effort FTS index at index time (PR-SEARCH-3) so hybrid
                     # search works on all tables (java/sql/yaml) without a
                     # first-query race. Failure is non-fatal — the lazy
