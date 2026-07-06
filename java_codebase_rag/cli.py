@@ -15,12 +15,14 @@ from pathlib import Path
 from typing import Any, Callable
 
 from java_codebase_rag.config import (
+    OPERATOR_OWNED_INDEX_FILES,
     ResolvedOperatorConfig,
     describe_path_sizes,
     emit_legacy_env_hints_if_present,
     emit_legacy_yaml_hint_if_needed,
     index_dir_has_existing_artifacts,
     resolve_operator_config,
+    write_config_source_pointer,
 )
 from java_codebase_rag._fdlimit import raise_fd_limit
 from java_codebase_rag.pipeline import clip, run_build_ast_graph, run_cocoindex_drop, run_cocoindex_update, run_incremental_graph
@@ -126,6 +128,21 @@ def _pipeline_footer(subcommand: str, started: float, exit_code: int) -> None:
     )
 
 
+# Subcommands that build/refresh an index and therefore should record which YAML
+# was used (so a later discovery run from a sibling/cwd can relocate it).
+_CONFIG_SOURCE_RECORDING_SUBCOMMANDS = frozenset({"init", "increment", "reprocess"})
+
+
+def _maybe_record_config_source(
+    subcommand: str, cfg: ResolvedOperatorConfig, code: int
+) -> None:
+    """On a successful index build, remember the YAML path inside the index dir."""
+    if code == 0 and subcommand in _CONFIG_SOURCE_RECORDING_SUBCOMMANDS:
+        write_config_source_pointer(
+            index_dir=cfg.index_dir, yaml_config_path=cfg.yaml_config_path
+        )
+
+
 def _run_with_pipeline_progress(
     subcommand: str,
     cfg: ResolvedOperatorConfig,
@@ -143,7 +160,9 @@ def _run_with_pipeline_progress(
     raw-relays subprocess output).
     """
     if quiet or verbose:
-        return int(work(None))
+        code = int(work(None))
+        _maybe_record_config_source(subcommand, cfg, code)
+        return code
     from java_codebase_rag.progress import build_index_progress_context
 
     # PR-3 owns all three tasks in order: Vectors → Optimize → Graph. The vectors
@@ -183,6 +202,7 @@ def _run_with_pipeline_progress(
     finally:
         renderer.stop()
         _pipeline_footer(subcommand, t0, code)
+        _maybe_record_config_source(subcommand, cfg, code)
 
 
 class PipelineProgress:
@@ -612,7 +632,13 @@ def _cmd_erase(args: argparse.Namespace) -> int:
     # every other command) stay fast -- see the lazy-import invariant atop this file.
     from build_ast_graph import BUILDER_OWNED_INDEX_FILES
     builder_paths = [cfg.ladybug_path.parent / name for name in BUILDER_OWNED_INDEX_FILES]
-    to_describe: list[Path] = [cfg.ladybug_path, cfg.cocoindex_db, *builder_paths]
+    operator_paths = [cfg.index_dir / name for name in OPERATOR_OWNED_INDEX_FILES]
+    to_describe: list[Path] = [
+        cfg.ladybug_path,
+        cfg.cocoindex_db,
+        *builder_paths,
+        *operator_paths,
+    ]
     if cfg.index_dir.is_dir():
         try:
             import lancedb
@@ -671,6 +697,11 @@ def _cmd_erase(args: argparse.Namespace) -> int:
         _rm_any(cfg.cocoindex_db)
         for builder_path in builder_paths:
             _rm_any(builder_path)
+        # Operator-owned index files (the config_source pointer recording which
+        # YAML built this index) — owned by the CLI/installer, not the graph
+        # builder, so removed here rather than via BUILDER_OWNED_INDEX_FILES.
+        for operator_path in operator_paths:
+            _rm_any(operator_path)
         if cfg.index_dir.is_dir():
             try:
                 import lancedb

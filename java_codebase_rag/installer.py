@@ -1021,6 +1021,7 @@ def run_init_if_needed(
     from java_codebase_rag.config import (
         index_dir_has_existing_artifacts,
         resolve_operator_config,
+        write_config_source_pointer,
     )
     from java_codebase_rag.pipeline import run_build_ast_graph, run_cocoindex_update
 
@@ -1093,6 +1094,12 @@ def run_init_if_needed(
         if renderer is not None:
             renderer.stop()
             _index_progress_footer("install", started, ok=index_ok)
+    if index_ok:
+        # Remember which YAML built this index so discovery from a sibling/cwd
+        # can relocate the config (e.g. a config beside, not inside, the tree).
+        write_config_source_pointer(
+            index_dir=cfg.index_dir, yaml_config_path=cfg.yaml_config_path
+        )
     return index_ok
 
 
@@ -1595,6 +1602,7 @@ def run_update(
         discover_project_root,
         index_dir_has_existing_artifacts,
         resolve_operator_config,
+        write_config_source_pointer,
     )
     from java_codebase_rag.pipeline import run_cocoindex_update, run_incremental_graph
 
@@ -1699,6 +1707,11 @@ def run_update(
                 _index_progress_footer("update", started, ok=index_ok)
         if not index_ok:
             return 1
+        # Refresh the config pointer so a config moved/renamed since the last
+        # index is relocated correctly by discovery from a sibling/cwd.
+        write_config_source_pointer(
+            index_dir=cfg.index_dir, yaml_config_path=cfg.yaml_config_path
+        )
     else:
         print("\nWould run incremental index update (Lance + graph).")
 
