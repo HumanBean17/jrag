@@ -783,6 +783,7 @@ class TestInstallIntegration:
             agents=["claude-code"],
             scope="project",
             model="auto",
+            surface="mcp",
             source_root=cwd,
             quiet=True,
         )
@@ -867,6 +868,7 @@ class TestInstallIntegration:
             agents=["claude-code", "qwen-code"],
             scope="project",
             model="auto",
+            surface="mcp",
             source_root=cwd,
             quiet=True,
         )
@@ -1358,6 +1360,7 @@ class TestRunUpdate:
             agents=["claude-code"],
             scope="project",
             model="auto",
+            surface="mcp",
             source_root=cwd,
             quiet=True,
         )

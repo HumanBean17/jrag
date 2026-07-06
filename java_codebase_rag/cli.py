@@ -648,6 +648,7 @@ def _cmd_update(args: argparse.Namespace) -> int:
         dry_run=bool(args.dry_run),
         quiet=bool(args.quiet),
         verbose=bool(args.verbose),
+        surface=args.surface,
     )
 
 
@@ -986,7 +987,9 @@ def build_parser() -> argparse.ArgumentParser:
             "Post-upgrade refresh: overwrites skill and agent files with the latest "
             "shipped versions and updates the MCP command path. If an index exists, "
             "also runs an incremental Lance + graph catch-up (same as `increment`). "
-            "Use --dry-run to preview changes without writing. Requires a prior `install` run."
+            "Use --dry-run to preview changes without writing. Pass --surface to "
+            "switch between the mcp and cli surfaces (migrates artifacts + marker). "
+            "Requires a prior `install` run."
         ),
     )
     update.add_argument(
@@ -998,6 +1001,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help="Print changes without writing files.",
+    )
+    update.add_argument(
+        "--surface",
+        choices=["mcp", "cli"],
+        default=None,
+        help=(
+            "Switch agent surface: 'mcp' or 'cli'. Tears down the old surface's "
+            "artifacts and deploys the new surface's (also rewrites the install "
+            "marker). Omit to keep the current surface; on a TTY you'll be prompted."
+        ),
     )
     _add_verbosity_flags(update)
     update.set_defaults(handler=_cmd_update)

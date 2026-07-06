@@ -445,7 +445,8 @@ def test_install_subparser_registers_surface_flag():
 
     Default is ``None`` so the interactive ``select_surface`` wizard prompts
     when the flag is omitted (the proposal's CLI-vs-MCP choice); non-interactive
-    installs fall back to ``'mcp'`` inside ``select_surface`` for back-comat.
+    installs fall back to ``'cli'`` inside ``select_surface`` (the recommended
+    default).
     """
     import argparse
 
@@ -465,3 +466,446 @@ def test_install_subparser_registers_surface_flag():
     assert surface_action.choices == ["mcp", "cli"]
     assert surface_action.default is None
     assert surface_action.dest == "surface"
+
+
+# ---------------------------------------------------------------------------
+# cli is the recommended surface: choice order/label + default flip
+# ---------------------------------------------------------------------------
+
+
+def test_surface_choices_cli_first_and_recommended():
+    """_surface_choices lists cli first and marks it '(Recommended)'."""
+    from java_codebase_rag.installer import _surface_choices
+
+    choices = _surface_choices()
+    assert [c["value"] for c in choices] == ["cli", "mcp"]
+    assert "Recommended" in choices[0]["name"]
+    assert choices[1]["value"] == "mcp"
+
+
+def test_select_surface_non_interactive_defaults_to_cli():
+    """Non-interactive install without --surface now defaults to cli."""
+    assert select_surface(non_interactive=True, cli_surface=None) == "cli"
+
+
+def test_select_surface_prefill_is_preserved_non_tty():
+    """Re-run prefill is honored (cursor/default = prefill) on non-TTY.
+
+    cli is still the first/recommended choice, but the default returns the
+    prior surface so a re-run preserves it.
+    """
+    assert select_surface(non_interactive=False, cli_surface=None, prefill="mcp") == "mcp"
+    assert select_surface(non_interactive=False, cli_surface=None, prefill="cli") == "cli"
+
+
+def test_prompt_select_forwards_default_and_normalizes_dict_choices(monkeypatch):
+    """prompt('select') forwards default and normalizes dict choices to Choice.
+
+    questionary.select validates default only against Choice.value (not dict
+    values), so dict choices must be normalized or default raises. Verified on a
+    faked TTY (prompt returns default without calling questionary when non-TTY).
+    """
+    import sys
+
+    import questionary
+
+    from java_codebase_rag.installer import prompt
+
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    seen: dict = {}
+
+    class _FakeQuestion:
+        def __init__(self, message, choices=None, default=None, style=None, **kw):
+            seen["choices"] = choices
+            seen["default"] = default
+
+        def ask(self):
+            return "mcp"
+
+    monkeypatch.setattr(questionary, "select", _FakeQuestion)
+
+    result = prompt(
+        "select",
+        "pick",
+        choices=[{"name": "cli (Recommended)", "value": "cli"}, {"name": "mcp", "value": "mcp"}],
+        default="mcp",
+    )
+    assert result == "mcp"
+    assert seen["default"] == "mcp"
+    norm = seen["choices"]
+    assert all(isinstance(c, questionary.Choice) for c in norm)
+    assert [c.value for c in norm] == ["cli", "mcp"]
+    assert norm[0].title == "cli (Recommended)"
+
+
+# ---------------------------------------------------------------------------
+# update --surface: mcp <-> cli migration
+# ---------------------------------------------------------------------------
+
+
+def _stub_update_index_skip(monkeypatch):
+    """Stub the index-discovery + pipeline so run_update stops before indexing."""
+    monkeypatch.setattr(
+        "java_codebase_rag.config.discover_project_root", lambda cwd: None
+    )
+
+
+def test_update_migrates_mcp_to_cli(tmp_path, monkeypatch):
+    """run_update(surface='cli') on an mcp install migrates: tears down mcp,
+    deploys cli, rewrites the marker. Sibling MCP servers are preserved."""
+    import json
+
+    import java_codebase_rag.installer as installer
+
+    _write_hosts_marker(tmp_path, [ConfiguredHost(HOSTS["claude-code"], "project", "mcp")])
+
+    # Existing mcp-surface state: .mcp.json (us + a sibling server) + mcp skill/agent.
+    (tmp_path / ".mcp.json").write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "other": {"command": "/other"},
+                    "java-codebase-rag": {"command": "/fake/bin/java-codebase-rag-mcp", "type": "stdio"},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    mcp_skill = tmp_path / ".claude" / "skills" / "explore-codebase" / "SKILL.md"
+    mcp_skill.parent.mkdir(parents=True)
+    mcp_skill.write_text("OLD MCP SKILL", encoding="utf-8")
+    mcp_agent = tmp_path / ".claude" / "agents" / "explorer-rag-enhanced.md"
+    mcp_agent.parent.mkdir(parents=True)
+    mcp_agent.write_text("OLD MCP AGENT", encoding="utf-8")
+
+    monkeypatch.setattr(shutil, "which", lambda name: f"/fake/bin/{name}")
+    monkeypatch.setattr(
+        "java_codebase_rag.installer._read_package_artifact",
+        lambda rel: f"FRESH:{rel}",
+    )
+    _stub_update_index_skip(monkeypatch)
+
+    rc = run_update(force=False, dry_run=False, cwd=tmp_path, surface="cli")
+    assert rc == 0
+
+    # mcp entry removed, sibling preserved.
+    cfg = json.loads((tmp_path / ".mcp.json").read_text())
+    assert "java-codebase-rag" not in cfg["mcpServers"]
+    assert "other" in cfg["mcpServers"]
+
+    # mcp skill/agent torn down; cli skill/agent deployed.
+    assert not mcp_skill.is_file()
+    assert not mcp_agent.is_file()
+    cli_skill = tmp_path / ".claude" / "skills" / "explore-codebase-cli" / "SKILL.md"
+    cli_agent = tmp_path / ".claude" / "agents" / "explorer-rag-cli.md"
+    assert cli_skill.is_file() and cli_skill.read_text().startswith("FRESH:")
+    assert cli_agent.is_file() and cli_agent.read_text().startswith("FRESH:")
+
+    # Marker rewritten to cli.
+    detected = installer._read_hosts_marker(tmp_path)
+    assert detected is not None and detected[0].surface == "cli"
+
+
+def test_update_migrates_cli_to_mcp(tmp_path, monkeypatch):
+    """run_update(surface='mcp') on a cli install migrates the other way."""
+    import json
+
+    import java_codebase_rag.installer as installer
+
+    _write_hosts_marker(tmp_path, [ConfiguredHost(HOSTS["claude-code"], "project", "cli")])
+
+    cli_skill = tmp_path / ".claude" / "skills" / "explore-codebase-cli" / "SKILL.md"
+    cli_skill.parent.mkdir(parents=True)
+    cli_skill.write_text("OLD CLI SKILL", encoding="utf-8")
+    cli_agent = tmp_path / ".claude" / "agents" / "explorer-rag-cli.md"
+    cli_agent.parent.mkdir(parents=True)
+    cli_agent.write_text("OLD CLI AGENT", encoding="utf-8")
+
+    monkeypatch.setattr(shutil, "which", lambda name: f"/fake/bin/{name}")
+    monkeypatch.setattr(
+        "java_codebase_rag.installer._read_package_artifact",
+        lambda rel: f"FRESH:{rel}",
+    )
+    _stub_update_index_skip(monkeypatch)
+
+    rc = run_update(force=False, dry_run=False, cwd=tmp_path, surface="mcp")
+    assert rc == 0
+
+    # cli artifacts gone; mcp entry + mcp skill/agent deployed.
+    assert not cli_skill.is_file()
+    assert not cli_agent.is_file()
+    cfg = json.loads((tmp_path / ".mcp.json").read_text())
+    assert "java-codebase-rag" in cfg["mcpServers"]
+    assert (tmp_path / ".claude" / "skills" / "explore-codebase" / "SKILL.md").is_file()
+    assert (tmp_path / ".claude" / "agents" / "explorer-rag-enhanced.md").is_file()
+
+    detected = installer._read_hosts_marker(tmp_path)
+    assert detected is not None and detected[0].surface == "mcp"
+
+
+def test_update_surface_missing_target_binary_returns_partial(tmp_path, monkeypatch):
+    """Migrating to mcp when java-codebase-rag-mcp is absent -> exit 1, no migration."""
+    import java_codebase_rag.installer as installer
+
+    _write_hosts_marker(tmp_path, [ConfiguredHost(HOSTS["claude-code"], "project", "cli")])
+    cli_skill = tmp_path / ".claude" / "skills" / "explore-codebase-cli" / "SKILL.md"
+    cli_skill.parent.mkdir(parents=True)
+    cli_skill.write_text("OLD CLI SKILL", encoding="utf-8")
+
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    _stub_update_index_skip(monkeypatch)
+
+    rc = run_update(force=False, dry_run=False, cwd=tmp_path, surface="mcp")
+    assert rc == 1
+    # Nothing torn down / deployed.
+    assert cli_skill.is_file()
+    assert not (tmp_path / ".mcp.json").is_file()
+    # Marker unchanged.
+    detected = installer._read_hosts_marker(tmp_path)
+    assert detected is not None and detected[0].surface == "cli"
+
+
+def test_update_surface_same_as_current_does_not_migrate(tmp_path, monkeypatch):
+    """run_update(surface=<current>) takes the refresh path; no teardown/marker write."""
+    import java_codebase_rag.installer as installer
+
+    _write_hosts_marker(tmp_path, [ConfiguredHost(HOSTS["claude-code"], "project", "mcp")])
+    mcp_skill = tmp_path / ".claude" / "skills" / "explore-codebase" / "SKILL.md"
+    mcp_skill.parent.mkdir(parents=True)
+    mcp_skill.write_text("STALE", encoding="utf-8")
+
+    monkeypatch.setattr(shutil, "which", lambda name: f"/fake/bin/{name}")
+    monkeypatch.setattr(
+        "java_codebase_rag.installer._read_package_artifact", lambda rel: "FRESH"
+    )
+    _stub_update_index_skip(monkeypatch)
+
+    called = {"undeploy": False}
+    real_undeploy = installer._undeploy_surface
+
+    def spy(host, scope, cwd, *, surface, dry_run):
+        called["undeploy"] = True
+        return real_undeploy(host, scope, cwd, surface=surface, dry_run=dry_run)
+
+    monkeypatch.setattr("java_codebase_rag.installer._undeploy_surface", spy)
+
+    rc = run_update(force=False, dry_run=False, cwd=tmp_path, surface="mcp")
+    assert rc == 0
+    assert called["undeploy"] is False, "same-surface update must not tear down"
+    # Refresh did run.
+    assert mcp_skill.read_text() == "FRESH"
+    # Marker still mcp.
+    detected = installer._read_hosts_marker(tmp_path)
+    assert detected is not None and detected[0].surface == "mcp"
+
+
+def test_update_surface_dry_run_writes_nothing(tmp_path, monkeypatch):
+    """run_update(surface='cli', dry_run=True) prints intent, writes no files/marker."""
+    import json
+
+    import java_codebase_rag.installer as installer
+
+    _write_hosts_marker(tmp_path, [ConfiguredHost(HOSTS["claude-code"], "project", "mcp")])
+    (tmp_path / ".mcp.json").write_text(
+        json.dumps(
+            {"mcpServers": {"java-codebase-rag": {"command": "/x", "type": "stdio"}}}
+        ),
+        encoding="utf-8",
+    )
+    mcp_skill = tmp_path / ".claude" / "skills" / "explore-codebase" / "SKILL.md"
+    mcp_skill.parent.mkdir(parents=True)
+    mcp_skill.write_text("KEEP", encoding="utf-8")
+
+    monkeypatch.setattr(shutil, "which", lambda name: f"/fake/bin/{name}")
+    monkeypatch.setattr(
+        "java_codebase_rag.installer._read_package_artifact", lambda rel: "FRESH"
+    )
+    _stub_update_index_skip(monkeypatch)
+
+    rc = run_update(force=False, dry_run=True, cwd=tmp_path, surface="cli")
+    # Dry run performs no writes, so there can be no partial failures.
+    assert rc == 0
+    # Nothing changed on disk.
+    cfg = json.loads((tmp_path / ".mcp.json").read_text())
+    assert "java-codebase-rag" in cfg["mcpServers"]
+    assert mcp_skill.read_text() == "KEEP"
+    assert not (tmp_path / ".claude" / "skills" / "explore-codebase-cli").exists()
+    # Marker still mcp (not rewritten on dry-run).
+    detected = installer._read_hosts_marker(tmp_path)
+    assert detected is not None and detected[0].surface == "mcp"
+
+
+def test_remove_mcp_entry_preserves_sibling_servers(tmp_path):
+    """_remove_mcp_entry pops only our key; other servers + file survive."""
+    import json
+
+    from java_codebase_rag.installer import _remove_mcp_entry
+
+    config_path = tmp_path / ".mcp.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "numStartups": 42,
+                "mcpServers": {
+                    "other": {"command": "/other"},
+                    "java-codebase-rag": {"command": "/x", "type": "stdio"},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = _remove_mcp_entry(config_path, dry_run=False)
+    assert result.success
+    cfg = json.loads(config_path.read_text())
+    assert "java-codebase-rag" not in cfg["mcpServers"]
+    assert "other" in cfg["mcpServers"]
+    assert cfg["numStartups"] == 42
+
+
+# ---------------------------------------------------------------------------
+# mixed-surface markers + user scope (per-host dispatch)
+# ---------------------------------------------------------------------------
+
+
+def test_update_no_flag_non_tty_mixed_marker_does_not_migrate(tmp_path, monkeypatch):
+    """Non-TTY update with NO --surface refreshes each host on its OWN surface.
+
+    Regression: an earlier version returned the first host's surface as the
+    global target, so a mixed marker like [claude-code/mcp, qwen-code/cli] would
+    migrate qwen-code to mcp. The non-TTY no-flag path must migrate nothing.
+    """
+    import java_codebase_rag.installer as installer
+
+    _write_hosts_marker(
+        tmp_path,
+        [
+            ConfiguredHost(HOSTS["claude-code"], "project", "mcp"),
+            ConfiguredHost(HOSTS["qwen-code"], "project", "cli"),
+        ],
+    )
+    claude_mcp_skill = tmp_path / ".claude" / "skills" / "explore-codebase" / "SKILL.md"
+    claude_mcp_skill.parent.mkdir(parents=True)
+    claude_mcp_skill.write_text("STALE", encoding="utf-8")
+    qwen_cli_skill = tmp_path / ".qwen" / "skills" / "explore-codebase-cli" / "SKILL.md"
+    qwen_cli_skill.parent.mkdir(parents=True)
+    qwen_cli_skill.write_text("STALE", encoding="utf-8")
+
+    monkeypatch.setattr(shutil, "which", lambda name: f"/fake/bin/{name}")
+    monkeypatch.setattr(
+        "java_codebase_rag.installer._read_package_artifact", lambda rel: "FRESH"
+    )
+    _stub_update_index_skip(monkeypatch)
+
+    # _undeploy_surface must NOT be called (no migration on this path).
+    called = {"undeploy": False}
+    real_undeploy = installer._undeploy_surface
+
+    def spy(host, scope, cwd, *, surface, dry_run):
+        called["undeploy"] = True
+        return real_undeploy(host, scope, cwd, surface=surface, dry_run=dry_run)
+
+    monkeypatch.setattr("java_codebase_rag.installer._undeploy_surface", spy)
+
+    rc = run_update(force=False, dry_run=False, cwd=tmp_path)  # no surface, non-TTY
+    assert rc == 0
+    assert called["undeploy"] is False, "non-TTY no-flag update must not migrate"
+    # Each host refreshed on its OWN surface.
+    assert claude_mcp_skill.read_text() == "FRESH"
+    assert qwen_cli_skill.read_text() == "FRESH"
+    # No cross-surface artifacts appeared.
+    assert not (tmp_path / ".claude" / "skills" / "explore-codebase-cli").exists()
+    assert not (tmp_path / ".qwen" / "skills" / "explore-codebase").exists()
+    # Marker surfaces unchanged.
+    detected = installer._read_hosts_marker(tmp_path)
+    assert [d.surface for d in detected] == ["mcp", "cli"]
+
+
+def test_update_surface_normalizes_mixed_marker(tmp_path, monkeypatch):
+    """--surface normalizes a mixed-surface marker: every host migrates to it."""
+    import json
+
+    import java_codebase_rag.installer as installer
+
+    _write_hosts_marker(
+        tmp_path,
+        [
+            ConfiguredHost(HOSTS["claude-code"], "project", "mcp"),
+            ConfiguredHost(HOSTS["qwen-code"], "project", "cli"),
+        ],
+    )
+    # claude-code (mcp) has an MCP entry to tear down.
+    (tmp_path / ".mcp.json").write_text(
+        json.dumps(
+            {"mcpServers": {"java-codebase-rag": {"command": "/x", "type": "stdio"}}}
+        ),
+        encoding="utf-8",
+    )
+    # qwen-code (cli) already has the cli skill.
+    qwen_cli = tmp_path / ".qwen" / "skills" / "explore-codebase-cli" / "SKILL.md"
+    qwen_cli.parent.mkdir(parents=True)
+    qwen_cli.write_text("OLD", encoding="utf-8")
+
+    monkeypatch.setattr(shutil, "which", lambda name: f"/fake/bin/{name}")
+    monkeypatch.setattr(
+        "java_codebase_rag.installer._read_package_artifact",
+        lambda rel: f"FRESH:{rel}",
+    )
+    _stub_update_index_skip(monkeypatch)
+
+    rc = run_update(force=False, dry_run=False, cwd=tmp_path, surface="cli")
+    assert rc == 0
+
+    # claude-code migrated mcp -> cli: entry gone, cli skill deployed.
+    cfg = json.loads((tmp_path / ".mcp.json").read_text())
+    assert "java-codebase-rag" not in cfg.get("mcpServers", {})
+    assert (
+        tmp_path / ".claude" / "skills" / "explore-codebase-cli" / "SKILL.md"
+    ).is_file()
+    # qwen-code was already cli -> refreshed in place (still present).
+    assert qwen_cli.is_file() and qwen_cli.read_text().startswith("FRESH:")
+    # Marker normalized: both cli.
+    detected = installer._read_hosts_marker(tmp_path)
+    assert [d.surface for d in detected] == ["cli", "cli"]
+
+
+def test_update_migrates_user_scope_host(tmp_path, monkeypatch):
+    """Migration is scope-agnostic: a user-scope host migrates too.
+
+    User-scope paths resolve under ``Path.home()``; home is redirected to
+    ``tmp_path`` to keep the test hermetic.
+    """
+    import json
+    from pathlib import Path
+
+    import java_codebase_rag.installer as installer
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    _write_hosts_marker(tmp_path, [ConfiguredHost(HOSTS["claude-code"], "user", "mcp")])
+
+    # User-scope MCP config for claude-code lives at ~/.claude.json (== tmp_path).
+    (tmp_path / ".claude.json").write_text(
+        json.dumps(
+            {"mcpServers": {"java-codebase-rag": {"command": "/x", "type": "stdio"}}}
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(shutil, "which", lambda name: f"/fake/bin/{name}")
+    monkeypatch.setattr(
+        "java_codebase_rag.installer._read_package_artifact",
+        lambda rel: f"FRESH:{rel}",
+    )
+    _stub_update_index_skip(monkeypatch)
+
+    rc = run_update(force=False, dry_run=False, cwd=tmp_path, surface="cli")
+    assert rc == 0
+
+    # User-scope MCP entry removed; user-scope cli skill deployed.
+    cfg = json.loads((tmp_path / ".claude.json").read_text())
+    assert "java-codebase-rag" not in cfg.get("mcpServers", {})
+    assert (
+        tmp_path / ".claude" / "skills" / "explore-codebase-cli" / "SKILL.md"
+    ).is_file()
+    detected = installer._read_hosts_marker(tmp_path)
+    assert detected[0].scope == "user" and detected[0].surface == "cli"

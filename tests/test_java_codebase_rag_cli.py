@@ -1528,7 +1528,7 @@ def test_cmd_update_forwards_quiet_flag(
     captured: dict = {}
 
     def _fake_run_update(*, force=False, dry_run=False, cwd=None,
-                         quiet=False, verbose=False):
+                         quiet=False, verbose=False, surface=None):
         captured["quiet"] = quiet
         captured["verbose"] = verbose
         captured["force"] = force
@@ -1552,7 +1552,7 @@ def test_cmd_update_forwards_verbose_flag(
     captured: dict = {}
 
     def _fake_run_update(*, force=False, dry_run=False, cwd=None,
-                         quiet=False, verbose=False):
+                         quiet=False, verbose=False, surface=None):
         captured["quiet"] = quiet
         captured["verbose"] = verbose
         return 0
@@ -1598,7 +1598,7 @@ def test_cmd_install_forwards_verbose_flag(
     assert rc == 0
     assert captured["verbose"] is True
     # Omitting --surface forwards None so the interactive select_surface wizard
-    # prompts (non-interactive falls back to "mcp" inside select_surface). The
+    # prompts (non-interactive falls back to "cli" inside select_surface). The
     # operator never picking a surface implicitly is the bug-#1 contract.
     assert captured["surface"] is None
     # quiet still flows through too.
