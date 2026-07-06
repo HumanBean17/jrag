@@ -506,6 +506,10 @@ def test_cocoindex_subprocess_env_defaults_uses_real_inflight_env_var() -> None:
     assert defaults["COCOINDEX_MAX_INFLIGHT_COMPONENTS"] == "256"
     # The bogus name from the broken #293 fix must NOT leak back in.
     assert "COCOINDEX_SOURCE_MAX_INFLIGHT_ROWS" not in defaults
+    # Lance native hash-join pool ceiling, raised from the ~100 MiB default so a
+    # large full-reprocess merge_insert does not exhaust it mid-commit. Applied
+    # via setdefault, so an operator's own value still wins.
+    assert defaults["LANCE_MEM_POOL_SIZE"] == "1073741824"
 
 
 class TestConfigSourcePointer:

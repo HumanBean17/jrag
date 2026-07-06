@@ -47,15 +47,39 @@ ENV_RUN_HEAVY = "JAVA_CODEBASE_RAG_RUN_HEAVY"
 COCOINDEX_MAX_INFLIGHT_COMPONENTS_ENV = "COCOINDEX_MAX_INFLIGHT_COMPONENTS"
 COCOINDEX_DEFAULT_MAX_INFLIGHT_COMPONENTS = "256"
 
+# Lance native DataFusion hash-join memory pool ceiling (FairSpillPool). The
+# lance default is ~100 MiB, tuned for query workloads — too small for the
+# single big ``merge_insert`` cocoindex emits at the end of a flow component.
+# On ``--full-reprocess`` (all rows match the existing table → bulk-update
+# path) the hash join builds on a large side and exhausts the pool somewhere
+# around 75k-100k chunks: "Resources exhausted: Failed to allocate ... for
+# HashJoinInput ... N MiB remain available for the total pool". cocoindex is a
+# bare pass-through to lancedb (it never sets a Session/memory_limit), so it
+# inherits this default — we raise it here. FairSpillPool is a *reservation
+# ceiling*, not a pre-allocation: setting 1 GiB does not reserve 1 GiB upfront,
+# it just allows the join to grow before spilling/erroring, so it is safe on
+# memory-constrained hosts. An operator can still override via their own
+# ``LANCE_MEM_POOL_SIZE`` (subprocess_env copies os.environ, and apply is via
+# ``setdefault`` so the operator value wins). Increment is unaffected (tiny
+# batch → tiny hash table); only the full-reprocess write path is at risk.
+LANCE_MEM_POOL_SIZE_ENV = "LANCE_MEM_POOL_SIZE"
+LANCE_DEFAULT_MEM_POOL_SIZE = "1073741824"  # 1 GiB
+
 
 def cocoindex_subprocess_env_defaults() -> dict[str, str]:
-    """Env defaults applied to every CocoIndex subprocess to bound concurrency.
+    """Env defaults applied to every CocoIndex subprocess.
+
+    Bounds CocoIndex concurrency (``COCOINDEX_MAX_INFLIGHT_COMPONENTS``; see
+    :issue:`306`) and raises the Lance hash-join memory ceiling
+    (``LANCE_MEM_POOL_SIZE``) so a large full-reprocess does not exhaust the
+    default ~100 MiB pool mid-``merge_insert``.
 
     Apply with ``env.setdefault(...)`` so a caller-provided (operator) value
-    always wins. See :issue:`306`.
+    always wins.
     """
     return {
-        COCOINDEX_MAX_INFLIGHT_COMPONENTS_ENV: COCOINDEX_DEFAULT_MAX_INFLIGHT_COMPONENTS
+        COCOINDEX_MAX_INFLIGHT_COMPONENTS_ENV: COCOINDEX_DEFAULT_MAX_INFLIGHT_COMPONENTS,
+        LANCE_MEM_POOL_SIZE_ENV: LANCE_DEFAULT_MEM_POOL_SIZE,
     }
 
 _DEFAULT_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
