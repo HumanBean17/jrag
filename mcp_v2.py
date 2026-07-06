@@ -860,6 +860,17 @@ def search_v2(
                 limit=None,
                 offset=None,
             )
+        # hybrid + table='all' is unsupported (hybrid fuses vector+FTS on ONE
+        # table); fail fast with a clean envelope BEFORE loading the embedding
+        # model. run_search also guards this — this is the user-facing fast path.
+        if hybrid and table == "all":
+            return SearchOutput(
+                success=False,
+                message="hybrid search requires a single table; use java, sql, or yaml (not all)",
+                advisories=[],
+                limit=None,
+                offset=None,
+            )
         model_name = resolved_sbert_model_for_process_env(SBERT_MODEL)
         device = os.environ.get("SBERT_DEVICE") or None
         model = _get_sentence_transformer(model_name, device)

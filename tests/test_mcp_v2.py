@@ -662,6 +662,16 @@ def test_search_pushes_nodefilter_into_run_search(monkeypatch, ladybug_graph) ->
     assert captured.get("exclude_roles") == ["CONTROLLER"]
 
 
+def test_search_all_tables_hybrid_returns_clean_failure(ladybug_graph) -> None:
+    """hybrid + table='all' is unsupported; search_v2 fails fast with a clean
+    success=False envelope BEFORE loading the embedding model (no raw exception
+    escapes to the MCP caller)."""
+    out = search_v2("anything", table="all", hybrid=True, graph=ladybug_graph)
+    assert out.success is False
+    assert out.message is not None and "table" in out.message.lower()
+    assert out.results == []
+
+
 def test_unresolved_call_site_noderef_carries_callee_name() -> None:
     """The unresolved-call-site NodeRef must carry the callee identifier in `name`
     (issue #354) — NodeRef previously had no `name` field, so pydantic's default
