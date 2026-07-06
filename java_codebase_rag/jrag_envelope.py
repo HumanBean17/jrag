@@ -778,7 +778,7 @@ _BRIEF_NODE_KEYS: frozenset[str] = frozenset(
 # brief + location / classification / ranking. ``file`` is the composed
 # ``filename:start_line`` display field (see :func:`_compose_file`).
 _NORMAL_NODE_KEYS: frozenset[str] = _BRIEF_NODE_KEYS | frozenset(
-    {"module", "role", "symbol_kind", "framework", "file", "score"}
+    {"module", "role", "symbol_kind", "framework", "file", "score", "explain", "chunks"}
 )
 
 # Edge attrs the text renderers read at the default level (target id variants

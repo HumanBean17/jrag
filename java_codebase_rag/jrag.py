@@ -1059,6 +1059,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--hybrid", action="store_true", help="Enable vector+keyword hybrid search."
     )
     search.add_argument(
+        "--explain", action="store_true", help="Show score breakdown per hit."
+    )
+    search.add_argument(
         "--path-contains", type=str, default=None, dest="path_contains",
         help="Narrow to chunks whose filename contains this substring.",
     )
@@ -1087,6 +1090,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=0,
         help="Page offset (passed to search_v2; paginated via +1-fetch).",
+    )
+    search.add_argument(
+        "--chunks",
+        action="store_true",
+        help="Show every chunk (default collapses to one row per symbol/type).",
     )
     search.set_defaults(handler=_cmd_search, auto_scope=True)
 
@@ -4025,6 +4033,65 @@ def _cmd_overview(args: argparse.Namespace) -> int:
 # ============================================================================
 
 
+def _zero_result_guidance(args: argparse.Namespace, graph) -> str | None:
+    """Hint where matches live when a filtered search returns 0 results.
+
+    Runs ONE cheap unfiltered probe (limit 10) and tallies the filtered
+    dimension across the probe hits, so an agent who filtered to e.g.
+    ``--role SERVICE`` and got nothing learns the matches are under
+    COMPONENT/OTHER instead of guessing. Returns None when no guidance
+    applies: no recognizable single-dimension filter set, the probe is
+    empty (truly no matches for this query), or the probe itself errored
+    (non-fatal — the empty result still renders).
+    """
+    import mcp_v2
+    from collections import Counter
+
+    from java_codebase_rag.jrag_envelope import normalize_enum
+
+    # Only the common single-dimension filters get guidance; first set wins.
+    dims: list[tuple[str, str, str, str]] = []
+    if args.role:
+        dims.append(("role", "role", "roles", normalize_enum(args.role, kind="role")))
+    if args.service:
+        dims.append(("microservice", "service", "services", args.service))
+    if args.module:
+        dims.append(("module", "module", "modules", args.module))
+    if not dims:
+        return None
+    attr, flag, plural, value = dims[0]
+
+    try:
+        probe = mcp_v2.search_v2(
+            args.query,
+            table=args.table,
+            hybrid=args.hybrid,
+            limit=10,
+            offset=0,
+            path_contains=args.path_contains,
+            filter=None,
+            explain=False,
+            graph=graph,
+        )
+    except Exception:
+        return None
+    if not probe.success or not probe.results:
+        return None
+
+    counts: Counter = Counter(getattr(h, attr, None) for h in probe.results)
+    counts.pop(None, None)
+    if not counts:
+        return None
+    total = sum(counts.values())
+    top = counts.most_common(3)
+    alts = ", ".join(f"{v} ({c})" for v, c in top)
+    suggestion = top[0][0]
+    return (
+        f"0 results with --{flag} {value}; {total} matches exist under other {plural}: "
+        f"{alts} — try --{flag} {suggestion}"
+    )
+
+
 def _cmd_search(args: argparse.Namespace) -> int:
     """search <query> — semantic search via search_v2 over Lance tables.
 
@@ -4053,6 +4120,19 @@ def _cmd_search(args: argparse.Namespace) -> int:
         return rc
 
     limit = min(args.limit if args.limit is not None else 20, 499)
+
+    # --limit 0: short-circuit to a clean empty page. mark_truncated(rows, 0)
+    # would otherwise report truncated=True (a unit test pins the helper's
+    # current behavior, so we fix this in the handler, not the helper), and
+    # there is nothing to search — skip the embedding-model load entirely.
+    if limit == 0:
+        env = Envelope(
+            status="ok", nodes={}, truncated=False,
+            warnings=_auto_scope_notice(args),
+        )
+        next_actions_hook(env)
+        print(render(env, fmt=args.format, detail=args.detail, noun="search"))
+        return 0
 
     # Build NodeFilter from flags (same set as `find` filter mode).
     filter_dict: dict = {}
@@ -4107,7 +4187,9 @@ def _cmd_search(args: argparse.Namespace) -> int:
         offset=args.offset,
         path_contains=args.path_contains,
         filter=node_filter,
+        explain=args.explain,
         graph=graph,
+        dedup=not getattr(args, "chunks", False),
     )
 
     if not out.success:
@@ -4134,6 +4216,16 @@ def _cmd_search(args: argparse.Namespace) -> int:
             d["id"] = d.get("chunk_id") or d.get("symbol_id") or d.get("fqn") or ""
         if "kind" not in d:
             d["kind"] = "search_hit"
+        # Add explain token when --explain is set
+        if args.explain:
+            from search_lancedb import explain_score_components
+            comps = d.get("score_components")
+            d["explain"] = explain_score_components(
+                comps,
+                role=d.get("role"),
+                hybrid=bool(args.hybrid),
+                graph_expanded=False,
+            )
         hit_dicts.append(d)
 
     # --framework POST-filter: the graph stores `framework` only on Route nodes,
@@ -4162,6 +4254,13 @@ def _cmd_search(args: argparse.Namespace) -> int:
             f"--framework {framework_want!r} filtered out all {framework_dropped} hit(s); "
             f"no symbol's declaring type matched the framework's characteristic annotations"
         )
+    # Zero-result guidance: when a structural filter emptied the page, run one
+    # cheap unfiltered probe and point at where matches actually live (e.g.
+    # "--role SERVICE" returned 0 but matches are under COMPONENT/OTHER).
+    if not hit_dicts and filter_dict:
+        guidance = _zero_result_guidance(args, graph)
+        if guidance:
+            warnings.append(guidance)
     env = Envelope(
         status="ok", nodes=nodes, truncated=truncated,
         warnings=warnings + _auto_scope_notice(args),

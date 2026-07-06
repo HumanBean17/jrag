@@ -1,4 +1,0 @@
-# Fixture-only: split microservices so two modules sharing the same HTTP path get distinct Route ids.
-microservice_roots:
-  - service-a
-  - service-b

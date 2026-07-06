@@ -70,6 +70,8 @@ _NORMAL_INLINE_EXTRAS: tuple[str, ...] = (
     "framework",
     "file",
     "score",
+    "explain",
+    "chunks",
 )
 
 # Identity-adjacent extras shown inline at ``--detail brief``. ``score`` is the
@@ -85,6 +87,13 @@ _BRIEF_INLINE_EXTRAS: tuple[str, ...] = ("score",)
 _EDGE_LINE_KEYS: frozenset[str] = frozenset(
     {"other_id", "dst_id", "target_id", "term_id", "edge_type", "stored_edge_type", "label", "type", "confidence"}
 )
+
+
+def _format_inline_value(value: Any) -> str:
+    """Format a value for inline rendering: round floats to 3 decimals, others verbatim."""
+    if isinstance(value, float):
+        return f"{value:.3f}"
+    return str(value)
 
 
 def _next_action_lines(envelope: Envelope) -> list[str]:
@@ -266,7 +275,7 @@ def _render_listing(envelope: Envelope, *, noun: str, detail: str = "normal") ->
         # of every non-identity key (signature/annotations/snippet/...).
         if detail == "brief":
             extras = [
-                f"{key}={node[key]}"
+                f"{key}={_format_inline_value(node[key])}"
                 for key in _BRIEF_INLINE_EXTRAS
                 if key in node and node[key] not in ("", None)
             ]
@@ -274,9 +283,9 @@ def _render_listing(envelope: Envelope, *, noun: str, detail: str = "normal") ->
                 line += "  " + "  ".join(extras)
         elif detail == "normal":
             extras = [
-                f"{key}={node[key]}"
+                f"{key}={_format_inline_value(node[key])}"
                 for key in _NORMAL_INLINE_EXTRAS
-                if key in node and node[key] not in ("", None)
+                if key in node and node[key] not in ("", None) and not (key == "chunks" and node[key] == 1)
             ]
             if extras:
                 line += "  " + "  ".join(extras)

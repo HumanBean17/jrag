@@ -184,6 +184,24 @@ async def optimize_lance_tables(
 
                 if last_exc is None:
                     results[name] = "ok"
+                    # Best-effort FTS index at index time (PR-SEARCH-3) so hybrid
+                    # search works on all tables (java/sql/yaml) without a
+                    # first-query race. Failure is non-fatal — the lazy
+                    # ensure_text_fts_index in search_lancedb.py is the runtime
+                    # fallback — so it never alters the "ok" optimize status; we
+                    # only log the skip when verbose.
+                    try:
+                        from lancedb.index import FTS
+                        await table.create_index("text", config=FTS(), replace=True)
+                    except Exception as exc:
+                        low = str(exc).lower()
+                        if not any(
+                            w in low for w in ("exist", "duplicate", "already", "same name")
+                        ) and not quiet:
+                            print(
+                                f"java-codebase-rag: optimize: {name} fts skipped: {exc}",
+                                file=sys.stderr,
+                            )
                     if not quiet:
                         print(
                             f"java-codebase-rag: optimize: {name} ok",

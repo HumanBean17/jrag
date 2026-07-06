@@ -190,7 +190,7 @@ Prefer **`resolve` → `describe(id=…)`** over **`describe(fqn=…)`** when an
 
 #### `search`
 
-Ranked chunk retrieval. Args: `query`, `table` (`java`|`sql`|`yaml`|`all`, default `java`), `hybrid` (bool), `limit` (default 5), `offset`, `path_contains`, optional `filter` (symbol-applicable `NodeFilter` only).
+Ranked chunk retrieval. Args: `query`, `table` (`java`|`sql`|`yaml`|`all`, default `java`), `hybrid` (bool), `limit` (default 5), `offset`, `path_contains`, optional `filter` (symbol-applicable `NodeFilter` only), optional `chunks` (bool, default `false`). Returns one row per `primary_type_fqn` (symbol/type) by default; set `chunks=true` to restore chunk-level output. When deduped, each hit includes a `chunks` field (≥1) indicating how many chunks were collapsed into that hit.
 
 #### `find`
 

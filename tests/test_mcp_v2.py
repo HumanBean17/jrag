@@ -662,6 +662,65 @@ def test_search_pushes_nodefilter_into_run_search(monkeypatch, ladybug_graph) ->
     assert captured.get("exclude_roles") == ["CONTROLLER"]
 
 
+def test_search_all_tables_hybrid_returns_clean_failure(ladybug_graph) -> None:
+    """hybrid + table='all' is unsupported; search_v2 fails fast with a clean
+    success=False envelope BEFORE loading the embedding model (no raw exception
+    escapes to the MCP caller)."""
+    out = search_v2("anything", table="all", hybrid=True, graph=ladybug_graph)
+    assert out.success is False
+    assert out.message is not None and "table" in out.message.lower()
+    assert out.results == []
+
+
+def test_search_hybrid_missing_fts_falls_back_to_vector(monkeypatch, ladybug_graph) -> None:
+    """hybrid search on a table missing the FTS index falls back to vector-only
+    with an advisory (PR-SEARCH-3) — instead of surfacing a raw Lance error, the
+    search retries with hybrid=False and returns success=True with a clear
+    advisory message."""
+    call_count = {"hybrid": 0, "vector": 0}
+
+    def fake_run_search(query, *, hybrid, **kwargs):
+        if hybrid:
+            call_count["hybrid"] += 1
+            raise ValueError("Cannot perform full text search unless an INVERTED index has been created")
+        call_count["vector"] += 1
+        return _fake_search_rows()
+
+    monkeypatch.setattr("mcp_v2.run_search", fake_run_search)
+    out = search_v2("server port", table="yaml", hybrid=True, graph=ladybug_graph)
+
+    # Should succeed with vector-only fallback
+    assert out.success is True
+    assert len(out.results) == 2
+    # Should have retried with hybrid=False
+    assert call_count["hybrid"] == 1
+    assert call_count["vector"] == 1
+    # Should include advisory about the fallback
+    assert out.advisories
+    advisory_text = " ".join(out.advisories)
+    assert "fell back" in advisory_text.lower()
+    assert "vector-only" in advisory_text.lower()
+    assert "FTS index missing" in advisory_text
+
+
+def test_search_hybrid_non_fts_error_still_fails(monkeypatch, ladybug_graph) -> None:
+    """A non-FTS exception during hybrid search still yields success=False — the
+    graceful fallback is scoped ONLY to the missing-FTS signature; other errors
+    surface as structured failures (PR-SEARCH-3)."""
+    def fake_run_search(query, **kwargs):
+        raise RuntimeError("Some other LanceDB error")
+
+    monkeypatch.setattr("mcp_v2.run_search", fake_run_search)
+    out = search_v2("query", table="java", hybrid=True, graph=ladybug_graph)
+
+    # Should fail with the error message
+    assert out.success is False
+    assert out.message is not None
+    assert "Some other LanceDB error" in out.message
+    # No advisory fallback for non-FTS errors
+    assert not any("fell back" in a.lower() for a in out.advisories)
+
+
 def test_unresolved_call_site_noderef_carries_callee_name() -> None:
     """The unresolved-call-site NodeRef must carry the callee identifier in `name`
     (issue #354) — NodeRef previously had no `name` field, so pydantic's default
@@ -1739,3 +1798,187 @@ def test_describe_unresolved_call_sites_rollup_cap_footer_and_total(ladybug_grap
         assert mid in footer
 
 
+def test_search_hit_has_score_components_field() -> None:
+    """SearchHit model includes score_components field (default None)."""
+    from mcp_v2 import SearchHit
+    hit = SearchHit(
+        chunk_id="chunk:1",
+        symbol_id="sym:1",
+        score=0.9,
+        snippet="test",
+    )
+    assert hasattr(hit, "score_components")
+    assert hit.score_components is None
+
+
+def test_search_explain_true_includes_score_components(monkeypatch, ladybug_graph) -> None:
+    """search with explain=True returns hits with score_components."""
+    def fake_rows_with_components():
+        return [
+            {
+                "id": "chunk:1",
+                "symbol_id": "sym:1",
+                "primary_type_fqn": "com.example.ChatService",
+                "_score": 0.85,
+                "_score_components": {
+                    "distance": 0.3,
+                    "role_weight": 0.1,
+                    "symbol_bonus": 0.05,
+                },
+                "text": "ChatService sample",
+                "microservice": "chat-assign",
+                "module": "chat-assign",
+                "role": "SERVICE",
+                "filename": "ChatAssignService.java",
+                "start": {"line": 10},
+                "end": {"line": 20},
+            }
+        ]
+
+    monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: fake_rows_with_components())
+    out = search_v2("ChatService", explain=True, graph=ladybug_graph)
+    assert out.success is True
+    assert out.results
+    assert len(out.results) == 1
+    hit = out.results[0]
+    assert hit.score_components is not None
+    assert "distance" in hit.score_components
+    assert hit.score_components["distance"] == 0.3
+    assert "role_weight" in hit.score_components
+    assert hit.score_components["role_weight"] == 0.1
+
+
+def test_search_explain_false_omits_score_components(monkeypatch, ladybug_graph) -> None:
+    """search with explain=False (or omitted) returns hits with score_components=None."""
+    def fake_rows_with_components():
+        return [
+            {
+                "id": "chunk:1",
+                "symbol_id": "sym:1",
+                "primary_type_fqn": "com.example.ChatService",
+                "_score": 0.85,
+                "_score_components": {
+                    "distance": 0.3,
+                    "role_weight": 0.1,
+                },
+                "text": "ChatService sample",
+                "microservice": "chat-assign",
+                "module": "chat-assign",
+                "role": "SERVICE",
+                "filename": "ChatAssignService.java",
+                "start": {"line": 10},
+                "end": {"line": 20},
+            }
+        ]
+
+    monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: fake_rows_with_components())
+    # Test with explain=False explicitly
+    out = search_v2("ChatService", explain=False, graph=ladybug_graph)
+    assert out.success is True
+    assert out.results
+    assert len(out.results) == 1
+    hit = out.results[0]
+    assert hit.score_components is None
+
+    # Test with explain omitted (default False)
+    out2 = search_v2("ChatService", graph=ladybug_graph)
+    assert out2.success is True
+    assert out2.results
+    assert len(out2.results) == 1
+    hit2 = out2.results[0]
+    assert hit2.score_components is None
+
+
+
+
+def test_search_dedup_default_is_true(monkeypatch, ladybug_graph) -> None:
+    """search tool defaults to dedup=True (per-symbol dedup enabled)."""
+    captured_kwargs: dict = {}
+
+    def mock_run_search(query, **kwargs):
+        captured_kwargs.update(kwargs)
+        captured_kwargs["query"] = query
+        return [
+            {
+                "id": "chunk:1",
+                "symbol_id": "sym:1",
+                "primary_type_fqn": "com.example.TypeA",
+                "_score": 0.95,
+                "text": "TypeA sample",
+                "microservice": "ms",
+                "module": "mod",
+                "role": "SERVICE",
+                "filename": "a.java",
+                "start": {"line": 10},
+                "end": {"line": 20},
+            }
+        ]
+
+    monkeypatch.setattr("mcp_v2.run_search", mock_run_search)
+
+    out = search_v2("TypeA", graph=ladybug_graph)
+    assert out.success is True
+    # Default should be dedup=True
+    assert captured_kwargs.get("dedup_by_fqn") is True, f"expected dedup_by_fqn=True by default, got {captured_kwargs.get('dedup_by_fqn')}"
+
+
+def test_search_chunks_field_present_when_deduped(monkeypatch, ladybug_graph) -> None:
+    """SearchHit.chunks field is present when rows have _chunks_collapsed."""
+    def mock_run_search(query, **kwargs):
+        # Return a row with _chunks_collapsed (simulating dedup output)
+        return [
+            {
+                "id": "chunk:1",
+                "symbol_id": "sym:1",
+                "primary_type_fqn": "com.example.TypeA",
+                "_score": 0.95,
+                "_chunks_collapsed": 3,  # Dedup collapsed 3 chunks into this one
+                "text": "TypeA sample",
+                "microservice": "ms",
+                "module": "mod",
+                "role": "SERVICE",
+                "filename": "a.java",
+                "start": {"line": 10},
+                "end": {"line": 20},
+            }
+        ]
+
+    monkeypatch.setattr("mcp_v2.run_search", mock_run_search)
+
+    out = search_v2("TypeA", graph=ladybug_graph)
+    assert out.success is True
+    assert len(out.results) == 1
+    hit = out.results[0]
+    # chunks field should be present and equal to _chunks_collapsed
+    assert hasattr(hit, "chunks"), "SearchHit should have chunks field"
+    assert hit.chunks == 3, f"expected chunks=3, got {hit.chunks}"
+
+
+def test_search_chunks_flag_sets_dedup_false(monkeypatch, ladybug_graph) -> None:
+    """chunks=True parameter sets dedup=False (opt-out of per-symbol dedup)."""
+    captured_kwargs: dict = {}
+
+    def mock_run_search(query, **kwargs):
+        captured_kwargs.update(kwargs)
+        captured_kwargs["query"] = query
+        return [
+            {
+                "id": "chunk:1",
+                "symbol_id": "sym:1",
+                "primary_type_fqn": "com.example.TypeA",
+                "_score": 0.95,
+                "text": "TypeA sample",
+                "microservice": "ms",
+                "module": "mod",
+                "role": "SERVICE",
+                "filename": "a.java",
+                "start": {"line": 10},
+                "end": {"line": 20},
+            }
+        ]
+
+    monkeypatch.setattr("mcp_v2.run_search", mock_run_search)
+
+    out = search_v2("TypeA", dedup=False, graph=ladybug_graph)
+    assert out.success is True
+    assert captured_kwargs.get("dedup_by_fqn") is False, f"expected dedup_by_fqn=False with dedup=False, got {captured_kwargs.get('dedup_by_fqn')}"

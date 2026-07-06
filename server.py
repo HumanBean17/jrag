@@ -512,6 +512,7 @@ def create_mcp_server() -> FastMCP:
             "structured DSL inside `query`; structured predicates belong in `find`. "
             "For identifier-shaped lookups (FQN, id, route/client identifiers, …), use `resolve` first; "
             "use `search` for natural-language or ranked fuzzy discovery. "
+            "Set `explain=true` to include score breakdown per hit. "
             "Successful responses echo `limit`/`offset`."
         ),
     )
@@ -538,6 +539,14 @@ def create_mcp_server() -> FastMCP:
                 "predicate. Unknown keys or populated fields not applicable to symbols return success=false."
             ),
         ),
+        explain: bool = Field(
+            default=False,
+            description="If true, include score_components in each SearchHit (breakdown of distance/rrf, role, symbol, import_penalty).",
+        ),
+        chunks: bool = Field(
+            default=False,
+            description="If true, show every chunk (default collapses to one row per symbol/type).",
+        ),
     ) -> mcp_v2.SearchOutput:
         scoped_filter = _scope_manager.apply_auto_scope(filter) if _scope_manager else filter
         return await asyncio.to_thread(
@@ -549,7 +558,9 @@ def create_mcp_server() -> FastMCP:
             offset,
             path_contains,
             scoped_filter,
+            explain,
             None,
+            not chunks,  # dedup=True by default; chunks=True opts out
         )
 
     @mcp.tool(

@@ -158,7 +158,12 @@ def test_search_filter_carries_auto_scope(
     captured: dict = {}
 
     def mock_search_v2(query, **kwargs):
-        captured["filter"] = kwargs.get("filter")
+        # Capture the FIRST (real search) call's filter. The zero-result
+        # guidance probe (PR-SEARCH-4) makes a second call with filter=None
+        # when an empty result has a filter set, so capturing every call
+        # would overwrite this with the probe's None.
+        if "filter" not in captured:
+            captured["filter"] = kwargs.get("filter")
         return mcp_v2.SearchOutput(
             success=True, results=[], limit=kwargs.get("limit", 5),
             offset=kwargs.get("offset", 0), advisories=[],

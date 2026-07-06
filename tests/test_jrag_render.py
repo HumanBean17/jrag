@@ -535,9 +535,10 @@ def test_search_text_normal_shows_score_not_snippet() -> None:
     """Regression for the complaint: text used to drop BOTH score and snippet.
 
     At normal, score is now visible; the snippet stays opt-in (full only).
+    Score is rounded to 3 decimals (e.g., 0.910).
     """
     out = render(_search_listing_env(), fmt="text", noun="search", detail="normal")
-    assert "score=0.91" in out, f"normal search text missing score: {out!r}"
+    assert "score=0.910" in out, f"normal search text missing score: {out!r}"
     assert "void x();" not in out, f"normal search text leaked snippet: {out!r}"
 
 
@@ -549,6 +550,60 @@ def test_search_json_normal_omits_snippet_drops_empty_fields() -> None:
     assert "snippet" not in node, f"normal json leaked snippet: {node!r}"
     assert "symbol_id" not in node, f"normal json kept empty symbol_id: {node!r}"
     assert node["score"] == 0.91
+
+
+def test_search_normal_shows_chunks_when_collapsed_multiple() -> None:
+    """chunks=N appears at normal detail when _chunks_collapsed >= 2.
+
+    Regression for search redesign PR: deduped types should show chunk count,
+    but single-chunk results should not display chunks=1 noise.
+    """
+    env = Envelope(
+        status="ok",
+        nodes={
+            "chunk:1": {
+                "id": "chunk:1",
+                "kind": "search_hit",
+                "fqn": "com.foo.ManyChunks",
+                "name": "ManyChunks",
+                "microservice": "chat",
+                "module": "core",
+                "role": "SERVICE",
+                "score": 0.95,
+                "chunks": 3,  # dedup collapsed 3 chunks
+                "symbol_id": "sym:1",
+            },
+            "chunk:2": {
+                "id": "chunk:2",
+                "kind": "search_hit",
+                "fqn": "com.foo.SingleChunk",
+                "name": "SingleChunk",
+                "microservice": "chat",
+                "module": "core",
+                "role": "SERVICE",
+                "score": 0.85,
+                "chunks": 1,  # should NOT show (noise)
+                "symbol_id": "sym:2",
+            },
+            "chunk:3": {
+                "id": "chunk:3",
+                "kind": "search_hit",
+                "fqn": "com.foo.NoChunks",
+                "name": "NoChunks",
+                "microservice": "chat",
+                "module": "core",
+                "role": "SERVICE",
+                "score": 0.75,
+                "symbol_id": "sym:3",
+                # chunks=None (omitted) - should NOT show
+            },
+        },
+    )
+    out = render(env, fmt="text", noun="search", detail="normal")
+    # chunks=3 appears
+    assert "chunks=3" in out, f"normal text missing chunks=3: {out!r}"
+    # chunks=1 does NOT appear (noise)
+    assert "chunks=1" not in out, f"normal text should not show chunks=1: {out!r}"
 
 
 # ----- Traversal label disambiguation + text/json detail parity -----
@@ -716,3 +771,38 @@ def test_traversal_full_text_renders_per_edge_content_block() -> None:
     parsed = json.loads(render(env, fmt="json", detail="full"))
     callee = parsed["nodes"]["com.foo.Repo#findById(Long)"]
     assert {"signature", "annotations", "modifiers", "package"} <= set(callee.keys()), callee
+
+
+def test_listing_normal_renders_explain_token() -> None:
+    """normal text renders explain= token inline when present on node."""
+    env = Envelope(
+        status="ok",
+        nodes={
+            "sym:1": {
+                "id": "sym:1", "kind": "symbol", "fqn": "com.foo.Svc.find", "name": "find",
+                "microservice": "chat", "module": "core", "role": "SERVICE", "score": 0.77,
+                "filename": "src/Svc.java", "start_line": 12,
+                "explain": "dist=0.42 role:+0.05 symbol:+0.03",
+            }
+        },
+    )
+    line = render(env, fmt="text", noun="symbol", detail="normal").splitlines()[0]
+    assert "explain=" in line, f"explain token should render in normal text: {line}"
+    assert "dist=0.42" in line
+    assert "role:+0.05" in line
+
+
+def test_listing_normal_without_explain_omits_token() -> None:
+    """normal text without explain key renders no explain= token."""
+    env = Envelope(
+        status="ok",
+        nodes={
+            "sym:1": {
+                "id": "sym:1", "kind": "symbol", "fqn": "com.foo.Svc.find", "name": "find",
+                "microservice": "chat", "module": "core", "role": "SERVICE", "score": 0.77,
+                "filename": "src/Svc.java", "start_line": 12,
+            }
+        },
+    )
+    line = render(env, fmt="text", noun="symbol", detail="normal").splitlines()[0]
+    assert "explain=" not in line, f"explain token should not render when absent: {line}"

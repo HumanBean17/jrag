@@ -466,6 +466,8 @@ class SearchHit(BaseModel):
     role: str | None = None
     filename: str | None = None
     start_line: int | None = None
+    score_components: dict[str, float] | None = None
+    chunks: int | None = None
 
 
 # NodeRef is now defined in graph_types.py and imported above
@@ -583,7 +585,7 @@ def _chunk_id_from_row(row: dict[str, Any]) -> str:
     return f"{filename}:{sb}:{eb}"
 
 
-def _row_to_search_hit(row: dict[str, Any]) -> SearchHit:
+def _row_to_search_hit(row: dict[str, Any], explain: bool = False) -> SearchHit:
     score = float(row.get("_rrf_score") or row.get("_score") or 0.0)
     filename = str(row.get("filename") or "") or None
     start_line: int | None = None
@@ -595,6 +597,8 @@ def _row_to_search_hit(row: dict[str, Any]) -> SearchHit:
                 start_line = int(ln)
             except (TypeError, ValueError):
                 start_line = None
+    chunks = row.get("_chunks_collapsed")
+    chunks_int = int(chunks) if chunks is not None and int(chunks) >= 2 else None
     return SearchHit(
         chunk_id=_chunk_id_from_row(row),
         symbol_id=_chunk_to_symbol_id(row),
@@ -606,6 +610,8 @@ def _row_to_search_hit(row: dict[str, Any]) -> SearchHit:
         role=str(row.get("role")) if row.get("role") else None,
         filename=filename,
         start_line=start_line,
+        score_components=row.get("_score_components") if explain else None,
+        chunks=chunks_int,
     )
 
 
@@ -820,7 +826,9 @@ def search_v2(
     offset: int = 0,
     path_contains: str | None = None,
     filter: NodeFilter | dict[str, Any] | str | None = None,
+    explain: bool = False,
     graph: LadybugGraph | None = None,
+    dedup: bool = True,
 ) -> SearchOutput:
     try:
         raw_filter = _coerce_filter(filter)
@@ -852,6 +860,17 @@ def search_v2(
                 limit=None,
                 offset=None,
             )
+        # hybrid + table='all' is unsupported (hybrid fuses vector+FTS on ONE
+        # table); fail fast with a clean envelope BEFORE loading the embedding
+        # model. run_search also guards this — this is the user-facing fast path.
+        if hybrid and table == "all":
+            return SearchOutput(
+                success=False,
+                message="hybrid search requires a single table; use java, sql, or yaml (not all)",
+                advisories=[],
+                limit=None,
+                offset=None,
+            )
         model_name = resolved_sbert_model_for_process_env(SBERT_MODEL)
         device = os.environ.get("SBERT_DEVICE") or None
         model = _get_sentence_transformer(model_name, device)
@@ -862,29 +881,66 @@ def search_v2(
         if not uri.startswith(("s3://", "gs://", "az://")) and uri_path.exists():
             uri = str(uri_path.resolve())
         table_keys = list(TABLES) if table == "all" else [table]
-        rows = run_search(
-            query,
-            uri=uri,
-            table_keys=table_keys,
-            hybrid=hybrid,
-            limit=limit,
-            offset=offset,
-            path_substring=path_contains,
-            model_name=model_name,
-            device=device,
-            model=model,
-            # Push the NodeFilter structural predicates into the LanceDB query so
-            # they apply BEFORE pagination (issue #353) — previously they were only
-            # a post-filter on the already-paginated page, which could shrink or
-            # empty filtered pages even when many matches existed deeper in the
-            # ranking. _node_matches_filter below still re-checks every row (it
-            # covers the non-pushdownable fields and is the contract guarantee).
-            role=nf.role if nf else None,
-            module=nf.module if nf else None,
-            microservice=nf.microservice if nf else None,
-            capability=nf.capability if nf else None,
-            exclude_roles=nf.exclude_roles if nf else None,
-        )
+
+        # Graceful fallback: if hybrid=True and FTS index is missing (old index),
+        # retry with hybrid=False and return vector-only results with an advisory.
+        advisories: list[str] = []
+        try:
+            rows = run_search(
+                query,
+                uri=uri,
+                table_keys=table_keys,
+                hybrid=hybrid,
+                limit=limit,
+                offset=offset,
+                path_substring=path_contains,
+                model_name=model_name,
+                device=device,
+                model=model,
+                # Push the NodeFilter structural predicates into the LanceDB query so
+                # they apply BEFORE pagination (issue #353) — previously they were only
+                # a post-filter on the already-paginated page, which could shrink or
+                # empty filtered pages even when many matches existed deeper in the
+                # ranking. _node_matches_filter below still re-checks every row (it
+                # covers the non-pushdownable fields and is the contract guarantee).
+                role=nf.role if nf else None,
+                module=nf.module if nf else None,
+                microservice=nf.microservice if nf else None,
+                capability=nf.capability if nf else None,
+                exclude_roles=nf.exclude_roles if nf else None,
+                dedup_by_fqn=dedup,
+            )
+        except Exception as exc:
+            # Check if this is a missing-FTS error (old index built before PR-SEARCH-3)
+            exc_text = str(exc).lower()
+            is_fts_missing = "full text search" in exc_text or "inverted index" in exc_text
+            if hybrid and is_fts_missing:
+                # Retry with vector-only search
+                rows = run_search(
+                    query,
+                    uri=uri,
+                    table_keys=table_keys,
+                    hybrid=False,  # Fallback to vector-only
+                    limit=limit,
+                    offset=offset,
+                    path_substring=path_contains,
+                    model_name=model_name,
+                    device=device,
+                    model=model,
+                    role=nf.role if nf else None,
+                    module=nf.module if nf else None,
+                    microservice=nf.microservice if nf else None,
+                    capability=nf.capability if nf else None,
+                    exclude_roles=nf.exclude_roles if nf else None,
+                    dedup_by_fqn=dedup,
+                )
+                advisories.append(
+                    f"hybrid unavailable on table '{table}' (FTS index missing on this index built before "
+                    f"PR-SEARCH-3); fell back to vector-only — reindex to enable hybrid"
+                )
+            else:
+                # Non-FTS error: surface as structured failure
+                raise
         hits: list[SearchHit] = []
         for row in rows:
             if path_contains and path_contains not in str(row.get("filename") or ""):
@@ -893,7 +949,7 @@ def search_v2(
                 row_kind = "symbol"
                 if not _node_matches_filter(row_kind, row, nf):
                     continue
-            hits.append(_row_to_search_hit(row))
+            hits.append(_row_to_search_hit(row, explain=explain))
         hint_payload = {
             "success": True,
             "results": [h.model_dump() for h in hits],
@@ -906,7 +962,7 @@ def search_v2(
             results=hits,
             limit=limit,
             offset=offset,
-            advisories=raw_advisories,
+            advisories=advisories + raw_advisories,  # Merge fallback + hints advisories
             hints_structured=_to_structured_hints(raw_struct),
         )
     except Exception as exc:

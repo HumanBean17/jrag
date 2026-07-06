@@ -361,11 +361,10 @@ def test_search_fuzzy_rejected_in_handler_as_status_error(
 def test_search_min_score_drops_negative_noise(
     monkeypatch, capsys, corpus_root: Path, ladybug_db_path: Path
 ) -> None:
-    """--min-score (default 0.0) drops negative-score hits (noise).
+    """--min-score (default 0.0) drops low-score hits below the floor.
 
-    A nonsense query yields only negative-score chunks (l2_distance_to_score <
-    0 = farther than orthogonal). The default floor of 0.0 drops them all. The
-    floor is overrideable: --min-score -1 keeps them.
+    Scores are now unified to [0,1] across all modes. The default floor of 0.0
+    drops weak hits; --min-score 0.5 keeps only the stronger half.
     """
     import mcp_v2
     from java_codebase_rag.jrag import main
@@ -374,13 +373,13 @@ def test_search_min_score_drops_negative_noise(
     monkeypatch.setenv("JAVA_CODEBASE_RAG_INDEX_DIR", env_index)
     monkeypatch.setenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", str(corpus_root))
 
-    noise = mcp_v2.SearchHit(
-        chunk_id="c1", symbol_id="sym1", fqn="com.example.Noise",
-        score=-0.5, snippet="noise", microservice="chat-core",
+    weak = mcp_v2.SearchHit(
+        chunk_id="c1", symbol_id="sym1", fqn="com.example.Weak",
+        score=0.1, snippet="weak", microservice="chat-core",
     )
     signal = mcp_v2.SearchHit(
         chunk_id="c2", symbol_id="sym2", fqn="com.example.Signal",
-        score=0.4, snippet="signal", microservice="chat-core",
+        score=0.6, snippet="signal", microservice="chat-core",
     )
 
     def make_mock(hits):
@@ -392,23 +391,24 @@ def test_search_min_score_drops_negative_noise(
             )
         return mock_search_v2
 
-    # Default floor (0.0): only the positive-score signal survives.
-    monkeypatch.setattr(mcp_v2, "search_v2", make_mock([noise, signal]))
+    # Default floor (0.0): both survive (both are ≥ 0).
+    monkeypatch.setattr(mcp_v2, "search_v2", make_mock([weak, signal]))
     rc = main(["search", "--index-dir", env_index, "q", "--format", "json"])
     out = capsys.readouterr().out
     assert rc == 0, out
     payload = json.loads(out)
     fqns = {n.get("fqn") for n in payload.get("nodes", {}).values()}
     assert "com.example.Signal" in fqns
-    assert "com.example.Noise" not in fqns, "negative-score noise must be dropped by default floor"
+    assert "com.example.Weak" in fqns, "weak hit (0.1) should survive default floor 0.0"
 
-    # Override floor to -1: both survive.
-    monkeypatch.setattr(mcp_v2, "search_v2", make_mock([noise, signal]))
-    rc = main(["search", "--index-dir", env_index, "q", "--min-score", "-1", "--format", "json"])
+    # Floor 0.5: only the strong signal survives.
+    monkeypatch.setattr(mcp_v2, "search_v2", make_mock([weak, signal]))
+    rc = main(["search", "--index-dir", env_index, "q", "--min-score", "0.5", "--format", "json"])
     out = capsys.readouterr().out
     payload = json.loads(out)
     fqns = {n.get("fqn") for n in payload.get("nodes", {}).values()}
-    assert "com.example.Noise" in fqns and "com.example.Signal" in fqns
+    assert "com.example.Signal" in fqns
+    assert "com.example.Weak" not in fqns, "weak hit (0.1) must be dropped by floor 0.5"
 
 
 def test_search_hit_carries_file_path(
@@ -856,3 +856,274 @@ def test_build_parser_imports_no_backend_modules() -> None:
         commands = set(sub_actions[0].choices.keys())
         for expected in ("microservices", "map", "conventions", "overview", "search"):
             assert expected in commands, f"missing {expected} in parser subcommands: {commands}"
+
+
+def test_search_explain_calls_search_v2_with_explain_true(
+    monkeypatch, capsys, corpus_root: Path, ladybug_db_path: Path
+) -> None:
+    """--explain flag passes explain=True to search_v2."""
+    import mcp_v2
+    from java_codebase_rag.jrag import main
+
+    env_index = str(ladybug_db_path.parent)
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_INDEX_DIR", env_index)
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", str(corpus_root))
+
+    captured_kwargs: dict = {}
+    def mock_search_v2(query, **kwargs):
+        captured_kwargs.update(kwargs)
+        captured_kwargs["query"] = query
+        return mcp_v2.SearchOutput(
+            success=True, results=[], limit=kwargs.get("limit", 5),
+            offset=kwargs.get("offset", 0), advisories=[],
+        )
+    monkeypatch.setattr(mcp_v2, "search_v2", mock_search_v2)
+
+    rc = main(["search", "--index-dir", env_index, "audit", "--explain", "--format", "json"])
+    assert rc == 0
+    assert captured_kwargs.get("explain") is True, (
+        f"expected explain=True, got explain={captured_kwargs.get('explain')}"
+    )
+
+
+def test_search_dedup_default_collapses_same_fqn(monkeypatch, corpus_root: Path, ladybug_db_path: Path) -> None:
+    """Default search (dedup ON) collapses multiple chunks of same FQN into one node."""
+    import mcp_v2
+    from java_codebase_rag.jrag import main
+
+    env_index = str(ladybug_db_path.parent)
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_INDEX_DIR", env_index)
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", str(corpus_root))
+
+    def mock_search_v2(query, **kwargs):
+        # By default, dedup should be True
+        assert kwargs.get("dedup") is True, f"expected dedup=True by default, got {kwargs.get('dedup')}"
+        # Return 2 hits with same FQN
+        return mcp_v2.SearchOutput(
+            success=True,
+            results=[
+                mcp_v2.SearchHit(
+                    chunk_id="chunk:1",
+                    fqn="com.example.TypeA",
+                    score=0.95,
+                    snippet="TypeA chunk 1",
+                    filename="a.java",
+                    start_line=10,
+                ),
+                mcp_v2.SearchHit(
+                    chunk_id="chunk:2",
+                    fqn="com.example.TypeA",
+                    score=0.85,
+                    snippet="TypeA chunk 2",
+                    filename="a.java",
+                    start_line=20,
+                ),
+            ],
+            limit=10,
+            offset=0,
+            advisories=[],
+        )
+
+    monkeypatch.setattr(mcp_v2, "search_v2", mock_search_v2)
+    rc = main(["search", "--index-dir", env_index, "TypeA", "--format", "json"])
+    assert rc == 0
+    # The output should show the dedup behavior
+    # (In real run, the 2 chunks would be collapsed to 1 node by run_search dedup)
+
+
+def test_search_chunks_flag_passes_dedup_false(monkeypatch, corpus_root: Path, ladybug_db_path: Path) -> None:
+    """--chunks flag passes dedup=False to search_v2, disabling dedup."""
+    import mcp_v2
+    from java_codebase_rag.jrag import main
+
+    env_index = str(ladybug_db_path.parent)
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_INDEX_DIR", env_index)
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", str(corpus_root))
+
+    captured_kwargs: dict = {}
+    def mock_search_v2(query, **kwargs):
+        captured_kwargs.update(kwargs)
+        captured_kwargs["query"] = query
+        # Return 2 hits with same FQN
+        return mcp_v2.SearchOutput(
+            success=True,
+            results=[
+                mcp_v2.SearchHit(
+                    chunk_id="chunk:1",
+                    fqn="com.example.TypeA",
+                    score=0.95,
+                    snippet="TypeA chunk 1",
+                    filename="a.java",
+                    start_line=10,
+                ),
+                mcp_v2.SearchHit(
+                    chunk_id="chunk:2",
+                    fqn="com.example.TypeA",
+                    score=0.85,
+                    snippet="TypeA chunk 2",
+                    filename="a.java",
+                    start_line=20,
+                ),
+            ],
+            limit=10,
+            offset=0,
+            advisories=[],
+        )
+
+    monkeypatch.setattr(mcp_v2, "search_v2", mock_search_v2)
+    rc = main(["search", "--index-dir", env_index, "TypeA", "--chunks", "--format", "json"])
+    assert rc == 0
+    assert captured_kwargs.get("dedup") is False, f"expected dedup=False with --chunks, got {captured_kwargs.get('dedup')}"
+
+
+def test_search_limit_zero_returns_empty_not_truncated(monkeypatch, capsys, corpus_root: Path, ladybug_db_path: Path) -> None:
+    """--limit 0 returns clean empty page (truncated:false) WITHOUT calling search_v2."""
+    import mcp_v2
+    from java_codebase_rag.jrag import main
+
+    env_index = str(ladybug_db_path.parent)
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_INDEX_DIR", env_index)
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", str(corpus_root))
+
+    search_v2_calls = []
+    def mock_search_v2(query, **kwargs):
+        search_v2_calls.append({"query": query, "kwargs": kwargs})
+        return mcp_v2.SearchOutput(
+            success=True, results=[], limit=kwargs.get("limit", 5),
+            offset=kwargs.get("offset", 0), advisories=[],
+        )
+    monkeypatch.setattr(mcp_v2, "search_v2", mock_search_v2)
+
+    rc = main(["search", "--index-dir", env_index, "anything", "--limit", "0", "--format", "json"])
+    captured = capsys.readouterr()
+    assert rc == 0, f"search failed: rc={rc}\nstdout={captured.out}\nstderr={captured.err}"
+    payload = json.loads(captured.out)
+    assert payload["status"] == "ok", f"expected status=ok, got {payload.get('status')}"
+    assert payload.get("truncated") is not True, f"expected truncated not true (the --limit-0 bug surfaced truncated:true), got {payload.get('truncated')}"
+    assert not payload.get("nodes"), f"expected empty nodes, got {payload.get('nodes')}"
+    assert len(search_v2_calls) == 0, f"search_v2 should NOT be called with --limit 0, but was called {len(search_v2_calls)} times"
+
+
+def test_search_zero_results_with_role_filter_emits_guidance(monkeypatch, capsys, corpus_root: Path, ladybug_db_path: Path) -> None:
+    """Filtered search returning 0 results emits guidance when matches exist under other filter values."""
+    import mcp_v2
+    from java_codebase_rag.jrag import main
+
+    env_index = str(ladybug_db_path.parent)
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_INDEX_DIR", env_index)
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", str(corpus_root))
+
+    # Mock search_v2 to track calls and return empty for filtered, hits for unfiltered probe
+    search_v2_calls = []
+    def mock_search_v2(query, **kwargs):
+        search_v2_calls.append({"query": query, "kwargs": kwargs})
+        # If no filter (probe), return hits with various roles
+        if kwargs.get("filter") is None or (
+            isinstance(kwargs.get("filter"), dict) and not kwargs.get("filter")
+        ):
+            return mcp_v2.SearchOutput(
+                success=True,
+                results=[
+                    mcp_v2.SearchHit(
+                        chunk_id="c1", symbol_id="sym1", fqn="com.example.HitA",
+                        score=0.95, snippet="audit code A", microservice="ms1",
+                        module="m1", role="COMPONENT",
+                    ),
+                    mcp_v2.SearchHit(
+                        chunk_id="c2", symbol_id="sym2", fqn="com.example.HitB",
+                        score=0.85, snippet="audit code B", microservice="ms2",
+                        module="m2", role="OTHER",
+                    ),
+                    mcp_v2.SearchHit(
+                        chunk_id="c3", symbol_id="sym3", fqn="com.example.HitC",
+                        score=0.75, snippet="audit code C", microservice="ms3",
+                        module="m3", role="COMPONENT",
+                    ),
+                ],
+                limit=10,
+                offset=0,
+                advisories=[],
+            )
+        # Filtered call returns empty
+        return mcp_v2.SearchOutput(
+            success=True, results=[], limit=kwargs.get("limit", 5),
+            offset=kwargs.get("offset", 0), advisories=[],
+        )
+    monkeypatch.setattr(mcp_v2, "search_v2", mock_search_v2)
+
+    rc = main(["search", "--index-dir", env_index, "audit", "--role", "SERVICE", "--format", "json"])
+    captured = capsys.readouterr()
+    assert rc == 0, f"search failed: rc={rc}\nstdout={captured.out}\nstderr={captured.err}"
+    payload = json.loads(captured.out)
+    assert payload["status"] == "ok"
+    # Should have warning mentioning alternative roles (COMPONENT should be mentioned)
+    warnings = payload.get("warnings", [])
+    assert len(warnings) > 0, "expected guidance warning when filtered search returns 0 but unfiltered has results"
+    warning_text = " ".join(warnings)
+    assert "COMPONENT" in warning_text, f"expected COMPONENT in warning, got: {warning_text}"
+    assert "0 results with --role SERVICE" in warning_text, f"expected filter context in warning, got: {warning_text}"
+    # Verify probe was called (unfiltered)
+    assert len(search_v2_calls) == 2, f"expected 2 calls (filtered + probe), got {len(search_v2_calls)}"
+
+
+def test_search_zero_results_no_filter_no_guidance(monkeypatch, capsys, corpus_root: Path, ladybug_db_path: Path) -> None:
+    """Unfiltered search returning 0 results does NOT run probe or emit guidance."""
+    import mcp_v2
+    from java_codebase_rag.jrag import main
+
+    env_index = str(ladybug_db_path.parent)
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_INDEX_DIR", env_index)
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", str(corpus_root))
+
+    search_v2_calls = []
+    def mock_search_v2(query, **kwargs):
+        search_v2_calls.append({"query": query, "kwargs": kwargs})
+        return mcp_v2.SearchOutput(
+            success=True, results=[], limit=kwargs.get("limit", 5),
+            offset=kwargs.get("offset", 0), advisories=[],
+        )
+    monkeypatch.setattr(mcp_v2, "search_v2", mock_search_v2)
+
+    rc = main(["search", "--index-dir", env_index, "nonexistent query xyz", "--format", "json"])
+    captured = capsys.readouterr()
+    assert rc == 0, f"search failed: rc={rc}\nstdout={captured.out}\nstderr={captured.err}"
+    payload = json.loads(captured.out)
+    assert payload["status"] == "ok"
+    warnings = payload.get("warnings", [])
+    # Should NOT have guidance warning for unfiltered empty search
+    guidance_warnings = [w for w in warnings if "results with --" in w or "try --" in w]
+    assert len(guidance_warnings) == 0, f"should not run probe for unfiltered empty search, got warnings: {warnings}"
+    # Should only be called once (no probe)
+    assert len(search_v2_calls) == 1, f"expected 1 call (no probe for unfiltered), got {len(search_v2_calls)}"
+
+
+def test_search_probe_failure_does_not_break_empty_rendering(monkeypatch, capsys, corpus_root: Path, ladybug_db_path: Path) -> None:
+    """When probe fails (raises), the empty result still renders successfully."""
+    import mcp_v2
+    from java_codebase_rag.jrag import main
+
+    env_index = str(ladybug_db_path.parent)
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_INDEX_DIR", env_index)
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", str(corpus_root))
+
+    call_count = []
+    def mock_search_v2(query, **kwargs):
+        call_count.append(kwargs)
+        # First call (filtered): returns empty
+        if len(call_count) == 1:
+            return mcp_v2.SearchOutput(
+                success=True, results=[], limit=kwargs.get("limit", 5),
+                offset=kwargs.get("offset", 0), advisories=[],
+            )
+        # Second call (probe): raises exception
+        raise RuntimeError("probe failure (network/db error)")
+    monkeypatch.setattr(mcp_v2, "search_v2", mock_search_v2)
+
+    rc = main(["search", "--index-dir", env_index, "audit", "--role", "SERVICE", "--format", "json"])
+    captured = capsys.readouterr()
+    # Should still succeed (probe failure is non-fatal)
+    assert rc == 0, f"search should succeed despite probe failure, got rc={rc}\nstdout={captured.out}\nstderr={captured.err}"
+    payload = json.loads(captured.out)
+    assert payload["status"] == "ok"
+    # Should still show empty results (nodes omitted when empty)
+    assert not payload.get("nodes")

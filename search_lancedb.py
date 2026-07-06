@@ -41,6 +41,11 @@ JAVA_ENRICHED_COLUMNS: tuple[str, ...] = (
     "capabilities",
 )
 
+# Over-fetch multiplier for dedup: fetch 4x to absorb per-FQN chunk multiplicity
+# so that after collapsing by primary_type_fqn, a page stays full and the +1
+# truncation sentinel survives. The formula: need = max((limit + offset) * 4, limit + offset + 1)
+DEDUP_OVERFETCH = 4
+
 VECTOR_COLUMN = "embedding"
 _FTS_READY: set[tuple[str, str]] = set()
 _FTS_LOCK = threading.Lock()
@@ -201,6 +206,14 @@ _ROLE_SCORE_WEIGHTS: dict[str, float] = {
     "DTO": -0.08,
 }
 
+# Theoretical maximum for hybrid composite score (used for display normalization).
+# Hybrid sort metric: raw_rrf * (import_factor if import_heavy else 1)
+#                   + role_weight + symbol_bonus
+# where raw_rrf ≤ 2/(k+1) for 2-list RRF, role_weight ≤ max(_ROLE_SCORE_WEIGHTS),
+# and symbol_bonus ≤ _SYMBOL_MATCH_BONUS_CAP + _TYPE_MATCH_BONUS_CAP + _ACTION_VERB_BONUS.
+# The import factor is ≤ 1, so we use the raw max (2/61).
+_HYBRID_SCORE_MAX = (2.0 / 61.0) + max(_ROLE_SCORE_WEIGHTS.values()) + _SYMBOL_MATCH_BONUS_CAP + _TYPE_MATCH_BONUS_CAP + _ACTION_VERB_BONUS
+
 
 def _query_tokens(query: str) -> set[str]:
     """Lowercased alpha-only tokens from the query, minus stopwords, len >= 3.
@@ -353,7 +366,7 @@ def _hybrid_sort_key(r: dict) -> float:
     comps["hybrid_rrf"] = s
     if r.get("_hints", {}).get("import_heavy"):
         s *= _IMPORT_HYBRID_SCORE_FACTOR
-        comps["import_penalty"] = _IMPORT_HYBRID_SCORE_FACTOR
+        comps["import_penalty"] = 1.0 - _IMPORT_HYBRID_SCORE_FACTOR
     s += _role_weight(r)
     s += float(comps.get("symbol_bonus", 0.0))
     return -s
@@ -376,7 +389,8 @@ def explain_score_components(
         comps = {}
     parts: list[str] = []
     if hybrid:
-        rrf = comps.get("hybrid_rrf")
+        # Prefer rrf_raw (added by PR-SEARCH-1a) for explanation
+        rrf = comps.get("rrf_raw") or comps.get("hybrid_rrf")
         if rrf is not None:
             parts.append(f"rrf={float(rrf):.3f}")
     else:
@@ -401,6 +415,46 @@ def explain_score_components(
 def l2_distance_to_score(distance: float) -> float:
     """Map L2 distance to a similarity score for unit-normalized embeddings."""
     return 1.0 - distance * distance / 2.0
+
+
+def _effective_distance(comps: dict[str, float]) -> float:
+    """Compute the adjusted distance used for sorting.
+
+    Matches _vector_sort_key logic: distance + import_penalty - role_weight - symbol_bonus.
+    """
+    d = comps.get("distance", 0.0)
+    d += comps.get("import_penalty", 0.0)
+    d -= comps.get("role_weight", 0.0)
+    d -= comps.get("symbol_bonus", 0.0)
+    return d
+
+
+def _clamp01(x: float) -> float:
+    """Clamp a value to the [0.0, 1.0] range."""
+    if x < 0.0:
+        return 0.0
+    if x > 1.0:
+        return 1.0
+    return x
+
+
+def _hybrid_post_sort_normalization(rows: list[dict]) -> None:
+    """Set honest displayed scores for hybrid search after sorting.
+
+    Reconstructs the composite score (raw_rrf * import_factor + role_weight + symbol_bonus)
+    and normalizes by _HYBRID_SCORE_MAX to ensure rank-monotonicity.
+
+    Mutates rows in-place, replacing _score with the normalized value.
+    """
+    for r in rows:
+        comps = r.setdefault("_score_components", {})
+        raw = comps.get("hybrid_rrf", 0.0)
+        comps["rrf_raw"] = raw  # preserve raw RRF for --explain. NOTE: when graph_expand + hybrid combine (Phase 2), _rrf_merge below overwrites this with graph-RRF, so --explain would show graph-RRF not hybrid-RRF.
+        s = raw
+        if r.get("_hints", {}).get("import_heavy"):
+            s *= _IMPORT_HYBRID_SCORE_FACTOR
+        s += comps.get("role_weight", 0.0) + comps.get("symbol_bonus", 0.0)
+        r["_score"] = _clamp01(s / _HYBRID_SCORE_MAX)
 
 
 def _escape_like_fragment(s: str) -> str:
@@ -790,7 +844,70 @@ def _rrf_merge(
                 existing["_rrf_score"] = float(existing.get("_rrf_score", 0.0)) + contribution
     merged = list(pool.values())
     merged.sort(key=lambda r: -float(r.get("_rrf_score", 0.0)))
+    # Normalize displayed _rrf_score to [0,1] by theoretical max
+    # RRF max = Σ weight·1/(k+rank+1); theoretical max when all rows are rank 0
+    # with weight 1.0 = num_lists / (k + 1)
+    num_lists = len(lists)
+    max_rrf = num_lists / (k + 1)
+    for r in merged:
+        raw_score = float(r.get("_rrf_score", 0.0))
+        comps = r.setdefault("_score_components", {})
+        comps["rrf_raw"] = raw_score
+        r["_rrf_score"] = _clamp01(raw_score / max_rrf)
     return merged
+
+
+def _dedup_by_fqn(rows: list[dict], dedup_by_fqn: bool = True) -> list[dict]:
+    """Deduplicate rows by primary_type_fqn (java table only).
+
+    When dedup_by_fqn is True, collapses multiple chunks of the same
+    primary_type_fqn into one row (first-seen-wins, since rows are pre-sorted
+    so the first is the best chunk). Each survivor gets a _chunks_collapsed
+    field (>=1) counting how many rows were collapsed into it.
+
+    Rows without primary_type_fqn (sql/yaml tables) get a unique __id:<id>
+    key so they pass through unchanged (each row is unique).
+
+    When dedup_by_fqn is False, returns rows unchanged (regression guard).
+    """
+    if not dedup_by_fqn:
+        # Non-dedup path: return unchanged, byte-identical to prior behavior
+        return rows
+
+    deduped: list[dict] = []
+    seen_keys: dict[str, dict] = {}
+    collapsed_counts: dict[str, int] = {}
+
+    for row in rows:
+        # Build dedup key: primary_type_fqn for java rows, unique __id:<id> for sql/yaml
+        fqn = row.get("primary_type_fqn")
+        if fqn:
+            key = str(fqn)
+        else:
+            # sql/yaml rows have no primary_type_fqn → unique key per row
+            row_id = row.get("id") or id(row)
+            key = f"__id:{row_id}"
+
+        if key not in seen_keys:
+            # First occurrence: keep it
+            seen_keys[key] = row
+            collapsed_counts[key] = 1
+            deduped.append(row)
+        else:
+            # Duplicate: increment collapse count, discard this row
+            collapsed_counts[key] += 1
+
+    # Annotate each survivor with _chunks_collapsed
+    for row in deduped:
+        fqn = row.get("primary_type_fqn")
+        if fqn:
+            key = str(fqn)
+        else:
+            row_id = row.get("id") or id(row)
+            key = f"__id:{row_id}"
+        row["_chunks_collapsed"] = collapsed_counts[key]
+
+    return deduped
 
 
 def run_search(
@@ -819,6 +936,7 @@ def run_search(
     exclude_roles: list[str] | None = None,
     capability: str | None = None,
     capability_in: list[str] | None = None,
+    dedup_by_fqn: bool = False,
 ) -> list[dict]:
     effective_hybrid = hybrid
     effective_fts = fts_text
@@ -852,7 +970,16 @@ def run_search(
     fts_for_hybrid = effective_fts if effective_fts is not None else query
 
     db = lancedb.connect(uri)
-    need = max(limit + offset, 1)
+    if dedup_by_fqn:
+        # Over-fetch to absorb per-FQN chunk multiplicity: fetch 4x so that
+        # after collapsing, the page stays full and the +1 truncation sentinel survives.
+        # The 4× factor assumes typical per-FQN chunk multiplicity; a single type with
+        # many high-ranking chunks (e.g. generated/God classes) could starve the page or
+        # make the +1 truncation sentinel unreliable; Phase 1 may revisit adaptive over-fetch (plan risk #1).
+        need = max((limit + offset) * DEDUP_OVERFETCH, limit + offset + 1)
+    else:
+        # Non-dedup path: exact fetch as before
+        need = max(limit + offset, 1)
 
     extra_java = _build_extra_predicates(
         columns=_table_columns(uri, TABLES["java"], db),
@@ -887,8 +1014,15 @@ def run_search(
         _apply_symbol_bonus(rows, query_toks)
         if effective_hybrid:
             rows.sort(key=_hybrid_sort_key)
+            # Hybrid: set honest displayed score from composite sort metric, clamped to [0,1]
+            _hybrid_post_sort_normalization(rows)
         else:
             rows.sort(key=_vector_sort_key)
+            # Vector: set honest displayed score from adjusted distance, clamped to [0,1]
+            for r in rows:
+                comps = r.setdefault("_score_components", {})
+                effective_dist = _effective_distance(comps)
+                r["_score"] = _clamp01(l2_distance_to_score(effective_dist))
 
         if graph_expand and key == "java" and expand_depth > 0:
             rows = _graph_expand_merge(
@@ -901,6 +1035,9 @@ def run_search(
                 expand_depth=expand_depth,
                 ladybug_path=ladybug_path,
             )
+
+        # Dedup by primary_type_fqn after all sorting/merging, before windowing
+        rows = _dedup_by_fqn(rows, dedup_by_fqn=dedup_by_fqn)
 
         window = rows[offset : offset + limit]
         if context_neighbors > 0 and key == "java":
@@ -931,6 +1068,15 @@ def run_search(
             r["_skip_role_weight"] = True
     _apply_symbol_bonus(merged, query_toks)
     merged.sort(key=_vector_sort_key)
+    # Vector: set honest displayed score from adjusted distance, clamped to [0,1]
+    for r in merged:
+        comps = r.setdefault("_score_components", {})
+        effective_dist = _effective_distance(comps)
+        r["_score"] = _clamp01(l2_distance_to_score(effective_dist))
+
+    # Dedup by primary_type_fqn after all sorting/merging, before windowing
+    merged = _dedup_by_fqn(merged, dedup_by_fqn=dedup_by_fqn)
+
     window = merged[offset : offset + limit]
     if context_neighbors > 0:
         _attach_neighbor_context(window, db=db, neighbors=context_neighbors, uri=uri)
