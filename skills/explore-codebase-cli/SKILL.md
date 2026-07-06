@@ -5,80 +5,63 @@ description: "MUST BE USED PROACTIVELY. Universal read-only codebase exploration
 
 # /explore-codebase-cli — Universal codebase exploration via `jrag`
 
-Read-only exploration combining **graph navigation through the `jrag` CLI** with **broad file-system search**. This is the CLI surface of java-codebase-rag; it loads the same index used by the MCP server but exposes one shell command per engineering intent instead of five MCP tools.
+Read-only exploration combining **graph navigation through the `jrag` CLI** with **broad file-system search**. `jrag` loads the same index as the MCP server but exposes one shell command per intent instead of five MCP tools.
 
-## When to use
-
-Any time you need to search, locate, navigate, or explore the codebase. **Do NOT use when** the answer is already in open context or for a single known file — read that file directly.
+Use any time you must search, locate, navigate, or explore. **Do NOT use when** the answer is already in context or for a single known file — read it directly.
 
 ## Core Principles
 
 1. **Read-only.** Never edit, write, or modify any file.
-2. **Names in, names out.** Every `<query>` is human-readable (FQN / simple name / route path / topic). Raw node IDs are never required.
-3. **One command per intent.** `jrag` collapses resolve + walk into one call. Pick the command that matches the intent; do not chain resolve→describe→neighbors manually.
+2. **Names in, names out.** Every `<query>` is human-readable (FQN / simple name / route path / topic). Raw node IDs never required.
+3. **One command per intent.** `jrag` collapses resolve + walk into one call — don't chain resolve→describe→neighbors manually.
 4. **Stop when answered.** Don't prefetch unrelated subgraphs or directories.
 
-## Why `jrag` (CLI) vs `java-codebase-rag` (MCP)
-
-| Aspect | `jrag` CLI | MCP server (`java-codebase-rag-mcp`) |
-| --- | --- | --- |
-| Surface | Shell — one command per intent | 5 stdio MCP tools (`search` / `find` / `describe` / `neighbors` / `resolve`) |
-| Resolve | **Internalized** — every `<query>` command runs `resolve_v2` first | Explicit — agent calls `resolve` then `describe` / `neighbors` |
-| Output | Compact text by default; `--format json` for the envelope; `--detail brief\|normal\|full` (orthogonal to format) | JSON-RPC envelope |
-| Host fit | Any agent that can run shell commands | MCP-aware hosts (Claude Code, Claude Desktop, Qwen Code, GigaCode) |
-| Index | Reuses the operator's `~/.java-codebase-rag` / `.java-codebase-rag/` index | Same |
-
-Pick **one** surface per project — running both strands the agent in two vocabularies. This skill is for the CLI surface.
+**One surface per project.** This is the CLI surface; the MCP surface (`search`/`find`/`describe`/`neighbors`/`resolve`) is mutually exclusive — running both strands the agent in two vocabularies.
 
 ## Prerequisite: index must exist
 
-`jrag` is a thin compose-and-render layer over the existing index. If the project has not been indexed, every command exits 2 with an actionable envelope:
+`jrag` is a thin layer over the existing index. If unindexed, every command exits 2:
 
 ```
 status: error
 message: No index at <path>. Run: java-codebase-rag init --source-root <root>
 ```
 
-Verify with `jrag status` first when in doubt.
+Verify with `jrag status` when in doubt.
 
 ## Tool Inventory
 
 ### `jrag` command groups
 
-Run `jrag --help` for the canonical list. Groups (PR-JRAG-1a..4):
+Run `jrag --help` for the canonical list.
 
 | Group | Commands |
 | --- | --- |
 | **Orientation** | `status`, `microservices`, `map`, `conventions`, `overview` |
 | **Locate** | `find`, `search` |
-| **Listings** | `routes`, `clients`, `producers`, `topics`, `jobs`, `listeners`, `entities` |
-| **Traversal** | `callers`, `callees`, `hierarchy`, `implementations`, `subclasses`, `overrides`, `overridden-by`, `dependents`, `impact`, `flow`, `dependencies`, `connection` |
+| **Listings** | `http-routes`, `http-clients`, `producers`, `topics`, `jobs`, `listeners`, `entities` |
+| **Traversal** | `callers`, `callees`, `hierarchy`, `implementations`, `subclasses`, `overrides`, `overridden-by`, `dependents`, `impact`, `flow`, `decompose`, `dependencies`, `connection` |
 | **Inspection** | `inspect`, `outline`, `imports` |
 
-### Common flags (every command)
+### Common flags
 
 ```
---service <name>      Filter by microservice
---module <name>       Filter by module
---limit <N>           Cap on results (default 20; 10 for fan-out commands)
---format text|json    Output format (default: text)
---detail brief|normal|full  Output detail (default: normal) — orthogonal to --format;
-                      both modes honor it. brief=name @service; normal=+module/role/
-                      file/score; full=+signature/annotations/snippet. inspect and the
-                      orientation commands (status/microservices/map/conventions/overview)
-                      default to full.
---index-dir <path>    Index directory override (default: discovered from cwd)
+--service <name>            Filter by microservice
+--module <name>             Filter by module
+--limit <N>                 Cap on results (default 20; 10 for fan-out)
+--format text|json          Output format (default: text)
+--detail brief|normal|full  How much of each node/edge is shown (default: normal);
+                            orthogonal to --format. brief=name @service;
+                            normal=+module/role/file/score; full=+signature/
+                            annotations/snippet. inspect + orientation default to full.
+--index-dir <path>          Index directory override (default: discovered from cwd)
 ```
 
-`--offset` is supported **only** on `find` and `search` (they route through `find_v2` / `search_v2` which accept it). Other commands emit `truncated: more results — narrow your query` when capped.
+`--offset` is supported **only** on `find` and `search`. Other commands emit `truncated: more results — narrow your query` when capped.
 
 ### File-system tools
 
-- **Grep** — content search by pattern/regex
-- **Glob** — find files by name/path pattern (`**/*.java`, `**/*Controller*.java`, `**/application*.yml`)
-- **Read** — read files (`offset`/`limit` for large files)
-
-### Other: **Bash** (read-only: `git log`, `git blame`, `ls`, `find`), **WebSearch**/**WebFetch** (external lookups)
+`Grep` (content/regex), `Glob` (name/path patterns), `Read` (`offset`/`limit`). Plus `Bash` (read-only: `git log`, `git blame`, `ls`, `find`), `WebSearch`/`WebFetch`.
 
 ---
 
@@ -87,74 +70,49 @@ Run `jrag --help` for the canonical list. Groups (PR-JRAG-1a..4):
 | User asks… | First `jrag` command | Follow-up |
 | ---------- | -------------------- | --------- |
 | "Is the index fresh?" | `jrag status` | — |
-| Identifier-shaped string (FQN / simple name) | `jrag inspect <query>` | `callers` / `callees` |
+| Identifier (FQN / simple name) | `jrag inspect <query>` | `callers` / `callees` |
 | Fuzzy / NL "where is X" | `jrag search "<text>"` | `inspect <hit>` |
-| All controllers in service S | `jrag find --role CONTROLLER --service S` | `callees` |
-| Interfaces in service S | `jrag find --java-kind interface --service S` | `implementations` |
+| All controllers in S | `jrag find --role CONTROLLER --service S` | `callees` |
+| Interfaces in S | `jrag find --java-kind interface --service S` | `implementations` |
 | HTTP / messaging entry points | `jrag http-routes [--framework …] [--method …]` | `inspect <route>` |
 | Outbound HTTP clients | `jrag http-clients [--calls-service …]` | `callees <client>` |
 | Outbound async producers | `jrag producers [--topic-contains …]` | `callees <producer>` |
 | Topics + consumers/producers | `jrag topics [--topic-contains …]` | — |
-| Who calls method M? | `jrag callers <M>` | `inspect <caller>` |
-| What does M call? | `jrag callees <M>` | `inspect <callee>` |
+| Who calls / what does M call? | `jrag callers <M>` / `jrag callees <M>` | `inspect` |
 | Who hits this route? | `jrag callers <route>` | — |
-| Who implements interface T? | `jrag implementations <T>` | — |
-| Subtypes of class C? | `jrag subclasses <C>` | — |
-| Overriding methods? | `jrag overrides <method>` (dispatch UP) | — |
-| Methods that override me? | `jrag overridden-by <method>` | — |
-| Who injects T? | `jrag dependencies <T>` | — |
-| Who depends on T? | `jrag dependents <T>` | — |
+| Implementations / subtypes of T? | `jrag implementations <T>` / `jrag subclasses <T>` | — |
+| Overriding / overridden methods? | `jrag overrides <method>` (UP) / `jrag overridden-by <method>` | — |
+| Who injects / depends on T? | `jrag dependencies <T>` / `jrag dependents <T>` | — |
 | Blast-radius of changing X? | `jrag impact <X>` (bounded fan-in) | `Grep` fallback |
 | Trace request flow A→B | `jrag flow <route>` | `connection <A> <B>` |
-| File outline | `jrag outline <file>` | `inspect <row>` |
-| File imports | `jrag imports <file>` | — |
-| "Explain service S" | `jrag overview <service>` | `http-routes` / `http-clients` / `producers` |
+| File outline / imports | `jrag outline <file>` / `jrag imports <file>` | `inspect <row>` |
+| "Explain service S" | `jrag overview <service>` | `http-routes`/`http-clients`/`producers` |
 | "Explain route /topic" | `jrag overview <subject>` | `flow` |
-| Find files matching pattern | `Glob` | `Read` |
-| Search for text in files | `Grep` | `Read` |
+| Find files / text | `Glob` / `Grep` | `Read` |
 | Who changed X and when? | Bash: `git log`/`git blame` | — |
-| "How is this configured?" | `Glob` + `Grep` for config keys; `jrag search "<key>" --table yaml` | `Read` sections |
+| "How is this configured?" | `Glob` + `Grep`; `jrag search "<key>" --table yaml` | `Read` sections |
 
-**Escalation:** ① Most targeted command first → ② Fall back gracefully (`callers` empty → `Grep`) → ③ Cross-validate (CLI vs file disagree → **trust the file** — index may be stale).
+**Escalation:** ① Most targeted command first → ② fall back gracefully (`callers` empty → `Grep`) → ③ cross-validate (CLI vs file disagree → **trust the file** — index may be stale).
 
-**Rules of thumb:** Structure beats vector for exact questions (`find` / `inspect` + traversal); vector beats structure for fuzzy discovery (`search`); file-system beats stale index.
+**Rules of thumb:** structure beats vector for exact questions (`find`/`inspect` + traversal); vector beats structure for fuzzy discovery (`search`); file-system beats stale index.
 
 ---
 
 ## Resolve-first contract (every `<query>` command)
 
-Every `jrag` command that takes a `<query>` runs `resolve_v2` internally and maps the contract onto the envelope:
+Every `jrag` command that takes a `<query>` runs `resolve_v2` internally:
 
 | `resolve_v2` status | `jrag` behavior |
 | --- | --- |
 | `one` | Run the traversal/listing against the resolved node. |
-| `many` | Return the candidate list and stop. **No auto-pick.** Disambiguate with `--kind`, `--role`, `--fqn-contains`, etc. |
-| `none` | Emit `status: not_found` envelope (exit 2). Fall back to `search` or `Grep`. |
+| `many` | Return the candidate list and stop. **No auto-pick.** Disambiguate with `--kind`/`--role`/`--fqn-contains`/`--service`; re-run. |
+| `none` | `status: not_found` envelope (exit 0). Fall back to `search` or `Grep`. |
 
-You never need to look up a raw node ID. Pass an FQN, simple name, `sym:`/`route:`/`client:`/`producer:` id (from a prior call), route path, topic, etc.
-
-### Disambiguation flags
-
-Only `--kind` is a true resolve input (`hint_kind`). The other narrowing flags (`--role`, `--java-kind`, `--fqn-contains`, `--service`, `--module`) post-filter the resolve result client-side. If a post-filter collapses `many` → `one`, the command proceeds; if it still leaves `many`, the narrowed candidates are returned.
-
----
+Never look up a raw node ID — pass an FQN, simple name, prior `sym:`/`route:`/`client:`/`producer:` id, route path, or topic. Only `--kind` is a true resolve input; `--role`/`--java-kind`/`--fqn-contains` post-filter client-side, while `--service`/`--module` are resolve-time filters on `inspect`/`callers` and result filters elsewhere.
 
 ## Output envelope
 
-`--format` (text|json) and `--detail` (brief|normal|full) are **orthogonal**:
-`--format` picks the representation, `--detail` picks how much of each node/edge is
-shown, and **both modes honor the same detail level** through one projection seam.
-
-- Default is `text` + `normal`: a one-line-per-row listing that includes
-  `name @service module=… role=… file=… score=…` (the cheap, high-value fields).
-  `inspect` and the orientation commands default to `full` (their purpose is detail).
-- `--detail brief` reproduces the ultra-terse `name @service` line (escape hatch).
-- `--detail full` adds an indented block per row (`signature`, `annotations`,
-  `snippet` for search, `data`/`edge_summary` for inspect).
-- `--format json` emits the **projected** envelope (same field set as the text at
-  that detail level). Empty fields are dropped at every level (no `null` noise).
-
-`--format json` envelope shape (fields omitted when empty):
+`--format` (text|json) picks the representation; `--detail` (brief|normal|full) picks how much of each node/edge shows — **both honor the same detail level**. Default: `text` + `normal`. `inspect` and orientation commands default to `full`. `--format json` emits the projected envelope (empty fields dropped):
 
 ```json
 {
@@ -168,52 +126,31 @@ shown, and **both modes honor the same detail level** through one projection sea
 }
 ```
 
-- `truncated` is computed via +1-fetch on `find`/`search` (pass `--limit`, observe `truncated`, narrow or page with `--offset`); other commands emit `truncated: more results — narrow your query` when capped (no `--offset`).
-- `agent_next_actions` is a CLI-native hint list (≤5) mapping the current result's edge labels to the next `jrag` command — use it as a starting point, not a directive.
-- `file_location` is populated only on `one`-hit resolve (carries the resolved node's `filename` + `start_line`).
-
----
+`truncated` is computed via +1-fetch on `find`/`search` (use `--limit`, then `--offset`); other commands emit the `more results` message when capped. `agent_next_actions` (≤5) maps result edges to next commands — a starting point, not a directive. `file_location` populates only on `one`-hit resolve.
 
 ## Traversal direction reference
 
-`jrag` abstracts away `direction` and `edge_types` — you name the intent, it picks the edges. For reference, the mapping is:
+`jrag` abstracts away `direction`/`edge_types` — you name the intent, it picks the edges:
 
 | Intent (command) | Underlying edges |
 | --- | --- |
-| `callers` | `CALLS` direction=in |
-| `callees` | `CALLS` direction=out |
-| `hierarchy` | `EXTENDS` + `IMPLEMENTS` direction=out |
-| `implementations` | `IMPLEMENTS` direction=in |
-| `subclasses` | `EXTENDS` direction=in |
-| `overrides` | `OVERRIDES` direction=out (subtype → supertype) |
-| `overridden-by` | `OVERRIDES` direction=in (virtual `OVERRIDDEN_BY` out) |
-| `dependencies` | `INJECTS` direction=out |
-| `dependents` | `INJECTS` direction=in |
-| `impact` | bounded fan-in: `CALLS`/`INJECTS`/`IMPLEMENTS`/`EXTENDS` direction=in (depth ≤2) |
-| `flow <route>` | `trace_request_flow`: `EXPOSES`/`HTTP_CALLS`/`ASYNC_CALLS`/`CALLS` |
-| `connection A B` | bounded search over the same edge set between A and B |
+| `callers` / `callees` | `CALLS` in / out |
+| `hierarchy` | `EXTENDS` + `IMPLEMENTS`, both directions (parents + children) |
+| `implementations` / `subclasses` | `IMPLEMENTS` / `EXTENDS` in |
+| `overrides` / `overridden-by` | `OVERRIDES` out (subtype→supertype) / in |
+| `dependencies` / `dependents` | `INJECTS` out / in |
+| `impact` | bounded fan-in: `INJECTS`/`IMPLEMENTS`/`EXTENDS` in (depth ≤2) |
+| `flow <route>` | `EXPOSES`/`HTTP_CALLS`/`ASYNC_CALLS`/`CALLS` |
+| `connection A B` | bounded search over the same edge set |
 
-### Node id prefixes (from prior results)
-
-`sym:` (Symbol), `route:`/`r:` (Route), `client:`/`c:` (Client), `producer:`/`p:` (Producer). Pass these verbatim if you have them; otherwise use the human-readable name.
-
-### Symbol FQN shape
-
-`<package>.<Type>[.<NestedType>]#<methodName>(<SimpleType1>,<SimpleType2>,…)`. Generics erased, no spaces after commas. No-arg: `()`. Constructor: `#<init>(...)`.
-
----
+**Node id prefixes (from prior results):** `sym:` (Symbol), `route:`/`r:` (Route), `client:`/`c:` (Client), `producer:`/`p:` (Producer). **Symbol FQN:** `<package>.<Type>[.<NestedType>]#<methodName>(<SimpleType1>,…)` — generics erased, no spaces after commas, no-arg `()`, constructor `#<init>(...)`.
 
 ## Ontology glossary
 
 **Roles:** `CONTROLLER` | `SERVICE` | `REPOSITORY` | `COMPONENT` | `CONFIG` | `ENTITY` | `CLIENT` | `MAPPER` | `DTO` | `OTHER`.
-
 **Capabilities:** `MESSAGE_LISTENER`, `MESSAGE_PRODUCER`, `HTTP_CLIENT`, `SCHEDULED_TASK`, `EXCEPTION_HANDLER`.
-
 **Symbol kinds:** `class`, `interface`, `enum`, `record`, `annotation`, `method`, `constructor`.
-
-**Route frameworks:** `spring_mvc`, `webflux`. Route *kinds*: `http_endpoint`, `http_consumer`, `kafka_topic`, `rabbit_queue`, `jms_destination`, `stream_binding`.
-
-**Client kinds:** `feign_method`, `rest_template`, `web_client`. **Producer kinds:** `kafka_send`, `stream_bridge_send`. **Source layers (client/producer):** `builtin`, `layer_a_meta`, `layer_b_ann`, `layer_b_fqn`, `layer_c_source`.
+**Route frameworks:** `spring_mvc`/`webflux` (HTTP), `kafka`/`rabbitmq`/`jms`/`stream` (messaging), `feign` (client mirrors). Route *kinds*: `http_endpoint`, `http_consumer`, `kafka_topic`, `rabbit_queue`, `jms_destination`, `stream_binding`. **Client kinds:** `feign_method`, `rest_template`, `web_client`. **Producer kinds:** `kafka_send`, `stream_bridge_send`. **Source layers:** `builtin`, `layer_a_meta`, `layer_b_ann`, `layer_b_fqn`, `layer_c_source`.
 
 ---
 
@@ -223,29 +160,24 @@ shown, and **both modes honor the same detail level** through one projection sea
 
 | Symptom | Fix |
 | ------- | --- |
-| `status: error` "No index at …" | Run `java-codebase-rag init --source-root <root>` then retry |
-| `status: not_found` | Try `jrag search "<query>"`; or `find --fqn-contains …`; fallback `Grep` |
-| `many` candidates returned | Add `--kind`/`--role`/`--fqn-contains`/`--service`; re-run |
-| `find` returns too much | Add `--service`, `--fqn-contains`, `--path-contains`, `--topic-contains` |
-| Empty `search` | Try `--table all`; `find --fqn-contains`; `Grep` directly |
-| `truncated: true` | Narrow the query, or page with `--offset` (`find`/`search` only) |
-| Empty results across commands | Index missing/stale → `Grep`/`Glob`/`Read`; ask operator to rebuild (`java-codebase-rag reprocess`) |
+| `status: error` "No index at …" | Run `java-codebase-rag init --source-root <root>`; retry |
+| `status: not_found` | `jrag search "<query>"`; or `find --fqn-contains …`; fallback `Grep` |
+| `many` candidates | Add `--kind`/`--role`/`--fqn-contains`/`--service`; re-run |
+| `find` too broad | Add `--service`, `--fqn-contains`, `--path-contains`, `--topic-contains` |
+| Empty `search` | Try `--table all`; `find --fqn-contains`; `Grep` |
+| `truncated: true` | Narrow, or page with `--offset` (`find`/`search` only) |
+| Empty across commands | Index missing/stale → `Grep`/`Glob`/`Read`; ask operator to rebuild (`java-codebase-rag reprocess`) |
 | CLI vs file disagree | **Trust the file**; report stale index |
-| `--offset` rejected | Only `find`/`search` accept it; other commands narrow via filters |
-| Wrong node picked | Resolve must be ambiguous — pass `--kind` to narrow |
+| `--offset` rejected | Only `find`/`search` accept it; others narrow via filters |
+| Wrong node picked | Resolve ambiguous — pass `--kind` |
 
 ---
 
 ## Workflow Patterns
 
-**"Explain feature X":** `jrag search "X"` → pick 1–3 hits → `jrag inspect <hit>` → targeted traversal (`callees`/`implementations`) → stop when answered.
-
-**"Where is X used?":** `jrag inspect <X>` (resolves) → `jrag callers <X>` and `jrag dependents <X>` → `Grep` fallback → report all sites with file:line.
-
-**"Find all Y":** Structural → `jrag find --role <ROLE> [--service <S>]`. Textual → `Grep`. Broad → `Glob` + `Grep`. Summarize, don't dump.
-
-**"Trace flow from A to B":** `jrag flow <route-A>` to trace the request → `jrag connection A B` to confirm a path → `Grep` gaps → report with file:line.
-
-**"How is this configured?":** `Glob` for `**/application*.yml` → `Grep` for the key → `Read` sections → `jrag search "<key>" --table yaml` supplement.
-
-**"Orient in a new service":** `jrag overview <service>` (bundle) → `jrag conventions --service <service>` (dominant roles) → `jrag map --service <service>` (counts) → `jrag http-routes --service <service>` (entry points).
+- **"Explain feature X":** `jrag search "X"` → pick 1–3 hits → `jrag inspect <hit>` → targeted traversal (`callees`/`implementations`) → stop when answered.
+- **"Where is X used?":** `jrag inspect <X>` → `jrag callers <X>` + `jrag dependents <X>` → `Grep` fallback → report sites with file:line.
+- **"Find all Y":** structural → `jrag find --role <ROLE> [--service <S>]`; textual → `Grep`; broad → `Glob`+`Grep`. Summarize, don't dump.
+- **"Trace flow A→B":** `jrag flow <route-A>` → `jrag connection A B` → `Grep` gaps → report with file:line.
+- **"How is this configured?":** `Glob` `**/application*.yml` → `Grep` the key → `Read` sections → `jrag search "<key>" --table yaml`.
+- **"Orient in a new service":** `jrag overview <S>` → `jrag conventions --service <S>` → `jrag map --service <S>` → `jrag http-routes --service <S>`.
