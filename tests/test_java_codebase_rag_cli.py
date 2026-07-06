@@ -12,7 +12,11 @@ from pathlib import Path
 import pytest
 
 from java_codebase_rag import cli as cli_mod
-from java_codebase_rag.config import emit_legacy_env_hints_if_present, resolve_operator_config
+from java_codebase_rag.config import (
+    YAML_CONFIG_FILENAMES,
+    emit_legacy_env_hints_if_present,
+    resolve_operator_config,
+)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -172,6 +176,71 @@ def test_erase_removes_increment_marker_and_hash_store_tmp(tmp_path: Path) -> No
     assert not (idx / ".graph_hashes.json.tmp").exists(), (
         "erase left .graph_hashes.json.tmp orphan (#350)"
     )
+
+
+def test_erase_removes_config_source_pointer(tmp_path: Path) -> None:
+    """erase must clear the operator-owned ``config_source`` pointer.
+
+    The pointer is written by init/reprocess/increment/install/update (not the
+    graph builder), so erase removes it via ``OPERATOR_OWNED_INDEX_FILES`` rather
+    than ``BUILDER_OWNED_INDEX_FILES``. A stale pointer surviving erase would let
+    a later discovery run from a sibling cwd relocate a YAML for an index that no
+    longer exists — defeating erase's "clean slate".
+    """
+    idx = tmp_path / "erase_pointer"
+    idx.mkdir()
+    (idx / "code_graph.lbug").write_bytes(b"fake-kuzu-db")
+    (idx / "config_source").write_text(
+        str(tmp_path / ".java-codebase-rag.yml") + "\n", encoding="utf-8"
+    )
+    env = os.environ.copy()
+    env["JAVA_CODEBASE_RAG_INDEX_DIR"] = str(idx)
+    env["JAVA_CODEBASE_RAG_SOURCE_ROOT"] = str(tmp_path)
+    proc = _run_cli(
+        ["erase", "--source-root", str(tmp_path), "--index-dir", str(idx), "--yes"],
+        env=env,
+    )
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert not (idx / "config_source").exists(), (
+        "erase left config_source pointer; discovery could relocate a stale YAML"
+    )
+
+
+def test_pipeline_progress_writes_config_source_on_success_skips_on_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """_run_with_pipeline_progress records the pointer on code==0, skips on failure.
+
+    Covers the actual CLI write hook (not just the helper). Uses the non-TTY
+    (--quiet) branch so no Live region is needed; the TTY branch calls the same
+    ``_maybe_record_config_source`` helper from its ``finally``.
+    """
+    monkeypatch.delenv("JAVA_CODEBASE_RAG_INDEX_DIR", raising=False)
+    monkeypatch.delenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", raising=False)
+    (tmp_path / YAML_CONFIG_FILENAMES[0]).write_text("source_root: .\n", encoding="utf-8")
+    cfg = resolve_operator_config(source_root=tmp_path)
+    pointer = cfg.index_dir / "config_source"
+
+    # Success -> pointer written with the YAML's absolute path.
+    code = cli_mod._run_with_pipeline_progress(
+        "init", cfg, quiet=True, verbose=False, work=lambda progress: 0
+    )
+    assert code == 0
+    assert pointer.exists()
+    assert Path(pointer.read_text().strip()) == (tmp_path / YAML_CONFIG_FILENAMES[0]).resolve()
+
+    # Failure -> pointer not (re)written; the success pointer is left in place
+    # (erase owns removal), but a fresh failure on a clean dir writes nothing.
+    pointer.unlink()
+    fresh_idx = tmp_path / "fresh"
+    fresh_idx.mkdir()
+    fresh_cfg = resolve_operator_config(source_root=tmp_path, cli_index_dir=str(fresh_idx))
+    fresh_pointer = fresh_cfg.index_dir / "config_source"
+    code = cli_mod._run_with_pipeline_progress(
+        "init", fresh_cfg, quiet=True, verbose=False, work=lambda progress: 1
+    )
+    assert code == 1
+    assert not fresh_pointer.exists(), "failure must not record a config pointer"
 
 
 def test_embedding_model_precedence_cli_over_env_over_yaml_over_default(

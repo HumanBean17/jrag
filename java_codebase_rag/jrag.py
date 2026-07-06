@@ -1101,6 +1101,10 @@ def _resolve_cfg(args: argparse.Namespace):  # type: ignore[no-untyped-def]
     applies CLI ``--index-dir`` if given, and calls ``apply_to_os_environ`` so
     downstream modules see a consistent env (critically: SBERT_MODEL for
     ``jrag search`` in PR-JRAG-4).
+
+    When the anchor is an index dir with no YAML beside it, resolution follows
+    that index's ``config_source`` pointer (see ``config._effective_config_dir``)
+    so a config living in a sibling dir is still found from inside a microservice.
     """
     from java_codebase_rag.config import discover_project_root, resolve_operator_config
 

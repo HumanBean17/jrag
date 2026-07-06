@@ -2,9 +2,13 @@
 
 from pathlib import Path
 from java_codebase_rag.config import (
-    discover_project_root,
+    CONFIG_SOURCE_FILENAME,
     YAML_CONFIG_FILENAMES,
+    _config_dir_from_pointer,
+    _effective_config_dir,
+    discover_project_root,
     resolve_operator_config,
+    write_config_source_pointer,
 )
 
 
@@ -502,3 +506,196 @@ def test_cocoindex_subprocess_env_defaults_uses_real_inflight_env_var() -> None:
     assert defaults["COCOINDEX_MAX_INFLIGHT_COMPONENTS"] == "256"
     # The bogus name from the broken #293 fix must NOT leak back in.
     assert "COCOINDEX_SOURCE_MAX_INFLIGHT_ROWS" not in defaults
+
+
+class TestConfigSourcePointer:
+    """Index-dir ``config_source`` pointer lets a YAML in a sibling dir be found.
+
+    Walk-up discovery is ancestor-only, so a config in a sibling dir (e.g.
+    ``project-context/`` beside the Java tree) is invisible from inside a
+    microservice. The index dir remembers its YAML via ``config_source``;
+    ``_effective_config_dir`` follows it and rebases ``config_dir`` so YAML-
+    relative fields (``index_dir``, ``source_root``, ``embedding.model``)
+    resolve against the YAML's home, not the index-dir anchor.
+    """
+
+    @staticmethod
+    def _sibling_layout(tmp_path: Path) -> dict:
+        """The user's monorepo shape: config beside, not inside, the Java tree."""
+        root = tmp_path
+        ctx = root / "project-context"
+        ctx.mkdir()
+        (ctx / YAML_CONFIG_FILENAMES[0]).write_text(
+            "source_root: ../\nindex_dir: ../.java-codebase-rag\n"
+            "microservice_roots: [microservice-a]\n"
+        )
+        idx = root / ".java-codebase-rag"
+        idx.mkdir()
+        (idx / "code_graph.lbug").write_bytes(b"\x00" * 16)
+        micro = root / "microservice-a" / "src" / "main" / "java"
+        micro.mkdir(parents=True)
+        return {
+            "root": root,
+            "ctx": ctx,
+            "yaml": ctx / YAML_CONFIG_FILENAMES[0],
+            "idx": idx,
+            "micro": micro,
+        }
+
+    # --- _config_dir_from_pointer unit behaviour ---
+
+    def test_pointer_returns_yaml_dir(self, tmp_path):
+        idx = tmp_path / ".java-codebase-rag"
+        idx.mkdir()
+        (idx / "code_graph.lbug").write_bytes(b"\x00")
+        sibling = tmp_path / "ctx"
+        sibling.mkdir()
+        yaml = sibling / YAML_CONFIG_FILENAMES[0]
+        yaml.write_text("source_root: ../\n")
+        write_config_source_pointer(index_dir=idx, yaml_config_path=yaml)
+        assert _config_dir_from_pointer(tmp_path) == sibling.resolve()
+
+    def test_pointer_missing_returns_none(self, tmp_path):
+        idx = tmp_path / ".java-codebase-rag"
+        idx.mkdir()
+        (idx / "code_graph.lbug").write_bytes(b"\x00")
+        assert _config_dir_from_pointer(tmp_path) is None
+
+    def test_pointer_stale_target_returns_none(self, tmp_path):
+        idx = tmp_path / ".java-codebase-rag"
+        idx.mkdir()
+        (idx / "code_graph.lbug").write_bytes(b"\x00")
+        (idx / CONFIG_SOURCE_FILENAME).write_text(str(tmp_path / "gone.yml") + "\n")
+        assert _config_dir_from_pointer(tmp_path) is None
+
+    def test_pointer_wrong_target_name_returns_none(self, tmp_path):
+        idx = tmp_path / ".java-codebase-rag"
+        idx.mkdir()
+        (idx / "code_graph.lbug").write_bytes(b"\x00")
+        wrong = tmp_path / "not-a-config.txt"
+        wrong.write_text("nope")
+        (idx / CONFIG_SOURCE_FILENAME).write_text(str(wrong) + "\n")
+        assert _config_dir_from_pointer(tmp_path) is None
+
+    # --- _effective_config_dir precedence ---
+
+    def test_direct_yaml_wins_over_pointer(self, tmp_path):
+        (tmp_path / YAML_CONFIG_FILENAMES[0]).write_text("source_root: .\n")
+        idx = tmp_path / ".java-codebase-rag"
+        idx.mkdir()
+        (idx / "code_graph.lbug").write_bytes(b"\x00")
+        sibling = tmp_path / "ctx"
+        sibling.mkdir()
+        other = sibling / YAML_CONFIG_FILENAMES[0]
+        other.write_text("source_root: .\n")
+        write_config_source_pointer(index_dir=idx, yaml_config_path=other)
+        # Direct YAML at tmp_path wins; the sibling pointer is ignored.
+        assert _effective_config_dir(tmp_path) == tmp_path
+
+    def test_effective_dir_falls_back_to_anchor_when_no_yaml_or_pointer(self, tmp_path):
+        assert _effective_config_dir(tmp_path) == tmp_path
+
+    # --- end-to-end via resolve_operator_config ---
+
+    def test_resolve_via_pointer_index_dir_is_tree_index(self, tmp_path, monkeypatch):
+        """REGRESSION: index_dir resolves to <tree>/.java-codebase-rag, not
+        <tree>.parent/.java-codebase-rag. Without the config_dir rebase, the YAML's
+        ``index_dir: ../.java-codebase-rag`` would resolve against the index-dir
+        anchor and overshoot by one level — a silent wrong-store bug."""
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_INDEX_DIR", raising=False)
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", raising=False)
+        lay = self._sibling_layout(tmp_path)
+        write_config_source_pointer(index_dir=lay["idx"], yaml_config_path=lay["yaml"])
+        monkeypatch.chdir(lay["micro"])
+        # jrag path: explicit source_root = the discovered index-dir anchor.
+        cfg = resolve_operator_config(source_root=discover_project_root(Path.cwd()))
+        assert cfg.source_root == lay["root"].resolve()
+        assert cfg.index_dir == lay["idx"].resolve()
+        # The exact overshoot the rebase prevents:
+        assert cfg.index_dir != (lay["root"].parent / ".java-codebase-rag").resolve()
+        assert cfg.yaml_config_path == lay["yaml"].resolve()
+
+    def test_discovery_via_pointer_from_microservice_cwd(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_INDEX_DIR", raising=False)
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", raising=False)
+        lay = self._sibling_layout(tmp_path)
+        write_config_source_pointer(index_dir=lay["idx"], yaml_config_path=lay["yaml"])
+        monkeypatch.chdir(lay["micro"])
+        cfg = resolve_operator_config(source_root=None)
+        assert cfg.source_root == lay["root"].resolve()
+        assert cfg.index_dir == lay["idx"].resolve()
+        assert cfg.yaml_config_path == lay["yaml"].resolve()
+
+    def test_no_pointer_falls_back_to_defaults(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_INDEX_DIR", raising=False)
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", raising=False)
+        lay = self._sibling_layout(tmp_path)
+        monkeypatch.chdir(lay["micro"])
+        cfg = resolve_operator_config(source_root=None)
+        assert cfg.yaml_config_path is None
+        # Default <source_root>/.java-codebase-rag still lands on the anchor's
+        # index by coincidence (the pre-feature behaviour) — no crash.
+        assert cfg.index_dir == lay["idx"].resolve()
+
+    def test_round_trip_write_then_resolve(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_INDEX_DIR", raising=False)
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", raising=False)
+        lay = self._sibling_layout(tmp_path)
+        # init-style resolve from the config dir, then record the pointer.
+        monkeypatch.chdir(lay["ctx"])
+        cfg = resolve_operator_config(source_root=None)
+        write_config_source_pointer(
+            index_dir=cfg.index_dir, yaml_config_path=cfg.yaml_config_path
+        )
+        # Resolving from the microservice cwd lands identically.
+        monkeypatch.chdir(lay["micro"])
+        cfg2 = resolve_operator_config(source_root=discover_project_root(Path.cwd()))
+        assert cfg2.index_dir == cfg.index_dir
+        assert cfg2.source_root == cfg.source_root
+        assert cfg2.yaml_config_path == cfg.yaml_config_path
+
+    # --- issue #357: a stray pointer at $HOME must not hijack discovery ---
+
+    def test_stray_pointer_at_home_does_not_hijack(self, tmp_path, monkeypatch):
+        fake_home = tmp_path / "fake-home"
+        fake_home.mkdir()
+        stray_idx = fake_home / ".java-codebase-rag"
+        stray_idx.mkdir()
+        (stray_idx / "code_graph.lbug").write_bytes(b"\x00")
+        sibling = fake_home / "ctx"
+        sibling.mkdir()
+        (sibling / YAML_CONFIG_FILENAMES[0]).write_text("source_root: .\n")
+        write_config_source_pointer(
+            index_dir=stray_idx, yaml_config_path=sibling / YAML_CONFIG_FILENAMES[0]
+        )
+        monkeypatch.setenv("HOME", str(fake_home))
+        monkeypatch.setenv("USERPROFILE", str(fake_home))
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        (proj / YAML_CONFIG_FILENAMES[0]).write_text("source_root: .\n")
+        monkeypatch.chdir(proj)
+        # Discovery anchors on the real project, never on the fake $HOME index.
+        assert discover_project_root(Path.cwd()) == proj.resolve()
+        assert _effective_config_dir(proj.resolve()) == proj.resolve()
+
+    # --- write helper ---
+
+    def test_write_pointer_noop_when_no_yaml(self, tmp_path):
+        idx = tmp_path / ".java-codebase-rag"
+        idx.mkdir()
+        write_config_source_pointer(index_dir=idx, yaml_config_path=None)
+        assert not (idx / CONFIG_SOURCE_FILENAME).exists()
+
+    def test_write_pointer_creates_index_dir_writes_absolute_path(self, tmp_path):
+        idx = tmp_path / ".java-codebase-rag"
+        yaml = tmp_path / YAML_CONFIG_FILENAMES[0]
+        yaml.write_text("source_root: .\n")
+        write_config_source_pointer(index_dir=idx, yaml_config_path=yaml)
+        # index_dir was created; content is an absolute path + newline.
+        content = (idx / CONFIG_SOURCE_FILENAME).read_text()
+        assert content.endswith("\n")
+        written = Path(content.strip())
+        assert written.is_absolute()
+        assert written == yaml.resolve()
+        # Atomic write left no .tmp behind.
+        assert not (idx / (CONFIG_SOURCE_FILENAME + ".tmp")).exists()

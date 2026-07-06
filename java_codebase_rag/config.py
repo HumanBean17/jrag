@@ -18,6 +18,18 @@ SettingSource = Literal["cli", "env", "yaml", "default"]
 YAML_CONFIG_FILENAMES = (".java-codebase-rag.yml", ".java-codebase-rag.yaml")
 LEGACY_YAML_FILENAMES = (".lancedb-mcp.yml", ".lancedb-mcp.yaml")
 
+# Pointer file written into the index dir at index time so discovery can locate
+# a YAML that does not sit beside the index-dir anchor — e.g. a config living in
+# a sibling ``project-context/`` dir when the agent's cwd is inside a
+# microservice (a descendant of the index anchor, a sibling of the config).
+# Contains one line: the absolute path of the YAML used to build the index. A
+# direct YAML at the anchor always wins; the pointer only fires when the anchor
+# has no YAML beside it (see ``_effective_config_dir``).
+CONFIG_SOURCE_FILENAME = "config_source"
+# Operator-owned files inside the index dir that ``erase`` removes. Kept separate
+# from ``build_ast_graph.BUILDER_OWNED_INDEX_FILES`` (builder-owned artifacts).
+OPERATOR_OWNED_INDEX_FILES = (CONFIG_SOURCE_FILENAME,)
+
 ENV_INDEX_DIR = "JAVA_CODEBASE_RAG_INDEX_DIR"
 # Public operator contract is six names: INDEX_DIR, DEBUG_CONTEXT, RUN_HEAVY, SBERT_MODEL, SBERT_DEVICE, HINTS_ENABLED.
 # SOURCE_ROOT is still required for MCP / subprocess Java tree resolution (see mcp.json.example); it is not folded into the headline "5".
@@ -234,6 +246,61 @@ def discover_project_root(start: Path) -> Path | None:
         current = parent
 
 
+_stale_pointer_seen: set[str] = set()
+
+
+def _config_dir_from_pointer(anchor: Path) -> Path | None:
+    """Return the YAML config dir recorded in the index dir's ``config_source`` pointer.
+
+    Reads ``<anchor>/.java-codebase-rag/config_source`` (one absolute path). If it
+    names an existing ``.java-codebase-rag.yml`` / ``.yaml``, returns that file's
+    parent directory; otherwise (missing/blank/stale) returns ``None``. Used only
+    when the anchor has no direct YAML — see :func:`_effective_config_dir`.
+    """
+    pointer = anchor / ".java-codebase-rag" / CONFIG_SOURCE_FILENAME
+    if not pointer.is_file():
+        return None
+    try:
+        raw = pointer.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not raw:
+        return None
+    target = Path(raw).expanduser()
+    if not target.is_absolute():
+        # Relative to the anchor (the index-dir parent), not the pointer file.
+        target = (anchor / target).resolve()
+    if not target.is_file() or target.name not in YAML_CONFIG_FILENAMES:
+        key = str(pointer.resolve())
+        if key not in _stale_pointer_seen:
+            _stale_pointer_seen.add(key)
+            print(
+                "java-codebase-rag: ignoring stale index pointer "
+                f"{pointer} -> {raw} (target missing or not a config file).",
+                file=sys.stderr,
+            )
+        return None
+    return target.parent
+
+
+def _effective_config_dir(config_dir: Path) -> Path:
+    """Resolve the directory YAML config fields are relative to.
+
+    A direct ``.java-codebase-rag.yml`` / ``.yaml`` in ``config_dir`` always wins.
+    Otherwise, if ``config_dir`` hosts the ``.java-codebase-rag/`` index dir and
+    that index remembers its config via a ``config_source`` pointer, follow it to
+    the YAML's directory. This lets a config in a sibling dir (e.g.
+    ``project-context/`` beside the Java tree) be found when discovery anchors on
+    the index dir from inside a microservice — without an env var or flag, and
+    with YAML-relative fields (``index_dir``, ``source_root``, ``embedding.model``)
+    resolving against the YAML's home rather than the index anchor. Falls back to
+    ``config_dir`` unchanged when neither applies.
+    """
+    if find_yaml_config_file(config_dir) is not None:
+        return config_dir
+    return _config_dir_from_pointer(config_dir) or config_dir
+
+
 def load_yaml_mapping(source_root: Path) -> dict[str, Any]:
     path = find_yaml_config_file(source_root)
     if path is None:
@@ -272,6 +339,10 @@ class ResolvedOperatorConfig:
     embedding_model_source: SettingSource
     embedding_device_source: SettingSource
     hints_enabled_source: SettingSource
+    # Absolute path of the YAML actually loaded (None when built-in defaults were
+    # used with no config file). Recorded into the index dir at index time so a
+    # later discovery run from a sibling/cwd can relocate this config.
+    yaml_config_path: Path | None = None
 
     def apply_to_os_environ(self) -> None:
         """Make downstream modules (server, ladybug_queries, flows) see a consistent environment.
@@ -411,21 +482,26 @@ def resolve_operator_config(
     # Phase 1: Find the config file directory
     if source_root is not None:
         # CLI flag provided: use it as both config_dir and effective source_root
-        # (skip YAML source_root check - CLI wins)
+        # (skip YAML source_root check - CLI wins). ``_effective_config_dir`` may
+        # rebase config_dir to a YAML reached via the index-dir pointer; root is
+        # untouched (explicit source_root wins).
         root = source_root.expanduser().resolve()
-        config_dir = root
+        config_dir = _effective_config_dir(root)
         yaml_dict = load_yaml_mapping(config_dir)
     else:
         # Check env var first
         env_raw = os.environ.get(ENV_SOURCE_ROOT, "").strip()
         if env_raw:
             root = Path(env_raw).expanduser().resolve()
-            config_dir = root
+            config_dir = _effective_config_dir(root)
             yaml_dict = load_yaml_mapping(config_dir)
         else:
             # Walk up to find config dir
             discovered = discover_project_root(Path.cwd())
             config_dir = discovered if discovered is not None else Path.cwd().resolve()
+            # Follow an index-dir pointer to the real config dir when the anchor
+            # has no YAML beside it (e.g. config in a sibling dir).
+            config_dir = _effective_config_dir(config_dir)
             # Load YAML from config dir
             yaml_dict = load_yaml_mapping(config_dir)
 
@@ -479,7 +555,33 @@ def resolve_operator_config(
         embedding_model_source=model_src,
         embedding_device_source=device_src,
         hints_enabled_source=hints_src,
+        yaml_config_path=find_yaml_config_file(config_dir),
     )
+
+
+def write_config_source_pointer(
+    *, index_dir: Path, yaml_config_path: Path | None
+) -> None:
+    """Record the YAML config path inside the index dir (best-effort).
+
+    Writes ``<index_dir>/config_source`` with the YAML's absolute path so a later
+    discovery run that anchors on the index dir (but has no YAML beside it) can
+    relocate the config via :func:`_effective_config_dir`. No-op when
+    ``yaml_config_path`` is None (pure-default build — nothing to remember). Never
+    raises: the pointer is an optimization, not a correctness requirement — a
+    missing/unreadable pointer just falls back to built-in defaults.
+    """
+    if yaml_config_path is None:
+        return
+    try:
+        index_dir.mkdir(parents=True, exist_ok=True)
+        content = str(yaml_config_path.resolve()) + "\n"
+        target = index_dir / CONFIG_SOURCE_FILENAME
+        tmp = index_dir / (CONFIG_SOURCE_FILENAME + ".tmp")
+        tmp.write_text(content, encoding="utf-8")
+        os.replace(tmp, target)
+    except OSError:
+        pass
 
 
 def index_dir_has_existing_artifacts(index_dir: Path) -> tuple[bool, list[str]]:

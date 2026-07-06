@@ -1,6 +1,10 @@
 """Tests for server.py _project_root() function in the MCP server context."""
 
-from java_codebase_rag.config import YAML_CONFIG_FILENAMES, resolve_operator_config
+from java_codebase_rag.config import (
+    YAML_CONFIG_FILENAMES,
+    resolve_operator_config,
+    write_config_source_pointer,
+)
 
 
 class TestProjectRoot:
@@ -78,4 +82,45 @@ class TestSourceRootForOperatorConfig:
         assert mcp.index_dir == (tmp_path / ".java-codebase-rag").resolve()
         assert mcp.source_root == cli.source_root
         assert mcp.index_dir == cli.index_dir
+
+    def test_mcp_and_init_resolve_identically_via_pointer(self, tmp_path, monkeypatch):
+        """MCP/CLI parity when the config is reached via the index-dir pointer.
+
+        Config lives in a SIBLING dir (``my-project-context/``) of the Java tree;
+        the agent's cwd is inside a microservice. Walk-up anchors on the index dir
+        at ``tmp_path``; the ``config_source`` pointer rebases config_dir to the
+        sibling YAML. The MCP server (env unset) and the CLI must still resolve the
+        SAME source_root and index_dir — and that index_dir is the real tree index,
+        not ``tmp_path.parent/.java-codebase-rag`` (the overshoot the rebase fixes).
+        """
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", raising=False)
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_INDEX_DIR", raising=False)
+
+        config_dir = tmp_path / "my-project-context"
+        config_dir.mkdir()
+        (config_dir / YAML_CONFIG_FILENAMES[0]).write_text(
+            "source_root: ../\nindex_dir: ../.java-codebase-rag\n"
+        )
+        idx = tmp_path / ".java-codebase-rag"
+        idx.mkdir()
+        (idx / "code_graph.lbug").write_bytes(b"\x00" * 16)
+        write_config_source_pointer(
+            index_dir=idx, yaml_config_path=config_dir / YAML_CONFIG_FILENAMES[0]
+        )
+        microservice = tmp_path / "microservice-a" / "src"
+        microservice.mkdir(parents=True)
+        monkeypatch.chdir(microservice)
+
+        from server import _source_root_for_operator_config
+
+        mcp = resolve_operator_config(source_root=_source_root_for_operator_config())
+        cli = resolve_operator_config(source_root=None)
+
+        assert mcp.source_root == tmp_path.resolve()
+        assert mcp.index_dir == idx.resolve()
+        # The rebase prevents overshooting to tmp_path.parent.
+        assert mcp.index_dir != (tmp_path.parent / ".java-codebase-rag").resolve()
+        assert mcp.source_root == cli.source_root
+        assert mcp.index_dir == cli.index_dir
+        assert mcp.yaml_config_path == (config_dir / YAML_CONFIG_FILENAMES[0]).resolve()
 
