@@ -22,10 +22,14 @@ import os
 import sys
 from pathlib import Path
 import threading
-from typing import Annotated, Any, Literal, get_args
+from typing import Annotated, Any, Literal, TYPE_CHECKING, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, model_validator, validate_call
-from sentence_transformers import SentenceTransformer
+
+if TYPE_CHECKING:
+    # Eager import would pull torch at module load. The vector stack is optional (graph-only
+    # installs ship without torch/lancedb); it is imported lazily in _get_sentence_transformer.
+    from sentence_transformers import SentenceTransformer
 
 from graph_types import (
     NodeRef,
@@ -41,8 +45,17 @@ from java_codebase_rag.config import resolved_sbert_model_for_process_env
 from java_ontology import EDGE_SCHEMA
 from ladybug_queries import LadybugGraph, OVERRIDE_AXIS_COMPOSED_EDGE_TYPES
 from mcp_hints import MCP_HINTS_STRUCTURED_FIELD_DESCRIPTION
-from search_lancedb import TABLES, run_search
 
+# The vector stack (lancedb/torch, reached via search_lancedb) is optional — it is absent on
+# graph-only installs (macOS Intel). Import eagerly when available so ``run_search``/``TABLES``
+# exist as module attributes (tests monkeypatch ``mcp_v2.run_search``; callers use ``TABLES``);
+# fall back to sentinels on ImportError so importing this module never fails and ``search_v2``
+# can return a clean "vector search unavailable" envelope instead of crashing.
+try:
+    from search_lancedb import TABLES, run_search
+except ImportError:  # graph-only install: no torch/lancedb
+    TABLES = {}
+    run_search = None
 __all__ = [
     "search_v2",
     "find_v2",
@@ -158,6 +171,8 @@ def filter_frame_counters() -> dict[str, int]:
 
 def _get_sentence_transformer(model_name: str, device: str | None) -> SentenceTransformer:
     global _st_model
+    from sentence_transformers import SentenceTransformer
+
     with _st_lock:
         if _st_model is None:
             _st_model = SentenceTransformer(
@@ -827,6 +842,16 @@ def search_v2(
         if nf and (err := _nodefilter_applicability_error("symbol", nf)):
             _log_fail_loud("applicability")
             return SearchOutput(success=False, message=err, advisories=[], limit=None, offset=None)
+        if run_search is None:
+            # Graph-only install (no torch/lancedb): the vector stack is absent. Return a
+            # clean failure rather than crashing so the server keeps serving graph tools.
+            return SearchOutput(
+                success=False,
+                message="Vector search unavailable: graph-only mode (vector stack not installed).",
+                advisories=[],
+                limit=None,
+                offset=None,
+            )
         model_name = resolved_sbert_model_for_process_env(SBERT_MODEL)
         device = os.environ.get("SBERT_DEVICE") or None
         model = _get_sentence_transformer(model_name, device)

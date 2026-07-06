@@ -1,0 +1,80 @@
+"""Graph-only boot: the MCP server must start and serve graph tools without the vector
+stack (lancedb/torch/sentence-transformers/cocoindex), which is the macOS Intel reality.
+
+We simulate that install by pre-seeding ``sys.modules[<name>] = None`` in a fresh
+subprocess, which makes ``import <name>`` raise ``ModuleNotFoundError``. This runs on any
+platform (no uninstall needed) and proves the lazy-import seam in ``server.py``/``mcp_v2.py``.
+"""
+from __future__ import annotations
+
+import subprocess
+import sys
+import textwrap
+
+from java_codebase_rag.pipeline import is_cocoindex_preflight_blocker
+
+# Absent on a graph-only install. Pre-seeding with None forces ImportError on import.
+_VECTOR_MODULES = ("lancedb", "pylance", "torch", "sentence_transformers", "cocoindex")
+
+_BOOT_SCRIPT = textwrap.dedent(
+    """
+    import asyncio
+    import sys
+
+    for _m in {modules!r}:
+        sys.modules[_m] = None  # force ImportError on import
+
+    import server  # must not pull the vector stack at module load
+    srv = server.create_mcp_server()  # registers tools + runs ScopeManager setup
+
+    loaded = [m for m in {vector!r} if sys.modules.get(m) is not None]
+    tools = sorted(t.name for t in asyncio.run(srv.list_tools()))
+    from mcp_v2 import search_v2
+    out = search_v2(query="x")
+    print("TOOLS:" + ",".join(tools))
+    print("LOADED_AT_BOOT:" + (",".join(loaded) or "none"))
+    print("SEARCH_SUCCESS:" + str(out.success))
+    print("SEARCH_MSG:" + str(out.message))
+    """
+)
+
+
+def _run_graph_only_boot() -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, "-c", _BOOT_SCRIPT.format(modules=_VECTOR_MODULES, vector=_VECTOR_MODULES)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+
+def test_server_boots_and_serves_graph_tools_without_vector_stack() -> None:
+    proc = _run_graph_only_boot()
+    assert proc.returncode == 0, f"graph-only boot failed:\nstdout={proc.stdout}\nstderr={proc.stderr}"
+
+    out = proc.stdout
+    # All five tools register; `search` is present but degrades at call time (below).
+    assert "TOOLS:describe,find,neighbors,resolve,search" in out
+    # None of the vector modules may be imported during boot.
+    assert "LOADED_AT_BOOT:none" in out
+    # The search tool returns a clean failure rather than raising.
+    assert "SEARCH_SUCCESS:False" in out
+    assert "Vector search unavailable" in out
+
+
+def _completed(returncode: int, args: tuple[str, ...]) -> subprocess.CompletedProcess[str]:
+    return subprocess.CompletedProcess(args=list(args), returncode=returncode, stdout="", stderr="")
+
+
+def test_preflight_blocker_detects_graph_only_install() -> None:
+    # The detector drives init/increment/install/update's "skip vectors, build graph"
+    # branch. It must recognize the two pre-spawn stubs (cocoindex binary missing on a
+    # graph-only install; flow file missing) and NOT mistake a real cocoindex run for one.
+    exe = "/example/.venv/bin/cocoindex"
+
+    assert is_cocoindex_preflight_blocker(_completed(127, (exe,))) is True   # binary absent
+    assert is_cocoindex_preflight_blocker(_completed(126, ())) is True        # flow file absent
+    # A real cocoindex invocation carries the full command list (len(args) > 1): a genuine
+    # non-zero exit is a failure, not a skip.
+    assert is_cocoindex_preflight_blocker(_completed(1, (exe, "update", "t", "-f"))) is False
+    assert is_cocoindex_preflight_blocker(_completed(0, (exe, "update", "t", "-f"))) is False

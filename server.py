@@ -26,7 +26,8 @@ from java_codebase_rag.config import (
 from ladybug_queries import LadybugGraph, resolve_ladybug_path
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
-from search_lancedb import TABLES
+# NOTE: search_lancedb.TABLES is imported lazily in list_code_index_tables_payload() — it
+# pulls lancedb/torch and is unavailable on graph-only installs (macOS Intel).
 
 _COCOINDEX_TARGET = "java_index_flow_lancedb.py:JavaCodeIndexLance"
 _INSTRUCTIONS = (
@@ -296,12 +297,19 @@ def _graph_meta_output() -> GraphMetaOutput:
 
 
 def list_code_index_tables_payload() -> IndexInfoOutput:
+    try:
+        from search_lancedb import TABLES
+
+        tables = dict(TABLES)
+    except ImportError:
+        # Graph-only install (no lancedb): no Lance vector tables exist.
+        tables = {}
     return IndexInfoOutput(
         lancedb_uri=_resolve_lancedb_uri(),
         embedding_model=resolved_sbert_model_for_process_env(SBERT_MODEL),
         project_root=str(_project_root()),
         cocoindex_target=_COCOINDEX_TARGET,
-        tables=dict(TABLES),
+        tables=tables,
         graph=_graph_meta_output(),
     )
 
