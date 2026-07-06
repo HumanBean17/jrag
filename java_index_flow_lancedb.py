@@ -112,6 +112,38 @@ _NUM_TXN_BEFORE_OPTIMIZE = 10**12
 # parent clamps to total on the terminal event anyway).
 _VECTORS_TICK_EVERY = 25
 
+# Bounded concurrency for the per-file drain in app_main. cocoindex's embedder
+# is ``@coco.fn.as_async(batching=True, runner=GPU, max_batch_size=64)`` — but
+# its batching layer only coalesces calls that are in flight SIMULTANEOUSLY. A
+# serial ``async for … await`` loop keeps just one file's chunks (avg 1–3) in
+# flight, so real batches stay tiny and MPS idles between them (measured ~138
+# chunks/s vs the ~235 chunks/s ceiling at batch=64 for all-MiniLM-L6-v2).
+# Draining many files at once with a semaphore puts their chunks in flight
+# together → the embedder coalesces them into full batches → MPS climbs toward
+# the ceiling. Measured on Shopizer (1167 files / 3475 chunks): full init drops
+# from ~46.7s (serial) to ~36.0s (32) / ~34.3s (64), with identical row output.
+#
+# This stays inside ONE component, so the earlier mount_each→app_main win is
+# preserved: still exactly ONE merge_insert per table at commit. Memoization
+# (``@coco.fn(memo=True)``) and the lock-guarded tick counter are safe under
+# concurrency; ``parse_java`` uses a per-thread tree-sitter Parser (already
+# routed via ``asyncio.to_thread``) and ``splitter.split`` is synchronous so the
+# event loop cannot reenter it.
+#
+# Default 64 is sized to MATCH the embedder's hardcoded max_batch_size=64 (the
+# decorator above; not a constructor arg, so not raisable from the flow): ~64
+# files in flight reliably fills a 64-chunk batch and saturates MPS. Going higher
+# buys nothing — the batch is already capped — and lower underfills it. Memory
+# is NOT the limiting factor here: cocoindex buffers ALL staged rows until the
+# single final merge_insert regardless of concurrency, so peak RSS is set by
+# total chunk count (the commit buffer), not by how many files process at once.
+# Set to ``1`` for the old serial behavior; raise/lower only if you have also
+# changed the effective batch size or are constraining the commit buffer itself.
+_FILE_CONCURRENCY = max(
+    1,
+    int(os.environ.get("JAVA_CODEBASE_RAG_FILE_CONCURRENCY", "64") or "64"),
+)
+
 # Thread-safe counter: cocoindex may call process_*_file concurrently
 # (mount_each parallelism is implementation-defined). A module-level lock guards
 # both the counter and the emission so two threads never interleave a tick.
@@ -533,6 +565,29 @@ async def process_yaml_file(
         )
 
 
+async def _drain_files_concurrently(
+    files: Any, process_fn: Any, table: Any, sem: asyncio.Semaphore
+) -> None:
+    """Run ``process_fn(file, table)`` over every file with bounded concurrency.
+
+    Replaces the serial ``async for … await process_*_file`` loop so the
+    embedder's batching layer sees many files' chunks in flight at once (see
+    ``_FILE_CONCURRENCY``). Materializes the async iterable up front — file
+    handles are lightweight and cocoindex already realized the collection when
+    the walker mounted, so this is not a second walk. An empty collection is a
+    no-op (e.g. SQL/YAML tables on a repo with none).
+    """
+    items = [f async for _, f in files.items()]
+    if not items:
+        return
+
+    async def _one(_file: Any) -> None:
+        async with sem:
+            await process_fn(_file, table)
+
+    await asyncio.gather(*(_one(f) for f in items))
+
+
 @coco.fn
 async def app_main() -> None:
     java_schema = await lancedb.TableSchema.from_class(
@@ -646,12 +701,17 @@ async def app_main() -> None:
     # unchanged files still skip re-embedding on incremental; _RowHandler.
     # reconcile skips rows whose fingerprint is unchanged → increment carries
     # only changed rows in its single merge_insert.
-    async for _key, _file in java_files.items():
-        await process_java_file(_file, java_table)
-    async for _key, _file in sql_files.items():
-        await process_sql_file(_file, sql_table)
-    async for _key, _file in yaml_files.items():
-        await process_yaml_file(_file, yaml_table)
+    #
+    # PERF (concurrency): drain files with a bounded semaphore instead of a
+    # serial ``async for … await``. See ``_FILE_CONCURRENCY`` — this is what
+    # lets the embedder's batching layer fill real batches (embedding dominates
+    # init cost, and serial files starve it). One shared semaphore bounds total
+    # in-flight work; tables are drained in order (java dominates, sql/yaml are
+    # usually near-empty).
+    _sem = asyncio.Semaphore(_FILE_CONCURRENCY)
+    await _drain_files_concurrently(java_files, process_java_file, java_table, _sem)
+    await _drain_files_concurrently(sql_files, process_sql_file, sql_table, _sem)
+    await _drain_files_concurrently(yaml_files, process_yaml_file, yaml_table, _sem)
 
 
 app = coco.App(
