@@ -1364,6 +1364,27 @@ def test_resolve_every_reason_in_closed_set_appears() -> None:
         "end_line": 1,
         "resolved": True,
     }
+    # kafka_topic Route: name lives in ``topic`` (path empty) — exercises the
+    # r.topic resolve branch (route_topic / route_topic_prefix reasons).
+    kafka_route_row = {
+        "id": "route:reasontopic000",
+        "kind": "kafka_topic",
+        "framework": "kafka",
+        "method": "",
+        "path": "",
+        "path_template": "",
+        "path_regex": "",
+        "topic": "reason.created",
+        "broker": "",
+        "feign_name": "",
+        "feign_url": "",
+        "microservice": "svc",
+        "module": "mod",
+        "filename": "K.java",
+        "start_line": 1,
+        "end_line": 1,
+        "resolved": True,
+    }
     client_row = {
         "id": "client:reason",
         "client_kind": "feign_method",
@@ -1415,6 +1436,10 @@ def test_resolve_every_reason_in_closed_set_appears() -> None:
                 return [route_row]
             if "r.path = $path OR r.path_template = $path" in query:
                 return [route_row]
+            if "r.topic STARTS WITH $topic" in query:
+                return [kafka_route_row]
+            if "WHERE r.topic = $topic" in query:
+                return [kafka_route_row]
             if "WHERE c.id = $id" in query:
                 return [client_row]
             if "STARTS WITH $path" in query:
@@ -1442,6 +1467,10 @@ def test_resolve_every_reason_in_closed_set_appears() -> None:
     for _node, reason, _spec in _resolve_route_candidates(g, "GET /reason"):
         seen.add(reason)
     for _node, reason, _spec in _resolve_route_candidates(g, "/reason"):
+        seen.add(reason)
+    # Topic resolution: exact ``r.topic`` (route_topic) + prefix
+    # ``r.topic STARTS WITH`` (route_topic_prefix, since no leading '/').
+    for _node, reason, _spec in _resolve_route_candidates(g, "reason.created"):
         seen.add(reason)
     for _node, reason, _spec in _resolve_client_candidates(g, "client:reason"):
         seen.add(reason)

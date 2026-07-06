@@ -43,11 +43,13 @@ _RESOLVE_REASON_PRIORITY: dict[ResolveReason, int] = {
     "producer_topic_prefix": 1,
     "fqn_suffix": 2,
     "route_template": 2,
+    "route_topic": 2,
     "client_fqn": 2,
     "short_name": 3,
     "client_target": 3,
     "client_name": 3,
     "producer_topic": 3,
+    "route_topic_prefix": 3,
 }
 
 _SYMBOL_RESOLVE_RETURN = (
@@ -294,6 +296,28 @@ def _resolve_route_candidates(
         for row in rows:
             path_val = str(row.get("path_template") or row.get("path") or "")
             out.append((_node_ref_from_row("route", row), "route_template", len(path_val)))
+
+    # Kafka/topic routes carry their name in ``topic`` (``path``/``path_template``
+    # are empty), so path-based matching above cannot reach them. Match on
+    # ``r.topic`` the same way ``_resolve_producer_candidates`` matches
+    # ``p.topic`` — this lets ``flow``/``callers``/``overview`` resolve a
+    # ``kafka_topic`` Route by topic name. ``_drop_route_mirrors`` below then
+    # discards the no-EXPOSES producer phantom in favour of the server route.
+    rows = g._rows(  # noqa: SLF001
+        f"MATCH (r:Route) WHERE r.topic = $topic{scope} RETURN {_ROUTE_RESOLVE_RETURN} LIMIT $lim",
+        {"topic": identifier, "lim": lim, **scope_params},
+    )
+    for row in rows:
+        out.append((_node_ref_from_row("route", row), "route_topic", len(identifier)))
+
+    if not identifier.startswith("/"):
+        rows = g._rows(  # noqa: SLF001
+            f"MATCH (r:Route) WHERE r.topic STARTS WITH $topic{scope} "
+            f"RETURN {_ROUTE_RESOLVE_RETURN} LIMIT $lim",
+            {"topic": identifier, "lim": lim, **scope_params},
+        )
+        for row in rows:
+            out.append((_node_ref_from_row("route", row), "route_topic_prefix", len(identifier)))
 
     return _drop_route_mirrors(g, out)
 
