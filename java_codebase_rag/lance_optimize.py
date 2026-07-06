@@ -183,30 +183,28 @@ async def optimize_lance_tables(
                         break
 
                 if last_exc is None:
-                    # Build the FTS index at index time (PR-SEARCH-3) so hybrid search
-                    # works on all tables (java/sql/yaml) without first-query race.
-                    # Match the lazy path's Tantivy FTS via create_fts_index.
+                    results[name] = "ok"
+                    # Best-effort FTS index at index time (PR-SEARCH-3) so hybrid
+                    # search works on all tables (java/sql/yaml) without a
+                    # first-query race. Failure is non-fatal — the lazy
+                    # ensure_text_fts_index in search_lancedb.py is the runtime
+                    # fallback — so it never alters the "ok" optimize status; we
+                    # only log the skip when verbose.
                     try:
                         from lancedb.index import FTS
                         await table.create_index("text", config=FTS(), replace=True)
-                        results[name] = "ok"
                     except Exception as exc:
                         low = str(exc).lower()
-                        # Index already exists / signature mismatch — non-fatal; the
-                        # lazy ensure_text_fts_index in search_lancedb.py is the
-                        # runtime fallback.
-                        if any(w in low for w in ("exist", "duplicate", "already", "same name")):
-                            results[name] = "ok"
-                        else:
-                            results[name] = f"ok (fts skipped: {exc})"
-                    if not quiet and "fts skipped" not in results[name]:
+                        if not any(
+                            w in low for w in ("exist", "duplicate", "already", "same name")
+                        ) and not quiet:
+                            print(
+                                f"java-codebase-rag: optimize: {name} fts skipped: {exc}",
+                                file=sys.stderr,
+                            )
+                    if not quiet:
                         print(
                             f"java-codebase-rag: optimize: {name} ok",
-                            file=sys.stderr,
-                        )
-                    elif not quiet:
-                        print(
-                            f"java-codebase-rag: optimize: {name} {results[name]}",
                             file=sys.stderr,
                         )
                 else:
