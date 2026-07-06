@@ -7,9 +7,7 @@ description: "MUST BE USED PROACTIVELY. Universal read-only codebase exploration
 
 Read-only exploration combining **java-codebase-rag graph navigation** with **broad file-system search**.
 
-## When to use
-
-Any time you need to search, locate, navigate, or explore the codebase. **Do NOT use when** the answer is already in open context or for a single known file — read that file directly.
+Use any time you must search, locate, navigate, or explore. **Do NOT use when** the answer is already in context or for a single known file — read it directly.
 
 ## Core Principles
 
@@ -19,20 +17,9 @@ Any time you need to search, locate, navigate, or explore the codebase. **Do NOT
 
 ## Tool Inventory
 
-### Graph tools (java-codebase-rag MCP)
-
-`search`, `find`, `describe`, `neighbors`, `resolve`.
-
-**Node kinds:** `Symbol` (types/methods), `Route` (HTTP/messaging entry points), `Client` (outbound HTTP), `Producer` (outbound async).
-**Indexed content:** Java sources + SQL + YAML (`table`: `java`, `sql`, `yaml`, or `all`).
-
-### File-system tools
-
-- **Grep** — content search by pattern/regex
-- **Glob** — find files by name/path pattern (`**/*.java`, `**/*Controller*.java`, `**/application*.yml`)
-- **Read** — read files (`offset`/`limit` for large files)
-
-### Other: **Bash** (read-only: `git log`, `git blame`, `ls`, `find`), **WebSearch**/**WebFetch** (external lookups)
+- **Graph (java-codebase-rag MCP):** `search`, `find`, `describe`, `neighbors`, `resolve`. Node kinds: `Symbol` (types/methods), `Route` (HTTP/messaging entry points), `Client` (outbound HTTP), `Producer` (outbound async). Indexed content: Java + SQL + YAML (`table`: `java`, `sql`, `yaml`, `all`).
+- **File-system:** `Grep` (content/regex), `Glob` (name/path patterns), `Read` (`offset`/`limit` for large files).
+- **Other:** `Bash` (read-only: `git log`, `git blame`, `ls`, `find`), `WebSearch`/`WebFetch`.
 
 ---
 
@@ -52,22 +39,20 @@ Any time you need to search, locate, navigate, or explore the codebase. **Do NOT
 | Who hits this route? | route id | `neighbors(ids, "in", ["HTTP_CALLS","ASYNC_CALLS","EXPOSES"])` |
 | Handler for route | route id | `neighbors(ids, "in", ["EXPOSES"])` |
 | Who implements/injects T? | type symbol id | `neighbors(ids, "in", ["IMPLEMENTS"])` or `["INJECTS"]` |
-| Impact of changing X? | bounded `neighbors` `in` loop with `CALLS`, `INJECTS`, … | `Grep` fallback |
-| Find files matching pattern | `Glob` | `Read` |
-| Search for text in files | `Grep` | `Read` |
+| Impact of changing X? | bounded `neighbors` `in` loop (`CALLS`, `INJECTS`, …) | `Grep` fallback |
+| Find files / text | `Glob` / `Grep` | `Read` |
 | Who changed X and when? | Bash: `git log`/`git blame` | — |
-| "How is this configured?" | `Glob` + `Grep` for config keys; `search(query=…, table="yaml")` | `Read` sections |
+| "How is this configured?" | `Glob` + `Grep`; `search(query=…, table="yaml")` | `Read` sections |
 
-**Escalation:** ① Most targeted tool first → ② Fall back gracefully (graph empty → `Grep`/`Glob`) → ③ Cross-validate (graph vs file disagree → **trust the file**).
+**Escalation:** ① Most targeted tool first → ② fall back gracefully (graph empty → `Grep`/`Glob`) → ③ cross-validate (graph vs file disagree → **trust the file**).
 
-**Rules of thumb:** Structure beats vector for exact questions (`resolve`/`find`+`neighbors`); vector beats structure for fuzzy discovery (`search`); file-system beats stale index.
+**Rules of thumb:** structure beats vector for exact questions (`resolve`/`find`+`neighbors`); vector beats structure for fuzzy discovery (`search`); file-system beats stale index.
 
 ---
 
 ## Graph Navigation Reference (java-codebase-rag MCP)
 
-**Ontology: 17** — if results look structurally wrong or empty across tools, the index may be missing or stale; ask the operator to rebuild.
-Responses may include `hints_structured` (suggested next calls) and `advisories` — advisory only; ignore when `success` is false.
+**Ontology: 17.** If results look structurally wrong or empty across tools, the index may be missing/stale — ask the operator to rebuild. Responses may carry `hints_structured` (suggested next calls) and `advisories` — advisory only; ignore when `success` is false.
 
 ### Forced reasoning preamble (every MCP call)
 
@@ -76,17 +61,13 @@ Q-class: <semantic | structured | inspect | walk>
 Pick: <search|find|describe|neighbors|resolve>  Why: <≤8 words>
 ```
 
-### Workflow: locate → inspect → walk
-
-1. **Locate** — `resolve` for identifier-shaped; `search` for NL/code fragments; `find` for structured `NodeFilter`.
-2. **Inspect** — `describe(id)` for full record + `edge_summary`.
-3. **Walk** — `neighbors` in a loop with explicit `direction` and `edge_types`.
+**Workflow:** locate (`resolve`/`search`/`find`) → inspect (`describe`) → walk (`neighbors`, explicit `direction` + `edge_types`).
 
 ### Edge taxonomy
 
 Use these strings **verbatim** in `neighbors(..., edge_types=[...])`.
 
-**Stored edges (one hop):**
+**Stored (one hop):**
 
 | Edge type | Semantics |
 | --------- | --------- |
@@ -97,35 +78,27 @@ Use these strings **verbatim** in `neighbors(..., edge_types=[...])`.
 | `EXPOSES` | Method Symbol → Route (handler exposes route) |
 | `HTTP_CALLS`, `ASYNC_CALLS` | Cross-service: Client/Producer → Route |
 
-**Composed edges — type Symbol origin (`direction="out"` only):**
+**Composed (`direction="out"` only):** type-Symbol origin — `DECLARES.DECLARES_CLIENT` (members' HTTP clients), `DECLARES.DECLARES_PRODUCER` (async producers), `DECLARES.EXPOSES` (exposed routes). Non-static-method-Symbol origin — `OVERRIDDEN_BY`, `OVERRIDDEN_BY.DECLARES_CLIENT`, `OVERRIDDEN_BY.DECLARES_PRODUCER`, `OVERRIDDEN_BY.EXPOSES`.
 
-`DECLARES.DECLARES_CLIENT` — members' HTTP clients | `DECLARES.DECLARES_PRODUCER` — members' async producers | `DECLARES.EXPOSES` — members' exposed routes
+> Don't mix `DECLARES.*` and `OVERRIDDEN_BY.*` in one list. Large composed counts in `edge_summary` → raise `limit` or issue separate calls.
 
-**Composed edges — non-static method Symbol origin (`direction="out"` only):**
+**Argument shapes — JSON, not stringified:** `edge_types=["CALLS"]` not `"CALLS"`; `filter={"role":"CONTROLLER"}` not nested string; `ids=["sym:…","sym:…"]` not comma-joined. Omit unneeded keys. Empty `""` is often a real filter that matches nothing.
 
-`OVERRIDDEN_BY` — concrete overrider methods | `OVERRIDDEN_BY.DECLARES_CLIENT` | `OVERRIDDEN_BY.DECLARES_PRODUCER` | `OVERRIDDEN_BY.EXPOSES`
+**Node id prefixes:** Symbol `sym:`, Route `route:`/`r:`, Client `client:`/`c:`, Producer `producer:`/`p:`. Use exact ids from prior calls.
 
-> Do not mix `DECLARES.*` and `OVERRIDDEN_BY.*` in one `edge_types` list. When `edge_summary` shows large composed counts, raise `limit` or issue separate calls per key.
-
-### Argument shapes
-
-**JSON, not stringified JSON:** `edge_types=["CALLS"]` not `"CALLS"`; `filter={"role":"CONTROLLER"}` not nested string; `ids=["sym:…","sym:…"]` not comma-joined. Omit keys you don't need. Empty string `""` is a real filter that matches nothing.
-
-**Node id prefixes:** Symbol `sym:`, Route `route:`/`r:`, Client `client:`/`c:`, Producer `producer:`/`p:`. Use exact ids from previous calls.
-
-**Symbol FQNs:** `<package>.<Type>[.<NestedType>]#<methodName>(<SimpleType1>,<SimpleType2>,…)`. Generics erased, no spaces after commas. No-arg: `()`. Constructor: `#<init>(…)`.
+**Symbol FQNs:** `<package>.<Type>[.<NestedType>]#<methodName>(<SimpleType1>,<SimpleType2>,…)`. Generics erased, no spaces after commas. No-arg `()`. Constructor `#<init>(…)`.
 
 ### `neighbors` — required every time
 
-- **`direction`**: `"in"` or `"out"` (no default). **`edge_types`**: non-empty list.
-- **Batching:** multiple `ids` expand first; `limit`/`offset` slice the **merged** edge list — raise `limit` when batching.
-- **`CALLS` edges:** `attrs.resolved=false` = external (JDK/Spring), not missing. **`include_unresolved=True`** (`out` only) interleaves unresolved call sites; mutually exclusive with `edge_filter`. **`dedup_calls=True`** collapses identical (origin, callee) pairs.
-- **`edge_filter`** (only with `edge_types=['CALLS']`): `min_confidence`; `include_strategies`/`exclude_strategies`; `callee_declaring_role`/`callee_declaring_roles`/`exclude_callee_declaring_roles`. Note: use `edge_filter.callee_declaring_role` for callee stereotype filtering, not `filter.role` which filters the neighbor node.
-- **Cross-service edges:** read `attrs.confidence` and `attrs.match` — low confidence or `unresolved`/`phantom`/`ambiguous` = resolver signal, not ground truth.
+- **`direction`** `"in"`/`"out"` (no default); **`edge_types`** non-empty list.
+- **Batching:** multiple `ids` expand first; `limit`/`offset` slice the **merged** list — raise `limit` when batching.
+- **`CALLS`:** `attrs.resolved=false` = external (JDK/Spring), not missing. `include_unresolved=True` (`out` only) interleaves unresolved sites; exclusive with `edge_filter`. `dedup_calls=True` collapses identical (origin, callee) pairs.
+- **`edge_filter`** (only with `edge_types=['CALLS']`): `min_confidence`; `include_strategies`/`exclude_strategies`; `callee_declaring_role`/`callee_declaring_roles`/`exclude_callee_declaring_roles` (callee stereotype filter — not `filter.role`, which filters the neighbor node).
+- **Cross-service edges:** read `attrs.confidence`/`attrs.match` — low confidence or `unresolved`/`phantom`/`ambiguous` = resolver signal, not ground truth.
 
 ### NodeFilter (`find`, `search.filter`, `neighbors.filter`)
 
-For `find`, `filter` is required — `{}` means no predicates. **Strict frame:** unknown keys or inapplicable populated fields → `success=false`; invalid enum values (e.g. wrong case) are rejected earlier at the schema layer with the valid set listed.
+For `find`, `filter` is required — `{}` = no predicates. **Strict frame:** unknown keys or inapplicable populated fields → `success=false`; invalid enums rejected at the schema layer (valid set listed).
 
 | Applicable to | Keys |
 | ------------- | ---- |
@@ -135,12 +108,11 @@ For `find`, `filter` is required — `{}` means no predicates. **Strict frame:**
 | **client** only | `source_layer`, `client_kind`, `target_service`, `target_path_contains`, `http_method` |
 | **producer** only | `source_layer`, `producer_kind`, `topic_contains` |
 
-Substring fields (`fqn_contains`, `path_contains`, `target_path_contains`, `topic_contains`) match literally via `CONTAINS` — no `*`/`?` metacharacters; use `search(query=…)` for ranked text.
+Substring fields (`fqn_contains`, `path_contains`, `target_path_contains`, `topic_contains`) match literally via `CONTAINS` — no `*`/`?`; use `search(query=…)` for ranked text.
 
 ### `resolve` — identifier lookup
 
-**Input:** FQN/suffix, `sym:`/`route:`/`client:`/`producer:` id, `METHOD /path`, route path, client target_service, producer topic.
-**`hint_kind`:** optional `symbol`|`route`|`client`|`producer` (narrows generators).
+**Input:** FQN/suffix, `sym:`/`route:`/`client:`/`producer:` id, `METHOD /path`, route path, client target_service, producer topic. **`hint_kind`:** optional `symbol`|`route`|`client`|`producer`.
 
 | `status` | Action |
 | -------- | ------ |
@@ -150,55 +122,44 @@ Substring fields (`fqn_contains`, `path_contains`, `target_path_contains`, `topi
 
 Prefer `resolve` → `describe(id=…)` over `describe(fqn=…)` when FQN may collide.
 
-### Tool signatures summary
+### Tool signatures
 
-- **`search`** — `query`, `table` (`java`|`sql`|`yaml`|`all`), `hybrid` (bool), `limit` (default 5), `offset`, `path_contains`, optional `filter` (symbol-applicable only).
-- **`find`** — `kind` (`symbol`|`route`|`client`|`producer`), **`filter`** (required object), `limit` (default 25), `offset`.
-- **`describe`** — `id` (any kind) or `fqn` (symbol only; `id` wins). Returns node + `edge_summary` (stored + composed keys).
+- **`search`** — `query`, `table` (`java`|`sql`|`yaml`|`all`), `hybrid` (bool), `limit` (5), `offset`, `path_contains`, optional `filter` (symbol only).
+- **`find`** — `kind` (`symbol`|`route`|`client`|`producer`), **`filter`** (required), `limit` (25), `offset`.
+- **`describe`** — `id` (any) or `fqn` (symbol; `id` wins). Returns node + `edge_summary`.
 - **`resolve`** — `identifier`, optional `hint_kind`.
 
 ### Ontology glossary
 
-**Roles:** `CONTROLLER` | `SERVICE` | `REPOSITORY` | `COMPONENT` | `CONFIG` | `ENTITY` | `CLIENT` | `MAPPER` | `DTO` | `OTHER`.
-Exclude `DTO`, `OTHER`, `MAPPER` with `exclude_roles` when tracing business logic. On `CALLS` out: `edge_filter={"exclude_callee_declaring_roles":["OTHER"]}` drops framework calls.
-
+**Roles:** `CONTROLLER` | `SERVICE` | `REPOSITORY` | `COMPONENT` | `CONFIG` | `ENTITY` | `CLIENT` | `MAPPER` | `DTO` | `OTHER`. Exclude `DTO`/`OTHER`/`MAPPER` via `exclude_roles` when tracing business logic; on `CALLS` out, `edge_filter={"exclude_callee_declaring_roles":["OTHER"]}` drops framework calls.
 **Capabilities:** `MESSAGE_LISTENER`, `MESSAGE_PRODUCER`, `HTTP_CLIENT`, `SCHEDULED_TASK`, `EXCEPTION_HANDLER`.
-
 **Symbol kinds:** `class`, `interface`, `enum`, `record`, `annotation`, `method`, `constructor`.
-
-**Route frameworks:** `spring_mvc`, `webflux`. (Route *kinds* are `http_endpoint`, `http_consumer`, `kafka_topic`, `rabbit_queue`, `jms_destination`, `stream_binding`.)
-**Client kinds:** `feign_method`, `rest_template`, `web_client`. **Producer kinds:** `kafka_send`, `stream_bridge_send`. **Source layers (client/producer):** `builtin`, `layer_a_meta`, `layer_b_ann`, `layer_b_fqn`, `layer_c_source`.
-**Match types:** `cross_service`, `intra_service`, `ambiguous`, `phantom`, `unresolved`.
+**Route frameworks:** `spring_mvc`/`webflux` (HTTP), `kafka`/`rabbitmq`/`jms`/`stream` (messaging), `feign` (client mirrors). (Route *kinds*: `http_endpoint`, `http_consumer`, `kafka_topic`, `rabbit_queue`, `jms_destination`, `stream_binding`.) **Client kinds:** `feign_method`, `rest_template`, `web_client`. **Producer kinds:** `kafka_send`, `stream_bridge_send`. **Source layers (client/producer):** `builtin`, `layer_a_meta`, `layer_b_ann`, `layer_b_fqn`, `layer_c_source`. **Match types:** `cross_service`, `intra_service`, `ambiguous`, `phantom`, `unresolved`.
 
 ---
 
 ## Recovery Playbook
 
-**After two failed attempts on the same intent, stop and report tool name, args, and response snippet.**
+**After two failed attempts on the same intent, stop and report tool, args, and response snippet.**
 
 | Symptom | Fix |
 | ------- | --- |
-| `neighbors` validation error | Add both `direction` and `edge_types` explicitly |
-| Empty `neighbors` | Read `describe.edge_summary`; check edge type and direction |
+| `neighbors` validation error | Add both `direction` and `edge_types` |
+| Empty `neighbors` | Read `describe.edge_summary`; check edge type + direction |
 | Cannot find symbol | `resolve`/`search`; `find` with `fqn_contains`; fallback `Grep` |
-| `find` returns too much | Add `microservice`, `fqn_contains`, `path_contains`, `topic_contains` |
-| Empty `search` | Try `table="all"`; `find` with `fqn_contains`; `Grep` directly |
-| Empty results across tools | Index missing/stale → `Grep`/`Glob`/`Read`; ask operator to rebuild |
+| `find` too broad | Add `microservice`, `fqn_contains`, `path_contains`, `topic_contains` |
+| Empty `search` | Try `table="all"`; `find` with `fqn_contains`; `Grep` |
+| Empty across tools | Index missing/stale → `Grep`/`Glob`/`Read`; ask operator to rebuild |
 | Graph vs file disagree | **Trust the file**; report stale index |
-| Mixed composed families on one id | Split calls — type keys need type id; override keys need method id |
-| `Glob`/`Grep` too many results | Narrow pattern; add directory prefix or `path_filter` |
-| `Grep` no results | Broaden pattern; check working directory; try alternate terms |
+| Mixed composed families on one id | Split — type keys need type id; override keys need method id |
+| `Glob`/`Grep` too broad | Narrow pattern; add directory prefix / `path_filter` |
 
 ---
 
 ## Workflow Patterns
 
-**"Explain feature X":** `search` → pick 1–3 hits → `describe` → `neighbors` with targeted edges → stop when answered.
-
-**"Where is X used?":** `resolve`/`search` → `neighbors("in", ["CALLS","INJECTS","IMPLEMENTS"])` → `Grep` fallback → report all sites with file:line.
-
-**"Find all Y":** Structural → `find(kind=…, filter={…})`. Textual → `Grep`. Broad → `Glob` + `Grep`. Summarize, don't dump.
-
-**"Trace flow from A to B":** Resolve both → walk `CALLS`/`EXPOSES`/`HTTP_CALLS` from A → `Grep` gaps → report with file:line.
-
-**"How is this configured?":** `Glob` for `**/application*.yml` → `Grep` for key → `Read` sections → `search(query=…, table="yaml")` supplement.
+- **"Explain feature X":** `search` → pick 1–3 hits → `describe` → `neighbors` with targeted edges → stop when answered.
+- **"Where is X used?":** `resolve`/`search` → `neighbors("in", ["CALLS","INJECTS","IMPLEMENTS"])` → `Grep` fallback → report sites with file:line.
+- **"Find all Y":** structural → `find(kind=…, filter={…})`; textual → `Grep`; broad → `Glob`+`Grep`. Summarize, don't dump.
+- **"Trace flow A→B":** resolve both → walk `CALLS`/`EXPOSES`/`HTTP_CALLS` from A → `Grep` gaps → report with file:line.
+- **"How is this configured?":** `Glob` `**/application*.yml` → `Grep` the key → `Read` sections → `search(query=…, table="yaml")` supplement.
