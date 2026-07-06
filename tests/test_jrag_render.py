@@ -552,6 +552,60 @@ def test_search_json_normal_omits_snippet_drops_empty_fields() -> None:
     assert node["score"] == 0.91
 
 
+def test_search_normal_shows_chunks_when_collapsed_multiple() -> None:
+    """chunks=N appears at normal detail when _chunks_collapsed >= 2.
+
+    Regression for search redesign PR: deduped types should show chunk count,
+    but single-chunk results should not display chunks=1 noise.
+    """
+    env = Envelope(
+        status="ok",
+        nodes={
+            "chunk:1": {
+                "id": "chunk:1",
+                "kind": "search_hit",
+                "fqn": "com.foo.ManyChunks",
+                "name": "ManyChunks",
+                "microservice": "chat",
+                "module": "core",
+                "role": "SERVICE",
+                "score": 0.95,
+                "chunks": 3,  # dedup collapsed 3 chunks
+                "symbol_id": "sym:1",
+            },
+            "chunk:2": {
+                "id": "chunk:2",
+                "kind": "search_hit",
+                "fqn": "com.foo.SingleChunk",
+                "name": "SingleChunk",
+                "microservice": "chat",
+                "module": "core",
+                "role": "SERVICE",
+                "score": 0.85,
+                "chunks": 1,  # should NOT show (noise)
+                "symbol_id": "sym:2",
+            },
+            "chunk:3": {
+                "id": "chunk:3",
+                "kind": "search_hit",
+                "fqn": "com.foo.NoChunks",
+                "name": "NoChunks",
+                "microservice": "chat",
+                "module": "core",
+                "role": "SERVICE",
+                "score": 0.75,
+                "symbol_id": "sym:3",
+                # chunks=None (omitted) - should NOT show
+            },
+        },
+    )
+    out = render(env, fmt="text", noun="search", detail="normal")
+    # chunks=3 appears
+    assert "chunks=3" in out, f"normal text missing chunks=3: {out!r}"
+    # chunks=1 does NOT appear (noise)
+    assert "chunks=1" not in out, f"normal text should not show chunks=1: {out!r}"
+
+
 # ----- Traversal label disambiguation + text/json detail parity -----
 #
 # Regression for the `jrag callees/callers "SlaService"` complaint: the text

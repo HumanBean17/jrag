@@ -366,7 +366,7 @@ def _hybrid_sort_key(r: dict) -> float:
     comps["hybrid_rrf"] = s
     if r.get("_hints", {}).get("import_heavy"):
         s *= _IMPORT_HYBRID_SCORE_FACTOR
-        comps["import_penalty"] = _IMPORT_HYBRID_SCORE_FACTOR
+        comps["import_penalty"] = 1.0 - _IMPORT_HYBRID_SCORE_FACTOR
     s += _role_weight(r)
     s += float(comps.get("symbol_bonus", 0.0))
     return -s
@@ -449,7 +449,7 @@ def _hybrid_post_sort_normalization(rows: list[dict]) -> None:
     for r in rows:
         comps = r.setdefault("_score_components", {})
         raw = comps.get("hybrid_rrf", 0.0)
-        comps["rrf_raw"] = raw  # preserve raw RRF for --explain
+        comps["rrf_raw"] = raw  # preserve raw RRF for --explain. NOTE: when graph_expand + hybrid combine (Phase 2), _rrf_merge below overwrites this with graph-RRF, so --explain would show graph-RRF not hybrid-RRF.
         s = raw
         if r.get("_hints", {}).get("import_heavy"):
             s *= _IMPORT_HYBRID_SCORE_FACTOR
@@ -972,7 +972,10 @@ def run_search(
     db = lancedb.connect(uri)
     if dedup_by_fqn:
         # Over-fetch to absorb per-FQN chunk multiplicity: fetch 4x so that
-        # after collapsing, the page stays full and the +1 truncation sentinel survives
+        # after collapsing, the page stays full and the +1 truncation sentinel survives.
+        # The 4× factor assumes typical per-FQN chunk multiplicity; a single type with
+        # many high-ranking chunks (e.g. generated/God classes) could starve the page or
+        # make the +1 truncation sentinel unreliable; Phase 1 may revisit adaptive over-fetch (plan risk #1).
         need = max((limit + offset) * DEDUP_OVERFETCH, limit + offset + 1)
     else:
         # Non-dedup path: exact fetch as before

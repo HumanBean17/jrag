@@ -71,6 +71,7 @@ _NORMAL_INLINE_EXTRAS: tuple[str, ...] = (
     "file",
     "score",
     "explain",
+    "chunks",
 )
 
 # Identity-adjacent extras shown inline at ``--detail brief``. ``score`` is the
@@ -284,7 +285,7 @@ def _render_listing(envelope: Envelope, *, noun: str, detail: str = "normal") ->
             extras = [
                 f"{key}={_format_inline_value(node[key])}"
                 for key in _NORMAL_INLINE_EXTRAS
-                if key in node and node[key] not in ("", None)
+                if key in node and node[key] not in ("", None) and not (key == "chunks" and node[key] == 1)
             ]
             if extras:
                 line += "  " + "  ".join(extras)

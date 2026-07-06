@@ -277,6 +277,47 @@ def test_hybrid_score_normalized_to_unit_range() -> None:
     assert rows[2]["filename"] == "c.java", f"expected c.java last, got {rows[2]['filename']}"
 
 
+def test_hybrid_import_penalty_rendered_as_additive_penalty() -> None:
+    """Hybrid import_penalty is rendered as +0.12 (not +0.88 multiplier).
+
+    Regression for search redesign PR: _hybrid_sort_key stores import_penalty
+    as the EFFECT (1.0 - 0.88 = 0.12) so explain output is not misleading.
+    The normalization function uses the constant directly, so changing the
+    stored value is safe and doesn't affect the actual hybrid score.
+    """
+    from search_lancedb import _hybrid_sort_key, explain_score_components
+
+    # Create a row with import_heavy hint
+    row = {
+        "filename": "a.java",
+        "range_start": 1,
+        "range_end": 10,
+        "_score": 0.032,
+        "role": "SERVICE",
+        "_hints": {"import_heavy": True},
+        "_score_components": {},
+    }
+
+    # Run through hybrid sort key (this populates _score_components)
+    _ = _hybrid_sort_key(row)
+
+    # Verify import_penalty is 0.12 (the effect), not 0.88 (the multiplier)
+    comps = row["_score_components"]
+    assert "import_penalty" in comps, "import_penalty should be in score_components"
+    assert abs(comps["import_penalty"] - 0.12) < 0.001, (
+        f"import_penalty should be ~0.12, got {comps['import_penalty']}"
+    )
+
+    # Verify explain output shows +0.12 (not +0.88)
+    explain = explain_score_components(comps, hybrid=True, role=row.get("role"))
+    assert "import_penalty:+0.12" in explain, (
+        f"explain should show import_penalty:+0.12, got: {explain}"
+    )
+    assert "+0.88" not in explain, (
+        f"explain should NOT show misleading +0.88 bonus, got: {explain}"
+    )
+
+
 def test_run_search_dedup_collapses_by_fqn() -> None:
     """Dedup by primary_type_fqn collapses multiple chunks of the same type.
 

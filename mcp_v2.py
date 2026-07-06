@@ -598,7 +598,7 @@ def _row_to_search_hit(row: dict[str, Any], explain: bool = False) -> SearchHit:
             except (TypeError, ValueError):
                 start_line = None
     chunks = row.get("_chunks_collapsed")
-    chunks_int = int(chunks) if chunks is not None else None
+    chunks_int = int(chunks) if chunks is not None and int(chunks) >= 2 else None
     return SearchHit(
         chunk_id=_chunk_id_from_row(row),
         symbol_id=_chunk_to_symbol_id(row),
