@@ -25,10 +25,14 @@ classifiers = [
     "Operating System :: MacOS :: MacOS X",
     "Operating System :: Microsoft :: Windows",
 ]
+# The vector/semantic-search trio (cocoindex[lancedb], lancedb, sentence-transformers
+# -> torch) is gated off on Intel Mac (darwin + x86_64): torch >=2.3 and lancedb >=0.26
+# dropped macOS x86_64 wheels, so the full stack is uninstallable there. On Intel Mac the
+# package installs graph-only and works out of the box; every other platform is unchanged.
 dependencies = [
-    "cocoindex[lancedb]>=1.0.7,<2",
+    "cocoindex[lancedb]>=1.0.7,<2; sys_platform != 'darwin' or platform_machine != 'x86_64'",
     "ladybug>=0.17.1,<0.18",
-    "lancedb>=0.25.3,<0.31",
+    "lancedb>=0.25.3,<0.31; sys_platform != 'darwin' or platform_machine != 'x86_64'",
     "mcp>=1.27.0,<2",
     "numpy>=1.26.4,<2.5",
     "pathspec>=1.0.4,<2",
@@ -37,7 +41,7 @@ dependencies = [
     "PyYAML>=6.0.3,<7",
     "questionary>=2.0,<3",
     "rich>=14,<15",
-    "sentence-transformers>=5.4.0,<6",
+    "sentence-transformers>=5.4.0,<6; sys_platform != 'darwin' or platform_machine != 'x86_64'",
     "tree-sitter>=0.25.2,<0.26",
     "tree-sitter-java>=0.23.5,<0.24",
     "unidiff>=0.7.3,<1",
