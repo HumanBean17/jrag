@@ -132,6 +132,26 @@ def run_cocoindex_update(
     on_progress: Callable[[ProgressEvent], None] | None = None,
     on_progress_console: object | None = None,
 ) -> subprocess.CompletedProcess[str]:
+    if full_reprocess:
+        # A full reprocess rebuilds every row, so DROP the Lance target tables
+        # first and let cocoindex recreate them via the fast INSERT path. The
+        # in-place alternative (cocoindex's bulk-update merge_insert) emits
+        # ~one deletion-vector + version commit PER matched row — O(rows) of
+        # tiny file IO that scales to multi-minute hangs on large repos
+        # (measured ~83s sys time / 3474 deletion files for 3475 chunks on
+        # Shopizer; drop+recreate is ~3.6s sys / 0 deletions, ~3.7x faster and
+        # hang-free). Output is identical either way (full recompute); only the
+        # write path differs. Drop failure is non-fatal — if it somehow fails,
+        # the update falls back to the slow in-place path. The same fix is
+        # applied on the async server path (``server.run_refresh_pipeline``).
+        drop = run_cocoindex_drop(env, quiet=quiet)
+        if drop.returncode != 0 and not is_cocoindex_preflight_blocker(drop):
+            print(
+                "java-codebase-rag: drop-before-reprocess failed "
+                f"(exit {drop.returncode}); falling back to in-place update: "
+                f"{(drop.stderr or '').strip()[:200]}",
+                file=sys.stderr,
+            )
     result = _run_cocoindex_update_impl(
         env,
         full_reprocess=full_reprocess,
