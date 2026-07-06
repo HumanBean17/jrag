@@ -26,6 +26,11 @@ class _FakeTable:
         self.name = name
         self._outcomes = list(outcomes)
         self.optimize_calls = 0
+        # PR-SEARCH-3: optimize_lance_tables also builds the FTS index via
+        # ``await table.create_index("text", config=FTS(), replace=True)``.
+        # Track those calls so a test can prove the FTS path actually runs
+        # (instead of being silently swallowed by the broad except).
+        self.create_index_calls: list[dict] = []
 
     async def optimize(self, *args, **kwargs):  # noqa: ANN002, ANN003 — fake
         self.optimize_calls += 1
@@ -34,6 +39,10 @@ class _FakeTable:
         outcome = self._outcomes.pop(0)
         if isinstance(outcome, BaseException):
             raise outcome
+        return None
+
+    async def create_index(self, *args, **kwargs):  # noqa: ANN002, ANN003 — fake
+        self.create_index_calls.append({"args": args, "kwargs": kwargs})
         return None
 
 
@@ -93,6 +102,49 @@ async def test_optimize_retries_commit_conflict_then_succeeds(monkeypatch, tmp_p
     results = await lance_optimize.optimize_lance_tables(tmp_path, quiet=True)
     assert results[lance_optimize.LANCE_TABLE_NAMES[0]] == "ok"
     assert table.optimize_calls == 3  # 2 retries + 1 success
+
+
+async def test_optimize_builds_fts_index_after_success(monkeypatch, tmp_path) -> None:
+    """A successful optimize builds the FTS index (PR-SEARCH-3).
+
+    Guards against a silent regression: ``optimize_lance_tables`` builds FTS via
+    ``await table.create_index("text", config=FTS(), replace=True)`` inside a
+    broad ``except`` that swallows failures. Without this test the FTS call is
+    never exercised (the ``_FakeTable`` previously had no ``create_index`` and
+    ``lancedb.index`` was unmocked), so a future lancedb upgrade that moved
+    ``FTS`` or changed the signature would break index-time FTS while every
+    optimize test stayed green.
+    """
+    import types
+
+    from java_codebase_rag import lance_optimize
+
+    name = lance_optimize.LANCE_TABLE_NAMES[0]
+    table = _FakeTable(name, [None])  # optimize succeeds on first try
+    conn = _FakeConnection(table_names={name}, tables={name: table})
+    _install_fake_lancedb(monkeypatch, conn)
+    # Make ``from lancedb.index import FTS`` resolve against a stand-in module.
+    index_mod = types.ModuleType("lancedb.index")
+
+    class FTS:  # stands in for lancedb.index.FTS config object
+        pass
+
+    index_mod.FTS = FTS
+    monkeypatch.setitem(sys.modules, "lancedb.index", index_mod)
+
+    results = await lance_optimize.optimize_lance_tables(tmp_path, quiet=True)
+
+    assert results[name] == "ok"
+    assert len(table.create_index_calls) == 1, (
+        f"expected FTS create_index once after optimize, got {table.create_index_calls}"
+    )
+    call = table.create_index_calls[0]
+    assert call["args"] and call["args"][0] == "text", (
+        f"FTS index must target the 'text' column, got args={call['args']}"
+    )
+    assert call["kwargs"].get("replace") is True, (
+        f"FTS index must be built with replace=True, got kwargs={call['kwargs']}"
+    )
     assert conn.closed is True
 
 
