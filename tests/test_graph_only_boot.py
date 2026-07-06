@@ -78,3 +78,25 @@ def test_preflight_blocker_detects_graph_only_install() -> None:
     # non-zero exit is a failure, not a skip.
     assert is_cocoindex_preflight_blocker(_completed(1, (exe, "update", "t", "-f"))) is False
     assert is_cocoindex_preflight_blocker(_completed(0, (exe, "update", "t", "-f"))) is False
+
+
+def test_vector_stack_installed_reports_absent_when_blocked() -> None:
+    # The installer wizard gates its embedding-model step on vector_stack_installed().
+    # Deterministic across platforms: blocking the modules in a fresh subprocess must
+    # report False (this is the macOS Intel reality).
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys\n"
+            "for m in ('lancedb','pylance','torch','sentence_transformers','cocoindex'):\n"
+            "    sys.modules[m] = None\n"
+            "from java_codebase_rag.pipeline import vector_stack_installed\n"
+            "print('INSTALLED:' + str(vector_stack_installed()))",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "INSTALLED:False" in proc.stdout

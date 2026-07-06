@@ -1799,7 +1799,19 @@ def run_install(
         return e.code
 
     # Stage 2: Embedding model
-    resolved_model = resolve_model(model, non_interactive=non_interactive)
+    from java_codebase_rag.pipeline import vector_stack_installed
+
+    if not vector_stack_installed():
+        # Graph-only install (macOS Intel): no torch/lancedb, so there is no vector
+        # index to embed into — the embedding-model choice is inert here. Skip the
+        # prompt and let init build the graph (vectors phase auto-skipped).
+        print(
+            "Skipping embedding model selection: vector stack not installed on this "
+            "platform (graph-only mode)."
+        )
+        resolved_model = "auto"
+    else:
+        resolved_model = resolve_model(model, non_interactive=non_interactive)
 
     # Stage 3-4: Agent host + scope + surface selection
     prior_surface = _prior_surface_from_marker(cwd)
