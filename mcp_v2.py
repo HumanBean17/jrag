@@ -881,30 +881,66 @@ def search_v2(
         if not uri.startswith(("s3://", "gs://", "az://")) and uri_path.exists():
             uri = str(uri_path.resolve())
         table_keys = list(TABLES) if table == "all" else [table]
-        rows = run_search(
-            query,
-            uri=uri,
-            table_keys=table_keys,
-            hybrid=hybrid,
-            limit=limit,
-            offset=offset,
-            path_substring=path_contains,
-            model_name=model_name,
-            device=device,
-            model=model,
-            # Push the NodeFilter structural predicates into the LanceDB query so
-            # they apply BEFORE pagination (issue #353) — previously they were only
-            # a post-filter on the already-paginated page, which could shrink or
-            # empty filtered pages even when many matches existed deeper in the
-            # ranking. _node_matches_filter below still re-checks every row (it
-            # covers the non-pushdownable fields and is the contract guarantee).
-            role=nf.role if nf else None,
-            module=nf.module if nf else None,
-            microservice=nf.microservice if nf else None,
-            capability=nf.capability if nf else None,
-            exclude_roles=nf.exclude_roles if nf else None,
-            dedup_by_fqn=dedup,
-        )
+
+        # Graceful fallback: if hybrid=True and FTS index is missing (old index),
+        # retry with hybrid=False and return vector-only results with an advisory.
+        advisories: list[str] = []
+        try:
+            rows = run_search(
+                query,
+                uri=uri,
+                table_keys=table_keys,
+                hybrid=hybrid,
+                limit=limit,
+                offset=offset,
+                path_substring=path_contains,
+                model_name=model_name,
+                device=device,
+                model=model,
+                # Push the NodeFilter structural predicates into the LanceDB query so
+                # they apply BEFORE pagination (issue #353) — previously they were only
+                # a post-filter on the already-paginated page, which could shrink or
+                # empty filtered pages even when many matches existed deeper in the
+                # ranking. _node_matches_filter below still re-checks every row (it
+                # covers the non-pushdownable fields and is the contract guarantee).
+                role=nf.role if nf else None,
+                module=nf.module if nf else None,
+                microservice=nf.microservice if nf else None,
+                capability=nf.capability if nf else None,
+                exclude_roles=nf.exclude_roles if nf else None,
+                dedup_by_fqn=dedup,
+            )
+        except Exception as exc:
+            # Check if this is a missing-FTS error (old index built before PR-SEARCH-3)
+            exc_text = str(exc).lower()
+            is_fts_missing = "full text search" in exc_text or "inverted index" in exc_text
+            if hybrid and is_fts_missing:
+                # Retry with vector-only search
+                rows = run_search(
+                    query,
+                    uri=uri,
+                    table_keys=table_keys,
+                    hybrid=False,  # Fallback to vector-only
+                    limit=limit,
+                    offset=offset,
+                    path_substring=path_contains,
+                    model_name=model_name,
+                    device=device,
+                    model=model,
+                    role=nf.role if nf else None,
+                    module=nf.module if nf else None,
+                    microservice=nf.microservice if nf else None,
+                    capability=nf.capability if nf else None,
+                    exclude_roles=nf.exclude_roles if nf else None,
+                    dedup_by_fqn=dedup,
+                )
+                advisories.append(
+                    f"hybrid unavailable on table '{table}' (FTS index missing on this index built before "
+                    f"PR-SEARCH-3); fell back to vector-only — reindex to enable hybrid"
+                )
+            else:
+                # Non-FTS error: surface as structured failure
+                raise
         hits: list[SearchHit] = []
         for row in rows:
             if path_contains and path_contains not in str(row.get("filename") or ""):
@@ -926,7 +962,7 @@ def search_v2(
             results=hits,
             limit=limit,
             offset=offset,
-            advisories=raw_advisories,
+            advisories=advisories + raw_advisories,  # Merge fallback + hints advisories
             hints_structured=_to_structured_hints(raw_struct),
         )
     except Exception as exc:

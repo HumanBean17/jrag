@@ -672,6 +672,55 @@ def test_search_all_tables_hybrid_returns_clean_failure(ladybug_graph) -> None:
     assert out.results == []
 
 
+def test_search_hybrid_missing_fts_falls_back_to_vector(monkeypatch, ladybug_graph) -> None:
+    """hybrid search on a table missing the FTS index falls back to vector-only
+    with an advisory (PR-SEARCH-3) — instead of surfacing a raw Lance error, the
+    search retries with hybrid=False and returns success=True with a clear
+    advisory message."""
+    call_count = {"hybrid": 0, "vector": 0}
+
+    def fake_run_search(query, *, hybrid, **kwargs):
+        if hybrid:
+            call_count["hybrid"] += 1
+            raise ValueError("Cannot perform full text search unless an INVERTED index has been created")
+        call_count["vector"] += 1
+        return _fake_search_rows()
+
+    monkeypatch.setattr("mcp_v2.run_search", fake_run_search)
+    out = search_v2("server port", table="yaml", hybrid=True, graph=ladybug_graph)
+
+    # Should succeed with vector-only fallback
+    assert out.success is True
+    assert len(out.results) == 2
+    # Should have retried with hybrid=False
+    assert call_count["hybrid"] == 1
+    assert call_count["vector"] == 1
+    # Should include advisory about the fallback
+    assert out.advisories
+    advisory_text = " ".join(out.advisories)
+    assert "fell back" in advisory_text.lower()
+    assert "vector-only" in advisory_text.lower()
+    assert "FTS index missing" in advisory_text
+
+
+def test_search_hybrid_non_fts_error_still_fails(monkeypatch, ladybug_graph) -> None:
+    """A non-FTS exception during hybrid search still yields success=False — the
+    graceful fallback is scoped ONLY to the missing-FTS signature; other errors
+    surface as structured failures (PR-SEARCH-3)."""
+    def fake_run_search(query, **kwargs):
+        raise RuntimeError("Some other LanceDB error")
+
+    monkeypatch.setattr("mcp_v2.run_search", fake_run_search)
+    out = search_v2("query", table="java", hybrid=True, graph=ladybug_graph)
+
+    # Should fail with the error message
+    assert out.success is False
+    assert out.message is not None
+    assert "Some other LanceDB error" in out.message
+    # No advisory fallback for non-FTS errors
+    assert not any("fell back" in a.lower() for a in out.advisories)
+
+
 def test_unresolved_call_site_noderef_carries_callee_name() -> None:
     """The unresolved-call-site NodeRef must carry the callee identifier in `name`
     (issue #354) — NodeRef previously had no `name` field, so pydantic's default
