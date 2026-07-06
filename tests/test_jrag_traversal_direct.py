@@ -620,6 +620,67 @@ def test_flow_outbound_intra_service_on_fixture(
     )
 
 
+def test_flow_follows_kafka_topic_on_fixture(
+    corpus_root: Path, ladybug_db_path: Path
+) -> None:
+    """flow resolves a Kafka topic name to its Route and follows it.
+
+    Regression: ``_resolve_route_candidates`` matched only on path, so a
+    ``kafka_topic`` Route (name in ``topic``, ``path=''``) was unresolvable and
+    ``jrag flow <topic>`` returned 'none' even though the route + EXPOSES edge
+    existed. ``banking.chat.compliance.review`` is consumed by
+    ``ComplianceReviewListener`` (``@CodebaseAsyncRoute(topic=...)``); flow must
+    now resolve it to a Route root and surface the listener's outbound CALLS.
+    """
+    env = _env_for(corpus_root, ladybug_db_path)
+    proc = _run_jrag(
+        ["flow", "banking.chat.compliance.review", "--format", "json"], env=env
+    )
+    assert proc.returncode == 0, (
+        f"flow on kafka topic failed: rc={proc.returncode}\nstdout={proc.stdout}\nstderr={proc.stderr}"
+    )
+    payload = json.loads(proc.stdout)
+    assert payload["status"] == "ok", f"expected ok, got {payload}"
+    assert payload.get("root"), "expected root id (the kafka_topic Route)"
+    root_node = payload.get("nodes", {}).get(payload["root"], {})
+    assert root_node.get("kind") == "route", f"expected route root, got {root_node}"
+
+
+def test_flow_depth_flag_and_max_hops_alias(
+    corpus_root: Path, ladybug_db_path: Path
+) -> None:
+    """flow uses --depth (consistent with callers/callees/impact/decompose).
+
+    --max-hops remains as a hidden back-compat alias (same dest). Both must be
+    accepted and produce the same shape as the default-depth flow.
+    """
+    env = _env_for(corpus_root, ladybug_db_path)
+
+    # --depth is the primary flag now.
+    proc_depth = _run_jrag(
+        ["flow", "/chat/assign", "--depth", "2", "--format", "json"], env=env
+    )
+    assert proc_depth.returncode == 0, (
+        f"flow --depth failed: rc={proc_depth.returncode}\nstdout={proc_depth.stdout}"
+    )
+    payload_depth = json.loads(proc_depth.stdout)
+    assert payload_depth["status"] == "ok", f"expected ok, got {payload_depth}"
+
+    # --max-hops is the hidden alias; must still be accepted (back-compat).
+    proc_alias = _run_jrag(
+        ["flow", "/chat/assign", "--max-hops", "2", "--format", "json"], env=env
+    )
+    assert proc_alias.returncode == 0, (
+        f"flow --max-hops alias failed: rc={proc_alias.returncode}\nstdout={proc_alias.stdout}"
+    )
+    payload_alias = json.loads(proc_alias.stdout)
+    assert payload_alias["status"] == "ok", f"expected ok, got {payload_alias}"
+    # Same dest -> same traversal (depth 2 in both cases).
+    assert payload_alias.get("root") == payload_depth.get("root"), (
+        "expected identical root id for --depth and --max-hops"
+    )
+
+
 # ----- Test 16: traversal resolve-ambiguous stops (no auto-pick) -----
 
 
