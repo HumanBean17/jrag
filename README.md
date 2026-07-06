@@ -77,7 +77,7 @@ If you prefer manual configuration, see [`docs/JAVA-CODEBASE-RAG-CLI.md`](./docs
 
 ## Tools & commands at a glance
 
-Pick a surface once at install time — `java-codebase-rag install --surface mcp|cli` (default `mcp`). Both surfaces walk the same LanceDB vectors + LadybugDB graph.
+Pick a surface at install time — `java-codebase-rag install --surface mcp|cli` (default `cli`, recommended). Both surfaces walk the same LanceDB vectors + LadybugDB graph. Switch an existing install later with `java-codebase-rag update --surface mcp|cli`.
 
 **MCP surface — five tools over stdio**
 

@@ -43,6 +43,7 @@ java-codebase-rag install --scope user
 - `--agent {claude-code,qwen-code,gigacode}` — Agent host to configure (can be passed multiple times).
 - `--scope {project,user}` — Installation scope (default: `project`). Project scope writes to `.<host>/` in the project repo; user scope writes to `~/.<host>/` (globally available).
 - `--model MODEL` — Embedding model path or `auto` (default: `auto`, downloads `sentence-transformers/all-MiniLM-L6-v2` on first run).
+- `--surface {mcp,cli}` — Agent surface (default: `cli`, recommended). `cli` deploys the `jrag` console-script skill + `explorer-rag-cli` subagent (one command per intent, no MCP entry). `mcp` registers the `java-codebase-rag` stdio MCP server (five tools: `search`/`find`/`describe`/`neighbors`/`resolve`) plus the `explore-codebase` skill + `explorer-rag-enhanced` subagent. Omit to choose interactively.
 - `--quiet` / `-q` — Suppress the indexing progress stream on stderr (wizard prompts unchanged).
 - `--verbose` / `-v` — Raw-relay subprocess output during the indexing sub-step (no progress bar).
 
@@ -56,14 +57,15 @@ java-codebase-rag install --scope user
 2. Embedding model selection — auto-download or local path.
 3. Agent host selection — Claude Code, Qwen Code, GigaCode (multi-select).
 4. Install scope — project or user.
-5. MCP entrypoint resolution + artifact deployment — config, skill, agent files.
-6. Index + finish — YAML generation, `.gitignore` update, `init`. Stage 6's indexing sub-step renders the unified `Vectors → Optimize → Graph` progress on **stderr** (see [Indexing progress](#indexing-progress-stderr)); the wizard's conversational stdout is unchanged.
+5. Surface selection — `cli` (recommended, `jrag` skill+subagent) or `mcp` (stdio server + skill + subagent). Re-runs pre-fill the prior surface.
+6. Surface entrypoint resolution + artifact deployment — config (mcp only), skill, agent files.
+7. Index + finish — YAML generation, `.gitignore` update, `init`. Stage 7's indexing sub-step renders the unified `Vectors → Optimize → Graph` progress on **stderr** (see [Indexing progress](#indexing-progress-stderr)); the wizard's conversational stdout is unchanged.
 
 **Re-running `install`:** If `.java-codebase-rag.yml` exists, the installer shows current values and offers "Update" (pre-filled) or "Start fresh". Existing MCP entries are updated in-place (merged, not duplicated). Skill/agent files trigger overwrite confirmation.
 
 ### `update`
 
-Post-upgrade refresh: overwrites skill and agent files with the latest shipped versions and updates the MCP command path. If an index exists, also runs an incremental Lance + graph catch-up (same as `increment`). Requires a prior `install` run.
+Post-upgrade refresh: overwrites skill and agent files with the latest shipped versions and updates the MCP command path. If an index exists, also runs an incremental Lance + graph catch-up (same as `increment`). Can also switch the agent surface (`mcp` ↔ `cli`) for an existing install. Requires a prior `install` run.
 
 ```bash
 # Refresh after pip upgrade
@@ -75,18 +77,23 @@ java-codebase-rag update --dry-run
 
 # Force overwrite all artifacts
 java-codebase-rag update --force
+
+# Switch surface (migrate an existing install)
+java-codebase-rag update --surface cli      # mcp → cli
+java-codebase-rag update --surface mcp      # cli → mcp
 ```
 
 **Flags:**
 - `--force` — Overwrite all artifacts even if content matches.
 - `--dry-run` — Print changes without writing files.
+- `--surface {mcp,cli}` — Switch agent surface. Tears down the old surface's artifacts (removes just the `java-codebase-rag` MCP entry on `mcp`→`cli`; removes the `jrag` skill/subagent on `cli`→`mcp`), deploys the new surface's, and rewrites the install marker so the switch persists. Omit to keep the current surface; on a TTY you'll be prompted (cursor on the current surface).
 - `--quiet` / `-q` — Suppress the indexing progress stream on stderr (wizard stdout unchanged).
 - `--verbose` / `-v` — Raw-relay subprocess output during the indexing sub-step (no progress bar).
 
 **Behavior:**
-- Detects previously configured agent hosts (scans both project-level and user-level config files).
-- Refreshes skill and agent files (versioned assets from the package).
-- Updates MCP entrypoint path if `java-codebase-rag-mcp` has moved.
+- Detects previously configured agent hosts (reads the `.java-codebase-rag.hosts` marker; falls back to scanning project- and user-level MCP config files).
+- Refreshes skill and agent files (versioned assets from the package). On the `mcp` surface, also updates the MCP entrypoint path if `java-codebase-rag-mcp` has moved.
+- With `--surface` (or the interactive prompt), migrates each host whose recorded surface differs: tears down the old surface, deploys the new one, rewrites the marker. Non-interactive `update` without `--surface` keeps the current surface.
 - Runs an incremental index update (Lance + graph) if an index exists — same as `java-codebase-rag increment`. The indexing sub-step renders the unified `Vectors → Optimize → Graph` progress on **stderr** (see [Indexing progress](#indexing-progress-stderr)); it no longer runs silently.
 
 **Exit codes:**

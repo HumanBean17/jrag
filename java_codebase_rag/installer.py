@@ -190,7 +190,27 @@ def prompt(
         if prompt_type == "checkbox":
             return questionary.checkbox(message, choices=choices, style=no_color_style).ask()
         elif prompt_type == "select":
-            return questionary.select(message, choices=choices, style=no_color_style).ask()
+            # Normalize dict choices to questionary.Choice so ``default`` is
+            # matched by value. questionary.select forwards ``default`` as the
+            # cursor position (initial_choice), but its validation only matches
+            # ``default`` against ``Choice.value`` — a raw dict's value is
+            # invisible there, so passing ``default`` with dict choices raises.
+            # Plain-string choices pass through unchanged.
+            norm_choices = []
+            for c in choices or []:
+                if isinstance(c, dict):
+                    title = c.get("name", c.get("value"))
+                    norm_choices.append(
+                        questionary.Choice(title, value=c.get("value", title))
+                    )
+                else:
+                    norm_choices.append(c)
+            return questionary.select(
+                message,
+                choices=norm_choices,
+                default=default,
+                style=no_color_style,
+            ).ask()
         elif prompt_type == "text":
             return questionary.text(message, default=default, style=no_color_style).ask()
         elif prompt_type == "confirm":
@@ -475,6 +495,21 @@ def select_scope(*, non_interactive: bool, cli_scope: str | None) -> Scope:
     return selected  # type: ignore
 
 
+def _surface_choices() -> list[dict]:
+    """Choice list for a surface select prompt.
+
+    Single source of truth for the surface option labels and order: ``cli`` is
+    listed first and marked "(Recommended)" — the jrag CLI surface is the
+    recommended default for new installs. ``mcp`` remains available. The
+    returned dicts are normalized to ``questionary.Choice`` inside ``prompt``
+    so a value-based ``default`` (cursor position) validates.
+    """
+    return [
+        {"name": "cli (Recommended)", "value": "cli"},
+        {"name": "mcp", "value": "mcp"},
+    ]
+
+
 def select_surface(
     *,
     non_interactive: bool,
@@ -483,15 +518,17 @@ def select_surface(
 ) -> Surface:
     """Select 'mcp' or 'cli' surface (PR-JRAG-5).
 
-    The MCP surface registers the stdio MCP server (today's behavior). The CLI
-    surface ships the ``jrag`` console-script skill+subagent instead — no MCP
-    entry is registered.
+    The MCP surface registers the stdio MCP server. The CLI surface ships the
+    ``jrag`` console-script skill+subagent instead — no MCP entry is registered.
+    The CLI surface is the recommended default (listed first, marked
+    "(Recommended)").
 
     Args:
-        non_interactive: If True, honor ``cli_surface`` (default ``"mcp"``).
+        non_interactive: If True, honor ``cli_surface`` (default ``"cli"``).
         cli_surface: Surface from the ``--surface`` CLI flag.
         prefill: On re-run, the surface recorded in the existing marker file.
-            When set and the user does not pick otherwise, this is preserved.
+            When set, the cursor defaults to it so the user can keep the prior
+            choice with Enter (``cli`` is still shown first + recommended).
 
     Returns:
         Selected surface (``"mcp"`` or ``"cli"``).
@@ -506,25 +543,22 @@ def select_surface(
         return cli_surface  # type: ignore
 
     if non_interactive:
-        # Default to MCP for back-comat when no flag is passed.
-        return "mcp"
+        # Default to the recommended CLI surface when no flag is passed.
+        return "cli"
 
     print(
-        "Note: 'mcp' surface registers the java-codebase-rag MCP server (5 tools: "
-        "search/find/describe/neighbors/resolve)."
+        "Note: 'cli' surface deploys the `jrag` console-script skill+subagent "
+        "(one command per intent, no MCP server) — recommended."
     )
     print(
-        "      'cli' surface deploys the `jrag` console-script skill+subagent "
-        "(one command per intent, no MCP server)."
+        "      'mcp' surface registers the java-codebase-rag MCP server "
+        "(5 tools: search/find/describe/neighbors/resolve)."
     )
 
-    choices = ["mcp", "cli"]
-    if prefill is not None:
-        # Surface the prior choice first so the user can keep it with Enter.
-        choices = [prefill] + [c for c in ("mcp", "cli") if c != prefill]
-        default = prefill
-    else:
-        default = "mcp"
+    # cli is always shown first + recommended; the cursor defaults to the prior
+    # choice (prefill) on re-run so the user can keep it with Enter.
+    choices = _surface_choices()
+    default = prefill if prefill is not None else "cli"
 
     selected = prompt(
         "select",
@@ -1543,6 +1577,133 @@ def _refresh_mcp_config(
         return ArtifactResult(path=config_path, success=False, error=str(e))
 
 
+def _remove_mcp_entry(config_path: Path, *, dry_run: bool) -> ArtifactResult:
+    """Remove the java-codebase-rag entry from an MCP config (surface migration).
+
+    Pops ONLY the ``java-codebase-rag`` key from ``mcpServers`` — other servers
+    and the file itself are preserved. No-op success when the file or our key is
+    absent. Atomic write (same tmp + ``os.replace`` pattern as ``merge_mcp_config``).
+    Used by ``_undeploy_surface`` when switching off the MCP surface.
+    """
+    if not config_path.is_file():
+        return ArtifactResult(path=config_path, success=True, error=None)
+    try:
+        with open(config_path, "r") as f:
+            config = json.load(f)
+    except (json.JSONDecodeError, IOError, OSError) as e:
+        return ArtifactResult(
+            path=config_path, success=False, error=f"Failed to parse {config_path}: {e}"
+        )
+
+    servers = config.get("mcpServers")
+    if not isinstance(servers, dict) or _MCP_SERVER_NAME not in servers:
+        return ArtifactResult(path=config_path, success=True, error=None)
+
+    if dry_run:
+        print(f"Would remove MCP entry from {config_path}")
+        return ArtifactResult(path=config_path, success=True, error=None)
+
+    del servers[_MCP_SERVER_NAME]
+    if not servers:
+        config.pop("mcpServers", None)
+
+    tmp_name = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            dir=config_path.parent,
+            prefix=f".{config_path.name}.",
+            delete=False,
+        ) as tmp:
+            json.dump(config, tmp, indent=2)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+            tmp_name = tmp.name
+        os.replace(tmp_name, config_path)
+        print(f"Removed MCP entry from {config_path}")
+        return ArtifactResult(path=config_path, success=True, error=None)
+    except (IOError, OSError) as e:
+        if tmp_name:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+        return ArtifactResult(
+            path=config_path, success=False, error=f"Failed to write {config_path}: {e}"
+        )
+
+
+def _remove_artifact_file(dest_path: Path, *, dry_run: bool) -> ArtifactResult:
+    """Remove a deployed skill/agent file (surface migration teardown).
+
+    Best-effort prunes the now-empty immediate parent dir (e.g.
+    ``skills/explore-codebase``); leaves it in place if other files remain.
+    No-op success when the file is absent.
+    """
+    if not dest_path.is_file():
+        return ArtifactResult(path=dest_path, success=True, error=None)
+    if dry_run:
+        print(f"Would remove {dest_path}")
+        return ArtifactResult(path=dest_path, success=True, error=None)
+    try:
+        dest_path.unlink()
+        try:
+            dest_path.parent.rmdir()
+        except OSError:
+            # Not empty or not removable — leave the directory in place.
+            pass
+        print(f"Removed {dest_path}")
+        return ArtifactResult(path=dest_path, success=True, error=None)
+    except OSError as e:
+        return ArtifactResult(
+            path=dest_path, success=False, error=f"Failed to remove {dest_path}: {e}"
+        )
+
+
+def _undeploy_surface(
+    host: HostConfig, scope: str, cwd: Path, *, surface: Surface, dry_run: bool
+) -> list[ArtifactResult]:
+    """Tear down every artifact a surface shipped (migration off ``surface``).
+
+    Iterates ``ARTIFACT_MANIFEST[surface]`` so adding/removing an artifact is
+    one manifest edit, not two — mirrors ``deploy_artifacts``/``refresh_artifacts``.
+    The ``mcp`` row removes just our server entry; ``skill``/``agent`` rows
+    remove the file. Returns one ``ArtifactResult`` per manifest row.
+    """
+    results: list[ArtifactResult] = []
+    for kind, _package_path, dest_relative in ARTIFACT_MANIFEST[surface]:
+        if kind == "mcp":
+            mcp_config_path = host.mcp_config_path(scope, cwd)
+            results.append(_remove_mcp_entry(mcp_config_path, dry_run=dry_run))
+        else:
+            dest_path = host.scope_path(scope, cwd) / dest_relative
+            results.append(_remove_artifact_file(dest_path, dry_run=dry_run))
+    return results
+
+
+def _resolve_update_surface(*, surface: str | None, current: Surface) -> Surface | None:
+    """Decide which surface ``run_update`` should target.
+
+    Returns a surface to migrate toward, or ``None`` when no global choice was
+    made (non-TTY, no flag) — in which case ``run_update`` refreshes each host
+    on its OWN recorded surface and migrates nothing.
+
+    - ``surface`` set (``--surface`` flag): validate and use it (enables
+      migration; invalid value raises ``SystemExit(2)`` via ``select_surface``).
+    - TTY, no flag: interactive prompt — ``cli`` recommended, cursor on the
+      current surface so the user can keep it with Enter or switch.
+    - non-TTY, no flag: ``None`` (no migration). Preserves the behavior of
+      non-interactive ``run_update(...)`` callers and, crucially, leaves a
+      mixed-surface marker untouched rather than normalizing it to the first
+      host's surface.
+    """
+    if surface is not None:
+        return select_surface(non_interactive=True, cli_surface=surface)
+    if sys.stdin.isatty():
+        return select_surface(non_interactive=False, cli_surface=None, prefill=current)
+    return None
+
+
 def run_update(
     *,
     force: bool,
@@ -1550,6 +1711,7 @@ def run_update(
     cwd: Path | None = None,
     quiet: bool = False,
     verbose: bool = False,
+    surface: str | None = None,
 ) -> int:
     """Run the update pipeline. Returns exit code.
 
@@ -1561,12 +1723,20 @@ def run_update(
     the indexing chatter that used to print to stdout moves onto the stderr
     renderer framing.
 
+    Surface switching (mcp ↔ cli): a ``surface`` choice different from a host's
+    recorded surface migrates that host — tearing down the old surface's
+    artifacts (``_undeploy_surface``), deploying the new surface's
+    (``deploy_artifacts``), and rewriting the marker so the switch persists.
+
     Args:
         force: If True, overwrite all artifacts even if matching
         dry_run: If True, print changes without writing
         cwd: Current working directory (defaults to Path.cwd())
         quiet: If True, suppress progress output
         verbose: If True, raw-relay subprocess output (no Live region)
+        surface: Target surface (``"mcp"``/``"cli"``) from ``--surface``. When
+            ``None``: a TTY prompts (cursor on the current surface); a non-TTY
+            keeps each host's recorded surface (no migration).
 
     Returns:
         Exit code (0=success, 1=partial, 2=fatal)
@@ -1585,19 +1755,115 @@ def run_update(
 
     print(f"Found {len(configured_hosts)} configured host(s).")
 
-    # Refresh artifacts for each host
+    # Resolve the target surface. ``--surface`` validates + overrides; a TTY
+    # with no flag prompts (cursor on the current surface); a non-TTY with no
+    # flag yields None -> no global choice, so each host refreshes on its OWN
+    # recorded surface and nothing migrates (preserves non-interactive callers
+    # and leaves mixed-surface markers untouched rather than normalizing them).
+    current_surfaces = {ch.surface for ch in configured_hosts}
+    current_surface = configured_hosts[0].surface
+    chosen_surface = _resolve_update_surface(
+        surface=surface, current=current_surface
+    )
+    if len(current_surfaces) > 1:
+        if chosen_surface is None:
+            print(
+                f"Note: configured hosts span multiple surfaces "
+                f"({sorted(current_surfaces)}); refreshing each on its own "
+                f"recorded surface (pass --surface to normalize)."
+            )
+        else:
+            print(
+                f"Note: configured hosts span multiple surfaces "
+                f"({sorted(current_surfaces)}); normalizing to '{chosen_surface}'."
+            )
+
+    # If any host needs to migrate, resolve the target surface's runtime binary
+    # up front so a missing binary fails fast with a clear message rather than a
+    # per-host partial. (For the cli surface ``deploy_artifacts`` ignores the
+    # command, but resolving ``jrag`` confirms the invoked CLI actually exists.)
+    # ``chosen_surface`` is guaranteed non-None here when migration_needed.
+    migration_needed = (
+        chosen_surface is not None
+        and any(ch.surface != chosen_surface for ch in configured_hosts)
+    )
+    deploy_command = ""
+    if migration_needed and not dry_run:
+        try:
+            deploy_command = resolve_mcp_command(
+                non_interactive=not sys.stdin.isatty(), surface=chosen_surface
+            )
+        except SystemExit:
+            binary = "jrag" if chosen_surface == "cli" else "java-codebase-rag-mcp"
+            print(
+                f"Error: `{binary}` not found on PATH — cannot migrate to the "
+                f"'{chosen_surface}' surface."
+            )
+            print(
+                "Ensure `java-codebase-rag` is installed, then re-run `update "
+                f"--surface {chosen_surface}`."
+            )
+            return EXIT_PARTIAL
+
+    # Refresh (or migrate) artifacts for each host. When chosen_surface is None
+    # (non-TTY, no flag) every host takes the refresh branch on its own surface.
     all_results = []
-    for host_config, scope, surface in configured_hosts:
-        print(f"\nRefreshing {host_config.name} ({scope} scope, surface={surface})...")
-        results = refresh_artifacts(
-            host_config,
-            scope,
-            cwd,
-            force=force,
-            dry_run=dry_run,
-            surface=surface,
-        )
-        all_results.extend(results)
+    updated_configured: list[ConfiguredHost] = []
+    migrated = False
+    for host_config, scope, host_surface in configured_hosts:
+        if chosen_surface is not None and host_surface != chosen_surface:
+            migrated = True
+            print(
+                f"\nMigrating {host_config.name} ({scope} scope): "
+                f"{host_surface} → {chosen_surface}..."
+            )
+            if dry_run:
+                print(
+                    f"  Would tear down {host_surface} artifacts and deploy "
+                    f"{chosen_surface} artifacts."
+                )
+                updated_configured.append(
+                    ConfiguredHost(host_config, scope, chosen_surface)
+                )
+                continue
+            teardown_results = _undeploy_surface(
+                host_config, scope, cwd, surface=host_surface, dry_run=False
+            )
+            all_results.extend(teardown_results)
+            # deploy_command was resolved up front (migration_needed && not
+            # dry_run); chosen_surface is non-None on this branch by the guard.
+            deploy_results = deploy_artifacts(
+                [host_config],
+                scope,
+                cwd,
+                non_interactive=True,
+                mcp_command=deploy_command,
+                surface=chosen_surface,
+            )
+            all_results.extend(deploy_results)
+            updated_configured.append(
+                ConfiguredHost(host_config, scope, chosen_surface)
+            )
+        else:
+            print(
+                f"\nRefreshing {host_config.name} ({scope} scope, surface={host_surface})..."
+            )
+            results = refresh_artifacts(
+                host_config,
+                scope,
+                cwd,
+                force=force,
+                dry_run=dry_run,
+                surface=host_surface,
+            )
+            all_results.extend(results)
+            updated_configured.append(
+                ConfiguredHost(host_config, scope, host_surface)
+            )
+
+    # Persist the surface switch so a later ``update`` sees the new surface.
+    if migrated and not dry_run:
+        _write_hosts_marker(cwd, updated_configured)
 
     # Check for partial failures
     partial_failures = [r for r in all_results if not r.success]
