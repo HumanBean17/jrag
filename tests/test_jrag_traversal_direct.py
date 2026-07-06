@@ -22,8 +22,11 @@ Tests (bank-chat fixture):
 13. test_impact_service_post_filter_emits_warning
 14. test_decompose_renders_role_waterfall
 15. test_flow_outbound_intra_service_on_fixture
-16. test_traversal_resolve_ambiguous_stops
-17. test_traversal_rejects_offset
+16. test_flow_follows_kafka_topic_on_fixture
+17. test_flow_depth_flag_and_max_hops_alias
+18. test_callers_topic_disambiguates_with_kind
+19. test_traversal_resolve_ambiguous_stops
+20. test_traversal_rejects_offset
 """
 from __future__ import annotations
 
@@ -623,18 +626,22 @@ def test_flow_outbound_intra_service_on_fixture(
 def test_flow_follows_kafka_topic_on_fixture(
     corpus_root: Path, ladybug_db_path: Path
 ) -> None:
-    """flow resolves a Kafka topic name to its Route and follows it.
+    """flow resolves a Kafka topic to its Route AND follows it (async edges).
 
     Regression: ``_resolve_route_candidates`` matched only on path, so a
     ``kafka_topic`` Route (name in ``topic``, ``path=''``) was unresolvable and
-    ``jrag flow <topic>`` returned 'none' even though the route + EXPOSES edge
-    existed. ``banking.chat.compliance.review`` is consumed by
-    ``ComplianceReviewListener`` (``@CodebaseAsyncRoute(topic=...)``); flow must
-    now resolve it to a Route root and surface the listener's outbound CALLS.
+    ``jrag flow <topic>`` returned 'none'. Resolution alone is not enough — this
+    test also asserts the follow graph is non-empty and carries an
+    ``ASYNC_CALLS`` edge, proving the kafka-specific inbound arm (topic-matched
+    Producer) actually fires once the route resolves.
+
+    ``banking.chat.incoming`` is the canonical dual-sided topic: produced by
+    ``FollowUpKafkaPublisher`` (inbound ``ASYNC_CALLS``) and consumed by
+    ``ChatKafkaListener`` (outbound ``CALLS`` to ``orchestrationService.handle``).
     """
     env = _env_for(corpus_root, ladybug_db_path)
     proc = _run_jrag(
-        ["flow", "banking.chat.compliance.review", "--format", "json"], env=env
+        ["flow", "banking.chat.incoming", "--format", "json"], env=env
     )
     assert proc.returncode == 0, (
         f"flow on kafka topic failed: rc={proc.returncode}\nstdout={proc.stdout}\nstderr={proc.stderr}"
@@ -644,6 +651,13 @@ def test_flow_follows_kafka_topic_on_fixture(
     assert payload.get("root"), "expected root id (the kafka_topic Route)"
     root_node = payload.get("nodes", {}).get(payload["root"], {})
     assert root_node.get("kind") == "route", f"expected route root, got {root_node}"
+    # The follow graph must be non-empty AND carry a kafka async inbound edge —
+    # this is the part that proves "flow follows kafka", not just "resolves it".
+    edges = payload.get("edges", [])
+    assert edges, f"expected non-empty follow graph for a kafka topic, got edges={edges}"
+    assert any(e.get("edge_type") == "ASYNC_CALLS" for e in edges), (
+        f"expected an ASYNC_CALLS (topic-matched Producer) inbound edge, got {edges}"
+    )
 
 
 def test_flow_depth_flag_and_max_hops_alias(
@@ -652,7 +666,8 @@ def test_flow_depth_flag_and_max_hops_alias(
     """flow uses --depth (consistent with callers/callees/impact/decompose).
 
     --max-hops remains as a hidden back-compat alias (same dest). Both must be
-    accepted and produce the same shape as the default-depth flow.
+    accepted, produce the same traversal, and --depth must actually change the
+    traversal depth (more hops => strictly more CALLS edges).
     """
     env = _env_for(corpus_root, ladybug_db_path)
 
@@ -679,6 +694,61 @@ def test_flow_depth_flag_and_max_hops_alias(
     assert payload_alias.get("root") == payload_depth.get("root"), (
         "expected identical root id for --depth and --max-hops"
     )
+
+    # --depth must actually affect the traversal: depth 1 yields strictly fewer
+    # outbound CALLS edges than depth 5 on this fixture (~3 vs ~20).
+    proc_shallow = _run_jrag(
+        ["flow", "/chat/assign", "--depth", "1", "--format", "json"], env=env
+    )
+    proc_deep = _run_jrag(
+        ["flow", "/chat/assign", "--depth", "5", "--format", "json"], env=env
+    )
+    shallow = json.loads(proc_shallow.stdout)
+    deep = json.loads(proc_deep.stdout)
+    assert len(shallow.get("edges", [])) < len(deep.get("edges", [])), (
+        f"--depth should change traversal size; depth=1 -> {len(shallow.get('edges', []))}, "
+        f"depth=5 -> {len(deep.get('edges', []))}"
+    )
+
+
+def test_callers_topic_disambiguates_with_kind(
+    corpus_root: Path, ladybug_db_path: Path
+) -> None:
+    """A dual-sided topic resolves to BOTH a Producer and a Route -> ambiguous
+    without --kind; --kind route collapses to one and runs find_route_callers.
+
+    Behavior note (from enabling r.topic resolution): ``callers <topic>`` with no
+    --kind now searches all kinds, and a topic with both a Producer and a server
+    Route is genuinely ambiguous (previously only the Producer matched, which
+    then errored because callers only accepts Symbol/Route roots — jrag.py:2371).
+    ``--kind route`` is the disambiguation that yields a working callers run.
+    (--kind producer resolves to the Producer but callers rejects a Producer
+    root; use the ``producers`` command for the producer view.)
+    """
+    env = _env_for(corpus_root, ladybug_db_path)
+
+    # No --kind: Producer + Route both match -> ambiguous (no traversal).
+    proc_both = _run_jrag(
+        ["callers", "banking.chat.incoming", "--format", "json"], env=env
+    )
+    payload_both = json.loads(proc_both.stdout)
+    assert payload_both["status"] == "ambiguous", (
+        f"expected ambiguous for dual-sided topic without --kind, got {payload_both.get('status')}"
+    )
+    assert len(payload_both.get("candidates", [])) >= 2, (
+        f"expected >=2 candidates (producer + route), got {payload_both.get('candidates')}"
+    )
+
+    # --kind route: resolves to the single server Route and runs find_route_callers.
+    proc_route = _run_jrag(
+        ["callers", "banking.chat.incoming", "--kind", "route", "--format", "json"],
+        env=env,
+    )
+    payload_route = json.loads(proc_route.stdout)
+    assert payload_route["status"] == "ok", (
+        f"expected --kind route to resolve and run, got {payload_route.get('status')}"
+    )
+    assert payload_route.get("root"), "expected a resolved root for --kind route"
 
 
 # ----- Test 16: traversal resolve-ambiguous stops (no auto-pick) -----
