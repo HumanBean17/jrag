@@ -291,9 +291,23 @@ async def coco_lifespan(builder: coco.EnvironmentBuilder) -> AsyncIterator[None]
         root = Path(".").resolve()
     builder.provide(PROJECT_ROOT, root)
 
+    # Default to Apple Metal (MPS) when available: ~1.7x faster encode on
+    # all-MiniLM-L6-v2 (measured), and the win grows with repo size since
+    # embedding dominates on large trees. torch is already on the import path
+    # here (sentence-transformers pulls it), so the availability check is free
+    # in this child process — and it keeps the CLI parent (config.py) from ever
+    # paying a torch import. Operators force CPU with SBERT_DEVICE=cpu.
+    device = os.environ.get("SBERT_DEVICE") or None
+    if device is None:
+        try:
+            import torch  # noqa: WPS433 (local import: avoid parent-import cost)
+            if torch.backends.mps.is_available():
+                device = "mps"
+        except Exception:
+            pass
     embedder = SentenceTransformerEmbedder(
         resolved_sbert_model_for_process_env(SBERT_MODEL),
-        device=os.environ.get("SBERT_DEVICE") or None,
+        device=device,
         trust_remote_code=True,
     )
     builder.provide(EMBEDDER, embedder)
@@ -619,24 +633,25 @@ async def app_main() -> None:
         ),
     )
 
-    await coco.mount_each(
-        coco.component_subpath(coco.Symbol("java_files")),
-        process_java_file,
-        java_files.items(),
-        java_table,
-    )
-    await coco.mount_each(
-        coco.component_subpath(coco.Symbol("sql_files")),
-        process_sql_file,
-        sql_files.items(),
-        sql_table,
-    )
-    await coco.mount_each(
-        coco.component_subpath(coco.Symbol("yaml_files")),
-        process_yaml_file,
-        yaml_files.items(),
-        yaml_table,
-    )
+    # PERF: declare all rows in ONE component (app_main) instead of one
+    # component per file via coco.mount_each. cocoindex flushes target writes
+    # once per processing component, and all declare_row calls inside a
+    # component batch into a single Lance merge_insert (see _RowHandler.
+    # _apply_actions). mount_each created one component PER FILE → ~1167
+    # merge_insert transactions (one fragment + manifest commit each) → ~91s
+    # of kernel I/O on a 1167-file repo. The single-component loop collapses
+    # that to ONE merge_insert per table. cocoindex does not yet batch across
+    # mount_each components natively (open issue cocoindex#2219), so the loop
+    # is the supported workaround. process_*_file stay @coco.fn(memo=True), so
+    # unchanged files still skip re-embedding on incremental; _RowHandler.
+    # reconcile skips rows whose fingerprint is unchanged → increment carries
+    # only changed rows in its single merge_insert.
+    async for _key, _file in java_files.items():
+        await process_java_file(_file, java_table)
+    async for _key, _file in sql_files.items():
+        await process_sql_file(_file, sql_table)
+    async for _key, _file in yaml_files.items():
+        await process_yaml_file(_file, yaml_table)
 
 
 app = coco.App(
