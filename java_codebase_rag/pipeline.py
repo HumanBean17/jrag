@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import os
 import shutil
 import subprocess
@@ -198,6 +199,19 @@ def is_cocoindex_preflight_blocker(proc: subprocess.CompletedProcess[str]) -> bo
 def is_graph_preflight_blocker(proc: subprocess.CompletedProcess[str]) -> bool:
     """True when ``run_build_ast_graph`` returned a pre-spawn stub (builder missing)."""
     return bool(proc.returncode in (126, 127) and len(getattr(proc, "args", ()) or ()) <= 1)
+
+
+def vector_stack_installed() -> bool:
+    """True when the optional vector stack (cocoindex/lancedb/sentence-transformers) is importable.
+
+    False on graph-only installs (macOS Intel), where PEP 508 markers exclude the trio.
+    Used to skip vector-only wizard steps (e.g. embedding-model selection) and to preflight
+    branching without spawning cocoindex. Probes all three since they are gated together.
+    """
+    return all(
+        importlib.util.find_spec(m) is not None
+        for m in ("cocoindex", "lancedb", "sentence_transformers")
+    )
 
 
 def _run_cocoindex_update_impl(
