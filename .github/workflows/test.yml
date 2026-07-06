@@ -19,11 +19,13 @@ jobs:
         # before this matrix. Promote an OS to a hard gate by dropping it from
         # the continue-on-error expression once it is reliably green.
         #
-        # macos-13 is the only Intel (x86_64) runner: PEP 508 markers gate the
-        # vector trio (cocoindex[lancedb]/lancedb/sentence-transformers) off
-        # there, so it installs graph-only and proves the graph-only boot path
-        # (tests/test_graph_only_boot.py) plus clean skips of vector tests.
-        os: [ubuntu-latest, macos-latest, macos-13, windows-latest]
+        # macos-13 (Intel x86_64) is the only runner that proves the graph-only
+        # install/boot path (PEP 508 markers gate the vector trio off there).
+        # TEMPORARILY DISABLED: the leg was pending indefinitely. Re-add
+        # `macos-13` to the list below to restore Intel graph-only coverage;
+        # the graph-only boot is still covered cross-platform by
+        # tests/test_graph_only_boot.py (which blocks the vector modules in-process).
+        os: [ubuntu-latest, macos-latest, windows-latest]
     continue-on-error: ${{ matrix.os != 'ubuntu-latest' }}
     runs-on: ${{ matrix.os }}
     steps:
