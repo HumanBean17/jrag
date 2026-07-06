@@ -349,6 +349,31 @@ async def run_refresh_pipeline(
             )
     proc: asyncio.subprocess.Process | None = None
     out_b, err_b = b"", b""
+    # DROP the Lance target tables so the update takes the fast INSERT path
+    # instead of cocoindex's in-place bulk-update, which emits ~one deletion-
+    # vector + version commit PER matched row — O(rows) of tiny file IO that
+    # hangs for many minutes on large repos. Drop+recreate is identical output
+    # for a full rebuild (the very thing --full-reprocess means). Same fix on
+    # the sync path: pipeline.run_cocoindex_update. Drop failure is non-fatal:
+    # the update falls back to the slow in-place path.
+    try:
+        drop_proc = await asyncio.create_subprocess_exec(
+            str(cocoindex_bin),
+            "drop",
+            _COCOINDEX_TARGET,
+            "-f",
+            cwd=str(flow_path.parent),
+            env=_cocoindex_subprocess_env(root),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await drop_proc.communicate()
+    except Exception as exc:
+        print(
+            f"java-codebase-rag: drop-before-reprocess failed ({exc!s}); "
+            "falling back to in-place update",
+            file=sys.stderr,
+        )
     if quiet:
         try:
             proc = await asyncio.create_subprocess_exec(
