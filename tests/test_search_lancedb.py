@@ -3,6 +3,12 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
+
+# search_lancedb imports lancedb/torch at module load; skip the whole file on graph-only
+# installs (macOS Intel) where the vector stack is absent.
+pytest.importorskip("lancedb")
+pytest.importorskip("sentence_transformers")
 
 import search_lancedb
 from search_lancedb import JAVA_ENRICHED_COLUMNS, _rrf_merge

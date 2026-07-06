@@ -29,6 +29,24 @@ from mcp_v2 import (
 )
 from pinned_ids import client_message_processor_process_id
 
+import importlib.util
+
+
+def _vector_stack_available() -> bool:
+    """True when the optional vector stack (torch/sentence-transformers/lancedb) is installed.
+
+    The ``search`` tool loads a SentenceTransformer model, so the search/filter unit tests
+    need it even when ``run_search`` is monkeypatched. Skip them on graph-only installs
+    (macOS Intel, where the vector trio is gated off by PEP 508 markers).
+    """
+    return all(importlib.util.find_spec(m) is not None for m in ("sentence_transformers", "lancedb"))
+
+
+needs_vectors = pytest.mark.skipif(
+    not _vector_stack_available(),
+    reason="vector stack not installed (graph-only install; macOS Intel)",
+)
+
 _PR2_CHAIN_SEARCH_DESCRIBE = re.compile(r"search\(query=.*\).*describe")
 _PR2_SENTINEL_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"per\.candidate"),
@@ -116,6 +134,7 @@ def _fake_search_rows() -> list[dict[str, Any]]:
     ]
 
 
+@needs_vectors
 def test_search_basic_returns_hits_with_symbol_id(monkeypatch, ladybug_graph) -> None:
     monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
     out = search_v2("ChatService", graph=ladybug_graph)
@@ -124,6 +143,7 @@ def test_search_basic_returns_hits_with_symbol_id(monkeypatch, ladybug_graph) ->
     assert out.results[0].symbol_id is not None
 
 
+@needs_vectors
 def test_search_filter_microservice(monkeypatch, ladybug_graph) -> None:
     monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
     out = search_v2("ChatService", filter={"microservice": "chat-assign"}, graph=ladybug_graph)
@@ -132,6 +152,7 @@ def test_search_filter_microservice(monkeypatch, ladybug_graph) -> None:
     assert {h.microservice for h in out.results} == {"chat-assign"}
 
 
+@needs_vectors
 def test_search_path_contains_filter(monkeypatch, ladybug_graph) -> None:
     monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
     out = search_v2("ChatAssign", path_contains="ChatAssign", graph=ladybug_graph)
@@ -569,6 +590,7 @@ async def test_search_invalid_table_rejected(mcp_server) -> None:
         await mcp_server.call_tool("search", {"query": "foo", "table": "code"})
 
 
+@needs_vectors
 def test_search_filter_accepts_json_string(monkeypatch, ladybug_graph) -> None:
     monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
     want = {"microservice": "chat-assign"}
@@ -579,6 +601,7 @@ def test_search_filter_accepts_json_string(monkeypatch, ladybug_graph) -> None:
     assert out_dict.results == out_str.results
 
 
+@needs_vectors
 def test_search_unknown_filter_key_returns_failure(monkeypatch, ladybug_graph) -> None:
     monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
     out = search_v2("ChatService", filter={"typo_key": "x"}, graph=ladybug_graph)
@@ -607,6 +630,7 @@ def test_search_no_lance_index_returns_failure_envelope(monkeypatch, ladybug_gra
     assert found.results
 
 
+@needs_vectors
 def test_search_pushes_nodefilter_into_run_search(monkeypatch, ladybug_graph) -> None:
     """search forwards NodeFilter structural fields into run_search so the filter
     applies BEFORE pagination, not as a post-filter on the already-paginated page
@@ -711,6 +735,7 @@ def test_neighbors_flat_labels_select_columns_per_edge_type() -> None:
         )
 
 
+@needs_vectors
 def test_search_cross_kind_filter_returns_failure(monkeypatch, ladybug_graph) -> None:
     monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
     out = search_v2("ChatService", filter={"path_contains": "/api"}, graph=ladybug_graph)
@@ -720,6 +745,7 @@ def test_search_cross_kind_filter_returns_failure(monkeypatch, ladybug_graph) ->
     assert "kind='symbol'" in out.message
 
 
+@needs_vectors
 def test_search_filter_empty_string_treated_as_none(monkeypatch, ladybug_graph) -> None:
     monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
     baseline = search_v2("ChatService", graph=ladybug_graph)
@@ -731,6 +757,7 @@ def test_search_filter_empty_string_treated_as_none(monkeypatch, ladybug_graph) 
     assert baseline.results == empty.results == whitespace.results
 
 
+@needs_vectors
 def test_search_filter_json_null_treated_as_none(monkeypatch, ladybug_graph) -> None:
     monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
     baseline = search_v2("ChatService", graph=ladybug_graph)
@@ -824,6 +851,7 @@ def test_neighbors_validate_call_still_raises(ladybug_graph) -> None:
         neighbors_v2(mid, direction="upstream", edge_types=["CALLS"], graph=ladybug_graph)
 
 
+@needs_vectors
 def test_filter_invalid_json_returns_failure(monkeypatch, ladybug_graph) -> None:
     monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
     out = search_v2("ChatService", filter="{not json", graph=ladybug_graph)

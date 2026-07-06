@@ -25,7 +25,15 @@ from java_codebase_rag.config import (
     write_config_source_pointer,
 )
 from java_codebase_rag._fdlimit import raise_fd_limit
-from java_codebase_rag.pipeline import clip, run_build_ast_graph, run_cocoindex_drop, run_cocoindex_update, run_incremental_graph
+from java_codebase_rag.pipeline import (
+    clip,
+    is_cocoindex_preflight_blocker,
+    is_graph_preflight_blocker,
+    run_build_ast_graph,
+    run_cocoindex_drop,
+    run_cocoindex_update,
+    run_incremental_graph,
+)
 from java_ontology import VALID_UNRESOLVED_CALL_REASONS
 
 LADYBUG_INCREMENTAL_TRACKING_ISSUE_URL = "https://github.com/HumanBean17/java-codebase-rag/issues/73"
@@ -63,6 +71,12 @@ def _reprocess_drift_graph_only_line(index_dir: Path) -> str:
     )
 
 
+_VECTORS_SKIPPED_GRAPH_ONLY = (
+    "java-codebase-rag: vectors skipped — vector stack not installed on this platform "
+    "(graph-only mode). The graph is built/refreshed; semantic search is unavailable."
+)
+
+
 def _reprocess_exit_code(payload: dict[str, Any]) -> int:
     if payload.get("success"):
         return 0
@@ -72,16 +86,17 @@ def _reprocess_exit_code(payload: dict[str, Any]) -> int:
     return 1
 
 
-# Preflight detection must stay aligned with stub CompletedProcess shapes in
-# java_codebase_rag/pipeline.py (missing cocoindex / flow / build_ast_graph.py).
+# Preflight detection delegates to pipeline.is_cocoindex_preflight_blocker /
+# is_graph_preflight_blocker, which are co-located with the stub CompletedProcess shapes
+# they must match (missing cocoindex / flow / build_ast_graph.py).
 def _is_cocoindex_preflight_blocker(coco: Any) -> bool:
     """True when ``run_cocoindex_update`` returned without spawning cocoindex."""
-    return bool(coco.returncode in (126, 127) and len(getattr(coco, "args", ()) or ()) <= 1)
+    return is_cocoindex_preflight_blocker(coco)
 
 
 def _is_graph_preflight_blocker(g: Any) -> bool:
     """True when ``run_build_ast_graph`` returned without spawning the builder."""
-    return bool(g.returncode in (126, 127) and len(getattr(g, "args", ()) or ()) <= 1)
+    return is_graph_preflight_blocker(g)
 
 
 def _emit_reprocess_selective_tty(*, mode: str) -> None:
@@ -341,7 +356,11 @@ def _cmd_init(args: argparse.Namespace) -> int:
             on_progress=progress.on_progress if progress is not None else None,
             on_progress_console=progress.console if progress is not None else None,
         )
-        if coco.returncode != 0:
+        # Graph-only install (cocoindex absent, e.g. macOS Intel): skip the vectors phase
+        # and proceed to the graph build rather than failing — the graph layer is the
+        # supported surface there. A genuine non-zero cocoindex exit still fails.
+        vectors_skipped = _is_cocoindex_preflight_blocker(coco)
+        if coco.returncode != 0 and not vectors_skipped:
             _emit(
                 {
                     "success": False,
@@ -352,6 +371,8 @@ def _cmd_init(args: argparse.Namespace) -> int:
                 }
             )
             return 1
+        if vectors_skipped:
+            print(_VECTORS_SKIPPED_GRAPH_ONLY, file=sys.stderr, flush=True)
         if not args.quiet:
             print(file=sys.stderr, flush=True)
         g = run_build_ast_graph(
@@ -374,7 +395,16 @@ def _cmd_init(args: argparse.Namespace) -> int:
                 }
             )
             return 1
-        _emit({"success": True, "message": "init completed"})
+        _emit(
+            {
+                "success": True,
+                "message": (
+                    "init completed (graph-only; vectors skipped — vector stack not installed)"
+                    if vectors_skipped
+                    else "init completed"
+                ),
+            }
+        )
         return 0
 
     return _run_with_pipeline_progress(
@@ -403,7 +433,8 @@ def _cmd_increment(args: argparse.Namespace) -> int:
             on_progress=progress.on_progress if progress is not None else None,
             on_progress_console=progress.console if progress is not None else None,
         )
-        if coco.returncode != 0:
+        vectors_skipped = _is_cocoindex_preflight_blocker(coco)
+        if coco.returncode != 0 and not vectors_skipped:
             _emit(
                 {
                     "success": False,
@@ -414,9 +445,19 @@ def _cmd_increment(args: argparse.Namespace) -> int:
                 }
             )
             return 1
+        if vectors_skipped:
+            print(_VECTORS_SKIPPED_GRAPH_ONLY, file=sys.stderr, flush=True)
 
         # If --vectors-only is set, skip graph update
         if vectors_only:
+            if vectors_skipped:
+                _emit(
+                    {
+                        "success": True,
+                        "message": "increment skipped: vector stack not installed (graph-only mode)",
+                    }
+                )
+                return 0
             _emit({"success": True, "message": "increment completed (Lance only; graph may be stale — see stderr)"})
             return 0
 
@@ -459,7 +500,16 @@ def _cmd_increment(args: argparse.Namespace) -> int:
             )
             return 1
 
-        _emit({"success": True, "message": "increment completed (Lance + graph updated)"})
+        _emit(
+            {
+                "success": True,
+                "message": (
+                    "increment completed (graph only; vectors skipped — vector stack not installed)"
+                    if vectors_skipped
+                    else "increment completed (Lance + graph updated)"
+                ),
+            }
+        )
         return 0
 
     return _run_with_pipeline_progress(

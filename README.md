@@ -41,8 +41,8 @@ The rest of this README is the install, the tool/command orientation, and the re
 pip install java-codebase-rag
 ```
 
-Python **3.11+** required, on **Linux, macOS, and Windows** — every native dependency (LanceDB, LadybugDB/kuzu, CocoIndex) ships a wheel for each platform. After install, `java-codebase-rag --help` should print the CLI groups.
-The package includes the CocoIndex lifecycle dependency used by `init`, `increment`, `reprocess`, and `erase`.
+Python **3.11+** required, on **Linux, macOS, and Windows**. On Linux, Windows, and **Apple Silicon** Macs every native dependency (LanceDB, LadybugDB/kuzu, CocoIndex) ships a wheel and you get the full semantic + graph search. **Intel Macs (x86_64) install graph-only**: PyTorch ≥2.3 and LanceDB ≥0.26 dropped macOS Intel wheels, so the vector stack is auto-excluded via PEP 508 markers — `pip install java-codebase-rag` works out of the box, the graph layer (`find` / `describe` / `neighbors` / `resolve`) is fully usable, and the `search` (semantic) tool reports it is unavailable rather than failing. After install, `java-codebase-rag --help` should print the CLI groups.
+The package includes the CocoIndex lifecycle dependency used by `init`, `increment`, `reprocess`, and `erase` on platforms that have it (it is absent on Intel Mac).
 
 ### Interactive setup (recommended)
 
@@ -270,7 +270,7 @@ full design and per-PR breakdown.
 git clone https://github.com/HumanBean17/java-codebase-rag
 cd java-codebase-rag
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+.venv/bin/pip install -e ".[dev]"
 ```
 
 The `cocoindex` package powers lifecycle commands that run the indexer (`init`, `increment`, `reprocess`, `erase`). Search and MCP navigation do not invoke it directly.

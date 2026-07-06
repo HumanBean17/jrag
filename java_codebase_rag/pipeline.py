@@ -180,6 +180,26 @@ def _maybe_run_serialized_optimize(
         print(f"java-codebase-rag: optimize failed: {exc}", file=sys.stderr)
 
 
+def is_cocoindex_preflight_blocker(proc: subprocess.CompletedProcess[str]) -> bool:
+    """True when ``run_cocoindex_update`` returned a pre-spawn stub, not a real cocoindex run.
+
+    The stubs are emitted by ``_run_cocoindex_update_impl`` just below:
+      * returncode 127, args=[exe] -> cocoindex binary not installed (graph-only install,
+        e.g. macOS Intel where the vector extra is gated off).
+      * returncode 126, args=[]     -> ``java_index_flow_lancedb.py`` missing from the bundle.
+    A real cocoindex run has ``args`` = the full command list (length > 1), so the
+    ``len(args) <= 1`` guard distinguishes a stub from a genuine non-zero exit. This is the
+    single authoritative detector — ``cli.py`` and ``installer.py`` both call it so the
+    "treat as skip, not failure" decision stays aligned with the stub shapes here.
+    """
+    return bool(proc.returncode in (126, 127) and len(getattr(proc, "args", ()) or ()) <= 1)
+
+
+def is_graph_preflight_blocker(proc: subprocess.CompletedProcess[str]) -> bool:
+    """True when ``run_build_ast_graph`` returned a pre-spawn stub (builder missing)."""
+    return bool(proc.returncode in (126, 127) and len(getattr(proc, "args", ()) or ()) <= 1)
+
+
 def _run_cocoindex_update_impl(
     env: dict[str, str],
     *,
