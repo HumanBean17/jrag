@@ -21,6 +21,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 
 def _jrag_exe() -> str:
     """Locate the installed ``jrag`` entry point next to the venv interpreter."""
@@ -172,3 +174,45 @@ def test_jrag_help_lists_status_subcommand() -> None:
     assert "status" in proc.stdout
     # The --offset flag must NOT appear in the top-level help.
     assert "--offset" not in proc.stdout
+
+
+# ----- Config resolution: env var beats a stray ancestor marker -----
+
+
+def test_resolve_cfg_honors_source_root_env_over_stray_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """JAVA_CODEBASE_RAG_SOURCE_ROOT must win over a stray ``.java-codebase-rag``
+    marker in an ancestor of cwd.
+
+    Regression: ``jrag._resolve_cfg`` used to pass ``discover_project_root(cwd)``
+    as the explicit ``source_root``, which silently overrode the env var whenever
+    any ancestor dir had a non-empty ``.java-codebase-rag/`` index — the
+    documented subprocess source-root mechanism ``pipeline.subprocess_env`` sets
+    for the cocoindex child (and that the traversal tests rely on). It now passes
+    ``source_root=None`` so ``resolve_operator_config`` honors the env var first
+    (mirroring ``cli._resolved_from_ns``).
+    """
+    from java_codebase_rag.jrag import _resolve_cfg
+
+    real_root = tmp_path / "real-source"
+    real_root.mkdir()
+    # cwd sits inside a dir whose PARENT has a stray non-empty .java-codebase-rag/
+    # index dir — the hijack condition that used to override the env var.
+    # (_has_index_dir requires the marker dir to be non-empty: any(iterdir()).)
+    workdir = tmp_path / "has-marker" / "sub"
+    workdir.mkdir(parents=True)
+    stray_idx = tmp_path / "has-marker" / ".java-codebase-rag"
+    stray_idx.mkdir()
+    (stray_idx / "cocoindex.db").write_bytes(b"")  # non-empty → recognized as marker
+    monkeypatch.chdir(workdir)
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", str(real_root))
+    monkeypatch.delenv("JAVA_CODEBASE_RAG_INDEX_DIR", raising=False)
+
+    class _Args:
+        index_dir = None
+
+    cfg = _resolve_cfg(_Args())  # type: ignore[arg-type]
+    assert cfg.source_root == real_root.resolve(), (
+        "JAVA_CODEBASE_RAG_SOURCE_ROOT must win over a stray ancestor marker"
+    )

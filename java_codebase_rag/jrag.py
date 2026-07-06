@@ -1096,20 +1096,26 @@ def build_parser() -> argparse.ArgumentParser:
 def _resolve_cfg(args: argparse.Namespace):  # type: ignore[no-untyped-def]
     """Resolve operator config (reuses the operator's cocoindex-free resolver).
 
-    Same pattern as ``java_codebase_rag.cli._resolved_from_ns``: walks up from
-    cwd to find a project root (config file or ``.java-codebase-rag/`` index),
-    applies CLI ``--index-dir`` if given, and calls ``apply_to_os_environ`` so
-    downstream modules see a consistent env (critically: SBERT_MODEL for
-    ``jrag search`` in PR-JRAG-4).
+    Mirrors ``java_codebase_rag.cli._resolved_from_ns``: pass ``source_root=None``
+    so ``resolve_operator_config`` honors ``JAVA_CODEBASE_RAG_SOURCE_ROOT`` first,
+    then a YAML ``source_root`` field, then walks up from cwd to find a project
+    root. Passing a discovered root explicitly here would OVERRIDE a set env var
+    whenever any ancestor dir has a ``.java-codebase-rag`` marker — silently
+    ignoring the documented subprocess source-root mechanism that
+    ``pipeline.subprocess_env`` sets for the cocoindex child (and that operators
+    set directly).
 
     When the anchor is an index dir with no YAML beside it, resolution follows
     that index's ``config_source`` pointer (see ``config._effective_config_dir``)
     so a config living in a sibling dir is still found from inside a microservice.
+    Applies CLI ``--index-dir`` if given and calls ``apply_to_os_environ`` so
+    downstream modules see a consistent env (critically SBERT_MODEL for ``jrag
+    search``).
     """
-    from java_codebase_rag.config import discover_project_root, resolve_operator_config
+    from java_codebase_rag.config import resolve_operator_config
 
     cfg = resolve_operator_config(
-        source_root=discover_project_root(Path.cwd()),
+        source_root=None,
         cli_index_dir=getattr(args, "index_dir", None),
     )
     cfg.apply_to_os_environ()
