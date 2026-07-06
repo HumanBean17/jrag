@@ -3,6 +3,12 @@ from __future__ import annotations
 
 import uuid
 
+import pytest
+
+# Skip the whole file on graph-only installs (macOS Intel) where the vector stack is absent.
+pytest.importorskip("lancedb")
+pytest.importorskip("sentence_transformers")
+
 from sentence_transformers import SentenceTransformer
 
 from ast_java import ONTOLOGY_VERSION
