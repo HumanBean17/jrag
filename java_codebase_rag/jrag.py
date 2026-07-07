@@ -4328,6 +4328,7 @@ def _cmd_search(args: argparse.Namespace) -> int:
                 role=d.get("role"),
                 hybrid=bool(args.hybrid),
                 graph_expanded=False,
+                lexical=bool(getattr(out, "lexical_mode", False)),
             )
         hit_dicts.append(d)
 

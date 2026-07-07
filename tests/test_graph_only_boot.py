@@ -7,6 +7,7 @@ platform (no uninstall needed) and proves the lazy-import seam in ``server.py``/
 """
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import textwrap
@@ -40,11 +41,16 @@ _BOOT_SCRIPT = textwrap.dedent(
 
 
 def _run_graph_only_boot() -> subprocess.CompletedProcess[str]:
+    # Point the index dir at a nonexistent path so the lexical backend's
+    # `LadybugGraph.exists()` is deterministically False regardless of the dev
+    # machine's state — the boot test asserts the no-graph clean-failure path.
+    env = {**os.environ, "JAVA_CODEBASE_RAG_INDEX_DIR": "/tmp/lex_boot_no_graph"}
     return subprocess.run(
         [sys.executable, "-c", _BOOT_SCRIPT.format(modules=_VECTOR_MODULES, vector=_VECTOR_MODULES)],
         capture_output=True,
         text=True,
         timeout=120,
+        env=env,
     )
 
 
@@ -57,9 +63,11 @@ def test_server_boots_and_serves_graph_tools_without_vector_stack() -> None:
     assert "TOOLS:describe,find,neighbors,resolve,search" in out
     # None of the vector modules may be imported during boot.
     assert "LOADED_AT_BOOT:none" in out
-    # The search tool returns a clean failure rather than raising.
+    # The search tool returns a clean failure rather than raising. In graph-only mode
+    # search dispatches to the lexical backend, which (with no graph present) reports
+    # "lexical search unavailable" instead of the old "Vector search unavailable".
     assert "SEARCH_SUCCESS:False" in out
-    assert "Vector search unavailable" in out
+    assert "lexical search unavailable" in out
 
 
 def _completed(returncode: int, args: tuple[str, ...]) -> subprocess.CompletedProcess[str]:

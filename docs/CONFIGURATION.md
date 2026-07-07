@@ -361,6 +361,18 @@ On top of role weights, Java chunks receive a **symbol-match bonus** (exposed as
 
 Combined, these pull `processClientMessage` / `pickEligibleOperator` / `onOperatorAssigned` chunks — and the classes that own them — above ones that only enqueue or configure. Like role weights, the bonus is **skipped when the caller locks `role=`**.
 
+#### Graph-only (macOS Intel) lexical ranking
+
+On Intel Mac installs the vector stack is absent (see `README.md`), so `search` runs the **lexical backend** — keyword relevance over the symbol graph instead of embeddings, behind the same tool contract. Ranking components, normalized into a `[0,1]` score:
+
+- **Name token overlap** — strongest signal (weight `0.45`); full query-token coverage of the declaration name scores `1.0`.
+- **Type-name overlap** — `+0.05`/hit, capped `+0.10` (same convention as the vector symbol bonus above).
+- **FQN / package overlap** — weight `0.20`.
+- **Signature / annotation / capability text overlap** — weight `0.15`.
+- **Role weights** — the same table above applies as a tie-breaker/booster.
+
+Rows with **no keyword overlap** are dropped — role alone never qualifies a hit (it only reorders matches). Locking `role=` / `exclude_roles` still skips the role weight. `--explain` surfaces `name=` / `type=` / `fqn=` / `relevance=` components. `sql` / `yaml` tables aren't indexed in graph-only mode (only Java symbols are), and `hybrid` is ignored (lexical-only).
+
 ### Debugging empty `context_before` / `context_after`
 
 If `context_neighbors=1` returns empty context strings, set `JAVA_CODEBASE_RAG_DEBUG_CONTEXT=1` in the MCP server env before launching. The server logs (to stderr) why expansion bailed: missing schema columns, empty bucket scan, chunk not found in bucket, or underlying scan error. Typical causes are (a) a stale server that hasn't reloaded after a reindex, or (b) an index missing `range_start` / `range_end` columns — the code falls back to exact-text matching, so re-running fixes it.

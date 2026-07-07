@@ -520,6 +520,10 @@ class SearchOutput(BaseModel):
     )
     advisories: list[str] = Field(default_factory=list, description="Pure informational text with no tool call suggestion")
     hints_structured: list[StructuredHint] = Field(default_factory=list, description=MCP_HINTS_STRUCTURED_FIELD_DESCRIPTION)
+    lexical_mode: bool = Field(
+        default=False,
+        description="True when results come from the graph-only lexical (keyword) backend instead of semantic/vector search.",
+    )
 
 
 class FindOutput(BaseModel):
@@ -850,83 +854,92 @@ def search_v2(
         if nf and (err := _nodefilter_applicability_error("symbol", nf)):
             _log_fail_loud("applicability")
             return SearchOutput(success=False, message=err, advisories=[], limit=None, offset=None)
-        if run_search is None:
-            # Graph-only install (no torch/lancedb): the vector stack is absent. Return a
-            # clean failure rather than crashing so the server keeps serving graph tools.
-            return SearchOutput(
-                success=False,
-                message="Vector search unavailable: graph-only mode (vector stack not installed).",
-                advisories=[],
-                limit=None,
-                offset=None,
-            )
-        # hybrid + table='all' is unsupported (hybrid fuses vector+FTS on ONE
-        # table); fail fast with a clean envelope BEFORE loading the embedding
-        # model. run_search also guards this — this is the user-facing fast path.
-        if hybrid and table == "all":
-            return SearchOutput(
-                success=False,
-                message="hybrid search requires a single table; use java, sql, or yaml (not all)",
-                advisories=[],
-                limit=None,
-                offset=None,
-            )
-        model_name = resolved_sbert_model_for_process_env(SBERT_MODEL)
-        device = os.environ.get("SBERT_DEVICE") or None
-        model = _get_sentence_transformer(model_name, device)
-        uri = os.environ.get("JAVA_CODEBASE_RAG_INDEX_DIR", "").strip() or str(
-            (Path.cwd() / ".java-codebase-rag").resolve()
-        )
-        uri_path = Path(uri)
-        if not uri.startswith(("s3://", "gs://", "az://")) and uri_path.exists():
-            uri = str(uri_path.resolve())
-        table_keys = list(TABLES) if table == "all" else [table]
-
-        # Graceful fallback: if hybrid=True and FTS index is missing (old index),
-        # retry with hybrid=False and return vector-only results with an advisory.
         advisories: list[str] = []
-        try:
-            rows = run_search(
+        lexical_mode = run_search is None
+        if lexical_mode:
+            # Graph-only install (macOS Intel: no torch/lancedb). Fall back to lexical
+            # (keyword) search over the symbol graph that graph-only mode already builds.
+            # run_lexical_search returns rows in the same shape as run_search, so the
+            # shared row->hit loop below works unchanged. It raises (message contains
+            # "lexical search unavailable") when no graph exists — caught by the outer
+            # try -> success=False. It returns [] for sql/yaml (advisory below) and for
+            # empty-but-valid results.
+            try:
+                from search_lexical import run_lexical_search
+            except ImportError:  # pragma: no cover - search_lexical has no heavy deps
+                run_lexical_search = None  # type: ignore[assignment]
+            if run_lexical_search is None:
+                return SearchOutput(
+                    success=False,
+                    message="search unavailable: graph-only mode and lexical backend not importable.",
+                    advisories=[],
+                    limit=None,
+                    offset=None,
+                )
+            rows = run_lexical_search(
                 query,
-                uri=uri,
-                table_keys=table_keys,
-                hybrid=hybrid,
+                table=table,
                 limit=limit,
                 offset=offset,
-                path_substring=path_contains,
-                model_name=model_name,
-                device=device,
-                model=model,
-                # Push the NodeFilter structural predicates into the LanceDB query so
-                # they apply BEFORE pagination (issue #353) — previously they were only
-                # a post-filter on the already-paginated page, which could shrink or
-                # empty filtered pages even when many matches existed deeper in the
-                # ranking. _node_matches_filter below still re-checks every row (it
-                # covers the non-pushdownable fields and is the contract guarantee).
-                role=nf.role if nf else None,
-                module=nf.module if nf else None,
-                microservice=nf.microservice if nf else None,
-                capability=nf.capability if nf else None,
-                exclude_roles=nf.exclude_roles if nf else None,
-                dedup_by_fqn=dedup,
+                path_contains=path_contains,
+                filter=nf,
+                explain=explain,
+                dedup=dedup,
+                graph=graph,
             )
-        except Exception as exc:
-            # Check if this is a missing-FTS error (old index built before PR-SEARCH-3)
-            exc_text = str(exc).lower()
-            is_fts_missing = "full text search" in exc_text or "inverted index" in exc_text
-            if hybrid and is_fts_missing:
-                # Retry with vector-only search
+            advisories.append(
+                "lexical (graph-only) mode — keyword ranking only; "
+                "semantic/vector search requires Apple Silicon, Linux, or Windows"
+            )
+            if table in ("sql", "yaml", "all"):
+                advisories.append(
+                    "sql/yaml tables are not indexed in graph-only mode; only Java symbols were searched"
+                )
+            if hybrid:
+                advisories.append("hybrid is ignored in graph-only lexical mode")
+        else:
+            # hybrid + table='all' is unsupported (hybrid fuses vector+FTS on ONE
+            # table); fail fast with a clean envelope BEFORE loading the embedding
+            # model. run_search also guards this — this is the user-facing fast path.
+            if hybrid and table == "all":
+                return SearchOutput(
+                    success=False,
+                    message="hybrid search requires a single table; use java, sql, or yaml (not all)",
+                    advisories=[],
+                    limit=None,
+                    offset=None,
+                )
+            model_name = resolved_sbert_model_for_process_env(SBERT_MODEL)
+            device = os.environ.get("SBERT_DEVICE") or None
+            model = _get_sentence_transformer(model_name, device)
+            uri = os.environ.get("JAVA_CODEBASE_RAG_INDEX_DIR", "").strip() or str(
+                (Path.cwd() / ".java-codebase-rag").resolve()
+            )
+            uri_path = Path(uri)
+            if not uri.startswith(("s3://", "gs://", "az://")) and uri_path.exists():
+                uri = str(uri_path.resolve())
+            table_keys = list(TABLES) if table == "all" else [table]
+
+            # Graceful fallback: if hybrid=True and FTS index is missing (old index),
+            # retry with hybrid=False and return vector-only results with an advisory.
+            try:
                 rows = run_search(
                     query,
                     uri=uri,
                     table_keys=table_keys,
-                    hybrid=False,  # Fallback to vector-only
+                    hybrid=hybrid,
                     limit=limit,
                     offset=offset,
                     path_substring=path_contains,
                     model_name=model_name,
                     device=device,
                     model=model,
+                    # Push the NodeFilter structural predicates into the LanceDB query so
+                    # they apply BEFORE pagination (issue #353) — previously they were only
+                    # a post-filter on the already-paginated page, which could shrink or
+                    # empty filtered pages even when many matches existed deeper in the
+                    # ranking. _node_matches_filter below still re-checks every row (it
+                    # covers the non-pushdownable fields and is the contract guarantee).
                     role=nf.role if nf else None,
                     module=nf.module if nf else None,
                     microservice=nf.microservice if nf else None,
@@ -934,13 +947,37 @@ def search_v2(
                     exclude_roles=nf.exclude_roles if nf else None,
                     dedup_by_fqn=dedup,
                 )
-                advisories.append(
-                    f"hybrid unavailable on table '{table}' (FTS index missing on this index built before "
-                    f"PR-SEARCH-3); fell back to vector-only — reindex to enable hybrid"
-                )
-            else:
-                # Non-FTS error: surface as structured failure
-                raise
+            except Exception as exc:
+                # Check if this is a missing-FTS error (old index built before PR-SEARCH-3)
+                exc_text = str(exc).lower()
+                is_fts_missing = "full text search" in exc_text or "inverted index" in exc_text
+                if hybrid and is_fts_missing:
+                    # Retry with vector-only search
+                    rows = run_search(
+                        query,
+                        uri=uri,
+                        table_keys=table_keys,
+                        hybrid=False,  # Fallback to vector-only
+                        limit=limit,
+                        offset=offset,
+                        path_substring=path_contains,
+                        model_name=model_name,
+                        device=device,
+                        model=model,
+                        role=nf.role if nf else None,
+                        module=nf.module if nf else None,
+                        microservice=nf.microservice if nf else None,
+                        capability=nf.capability if nf else None,
+                        exclude_roles=nf.exclude_roles if nf else None,
+                        dedup_by_fqn=dedup,
+                    )
+                    advisories.append(
+                        f"hybrid unavailable on table '{table}' (FTS index missing on this index built before "
+                        f"PR-SEARCH-3); fell back to vector-only — reindex to enable hybrid"
+                    )
+                else:
+                    # Non-FTS error: surface as structured failure
+                    raise
         hits: list[SearchHit] = []
         for row in rows:
             if path_contains and path_contains not in str(row.get("filename") or ""):
@@ -964,6 +1001,7 @@ def search_v2(
             offset=offset,
             advisories=advisories + raw_advisories,  # Merge fallback + hints advisories
             hints_structured=_to_structured_hints(raw_struct),
+            lexical_mode=lexical_mode,
         )
     except Exception as exc:
         return SearchOutput(success=False, message=str(exc), advisories=[], limit=None, offset=None)
