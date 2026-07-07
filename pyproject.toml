@@ -70,9 +70,9 @@ jrag = "java_codebase_rag.jrag:_console_script_main"
 [tool.setuptools]
 packages = ["java_codebase_rag"]
 py-modules = [
-    "absence_diagnosis",
     "absence_types",
     "absence_vocab",
+    "absence_diagnosis",
     "ast_java",
     "brownfield_events",
     "build_ast_graph",

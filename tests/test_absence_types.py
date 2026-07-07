@@ -163,7 +163,7 @@ class TestAbsenceFieldOnOutputModels:
         output_default = DescribeOutput(
             success=True,
             message="test",
-            node="test-id"
+            record=None
         )
         assert output_default.absence is None
 
@@ -176,7 +176,7 @@ class TestAbsenceFieldOnOutputModels:
         output_with_absence = DescribeOutput(
             success=True,
             message="test",
-            node="test-id",
+            record=None,
             absence=diagnosis
         )
         assert output_with_absence.absence == diagnosis
