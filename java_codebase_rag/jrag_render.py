@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from absence_types import AbsenceDiagnosis
 from java_codebase_rag.jrag_envelope import Envelope, project_envelope, simple_name
 
 __all__ = ["render", "tiered_name", "display_name"]
@@ -226,7 +227,36 @@ def _render_error(envelope: Envelope) -> str:
 
 def _render_not_found(envelope: Envelope) -> str:
     msg = envelope.message or "not found"
-    return f"not found: {msg}"
+    base = f"not found: {msg}"
+
+    # If absence diagnosis is present, append verdict + message (+ did-you-mean)
+    if envelope.absence is not None:
+        lines = [base]
+        # Add verdict line (human-readable)
+        verdict = envelope.absence.verdict
+        if verdict == "not_in_project":
+            lines.append("Verdict: not in project")
+        elif verdict == "external_dependency":
+            lines.append("Verdict: external dependency")
+        elif verdict == "refine_query":
+            lines.append("Verdict: refine your query")
+        elif verdict == "correct_empty":
+            lines.append("Verdict: correct empty")
+
+        # Add did-you-mean line if closest_symbols is non-empty
+        if envelope.absence.closest_symbols:
+            symbols = [s.fqn for s in envelope.absence.closest_symbols]
+            if len(symbols) == 1:
+                lines.append(f"Did you mean: {symbols[0]}?")
+            elif len(symbols) == 2:
+                lines.append(f"Did you mean: {symbols[0]} or {symbols[1]}?")
+            else:
+                joined = ", ".join(symbols[:-1]) + f", or {symbols[-1]}"
+                lines.append(f"Did you mean: {joined}?")
+
+        return "\n".join(lines)
+
+    return base
 
 
 def _render_listing(envelope: Envelope, *, noun: str, detail: str = "normal") -> str:
@@ -295,7 +325,21 @@ def _render_listing(envelope: Envelope, *, noun: str, detail: str = "normal") ->
             if rest:
                 lines.extend(_render_inspect_block(rest, 1))
     if not lines:
-        lines.append(f"0 {noun}".rstrip())
+        # Handle absence diagnosis (PR-ABS-4)
+        if envelope.absence is not None:
+            verdict = envelope.absence.verdict
+            if verdict == "refine_query":
+                lines.append("Verdict: refine your query")
+            elif verdict == "not_in_project":
+                lines.append("Verdict: not in project")
+            elif verdict == "external_dependency":
+                lines.append("Verdict: external dependency")
+            elif verdict == "correct_empty":
+                lines.append("Verdict: correct empty")
+            else:
+                lines.append(f"0 {noun}".rstrip())
+        else:
+            lines.append(f"0 {noun}".rstrip())
     # Listing breadcrumbs (Phase 2): <=2 `next:` hint lines when the listing
     # command emitted agent_next_actions (routes/clients/producers/topics).
     lines.extend(_next_action_lines(envelope))
@@ -413,10 +457,29 @@ def _render_traversal(envelope: Envelope, *, noun: str, detail: str = "normal") 
         root_node = envelope.nodes.get(root_id, {})
         root_fqn = str(root_node.get("fqn") or "").strip()
         root_svc = str(root_node.get("microservice") or "").strip()
-        if envelope.is_external_entrypoint:
+
+        # Handle absence diagnosis (PR-ABS-4)
+        if envelope.absence is not None:
+            verdict = envelope.absence.verdict
+            if verdict == "correct_empty":
+                # Same text as is_external_entrypoint case
+                parts = ["external entrypoint — no in-repo callers"]
+            elif verdict == "not_in_project":
+                lines.append("Verdict: not in project")
+                parts = [f"0 {noun}".rstrip()]
+            elif verdict == "external_dependency":
+                lines.append("Verdict: external dependency")
+                parts = [f"0 {noun}".rstrip()]
+            elif verdict == "refine_query":
+                lines.append("Verdict: refine your query")
+                parts = [f"0 {noun}".rstrip()]
+            else:
+                parts = [f"0 {noun}".rstrip()]
+        elif envelope.is_external_entrypoint:
             parts = ["external entrypoint — no in-repo callers"]
         else:
             parts = [f"0 {noun}".rstrip()]
+
         if root_fqn:
             parts.append(root_fqn)
         if root_svc:
