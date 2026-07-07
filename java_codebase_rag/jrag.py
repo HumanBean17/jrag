@@ -777,16 +777,21 @@ def build_parser() -> argparse.ArgumentParser:
     decompose.add_argument("--depth", type=int, default=2, help="Neighbour hop count per stage (clamped 1..3, default 2).")
     decompose.add_argument(
         "--follow-calls",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=True,
         dest="follow_calls",
-        help="Follow DECLARES+CALLS type-to-type hops to top up each stage.",
+        help=(
+            "Top up each stage with DECLARES+CALLS type-to-type hops when the "
+            "structural INJECTS/EXTENDS/IMPLEMENTS pass under-fills it (default: "
+            "on). --no-follow-calls restricts the waterfall to structural edges."
+        ),
     )
     decompose.add_argument(
-        "--max-stage",
+        "--per-stage-limit",
         type=int,
         default=20,
-        dest="max_stage",
-        help="Cap on symbols per stage (stage_limit, default 20).",
+        dest="per_stage_limit",
+        help="Cap on symbols per stage (stage_limit, default 20). Not a stage-count knob.",
     )
     decompose.add_argument(
         "--min-confidence",
@@ -2404,6 +2409,44 @@ def _cmd_callers(args: argparse.Namespace) -> int:
         edges.append(
             {"other_id": ce.src.id, "edge_type": "CALLS", "confidence": ce.confidence}
         )
+    # Entry-point awareness. A controller / messaging-listener type is invoked
+    # via the routes its methods EXPOSE (Controller -[:DECLARES]-> method
+    # -[:EXPOSES]-> Route), NOT via in-repo CALLS edges — so find_callers is
+    # typically empty for HTTP handlers. Without this fold, `callers
+    # <Controller>` returns a bug-looking empty list when the controller is the
+    # very thing the agent is investigating. The routes ARE its inbound callers,
+    # so surface them as additional EXPOSES rows alongside any CALLS-in edges.
+    # Gated on having DECLARES.EXPOSES out-edges (covers any entry-point holder,
+    # not just role=CONTROLLER). Routes are additive and usually few, so they do
+    # not count against the CALLS --limit (cf. the callees client/producer path,
+    # which likewise emits its own targets without sharing the CALLS budget).
+    expose_rows = graph._rows(  # noqa: SLF001 - one-shot aggregation, cf. _cmd_callees client path
+        "MATCH (t:Symbol {id: $tid})-[:DECLARES]->(m:Symbol)-[e:EXPOSES]->(r:Route) "
+        "RETURN r.id AS rid, r.method AS rmethod, r.path AS rpath, "
+        "r.path_template AS rpt, r.microservice AS rms, "
+        "m.fqn AS via_fqn, e.confidence AS conf",
+        {"tid": root_id},
+    )
+    for row in expose_rows:
+        rid = str(row.get("rid") or "")
+        if not rid or rid in nodes:
+            continue
+        rmethod = str(row.get("rmethod") or "")
+        rpath = str(row.get("rpt") or row.get("rpath") or "")
+        nodes[rid] = {
+            "id": rid,
+            "kind": "route",
+            "fqn": f"{rmethod} {rpath}".strip(),
+            "method": rmethod,
+            "path": rpath,
+            "microservice": str(row.get("rms") or ""),
+        }
+        edge_row: dict = {"other_id": rid, "edge_type": "EXPOSES"}
+        via_fqn = str(row.get("via_fqn") or "")
+        if via_fqn:
+            # Declaring method that exposes the route; rendered at --detail full.
+            edge_row["from_fqn"] = via_fqn
+        edges.append(edge_row)
     nodes[root_id] = root_dict
     return _emit_traversal(
         args, root_id=root_id, nodes=nodes, edges=edges,
@@ -2956,8 +2999,8 @@ def _cmd_decompose(args: argparse.Namespace) -> int:
     stages = graph.trace_flow(
         seed_fqns=[seed_fqn],
         depth=depth,
-        follow_calls=getattr(args, "follow_calls", False),
-        stage_limit=getattr(args, "max_stage", 20),
+        follow_calls=getattr(args, "follow_calls", True),
+        stage_limit=getattr(args, "per_stage_limit", 20),
         min_call_confidence=getattr(args, "min_confidence", 0.0),
         exclude_external=not getattr(args, "include_external", False),
         microservice=args.service,
@@ -2983,12 +3026,12 @@ def _cmd_decompose(args: argparse.Namespace) -> int:
                 edge_row["from_fqn"] = via.from_fqn
             edges.append(edge_row)
     # --limit is inherited from common but does not cap decompose (trace_flow
-    # is stage-limited via --max-stage, not a total edge count). Warn when the
+    # is stage-limited via --per-stage-limit, not a total edge count). Warn when the
     # user explicitly set --limit away from the default so they get a signal
     # rather than a silent multi-stage dump (Fix 4).
     if args.limit is not None and args.limit != 20:
         warnings.append(
-            "--limit does not apply to decompose; use --max-stage to cap per-stage breadth"
+            "--limit does not apply to decompose; use --per-stage-limit to cap per-stage breadth"
         )
     return _emit_traversal(
         args, root_id=root_id, nodes=nodes, edges=edges,

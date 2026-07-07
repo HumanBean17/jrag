@@ -61,6 +61,7 @@ Run `jrag --help` for the canonical list.
 | Question type | Primary approach |
 | --- | --- |
 | "Who calls method M?" / "What does M call?" | `jrag callers <M>` / `jrag callees <M>` |
+| "What routes does a controller expose?" | `jrag callers <controller>` (folds in its `EXPOSES` routes) |
 | "Where is class X?" | `jrag inspect <X>`; fallback `Grep`/`Glob` |
 | "All controllers in service S" | `jrag find --role CONTROLLER --service S` |
 | "Routes/endpoints in service S" | `jrag http-routes --service S` |
@@ -101,7 +102,7 @@ Never look up a raw node ID — pass an FQN, simple name, prior `sym:`/`route:`/
 
 | Intent (command) | Underlying edges |
 | --- | --- |
-| `callers` / `callees` | `CALLS` in / out |
+| `callers` / `callees` | `CALLS` in / out. On a controller/entry-point type, `callers` also folds in the routes its methods `EXPOSE` (the inbound callers of an entry point) |
 | `hierarchy` | `EXTENDS` + `IMPLEMENTS`, both directions (parents + children) |
 | `implementations` / `subclasses` | `IMPLEMENTS` / `EXTENDS` in |
 | `overrides` / `overridden-by` | `OVERRIDES` out (subtype→supertype) / in |

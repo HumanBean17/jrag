@@ -107,6 +107,48 @@ def test_callers_symbol_uses_find_callers(corpus_root: Path, ladybug_db_path: Pa
     )
 
 
+# ----- Test 1b: callers on a controller CLASS surfaces its EXPOSES routes -----
+
+
+def test_callers_on_controller_class_surfaces_exposes_routes(
+    corpus_root: Path, ladybug_db_path: Path
+) -> None:
+    """callers on a controller type folds in the routes its methods EXPOSE.
+
+    A controller is an HTTP entry point: its handler methods are invoked via
+    EXPOSES (the framework dispatches the route), not via in-repo CALLS edges.
+    So `callers <Controller>` must surface those routes as EXPOSES rows rather
+    than returning a bug-looking empty CALLS-in list. The routes are additive
+    to any CALLS-in edges (the consumer contract: "not only CALLS").
+    """
+    env = _env_for(corpus_root, ladybug_db_path)
+    proc = _run_jrag(["callers", _INGRESS_CTRL, "--format", "json"], env=env)
+    assert proc.returncode == 0, (
+        f"callers failed: rc={proc.returncode}\nstdout={proc.stdout}\nstderr={proc.stderr}"
+    )
+    payload = json.loads(proc.stdout)
+    assert payload["status"] == "ok", f"expected ok, got {payload}"
+    edges = payload.get("edges", [])
+    nodes = payload.get("nodes", {})
+    expose_edges = [e for e in edges if e.get("edge_type") == "EXPOSES"]
+    assert expose_edges, (
+        f"expected at least one EXPOSES edge for a controller root, got edge types "
+        f"{[e.get('edge_type') for e in edges]}"
+    )
+    # Every EXPOSES target must be a route node carrying an HTTP method+path.
+    for e in expose_edges:
+        tgt = nodes.get(e.get("target"), {})
+        assert tgt.get("kind") == "route", f"EXPOSES target is not a route: {tgt}"
+        assert tgt.get("method"), f"EXPOSES route missing method: {tgt}"
+        assert tgt.get("path"), f"EXPOSES route missing path: {tgt}"
+    # Text rendering: the route must appear under the root (not a bare "0 callers").
+    proc_text = _run_jrag(["callers", _INGRESS_CTRL], env=env)
+    assert proc_text.returncode == 0, f"text callers failed: {proc_text.stderr}"
+    assert "/api/v1/chat/events" in proc_text.stdout, (
+        f"expected the exposed route path in text output:\n{proc_text.stdout}"
+    )
+
+
 # ----- Test 2: callers (Route) --service narrows resolve (no post-filter) -----
 
 
@@ -561,6 +603,17 @@ def test_decompose_renders_role_waterfall(
     # At least one later stage header must be present (the waterfall has >=2 stages).
     assert "stage 1" in text, (
         f"expected 'stage 1' header in text output, got:\n{text}"
+    )
+    # Stage 1 on this fixture mixes SERVICE + COMPONENT, so the renderer must
+    # list BOTH roles in the header (`stage 1 (component, service):`) rather
+    # than dropping the role label on its busiest stage. The role allow-list is
+    # the whole point of a role-waterfall — hiding it where it matters most is
+    # the gap this closes.
+    assert "stage 1 (" in text and "stage 1" in text, (
+        f"expected a role-labelled 'stage 1 (...):' header, got:\n{text}"
+    )
+    assert "component" in text and "service" in text, (
+        f"expected both 'component' and 'service' roles in the stage-1 header:\n{text}"
     )
     # The seed stage must list the controller; a later stage lists engine components.
     seed_section = text.split("stage 1", 1)[0]

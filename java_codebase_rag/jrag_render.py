@@ -472,11 +472,19 @@ def _render_traversal(envelope: Envelope, *, noun: str, detail: str = "normal") 
             by_stage[s].append(e)
         for s in stage_order:
             stage_edges = by_stage[s]
-            roles = {str(e.get("role") or "").upper() for e in stage_edges if e.get("role")}
+            # Preserve first-seen order so a mixed stage reads naturally
+            # (e.g. `stage 1 (service, component):`) instead of dropping the
+            # role label entirely — the role allow-list is the whole point of a
+            # role-waterfall, so hiding it on the busiest stages is a loss.
+            seen: list[str] = []
+            for e in stage_edges:
+                r = str(e.get("role") or "").strip().lower()
+                if r and r not in seen:
+                    seen.append(r)
             if s == 0:
                 header = "stage 0 (seed):"
-            elif len(roles) == 1:
-                header = f"stage {s} ({next(iter(roles)).lower()}):"
+            elif seen:
+                header = f"stage {s} ({', '.join(seen)}):"
             else:
                 header = f"stage {s}:"
             lines.append(header)

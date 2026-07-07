@@ -806,3 +806,49 @@ def test_listing_normal_without_explain_omits_token() -> None:
     )
     line = render(env, fmt="text", noun="symbol", detail="normal").splitlines()[0]
     assert "explain=" not in line, f"explain token should not render when absent: {line}"
+
+
+# ----- decompose role-waterfall: multi-stage rendering -----
+
+
+def test_render_decompose_multistage_waterfall_lists_all_roles() -> None:
+    """A 3-stage role-waterfall renders every stage with its role allow-list.
+
+    The bank-chat fixture tops out at 2 stages (no REPOSITORY/MAPPER symbols),
+    so this synthetic envelope is what actually pins the renderer's handling of
+    the 3rd role tier (`stage 2 (client, repository):`) that ``trace_flow``
+    produces on a deeper codebase. It also covers the mixed-role case
+    (`stage 1 (...)` with two roles) — the gap where the renderer used to drop
+    the role label on its busiest stage.
+    """
+    env = Envelope(
+        status="ok",
+        root="sym:0",
+        nodes={
+            "sym:0": {"fqn": "com.foo.OrderController", "microservice": "orders"},
+            "sym:1": {"fqn": "com.foo.OrderService", "microservice": "orders"},
+            "sym:2": {"fqn": "com.foo.PriceComponent", "microservice": "orders"},
+            "sym:3": {"fqn": "com.foo.OrderRepository", "microservice": "orders"},
+            "sym:4": {"fqn": "com.foo.InventoryClient", "microservice": "orders"},
+        },
+        edges=[
+            {"edge_type": "SEED", "other_id": "sym:0", "stage": 0, "role": "CONTROLLER"},
+            {"edge_type": "INJECTS", "other_id": "sym:1", "stage": 1, "role": "SERVICE"},
+            {"edge_type": "INJECTS", "other_id": "sym:2", "stage": 1, "role": "COMPONENT"},
+            {"edge_type": "INJECTS", "other_id": "sym:3", "stage": 2, "role": "REPOSITORY"},
+            {"edge_type": "INJECTS", "other_id": "sym:4", "stage": 2, "role": "CLIENT"},
+        ],
+    )
+    out = render(env, fmt="text", noun="decompose")
+    # All three stages render, in order.
+    lines = out.splitlines()
+    headers = [ln for ln in lines if ln.startswith("stage ")]
+    assert [ln.rstrip(":") for ln in headers] == [
+        "stage 0 (seed)",
+        "stage 1 (service, component)",
+        "stage 2 (repository, client)",
+    ], f"stage headers wrong:\n{out}"
+    # Seed + every tier target appears under its own header.
+    assert "OrderController" in out
+    assert "OrderRepository" in out
+    assert "InventoryClient" in out
