@@ -35,6 +35,7 @@ def pytest_configure(config) -> None:
         "markers",
         "lance_e2e: end-to-end cocoindex + Lance (optional; also gate with JAVA_CODEBASE_RAG_RUN_HEAVY).",
     )
+    _enforce_dev_deps()
     _enforce_editable_install()
 
 
@@ -67,9 +68,33 @@ def _enforce_editable_install() -> None:
     where = resolved or f"import failed (rc={res.returncode}): {res.stderr.strip()}"
     pytest.exit(
         f"\n[install] `jrag`/`java-codebase-rag` resolve to a stale/non-editable copy "
-        f"({where}).\n  Fix once: .venv/bin/pip install -e .  then re-run pytest.\n",
+        f'({where}).\n  Fix once: .venv/bin/pip install -e ".[dev]"  then re-run pytest.\n',
         returncode=4,
     )
+
+
+def _enforce_dev_deps() -> None:
+    """Fail collection if ``pytest-asyncio`` (a ``[dev]`` extra) is missing.
+
+    ``pytest.ini`` sets ``asyncio_mode = auto``, which is a silent no-op
+    without the plugin: every ``async def test_*`` is collected and then
+    fails instantly (~0.01s, coroutine-never-awaited) instead of running.
+    That signature is indistinguishable from a real regression and has
+    produced false "pre-existing failures on master" baselines. CI installs
+    ``[dev]`` (``.github/workflows/test.yml``); this catches a local
+    ``pip install -e .`` that omitted it. Checked via direct import (not
+    pluginmanager) so the message clearly names the missing package.
+    """
+    try:
+        import pytest_asyncio  # noqa: F401
+    except ImportError:
+        pytest.exit(
+            "\n[dev-deps] pytest-asyncio is missing. With pytest.ini's "
+            "`asyncio_mode = auto`, every async test fails instantly and "
+            "looks like a real regression.\n"
+            '  Fix once: .venv/bin/pip install -e ".[dev]"  then re-run pytest.\n',
+            returncode=4,
+        )
 
 
 @pytest.fixture(scope="session")
