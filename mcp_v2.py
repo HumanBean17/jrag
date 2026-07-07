@@ -876,17 +876,6 @@ def search_v2(
                     limit=None,
                     offset=None,
                 )
-            rows = run_lexical_search(
-                query,
-                table=table,
-                limit=limit,
-                offset=offset,
-                path_contains=path_contains,
-                filter=nf,
-                explain=explain,
-                dedup=dedup,
-                graph=graph,
-            )
             advisories.append(
                 "lexical (graph-only) mode — keyword ranking only; "
                 "semantic/vector search requires Apple Silicon, Linux, or Windows"
@@ -897,6 +886,18 @@ def search_v2(
                 )
             if hybrid:
                 advisories.append("hybrid is ignored in graph-only lexical mode")
+            rows = run_lexical_search(
+                query,
+                table=table,
+                limit=limit,
+                offset=offset,
+                path_contains=path_contains,
+                filter=nf,
+                explain=explain,
+                dedup=dedup,
+                advisories=advisories,
+                graph=graph,
+            )
         else:
             # hybrid + table='all' is unsupported (hybrid fuses vector+FTS on ONE
             # table); fail fast with a clean envelope BEFORE loading the embedding

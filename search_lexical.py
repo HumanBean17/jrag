@@ -176,6 +176,7 @@ def run_lexical_search(
     filter: NodeFilter | None = None,
     explain: bool = False,
     dedup: bool = True,
+    advisories: list[str] | None = None,
     graph: LadybugGraph | None = None,
 ) -> list[dict]:
     """Keyword search over Symbol nodes; returns ``run_search``-shaped row-dicts.
@@ -213,6 +214,16 @@ def run_lexical_search(
     params["lim"] = _CANDIDATE_LIMIT_CAP
     cypher = f"MATCH (s:Symbol) {where} RETURN {_SYMBOL_RETURN} LIMIT $lim"
     rows = g._rows(cypher, params)  # noqa: SLF001 — de facto public read API (see find_v2)
+    # If the fetch hit the safety cap, deeper matches were never ranked (the scan has no
+    # ORDER BY — kuzu returns an arbitrary, storage-order-dependent subset). Surface it so
+    # a user on a large repo isn't silently shown an incomplete result set; refining the
+    # query or adding a filter narrows the pool below the cap. Raising the cap / FTS5 is
+    # the deferred long-term fix (see the plan's "Out of scope" note).
+    if advisories is not None and len(rows) >= _CANDIDATE_LIMIT_CAP:
+        advisories.append(
+            f"lexical search scanned the first {_CANDIDATE_LIMIT_CAP} matching symbols "
+            "(repo cap); deeper matches were not ranked — refine the query or add a filter"
+        )
 
     query_toks = _query_tokens(query)
     source_root = _resolve_source_root(g)

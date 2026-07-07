@@ -182,36 +182,67 @@ def test_lexical_where_parity_with_mcp_v2() -> None:
     assert params == {"path_contains": "src/main"}
 
 
-def test_large_candidate_pool_is_fully_scored(tmp_path: Path) -> None:
-    """C2 regression: lexical ranking happens in Python over the full candidate pool
-    (no DB-side keyword ranking without FTS5). A pagination-derived LIMIT (4x the page)
-    on this UNORDERED MATCH scan would return only the first ~20 symbols in storage order
-    and silently miss the rest — invisible at the small fixture scale, fatal on a real
-    repo. Build >20 distinct matching symbols and assert they all come back (the fetch
-    LIMIT must be the safety cap, not a multiple of the requested page)."""
-    for i in range(30):
-        # Letter suffix keeps the leading 'Widget' token clean — _split_identifier
-        # fuses a digit run onto it ('Widget00Service' -> ['widget00','service'], which
-        # would never match the bare query token 'widget'). Two-letter combos give 30
-        # distinct names that all split to a leading 'widget' token.
-        suffix = chr(ord("a") + i // 26) + chr(ord("a") + i % 26)
-        name = f"Widget{suffix.capitalize()}Service"
-        pkg = tmp_path / f"pkg{i}"
-        pkg.mkdir(exist_ok=True)
-        (pkg / f"{name}.java").write_text(
-            f"package pkg{i};\npublic class {name} {{\n"
-            f"    public void run() {{ }}\n}}\n",
-            encoding="utf-8",
-        )
-    db = tmp_path / "g.lbug"
-    from _builders import build_ladybug_to
+def test_fetch_limit_is_pool_cap_not_page_derived(tmp_path: Path) -> None:
+    """C2 regression: the lexical fetch LIMIT must be _CANDIDATE_LIMIT_CAP (rank the full
+    candidate pool in Python), NOT a page-derived value. The MATCH scan has no DB-side
+    relevance ORDER BY, so a pagination-derived LIMIT (4x the page — valid on the vector
+    path where LanceDB returns rows pre-ranked by similarity) returns only the first ~4xL
+    symbols in arbitrary storage order and misses the best match on a real repo.
 
-    build_ladybug_to(tmp_path, db, max_pass=3)
-    rows = run_lexical_search("widget", limit=50, graph=_graph(db))
-    # 30 distinct Widget##Service types all match "widget"; they must ALL be returned.
-    # Under the buggy LIMIT 20 at most 20 could come back, so >20 is the kill signal.
-    assert len(rows) >= 25, f"expected the full >20-symbol pool; got {len(rows)}"
-    assert all("Widget" in (r.get("fqn") or "") for r in rows)
+    A purely behavioral test can't catch this deterministically: the buggy formula
+    `(limit+offset)*4` always overfetches enough to fill the windowed page, so only the
+    *identity* of returned symbols differs (nondeterministic storage order). Instead we
+    capture the LIMIT param sent to the graph and assert it equals the cap, independent of
+    the requested page — the exact invariant the fix established. (The earlier count-based
+    test used limit=50, under which the buggy formula yields 200 >= the 30-symbol pool, so
+    it passed green under the bug — a false sentinel, removed.)"""
+    db = _build_corpus(tmp_path)
+    g = _graph(db)
+
+    captured: list = []
+    real_rows = g._rows
+
+    def _spy(cypher, params):  # capture the LIMIT param the backend sends to the graph
+        if "lim" in params:
+            captured.append(params["lim"])
+        return real_rows(cypher, params)
+
+    g._rows = _spy  # type: ignore[method-assign]
+
+    from search_lexical import _CANDIDATE_LIMIT_CAP
+
+    # Default page and a larger page must BOTH request the same cap-sized fetch — the
+    # buggy formula would have produced 20 (limit=5) and 80 (limit=20).
+    run_lexical_search("distribution", limit=5, graph=g)
+    run_lexical_search("distribution", limit=20, graph=g)
+    assert captured, "no LIMIT captured — _rows spy did not fire"
+    assert all(lim == _CANDIDATE_LIMIT_CAP for lim in captured), (
+        f"fetch LIMIT must be the pool cap ({_CANDIDATE_LIMIT_CAP}) independent of page; "
+        f"got {captured}"
+    )
+
+
+def test_cap_truncation_advisory_fires_at_cap(monkeypatch, tmp_path: Path) -> None:
+    """Correctness review: when the fetch hits the safety cap, deeper matches are never
+    ranked (the scan has no ORDER BY). Surface an advisory instead of silently returning a
+    storage-order-dependent subset. Lower the cap so a small fixture triggers it."""
+    import search_lexical
+
+    db = _build_corpus(tmp_path)
+    g = _graph(db)
+    monkeypatch.setattr(search_lexical, "_CANDIDATE_LIMIT_CAP", 3)
+    adv: list[str] = []
+    run_lexical_search("distribution", limit=5, graph=g, advisories=adv)
+    assert any("repo cap" in a for a in adv), f"cap advisory should fire; got {adv}"
+
+
+def test_cap_advisory_silent_below_cap(tmp_path: Path) -> None:
+    """The cap advisory must NOT fire when the pool fits under the cap (no truncation)."""
+    db = _build_corpus(tmp_path)
+    g = _graph(db)
+    adv: list[str] = []
+    run_lexical_search("distribution", limit=5, graph=g, advisories=adv)
+    assert adv == [], f"no advisory expected for a small pool; got {adv}"
 
 
 def test_fqn_contains_member_match_not_dropped(tmp_path: Path) -> None:
@@ -279,3 +310,27 @@ def test_explain_import_survives_graph_only_env() -> None:
     )
     assert "SCORING:ok" in proc.stdout
     assert "relevance=" in proc.stdout
+
+
+def test_search_v2_lexical_dispatch_end_to_end(monkeypatch, tmp_path: Path) -> None:
+    """Integration (test-review gaps I-1/I-2): drive the REAL search_v2 entry point down
+    the lexical branch (run_search=None) against a fixture graph. Verifies the dispatch
+    converges on the shared row->hit loop, sets lexical_mode, emits the graph-only mode
+    advisory, and that SearchHit carries the expected fqn — none of which the direct
+    run_lexical_search unit tests reach. Also covers --explain score_components end-to-end."""
+    import mcp_v2
+
+    db = _build_corpus(tmp_path)
+    g = _graph(db)
+    monkeypatch.setattr(mcp_v2, "run_search", None)
+
+    out = mcp_v2.search_v2(query="distribution chunk", graph=g)
+    assert out.success, f"expected success; message={out.message}"
+    assert out.lexical_mode is True
+    assert out.results, "expected >=1 hit through the shared row->hit loop"
+    assert out.results[0].fqn == "svc.DistributionChunkService"
+    assert any("graph-only" in a for a in (out.advisories or [])), out.advisories
+
+    out2 = mcp_v2.search_v2(query="distribution chunk", graph=g, explain=True)
+    assert out2.success and out2.results
+    assert out2.results[0].score_components, "explain should populate score_components"
