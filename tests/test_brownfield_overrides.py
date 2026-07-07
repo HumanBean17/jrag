@@ -485,6 +485,7 @@ def test_fqn_fires_with_enrich_chunk_lance_path(tmp_path: Path) -> None:
 
 def test_tier1_java_lance_chunk_capabilities_list_type_matches_other_lists() -> None:
     """Pre-flight tier 1: `capabilities` uses the same Arrow list<string> as other list cols."""
+    pytest.importorskip("cocoindex")  # java_index_flow_lancedb pulls cocoindex at import
     import java_index_flow_lancedb as java_lance
     from typing import Annotated, get_args, get_origin, get_type_hints
 
@@ -511,6 +512,7 @@ def test_tier1_java_lance_chunk_capabilities_list_type_matches_other_lists() -> 
 
 def test_tier2_lance_row_carries_enrich_capabilities_without_lancedb() -> None:
     """Pre-flight tier 2: `JavaLanceChunk` row would carry the same `capabilities` as `enrich_chunk` (CocoIndex wiring)."""
+    pytest.importorskip("cocoindex")  # java_index_flow_lancedb pulls cocoindex at import
     import numpy as np
 
     from graph_enrich import enrich_chunk
@@ -564,6 +566,7 @@ def test_lance_table_round_trips_list_capabilities(tmp_path: Path) -> None:
     Runs after tier1/tier2: importing lancedb/pyarrow first breaks cocoindex's
     numpy import in the same pytest process (numpy._core.numeric).
     """
+    pytest.importorskip("lancedb")
     import lancedb
     import pyarrow as pa
 

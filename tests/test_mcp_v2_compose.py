@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,22 @@ from mcp_v2 import (
     search_v2,
 )
 from server import _graph_meta_output
+
+
+def _vector_stack_available() -> bool:
+    """True when the optional vector stack (torch/sentence-transformers/lancedb) is installed.
+
+    Search tests that monkeypatch ``mcp_v2.run_search`` still drive the vector path
+    (which embeds the query), so they need the stack even when run_search is faked.
+    Skip them on graph-only installs (macOS Intel). Mirrors tests/test_mcp_v2.py.
+    """
+    return all(importlib.util.find_spec(m) is not None for m in ("sentence_transformers", "lancedb"))
+
+
+needs_vectors = pytest.mark.skipif(
+    not _vector_stack_available(),
+    reason="vector stack not installed (graph-only install; macOS Intel)",
+)
 
 
 _EDGE_TYPES = (
@@ -187,6 +204,7 @@ def test_describe_edge_summary_for_route(ladybug_graph) -> None:
     assert int(exposes.get("in", 0)) >= 1
 
 
+@needs_vectors
 def test_search_populates_symbol_id_when_chunk_rooted_in_symbol(monkeypatch, ladybug_graph) -> None:
     rows: list[dict[str, Any]] = [
         {
@@ -239,6 +257,7 @@ def test_meta_returns_per_edge_type_counts() -> None:
     assert all(int(v) >= 0 for v in out.edge_counts.values())
 
 
+@needs_vectors
 def test_search_describe_neighbors_chain_end_to_end(ladybug_graph, monkeypatch) -> None:
     node_id, _ = _method_with_incoming_calls(ladybug_graph)
     rows = ladybug_graph._rows(  # noqa: SLF001

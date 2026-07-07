@@ -611,6 +611,7 @@ def test_search_unknown_filter_key_returns_failure(monkeypatch, ladybug_graph) -
     assert "typo_key" in out.message
 
 
+@needs_vectors
 def test_search_no_lance_index_returns_failure_envelope(monkeypatch, ladybug_graph, tmp_path) -> None:
     """Real search error path (issue #358): every other search test monkeypatches
     run_search, so the genuine `except Exception` envelope in search_v2 was never
@@ -662,6 +663,7 @@ def test_search_pushes_nodefilter_into_run_search(monkeypatch, ladybug_graph) ->
     assert captured.get("exclude_roles") == ["CONTROLLER"]
 
 
+@needs_vectors
 def test_search_all_tables_hybrid_returns_clean_failure(ladybug_graph) -> None:
     """hybrid + table='all' is unsupported; search_v2 fails fast with a clean
     success=False envelope BEFORE loading the embedding model (no raw exception
@@ -672,6 +674,7 @@ def test_search_all_tables_hybrid_returns_clean_failure(ladybug_graph) -> None:
     assert out.results == []
 
 
+@needs_vectors
 def test_search_hybrid_missing_fts_falls_back_to_vector(monkeypatch, ladybug_graph) -> None:
     """hybrid search on a table missing the FTS index falls back to vector-only
     with an advisory (PR-SEARCH-3) — instead of surfacing a raw Lance error, the
@@ -703,6 +706,7 @@ def test_search_hybrid_missing_fts_falls_back_to_vector(monkeypatch, ladybug_gra
     assert "FTS index missing" in advisory_text
 
 
+@needs_vectors
 def test_search_hybrid_non_fts_error_still_fails(monkeypatch, ladybug_graph) -> None:
     """A non-FTS exception during hybrid search still yields success=False — the
     graceful fallback is scoped ONLY to the missing-FTS signature; other errors
@@ -1840,6 +1844,7 @@ def test_search_hit_has_score_components_field() -> None:
     assert hit.score_components is None
 
 
+@needs_vectors
 def test_search_explain_true_includes_score_components(monkeypatch, ladybug_graph) -> None:
     """search with explain=True returns hits with score_components."""
     def fake_rows_with_components():
@@ -1877,6 +1882,7 @@ def test_search_explain_true_includes_score_components(monkeypatch, ladybug_grap
     assert hit.score_components["role_weight"] == 0.1
 
 
+@needs_vectors
 def test_search_explain_false_omits_score_components(monkeypatch, ladybug_graph) -> None:
     """search with explain=False (or omitted) returns hits with score_components=None."""
     def fake_rows_with_components():
@@ -1920,6 +1926,7 @@ def test_search_explain_false_omits_score_components(monkeypatch, ladybug_graph)
 
 
 
+@needs_vectors
 def test_search_dedup_default_is_true(monkeypatch, ladybug_graph) -> None:
     """search tool defaults to dedup=True (per-symbol dedup enabled)."""
     captured_kwargs: dict = {}
@@ -1951,6 +1958,7 @@ def test_search_dedup_default_is_true(monkeypatch, ladybug_graph) -> None:
     assert captured_kwargs.get("dedup_by_fqn") is True, f"expected dedup_by_fqn=True by default, got {captured_kwargs.get('dedup_by_fqn')}"
 
 
+@needs_vectors
 def test_search_chunks_field_present_when_deduped(monkeypatch, ladybug_graph) -> None:
     """SearchHit.chunks field is present when rows have _chunks_collapsed."""
     def mock_run_search(query, **kwargs):
@@ -1983,6 +1991,7 @@ def test_search_chunks_field_present_when_deduped(monkeypatch, ladybug_graph) ->
     assert hit.chunks == 3, f"expected chunks=3, got {hit.chunks}"
 
 
+@needs_vectors
 def test_search_chunks_flag_sets_dedup_false(monkeypatch, ladybug_graph) -> None:
     """chunks=True parameter sets dedup=False (opt-out of per-symbol dedup)."""
     captured_kwargs: dict = {}
