@@ -391,6 +391,8 @@ class ResolvedOperatorConfig:
         os.environ["SBERT_MODEL"] = self.embedding_model
         if self.embedding_device is not None:
             os.environ["SBERT_DEVICE"] = self.embedding_device
+        # Publish absence diagnosis knobs for subprocess builds (PR-ABS-1)
+        os.environ["JAVA_CODEBASE_RAG_ABSENCE_NGRAM_Q"] = str(self.absence_ngram_q)
 
     def subprocess_env(self, base: dict[str, str] | None = None) -> dict[str, str]:
         out = dict(base or os.environ)
@@ -401,6 +403,8 @@ class ResolvedOperatorConfig:
             out["SBERT_DEVICE"] = self.embedding_device
         else:
             out.pop("SBERT_DEVICE", None)
+        # Publish absence diagnosis knobs for subprocess builds (PR-ABS-1)
+        out["JAVA_CODEBASE_RAG_ABSENCE_NGRAM_Q"] = str(self.absence_ngram_q)
         return out
 
 

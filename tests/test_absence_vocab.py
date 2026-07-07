@@ -294,3 +294,69 @@ class TestBuildFailureResilience:
 
         # Should have logged a warning
         assert any("Vocabulary index build failed" in record.message for record in caplog.records)
+
+
+class TestEnvVarWiring:
+    """Tests that the build hook reads the env var and config publishes it (PR-ABS-1 fix)."""
+
+    def test_build_hook_reads_env_var(self, ladybug_db_path, corpus_root, monkeypatch):
+        """_try_build_vocabulary_index reads JAVA_CODEBASE_RAG_ABSENCE_NGRAM_Q from env."""
+        from build_ast_graph import _try_build_vocabulary_index
+
+        # Set env var to q=2
+        monkeypatch.setenv("JAVA_CODEBASE_RAG_ABSENCE_NGRAM_Q", "2")
+
+        # Build the vocab index (uses Path objects, not strings)
+        _try_build_vocabulary_index(ladybug_db_path, corpus_root, verbose=False)
+
+        # Load the saved index and verify q=2
+        sidecar_path = ladybug_db_path.parent / VOCAB_INDEX_FILENAME
+        assert sidecar_path.exists(), "Sidecar should be created"
+
+        loaded = VocabularyIndex.load(sidecar_path)
+        assert loaded.q == 2, f"Expected q=2, got q={loaded.q}"
+
+        # Clean up
+        sidecar_path.unlink()
+
+    def test_build_hook_default_q_when_env_var_invalid(self, ladybug_db_path, corpus_root, monkeypatch):
+        """Build hook falls back to q=3 when env var is invalid."""
+        from build_ast_graph import _try_build_vocabulary_index
+
+        # Set env var to invalid value
+        monkeypatch.setenv("JAVA_CODEBASE_RAG_ABSENCE_NGRAM_Q", "not_a_number")
+
+        # Build the vocab index
+        _try_build_vocabulary_index(ladybug_db_path, corpus_root, verbose=False)
+
+        # Load the saved index and verify default q=3
+        sidecar_path = ladybug_db_path.parent / VOCAB_INDEX_FILENAME
+        assert sidecar_path.exists(), "Sidecar should be created"
+
+        loaded = VocabularyIndex.load(sidecar_path)
+        assert loaded.q == 3, f"Expected default q=3, got q={loaded.q}"
+
+        # Clean up
+        sidecar_path.unlink()
+
+    def test_config_publishes_absence_ngram_q(self, monkeypatch):
+        """ResolvedOperatorConfig.subprocess_env() includes JAVA_CODEBASE_RAG_ABSENCE_NGRAM_Q."""
+        from java_codebase_rag.config import resolve_operator_config
+
+        # Set up a config with absence_ngram_q=5 via env
+        monkeypatch.setenv("JAVA_CODEBASE_RAG_ABSENCE_NGRAM_Q", "5")
+        monkeypatch.setenv("JAVA_CODEBASE_RAG_INDEX_DIR", "/tmp/test_index")
+        monkeypatch.setenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", "/tmp/test_root")
+
+        cfg = resolve_operator_config(source_root=Path("/tmp/test_root"))
+        assert cfg.absence_ngram_q == 5
+
+        # Verify subprocess_env() publishes it
+        env = cfg.subprocess_env()
+        assert "JAVA_CODEBASE_RAG_ABSENCE_NGRAM_Q" in env
+        assert env["JAVA_CODEBASE_RAG_ABSENCE_NGRAM_Q"] == "5"
+
+        # Verify apply_to_os_environ() publishes it
+        cfg.apply_to_os_environ()
+        import os
+        assert os.environ.get("JAVA_CODEBASE_RAG_ABSENCE_NGRAM_Q") == "5"

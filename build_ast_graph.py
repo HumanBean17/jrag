@@ -4235,8 +4235,14 @@ def _try_build_vocabulary_index(db_path: Path, source_root: Path, verbose: bool)
         # Open graph for reading
         graph = LadybugGraph.get(str(db_path))
 
-        # Build index with default q=3 (config not available in this subprocess)
-        index = VocabularyIndex.build(graph, q=3)
+        # Read q from env var set by ResolvedOperatorConfig.subprocess_env()
+        raw_q = os.environ.get("JAVA_CODEBASE_RAG_ABSENCE_NGRAM_Q", "3").strip()
+        try:
+            q = int(raw_q) if raw_q else 3
+        except ValueError:
+            q = 3  # Invalid env value falls back to default
+        # Build index with configured q (or default 3)
+        index = VocabularyIndex.build(graph, q=q)
 
         # Save to sidecar next to the graph db
         sidecar_path = Path(db_path).parent / VOCAB_INDEX_FILENAME
