@@ -10,6 +10,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 
 def _conflict_error(version: int = 4424) -> RuntimeError:
     return RuntimeError(
@@ -266,6 +268,7 @@ async def test_optimize_closes_connection_even_on_open_failure(monkeypatch, tmp_
 
 def test_lance_table_names_constant_matches_search_lancedb_tables() -> None:
     """The single source of truth agrees with the search-side TABLES mapping."""
+    pytest.importorskip("lancedb")  # search_lancedb imports lancedb at module top
     from java_codebase_rag.lance_optimize import LANCE_TABLE_NAMES
 
     # Imported lazily to avoid pulling sentence-transformers at collection time.

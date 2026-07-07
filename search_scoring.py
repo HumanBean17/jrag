@@ -1,0 +1,338 @@
+#!/usr/bin/env python3
+"""Dependency-free scoring & dedup primitives shared by the search backends.
+
+Imported by both the vector backend (`search_lancedb`) and the lexical backend
+(`search_lexical`). This module MUST NOT import lancedb / torch /
+sentence_transformers / cocoindex — it is imported on graph-only (macOS Intel)
+installs where those packages are absent (see pyproject.toml PEP 508 markers).
+
+Everything here is pure-Python dict/list math with no third-party deps.
+"""
+
+from __future__ import annotations
+
+import json
+
+# Over-fetch multiplier for dedup: fetch 4x to absorb per-FQN chunk multiplicity
+# so that after collapsing by primary_type_fqn, a page stays full and the +1
+# truncation sentinel survives. The formula: need = max((limit + offset) * 4, limit + offset + 1)
+DEDUP_OVERFETCH = 4
+
+_IMPORT_DISTANCE_PENALTY = 0.08
+_IMPORT_HYBRID_SCORE_FACTOR = 0.88
+
+# Bonus for chunks whose declared symbols (method / field names) share tokens with
+# the query. Behavioural queries like "what happens when a client message arrives"
+# should float chunks containing `processClientMessage` above ones that only
+# enqueue; this is a cheap, query-dependent signal computed at rank time.
+_SYMBOL_MATCH_BONUS_PER_HIT = 0.03
+_SYMBOL_MATCH_BONUS_CAP = 0.06
+
+# Action verbs that typically mark behavioural entry points in this codebase.
+# A chunk whose symbols begin with one of these verbs earns a small flat bump
+# — again only for java chunks and only when role-filtering is off.
+_ACTION_VERB_PREFIXES: tuple[str, ...] = (
+    "process", "handle", "on", "pick", "select", "assign",
+    "notify", "dispatch", "publish", "consume", "route",
+    "trigger", "enqueue", "distribute", "update", "create",
+    "apply", "resolve", "reassign", "close", "open",
+)
+_ACTION_VERB_BONUS = 0.02
+
+# Type-name overlap bonus. The class name is a much stronger discovery signal
+# than any individual method, because class naming in this codebase encodes
+# the domain concept (`DistributionChunkService`, `OperatorSessionService`,
+# `JoinOperatorController`). So we reward overlap between query tokens and the
+# simple name of `primary_type_fqn` more heavily than per-method overlap, and
+# we stack it on top of the existing `_symbol_bonus`.
+_TYPE_MATCH_BONUS_PER_HIT = 0.05
+_TYPE_MATCH_BONUS_CAP = 0.10
+
+_STOPWORDS: frozenset[str] = frozenset({
+    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+    "to", "of", "in", "on", "at", "by", "for", "with", "from", "as", "or",
+    "and", "but", "if", "then", "else", "when", "what", "how", "why", "does",
+    "do", "did", "has", "have", "had", "this", "that", "these", "those", "it",
+    "its", "new", "no", "not", "will", "would", "should", "can", "could",
+    "may", "might", "happens", "happen", "happened", "get", "gets", "got",
+})
+
+# Role-aware reweighting for Java chunks. Positive values favour actionable
+# behavioural code (entrypoints, orchestrators, integrations) over configuration,
+# schema, and persistence stubs for "what happens when..."-style queries.
+# Applied to the similarity score (higher = better); distance-based sort subtracts
+# the weight. Skipped when caller filters explicitly by role.
+_ROLE_SCORE_WEIGHTS: dict[str, float] = {
+    "CONTROLLER": 0.10,
+    "SERVICE": 0.08,
+    "CLIENT": 0.06,
+    "COMPONENT": 0.03,
+    "REPOSITORY": 0.02,
+    "MAPPER": 0.00,
+    "OTHER": 0.00,
+    "ENTITY": -0.06,
+    "CONFIG": -0.10,
+    # DTOs are passive data carriers; they almost never answer "how/what
+    # happens" queries. Penalty is slightly stronger than ENTITY so a DTO
+    # with a great embedding match still loses to a mediocre SERVICE hit.
+    "DTO": -0.08,
+}
+
+# Theoretical maximum for hybrid composite score (used for display normalization).
+# Hybrid sort metric: raw_rrf * (import_factor if import_heavy else 1)
+#                   + role_weight + symbol_bonus
+# where raw_rrf ≤ 2/(k+1) for 2-list RRF, role_weight ≤ max(_ROLE_SCORE_WEIGHTS),
+# and symbol_bonus ≤ _SYMBOL_MATCH_BONUS_CAP + _TYPE_MATCH_BONUS_CAP + _ACTION_VERB_BONUS.
+# The import factor is ≤ 1, so we use the raw max (2/61).
+_HYBRID_SCORE_MAX = (2.0 / 61.0) + max(_ROLE_SCORE_WEIGHTS.values()) + _SYMBOL_MATCH_BONUS_CAP + _TYPE_MATCH_BONUS_CAP + _ACTION_VERB_BONUS
+
+
+def _query_tokens(query: str) -> set[str]:
+    """Lowercased alpha-only tokens from the query, minus stopwords, len >= 3.
+
+    Used to score symbol-name overlap; we keep it simple and locale-free.
+    """
+    out: set[str] = set()
+    cur: list[str] = []
+
+    def _flush() -> None:
+        if cur:
+            tok = "".join(cur).lower()
+            cur.clear()
+            if len(tok) >= 3 and tok not in _STOPWORDS:
+                out.add(tok)
+
+    for c in query:
+        if c.isalpha():
+            cur.append(c)
+        else:
+            _flush()
+    _flush()
+    return out
+
+
+def _split_identifier(name: str) -> list[str]:
+    """camelCase / snake_case -> lowercase token list."""
+    parts: list[str] = []
+    cur: list[str] = []
+    for c in name:
+        if c == "_":
+            if cur:
+                parts.append("".join(cur).lower())
+                cur = []
+        elif c.isupper() and cur:
+            parts.append("".join(cur).lower())
+            cur = [c]
+        else:
+            cur.append(c)
+    if cur:
+        parts.append("".join(cur).lower())
+    return [p for p in parts if p]
+
+
+def _symbol_bonus(r: dict, query_toks: set[str]) -> float:
+    """Symbol-name overlap + action-verb bump for java chunks.
+
+    Caps at `_SYMBOL_MATCH_BONUS_CAP + _ACTION_VERB_BONUS` to avoid runaway
+    ranks on chunks declaring many symbols.
+    """
+    if str(r.get("_kind", "")) != "java":
+        return 0.0
+    raw = r.get("symbols") or []
+    if isinstance(raw, str):
+        # Legacy JSON-encoded list column; parse defensively.
+        try:
+            parsed = json.loads(raw)
+            raw = parsed if isinstance(parsed, list) else []
+        except Exception:
+            raw = []
+    symbols = [str(s) for s in raw if s]
+
+    overlap_hits = 0
+    has_action = False
+    for s in symbols:
+        bare = s.split("(", 1)[0].strip()
+        if not bare:
+            continue
+        toks = _split_identifier(bare)
+        if toks:
+            if toks[0] in _ACTION_VERB_PREFIXES:
+                has_action = True
+            if query_toks & set(toks):
+                overlap_hits += 1
+
+    bonus = min(overlap_hits * _SYMBOL_MATCH_BONUS_PER_HIT, _SYMBOL_MATCH_BONUS_CAP)
+    if has_action:
+        bonus += _ACTION_VERB_BONUS
+
+    # Type-name overlap: strongest single lexical signal for "which class is
+    # the answer?" queries. Uses the simple name of primary_type_fqn.
+    fqn = str(r.get("primary_type_fqn") or "")
+    if fqn:
+        simple = fqn.rsplit(".", 1)[-1]
+        type_toks = set(_split_identifier(simple))
+        type_hits = len(query_toks & type_toks)
+        if type_hits:
+            bonus += min(type_hits * _TYPE_MATCH_BONUS_PER_HIT, _TYPE_MATCH_BONUS_CAP)
+    return bonus
+
+
+def _role_weight(r: dict) -> float:
+    """Effective role weight for a row, captured into `_score_components.role_weight`."""
+    comps = r.setdefault("_score_components", {})
+    cached = comps.get("role_weight")
+    if cached is not None:
+        return float(cached)
+    if r.get("_skip_role_weight") or str(r.get("_kind", "")) != "java":
+        comps["role_weight"] = 0.0
+        return 0.0
+    role = (r.get("role") or "").upper()
+    w = _ROLE_SCORE_WEIGHTS.get(role, 0.0)
+    comps["role_weight"] = w
+    return w
+
+
+def _apply_symbol_bonus(rows: list[dict], query_toks: set[str]) -> None:
+    """Pre-compute symbol-match bonus into `_score_components.symbol_bonus`."""
+    if not query_toks:
+        return
+    for r in rows:
+        if r.get("_skip_role_weight"):
+            # When the caller locked role, respect their intent everywhere.
+            continue
+        b = _symbol_bonus(r, query_toks)
+        if b:
+            r.setdefault("_score_components", {})["symbol_bonus"] = b
+
+
+def l2_distance_to_score(distance: float) -> float:
+    """Map L2 distance to a similarity score for unit-normalized embeddings."""
+    return 1.0 - distance * distance / 2.0
+
+
+def _effective_distance(comps: dict[str, float]) -> float:
+    """Compute the adjusted distance used for sorting.
+
+    Matches _vector_sort_key logic: distance + import_penalty - role_weight - symbol_bonus.
+    """
+    d = comps.get("distance", 0.0)
+    d += comps.get("import_penalty", 0.0)
+    d -= comps.get("role_weight", 0.0)
+    d -= comps.get("symbol_bonus", 0.0)
+    return d
+
+
+def _clamp01(x: float) -> float:
+    """Clamp a value to the [0.0, 1.0] range."""
+    if x < 0.0:
+        return 0.0
+    if x > 1.0:
+        return 1.0
+    return x
+
+
+def explain_score_components(
+    comps: dict[str, float] | None,
+    *,
+    role: str | None = None,
+    hybrid: bool = False,
+    graph_expanded: bool = False,
+    lexical: bool = False,
+) -> str:
+    """Compact human-readable 'why' string for a ranked hit.
+
+    Joins the interesting components of `_score_components` in a stable order
+    so agents can reason about rankings without chasing raw floats. Returns
+    "" if there's nothing worth mentioning.
+    """
+    if not comps:
+        comps = {}
+    parts: list[str] = []
+    if lexical:
+        rel = comps.get("lexical_relevance")
+        if rel is not None:
+            parts.append(f"relevance={float(rel):.2f}")
+        nm = comps.get("name_match")
+        if nm is not None:
+            parts.append(f"name={float(nm):.2f}")
+        ty = comps.get("type_match")
+        if ty:
+            parts.append(f"type:{float(ty):+.2f}")
+        fq = comps.get("fqn_match")
+        if fq:
+            parts.append(f"fqn:{float(fq):+.2f}")
+    elif hybrid:
+        # Prefer rrf_raw (added by PR-SEARCH-1a) for explanation
+        rrf = comps.get("rrf_raw") or comps.get("hybrid_rrf")
+        if rrf is not None:
+            parts.append(f"rrf={float(rrf):.3f}")
+    else:
+        d = comps.get("distance")
+        if d is not None:
+            parts.append(f"dist={float(d):.2f}")
+    rw = comps.get("role_weight")
+    if rw:
+        label = f"role:{role}" if role else "role"
+        parts.append(f"{label}:{float(rw):+.02f}")
+    sb = comps.get("symbol_bonus")
+    if sb:
+        parts.append(f"symbol:{float(sb):+.02f}")
+    ip = comps.get("import_penalty")
+    if ip:
+        parts.append(f"import_penalty:{float(ip):+.02f}")
+    if graph_expanded:
+        parts.append("graph")
+    return " ".join(parts)
+
+
+def _dedup_by_fqn(rows: list[dict], dedup_by_fqn: bool = True) -> list[dict]:
+    """Deduplicate rows by primary_type_fqn (java table only).
+
+    When dedup_by_fqn is True, collapses multiple chunks of the same
+    primary_type_fqn into one row (first-seen-wins, since rows are pre-sorted
+    so the first is the best chunk). Each survivor gets a _chunks_collapsed
+    field (>=1) counting how many rows were collapsed into it.
+
+    Rows without primary_type_fqn (sql/yaml tables) get a unique __id:<id>
+    key so they pass through unchanged (each row is unique).
+
+    When dedup_by_fqn is False, returns rows unchanged (regression guard).
+    """
+    if not dedup_by_fqn:
+        # Non-dedup path: return unchanged, byte-identical to prior behavior
+        return rows
+
+    deduped: list[dict] = []
+    seen_keys: dict[str, dict] = {}
+    collapsed_counts: dict[str, int] = {}
+
+    for row in rows:
+        # Build dedup key: primary_type_fqn for java rows, unique __id:<id> for sql/yaml
+        fqn = row.get("primary_type_fqn")
+        if fqn:
+            key = str(fqn)
+        else:
+            # sql/yaml rows have no primary_type_fqn → unique key per row
+            row_id = row.get("id") or id(row)
+            key = f"__id:{row_id}"
+
+        if key not in seen_keys:
+            # First occurrence: keep it
+            seen_keys[key] = row
+            collapsed_counts[key] = 1
+            deduped.append(row)
+        else:
+            # Duplicate: increment collapse count, discard this row
+            collapsed_counts[key] += 1
+
+    # Annotate each survivor with _chunks_collapsed
+    for row in deduped:
+        fqn = row.get("primary_type_fqn")
+        if fqn:
+            key = str(fqn)
+        else:
+            row_id = row.get("id") or id(row)
+            key = f"__id:{row_id}"
+        row["_chunks_collapsed"] = collapsed_counts[key]
+
+    return deduped

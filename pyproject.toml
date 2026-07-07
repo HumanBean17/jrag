@@ -28,7 +28,9 @@ classifiers = [
 # The vector/semantic-search trio (cocoindex[lancedb], lancedb, sentence-transformers
 # -> torch) is gated off on Intel Mac (darwin + x86_64): torch >=2.3 and lancedb >=0.26
 # dropped macOS x86_64 wheels, so the full stack is uninstallable there. On Intel Mac the
-# package installs graph-only and works out of the box; every other platform is unchanged.
+# package installs graph-only and works out of the box — `search` then falls back to the
+# lexical (keyword) backend over the symbol graph (search_lexical.py); every other platform
+# is unchanged.
 dependencies = [
     "cocoindex[lancedb]>=1.0.7,<2; sys_platform != 'darwin' or platform_machine != 'x86_64'",
     "ladybug>=0.17.1,<0.18",
@@ -85,6 +87,8 @@ py-modules = [
     "pr_analysis",
     "resolve_service",
     "search_lancedb",
+    "search_lexical",
+    "search_scoring",
     "server",
 ]
 

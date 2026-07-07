@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import importlib.util
 import io
 import json
 import os
@@ -36,6 +37,16 @@ def _install_java_codebase_rag_entrypoint() -> None:
 
 def _cocoindex_available() -> bool:
     return (Path(sys.executable).parent / "cocoindex").is_file()
+
+
+def _vector_stack_available() -> bool:
+    """True when the optional vector stack (lancedb/sentence-transformers) is installed.
+
+    Graph-only installs (macOS Intel) gate the trio off via PEP 508 markers. Used to
+    make a few CLI assertions path-aware so they keep providing graph-only coverage
+    (graph-only is a supported mode now — we run it rather than skip it).
+    """
+    return all(importlib.util.find_spec(m) is not None for m in ("sentence_transformers", "lancedb"))
 
 
 def _base_env(corpus_root: Path, ladybug_db_path: Path | None = None) -> dict[str, str]:
@@ -688,8 +699,13 @@ def test_increment_first_run_falls_back_to_full(
     err = buf_err.getvalue()
     # Should fall back to full rebuild gracefully
     assert "fell back to full graph rebuild" in err
-    # Should still succeed
-    assert "increment completed (Lance + graph updated)" in buf.getvalue()
+    # Should still succeed. On graph-only installs the message notes vectors were
+    # skipped; on full installs it reports the Lance + graph update.
+    stdout = buf.getvalue()
+    if _vector_stack_available():
+        assert "increment completed (Lance + graph updated)" in stdout
+    else:
+        assert "increment completed (graph only" in stdout, stdout
 
 
 
@@ -807,7 +823,12 @@ def test_cli_tables_lists_known_table(corpus_root, ladybug_db_path) -> None:
     proc = _run_cli(["tables", "--source-root", str(corpus_root)], env=env)
     assert proc.returncode == 0, proc.stderr
     payload = json.loads(proc.stdout)
-    assert "java" in payload["tables"]
+    if _vector_stack_available():
+        assert "java" in payload["tables"]
+    else:
+        # Graph-only install: no Lance vector tables exist (server sets tables={}),
+        # but the symbol graph is reported.
+        assert payload["tables"] == {}, payload["tables"]
     assert "graph" in payload
 
 
