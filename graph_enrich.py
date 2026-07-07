@@ -142,6 +142,130 @@ def _load_config_microservice_roots(project_root_str: str) -> tuple[str, ...]:
 
 
 @lru_cache(maxsize=64)
+def load_generated_detection(project_root_str: str | None) -> GeneratedDetectionConfig:
+    """Read `generated_detection` from `.java-codebase-rag.yml` at project_root.
+
+    Cached per project_root to avoid re-reading on every chunk. Returns empty
+    config when section absent or project_root is None. Malformed entries
+    (wrong types, non-string values) are dropped with a stderr warning.
+    """
+    if project_root_str is None:
+        return GeneratedDetectionConfig()
+
+    root = Path(project_root_str)
+    for name in CONFIG_FILENAMES:
+        candidate = root / name
+        if not candidate.is_file():
+            continue
+        try:
+            import yaml  # PyYAML; already a transitive dep of cocoindex
+        except ImportError:
+            return GeneratedDetectionConfig()
+        try:
+            data = yaml.safe_load(candidate.read_text(encoding="utf-8"))
+        except Exception:
+            return GeneratedDetectionConfig()
+        if not isinstance(data, dict):
+            return GeneratedDetectionConfig()
+
+        raw = data.get("generated_detection")
+        if raw is None:
+            return GeneratedDetectionConfig()
+
+        if not isinstance(raw, dict):
+            import sys
+            print("[warn] generated_detection must be a dict; skipping",
+                  file=sys.stderr)
+            return GeneratedDetectionConfig()
+
+        result = GeneratedDetectionConfig()
+
+        # Parse header_patterns (list of strings)
+        hp = raw.get("header_patterns")
+        if hp is not None:
+            if isinstance(hp, list):
+                valid = [s for s in hp if isinstance(s, str)]
+                if len(valid) != len(hp):
+                    import sys
+                    print("[warn] generated_detection.header_patterns: "
+                          "non-string entries dropped", file=sys.stderr)
+                result = GeneratedDetectionConfig(
+                    header_patterns=valid,
+                    annotation_patterns=result.annotation_patterns,
+                    force_fqns=result.force_fqns,
+                    exclude_fqns=result.exclude_fqns
+                )
+            else:
+                import sys
+                print("[warn] generated_detection.header_patterns: "
+                      "must be a list; skipping", file=sys.stderr)
+
+        # Parse annotation_patterns (list of strings)
+        ap = raw.get("annotation_patterns")
+        if ap is not None:
+            if isinstance(ap, list):
+                valid = [s for s in ap if isinstance(s, str)]
+                if len(valid) != len(ap):
+                    import sys
+                    print("[warn] generated_detection.annotation_patterns: "
+                          "non-string entries dropped", file=sys.stderr)
+                result = GeneratedDetectionConfig(
+                    header_patterns=result.header_patterns,
+                    annotation_patterns=valid,
+                    force_fqns=result.force_fqns,
+                    exclude_fqns=result.exclude_fqns
+                )
+            else:
+                import sys
+                print("[warn] generated_detection.annotation_patterns: "
+                      "must be a list; skipping", file=sys.stderr)
+
+        # Parse force_fqns (list of strings, convert to set)
+        ff = raw.get("force_fqns")
+        if ff is not None:
+            if isinstance(ff, list):
+                valid = {s for s in ff if isinstance(s, str)}
+                if len(valid) != len(ff):
+                    import sys
+                    print("[warn] generated_detection.force_fqns: "
+                          "non-string entries dropped", file=sys.stderr)
+                result = GeneratedDetectionConfig(
+                    header_patterns=result.header_patterns,
+                    annotation_patterns=result.annotation_patterns,
+                    force_fqns=valid,
+                    exclude_fqns=result.exclude_fqns
+                )
+            else:
+                import sys
+                print("[warn] generated_detection.force_fqns: "
+                      "must be a list; skipping", file=sys.stderr)
+
+        # Parse exclude_fqns (list of strings, convert to set)
+        ef = raw.get("exclude_fqns")
+        if ef is not None:
+            if isinstance(ef, list):
+                valid = {s for s in ef if isinstance(s, str)}
+                if len(valid) != len(ef):
+                    import sys
+                    print("[warn] generated_detection.exclude_fqns: "
+                          "non-string entries dropped", file=sys.stderr)
+                result = GeneratedDetectionConfig(
+                    header_patterns=result.header_patterns,
+                    annotation_patterns=result.annotation_patterns,
+                    force_fqns=result.force_fqns,
+                    exclude_fqns=valid
+                )
+            else:
+                import sys
+                print("[warn] generated_detection.exclude_fqns: "
+                      "must be a list; skipping", file=sys.stderr)
+
+        return result
+
+    return GeneratedDetectionConfig()
+
+
+@lru_cache(maxsize=64)
 def _load_config_cross_service_resolution(project_root_str: str) -> str:
     """Read `cross_service_resolution` from `.java-codebase-rag.yml` at project_root.
 
@@ -236,6 +360,19 @@ class BrownfieldOverrides:
     fqn_to_http_client_hint: dict[str, HttpClientHint] = field(default_factory=dict)
     annotation_to_async_producer_hint: dict[str, AsyncProducerHint] = field(default_factory=dict)
     fqn_to_async_producer_hint: dict[str, AsyncProducerHint] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class GeneratedDetectionConfig:
+    """Config for generated-source detection.
+
+    Mirrors brownfield override pattern: frozen dataclass with
+    field(default_factory=...) for mutable defaults.
+    """
+    header_patterns: list[str] = field(default_factory=list)
+    annotation_patterns: list[str] = field(default_factory=list)
+    force_fqns: set[str] = field(default_factory=set)
+    exclude_fqns: set[str] = field(default_factory=set)
 
 
 def _meta_builtins() -> frozenset[str]:
@@ -1542,6 +1679,159 @@ def microservice_for_path(
                 return parts[0]
 
     return ""
+
+
+# ---------- generated-source detection ----------
+
+
+# Built-in generator markers (v1 set). Verified against real generator output.
+# Annotation FQNs that mark generated code (any annotation with these FQNs
+# or simple names is considered a marker).
+_GENERATED_ANNOTATION_FQNS = {
+    "javax.annotation.processing.Generated",  # Standard Java (pre-Jakarta)
+    "jakarta.annotation.processing.Generated",  # Jakarta EE
+    "org.immutables.value.Generated",  # Immutables
+    "lombok.Generated",  # Lombok
+    "com.squareup.javapoet.Generated",  # JavaPoet
+}
+
+# Header patterns for generators that emit banners (checked against first 4KB).
+# Patterns are compiled as case-insensitive regexes.
+_GENERATED_HEADER_PATTERNS = {
+    r"This file was generated by the OpenAPI Generator": "openapi",
+    r"Generated by the protocol buffer compiler": "protobuf",
+    r"This file was generated by jsonschema2pojo": "jsonschema2pojo",
+    r"generated by wsimport": "wsimport",  # JAX-WS wsimport
+    r"WARNING: DO NOT EDIT.*generated by MapStruct": "mapstruct",
+}
+
+# @Generated(value="...") patterns that identify the generator family.
+# These are matched against annotation arguments["value"] or arguments["comments"].
+_GENERATED_VALUE_PATTERNS = {
+    r"org\.openapitools\.codegen\.": "openapi",
+    r"org\.mapstruct\.ap\.MappingProcessor": "mapstruct",
+    r"com\.google\.auto\.value\.processor\.AutoValueProcessor": "autovalue",
+    r"org\.jooq\.": "jooq",
+    r"com\.querydsl\.": "querydsl",
+    r"org\.immutables\.": "immutables",
+}
+
+
+def _infer_family_from_annotation(annotation: AnnotationRef) -> str | None:
+    """Infer generator family from @Generated annotation arguments.
+
+    Returns lowercased family slug or None if no match.
+    """
+    # Check annotation FQN first (direct marker)
+    if annotation.qualified in _GENERATED_ANNOTATION_FQNS:
+        # Extract family from qualified name if possible
+        if "lombok.Generated" in annotation.qualified:
+            return "lombok"
+        if "immutables" in annotation.qualified:
+            return "immutables"
+        # Generic javax/jakarta or JavaPoet -> unknown family
+        return None
+
+    # Check value/comments arguments for generator identifiers
+    value = annotation.arguments.get("value", "")
+    comments = annotation.arguments.get("comments", "")
+
+    for pattern, family in _GENERATED_VALUE_PATTERNS.items():
+        import re
+        if re.search(pattern, value) or re.search(pattern, comments):
+            return family
+
+    return None
+
+
+def _check_header_banners(source: bytes) -> str | None:
+    """Check header (first 4KB) for generator banners.
+
+    Returns family slug if matched, None otherwise.
+    """
+    HEADER_PREFIX_SIZE = 4096  # First 4KB should capture any banner
+    header_bytes = source[:HEADER_PREFIX_SIZE]
+    try:
+        header_text = header_bytes.decode("utf-8", errors="ignore")
+    except Exception:
+        return None
+
+    import re
+    for pattern, family in _GENERATED_HEADER_PATTERNS.items():
+        if re.search(pattern, header_text, re.IGNORECASE):
+            return family
+
+    return None
+
+
+def classify_java_file(
+    source: bytes,
+    ast: "JavaFileAst",
+    *,
+    config: GeneratedDetectionConfig | None = None,
+    project_root: str | Path | None = None,
+) -> tuple[bool, str | None]:
+    """Classify whether a Java source file is generated.
+
+    Args:
+        source: Raw file bytes (required for header-banner detection).
+        ast: Parsed Java AST (from ast_java.parse_java_ast).
+        config: Optional detection config (defaults to empty config).
+        project_root: Optional project root for loading default config.
+
+    Returns:
+        (generated, generated_by) tuple:
+        - generated: True if file is detected as generated code.
+        - generated_by: Lowercased family slug (openapi, jsonschema2pojo,
+          protobuf, mapstruct, wsimport, querydsl, jooq, immutables,
+          autovalue, lombok) or None if family unknown.
+    """
+    # Load config if not provided
+    if config is None:
+        config = load_generated_detection(
+            str(project_root) if project_root is not None else None
+        )
+
+    # Collect all type FQNs for config-based checks
+    all_type_fqns = {t.fqn for t in ast.all_types}
+
+    # Priority 1: exclude_fqns (override, wins even with markers)
+    if all_type_fqns & config.exclude_fqns:
+        return False, None
+
+    # Priority 2: force_fqns (forced generated, no markers needed)
+    if all_type_fqns & config.force_fqns:
+        return True, None
+
+    # Priority 3: annotation-based detection
+    import re
+    for typ in ast.all_types:
+        for ann in typ.annotations:
+            # Check simple name "Generated" first
+            if ann.name == "Generated":
+                family = _infer_family_from_annotation(ann)
+                if family is not None:
+                    return True, family
+                # Generic @Generated without identifiable value
+                return True, None
+
+            # Check configured annotation patterns
+            for pattern in config.annotation_patterns:
+                if re.search(pattern, ann.qualified) or re.search(pattern, ann.name):
+                    return True, None
+
+    # Priority 4: header-banner detection
+    family = _check_header_banners(source)
+    if family is not None:
+        return True, family
+
+    # Check configured header patterns
+    header_prefix = source[:4096].decode("utf-8", errors="ignore")
+    for pattern in config.header_patterns:
+        if re.search(pattern, header_prefix, re.IGNORECASE):
+            return True, None
+
+    return False, None
 
 
 def detect_microservice_from_path(cwd: Path, source_root: Path) -> str | None:
