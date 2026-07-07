@@ -497,6 +497,8 @@ class SearchHit(BaseModel):
     microservice: str | None = None
     module: str | None = None
     role: str | None = None
+    generated: bool | None = None
+    generated_by: str | None = None
     filename: str | None = None
     start_line: int | None = None
     score_components: dict[str, float] | None = None
@@ -649,6 +651,8 @@ def _row_to_search_hit(row: dict[str, Any], explain: bool = False) -> SearchHit:
         microservice=str(row.get("microservice")) if row.get("microservice") else None,
         module=str(row.get("module")) if row.get("module") else None,
         role=str(row.get("role")) if row.get("role") else None,
+        generated=bool(row.get("generated")) if row.get("generated") is not None else None,
+        generated_by=str(row.get("generated_by")) if row.get("generated_by") else None,
         filename=filename,
         start_line=start_line,
         score_components=row.get("_score_components") if explain else None,
@@ -722,7 +726,7 @@ def _load_node_record(
             "n.start_line AS start_line, n.end_line AS end_line, n.start_byte AS start_byte, "
             "n.end_byte AS end_byte, n.modifiers AS modifiers, n.annotations AS annotations, "
             "n.capabilities AS capabilities, n.role AS role, n.signature AS signature, "
-            "n.parent_id AS parent_id, n.resolved AS resolved"
+            "n.parent_id AS parent_id, n.resolved AS resolved, n.generated AS generated, n.generated_by AS generated_by"
         )
         label = "Symbol"
     elif kind == "route":
@@ -1097,7 +1101,7 @@ def find_v2(
             params["lim"] = fetch_cap
             rows = g._rows(  # noqa: SLF001
                 f"MATCH (s:Symbol) {where} RETURN s.id AS id, s.fqn AS fqn, s.microservice AS microservice, "
-                "s.module AS module, s.role AS role, s.kind AS symbol_kind ORDER BY s.fqn LIMIT $lim",
+                "s.module AS module, s.role AS role, s.kind AS symbol_kind, s.generated AS generated, s.generated_by AS generated_by ORDER BY s.fqn LIMIT $lim",
                 params,
             )
         elif kind == "route":

@@ -932,6 +932,10 @@ def main() -> None:
         mod = row.get("module") or ""
         if mod and mod != ms:
             hint_s += f" | module:{mod}"
+        gen = row.get("generated")
+        gen_by = row.get("generated_by") or ""
+        if gen:
+            hint_s += f" | generated:{gen_by}" if gen_by else " | generated"
         comps = row.get("_score_components") or {}
         rw = comps.get("role_weight")
         if rw:

@@ -207,7 +207,7 @@ def _symbol_return_for(alias: str) -> str:
         f"{alias}.modifiers AS modifiers, {alias}.annotations AS annotations, "
         f"{alias}.capabilities AS capabilities, "
         f"{alias}.role AS role, {alias}.signature AS signature, "
-        f"{alias}.parent_id AS parent_id, {alias}.resolved AS resolved"
+        f"{alias}.parent_id AS parent_id, {alias}.resolved AS resolved, {alias}.generated AS generated, {alias}.generated_by AS generated_by"
     )
 
 
@@ -296,7 +296,7 @@ def _row_to_symbol(row: dict[str, Any]) -> SymbolHit:
 _SYM_COLS = (
     "id", "kind", "name", "fqn", "package", "module", "microservice",
     "filename", "start_line", "end_line", "start_byte", "end_byte",
-    "modifiers", "annotations", "capabilities", "role", "signature", "parent_id", "resolved",
+    "modifiers", "annotations", "capabilities", "role", "signature", "parent_id", "resolved", "generated", "generated_by",
 )
 
 
@@ -1107,14 +1107,14 @@ class LadybugGraph:
             f"s.{c} AS s_{c}" for c in (
                 "id", "kind", "name", "fqn", "package", "module", "microservice",
                 "filename", "start_line", "end_line", "start_byte", "end_byte",
-                "modifiers", "annotations", "capabilities", "role", "signature", "parent_id", "resolved",
+                "modifiers", "annotations", "capabilities", "role", "signature", "parent_id", "resolved", "generated", "generated_by",
             )
         )
         t_proj = ", ".join(
             f"t.{c} AS t_{c}" for c in (
                 "id", "kind", "name", "fqn", "package", "module", "microservice",
                 "filename", "start_line", "end_line", "start_byte", "end_byte",
-                "modifiers", "annotations", "capabilities", "role", "signature", "parent_id", "resolved",
+                "modifiers", "annotations", "capabilities", "role", "signature", "parent_id", "resolved", "generated", "generated_by",
             )
         )
         q = (
