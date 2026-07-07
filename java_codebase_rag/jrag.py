@@ -303,6 +303,44 @@ def _preparse_render_flags(raw: list[str]) -> tuple[str | None, str | None, list
         return None, None, list(raw)
 
 
+# Closed enum taxonomies for the --role / --exclude-role / --java-kind /
+# --framework / --capability filters. Sourced from the canonical literals
+# (mcp_v2.Role, mcp_v2.DeclarationSymbolKind, mcp_v2.Framework) and
+# java_ontology.VALID_CAPABILITIES, and cross-checked by test_jrag_enum_choices.
+# Hardcoded here (not imported) so `jrag --help` stays fast — build_parser
+# imports no backend modules, and importing mcp_v2 costs ~0.7s.
+_ROLE_CHOICES = (
+    "CONTROLLER", "SERVICE", "REPOSITORY", "COMPONENT", "CONFIG",
+    "ENTITY", "CLIENT", "MAPPER", "DTO", "OTHER",
+)
+_JAVA_KIND_CHOICES = (
+    "class", "interface", "enum", "record", "annotation", "method", "constructor",
+)
+_FRAMEWORK_CHOICES = (
+    "spring_mvc", "webflux", "kafka", "rabbitmq", "jms", "stream", "feign",
+)
+_CAPABILITY_CHOICES = (
+    "MESSAGE_LISTENER", "MESSAGE_PRODUCER", "HTTP_CLIENT",
+    "SCHEDULED_TASK", "EXCEPTION_HANDLER",
+)
+
+
+def _upper_snake(value: str) -> str:
+    """Normalize a role/capability value to its stored UPPER_SNAKE form so
+    argparse ``choices=`` accepts flexible casing (``controller`` /
+    ``scheduled-task`` -> ``CONTROLLER`` / ``SCHEDULED_TASK``). Mirrors the
+    role/capability branch of jrag_envelope.normalize_enum."""
+    return value.strip().upper().replace("-", "_").replace(" ", "_")
+
+
+def _lower_snake(value: str) -> str:
+    """Normalize a java-kind/framework value to its stored lowercase form so
+    argparse ``choices=`` accepts flexible casing (``Spring-MVC`` ->
+    ``spring_mvc``). Mirrors the framework/java_kind branch of
+    jrag_envelope.normalize_enum."""
+    return value.strip().lower().replace("-", "_").replace(" ", "_")
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Argparse builder. Imports no backend modules.
 
@@ -343,8 +381,8 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", parser_class=_EnvelopeArgumentParser)
 
     # Common flags applied per command via parents=[_common_parser()]. NOT
-    # global so commands can override defaults (e.g. fan-out commands use
-    # limit=10). The helper builds a FRESH parser each call so every subparser
+    # global so commands can override defaults (e.g. inspect/orientation
+    # default --detail to full). The helper builds a FRESH parser each call so every subparser
     # owns its own --detail Action object — argparse `parents` shares Action
     # objects by reference, and `set_defaults(detail=...)` mutates the shared
     # action's default (CPython walks `self._actions`), so a single shared
@@ -366,7 +404,7 @@ def build_parser() -> argparse.ArgumentParser:
             ),
         )
         common.add_argument(
-            "--limit", type=int, default=20, help="Cap on results (default 20; 10 for fan-out)."
+            "--limit", type=int, default=20, help="Cap on results (default 20)."
         )
         common.add_argument(
             "--index-dir",
@@ -461,12 +499,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Node kind (omit for auto-inference from domain flags).",
     )
-    find.add_argument("--role", type=str, default=None, help="Filter by role.")
-    find.add_argument("--exclude-role", type=str, default=None, help="Exclude by role.")
-    find.add_argument("--java-kind", type=str, default=None, help="Filter by Java symbol kind.")
+    find.add_argument("--role", type=_upper_snake, choices=_ROLE_CHOICES, default=None, help="Filter by role.")
+    find.add_argument("--exclude-role", type=_upper_snake, choices=_ROLE_CHOICES, default=None, help="Exclude by role.")
+    find.add_argument("--java-kind", type=_lower_snake, choices=_JAVA_KIND_CHOICES, default=None, help="Filter by Java symbol kind.")
     find.add_argument("--annotation", type=str, default=None, help="Filter by annotation.")
-    find.add_argument("--capability", type=str, default=None, help="Filter by capability.")
-    find.add_argument("--framework", type=str, default=None, help="Filter by framework.")
+    find.add_argument("--capability", type=_upper_snake, choices=_CAPABILITY_CHOICES, default=None, help="Filter by capability.")
+    find.add_argument("--framework", type=_lower_snake, choices=_FRAMEWORK_CHOICES, default=None, help="Filter by framework.")
     find.add_argument("--source-layer", type=str, default=None, help="Filter by source layer.")
     find.add_argument("--fqn-contains", type=str, default=None, help="Filter by FQN substring.")
     find.add_argument("--http-method", type=str, default=None, help="Filter by HTTP method (route).")
@@ -502,8 +540,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Hint for resolve (omitted for broad search).",
     )
-    inspect.add_argument("--java-kind", type=str, default=None, help="Post-filter by Java symbol kind.")
-    inspect.add_argument("--role", type=str, default=None, help="Post-filter by role.")
+    inspect.add_argument("--java-kind", type=_lower_snake, choices=_JAVA_KIND_CHOICES, default=None, help="Post-filter by Java symbol kind.")
+    inspect.add_argument("--role", type=_upper_snake, choices=_ROLE_CHOICES, default=None, help="Post-filter by role.")
     inspect.add_argument("--fqn-contains", type=str, default=None, help="Post-filter by FQN substring.")
     inspect.set_defaults(handler=_cmd_inspect, detail="full")
 
@@ -518,7 +556,7 @@ def build_parser() -> argparse.ArgumentParser:
             "kafka topics live under `topics`."
         ),
     )
-    http_routes.add_argument("--framework", type=str, default=None, help="Filter by framework.")
+    http_routes.add_argument("--framework", type=_lower_snake, choices=_FRAMEWORK_CHOICES, default=None, help="Filter by framework.")
     http_routes.add_argument("--path-contains", type=str, default=None, help="Filter by path substring.")
     http_routes.add_argument("--method", type=str, default=None, help="Filter by HTTP method.")
     http_routes.set_defaults(handler=_cmd_routes, detail="full", auto_scope=True)
@@ -617,8 +655,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Hint for resolve (omit for broad search).",
     )
-    resolve_parent.add_argument("--java-kind", type=str, default=None, help="Post-filter by Java symbol kind.")
-    resolve_parent.add_argument("--role", type=str, default=None, help="Post-filter by role.")
+    resolve_parent.add_argument("--java-kind", type=_lower_snake, choices=_JAVA_KIND_CHOICES, default=None, help="Post-filter by Java symbol kind.")
+    resolve_parent.add_argument("--role", type=_upper_snake, choices=_ROLE_CHOICES, default=None, help="Post-filter by role.")
     resolve_parent.add_argument("--fqn-contains", type=str, default=None, help="Post-filter by FQN substring.")
 
     callers = subparsers.add_parser(
@@ -700,7 +738,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     implementations.add_argument("query", help="Interface FQN or name.")
-    implementations.add_argument("--capability", type=str, default=None, help="Filter implementors by capability.")
+    implementations.add_argument("--capability", type=_upper_snake, choices=_CAPABILITY_CHOICES, default=None, help="Filter implementors by capability.")
     implementations.set_defaults(handler=_cmd_implementations, auto_scope=True)
 
     subclasses = subparsers.add_parser(
@@ -1105,12 +1143,12 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     # NodeFilter flags (same set as `find` filter mode, minus the query-only ones).
-    search.add_argument("--role", type=str, default=None, help="Filter by role.")
-    search.add_argument("--exclude-role", type=str, default=None, dest="exclude_role", help="Exclude by role.")
-    search.add_argument("--java-kind", type=str, default=None, dest="java_kind", help="Filter by Java symbol kind.")
+    search.add_argument("--role", type=_upper_snake, choices=_ROLE_CHOICES, default=None, help="Filter by role.")
+    search.add_argument("--exclude-role", type=_upper_snake, choices=_ROLE_CHOICES, default=None, dest="exclude_role", help="Exclude by role.")
+    search.add_argument("--java-kind", type=_lower_snake, choices=_JAVA_KIND_CHOICES, default=None, dest="java_kind", help="Filter by Java symbol kind.")
     search.add_argument("--annotation", type=str, default=None, help="Filter by annotation.")
-    search.add_argument("--capability", type=str, default=None, help="Filter by capability.")
-    search.add_argument("--framework", type=str, default=None, help="Filter by framework.")
+    search.add_argument("--capability", type=_upper_snake, choices=_CAPABILITY_CHOICES, default=None, help="Filter by capability.")
+    search.add_argument("--framework", type=_lower_snake, choices=_FRAMEWORK_CHOICES, default=None, help="Filter by framework.")
     search.add_argument("--fqn-contains", type=str, default=None, dest="fqn_contains", help="Filter by FQN substring.")
     search.add_argument(
         "--offset",
