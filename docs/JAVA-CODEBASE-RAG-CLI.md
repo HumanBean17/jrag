@@ -215,6 +215,8 @@ java-codebase-rag increment --source-root /path/to/java/repo --index-dir /path/t
 - `--vectors-only` — runs only the cocoindex full reprocess phase; does **not** invoke the graph builder.
 - `--graph-only` — runs only `build_ast_graph.py`; does **not** invoke cocoindex.
 
+**Reprocess for new schema fields:** Adding `generated` and `generated_by` columns to Lance chunks and graph Symbol nodes is a schema change (ontology version bumped 17→18). Existing indexes must be reprocessed via `java-codebase-rag reprocess` to populate these fields; until then, old chunks report `generated=false`. After upgrading, run a full reprocess once to enable generated-source detection and filtering.
+
 Passing **both** flags is rejected by argparse **before** any subprocess runs. The error is printed on **stderr** in this form (wording may vary slightly with Python/argparse version):
 
 ```text
@@ -389,5 +391,7 @@ jrag search "service" --limit 20 --offset 20
 - `--path-contains SUBSTR` — Narrow to chunks whose filename contains this substring.
 - `--role ROLE` — Filter by role (e.g., `CONTROLLER`, `SERVICE`).
 - `--framework FRAMEWORK` — Filter by framework (e.g., `spring_mvc`, `webflux`).
+- `--exclude-generated` — Exclude generated sources from results (auto-detected by `@Generated` annotations and generator header banners).
+- `--generated-only` — Show only generated sources (mutually exclusive with `--exclude-generated`).
 
 **Breaking change (PR-SEARCH-2):** By default, `jrag search` now returns one row per `primary_type_fqn` (symbol/type) to prevent a single type from flooding the page. The `--chunks` flag restores the previous chunk-level output. When deduped, each hit shows a `chunks=N` field indicating how many chunks were collapsed into that hit.
