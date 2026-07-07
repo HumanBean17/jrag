@@ -631,7 +631,7 @@ def _resolve_finalize_success(
     # Absence diagnosis for empty results (status="none")
     cfg = _get_absence_config()
     diag: AbsenceDiagnosis | None = None
-    if not matches and graph is not None:
+    if not matches:
         g = graph
         vocab = get_vocabulary_index(g, cfg)
         # Map hint_kind to filter_kind (symbol -> "symbol", etc.)
