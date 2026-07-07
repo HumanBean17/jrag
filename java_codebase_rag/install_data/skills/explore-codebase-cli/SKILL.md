@@ -79,6 +79,7 @@ Run `jrag --help` for the canonical list.
 | Outbound async producers | `jrag producers [--topic-contains …]` | `callees <producer>` |
 | Topics + consumers/producers | `jrag topics [--topic-contains …]` | — |
 | Who calls / what does M call? | `jrag callers <M>` / `jrag callees <M>` | `inspect` |
+| What routes does a controller expose? | `jrag callers <controller>` | `inspect` (`DECLARES.EXPOSES`) |
 | Who hits this route? | `jrag callers <route>` | — |
 | Implementations / subtypes of T? | `jrag implementations <T>` / `jrag subclasses <T>` | — |
 | Overriding / overridden methods? | `jrag overrides <method>` (UP) / `jrag overridden-by <method>` | — |
@@ -134,7 +135,7 @@ Never look up a raw node ID — pass an FQN, simple name, prior `sym:`/`route:`/
 
 | Intent (command) | Underlying edges |
 | --- | --- |
-| `callers` / `callees` | `CALLS` in / out |
+| `callers` / `callees` | `CALLS` in / out. On a controller/entry-point type, `callers` also folds in the routes its methods `EXPOSE` (they are the inbound callers) — use it to list a controller's endpoints. `decompose` defaults to `--follow-calls`; `--per-stage-limit` caps symbols per stage (not stage count) |
 | `hierarchy` | `EXTENDS` + `IMPLEMENTS`, both directions (parents + children) |
 | `implementations` / `subclasses` | `IMPLEMENTS` / `EXTENDS` in |
 | `overrides` / `overridden-by` | `OVERRIDES` out (subtype→supertype) / in |

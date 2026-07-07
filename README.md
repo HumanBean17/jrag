@@ -123,6 +123,7 @@ jrag entities                  # JPA entities
 
 # Traversals (all resolve-first)
 jrag callers ChatService#assign(Request)   # who calls me?
+jrag callers ChatIngressController         # controller: also lists its EXPOSES routes
 jrag callees ChatService#assign(Request)   # what do I call?
 jrag hierarchy AbstractBase               # type tree (parents + children)
 jrag implementations PaymentProcessor     # classes implementing an interface
