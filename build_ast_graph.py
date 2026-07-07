@@ -54,8 +54,10 @@ from ast_java import (
 )
 from graph_enrich import (
     _load_config_cross_service_resolution,
+    classify_java_file,
     collect_annotation_meta_chain,
     load_brownfield_overrides,
+    load_generated_detection,
     microservice_for_path,
     module_for_path,
     phantom_id,
@@ -465,6 +467,8 @@ class GraphTables:
     cross_service_resolution: str = "auto"
     # Populated in _write_nodes (same overrides + meta_chain as Symbol.role).
     type_role_by_node_id: dict[str, str] = field(default_factory=dict)
+    # Populated in pass 1 (classify_java_file) and _load_existing_types for incremental rebuilds.
+    type_generated_by_node_id: dict[str, tuple[bool, str]] = field(default_factory=dict)
 
 
 @dataclass
@@ -598,7 +602,7 @@ def _load_existing_types(conn: ladybug.Connection, tables: GraphTables, exclude_
     query = f"""
     MATCH (s:Symbol)
     {where}
-    RETURN s.kind, s.fqn, s.name, s.filename, s.module, s.microservice, s.id, s.role
+    RETURN s.kind, s.fqn, s.name, s.filename, s.module, s.microservice, s.id, s.role, s.generated, s.generated_by
     """
     result = conn.execute(query, params)
     while result.has_next():
@@ -608,6 +612,8 @@ def _load_existing_types(conn: ladybug.Connection, tables: GraphTables, exclude_
         microservice = row[5] if len(row) > 5 else ""
         node_id = row[6] if len(row) > 6 else ""
         role = row[7] if len(row) > 7 else ""
+        generated = row[8] if len(row) > 8 else False
+        generated_by = row[9] if len(row) > 9 else ""
 
         decl = TypeDecl(name, kind, fqn)
         package = fqn[: -(len(name) + 1)] if fqn.endswith("." + name) else ""
@@ -629,6 +635,8 @@ def _load_existing_types(conn: ladybug.Connection, tables: GraphTables, exclude_
         # the default during node staging (issue #352 divergence #2).
         if role:
             tables.type_role_by_node_id[node_id] = role
+        # Seed the persisted generated/generated_by so stubs retain their values
+        tables.type_generated_by_node_id[node_id] = (generated if generated else False, generated_by or "")
 
 
 def _load_existing_members(conn: ladybug.Connection, tables: GraphTables, exclude_files: set[str] | None = None) -> None:
@@ -1061,6 +1069,12 @@ def pass1_parse(
             microservice = microservice_for_path(str(p), root)
             asts[rel] = ast
 
+            # Classify the file once (generated or not, and which tool generated it)
+            generated_config = load_generated_detection(str(root))
+            file_generated, file_generated_by = classify_java_file(
+                content, ast, config=generated_config, project_root=root
+            )
+
             # file node
             file_id = symbol_id("file", rel, rel, 0)
             tables.files[rel] = file_id
@@ -1074,6 +1088,12 @@ def pass1_parse(
                     tables, t, file_path=rel,
                     module=module, microservice=microservice, outer_fqn=None,
                 )
+
+            # Seed generated/generated_by for all types in this file (including nested)
+            for t in ast.all_types:
+                if t.fqn in tables.types:
+                    node_id = tables.types[t.fqn].node_id
+                    tables.type_generated_by_node_id[node_id] = (file_generated, file_generated_by or "")
 
     if verbose:
         elapsed = time.time() - t0
@@ -2906,7 +2926,8 @@ _SCHEMA_NODE = (
     "filename STRING, start_line INT64, end_line INT64, "
     "start_byte INT64, end_byte INT64, "
     "modifiers STRING[], annotations STRING[], capabilities STRING[], "
-    "role STRING, signature STRING, parent_id STRING, resolved BOOLEAN"
+    "role STRING, signature STRING, parent_id STRING, resolved BOOLEAN, "
+    "generated BOOLEAN, generated_by STRING"
     ")"
 )
 
@@ -3088,6 +3109,7 @@ def _node_row(**kwargs) -> dict:
         "start_byte": 0, "end_byte": 0,
         "modifiers": [], "annotations": [], "capabilities": [],
         "role": "OTHER", "signature": "", "parent_id": "", "resolved": True,
+        "generated": False, "generated_by": "",
     }
     base.update(kwargs)
     return base
@@ -3138,7 +3160,8 @@ def _existing_node_ids(conn: ladybug.Connection) -> set[str]:
 _NODE_COLUMNS = [
     "id", "kind", "name", "fqn", "package", "module", "microservice",
     "filename", "start_line", "end_line", "start_byte", "end_byte",
-    "modifiers", "annotations", "capabilities", "role", "signature", "parent_id", "resolved"
+    "modifiers", "annotations", "capabilities", "role", "signature", "parent_id", "resolved",
+    "generated", "generated_by"
 ]
 
 # Type declaration kinds. Tuple (not set) so the rendered SQL `IN` clause is
@@ -3161,7 +3184,8 @@ _SET_SYMBOL_BY_ID = (
     "n.start_byte = $start_byte, n.end_byte = $end_byte, "
     "n.modifiers = $modifiers, n.annotations = $annotations, "
     "n.capabilities = $capabilities, n.role = $role, "
-    "n.signature = $signature, n.parent_id = $parent_id, n.resolved = $resolved"
+    "n.signature = $signature, n.parent_id = $parent_id, n.resolved = $resolved, "
+    "n.generated = $generated, n.generated_by = $generated_by"
 )
 
 # Refresh every mutable Route field on an existing Route node by id. Mirrors the
@@ -3240,6 +3264,9 @@ def _write_nodes_impl(
             overrides=overrides,
             meta_chain=mch,
         )
+        # Read generated/generated_by from pass-1 classification or stub persistence
+        generated, generated_by = tables.type_generated_by_node_id.get(entry.node_id, (False, ""))
+
         if entry.loaded_from_db:
             stub_ids.add(entry.node_id)
             # Out-of-scope stub: its annotation-less decl collapses role to the
@@ -3250,6 +3277,7 @@ def _write_nodes_impl(
             # capabilities placeholder never reaches the graph.
             role = tables.type_role_by_node_id.get(entry.node_id, role)
             capabilities = []
+            # For stubs, trust the persisted generated/generated_by (seeded by _load_existing_types)
         else:
             tables.type_role_by_node_id[entry.node_id] = role
         rows.append(_node_row(
@@ -3265,6 +3293,8 @@ def _write_nodes_impl(
             role=role,
             signature="",
             parent_id=tables.types[entry.outer_fqn].node_id if entry.outer_fqn and entry.outer_fqn in tables.types else "",
+            generated=generated,
+            generated_by=generated_by,
         ))
     # members (methods / constructors)
     for m in tables.members:
