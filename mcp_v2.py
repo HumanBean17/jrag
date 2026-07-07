@@ -224,6 +224,8 @@ class NodeFilter(BaseModel):
     source_layer: SourceLayer | None = None
     role: Role | None = None
     exclude_roles: list[Role] | None = None
+    generated_only: bool = False
+    exclude_generated: bool = False
     annotation: str | None = None
     capability: str | None = None
     fqn_contains: str | None = None
@@ -306,6 +308,8 @@ _NODEFILTER_APPLICABLE_FIELDS: dict[Literal["symbol", "route", "client", "produc
         "module",
         "role",
         "exclude_roles",
+        "generated_only",
+        "exclude_generated",
         "annotation",
         "capability",
         "fqn_contains",
@@ -349,6 +353,8 @@ def _populated_nodefilter_fields(nf: NodeFilter) -> set[str]:
         if value is None:
             continue
         if isinstance(value, list) and not value:
+            continue
+        if isinstance(value, bool) and not value:
             continue
         populated.add(field_name)
     return populated
@@ -396,6 +402,8 @@ def _populated_edgefilter_fields(ef: EdgeFilter) -> set[str]:
         if value is None:
             continue
         if isinstance(value, list) and not value:
+            continue
+        if isinstance(value, bool) and not value:
             continue
         populated.add(field_name)
     return populated
@@ -694,6 +702,10 @@ def _symbol_where_from_filter(f: NodeFilter) -> tuple[str, dict[str, Any]]:
     if f.exclude_roles:
         preds.append("NOT s.role IN $exclude_roles")
         params["exclude_roles"] = list(f.exclude_roles)
+    if f.generated_only:
+        preds.append("s.generated = true")
+    if f.exclude_generated:
+        preds.append("(s.generated IS NULL OR s.generated = false)")
     if f.annotation:
         preds.append("list_contains(s.annotations, $annotation)")
         params["annotation"] = f.annotation
@@ -822,6 +834,11 @@ def _node_matches_filter(
         if f.role and role != f.role:
             return False
         if f.exclude_roles and role in set(f.exclude_roles):
+            return False
+        generated = row.get("generated")
+        if f.generated_only and not generated:
+            return False
+        if f.exclude_generated and generated:
             return False
         if f.annotation and f.annotation not in list(row.get("annotations") or []):
             return False
@@ -987,6 +1004,8 @@ def search_v2(
                     microservice=nf.microservice if nf else None,
                     capability=nf.capability if nf else None,
                     exclude_roles=nf.exclude_roles if nf else None,
+                    exclude_generated=nf.exclude_generated if nf else None,
+                    generated_only=nf.generated_only if nf else None,
                     dedup_by_fqn=dedup,
                 )
             except Exception as exc:
@@ -1011,6 +1030,8 @@ def search_v2(
                         microservice=nf.microservice if nf else None,
                         capability=nf.capability if nf else None,
                         exclude_roles=nf.exclude_roles if nf else None,
+                        exclude_generated=nf.exclude_generated if nf else None,
+                        generated_only=nf.generated_only if nf else None,
                         dedup_by_fqn=dedup,
                     )
                     advisories.append(
