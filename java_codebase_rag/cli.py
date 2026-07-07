@@ -27,6 +27,7 @@ from java_codebase_rag.config import (
 from java_codebase_rag._fdlimit import raise_fd_limit
 from java_codebase_rag._version import version_string
 from java_codebase_rag.pipeline import (
+    VECTORS_SKIPPED_GRAPH_ONLY as _VECTORS_SKIPPED_GRAPH_ONLY,
     clip,
     is_cocoindex_preflight_blocker,
     is_graph_preflight_blocker,
@@ -70,12 +71,6 @@ def _reprocess_drift_graph_only_line(index_dir: Path) -> str:
         "java-codebase-rag reprocess: rebuilt graph only; vectors (Lance tables under "
         f"{index_dir}) were NOT rebuilt and may now reflect a stale source snapshot."
     )
-
-
-_VECTORS_SKIPPED_GRAPH_ONLY = (
-    "java-codebase-rag: vectors skipped — vector stack not installed on this platform "
-    "(graph-only mode). The graph is built/refreshed; semantic search is unavailable."
-)
 
 
 def _reprocess_exit_code(payload: dict[str, Any]) -> int:

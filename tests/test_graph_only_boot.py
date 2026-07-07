@@ -100,3 +100,54 @@ def test_vector_stack_installed_reports_absent_when_blocked() -> None:
     )
     assert proc.returncode == 0, proc.stderr
     assert "INSTALLED:False" in proc.stdout
+
+
+def test_refresh_pipeline_skips_vectors_and_builds_graph_on_graph_only(
+    monkeypatch, tmp_path
+) -> None:
+    """``reprocess``'s refresh pipeline must skip vectors and build the graph on a
+    graph-only install (macOS Intel), NOT fail with a cryptic "cocoindex not found"
+    message. Mirrors init/increment's skip-vectors-then-build-graph branch; this is
+    the regression guard for the Intel-Mac reprocess failure.
+    """
+    import asyncio
+    import io
+    from contextlib import redirect_stderr
+    from pathlib import Path
+
+    import server
+
+    monkeypatch.setattr(server, "vector_stack_installed", lambda: False)
+
+    captured: dict[str, object] = {}
+
+    async def fake_graph_phase(root, *, quiet, verbose, on_progress, on_progress_console):
+        captured["called"] = True
+        captured["root"] = root
+        return 0, "GRAPH_STDOUT", "GRAPH_STDERR", True
+
+    monkeypatch.setattr(server, "_run_graph_phase", fake_graph_phase)
+
+    repo_root = Path(__file__).resolve().parent.parent
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", str(repo_root))
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_INDEX_DIR", str(tmp_path / "idx"))
+
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        out = asyncio.run(server.run_refresh_pipeline(quiet=True))
+    err = buf.getvalue()
+
+    # Vectors were skipped; the graph phase ran (got the resolved source root) and
+    # succeeded.
+    assert captured.get("called") is True
+    assert captured.get("root") == repo_root
+    assert out.success is True
+    assert out.phases_run == ["graph"]
+    assert out.graph_exit_code == 0
+    # The operator-facing skip line is printed; the cryptic failure is not, anywhere.
+    assert "vectors skipped" in err
+    assert "graph-only mode" in err
+    assert "cocoindex not found" not in err
+    assert "cocoindex not found" not in (out.message or "")
+    # The JSON message documents the graph-only outcome.
+    assert "graph-only" in (out.message or "")

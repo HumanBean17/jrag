@@ -89,6 +89,12 @@ async def test_stream_relay_arrives_before_wait(monkeypatch: pytest.MonkeyPatch)
 def test_refresh_pipeline_quiet_stderr_baseline(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import server
 
+    # This test simulates a FULL (vectors-capable) install by faking the cocoindex
+    # binary below; it must also report the vector stack as installed, otherwise
+    # run_refresh_pipeline's graph-only branch short-circuits before the vectors
+    # path this test exercises.
+    monkeypatch.setattr(server, "vector_stack_installed", lambda: True)
+
     repo_root = Path(__file__).resolve().parent.parent
     idx = tmp_path / "idx_q"
     idx.mkdir(parents=True)
