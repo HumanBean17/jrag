@@ -30,6 +30,7 @@ from pathlib import Path
 
 from java_codebase_rag._fdlimit import raise_fd_limit
 from java_codebase_rag._stdio import force_utf8_stdio
+from java_codebase_rag._version import version_string
 
 __all__ = ["build_parser", "main", "_console_script_main"]
 
@@ -333,6 +334,11 @@ def build_parser() -> argparse.ArgumentParser:
         description=description,
         formatter_class=argparse.RawDescriptionHelpFormatter,
         exit_on_error=False,
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=version_string(parser.prog),
     )
     subparsers = parser.add_subparsers(dest="command", parser_class=_EnvelopeArgumentParser)
 

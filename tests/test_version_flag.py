@@ -1,0 +1,39 @@
+"""``--version`` flag for the ``java-codebase-rag`` and ``jrag`` CLIs.
+
+Format contract: ``<prog> <version> (python <x.y.z>)``, exit 0. The version is
+read from installed metadata, so assertions match :func:`version_string` rather
+than a hardcoded literal (it bumps every release).
+"""
+from __future__ import annotations
+
+import re
+
+from java_codebase_rag import cli, jrag
+from java_codebase_rag._version import version_string
+
+_PY_VER_RE = re.compile(r"\(python \d+\.\d+\.\d+\)")
+
+
+def test_java_codebase_rag_version_flag(capsys):
+    rc = cli.main(["--version"])
+
+    assert rc == 0
+    out = capsys.readouterr().out.strip()
+    assert out == version_string("java-codebase-rag")
+    assert _PY_VER_RE.search(out)
+
+
+def test_jrag_version_flag(capsys):
+    rc = jrag.main(["--version"])
+
+    assert rc == 0
+    out = capsys.readouterr().out.strip()
+    assert out == version_string("jrag")
+    assert _PY_VER_RE.search(out)
+
+
+def test_version_flag_rejected_after_subcommand():
+    """Top-level only: ``jrag <cmd> --version`` is a usage error, not a version print."""
+    rc = jrag.main(["status", "--version"])
+
+    assert rc != 0
