@@ -40,7 +40,7 @@ from absence_types import (
 )
 from absence_vocab import SymbolRecord, VocabularyIndex, _normalize_name
 from graph_types import NodeRef
-from mcp_hints import _IDENTIFIER_FILTER_FIELDS, _find_has_identifier_shaped_filter
+from mcp_hints import _IDENTIFIER_FILTER_FIELDS
 
 log = logging.getLogger(__name__)
 
@@ -416,11 +416,18 @@ def _neighbors_meaningful_empty(root_node: NodeRef, graph: Any) -> bool:
     """
     try:
         if root_node.kind == "route":
-            handlers = graph.find_route_handlers(route_id=root_node.id)
-            if handlers:
-                return True
-            # A route with no handlers: still an external surface → meaningful.
-            return True
+            # Fetch the route's kind property (http_endpoint vs kafka_topic).
+            kind_rows = graph._rows(
+                "MATCH (r:Route) WHERE r.id = $id RETURN r.kind AS k",
+                {"id": root_node.id},
+            )
+            route_kind = kind_rows[0].get("k") if kind_rows else ""
+            # Only http_endpoint routes with handlers are external entrypoints.
+            if route_kind == "http_endpoint":
+                handlers = graph.find_route_handlers(route_id=root_node.id)
+                if handlers:
+                    return True
+            # kafka_topic routes and handler-less routes are NOT meaningful empty.
         # Symbol/other: meaningful empty only if it has zero edges (isolated leaf).
         rows = graph._rows(  # noqa: SLF001 - same pattern as graph_types helpers
             "MATCH (n)--(m) WHERE n.id = $id RETURN count(*) AS c",
@@ -489,7 +496,7 @@ def _tally_dim(
     where = ["s.module IS NOT NULL"] if dim == "module" else []
     # module_counts/microservice_counts count resolved type-symbols; mirror that
     # by restricting to resolved symbols for scope dims so suggestions are stable.
-    if dim in ("module", "microservice"):
+    if dim in ("module", "microservice", "role"):
         where.append("s.resolved = true")
     if identifier:
         where.append(

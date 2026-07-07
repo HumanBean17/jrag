@@ -314,6 +314,24 @@ class TestExternalDependency:
         assert diag.external_identity is not None
         assert diag.external_identity.reason == "phantom"
 
+    def test_unresolved_call_site_root_node_external_dependency(self, graph, vocab, cfg):
+        """unresolved_call_site root_node → external_dependency, reason=unresolved-call."""
+        ucs = _find_unresolved_call_site(graph)
+        if not ucs:
+            pytest.skip("corpus has no unresolved_call_site node")
+        diag = _diagnose(
+            tool="neighbors",
+            root_node=ucs,
+            vocab=vocab,
+            graph=graph,
+            cfg=cfg,
+        )
+        assert diag is not None
+        assert diag.verdict == "external_dependency"
+        assert diag.cause == "external"
+        assert diag.external_identity is not None
+        assert diag.external_identity.reason == "unresolved-call"
+
 
 # ---- neighbors path ----------------------------------------------------------
 
@@ -347,6 +365,35 @@ def _find_symbol_with_edges(graph) -> NodeRef:
     )
 
 
+def _find_kafka_topic_route(graph) -> str | None:
+    """Find a real kafka_topic Route id (NOT http_endpoint)."""
+    rows = graph._rows(  # noqa: SLF001 - test helper, same pattern as conftest
+        "MATCH (r:Route) WHERE r.kind = 'kafka_topic' RETURN r.id AS id LIMIT 10"
+    )
+    for row in rows:
+        rid = str(row.get("id") or "")
+        if rid:
+            return rid
+    return None
+
+
+def _find_unresolved_call_site(graph) -> NodeRef | None:
+    """Find a real UnresolvedCallSite node."""
+    rows = graph._rows(  # noqa: SLF001
+        "MATCH (ucs:UnresolvedCallSite) RETURN ucs.id AS id, ucs.callee_simple AS callee LIMIT 1"
+    )
+    if not rows:
+        return None
+    row = rows[0]
+    return NodeRef(
+        id=str(row.get("id") or ""),
+        kind="unresolved_call_site",
+        fqn=str(row.get("callee") or ""),  # Use callee_simple as fqn
+        name=str(row.get("callee") or "") or None,
+        symbol_kind=None,
+    )
+
+
 class TestNeighbors:
     """neighbors: leaf/entrypoint → correct_empty; wrong edge type → refine_query."""
 
@@ -376,6 +423,24 @@ class TestNeighbors:
         )
         assert diag is not None
         assert diag.verdict == "refine_query"
+
+    def test_kafka_topic_route_refine_query_not_correct_empty(self, graph, vocab, cfg):
+        """kafka_topic route with zero neighbors → refine_query (not correct_empty)."""
+        rid = _find_kafka_topic_route(graph)
+        if not rid:
+            pytest.skip("corpus has no kafka_topic route")
+        root = NodeRef(id=rid, kind="route", fqn="kafka:topic")
+        diag = _diagnose(
+            tool="neighbors",
+            root_node=root,
+            vocab=vocab,
+            graph=graph,
+            cfg=cfg,
+        )
+        assert diag is not None
+        # kafka_topic routes are NOT external entrypoints → refine_query, not correct_empty
+        assert diag.verdict == "refine_query"
+        assert diag.cause == "identifier_miss"
 
 
 # ---- describe path -----------------------------------------------------------
