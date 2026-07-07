@@ -18,6 +18,16 @@ from java_codebase_rag.progress import ProgressEvent, ProgressRelay, make_relay
 
 COCOINDEX_TARGET = "java_index_flow_lancedb.py:JavaCodeIndexLance"
 
+# Operator-facing line printed when an indexing command skips the vectors phase
+# because the vector stack is absent (graph-only install, e.g. macOS Intel where
+# cocoindex[lancedb]/lancedb/sentence-transformers are gated off by PEP 508 markers).
+# Single source of truth — imported by cli.py (init/increment) and server.py
+# (reprocess) so the wording can't drift between the two paths.
+VECTORS_SKIPPED_GRAPH_ONLY = (
+    "java-codebase-rag: vectors skipped — vector stack not installed on this platform "
+    "(graph-only mode). The graph is built/refreshed; semantic search is unavailable."
+)
+
 
 def bundle_dir() -> Path:
     return Path(__file__).resolve().parent.parent

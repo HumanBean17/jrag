@@ -14,6 +14,7 @@ from index_common import SBERT_MODEL
 from java_codebase_rag.cli_progress import (
     accumulate_and_relay_subprocess_streams,
 )
+from java_codebase_rag.pipeline import VECTORS_SKIPPED_GRAPH_ONLY, vector_stack_installed
 from java_codebase_rag.progress import ProgressEvent
 from java_codebase_rag._fdlimit import raise_fd_limit
 from java_codebase_rag.config import (
@@ -314,6 +315,61 @@ def list_code_index_tables_payload() -> IndexInfoOutput:
     )
 
 
+async def _run_graph_phase(
+    root: Path,
+    *,
+    quiet: bool,
+    verbose: bool,
+    on_progress: object | None,
+    on_progress_console: object | None,
+) -> tuple[int | None, str, str, bool]:
+    """Run ``build_ast_graph.py`` and return ``(code, stdout, stderr, started)``.
+
+    Shared by the vectors→graph refresh path and the graph-only path (macOS Intel,
+    where the vector stack is gated off). ``started`` is True only when the graph
+    subprocess was actually created, so callers set ``phases_run`` accurately — the
+    CLI maps an empty ``phases_run`` to a preflight exit code 2 (nothing spawned).
+    A missing builder or a spawn failure returns ``started=False`` with the graph
+    code carrying the reason (``None`` for missing builder, ``-1`` for spawn error).
+    """
+    builder = Path(__file__).resolve().parent / "build_ast_graph.py"
+    if not builder.is_file():
+        return None, "", "", False
+    try:
+        graph_args = [
+            sys.executable,
+            str(builder),
+            "--source-root",
+            str(root),
+            "--ladybug-path",
+            resolve_ladybug_path(),
+        ]
+        if not quiet:
+            graph_args.append("--verbose")
+        gproc = await asyncio.create_subprocess_exec(
+            *graph_args,
+            cwd=str(root),
+            env=_cocoindex_subprocess_env(root),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        if quiet:
+            gout_b, gerr_b = await gproc.communicate()
+        else:
+            gout_b, gerr_b = await accumulate_and_relay_subprocess_streams(
+                gproc, relay=True, verbose=verbose,
+                on_progress=on_progress, on_progress_console=on_progress_console,
+            )
+        return (
+            gproc.returncode,
+            gout_b.decode(errors="replace"),
+            gerr_b.decode(errors="replace"),
+            True,
+        )
+    except Exception as exc:
+        return -1, "", f"graph builder spawn failed: {exc}", False
+
+
 async def run_refresh_pipeline(
     *,
     quiet: bool = False,
@@ -322,6 +378,42 @@ async def run_refresh_pipeline(
     on_progress_console: object | None = None,
 ) -> RefreshIndexOutput:
     root = _project_root()
+    if not vector_stack_installed():
+        # Graph-only install (macOS Intel): the vector stack (cocoindex/lancedb/
+        # sentence-transformers) is gated off by PEP 508 markers and uninstallable,
+        # so the cocoindex binary is absent. Skip the vectors phase and build the
+        # graph only — mirroring init/increment, which treat cocoindex-absent as a
+        # skip, not a failure (the graph layer is the supported surface there). No
+        # vectors progress event is emitted, so the renderer's vectors task stays
+        # invisible (its "never spawned" invariant) instead of hanging at running.
+        print(VECTORS_SKIPPED_GRAPH_ONLY, file=sys.stderr, flush=True)
+        if not quiet:
+            print(file=sys.stderr, flush=True)
+        graph_code, graph_out, graph_err, started = await _run_graph_phase(
+            root, quiet=quiet, verbose=verbose,
+            on_progress=on_progress, on_progress_console=on_progress_console,
+        )
+        ok = graph_code == 0
+        if not ok:
+            message = (
+                f"graph builder exit {graph_code}"
+                if graph_code is not None
+                else (graph_err.strip() or "graph builder unavailable")
+            )
+        else:
+            message = "reprocess completed (graph-only; vectors skipped — vector stack not installed)"
+        return RefreshIndexOutput(
+            success=ok,
+            exit_code=None,
+            stdout="",
+            stderr="",
+            message=message,
+            graph_exit_code=graph_code,
+            graph_stdout=graph_out[-4000:] if len(graph_out) > 4000 else graph_out,
+            graph_stderr=graph_err[-4000:] if len(graph_err) > 4000 else graph_err,
+            phases_run=["graph"] if started else [],
+            optimize_error=None,
+        )
     cocoindex_bin = Path(sys.executable).parent / "cocoindex"
     if not cocoindex_bin.is_file():
         # 127 pre-spawn: emit a terminal failed vectors event so the renderer's
@@ -466,40 +558,12 @@ async def run_refresh_pipeline(
         except Exception as exc:
             optimize_error = f"lance optimize failed: {exc}"
             print(f"java-codebase-rag: {optimize_error}", file=sys.stderr)
-        builder = Path(__file__).resolve().parent / "build_ast_graph.py"
-        if builder.is_file():
-            try:
-                graph_args = [
-                    sys.executable,
-                    str(builder),
-                    "--source-root",
-                    str(root),
-                    "--ladybug-path",
-                    resolve_ladybug_path(),
-                ]
-                if not quiet:
-                    graph_args.append("--verbose")
-                gproc = await asyncio.create_subprocess_exec(
-                    *graph_args,
-                    cwd=str(root),
-                    env=_cocoindex_subprocess_env(root),
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                phases_run = ["vectors", "graph"]
-                if quiet:
-                    gout_b, gerr_b = await gproc.communicate()
-                else:
-                    gout_b, gerr_b = await accumulate_and_relay_subprocess_streams(
-                        gproc, relay=True, verbose=verbose,
-                        on_progress=on_progress, on_progress_console=on_progress_console,
-                    )
-                graph_code = gproc.returncode
-                graph_out = gout_b.decode(errors="replace")
-                graph_err = gerr_b.decode(errors="replace")
-            except Exception as exc:
-                graph_code = -1
-                graph_err = f"graph builder spawn failed: {exc}"
+        graph_code, graph_out, graph_err, graph_started = await _run_graph_phase(
+            root, quiet=quiet, verbose=verbose,
+            on_progress=on_progress, on_progress_console=on_progress_console,
+        )
+        if graph_started:
+            phases_run = ["vectors", "graph"]
     message: str | None = None
     if not ok:
         message = f"cocoindex exit {proc.returncode}"
