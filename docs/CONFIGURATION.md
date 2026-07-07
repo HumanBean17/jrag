@@ -52,8 +52,8 @@ This walk-up behavior means you no longer need to set environment variables or p
 | `JAVA_CODEBASE_RAG_RUN_HEAVY` | Test gate: set to `1` / `true` / `yes` to run the slow cocoindex + Lance end-to-end test (`pytest`); not used in normal operator workflows. |
 | `JAVA_CODEBASE_RAG_HINTS_ENABLED` | When `0` / `false` / `no`, suppress `hints_structured` and `advisories` from all MCP tool responses. Overridable via `.java-codebase-rag.yml` `hints.enabled`. Default: enabled. |
 | `JAVA_CODEBASE_RAG_ABSENCE_DIAG_ENABLED` | When `0` / `false` / `no`, disable `absence` field on empty tool responses. Overridable via `.java-codebase-rag.yml` `absence.diag_enabled`. Default: enabled. |
-| `JAVA_CODEBASE_RAG_ABSENCE_CLOSE_THRESHOLD` | Distance threshold (0.0-1.0) above which a symbol is considered "absent". Raise to be more conservative. Overridable via `.java-codebase-rag.yml` `absence.close_threshold`. Default: 0.85. |
-| `JAVA_CODEBASE_RAG_ABSENCE_ABSENT_FLOOR` | Floor distance (0.0-1.0) below which the nearest symbol is "too close" to declare absence. Raise to be more conservative. Overridable via `.java-codebase-rag.yml` `absence.absent_floor`. Default: 0.40. |
+| `JAVA_CODEBASE_RAG_ABSENCE_CLOSE_THRESHOLD` | Similarity (0.0–1.0, higher = closer match) at/above which an empty identifier query is treated as a near-match → verdict `refine_query`. Overridable via `.java-codebase-rag.yml` `absence.close_threshold`. Default: 0.85. |
+| `JAVA_CODEBASE_RAG_ABSENCE_ABSENT_FLOOR` | Similarity (0.0–1.0) BELOW which an identifier-shaped empty query yields `not_in_project` (confident absent). **Lower it to be more conservative (fewer false-absent); raise it to declare absence more aggressively.** Overridable via `.java-codebase-rag.yml` `absence.absent_floor`. Default: 0.40. |
 | `JAVA_CODEBASE_RAG_ABSENCE_CANDIDATE_COUNT` | Number of closest candidates (1-20) to return in `absence.closest_symbols` and `absence.distances`. Overridable via `.java-codebase-rag.yml` `absence.candidate_count`. Default: 5. |
 | `JAVA_CODEBASE_RAG_ABSENCE_NGRAM_Q` | N-gram q-gram size (1-5) for lexical similarity scoring. Overridable via `.java-codebase-rag.yml` `absence.ngram_q`. Default: 3. |
 
@@ -185,16 +185,16 @@ hints:
 absence:
   diag_enabled: true
 
-  # Distance threshold above which a symbol is considered "absent" (i.e., not in
-  # the project). Raise to be more conservative (fewer false-absent verdicts).
-  # Range: 0.0 (strict) to 1.0 (permissive). Default: 0.85.
+  # Similarity (0.0–1.0, higher = closer match) at/above which an empty
+  # identifier query is treated as a near-match → verdict `refine_query`.
+  # Default: 0.85.
   # Env: JAVA_CODEBASE_RAG_ABSENCE_CLOSE_THRESHOLD.
   close_threshold: 0.85
 
-  # Floor distance below which the nearest symbol is considered "too close" to
-  # declare absence (i.e., we're not confident enough to say "not in project").
-  # Raise to be more conservative (fewer false-absent verdicts).
-  # Range: 0.0 to 1.0. Default: 0.40.
+  # Similarity (0.0–1.0) BELOW which an identifier-shaped empty query yields
+  # `not_in_project` (confident absent). Lower it to be more conservative
+  # (fewer false-absent); raise it to declare absence more aggressively.
+  # Default: 0.40.
   # Env: JAVA_CODEBASE_RAG_ABSENCE_ABSENT_FLOOR.
   absent_floor: 0.40
 
