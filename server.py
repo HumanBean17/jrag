@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Literal
 
 import mcp_v2
+import resolve_service
 from index_common import SBERT_MODEL
 from java_codebase_rag.cli_progress import (
     accumulate_and_relay_subprocess_streams,
@@ -852,6 +853,8 @@ def main() -> None:
     cfg = resolve_operator_config(source_root=_source_root_for_operator_config())
     cfg.apply_to_os_environ()
     mcp_v2.set_hints_enabled(cfg.hints_enabled)
+    mcp_v2.set_absence_config(cfg)
+    resolve_service.set_absence_config(cfg)
 
     # Initialize scope manager for automatic microservice detection
     global _scope_manager

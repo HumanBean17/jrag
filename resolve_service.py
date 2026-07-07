@@ -6,11 +6,13 @@ by the CLI layer. Provides resolve_v2(identifier, hint_kind, graph) -> ResolveOu
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from absence_types import AbsenceDiagnosis
+from absence_diagnosis import diagnose
+from absence_vocab import get_vocabulary_index
 from graph_types import (
     NodeRef,
     StructuredHint,
@@ -29,12 +31,42 @@ __all__ = [
     "ResolveCandidate",
     "ResolveStatus",
     "set_hints_enabled",
+    "set_absence_config",
 ]
 
 
 ResolveStatus = Literal["one", "many", "none"]
 
 _RESOLVE_CANDIDATE_CAP = 10
+
+# Module-level holder for absence diagnosis config (set by server.py)
+_absence_config: Any = None
+
+
+def set_absence_config(cfg: Any) -> None:
+    """Set the global absence diagnosis config for resolve service.
+
+    Mirrors set_hints_enabled: called from server.py to make cfg reachable
+    in resolve functions without threading it through every signature.
+    """
+    global _absence_config
+    _absence_config = cfg
+
+
+def _get_absence_config() -> Any:
+    """Get the absence diagnosis config, with safe fallback.
+
+    Returns the module-level config if set; otherwise falls back to a
+    default config (for direct tool calls in tests without server init).
+    """
+    if _absence_config is not None:
+        return _absence_config
+
+    # Fallback: resolve from cwd for direct test calls
+    from java_codebase_rag.config import resolve_operator_config
+    from pathlib import Path
+
+    return resolve_operator_config(source_root=Path.cwd())
 
 _RESOLVE_REASON_PRIORITY: dict[ResolveReason, int] = {
     "exact_id": 0,
@@ -568,6 +600,9 @@ def _resolve_finalize_success(
     trimmed: str,
     hint_kind: Literal["symbol", "route", "client", "producer"] | None,
     matches: list[ResolveCandidate],
+    graph: LadybugGraph | None = None,
+    microservice: str = "",
+    module: str = "",
 ) -> ResolveOutput:
     if not matches:
         out = ResolveOutput(
@@ -593,6 +628,28 @@ def _resolve_finalize_success(
             resolved_identifier=trimmed,
         )
 
+    # Absence diagnosis for empty results (status="none")
+    cfg = _get_absence_config()
+    diag: AbsenceDiagnosis | None = None
+    if not matches and graph is not None:
+        g = graph
+        vocab = get_vocabulary_index(g, cfg)
+        # Map hint_kind to filter_kind (symbol -> "symbol", etc.)
+        filter_kind = hint_kind if hint_kind in ("symbol", "route", "client", "producer") else None
+        # Build scope from microservice/module params
+        scope = {"microservice": microservice or "", "module": module or ""}
+        diag = diagnose(
+            tool="resolve",
+            query=trimmed,
+            filt=None,
+            filter_kind=filter_kind,
+            root_node=None,
+            scope=scope,
+            vocab=vocab,
+            graph=g,
+            cfg=cfg,
+        )
+
     path_prefix_seed, target_service_seed = _resolve_seeds_for_hints(trimmed)
     hint_payload = {
         "status": out.status,
@@ -606,6 +663,7 @@ def _resolve_finalize_success(
     out = out.model_copy(update={
         "advisories": raw_advisories,
         "hints_structured": _to_structured_hints(raw_struct),
+        "absence": diag,
     })
     _resolve_assert_invariants(out)
     return out
@@ -662,7 +720,14 @@ def resolve_v2(
         deduped = _resolve_dedupe_candidates(raw)
         ranked = _resolve_rank_candidates(deduped)
         capped = ranked[:_RESOLVE_CANDIDATE_CAP]
-        return _resolve_finalize_success(trimmed, hint_kind, capped)
+        return _resolve_finalize_success(
+            trimmed,
+            hint_kind,
+            capped,
+            graph=g,
+            microservice=microservice,
+            module=module,
+        )
     except Exception as exc:
         out = ResolveOutput(
             success=False,
