@@ -68,6 +68,8 @@ JAVA_ENRICHED_COLUMNS: tuple[str, ...] = (
     "metadata",
     "ontology_version",
     "capabilities",
+    "generated",
+    "generated_by",
 )
 
 VECTOR_COLUMN = "embedding"
