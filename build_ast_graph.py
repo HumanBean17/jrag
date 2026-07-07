@@ -4211,6 +4211,7 @@ def write_ladybug(
 
     # Build vocabulary index (best-effort, failure doesn't fail the graph build)
     _try_build_vocabulary_index(db_path, source_root, verbose)
+    _init_hash_tracker(source_root, db_path)
 
 
 def _try_build_vocabulary_index(db_path: Path, source_root: Path, verbose: bool) -> None:
@@ -4256,7 +4257,6 @@ def _try_build_vocabulary_index(db_path: Path, source_root: Path, verbose: bool)
         log.warning(f"Vocabulary index build failed (non-critical): {e}")
         if verbose:
             _verbose_stderr_line(f"[vocab] build failed (graph still written): {e}")
-    _init_hash_tracker(source_root, db_path)
 
 
 # ---------- CLI ----------

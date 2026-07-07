@@ -428,6 +428,7 @@ def _neighbors_meaningful_empty(root_node: NodeRef, graph: Any) -> bool:
                 if handlers:
                     return True
             # kafka_topic routes and handler-less routes are NOT meaningful empty.
+                return False
         # Symbol/other: meaningful empty only if it has zero edges (isolated leaf).
         rows = graph._rows(  # noqa: SLF001 - same pattern as graph_types helpers
             "MATCH (n)--(m) WHERE n.id = $id RETURN count(*) AS c",
