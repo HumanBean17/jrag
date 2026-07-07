@@ -4321,7 +4321,13 @@ def _cmd_search(args: argparse.Namespace) -> int:
             d["kind"] = "search_hit"
         # Add explain token when --explain is set
         if args.explain:
-            from search_lancedb import explain_score_components
+            # search_lancedb is unimportable on graph-only (macOS Intel) installs —
+            # lancedb/sentence-transformers are excluded by the PEP 508 markers in
+            # pyproject.toml, and this module imports them at module top. Importing the
+            # explain renderer from there would crash `jrag search ... --explain` on the
+            # exact Intel install that runs the lexical path. search_scoring is
+            # dependency-free and always installed, so the explain import works everywhere.
+            from search_scoring import explain_score_components
             comps = d.get("score_components")
             d["explain"] = explain_score_components(
                 comps,

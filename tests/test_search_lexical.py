@@ -8,12 +8,15 @@ The ``_lexical_where`` parity test guards drift against ``mcp_v2._symbol_where_f
 """
 from __future__ import annotations
 
+import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 from ladybug_queries import LadybugGraph
-from mcp_v2 import NodeFilter, _symbol_where_from_filter
+from mcp_v2 import NodeFilter, _node_matches_filter, _symbol_where_from_filter
 from search_lexical import _lexical_where, _read_snippet, run_lexical_search
 from search_scoring import explain_score_components
 
@@ -177,3 +180,102 @@ def test_lexical_where_parity_with_mcp_v2() -> None:
     where, params = _lexical_where(None, path_contains="src/main")
     assert where == "WHERE s.filename CONTAINS $path_contains"
     assert params == {"path_contains": "src/main"}
+
+
+def test_large_candidate_pool_is_fully_scored(tmp_path: Path) -> None:
+    """C2 regression: lexical ranking happens in Python over the full candidate pool
+    (no DB-side keyword ranking without FTS5). A pagination-derived LIMIT (4x the page)
+    on this UNORDERED MATCH scan would return only the first ~20 symbols in storage order
+    and silently miss the rest — invisible at the small fixture scale, fatal on a real
+    repo. Build >20 distinct matching symbols and assert they all come back (the fetch
+    LIMIT must be the safety cap, not a multiple of the requested page)."""
+    for i in range(30):
+        # Letter suffix keeps the leading 'Widget' token clean — _split_identifier
+        # fuses a digit run onto it ('Widget00Service' -> ['widget00','service'], which
+        # would never match the bare query token 'widget'). Two-letter combos give 30
+        # distinct names that all split to a leading 'widget' token.
+        suffix = chr(ord("a") + i // 26) + chr(ord("a") + i % 26)
+        name = f"Widget{suffix.capitalize()}Service"
+        pkg = tmp_path / f"pkg{i}"
+        pkg.mkdir(exist_ok=True)
+        (pkg / f"{name}.java").write_text(
+            f"package pkg{i};\npublic class {name} {{\n"
+            f"    public void run() {{ }}\n}}\n",
+            encoding="utf-8",
+        )
+    db = tmp_path / "g.lbug"
+    from _builders import build_ladybug_to
+
+    build_ladybug_to(tmp_path, db, max_pass=3)
+    rows = run_lexical_search("widget", limit=50, graph=_graph(db))
+    # 30 distinct Widget##Service types all match "widget"; they must ALL be returned.
+    # Under the buggy LIMIT 20 at most 20 could come back, so >20 is the kill signal.
+    assert len(rows) >= 25, f"expected the full >20-symbol pool; got {len(rows)}"
+    assert all("Widget" in (r.get("fqn") or "") for r in rows)
+
+
+def test_fqn_contains_member_match_not_dropped(tmp_path: Path) -> None:
+    """I1 regression: the shared post-filter _node_matches_filter re-checks fqn_contains
+    against row['fqn'] (falling back to primary_type_fqn). For a member node the fqn is
+    'Type#method(...)'; the lexical row MUST carry the raw 'fqn' or the post-filter drops
+    member-level matches the Cypher pushdown already accepted. This drives the bug
+    end-to-end: run the search, then re-check each returned row through the SAME
+    _node_matches_filter the real search_v2 loop uses."""
+    db = _build_corpus(tmp_path)
+    nf = NodeFilter.model_validate({"fqn_contains": "processClientMessage"})
+    rows = run_lexical_search("process client message", limit=10, filter=nf, graph=_graph(db))
+    assert rows, "Cypher pushdown should have surfaced the member node"
+    # The real bug site: a lexical row without the raw member 'fqn' passes the Cypher
+    # pushdown but is dropped here (falls back to the bare type fqn).
+    assert any(_node_matches_filter("symbol", r, nf) for r in rows), (
+        "post-filter dropped the member match: lexical row lacks raw 'fqn' "
+        "(only primary_type_fqn); fqns=" + str([r.get("fqn") for r in rows])
+    )
+    assert any("processClientMessage" in str(r.get("fqn") or "") for r in rows)
+
+
+def test_explain_import_survives_graph_only_env() -> None:
+    """C1 regression: `jrag search --explain` imports explain_score_components at call
+    time. On graph-only (macOS Intel) installs `search_lancedb` is unimportable
+    (lancedb/sentence-transformers excluded by PEP 508 markers, imported at its module
+    top), so the import MUST come from the dependency-free `search_scoring`. Assert both
+    that the CLI source imports from search_scoring AND the invariant: blocking the vector
+    stack makes search_lancedb unimportable while search_scoring (and the lexical explain
+    renderer) stays importable."""
+    jrag_py = Path(__file__).resolve().parent.parent / "java_codebase_rag" / "jrag.py"
+    m = re.search(r"from (search_\w+) import explain_score_components", jrag_py.read_text(encoding="utf-8"))
+    assert m, "explain_score_components import not found in jrag.py"
+    assert m.group(1) == "search_scoring", (
+        f"jrag.py imports explain_score_components from {m.group(1)!r}; it MUST be "
+        "'search_scoring' — search_lancedb is unimportable on graph-only (Intel) installs"
+    )
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys\n"
+            "for m in ('lancedb','pylance','torch','sentence_transformers','cocoindex'):\n"
+            "    sys.modules[m] = None\n"
+            "try:\n"
+            "    import search_lancedb\n"
+            "    print('LANCEDB:imported')\n"
+            "except ModuleNotFoundError:\n"
+            "    print('LANCEDB:blocked')\n"
+            "from search_scoring import explain_score_components\n"
+            "print('SCORING:ok')\n"
+            "r = explain_score_components("
+            "{'name_match':1.0,'type_match':0.1,'fqn_match':0.2,"
+            "'lexical_relevance':0.8,'role_weight':0.1}, lexical=True)\n"
+            "print('RENDER:' + r)\n",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "LANCEDB:blocked" in proc.stdout, (
+        f"search_lancedb imported under graph-only env: {proc.stdout}"
+    )
+    assert "SCORING:ok" in proc.stdout
+    assert "relevance=" in proc.stdout

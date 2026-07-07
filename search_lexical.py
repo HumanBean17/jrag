@@ -23,7 +23,6 @@ from typing import TYPE_CHECKING, Any
 
 from ladybug_queries import LadybugGraph
 from search_scoring import (
-    DEDUP_OVERFETCH,
     _ROLE_SCORE_WEIGHTS,
     _TYPE_MATCH_BONUS_CAP,
     _TYPE_MATCH_BONUS_PER_HIT,
@@ -204,8 +203,14 @@ def run_lexical_search(
     # 'DistributionChunkService.java') would surface the file node as a hit.
     struct_pred = "(s.kind <> 'file' AND s.kind <> 'package')"
     where = f"WHERE {struct_pred}" if not where else where.replace("WHERE ", f"WHERE {struct_pred} AND ", 1)
-    need = min(max((limit + offset) * DEDUP_OVERFETCH, limit + offset + 1), _CANDIDATE_LIMIT_CAP)
-    params["lim"] = need
+    # Lexical ranking is done in Python (LadybugDB/kuzu has no keyword ranking without
+    # FTS5, which is deferred), and the MATCH scan returns rows in storage order — there
+    # is NO DB-side relevance ORDER BY. So fetch the FULL candidate pool up to the safety
+    # cap and rank here. A pagination-derived LIMIT (4x the page) is correct on the vector
+    # path where LanceDB returns rows pre-ranked by similarity, but on this unordered scan
+    # it would return only the first ~N symbols in arbitrary storage order and silently
+    # miss the best match on any non-trivial repo.
+    params["lim"] = _CANDIDATE_LIMIT_CAP
     cypher = f"MATCH (s:Symbol) {where} RETURN {_SYMBOL_RETURN} LIMIT $lim"
     rows = g._rows(cypher, params)  # noqa: SLF001 — de facto public read API (see find_v2)
 
@@ -281,6 +286,11 @@ def run_lexical_search(
                 "filename": str(r.get("filename") or ""),
                 "text": _read_snippet(source_root, str(r.get("filename") or ""), sl, el, sig, fqn),
                 "primary_type_fqn": type_fqn or None,
+                # Raw node fqn (members are 'Type#method(...)') feeds
+                # _node_matches_filter's fqn_contains re-check (mcp_v2.py). Without it the
+                # post-filter falls back to primary_type_fqn (the bare type) and drops
+                # member-level matches the Cypher pushdown already accepted.
+                "fqn": fqn,
                 "microservice": r.get("microservice"),
                 "module": r.get("module"),
                 "role": role_raw or None,
