@@ -17,7 +17,7 @@ from typing import Any
 import pytest
 
 # These imports will fail until absence_diagnosis.py is created (RED).
-from absence_diagnosis import diagnose
+from absence_diagnosis import _neighbors_meaningful_empty, diagnose
 from absence_types import AbsenceDiagnosis
 from absence_vocab import VocabularyIndex
 from graph_types import NodeRef
@@ -441,6 +441,73 @@ class TestNeighbors:
         # kafka_topic routes are NOT external entrypoints → refine_query, not correct_empty
         assert diag.verdict == "refine_query"
         assert diag.cause == "identifier_miss"
+
+
+class TestNeighborsMeaningfulEmptyPredicate:
+    """Direct tests of _neighbors_meaningful_empty to harden route classification."""
+
+    def test_zero_edge_kafka_topic_route_returns_false(self):
+        """A kafka_topic route with zero edges must return False (not meaningful empty).
+
+        This test isolates the route-classification logic from fixture edge counts.
+        Before the indentation fix, this test would fail because the kafka route
+        would fall through to the edge-count check and incorrectly return True.
+        """
+        # Stub graph that returns kafka_topic kind and zero edge count
+        class StubGraph:
+            def _rows(self, cypher, params):
+                if "k" in cypher:  # route-kind query
+                    return [{"k": "kafka_topic"}]
+                if "count" in cypher:  # edge-count query
+                    return [{"c": 0}]
+                return []
+
+            def find_route_handlers(self, route_id):
+                return []  # no handlers
+
+        graph = StubGraph()
+        root_node = NodeRef(id="kafka-route-1", kind="route", fqn="kafka:topic")
+
+        # kafka_topic routes are NOT meaningful empty
+        result = _neighbors_meaningful_empty(root_node, graph)
+        assert result is False, "kafka_topic route must return False (refine_query)"
+
+    def test_http_endpoint_with_handlers_returns_true(self):
+        """An http_endpoint route with handlers must return True (meaningful empty)."""
+        class StubGraph:
+            def _rows(self, cypher, params):
+                if "k" in cypher:
+                    return [{"k": "http_endpoint"}]
+                return []
+
+            def find_route_handlers(self, route_id):
+                # Return list of dicts as the real implementation does
+                return [{"symbol": {"fqn": "Handler"}}]
+
+        graph = StubGraph()
+        root_node = NodeRef(id="http-route-1", kind="route", fqn="GET /api")
+
+        # http_endpoint with handlers IS meaningful empty
+        result = _neighbors_meaningful_empty(root_node, graph)
+        assert result is True, "http_endpoint with handlers must return True (correct_empty)"
+
+    def test_http_endpoint_without_handlers_returns_false(self):
+        """An http_endpoint route without handlers must return False (not meaningful empty)."""
+        class StubGraph:
+            def _rows(self, cypher, params):
+                if "k" in cypher:
+                    return [{"k": "http_endpoint"}]
+                return []
+
+            def find_route_handlers(self, route_id):
+                return []  # no handlers
+
+        graph = StubGraph()
+        root_node = NodeRef(id="http-route-2", kind="route", fqn="GET /api")
+
+        # http_endpoint without handlers is NOT meaningful empty
+        result = _neighbors_meaningful_empty(root_node, graph)
+        assert result is False, "http_endpoint without handlers must return False (refine_query)"
 
 
 # ---- describe path -----------------------------------------------------------
