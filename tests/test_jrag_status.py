@@ -56,7 +56,7 @@ def _run_jrag(
 def test_status_reports_ontology_version_and_counts(
     corpus_root: Path, ladybug_db_path: Path
 ) -> None:
-    """`jrag status` against a real index reports ontology 17 + non-empty counts."""
+    """`jrag status` against a real index reports ontology 18 + non-empty counts."""
     env = os.environ.copy()
     env["JAVA_CODEBASE_RAG_SOURCE_ROOT"] = str(corpus_root)
     env["JAVA_CODEBASE_RAG_INDEX_DIR"] = str(ladybug_db_path.parent)
@@ -70,7 +70,7 @@ def test_status_reports_ontology_version_and_counts(
     payload = json.loads(proc.stdout)
     assert payload["status"] == "ok"
     index = payload["nodes"]["index"]
-    assert index["ontology_version"] == 17
+    assert index["ontology_version"] == 18
     # Counts is a top-level nested dict on the index node (the generic
     # nested-sections dispatch signal - any dict-typed value renders as an
     # indented alphabetical section; edge_summary is NOT used as the dispatch
