@@ -7,7 +7,7 @@ The **`java-codebase-rag`** command is the **operator surface** for this bundle:
 After installing the package (e.g. editable install from the repo root), the console script is on your `PATH`:
 
 ```bash
-.venv/bin/pip install -e .
+.venv/bin/pip install -e ".[dev]"
 java-codebase-rag --help
 ```
 
