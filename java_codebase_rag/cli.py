@@ -25,6 +25,7 @@ from java_codebase_rag.config import (
     write_config_source_pointer,
 )
 from java_codebase_rag._fdlimit import raise_fd_limit
+from java_codebase_rag._version import version_string
 from java_codebase_rag.pipeline import (
     clip,
     is_cocoindex_preflight_blocker,
@@ -918,6 +919,11 @@ def build_parser() -> argparse.ArgumentParser:
         description=description,
         formatter_class=argparse.RawDescriptionHelpFormatter,
         exit_on_error=False,
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=version_string(parser.prog),
     )
     subparsers = parser.add_subparsers(dest="subcommand")
 
