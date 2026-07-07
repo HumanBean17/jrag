@@ -10,6 +10,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from absence_types import AbsenceDiagnosis
 from graph_types import (
     NodeRef,
     StructuredHint,
@@ -129,6 +130,7 @@ class ResolveOutput(BaseModel):
     resolved_identifier: str | None = None
     advisories: list[str] = Field(default_factory=list, description="Pure informational text with no tool call suggestion")
     hints_structured: list[StructuredHint] = Field(default_factory=list, description=MCP_HINTS_STRUCTURED_FIELD_DESCRIPTION)
+    absence: AbsenceDiagnosis | None = None
 
 
 def _resolve_validate_identifier(raw: str) -> tuple[str | None, str | None]:

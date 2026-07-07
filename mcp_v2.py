@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     # installs ship without torch/lancedb); it is imported lazily in _get_sentence_transformer.
     from sentence_transformers import SentenceTransformer
 
+from absence_types import AbsenceDiagnosis
 from graph_types import (
     NodeRef,
     StructuredHint,
@@ -524,6 +525,7 @@ class SearchOutput(BaseModel):
         default=False,
         description="True when results come from the graph-only lexical (keyword) backend instead of semantic/vector search.",
     )
+    absence: AbsenceDiagnosis | None = None
 
 
 class FindOutput(BaseModel):
@@ -545,6 +547,7 @@ class FindOutput(BaseModel):
     )
     advisories: list[str] = Field(default_factory=list, description="Pure informational text with no tool call suggestion")
     hints_structured: list[StructuredHint] = Field(default_factory=list, description=MCP_HINTS_STRUCTURED_FIELD_DESCRIPTION)
+    absence: AbsenceDiagnosis | None = None
 
 
 class DescribeOutput(BaseModel):
@@ -553,6 +556,7 @@ class DescribeOutput(BaseModel):
     message: str | None = None
     advisories: list[str] = Field(default_factory=list, description="Pure informational text with no tool call suggestion")
     hints_structured: list[StructuredHint] = Field(default_factory=list, description=MCP_HINTS_STRUCTURED_FIELD_DESCRIPTION)
+    absence: AbsenceDiagnosis | None = None
 
 
 class NeighborsOutput(BaseModel):
@@ -571,6 +575,7 @@ class NeighborsOutput(BaseModel):
     )
     advisories: list[str] = Field(default_factory=list, description="Pure informational text with no tool call suggestion")
     hints_structured: list[StructuredHint] = Field(default_factory=list, description=MCP_HINTS_STRUCTURED_FIELD_DESCRIPTION)
+    absence: AbsenceDiagnosis | None = None
 
 
 # Re-exported from resolve_service.py (imported at end of module to avoid circular import)
