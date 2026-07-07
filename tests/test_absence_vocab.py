@@ -17,6 +17,19 @@ from absence_vocab import (
 )
 
 
+@pytest.fixture(autouse=True)
+def reset_vocab_cache():
+    """Reset vocab cache before and after each test for test isolation.
+
+    The get_vocabulary_index() function uses a module-level cache keyed by graph db_path.
+    Since ladybug_graph is session-scoped (constant db_path), the cache persists across tests.
+    This fixture ensures each test starts with a cold cache, preventing false cache hits.
+    """
+    reset_cache()
+    yield
+    reset_cache()  # Also reset after for cleanliness
+
+
 class TestVocabularyIndexBuild:
     """Tests for VocabularyIndex.build() from a LadybugGraph."""
 
