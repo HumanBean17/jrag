@@ -812,11 +812,27 @@ def build_parser() -> argparse.ArgumentParser:
             "CALLS hops from the route handler. Intra-service is an INDEX-TIME data "
             "property: CALLS edges are intra-codebase by construction, and the query "
             "carries no microservice predicate, so the result reflects whatever the "
-            "fixture indexed (no query-time constraint). --max-hops clamped to 1..8."
+            "fixture indexed (no query-time constraint). --depth clamped to 1..8."
         ),
     )
-    flow.add_argument("query", help="Route path (e.g. '/chat/assign'). Resolved with hint_kind=route.")
-    flow.add_argument("--max-hops", type=int, default=5, dest="max_hops", help="Max CALLS hops (clamped 1..8, default 5).")
+    flow.add_argument(
+        "query",
+        help=(
+            "Route path (e.g. '/chat/assign') or Kafka topic name (e.g. "
+            "'banking.chat.compliance.review'). Resolved with hint_kind=route; "
+            "kafka_topic Routes match on topic."
+        ),
+    )
+    # Primary flag is --depth (consistent with callers/callees/impact/decompose).
+    # --max-hops is kept as a hidden back-compat alias (same dest).
+    flow.add_argument(
+        "--depth", type=int, default=5, dest="depth",
+        help="Max CALLS hops (clamped 1..8, default 5).",
+    )
+    flow.add_argument(
+        "--max-hops", type=int, dest="depth",
+        default=argparse.SUPPRESS, help=argparse.SUPPRESS,
+    )
     flow.set_defaults(handler=_cmd_flow)
 
     # ---- Compose traversals + file inspection (PR-JRAG-3b) ----
@@ -3001,7 +3017,7 @@ def _cmd_flow(args: argparse.Namespace) -> int:
         args, reason="trace_request_flow carries no microservice predicate; intra-codebase is an index-time data property"
     )
 
-    max_hops = max(1, min(8, getattr(args, "max_hops", 5)))
+    max_hops = max(1, min(8, getattr(args, "depth", 5)))
     flow_data = graph.trace_request_flow(entry_route_id=node.id, max_hops=max_hops)
 
     root_id = node.id

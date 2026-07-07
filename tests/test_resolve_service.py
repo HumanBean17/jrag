@@ -146,6 +146,53 @@ def test_resolve_service_producer_topic_prefix(ladybug_db_path: Path) -> None:
         assert result.message is not None
 
 
+def test_resolve_service_route_kafka_topic(ladybug_db_path: Path) -> None:
+    """A Kafka topic name resolves to its Route via ``r.topic``.
+
+    Regression: ``_resolve_route_candidates`` matched only on
+    ``path``/``path_template``, so ``kafka_topic`` Routes (which carry their
+    name in ``topic`` with ``path=''``) were unresolvable — ``jrag flow
+    <topic>``/``callers <topic>``/``overview <topic>`` could not follow kafka
+    even when the route + EXPOSES edge existed. ``banking.chat.compliance.review``
+    is consumed by ``ComplianceReviewListener`` (consumer-only, no producer
+    phantom), so it resolves to exactly one Route.
+    """
+    g = LadybugGraph.get(str(ladybug_db_path))
+    result = resolve_v2("banking.chat.compliance.review", hint_kind="route", graph=g)
+
+    assert isinstance(result, ResolveOutput)
+    assert result.success is True
+    assert result.resolved_identifier == "banking.chat.compliance.review"
+    assert result.status == "one", (
+        f"topic should resolve to one Route, got status={result.status!r}: {result.message}"
+    )
+    assert result.node is not None
+    assert result.node.kind == "route", f"expected a Route node, got {result.node}"
+
+
+def test_resolve_service_route_kafka_topic_drops_producer_mirror(ladybug_db_path: Path) -> None:
+    """A topic with both a producer (phantom, no EXPOSES) and a consumer
+    (server Route, EXPOSES) resolves to the single server Route.
+
+    ``banking.chat.incoming`` is produced by ``FollowUpKafkaPublisher`` (phantom
+    kafka_topic Route, ``microservice=''``, no EXPOSES) and consumed by
+    ``ChatKafkaListener`` (server Route with EXPOSES). Both carry the same topic
+    so topic-matching surfaces both; ``_drop_route_mirrors`` must collapse them
+    to the one exposed server route (status ``one``), not report ``many``.
+    """
+    g = LadybugGraph.get(str(ladybug_db_path))
+    result = resolve_v2("banking.chat.incoming", hint_kind="route", graph=g)
+
+    assert isinstance(result, ResolveOutput)
+    assert result.success is True
+    assert result.status == "one", (
+        f"producer+consumer topic should collapse to one server Route via mirror-drop, "
+        f"got status={result.status!r}: {result.message}"
+    )
+    assert result.node is not None
+    assert result.node.kind == "route", f"expected a Route node, got {result.node}"
+
+
 def test_resolve_service_hint_kind_filters(ladybug_db_path: Path) -> None:
     """hint_kind narrows the search space (route hint won't match symbol-only ids)."""
     g = LadybugGraph.get(str(ladybug_db_path))
