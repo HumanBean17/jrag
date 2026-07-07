@@ -51,6 +51,11 @@ This walk-up behavior means you no longer need to set environment variables or p
 | `JAVA_CODEBASE_RAG_DEBUG_CONTEXT` | When truthy, verbose stderr logging for chunk context expansion (diagnostics only). |
 | `JAVA_CODEBASE_RAG_RUN_HEAVY` | Test gate: set to `1` / `true` / `yes` to run the slow cocoindex + Lance end-to-end test (`pytest`); not used in normal operator workflows. |
 | `JAVA_CODEBASE_RAG_HINTS_ENABLED` | When `0` / `false` / `no`, suppress `hints_structured` and `advisories` from all MCP tool responses. Overridable via `.java-codebase-rag.yml` `hints.enabled`. Default: enabled. |
+| `JAVA_CODEBASE_RAG_ABSENCE_DIAG_ENABLED` | When `0` / `false` / `no`, disable `absence` field on empty tool responses. Overridable via `.java-codebase-rag.yml` `absence.diag_enabled`. Default: enabled. |
+| `JAVA_CODEBASE_RAG_ABSENCE_CLOSE_THRESHOLD` | Distance threshold (0.0-1.0) above which a symbol is considered "absent". Raise to be more conservative. Overridable via `.java-codebase-rag.yml` `absence.close_threshold`. Default: 0.85. |
+| `JAVA_CODEBASE_RAG_ABSENCE_ABSENT_FLOOR` | Floor distance (0.0-1.0) below which the nearest symbol is "too close" to declare absence. Raise to be more conservative. Overridable via `.java-codebase-rag.yml` `absence.absent_floor`. Default: 0.40. |
+| `JAVA_CODEBASE_RAG_ABSENCE_CANDIDATE_COUNT` | Number of closest candidates (1-20) to return in `absence.closest_symbols` and `absence.distances`. Overridable via `.java-codebase-rag.yml` `absence.candidate_count`. Default: 5. |
+| `JAVA_CODEBASE_RAG_ABSENCE_NGRAM_Q` | N-gram q-gram size (1-5) for lexical similarity scoring. Overridable via `.java-codebase-rag.yml` `absence.ngram_q`. Default: 3. |
 
 **MCP host launchers** also set `JAVA_CODEBASE_RAG_SOURCE_ROOT` to the Java repository root when it differs from the server process cwd (see `mcp.json.example` in the repo root).
 
@@ -168,6 +173,42 @@ cross_service_resolution: auto
 # Env: JAVA_CODEBASE_RAG_HINTS_ENABLED (1/true/yes or 0/false/no).
 hints:
   enabled: true  # set to false to suppress hints and advisories
+
+# -------- Absence diagnosis (empty-result verdicts) --------
+
+# When enabled (default), empty tool responses include an `absence` field with
+# a verdict (`refine_query` | `not_in_project` | `external_dependency` |
+# `correct_empty`), a cause, and cause-specific help (`closest_symbols`,
+# `vocabulary_context`, `filter_relaxation`, `external_identity`, `proof`).
+# Disable to restore pre-feature behavior (empty results with no `absence`).
+# Env: JAVA_CODEBASE_RAG_ABSENCE_DIAG_ENABLED (1/true/yes or 0/false/no).
+absence:
+  diag_enabled: true
+
+  # Distance threshold above which a symbol is considered "absent" (i.e., not in
+  # the project). Raise to be more conservative (fewer false-absent verdicts).
+  # Range: 0.0 (strict) to 1.0 (permissive). Default: 0.85.
+  # Env: JAVA_CODEBASE_RAG_ABSENCE_CLOSE_THRESHOLD.
+  close_threshold: 0.85
+
+  # Floor distance below which the nearest symbol is considered "too close" to
+  # declare absence (i.e., we're not confident enough to say "not in project").
+  # Raise to be more conservative (fewer false-absent verdicts).
+  # Range: 0.0 to 1.0. Default: 0.40.
+  # Env: JAVA_CODEBASE_RAG_ABSENCE_ABSENT_FLOOR.
+  absent_floor: 0.40
+
+  # Number of closest candidates to return in `absence.closest_symbols` and
+  # `absence.distances`. More candidates provide more context but increase noise.
+  # Range: 1 to 20. Default: 5.
+  # Env: JAVA_CODEBASE_RAG_ABSENCE_CANDIDATE_COUNT.
+  candidate_count: 5
+
+  # N-gram q-gram size for lexical similarity scoring. Smaller values are more
+  # permissive (match shorter substrings); larger values require longer shared
+  # subsequences. Range: 1 to 5. Default: 3.
+  # Env: JAVA_CODEBASE_RAG_ABSENCE_NGRAM_Q.
+  ngram_q: 3
 
 # -------- Brownfield overrides (see §4 for full schema and semantics) --------
 

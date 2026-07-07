@@ -26,7 +26,7 @@ Copy the block between `<!-- BEGIN` and `<!-- END` into your project's `AGENTS.m
 
 - **Test files, build files, CI/deploy** — read those files directly in the repo.
 - **Reflection and dynamic dispatch** — `CALLS` is static analysis only; the resolved set is a **lower bound**.
-- **Proof of absence** — an empty result may mean the project was not indexed, the wrong `table`, or a filter that matches nothing.
+- **Proof of absence** — an empty result may mean the project was not indexed, the wrong `table`, or a filter that matches nothing. When `absence` is populated on empty results, `absence.proof` provides an auditable signal (nearest distance, symbols scanned, thresholds) for `not_in_project` verdicts.
 - **Git history** — use `git log` / `git blame` for "who changed" / "when".
 
 When MCP disagrees with the open file, **the file wins**; treat the mismatch as a likely stale or incomplete index.
@@ -262,11 +262,11 @@ Returns **edges** with `attrs` (`confidence`, `strategy`, `match`, … on cross-
 | Symptom | Likely cause | Fix |
 | ------- | ------------ | --- |
 | `neighbors` validation error | Missing `direction` or `edge_types` | Add both explicitly |
-| Empty `neighbors` | Wrong edge type or direction | Read `describe.edge_summary`; `EXPOSES` is Symbol→Route; `OVERRIDES` is method↔method only; `HTTP_CALLS` starts from **Client** ids |
-| Cannot find symbol | Wrong id or empty index | `resolve` / `search`; try `find` with `fqn_contains` |
+| Empty `neighbors` | Wrong edge type or direction | Read `describe.edge_summary`; `EXPOSES` is Symbol→Route; `OVERRIDES` is method↔method only; `HTTP_CALLS` starts from **Client** ids. If `absence` is populated, read `absence.verdict` first: `not_in_project` → stop (target isn't in this project); `external_dependency` → it's a referenced-but-undefined dep; `refine_query` → use provided `closest_symbols`/`vocabulary_context`/`filter_relaxation`; `correct_empty` → the zero is correct. |
+| Cannot find symbol | Wrong id or empty index | `resolve` / `search`; try `find` with `fqn_contains`. If `absence` is populated, read `absence.verdict` first (see `Empty neighbors` above). |
 | `find` returns too much | Broad filter | Add `microservice`, `fqn_contains`, `path_contains`, `topic_contains`, … |
 | Route not found | Path mismatch | `find(kind="route", filter={"path_contains":…})` |
-| Empty `search` | Wrong `table`, no index, or chunk miss | Try `table="all"`; `find` with `fqn_contains`; read source files directly |
+| Empty `search` | Wrong `table`, no index, or chunk miss | Try `table="all"`; `find` with `fqn_contains`; read source files directly. If `absence` is populated, read `absence.verdict` first (see `Empty neighbors` above). |
 | Empty results across several tools | Index missing, stale, or wrong project | You cannot rebuild the index via MCP — ask the operator; meanwhile use open files / `rg` |
 | Result vs open file disagree | Stale or partial index | Trust the file; say index may be stale |
 | Mixed composed families on one id | `DECLARES.*` + `OVERRIDDEN_BY.*` together | Split calls — type keys need a type id; override keys need a method id |
