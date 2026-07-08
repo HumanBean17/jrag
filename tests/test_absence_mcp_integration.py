@@ -5,6 +5,8 @@ attached to the output's absence field. Non-empty results should have absence=No
 """
 from __future__ import annotations
 
+import importlib.util
+
 import pytest
 
 from mcp_v2 import describe_v2, find_v2, neighbors_v2, search_v2
@@ -12,6 +14,24 @@ from resolve_service import resolve_v2
 from absence_types import AbsenceVerdict
 
 
+def _vector_stack_available() -> bool:
+    """True when the optional vector stack (torch/sentence-transformers/lancedb) is installed.
+
+    The ``search`` tool loads a SentenceTransformer model, so tests that monkeypatch
+    ``run_search`` still need the model importable (the patch makes ``run_search is None``
+    False, forcing the semantic path). Skip them on graph-only installs (macOS Intel,
+    where the vector trio is gated off by PEP 508 markers). Mirrors test_mcp_v2.py.
+    """
+    return all(importlib.util.find_spec(m) is not None for m in ("sentence_transformers", "lancedb"))
+
+
+needs_vectors = pytest.mark.skipif(
+    not _vector_stack_available(),
+    reason="vector stack not installed (graph-only install; macOS Intel)",
+)
+
+
+@needs_vectors
 def test_search_empty_result_has_absence_diagnosis(ladybug_graph, monkeypatch) -> None:
     """Empty search result should have absence field populated with diagnosis."""
     # Monkeypatch run_search to return empty results
@@ -29,6 +49,7 @@ def test_search_empty_result_has_absence_diagnosis(ladybug_graph, monkeypatch) -
         assert out.absence.closest_symbols is not None
 
 
+@needs_vectors
 def test_search_typo_has_absence_diagnosis(ladybug_graph, monkeypatch) -> None:
     """Search with a typo should have refine_query verdict with closest symbols."""
     monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: [])
@@ -42,6 +63,7 @@ def test_search_typo_has_absence_diagnosis(ladybug_graph, monkeypatch) -> None:
     assert out.absence.closest_symbols  # should have did-you-mean suggestions
 
 
+@needs_vectors
 def test_search_external_dependency_has_absence_diagnosis(ladybug_graph, monkeypatch) -> None:
     """Search for an external dependency should have external_dependency verdict."""
     monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: [])
@@ -55,6 +77,7 @@ def test_search_external_dependency_has_absence_diagnosis(ladybug_graph, monkeyp
     assert "java.util" in out.absence.external_identity.fqn or "java.util.List" in out.absence.external_identity.fqn
 
 
+@needs_vectors
 def test_search_non_empty_result_has_no_absence(ladybug_graph, monkeypatch) -> None:
     """Non-empty search result should have absence=None."""
     # Mock search to return results
