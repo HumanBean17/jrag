@@ -76,10 +76,21 @@ class VocabularyIndex:
         records: list[SymbolRecord],
         ngram_index: dict[str, list[int]],
         q: int,
+        _name_index: dict[str, list[int]] | None = None,
     ) -> None:
         self.records = records
         self.ngram_index = ngram_index
         self.q = q
+        # Build name index for O(1) exact lookups (key: normalized_name -> record indices)
+        if _name_index is None:
+            self._name_index: dict[str, list[int]] = {}
+            for idx, record in enumerate(records):
+                norm = record.normalized_name
+                if norm not in self._name_index:
+                    self._name_index[norm] = []
+                self._name_index[norm].append(idx)
+        else:
+            self._name_index = _name_index
 
     @property
     def symbol_count(self) -> int:
@@ -157,6 +168,7 @@ class VocabularyIndex:
                 for r in self.records
             ],
             "ngrams": self.ngram_index,
+            "name_index": self._name_index,
         }
 
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -209,6 +221,7 @@ class VocabularyIndex:
             records=records,
             ngram_index=data["ngrams"],
             q=data["q"],
+            _name_index=data.get("name_index"),
         )
 
     def lookup(self, name: str, *, limit: int) -> list[SymbolRecord]:
@@ -224,16 +237,18 @@ class VocabularyIndex:
         Returns:
             List of candidate SymbolRecord (up to limit), ordered by n-gram overlap count
         """
-        # First, check for exact match on simple_name (fast path)
-        for record in self.records:
-            if record.simple_name == name:
+        # First, check for exact match on simple_name using O(1) dict lookup (fast path)
+        # Return ALL matching records since overloaded names matter
+        normalized = _normalize_name(name)
+        if normalized in self._name_index:
+            exact_matches = [self.records[idx] for idx in self._name_index[normalized]]
+            # Filter to only those where simple_name matches exactly (case-sensitive)
+            exact_simple_matches = [r for r in exact_matches if r.simple_name == name]
+            if exact_simple_matches:
                 log.debug(f"lookup({name}): exact match found")
-                return [record]
+                return exact_simple_matches
 
         # No exact match, use n-gram overlap
-        # Normalize query name
-        normalized = _normalize_name(name)
-
         # Extract q-grams from query
         grams = _qgrams(normalized, self.q)
 
@@ -279,11 +294,14 @@ class VocabularyIndex:
             if name.startswith(prefix):
                 return (True, "prefix")
 
-        # Check if name matches any record in our vocabulary
+        # Check if name matches any record in our vocabulary using O(1) dict lookup
+        normalized = _normalize_name(name)
+        matching_indices = self._name_index.get(normalized, [])
         matching_record = None
-        for record in self.records:
-            if record.simple_name == name or record.fqn == name:
-                matching_record = record
+        for idx in matching_indices:
+            rec = self.records[idx]
+            if rec.simple_name == name or rec.fqn == name:
+                matching_record = rec
                 break
 
         if matching_record:

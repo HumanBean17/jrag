@@ -34,7 +34,7 @@ class AbsenceProof(BaseModel):
     Attributes:
         nearest_distance: Distance to the closest symbol found (0-1)
         symbol_count_scanned: Total symbols examined during search
-        thresholds_applied: The distance thresholds used in the decision
+        thresholds_applied: The similarity thresholds used in the decision
         query_shape: Shape of the original query (currently only "identifier")
     """
     nearest_distance: float

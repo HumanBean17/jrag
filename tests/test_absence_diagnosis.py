@@ -207,6 +207,51 @@ class TestFalseAbsentGuard:
         assert diag.verdict != "not_in_project"
 
 
+# ---- empty vocab guard --------------------------------------------------------
+
+
+class TestEmptyVocabGuard:
+    """Empty/unindexed vocab → refine_query (never not_in_project)."""
+
+    def test_empty_vocab_identifier_query_yields_refine_query(self, cfg):
+        """Empty vocab (symbol_count == 0) + identifier query → refine_query.
+
+        The spec mandates refine_query for empty/unindexed projects ("Never a false
+        not_in_project"). An empty vocab yields best_sim=0.0, which without this guard
+        would incorrectly emit not_in_project with symbol_count_scanned=0.
+        """
+        empty_vocab = VocabularyIndex(records=[], ngram_index={}, q=3)
+        diag = _diagnose(
+            tool="search",
+            query="SomeIdentifier",
+            vocab=empty_vocab,
+            graph=None,  # Not used when vocab is empty
+            cfg=cfg,
+        )
+        assert diag is not None
+        assert diag.verdict == "refine_query"
+        assert diag.verdict != "not_in_project"
+        assert diag.cause == "identifier_miss"
+        # Message should mention empty/unindexed index
+        assert "empty" in diag.message.lower() or "unindexed" in diag.message.lower()
+
+    def test_empty_vocab_find_identifier_filter_yields_refine_query(self, cfg):
+        """Empty vocab + find with identifier filter → refine_query."""
+        empty_vocab = VocabularyIndex(records=[], ngram_index={}, q=3)
+        diag = _diagnose(
+            tool="find",
+            filt={"fqn_contains": "SomeClass"},
+            filter_kind="symbol",
+            vocab=empty_vocab,
+            graph=None,
+            cfg=cfg,
+        )
+        assert diag is not None
+        assert diag.verdict == "refine_query"
+        assert diag.verdict != "not_in_project"
+        assert diag.cause == "identifier_miss"
+
+
 # ---- NL path -----------------------------------------------------------------
 
 

@@ -167,6 +167,17 @@ def _diagnose_inner(
 def _diagnose_query(
     query: str, vocab: VocabularyIndex, graph: Any, cfg: Any,
 ) -> AbsenceDiagnosis:
+    # Empty vocab guard: never declare not_in_project on an unindexed/empty graph
+    if vocab.symbol_count == 0:
+        return AbsenceDiagnosis(
+            verdict="refine_query",
+            cause="identifier_miss",
+            message=(
+                "Index appears empty/unindexed — verify the project was indexed "
+                "before concluding a symbol is absent."
+            ),
+        )
+
     if _is_identifier_shaped(query):
         closest, distances, best_sim = _did_you_mean(query, vocab, cfg)
         verdict, cause, proof = _threshold_verdict(best_sim, cfg, identifier=True)
@@ -206,6 +217,17 @@ def _diagnose_find(
     graph: Any,
     cfg: Any,
 ) -> AbsenceDiagnosis:
+    # Empty vocab guard: never declare not_in_project on an unindexed/empty graph
+    if vocab.symbol_count == 0:
+        return AbsenceDiagnosis(
+            verdict="refine_query",
+            cause="identifier_miss",
+            message=(
+                "Index appears empty/unindexed — verify the project was indexed "
+                "before concluding a symbol is absent."
+            ),
+        )
+
     identifier = _extract_identifier(filt, filter_kind)
 
     if identifier is not None:
@@ -413,6 +435,9 @@ def _neighbors_meaningful_empty(root_node: NodeRef, graph: Any) -> bool:
     HTTP ``http_endpoint`` route with inbound handlers is an external entrypoint,
     so zero callers is meaningful. A symbol with no edges at all is an isolated
     leaf. Everything else (has edges, just not the requested type) → refine.
+
+    Kafka topics are not considered external entrypoints: their empty-callers
+    semantics differ from HTTP routes (per is_external_entrypoint precedent).
     """
     try:
         if root_node.kind == "route":
