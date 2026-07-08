@@ -10,7 +10,7 @@
     "UNRESOLVED_AT": 227
   },
   "graph_meta": {
-    "ontology_version": 17,
+    "ontology_version": 18,
     "built_at": 1782110216,
     "source_root": "/Users/dmitry/Desktop/CursorProjects/java-enterprise-codebase-rag/tests/bank-chat-system",
     "counts_json": "{packages: 29, files: 130, types: 140, members: 606, phantoms: 54, extends: 18, implements: 21, injects: 94, declares: 606, overrides: 38, calls: 684, routes: 29, exposes: 15, clients: 8, declares_client: 8, producers: 9, declares_producer: 9, http_calls: 8, async_calls: 9}"

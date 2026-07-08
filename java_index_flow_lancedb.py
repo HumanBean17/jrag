@@ -51,7 +51,13 @@ from java_index_v1_common import (
 )
 from path_filtering import LayeredIgnore
 from ast_java import ONTOLOGY_VERSION, parse_java
-from graph_enrich import collect_annotation_meta_chain, enrich_chunk, load_brownfield_overrides
+from graph_enrich import (
+    classify_java_file,
+    collect_annotation_meta_chain,
+    enrich_chunk,
+    load_brownfield_overrides,
+    load_generated_detection,
+)
 
 # Older cocoindex (e.g. 1.0.0a43) uses ``tracked=False``; newer releases renamed
 # the flag to ``detect_change`` (default False) and reject ``tracked``.
@@ -280,6 +286,9 @@ class JavaLanceChunk:
     annotations_on_type: Annotated[list[str], LanceType(pa.list_(pa.string()))]
     symbols: Annotated[list[str], LanceType(pa.list_(pa.string()))]
     ontology_version: int
+    # Generated source detection: populated per-file, not per-chunk
+    generated: bool
+    generated_by: str | None
 
 
 @dataclass
@@ -364,12 +373,13 @@ def _parse_and_enrich_java(
     chunks: list[Any],
     rel: str,
     project_root: Path,
-) -> list[Any]:
+) -> tuple[list[Any], Any]:
     """Parse one Java file and enrich every chunk, off the event loop.
 
-    Returns a list of :class:`graph_enrich.ChunkEnrichment` aligned 1:1 with
-    ``chunks``. Intended to run via ``asyncio.to_thread`` from
-    ``process_java_file`` (vectors perf lever #2): while the worker thread
+    Returns a tuple of (enrichments, ast) where enrichments is a list of
+    :class:`graph_enrich.ChunkEnrichment` aligned 1:1 with ``chunks``, and ast
+    is the parsed :class:`JavaFileAst`. Intended to run via ``asyncio.to_thread``
+    from ``process_java_file`` (vectors perf lever #2): while the worker thread
     parses + enriches, the event loop is free to drive other files and keep the
     embedder's batching queue fed.
 
@@ -381,7 +391,7 @@ def _parse_and_enrich_java(
     ``lru_cache`` reads are thread-safe under the GIL.
     """
     ast = parse_java(content_bytes)
-    return [
+    enrichments = [
         enrich_chunk(
             ast,
             chunk_start_byte=ch.start.byte_offset,
@@ -391,6 +401,7 @@ def _parse_and_enrich_java(
         )
         for ch in chunks
     ]
+    return enrichments, ast
 
 
 @coco.fn(memo=True)
@@ -430,9 +441,16 @@ async def process_java_file(
     # (vectors perf lever #2) parse + enrich off the event loop so the loop can
     # keep the embedder's batching queue fed while this file is being parsed.
     # parse_java is thread-safe (per-thread tree-sitter Parser in ast_java).
-    enrichments = await asyncio.to_thread(
+    enrichments, ast = await asyncio.to_thread(
         _parse_and_enrich_java, content_bytes, chunks, rel, project_root
     )
+
+    # Compute generated source detection once per file (uses the AST and content_bytes)
+    generated_config = load_generated_detection(project_root)
+    generated, generated_by = classify_java_file(
+        content_bytes, ast, config=generated_config, project_root=project_root
+    )
+
     # (vectors perf lever #1) embed all chunks concurrently so the batched
     # embedder groups them into one ``model.encode(...)`` (max_batch_size=64)
     # instead of N serial batch-of-1 calls. Dominant win for ``increment``
@@ -462,6 +480,8 @@ async def process_java_file(
                 annotations_on_type=enrich.annotations_on_type,
                 symbols=enrich.symbols,
                 ontology_version=ONTOLOGY_VERSION,
+                generated=generated,
+                generated_by=generated_by,
             )
         )
 

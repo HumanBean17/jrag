@@ -19,6 +19,7 @@ Two location concepts are tracked per file:
 from __future__ import annotations
 
 import hashlib
+import re
 import sys
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
@@ -142,6 +143,87 @@ def _load_config_microservice_roots(project_root_str: str) -> tuple[str, ...]:
 
 
 @lru_cache(maxsize=64)
+def load_generated_detection(project_root_str: str | None) -> GeneratedDetectionConfig:
+    """Read `generated_detection` from `.java-codebase-rag.yml` at project_root.
+
+    Cached per project_root to avoid re-reading on every chunk. Returns empty
+    config when section absent or project_root is None. Malformed entries
+    (wrong types, non-string values) are dropped with a stderr warning.
+    """
+    if project_root_str is None:
+        return GeneratedDetectionConfig()
+
+    root = Path(project_root_str)
+    for name in CONFIG_FILENAMES:
+        candidate = root / name
+        if not candidate.is_file():
+            continue
+        try:
+            import yaml  # PyYAML; already a transitive dep of cocoindex
+        except ImportError:
+            return GeneratedDetectionConfig()
+        try:
+            data = yaml.safe_load(candidate.read_text(encoding="utf-8"))
+        except Exception:
+            return GeneratedDetectionConfig()
+        if not isinstance(data, dict):
+            return GeneratedDetectionConfig()
+
+        raw = data.get("generated_detection")
+        if raw is None:
+            return GeneratedDetectionConfig()
+
+        if not isinstance(raw, dict):
+            import sys
+            print("[warn] generated_detection must be a dict; skipping",
+                  file=sys.stderr)
+            return GeneratedDetectionConfig()
+
+        result = GeneratedDetectionConfig()
+
+        # Spec table: (config_key, field_name, type_converter, is_list_type)
+        # is_list_type: True = keep as list, False = convert to set
+        spec_table = [
+            ("header_patterns", "header_patterns", lambda x: x, True),
+            ("annotation_patterns", "annotation_patterns", lambda x: x, True),
+            ("force_fqns", "force_fqns", set, False),
+            ("exclude_fqns", "exclude_fqns", set, False),
+        ]
+
+        for config_key, field_name, type_conv, is_list_type in spec_table:
+            value = raw.get(config_key)
+            if value is not None:
+                if isinstance(value, list):
+                    if is_list_type:
+                        valid = [s for s in value if isinstance(s, str)]
+                    else:
+                        valid = {s for s in value if isinstance(s, str)}
+
+                    if len(valid) != len(value):
+                        import sys
+                        print(f"[warn] generated_detection.{config_key}: "
+                              "non-string entries dropped", file=sys.stderr)
+
+                    # Update result with converted value
+                    kwargs = {field_name: type_conv(valid)}
+                    result = GeneratedDetectionConfig(
+                        header_patterns=kwargs.get("header_patterns", result.header_patterns),
+                        annotation_patterns=kwargs.get("annotation_patterns", result.annotation_patterns),
+                        force_fqns=kwargs.get("force_fqns", result.force_fqns),
+                        exclude_fqns=kwargs.get("exclude_fqns", result.exclude_fqns)
+                    )
+                else:
+                    import sys
+                    print(f"[warn] generated_detection.{config_key}: "
+                          "must be a list; skipping", file=sys.stderr)
+
+        return result
+
+    # No config file found → return empty config
+    return GeneratedDetectionConfig()
+
+
+@lru_cache(maxsize=64)
 def _load_config_cross_service_resolution(project_root_str: str) -> str:
     """Read `cross_service_resolution` from `.java-codebase-rag.yml` at project_root.
 
@@ -236,6 +318,19 @@ class BrownfieldOverrides:
     fqn_to_http_client_hint: dict[str, HttpClientHint] = field(default_factory=dict)
     annotation_to_async_producer_hint: dict[str, AsyncProducerHint] = field(default_factory=dict)
     fqn_to_async_producer_hint: dict[str, AsyncProducerHint] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class GeneratedDetectionConfig:
+    """Config for generated-source detection.
+
+    Mirrors brownfield override pattern: frozen dataclass with
+    field(default_factory=...) for mutable defaults.
+    """
+    header_patterns: list[str] = field(default_factory=list)
+    annotation_patterns: list[str] = field(default_factory=list)
+    force_fqns: set[str] = field(default_factory=set)
+    exclude_fqns: set[str] = field(default_factory=set)
 
 
 def _meta_builtins() -> frozenset[str]:
@@ -1542,6 +1637,156 @@ def microservice_for_path(
                 return parts[0]
 
     return ""
+
+
+# ---------- generated-source detection ----------
+
+
+# Built-in generator markers (v1 set). Verified against real generator output.
+# Annotation FQNs that mark generated code (any annotation with these FQNs
+# or simple names is considered a marker).
+_GENERATED_ANNOTATION_FQNS = {
+    "javax.annotation.processing.Generated",  # Standard Java (pre-Jakarta)
+    "jakarta.annotation.processing.Generated",  # Jakarta EE
+    "org.immutables.value.Generated",  # Immutables
+    "lombok.Generated",  # Lombok
+    "com.squareup.javapoet.Generated",  # JavaPoet
+}
+
+# Header patterns for generators that emit banners (checked against first 4KB).
+# Patterns are compiled as case-insensitive regexes.
+_GENERATED_HEADER_PATTERNS = {
+    re.compile(r"This file was generated by the OpenAPI Generator", re.IGNORECASE): "openapi",
+    re.compile(r"Generated by the protocol buffer compiler", re.IGNORECASE): "protobuf",
+    re.compile(r"This file was generated by jsonschema2pojo", re.IGNORECASE): "jsonschema2pojo",
+    re.compile(r"generated by wsimport", re.IGNORECASE): "wsimport",  # JAX-WS wsimport
+    re.compile(r"WARNING: DO NOT EDIT.*generated by MapStruct", re.IGNORECASE): "mapstruct",
+}
+
+# @Generated(value="...") patterns that identify the generator family.
+# These are matched against annotation arguments["value"] or arguments["comments"].
+_GENERATED_VALUE_PATTERNS = {
+    re.compile(r"org\.openapitools\.codegen\."): "openapi",
+    re.compile(r"org\.mapstruct\.ap\.MappingProcessor"): "mapstruct",
+    re.compile(r"com\.google\.auto\.value\.processor\.AutoValueProcessor"): "autovalue",
+    re.compile(r"org\.jooq\."): "jooq",
+    re.compile(r"com\.querydsl\."): "querydsl",
+    re.compile(r"org\.immutables\."): "immutables",
+}
+
+
+def _infer_family_from_annotation(annotation: AnnotationRef) -> str | None:
+    """Infer generator family from @Generated annotation arguments.
+
+    Returns lowercased family slug or None if no match.
+    """
+    # Check value/comments arguments for generator identifiers FIRST
+    # (handles javax.annotation.processing.Generated(value="org.mapstruct.ap.MappingProcessor"))
+    value = annotation.arguments.get("value", "")
+    comments = annotation.arguments.get("comments", "")
+
+    for pattern, family in _GENERATED_VALUE_PATTERNS.items():
+        if pattern.search(value) or pattern.search(comments):
+            return family
+
+    # Check annotation FQN for families identifiable by FQN itself
+    if annotation.qualified in _GENERATED_ANNOTATION_FQNS:
+        # Extract family from qualified name if possible
+        if "lombok.Generated" in annotation.qualified:
+            return "lombok"
+        if "immutables" in annotation.qualified:
+            return "immutables"
+        # Generic javax/jakarta or JavaPoet -> unknown family
+        return None
+
+    return None
+
+
+def _check_header_banners(header_text: str) -> str | None:
+    """Check header (first 4KB) for generator banners.
+
+    Args:
+        header_text: Decoded header text (first 4KB of source file).
+
+    Returns family slug if matched, None otherwise.
+    """
+    for pattern, family in _GENERATED_HEADER_PATTERNS.items():
+        if pattern.search(header_text):
+            return family
+
+    return None
+
+
+def classify_java_file(
+    source: bytes,
+    ast: "JavaFileAst",
+    *,
+    config: GeneratedDetectionConfig | None = None,
+    project_root: str | Path | None = None,
+) -> tuple[bool, str | None]:
+    """Classify whether a Java source file is generated.
+
+    Args:
+        source: Raw file bytes (required for header-banner detection).
+        ast: Parsed Java AST (from ast_java.parse_java_ast).
+        config: Optional detection config (defaults to empty config).
+        project_root: Optional project root for loading default config.
+
+    Returns:
+        (generated, generated_by) tuple:
+        - generated: True if file is detected as generated code.
+        - generated_by: Lowercased family slug (openapi, jsonschema2pojo,
+          protobuf, mapstruct, wsimport, querydsl, jooq, immutables,
+          autovalue, lombok) or None if family unknown.
+    """
+    # Load config if not provided
+    if config is None:
+        config = load_generated_detection(
+            str(project_root) if project_root is not None else None
+        )
+
+    # Decode header once for banner detection (first 4KB)
+    HEADER_PREFIX_SIZE = 4096
+    header_prefix = source[:HEADER_PREFIX_SIZE].decode("utf-8", errors="ignore")
+
+    # Collect all type FQNs for config-based checks
+    all_type_fqns = {t.fqn for t in ast.all_types}
+
+    # Priority 1: exclude_fqns (override, wins even with markers)
+    if all_type_fqns & config.exclude_fqns:
+        return False, None
+
+    # Priority 2: force_fqns (forced generated, no markers needed)
+    if all_type_fqns & config.force_fqns:
+        return True, None
+
+    # Priority 3: annotation-based detection
+    for typ in ast.all_types:
+        for ann in typ.annotations:
+            # Check simple name "Generated" first
+            if ann.name == "Generated":
+                family = _infer_family_from_annotation(ann)
+                if family is not None:
+                    return True, family
+                # Generic @Generated without identifiable value
+                return True, None
+
+            # Check configured annotation patterns
+            for pattern in config.annotation_patterns:
+                if re.search(pattern, ann.qualified) or re.search(pattern, ann.name):
+                    return True, None
+
+    # Priority 4: header-banner detection
+    family = _check_header_banners(header_prefix)
+    if family is not None:
+        return True, family
+
+    # Check configured header patterns
+    for pattern in config.header_patterns:
+        if re.search(pattern, header_prefix, re.IGNORECASE):
+            return True, None
+
+    return False, None
 
 
 def detect_microservice_from_path(cwd: Path, source_root: Path) -> str | None:

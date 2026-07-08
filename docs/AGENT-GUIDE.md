@@ -14,7 +14,7 @@ Copy the block between `<!-- BEGIN` and `<!-- END` into your project's `AGENTS.m
 
 **Indexed content:** Java production sources plus SQL and YAML (use `search` `table`: `java`, `sql`, `yaml`, or `all`).
 
-**Ontology: 17** — if results look structurally wrong or empty across tools, the index may be missing, stale, or built with a different `ontology_version`; you cannot re-index via MCP — ask the operator to rebuild.
+**Ontology: 18** — if results look structurally wrong or empty across tools, the index may be missing, stale, or built with a different `ontology_version`; you cannot re-index via MCP — ask the operator to rebuild.
 
 **Responses:** On success, `search`, `find`, `describe`, `neighbors`, and `resolve` may include two top-level fields: `hints_structured` (≤5 suggested next-tool calls) and `advisories` (≤5 pure informational strings). Each `hints_structured` entry has `tool`, `args`, `actionable`, `label`, and `reason`. `actionable=true` means you can call the tool directly with `args`; `actionable=false` means partial/advisory — fill missing values or use as guidance. `reason` explains why the hint was emitted. `advisories` carry context education (fuzzy strategy warnings, role collision explanations, etc.) with no tool call suggestion. For `search`/`find`, echoed `limit`/`offset`. Hints are advisory; ignore them when `success` is false.
 
@@ -136,7 +136,7 @@ For **`find`**, `filter` is required — `{}` means no predicates (all nodes of 
 | Keys | Applies to |
 | ---- | ---------- |
 | `microservice`, `module` | All kinds |
-| `role`, `exclude_roles`, `annotation`, `capability`, `fqn_contains`, `symbol_kind`, `symbol_kinds` | **symbol** |
+| `role`, `exclude_roles`, `annotation`, `capability`, `fqn_contains`, `symbol_kind`, `symbol_kinds`, `generated_only`, `exclude_generated` | **symbol** |
 | `http_method`, `path_contains`, `framework` | **route** |
 | `source_layer`, `client_kind`, `target_service`, `target_path_contains`, `http_method` | **client** |
 | `source_layer`, `producer_kind`, `topic_contains` | **producer** |
@@ -144,6 +144,21 @@ For **`find`**, `filter` is required — `{}` means no predicates (all nodes of 
 `http_method` filters HTTP verbs on **routes** (declared method) and on **clients** (outbound call method). Not applicable to **symbol** rows.
 
 **Strict frame:** one populated field → one stored attribute for that kind. Unknown keys or inapplicable populated fields → `success=false` with a teaching `message`. Invalid enum values (e.g. wrong case) are rejected earlier at the schema layer with the valid set listed. The substring fields (`fqn_contains`, `path_contains`, `target_path_contains`, `topic_contains`) match literally via `CONTAINS` — no `*`/`?` metacharacters; use `search(query=…)` for ranked text instead. `search.query` is opaque text, not a DSL.
+
+### Generated source detection
+
+**Generated sources** (MapStruct mappers, OpenAPI clients, protobuf stubs, etc.) are **auto-detected by content** (not by path). Every MCP search/find/describe/neighbors result row carries two fields:
+
+- `generated` (bool) — `true` if the source file is generated.
+- `generated_by` (string | null) — the generator family slug (`openapi`, `jsonschema2pojo`, `protobuf`, `mapstruct`, `wsimport`, `querydsl`, `jooq`, `immutables`, `autovalue`, `lombok`), or `null` for unrecognized generators.
+
+**Detection criteria:** A Java source file is classified as generated when it carries a `@Generated` annotation (javax/jakarta.annotation.processing.Generated and equivalents: lombok.Generated, org.immutables.value.Generated, com.squareup.javapoet.Generated) OR a recognized generator header banner (OpenAPI, jsonschema2pojo, protobuf, MapStruct, wsimport).
+
+**Note:** The detector matches `@Generated` by simple annotation name. If your project defines its own unrelated `@Generated` annotation (e.g., `@com.example.Generated`), it will be flagged as generated code. To exclude a specific FQN from detection, add it to `generated_detection.exclude_fqns` in your `.java-codebase-rag.yml` configuration.
+
+**Equal-treatment default:** Generated sources are indexed and returned **exactly** like hand-written code by default — they are **not** ranked down and **not** excluded from graph traversal. The existing role-aware ranking already down-ranks non-actionable roles (DTOs/mappers), which covers most generated code.
+
+**Filtering:** Use `filter={"exclude_generated": true}` on the MCP `NodeFilter` to exclude generated sources when you only want hand-written code. Use `filter={"generated_only": true}` to show only generated sources. On the CLI, use `--exclude-generated` or `--generated-only` flags.
 
 ### Identifier resolution (`resolve`)
 

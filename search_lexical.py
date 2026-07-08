@@ -93,6 +93,10 @@ def _lexical_where(f: Any, *, path_contains: str | None) -> tuple[str, dict[str,
         if getattr(f, "exclude_roles", None):
             preds.append("NOT s.role IN $exclude_roles")
             params["exclude_roles"] = list(f.exclude_roles)
+        if getattr(f, "generated_only", False):
+            preds.append("s.generated = true")
+        if getattr(f, "exclude_generated", False):
+            preds.append("(s.generated IS NULL OR s.generated = false)")
         if getattr(f, "annotation", None):
             preds.append("list_contains(s.annotations, $annotation)")
             params["annotation"] = f.annotation

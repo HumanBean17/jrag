@@ -556,6 +556,8 @@ def test_tier2_lance_row_carries_enrich_capabilities_without_lancedb() -> None:
         annotations_on_type=e.annotations_on_type,
         symbols=e.symbols,
         ontology_version=ONTOLOGY_VERSION,
+        generated=False,
+        generated_by=None,
     )
     assert "MESSAGE_LISTENER" in row.capabilities
 

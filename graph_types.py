@@ -34,6 +34,8 @@ class NodeRef(BaseModel):
     microservice: str | None = None
     module: str | None = None
     role: str | None = None
+    generated: bool | None = None
+    generated_by: str | None = None
 
 
 class StructuredHint(BaseModel):
@@ -126,6 +128,8 @@ def _node_ref_from_row(kind: Literal["symbol", "route", "client", "producer"], r
         microservice=str(row.get("microservice") or "") or None,
         module=str(row.get("module") or "") or None,
         role=role,
+        generated=bool(row.get("generated")) if row.get("generated") is not None else None,
+        generated_by=str(row.get("generated_by")) if row.get("generated_by") else None,
     )
 
 

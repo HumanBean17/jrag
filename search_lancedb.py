@@ -68,6 +68,8 @@ JAVA_ENRICHED_COLUMNS: tuple[str, ...] = (
     "metadata",
     "ontology_version",
     "capabilities",
+    "generated",
+    "generated_by",
 )
 
 VECTOR_COLUMN = "embedding"
@@ -107,6 +109,8 @@ def _build_extra_predicates(
     exclude_roles: list[str] | None = None,
     capability: str | None = None,
     capability_in: list[str] | None = None,
+    generated_only: bool = False,
+    exclude_generated: bool = False,
 ) -> list[str]:
     preds: list[str] = []
     if role and "role" in columns:
@@ -139,6 +143,10 @@ def _build_extra_predicates(
     if exclude_roles and "role" in columns:
         vals = ", ".join(f"'{_escape_sql_str(v)}'" for v in exclude_roles)
         preds.append(f"(role IS NULL OR role NOT IN ({vals}))")
+    if generated_only and "generated" in columns:
+        preds.append("generated = true")
+    if exclude_generated and "generated" in columns:
+        preds.append("(generated IS NULL OR generated = false)")
     if module and "module" in columns:
         preds.append(f"module = '{_escape_sql_str(module)}'")
     if microservice and "microservice" in columns:
@@ -654,6 +662,8 @@ def run_search(
     exclude_roles: list[str] | None = None,
     capability: str | None = None,
     capability_in: list[str] | None = None,
+    generated_only: bool = False,
+    exclude_generated: bool = False,
     dedup_by_fqn: bool = False,
 ) -> list[dict]:
     effective_hybrid = hybrid
@@ -705,6 +715,7 @@ def run_search(
         package_prefix=package_prefix, fqn_in=None,
         role_in=role_in, exclude_roles=exclude_roles,
         capability=capability, capability_in=capability_in,
+        generated_only=generated_only, exclude_generated=exclude_generated,
     ) if "java" in table_keys else []
 
     skip_role_weight = bool(role or role_in or exclude_roles)
@@ -832,6 +843,10 @@ def main() -> None:
     parser.add_argument("--fts-text", metavar="TEXT", default=None)
     parser.add_argument("--auto-hybrid", action="store_true")
     parser.add_argument("--role", default=None)
+    parser.add_argument("--exclude-generated", action="store_true",
+                        help="Exclude generated sources from results.")
+    parser.add_argument("--generated-only", action="store_true",
+                        help="Return only generated sources in results.")
     parser.add_argument("--module", default=None,
                         help="Filter to a single Maven/Gradle module name.")
     parser.add_argument("--microservice", default=None,
@@ -885,6 +900,8 @@ def main() -> None:
             expand_depth=args.expand_depth,
             ladybug_path=args.ladybug_path,
             context_neighbors=args.context_neighbors,
+            exclude_generated=args.exclude_generated,
+            generated_only=args.generated_only,
         )
     except Exception as e:
         print(f"Search failed: {e}", file=sys.stderr)
@@ -930,6 +947,10 @@ def main() -> None:
         mod = row.get("module") or ""
         if mod and mod != ms:
             hint_s += f" | module:{mod}"
+        gen = row.get("generated")
+        gen_by = row.get("generated_by") or ""
+        if gen:
+            hint_s += f" | generated:{gen_by}" if gen_by else " | generated"
         comps = row.get("_score_components") or {}
         rw = comps.get("role_weight")
         if rw:
