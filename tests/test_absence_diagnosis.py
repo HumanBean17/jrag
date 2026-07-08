@@ -394,12 +394,20 @@ def _find_http_route_with_handlers(graph) -> str | None:
 
 
 def _find_symbol_with_edges(graph) -> NodeRef:
-    """Find a real Symbol node that has at least one edge."""
+    """Find a real, resolved project Symbol node that has at least one edge.
+
+    Restricted to ``s.resolved = true``: an unresolved/phantom symbol (external /
+    JDK / library reference) is classified ``external_dependency`` by diagnose
+    (external-wins precedence), not ``refine_query``. ``LIMIT 1`` without
+    ``ORDER BY`` is platform-nondeterministic in Kùzu, so the resolved filter
+    guarantees a genuine project symbol on every platform (was flaky on Windows).
+    """
     rows = graph._rows(  # noqa: SLF001
-        "MATCH (s:Symbol)--() RETURN s.id AS id, s.name AS name, s.fqn AS fqn, "
+        "MATCH (s:Symbol)--() WHERE s.resolved = true "
+        "RETURN s.id AS id, s.name AS name, s.fqn AS fqn, "
         "s.kind AS kind LIMIT 1"
     )
-    assert rows, "corpus has no symbol with edges"
+    assert rows, "corpus has no resolved symbol with edges"
     row = rows[0]
     return NodeRef(
         id=str(row.get("id") or ""),
