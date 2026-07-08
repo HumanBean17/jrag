@@ -9,7 +9,6 @@ import subprocess
 from pathlib import Path
 
 import pytest
-import lancedb
 
 from mcp_v2 import find_v2, NodeFilter
 

@@ -10,7 +10,8 @@ import subprocess
 from pathlib import Path
 
 import pytest
-import lancedb
+
+lancedb = pytest.importorskip("lancedb")
 
 
 FIXTURE_ROOT = Path(__file__).resolve().parent / "fixtures" / "generated_samples"
