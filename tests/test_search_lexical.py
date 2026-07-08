@@ -172,6 +172,9 @@ def test_lexical_where_parity_with_mcp_v2() -> None:
         {"microservice": "ms", "exclude_roles": ["DTO"]},
         {"symbol_kind": "class"},
         {"symbol_kinds": ["class", "interface"]},
+        {"generated_only": True},
+        {"exclude_generated": True},
+        {"role": "SERVICE", "exclude_generated": True},
     ]
     for c in cases:
         nf = NodeFilter.model_validate(c)
