@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from mcp_v2 import SearchHit, find_v2, describe_v2, neighbors_v2, search_v2
+from mcp_v2 import SearchHit, Edge, find_v2, describe_v2, neighbors_v2, search_v2
 from graph_types import NodeRef
 
 
@@ -55,6 +55,7 @@ def _fake_search_rows_with_generated() -> list[dict[str, Any]]:
 
 def test_search_surfaces_generated_fields(monkeypatch, ladybug_graph) -> None:
     """Test that search returns SearchHit with generated/generated_by set."""
+    pytest.importorskip("lancedb")  # vector-search path; N/A on graph-only installs
     monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows_with_generated())
     out = search_v2("OpenAPIModel", graph=ladybug_graph)
     assert out.success is True
@@ -74,6 +75,7 @@ def test_search_surfaces_generated_fields(monkeypatch, ladybug_graph) -> None:
 
 def test_search_handles_missing_generated_fields(monkeypatch, ladybug_graph) -> None:
     """Test that search handles rows without generated/generated_by fields (old indexes)."""
+    pytest.importorskip("lancedb")  # vector-search path; N/A on graph-only installs
     # Use fake rows without generated/generated_by (simulating old indexes)
     rows_without_generated = [
         {
