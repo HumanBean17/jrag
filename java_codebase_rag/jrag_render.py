@@ -33,6 +33,23 @@ _CALLS_FAMILY_EDGES = frozenset({"CALLS", "HTTP_CALLS", "ASYNC_CALLS"})
 # none) and are left untagged.
 _ROUTE_KIND_TAGS: dict[str, str] = {"kafka_topic": "kafka", "http_endpoint": "http"}
 
+# Absence verdict → human-readable label, shared by the not-found / listing /
+# traversal empty-result renderers. ``AbsenceVerdict`` is a closed Literal of
+# these four values.
+_ABSENCE_VERDICT_TEXT: dict[str, str] = {
+    "not_in_project": "not in project",
+    "external_dependency": "external dependency",
+    "refine_query": "refine your query",
+    "correct_empty": "correct empty",
+}
+
+
+def _verdict_line(absence: AbsenceDiagnosis) -> str | None:
+    """A ``Verdict: <label>`` line for an absence diagnosis, or ``None`` if the
+    verdict is not one of the known values."""
+    text = _ABSENCE_VERDICT_TEXT.get(absence.verdict)
+    return f"Verdict: {text}" if text else None
+
 # Identity keys already represented in a listing line (display_name + @service +
 # kind tag). At ``--detail full`` the per-row kv-block skips these (they are in
 # the header line) and renders every OTHER key, so full listing == per-row
@@ -232,16 +249,15 @@ def _render_not_found(envelope: Envelope) -> str:
     # If absence diagnosis is present, append verdict + message (+ did-you-mean)
     if envelope.absence is not None:
         lines = [base]
-        # Add verdict line (human-readable)
-        verdict = envelope.absence.verdict
-        if verdict == "not_in_project":
-            lines.append("Verdict: not in project")
-        elif verdict == "external_dependency":
-            lines.append("Verdict: external dependency")
-        elif verdict == "refine_query":
-            lines.append("Verdict: refine your query")
-        elif verdict == "correct_empty":
-            lines.append("Verdict: correct empty")
+        # Verdict line (human-readable label)
+        vline = _verdict_line(envelope.absence)
+        if vline:
+            lines.append(vline)
+
+        # Per-cause explanation message — surfaces the diagnosis's authored help
+        # (external-identity context, filter-relaxation suggestions, etc.).
+        if envelope.absence.message:
+            lines.append(envelope.absence.message)
 
         # Add did-you-mean line if closest_symbols is non-empty
         if envelope.absence.closest_symbols:
@@ -327,17 +343,8 @@ def _render_listing(envelope: Envelope, *, noun: str, detail: str = "normal") ->
     if not lines:
         # Handle absence diagnosis (PR-ABS-4)
         if envelope.absence is not None:
-            verdict = envelope.absence.verdict
-            if verdict == "refine_query":
-                lines.append("Verdict: refine your query")
-            elif verdict == "not_in_project":
-                lines.append("Verdict: not in project")
-            elif verdict == "external_dependency":
-                lines.append("Verdict: external dependency")
-            elif verdict == "correct_empty":
-                lines.append("Verdict: correct empty")
-            else:
-                lines.append(f"0 {noun}".rstrip())
+            vline = _verdict_line(envelope.absence)
+            lines.append(vline if vline else f"0 {noun}".rstrip())
         else:
             lines.append(f"0 {noun}".rstrip())
     # Listing breadcrumbs (Phase 2): <=2 `next:` hint lines when the listing
@@ -460,20 +467,14 @@ def _render_traversal(envelope: Envelope, *, noun: str, detail: str = "normal") 
 
         # Handle absence diagnosis (PR-ABS-4)
         if envelope.absence is not None:
-            verdict = envelope.absence.verdict
-            if verdict == "correct_empty":
-                # Same text as is_external_entrypoint case
+            absence = envelope.absence
+            if absence.verdict == "correct_empty":
+                # Same text as the is_external_entrypoint case.
                 parts = ["external entrypoint — no in-repo callers"]
-            elif verdict == "not_in_project":
-                lines.append("Verdict: not in project")
-                parts = [f"0 {noun}".rstrip()]
-            elif verdict == "external_dependency":
-                lines.append("Verdict: external dependency")
-                parts = [f"0 {noun}".rstrip()]
-            elif verdict == "refine_query":
-                lines.append("Verdict: refine your query")
-                parts = [f"0 {noun}".rstrip()]
             else:
+                vline = _verdict_line(absence)
+                if vline:
+                    lines.append(vline)
                 parts = [f"0 {noun}".rstrip()]
         elif envelope.is_external_entrypoint:
             parts = ["external entrypoint — no in-repo callers"]

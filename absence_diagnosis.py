@@ -335,11 +335,15 @@ def _did_you_mean(
 def _threshold_verdict(
     best_sim: float, cfg: Any, *, identifier: bool,
 ) -> tuple[str, str, AbsenceProof | None]:
-    """Conservative two-band threshold policy.
+    """Conservative threshold policy with a single deciding band.
 
-    Returns (verdict, cause, proof). Middle band defaults to ``refine_query``;
-    ``not_in_project`` only when best similarity < ``absence_absent_floor`` AND
-    the query is identifier-shaped.
+    Returns (verdict, cause, proof). ``not_in_project`` only when best
+    similarity < ``absence_absent_floor`` AND the query is identifier-shaped;
+    everything else (a close hit OR the middle band) → ``refine_query``, so a
+    real symbol is never falsely declared absent. ``absence_close_threshold``
+    is NOT a decider on this path (it decides the *find* path's "close hit
+    excluded by filter/scope" branch at the ``best_sim >= close`` check) — it
+    is recorded in ``proof.thresholds_applied`` for transparency only.
     """
     close = float(getattr(cfg, "absence_close_threshold", 0.85))
     floor = float(getattr(cfg, "absence_absent_floor", 0.40))
