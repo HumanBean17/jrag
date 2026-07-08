@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,10 @@ __all__ = [
 ]
 
 VOCAB_INDEX_FILENAME = "vocab_index.json"
+
+# Sidecar schema version. Bump when the on-disk JSON shape changes; load() rejects
+# a mismatch as stale (→ rebuild) so an old-format sidecar is never misread.
+FORMAT_VERSION = 1
 
 
 class VocabIndexStale(Exception):
@@ -148,7 +153,7 @@ class VocabularyIndex:
         import time
 
         data = {
-            "format_version": 1,
+            "format_version": FORMAT_VERSION,
             "ontology_version": ontology_version,
             "built_at": int(time.time()),
             "symbol_count": self.symbol_count,
@@ -168,12 +173,20 @@ class VocabularyIndex:
                 for r in self.records
             ],
             "ngrams": self.ngram_index,
-            "name_index": self._name_index,
+            # _name_index is intentionally NOT persisted: it is derivable from
+            # records and rebuilt in __init__ on load (single source of truth,
+            # no sidecar bloat).
         }
 
         path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w") as f:
-            json.dump(data, f)
+        # Atomic write — dump to a temp sibling, then os.replace onto the target.
+        # A crash mid-write leaves either the previous complete file or the new
+        # complete file, never a truncated/corrupt sidecar (readers see one or
+        # the other atomically; os.replace is atomic on the same filesystem).
+        tmp_path = path.with_name(path.name + ".tmp")
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        os.replace(tmp_path, path)
 
         log.debug(f"VocabularyIndex saved to {path} ({self.symbol_count} symbols)")
 
@@ -188,14 +201,22 @@ class VocabularyIndex:
             VocabularyIndex
 
         Raises:
-            VocabIndexStale: If sidecar ontology_version doesn't match expected
+            VocabIndexStale: If sidecar format_version or ontology_version
+                doesn't match expected
         """
         from ast_java import ONTOLOGY_VERSION
 
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
 
-        # Check ontology version
+        # Check format version (sidecar JSON schema) first.
+        if data.get("format_version") != FORMAT_VERSION:
+            raise VocabIndexStale(
+                f"Vocab index format_version {data.get('format_version')} "
+                f"does not match expected {FORMAT_VERSION}"
+            )
+
+        # Check ontology version (graph schema the index was built against).
         if data.get("ontology_version") != ONTOLOGY_VERSION:
             raise VocabIndexStale(
                 f"Vocab index ontology version {data.get('ontology_version')} "
@@ -217,11 +238,11 @@ class VocabularyIndex:
             for r in data["records"]
         ]
 
+        # _name_index is rebuilt from records in __init__ (not persisted).
         return cls(
             records=records,
             ngram_index=data["ngrams"],
             q=data["q"],
-            _name_index=data.get("name_index"),
         )
 
     def lookup(self, name: str, *, limit: int) -> list[SymbolRecord]:
@@ -349,9 +370,10 @@ def get_vocabulary_index(graph: Any, cfg: Any) -> VocabularyIndex:
         _vocab_cache[db_path] = index
         log.debug(f"Loaded vocabulary index from {sidecar_path}")
         return index
-    except (VocabIndexStale, FileNotFoundError, Exception) as e:
-        # Stale, missing, or corrupt - rebuild from graph
-        log.debug(f"Vocab index missing/stale ({e}), rebuilding from graph")
+    except Exception as e:
+        # Stale (VocabIndexStale), missing (FileNotFoundError), or corrupt
+        # (JSONDecodeError/KeyError) — all subsumed by Exception; rebuild.
+        log.debug(f"Vocab index missing/stale/corrupt ({e}), rebuilding from graph")
 
         # Build from graph
         index = VocabularyIndex.build(graph, q=cfg.absence_ngram_q)

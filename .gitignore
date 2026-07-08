@@ -51,6 +51,9 @@ lancedb_data/
 cocoindex_java_lance.db/
 *.kuzu
 *.kuzu.wal
+# Generated vocabulary-index sidecar (absence diagnosis; rebuilt on demand)
+vocab_index.json
+vocab_index.json.tmp
 
 # Local env files
 .env
