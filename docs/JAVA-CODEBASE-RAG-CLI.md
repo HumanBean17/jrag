@@ -392,6 +392,6 @@ jrag search "service" --limit 20 --offset 20
 - `--role ROLE` — Filter by role (e.g., `CONTROLLER`, `SERVICE`).
 - `--framework FRAMEWORK` — Filter by framework (e.g., `spring_mvc`, `webflux`).
 - `--exclude-generated` — Exclude generated sources from results (auto-detected by `@Generated` annotations and generator header banners).
-- `--generated-only` — Show only generated sources (mutually exclusive with `--exclude-generated`).
+- `--generated-only` — Show only generated sources.
 
 **Breaking change (PR-SEARCH-2):** By default, `jrag search` now returns one row per `primary_type_fqn` (symbol/type) to prevent a single type from flooding the page. The `--chunks` flag restores the previous chunk-level output. When deduped, each hit shows a `chunks=N` field indicating how many chunks were collapsed into that hit.

@@ -136,7 +136,7 @@ For **`find`**, `filter` is required — `{}` means no predicates (all nodes of 
 | Keys | Applies to |
 | ---- | ---------- |
 | `microservice`, `module` | All kinds |
-| `role`, `exclude_roles`, `annotation`, `capability`, `fqn_contains`, `symbol_kind`, `symbol_kinds`, `generated`, `exclude_generated` | **symbol** |
+| `role`, `exclude_roles`, `annotation`, `capability`, `fqn_contains`, `symbol_kind`, `symbol_kinds`, `generated_only`, `exclude_generated` | **symbol** |
 | `http_method`, `path_contains`, `framework` | **route** |
 | `source_layer`, `client_kind`, `target_service`, `target_path_contains`, `http_method` | **client** |
 | `source_layer`, `producer_kind`, `topic_contains` | **producer** |
@@ -156,7 +156,7 @@ For **`find`**, `filter` is required — `{}` means no predicates (all nodes of 
 
 **Equal-treatment default:** Generated sources are indexed and returned **exactly** like hand-written code by default — they are **not** ranked down and **not** excluded from graph traversal. The existing role-aware ranking already down-ranks non-actionable roles (DTOs/mappers), which covers most generated code.
 
-**Filtering:** Use `filter={"generated": false}` on the MCP `NodeFilter` to exclude generated sources when you only want hand-written code. Use `filter={"generated": true}` to show only generated sources. On the CLI, use `--exclude-generated` or `--generated-only` flags.
+**Filtering:** Use `filter={"exclude_generated": true}` on the MCP `NodeFilter` to exclude generated sources when you only want hand-written code. Use `filter={"generated_only": true}` to show only generated sources. On the CLI, use `--exclude-generated` or `--generated-only` flags.
 
 ### Identifier resolution (`resolve`)
 
