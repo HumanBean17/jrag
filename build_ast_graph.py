@@ -3804,7 +3804,7 @@ def incremental_rebuild(
     Returns IncrementalResult with statistics about the rebuild.
     Falls back to full rebuild if:
     - No previous graph exists
-    - Ontology version < 17 (missing source_file on edges)
+    - Ontology version < ONTOLOGY_VERSION (stale schema; rebuild for current columns)
     - Crash marker exists (previous incremental run failed)
     - Dependent expansion exceeds expansion_cap
     """
@@ -3842,9 +3842,9 @@ def incremental_rebuild(
         if meta_result.has_next():
             row = meta_result.get_next()
             version = row[0] if row else 0
-            if version < 17:
+            if version < ONTOLOGY_VERSION:
                 if verbose:
-                    _verbose_stderr_line(f"[increment] ontology version {version} < 17; falling back to full rebuild")
+                    _verbose_stderr_line(f"[increment] ontology version {version} < {ONTOLOGY_VERSION}; falling back to full rebuild")
                 conn.close()
                 db.close()
                 del conn, db
