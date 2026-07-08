@@ -363,6 +363,17 @@ class ResolvedOperatorConfig:
     embedding_model_source: SettingSource
     embedding_device_source: SettingSource
     hints_enabled_source: SettingSource
+    # Absence diagnosis config knobs (PR-ABS-0)
+    absence_close_threshold: float
+    absence_absent_floor: float
+    absence_candidate_count: int
+    absence_ngram_q: int
+    absence_diag_enabled: bool
+    absence_close_threshold_source: SettingSource
+    absence_absent_floor_source: SettingSource
+    absence_candidate_count_source: SettingSource
+    absence_ngram_q_source: SettingSource
+    absence_diag_enabled_source: SettingSource
     # Absolute path of the YAML actually loaded (None when built-in defaults were
     # used with no config file). Recorded into the index dir at index time so a
     # later discovery run from a sibling/cwd can relocate this config.
@@ -380,6 +391,8 @@ class ResolvedOperatorConfig:
         os.environ["SBERT_MODEL"] = self.embedding_model
         if self.embedding_device is not None:
             os.environ["SBERT_DEVICE"] = self.embedding_device
+        # Publish absence diagnosis knobs for subprocess builds (PR-ABS-1)
+        os.environ["JAVA_CODEBASE_RAG_ABSENCE_NGRAM_Q"] = str(self.absence_ngram_q)
 
     def subprocess_env(self, base: dict[str, str] | None = None) -> dict[str, str]:
         out = dict(base or os.environ)
@@ -390,6 +403,8 @@ class ResolvedOperatorConfig:
             out["SBERT_DEVICE"] = self.embedding_device
         else:
             out.pop("SBERT_DEVICE", None)
+        # Publish absence diagnosis knobs for subprocess builds (PR-ABS-1)
+        out["JAVA_CODEBASE_RAG_ABSENCE_NGRAM_Q"] = str(self.absence_ngram_q)
         return out
 
 
@@ -455,6 +470,66 @@ def _pick_bool(
             break
         cur = cur.get(part)
     if isinstance(cur, bool):
+        return cur, "yaml"
+    return default, "default"
+
+
+def _pick_float(
+    *,
+    env_key: str,
+    yaml_dict: dict[str, Any],
+    yaml_path: tuple[str, ...],
+    default: float,
+) -> tuple[float, SettingSource]:
+    """Pick a float setting from env (parsed via float(...)), YAML, or default.
+
+    Precedence: CLI > env > YAML > default. Env values that fail to parse as float
+    fall back to the default (matching the brief's requirement for graceful degradation).
+    """
+    env_raw = os.environ.get(env_key, "").strip()
+    if env_raw:
+        try:
+            return float(env_raw), "env"
+        except ValueError:
+            # Invalid env value falls back to default (per brief)
+            pass
+    cur: Any = yaml_dict
+    for part in yaml_path:
+        if not isinstance(cur, dict) or part not in cur:
+            cur = None
+            break
+        cur = cur.get(part)
+    if isinstance(cur, (int, float)):
+        return float(cur), "yaml"
+    return default, "default"
+
+
+def _pick_int(
+    *,
+    env_key: str,
+    yaml_dict: dict[str, Any],
+    yaml_path: tuple[str, ...],
+    default: int,
+) -> tuple[int, SettingSource]:
+    """Pick an int setting from env (parsed via int(...)), YAML, or default.
+
+    Precedence: CLI > env > YAML > default. Env values that fail to parse as int
+    fall back to the default (matching the brief's requirement for graceful degradation).
+    """
+    env_raw = os.environ.get(env_key, "").strip()
+    if env_raw:
+        try:
+            return int(env_raw), "env"
+        except ValueError:
+            # Invalid env value falls back to default (per brief)
+            pass
+    cur: Any = yaml_dict
+    for part in yaml_path:
+        if not isinstance(cur, dict) or part not in cur:
+            cur = None
+            break
+        cur = cur.get(part)
+    if isinstance(cur, int):
         return cur, "yaml"
     return default, "default"
 
@@ -565,6 +640,37 @@ def resolve_operator_config(
         yaml_path=("hints", "enabled"),
         default=True,
     )
+    # Absence diagnosis config (PR-ABS-0)
+    abs_close, abs_close_src = _pick_float(
+        env_key="JAVA_CODEBASE_RAG_ABSENCE_CLOSE_THRESHOLD",
+        yaml_dict=yaml_dict,
+        yaml_path=("absence", "close_threshold"),
+        default=0.85,
+    )
+    abs_floor, abs_floor_src = _pick_float(
+        env_key="JAVA_CODEBASE_RAG_ABSENCE_ABSENT_FLOOR",
+        yaml_dict=yaml_dict,
+        yaml_path=("absence", "absent_floor"),
+        default=0.40,
+    )
+    abs_cand, abs_cand_src = _pick_int(
+        env_key="JAVA_CODEBASE_RAG_ABSENCE_CANDIDATE_COUNT",
+        yaml_dict=yaml_dict,
+        yaml_path=("absence", "candidate_count"),
+        default=5,
+    )
+    abs_q, abs_q_src = _pick_int(
+        env_key="JAVA_CODEBASE_RAG_ABSENCE_NGRAM_Q",
+        yaml_dict=yaml_dict,
+        yaml_path=("absence", "ngram_q"),
+        default=3,
+    )
+    abs_diag, abs_diag_src = _pick_bool(
+        env_key="JAVA_CODEBASE_RAG_ABSENCE_DIAG_ENABLED",
+        yaml_dict=yaml_dict,
+        yaml_path=("absence", "diag_enabled"),
+        default=True,
+    )
     ku = index_dir / "code_graph.lbug"
     coco = index_dir / "cocoindex.db"
     return ResolvedOperatorConfig(
@@ -579,6 +685,16 @@ def resolve_operator_config(
         embedding_model_source=model_src,
         embedding_device_source=device_src,
         hints_enabled_source=hints_src,
+        absence_close_threshold=abs_close,
+        absence_absent_floor=abs_floor,
+        absence_candidate_count=abs_cand,
+        absence_ngram_q=abs_q,
+        absence_diag_enabled=abs_diag,
+        absence_close_threshold_source=abs_close_src,
+        absence_absent_floor_source=abs_floor_src,
+        absence_candidate_count_source=abs_cand_src,
+        absence_ngram_q_source=abs_q_src,
+        absence_diag_enabled_source=abs_diag_src,
         yaml_config_path=find_yaml_config_file(config_dir),
     )
 

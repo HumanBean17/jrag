@@ -4208,7 +4208,55 @@ def write_ladybug(
         _write_meta(conn, tables, source_root)
         conn.close()
         db.close()
+
+    # Build vocabulary index (best-effort, failure doesn't fail the graph build)
+    _try_build_vocabulary_index(db_path, source_root, verbose)
     _init_hash_tracker(source_root, db_path)
+
+
+def _try_build_vocabulary_index(db_path: Path, source_root: Path, verbose: bool) -> None:
+    """Build and save the vocabulary index as a sidecar (best-effort).
+
+    This is called after write_ladybug() completes. A build failure must not
+    fail the graph build, so this is wrapped in try/except and logged.
+
+    Args:
+        db_path: Path to the LadybugDB database file
+        source_root: Source repository root
+        verbose: Whether to emit verbose progress
+    """
+    try:
+        from absence_vocab import VocabularyIndex, VOCAB_INDEX_FILENAME
+        from ladybug_queries import LadybugGraph
+
+        t0 = time.time()
+        if verbose:
+            _verbose_stderr_line("[vocab] building vocabulary index")
+
+        # Open graph for reading
+        graph = LadybugGraph.get(str(db_path))
+
+        # Read q from env var set by ResolvedOperatorConfig.subprocess_env()
+        raw_q = os.environ.get("JAVA_CODEBASE_RAG_ABSENCE_NGRAM_Q", "3").strip()
+        try:
+            q = int(raw_q) if raw_q else 3
+        except ValueError:
+            q = 3  # Invalid env value falls back to default
+        # Build index with configured q (or default 3)
+        index = VocabularyIndex.build(graph, q=q)
+
+        # Save to sidecar next to the graph db
+        sidecar_path = Path(db_path).parent / VOCAB_INDEX_FILENAME
+        index.save(sidecar_path, ontology_version=ONTOLOGY_VERSION)
+
+        if verbose:
+            _verbose_stderr_line(f"[vocab] index built with {index.symbol_count} symbols in {time.time() - t0:.2f}s")
+
+    except Exception as e:
+        # Log but don't fail - graph build is the primary concern
+        log.warning(f"Vocabulary index build failed (non-critical): {e}")
+        if verbose:
+            _verbose_stderr_line(f"[vocab] build failed (graph still written): {e}")
 
 
 # ---------- CLI ----------

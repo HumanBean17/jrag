@@ -18,6 +18,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from absence_types import AbsenceDiagnosis
 from graph_types import NodeRef
 
 __all__ = [
@@ -118,6 +119,9 @@ class Envelope:
     # zero in-repo callers. Distinguishes the *correct* empty result ("external
     # entrypoint — no in-repo callers") from a bug-looking bare "0 callers".
     is_external_entrypoint: bool = False
+    # Absence diagnosis explaining why a result is empty (PR-ABS-4). Carried
+    # from MCP outputs and rendered in CLI text/JSON. None on ok/ambiguous.
+    absence: AbsenceDiagnosis | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a JSON-ready dict, omitting empty optionals.
@@ -151,6 +155,8 @@ class Envelope:
             out["message"] = self.message
         if self.is_external_entrypoint:
             out["is_external_entrypoint"] = True
+        if self.absence is not None:
+            out["absence"] = self.absence.model_dump()
         return out
 
     def to_json(self) -> str:
@@ -237,6 +243,8 @@ class Envelope:
             out["message"] = self.message
         if self.is_external_entrypoint:
             out["is_external_entrypoint"] = True
+        if self.absence is not None:
+            out["absence"] = self.absence.model_dump()
         return out
 
     @staticmethod
@@ -610,7 +618,7 @@ def resolve_query(
     # the agent-facing CLI).
     if "jrag search" not in raw_msg:
         raw_msg = f"{raw_msg} Use `jrag search <query>` for ranked fuzzy lookup."
-    return None, Envelope(status="not_found", message=raw_msg)
+    return None, Envelope(status="not_found", message=raw_msg, absence=out.absence)
 
 
 # Listing breadcrumbs (root is None): 1–2 template hints pointing at the natural
@@ -1082,4 +1090,5 @@ def project_envelope(envelope: Envelope, detail: str) -> Envelope:
         file_location=envelope.file_location,
         message=envelope.message,
         is_external_entrypoint=envelope.is_external_entrypoint,
+        absence=envelope.absence,
     )

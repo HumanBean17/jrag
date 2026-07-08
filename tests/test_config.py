@@ -703,3 +703,79 @@ class TestConfigSourcePointer:
         assert written == yaml.resolve()
         # Atomic write left no .tmp behind.
         assert not (idx / (CONFIG_SOURCE_FILENAME + ".tmp")).exists()
+
+
+class TestAbsenceConfigKnobs:
+    """Tests for absence diagnosis configuration knobs."""
+
+    def test_absence_fields_have_defaults_when_no_config(self, tmp_path, monkeypatch):
+        """resolve_operator_config returns the 5 absence fields with defaults when no env/YAML is set."""
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_ABSENCE_CLOSE_THRESHOLD", raising=False)
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_ABSENCE_ABSENT_FLOOR", raising=False)
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_ABSENCE_CANDIDATE_COUNT", raising=False)
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_ABSENCE_NGRAM_Q", raising=False)
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_ABSENCE_DIAG_ENABLED", raising=False)
+
+        cfg = resolve_operator_config(source_root=tmp_path)
+
+        assert cfg.absence_close_threshold == 0.85
+        assert cfg.absence_absent_floor == 0.40
+        assert cfg.absence_candidate_count == 5
+        assert cfg.absence_ngram_q == 3
+        assert cfg.absence_diag_enabled is True
+
+    def test_absence_close_threshold_from_env(self, tmp_path, monkeypatch):
+        """Setting JAVA_CODEBASE_RAG_ABSENCE_CLOSE_THRESHOLD=0.9 yields absence_close_threshold == 0.9."""
+        monkeypatch.setenv("JAVA_CODEBASE_RAG_ABSENCE_CLOSE_THRESHOLD", "0.9")
+
+        cfg = resolve_operator_config(source_root=tmp_path)
+
+        assert cfg.absence_close_threshold == 0.9
+
+    def test_absence_close_threshold_invalid_falls_back_to_default(self, tmp_path, monkeypatch):
+        """A non-numeric value falls back to the default (0.85) without raising."""
+        monkeypatch.setenv("JAVA_CODEBASE_RAG_ABSENCE_CLOSE_THRESHOLD", "not-a-number")
+
+        cfg = resolve_operator_config(source_root=tmp_path)
+
+        assert cfg.absence_close_threshold == 0.85
+
+    def test_absence_absent_floor_from_env(self, tmp_path, monkeypatch):
+        """Setting JAVA_CODEBASE_RAG_ABSENCE_ABSENT_FLOOR yields the correct value."""
+        monkeypatch.setenv("JAVA_CODEBASE_RAG_ABSENCE_ABSENT_FLOOR", "0.35")
+
+        cfg = resolve_operator_config(source_root=tmp_path)
+
+        assert cfg.absence_absent_floor == 0.35
+
+    def test_absence_candidate_count_from_env(self, tmp_path, monkeypatch):
+        """Setting JAVA_CODEBASE_RAG_ABSENCE_CANDIDATE_COUNT yields the correct value."""
+        monkeypatch.setenv("JAVA_CODEBASE_RAG_ABSENCE_CANDIDATE_COUNT", "10")
+
+        cfg = resolve_operator_config(source_root=tmp_path)
+
+        assert cfg.absence_candidate_count == 10
+
+    def test_absence_candidate_count_invalid_falls_back_to_default(self, tmp_path, monkeypatch):
+        """A non-integer value falls back to the default (5) without raising."""
+        monkeypatch.setenv("JAVA_CODEBASE_RAG_ABSENCE_CANDIDATE_COUNT", "not-an-int")
+
+        cfg = resolve_operator_config(source_root=tmp_path)
+
+        assert cfg.absence_candidate_count == 5
+
+    def test_absence_ngram_q_from_env(self, tmp_path, monkeypatch):
+        """Setting JAVA_CODEBASE_RAG_ABSENCE_NGRAM_Q yields the correct value."""
+        monkeypatch.setenv("JAVA_CODEBASE_RAG_ABSENCE_NGRAM_Q", "4")
+
+        cfg = resolve_operator_config(source_root=tmp_path)
+
+        assert cfg.absence_ngram_q == 4
+
+    def test_absence_diag_enabled_from_env(self, tmp_path, monkeypatch):
+        """Setting JAVA_CODEBASE_RAG_ABSENCE_DIAG_ENABLED yields the correct value."""
+        monkeypatch.setenv("JAVA_CODEBASE_RAG_ABSENCE_DIAG_ENABLED", "false")
+
+        cfg = resolve_operator_config(source_root=tmp_path)
+
+        assert cfg.absence_diag_enabled is False

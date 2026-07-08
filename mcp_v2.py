@@ -31,6 +31,9 @@ if TYPE_CHECKING:
     # installs ship without torch/lancedb); it is imported lazily in _get_sentence_transformer.
     from sentence_transformers import SentenceTransformer
 
+from absence_types import AbsenceDiagnosis
+from absence_diagnosis import diagnose
+from absence_vocab import get_vocabulary_index
 from graph_types import (
     NodeRef,
     StructuredHint,
@@ -74,6 +77,7 @@ __all__ = [
     "EdgeFilter",
     "StructuredHint",
     "set_hints_enabled",
+    "set_absence_config",
 ]
 
 DeclarationSymbolKind = Literal["class", "interface", "enum", "record", "annotation", "method", "constructor"]
@@ -146,6 +150,35 @@ _METHOD_SYMBOL_KINDS_FOR_OVERRIDE_ROLLUP = frozenset({"method"})
 
 _fail_loud_counts: dict[str, int] = {}
 _fail_loud_lock = threading.Lock()
+
+# Module-level holder for absence diagnosis config (set by server.py)
+_absence_config: Any = None
+
+
+def set_absence_config(cfg: Any) -> None:
+    """Set the global absence diagnosis config for MCP tools.
+
+    Mirrors set_hints_enabled: called from server.py to make cfg reachable
+    in tool functions without threading it through every signature.
+    """
+    global _absence_config
+    _absence_config = cfg
+
+
+def _get_absence_config() -> Any:
+    """Get the absence diagnosis config, with safe fallback.
+
+    Returns the module-level config if set; otherwise falls back to a
+    default config (for direct tool calls in tests without server init).
+    """
+    if _absence_config is not None:
+        return _absence_config
+
+    # Fallback: resolve from cwd for direct test calls
+    from java_codebase_rag.config import resolve_operator_config
+    from pathlib import Path
+
+    return resolve_operator_config(source_root=Path.cwd())
 
 
 def _log_fail_loud(category: str) -> None:
@@ -524,6 +557,7 @@ class SearchOutput(BaseModel):
         default=False,
         description="True when results come from the graph-only lexical (keyword) backend instead of semantic/vector search.",
     )
+    absence: AbsenceDiagnosis | None = None
 
 
 class FindOutput(BaseModel):
@@ -545,6 +579,7 @@ class FindOutput(BaseModel):
     )
     advisories: list[str] = Field(default_factory=list, description="Pure informational text with no tool call suggestion")
     hints_structured: list[StructuredHint] = Field(default_factory=list, description=MCP_HINTS_STRUCTURED_FIELD_DESCRIPTION)
+    absence: AbsenceDiagnosis | None = None
 
 
 class DescribeOutput(BaseModel):
@@ -553,6 +588,7 @@ class DescribeOutput(BaseModel):
     message: str | None = None
     advisories: list[str] = Field(default_factory=list, description="Pure informational text with no tool call suggestion")
     hints_structured: list[StructuredHint] = Field(default_factory=list, description=MCP_HINTS_STRUCTURED_FIELD_DESCRIPTION)
+    absence: AbsenceDiagnosis | None = None
 
 
 class NeighborsOutput(BaseModel):
@@ -571,6 +607,7 @@ class NeighborsOutput(BaseModel):
     )
     advisories: list[str] = Field(default_factory=list, description="Pure informational text with no tool call suggestion")
     hints_structured: list[StructuredHint] = Field(default_factory=list, description=MCP_HINTS_STRUCTURED_FIELD_DESCRIPTION)
+    absence: AbsenceDiagnosis | None = None
 
 
 # Re-exported from resolve_service.py (imported at end of module to avoid circular import)
@@ -988,6 +1025,25 @@ def search_v2(
                 if not _node_matches_filter(row_kind, row, nf):
                     continue
             hits.append(_row_to_search_hit(row, explain=explain))
+
+        # Absence diagnosis for empty results
+        cfg = _get_absence_config()
+        diag: AbsenceDiagnosis | None = None
+        if not hits:
+            g = graph or LadybugGraph.get()
+            vocab = get_vocabulary_index(g, cfg)
+            diag = diagnose(
+                tool="search",
+                query=query,
+                filt=None,
+                filter_kind=None,
+                root_node=None,
+                scope={},
+                vocab=vocab,
+                graph=g,
+                cfg=cfg,
+            )
+
         hint_payload = {
             "success": True,
             "results": [h.model_dump() for h in hits],
@@ -1003,6 +1059,7 @@ def search_v2(
             advisories=advisories + raw_advisories,  # Merge fallback + hints advisories
             hints_structured=_to_structured_hints(raw_struct),
             lexical_mode=lexical_mode,
+            absence=diag,
         )
     except Exception as exc:
         return SearchOutput(success=False, message=str(exc), advisories=[], limit=None, offset=None)
@@ -1074,6 +1131,24 @@ def find_v2(
         rows = rows[offset : offset + limit]
         refs = [_node_ref_from_row(kind, r) for r in rows]
         filter_dump = nf.model_dump(exclude_none=True)
+
+        # Absence diagnosis for empty results
+        cfg = _get_absence_config()
+        diag: AbsenceDiagnosis | None = None
+        if not refs:
+            vocab = get_vocabulary_index(g, cfg)
+            diag = diagnose(
+                tool="find",
+                query=None,
+                filt=filter_dump,
+                filter_kind=kind,
+                root_node=None,
+                scope={},
+                vocab=vocab,
+                graph=g,
+                cfg=cfg,
+            )
+
         hint_payload: dict[str, Any] = {
             "success": True,
             "kind": kind,
@@ -1097,6 +1172,7 @@ def find_v2(
             has_more_results=has_more_results,
             advisories=raw_advisories,
             hints_structured=_to_structured_hints(raw_struct),
+            absence=diag,
         )
     except Exception as exc:
         return FindOutput(success=False, message=str(exc), advisories=[], limit=None, offset=None)
@@ -1133,7 +1209,25 @@ def describe_v2(
                 {"fqn": fqn_val},
             )
             if not rows:
-                return DescribeOutput(success=False, message=f"No Symbol found for fqn='{fqn_val}'")
+                # FQN not found: run diagnosis with query=fqn
+                cfg = _get_absence_config()
+                vocab = get_vocabulary_index(g, cfg)
+                diag = diagnose(
+                    tool="describe",
+                    query=fqn_val,
+                    filt=None,
+                    filter_kind=None,
+                    root_node=None,
+                    scope={},
+                    vocab=vocab,
+                    graph=g,
+                    cfg=cfg,
+                )
+                return DescribeOutput(
+                    success=False,
+                    message=f"No Symbol found for fqn='{fqn_val}'",
+                    absence=diag,
+                )
             node_id = str(rows[0]["id"] or "")
             if len(rows) > 1:
                 hint_message = (
@@ -1146,7 +1240,26 @@ def describe_v2(
             return DescribeOutput(success=False, message=_DESCRIBE_UCS_ID_MESSAGE, advisories=[])
         row = _load_node_record(g, node_id, kind)
         if row is None:
-            return DescribeOutput(success=False, message=f"No node found for `{node_id}`", advisories=[])
+            # Node ID not found: run diagnosis with query=None (minimal refine)
+            cfg = _get_absence_config()
+            vocab = get_vocabulary_index(g, cfg)
+            diag = diagnose(
+                tool="describe",
+                query=None,
+                filt=None,
+                filter_kind=None,
+                root_node=None,
+                scope={},
+                vocab=vocab,
+                graph=g,
+                cfg=cfg,
+            )
+            return DescribeOutput(
+                success=False,
+                message=f"No node found for `{node_id}`",
+                advisories=[],
+                absence=diag,
+            )
         ref = _node_ref_from_row(kind, row)
         edge_summary = _edge_summary_for_node(g, node_id, kind=kind, row=row)
         data = dict(row)
@@ -1657,6 +1770,26 @@ def neighbors_v2(
         first_origin = origins[0]
         origin_kind = _resolve_node_kind(g, first_origin)
         subject_record = _load_node_record(g, first_origin, origin_kind)
+
+        # Absence diagnosis for empty results
+        cfg = _get_absence_config()
+        diag: AbsenceDiagnosis | None = None
+        if not sliced:
+            # Build root_node from first_origin + subject_record
+            root_node = _node_ref_from_row(origin_kind, subject_record) if subject_record else None
+            vocab = get_vocabulary_index(g, cfg)
+            diag = diagnose(
+                tool="neighbors",
+                query=None,
+                filt=None,
+                filter_kind=None,
+                root_node=root_node,
+                scope={},
+                vocab=vocab,
+                graph=g,
+                cfg=cfg,
+            )
+
         neigh_payload = {
             "success": True,
             "results": [e.model_dump(exclude_none=True) for e in sliced],
@@ -1682,6 +1815,7 @@ def neighbors_v2(
             has_more_results=neighbors_has_more,
             advisories=raw_advisories,
             hints_structured=_to_structured_hints(raw_struct),
+            absence=diag,
         )
     except ValidationError:
         raise

@@ -1163,6 +1163,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     search.set_defaults(handler=_cmd_search, auto_scope=True)
 
+    # ---- vocab-index subparser (PR-ABS-1) ----
+    vocab_index = subparsers.add_parser(
+        "vocab-index",
+        help="Rebuild the vocabulary index (absence diagnosis).",
+        parents=[_core_parser()],
+        description=(
+            "Rebuild the vocabulary index sidecar from the current Ladybug graph. "
+            "The index is a search-optimized projection of Symbol nodes used for "
+            "did-you-mean suggestions and external membership checks in absence "
+            "diagnosis. Printed on success: symbol count and sidecar path."
+        ),
+    )
+    vocab_index.set_defaults(handler=_cmd_vocab_index, detail="full")
+
     return parser
 
 
@@ -1215,6 +1229,40 @@ def _load_graph(cfg):  # type: ignore[no-untyped-def]
         return LadybugGraph.get(ladybug_path)
     except RuntimeError as exc:
         raise _IndexStale(str(exc)) from exc
+
+
+def _cmd_vocab_index(args: argparse.Namespace) -> int:
+    """Rebuild the vocabulary index sidecar from the Ladybug graph."""
+    from ast_java import ONTOLOGY_VERSION
+    from absence_vocab import VocabularyIndex, VOCAB_INDEX_FILENAME
+
+    cfg = _resolve_cfg(args)
+    try:
+        graph = _load_graph(cfg)
+    except (_IndexNotFound, _IndexStale) as exc:
+        print(f"[error] {exc}", file=sys.stderr)
+        return 2
+
+    # Build vocabulary index
+    try:
+        index = VocabularyIndex.build(graph, q=cfg.absence_ngram_q)
+    except Exception as e:
+        print(f"[error] Vocabulary index build failed: {e}", file=sys.stderr)
+        return 1
+
+    # Save to sidecar
+    sidecar_path = cfg.ladybug_path.parent / VOCAB_INDEX_FILENAME
+    try:
+        index.save(sidecar_path, ontology_version=ONTOLOGY_VERSION)
+    except Exception as e:
+        print(f"[error] Failed to save vocabulary index: {e}", file=sys.stderr)
+        return 1
+
+    # Print success message (simple format for admin command)
+    print(f"Vocabulary index rebuilt successfully:")
+    print(f"  Symbol count: {index.symbol_count}")
+    print(f"  Sidecar path: {sidecar_path}")
+    return 0
 
 
 def _cmd_status(args: argparse.Namespace) -> int:
