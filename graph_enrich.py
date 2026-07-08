@@ -19,6 +19,7 @@ Two location concepts are tracked per file:
 from __future__ import annotations
 
 import hashlib
+import re
 import sys
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
@@ -256,12 +257,12 @@ def load_generated_detection(project_root_str: str | None) -> GeneratedDetection
                     exclude_fqns=valid
                 )
             else:
-                import sys
                 print("[warn] generated_detection.exclude_fqns: "
                       "must be a list; skipping", file=sys.stderr)
 
         return result
 
+    # No config file found → return empty config
     return GeneratedDetectionConfig()
 
 
@@ -1722,7 +1723,16 @@ def _infer_family_from_annotation(annotation: AnnotationRef) -> str | None:
 
     Returns lowercased family slug or None if no match.
     """
-    # Check annotation FQN first (direct marker)
+    # Check value/comments arguments for generator identifiers FIRST
+    # (handles javax.annotation.processing.Generated(value="org.mapstruct.ap.MappingProcessor"))
+    value = annotation.arguments.get("value", "")
+    comments = annotation.arguments.get("comments", "")
+
+    for pattern, family in _GENERATED_VALUE_PATTERNS.items():
+        if re.search(pattern, value) or re.search(pattern, comments):
+            return family
+
+    # Check annotation FQN for families identifiable by FQN itself
     if annotation.qualified in _GENERATED_ANNOTATION_FQNS:
         # Extract family from qualified name if possible
         if "lombok.Generated" in annotation.qualified:
@@ -1732,31 +1742,17 @@ def _infer_family_from_annotation(annotation: AnnotationRef) -> str | None:
         # Generic javax/jakarta or JavaPoet -> unknown family
         return None
 
-    # Check value/comments arguments for generator identifiers
-    value = annotation.arguments.get("value", "")
-    comments = annotation.arguments.get("comments", "")
-
-    for pattern, family in _GENERATED_VALUE_PATTERNS.items():
-        import re
-        if re.search(pattern, value) or re.search(pattern, comments):
-            return family
-
     return None
 
 
-def _check_header_banners(source: bytes) -> str | None:
+def _check_header_banners(header_text: str) -> str | None:
     """Check header (first 4KB) for generator banners.
+
+    Args:
+        header_text: Decoded header text (first 4KB of source file).
 
     Returns family slug if matched, None otherwise.
     """
-    HEADER_PREFIX_SIZE = 4096  # First 4KB should capture any banner
-    header_bytes = source[:HEADER_PREFIX_SIZE]
-    try:
-        header_text = header_bytes.decode("utf-8", errors="ignore")
-    except Exception:
-        return None
-
-    import re
     for pattern, family in _GENERATED_HEADER_PATTERNS.items():
         if re.search(pattern, header_text, re.IGNORECASE):
             return family
@@ -1792,6 +1788,10 @@ def classify_java_file(
             str(project_root) if project_root is not None else None
         )
 
+    # Decode header once for banner detection (first 4KB)
+    HEADER_PREFIX_SIZE = 4096
+    header_prefix = source[:HEADER_PREFIX_SIZE].decode("utf-8", errors="ignore")
+
     # Collect all type FQNs for config-based checks
     all_type_fqns = {t.fqn for t in ast.all_types}
 
@@ -1804,7 +1804,6 @@ def classify_java_file(
         return True, None
 
     # Priority 3: annotation-based detection
-    import re
     for typ in ast.all_types:
         for ann in typ.annotations:
             # Check simple name "Generated" first
@@ -1821,12 +1820,11 @@ def classify_java_file(
                     return True, None
 
     # Priority 4: header-banner detection
-    family = _check_header_banners(source)
+    family = _check_header_banners(header_prefix)
     if family is not None:
         return True, family
 
     # Check configured header patterns
-    header_prefix = source[:4096].decode("utf-8", errors="ignore")
     for pattern in config.header_patterns:
         if re.search(pattern, header_prefix, re.IGNORECASE):
             return True, None

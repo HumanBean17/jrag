@@ -98,7 +98,7 @@ def lancedb_with_generated_index(tmp_path):
     return str(index_dir)
 
 
-def test_mcp_nodefilter_accepts_generated_flags(ladybug_graph) -> None:
+def test_mcp_nodefilter_accepts_generated_flags(ladybug_graph_generated_smoke) -> None:
     """NodeFilter should accept exclude_generated and generated_only flags."""
     # This would fail before implementation due to extra="forbid"
     filter1 = NodeFilter(exclude_generated=True)
@@ -111,7 +111,7 @@ def test_mcp_nodefilter_accepts_generated_flags(ladybug_graph) -> None:
     assert filter3.generated_only is False
 
 
-def test_mcp_find_exclude_generated_excludes_generated_nodes(ladybug_graph) -> None:
+def test_mcp_find_exclude_generated_excludes_generated_nodes(ladybug_graph_generated_smoke) -> None:
     """find(symbol, filter=NodeFilter(exclude_generated=True)) → generated NodeRef excluded.
 
     This tests the Cypher path via _symbol_where_from_filter.
@@ -119,7 +119,7 @@ def test_mcp_find_exclude_generated_excludes_generated_nodes(ladybug_graph) -> N
     out = find_v2(
         "symbol",
         NodeFilter(exclude_generated=True),
-        graph=ladybug_graph,
+        graph=ladybug_graph_generated_smoke,
         limit=100,
     )
     assert out.success is True
@@ -129,7 +129,7 @@ def test_mcp_find_exclude_generated_excludes_generated_nodes(ladybug_graph) -> N
             assert not r.generated, f"Expected only hand-written symbols, but found generated: {r}"
 
 
-def test_mcp_find_generated_only_returns_only_generated_nodes(ladybug_graph) -> None:
+def test_mcp_find_generated_only_returns_only_generated_nodes(ladybug_graph_generated_smoke) -> None:
     """find(symbol, filter=NodeFilter(generated_only=True)) → only generated.
 
     This tests the post-filter path via _node_matches_filter.
@@ -137,7 +137,7 @@ def test_mcp_find_generated_only_returns_only_generated_nodes(ladybug_graph) -> 
     out = find_v2(
         "symbol",
         NodeFilter(generated_only=True),
-        graph=ladybug_graph,
+        graph=ladybug_graph_generated_smoke,
         limit=100,
     )
     assert out.success is True
@@ -147,17 +147,22 @@ def test_mcp_find_generated_only_returns_only_generated_nodes(ladybug_graph) -> 
             assert r.generated, f"Expected only generated symbols, but found hand-written: {r}"
 
 
-def test_mcp_find_default_returns_both_types(ladybug_graph) -> None:
+def test_mcp_find_default_returns_both_types(ladybug_graph_generated_smoke) -> None:
     """find(symbol, filter=NodeFilter()) → both generated and hand-written returned (default)."""
     out = find_v2(
         "symbol",
         NodeFilter(),  # No flags set (default behavior)
-        graph=ladybug_graph,
+        graph=ladybug_graph_generated_smoke,
         limit=100,
     )
     assert out.success is True
-    # Should have results (we don't assert both types exist since the test data may vary)
+    # Should have results from both generated and hand-written types
     assert len(out.results) > 0, "Expected some results with default filter"
+    # Verify we have both types
+    has_generated = any(hasattr(r, 'generated') and r.generated for r in out.results)
+    has_handwritten = any(hasattr(r, 'generated') and not r.generated for r in out.results)
+    assert has_generated, "Expected at least one generated symbol in default results"
+    assert has_handwritten, "Expected at least one hand-written symbol in default results"
 
 
 def test_run_search_exclude_generated_removes_generated_sources(lancedb_with_generated_index) -> None:

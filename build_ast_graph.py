@@ -468,7 +468,7 @@ class GraphTables:
     # Populated in _write_nodes (same overrides + meta_chain as Symbol.role).
     type_role_by_node_id: dict[str, str] = field(default_factory=dict)
     # Populated in pass 1 (classify_java_file) and _load_existing_types for incremental rebuilds.
-    type_generated_by_node_id: dict[str, tuple[bool, str]] = field(default_factory=dict)
+    type_generated_by_node_id: dict[str, tuple[bool, str | None]] = field(default_factory=dict)
 
 
 @dataclass
@@ -636,7 +636,7 @@ def _load_existing_types(conn: ladybug.Connection, tables: GraphTables, exclude_
         if role:
             tables.type_role_by_node_id[node_id] = role
         # Seed the persisted generated/generated_by so stubs retain their values
-        tables.type_generated_by_node_id[node_id] = (generated if generated else False, generated_by or "")
+        tables.type_generated_by_node_id[node_id] = (generated if generated else False, generated_by)
 
 
 def _load_existing_members(conn: ladybug.Connection, tables: GraphTables, exclude_files: set[str] | None = None) -> None:
@@ -1093,7 +1093,7 @@ def pass1_parse(
             for t in ast.all_types:
                 if t.fqn in tables.types:
                     node_id = tables.types[t.fqn].node_id
-                    tables.type_generated_by_node_id[node_id] = (file_generated, file_generated_by or "")
+                    tables.type_generated_by_node_id[node_id] = (file_generated, file_generated_by)
 
     if verbose:
         elapsed = time.time() - t0
@@ -3109,7 +3109,7 @@ def _node_row(**kwargs) -> dict:
         "start_byte": 0, "end_byte": 0,
         "modifiers": [], "annotations": [], "capabilities": [],
         "role": "OTHER", "signature": "", "parent_id": "", "resolved": True,
-        "generated": False, "generated_by": "",
+        "generated": False, "generated_by": None,
     }
     base.update(kwargs)
     return base
@@ -3265,7 +3265,7 @@ def _write_nodes_impl(
             meta_chain=mch,
         )
         # Read generated/generated_by from pass-1 classification or stub persistence
-        generated, generated_by = tables.type_generated_by_node_id.get(entry.node_id, (False, ""))
+        generated, generated_by = tables.type_generated_by_node_id.get(entry.node_id, (False, None))
 
         if entry.loaded_from_db:
             stub_ids.add(entry.node_id)

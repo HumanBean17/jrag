@@ -82,7 +82,7 @@ def test_generated_type_has_generated_fields(
     assert manual_result.has_next(), "ManualUser type should exist in graph"
     manual_generated, manual_generated_by = manual_result.get_next()
     assert manual_generated is False, f"ManualUser should have generated=False, got {manual_generated}"
-    assert manual_generated_by == "" or manual_generated_by is None, f"ManualUser should have empty generated_by, got {manual_generated_by}"
+    assert manual_generated_by is None, f"ManualUser should have generated_by=None, got {manual_generated_by}"
 
 
 def test_incremental_rebuild_preserves_generated_fields(
@@ -196,8 +196,8 @@ def test_schema_has_generated_columns(
     conn = _connect(db_path)
     try:
         result = conn.execute("MATCH (n:Symbol) RETURN n.generated, n.generated_by LIMIT 1;")
-        # If we get here, columns exist
-        assert result.has_next() or not result.has_next()  # Either way, query succeeded
+        # If we get here without exception, columns exist (query succeeded)
+        # The try/except is the real check - no assertion needed
     except RuntimeError as e:
         if "Cannot find property" in str(e):
             pytest.fail(f"Schema missing generated columns: {e}")

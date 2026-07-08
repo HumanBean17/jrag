@@ -235,6 +235,24 @@ def ladybug_db_path_http_caller_smoke(tmp_path_factory) -> Path:
 
 
 @pytest.fixture(scope="session")
+def ladybug_db_path_generated_smoke(tmp_path_factory) -> Path:
+    from _builders import build_ladybug_to
+
+    root = TESTS_DIR / "fixtures" / "generated_samples"
+    assert root.is_dir(), root
+    db_path = _session_db_path(tmp_path_factory, "generated_smoke")
+    return build_ladybug_to(root, db_path, max_pass=4)
+
+
+@pytest.fixture(scope="session")
+def ladybug_graph_generated_smoke(ladybug_db_path_generated_smoke: Path):
+    """Read-only ``LadybugGraph`` for ``generated_samples`` (one generated + one hand-written type)."""
+    from ladybug_queries import LadybugGraph
+
+    return LadybugGraph(str(ladybug_db_path_generated_smoke))
+
+
+@pytest.fixture(scope="session")
 def graph_tables_cross_service_smoke() -> "GraphTables":
     """In-memory tables for ``tests/fixtures/cross_service_smoke`` through pass6 (read-only tests)."""
     from _builders import build_graph_tables_to

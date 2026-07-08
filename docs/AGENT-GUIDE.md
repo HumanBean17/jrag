@@ -150,7 +150,7 @@ For **`find`**, `filter` is required — `{}` means no predicates (all nodes of 
 **Generated sources** (MapStruct mappers, OpenAPI clients, protobuf stubs, etc.) are **auto-detected by content** (not by path). Every MCP search/find/describe/neighbors result row carries two fields:
 
 - `generated` (bool) — `true` if the source file is generated.
-- `generated_by` (string | null) — the generator family slug (`openapi`, `jsonschema2pojo`, `protobuf`, `mapstruct`, `wsimport`, `querydsl`, `jooq`, `immutables`, `autovalue`), or `null` for unrecognized generators.
+- `generated_by` (string | null) — the generator family slug (`openapi`, `jsonschema2pojo`, `protobuf`, `mapstruct`, `wsimport`, `querydsl`, `jooq`, `immutables`, `autovalue`, `lombok`), or `null` for unrecognized generators.
 
 **Detection criteria:** A Java source file is classified as generated when it carries a `@Generated` annotation (javax/jakarta.annotation.processing.Generated and equivalents: lombok.Generated, org.immutables.value.Generated, com.squareup.javapoet.Generated) OR a recognized generator header banner (OpenAPI, jsonschema2pojo, protobuf, MapStruct, wsimport).
 
