@@ -355,6 +355,7 @@ def _populated_nodefilter_fields(nf: NodeFilter) -> set[str]:
         if isinstance(value, list) and not value:
             continue
         if isinstance(value, bool) and not value:
+            # default-False NodeFilter fields (generated_only, exclude_generated) must not count as "populated"
             continue
         populated.add(field_name)
     return populated

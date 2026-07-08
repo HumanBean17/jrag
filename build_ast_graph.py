@@ -636,7 +636,7 @@ def _load_existing_types(conn: ladybug.Connection, tables: GraphTables, exclude_
         if role:
             tables.type_role_by_node_id[node_id] = role
         # Seed the persisted generated/generated_by so stubs retain their values
-        tables.type_generated_by_node_id[node_id] = (generated if generated else False, generated_by)
+        tables.type_generated_by_node_id[node_id] = (bool(generated), generated_by)
 
 
 def _load_existing_members(conn: ladybug.Connection, tables: GraphTables, exclude_files: set[str] | None = None) -> None:

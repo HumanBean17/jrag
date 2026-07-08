@@ -279,6 +279,8 @@ generated_detection:
   # Annotation simple names are also recognized (e.g., '@Generated' matches
   # javax.annotation.processing.Generated, jakarta.annotation.processing.Generated).
   # Use FQNs to avoid collisions with non-generated annotations of the same name.
+  # Note: Simple-name matching means your project's own @com.example.Generated
+  # would be flagged as generated. To exclude a specific FQN, add it to exclude_fqns below.
   annotation_patterns:
     - 'com.example.custom.Generated'
 

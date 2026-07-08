@@ -154,6 +154,8 @@ For **`find`**, `filter` is required — `{}` means no predicates (all nodes of 
 
 **Detection criteria:** A Java source file is classified as generated when it carries a `@Generated` annotation (javax/jakarta.annotation.processing.Generated and equivalents: lombok.Generated, org.immutables.value.Generated, com.squareup.javapoet.Generated) OR a recognized generator header banner (OpenAPI, jsonschema2pojo, protobuf, MapStruct, wsimport).
 
+**Note:** The detector matches `@Generated` by simple annotation name. If your project defines its own unrelated `@Generated` annotation (e.g., `@com.example.Generated`), it will be flagged as generated code. To exclude a specific FQN from detection, add it to `generated_detection.exclude_fqns` in your `.java-codebase-rag.yml` configuration.
+
 **Equal-treatment default:** Generated sources are indexed and returned **exactly** like hand-written code by default — they are **not** ranked down and **not** excluded from graph traversal. The existing role-aware ranking already down-ranks non-actionable roles (DTOs/mappers), which covers most generated code.
 
 **Filtering:** Use `filter={"exclude_generated": true}` on the MCP `NodeFilter` to exclude generated sources when you only want hand-written code. Use `filter={"generated_only": true}` to show only generated sources. On the CLI, use `--exclude-generated` or `--generated-only` flags.

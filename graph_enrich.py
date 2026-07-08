@@ -181,84 +181,41 @@ def load_generated_detection(project_root_str: str | None) -> GeneratedDetection
 
         result = GeneratedDetectionConfig()
 
-        # Parse header_patterns (list of strings)
-        hp = raw.get("header_patterns")
-        if hp is not None:
-            if isinstance(hp, list):
-                valid = [s for s in hp if isinstance(s, str)]
-                if len(valid) != len(hp):
-                    import sys
-                    print("[warn] generated_detection.header_patterns: "
-                          "non-string entries dropped", file=sys.stderr)
-                result = GeneratedDetectionConfig(
-                    header_patterns=valid,
-                    annotation_patterns=result.annotation_patterns,
-                    force_fqns=result.force_fqns,
-                    exclude_fqns=result.exclude_fqns
-                )
-            else:
-                import sys
-                print("[warn] generated_detection.header_patterns: "
-                      "must be a list; skipping", file=sys.stderr)
+        # Spec table: (config_key, field_name, type_converter, is_list_type)
+        # is_list_type: True = keep as list, False = convert to set
+        spec_table = [
+            ("header_patterns", "header_patterns", lambda x: x, True),
+            ("annotation_patterns", "annotation_patterns", lambda x: x, True),
+            ("force_fqns", "force_fqns", set, False),
+            ("exclude_fqns", "exclude_fqns", set, False),
+        ]
 
-        # Parse annotation_patterns (list of strings)
-        ap = raw.get("annotation_patterns")
-        if ap is not None:
-            if isinstance(ap, list):
-                valid = [s for s in ap if isinstance(s, str)]
-                if len(valid) != len(ap):
-                    import sys
-                    print("[warn] generated_detection.annotation_patterns: "
-                          "non-string entries dropped", file=sys.stderr)
-                result = GeneratedDetectionConfig(
-                    header_patterns=result.header_patterns,
-                    annotation_patterns=valid,
-                    force_fqns=result.force_fqns,
-                    exclude_fqns=result.exclude_fqns
-                )
-            else:
-                import sys
-                print("[warn] generated_detection.annotation_patterns: "
-                      "must be a list; skipping", file=sys.stderr)
+        for config_key, field_name, type_conv, is_list_type in spec_table:
+            value = raw.get(config_key)
+            if value is not None:
+                if isinstance(value, list):
+                    if is_list_type:
+                        valid = [s for s in value if isinstance(s, str)]
+                    else:
+                        valid = {s for s in value if isinstance(s, str)}
 
-        # Parse force_fqns (list of strings, convert to set)
-        ff = raw.get("force_fqns")
-        if ff is not None:
-            if isinstance(ff, list):
-                valid = {s for s in ff if isinstance(s, str)}
-                if len(valid) != len(ff):
-                    import sys
-                    print("[warn] generated_detection.force_fqns: "
-                          "non-string entries dropped", file=sys.stderr)
-                result = GeneratedDetectionConfig(
-                    header_patterns=result.header_patterns,
-                    annotation_patterns=result.annotation_patterns,
-                    force_fqns=valid,
-                    exclude_fqns=result.exclude_fqns
-                )
-            else:
-                import sys
-                print("[warn] generated_detection.force_fqns: "
-                      "must be a list; skipping", file=sys.stderr)
+                    if len(valid) != len(value):
+                        import sys
+                        print(f"[warn] generated_detection.{config_key}: "
+                              "non-string entries dropped", file=sys.stderr)
 
-        # Parse exclude_fqns (list of strings, convert to set)
-        ef = raw.get("exclude_fqns")
-        if ef is not None:
-            if isinstance(ef, list):
-                valid = {s for s in ef if isinstance(s, str)}
-                if len(valid) != len(ef):
+                    # Update result with converted value
+                    kwargs = {field_name: type_conv(valid)}
+                    result = GeneratedDetectionConfig(
+                        header_patterns=kwargs.get("header_patterns", result.header_patterns),
+                        annotation_patterns=kwargs.get("annotation_patterns", result.annotation_patterns),
+                        force_fqns=kwargs.get("force_fqns", result.force_fqns),
+                        exclude_fqns=kwargs.get("exclude_fqns", result.exclude_fqns)
+                    )
+                else:
                     import sys
-                    print("[warn] generated_detection.exclude_fqns: "
-                          "non-string entries dropped", file=sys.stderr)
-                result = GeneratedDetectionConfig(
-                    header_patterns=result.header_patterns,
-                    annotation_patterns=result.annotation_patterns,
-                    force_fqns=result.force_fqns,
-                    exclude_fqns=valid
-                )
-            else:
-                print("[warn] generated_detection.exclude_fqns: "
-                      "must be a list; skipping", file=sys.stderr)
+                    print(f"[warn] generated_detection.{config_key}: "
+                          "must be a list; skipping", file=sys.stderr)
 
         return result
 
@@ -1699,22 +1656,22 @@ _GENERATED_ANNOTATION_FQNS = {
 # Header patterns for generators that emit banners (checked against first 4KB).
 # Patterns are compiled as case-insensitive regexes.
 _GENERATED_HEADER_PATTERNS = {
-    r"This file was generated by the OpenAPI Generator": "openapi",
-    r"Generated by the protocol buffer compiler": "protobuf",
-    r"This file was generated by jsonschema2pojo": "jsonschema2pojo",
-    r"generated by wsimport": "wsimport",  # JAX-WS wsimport
-    r"WARNING: DO NOT EDIT.*generated by MapStruct": "mapstruct",
+    re.compile(r"This file was generated by the OpenAPI Generator", re.IGNORECASE): "openapi",
+    re.compile(r"Generated by the protocol buffer compiler", re.IGNORECASE): "protobuf",
+    re.compile(r"This file was generated by jsonschema2pojo", re.IGNORECASE): "jsonschema2pojo",
+    re.compile(r"generated by wsimport", re.IGNORECASE): "wsimport",  # JAX-WS wsimport
+    re.compile(r"WARNING: DO NOT EDIT.*generated by MapStruct", re.IGNORECASE): "mapstruct",
 }
 
 # @Generated(value="...") patterns that identify the generator family.
 # These are matched against annotation arguments["value"] or arguments["comments"].
 _GENERATED_VALUE_PATTERNS = {
-    r"org\.openapitools\.codegen\.": "openapi",
-    r"org\.mapstruct\.ap\.MappingProcessor": "mapstruct",
-    r"com\.google\.auto\.value\.processor\.AutoValueProcessor": "autovalue",
-    r"org\.jooq\.": "jooq",
-    r"com\.querydsl\.": "querydsl",
-    r"org\.immutables\.": "immutables",
+    re.compile(r"org\.openapitools\.codegen\."): "openapi",
+    re.compile(r"org\.mapstruct\.ap\.MappingProcessor"): "mapstruct",
+    re.compile(r"com\.google\.auto\.value\.processor\.AutoValueProcessor"): "autovalue",
+    re.compile(r"org\.jooq\."): "jooq",
+    re.compile(r"com\.querydsl\."): "querydsl",
+    re.compile(r"org\.immutables\."): "immutables",
 }
 
 
@@ -1729,7 +1686,7 @@ def _infer_family_from_annotation(annotation: AnnotationRef) -> str | None:
     comments = annotation.arguments.get("comments", "")
 
     for pattern, family in _GENERATED_VALUE_PATTERNS.items():
-        if re.search(pattern, value) or re.search(pattern, comments):
+        if pattern.search(value) or pattern.search(comments):
             return family
 
     # Check annotation FQN for families identifiable by FQN itself
@@ -1754,7 +1711,7 @@ def _check_header_banners(header_text: str) -> str | None:
     Returns family slug if matched, None otherwise.
     """
     for pattern, family in _GENERATED_HEADER_PATTERNS.items():
-        if re.search(pattern, header_text, re.IGNORECASE):
+        if pattern.search(header_text):
             return family
 
     return None
