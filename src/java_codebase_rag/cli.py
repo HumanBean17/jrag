@@ -36,7 +36,7 @@ from java_codebase_rag.pipeline import (
     run_cocoindex_update,
     run_incremental_graph,
 )
-from java_ontology import VALID_UNRESOLVED_CALL_REASONS
+from java_codebase_rag.graph.java_ontology import VALID_UNRESOLVED_CALL_REASONS
 
 LADYBUG_INCREMENTAL_TRACKING_ISSUE_URL = "https://github.com/HumanBean17/java-codebase-rag/issues/73"
 
@@ -602,7 +602,7 @@ def _cmd_reprocess(args: argparse.Namespace) -> int:
             _emit_reprocess_outcome(payload, selective_tty_mode="graph" if ok else None)
             return _reprocess_exit_code(payload)
 
-        import server  # lazy: pulls sentence_transformers/torch/lancedb/ladybug
+        from java_codebase_rag.mcp import server  # lazy: pulls sentence_transformers/torch/lancedb/ladybug
 
         result = asyncio.run(
             server.run_refresh_pipeline(
@@ -677,7 +677,7 @@ def _cmd_erase(args: argparse.Namespace) -> int:
     # tree_sitter (~54ms), and these filenames are only needed on the erase path.
     # Keeping it out of the top-level import lets `java-codebase-rag --help` (and
     # every other command) stay fast -- see the lazy-import invariant atop this file.
-    from build_ast_graph import BUILDER_OWNED_INDEX_FILES
+    from java_codebase_rag.graph.build_ast_graph import BUILDER_OWNED_INDEX_FILES
     builder_paths = [cfg.ladybug_path.parent / name for name in BUILDER_OWNED_INDEX_FILES]
     operator_paths = [cfg.index_dir / name for name in OPERATOR_OWNED_INDEX_FILES]
     to_describe: list[Path] = [
@@ -768,12 +768,12 @@ def _cmd_erase(args: argparse.Namespace) -> int:
 
 
 def _cmd_meta(args: argparse.Namespace) -> int:
-    import server  # lazy
+    from java_codebase_rag.mcp import server  # lazy
 
     cfg = _resolved_from_ns(args)
     _startup_hints(cfg)
     cfg.apply_to_os_environ()
-    from ladybug_queries import LadybugGraph  # lazy
+    from java_codebase_rag.graph.ladybug_queries import LadybugGraph  # lazy
 
     LadybugGraph._instance = None
     LadybugGraph._instance_path = None
@@ -792,7 +792,7 @@ def _cmd_meta(args: argparse.Namespace) -> int:
 
 
 def _cmd_tables(args: argparse.Namespace) -> int:
-    import server  # lazy
+    from java_codebase_rag.mcp import server  # lazy
 
     cfg = _resolved_from_ns(args)
     _startup_hints(cfg)
@@ -803,8 +803,8 @@ def _cmd_tables(args: argparse.Namespace) -> int:
 
 
 def _cmd_diagnose_ignore(args: argparse.Namespace) -> int:
-    import server  # lazy
-    from path_filtering import LayeredIgnore  # lazy
+    from java_codebase_rag.mcp import server  # lazy
+    from java_codebase_rag.graph.path_filtering import LayeredIgnore  # lazy
 
     cfg = _resolved_from_ns(args)
     _startup_hints(cfg)
@@ -833,7 +833,7 @@ def _cmd_unresolved_calls_list(args: argparse.Namespace) -> int:
     cfg = _resolved_from_ns(args)
     _startup_hints(cfg)
     cfg.apply_to_os_environ()
-    from ladybug_queries import LadybugGraph  # lazy
+    from java_codebase_rag.graph.ladybug_queries import LadybugGraph  # lazy
 
     if not LadybugGraph.exists():
         _emit({"success": False, "message": "LadybugDB graph not found"})
@@ -854,7 +854,7 @@ def _cmd_unresolved_calls_stats(args: argparse.Namespace) -> int:
     cfg = _resolved_from_ns(args)
     _startup_hints(cfg)
     cfg.apply_to_os_environ()
-    from ladybug_queries import LadybugGraph  # lazy
+    from java_codebase_rag.graph.ladybug_queries import LadybugGraph  # lazy
 
     if not LadybugGraph.exists():
         _emit({"success": False, "message": "LadybugDB graph not found"})
@@ -878,8 +878,8 @@ def _cmd_analyze_pr(args: argparse.Namespace) -> int:
     if not diff_text.strip():
         _emit({"success": False, "message": "Diff is empty"})
         return 1
-    import pr_analysis  # lazy
-    from ladybug_queries import LadybugGraph  # lazy
+    from java_codebase_rag.analysis import pr_analysis  # lazy
+    from java_codebase_rag.graph.ladybug_queries import LadybugGraph  # lazy
 
     if not LadybugGraph.exists():
         _emit({"success": False, "message": "LadybugDB graph not found"})

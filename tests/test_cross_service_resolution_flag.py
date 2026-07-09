@@ -10,8 +10,8 @@ import ladybug
 import pytest
 
 from _builders import build_graph_tables_to, build_ladybug_to
-from build_ast_graph import GraphTables
-from graph_enrich import _load_config_cross_service_resolution
+from java_codebase_rag.graph.build_ast_graph import GraphTables
+from java_codebase_rag.graph.graph_enrich import _load_config_cross_service_resolution
 
 _FIXTURE = Path(__file__).resolve().parent / "fixtures" / "cross_service_smoke"
 
@@ -125,7 +125,7 @@ def test_brownfield_only_suppresses_feign_auto_cross_service(tmp_path: Path) -> 
 
 
 def test_meta_reports_cross_service_resolution(tmp_path: Path) -> None:
-    from ladybug_queries import LadybugGraph
+    from java_codebase_rag.graph.ladybug_queries import LadybugGraph
 
     root = tmp_path / "proj"
     _copy_fixture(root)
@@ -149,7 +149,7 @@ def test_meta_reports_cross_service_resolution(tmp_path: Path) -> None:
 
 
 def test_meta_resolution_null_for_old_graphs(tmp_path: Path) -> None:
-    from ladybug_queries import LadybugGraph
+    from java_codebase_rag.graph.ladybug_queries import LadybugGraph
 
     db_path = tmp_path / "legacy.lbug"
     db = ladybug.Database(str(db_path))

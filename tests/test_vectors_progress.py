@@ -162,7 +162,7 @@ def test_cli_reprocess_optimize_phase_progress(
     import contextlib
 
     from java_codebase_rag import cli as cli_mod
-    import server
+    from java_codebase_rag.mcp import server
 
     idx = tmp_path / "idx_optimize_prog"
     idx.mkdir()
@@ -175,7 +175,7 @@ def test_cli_reprocess_optimize_phase_progress(
         if on_progress is not None:
             on_progress(ProgressEvent(kind="optimize", phase=None, pass_=None, done=None, total=None, status="running", elapsed_s=None))
             on_progress(ProgressEvent(kind="optimize", phase=None, pass_=None, done=None, total=None, status="done", elapsed_s=1.2))
-        from server import RefreshIndexOutput
+        from java_codebase_rag.mcp.server import RefreshIndexOutput
 
         return RefreshIndexOutput(success=True, message=None, phases_run=["vectors", "graph"])
 
@@ -212,12 +212,12 @@ def test_spinner_removed_and_emit_vectors_helpers_removed() -> None:
     # And no remaining references anywhere in the production tree.
     repo_root = Path(__file__).resolve().parent.parent
     offenders: list[str] = []
-    for py in (repo_root / "java_codebase_rag").rglob("*.py"):
+    for py in (repo_root / "src" / "java_codebase_rag").rglob("*.py"):
         text = py.read_text(encoding="utf-8")
         # Word-boundary match for the retired Spinner class (not rich's SpinnerColumn).
         if re.search(r"\bSpinner\b", text):
             offenders.append(str(py))
-    server_py = repo_root / "server.py"
+    server_py = repo_root / "src" / "java_codebase_rag" / "mcp" / "server.py"
     if server_py.is_file():
         text = server_py.read_text(encoding="utf-8")
         if re.search(r"\bSpinner\b", text) or "emit_vectors_start" in text or "emit_vectors_finish" in text:
@@ -254,7 +254,7 @@ def _run_cocoindex_update(corpus_root: Path, index_dir: Path) -> subprocess.Comp
     if not cocoindex_bin.is_file():
         pytest.skip(f"cocoindex not installed in venv: {cocoindex_bin}")
     bundle_dir = Path(__file__).resolve().parent.parent
-    flow = (bundle_dir / "java_index_flow_lancedb.py").resolve()
+    flow = (bundle_dir / "src" / "java_codebase_rag" / "index" / "java_index_flow_lancedb.py").resolve()
     start = Path(corpus_root).resolve()
     relp = os.path.relpath(str(flow), start=str(start))
     relp = Path(relp).as_posix()

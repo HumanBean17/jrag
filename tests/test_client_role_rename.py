@@ -8,9 +8,9 @@ from pathlib import Path
 import pytest
 
 from _builders import build_graph_tables_to, build_ladybug_to
-from build_ast_graph import GraphTables
-from graph_enrich import _load_brownfield_overrides, collect_annotation_meta_chain
-from ladybug_queries import LadybugGraph
+from java_codebase_rag.graph.build_ast_graph import GraphTables
+from java_codebase_rag.graph.graph_enrich import _load_brownfield_overrides, collect_annotation_meta_chain
+from java_codebase_rag.graph.ladybug_queries import LadybugGraph
 
 _FIXTURE = Path(__file__).resolve().parent / "fixtures" / "cross_service_smoke"
 

@@ -12,7 +12,7 @@ from typing import Any
 from unidiff import PatchSet
 from unidiff.errors import UnidiffParseError
 
-from ladybug_queries import SymbolHit, find_symbols_in_file_range, _row_to_symbol
+from java_codebase_rag.graph.ladybug_queries import SymbolHit, find_symbols_in_file_range, _row_to_symbol
 
 
 @dataclass

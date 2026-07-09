@@ -41,7 +41,7 @@ from pathlib import Path
 import ladybug
 import pyarrow as pa
 
-from ast_java import (
+from java_codebase_rag.ast.ast_java import (
     ONTOLOGY_VERSION,
     CallSite,
     JavaFileAst,
@@ -52,7 +52,7 @@ from ast_java import (
     lombok_required_args_annotations,
     parse_java,
 )
-from graph_enrich import (
+from java_codebase_rag.graph.graph_enrich import (
     _load_config_cross_service_resolution,
     classify_java_file,
     collect_annotation_meta_chain,
@@ -67,8 +67,8 @@ from graph_enrich import (
     resolve_routes_for_method,
     symbol_id,
 )
-from path_filtering import LayeredIgnore, iter_java_source_files
-from java_ontology import (
+from java_codebase_rag.graph.path_filtering import LayeredIgnore, iter_java_source_files
+from java_codebase_rag.graph.java_ontology import (
     CLIENT_KIND_FEIGN_METHOD,
     CLIENT_KIND_REST_TEMPLATE,
     VALID_CLIENT_KINDS,
@@ -4256,8 +4256,8 @@ def _try_build_vocabulary_index(db_path: Path, source_root: Path, verbose: bool)
         verbose: Whether to emit verbose progress
     """
     try:
-        from absence_vocab import VocabularyIndex, VOCAB_INDEX_FILENAME
-        from ladybug_queries import LadybugGraph
+        from java_codebase_rag.absence.absence_vocab import VocabularyIndex, VOCAB_INDEX_FILENAME
+        from java_codebase_rag.graph.ladybug_queries import LadybugGraph
 
         t0 = time.time()
         if verbose:

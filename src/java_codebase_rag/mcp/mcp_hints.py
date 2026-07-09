@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 from typing import Any, Literal, NamedTuple
 
-from java_ontology import EDGE_SCHEMA, FUZZY_STRATEGY_SET
+from java_codebase_rag.graph.java_ontology import EDGE_SCHEMA, FUZZY_STRATEGY_SET
 
 # Normative schema description (propose §3.1) — imported by ``mcp_v2`` for Field(description=...).
 MCP_HINTS_STRUCTURED_FIELD_DESCRIPTION = (

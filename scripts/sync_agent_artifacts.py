@@ -27,9 +27,9 @@ from pathlib import Path
 # Mapping of source (dev) paths to destination (install_data) paths
 # Only these subtrees are shipped - skills/README.md is explicitly excluded
 SYNC_MAP: list[tuple[Path, Path]] = [
-    (Path("skills/explore-codebase"), Path("java_codebase_rag/install_data/skills/explore-codebase")),
-    (Path("skills/explore-codebase-cli"), Path("java_codebase_rag/install_data/skills/explore-codebase-cli")),
-    (Path("agents"), Path("java_codebase_rag/install_data/agents")),
+    (Path("skills/explore-codebase"), Path("src/java_codebase_rag/install_data/skills/explore-codebase")),
+    (Path("skills/explore-codebase-cli"), Path("src/java_codebase_rag/install_data/skills/explore-codebase-cli")),
+    (Path("agents"), Path("src/java_codebase_rag/install_data/agents")),
 ]
 
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ast_java import parse_java
+from java_codebase_rag.ast.ast_java import parse_java
 
 
 def test_string_value_atoms_renamed_call_sites_still_work() -> None:

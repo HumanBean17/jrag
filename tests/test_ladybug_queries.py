@@ -23,8 +23,8 @@ from pathlib import Path
 import ladybug
 import pytest
 
-from ast_java import ONTOLOGY_VERSION
-from ladybug_queries import LadybugGraph, _is_external_fqn
+from java_codebase_rag.ast.ast_java import ONTOLOGY_VERSION
+from java_codebase_rag.graph.ladybug_queries import LadybugGraph, _is_external_fqn
 
 
 def _names(symbols) -> set[str]:
@@ -523,7 +523,7 @@ def test_find_route_callers_includes_producer_callers(ladybug_db_path_cross_serv
 
 
 def test_find_route_callers_returns_route_caller_client_node(ladybug_db_path_cross_service_smoke: Path) -> None:
-    from ladybug_queries import RouteCaller
+    from java_codebase_rag.graph.ladybug_queries import RouteCaller
 
     g = LadybugGraph(str(ladybug_db_path_cross_service_smoke))
     routes = g.list_routes(limit=50)
@@ -562,7 +562,7 @@ def test_parse_ladybug_json_handles_colon_in_values() -> None:
     word-colon run (e.g. a URL) is not corrupted (issue #359). The prior regex
     matched ``(\\w+):`` anywhere, which turned {url: "https://x"} into junk and
     fell back to {}."""
-    from ladybug_queries import _parse_ladybug_json
+    from java_codebase_rag.graph.ladybug_queries import _parse_ladybug_json
 
     # Standard unquoted keys (LadybugDB style).
     assert _parse_ladybug_json("{packages: 1, files: 2}") == {"packages": 1, "files": 2}

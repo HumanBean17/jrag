@@ -24,7 +24,7 @@ from typing import Any, Literal
 
 import ladybug
 
-from ast_java import ONTOLOGY_VERSION as _ONTOLOGY_VERSION
+from java_codebase_rag.ast.ast_java import ONTOLOGY_VERSION as _ONTOLOGY_VERSION
 
 log = logging.getLogger(__name__)
 

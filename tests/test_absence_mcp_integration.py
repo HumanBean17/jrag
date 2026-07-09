@@ -9,9 +9,9 @@ import importlib.util
 
 import pytest
 
-from mcp_v2 import describe_v2, find_v2, neighbors_v2, search_v2
-from resolve_service import resolve_v2
-from absence_types import AbsenceVerdict
+from java_codebase_rag.mcp.mcp_v2 import describe_v2, find_v2, neighbors_v2, search_v2
+from java_codebase_rag.analysis.resolve_service import resolve_v2
+from java_codebase_rag.absence.absence_types import AbsenceVerdict
 
 
 def _vector_stack_available() -> bool:
@@ -35,7 +35,7 @@ needs_vectors = pytest.mark.skipif(
 def test_search_empty_result_has_absence_diagnosis(ladybug_graph, monkeypatch) -> None:
     """Empty search result should have absence field populated with diagnosis."""
     # Monkeypatch run_search to return empty results
-    monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: [])
+    monkeypatch.setattr("java_codebase_rag.mcp.mcp_v2.run_search", lambda *args, **kwargs: [])
 
     out = search_v2("zzzNoSuchClass123", graph=ladybug_graph)
     assert out.success is True
@@ -52,7 +52,7 @@ def test_search_empty_result_has_absence_diagnosis(ladybug_graph, monkeypatch) -
 @needs_vectors
 def test_search_typo_has_absence_diagnosis(ladybug_graph, monkeypatch) -> None:
     """Search with a typo should have refine_query verdict with closest symbols."""
-    monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: [])
+    monkeypatch.setattr("java_codebase_rag.mcp.mcp_v2.run_search", lambda *args, **kwargs: [])
 
     out = search_v2("ChatServic", graph=ladybug_graph)  # typo: missing 'e'
     assert out.success is True
@@ -66,7 +66,7 @@ def test_search_typo_has_absence_diagnosis(ladybug_graph, monkeypatch) -> None:
 @needs_vectors
 def test_search_external_dependency_has_absence_diagnosis(ladybug_graph, monkeypatch) -> None:
     """Search for an external dependency should have external_dependency verdict."""
-    monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: [])
+    monkeypatch.setattr("java_codebase_rag.mcp.mcp_v2.run_search", lambda *args, **kwargs: [])
 
     out = search_v2("java.util.List", graph=ladybug_graph)
     assert out.success is True
@@ -96,7 +96,7 @@ def test_search_non_empty_result_has_no_absence(ladybug_graph, monkeypatch) -> N
             "end": {"byte_offset": 30},
         },
     ]
-    monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: fake_rows)
+    monkeypatch.setattr("java_codebase_rag.mcp.mcp_v2.run_search", lambda *args, **kwargs: fake_rows)
 
     out = search_v2("ChatService", graph=ladybug_graph)
     assert out.success is True

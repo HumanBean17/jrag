@@ -9,9 +9,9 @@ import time
 from pathlib import Path
 from typing import Literal
 
-import mcp_v2
-import resolve_service
-from index_common import SBERT_MODEL
+from java_codebase_rag.mcp import mcp_v2
+from java_codebase_rag.analysis import resolve_service
+from java_codebase_rag.search.index_common import SBERT_MODEL
 from java_codebase_rag.cli_progress import (
     accumulate_and_relay_subprocess_streams,
 )
@@ -25,13 +25,20 @@ from java_codebase_rag.config import (
     resolved_sbert_model_for_process_env,
     resolve_operator_config,
 )
-from ladybug_queries import LadybugGraph, resolve_ladybug_path
+from java_codebase_rag.graph.ladybug_queries import LadybugGraph, resolve_ladybug_path
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
 # NOTE: search_lancedb.TABLES is imported lazily in list_code_index_tables_payload() — it
 # pulls lancedb/torch and is unavailable on graph-only installs (macOS Intel).
 
 _COCOINDEX_TARGET = "java_index_flow_lancedb.py:JavaCodeIndexLance"
+
+# Package-internal locations of the cocoindex flow and the graph builder, both
+# executed by file path (see java_codebase_rag.pipeline). Derived from this
+# file's location so they resolve under editable and wheel installs alike.
+_PKG_DIR = Path(__file__).resolve().parent.parent
+_FLOW_FILE = _PKG_DIR / "index" / "java_index_flow_lancedb.py"
+_BUILDER_FILE = _PKG_DIR / "graph" / "build_ast_graph.py"
 _INSTRUCTIONS = (
     "Java codebase graph navigator over an indexed Java codebase. "
     "Tools: search (NL/code locate), find (structured NodeFilter), describe (one node + edge_summary: stored edge-label counts and optional composed keys for type Symbols and override-axis virtual keys for method Symbols), "
@@ -114,7 +121,7 @@ class ScopeManager:
         self._log_detection()
 
     def _detect_scope(self) -> str | None:
-        from graph_enrich import detect_microservice_from_path
+        from java_codebase_rag.graph.graph_enrich import detect_microservice_from_path
 
         candidate = detect_microservice_from_path(Path.cwd(), self.source_root)
         if candidate is None:
@@ -300,7 +307,7 @@ def _graph_meta_output() -> GraphMetaOutput:
 
 def list_code_index_tables_payload() -> IndexInfoOutput:
     try:
-        from search_lancedb import TABLES
+        from java_codebase_rag.search.search_lancedb import TABLES
 
         tables = dict(TABLES)
     except ImportError:
@@ -333,7 +340,7 @@ async def _run_graph_phase(
     A missing builder or a spawn failure returns ``started=False`` with the graph
     code carrying the reason (``None`` for missing builder, ``-1`` for spawn error).
     """
-    builder = Path(__file__).resolve().parent / "build_ast_graph.py"
+    builder = _BUILDER_FILE
     if not builder.is_file():
         return None, "", "", False
     try:
@@ -426,20 +433,15 @@ async def run_refresh_pipeline(
             message=f"cocoindex not found next to Python: {cocoindex_bin}",
             phases_run=[],
         )
-    flow_path = root / "java_index_flow_lancedb.py"
-    bundle_dir = Path(__file__).resolve().parent
+    flow_path = _FLOW_FILE
     if not flow_path.is_file():
-        fallback = bundle_dir / "java_index_flow_lancedb.py"
-        if fallback.is_file():
-            flow_path = fallback
-        else:
-            if on_progress is not None:
-                on_progress(ProgressEvent(kind="vectors", phase=None, pass_=None, done=None, total=None, status="failed", elapsed_s=None))
-            return RefreshIndexOutput(
-                success=False,
-                message=f"java_index_flow_lancedb.py not found under {root} nor {bundle_dir}",
-                phases_run=[],
-            )
+        if on_progress is not None:
+            on_progress(ProgressEvent(kind="vectors", phase=None, pass_=None, done=None, total=None, status="failed", elapsed_s=None))
+        return RefreshIndexOutput(
+            success=False,
+            message=f"java_index_flow_lancedb.py not found at {flow_path}",
+            phases_run=[],
+        )
     proc: asyncio.subprocess.Process | None = None
     out_b, err_b = b"", b""
     # DROP the Lance target tables so the update takes the fast INSERT path

@@ -385,7 +385,7 @@ def test_simple_name_derived_from_fqn() -> None:
     A pydantic NodeRef crosses the model_dump boundary as a dict, then
     simple_name extracts the simple name from the FQN.
     """
-    from graph_types import NodeRef
+    from java_codebase_rag.graph.graph_types import NodeRef
 
     ref = NodeRef(id="sym:1", kind="symbol", fqn="com.example.MyClass.handle")
     row = ref.model_dump()

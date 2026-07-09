@@ -31,10 +31,10 @@ if TYPE_CHECKING:
     # installs ship without torch/lancedb); it is imported lazily in _get_sentence_transformer.
     from sentence_transformers import SentenceTransformer
 
-from absence_types import AbsenceDiagnosis
-from absence_diagnosis import diagnose
-from absence_vocab import get_vocabulary_index
-from graph_types import (
+from java_codebase_rag.absence.absence_types import AbsenceDiagnosis
+from java_codebase_rag.absence.absence_diagnosis import diagnose
+from java_codebase_rag.absence.absence_vocab import get_vocabulary_index
+from java_codebase_rag.graph.graph_types import (
     NodeRef,
     StructuredHint,
     _hints_or_skip,
@@ -43,11 +43,11 @@ from graph_types import (
     _to_structured_hints,
     set_hints_enabled,
 )
-from index_common import SBERT_MODEL
+from java_codebase_rag.search.index_common import SBERT_MODEL
 from java_codebase_rag.config import resolved_sbert_model_for_process_env
-from java_ontology import EDGE_SCHEMA
-from ladybug_queries import LadybugGraph, OVERRIDE_AXIS_COMPOSED_EDGE_TYPES
-from mcp_hints import MCP_HINTS_STRUCTURED_FIELD_DESCRIPTION
+from java_codebase_rag.graph.java_ontology import EDGE_SCHEMA
+from java_codebase_rag.graph.ladybug_queries import LadybugGraph, OVERRIDE_AXIS_COMPOSED_EDGE_TYPES
+from java_codebase_rag.mcp.mcp_hints import MCP_HINTS_STRUCTURED_FIELD_DESCRIPTION
 
 # The vector stack (lancedb/torch, reached via search_lancedb) is optional — it is absent on
 # graph-only installs (macOS Intel). Import eagerly when available so ``run_search``/``TABLES``
@@ -55,7 +55,7 @@ from mcp_hints import MCP_HINTS_STRUCTURED_FIELD_DESCRIPTION
 # fall back to sentinels on ImportError so importing this module never fails and ``search_v2``
 # can return a clean "vector search unavailable" envelope instead of crashing.
 try:
-    from search_lancedb import TABLES, run_search
+    from java_codebase_rag.search.search_lancedb import TABLES, run_search
 except ImportError:  # graph-only install: no torch/lancedb
     TABLES = {}
     run_search = None
@@ -924,7 +924,7 @@ def search_v2(
             # try -> success=False. It returns [] for sql/yaml (advisory below) and for
             # empty-but-valid results.
             try:
-                from search_lexical import run_lexical_search
+                from java_codebase_rag.search.search_lexical import run_lexical_search
             except ImportError:  # pragma: no cover - search_lexical has no heavy deps
                 run_lexical_search = None  # type: ignore[assignment]
             if run_lexical_search is None:
@@ -1850,7 +1850,7 @@ def neighbors_v2(
 
 
 # Re-export resolve symbols from resolve_service.py (imported here to avoid circular import)
-from resolve_service import (  # noqa: E402
+from java_codebase_rag.analysis.resolve_service import (  # noqa: E402
     ResolveCandidate,
     ResolveOutput,
     ResolveStatus,

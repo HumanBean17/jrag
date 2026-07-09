@@ -20,7 +20,7 @@ from typing import Iterable
 
 import tree_sitter_java as _ts_java
 
-from brownfield_events import (
+from java_codebase_rag.ast.brownfield_events import (
     emit_brownfield_exclusivity_shadowing,
     emit_brownfield_method_string_literal,
 )
@@ -1617,7 +1617,7 @@ def _parse_codebase_http_client_annotation(
         val, vkind = _annotation_value(pairs["clientKind"], src)
         if val and vkind == "enum":
             kind_val = str(val)
-            from java_ontology import VALID_CLIENT_KINDS  # deferred: java_ontology imports ast_java
+            from java_codebase_rag.graph.java_ontology import VALID_CLIENT_KINDS  # deferred: java_ontology imports ast_java
             if kind_val in VALID_CLIENT_KINDS:
                 client_kind = kind_val
             else:
@@ -1697,7 +1697,7 @@ def _parse_codebase_producer_annotation(
         val, vkind = _annotation_value(kind_node, src)
         if val and vkind == "enum":
             kind_val = str(val)
-            from java_ontology import VALID_PRODUCER_KINDS  # deferred: java_ontology imports ast_java
+            from java_codebase_rag.graph.java_ontology import VALID_PRODUCER_KINDS  # deferred: java_ontology imports ast_java
             if kind_val in VALID_PRODUCER_KINDS:
                 client_kind = kind_val
             else:
@@ -1868,7 +1868,7 @@ def _collect_outgoing_calls(
     file_rel: str,
 ) -> list[OutgoingCallDecl]:
     del project_root
-    from java_ontology import (  # deferred: java_ontology imports ast_java
+    from java_codebase_rag.graph.java_ontology import (  # deferred: java_ontology imports ast_java
         CLIENT_KIND_FEIGN_METHOD,
         CLIENT_KIND_REST_TEMPLATE,
         CLIENT_KIND_WEB_CLIENT,

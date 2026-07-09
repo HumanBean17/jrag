@@ -25,12 +25,12 @@ _BOOT_SCRIPT = textwrap.dedent(
     for _m in {modules!r}:
         sys.modules[_m] = None  # force ImportError on import
 
-    import server  # must not pull the vector stack at module load
+    from java_codebase_rag.mcp import server  # must not pull the vector stack at module load
     srv = server.create_mcp_server()  # registers tools + runs ScopeManager setup
 
     loaded = [m for m in {vector!r} if sys.modules.get(m) is not None]
     tools = sorted(t.name for t in asyncio.run(srv.list_tools()))
-    from mcp_v2 import search_v2
+    from java_codebase_rag.mcp.mcp_v2 import search_v2
     out = search_v2(query="x")
     print("TOOLS:" + ",".join(tools))
     print("LOADED_AT_BOOT:" + (",".join(loaded) or "none"))
@@ -123,7 +123,7 @@ def test_refresh_pipeline_skips_vectors_and_builds_graph_on_graph_only(
     from contextlib import redirect_stderr
     from pathlib import Path
 
-    import server
+    from java_codebase_rag.mcp import server
 
     monkeypatch.setattr(server, "vector_stack_installed", lambda: False)
 

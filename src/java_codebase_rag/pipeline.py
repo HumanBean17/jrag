@@ -29,8 +29,17 @@ VECTORS_SKIPPED_GRAPH_ONLY = (
 )
 
 
-def bundle_dir() -> Path:
-    return Path(__file__).resolve().parent.parent
+# Package-internal locations of the cocoindex flow definition and the graph
+# builder. Both are executed *by file path* — cocoindex loads the flow via a
+# ``file:Class`` target (COCOINDEX_TARGET below) and the builder runs as
+# ``python <path>`` — so we must resolve their paths without importing them
+# (this module deliberately stays free of heavy ML imports at import time).
+# Derived from this file's location so they resolve under both editable and
+# wheel installs.
+_PKG_DIR = Path(__file__).resolve().parent
+_FLOW_DIR = _PKG_DIR / "index"
+_FLOW_FILE = _FLOW_DIR / "java_index_flow_lancedb.py"
+_BUILDER_FILE = _PKG_DIR / "graph" / "build_ast_graph.py"
 
 
 def cocoindex_bin() -> Path:
@@ -266,7 +275,7 @@ def _run_cocoindex_update_impl(
             stdout="",
             stderr=f"cocoindex not found: {exe}",
         )
-    bd = bundle_dir()
+    bd = _FLOW_DIR
     flow = bd / "java_index_flow_lancedb.py"
     if not flow.is_file():
         if on_progress is not None:
@@ -343,7 +352,7 @@ def run_cocoindex_drop(env: dict[str, str], *, quiet: bool) -> subprocess.Comple
             stdout="",
             stderr=f"cocoindex not found: {exe}",
         )
-    bd = bundle_dir()
+    bd = _FLOW_DIR
     cmd = [str(exe), "drop", COCOINDEX_TARGET, "-f"]
     if quiet:
         cmd.append("-q")
@@ -366,7 +375,7 @@ def run_build_ast_graph(
     on_progress: Callable[[ProgressEvent], None] | None = None,
     on_progress_console: object | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    builder = bundle_dir() / "build_ast_graph.py"
+    builder = _BUILDER_FILE
     if not builder.is_file():
         return subprocess.CompletedProcess(
             args=[],
@@ -424,7 +433,7 @@ def run_incremental_graph(
     on_progress_console: object | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run incremental graph rebuild by passing --incremental flag to build_ast_graph.py."""
-    builder = bundle_dir() / "build_ast_graph.py"
+    builder = _BUILDER_FILE
     if not builder.is_file():
         return subprocess.CompletedProcess(
             args=[],

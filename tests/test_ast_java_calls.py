@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ast_java import parse_java
+from java_codebase_rag.ast.ast_java import parse_java
 
 _FIXTURE_JAVA = (
     Path(__file__).resolve().parent

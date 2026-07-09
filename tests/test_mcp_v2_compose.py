@@ -7,15 +7,15 @@ from typing import Any
 import pytest
 
 from _builders import build_ladybug_to
-from ladybug_queries import LadybugGraph
-from mcp_v2 import (
+from java_codebase_rag.graph.ladybug_queries import LadybugGraph
+from java_codebase_rag.mcp.mcp_v2 import (
     _NEIGHBOR_EDGE_TYPES_ADAPTER,
     _TYPE_SYMBOL_KINDS_FOR_EDGE_ROLLUP,
     describe_v2,
     neighbors_v2,
     search_v2,
 )
-from server import _graph_meta_output
+from java_codebase_rag.mcp.server import _graph_meta_output
 
 
 def _vector_stack_available() -> bool:
@@ -242,7 +242,7 @@ def test_search_populates_symbol_id_when_chunk_rooted_in_symbol(monkeypatch, lad
             "text": "raw",
         },
     ]
-    monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: rows)
+    monkeypatch.setattr("java_codebase_rag.mcp.mcp_v2.run_search", lambda *args, **kwargs: rows)
     out = search_v2("query", graph=ladybug_graph)
     assert out.success is True
     rooted = [hit for hit in out.results if hit.fqn is not None]
@@ -268,7 +268,7 @@ def test_search_describe_neighbors_chain_end_to_end(ladybug_graph, monkeypatch) 
     assert rows
     row = rows[0]
     monkeypatch.setattr(
-        "mcp_v2.run_search",
+        "java_codebase_rag.mcp.mcp_v2.run_search",
         lambda *args, **kwargs: [
             {
                 "filename": str(row.get("filename") or "x.java"),
@@ -979,7 +979,7 @@ def test_overrides_edge_set_deterministic_double_build(tmp_path: Path) -> None:
 def test_describe_client_edge_summary_includes_http_calls_out(
     ladybug_db_path_cross_service_smoke: Path,
 ) -> None:
-    from ladybug_queries import LadybugGraph
+    from java_codebase_rag.graph.ladybug_queries import LadybugGraph
 
     g = LadybugGraph(str(ladybug_db_path_cross_service_smoke))
     rows = g._rows(  # noqa: SLF001

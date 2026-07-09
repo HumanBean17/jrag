@@ -66,7 +66,7 @@ def test_lance_chunk_generated_columns(
     bundle_dir = Path(__file__).resolve().parent.parent
 
     # Get the flow specifier
-    app_spec = _cocoindex_flow_specifier(bundle_dir, FIXTURE_ROOT)
+    app_spec = _cocoindex_flow_specifier(bundle_dir / "src" / "java_codebase_rag" / "index", FIXTURE_ROOT)
 
     # Locate cocoindex binary
     import sys

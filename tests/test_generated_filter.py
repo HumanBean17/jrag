@@ -10,11 +10,11 @@ from pathlib import Path
 
 import pytest
 
-from mcp_v2 import find_v2, NodeFilter
+from java_codebase_rag.mcp.mcp_v2 import find_v2, NodeFilter
 
 # Skip LanceDB tests if we're in a graph-only environment
 pytest.importorskip("lancedb")
-import search_lancedb
+from java_codebase_rag.search import search_lancedb
 
 
 FIXTURE_ROOT = Path(__file__).resolve().parent / "fixtures" / "generated_samples"
@@ -52,7 +52,7 @@ def lancedb_with_generated_index(tmp_path):
     bundle_dir = Path(__file__).resolve().parent.parent
 
     # Get the flow specifier
-    app_spec = _cocoindex_flow_specifier(bundle_dir, FIXTURE_ROOT)
+    app_spec = _cocoindex_flow_specifier(bundle_dir / "src" / "java_codebase_rag" / "index", FIXTURE_ROOT)
 
     # Locate cocoindex binary
     import sys

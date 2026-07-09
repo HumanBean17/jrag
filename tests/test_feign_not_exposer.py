@@ -4,8 +4,8 @@ from pathlib import Path
 
 import ladybug
 
-from build_ast_graph import GraphTables, write_ladybug
-from ladybug_queries import LadybugGraph
+from java_codebase_rag.graph.build_ast_graph import GraphTables, write_ladybug
+from java_codebase_rag.graph.ladybug_queries import LadybugGraph
 
 _FIXTURE = Path(__file__).resolve().parent / "fixtures" / "cross_service_smoke"
 

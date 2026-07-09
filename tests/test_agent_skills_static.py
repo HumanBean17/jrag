@@ -16,8 +16,8 @@ import re
 from pathlib import Path
 from typing import get_args
 
-from java_ontology import NodeKind
-from mcp_v2 import ComposedEdgeType, EdgeType
+from java_codebase_rag.graph.java_ontology import NodeKind
+from java_codebase_rag.mcp.mcp_v2 import ComposedEdgeType, EdgeType
 
 # ---------------------------------------------------------------------------
 # Allowlists sourced from production code

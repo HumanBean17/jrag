@@ -1180,7 +1180,7 @@ def test_reprocess_graph_only_setup_failure_returns_exit_2_without_phase(
 def test_reprocess_no_flag_cocoindex_failure_records_vectors_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import server as server_mod
+    from java_codebase_rag.mcp import server as server_mod
 
     idx = tmp_path / "idx_nf"
     idx.mkdir()
@@ -1293,7 +1293,7 @@ def test_mcp_server_loads_yaml_config_at_startup(
     and applies the result to os.environ. Uses mocks to avoid loading real models
     or leaking env state (e.g. SBERT_DEVICE=cuda) to subsequent tests.
     """
-    import server as server_mod
+    from java_codebase_rag.mcp import server as server_mod
     from unittest.mock import MagicMock
 
     fake_cfg = MagicMock()
@@ -1325,7 +1325,7 @@ def test_mcp_server_yaml_config_precedence_env_over_yaml(
     This test verifies that main() delegates to resolve_operator_config
     with the correct source root, which handles precedence internally.
     """
-    import server as server_mod
+    from java_codebase_rag.mcp import server as server_mod
     from unittest.mock import MagicMock
 
     fake_cfg = MagicMock()

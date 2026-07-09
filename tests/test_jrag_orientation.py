@@ -209,7 +209,7 @@ def test_search_returns_ranked_hits(
     monkeypatch, capsys, corpus_root: Path, ladybug_db_path: Path
 ) -> None:
     """search returns ranked hits from search_v2 (mocked to avoid Lance dependency)."""
-    import mcp_v2
+    from java_codebase_rag.mcp import mcp_v2
     from java_codebase_rag.jrag import main
 
     env_index = str(ladybug_db_path.parent)
@@ -243,7 +243,7 @@ def test_search_hybrid_calls_hybrid_path(
     monkeypatch, capsys, corpus_root: Path, ladybug_db_path: Path
 ) -> None:
     """--hybrid flag passes hybrid=True to search_v2."""
-    import mcp_v2
+    from java_codebase_rag.mcp import mcp_v2
     from java_codebase_rag.jrag import main
 
     env_index = str(ladybug_db_path.parent)
@@ -271,7 +271,7 @@ def test_search_table_all_runs_three_tables(
     monkeypatch, capsys, corpus_root: Path, ladybug_db_path: Path
 ) -> None:
     """--table all passes table='all' to search_v2 (java+sql+yaml)."""
-    import mcp_v2
+    from java_codebase_rag.mcp import mcp_v2
     from java_codebase_rag.jrag import main
 
     env_index = str(ladybug_db_path.parent)
@@ -298,7 +298,7 @@ def test_search_offset_paginates(
     monkeypatch, capsys, corpus_root: Path, ladybug_db_path: Path
 ) -> None:
     """--offset paginates: passes offset to search_v2 and renders next_offset hint."""
-    import mcp_v2
+    from java_codebase_rag.mcp import mcp_v2
     from java_codebase_rag.jrag import main
 
     env_index = str(ladybug_db_path.parent)
@@ -366,7 +366,7 @@ def test_search_min_score_drops_negative_noise(
     Scores are now unified to [0,1] across all modes. The default floor of 0.0
     drops weak hits; --min-score 0.5 keeps only the stronger half.
     """
-    import mcp_v2
+    from java_codebase_rag.mcp import mcp_v2
     from java_codebase_rag.jrag import main
 
     env_index = str(ladybug_db_path.parent)
@@ -417,7 +417,7 @@ def test_search_hit_carries_file_path(
     """Each rendered search hit includes a `file` locator (filename:start_line)
     so an agent can jump to the hit. SearchHit now carries filename/start_line;
     the projector folds them into the `file` display field."""
-    import mcp_v2
+    from java_codebase_rag.mcp import mcp_v2
     from java_codebase_rag.jrag import main
 
     env_index = str(ladybug_db_path.parent)
@@ -862,7 +862,7 @@ def test_search_explain_calls_search_v2_with_explain_true(
     monkeypatch, capsys, corpus_root: Path, ladybug_db_path: Path
 ) -> None:
     """--explain flag passes explain=True to search_v2."""
-    import mcp_v2
+    from java_codebase_rag.mcp import mcp_v2
     from java_codebase_rag.jrag import main
 
     env_index = str(ladybug_db_path.parent)
@@ -888,7 +888,7 @@ def test_search_explain_calls_search_v2_with_explain_true(
 
 def test_search_dedup_default_collapses_same_fqn(monkeypatch, corpus_root: Path, ladybug_db_path: Path) -> None:
     """Default search (dedup ON) collapses multiple chunks of same FQN into one node."""
-    import mcp_v2
+    from java_codebase_rag.mcp import mcp_v2
     from java_codebase_rag.jrag import main
 
     env_index = str(ladybug_db_path.parent)
@@ -933,7 +933,7 @@ def test_search_dedup_default_collapses_same_fqn(monkeypatch, corpus_root: Path,
 
 def test_search_chunks_flag_passes_dedup_false(monkeypatch, corpus_root: Path, ladybug_db_path: Path) -> None:
     """--chunks flag passes dedup=False to search_v2, disabling dedup."""
-    import mcp_v2
+    from java_codebase_rag.mcp import mcp_v2
     from java_codebase_rag.jrag import main
 
     env_index = str(ladybug_db_path.parent)
@@ -978,7 +978,7 @@ def test_search_chunks_flag_passes_dedup_false(monkeypatch, corpus_root: Path, l
 
 def test_search_limit_zero_returns_empty_not_truncated(monkeypatch, capsys, corpus_root: Path, ladybug_db_path: Path) -> None:
     """--limit 0 returns clean empty page (truncated:false) WITHOUT calling search_v2."""
-    import mcp_v2
+    from java_codebase_rag.mcp import mcp_v2
     from java_codebase_rag.jrag import main
 
     env_index = str(ladybug_db_path.parent)
@@ -1006,7 +1006,7 @@ def test_search_limit_zero_returns_empty_not_truncated(monkeypatch, capsys, corp
 
 def test_search_zero_results_with_role_filter_emits_guidance(monkeypatch, capsys, corpus_root: Path, ladybug_db_path: Path) -> None:
     """Filtered search returning 0 results emits guidance when matches exist under other filter values."""
-    import mcp_v2
+    from java_codebase_rag.mcp import mcp_v2
     from java_codebase_rag.jrag import main
 
     env_index = str(ladybug_db_path.parent)
@@ -1068,7 +1068,7 @@ def test_search_zero_results_with_role_filter_emits_guidance(monkeypatch, capsys
 
 def test_search_zero_results_no_filter_no_guidance(monkeypatch, capsys, corpus_root: Path, ladybug_db_path: Path) -> None:
     """Unfiltered search returning 0 results does NOT run probe or emit guidance."""
-    import mcp_v2
+    from java_codebase_rag.mcp import mcp_v2
     from java_codebase_rag.jrag import main
 
     env_index = str(ladybug_db_path.parent)
@@ -1099,7 +1099,7 @@ def test_search_zero_results_no_filter_no_guidance(monkeypatch, capsys, corpus_r
 
 def test_search_probe_failure_does_not_break_empty_rendering(monkeypatch, capsys, corpus_root: Path, ladybug_db_path: Path) -> None:
     """When probe fails (raises), the empty result still renders successfully."""
-    import mcp_v2
+    from java_codebase_rag.mcp import mcp_v2
     from java_codebase_rag.jrag import main
 
     env_index = str(ladybug_db_path.parent)

@@ -5,7 +5,7 @@ import io
 import json
 from contextlib import redirect_stderr
 
-from brownfield_events import (
+from java_codebase_rag.ast.brownfield_events import (
     emit_brownfield_exclusivity_shadowing,
     emit_brownfield_method_string_literal,
     emit_structured_brownfield_event,

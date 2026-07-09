@@ -30,7 +30,7 @@ from collections import Counter
 from difflib import SequenceMatcher
 from typing import Any, Literal
 
-from absence_types import (
+from java_codebase_rag.absence.absence_types import (
     AbsenceDiagnosis,
     AbsenceProof,
     ExternalIdentity,
@@ -38,9 +38,9 @@ from absence_types import (
     FilterRelaxationDim,
     VocabularyContext,
 )
-from absence_vocab import SymbolRecord, VocabularyIndex, _normalize_name
-from graph_types import NodeRef
-from mcp_hints import _IDENTIFIER_FILTER_FIELDS
+from java_codebase_rag.absence.absence_vocab import SymbolRecord, VocabularyIndex, _normalize_name
+from java_codebase_rag.graph.graph_types import NodeRef
+from java_codebase_rag.mcp.mcp_hints import _IDENTIFIER_FILTER_FIELDS
 
 log = logging.getLogger(__name__)
 

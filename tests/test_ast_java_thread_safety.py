@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 
-from ast_java import parse_java
+from java_codebase_rag.ast.ast_java import parse_java
 
 _SRC_A = b"""
 package com.example.alpha;

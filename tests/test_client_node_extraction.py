@@ -5,8 +5,8 @@ from pathlib import Path
 
 import ladybug
 
-from ast_java import ONTOLOGY_VERSION
-from graph_enrich import _load_brownfield_overrides, collect_annotation_meta_chain
+from java_codebase_rag.ast.ast_java import ONTOLOGY_VERSION
+from java_codebase_rag.graph.graph_enrich import _load_brownfield_overrides, collect_annotation_meta_chain
 
 STUB_ROOT = Path(__file__).resolve().parent / "fixtures" / "brownfield_client_stubs"
 

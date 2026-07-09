@@ -25,7 +25,7 @@ from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, TypeVar
-from ast_java import (
+from java_codebase_rag.ast.ast_java import (
     AnnotationRef,
     JavaFileAst,
     MethodDecl,
@@ -43,7 +43,7 @@ from ast_java import (
     _METHOD_ANN_TO_CAPABILITY,
     _TYPE_ANN_TO_CAPABILITY,
 )
-from java_ontology import (
+from java_codebase_rag.graph.java_ontology import (
     CLIENT_KIND_REST_TEMPLATE,
     VALID_CAPABILITIES,
     VALID_CLIENT_KINDS,
@@ -52,7 +52,7 @@ from java_ontology import (
     VALID_ROUTE_FRAMEWORKS,
     VALID_ROUTE_KINDS,
 )
-from path_filtering import LayeredIgnore, iter_java_source_files
+from java_codebase_rag.graph.path_filtering import LayeredIgnore, iter_java_source_files
 
 __all__ = [
     "AnnotationDecl",

@@ -204,7 +204,7 @@ class VocabularyIndex:
             VocabIndexStale: If sidecar format_version or ontology_version
                 doesn't match expected
         """
-        from ast_java import ONTOLOGY_VERSION
+        from java_codebase_rag.ast.ast_java import ONTOLOGY_VERSION
 
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
@@ -304,7 +304,7 @@ class VocabularyIndex:
         Returns:
             (is_external, reason) tuple
         """
-        from ladybug_queries import _is_external_fqn, _EXTERNAL_PREFIXES
+        from java_codebase_rag.graph.ladybug_queries import _is_external_fqn, _EXTERNAL_PREFIXES
 
         # First, check if it's an external prefix (highest priority)
         if _is_external_fqn(name):
@@ -354,7 +354,7 @@ def get_vocabulary_index(graph: Any, cfg: Any) -> VocabularyIndex:
     Returns:
         VocabularyIndex (cached or newly built)
     """
-    from ast_java import ONTOLOGY_VERSION
+    from java_codebase_rag.ast.ast_java import ONTOLOGY_VERSION
 
     # Determine graph db path for cache key
     db_path = graph.db_path if hasattr(graph, 'db_path') else str(cfg.ladybug_path)
@@ -403,7 +403,7 @@ def reset_cache() -> None:
 
 def _row_to_symbol_record(row: dict[str, Any]) -> SymbolRecord:
     """Convert a Ladybug row to a SymbolRecord."""
-    from ladybug_queries import _type_part_fqn
+    from java_codebase_rag.graph.ladybug_queries import _type_part_fqn
 
     fqn = row.get("fqn") or ""
     name = row.get("name") or ""

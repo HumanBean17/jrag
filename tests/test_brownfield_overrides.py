@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from ast_java import parse_java
-from graph_enrich import (
+from java_codebase_rag.ast.ast_java import parse_java
+from java_codebase_rag.graph.graph_enrich import (
     BrownfieldOverrides,
     _load_brownfield_overrides,
     collect_annotation_meta_chain,
@@ -43,7 +43,7 @@ class TestResolveBasics:
         """
         )
         r, c = resolve_role_and_capabilities(t, overrides=_empty(), meta_chain=None)
-        from ast_java import infer_capabilities_for_type, infer_role_for_type
+        from java_codebase_rag.ast.ast_java import infer_capabilities_for_type, infer_role_for_type
 
         assert r == infer_role_for_type(t)
         assert c == sorted(set(infer_capabilities_for_type(t)))
@@ -463,7 +463,7 @@ class TestLayerC:
 
 def test_fqn_fires_with_enrich_chunk_lance_path(tmp_path: Path) -> None:
     """Regression: role_overrides fqn + enrich_chunk feeds capabilities to callers."""
-    from graph_enrich import enrich_chunk
+    from java_codebase_rag.graph.graph_enrich import enrich_chunk
 
     y = tmp_path / ".java-codebase-rag.yaml"
     y.write_text(
@@ -486,10 +486,10 @@ def test_fqn_fires_with_enrich_chunk_lance_path(tmp_path: Path) -> None:
 def test_tier1_java_lance_chunk_capabilities_list_type_matches_other_lists() -> None:
     """Pre-flight tier 1: `capabilities` uses the same Arrow list<string> as other list cols."""
     pytest.importorskip("cocoindex")  # java_index_flow_lancedb pulls cocoindex at import
-    import java_index_flow_lancedb as java_lance
+    from java_codebase_rag.index import java_index_flow_lancedb as java_lance
     from typing import Annotated, get_args, get_origin, get_type_hints
 
-    from java_index_flow_lancedb import JavaLanceChunk
+    from java_codebase_rag.index.java_index_flow_lancedb import JavaLanceChunk
 
     def lance_anno(ftype: object) -> object:
         if get_origin(ftype) is not Annotated:
@@ -515,9 +515,9 @@ def test_tier2_lance_row_carries_enrich_capabilities_without_lancedb() -> None:
     pytest.importorskip("cocoindex")  # java_index_flow_lancedb pulls cocoindex at import
     import numpy as np
 
-    from graph_enrich import enrich_chunk
-    from java_index_flow_lancedb import JavaLanceChunk
-    from ast_java import ONTOLOGY_VERSION
+    from java_codebase_rag.graph.graph_enrich import enrich_chunk
+    from java_codebase_rag.index.java_index_flow_lancedb import JavaLanceChunk
+    from java_codebase_rag.ast.ast_java import ONTOLOGY_VERSION
 
     # Default SBERT (all-MiniLM-L6-v2) embedding size — no model download in CI.
     z = np.zeros((384,), dtype=np.float32)

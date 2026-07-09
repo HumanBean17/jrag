@@ -41,7 +41,7 @@ from cocoindex.resources.file import PatternFilePathMatcher
 
 from java_codebase_rag.config import resolved_sbert_model_for_process_env
 from java_codebase_rag.lance_optimize import LANCE_TABLE_NAMES
-from java_index_v1_common import (
+from java_codebase_rag.index.java_index_v1_common import (
     JAVA_CHUNK,
     SBERT_MODEL,
     SQL_CHUNK,
@@ -49,9 +49,9 @@ from java_index_v1_common import (
     chunk_key_range,
     position_to_json,
 )
-from path_filtering import LayeredIgnore
-from ast_java import ONTOLOGY_VERSION, parse_java
-from graph_enrich import (
+from java_codebase_rag.graph.path_filtering import LayeredIgnore
+from java_codebase_rag.ast.ast_java import ONTOLOGY_VERSION, parse_java
+from java_codebase_rag.graph.graph_enrich import (
     classify_java_file,
     collect_annotation_meta_chain,
     enrich_chunk,

@@ -4,8 +4,8 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
-from ladybug_queries import find_symbols_in_file_range
-from pr_analysis import (
+from java_codebase_rag.graph.ladybug_queries import find_symbols_in_file_range
+from java_codebase_rag.analysis.pr_analysis import (
     DiffHunk,
     analyze_pr_pipeline,
     compute_risk,
@@ -72,7 +72,7 @@ def test_33_map_hunks_to_symbols_chat_management_service_assign(ladybug_graph) -
 
 
 def test_34_compute_risk_leaf_private_method_low_blast(ladybug_graph) -> None:
-    from pr_analysis import ChangedSymbol
+    from java_codebase_rag.analysis.pr_analysis import ChangedSymbol
 
     sym = find_symbols_in_file_range(
         ladybug_graph,
@@ -102,7 +102,7 @@ def test_35_compute_risk_controller_route_and_high_band_when_saturated(
     monkeypatch, ladybug_graph,
 ) -> None:
     """Fixture corpus: controller diff surfaces EXPOSES routes; `high` needs saturated metrics."""
-    from pr_analysis import ChangedSymbol
+    from java_codebase_rag.analysis.pr_analysis import ChangedSymbol
 
     diff = """diff --git a/chat-assign/src/main/java/com/bank/chat/assign/web/ChatManagementController.java b/chat-assign/src/main/java/com/bank/chat/assign/web/ChatManagementController.java
 --- a/chat-assign/src/main/java/com/bank/chat/assign/web/ChatManagementController.java
@@ -168,7 +168,7 @@ def test_35_compute_risk_controller_route_and_high_band_when_saturated(
 
 
 def test_35a_compute_risk_cross_service_bonus_saturates_to_one(monkeypatch) -> None:
-    from pr_analysis import ChangedSymbol
+    from java_codebase_rag.analysis.pr_analysis import ChangedSymbol
 
     class _FakeGraph:
         def _rows(self, query, params):
@@ -208,7 +208,7 @@ def test_35a_compute_risk_cross_service_bonus_saturates_to_one(monkeypatch) -> N
             del name, kwargs
             return []
 
-    monkeypatch.setattr("pr_analysis._route_ids_for_symbol", lambda graph, sid: ["route-1"])
+    monkeypatch.setattr("java_codebase_rag.analysis.pr_analysis._route_ids_for_symbol", lambda graph, sid: ["route-1"])
     rep = compute_risk(
         _FakeGraph(),
         [
@@ -226,7 +226,7 @@ def test_35a_compute_risk_cross_service_bonus_saturates_to_one(monkeypatch) -> N
 
 
 def test_35b_compute_risk_single_cross_service_bonus_is_point_two(monkeypatch) -> None:
-    from pr_analysis import ChangedSymbol
+    from java_codebase_rag.analysis.pr_analysis import ChangedSymbol
 
     class _FakeGraph:
         def __init__(self, *, include_callers: bool) -> None:
@@ -271,7 +271,7 @@ def test_35b_compute_risk_single_cross_service_bonus_is_point_two(monkeypatch) -
             del name, kwargs
             return []
 
-    monkeypatch.setattr("pr_analysis._route_ids_for_symbol", lambda graph, sid: ["route-1"])
+    monkeypatch.setattr("java_codebase_rag.analysis.pr_analysis._route_ids_for_symbol", lambda graph, sid: ["route-1"])
     rep = compute_risk(
         _FakeGraph(include_callers=True),
         [
@@ -306,9 +306,9 @@ def test_35b_compute_risk_single_cross_service_bonus_is_point_two(monkeypatch) -
 def test_pr_analysis_changed_methods_finds_routes_via_declares_client(
     ladybug_db_path_cross_service_smoke: Path,
 ) -> None:
-    from ladybug_queries import LadybugGraph
+    from java_codebase_rag.graph.ladybug_queries import LadybugGraph
 
-    from pr_analysis import ChangedSymbol, compute_risk
+    from java_codebase_rag.analysis.pr_analysis import ChangedSymbol, compute_risk
 
     g = LadybugGraph(str(ladybug_db_path_cross_service_smoke))
     route_rows = g._rows(  # noqa: SLF001

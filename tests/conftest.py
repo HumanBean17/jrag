@@ -19,15 +19,15 @@ from typing import TYPE_CHECKING
 import pytest
 
 if TYPE_CHECKING:
-    from build_ast_graph import GraphTables
+    from java_codebase_rag.graph.build_ast_graph import GraphTables
 
 BUNDLE_DIR = Path(__file__).resolve().parent.parent
 TESTS_DIR = Path(__file__).resolve().parent
 CORPUS_ROOT = TESTS_DIR / "bank-chat-system"
 
-# Make the bundle importable when running `pytest` from the repo root.
-if str(BUNDLE_DIR) not in sys.path:
-    sys.path.insert(0, str(BUNDLE_DIR))
+# Make the package importable when running `pytest` from the repo root (src-layout).
+if str(BUNDLE_DIR / "src") not in sys.path:
+    sys.path.insert(0, str(BUNDLE_DIR / "src"))
 
 
 def pytest_configure(config) -> None:
@@ -62,7 +62,7 @@ def _enforce_editable_install() -> None:
     # Check against the source package dir, NOT BUNDLE_DIR: the venv lives at
     # BUNDLE_DIR/.venv, so a site-packages copy is also "under" BUNDLE_DIR and
     # would pass a naive is_relative_to(BUNDLE_DIR) check.
-    src_pkg = BUNDLE_DIR / "java_codebase_rag"
+    src_pkg = BUNDLE_DIR / "src" / "java_codebase_rag"
     if resolved and Path(resolved).resolve().is_relative_to(src_pkg):
         return
     where = resolved or f"import failed (rc={res.returncode}): {res.stderr.strip()}"
@@ -151,7 +151,7 @@ def mcp_env(ladybug_db_path: Path, tmp_path_factory) -> dict[str, str]:
 @pytest.fixture(scope="session")
 def ladybug_graph(mcp_env, ladybug_db_path: Path):
     """Read-only LadybugGraph singleton bound to the session DB."""
-    from ladybug_queries import LadybugGraph
+    from java_codebase_rag.graph.ladybug_queries import LadybugGraph
 
     LadybugGraph._instance = None
     LadybugGraph._instance_path = None
@@ -161,7 +161,7 @@ def ladybug_graph(mcp_env, ladybug_db_path: Path):
 @pytest.fixture(scope="session")
 def mcp_server(mcp_env, ladybug_graph):
     """A FastMCP server instance with all tools registered."""
-    from server import create_mcp_server
+    from java_codebase_rag.mcp.server import create_mcp_server
 
     return create_mcp_server()
 
@@ -192,7 +192,7 @@ def ladybug_db_path_route_extraction_smoke(tmp_path_factory) -> Path:
 @pytest.fixture(scope="session")
 def ladybug_graph_route_extraction_smoke(ladybug_db_path_route_extraction_smoke: Path):
     """Read-only ``LadybugGraph`` for ``route_extraction_smoke`` (own DB path; not ``LadybugGraph.get``)."""
-    from ladybug_queries import LadybugGraph
+    from java_codebase_rag.graph.ladybug_queries import LadybugGraph
 
     return LadybugGraph(str(ladybug_db_path_route_extraction_smoke))
 
@@ -219,7 +219,7 @@ def ladybug_db_path_fqn_collision_smoke(tmp_path_factory) -> Path:
 
 @pytest.fixture(scope="session")
 def ladybug_graph_fqn_collision_smoke(ladybug_db_path_fqn_collision_smoke: Path):
-    from ladybug_queries import LadybugGraph
+    from java_codebase_rag.graph.ladybug_queries import LadybugGraph
 
     return LadybugGraph(str(ladybug_db_path_fqn_collision_smoke))
 
@@ -247,7 +247,7 @@ def ladybug_db_path_generated_smoke(tmp_path_factory) -> Path:
 @pytest.fixture(scope="session")
 def ladybug_graph_generated_smoke(ladybug_db_path_generated_smoke: Path):
     """Read-only ``LadybugGraph`` for ``generated_samples`` (one generated + one hand-written type)."""
-    from ladybug_queries import LadybugGraph
+    from java_codebase_rag.graph.ladybug_queries import LadybugGraph
 
     return LadybugGraph(str(ladybug_db_path_generated_smoke))
 

@@ -83,18 +83,18 @@ def _seed_dev_source(tmp_path: Path, *, cli_skill_content: str = "# test") -> No
 
 def _seed_install_data(tmp_path: Path, *, extra: list[Path] | None = None) -> None:
     """Create the matching install_data tree (no drift) for the SYNC_MAP."""
-    tmp_install_agents = tmp_path / "java_codebase_rag" / "install_data" / "agents"
+    tmp_install_agents = tmp_path / "src" / "java_codebase_rag" / "install_data" / "agents"
     tmp_install_agents.mkdir(parents=True, exist_ok=True)
     (tmp_install_agents / "explorer-rag-enhanced.md").write_text("# test")
 
     tmp_install_mcp_skill = (
-        tmp_path / "java_codebase_rag" / "install_data" / "skills" / "explore-codebase"
+        tmp_path / "src" / "java_codebase_rag" / "install_data" / "skills" / "explore-codebase"
     )
     tmp_install_mcp_skill.mkdir(parents=True, exist_ok=True)
     (tmp_install_mcp_skill / "SKILL.md").write_text("# test")
 
     tmp_install_cli_skill = (
-        tmp_path / "java_codebase_rag" / "install_data" / "skills" / "explore-codebase-cli"
+        tmp_path / "src" / "java_codebase_rag" / "install_data" / "skills" / "explore-codebase-cli"
     )
     tmp_install_cli_skill.mkdir(parents=True, exist_ok=True)
     (tmp_install_cli_skill / "SKILL.md").write_text("# test")
@@ -151,18 +151,18 @@ def test_sync_script_detects_drift():
 
         # Also create the install_data directory structure in temp
         # so the script has something to compare against
-        tmp_install = tmp_path / "java_codebase_rag" / "install_data" / "agents"
+        tmp_install = tmp_path / "src" / "java_codebase_rag" / "install_data" / "agents"
         tmp_install.mkdir(parents=True)
 
         # Copy the unmutated file to install_data
         (tmp_install / "explorer-rag-enhanced.md").write_bytes(real_dev_file.read_bytes())
 
-        tmp_install_skills = tmp_path / "java_codebase_rag" / "install_data" / "skills" / "explore-codebase"
+        tmp_install_skills = tmp_path / "src" / "java_codebase_rag" / "install_data" / "skills" / "explore-codebase"
         tmp_install_skills.mkdir(parents=True)
         (tmp_install_skills / "SKILL.md").write_bytes(real_skill_file.read_bytes())
 
         tmp_install_cli_skills = (
-            tmp_path / "java_codebase_rag" / "install_data" / "skills" / "explore-codebase-cli"
+            tmp_path / "src" / "java_codebase_rag" / "install_data" / "skills" / "explore-codebase-cli"
         )
         tmp_install_cli_skills.mkdir(parents=True)
         (tmp_install_cli_skills / "SKILL.md").write_text("# test")
@@ -196,7 +196,7 @@ def test_sync_script_detects_extra_files():
         # Create install_data with an extra file
         _seed_install_data(
             tmp_path,
-            extra=[tmp_path / "java_codebase_rag" / "install_data" / "agents" / "extra_file.md"],
+            extra=[tmp_path / "src" / "java_codebase_rag" / "install_data" / "agents" / "extra_file.md"],
         )
 
         result = run_sync_script(check=True, cwd=tmp_path)
@@ -223,14 +223,14 @@ def test_sync_script_detects_missing_files():
         _seed_dev_source(tmp_path)
 
         # Create empty install_data (missing the files)
-        tmp_install = tmp_path / "java_codebase_rag" / "install_data" / "agents"
+        tmp_install = tmp_path / "src" / "java_codebase_rag" / "install_data" / "agents"
         tmp_install.mkdir(parents=True)
 
-        tmp_install_skills = tmp_path / "java_codebase_rag" / "install_data" / "skills" / "explore-codebase"
+        tmp_install_skills = tmp_path / "src" / "java_codebase_rag" / "install_data" / "skills" / "explore-codebase"
         tmp_install_skills.mkdir(parents=True)
 
         tmp_install_cli_skills = (
-            tmp_path / "java_codebase_rag" / "install_data" / "skills" / "explore-codebase-cli"
+            tmp_path / "src" / "java_codebase_rag" / "install_data" / "skills" / "explore-codebase-cli"
         )
         tmp_install_cli_skills.mkdir(parents=True)
 

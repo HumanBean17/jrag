@@ -3,8 +3,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from ast_java import OutgoingCallDecl
-from build_ast_graph import GraphTables, RouteRow, _match_call_edge
+from java_codebase_rag.ast.ast_java import OutgoingCallDecl
+from java_codebase_rag.graph.build_ast_graph import GraphTables, RouteRow, _match_call_edge
 
 
 def _mk_call(**kwargs) -> OutgoingCallDecl:
@@ -115,7 +115,7 @@ def test_phantom_routes_cleaned_up_when_real_match_found(graph_tables_cross_serv
 
 
 def test_graph_enrich_has_single_route_strategy_ladder() -> None:
-    graph_enrich = Path(__file__).resolve().parent.parent / "graph_enrich.py"
+    graph_enrich = Path(__file__).resolve().parent.parent / "src" / "java_codebase_rag" / "graph" / "graph_enrich.py"
     source = graph_enrich.read_text(encoding="utf-8")
     matches = re.findall(r"annotation.*spel.*constant_ref", source)
     assert len(matches) == 1

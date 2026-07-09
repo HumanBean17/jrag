@@ -18,8 +18,8 @@ import ladybug
 import pytest
 
 from _builders import build_ladybug_into, build_ladybug_to
-from ast_java import ONTOLOGY_VERSION
-from graph_enrich import _load_brownfield_overrides, collect_annotation_meta_chain
+from java_codebase_rag.ast.ast_java import ONTOLOGY_VERSION
+from java_codebase_rag.graph.graph_enrich import _load_brownfield_overrides, collect_annotation_meta_chain
 
 
 def _parse_ladybug_json(raw: str | None) -> dict:
@@ -348,7 +348,7 @@ def test_cli_entrypoint_runs(tmp_path: Path, corpus_root: Path) -> None:
     (via the venv Python) and asserts a non-empty Kuzu DB is written.
     """
     target = tmp_path / "graph.lbug"
-    script = Path(__file__).resolve().parent.parent / "build_ast_graph.py"
+    script = Path(__file__).resolve().parent.parent / "src" / "java_codebase_rag" / "graph" / "build_ast_graph.py"
     proc = subprocess.run(
         [
             sys.executable,
@@ -413,7 +413,7 @@ def test_pass3_known_external_calls_preserved(ladybug_db_path: Path) -> None:
 
 def _run_builder_verbose(corpus_root: Path, target_db: Path, *, extra_args: list[str] | None = None) -> subprocess.CompletedProcess:
     """Run build_ast_graph.py --verbose and return the CompletedProcess."""
-    script = Path(__file__).resolve().parent.parent / "build_ast_graph.py"
+    script = Path(__file__).resolve().parent.parent / "src" / "java_codebase_rag" / "graph" / "build_ast_graph.py"
     cmd = [
         sys.executable,
         str(script),
@@ -430,7 +430,7 @@ def _progress_lines(stderr: str) -> list[str]:
 
 
 def _count_filtered_java_files(corpus_root: Path) -> int:
-    from path_filtering import LayeredIgnore, iter_java_source_files
+    from java_codebase_rag.graph.path_filtering import LayeredIgnore, iter_java_source_files
 
     return sum(1 for _ in iter_java_source_files(corpus_root.resolve(), ignore=LayeredIgnore(corpus_root.resolve())))
 
@@ -489,7 +489,7 @@ def test_build_ast_graph_passes_2_to_6_emit_step_progress(corpus_root: Path, tmp
 
 def test_build_ast_graph_quiet_emits_no_progress(corpus_root: Path, tmp_path: Path) -> None:
     """Without --verbose the builder emits no JCIRAG_PROGRESS lines."""
-    script = Path(__file__).resolve().parent.parent / "build_ast_graph.py"
+    script = Path(__file__).resolve().parent.parent / "src" / "java_codebase_rag" / "graph" / "build_ast_graph.py"
     target = tmp_path / "quiet.lbug"
     proc = subprocess.run(
         [
@@ -515,7 +515,7 @@ def test_pass1_parse_incremental_total_excludes_removed_files(tmp_path: Path, ca
     ``pass1_total`` makes ``done`` undercount then two-way-clamp on completion.
     The fix: the total is ``len(scope_files - removed_files)``.
     """
-    import build_ast_graph
+    from java_codebase_rag.graph import build_ast_graph
 
     root = tmp_path / "proj"
     java_dir = root / "src/main/java/smoke"
@@ -679,7 +679,7 @@ def test_bulk_write_preserves_calls_dedup_and_callee_declaring_role(ladybug_db_p
 
 def test_bulk_write_empty_rel_table_is_noop(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """Bulk COPY FROM with empty rows list is a no-op; corpus with no EXTENDS edges should not error."""
-    import build_ast_graph
+    from java_codebase_rag.graph import build_ast_graph
 
     root = tmp_path / "proj"
     java_dir = root / "src/main/java/smoke"

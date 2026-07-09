@@ -5,7 +5,7 @@ Each test names the specific detector path it exercises.
 """
 from __future__ import annotations
 
-from ast_java import parse_java
+from java_codebase_rag.ast.ast_java import parse_java
 
 
 def _caps(source: str) -> list[str]:
@@ -55,7 +55,7 @@ def test_service_with_kafka_template_field_is_producer_not_listener() -> None:
     t = ast.top_level_types[0]
     assert t.capabilities == ["MESSAGE_PRODUCER"]
     # role should still be SERVICE (separate axis)
-    from ast_java import infer_role_for_type
+    from java_codebase_rag.ast.ast_java import infer_role_for_type
     assert infer_role_for_type(t) == "SERVICE"
 
 

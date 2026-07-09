@@ -8,10 +8,10 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from java_ontology import BROWNFIELD_RESOLVER_STRATEGY_SET, EDGE_SCHEMA
+from java_codebase_rag.graph.java_ontology import BROWNFIELD_RESOLVER_STRATEGY_SET, EDGE_SCHEMA
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
-_BUILD_AST_GRAPH = _REPO_ROOT / "build_ast_graph.py"
+_BUILD_AST_GRAPH = _REPO_ROOT / "src" / "java_codebase_rag" / "graph" / "build_ast_graph.py"
 
 _REL_DDL_RE = re.compile(
     r'CREATE REL TABLE (\w+)\(FROM (\w+) TO (\w+)',
@@ -20,9 +20,9 @@ _STRATEGY_LITERAL_RE = re.compile(
     r"""(?:strategy|resolution_strategy|edge_strat)\s*=\s*["']([a-z_]+)["']""",
 )
 _EMITTER_FILES = (
-    "build_ast_graph.py",
-    "graph_enrich.py",
-    "ast_java.py",
+    "src/java_codebase_rag/graph/build_ast_graph.py",
+    "src/java_codebase_rag/graph/graph_enrich.py",
+    "src/java_codebase_rag/ast/ast_java.py",
 )
 
 # Stored graph rels that are not MCP ``EdgeType`` / ``EDGE_SCHEMA`` entries.

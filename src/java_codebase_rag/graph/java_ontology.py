@@ -7,7 +7,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from ast_java import (
+from java_codebase_rag.ast.ast_java import (
     ROLE_ANNOTATIONS,
     _INJECTED_TYPES_TO_CAPABILITY,
     _METHOD_ANN_TO_CAPABILITY,

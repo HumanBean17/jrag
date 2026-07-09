@@ -4,8 +4,8 @@ import os
 from pathlib import Path
 import pytest
 
-from graph_enrich import classify_java_file, GeneratedDetectionConfig, load_generated_detection
-from ast_java import parse_java
+from java_codebase_rag.graph.graph_enrich import classify_java_file, GeneratedDetectionConfig, load_generated_detection
+from java_codebase_rag.ast.ast_java import parse_java
 
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "generated_samples"

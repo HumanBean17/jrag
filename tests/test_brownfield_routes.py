@@ -9,7 +9,7 @@ from pathlib import Path
 import ladybug
 import pytest
 
-from graph_enrich import _load_brownfield_overrides, collect_annotation_meta_chain
+from java_codebase_rag.graph.graph_enrich import _load_brownfield_overrides, collect_annotation_meta_chain
 
 STUB_ROOT = Path(__file__).resolve().parent / "fixtures" / "brownfield_route_stubs"
 
@@ -61,7 +61,7 @@ def _route_ids(db_path: Path) -> list[str]:
 
 
 def _meta(db_path: Path) -> dict:
-    from ladybug_queries import LadybugGraph
+    from java_codebase_rag.graph.ladybug_queries import LadybugGraph
 
     LadybugGraph._instance = None
     LadybugGraph._instance_path = None

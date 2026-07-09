@@ -8,8 +8,8 @@ contract for the branch it actually hit.
 """
 from pathlib import Path
 
-from ladybug_queries import LadybugGraph
-from resolve_service import ResolveCandidate, ResolveOutput, ResolveStatus, resolve_v2
+from java_codebase_rag.graph.ladybug_queries import LadybugGraph
+from java_codebase_rag.analysis.resolve_service import ResolveCandidate, ResolveOutput, ResolveStatus, resolve_v2
 
 # Known bank-chat fixture symbol (verified via test_jrag_locate.test_find_by_fqn_exact).
 _KNOWN_CLASS_FQN = "com.bank.chat.assign.ChatAssignApplication"

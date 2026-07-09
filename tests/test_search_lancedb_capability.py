@@ -11,9 +11,9 @@ pytest.importorskip("sentence_transformers")
 
 from sentence_transformers import SentenceTransformer
 
-from ast_java import ONTOLOGY_VERSION
-from index_common import SBERT_MODEL
-from search_lancedb import TABLES, _query_vector, run_search
+from java_codebase_rag.ast.ast_java import ONTOLOGY_VERSION
+from java_codebase_rag.search.index_common import SBERT_MODEL
+from java_codebase_rag.search.search_lancedb import TABLES, _query_vector, run_search
 
 
 def _one_java_row_built_for_capability_filter(

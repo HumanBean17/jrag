@@ -15,8 +15,8 @@ from typing import get_args
 
 import pytest
 
-import java_ontology
-import mcp_v2
+from java_codebase_rag.graph import java_ontology
+from java_codebase_rag.mcp import mcp_v2
 
 from java_codebase_rag.jrag import (
     _CAPABILITY_CHOICES,

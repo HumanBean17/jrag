@@ -15,15 +15,15 @@ import lancedb
 import numpy as np
 from sentence_transformers import SentenceTransformer
 
-from chunk_heuristics import analyze_chunk, looks_like_code_identifier
-from index_common import SBERT_MODEL
+from java_codebase_rag.ast.chunk_heuristics import analyze_chunk, looks_like_code_identifier
+from java_codebase_rag.search.index_common import SBERT_MODEL
 from java_codebase_rag.config import maybe_expand_embedding_model_path, resolved_sbert_model_for_process_env
 
 # Scoring & dedup primitives live in `search_scoring` (dependency-free — no
 # lancedb/torch) so the lexical backend `search_lexical` can share them on
 # graph-only (macOS Intel) installs where this module is unimportable. Re-exported
 # here for backward compatibility (`from search_lancedb import _clamp01`, etc.).
-from search_scoring import (  # noqa: F401
+from java_codebase_rag.search.search_scoring import (  # noqa: F401
     DEDUP_OVERFETCH,
     _ACTION_VERB_BONUS,
     _ACTION_VERB_PREFIXES,
@@ -522,7 +522,7 @@ def _graph_expand_merge(
     """Expand vector top-k through the LadybugDB graph and fuse (RRF) with the original list."""
     # Lazy import so the module works without ladybug installed when graph_expand=False.
     try:
-        from ladybug_queries import LadybugGraph
+        from java_codebase_rag.graph.ladybug_queries import LadybugGraph
     except Exception:
         return vector_rows
 

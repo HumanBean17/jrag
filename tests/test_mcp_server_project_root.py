@@ -23,7 +23,7 @@ class TestProjectRoot:
         monkeypatch.chdir(tmp_path)
 
         # Import _project_root after setting up the environment
-        from server import _project_root
+        from java_codebase_rag.mcp.server import _project_root
 
         result = _project_root()
         assert result == tmp_path
@@ -43,7 +43,7 @@ class TestSourceRootForOperatorConfig:
 
     def test_returns_none_when_env_unset(self, tmp_path, monkeypatch):
         monkeypatch.delenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", raising=False)
-        from server import _source_root_for_operator_config
+        from java_codebase_rag.mcp.server import _source_root_for_operator_config
 
         assert _source_root_for_operator_config() is None
 
@@ -51,7 +51,7 @@ class TestSourceRootForOperatorConfig:
         explicit = tmp_path / "explicit-root"
         explicit.mkdir()
         monkeypatch.setenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", str(explicit))
-        from server import _source_root_for_operator_config
+        from java_codebase_rag.mcp.server import _source_root_for_operator_config
 
         assert _source_root_for_operator_config() == explicit.resolve()
 
@@ -73,7 +73,7 @@ class TestSourceRootForOperatorConfig:
         )
         monkeypatch.chdir(config_dir)
 
-        from server import _source_root_for_operator_config
+        from java_codebase_rag.mcp.server import _source_root_for_operator_config
 
         mcp = resolve_operator_config(source_root=_source_root_for_operator_config())
         cli = resolve_operator_config(source_root=None)
@@ -111,7 +111,7 @@ class TestSourceRootForOperatorConfig:
         microservice.mkdir(parents=True)
         monkeypatch.chdir(microservice)
 
-        from server import _source_root_for_operator_config
+        from java_codebase_rag.mcp.server import _source_root_for_operator_config
 
         mcp = resolve_operator_config(source_root=_source_root_for_operator_config())
         cli = resolve_operator_config(source_root=None)

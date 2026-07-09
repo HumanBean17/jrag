@@ -1,9 +1,9 @@
 """Layer C `@CodebaseAsyncRoute` replaces same-method `@KafkaListener` auto routes."""
 from __future__ import annotations
 
-from graph_enrich import BrownfieldOverrides, resolve_routes_for_method
+from java_codebase_rag.graph.graph_enrich import BrownfieldOverrides, resolve_routes_for_method
 
-from ast_java import parse_java
+from java_codebase_rag.ast.ast_java import parse_java
 
 
 def _type_and_method(src: str):

@@ -91,7 +91,7 @@ def lance_index(tmp_path_factory, corpus_root: Path) -> Path:
     index_dir = work / ".java-codebase-rag"
     index_dir.mkdir(parents=True)
 
-    app_spec = _cocoindex_flow_specifier(bundle_dir, Path(corpus_root))
+    app_spec = _cocoindex_flow_specifier(bundle_dir / "src" / "java_codebase_rag" / "index", Path(corpus_root))
 
     env = {
         **os.environ,
@@ -126,7 +126,7 @@ def lance_index(tmp_path_factory, corpus_root: Path) -> Path:
             f"the in-flow background optimize race may have regressed:\n{proc.stderr}"
         )
 
-    builder = bundle_dir / "build_ast_graph.py"
+    builder = bundle_dir / "src" / "java_codebase_rag" / "graph" / "build_ast_graph.py"
     proc = subprocess.run(
         [
             sys.executable,
@@ -161,7 +161,7 @@ def lance_index_capability_smoke(tmp_path_factory) -> Path:
     work = tmp_path_factory.mktemp("lance_cap_smoke")
     index_dir = work / ".java-codebase-rag"
     index_dir.mkdir(parents=True)
-    app_spec = _cocoindex_flow_specifier(bundle_dir, Path(CAPABILITY_SMOKE_ROOT))
+    app_spec = _cocoindex_flow_specifier(bundle_dir / "src" / "java_codebase_rag" / "index", Path(CAPABILITY_SMOKE_ROOT))
     env = {
         **os.environ,
         "JAVA_CODEBASE_RAG_INDEX_DIR": str(index_dir.resolve()),
@@ -184,7 +184,7 @@ def lance_index_capability_smoke(tmp_path_factory) -> Path:
     assert proc.returncode == 0, (
         f"cocoindex failed: stdout={proc.stdout}\nstderr={proc.stderr}"
     )
-    builder = bundle_dir / "build_ast_graph.py"
+    builder = bundle_dir / "src" / "java_codebase_rag" / "graph" / "build_ast_graph.py"
     proc = subprocess.run(
         [
             sys.executable,
@@ -207,12 +207,12 @@ async def test_search_returns_hits(lance_index: Path, monkeypatch) -> None:
     monkeypatch.setenv("JAVA_CODEBASE_RAG_INDEX_DIR", str(lance_index))
     monkeypatch.delenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", raising=False)
 
-    from ladybug_queries import LadybugGraph
+    from java_codebase_rag.graph.ladybug_queries import LadybugGraph
 
     LadybugGraph._instance = None
     LadybugGraph._instance_path = None
 
-    from server import create_mcp_server
+    from java_codebase_rag.mcp.server import create_mcp_server
 
     server = create_mcp_server()
 
@@ -240,12 +240,12 @@ async def test_search_capability_filter_e2e(
     monkeypatch.setenv("JAVA_CODEBASE_RAG_INDEX_DIR", str(lance_index_capability_smoke))
     monkeypatch.delenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", raising=False)
 
-    from ladybug_queries import LadybugGraph
+    from java_codebase_rag.graph.ladybug_queries import LadybugGraph
 
     LadybugGraph._instance = None
     LadybugGraph._instance_path = None
 
-    from server import create_mcp_server
+    from java_codebase_rag.mcp.server import create_mcp_server
 
     server = create_mcp_server()
 
@@ -295,7 +295,7 @@ def test_lancedb_ignore_file_reduces_indexed_java_files(tmp_path_factory) -> Non
     def run_coco(corpus: Path) -> Path:
         index_dir = corpus / ".java-codebase-rag"
         index_dir.mkdir(parents=True)
-        app_spec = _cocoindex_flow_specifier(bundle_dir, corpus)
+        app_spec = _cocoindex_flow_specifier(bundle_dir / "src" / "java_codebase_rag" / "index", corpus)
         env = {
             **os.environ,
             "JAVA_CODEBASE_RAG_INDEX_DIR": str(index_dir.resolve()),
@@ -328,12 +328,12 @@ async def test_search_returns_multiple_hits(lance_index: Path, monkeypatch) -> N
     monkeypatch.setenv("JAVA_CODEBASE_RAG_INDEX_DIR", str(lance_index))
     monkeypatch.delenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", raising=False)
 
-    from ladybug_queries import LadybugGraph
+    from java_codebase_rag.graph.ladybug_queries import LadybugGraph
 
     LadybugGraph._instance = None
     LadybugGraph._instance_path = None
 
-    from server import create_mcp_server
+    from java_codebase_rag.mcp.server import create_mcp_server
 
     server = create_mcp_server()
 
@@ -360,7 +360,7 @@ def test_layered_ignore_provided_once_per_flow() -> None:
     the process boundary to instrument LayeredIgnore.__init__.
     """
     bundle_dir = Path(__file__).resolve().parent.parent
-    flow_file = bundle_dir / "java_index_flow_lancedb.py"
+    flow_file = bundle_dir / "src" / "java_codebase_rag" / "index" / "java_index_flow_lancedb.py"
     if not flow_file.is_file():
         pytest.skip(f"Flow file not found: {flow_file}")
 

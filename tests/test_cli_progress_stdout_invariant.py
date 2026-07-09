@@ -87,7 +87,7 @@ async def test_stream_relay_arrives_before_wait(monkeypatch: pytest.MonkeyPatch)
 
 
 def test_refresh_pipeline_quiet_stderr_baseline(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    import server
+    from java_codebase_rag.mcp import server
 
     # This test simulates a FULL (vectors-capable) install by faking the cocoindex
     # binary below; it must also report the vector stack as installed, otherwise
@@ -160,9 +160,9 @@ def test_cli_lifecycle_stdout_invariant_reprocess(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import server
+    from java_codebase_rag.mcp import server
     from java_codebase_rag import cli as cli_mod
-    from server import RefreshIndexOutput
+    from java_codebase_rag.mcp.server import RefreshIndexOutput
 
     baseline = (_FIXTURE_DIR / "reprocess_quiet_success.stdout.txt").read_text(encoding="utf-8")
 

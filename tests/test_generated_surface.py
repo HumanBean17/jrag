@@ -13,8 +13,8 @@ from typing import Any
 
 import pytest
 
-from mcp_v2 import SearchHit, Edge, find_v2, describe_v2, neighbors_v2, search_v2
-from graph_types import NodeRef
+from java_codebase_rag.mcp.mcp_v2 import SearchHit, Edge, find_v2, describe_v2, neighbors_v2, search_v2
+from java_codebase_rag.graph.graph_types import NodeRef
 
 
 def _fake_search_rows_with_generated() -> list[dict[str, Any]]:
@@ -56,7 +56,7 @@ def _fake_search_rows_with_generated() -> list[dict[str, Any]]:
 def test_search_surfaces_generated_fields(monkeypatch, ladybug_graph) -> None:
     """Test that search returns SearchHit with generated/generated_by set."""
     pytest.importorskip("lancedb")  # vector-search path; N/A on graph-only installs
-    monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows_with_generated())
+    monkeypatch.setattr("java_codebase_rag.mcp.mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows_with_generated())
     out = search_v2("OpenAPIModel", graph=ladybug_graph)
     assert out.success is True
     assert out.results
@@ -93,7 +93,7 @@ def test_search_handles_missing_generated_fields(monkeypatch, ladybug_graph) -> 
             # Note: no generated/generated_by fields
         },
     ]
-    monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: rows_without_generated)
+    monkeypatch.setattr("java_codebase_rag.mcp.mcp_v2.run_search", lambda *args, **kwargs: rows_without_generated)
     out = search_v2("OldType", graph=ladybug_graph)
     assert out.success is True
     assert out.results
@@ -210,7 +210,7 @@ def test_neighbors_surfaces_generated_fields(monkeypatch, ladybug_graph) -> None
 
     # Mock _load_node_record to return a symbol with generated/generated_by
     original_load_node_record = None
-    import mcp_v2
+    from java_codebase_rag.mcp import mcp_v2
     original_load_node_record = mcp_v2._load_node_record
 
     def _mock_load_node_record(graph, node_id, kind):
@@ -242,7 +242,7 @@ def test_neighbors_surfaces_generated_fields(monkeypatch, ladybug_graph) -> None
         # For the origin node, use the original function
         return original_load_node_record(graph, node_id, kind)
 
-    monkeypatch.setattr("mcp_v2._load_node_record", _mock_load_node_record)
+    monkeypatch.setattr("java_codebase_rag.mcp.mcp_v2._load_node_record", _mock_load_node_record)
 
     out = neighbors_v2(method_id, direction="out", edge_types=["CALLS"], graph=ladybug_graph)
     assert out.success is True

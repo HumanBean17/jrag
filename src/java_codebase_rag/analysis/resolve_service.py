@@ -10,10 +10,10 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from absence_types import AbsenceDiagnosis
-from absence_diagnosis import diagnose
-from absence_vocab import get_vocabulary_index
-from graph_types import (
+from java_codebase_rag.absence.absence_types import AbsenceDiagnosis
+from java_codebase_rag.absence.absence_diagnosis import diagnose
+from java_codebase_rag.absence.absence_vocab import get_vocabulary_index
+from java_codebase_rag.graph.graph_types import (
     NodeRef,
     StructuredHint,
     _hints_or_skip,
@@ -21,9 +21,9 @@ from graph_types import (
     _to_structured_hints,
     set_hints_enabled,
 )
-from java_ontology import ResolveReason
-from ladybug_queries import LadybugGraph
-from mcp_hints import MCP_HINTS_STRUCTURED_FIELD_DESCRIPTION
+from java_codebase_rag.graph.java_ontology import ResolveReason
+from java_codebase_rag.graph.ladybug_queries import LadybugGraph
+from java_codebase_rag.mcp.mcp_hints import MCP_HINTS_STRUCTURED_FIELD_DESCRIPTION
 
 __all__ = [
     "resolve_v2",

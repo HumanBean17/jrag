@@ -5,7 +5,7 @@ from pathlib import Path
 
 import ladybug
 
-from ladybug_queries import LadybugGraph
+from java_codebase_rag.graph.ladybug_queries import LadybugGraph
 
 _FIXTURE_ROOT = Path(__file__).resolve().parent / "fixtures" / "call_graph_smoke"
 

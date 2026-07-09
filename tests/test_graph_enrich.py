@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from graph_enrich import (
+from java_codebase_rag.graph.graph_enrich import (
     _load_config_microservice_roots,
     microservice_for_path,
     module_for_path,

@@ -1,7 +1,7 @@
 """Unit tests for iterative `_build_meta_chain` and `collect_annotation_meta_chain`."""
 from __future__ import annotations
 
-from graph_enrich import (
+from java_codebase_rag.graph.graph_enrich import (
     AnnotationDecl,
     _build_meta_chain,
     _meta_builtins,

@@ -89,9 +89,9 @@ def test_incremental_rebuild_preserves_generated_fields(
     tmp_path: Path,
 ) -> None:
     """Incremental rebuild: a preserved (unchanged) generated type retains its generated/generated_by."""
-    from build_ast_graph import FileHashTracker, GraphTables, incremental_rebuild, pass1_parse, write_ladybug
-    from graph_enrich import load_generated_detection
-    from path_filtering import LayeredIgnore
+    from java_codebase_rag.graph.build_ast_graph import FileHashTracker, GraphTables, incremental_rebuild, pass1_parse, write_ladybug
+    from java_codebase_rag.graph.graph_enrich import load_generated_detection
+    from java_codebase_rag.graph.path_filtering import LayeredIgnore
 
     load_generated_detection.cache_clear()
 
@@ -130,7 +130,7 @@ def test_incremental_rebuild_preserves_generated_fields(
     # Initial build
     tables = GraphTables()
     asts = pass1_parse(source_root, tables, verbose=False)
-    from build_ast_graph import pass2_edges
+    from java_codebase_rag.graph.build_ast_graph import pass2_edges
     pass2_edges(tables, asts, verbose=False)
     write_ladybug(ladybug_path, tables, source_root=source_root, verbose=False)
 

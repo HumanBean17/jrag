@@ -14,9 +14,9 @@ import pytest
 from pydantic import ValidationError
 from mcp.server.fastmcp.exceptions import ToolError
 
-from java_ontology import VALID_RESOLVE_REASONS
+from java_codebase_rag.graph.java_ontology import VALID_RESOLVE_REASONS
 
-from mcp_v2 import (
+from java_codebase_rag.mcp.mcp_v2 import (
     Edge,
     NodeFilter,
     _NODEFILTER_APPLICABLE_FIELDS,
@@ -136,7 +136,7 @@ def _fake_search_rows() -> list[dict[str, Any]]:
 
 @needs_vectors
 def test_search_basic_returns_hits_with_symbol_id(monkeypatch, ladybug_graph) -> None:
-    monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
+    monkeypatch.setattr("java_codebase_rag.mcp.mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
     out = search_v2("ChatService", graph=ladybug_graph)
     assert out.success is True
     assert out.results
@@ -145,7 +145,7 @@ def test_search_basic_returns_hits_with_symbol_id(monkeypatch, ladybug_graph) ->
 
 @needs_vectors
 def test_search_filter_microservice(monkeypatch, ladybug_graph) -> None:
-    monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
+    monkeypatch.setattr("java_codebase_rag.mcp.mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
     out = search_v2("ChatService", filter={"microservice": "chat-assign"}, graph=ladybug_graph)
     assert out.success is True
     assert out.results
@@ -154,7 +154,7 @@ def test_search_filter_microservice(monkeypatch, ladybug_graph) -> None:
 
 @needs_vectors
 def test_search_path_contains_filter(monkeypatch, ladybug_graph) -> None:
-    monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
+    monkeypatch.setattr("java_codebase_rag.mcp.mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
     out = search_v2("ChatAssign", path_contains="ChatAssign", graph=ladybug_graph)
     assert out.success is True
     assert len(out.results) == 1
@@ -592,7 +592,7 @@ async def test_search_invalid_table_rejected(mcp_server) -> None:
 
 @needs_vectors
 def test_search_filter_accepts_json_string(monkeypatch, ladybug_graph) -> None:
-    monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
+    monkeypatch.setattr("java_codebase_rag.mcp.mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
     want = {"microservice": "chat-assign"}
     out_dict = search_v2("ChatService", filter=want, graph=ladybug_graph)
     out_str = search_v2("ChatService", filter='{"microservice":"chat-assign"}', graph=ladybug_graph)
@@ -603,7 +603,7 @@ def test_search_filter_accepts_json_string(monkeypatch, ladybug_graph) -> None:
 
 @needs_vectors
 def test_search_unknown_filter_key_returns_failure(monkeypatch, ladybug_graph) -> None:
-    monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
+    monkeypatch.setattr("java_codebase_rag.mcp.mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
     out = search_v2("ChatService", filter={"typo_key": "x"}, graph=ladybug_graph)
     assert out.success is False
     assert out.message is not None
@@ -643,7 +643,7 @@ def test_search_pushes_nodefilter_into_run_search(monkeypatch, ladybug_graph) ->
         captured.update(kwargs)
         return _fake_search_rows()
 
-    monkeypatch.setattr("mcp_v2.run_search", fake_run_search)
+    monkeypatch.setattr("java_codebase_rag.mcp.mcp_v2.run_search", fake_run_search)
     out = search_v2(
         "ChatService",
         filter={
@@ -689,7 +689,7 @@ def test_search_hybrid_missing_fts_falls_back_to_vector(monkeypatch, ladybug_gra
         call_count["vector"] += 1
         return _fake_search_rows()
 
-    monkeypatch.setattr("mcp_v2.run_search", fake_run_search)
+    monkeypatch.setattr("java_codebase_rag.mcp.mcp_v2.run_search", fake_run_search)
     out = search_v2("server port", table="yaml", hybrid=True, graph=ladybug_graph)
 
     # Should succeed with vector-only fallback
@@ -714,7 +714,7 @@ def test_search_hybrid_non_fts_error_still_fails(monkeypatch, ladybug_graph) -> 
     def fake_run_search(query, **kwargs):
         raise RuntimeError("Some other LanceDB error")
 
-    monkeypatch.setattr("mcp_v2.run_search", fake_run_search)
+    monkeypatch.setattr("java_codebase_rag.mcp.mcp_v2.run_search", fake_run_search)
     out = search_v2("query", table="java", hybrid=True, graph=ladybug_graph)
 
     # Should fail with the error message
@@ -730,7 +730,7 @@ def test_unresolved_call_site_noderef_carries_callee_name() -> None:
     (issue #354) — NodeRef previously had no `name` field, so pydantic's default
     extra='ignore' silently dropped `name=callee`, leaving the structured ref with
     fqn='' and no human-readable callee (clients had to dig into attrs)."""
-    from mcp_v2 import _unresolved_site_to_edge
+    from java_codebase_rag.mcp.mcp_v2 import _unresolved_site_to_edge
 
     edge = _unresolved_site_to_edge(
         "origin:1",
@@ -769,7 +769,7 @@ def test_neighbors_flat_labels_select_columns_per_edge_type() -> None:
     RETURNs only that type's columns (issue #356) — never a fixed superset that
     references columns absent on some matched type (the typed-union RETURN
     anti-pattern that errors on stricter binders like Kuzu)."""
-    from mcp_v2 import _FLAT_EDGE_ATTR_COLUMNS
+    from java_codebase_rag.mcp.mcp_v2 import _FLAT_EDGE_ATTR_COLUMNS
 
     issued: list[tuple[str, dict[str, Any]]] = []
 
@@ -800,7 +800,7 @@ def test_neighbors_flat_labels_select_columns_per_edge_type() -> None:
 
 @needs_vectors
 def test_search_cross_kind_filter_returns_failure(monkeypatch, ladybug_graph) -> None:
-    monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
+    monkeypatch.setattr("java_codebase_rag.mcp.mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
     out = search_v2("ChatService", filter={"path_contains": "/api"}, graph=ladybug_graph)
     assert out.success is False
     assert out.message is not None
@@ -810,7 +810,7 @@ def test_search_cross_kind_filter_returns_failure(monkeypatch, ladybug_graph) ->
 
 @needs_vectors
 def test_search_filter_empty_string_treated_as_none(monkeypatch, ladybug_graph) -> None:
-    monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
+    monkeypatch.setattr("java_codebase_rag.mcp.mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
     baseline = search_v2("ChatService", graph=ladybug_graph)
     empty = search_v2("ChatService", filter="", graph=ladybug_graph)
     whitespace = search_v2("ChatService", filter="   ", graph=ladybug_graph)
@@ -822,7 +822,7 @@ def test_search_filter_empty_string_treated_as_none(monkeypatch, ladybug_graph) 
 
 @needs_vectors
 def test_search_filter_json_null_treated_as_none(monkeypatch, ladybug_graph) -> None:
-    monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
+    monkeypatch.setattr("java_codebase_rag.mcp.mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
     baseline = search_v2("ChatService", graph=ladybug_graph)
     out = search_v2("ChatService", filter="null", graph=ladybug_graph)
     assert baseline.success is True
@@ -916,7 +916,7 @@ def test_neighbors_validate_call_still_raises(ladybug_graph) -> None:
 
 @needs_vectors
 def test_filter_invalid_json_returns_failure(monkeypatch, ladybug_graph) -> None:
-    monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
+    monkeypatch.setattr("java_codebase_rag.mcp.mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows())
     out = search_v2("ChatService", filter="{not json", graph=ladybug_graph)
     assert out.success is False
     assert out.message is not None
@@ -997,7 +997,7 @@ def test_describe_by_fqn_duplicate_hint_points_to_resolve() -> None:
 
 
 def test_server_tool_descriptions_no_pre_resolve_fallback() -> None:
-    from server import _INSTRUCTIONS, create_mcp_server
+    from java_codebase_rag.mcp.server import _INSTRUCTIONS, create_mcp_server
 
     async def _run() -> None:
         mcp = create_mcp_server()
@@ -1258,7 +1258,7 @@ def test_resolve_route_template_returns_one_or_many(ladybug_graph_route_extracti
 
 
 def test_resolve_client_target_service(ladybug_graph, ladybug_db_path_http_caller_smoke) -> None:
-    from ladybug_queries import LadybugGraph
+    from java_codebase_rag.graph.ladybug_queries import LadybugGraph
 
     graph = ladybug_graph
     rows = graph.list_clients(limit=500)
@@ -1280,7 +1280,7 @@ def test_resolve_client_target_service(ladybug_graph, ladybug_db_path_http_calle
 
 
 def test_resolve_client_target_path_pair(ladybug_graph, ladybug_db_path_http_caller_smoke) -> None:
-    from ladybug_queries import LadybugGraph
+    from java_codebase_rag.graph.ladybug_queries import LadybugGraph
 
     def _seed_client(g: LadybugGraph) -> dict | None:
         rows = g.list_clients(limit=500)
@@ -1334,7 +1334,7 @@ def test_resolve_wildcard_identifier_rejected(ladybug_graph) -> None:
 
 
 def test_resolve_every_reason_in_closed_set_appears() -> None:
-    from resolve_service import (
+    from java_codebase_rag.analysis.resolve_service import (
         _resolve_client_candidates,
         _resolve_producer_candidates,
         _resolve_route_candidates,
@@ -1833,7 +1833,7 @@ def test_describe_unresolved_call_sites_rollup_cap_footer_and_total(ladybug_grap
 
 def test_search_hit_has_score_components_field() -> None:
     """SearchHit model includes score_components field (default None)."""
-    from mcp_v2 import SearchHit
+    from java_codebase_rag.mcp.mcp_v2 import SearchHit
     hit = SearchHit(
         chunk_id="chunk:1",
         symbol_id="sym:1",
@@ -1869,7 +1869,7 @@ def test_search_explain_true_includes_score_components(monkeypatch, ladybug_grap
             }
         ]
 
-    monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: fake_rows_with_components())
+    monkeypatch.setattr("java_codebase_rag.mcp.mcp_v2.run_search", lambda *args, **kwargs: fake_rows_with_components())
     out = search_v2("ChatService", explain=True, graph=ladybug_graph)
     assert out.success is True
     assert out.results
@@ -1906,7 +1906,7 @@ def test_search_explain_false_omits_score_components(monkeypatch, ladybug_graph)
             }
         ]
 
-    monkeypatch.setattr("mcp_v2.run_search", lambda *args, **kwargs: fake_rows_with_components())
+    monkeypatch.setattr("java_codebase_rag.mcp.mcp_v2.run_search", lambda *args, **kwargs: fake_rows_with_components())
     # Test with explain=False explicitly
     out = search_v2("ChatService", explain=False, graph=ladybug_graph)
     assert out.success is True
@@ -1950,7 +1950,7 @@ def test_search_dedup_default_is_true(monkeypatch, ladybug_graph) -> None:
             }
         ]
 
-    monkeypatch.setattr("mcp_v2.run_search", mock_run_search)
+    monkeypatch.setattr("java_codebase_rag.mcp.mcp_v2.run_search", mock_run_search)
 
     out = search_v2("TypeA", graph=ladybug_graph)
     assert out.success is True
@@ -1980,7 +1980,7 @@ def test_search_chunks_field_present_when_deduped(monkeypatch, ladybug_graph) ->
             }
         ]
 
-    monkeypatch.setattr("mcp_v2.run_search", mock_run_search)
+    monkeypatch.setattr("java_codebase_rag.mcp.mcp_v2.run_search", mock_run_search)
 
     out = search_v2("TypeA", graph=ladybug_graph)
     assert out.success is True
@@ -2015,7 +2015,7 @@ def test_search_chunks_flag_sets_dedup_false(monkeypatch, ladybug_graph) -> None
             }
         ]
 
-    monkeypatch.setattr("mcp_v2.run_search", mock_run_search)
+    monkeypatch.setattr("java_codebase_rag.mcp.mcp_v2.run_search", mock_run_search)
 
     out = search_v2("TypeA", dedup=False, graph=ladybug_graph)
     assert out.success is True

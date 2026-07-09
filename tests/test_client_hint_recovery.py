@@ -3,8 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
-from build_ast_graph import GraphTables, _match_call_edge, pass6_match_edges, write_ladybug
-from ladybug_queries import LadybugGraph
+from java_codebase_rag.graph.build_ast_graph import GraphTables, _match_call_edge, pass6_match_edges, write_ladybug
+from java_codebase_rag.graph.ladybug_queries import LadybugGraph
 
 _FIXTURE = Path(__file__).resolve().parent / "fixtures" / "cross_service_smoke"
 _HTTP_CALLER = Path(__file__).resolve().parent / "fixtures" / "http_caller_smoke"
@@ -101,7 +101,7 @@ def test_pass6_async_rematch_uses_producer_row_kind() -> None:
         seen_kinds.append(call.client_kind)
         return _match_call_edge(call, routes, caller_microservice)
 
-    with patch("build_ast_graph._match_call_edge", capture):
+    with patch("java_codebase_rag.graph.build_ast_graph._match_call_edge", capture):
         pass6_match_edges(tables, verbose=False)
 
     assert "stream_bridge_send" in seen_kinds

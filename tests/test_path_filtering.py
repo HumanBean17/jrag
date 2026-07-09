@@ -4,7 +4,7 @@ from __future__ import annotations
 import warnings
 from pathlib import Path
 
-from path_filtering import (
+from java_codebase_rag.graph.path_filtering import (
     COMMON_EXCLUDED_PATH_PATTERNS,
     LayeredIgnore,
     compile_excluded_glob_patterns,

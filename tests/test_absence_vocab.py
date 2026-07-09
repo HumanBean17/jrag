@@ -7,7 +7,7 @@ from unittest import mock
 import pytest
 
 # These imports will fail until absence_vocab.py is created
-from absence_vocab import (
+from java_codebase_rag.absence.absence_vocab import (
     SymbolRecord,
     VocabularyIndex,
     VocabIndexStale,
@@ -79,7 +79,7 @@ class TestVocabularyIndexPersistence:
         index = VocabularyIndex.build(ladybug_graph, q=3)
         sidecar_path = tmp_path / VOCAB_INDEX_FILENAME
 
-        from ast_java import ONTOLOGY_VERSION
+        from java_codebase_rag.ast.ast_java import ONTOLOGY_VERSION
         index.save(sidecar_path, ontology_version=ONTOLOGY_VERSION)
 
         assert sidecar_path.exists()
@@ -96,7 +96,7 @@ class TestVocabularyIndexPersistence:
 
     def test_save_load_roundtrip(self, ladybug_graph, tmp_path):
         """save() then load() round-trips: symbol_count equal; a known symbol present."""
-        from ast_java import ONTOLOGY_VERSION
+        from java_codebase_rag.ast.ast_java import ONTOLOGY_VERSION
 
         original = VocabularyIndex.build(ladybug_graph, q=3)
         sidecar_path = tmp_path / VOCAB_INDEX_FILENAME
@@ -114,7 +114,7 @@ class TestVocabularyIndexPersistence:
 
     def test_load_stale_ontology_version_raises(self, ladybug_graph, tmp_path):
         """load() on a sidecar with stale ontology_version raises VocabIndexStale."""
-        from ast_java import ONTOLOGY_VERSION
+        from java_codebase_rag.ast.ast_java import ONTOLOGY_VERSION
 
         index = VocabularyIndex.build(ladybug_graph, q=3)
         sidecar_path = tmp_path / VOCAB_INDEX_FILENAME
@@ -196,7 +196,7 @@ class TestGetVocabularyIndex:
 
     def test_first_call_builds_and_saves(self, ladybug_graph, tmp_path, monkeypatch):
         """First call with no sidecar builds + saves the index."""
-        from ast_java import ONTOLOGY_VERSION
+        from java_codebase_rag.ast.ast_java import ONTOLOGY_VERSION
         from java_codebase_rag.config import resolve_operator_config
         import os
 
@@ -269,13 +269,13 @@ class TestBuildFailureResilience:
 
     def test_write_ladybug_succeeds_when_vocab_build_fails(self, corpus_root, tmp_path):
         """Monkeypatch build to raise → write_ladybug still succeeds (graph written; sidecar absent)."""
-        from build_ast_graph import write_ladybug, GraphTables
+        from java_codebase_rag.graph.build_ast_graph import write_ladybug, GraphTables
 
         db_path = tmp_path / "code_graph.lbug"
         tables = GraphTables()  # Empty tables for this test
 
         # Mock VocabularyIndex.build to raise
-        with mock.patch("absence_vocab.VocabularyIndex.build", side_effect=RuntimeError("Build failed")):
+        with mock.patch("java_codebase_rag.absence.absence_vocab.VocabularyIndex.build", side_effect=RuntimeError("Build failed")):
             # write_ladybug should not raise
             write_ladybug(
                 db_path=db_path,
@@ -293,7 +293,7 @@ class TestBuildFailureResilience:
 
     def test_try_build_vocabulary_index_failure_is_logged(self, corpus_root, tmp_path, caplog):
         """_try_build_vocabulary_index logs on failure but doesn't raise."""
-        from build_ast_graph import _try_build_vocabulary_index
+        from java_codebase_rag.graph.build_ast_graph import _try_build_vocabulary_index
 
         db_path = tmp_path / "code_graph.lbug"
         # Create a dummy db file for testing
@@ -301,7 +301,7 @@ class TestBuildFailureResilience:
         db_path.touch()
 
         # Mock VocabularyIndex.build to raise
-        with mock.patch("absence_vocab.VocabularyIndex.build", side_effect=RuntimeError("Build failed")):
+        with mock.patch("java_codebase_rag.absence.absence_vocab.VocabularyIndex.build", side_effect=RuntimeError("Build failed")):
             # Should not raise
             _try_build_vocabulary_index(db_path, corpus_root, verbose=False)
 
@@ -314,7 +314,7 @@ class TestEnvVarWiring:
 
     def test_build_hook_reads_env_var(self, ladybug_db_path, corpus_root, monkeypatch):
         """_try_build_vocabulary_index reads JAVA_CODEBASE_RAG_ABSENCE_NGRAM_Q from env."""
-        from build_ast_graph import _try_build_vocabulary_index
+        from java_codebase_rag.graph.build_ast_graph import _try_build_vocabulary_index
 
         # Set env var to q=2
         monkeypatch.setenv("JAVA_CODEBASE_RAG_ABSENCE_NGRAM_Q", "2")
@@ -334,7 +334,7 @@ class TestEnvVarWiring:
 
     def test_build_hook_default_q_when_env_var_invalid(self, ladybug_db_path, corpus_root, monkeypatch):
         """Build hook falls back to q=3 when env var is invalid."""
-        from build_ast_graph import _try_build_vocabulary_index
+        from java_codebase_rag.graph.build_ast_graph import _try_build_vocabulary_index
 
         # Set env var to invalid value
         monkeypatch.setenv("JAVA_CODEBASE_RAG_ABSENCE_NGRAM_Q", "not_a_number")

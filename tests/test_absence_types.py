@@ -4,7 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 # These imports will fail until absence_types.py is created
-from absence_types import (
+from java_codebase_rag.absence.absence_types import (
     AbsenceDiagnosis,
     AbsenceProof,
     ExternalIdentity,
@@ -17,8 +17,8 @@ from absence_types import (
 )
 
 # Import the 5 MCP output models
-from mcp_v2 import SearchOutput, FindOutput, DescribeOutput, NeighborsOutput
-from resolve_service import ResolveOutput
+from java_codebase_rag.mcp.mcp_v2 import SearchOutput, FindOutput, DescribeOutput, NeighborsOutput
+from java_codebase_rag.analysis.resolve_service import ResolveOutput
 
 
 class TestAbsenceTypesDTOs:

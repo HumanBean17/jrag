@@ -134,7 +134,7 @@ def _apply_auto_scope(args: argparse.Namespace, cfg, graph) -> None:
     source_root = cfg.source_root if cfg.source_root else None
     if not source_root:
         return
-    from graph_enrich import detect_microservice_from_path
+    from java_codebase_rag.graph.graph_enrich import detect_microservice_from_path
 
     candidate = detect_microservice_from_path(Path.cwd(), Path(source_root))
     if not candidate:
@@ -1217,7 +1217,7 @@ def _load_graph(cfg):  # type: ignore[no-untyped-def]
     * ontology-mismatch (``RuntimeError`` from ``LadybugGraph.get``) ->
       ``_IndexStale`` (caught in ``main`` -> envelope with a rebuild hint).
     """
-    from ladybug_queries import LadybugGraph
+    from java_codebase_rag.graph.ladybug_queries import LadybugGraph
 
     ladybug_path = str(cfg.ladybug_path)
     if not LadybugGraph.exists(ladybug_path):
@@ -1233,8 +1233,8 @@ def _load_graph(cfg):  # type: ignore[no-untyped-def]
 
 def _cmd_vocab_index(args: argparse.Namespace) -> int:
     """Rebuild the vocabulary index sidecar from the Ladybug graph."""
-    from ast_java import ONTOLOGY_VERSION
-    from absence_vocab import VocabularyIndex, VOCAB_INDEX_FILENAME
+    from java_codebase_rag.ast.ast_java import ONTOLOGY_VERSION
+    from java_codebase_rag.absence.absence_vocab import VocabularyIndex, VOCAB_INDEX_FILENAME
 
     cfg = _resolve_cfg(args)
     try:
@@ -1565,7 +1565,7 @@ def _build_node_filter_or_error(filter_dict: dict):
     A bad enum (e.g. ``--role FOO``) should be a user-facing validation error,
     not an internal crash. Returns ``(node_filter, None)`` on success.
     """
-    import mcp_v2
+    from java_codebase_rag.mcp import mcp_v2
 
     from java_codebase_rag.jrag_envelope import Envelope
     from pydantic import ValidationError
@@ -1591,7 +1591,7 @@ def _cmd_find_filter_mode(
     limit: int,
 ) -> int:
     """Find filter mode: build NodeFilter and call find_v2."""
-    import mcp_v2
+    from java_codebase_rag.mcp import mcp_v2
 
     from java_codebase_rag.jrag_envelope import Envelope, next_actions_hook, normalize_enum, to_envelope_rows
     from java_codebase_rag.jrag_render import render
@@ -1674,7 +1674,7 @@ def _cmd_find_filter_mode(
 
 
 def _cmd_inspect(args: argparse.Namespace) -> int:
-    import mcp_v2
+    from java_codebase_rag.mcp import mcp_v2
 
     from java_codebase_rag.jrag_envelope import Envelope, next_actions_hook, resolve_query
     from java_codebase_rag.jrag_render import render
@@ -2574,7 +2574,7 @@ def _cmd_callees(args: argparse.Namespace) -> int:
     # Producer root -> ASYNC_CALLS out (Producer -> :Route, the kafka_topic
     # Route this producer publishes to — NOT a :Producer node).
     if node.kind in ("client", "producer"):
-        import mcp_v2
+        from java_codebase_rag.mcp import mcp_v2
 
         edge_types = ["HTTP_CALLS"] if node.kind == "client" else ["ASYNC_CALLS"]
         out = mcp_v2.neighbors_v2(
@@ -2710,7 +2710,7 @@ def _cmd_callees(args: argparse.Namespace) -> int:
 
 
 def _cmd_hierarchy(args: argparse.Namespace) -> int:
-    import mcp_v2
+    from java_codebase_rag.mcp import mcp_v2
 
     cfg, graph, rc = _load_graph_or_error(args)
     if rc:
@@ -2863,7 +2863,7 @@ def _cmd_subclasses(args: argparse.Namespace) -> int:
 
 
 def _cmd_overrides(args: argparse.Namespace) -> int:
-    import mcp_v2
+    from java_codebase_rag.mcp import mcp_v2
 
     cfg, graph, rc = _load_graph_or_error(args)
     if rc:
@@ -2916,7 +2916,7 @@ def _cmd_overrides(args: argparse.Namespace) -> int:
 
 
 def _cmd_overridden_by(args: argparse.Namespace) -> int:
-    import mcp_v2
+    from java_codebase_rag.mcp import mcp_v2
 
     cfg, graph, rc = _load_graph_or_error(args)
     if rc:
@@ -3224,7 +3224,7 @@ def _cmd_flow(args: argparse.Namespace) -> int:
 
 
 def _cmd_dependencies(args: argparse.Namespace) -> int:
-    import mcp_v2
+    from java_codebase_rag.mcp import mcp_v2
 
     cfg, graph, rc = _load_graph_or_error(args)
     if rc:
@@ -3559,7 +3559,7 @@ def _cmd_outline(args: argparse.Namespace) -> int:
     start_line<1). ``--limit`` caps the entry count (the file's symbol table
     is otherwise unbounded); ``truncated`` is set when more entries exist.
     """
-    from ladybug_queries import find_symbols_in_file_range
+    from java_codebase_rag.graph.ladybug_queries import find_symbols_in_file_range
 
     from java_codebase_rag.jrag_envelope import Envelope, mark_truncated, next_actions_hook
     from java_codebase_rag.jrag_render import render
@@ -3629,8 +3629,8 @@ def _cmd_imports(args: argparse.Namespace) -> int:
     a node per import: resolved graph Symbol when resolve_v2 hits (status=one),
     or an unresolved placeholder carrying the raw FQN otherwise.
     """
-    from ast_java import parse_java
-    from resolve_service import resolve_v2
+    from java_codebase_rag.ast.ast_java import parse_java
+    from java_codebase_rag.analysis.resolve_service import resolve_v2
 
     from java_codebase_rag.jrag_envelope import Envelope, next_actions_hook
     from java_codebase_rag.jrag_render import render
@@ -4195,7 +4195,7 @@ def _zero_result_guidance(args: argparse.Namespace, graph) -> str | None:
     empty (truly no matches for this query), or the probe itself errored
     (non-fatal — the empty result still renders).
     """
-    import mcp_v2
+    from java_codebase_rag.mcp import mcp_v2
     from collections import Counter
 
     from java_codebase_rag.jrag_envelope import normalize_enum
@@ -4250,7 +4250,7 @@ def _cmd_search(args: argparse.Namespace) -> int:
     truncation, and renders. --fuzzy is rejected IN-HANDLER (not argparse-exit)
     so the error carries the canonical envelope shape.
     """
-    import mcp_v2
+    from java_codebase_rag.mcp import mcp_v2
 
     from java_codebase_rag.jrag_envelope import Envelope, mark_truncated, next_actions_hook, normalize_enum
     from java_codebase_rag.jrag_render import render
@@ -4375,7 +4375,7 @@ def _cmd_search(args: argparse.Namespace) -> int:
             # explain renderer from there would crash `jrag search ... --explain` on the
             # exact Intel install that runs the lexical path. search_scoring is
             # dependency-free and always installed, so the explain import works everywhere.
-            from search_scoring import explain_score_components
+            from java_codebase_rag.search.search_scoring import explain_score_components
             comps = d.get("score_components")
             d["explain"] = explain_score_components(
                 comps,

@@ -10,8 +10,8 @@ import pytest
 pytest.importorskip("lancedb")
 pytest.importorskip("sentence_transformers")
 
-import search_lancedb
-from search_lancedb import JAVA_ENRICHED_COLUMNS, _rrf_merge
+from java_codebase_rag.search import search_lancedb
+from java_codebase_rag.search.search_lancedb import JAVA_ENRICHED_COLUMNS, _rrf_merge
 
 
 def test_rrf_merge_weights_second_list_by_row() -> None:
@@ -126,7 +126,7 @@ def test_vector_displayed_score_is_rank_monotonic() -> None:
     The honest score uses the adjusted distance (distance + import_penalty - role_weight - symbol_bonus).
     This matches the sort key, so the displayed score is monotonic. After clamping, scores are in [0,1].
     """
-    from search_lancedb import _effective_distance, l2_distance_to_score, _clamp01
+    from java_codebase_rag.search.search_lancedb import _effective_distance, l2_distance_to_score, _clamp01
 
     # Build controlled rows with varying distances and bonuses
     rows = [
@@ -208,7 +208,7 @@ def test_hybrid_score_normalized_to_unit_range() -> None:
     The composite sort metric (raw_rrf * import_factor + role_weight + symbol_bonus)
     must produce displayed scores that are non-increasing with rank.
     """
-    from search_lancedb import _hybrid_sort_key, _hybrid_post_sort_normalization
+    from java_codebase_rag.search.search_lancedb import _hybrid_sort_key, _hybrid_post_sort_normalization
 
     # Build controlled hybrid rows with varying raw scores and components.
     # Row 2 should rank highest due to large role_weight despite lower raw RRF.
@@ -285,7 +285,7 @@ def test_hybrid_import_penalty_rendered_as_additive_penalty() -> None:
     The normalization function uses the constant directly, so changing the
     stored value is safe and doesn't affect the actual hybrid score.
     """
-    from search_lancedb import _hybrid_sort_key, explain_score_components
+    from java_codebase_rag.search.search_lancedb import _hybrid_sort_key, explain_score_components
 
     # Create a row with import_heavy hint
     row = {
@@ -324,7 +324,7 @@ def test_run_search_dedup_collapses_by_fqn() -> None:
     First-seen-wins (rows are pre-sorted, so first is best chunk).
     Each survivor gets _chunks_collapsed count (>=1).
     """
-    from search_lancedb import _dedup_by_fqn
+    from java_codebase_rag.search.search_lancedb import _dedup_by_fqn
 
     # Build controlled sorted rows: 3 rows FQN=A (best first), 1 row FQN=B, 2 rows FQN=C
     rows = [
@@ -399,7 +399,7 @@ def test_run_search_dedup_offset_pagination() -> None:
     With limit=5, offset=5, dedup_by_fqn=True → should return FQNs #6..#10 (5 unique).
     Over-fetch (4x) ensures we fetch enough to fill the page after dedup.
     """
-    from search_lancedb import _dedup_by_fqn
+    from java_codebase_rag.search.search_lancedb import _dedup_by_fqn
 
     # Build 8 FQNs × 3 chunks each = 24 rows, pre-sorted by FQN then score
     rows = []
@@ -456,7 +456,7 @@ def test_run_search_dedup_passes_through_sql_yaml() -> None:
     Each row without primary_type_fqn gets a unique dedup key __id:<id>
     so they pass through unchanged.
     """
-    from search_lancedb import _dedup_by_fqn
+    from java_codebase_rag.search.search_lancedb import _dedup_by_fqn
 
     rows = [
         {
@@ -521,7 +521,7 @@ def test_run_search_dedup_off_is_byte_identical() -> None:
     The non-dedup path should be byte-identical to today's behavior.
     This test ensures we don't accidentally change behavior when dedup is off.
     """
-    from search_lancedb import _dedup_by_fqn
+    from java_codebase_rag.search.search_lancedb import _dedup_by_fqn
 
     rows = [
         {

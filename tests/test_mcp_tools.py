@@ -84,7 +84,7 @@ async def test_tool_input_schema_includes_expected_enums(mcp_server) -> None:
 
 
 def test_cocoindex_subprocess_env_sets_project_root(monkeypatch, tmp_path) -> None:
-    import server
+    from java_codebase_rag.mcp import server
 
     monkeypatch.setenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", "/should/be/overwritten")
     monkeypatch.setenv("PRESERVE_ME_FOR_SUBPROCESS", "ok")
@@ -103,7 +103,7 @@ def test_cocoindex_subprocess_env_applies_inflight_default(monkeypatch, tmp_path
     ``COCOINDEX_MAX_INFLIGHT_COMPONENTS`` (default 1024 -> capped to 256), not the
     non-existent ``COCOINDEX_SOURCE_MAX_INFLIGHT_ROWS`` from the broken #293 fix.
     """
-    import server
+    from java_codebase_rag.mcp import server
 
     proj = tmp_path / "external-java-repo"
     proj.mkdir()

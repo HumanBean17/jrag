@@ -10,8 +10,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
-from ladybug_queries import LadybugGraph
-from mcp_hints import generate_hints
+from java_codebase_rag.graph.ladybug_queries import LadybugGraph
+from java_codebase_rag.mcp.mcp_hints import generate_hints
 
 __all__ = [
     "NodeRef",

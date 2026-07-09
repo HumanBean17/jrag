@@ -8,7 +8,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from graph_types import NodeRef
+from java_codebase_rag.graph.graph_types import NodeRef
 
 __all__ = [
     "AbsenceVerdict",

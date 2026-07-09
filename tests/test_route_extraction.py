@@ -5,8 +5,8 @@ import io
 import json
 from contextlib import redirect_stderr
 
-from ast_java import parse_java
-from build_ast_graph import _normalize_path, _route_id
+from java_codebase_rag.ast.ast_java import parse_java
+from java_codebase_rag.graph.build_ast_graph import _normalize_path, _route_id
 
 
 def _routes(src: str, *, filename: str = "Smoke.java") -> list:

@@ -14,7 +14,7 @@ import pytest
 from java_codebase_rag import cli as cli_mod
 
 REPO = Path(__file__).resolve().parent.parent
-BUILDER = REPO / "build_ast_graph.py"
+BUILDER = REPO / "src" / "java_codebase_rag" / "graph" / "build_ast_graph.py"
 FIXTURE_ROOT = REPO / "tests" / "fixtures" / "call_graph_smoke"
 _PASS1_START = "[graph] pass 1 · parsing Java files"
 

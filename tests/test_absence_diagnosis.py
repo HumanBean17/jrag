@@ -17,10 +17,10 @@ from typing import Any
 import pytest
 
 # These imports will fail until absence_diagnosis.py is created (RED).
-from absence_diagnosis import _neighbors_meaningful_empty, diagnose
-from absence_types import AbsenceDiagnosis
-from absence_vocab import VocabularyIndex
-from graph_types import NodeRef
+from java_codebase_rag.absence.absence_diagnosis import _neighbors_meaningful_empty, diagnose
+from java_codebase_rag.absence.absence_types import AbsenceDiagnosis
+from java_codebase_rag.absence.absence_vocab import VocabularyIndex
+from java_codebase_rag.graph.graph_types import NodeRef
 
 
 # ---- helpers -----------------------------------------------------------------

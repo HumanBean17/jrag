@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from graph_types import NodeRef
+from java_codebase_rag.graph.graph_types import NodeRef
 from java_codebase_rag.jrag_envelope import (
     Envelope,
     mark_truncated,
@@ -21,7 +21,7 @@ from java_codebase_rag.jrag_envelope import (
     resolve_query,
     to_envelope_rows,
 )
-from resolve_service import ResolveCandidate, ResolveOutput
+from java_codebase_rag.analysis.resolve_service import ResolveCandidate, ResolveOutput
 
 
 # ----- Test 1: to_dict omits empty optionals -----
@@ -131,7 +131,7 @@ def test_resolve_query_one_proceeds_and_sets_file_location(monkeypatch: pytest.M
         assert identifier == "doStuff"
         return fake_output
 
-    monkeypatch.setattr("resolve_service.resolve_v2", fake_resolve_v2)
+    monkeypatch.setattr("java_codebase_rag.analysis.resolve_service.resolve_v2", fake_resolve_v2)
     graph = _graph_returning_file_location("src/Foo.java", 42)
     cfg = MagicMock()
     cfg.ladybug_path = "/tmp/x/code_graph.lbug"
@@ -158,7 +158,7 @@ def test_resolve_query_one_blocked_by_post_filter_returns_not_found(
 ) -> None:
     node = _make_node(role="SERVICE")
     fake_output = ResolveOutput(success=True, status="one", node=node)
-    monkeypatch.setattr("resolve_service.resolve_v2", lambda *a, **kw: fake_output)
+    monkeypatch.setattr("java_codebase_rag.analysis.resolve_service.resolve_v2", lambda *a, **kw: fake_output)
 
     graph = _graph_returning_file_location("src/Foo.java", 1)
     cfg = MagicMock()
@@ -189,7 +189,7 @@ def test_resolve_query_many_returns_candidates_with_reason(monkeypatch: pytest.M
             ResolveCandidate(node=n2, score=0.5, reason="short_name"),
         ],
     )
-    monkeypatch.setattr("resolve_service.resolve_v2", lambda *a, **kw: fake_output)
+    monkeypatch.setattr("java_codebase_rag.analysis.resolve_service.resolve_v2", lambda *a, **kw: fake_output)
     graph = MagicMock()
     cfg = MagicMock()
 
@@ -228,7 +228,7 @@ def test_resolve_query_many_post_filter_collapses_to_one(monkeypatch: pytest.Mon
             ResolveCandidate(node=n_other, score=0.5, reason="short_name"),
         ],
     )
-    monkeypatch.setattr("resolve_service.resolve_v2", lambda *a, **kw: fake_output)
+    monkeypatch.setattr("java_codebase_rag.analysis.resolve_service.resolve_v2", lambda *a, **kw: fake_output)
     graph = _graph_returning_file_location("Foo.java", 7)
     cfg = MagicMock()
 
@@ -260,7 +260,7 @@ def test_resolve_query_many_caps_candidates_at_ten(monkeypatch: pytest.MonkeyPat
         for i in range(12)
     ]
     fake_output = ResolveOutput(success=True, status="many", candidates=cands)
-    monkeypatch.setattr("resolve_service.resolve_v2", lambda *a, **kw: fake_output)
+    monkeypatch.setattr("java_codebase_rag.analysis.resolve_service.resolve_v2", lambda *a, **kw: fake_output)
     graph = MagicMock()
     cfg = MagicMock()
 
@@ -292,7 +292,7 @@ def test_resolve_query_many_post_filter_rejects_all_is_not_found(
             ResolveCandidate(node=n2, score=0.5, reason="short_name"),
         ],
     )
-    monkeypatch.setattr("resolve_service.resolve_v2", lambda *a, **kw: fake_output)
+    monkeypatch.setattr("java_codebase_rag.analysis.resolve_service.resolve_v2", lambda *a, **kw: fake_output)
     graph = MagicMock()
     cfg = MagicMock()
 
@@ -320,7 +320,7 @@ def test_resolve_query_none_is_not_found_with_search_hint(monkeypatch: pytest.Mo
         status="none",
         message="No matches for identifier; use search(query=...) for ranked fuzzy lookup.",
     )
-    monkeypatch.setattr("resolve_service.resolve_v2", lambda *a, **kw: fake_output)
+    monkeypatch.setattr("java_codebase_rag.analysis.resolve_service.resolve_v2", lambda *a, **kw: fake_output)
     graph = MagicMock()
     cfg = MagicMock()
 

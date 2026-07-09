@@ -12,11 +12,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from absence_types import AbsenceDiagnosis, AbsenceProof, ExternalIdentity
-from graph_types import NodeRef
+from java_codebase_rag.absence.absence_types import AbsenceDiagnosis, AbsenceProof, ExternalIdentity
+from java_codebase_rag.graph.graph_types import NodeRef
 from java_codebase_rag.jrag_envelope import Envelope, resolve_query
 from java_codebase_rag.jrag_render import render
-from resolve_service import ResolveOutput
+from java_codebase_rag.analysis.resolve_service import ResolveOutput
 
 
 # ----- Test 1: Envelope.absence serialization -----
@@ -223,9 +223,9 @@ def test_resolve_none_carries_absence_to_envelope() -> None:
     )
 
     # Mock resolve_v2 to return our test output
-    from resolve_service import resolve_v2
+    from java_codebase_rag.analysis.resolve_service import resolve_v2
     original_resolve = resolve_v2
-    import resolve_service
+    from java_codebase_rag.analysis import resolve_service
     resolve_service.resolve_v2 = lambda *args, **kwargs: mock_output
 
     try:
@@ -259,9 +259,9 @@ def test_resolve_without_absence() -> None:
         absence=None,  # No diagnosis
     )
 
-    from resolve_service import resolve_v2
+    from java_codebase_rag.analysis.resolve_service import resolve_v2
     original_resolve = resolve_v2
-    import resolve_service
+    from java_codebase_rag.analysis import resolve_service
     resolve_service.resolve_v2 = lambda *args, **kwargs: mock_output
 
     try:

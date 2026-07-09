@@ -4,7 +4,7 @@ from pathlib import Path
 
 import ladybug
 
-from ladybug_queries import LadybugGraph
+from java_codebase_rag.graph.ladybug_queries import LadybugGraph
 
 
 def _scalar(db_path: Path, query: str) -> int:

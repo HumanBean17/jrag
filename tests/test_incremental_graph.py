@@ -10,9 +10,9 @@ from pathlib import Path
 
 import ladybug
 
-from ast_java import ONTOLOGY_VERSION
-from build_ast_graph import FileHashTracker, GraphTables, pass1_parse, pass2_edges, pass4_routes
-from path_filtering import LayeredIgnore
+from java_codebase_rag.ast.ast_java import ONTOLOGY_VERSION
+from java_codebase_rag.graph.build_ast_graph import FileHashTracker, GraphTables, pass1_parse, pass2_edges, pass4_routes
+from java_codebase_rag.graph.path_filtering import LayeredIgnore
 
 
 class TestFileHashTracker:
@@ -232,7 +232,7 @@ class TestIncrementalOrchestrator:
 
     def test_incremental_single_file_change(self, tmp_path: Path) -> None:
         """Change one .java file, run incremental, verify only that file's nodes changed."""
-        from build_ast_graph import incremental_rebuild
+        from java_codebase_rag.graph.build_ast_graph import incremental_rebuild
 
         source_root = tmp_path / "src"
         source_root.mkdir()
@@ -250,7 +250,7 @@ class TestIncrementalOrchestrator:
         assert len(asts) == 2
 
         # Build full graph (pass2 needed for EXTENDS edges)
-        from build_ast_graph import write_ladybug
+        from java_codebase_rag.graph.build_ast_graph import write_ladybug
         pass2_edges(tables, asts, verbose=False)
         write_ladybug(ladybug_path, tables, source_root=source_root, verbose=False)
 
@@ -286,7 +286,7 @@ class TestIncrementalOrchestrator:
         (source_root / "A.java").write_text("package pkg; class A {}", encoding="utf-8")
 
         # Initial build
-        from build_ast_graph import write_ladybug
+        from java_codebase_rag.graph.build_ast_graph import write_ladybug
         tables = GraphTables()
         pass1_parse(source_root, tables, verbose=False)
         write_ladybug(ladybug_path, tables, source_root=source_root, verbose=False)
@@ -302,7 +302,7 @@ class TestIncrementalOrchestrator:
         (source_root / "B.java").write_text("package pkg; class B {}", encoding="utf-8")
 
         # Run incremental
-        from build_ast_graph import incremental_rebuild
+        from java_codebase_rag.graph.build_ast_graph import incremental_rebuild
         result = incremental_rebuild(source_root, ladybug_path, verbose=False)
 
         assert result.mode == "incremental"
@@ -322,7 +322,7 @@ class TestIncrementalOrchestrator:
         (source_root / "B.java").write_text("package pkg; class B {}", encoding="utf-8")
 
         # Initial build
-        from build_ast_graph import write_ladybug
+        from java_codebase_rag.graph.build_ast_graph import write_ladybug
         tables = GraphTables()
         pass1_parse(source_root, tables, verbose=False)
         write_ladybug(ladybug_path, tables, source_root=source_root, verbose=False)
@@ -338,7 +338,7 @@ class TestIncrementalOrchestrator:
         (source_root / "B.java").unlink()
 
         # Run incremental
-        from build_ast_graph import incremental_rebuild
+        from java_codebase_rag.graph.build_ast_graph import incremental_rebuild
         result = incremental_rebuild(source_root, ladybug_path, verbose=False)
 
         assert result.mode == "incremental"
@@ -369,7 +369,7 @@ class TestIncrementalOrchestrator:
         )
 
         # Initial build
-        from build_ast_graph import write_ladybug
+        from java_codebase_rag.graph.build_ast_graph import write_ladybug
         tables = GraphTables()
         pass1_parse(source_root, tables, verbose=False)
         write_ladybug(ladybug_path, tables, source_root=source_root, verbose=False)
@@ -399,7 +399,7 @@ class TestIncrementalOrchestrator:
         )
 
         # Run incremental
-        from build_ast_graph import incremental_rebuild
+        from java_codebase_rag.graph.build_ast_graph import incremental_rebuild
         incremental_rebuild(source_root, ladybug_path, verbose=False)
 
         # Verify phantom nodes still exist
@@ -427,7 +427,7 @@ class TestIncrementalOrchestrator:
         )
 
         # Initial build (pass2 needed for EXTENDS edges)
-        from build_ast_graph import write_ladybug
+        from java_codebase_rag.graph.build_ast_graph import write_ladybug
         tables = GraphTables()
         asts = pass1_parse(source_root, tables, verbose=False)
         pass2_edges(tables, asts, verbose=False)
@@ -446,7 +446,7 @@ class TestIncrementalOrchestrator:
         )
 
         # Run incremental
-        from build_ast_graph import incremental_rebuild
+        from java_codebase_rag.graph.build_ast_graph import incremental_rebuild
         result = incremental_rebuild(source_root, ladybug_path, verbose=False)
 
         # Derived.java should be reprocessed due to EXTENDS edge
@@ -468,7 +468,7 @@ class TestIncrementalOrchestrator:
             )
 
         # Initial build
-        from build_ast_graph import write_ladybug
+        from java_codebase_rag.graph.build_ast_graph import write_ladybug
         tables = GraphTables()
         asts = pass1_parse(source_root, tables, verbose=False)
         pass2_edges(tables, asts, verbose=False)
@@ -488,7 +488,7 @@ class TestIncrementalOrchestrator:
         )
 
         # Run incremental with low expansion cap
-        from build_ast_graph import incremental_rebuild
+        from java_codebase_rag.graph.build_ast_graph import incremental_rebuild
         result = incremental_rebuild(source_root, ladybug_path, verbose=False, expansion_cap=2)
 
         # Should fall back to full rebuild due to cap exceeded
@@ -506,7 +506,7 @@ class TestIncrementalOrchestrator:
         (source_root / "A.java").write_text("package pkg; class A {}", encoding="utf-8")
 
         # Initial build
-        from build_ast_graph import write_ladybug
+        from java_codebase_rag.graph.build_ast_graph import write_ladybug
         tables = GraphTables()
         pass1_parse(source_root, tables, verbose=False)
         write_ladybug(ladybug_path, tables, source_root=source_root, verbose=False)
@@ -528,7 +528,7 @@ class TestIncrementalOrchestrator:
         )
 
         # Run incremental - should fall back to full rebuild
-        from build_ast_graph import incremental_rebuild
+        from java_codebase_rag.graph.build_ast_graph import incremental_rebuild
         result = incremental_rebuild(source_root, ladybug_path, verbose=False)
 
         assert result.mode == "full_fallback"
@@ -547,7 +547,7 @@ class TestIncrementalOrchestrator:
         (source_root / "A.java").write_text("package pkg; class A {}", encoding="utf-8")
 
         # Initial build
-        from build_ast_graph import write_ladybug
+        from java_codebase_rag.graph.build_ast_graph import write_ladybug
         tables = GraphTables()
         pass1_parse(source_root, tables, verbose=False)
         write_ladybug(ladybug_path, tables, source_root=source_root, verbose=False)
@@ -565,7 +565,7 @@ class TestIncrementalOrchestrator:
         )
 
         # Run incremental
-        from build_ast_graph import incremental_rebuild
+        from java_codebase_rag.graph.build_ast_graph import incremental_rebuild
         result = incremental_rebuild(source_root, ladybug_path, verbose=False)
 
         assert result.mode == "incremental"
@@ -586,7 +586,7 @@ class TestIncrementalOrchestrator:
         (source_root / "A.java").write_text("package pkg; class A {}", encoding="utf-8")
 
         # Initial build
-        from build_ast_graph import write_ladybug
+        from java_codebase_rag.graph.build_ast_graph import write_ladybug
         tables = GraphTables()
         pass1_parse(source_root, tables, verbose=False)
         write_ladybug(ladybug_path, tables, source_root=source_root, verbose=False)
@@ -609,7 +609,7 @@ class TestIncrementalOrchestrator:
         tracker.save()
 
         # Run incremental with no changes
-        from build_ast_graph import incremental_rebuild
+        from java_codebase_rag.graph.build_ast_graph import incremental_rebuild
         result = incremental_rebuild(source_root, ladybug_path, verbose=False)
 
         assert result.mode == "incremental"
@@ -638,7 +638,7 @@ class TestIncrementalOrchestrator:
         (source_root / "A.java").write_text("package pkg; class A {}", encoding="utf-8")
 
         # Initial build
-        from build_ast_graph import write_ladybug
+        from java_codebase_rag.graph.build_ast_graph import write_ladybug
         tables = GraphTables()
         pass1_parse(source_root, tables, verbose=False)
         write_ladybug(ladybug_path, tables, source_root=source_root, verbose=False)
@@ -656,7 +656,7 @@ class TestIncrementalOrchestrator:
         )
 
         # Run incremental
-        from build_ast_graph import incremental_rebuild
+        from java_codebase_rag.graph.build_ast_graph import incremental_rebuild
         result = incremental_rebuild(source_root, ladybug_path, verbose=False)
 
         assert result.mode == "incremental"
@@ -675,7 +675,7 @@ class TestIncrementalOrchestrator:
 
     def test_load_existing_types_populates_indexes(self, tmp_path: Path) -> None:
         """Build full graph, then load existing types into empty GraphTables, verify types/by_simple_name/by_package populated."""
-        from build_ast_graph import _load_existing_types
+        from java_codebase_rag.graph.build_ast_graph import _load_existing_types
 
         source_root = tmp_path / "src"
         source_root.mkdir()
@@ -685,7 +685,7 @@ class TestIncrementalOrchestrator:
         (source_root / "A.java").write_text("package pkg; class A {}", encoding="utf-8")
 
         # Build full graph
-        from build_ast_graph import write_ladybug
+        from java_codebase_rag.graph.build_ast_graph import write_ladybug
         tables = GraphTables()
         pass1_parse(source_root, tables, verbose=False)
         write_ladybug(ladybug_path, tables, source_root=source_root, verbose=False)
@@ -704,7 +704,7 @@ class TestIncrementalOrchestrator:
 
     def test_find_dependents_returns_incoming_edge_sources(self, tmp_path: Path) -> None:
         """Seed graph with EXTENDS edge from file B to file A, change file A, verify _find_dependents returns file B's filename."""
-        from build_ast_graph import _find_dependents
+        from java_codebase_rag.graph.build_ast_graph import _find_dependents
 
         source_root = tmp_path / "src"
         source_root.mkdir()
@@ -717,7 +717,7 @@ class TestIncrementalOrchestrator:
         )
 
         # Build full graph
-        from build_ast_graph import write_ladybug
+        from java_codebase_rag.graph.build_ast_graph import write_ladybug
         tables = GraphTables()
         asts = pass1_parse(source_root, tables, verbose=False)
         pass2_edges(tables, asts, verbose=False)
@@ -747,7 +747,7 @@ class TestIncrementalOrchestrator:
         Uses the new (changed_files, dependent_files) signature with an empty
         dependent set so behavior matches the legacy single-file case.
         """
-        from build_ast_graph import _delete_file_scope
+        from java_codebase_rag.graph.build_ast_graph import _delete_file_scope
 
         source_root = tmp_path / "src"
         source_root.mkdir()
@@ -758,7 +758,7 @@ class TestIncrementalOrchestrator:
         (source_root / "B.java").write_text("package pkg; class B {}", encoding="utf-8")
 
         # Build full graph
-        from build_ast_graph import write_ladybug
+        from java_codebase_rag.graph.build_ast_graph import write_ladybug
         tables = GraphTables()
         pass1_parse(source_root, tables, verbose=False)
         write_ladybug(ladybug_path, tables, source_root=source_root, verbose=False)
@@ -796,7 +796,7 @@ class TestIncrementalOrchestrator:
         no exception, A's node is gone, B and C nodes are preserved, and the
         out-of-scope C->B CALLS edge survives.
         """
-        from build_ast_graph import _delete_file_scope, write_ladybug
+        from java_codebase_rag.graph.build_ast_graph import _delete_file_scope, write_ladybug
 
         source_root = tmp_path / "src"
         source_root.mkdir()
@@ -828,7 +828,7 @@ class TestIncrementalOrchestrator:
         tables = GraphTables()
         asts = pass1_parse(source_root, tables, verbose=False)
         pass2_edges(tables, asts, verbose=False)
-        from build_ast_graph import pass3_calls
+        from java_codebase_rag.graph.build_ast_graph import pass3_calls
         pass3_calls(tables, asts, verbose=False)
         write_ladybug(ladybug_path, tables, source_root=source_root, verbose=False)
 
@@ -892,7 +892,7 @@ class TestIncrementalOrchestrator:
         After the fix: mode is "incremental", B's node survives, and the C->B
         CALLS edge is preserved.
         """
-        from build_ast_graph import incremental_rebuild, write_ladybug
+        from java_codebase_rag.graph.build_ast_graph import incremental_rebuild, write_ladybug
 
         source_root = tmp_path / "src"
         source_root.mkdir()
@@ -926,7 +926,7 @@ class TestIncrementalOrchestrator:
         tables = GraphTables()
         asts = pass1_parse(source_root, tables, verbose=False)
         pass2_edges(tables, asts, verbose=False)
-        from build_ast_graph import pass3_calls
+        from java_codebase_rag.graph.build_ast_graph import pass3_calls
         pass3_calls(tables, asts, verbose=False)
         write_ladybug(ladybug_path, tables, source_root=source_root, verbose=False)
 
@@ -992,7 +992,7 @@ class TestIncrementalOrchestrator:
         state (bulk) and asserts node count, per-type edge counts, and GraphMeta
         counters are identical.
         """
-        from build_ast_graph import incremental_rebuild
+        from java_codebase_rag.graph.build_ast_graph import incremental_rebuild
         from _builders import build_ladybug_full_into
 
         source_root = tmp_path / "src"
@@ -1175,8 +1175,8 @@ class TestIncrementalOrchestrator:
         changed-files one. Removing the global pass4 call (incremental_rebuild
         step 6) leaves only one tables instance -> failure.
         """
-        import build_ast_graph as bag
-        from build_ast_graph import incremental_rebuild
+        from java_codebase_rag.graph import build_ast_graph as bag
+        from java_codebase_rag.graph.build_ast_graph import incremental_rebuild
         from _builders import build_ladybug_full_into
 
         source_root = tmp_path / "src"
@@ -1243,8 +1243,8 @@ class TestIncrementalOrchestrator:
         handle. The CLI runs each increment as a fresh process (cold meta-chain
         cache); the test mirrors that so the increment sees the updated chain.
         """
-        from build_ast_graph import incremental_rebuild
-        from graph_enrich import collect_annotation_meta_chain
+        from java_codebase_rag.graph.build_ast_graph import incremental_rebuild
+        from java_codebase_rag.graph.graph_enrich import collect_annotation_meta_chain
         from _builders import build_ladybug_full_into
 
         source_root = tmp_path / "src"
@@ -1321,8 +1321,8 @@ class TestIncrementalOrchestrator:
         so this isolates the scope-tracking fix from the preserved-dependent
         property refresh.
         """
-        from build_ast_graph import incremental_rebuild
-        from graph_enrich import collect_annotation_meta_chain
+        from java_codebase_rag.graph.build_ast_graph import incremental_rebuild
+        from java_codebase_rag.graph.graph_enrich import collect_annotation_meta_chain
         from _builders import build_ladybug_full_into
 
         source_root = tmp_path / "src"
@@ -1397,7 +1397,7 @@ class TestIncrementalOrchestrator:
         unrelated `Other.java` change triggers the increment so `TImpl`/`T` are
         loaded as stubs. The increment must keep exactly one OVERRIDES edge.
         """
-        from build_ast_graph import incremental_rebuild
+        from java_codebase_rag.graph.build_ast_graph import incremental_rebuild
         from _builders import build_ladybug_full_into
 
         source_root = tmp_path / "src"
@@ -1464,7 +1464,7 @@ class TestIncrementalOrchestrator:
         the name is kept for plan-reference continuity. The SET branch is what
         dedups against routes written during the scoped step here.
         """
-        from build_ast_graph import incremental_rebuild, write_ladybug
+        from java_codebase_rag.graph.build_ast_graph import incremental_rebuild, write_ladybug
 
         source_root = tmp_path / "src"
         source_root.mkdir()
@@ -1550,7 +1550,7 @@ class TestIncrementalRegressions:
         Without pruning, a stale entry is re-detected as 'removed' on every
         ``increment``, sustaining an endless full-rebuild loop.
         """
-        from build_ast_graph import write_ladybug
+        from java_codebase_rag.graph.build_ast_graph import write_ladybug
 
         source_root = tmp_path / "src"
         source_root.mkdir()
@@ -1588,7 +1588,7 @@ class TestIncrementalRegressions:
         (forcing full_fallback). After the fix: mode is "incremental".
         """
         from _builders import build_ladybug_full_into
-        from build_ast_graph import incremental_rebuild
+        from java_codebase_rag.graph.build_ast_graph import incremental_rebuild
 
         corpus = Path(__file__).parent / "fixtures" / "http_caller_smoke"
         source_root = tmp_path / "src"
@@ -1632,7 +1632,7 @@ class TestIncrementalRegressions:
         ``reprocess --graph-only`` does) followed by ``increment`` with no source
         changes must be a no-op, not a second full rebuild."""
         from _builders import build_ladybug_full_into
-        from build_ast_graph import incremental_rebuild
+        from java_codebase_rag.graph.build_ast_graph import incremental_rebuild
 
         corpus = Path(__file__).parent / "fixtures" / "http_caller_smoke"
         source_root = tmp_path / "src"
@@ -1658,7 +1658,7 @@ class TestIncrementalRegressions:
         hashes). Before the fixes this fell back to full and preserved the ghost.
         """
         from _builders import build_ladybug_full_into
-        from build_ast_graph import incremental_rebuild
+        from java_codebase_rag.graph.build_ast_graph import incremental_rebuild
 
         corpus = Path(__file__).parent / "fixtures" / "http_caller_smoke"
         source_root = tmp_path / "src"

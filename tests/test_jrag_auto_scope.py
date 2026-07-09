@@ -148,7 +148,7 @@ def test_search_filter_carries_auto_scope(
     monkeypatch, capsys, corpus_root: Path, ladybug_db_path: Path
 ) -> None:
     """search builds ``filter.microservice`` from the cwd-derived default."""
-    import mcp_v2
+    from java_codebase_rag.mcp import mcp_v2
     from java_codebase_rag.jrag import main
 
     monkeypatch.setenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", str(corpus_root))

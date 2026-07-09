@@ -9,7 +9,7 @@ from pathlib import Path
 
 import ladybug
 
-from ladybug_queries import LadybugGraph
+from java_codebase_rag.graph.ladybug_queries import LadybugGraph
 
 
 def _connect(db_path: Path) -> ladybug.Connection:

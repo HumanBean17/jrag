@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ast_java import parse_java
+from java_codebase_rag.ast.ast_java import parse_java
 
 
 def _calls(src: str, *, type_name: str, method_name: str):

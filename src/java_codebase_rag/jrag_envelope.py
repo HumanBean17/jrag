@@ -18,8 +18,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from absence_types import AbsenceDiagnosis
-from graph_types import NodeRef
+from java_codebase_rag.absence.absence_types import AbsenceDiagnosis
+from java_codebase_rag.graph.graph_types import NodeRef
 
 __all__ = [
     "Envelope",
@@ -532,10 +532,10 @@ def resolve_query(
     means ``--service`` disambiguates which microservice's route is selected.
     """
     # Lazy imports — keeps build_parser() / `jrag --help` free of resolve/ladybug.
-    from resolve_service import resolve_v2
+    from java_codebase_rag.analysis.resolve_service import resolve_v2
 
     if graph is None:
-        from ladybug_queries import LadybugGraph
+        from java_codebase_rag.graph.ladybug_queries import LadybugGraph
 
         graph = LadybugGraph.get(str(cfg.ladybug_path))
 

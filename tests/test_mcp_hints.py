@@ -7,14 +7,14 @@ from typing import Any
 import pytest
 
 from _builders import build_ladybug_to
-from java_ontology import FUZZY_STRATEGY_SET
-from ladybug_queries import LadybugGraph
-from mcp_hints import (
+from java_codebase_rag.graph.java_ontology import FUZZY_STRATEGY_SET
+from java_codebase_rag.graph.ladybug_queries import LadybugGraph
+from java_codebase_rag.mcp.mcp_hints import (
     _StructuredHint,
     finalize_structured_hints,
     generate_hints,
 )
-from mcp_v2 import (
+from java_codebase_rag.mcp.mcp_v2 import (
     FindOutput,
     SearchOutput,
     _hints_or_skip,
@@ -1245,7 +1245,7 @@ def test_structured_hints_reason_char_cap() -> None:
 
 def test_no_string_hints_field() -> None:
     """Verify no output model has hints field."""
-    from mcp_v2 import (
+    from java_codebase_rag.mcp.mcp_v2 import (
         DescribeOutput,
         NeighborsOutput,
         ResolveOutput,

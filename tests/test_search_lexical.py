@@ -15,10 +15,10 @@ from pathlib import Path
 
 import pytest
 
-from ladybug_queries import LadybugGraph
-from mcp_v2 import NodeFilter, _node_matches_filter, _symbol_where_from_filter
-from search_lexical import _lexical_where, _read_snippet, run_lexical_search
-from search_scoring import explain_score_components
+from java_codebase_rag.graph.ladybug_queries import LadybugGraph
+from java_codebase_rag.mcp.mcp_v2 import NodeFilter, _node_matches_filter, _symbol_where_from_filter
+from java_codebase_rag.search.search_lexical import _lexical_where, _read_snippet, run_lexical_search
+from java_codebase_rag.search.search_scoring import explain_score_components
 
 
 def _build_corpus(tmp_path: Path) -> Path:
@@ -212,7 +212,7 @@ def test_fetch_limit_is_pool_cap_not_page_derived(tmp_path: Path) -> None:
 
     g._rows = _spy  # type: ignore[method-assign]
 
-    from search_lexical import _CANDIDATE_LIMIT_CAP
+    from java_codebase_rag.search.search_lexical import _CANDIDATE_LIMIT_CAP
 
     # Default page and a larger page must BOTH request the same cap-sized fetch — the
     # buggy formula would have produced 20 (limit=5) and 80 (limit=20).
@@ -229,7 +229,7 @@ def test_cap_truncation_advisory_fires_at_cap(monkeypatch, tmp_path: Path) -> No
     """Correctness review: when the fetch hits the safety cap, deeper matches are never
     ranked (the scan has no ORDER BY). Surface an advisory instead of silently returning a
     storage-order-dependent subset. Lower the cap so a small fixture triggers it."""
-    import search_lexical
+    from java_codebase_rag.search import search_lexical
 
     db = _build_corpus(tmp_path)
     g = _graph(db)
@@ -276,8 +276,8 @@ def test_explain_import_survives_graph_only_env() -> None:
     that the CLI source imports from search_scoring AND the invariant: blocking the vector
     stack makes search_lancedb unimportable while search_scoring (and the lexical explain
     renderer) stays importable."""
-    jrag_py = Path(__file__).resolve().parent.parent / "java_codebase_rag" / "jrag.py"
-    m = re.search(r"from (search_\w+) import explain_score_components", jrag_py.read_text(encoding="utf-8"))
+    jrag_py = Path(__file__).resolve().parent.parent / "src" / "java_codebase_rag" / "jrag.py"
+    m = re.search(r"from java_codebase_rag\.search\.(search_\w+) import explain_score_components", jrag_py.read_text(encoding="utf-8"))
     assert m, "explain_score_components import not found in jrag.py"
     assert m.group(1) == "search_scoring", (
         f"jrag.py imports explain_score_components from {m.group(1)!r}; it MUST be "
@@ -292,11 +292,11 @@ def test_explain_import_survives_graph_only_env() -> None:
             "for m in ('lancedb','pylance','torch','sentence_transformers','cocoindex'):\n"
             "    sys.modules[m] = None\n"
             "try:\n"
-            "    import search_lancedb\n"
+            "    from java_codebase_rag.search import search_lancedb\n"
             "    print('LANCEDB:imported')\n"
             "except ModuleNotFoundError:\n"
             "    print('LANCEDB:blocked')\n"
-            "from search_scoring import explain_score_components\n"
+            "from java_codebase_rag.search.search_scoring import explain_score_components\n"
             "print('SCORING:ok')\n"
             "r = explain_score_components("
             "{'name_match':1.0,'type_match':0.1,'fqn_match':0.2,"
@@ -321,7 +321,7 @@ def test_search_v2_lexical_dispatch_end_to_end(monkeypatch, tmp_path: Path) -> N
     converges on the shared row->hit loop, sets lexical_mode, emits the graph-only mode
     advisory, and that SearchHit carries the expected fqn — none of which the direct
     run_lexical_search unit tests reach. Also covers --explain score_components end-to-end."""
-    import mcp_v2
+    from java_codebase_rag.mcp import mcp_v2
 
     db = _build_corpus(tmp_path)
     g = _graph(db)

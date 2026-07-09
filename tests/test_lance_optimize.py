@@ -274,7 +274,7 @@ def test_lance_table_names_constant_matches_search_lancedb_tables() -> None:
     # Imported lazily to avoid pulling sentence-transformers at collection time.
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     try:
-        from search_lancedb import TABLES
+        from java_codebase_rag.search.search_lancedb import TABLES
     finally:
         sys.path.pop(0)
     assert set(LANCE_TABLE_NAMES) == set(TABLES.values())

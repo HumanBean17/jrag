@@ -21,8 +21,8 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from ladybug_queries import LadybugGraph
-from search_scoring import (
+from java_codebase_rag.graph.ladybug_queries import LadybugGraph
+from java_codebase_rag.search.search_scoring import (
     _ROLE_SCORE_WEIGHTS,
     _TYPE_MATCH_BONUS_CAP,
     _TYPE_MATCH_BONUS_PER_HIT,
@@ -33,7 +33,7 @@ from search_scoring import (
 )
 
 if TYPE_CHECKING:
-    from mcp_v2 import NodeFilter
+    from java_codebase_rag.mcp.mcp_v2 import NodeFilter
 
 # Lexical relevance weights. The class/file name is the strongest discovery
 # signal (mirrors the type-name bonus rationale in search_scoring); fqn/package

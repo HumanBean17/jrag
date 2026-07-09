@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from absence_types import AbsenceDiagnosis
+from java_codebase_rag.absence.absence_types import AbsenceDiagnosis
 from java_codebase_rag.jrag_envelope import Envelope, project_envelope, simple_name
 
 __all__ = ["render", "tiered_name", "display_name"]

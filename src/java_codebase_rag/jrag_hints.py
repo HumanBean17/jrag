@@ -143,7 +143,7 @@ def next_actions(
     # EDGE_SCHEMA is the canonical label set; we use it to skip labels we don't
     # recognize (avoids emitting hints for spurious / future edge types the
     # command map doesn't cover).
-    from java_ontology import EDGE_SCHEMA
+    from java_codebase_rag.graph.java_ontology import EDGE_SCHEMA
 
     # Known virtual labels not in EDGE_SCHEMA (describe-time rollup constructs).
     _VIRTUAL_LABELS = frozenset({"OVERRIDDEN_BY"})

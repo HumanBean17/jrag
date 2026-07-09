@@ -1,6 +1,6 @@
 """Tests for microservice scope detection and ScopeManager."""
 
-from graph_enrich import detect_microservice_from_path
+from java_codebase_rag.graph.graph_enrich import detect_microservice_from_path
 
 
 class TestDetectMicroserviceFromPath:
@@ -69,7 +69,7 @@ class TestScopeManager:
         ms_dir.mkdir(parents=True, exist_ok=True)
         (ms_dir / "pom.xml").write_text("<project></project>")
 
-        from server import ScopeManager
+        from java_codebase_rag.mcp.server import ScopeManager
         mgr = ScopeManager(tmp_path)
         mgr.default_scope = "microservice-a"  # Simulate detection
 
@@ -79,11 +79,11 @@ class TestScopeManager:
 
     def test_apply_scope_when_filter_exists_no_microservice(self, tmp_path):
         """Filter without microservice gets auto-scope injected."""
-        from server import ScopeManager
+        from java_codebase_rag.mcp.server import ScopeManager
         mgr = ScopeManager(tmp_path)
         mgr.default_scope = "microservice-b"  # Simulate detection
 
-        from mcp_v2 import NodeFilter
+        from java_codebase_rag.mcp.mcp_v2 import NodeFilter
         result = mgr.apply_auto_scope(NodeFilter(role="CONTROLLER"))
         assert result is not None
         assert result.role == "CONTROLLER"
@@ -91,22 +91,22 @@ class TestScopeManager:
 
     def test_apply_scope_preserves_explicit_microservice(self, tmp_path):
         """Explicit microservice not overridden."""
-        from server import ScopeManager
+        from java_codebase_rag.mcp.server import ScopeManager
         mgr = ScopeManager(tmp_path)
         mgr.default_scope = "microservice-a"  # Simulate detection
 
-        from mcp_v2 import NodeFilter
+        from java_codebase_rag.mcp.mcp_v2 import NodeFilter
         result = mgr.apply_auto_scope(NodeFilter(microservice="microservice-c"))
         assert result is not None
         assert result.microservice == "microservice-c"
 
     def test_apply_scope_no_default(self, tmp_path):
         """No auto-detected scope leaves filter unchanged."""
-        from server import ScopeManager
+        from java_codebase_rag.mcp.server import ScopeManager
         mgr = ScopeManager(tmp_path)
         mgr.default_scope = None  # No detection
 
-        from mcp_v2 import NodeFilter
+        from java_codebase_rag.mcp.mcp_v2 import NodeFilter
         nf = NodeFilter(role="CONTROLLER")
         result = mgr.apply_auto_scope(nf)
         assert result is nf
@@ -123,7 +123,7 @@ class TestScopeManager:
         custom_ms_dir.mkdir()
 
         # Even without a build marker, the YAML override should detect this as a microservice
-        from graph_enrich import detect_microservice_from_path
+        from java_codebase_rag.graph.graph_enrich import detect_microservice_from_path
         result = detect_microservice_from_path(custom_ms_dir, tmp_path)
 
         # Should detect the microservice based on YAML override
@@ -137,7 +137,7 @@ class TestScopeManager:
         (ms_dir / "pom.xml").write_text("<project></project>")
 
         # Create a ScopeManager with real detection (no manual override)
-        from server import ScopeManager
+        from java_codebase_rag.mcp.server import ScopeManager
         mgr = ScopeManager(tmp_path)
 
         # The detection should have found the microservice
@@ -146,7 +146,7 @@ class TestScopeManager:
         assert mgr.default_scope is None
 
         # Test that apply_auto_scope doesn't inject when no scope detected
-        from mcp_v2 import NodeFilter
+        from java_codebase_rag.mcp.mcp_v2 import NodeFilter
         nf = NodeFilter(role="CONTROLLER")
         result = mgr.apply_auto_scope(nf)
         assert result is nf
@@ -167,7 +167,7 @@ class TestScopeManagerAutoScopeValidation:
     @staticmethod
     def _stub_index(monkeypatch, microservices: set[str]) -> None:
         """Make ScopeManager._indexed_microservices() see a fake graph."""
-        import server
+        from java_codebase_rag.mcp import server
 
         class _FakeGraph:
             def microservice_counts(self):
@@ -182,7 +182,7 @@ class TestScopeManagerAutoScopeValidation:
 
     def test_context_dir_not_detected_as_microservice(self, tmp_path, monkeypatch):
         """Launching from a codeless context dir must NOT auto-scope (the bug)."""
-        from server import ScopeManager
+        from java_codebase_rag.mcp.server import ScopeManager
 
         # Reported layout: source_root holds both the context dir and a real
         # microservice; the server is launched from the context dir.
@@ -201,7 +201,7 @@ class TestScopeManagerAutoScopeValidation:
 
     def test_real_microservice_dir_still_scopes(self, tmp_path, monkeypatch):
         """Launching from inside an indexed microservice keeps auto-scope."""
-        from server import ScopeManager
+        from java_codebase_rag.mcp.server import ScopeManager
 
         ms_dir = tmp_path / "microservice-a"
         (ms_dir / "src").mkdir(parents=True)
@@ -215,7 +215,7 @@ class TestScopeManagerAutoScopeValidation:
 
     def test_empty_index_keeps_detection(self, tmp_path, monkeypatch):
         """When the index is missing (exists()->False), keep detection."""
-        from server import ScopeManager
+        from java_codebase_rag.mcp.server import ScopeManager
 
         ms_dir = tmp_path / "microservice-a"
         ms_dir.mkdir()
@@ -236,8 +236,8 @@ class TestScopeManagerAutoScopeValidation:
         paths must converge to keeping the detected scope rather than silently
         disabling auto-scope.
         """
-        import server
-        from server import ScopeManager
+        from java_codebase_rag.mcp import server
+        from java_codebase_rag.mcp.server import ScopeManager
 
         ms_dir = tmp_path / "microservice-a"
         ms_dir.mkdir()
@@ -256,8 +256,8 @@ class TestScopeManagerAutoScopeValidation:
 
     def test_indexed_microservices_extracts_nonempty_keys(self, tmp_path, monkeypatch):
         """_indexed_microservices drops empty-string buckets, keeps the rest."""
-        import server
-        from server import ScopeManager
+        from java_codebase_rag.mcp import server
+        from java_codebase_rag.mcp.server import ScopeManager
 
         class _FakeGraph:
             def microservice_counts(self):
