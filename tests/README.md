@@ -37,7 +37,7 @@ cd /path/to/java-codebase-rag
 .venv/bin/python -m pytest tests -v
 ```
 
-**LadybugDB Cypher:** When writing queries or asserting on edge filters, follow the pitfalls note in [`AGENTS.md`](../AGENTS.md) (avoid `label(e) IN $list` for type filters; be careful with typed union rel patterns).
+**LadybugDB Cypher:** When writing queries or asserting on edge filters, follow the pitfalls note in [`CLAUDE.md`](../CLAUDE.md) (avoid `label(e) IN $list` for type filters; be careful with typed union rel patterns).
 
 ## CI merge gate and fixture tiers
 

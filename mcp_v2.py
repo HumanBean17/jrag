@@ -1711,7 +1711,7 @@ def neighbors_v2(
                 # RETURN anti-pattern, which errors on stricter binders (e.g. Kùzu).
                 # Run one single-label query per type, RETURNing only that type's
                 # columns, and merge the rows. `label(e) = $label` scalar equality
-                # (not `label(e) IN [...]`) per the AGENTS.md Cypher note.
+                # (not `label(e) IN [...]`) per the CLAUDE.md Cypher note.
                 rows: list[dict[str, Any]] = []
                 match_clause = "MATCH (a)-[e]->(b)" if direction == "out" else "MATCH (a)<-[e]-(b)"
                 for label in flat_labels:
