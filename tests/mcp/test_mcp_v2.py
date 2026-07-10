@@ -192,6 +192,8 @@ def test_find_symbol_excludes_file_and_package_nodes(ladybug_graph) -> None:
     assert out.results, "fixture (bank-chat-system) has Assign-named declarations"
     kinds = {r.symbol_kind for r in out.results}
     assert "file" not in kinds
+    # 'package' can't match here (CONTAINS is case-sensitive and package fqns are
+    # lowercase) — the package exclusion is proven by test_find_symbol_empty_filter_returns_results.
     assert "package" not in kinds
     # Real declarations still surface (the chat-assign module has Assign* types).
     assert kinds & {"class", "interface", "enum", "record", "annotation", "method", "constructor"}

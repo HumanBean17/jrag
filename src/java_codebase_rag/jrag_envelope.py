@@ -279,14 +279,15 @@ def simple_name(node_dict: dict[str, Any]) -> str:
     File/package Symbol nodes are the exception: their ``fqn`` is a filesystem
     path (e.g. ``chat-assign/.../AssignConfiguration.java``), so the dot-split
     would yield the file *extension* (``java``) instead of a name. When the fqn
-    looks like a path (contains a separator) we return the basename. Route fqns
+    is a path (contains ``/`` — the indexer POSIX-normalizes via ``.as_posix()``
+    so backslashes don't occur) we return the basename. Route fqns
     (``"GET /api/x"``) also contain ``/`` but carry a space, so they're excluded
     here and stay on the dot-split path.
     """
     fqn = str(node_dict.get("fqn") or "")
     if not fqn:
         return ""
-    if ("/" in fqn or "\\" in fqn) and " " not in fqn:
+    if "/" in fqn and " " not in fqn:
         base = Path(fqn).name
         if base:
             return base
