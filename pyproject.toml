@@ -32,17 +32,17 @@ classifiers = [
 # lexical (keyword) backend over the symbol graph (search_lexical.py); every other platform
 # is unchanged.
 dependencies = [
-    "cocoindex[lancedb]>=1.0.7,<2; sys_platform != 'darwin' or platform_machine != 'x86_64'",
+    "cocoindex[lancedb]>=1.0.15,<2; sys_platform != 'darwin' or platform_machine != 'x86_64'",
     "ladybug>=0.17.1,<0.18",
-    "lancedb>=0.25.3,<0.31; sys_platform != 'darwin' or platform_machine != 'x86_64'",
+    "lancedb>=0.34,<0.36; sys_platform != 'darwin' or platform_machine != 'x86_64'",
     "mcp>=1.27.0,<2",
     "numpy>=1.26.4,<2.5",
     "pathspec>=1.0.4,<2",
-    "pyarrow>=23.0.1,<24",
+    "pyarrow>=23.0.1,<26",
     "pydantic>=2.0,<3",
     "PyYAML>=6.0.3,<7",
     "questionary>=2.0,<3",
-    "rich>=14,<15",
+    "rich>=14,<16",
     "sentence-transformers>=5.4.0,<6; sys_platform != 'darwin' or platform_machine != 'x86_64'",
     "tree-sitter>=0.25.2,<0.26",
     "tree-sitter-java>=0.23.5,<0.24",

@@ -1,21 +1,20 @@
 """Serialized post-flow LanceDB optimize with commit-conflict retry.
 
-cocoindex 1.0.7 schedules ``table.optimize()`` (a LanceDB **Rewrite**/compaction
-transaction) as a *background* ``asyncio`` task that races concurrent
-``table.delete()`` (**Delete**) transactions emitted by later mutation batches.
-LanceDB does not allow a Rewrite to commit concurrently with a Delete
-(upstream lancedb#1504 — "We do not support concurrent deletes right now"),
-which surfaces as a flood of::
+Historically (cocoindex 1.0.7) this existed because cocoindex scheduled
+``table.optimize()`` (a LanceDB **Rewrite**/compaction) as a *background*
+``asyncio`` task that raced concurrent ``table.delete()`` (**Delete**)
+transactions — LanceDB does not allow a Rewrite to commit concurrently with a
+Delete (upstream lancedb#1504), surfacing as a flood of::
 
     RuntimeError: lance error: Retryable commit conflict for version N: \
 This Rewrite transaction was preempted by concurrent transaction Delete ...
 
-To eliminate the race, the flow (``java_index_flow_lancedb.py``) disables the
-in-flight background optimize entirely by raising
-``num_transactions_before_optimize`` to a value that is effectively never
-reached. This module then performs a *single*, serialized optimize after the
-flow returns (exit 0 → no concurrent writers), retrying the rare residual
-commit conflict that two internal compaction passes can still produce.
+cocoindex >=1.0.15 made optimize **inline and stats-driven** (only compacts
+when small fragments accumulate, inside the merge_insert commit path), so the
+race is gone and the flow no longer disables anything. This module still runs a
+*single*, serialized optimize after the flow returns (exit 0 → no concurrent
+writers) as a clean final compaction + scalar/FTS index build, retrying the rare
+residual commit conflict that two internal compaction passes can still produce.
 """
 from __future__ import annotations
 
