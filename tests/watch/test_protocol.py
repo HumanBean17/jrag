@@ -6,6 +6,11 @@ from dataclasses import dataclass
 import pytest
 
 from java_codebase_rag.watch.protocol import (
+    ERR_BAD_ARGS,
+    ERR_BACKEND_ERROR,
+    ERR_BUSY,
+    ERR_STALE_INDEX,
+    ERR_UNKNOWN_COMMAND,
     PROTOCOL_VERSION,
     VALID_CMDS,
     ErrorShape,
@@ -54,7 +59,7 @@ class TestResponseRoundTrip:
 
     def test_error_response(self):
         """Error response with ErrorShape should round-trip."""
-        error = ErrorShape(kind="backend_error", message="Connection failed")
+        error = ErrorShape(kind=ERR_BACKEND_ERROR, message="Connection failed")
         resp = Response(v=PROTOCOL_VERSION, ok=False, error=error)
 
         encoded = encode_response(resp)
@@ -75,13 +80,8 @@ class TestProtocolVersionMismatch:
         req = Request(v=bad_version, cmd="search", args={"query": "test"})
         encoded = encode_request(req)
 
-        # Manually corrupt the version in the encoded JSON
-        parsed = json.loads(encoded.decode("utf-8"))
-        parsed["v"] = bad_version
-        corrupted = json.dumps(parsed).encode("utf-8") + b"\n"
-
         with pytest.raises(ProtocolMismatch) as exc_info:
-            decode_request(corrupted)
+            decode_request(encoded)
 
         assert exc_info.value.got == bad_version
 
@@ -91,13 +91,8 @@ class TestProtocolVersionMismatch:
         resp = Response(v=bad_version, ok=True, result={"test": "data"})
         encoded = encode_response(resp)
 
-        # Manually corrupt the version in the encoded JSON
-        parsed = json.loads(encoded.decode("utf-8"))
-        parsed["v"] = bad_version
-        corrupted = json.dumps(parsed).encode("utf-8") + b"\n"
-
         with pytest.raises(ProtocolMismatch) as exc_info:
-            decode_response(corrupted)
+            decode_response(encoded)
 
         assert exc_info.value.got == bad_version
 
@@ -162,14 +157,22 @@ class TestEncodingFormat:
 class TestErrorKinds:
     """Test error kind constants."""
 
+    def test_constants_have_expected_string_values(self):
+        """Exported ERR_* constants should equal their documented string values."""
+        assert ERR_UNKNOWN_COMMAND == "unknown_command"
+        assert ERR_BAD_ARGS == "bad_args"
+        assert ERR_BACKEND_ERROR == "backend_error"
+        assert ERR_STALE_INDEX == "stale_index"
+        assert ERR_BUSY == "busy"
+
     def test_error_shape_with_all_kinds(self):
         """All documented error kinds should work in ErrorShape."""
         error_kinds = [
-            "unknown_command",
-            "bad_args",
-            "backend_error",
-            "stale_index",
-            "busy",
+            ERR_UNKNOWN_COMMAND,
+            ERR_BAD_ARGS,
+            ERR_BACKEND_ERROR,
+            ERR_STALE_INDEX,
+            ERR_BUSY,
         ]
 
         for kind in error_kinds:

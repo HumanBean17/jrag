@@ -20,6 +20,13 @@ VALID_CMDS: frozenset[str] = frozenset({
     "flow",
 })
 
+# Error kind constants — used as Response.ErrorShape.kind values.
+ERR_UNKNOWN_COMMAND = "unknown_command"
+ERR_BAD_ARGS = "bad_args"
+ERR_BACKEND_ERROR = "backend_error"
+ERR_STALE_INDEX = "stale_index"
+ERR_BUSY = "busy"
+
 
 class ProtocolMismatch(Exception):
     """Raised when the protocol version in a request/response doesn't match PROTOCOL_VERSION."""
