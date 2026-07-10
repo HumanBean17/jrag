@@ -64,36 +64,11 @@ Issues = "https://github.com/HumanBean17/java-codebase-rag/issues"
 
 [project.scripts]
 java-codebase-rag = "java_codebase_rag.cli:_console_script_main"
-java-codebase-rag-mcp = "server:main"
+java-codebase-rag-mcp = "java_codebase_rag.mcp.server:main"
 jrag = "java_codebase_rag.jrag:_console_script_main"
 
-[tool.setuptools]
-packages = ["java_codebase_rag"]
-py-modules = [
-    "absence_types",
-    "absence_vocab",
-    "absence_diagnosis",
-    "ast_java",
-    "brownfield_events",
-    "build_ast_graph",
-    "chunk_heuristics",
-    "graph_enrich",
-    "graph_types",
-    "index_common",
-    "java_index_flow_lancedb",
-    "java_index_v1_common",
-    "java_ontology",
-    "ladybug_queries",
-    "mcp_hints",
-    "mcp_v2",
-    "path_filtering",
-    "pr_analysis",
-    "resolve_service",
-    "search_lancedb",
-    "search_lexical",
-    "search_scoring",
-    "server",
-]
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.ruff]
 line-length = 100

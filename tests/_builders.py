@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from build_ast_graph import (
+from java_codebase_rag.graph.build_ast_graph import (
     GraphTables,
     pass1_parse,
     pass2_edges,

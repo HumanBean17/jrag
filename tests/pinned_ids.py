@@ -10,7 +10,7 @@ CLIENT_MESSAGE_PROCESSOR_PROCESS_FQN = (
 )
 
 if TYPE_CHECKING:
-    from ladybug_queries import LadybugGraph
+    from java_codebase_rag.graph.ladybug_queries import LadybugGraph
 
 
 def client_message_processor_process_id(graph: LadybugGraph) -> str:

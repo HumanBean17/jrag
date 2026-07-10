@@ -7,10 +7,11 @@ import sys
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
+_SRC = _REPO_ROOT / "src"
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
 
-from java_ontology import (  # noqa: E402
+from java_codebase_rag.graph.java_ontology import (  # noqa: E402
     EDGE_SCHEMA,
     EdgeSpec,
     _COMPOSED_MEMBER_TYPE_TRAVERSAL,

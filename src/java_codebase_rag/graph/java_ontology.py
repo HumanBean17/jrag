@@ -1,0 +1,465 @@
+"""Shared valid role and capability label sets for Java indexers and MCP.
+
+Used by `ast_java` inference, brownfield config validation in `graph_enrich`,
+and resolver steps for `@CodebaseRole` / `@CodebaseCapability`."""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Literal
+
+from java_codebase_rag.ast.ast_java import (
+    ROLE_ANNOTATIONS,
+    _INJECTED_TYPES_TO_CAPABILITY,
+    _METHOD_ANN_TO_CAPABILITY,
+    _SUPERTYPE_TO_CAPABILITY,
+    _TYPE_ANN_TO_CAPABILITY,
+)
+
+# Roles assignable by indexing: Spring stereotype values plus DTO. ``OTHER`` is the
+# built-in inference fallback (ast_java.infer_role when nothing matches) and is
+# deliberately excluded here — it is a read-side value (the mcp_v2 ``Role`` enum
+# includes it) but not a role a user may set via @CodebaseRole / role_overrides.
+VALID_ROLES: frozenset[str] = frozenset((*ROLE_ANNOTATIONS.values(), "DTO"))
+
+VALID_CAPABILITIES: frozenset[str] = frozenset(
+    {
+        *_METHOD_ANN_TO_CAPABILITY.values(),
+        *_TYPE_ANN_TO_CAPABILITY.values(),
+        *_INJECTED_TYPES_TO_CAPABILITY.values(),
+        *_SUPERTYPE_TO_CAPABILITY.values(),
+    }
+)
+
+VALID_ROUTE_FRAMEWORKS: frozenset[str] = frozenset((
+    "spring_mvc",
+    "webflux",
+))
+
+VALID_ROUTE_KINDS: frozenset[str] = frozenset((
+    "http_endpoint",
+    "http_consumer",
+    "kafka_topic",
+    "rabbit_queue",
+    "jms_destination",
+    "stream_binding",
+))
+
+VALID_CLIENT_KINDS: frozenset[str] = frozenset((
+    "feign_method",
+    "rest_template",
+    "web_client",
+))
+# Named members of VALID_CLIENT_KINDS — reference these at emit/match sites so a
+# rename in the set above cannot silently desync callers (issue #359).
+CLIENT_KIND_FEIGN_METHOD = "feign_method"
+CLIENT_KIND_REST_TEMPLATE = "rest_template"
+CLIENT_KIND_WEB_CLIENT = "web_client"
+
+VALID_PRODUCER_KINDS: frozenset[str] = frozenset((
+    "kafka_send",
+    "stream_bridge_send",
+))
+
+VALID_HTTP_CALL_STRATEGIES: frozenset[str] = frozenset((
+    "feign_method",
+    "rest_template",
+    "web_client",
+    "unresolved",
+))
+
+VALID_ASYNC_CALL_STRATEGIES: frozenset[str] = frozenset((
+    "kafka_template",
+    "stream_bridge",
+    "rabbit_template",
+    "jms_template",
+    "unresolved",
+))
+
+VALID_HTTP_CALL_MATCHES: frozenset[str] = frozenset((
+    "cross_service",
+    "intra_service",
+    "ambiguous",
+    "phantom",
+    "unresolved",
+))
+
+VALID_RESOLVE_REASONS: frozenset[str] = frozenset((
+    "exact_id",
+    "exact_fqn",
+    "fqn_suffix",
+    "short_name",
+    "route_template",
+    "route_method_path",
+    "route_topic",
+    "route_topic_prefix",
+    "client_target",
+    "client_target_path",
+    "client_name",
+    "client_fqn",
+    "producer_topic",
+    "producer_topic_prefix",
+))
+
+# Brownfield / fallback edge resolution strategies (hints v2 neighbors fuzzy signal).
+# ``phantom`` / ``chained_receiver`` are not CALLS edge strategies after PR-3 (receiver
+# failures live on ``UnresolvedCallSite``); they remain on HTTP/ASYNC match literals only.
+FUZZY_STRATEGY_SET: frozenset[str] = frozenset({
+    "layer_c_source",
+    "layer_b_fqn",
+    "overload_ambiguous",
+    "implicit_super",
+})
+
+VALID_UNRESOLVED_CALL_REASONS: frozenset[str] = frozenset({
+    "phantom_unresolved_receiver",
+    "chained_receiver",
+})
+
+# Union of fuzzy + non-fuzzy resolver strategies that may appear on graph edges
+# carrying a `strategy` column (brownfield layers, codebase stubs, call-graph tiers,
+# HTTP/async dispatch literals). Used by `EdgeSpec.brownfield_resolver_sourced`.
+BROWNFIELD_RESOLVER_STRATEGY_SET: frozenset[str] = frozenset({
+    *FUZZY_STRATEGY_SET,
+    # Receiver-tier / HTTP match literals — not CALLS edge strategies after PR-3 UCS facet.
+    "phantom",
+    "chained_receiver",
+    "layer_b_ann",
+    "layer_a_meta",
+    "codebase_route",
+    "codebase_client",
+    "codebase_producer",
+    "annotation",
+    "spel",
+    "constant_ref",
+    *VALID_HTTP_CALL_STRATEGIES,
+    *VALID_ASYNC_CALL_STRATEGIES,
+    *VALID_CLIENT_KINDS,
+    *VALID_PRODUCER_KINDS,
+    "import_map",
+    "static_import",
+    "static_import_wildcard",
+    "constructor",
+    "method_reference",
+    "this_super",
+    "unique_type_name",
+    "suffix",
+    "same_module",
+})
+
+NodeKind = Literal["Symbol", "Route", "Client", "Producer"]
+Cardinality = Literal["many_to_many", "many_to_one", "one_to_many", "one_to_one"]
+
+
+@dataclass(frozen=True)
+class EdgeAttr:
+    name: str
+    graph_type: str
+    purpose: str
+
+
+@dataclass(frozen=True)
+class EdgeSpec:
+    name: str
+    src: NodeKind
+    dst: NodeKind
+    cardinality: Cardinality
+    brownfield_resolver_sourced: bool
+    attrs: tuple[EdgeAttr, ...]
+    purpose: str
+    typical_traversals: dict[str, str]
+    member_only: bool = False
+
+
+_SYMBOL_TYPE_TRAVERSAL = (
+    "neighbors(['{id}'],'out',['DECLARES']) "
+    "then neighbors(member_ids,'{direction}',['{edge}'])"
+)
+
+_COMPOSED_MEMBER_TYPE_TRAVERSAL = (
+    "neighbors(['{id}'],'out',['DECLARES.{edge}']) — or "
+    "neighbors(['{id}'],'out',['DECLARES']) then neighbors(member_ids,'{direction}',['{edge}'])"
+)
+
+EDGE_SCHEMA: dict[str, EdgeSpec] = {
+    "EXTENDS": EdgeSpec(
+        name="EXTENDS",
+        src="Symbol",
+        dst="Symbol",
+        cardinality="many_to_one",
+        brownfield_resolver_sourced=False,
+        attrs=(
+            EdgeAttr("dst_name", "STRING", "raw supertype name as written in source"),
+            EdgeAttr("dst_fqn", "STRING", "best-effort resolved FQN of the supertype"),
+            EdgeAttr("resolved", "BOOLEAN", "True iff dst_fqn was resolved to an in-graph Symbol"),
+        ),
+        purpose="class or interface direct supertype relation",
+        typical_traversals={
+            "type_subject": _SYMBOL_TYPE_TRAVERSAL.format(id="{id}", direction="{direction}", edge="EXTENDS"),
+            "member_subject": "neighbors(['{id}'],'out',['EXTENDS'])",
+            "alien_subject": "EXTENDS connects Symbol → Symbol; use a type or member Symbol id",
+        },
+    ),
+    "IMPLEMENTS": EdgeSpec(
+        name="IMPLEMENTS",
+        src="Symbol",
+        dst="Symbol",
+        cardinality="many_to_many",
+        brownfield_resolver_sourced=False,
+        attrs=(
+            EdgeAttr("dst_name", "STRING", "raw interface name as written in source"),
+            EdgeAttr("dst_fqn", "STRING", "best-effort resolved FQN of the interface"),
+            EdgeAttr("resolved", "BOOLEAN", "True iff dst_fqn was resolved to an in-graph Symbol"),
+        ),
+        purpose="class implements interface relation",
+        typical_traversals={
+            "type_subject": _SYMBOL_TYPE_TRAVERSAL.format(id="{id}", direction="{direction}", edge="IMPLEMENTS"),
+            "member_subject": "neighbors(['{id}'],'out',['IMPLEMENTS'])",
+            "alien_subject": "IMPLEMENTS connects Symbol → Symbol; use a type or member Symbol id",
+        },
+    ),
+    "INJECTS": EdgeSpec(
+        name="INJECTS",
+        src="Symbol",
+        dst="Symbol",
+        cardinality="many_to_many",
+        brownfield_resolver_sourced=False,
+        attrs=(
+            EdgeAttr("dst_name", "STRING", "raw injected type name as written in source"),
+            EdgeAttr("dst_fqn", "STRING", "best-effort resolved FQN of the injected type"),
+            EdgeAttr("resolved", "BOOLEAN", "True iff dst_fqn was resolved to an in-graph Symbol"),
+            EdgeAttr("mechanism", "STRING", "injection mechanism literal (constructor, field, setter, …)"),
+            EdgeAttr("annotation", "STRING", "injection annotation simple name when present"),
+            EdgeAttr("field_or_param", "STRING", "field or parameter name for the injection site"),
+        ),
+        purpose="dependency injection edge from declaring type to injected type",
+        typical_traversals={
+            "type_subject": _SYMBOL_TYPE_TRAVERSAL.format(id="{id}", direction="{direction}", edge="INJECTS"),
+            "member_subject": "neighbors(['{id}'],'in',['INJECTS'])",
+            "alien_subject": "INJECTS connects Symbol → Symbol; use a type Symbol id",
+        },
+    ),
+    "DECLARES": EdgeSpec(
+        name="DECLARES",
+        src="Symbol",
+        dst="Symbol",
+        cardinality="one_to_many",
+        brownfield_resolver_sourced=False,
+        attrs=(),
+        purpose="type declares member Symbol (method, constructor, nested type)",
+        typical_traversals={
+            "type_subject": "neighbors(['{id}'],'out',['DECLARES'])",
+            "member_subject": "neighbors(['{id}'],'in',['DECLARES'])",
+            "alien_subject": "DECLARES connects Symbol → Symbol; use a type Symbol id for outbound members",
+        },
+    ),
+    "OVERRIDES": EdgeSpec(
+        name="OVERRIDES",
+        src="Symbol",
+        dst="Symbol",
+        cardinality="many_to_one",
+        brownfield_resolver_sourced=False,
+        attrs=(),
+        purpose="subtype method overrides supertype declared method with matching signature",
+        member_only=True,
+        typical_traversals={
+            "type_subject": _SYMBOL_TYPE_TRAVERSAL.format(id="{id}", direction="{direction}", edge="OVERRIDES"),
+            "member_subject": "neighbors(['{id}'],'out',['OVERRIDES'])",
+            "alien_subject": "OVERRIDES connects method Symbol → method Symbol",
+        },
+    ),
+    "CALLS": EdgeSpec(
+        name="CALLS",
+        src="Symbol",
+        dst="Symbol",
+        cardinality="many_to_many",
+        brownfield_resolver_sourced=True,
+        attrs=(
+            EdgeAttr("call_site_line", "INT64", "source line of the call site"),
+            EdgeAttr("call_site_byte", "INT64", "source byte offset of the call site"),
+            EdgeAttr("arg_count", "INT64", "argument count at the call site (-1 for method references)"),
+            EdgeAttr("confidence", "DOUBLE", "resolver confidence in [0.0, 1.0]"),
+            EdgeAttr("strategy", "STRING", "call-graph resolution strategy literal"),
+            EdgeAttr("source", "STRING", "call-graph source tag"),
+            EdgeAttr("resolved", "BOOLEAN", "True iff callee Symbol was resolved in-graph"),
+            EdgeAttr(
+                "callee_declaring_role",
+                "STRING",
+                "role of the Symbol that declares the callee method",
+            ),
+        ),
+        purpose="intra-codebase method call from caller method to callee method",
+        member_only=True,
+        typical_traversals={
+            "type_subject": _SYMBOL_TYPE_TRAVERSAL.format(id="{id}", direction="{direction}", edge="CALLS"),
+            "member_subject": "neighbors(['{id}'],'out',['CALLS'])",
+            "alien_subject": "CALLS connects method Symbol → method Symbol",
+        },
+    ),
+    "EXPOSES": EdgeSpec(
+        name="EXPOSES",
+        src="Symbol",
+        dst="Route",
+        cardinality="one_to_one",
+        brownfield_resolver_sourced=True,
+        attrs=(
+            EdgeAttr("confidence", "DOUBLE", "route extraction confidence in [0.0, 1.0]"),
+            EdgeAttr("strategy", "STRING", "route resolution strategy literal"),
+        ),
+        purpose="declaring method exposes an inbound HTTP or messaging Route",
+        member_only=True,
+        typical_traversals={
+            "type_subject": _SYMBOL_TYPE_TRAVERSAL.format(id="{id}", direction="{direction}", edge="EXPOSES"),
+            "member_subject": "neighbors(['{id}'],'out',['EXPOSES'])",
+            "alien_subject": "EXPOSES connects method Symbol → Route; use a method Symbol id",
+        },
+    ),
+    "DECLARES_CLIENT": EdgeSpec(
+        name="DECLARES_CLIENT",
+        src="Symbol",
+        dst="Client",
+        cardinality="one_to_many",
+        brownfield_resolver_sourced=True,
+        attrs=(
+            EdgeAttr("confidence", "DOUBLE", "client declaration confidence in [0.0, 1.0]"),
+            EdgeAttr("strategy", "STRING", "client resolution strategy literal"),
+        ),
+        purpose="method declares an outbound HTTP client call site",
+        member_only=True,
+        typical_traversals={
+            "type_subject": _SYMBOL_TYPE_TRAVERSAL.format(
+                id="{id}", direction="{direction}", edge="DECLARES_CLIENT",
+            ),
+            "member_subject": "neighbors(['{id}'],'out',['DECLARES_CLIENT'])",
+            "alien_subject": "DECLARES_CLIENT connects method Symbol → Client",
+        },
+    ),
+    "DECLARES_PRODUCER": EdgeSpec(
+        name="DECLARES_PRODUCER",
+        src="Symbol",
+        dst="Producer",
+        cardinality="one_to_many",
+        brownfield_resolver_sourced=True,
+        attrs=(
+            EdgeAttr("confidence", "DOUBLE", "producer declaration confidence in [0.0, 1.0]"),
+            EdgeAttr("strategy", "STRING", "producer resolution strategy literal"),
+        ),
+        purpose="method declares an outbound async producer call site",
+        member_only=True,
+        typical_traversals={
+            "type_subject": _SYMBOL_TYPE_TRAVERSAL.format(
+                id="{id}", direction="{direction}", edge="DECLARES_PRODUCER",
+            ),
+            "member_subject": "neighbors(['{id}'],'out',['DECLARES_PRODUCER'])",
+            "alien_subject": "DECLARES_PRODUCER connects method Symbol → Producer",
+        },
+    ),
+    "HTTP_CALLS": EdgeSpec(
+        name="HTTP_CALLS",
+        src="Client",
+        dst="Route",
+        cardinality="many_to_many",
+        brownfield_resolver_sourced=True,
+        attrs=(
+            EdgeAttr("confidence", "DOUBLE", "pass6 match confidence in [0.0, 1.0]"),
+            EdgeAttr("strategy", "STRING", "HTTP call resolution strategy literal"),
+            EdgeAttr("method_call", "STRING", "HTTP method of the call site"),
+            EdgeAttr("raw_uri", "STRING", "uninterpolated URI template from the call site"),
+            EdgeAttr("match", "STRING", "cross_service|intra_service|ambiguous|phantom|unresolved"),
+        ),
+        purpose="resolved HTTP call from a declared Client to a target route",
+        typical_traversals={
+            "type_subject": (
+                "neighbors(['{id}'],'out',['DECLARES']) "
+                "then neighbors(member_ids,'out',['DECLARES_CLIENT']) "
+                "then neighbors(client_ids,'out',['HTTP_CALLS'])"
+            ),
+            "member_subject": (
+                "neighbors(['{id}'],'out',['DECLARES_CLIENT']) "
+                "then neighbors(client_ids,'out',['HTTP_CALLS'])"
+            ),
+            "route_subject": (
+                "neighbors(['{id}'],'in',['HTTP_CALLS']) "
+                "then neighbors(client_ids,'in',['DECLARES_CLIENT']) for declaring method"
+            ),
+            "alien_subject": (
+                "HTTP_CALLS connects Client→Route; use DECLARES_CLIENT from a method Symbol, "
+                "or neighbors(client_id,'out',['HTTP_CALLS']) from a Client id"
+            ),
+        },
+    ),
+    "ASYNC_CALLS": EdgeSpec(
+        name="ASYNC_CALLS",
+        src="Producer",
+        dst="Route",
+        cardinality="many_to_many",
+        brownfield_resolver_sourced=True,
+        attrs=(
+            EdgeAttr("confidence", "DOUBLE", "pass6 match confidence in [0.0, 1.0]"),
+            EdgeAttr("strategy", "STRING", "async call resolution strategy literal"),
+            EdgeAttr("direction", "STRING", "produce|consume async direction literal"),
+            EdgeAttr("raw_topic", "STRING", "uninterpolated topic template from the call site"),
+            EdgeAttr("match", "STRING", "cross_service|intra_service|ambiguous|phantom|unresolved"),
+        ),
+        purpose="resolved async call from a declared Producer to a topic route",
+        typical_traversals={
+            "type_subject": (
+                "neighbors(['{id}'],'out',['DECLARES']) "
+                "then neighbors(member_ids,'out',['DECLARES_PRODUCER']) "
+                "then neighbors(producer_ids,'out',['ASYNC_CALLS'])"
+            ),
+            "member_subject": (
+                "neighbors(['{id}'],'out',['DECLARES_PRODUCER']) "
+                "then neighbors(producer_ids,'out',['ASYNC_CALLS'])"
+            ),
+            "route_subject": (
+                "neighbors(['{id}'],'in',['ASYNC_CALLS']) "
+                "then neighbors(producer_ids,'in',['DECLARES_PRODUCER']) for declaring method"
+            ),
+            "alien_subject": (
+                "ASYNC_CALLS connects Producer→Route; use DECLARES_PRODUCER from a method Symbol, "
+                "or neighbors(producer_id,'out',['ASYNC_CALLS']) from a Producer id"
+            ),
+        },
+    ),
+}
+
+ResolveReason = Literal[
+    "exact_id",
+    "exact_fqn",
+    "fqn_suffix",
+    "short_name",
+    "route_template",
+    "route_method_path",
+    "route_topic",
+    "route_topic_prefix",
+    "client_target",
+    "client_target_path",
+    "client_name",
+    "client_fqn",
+    "producer_topic",
+    "producer_topic_prefix",
+]
+
+__all__ = [
+    "VALID_ROLES",
+    "VALID_CAPABILITIES",
+    "VALID_ROUTE_FRAMEWORKS",
+    "VALID_ROUTE_KINDS",
+    "VALID_CLIENT_KINDS",
+    "CLIENT_KIND_FEIGN_METHOD",
+    "CLIENT_KIND_REST_TEMPLATE",
+    "CLIENT_KIND_WEB_CLIENT",
+    "VALID_PRODUCER_KINDS",
+    "VALID_HTTP_CALL_STRATEGIES",
+    "VALID_ASYNC_CALL_STRATEGIES",
+    "VALID_HTTP_CALL_MATCHES",
+    "VALID_RESOLVE_REASONS",
+    "FUZZY_STRATEGY_SET",
+    "BROWNFIELD_RESOLVER_STRATEGY_SET",
+    "NodeKind",
+    "Cardinality",
+    "EdgeAttr",
+    "EdgeSpec",
+    "EDGE_SCHEMA",
+    "ResolveReason",
+]
