@@ -5,10 +5,16 @@ reprocess* so the update takes the fast INSERT path. The in-place alternative
 (cocoindex's bulk-update ``merge_insert``) emits ~one deletion-vector + version
 commit per matched row — O(rows) of tiny file IO that hangs for many minutes on
 large repos. Drop+recreate is identical output for a full rebuild.
+
+Also covers ``_popen_capturing_stderr``'s Ctrl+C behavior: it must wait on the
+child (interruptible) before joining the drain threads (not interruptible), and
+on abort must terminate the child and re-raise WITHOUT joining.
 """
 from __future__ import annotations
 
 import subprocess
+import sys
+import threading
 
 from java_codebase_rag import pipeline
 
@@ -101,3 +107,91 @@ def test_drop_preflight_blocker_is_silent(monkeypatch, capsys) -> None:
     assert seen["update"] == 1
     # 127 preflight is expected on graph-only installs and must NOT warn.
     assert "drop-before-reprocess failed" not in capsys.readouterr().err
+
+
+def test_popen_captures_normal_child_output() -> None:
+    """Regression guard: a completing child's stdout/stderr/code are still captured
+    after the wait-before-join reorder (verifies normal operation is unchanged)."""
+    proc = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import sys; sys.stdout.write('hello-out'); "
+            "sys.stderr.write('hello-err'); sys.exit(0)",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        bufsize=0,
+    )
+    try:
+        out, err, code = pipeline._popen_capturing_stderr(proc, verbose=True)
+    finally:
+        proc.wait()
+    assert code == 0
+    assert out == "hello-out"
+    assert "hello-err" in err
+
+
+def test_popen_abort_terminates_child_without_joining() -> None:
+    """Ctrl+C path: when ``proc.wait()`` raises while drain threads are blocked,
+    ``_popen_capturing_stderr`` must terminate the child and re-raise WITHOUT
+    joining the drain threads — a join here re-introduces the uninterruptible
+    hang (``Thread.join()`` on an infinite-timeout lock cannot be interrupted by
+    SIGINT), which is exactly the bug being fixed.
+
+    Run the helper in a daemon thread with a hard deadline so that a regression
+    (a join sneaking back onto the abort path) fails the assertion instead of
+    hanging the whole test session.
+    """
+    release = threading.Event()
+
+    class _BlockingStream:
+        """``proc.stdout``/``.stderr`` stand-in: ``read()`` blocks until released."""
+
+        def read(self, _n: int) -> bytes:
+            release.wait()
+            return b""
+
+    class _InterruptedProc:
+        def __init__(self) -> None:
+            self.stdout = _BlockingStream()
+            self.stderr = _BlockingStream()
+            self.terminated = False
+
+        def wait(self, *_a, **_k) -> int:
+            # Simulate Ctrl+C interrupting the (interruptible) wait on the child.
+            raise KeyboardInterrupt
+
+        def terminate(self) -> None:
+            self.terminated = True
+
+    proc = _InterruptedProc()
+    outcome: dict = {}
+
+    def runner() -> None:
+        try:
+            pipeline._popen_capturing_stderr(proc, verbose=True)
+            outcome["raised"] = None
+        except BaseException as exc:  # noqa: BLE001 — we WANT every escape
+            outcome["raised"] = exc
+        finally:
+            release.set()
+
+    t = threading.Thread(target=runner, daemon=True)
+    t.start()
+    t.join(timeout=5.0)
+    # Snapshot liveness BEFORE releasing: with the buggy join-first order the
+    # runner would still be blocked in Thread.join() here (deterministic); with
+    # the fix it returns in milliseconds. Checking after release.set() would race.
+    hung = t.is_alive()
+    release.set()  # never leave drain threads blocked, even on a passing run
+    t.join(timeout=5.0)
+
+    assert not hung, (
+        "_popen_capturing_stderr hung on the abort path — it must not join the "
+        "drain threads when the child wait is interrupted (Ctrl+C regression)"
+    )
+    assert isinstance(outcome.get("raised"), KeyboardInterrupt), (
+        "expected the KeyboardInterrupt to propagate out of the abort path"
+    )
+    assert proc.terminated, "the spawned child must be torn down on abort"

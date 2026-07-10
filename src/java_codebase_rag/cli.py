@@ -1162,8 +1162,20 @@ def _console_script_main() -> None:
     racy teardown — the command has already done its work and emitted its result.
     ``main()`` stays return-based so in-process test callers (``cli.main(...)``)
     keep working.
+
+    ``KeyboardInterrupt`` (Ctrl+C during a long indexing step) is caught here
+    rather than left to propagate: an uncaught interrupt bypasses this function
+    and runs full interpreter finalization (traceback + thread teardown),
+    whereas routing it through the same flush + ``os._exit`` path gives a clean,
+    immediate exit (code 130) and avoids the finalization-time SIGABRT noted
+    above for commands that loaded lancedb.
     """
-    rc = main()
+    try:
+        rc = main()
+    except KeyboardInterrupt:
+        sys.stderr.write("\nInterrupted.\n")
+        sys.stderr.flush()
+        rc = 130
     sys.stdout.flush()
     sys.stderr.flush()
     os._exit(rc)

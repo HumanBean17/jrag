@@ -133,12 +133,53 @@ def _popen_capturing_stderr(
     t_err = threading.Thread(target=drain_err, name="stream-stderr", daemon=True)
     t_out.start()
     t_err.start()
+    # Wait on the CHILD before joining the drain threads. ``Popen.wait()`` is
+    # interruptible by Ctrl+C — the underlying ``os.waitpid`` returns EINTR and
+    # CPython raises ``KeyboardInterrupt`` — whereas ``Thread.join()`` blocks on
+    # an internal lock whose infinite-timeout acquire CPython never polls for
+    # signals. Joining *first* therefore made the whole indexing step ignore
+    # Ctrl+C until the child happened to close its pipes; cocoindex's teardown
+    # (and any flow-server grandchild it spawned) can hold them open for a long
+    # time, so an install/reprocess could not be aborted. The daemon drain
+    # threads keep the child's stdout/stderr pipes empty while we wait, so the
+    # child never blocks on a full pipe.
+    try:
+        code = proc.wait()
+    except BaseException:
+        # Ctrl+C or any other abort: best-effort, NON-BLOCKING child teardown
+        # so a process we spawned does not outlive us, then re-raise WITHOUT
+        # joining the drain threads. They may be blocked on a pipe the child
+        # still owns, and a join here would re-introduce the very hang this
+        # reordering fixes. The threads are daemons, so they vanish at exit.
+        _abort_child(proc)
+        raise
+    # Normal exit: the child is gone, its pipes hit EOF, and the drain threads
+    # return promptly — safe to join here.
     t_out.join()
     t_err.join()
     if filt is not None:
         filt.flush()
-    code = proc.wait()
     return out_buf.decode(errors="replace"), err_buf.decode(errors="replace"), code
+
+
+def _abort_child(proc: subprocess.Popen[bytes]) -> None:
+    """Best-effort, NON-BLOCKING teardown of a spawned child on an abort path.
+
+    Runs when ``proc.wait()`` raised (Ctrl+C, or any other exception). Sends
+    SIGTERM and returns immediately — this path exists to let the operator exit
+    *promptly*, and waiting for the child would defeat that. On Ctrl+C the child
+    already received SIGINT (same process group); this just guarantees teardown
+    for non-signal aborts, after which the child finishes shutting down on its
+    own. ``ProcessLookupError``/``OSError`` (already-dead / zombie / reaped) are
+    swallowed — the only caller re-raises regardless.
+    """
+    fn = getattr(proc, "terminate", None)
+    if fn is None:
+        return
+    try:
+        fn()
+    except (OSError, ProcessLookupError):
+        pass
 
 
 def run_cocoindex_update(
