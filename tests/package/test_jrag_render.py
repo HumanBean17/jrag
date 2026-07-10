@@ -1000,3 +1000,60 @@ def test_count_results_and_has_results_exported() -> None:
     # non-ok never has results even when it carries candidates/nodes
     assert has_results(Envelope(status="ambiguous", candidates=[{}]), None) is False
     assert has_results(Envelope(status="not_found", message="m"), None) is False
+
+
+# ----- precedence of the exists/count/fields/detail if-chain (load-bearing) -----
+
+
+def test_count_takes_precedence_over_fields() -> None:
+    """--count wins over --fields: the bare int is emitted, not projected nodes."""
+    env = Envelope(status="ok", nodes={"a": {"fqn": "x.A", "role": "SERVICE"}})
+    assert render(env, count=True, fields="fqn") == "1"
+
+
+def test_exists_takes_precedence_over_fields() -> None:
+    """--exists wins over --fields: the boolean is emitted, not projected nodes."""
+    env = Envelope(status="ok", nodes={"a": {"fqn": "x.A"}})
+    assert render(env, exists=True, fields="role") == "true"
+
+
+# ----- --fields CSV parsing + empty-allowlist fallback -----
+
+
+def test_field_set_parses_whitespace_duplicates_and_empties() -> None:
+    """_field_set trims whitespace, drops empty entries, and dedups."""
+    from java_codebase_rag.jrag_render import _field_set
+
+    assert _field_set(" fqn , role ,, fqn ,") == {"fqn", "role"}
+    assert _field_set(",,,") == set()
+    assert _field_set("fqn") == {"fqn"}
+
+
+def test_fields_csv_whitespace_and_duplicates_resolve() -> None:
+    """An allowlist with spaces/dups/padding still projects the right fields."""
+    env = Envelope(status="ok", nodes={"a": {"fqn": "x.A", "role": "SERVICE"}})
+    out = json.loads(render(env, fmt="json", fields=" fqn , role ,, fqn "))
+    assert out["nodes"]["x.A"] == {"fqn": "x.A", "role": "SERVICE"}
+
+
+def test_fields_empty_allowlist_falls_back_to_normal() -> None:
+    """A whitespace/comma-only --fields is treated as not given (normal render),
+    not an empty projection that strips every node to ``{}``."""
+    env = Envelope(status="ok", nodes={"a": {"fqn": "x.A", "role": "SERVICE"}})
+    for raw in ("   ", ",", " , "):
+        node = json.loads(render(env, fmt="json", fields=raw))["nodes"]["x.A"]
+        assert node, raw  # empty-allowlist bug would yield {}
+        assert "fqn" in node, raw
+
+
+# ----- --exists JSON shape on non-ok status -----
+
+
+def test_exists_json_shape_on_non_ok() -> None:
+    """--exists --format json reports the real status alongside exists:false."""
+    nf = render(Envelope(status="not_found", message="m"), fmt="json", exists=True)
+    assert json.loads(nf) == {"status": "not_found", "exists": False}
+    amb = Envelope(status="ambiguous", candidates=[{"fqn": "x.A"}])
+    assert json.loads(render(amb, fmt="json", exists=True)) == {
+        "status": "ambiguous", "exists": False,
+    }

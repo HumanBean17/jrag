@@ -499,8 +499,9 @@ def build_parser() -> argparse.ArgumentParser:
             metavar="LIST",
             help=(
                 "Comma-separated node-field allowlist that overrides --detail "
-                "(e.g. fqn,role,signature). Primarily a --format json lever; "
-                "text still labels rows from whatever identity fields survive."
+                "(e.g. fqn,role,signature). Ignored with --count/--exists; "
+                "primarily a --format json lever; text still labels rows from "
+                "whatever identity fields survive."
             ),
         )
         return common

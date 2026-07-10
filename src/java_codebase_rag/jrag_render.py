@@ -759,36 +759,29 @@ def _field_set(fields: str) -> set[str]:
 
 
 def _project_to_fields(envelope: Envelope, fields: str) -> Envelope:
-    """Return a new envelope projected to FULL detail, then trimmed so each node
-    keeps only the requested field names.
+    """Return a copy of ``envelope`` (at FULL detail) whose nodes keep only the
+    requested field names.
 
     ``--fields`` is an explicit allowlist that OVERRIDES ``--detail``: project to
     full (so a ``full``-tier field like ``signature`` is available even at the
     default detail), then keep only the requested keys per node. Names absent on
     a node are simply not present. Graph-id fields stay stripped
     (``project_envelope(full)`` already strips them). Edges/candidates are left
-    at full; ``--fields`` is documented as a node projection. Returns a fresh
-    envelope (no mutation of ``envelope``).
+    at full; ``--fields`` is documented as a node projection.
+
+    Delegates the envelope copy to :func:`project_envelope` (the single
+    projection seam) and only rewrites ``nodes`` on the already-copied result,
+    so the per-field Envelope construction can't drift out of sync as fields are
+    added. ``project_envelope`` returns an independent copy and the node dicts
+    are rebuilt by the comprehension, so the caller's ``envelope`` is untouched.
     """
     wanted = _field_set(fields)
-    full = project_envelope(envelope, "full")
-    return Envelope(
-        status=full.status,
-        nodes={
-            nid: {k: v for k, v in node.items() if k in wanted}
-            for nid, node in full.nodes.items()
-        },
-        edges=full.edges,
-        root=full.root,
-        candidates=full.candidates,
-        agent_next_actions=full.agent_next_actions,
-        warnings=full.warnings,
-        truncated=full.truncated,
-        file_location=full.file_location,
-        message=full.message,
-        is_external_entrypoint=full.is_external_entrypoint,
-        absence=full.absence,
-    )
+    projected = project_envelope(envelope, "full")
+    projected.nodes = {
+        nid: {k: v for k, v in node.items() if k in wanted}
+        for nid, node in projected.nodes.items()
+    }
+    return projected
 
 
 def _render_count(envelope: Envelope, *, fmt: str, shape: str | None) -> str:
@@ -858,8 +851,10 @@ def render(
       * ``fields`` -> comma-separated node-field allowlist that OVERRIDES
         ``--detail`` (project to full, then keep only the named fields). Applies
         only to ``status="ok"`` output; composes with the normal render, not with
-        ``count``/``exists``. Primarily a JSON lever (text rendering still labels
-        rows from whatever identity fields survive the allowlist).
+        ``count``/``exists``. A whitespace/comma-only allowlist is treated as
+        not given (falls back to the normal projection). Primarily a JSON lever
+        (text rendering still labels rows from whatever identity fields survive
+        the allowlist).
 
     The exit-code side of ``--exists`` is decided by the caller (``jrag._emit``)
     via :func:`has_results` — render() only shapes output.
@@ -868,7 +863,7 @@ def render(
         return _render_exists(envelope, fmt=fmt, shape=shape)
     if count:
         return _render_count(envelope, fmt=fmt, shape=shape)
-    if fields and envelope.status == "ok":
+    if fields and envelope.status == "ok" and _field_set(fields):
         projected = _project_to_fields(envelope, fields)
     else:
         projected = project_envelope(envelope, detail)
