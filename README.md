@@ -1,17 +1,15 @@
 # java-codebase-rag
 
-A graph-native code intelligence layer for Java microservice estates — usable as an **MCP server** or a **CLI** (`jrag`), two surfaces over the same graph.
+A graph-native code intelligence layer for Java microservice estates, surfaced through the **`jrag` CLI** — one command per engineering intent. A **legacy MCP server** (`search` / `find` / `describe` / `neighbors` / `resolve`) is also available for existing setups. Both are thin surfaces over the same **AST Graph**: a deterministic property graph extracted from Java source with tree-sitter, stored **locally** in **LadybugDB** (graph) alongside a **LanceDB** vector index (chunks). There is no server to host and no cloud round-trip — the index lives on your disk and your source never leaves the machine. Both surfaces collapse onto three primitive operations: **locate**, **inspect**, **walk**.
 
-The system extracts a deterministic property graph from Java source (tree-sitter), stores it in **LadybugDB** (graph) alongside a **LanceDB** vector index (chunks), and exposes two agent surfaces, picked at install time (`java-codebase-rag install --surface mcp|cli`): the **MCP** surface ships five tools — `search`, `find`, `describe`, `neighbors`, `resolve` — over stdio; the **CLI** surface ships `jrag`, one command per engineering intent. Both collapse onto three primitive operations: **locate**, **inspect**, **walk**.
-
-> **What this MCP is:** a **GPS for code navigation**, not a reasoning engine.
+> **What this is: a GPS for code navigation**, not a reasoning engine.
 > Agents use a simple loop:
 >
-> 1. **Locate** entry nodes (`search` / `find`, or identifier-shaped **`resolve`**)
-> 2. **Inspect** what a node is (`describe`)
-> 3. **Walk** one hop at a time (`neighbors`) until enough evidence is gathered
+> 1. **Locate** entry nodes (`jrag find`, `jrag search`, or identifier-shaped lookup)
+> 2. **Inspect** what a node is (`jrag inspect`)
+> 3. **Walk** one hop at a time (`jrag callers` / `callees` / `hierarchy` / …) until enough evidence is gathered
 >
-> The MCP exposes structure and adjacency; the agent owns multi-hop reasoning and stop conditions.
+> The tool exposes structure and adjacency; the agent owns multi-hop reasoning and stop conditions.
 
 For the design rationale, the GPS metaphor, and the full ontology, see [`docs/paper/paper.pdf`](./docs/paper/paper.pdf) (architecture report).
 
@@ -21,7 +19,7 @@ For the design rationale, the GPS metaphor, and the full ontology, see [`docs/pa
 
 Generic code-search tools (grep, ctags, vector-only RAG) hit a ceiling on real Java microservice estates: they find files but lose the structure that makes a Spring/JAX-RS system navigable. This project is built around five choices that target that gap.
 
-- **Hybrid RAG + GraphRAG, not either-or.** Semantic recall (LanceDB chunk vectors) and structural navigation (LadybugDB property graph) are composed in one surface. `search` finds candidate nodes by meaning; `neighbors` walks the exact edge you care about (`CALLS`, `IMPLEMENTS`, `INJECTS`, `EXPOSES`, …). The agent picks the right primitive per step instead of being forced into pure-vector or pure-symbol search.
+- **Hybrid RAG + AST Graph, not either-or.** Semantic recall (LanceDB chunk vectors) and structural navigation (the LadybugDB AST Graph) are composed in one surface. `search` finds candidate nodes by meaning; `neighbors` walks the exact edge you care about (`CALLS`, `IMPLEMENTS`, `INJECTS`, `EXPOSES`, …). The agent picks the right primitive per step instead of being forced into pure-vector or pure-symbol search.
 
 - **A Java-tuned role model.** Symbols are labelled with stereotypes inferred from Spring and JAX-RS conventions — `CONTROLLER`, `SERVICE`, `REPOSITORY`, `COMPONENT`, `CONFIG`, `ENTITY`, `CLIENT`, `MAPPER`, `DTO`. Agents can ask "list controllers" or "who injects this repository" directly, instead of grep-ing for `@RestController` and hoping for the best. Roles drive both filtering (`find` with a `NodeFilter`) and ranking.
 
@@ -77,19 +75,7 @@ If you prefer manual configuration, see [`docs/JAVA-CODEBASE-RAG-CLI.md`](./docs
 
 ## Tools & commands at a glance
 
-Pick a surface at install time — `java-codebase-rag install --surface mcp|cli` (default `cli`, recommended). Both surfaces walk the same LanceDB vectors + LadybugDB graph. Switch an existing install later with `java-codebase-rag update --surface mcp|cli`.
-
-**MCP surface — five tools over stdio**
-
-| Tool | Purpose | Required args |
-|---|---|---|
-| `search` | Locate nodes by NL / code text. | `query` |
-| `find` | Locate nodes by structured filter. | `kind`, `filter` |
-| `describe` | Full record + edge counts for one node. | `id` |
-| `resolve` | Identifier-shaped lookup (FQN-collision-safe). Returns `one` / `many` / `none`. | `identifier` |
-| `neighbors` | Graph walk, one hop. | `ids`, `direction`, `edge_types` |
-
-Full schemas, `NodeFilter` / `EdgeFilter` semantics, and the hints contract live in [`docs/AGENT-GUIDE.md`](./docs/AGENT-GUIDE.md). Edge types and traversal directions are listed in [`docs/EDGE-NAVIGATION.md`](./docs/EDGE-NAVIGATION.md).
+`jrag` is the default and recommended surface (`java-codebase-rag install --surface cli`). The **MCP server** (`--surface mcp`) is kept as a **legacy** option for existing setups. Both surfaces walk the same LanceDB vectors + LadybugDB **AST Graph**. Switch an existing install later with `java-codebase-rag update --surface mcp|cli`.
 
 **CLI surface — `jrag`, one command per engineering intent**
 
@@ -146,9 +132,21 @@ jrag search "audit" --offset 5            # paginated
 
 Every `<query>` command takes human-readable identifiers (FQN / simple name / route path / topic) — never raw node IDs. Output contract, flags, and the resolve-first rule are in [`jrag` — agent CLI](#jrag--agent-cli) below.
 
+**MCP surface — five tools over stdio (legacy)**
+
+| Tool | Purpose | Required args |
+|---|---|---|
+| `search` | Locate nodes by NL / code text. | `query` |
+| `find` | Locate nodes by structured filter. | `kind`, `filter` |
+| `describe` | Full record + edge counts for one node. | `id` |
+| `resolve` | Identifier-shaped lookup (FQN-collision-safe). Returns `one` / `many` / `none`. | `identifier` |
+| `neighbors` | Graph walk, one hop. | `ids`, `direction`, `edge_types` |
+
+Full schemas, `NodeFilter` / `EdgeFilter` semantics, and the hints contract live in [`docs/AGENT-GUIDE.md`](./docs/AGENT-GUIDE.md). Edge types and traversal directions are listed in [`docs/EDGE-NAVIGATION.md`](./docs/EDGE-NAVIGATION.md).
+
 ### Three-layer architecture
 
-Layer 1 (storage) → Layer 2 (5 MCP tools **or** the `jrag` CLI) → Layer 3 (skill). The MCP-surface skill **[`/explore-codebase`](./skills/explore-codebase/SKILL.md)** documents the 5-tool MCP; the CLI-surface skill **[`/explore-codebase-cli`](./skills/explore-codebase-cli/SKILL.md)** documents the `jrag` CLI (PR-JRAG-5). See the [architecture diagram in `skills/README.md`](./skills/README.md#three-layer-architecture).
+Layer 1 (storage) → Layer 2 (the `jrag` CLI, **or** the legacy 5-tool MCP) → Layer 3 (skill). The CLI-surface skill **[`/explore-codebase-cli`](./skills/explore-codebase-cli/SKILL.md)** documents the `jrag` CLI; the MCP-surface skill **[`/explore-codebase`](./skills/explore-codebase/SKILL.md)** documents the legacy 5-tool MCP (PR-JRAG-5). See the [architecture diagram in `skills/README.md`](./skills/README.md#three-layer-architecture).
 
 ---
 
@@ -258,7 +256,7 @@ full design and per-PR breakdown.
 | [`docs/CONFIGURATION.md`](./docs/CONFIGURATION.md) | Environment variables, project YAML, graph ontology, brownfield overrides, ignore patterns. |
 | [`docs/JAVA-CODEBASE-RAG-CLI.md`](./docs/JAVA-CODEBASE-RAG-CLI.md) | CLI operator playbook: workflows, exit codes, env alignment. |
 | [`docs/EDGE-NAVIGATION.md`](./docs/EDGE-NAVIGATION.md) | MCP-traversable edges, directions, dot-key composition. |
-| [`skills/`](./skills/) | `/explore-codebase` (MCP surface) + `/explore-codebase-cli` (CLI surface) skills — operating manuals for hosts with skill discovery (alternative to copy-pasting AGENT-GUIDE). See [`skills/README.md`](./skills/README.md). |
+| [`skills/`](./skills/) | `/explore-codebase-cli` (CLI surface) + `/explore-codebase` (legacy MCP surface) skills — operating manuals for hosts with skill discovery (alternative to copy-pasting AGENT-GUIDE). See [`skills/README.md`](./skills/README.md). |
 | [`docs/MANUAL-VERIFICATION-CHECKLIST.md`](./docs/MANUAL-VERIFICATION-CHECKLIST.md) | 7-phase agent-driven verification after indexing your project. |
 | [`docs/CODEBASE_REQUIREMENTS.md`](./docs/CODEBASE_REQUIREMENTS.md) | Assumptions about your Java repo + per-file edit map for non-conforming codebases. |
 | [`docs/PRODUCT-VISION.md`](./docs/PRODUCT-VISION.md) | Long-term product direction. |
