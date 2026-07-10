@@ -484,7 +484,8 @@ def build_parser() -> argparse.ArgumentParser:
         parents=[_common_parser()],
         description=(
             "Find nodes by query or filter. Two modes:\n"
-            "  Query mode (positional <query>): search by exact name/FQN (symbols only).\n"
+            "  Query mode (positional <query>): search by name/FQN (symbols only); --fuzzy\n"
+            "    falls back exact -> prefix -> substring when the exact match is empty.\n"
             "  Filter mode (no positional): apply structured filters (NodeFilter flags).\n"
             "Kind inference: domain flags (--http-method, --client-kind, --producer-kind) imply\n"
             "route/client/producer when --kind is omitted. Contradiction emits an error envelope.\n"
@@ -507,6 +508,12 @@ def build_parser() -> argparse.ArgumentParser:
     find.add_argument("--framework", type=_lower_snake, choices=_FRAMEWORK_CHOICES, default=None, help="Filter by framework.")
     find.add_argument("--source-layer", type=str, default=None, help="Filter by source layer.")
     find.add_argument("--fqn-contains", type=str, default=None, help="Filter by FQN substring.")
+    find.add_argument(
+        "--fuzzy",
+        action="store_true",
+        help="Query mode: fall back from exact name/FQN to prefix then substring "
+             "(case-sensitive) when the exact match is empty.",
+    )
     find.add_argument("--http-method", type=str, default=None, help="Filter by HTTP method (route).")
     find.add_argument("--path-contains", type=str, default=None, help="Filter by path substring (route).")
     find.add_argument("--client-kind", type=str, default=None, help="Filter by client kind (client).")
@@ -1427,14 +1434,14 @@ def _cmd_find_query_mode(
     graph,
     limit: int,
 ) -> int:
-    """Find query mode: g.find_by_name_or_fqn (Symbol-only, exact name/FQN match).
+    """Find query mode: g.find_by_name_or_fqn (Symbol-only name/FQN match).
 
-    ``find_by_name_or_fqn`` runs ``MATCH (s:Symbol) WHERE s.name=$needle OR
-    s.fqn=$needle`` — Symbol-only, exact-only. There is no fuzzy/prefix/contains
-    path; ``--fuzzy`` was deferred (see plans/active/PLAN-JRAG-CLI.md Out of
-    scope). Query mode is gated to ``effective_kind == "symbol"`` upstream in
-    ``_cmd_find``, so the only ``kinds`` filter we may pass is symbol sub-kinds
-    derived from ``--java-kind``.
+    Default is exact (``s.name``/``s.fqn`` = needle). With ``--fuzzy``, an empty
+    exact result widens to prefix (``STARTS WITH``) then substring (``CONTAINS``)
+    on name/FQN — fuzzy modes exclude file/package Symbol nodes (#411). Query
+    mode is gated to ``effective_kind == "symbol"`` upstream in ``_cmd_find``,
+    so the only ``kinds`` filter we may pass is symbol sub-kinds derived from
+    ``--java-kind``.
     """
     from java_codebase_rag.jrag_envelope import Envelope, next_actions_hook, normalize_enum
     from java_codebase_rag.jrag_render import render
@@ -1450,7 +1457,8 @@ def _cmd_find_query_mode(
     else:
         kinds = None
 
-    # Call find_by_name_or_fqn (exact name OR fqn match).
+    # Call find_by_name_or_fqn. Default is exact name/FQN match; with --fuzzy,
+    # widen to prefix then substring when the exact match is empty (issue #375).
     rows = graph.find_by_name_or_fqn(
         query,
         kinds=kinds,
@@ -1458,6 +1466,20 @@ def _cmd_find_query_mode(
         microservice=args.service,
         limit=limit + 1,  # +1 for truncated detection
     )
+    matched_mode = "exact"
+    if not rows and getattr(args, "fuzzy", False) and query:
+        for fb_mode in ("prefix", "contains"):
+            rows = graph.find_by_name_or_fqn(
+                query, kinds=kinds, module=args.module, microservice=args.service,
+                limit=limit + 1, mode=fb_mode,
+            )
+            if rows:
+                matched_mode = fb_mode
+                break
+    # Did any tier (exact or fallback) return rows BEFORE post-filters? Used to
+    # distinguish "identifier genuinely matched nothing" from "matched but
+    # --role/--annotation/--capability removed all hits" in the empty-result hint.
+    identifier_matched = bool(rows)
     # Truncation is decided by the RAW name/FQN fetch (limit+1), BEFORE
     # post-filters reduce the set — otherwise a post-filter that drops rows
     # would silently clear `truncated` even though more name matches may exist
@@ -1504,6 +1526,12 @@ def _cmd_find_query_mode(
 
     # Display at most `limit` of the (post-filtered) rows.
     display_rows = rows[:limit]
+    # Map internal mode -> user-facing term (help/empty-hint say "substring").
+    mode_label = "substring" if matched_mode == "contains" else matched_mode
+    if matched_mode != "exact" and display_rows:
+        warnings.append(
+            f"no exact name/FQN match; --fuzzy matched via {mode_label}"
+        )
     nodes = {}
     for row in display_rows:
         node_id = row.id
@@ -1539,17 +1567,25 @@ def _cmd_find_query_mode(
     )
     next_actions_hook(env)
 
-    # Empty-result discoverability: query mode is exact-match only (name OR fqn),
-    # so a partial like `find ChatManagement` legitimately returns 0. Surface a
-    # cross-ref so the agent knows the substring fallback exists instead of
-    # seeing a bare `0 symbol`. Carried as both a `message` (renders inline) and
-    # an `agent_next_action` (renders as `next:` / JSON). A literal FQN-shaped
-    # query (contains '.') almost certainly won't substring-match either, so the
-    # hint applies regardless of shape.
+    # Empty-result discoverability: a partial like `find ChatManag` returns 0
+    # under exact match. Three cases: (1) some tier matched the identifier but
+    # --role/--exclude-role/--annotation/--capability removed every hit — blame
+    # the filter, not the query; (2) --fuzzy widened to prefix/substring and
+    # still found nothing; (3) no --fuzzy, so suggest it. Carried as `message`
+    # (inline) + `agent_next_actions` (`next:`/JSON).
     if not nodes and query:
-        hint = f"no exact match for {query!r} — try `jrag find --fqn-contains {query}` for substring"
+        if identifier_matched and post_filter_active:
+            hint = (
+                f"matched {query!r} (via {mode_label}), but "
+                "--role/--exclude-role/--annotation/--capability removed all hits"
+            )
+        elif getattr(args, "fuzzy", False):
+            hint = f"no match for {query!r} (tried exact, prefix, substring)"
+            env.agent_next_actions = [f"jrag find --fqn-contains {query}"]
+        else:
+            hint = f"no exact match for {query!r} — try `jrag find {query} --fuzzy`"
+            env.agent_next_actions = [f"jrag find {query} --fuzzy"]
         env.message = hint
-        env.agent_next_actions = [f"jrag find --fqn-contains {query}"]
 
     # Offset is not supported in query mode (find_by_name_or_fqn has no offset).
     print(render(env, fmt=args.format, detail=args.detail, noun="symbol"))
