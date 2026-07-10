@@ -195,6 +195,46 @@ def _clamped_limit(args: argparse.Namespace) -> int:
     return min(raw_limit, 499)
 
 
+def _emit(env, args: argparse.Namespace, *, noun: str = "",
+          shape: str | None = None, next_offset: int | None = None) -> int:
+    """Final render+print funnel honoring ``--count`` / ``--exists`` / ``--fields``;
+    returns the exit code.
+
+    The single output seam every ok / not_found / ambiguous result routes
+    through. The shared helpers (:func:`_render_listing`, :func:`_emit_traversal`)
+    delegate their tail here; inline success render sites call it directly. True
+    usage / setup errors (missing index, kind guard, ``neighbors_v2`` failure,
+    argparse errors) bypass it — those render normally via :func:`render`, since a
+    count/exists shape would hide the actionable error message.
+
+    Exit code: ``--exists`` forces 0 when results are present and 2 otherwise
+    (resolve miss AND empty ok both count as absent), computed via
+    :func:`jrag_render.has_results` so output and exit code agree. Without
+    ``--exists``, rc follows the envelope (error -> 2, else 0); ``--count`` does
+    not gate (a zero count on an ok envelope stays exit 0).
+
+    ``getattr`` defaults keep this safe for parsers that lack the flags
+    (``_core_parser`` commands), though only ``_common_parser`` commands are
+    routed here today.
+    """
+    from java_codebase_rag.jrag_render import has_results, render
+
+    print(render(
+        env,
+        fmt=getattr(args, "format", "text"),
+        detail=getattr(args, "detail", "normal"),
+        noun=noun,
+        next_offset=next_offset,
+        shape=shape,
+        count=getattr(args, "count", False),
+        exists=getattr(args, "exists", False),
+        fields=getattr(args, "fields", None),
+    ))
+    if getattr(args, "exists", False):
+        return 0 if has_results(env, shape) else 2
+    return 2 if env.status == "error" else 0
+
+
 def _render_listing(rows, *, limit: int, args: argparse.Namespace, noun: str,
                     extra_hints: list[str] | None = None) -> int:
     """Apply +1-fetch truncation, build the envelope, render as a listing.
@@ -209,7 +249,6 @@ def _render_listing(rows, *, limit: int, args: argparse.Namespace, noun: str,
     (jobs / listeners / entities).
     """
     from java_codebase_rag.jrag_envelope import Envelope, mark_truncated, next_actions_hook, to_envelope_rows
-    from java_codebase_rag.jrag_render import render
 
     node_list = to_envelope_rows(rows) if rows and not isinstance(rows[0], dict) else list(rows)
     display_nodes_list, truncated = mark_truncated(node_list, limit)
@@ -227,8 +266,7 @@ def _render_listing(rows, *, limit: int, args: argparse.Namespace, noun: str,
                 seen.add(h)
                 env.agent_next_actions.append(h)
         env.agent_next_actions = env.agent_next_actions[:5]
-    print(render(env, fmt=args.format, detail=args.detail, noun=noun))
-    return 0
+    return _emit(env, args, noun=noun)
 
 
 def _symbol_hit_to_dict(hit) -> dict:
@@ -427,6 +465,42 @@ def build_parser() -> argparse.ArgumentParser:
                 "Output detail level (default normal) — ORTHOGONAL to --format: both "
                 "text and json honor it. brief = identity only (name @service); "
                 "normal = +module/role/file/score; full = +signature/annotations/snippet."
+            ),
+        )
+        # Output-shaping flags (issue #376). NOT on _core_parser: status /
+        # microservices are aggregate rollups (a count there is meaningless) and
+        # vocab-index prints plain text outside the render path, so adding them
+        # there would create silently-ignored flags (violates the
+        # "inapplicable flags never silently ignored" principle).
+        common.add_argument(
+            "--count",
+            action="store_true",
+            default=False,
+            help=(
+                "Print only the result count (no rows) — bare int in text, "
+                "{\"status\",\"count\"} in json. Counts nodes (listing), edges "
+                "(traversal), or 1 (inspect)."
+            ),
+        )
+        common.add_argument(
+            "--exists",
+            action="store_true",
+            default=False,
+            help=(
+                "Print only an exists boolean (true/false, or "
+                "{\"status\",\"exists\"} in json). Exit 0 when results exist, "
+                "2 otherwise (incl. resolve miss / empty result)."
+            ),
+        )
+        common.add_argument(
+            "--fields",
+            type=str,
+            default=None,
+            metavar="LIST",
+            help=(
+                "Comma-separated node-field allowlist that overrides --detail "
+                "(e.g. fqn,role,signature). Primarily a --format json lever; "
+                "text still labels rows from whatever identity fields survive."
             ),
         )
         return common
@@ -1444,7 +1518,6 @@ def _cmd_find_query_mode(
     ``--java-kind``.
     """
     from java_codebase_rag.jrag_envelope import Envelope, next_actions_hook, normalize_enum
-    from java_codebase_rag.jrag_render import render
 
     query = args.query
 
@@ -1588,8 +1661,7 @@ def _cmd_find_query_mode(
         env.message = hint
 
     # Offset is not supported in query mode (find_by_name_or_fqn has no offset).
-    print(render(env, fmt=args.format, detail=args.detail, noun="symbol"))
-    return 0
+    return _emit(env, args, noun="symbol")
 
 
 def _build_node_filter_or_error(filter_dict: dict):
@@ -1705,8 +1777,7 @@ def _cmd_find_filter_mode(
 
     # Render with offset hint if truncated
     next_offset = args.offset + limit if truncated else None
-    print(render(env, fmt=args.format, detail=args.detail, noun=kind, next_offset=next_offset))
-    return 0
+    return _emit(env, args, noun=kind, next_offset=next_offset)
 
 
 def _cmd_inspect(args: argparse.Namespace) -> int:
@@ -1740,8 +1811,10 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
     )
 
     if env.status != "ok":
-        print(render(env, fmt=args.format, detail=args.detail))
-        return 2 if env.status == "error" else 0
+        # _emit so --exists/--count shape a resolve miss (inspect Missing
+        # --exists -> false, rc 2). rc matches the prior 2-if-error-else-0
+        # when no flag is set.
+        return _emit(env, args)
 
     # Node resolved successfully - call describe_v2
     desc_out = mcp_v2.describe_v2(id=node.id, graph=graph)
@@ -1813,8 +1886,7 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
     next_actions_hook(env, root=node_id, edge_summary=record_dict.get("edge_summary"))
 
     # Render with inspect shape
-    print(render(env, fmt=args.format, detail=args.detail, shape="inspect"))
-    return 0
+    return _emit(env, args, shape="inspect")
 
 
 def _backfill_service_from_filename(row: dict) -> None:
@@ -1912,7 +1984,6 @@ def _cmd_producers(args: argparse.Namespace) -> int:
 
 def _cmd_topics(args: argparse.Namespace) -> int:
     from java_codebase_rag.jrag_envelope import Envelope, mark_truncated, next_actions_hook
-    from java_codebase_rag.jrag_render import render
 
     _, graph, rc = _load_graph_or_error(args)
     if rc:
@@ -1992,8 +2063,7 @@ def _cmd_topics(args: argparse.Namespace) -> int:
         warnings=warnings + _auto_scope_notice(args),
     )
     next_actions_hook(env, command=getattr(args, "command", None))
-    print(render(env, fmt=args.format, detail=args.detail, noun="topic"))
-    return 0
+    return _emit(env, args, noun="topic")
 
 
 def _inspect_hints_for_rows(rows: list[dict], *, limit: int = 2) -> list[str]:
@@ -2196,7 +2266,6 @@ def _resolve_traversal_node(
     resolves for the cross-service route-caller flow.
     """
     from java_codebase_rag.jrag_envelope import resolve_query
-    from java_codebase_rag.jrag_render import render
 
     node, env = resolve_query(
         args.query,
@@ -2210,8 +2279,10 @@ def _resolve_traversal_node(
         module=(getattr(args, "module", None) or "") if apply_scope else "",
     )
     if env.status != "ok":
-        print(render(env, fmt=args.format, detail=args.detail))
-        return None, env, 2 if env.status == "error" else 0
+        # Route through _emit so --exists/--count shape a resolve miss (e.g.
+        # `callers Missing --exists` -> false, rc 2) instead of rendering the
+        # not_found body. rc matches the prior 2-if-error-else-0 when no flag.
+        return None, env, _emit(env, args)
     return node, env, 0
 
 
@@ -2271,7 +2342,6 @@ def _emit_traversal(
     ``jrag implementations <fqn>``).
     """
     from java_codebase_rag.jrag_envelope import Envelope, next_actions_hook
-    from java_codebase_rag.jrag_render import render
 
     env = Envelope(
         status="ok",
@@ -2290,8 +2360,7 @@ def _emit_traversal(
                 seen.add(h)
                 env.agent_next_actions.append(h)
         env.agent_next_actions = env.agent_next_actions[:5]
-    print(render(env, fmt=args.format, detail=args.detail, noun=noun))
-    return 0
+    return _emit(env, args, noun=noun)
 
 
 def _require_kind(
@@ -3368,7 +3437,6 @@ def _cmd_connection(args: argparse.Namespace) -> int:
     limit = _clamped_limit(args)
 
     from java_codebase_rag.jrag_envelope import Envelope, next_actions_hook
-    from java_codebase_rag.jrag_render import render
 
     # Validate the microservice against the known set so a bogus name surfaces a
     # clear error instead of an empty inbound:/outbound: view (silent wrong
@@ -3568,8 +3636,7 @@ def _cmd_connection(args: argparse.Namespace) -> int:
         truncated=truncated,
     )
     next_actions_hook(env, root=root_id, result_edges=display_edges)
-    print(render(env, fmt=args.format, detail=args.detail, noun="connection"))
-    return 0
+    return _emit(env, args, noun="connection")
 
 
 def _resolve_source_path(cfg, file_arg: str) -> Path | None:
@@ -3652,8 +3719,7 @@ def _cmd_outline(args: argparse.Namespace) -> int:
     # thing to inspect from an outline. Per-row inspect hints for the leading
     # entries give the agent a concrete next step.
     env.agent_next_actions = _inspect_hints_for_rows(display, limit=2)
-    print(render(env, fmt=args.format, detail=args.detail, noun="symbol"))
-    return 0
+    return _emit(env, args, noun="symbol")
 
 
 def _cmd_imports(args: argparse.Namespace) -> int:
@@ -3766,8 +3832,7 @@ def _cmd_imports(args: argparse.Namespace) -> int:
 
     env = Envelope(status="ok", nodes=nodes, edges=edges, warnings=warnings)
     next_actions_hook(env, result_edges=edges)
-    print(render(env, fmt=args.format, detail=args.detail, noun="import"))
-    return 0
+    return _emit(env, args, noun="import")
 
 
 # ============================================================================
@@ -3817,7 +3882,6 @@ def _cmd_map(args: argparse.Namespace) -> int:
     axis, which made "group by ALL modules" unreachable.
     """
     from java_codebase_rag.jrag_envelope import Envelope, next_actions_hook
-    from java_codebase_rag.jrag_render import render
 
     _, graph, rc = _load_graph_or_error(args)
     if rc:
@@ -3871,14 +3935,12 @@ def _cmd_map(args: argparse.Namespace) -> int:
         hints.append(f"jrag overview {drill_scope}")
     hints.append("jrag conventions")
     env.agent_next_actions = hints[:5]
-    print(render(env, fmt=args.format, detail=args.detail, noun="map", shape="inspect"))
-    return 0
+    return _emit(env, args, noun="map", shape="inspect")
 
 
 def _cmd_conventions(args: argparse.Namespace) -> int:
     """conventions [--service] — dominant roles + framework tallies."""
     from java_codebase_rag.jrag_envelope import Envelope, next_actions_hook
-    from java_codebase_rag.jrag_render import render
 
     _, graph, rc = _load_graph_or_error(args)
     if rc:
@@ -3940,8 +4002,7 @@ def _cmd_conventions(args: argparse.Namespace) -> int:
         hints.append(f"jrag find --role {top_role}{scope_suffix}")
     hints.append("jrag map")
     env.agent_next_actions = hints[:5]
-    print(render(env, fmt=args.format, detail=args.detail, noun="conventions", shape="inspect"))
-    return 0
+    return _emit(env, args, noun="conventions", shape="inspect")
 
 
 def _overview_detect_type(subject: str, graph) -> str:
@@ -3976,7 +4037,6 @@ def _overview_microservice(args: argparse.Namespace, graph, microservice: str) -
     bundle to empty (subject node) or keep all samples equally (rollup node).
     """
     from java_codebase_rag.jrag_envelope import Envelope, next_actions_hook
-    from java_codebase_rag.jrag_render import render
 
     limit = _clamped_limit(args)
     routes = graph.list_routes(microservice=microservice, limit=limit + 1)
@@ -4030,8 +4090,7 @@ def _overview_microservice(args: argparse.Namespace, graph, microservice: str) -
         nodes={f"microservice:{microservice}": node},
     )
     next_actions_hook(env)
-    print(render(env, fmt=args.format, detail=args.detail, noun="overview", shape="inspect"))
-    return 0
+    return _emit(env, args, noun="overview", shape="inspect")
 
 
 def _overview_route(args: argparse.Namespace, cfg, graph, route_path: str) -> int:
@@ -4045,8 +4104,7 @@ def _overview_route(args: argparse.Namespace, cfg, graph, route_path: str) -> in
         cfg=cfg, graph=graph,
     )
     if renv.status != "ok" or node is None:
-        print(render(renv, fmt=args.format, detail=args.detail))
-        return 2 if renv.status == "error" else 0
+        return _emit(renv, args)
 
     if node.kind != "route":
         env = Envelope(
@@ -4091,8 +4149,7 @@ def _overview_route(args: argparse.Namespace, cfg, graph, route_path: str) -> in
         edges = edges[:limit]
     env = Envelope(status="ok", nodes=nodes_dict, edges=edges, root=root_id, truncated=truncated)
     next_actions_hook(env, root=root_id, result_edges=edges)
-    print(render(env, fmt=args.format, detail=args.detail, noun="overview"))
-    return 0
+    return _emit(env, args, noun="overview")
 
 
 def _overview_topic(args: argparse.Namespace, graph, topic: str) -> int:
@@ -4105,7 +4162,6 @@ def _overview_topic(args: argparse.Namespace, graph, topic: str) -> int:
     samples, full = +limit samples.
     """
     from java_codebase_rag.jrag_envelope import Envelope, next_actions_hook
-    from java_codebase_rag.jrag_render import render
 
     limit = _clamped_limit(args)
     # Producers: exact topic match first, then substring match as fallback.
@@ -4159,8 +4215,7 @@ def _overview_topic(args: argparse.Namespace, graph, topic: str) -> int:
         nodes={f"topic:{topic}": topic_node},
     )
     next_actions_hook(env)
-    print(render(env, fmt=args.format, detail=args.detail, noun="overview", shape="inspect"))
-    return 0
+    return _emit(env, args, noun="overview", shape="inspect")
 
 
 def _cmd_overview(args: argparse.Namespace) -> int:
@@ -4318,8 +4373,7 @@ def _cmd_search(args: argparse.Namespace) -> int:
             warnings=_auto_scope_notice(args),
         )
         next_actions_hook(env)
-        print(render(env, fmt=args.format, detail=args.detail, noun="search"))
-        return 0
+        return _emit(env, args, noun="search")
 
     # Build NodeFilter from flags (same set as `find` filter mode).
     filter_dict: dict = {}
@@ -4466,8 +4520,7 @@ def _cmd_search(args: argparse.Namespace) -> int:
     if display:
         env.agent_next_actions = _inspect_hints_for_rows(display, limit=2)
     next_offset = args.offset + limit if truncated else None
-    print(render(env, fmt=args.format, detail=args.detail, noun="search", next_offset=next_offset))
-    return 0
+    return _emit(env, args, noun="search", next_offset=next_offset)
 
 
 def _suppress_runtime_stderr_noise() -> None:

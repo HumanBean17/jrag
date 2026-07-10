@@ -668,3 +668,77 @@ def test_find_fuzzy_forwards_scope_filters(
     nodes = payload_assign.get("nodes", {})
     assert len(nodes) >= 1, payload_assign
     assert all("chat.assign" in n.get("fqn", "") for n in nodes.values()), payload_assign
+
+
+# ----- issue #376: --count / --exists / --fields end-to-end (exit-code contract) -----
+
+_KNOWN_FQN = "com.bank.chat.assign.ChatAssignApplication"
+_MISS_FQN = "com.bank.chat.assign.DoesNotExistGibberishXYZ123"
+
+
+def _index_env(corpus_root: Path, ladybug_db_path: Path) -> dict[str, str]:
+    """Env pointing jrag at the shared fixture index (DRY for the flag tests)."""
+    env = os.environ.copy()
+    env["JAVA_CODEBASE_RAG_SOURCE_ROOT"] = str(corpus_root)
+    env["JAVA_CODEBASE_RAG_INDEX_DIR"] = str(ladybug_db_path.parent)
+    return env
+
+
+def test_find_exists_true_on_hit(corpus_root: Path, ladybug_db_path: Path) -> None:
+    """find <existing> --exists -> 'true', exit 0."""
+    proc = _run_jrag(["find", _KNOWN_FQN, "--exists"], env=_index_env(corpus_root, ladybug_db_path))
+    assert proc.returncode == 0, f"rc={proc.returncode}\nstdout={proc.stdout}\nstderr={proc.stderr}"
+    assert proc.stdout.strip() == "true"
+
+
+def test_find_exists_false_on_miss_exits_2(corpus_root: Path, ladybug_db_path: Path) -> None:
+    """find <missing> --exists -> 'false', exit 2 (the gating contract)."""
+    proc = _run_jrag(["find", _MISS_FQN, "--exists"], env=_index_env(corpus_root, ladybug_db_path))
+    assert proc.returncode == 2, f"rc={proc.returncode}\nstdout={proc.stdout}\nstderr={proc.stderr}"
+    assert proc.stdout.strip() == "false"
+
+
+def test_find_count_reports_bare_int_and_json(corpus_root: Path, ladybug_db_path: Path) -> None:
+    """--count text is a bare int (rc 0 even when >0); --format json shapes it."""
+    env = _index_env(corpus_root, ladybug_db_path)
+    proc_c = _run_jrag(["find", "--role", "controller", "--count"], env=env)
+    assert proc_c.returncode == 0, f"rc={proc_c.returncode}\nstderr={proc_c.stderr}"
+    n = int(proc_c.stdout.strip())
+    assert n > 0, f"expected controllers in fixture, got count={n}"
+
+    proc_j = _run_jrag(["find", "--role", "controller", "--count", "--format", "json"], env=env)
+    payload = json.loads(proc_j.stdout)
+    assert payload == {"status": "ok", "count": n}
+
+
+def test_find_count_matches_row_count(corpus_root: Path, ladybug_db_path: Path) -> None:
+    """--count equals the number of node rows the same query returns without it."""
+    env = _index_env(corpus_root, ladybug_db_path)
+    proc_rows = _run_jrag(["find", "--role", "controller", "--format", "json"], env=env)
+    assert proc_rows.returncode == 0, proc_rows.stderr
+    row_count = len(json.loads(proc_rows.stdout).get("nodes", {}))
+
+    proc_count = _run_jrag(["find", "--role", "controller", "--count"], env=env)
+    assert int(proc_count.stdout.strip()) == row_count
+
+
+def test_inspect_exists_false_on_miss_exits_2(corpus_root: Path, ladybug_db_path: Path) -> None:
+    """inspect <missing> --exists routes the resolve-miss through the flag ->
+    'false', exit 2 (exercises the _resolve/inspect not_found -> _emit path)."""
+    proc = _run_jrag(["inspect", _MISS_FQN, "--exists"], env=_index_env(corpus_root, ladybug_db_path))
+    assert proc.returncode == 2, f"rc={proc.returncode}\nstdout={proc.stdout}\nstderr={proc.stderr}"
+    assert proc.stdout.strip() == "false"
+
+
+def test_find_fields_projects_json_to_allowlist(corpus_root: Path, ladybug_db_path: Path) -> None:
+    """--fields fqn,role keeps only those keys on each node (overrides --detail)."""
+    proc = _run_jrag(
+        ["find", _KNOWN_FQN, "--format", "json", "--fields", "fqn,role"],
+        env=_index_env(corpus_root, ladybug_db_path),
+    )
+    assert proc.returncode == 0, f"rc={proc.returncode}\nstderr={proc.stderr}"
+    payload = json.loads(proc.stdout)
+    assert payload["status"] == "ok" and payload["nodes"]
+    for node in payload["nodes"].values():
+        assert set(node.keys()) <= {"fqn", "role"}, f"unexpected keys: {node.keys()}"
+        assert "fqn" in node
