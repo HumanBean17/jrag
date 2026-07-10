@@ -4,12 +4,12 @@ Pure-path logic only — no sockets, no I/O except mkdir for the runtime dir.
 No dependencies on other watch modules.
 """
 
-import hashlib
-import sys
-from pathlib import Path
-
 import getpass
+import hashlib
+import os
+import sys
 import tempfile
+from pathlib import Path
 
 
 def runtime_dir() -> Path:
@@ -24,14 +24,14 @@ def runtime_dir() -> Path:
     The directory is created with parents=True, exist_ok=True before returning.
     """
     # 1. XDG_RUNTIME_DIR
-    if "XDG_RUNTIME_DIR" in __import__("os").environ:
-        rt_dir = Path(__import__("os").environ["XDG_RUNTIME_DIR"])
+    if "XDG_RUNTIME_DIR" in os.environ:
+        rt_dir = Path(os.environ["XDG_RUNTIME_DIR"])
     # 2. TMPDIR
-    elif "TMPDIR" in __import__("os").environ:
-        rt_dir = Path(__import__("os").environ["TMPDIR"])
+    elif "TMPDIR" in os.environ:
+        rt_dir = Path(os.environ["TMPDIR"])
     # 3. macOS-specific path
     elif sys.platform == "darwin":
-        home = Path(__import__("os").environ.get("HOME", Path.home()))
+        home = Path(os.environ.get("HOME") or os.path.expanduser("~"))
         rt_dir = home / "Library" / "Caches" / "JragWatch"
     # 4. Fallback
     else:

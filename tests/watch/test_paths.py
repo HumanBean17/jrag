@@ -6,7 +6,6 @@ from unittest.mock import patch
 
 import pytest
 
-# These imports will fail until paths.py is created
 from java_codebase_rag.watch.paths import (
     runtime_dir,
     project_key,
@@ -79,7 +78,7 @@ class TestSocketPidStatePaths:
         pid = pid_path(index_dir)
         state = state_path(index_dir)
 
-        assert sock != pid != state, (
+        assert len({sock, pid, state}) == 3, (
             f"paths not distinct: sock={sock}, pid={pid}, state={state}"
         )
 
@@ -141,22 +140,24 @@ class TestRuntimeDir:
         assert rt.is_dir(), f"runtime_dir is not a directory: {rt}"
 
     @patch("sys.platform", "linux")
-    def test_runtime_dir_resolution_order_xdg(self, monkeypatch):
+    def test_runtime_dir_resolution_order_xdg(self, monkeypatch, tmp_path):
         """runtime_dir respects XDG_RUNTIME_DIR env var first (Linux)."""
-        monkeypatch.setenv("XDG_RUNTIME_DIR", "/tmp/xdg-runtime")
+        xdg = tmp_path / "xdg"
+        monkeypatch.setenv("XDG_RUNTIME_DIR", str(xdg))
 
         rt = runtime_dir()
-        assert rt == Path("/tmp/xdg-runtime"), (
+        assert rt == xdg, (
             f"runtime_dir didn't use XDG_RUNTIME_DIR: {rt}"
         )
 
-    def test_runtime_dir_resolution_order_tmpdir(self, monkeypatch):
+    def test_runtime_dir_resolution_order_tmpdir(self, monkeypatch, tmp_path):
         """runtime_dir falls back to TMPDIR if XDG_RUNTIME_DIR not set."""
         monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
-        monkeypatch.setenv("TMPDIR", "/tmp/my-tmp")
+        mytmp = tmp_path / "my-tmp"
+        monkeypatch.setenv("TMPDIR", str(mytmp))
 
         rt = runtime_dir()
-        assert rt == Path("/tmp/my-tmp"), (
+        assert rt == mytmp, (
             f"runtime_dir didn't use TMPDIR: {rt}"
         )
 
@@ -178,16 +179,21 @@ class TestRuntimeDir:
         )
 
     @patch("sys.platform", "linux")
-    def test_runtime_dir_resolution_order_fallback(self, monkeypatch):
+    def test_runtime_dir_resolution_order_fallback(self, monkeypatch, tmp_path):
         """runtime_dir falls back to tempfile.gettempdir()/jrag-watch-{user} on Linux."""
         monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
         monkeypatch.delenv("TMPDIR", raising=False)
 
+        # Point tempfile.gettempdir() at a tmp_path subdir so the mkdir'd
+        # fallback dir lands under pytest's auto-cleaned tree.
+        fallback_tmp = tmp_path / "fallback"
+        fallback_tmp.mkdir(parents=True)
+        monkeypatch.setattr("tempfile.gettempdir", lambda: str(fallback_tmp))
+
         rt = runtime_dir()
         # Should be tempfile.gettempdir() / "jrag-watch-{username}"
-        import tempfile
         import getpass
-        expected = Path(tempfile.gettempdir()) / f"jrag-watch-{getpass.getuser()}"
+        expected = fallback_tmp / f"jrag-watch-{getpass.getuser()}"
         assert rt == expected, (
             f"runtime_dir didn't use Linux fallback: expected={expected}, got={rt}"
         )
