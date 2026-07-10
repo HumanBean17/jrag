@@ -216,3 +216,40 @@ def test_resolve_non_empty_result_has_no_absence(ladybug_graph) -> None:
     assert out.success is True
     assert out.status in ("one", "many")
     assert out.absence is None
+
+
+# --- Absence-config singleton isolation regression ---
+#
+# server.main() caches the operator cfg in a module-global singleton via
+# set_absence_config() (mcp/server.py). Tests that drive server.main() with a
+# MOCKED resolve_operator_config (tests/package/test_java_codebase_rag_cli.py)
+# cache a MagicMock there, and monkeypatch does NOT revert it (set via a function
+# call, not an attribute patch). On the graph-only macOS Intel CI leg this leaks
+# into later absence/resolve tests in the same xdist worker and surfaces as
+# `int < MagicMock` (best_sim < cfg.absence_absent_floor). The autouse
+# `_reset_absence_config_singleton` fixture in conftest.py is the fix; the pair
+# below pins the cross-test isolation contract. Runs in definition order.
+
+
+def test_absence_config_singleton_leak_regression_poison() -> None:
+    """Part 1: simulate server.main() caching a MagicMock cfg in the singleton."""
+    from unittest.mock import MagicMock
+
+    from java_codebase_rag.analysis import resolve_service
+    from java_codebase_rag.mcp import mcp_v2
+
+    mcp_v2._absence_config = MagicMock()
+    resolve_service._absence_config = MagicMock()
+    assert isinstance(mcp_v2._absence_config, MagicMock)
+
+
+def test_absence_config_singleton_leak_regression_is_clean() -> None:
+    """Part 2: the autouse isolation fixture must have reset the poisoned singleton
+    from part 1, so absence/resolve tools build a real config (no `int < MagicMock`).
+    Fails if the `_reset_absence_config_singleton` fixture is removed/broken.
+    """
+    from java_codebase_rag.analysis import resolve_service
+    from java_codebase_rag.mcp import mcp_v2
+
+    assert mcp_v2._absence_config is None
+    assert resolve_service._absence_config is None

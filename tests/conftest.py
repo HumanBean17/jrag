@@ -97,6 +97,33 @@ def _enforce_dev_deps() -> None:
         )
 
 
+@pytest.fixture(autouse=True)
+def _reset_absence_config_singleton():
+    """Isolate the module-global absence-diagnosis config between tests.
+
+    ``server.main()`` calls ``mcp_v2.set_absence_config(cfg)`` and
+    ``resolve_service.set_absence_config(cfg)`` (mcp/server.py), caching ``cfg`` in
+    a module-global singleton. Tests that drive ``server.main()`` with a *mocked*
+    ``resolve_operator_config`` (tests/package/test_java_codebase_rag_cli.py) cache
+    a ``MagicMock`` there. ``monkeypatch`` does NOT revert it — the value is set via
+    a function call, not an attribute patch — so it leaks across tests in the same
+    xdist worker (``--dist loadfile``). Later absence/resolve tests then read the
+    mock; ``get_vocabulary_index`` passes ``cfg.absence_ngram_q`` (a MagicMock)
+    uncoerced into ``_qgrams`` → ``len(text) < q`` → ``int < MagicMock``
+    (absence_vocab.py), surfacing as flaky ``success=False`` failures on the
+    graph-only macOS Intel CI leg. Resetting here guarantees each test sees a clean
+    config. (The production side also coerces ``q`` to int as defense-in-depth.)
+    """
+    from java_codebase_rag.analysis import resolve_service
+    from java_codebase_rag.mcp import mcp_v2
+
+    mcp_v2._absence_config = None
+    resolve_service._absence_config = None
+    yield
+    mcp_v2._absence_config = None
+    resolve_service._absence_config = None
+
+
 @pytest.fixture(scope="session")
 def corpus_root() -> Path:
     assert CORPUS_ROOT.is_dir(), f"corpus missing: {CORPUS_ROOT}"

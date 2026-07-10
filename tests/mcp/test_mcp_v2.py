@@ -171,8 +171,32 @@ def test_find_symbol_empty_filter_returns_results(ladybug_graph) -> None:
     out = find_v2("symbol", {}, graph=ladybug_graph)
     assert out.success is True
     assert out.results
-    # Regression guard: Symbol rows can include non-declaration kinds (e.g., package/file).
+    # Every returned row is a code declaration with a non-empty kind ...
     assert all(isinstance(r.symbol_kind, str) and r.symbol_kind for r in out.results)
+    # ... and structural file/package Symbol nodes are excluded (they are not
+    # code declarations). See test_find_symbol_excludes_file_and_package_nodes.
+    kinds = {r.symbol_kind for r in out.results}
+    assert "file" not in kinds
+    assert "package" not in kinds
+
+
+def test_find_symbol_excludes_file_and_package_nodes(ladybug_graph) -> None:
+    """File/package Symbol nodes are structural, not code declarations, so find_v2
+    must never surface them. Their ``fqn`` is a filesystem path, so a substring
+    filter otherwise matches the *filename* (e.g. ``Assign`` in
+    ``.../DevAssignmentController.java``) and leaks a file row whose rendered
+    label collapses to the ``java`` extension. Reproduces the chat-assign case.
+    """
+    out = find_v2("symbol", {"fqn_contains": "Assign"}, graph=ladybug_graph)
+    assert out.success is True
+    assert out.results, "fixture (bank-chat-system) has Assign-named declarations"
+    kinds = {r.symbol_kind for r in out.results}
+    assert "file" not in kinds
+    # 'package' can't match here (CONTAINS is case-sensitive and package fqns are
+    # lowercase) — the package exclusion is proven by test_find_symbol_empty_filter_returns_results.
+    assert "package" not in kinds
+    # Real declarations still surface (the chat-assign module has Assign* types).
+    assert kinds & {"class", "interface", "enum", "record", "annotation", "method", "constructor"}
 
 
 def test_find_symbol_by_symbol_kind_method(ladybug_graph) -> None:

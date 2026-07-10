@@ -396,6 +396,39 @@ def test_simple_name_derived_from_fqn() -> None:
     assert simple_name({}) == ""
 
 
+def test_simple_name_file_path_fqn_returns_basename_not_extension() -> None:
+    """File/package Symbol nodes carry a filesystem path as ``fqn``; the dot-split
+    would otherwise yield the file *extension* (``java``) instead of a name.
+    A path-shaped fqn returns its basename; a route fqn (``"GET /api/x"``) still
+    has a space so it stays on the dot-split path; a package fqn (dots only) is
+    unchanged.
+    """
+    assert simple_name({"fqn": "chat-assign/src/main/java/com/bank/chat/assign/config/AssignConfiguration.java"}) == "AssignConfiguration.java"
+    assert simple_name({"fqn": "src/main/java/Foo.java"}) == "Foo.java"
+    # Package node fqn: dots only, no separator -> unchanged dot-split.
+    assert simple_name({"fqn": "com.bank.chat.assign"}) == "assign"
+    # Route fqn contains '/' but also a space -> NOT treated as a path.
+    assert simple_name({"fqn": "GET /api/assign"}) == "GET /api/assign"
+
+
+def test_render_listing_file_node_shows_basename_not_extension() -> None:
+    """User-visible symptom guard: a file Symbol node (fqn = filesystem path) must
+    render its basename, never collapse to the ``java`` extension. Covers the
+    render path (display_name -> simple_name) end-to-end, complementing the
+    simple_name unit test. Defense-in-depth for Layer 2: Layer 1 keeps file nodes
+    out of `find`, but query-mode exact match or traversal can still surface one.
+    """
+    from java_codebase_rag.jrag_render import display_name
+
+    node = {"fqn": "chat-assign/src/main/java/com/bank/chat/assign/config/AssignConfiguration.java"}
+    # The label is the basename, not the 'java' extension.
+    assert display_name(node) == "AssignConfiguration.java"
+    # And it reaches the rendered listing the user actually sees.
+    env = Envelope(status="ok", nodes={"sym:1": node})
+    out = render(env, fmt="text", noun="matches")
+    assert "AssignConfiguration.java" in out
+
+
 # ----- Bonus: tiered_name tiers -----
 
 

@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Literal
 
 from java_codebase_rag.absence.absence_types import AbsenceDiagnosis
@@ -274,10 +275,22 @@ def simple_name(node_dict: dict[str, Any]) -> str:
 
     ``NodeRef`` carries no ``name`` field; the rendering layer derives a short
     label from the FQN on demand. Empty/missing FQN returns "".
+
+    File/package Symbol nodes are the exception: their ``fqn`` is a filesystem
+    path (e.g. ``chat-assign/.../AssignConfiguration.java``), so the dot-split
+    would yield the file *extension* (``java``) instead of a name. When the fqn
+    is a path (contains ``/`` — the indexer POSIX-normalizes via ``.as_posix()``
+    so backslashes don't occur) we return the basename. Route fqns
+    (``"GET /api/x"``) also contain ``/`` but carry a space, so they're excluded
+    here and stay on the dot-split path.
     """
     fqn = str(node_dict.get("fqn") or "")
     if not fqn:
         return ""
+    if "/" in fqn and " " not in fqn:
+        base = Path(fqn).name
+        if base:
+            return base
     return fqn.rsplit(".", 1)[-1]
 
 
