@@ -159,3 +159,77 @@ def test_refresh_pipeline_skips_vectors_and_builds_graph_on_graph_only(
     assert "cocoindex not found" not in (out.message or "")
     # The JSON message documents the graph-only outcome.
     assert "graph-only" in (out.message or "")
+
+
+def test_cocoindex_bin_falls_back_to_path(monkeypatch, tmp_path) -> None:
+    """``cocoindex_bin`` must honor ``shutil.which`` when cocoindex is not next to
+    the interpreter — a console script legitimately lives away from the venv python
+    (e.g. ``~/.local/bin`` from ``pip install --user``). Regression guard for the
+    PATH fallback that init/increment/``reprocess --vectors-only`` rely on."""
+    from java_codebase_rag import pipeline
+
+    # cocoindex is NOT next to a (faked) interpreter, but IS present on PATH.
+    fake_interp = tmp_path / "fakepython"
+    fake_interp.mkdir()
+    monkeypatch.setattr(pipeline.sys, "executable", str(fake_interp / "python"))
+
+    on_path = tmp_path / "bin" / "cocoindex"
+    on_path.parent.mkdir(parents=True)
+    on_path.write_text("")
+    monkeypatch.setattr(pipeline.shutil, "which", lambda name: str(on_path))
+
+    assert pipeline.cocoindex_bin() == on_path
+
+
+def test_refresh_pipeline_resolves_cocoindex_via_path_not_next_to_python(
+    monkeypatch, tmp_path
+) -> None:
+    """Regression: ``reprocess`` (no flags) must resolve cocoindex through the
+    shared PATH-aware ``cocoindex_bin()`` helper, not hardcode next-to-python.
+    When the binary is reachable only via PATH, it must spawn cocoindex rather
+    than fail with "cocoindex not found next to Python" — matching what the sync
+    path (``reprocess --vectors-only``) already did."""
+    import asyncio
+
+    from java_codebase_rag.mcp import server
+
+    # Vector stack IS installed (so we do NOT take the graph-only skip branch)...
+    monkeypatch.setattr(server, "vector_stack_installed", lambda: True)
+
+    # ...but cocoindex lives only on PATH, not next to python. The resolver
+    # returns that PATH-found binary; the old hardcoded path would have missed it.
+    on_path = tmp_path / "on_path" / "cocoindex"
+    on_path.parent.mkdir(parents=True)
+    on_path.write_text("")  # so .is_file() is True and the not-found branch is skipped
+    monkeypatch.setattr(server, "resolve_cocoindex_bin", lambda: on_path)
+
+    class _FakeProc:
+        def __init__(self) -> None:
+            self.returncode = 1  # nonzero: stop right after the vectors spawn
+
+        async def communicate(self):
+            return b"", b"cocoindex exit 1"
+
+    spawned: list[str] = []
+
+    async def fake_exec(exe, *args, **kwargs):
+        spawned.append(exe)
+        return _FakeProc()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", str(tmp_path))
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_INDEX_DIR", str(tmp_path / "idx"))
+
+    out = asyncio.run(server.run_refresh_pipeline(quiet=True))
+
+    # cocoindex WAS spawned with the PATH-resolved binary (the drop + update
+    # calls), and the run reached the spawn — it did not short-circuit to the
+    # not-found failure. The nonzero exit is the fake's, surfacing as a real
+    # cocoindex failure rather than a resolution failure.
+    assert spawned, "cocoindex was never spawned (not-found short-circuit)"
+    assert all(exe == str(on_path) for exe in spawned)
+    assert out.exit_code == 1
+    assert out.phases_run == ["vectors"]
+    assert out.message == "cocoindex exit 1"
+    assert "cocoindex not found" not in (out.message or "")

@@ -15,7 +15,11 @@ from java_codebase_rag.search.index_common import SBERT_MODEL
 from java_codebase_rag.cli_progress import (
     accumulate_and_relay_subprocess_streams,
 )
-from java_codebase_rag.pipeline import VECTORS_SKIPPED_GRAPH_ONLY, vector_stack_installed
+from java_codebase_rag.pipeline import (
+    VECTORS_SKIPPED_GRAPH_ONLY,
+    cocoindex_bin as resolve_cocoindex_bin,
+    vector_stack_installed,
+)
 from java_codebase_rag.progress import ProgressEvent
 from java_codebase_rag._fdlimit import raise_fd_limit
 from java_codebase_rag.config import (
@@ -422,7 +426,15 @@ async def run_refresh_pipeline(
             phases_run=["graph"] if started else [],
             optimize_error=None,
         )
-    cocoindex_bin = Path(sys.executable).parent / "cocoindex"
+    # Resolve cocoindex the same way the sync path does (pipeline.cocoindex_bin):
+    # next to the interpreter first, then via PATH (``shutil.which``). A console
+    # script legitimately lives away from the venv python — e.g. ``pip install
+    # --user`` places it in ``~/.local/bin``. Honoring PATH keeps ``reprocess``
+    # (no flags) consistent with init/increment/``reprocess --vectors-only``,
+    # which all resolve through cocoindex_bin(); previously this path checked
+    # only next-to-python and failed with "cocoindex not found next to Python"
+    # even though cocoindex was reachable on PATH.
+    cocoindex_bin = resolve_cocoindex_bin()
     if not cocoindex_bin.is_file():
         # 127 pre-spawn: emit a terminal failed vectors event so the renderer's
         # task doesn't hang at running (matches the sync pipeline path).
@@ -430,7 +442,10 @@ async def run_refresh_pipeline(
             on_progress(ProgressEvent(kind="vectors", phase=None, pass_=None, done=None, total=None, status="failed", elapsed_s=None))
         return RefreshIndexOutput(
             success=False,
-            message=f"cocoindex not found next to Python: {cocoindex_bin}",
+            message=(
+                f"cocoindex not found next to Python ({cocoindex_bin}) or on PATH; "
+                "install cocoindex[lancedb] into the same venv or add its bin/ to PATH."
+            ),
             phases_run=[],
         )
     flow_path = _FLOW_FILE
