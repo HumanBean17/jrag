@@ -154,7 +154,12 @@ def _popen_capturing_stderr(
         _abort_child(proc)
         raise
     # Normal exit: the child is gone, its pipes hit EOF, and the drain threads
-    # return promptly — safe to join here.
+    # return promptly — safe to join here. (If a pipe-inheriting grandchild
+    # lingered past the child's exit, these joins would block until it too
+    # closed its write ends — on Ctrl+C the shared-process-group SIGINT reaches
+    # it and closes them. This window is the short teardown-after-indexing phase,
+    # not the long indexing phase the wait-first reorder already made
+    # interruptible.)
     t_out.join()
     t_err.join()
     if filt is not None:
@@ -170,15 +175,15 @@ def _abort_child(proc: subprocess.Popen[bytes]) -> None:
     *promptly*, and waiting for the child would defeat that. On Ctrl+C the child
     already received SIGINT (same process group); this just guarantees teardown
     for non-signal aborts, after which the child finishes shutting down on its
-    own. ``ProcessLookupError``/``OSError`` (already-dead / zombie / reaped) are
-    swallowed — the only caller re-raises regardless.
+    own. ``OSError`` (incl. ``ProcessLookupError`` — already-dead / zombie /
+    reaped) is swallowed — the only caller re-raises regardless.
     """
     fn = getattr(proc, "terminate", None)
     if fn is None:
         return
     try:
         fn()
-    except (OSError, ProcessLookupError):
+    except OSError:
         pass
 
 

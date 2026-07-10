@@ -195,3 +195,23 @@ def test_popen_abort_terminates_child_without_joining() -> None:
         "expected the KeyboardInterrupt to propagate out of the abort path"
     )
     assert proc.terminated, "the spawned child must be torn down on abort"
+
+
+def test_abort_child_swallows_already_dead() -> None:
+    """``_abort_child`` must not raise if the child is already gone (zombie /
+    reaped) — the only caller is on an exception path whose job is to re-raise,
+    so a teardown failure here must never replace the abort cause.
+
+    ``ProcessLookupError`` is the real-world shape (wait() raised, OS already
+    reaped the child between wait and terminate); it's a subclass of ``OSError``,
+    which is what the helper catches.
+    """
+    class _AlreadyDeadProc:
+        terminated = False
+
+        def terminate(self) -> None:
+            raise ProcessLookupError(3, "No such process")
+
+    proc = _AlreadyDeadProc()
+    # Must not raise — caller relies on best-effort, swallow-and-return.
+    pipeline._abort_child(proc)  # type: ignore[arg-type]
