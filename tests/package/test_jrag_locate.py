@@ -19,6 +19,8 @@ Tests:
 16. test_find_fuzzy_exact_match_skips_fallback - exact hit does not trigger fallback
 17. test_find_fuzzy_no_match_reports_tried_modes - gibberish notes all three modes tried
 18. test_find_empty_without_fuzzy_suggests_flag - empty exact result suggests --fuzzy
+19. test_find_fuzzy_match_removed_by_postfilter_blames_filter - fuzzy hit emptied by --role blames filter
+20. test_find_fuzzy_forwards_scope_filters - --service flows into the fuzzy fallback tiers
 
 Note: --fuzzy is implemented as an exact -> prefix -> substring fallback on
 name/FQN (issue #375); fuzzy modes exclude file/package Symbol nodes (#411).
@@ -586,7 +588,8 @@ def test_find_fuzzy_no_match_reports_tried_modes(
     assert payload["status"] == "ok", payload
     assert len(payload.get("nodes", {})) == 0, payload
     msg = (payload.get("message") or "").lower()
-    assert "prefix" in msg and "substring" in msg, payload
+    assert "exact" in msg and "prefix" in msg and "substring" in msg, payload
+    assert payload.get("agent_next_actions"), payload
 
 
 def test_find_empty_without_fuzzy_suggests_flag(
@@ -600,5 +603,68 @@ def test_find_empty_without_fuzzy_suggests_flag(
     proc = _run_jrag(["find", "ChatManag", "--format", "json"], env=env)
     assert proc.returncode == 0, proc.stderr
     payload = json.loads(proc.stdout)
+    assert payload["status"] == "ok", payload
     assert len(payload.get("nodes", {})) == 0, payload
     assert "--fuzzy" in (payload.get("message") or ""), payload
+
+
+# ----- Test 19-20: find --fuzzy edge cases (review feedback) -----
+
+
+def test_find_fuzzy_match_removed_by_postfilter_blames_filter(
+    corpus_root: Path, ladybug_db_path: Path
+) -> None:
+    """Fuzzy matched the identifier, but --role removed every hit: the message
+    must blame the filter, not claim 'tried exact, prefix, substring'.
+
+    `ChatManag` prefix-matches ChatManagementController (CONTROLLER) and
+    ChatManagementService (SERVICE), both in chat-assign. Neither is a REPOSITORY,
+    so --role repository empties the set after the fuzzy tier already matched.
+    """
+    env = os.environ.copy()
+    env["JAVA_CODEBASE_RAG_SOURCE_ROOT"] = str(corpus_root)
+    env["JAVA_CODEBASE_RAG_INDEX_DIR"] = str(ladybug_db_path.parent)
+
+    proc = _run_jrag(
+        ["find", "ChatManag", "--fuzzy", "--role", "repository", "--format", "json"],
+        env=env,
+    )
+    assert proc.returncode == 0, f"{proc.stderr}\n{proc.stdout}"
+    payload = json.loads(proc.stdout)
+    assert payload["status"] == "ok", payload
+    assert len(payload.get("nodes", {})) == 0, payload
+    msg = (payload.get("message") or "").lower()
+    assert "removed all hits" in msg, payload
+    assert "tried exact, prefix, substring" not in msg, payload
+
+
+def test_find_fuzzy_forwards_scope_filters(
+    corpus_root: Path, ladybug_db_path: Path
+) -> None:
+    """--service must flow into the fuzzy fallback tiers, not just the exact fetch.
+
+    `ChatManag` lives only in chat-assign; scoping the fuzzy fallback to chat-core
+    must yield 0 (proving the scope filter reached the prefix/contains tiers),
+    while scoping to chat-assign returns them, all within chat-assign.
+    """
+    env = os.environ.copy()
+    env["JAVA_CODEBASE_RAG_SOURCE_ROOT"] = str(corpus_root)
+    env["JAVA_CODEBASE_RAG_INDEX_DIR"] = str(ladybug_db_path.parent)
+
+    proc_core = _run_jrag(
+        ["find", "ChatManag", "--fuzzy", "--service", "chat-core", "--format", "json"],
+        env=env,
+    )
+    payload_core = json.loads(proc_core.stdout)
+    assert payload_core["status"] == "ok", payload_core
+    assert len(payload_core.get("nodes", {})) == 0, payload_core
+
+    proc_assign = _run_jrag(
+        ["find", "ChatManag", "--fuzzy", "--service", "chat-assign", "--format", "json"],
+        env=env,
+    )
+    payload_assign = json.loads(proc_assign.stdout)
+    assert payload_assign["status"] == "ok", payload_assign
+    nodes = payload_assign.get("nodes", {})
+    assert len(nodes) >= 1, payload_assign
+    assert all("chat.assign" in n.get("fqn", "") for n in nodes.values()), payload_assign

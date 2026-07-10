@@ -511,7 +511,8 @@ def build_parser() -> argparse.ArgumentParser:
     find.add_argument(
         "--fuzzy",
         action="store_true",
-        help="Query mode: fall back from exact name/FQN to prefix then substring match.",
+        help="Query mode: fall back from exact name/FQN to prefix then substring "
+             "(case-sensitive) when the exact match is empty.",
     )
     find.add_argument("--http-method", type=str, default=None, help="Filter by HTTP method (route).")
     find.add_argument("--path-contains", type=str, default=None, help="Filter by path substring (route).")
@@ -1475,6 +1476,10 @@ def _cmd_find_query_mode(
             if rows:
                 matched_mode = fb_mode
                 break
+    # Did any tier (exact or fallback) return rows BEFORE post-filters? Used to
+    # distinguish "identifier genuinely matched nothing" from "matched but
+    # --role/--annotation/--capability removed all hits" in the empty-result hint.
+    identifier_matched = bool(rows)
     # Truncation is decided by the RAW name/FQN fetch (limit+1), BEFORE
     # post-filters reduce the set — otherwise a post-filter that drops rows
     # would silently clear `truncated` even though more name matches may exist
@@ -1521,9 +1526,11 @@ def _cmd_find_query_mode(
 
     # Display at most `limit` of the (post-filtered) rows.
     display_rows = rows[:limit]
+    # Map internal mode -> user-facing term (help/empty-hint say "substring").
+    mode_label = "substring" if matched_mode == "contains" else matched_mode
     if matched_mode != "exact" and display_rows:
         warnings.append(
-            f"no exact name/FQN match; --fuzzy matched via {matched_mode}"
+            f"no exact name/FQN match; --fuzzy matched via {mode_label}"
         )
     nodes = {}
     for row in display_rows:
@@ -1561,12 +1568,18 @@ def _cmd_find_query_mode(
     next_actions_hook(env)
 
     # Empty-result discoverability: a partial like `find ChatManag` returns 0
-    # under exact match. Point the agent at the fallback instead of showing a
-    # bare `0 symbol`. With --fuzzy we already tried prefix/contains, so say so;
-    # without it, suggest --fuzzy (the native query-mode fallback). Carried as
-    # both a `message` (renders inline) and an `agent_next_action` (`next:`/JSON).
+    # under exact match. Three cases: (1) some tier matched the identifier but
+    # --role/--exclude-role/--annotation/--capability removed every hit — blame
+    # the filter, not the query; (2) --fuzzy widened to prefix/substring and
+    # still found nothing; (3) no --fuzzy, so suggest it. Carried as `message`
+    # (inline) + `agent_next_actions` (`next:`/JSON).
     if not nodes and query:
-        if getattr(args, "fuzzy", False):
+        if identifier_matched and post_filter_active:
+            hint = (
+                f"matched {query!r} (via {mode_label}), but "
+                "--role/--exclude-role/--annotation/--capability removed all hits"
+            )
+        elif getattr(args, "fuzzy", False):
             hint = f"no match for {query!r} (tried exact, prefix, substring)"
             env.agent_next_actions = [f"jrag find --fqn-contains {query}"]
         else:

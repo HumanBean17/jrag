@@ -95,7 +95,7 @@ def test_find_by_name_or_fqn_fqn(ladybug_graph) -> None:
 
 
 def test_find_by_name_or_fqn_prefix_matches_partial_name(ladybug_graph) -> None:
-    """mode='prefix' matches names/FQNs that STARTS WITH the needle."""
+    """mode='prefix' matches names/FQNs that START WITH the needle."""
     rows = ladybug_graph.find_by_name_or_fqn("ChatManag", mode="prefix")
     # The exact simple name is 'ChatManagementService'; the prefix must reach it.
     assert any(r.fqn.endswith(".ChatManagementService") for r in rows), rows
@@ -130,15 +130,22 @@ def test_find_by_name_or_fqn_fuzzy_excludes_file_package(ladybug_graph) -> None:
     for r in rows:
         assert r.kind not in ("file", "package"), r
     prefix_rows = ladybug_graph.find_by_name_or_fqn("com", mode="prefix")
+    assert prefix_rows, "expected prefix 'com' to match class FQNs"
     for r in prefix_rows:
         assert r.kind not in ("file", "package"), r
 
 
 def test_find_by_name_or_fqn_bad_mode_raises(ladybug_graph) -> None:
-    import pytest
-
     with pytest.raises(ValueError):
         ladybug_graph.find_by_name_or_fqn("X", mode="regex")
+
+
+def test_find_by_name_or_fqn_empty_needle_fuzzy_returns_empty(ladybug_graph) -> None:
+    """Empty needle in a fuzzy mode must NOT widen to 'all symbols' (STARTS WITH
+    '' / CONTAINS '' match every string). Defensive guard for future callers;
+    the CLI never sends an empty positional."""
+    assert ladybug_graph.find_by_name_or_fqn("", mode="prefix") == []
+    assert ladybug_graph.find_by_name_or_fqn("", mode="contains") == []
 
 
 # ---------------- find_implementors / find_subclasses ----------------

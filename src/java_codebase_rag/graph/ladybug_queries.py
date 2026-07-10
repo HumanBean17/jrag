@@ -1006,6 +1006,12 @@ class LadybugGraph:
         # Fuzzy modes additionally exclude file/package Symbol nodes: their fqn is a
         # filesystem path, so a substring/prefix would leak filename rows (mirrors
         # the find_v2 fix, #411). Exact mode is unchanged for back-compat.
+        # Empty needle: STARTS WITH '' / CONTAINS '' match every string, so a
+        # fuzzy mode would silently return up to `limit` arbitrary Symbols. The
+        # CLI guards this (query mode requires a positional), but keep the
+        # backend safe-by-construction for any future caller.
+        if mode != "exact" and not name_or_fqn:
+            return []
         if mode == "exact":
             filters = ["(s.name = $needle OR s.fqn = $needle)"]
         elif mode == "prefix":
