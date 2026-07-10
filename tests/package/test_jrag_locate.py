@@ -15,9 +15,13 @@ Tests:
 12. test_inspect_returns_edge_summary_with_composed_keys - OVERRIDDEN_BY virtual key
 13. test_inspect_ambiguous_returns_candidates - resolve returns many
 14. test_inspect_populates_file_location - file_location set by resolve
+15. test_find_fuzzy_returns_results_when_exact_misses - --fuzzy prefix/substring fallback
+16. test_find_fuzzy_exact_match_skips_fallback - exact hit does not trigger fallback
+17. test_find_fuzzy_no_match_reports_tried_modes - gibberish notes all three modes tried
+18. test_find_empty_without_fuzzy_suggests_flag - empty exact result suggests --fuzzy
 
-Note: --fuzzy was deferred (backend find_by_name_or_fqn is exact-only; see
-plans/active/PLAN-JRAG-CLI.md Out of scope).
+Note: --fuzzy is implemented as an exact -> prefix -> substring fallback on
+name/FQN (issue #375); fuzzy modes exclude file/package Symbol nodes (#411).
 """
 from __future__ import annotations
 
@@ -513,3 +517,88 @@ def test_inspect_populates_file_location(corpus_root: Path, ladybug_db_path: Pat
     assert file_location is not None, "expected file_location to be populated for a real symbol"
     # Should be in format "filename:start_line" (start_line present for symbols).
     assert "ChatAssignApplication.java" in file_location, f"unexpected file_location: {file_location}"
+
+
+# ----- Test 15-18: find --fuzzy (exact -> prefix -> substring fallback, #375) -----
+
+
+def test_find_fuzzy_returns_results_when_exact_misses(
+    corpus_root: Path, ladybug_db_path: Path
+) -> None:
+    """--fuzzy widens an empty exact match to prefix/substring on name/FQN."""
+    env = os.environ.copy()
+    env["JAVA_CODEBASE_RAG_SOURCE_ROOT"] = str(corpus_root)
+    env["JAVA_CODEBASE_RAG_INDEX_DIR"] = str(ladybug_db_path.parent)
+
+    # Exact miss: no symbol is named exactly 'ChatManag'.
+    proc_exact = _run_jrag(["find", "ChatManag", "--format", "json"], env=env)
+    assert proc_exact.returncode == 0, proc_exact.stderr
+    assert len(json.loads(proc_exact.stdout).get("nodes", {})) == 0
+
+    # Fuzzy hit: prefix matches ChatManagementService.
+    proc = _run_jrag(["find", "ChatManag", "--fuzzy", "--format", "json"], env=env)
+    assert proc.returncode == 0, f"{proc.stderr}\n{proc.stdout}"
+    payload = json.loads(proc.stdout)
+    assert payload["status"] == "ok", payload
+    nodes = payload.get("nodes", {})
+    assert len(nodes) >= 1, payload
+    assert any(
+        n.get("name") == "ChatManagementService"
+        or n.get("fqn", "").endswith(".ChatManagementService")
+        for n in nodes.values()
+    ), nodes
+    # Fuzzy fallback is surfaced as a warning naming the matched mode.
+    assert any("fuzzy" in w.lower() for w in payload.get("warnings", [])), payload
+
+
+def test_find_fuzzy_exact_match_skips_fallback(
+    corpus_root: Path, ladybug_db_path: Path
+) -> None:
+    """When the exact name matches, --fuzzy is a no-op: no fallback warning."""
+    env = os.environ.copy()
+    env["JAVA_CODEBASE_RAG_SOURCE_ROOT"] = str(corpus_root)
+    env["JAVA_CODEBASE_RAG_INDEX_DIR"] = str(ladybug_db_path.parent)
+
+    proc = _run_jrag(
+        ["find", "ChatManagementService", "--fuzzy", "--format", "json"], env=env
+    )
+    assert proc.returncode == 0, f"{proc.stderr}\n{proc.stdout}"
+    payload = json.loads(proc.stdout)
+    assert payload["status"] == "ok", payload
+    assert len(payload.get("nodes", {})) >= 1, payload
+    # Exact hit means no fuzzy fallback fired -> no fuzzy warning.
+    assert not any("fuzzy" in w.lower() for w in payload.get("warnings", [])), payload
+
+
+def test_find_fuzzy_no_match_reports_tried_modes(
+    corpus_root: Path, ladybug_db_path: Path
+) -> None:
+    """Gibberish + --fuzzy: 0 nodes and a message noting all three modes were tried."""
+    env = os.environ.copy()
+    env["JAVA_CODEBASE_RAG_SOURCE_ROOT"] = str(corpus_root)
+    env["JAVA_CODEBASE_RAG_INDEX_DIR"] = str(ladybug_db_path.parent)
+
+    proc = _run_jrag(
+        ["find", "ZZZNoSuchSymbolXYZ", "--fuzzy", "--format", "json"], env=env
+    )
+    assert proc.returncode == 0, f"{proc.stderr}\n{proc.stdout}"
+    payload = json.loads(proc.stdout)
+    assert payload["status"] == "ok", payload
+    assert len(payload.get("nodes", {})) == 0, payload
+    msg = (payload.get("message") or "").lower()
+    assert "prefix" in msg and "substring" in msg, payload
+
+
+def test_find_empty_without_fuzzy_suggests_flag(
+    corpus_root: Path, ladybug_db_path: Path
+) -> None:
+    """An empty exact result without --fuzzy points the user at --fuzzy."""
+    env = os.environ.copy()
+    env["JAVA_CODEBASE_RAG_SOURCE_ROOT"] = str(corpus_root)
+    env["JAVA_CODEBASE_RAG_INDEX_DIR"] = str(ladybug_db_path.parent)
+
+    proc = _run_jrag(["find", "ChatManag", "--format", "json"], env=env)
+    assert proc.returncode == 0, proc.stderr
+    payload = json.loads(proc.stdout)
+    assert len(payload.get("nodes", {})) == 0, payload
+    assert "--fuzzy" in (payload.get("message") or ""), payload

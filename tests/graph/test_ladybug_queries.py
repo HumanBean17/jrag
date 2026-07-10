@@ -91,6 +91,56 @@ def test_find_by_name_or_fqn_fqn(ladybug_graph) -> None:
     assert rows[0].role == "SERVICE"
 
 
+# ---------------- find_by_name_or_fqn (mode: prefix/contains) ----------------
+
+
+def test_find_by_name_or_fqn_prefix_matches_partial_name(ladybug_graph) -> None:
+    """mode='prefix' matches names/FQNs that STARTS WITH the needle."""
+    rows = ladybug_graph.find_by_name_or_fqn("ChatManag", mode="prefix")
+    # The exact simple name is 'ChatManagementService'; the prefix must reach it.
+    assert any(r.fqn.endswith(".ChatManagementService") for r in rows), rows
+    # Every hit must genuinely start with the needle (on name OR fqn).
+    for r in rows:
+        assert r.name.startswith("ChatManag") or r.fqn.startswith("ChatManag"), r
+
+
+def test_find_by_name_or_fqn_default_mode_is_exact(ladybug_graph) -> None:
+    """A partial needle returns nothing under the default (exact) mode,
+    proving mode='prefix'/'contains' is what widens the match."""
+    rows = ladybug_graph.find_by_name_or_fqn("ChatManag")
+    assert rows == []
+    assert ladybug_graph.find_by_name_or_fqn("Management", mode="contains"), (
+        "contains mode should match where exact does not"
+    )
+
+
+def test_find_by_name_or_fqn_contains_matches_substring(ladybug_graph) -> None:
+    """mode='contains' matches names/FQNs that CONTAIN the needle."""
+    rows = ladybug_graph.find_by_name_or_fqn("Management", mode="contains")
+    assert len(rows) >= 1, rows
+    for r in rows:
+        assert "Management" in (r.name or "") or "Management" in (r.fqn or ""), r
+
+
+def test_find_by_name_or_fqn_fuzzy_excludes_file_package(ladybug_graph) -> None:
+    """Fuzzy modes must not surface structural file/package Symbol nodes (#411):
+    'Controller' appears in class names AND in filenames (...Controller.java)."""
+    rows = ladybug_graph.find_by_name_or_fqn("Controller", mode="contains")
+    assert rows, "expected at least one Controller symbol"
+    for r in rows:
+        assert r.kind not in ("file", "package"), r
+    prefix_rows = ladybug_graph.find_by_name_or_fqn("com", mode="prefix")
+    for r in prefix_rows:
+        assert r.kind not in ("file", "package"), r
+
+
+def test_find_by_name_or_fqn_bad_mode_raises(ladybug_graph) -> None:
+    import pytest
+
+    with pytest.raises(ValueError):
+        ladybug_graph.find_by_name_or_fqn("X", mode="regex")
+
+
 # ---------------- find_implementors / find_subclasses ----------------
 
 
