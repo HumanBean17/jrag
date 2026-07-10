@@ -1392,6 +1392,41 @@ def test_console_script_main_propagates_rc_via_os_exit_after_flush(
         assert result is None, fake_rc
 
 
+def test_console_script_main_ctrl_c_exits_130_via_os_exit(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Ctrl+C (KeyboardInterrupt out of ``main``) must produce a clean, immediate
+    exit: code 130 (128 + SIGINT), a short notice on stderr (not stdout), and
+    routing through the same flush + ``os._exit`` path as the normal rc — never
+    an uncaught traceback into interpreter finalization. This is the operator-
+    facing contract for aborting a long indexing step, reachable once
+    ``pipeline._popen_capturing_stderr`` waits on the child before joining."""
+    import os as _os
+
+    from java_codebase_rag import cli as cli
+
+    snapshot: dict[str, object] = {}
+
+    def fake_main() -> int:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli, "main", fake_main)
+
+    def fake_exit(code: int) -> None:
+        snapshot["exit_code"] = code
+
+    monkeypatch.setattr(_os, "_exit", fake_exit)
+
+    result = cli._console_script_main()
+
+    assert snapshot["exit_code"] == 130
+    assert result is None
+    captured = capsys.readouterr()
+    assert captured.out == "", "Ctrl+C must not write to stdout (machine consumers)"
+    assert "Interrupted" in captured.err, "Ctrl+C should print a short notice on stderr"
+
+
 def test_console_script_entry_point_routes_through_wrapper() -> None:
     """``[project.scripts]`` must point ``java-codebase-rag`` at
     ``_console_script_main`` (not ``main``) so the deterministic-exit path is the
