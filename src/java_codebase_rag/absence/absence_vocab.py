@@ -375,8 +375,13 @@ def get_vocabulary_index(graph: Any, cfg: Any) -> VocabularyIndex:
         # (JSONDecodeError/KeyError) — all subsumed by Exception; rebuild.
         log.debug(f"Vocab index missing/stale/corrupt ({e}), rebuilding from graph")
 
-        # Build from graph
-        index = VocabularyIndex.build(graph, q=cfg.absence_ngram_q)
+        # Build from graph. Coerce q to int (mirror absence_diagnosis.py's
+        # int(getattr(cfg, ...)) pattern): a non-int cfg.absence_ngram_q (e.g. a
+        # MagicMock cfg from a leaked test mock, or a YAML string) would otherwise
+        # crash _qgrams at `len(text) < q` ('int < MagicMock'). Default 3 = the
+        # config default for absence_ngram_q.
+        q = int(getattr(cfg, "absence_ngram_q", 3) or 3)
+        index = VocabularyIndex.build(graph, q=q)
 
         # Save to sidecar (best-effort)
         try:
