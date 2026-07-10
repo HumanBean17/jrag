@@ -396,6 +396,18 @@ def test_simple_name_derived_from_fqn() -> None:
     assert simple_name({}) == ""
 
 
+def test_simple_name_file_path_fqn_returns_basename_not_extension() -> None:
+    """File/package Symbol nodes carry a filesystem path as ``fqn``; the dot-split
+    would otherwise yield the file *extension* (``java``) instead of a name.
+    A path-shaped fqn returns its basename; a route fqn (``"GET /api/x"``) still
+    has a space so it stays on the dot-split path.
+    """
+    assert simple_name({"fqn": "chat-assign/src/main/java/com/bank/chat/assign/config/AssignConfiguration.java"}) == "AssignConfiguration.java"
+    assert simple_name({"fqn": "src/main/java/Foo.java"}) == "Foo.java"
+    # Route fqn contains '/' but also a space -> NOT treated as a path.
+    assert simple_name({"fqn": "GET /api/assign"}) == "GET /api/assign".rsplit(".", 1)[-1]
+
+
 # ----- Bonus: tiered_name tiers -----
 
 

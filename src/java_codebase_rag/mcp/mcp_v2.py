@@ -1120,6 +1120,20 @@ def find_v2(
         fetch_cap = int(limit) + int(offset) + 1
         if kind == "symbol":
             where, params = _symbol_where_from_filter(nf)
+            # Exclude structural Symbol nodes. Files and packages are :Symbol-
+            # labeled (kind='file'/'package') but aren't code declarations —
+            # without this, `fqn_contains` matches their filesystem-path fqn
+            # (e.g. 'Assign' in '.../DevAssignmentController.java') and surfaces
+            # them as hits. Mirrors search_lexical.py. Safe to apply
+            # unconditionally: DeclarationSymbolKind (the only values
+            # symbol_kind/symbol_kinds can take) excludes 'file'/'package', so no
+            # filter ever requests them.
+            struct_pred = "(s.kind <> 'file' AND s.kind <> 'package')"
+            where = (
+                f"WHERE {struct_pred}"
+                if not where
+                else where.replace("WHERE ", f"WHERE {struct_pred} AND ", 1)
+            )
             params["lim"] = fetch_cap
             rows = g._rows(  # noqa: SLF001
                 f"MATCH (s:Symbol) {where} RETURN s.id AS id, s.fqn AS fqn, s.microservice AS microservice, "
