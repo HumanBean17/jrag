@@ -222,9 +222,9 @@ class TestEdgeSchema:
             sub_filename, edge_source_file = result.get_next()
             assert sub_filename == edge_source_file
 
-    def test_ontology_version_bumped_to_18(self) -> None:
-        """ONTOLOGY_VERSION == 18."""
-        assert ONTOLOGY_VERSION == 18
+    def test_ontology_version_bumped_to_19(self) -> None:
+        """ONTOLOGY_VERSION == 19 (v19: Symbol.search_text + LadybugDB FTS index, fork A)."""
+        assert ONTOLOGY_VERSION == 19
 
 
 class TestIncrementalOrchestrator:

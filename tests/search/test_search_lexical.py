@@ -226,13 +226,16 @@ def test_fetch_limit_is_pool_cap_not_page_derived(tmp_path: Path) -> None:
 
 
 def test_cap_truncation_advisory_fires_at_cap(monkeypatch, tmp_path: Path) -> None:
-    """Correctness review: when the fetch hits the safety cap, deeper matches are never
+    """Heuristic-fallback path: when the fetch hits the safety cap, deeper matches are never
     ranked (the scan has no ORDER BY). Surface an advisory instead of silently returning a
-    storage-order-dependent subset. Lower the cap so a small fixture triggers it."""
+    storage-order-dependent subset. Lower the cap so a small fixture triggers it. The BM25
+    (FTS) path has no cap, so this forces the heuristic scan via ``_try_fts_candidates →
+    None`` to keep the cap + advisory exercised (fork A)."""
     from java_codebase_rag.search import search_lexical
 
     db = _build_corpus(tmp_path)
     g = _graph(db)
+    monkeypatch.setattr(search_lexical, "_try_fts_candidates", lambda *a, **k: None)
     monkeypatch.setattr(search_lexical, "_CANDIDATE_LIMIT_CAP", 3)
     adv: list[str] = []
     run_lexical_search("distribution", limit=5, graph=g, advisories=adv)
@@ -337,3 +340,53 @@ def test_search_v2_lexical_dispatch_end_to_end(monkeypatch, tmp_path: Path) -> N
     out2 = mcp_v2.search_v2(query="distribution chunk", graph=g, explain=True)
     assert out2.success and out2.results
     assert out2.results[0].score_components, "explain should populate score_components"
+
+
+def test_bm25_path_active_when_fts_index_present(tmp_path: Path) -> None:
+    """Fork A: with a built FTS index (the default after init/reprocess), run_lexical_search
+    fetches candidates DB-side via Okapi BM25 and records a bm25 score component on each hit.
+    Ranking is still driven by the heuristic re-rank (lexical_relevance), not by bm25."""
+    db = _build_corpus(tmp_path)
+    rows = run_lexical_search("distribution chunk service", limit=5, graph=_graph(db))
+    assert rows, "expected hits"
+    assert all("bm25" in r["_score_components"] for r in rows), (
+        f"BM25 path should annotate each hit with a bm25 component; got {rows[0]['_score_components']}"
+    )
+    assert rows[0]["fqn"] == "svc.DistributionChunkService"
+
+
+def test_bm25_falls_back_to_heuristic_when_fts_index_absent(tmp_path: Path) -> None:
+    """Fork A: if the FTS index is missing (older graph, or an offline first-run where
+    INSTALL FTS failed), run_lexical_search falls back to the heuristic scan — it still
+    returns hits, just without a bm25 component."""
+    import ladybug
+    from java_codebase_rag.search.search_scoring import SYMBOL_FTS_INDEX
+
+    db = _build_corpus(tmp_path)
+    # Drop the FTS index to simulate its absence.
+    rw_db = ladybug.Database(str(db), read_only=False)
+    rw_conn = ladybug.Connection(rw_db)
+    try:
+        rw_conn.execute("LOAD EXTENSION FTS")
+        rw_conn.execute(f"CALL DROP_FTS_INDEX('Symbol', '{SYMBOL_FTS_INDEX}')")
+    finally:
+        rw_conn.close()
+        rw_db.close()
+
+    rows = run_lexical_search("distribution chunk service", limit=5, graph=_graph(db))
+    assert rows, "heuristic fallback must still return hits"
+    assert all("bm25" not in r["_score_components"] for r in rows), (
+        "heuristic fallback must not annotate a bm25 component"
+    )
+
+
+def test_bm25_path_respects_role_filter(tmp_path: Path) -> None:
+    """Fork A: the BM25 fetch re-applies the NodeFilter on the re-MATCH (role pushdown), so a
+    role=CONTROLLER filter surfaces the @RestController hit and excludes the @Service one."""
+    db = _build_corpus(tmp_path)
+    rows = run_lexical_search(
+        "operator session", limit=5, graph=_graph(db), filter=NodeFilter(role="CONTROLLER")
+    )
+    assert rows, "expected the controller hit through the role filter"
+    assert all(r["role"] == "CONTROLLER" for r in rows), [r["role"] for r in rows]
+    assert rows[0]["fqn"] == "ctrl.OperatorSessionController"

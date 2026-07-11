@@ -437,7 +437,9 @@ Combined, these pull `processClientMessage` / `pickEligibleOperator` / `onOperat
 
 #### Graph-only (macOS Intel) lexical ranking
 
-On Intel Mac installs the vector stack is absent (see `README.md`), so `search` runs the **lexical backend** — keyword relevance over the symbol graph instead of embeddings, behind the same tool contract. Ranking components, normalized into a `[0,1]` score:
+On Intel Mac installs the vector stack is absent (see `README.md`), so `search` runs the **lexical backend** — keyword ranking over the symbol graph instead of embeddings, behind the same tool contract. It is **BM25-first**: at index time every `Symbol` gets a `search_text` column (camelCase-split tokens of name + fqn + signature + annotations + capabilities, tokenized with the same splitter the query path uses) and a LadybugDB FTS index (`sym_fts`, Okapi BM25, porter stemmer) over it. At query time `QUERY_FTS_INDEX` fetches the top-K candidates DB-side, which are then re-ranked in Python by the heuristic below and deduped by FQN.
+
+The heuristic re-rank decides final order (what `--explain` reports as `relevance=` / `name=` / `type=` / `fqn=`, plus a `bm25=` component for the index score):
 
 - **Name token overlap** — strongest signal (weight `0.45`); full query-token coverage of the declaration name scores `1.0`.
 - **Type-name overlap** — `+0.05`/hit, capped `+0.10` (same convention as the vector symbol bonus above).
@@ -445,7 +447,7 @@ On Intel Mac installs the vector stack is absent (see `README.md`), so `search` 
 - **Signature / annotation / capability text overlap** — weight `0.15`.
 - **Role weights** — the same table above applies as a tie-breaker/booster.
 
-Rows with **no keyword overlap** are dropped — role alone never qualifies a hit (it only reorders matches). Locking `role=` / `exclude_roles` still skips the role weight. `--explain` surfaces `name=` / `type=` / `fqn=` / `relevance=` components. `sql` / `yaml` tables aren't indexed in graph-only mode (only Java symbols are), and `hybrid` is ignored (lexical-only).
+BM25 only selects the candidate pool (so large repos no longer hit the old bounded Python scan); the heuristic decides order. If the FTS index or extension is unavailable (older graph, or an offline first run where `INSTALL FTS` can't fetch it), the backend falls back to that bounded scan over `Symbol` rows using the same heuristic. Locking `role=` / `exclude_roles` skips the role weight. `sql` / `yaml` tables aren't indexed in graph-only mode (only Java symbols are), and `hybrid` is ignored (lexical-only).
 
 ### Debugging empty `context_before` / `context_after`
 

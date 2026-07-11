@@ -70,7 +70,7 @@ def test_status_reports_ontology_version_and_counts(
     payload = json.loads(proc.stdout)
     assert payload["status"] == "ok"
     index = payload["nodes"]["index"]
-    assert index["ontology_version"] == 18
+    assert index["ontology_version"] == 19
     # Counts is a top-level nested dict on the index node (the generic
     # nested-sections dispatch signal - any dict-typed value renders as an
     # indented alphabetical section; edge_summary is NOT used as the dispatch

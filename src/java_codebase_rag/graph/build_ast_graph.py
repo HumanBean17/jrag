@@ -68,6 +68,7 @@ from java_codebase_rag.graph.graph_enrich import (
     symbol_id,
 )
 from java_codebase_rag.graph.path_filtering import LayeredIgnore, iter_java_source_files
+from java_codebase_rag.search.search_scoring import SYMBOL_FTS_INDEX as _SYMBOL_FTS_INDEX, _split_identifier
 from java_codebase_rag.graph.java_ontology import (
     CLIENT_KIND_FEIGN_METHOD,
     CLIENT_KIND_REST_TEMPLATE,
@@ -801,6 +802,12 @@ def _delete_file_scope(
     Producer nodes use DETACH DELETE as a safety net for any edges missed in
     Phase 1.
     """
+    # Symbol DELETEs below maintain the FTS index, which needs the extension loaded on
+    # this connection. Idempotent + best-effort (no-op when no index exists / FTS absent).
+    try:
+        conn.execute("LOAD EXTENSION FTS")
+    except Exception:
+        pass
     scope_files = changed_files | dependent_files
     scope_list = list(scope_files)
     changed_list = list(changed_files)
@@ -2927,7 +2934,8 @@ _SCHEMA_NODE = (
     "start_byte INT64, end_byte INT64, "
     "modifiers STRING[], annotations STRING[], capabilities STRING[], "
     "role STRING, signature STRING, parent_id STRING, resolved BOOLEAN, "
-    "generated BOOLEAN, generated_by STRING"
+    "generated BOOLEAN, generated_by STRING, "
+    "search_text STRING"
     ")"
 )
 
@@ -3050,7 +3058,28 @@ _SCHEMA_ASYNC_CALLS = (
 )
 
 
+def _drop_symbol_fts_index_if_present(conn: ladybug.Connection) -> None:
+    """Drop the Symbol FTS index so the table drop below succeeds.
+
+    LadybugDB refuses ``DROP TABLE Symbol`` while an FTS index references it ("Cannot
+    delete node table ... referenced by index"), so the index must go first. No-op when
+    FTS is unavailable (offline first-run) or the index was never created — in those
+    cases nothing blocks the table drop. Best-effort: any failure is swallowed.
+    """
+    try:
+        conn.execute("LOAD EXTENSION FTS")
+        existing = conn.execute("CALL SHOW_INDEXES() RETURN index_name")
+        names: set[str] = set()
+        while existing.has_next():
+            names.add(existing.get_next()[0])
+        if _SYMBOL_FTS_INDEX in names:
+            conn.execute(f"CALL DROP_FTS_INDEX('Symbol', '{_SYMBOL_FTS_INDEX}')")
+    except Exception:
+        pass
+
+
 def _drop_all(conn: ladybug.Connection) -> None:
+    _drop_symbol_fts_index_if_present(conn)
     for stmt in (
         "DROP TABLE IF EXISTS DECLARES_CLIENT",
         "DROP TABLE IF EXISTS DECLARES_PRODUCER",
@@ -3101,6 +3130,80 @@ def _create_schema(conn: ladybug.Connection) -> None:
         conn.execute(stmt)
 
 
+_IDENT_RE = re.compile(r"[A-Za-z][A-Za-z0-9]*")
+
+
+def _compute_symbol_search_text(
+    name: str,
+    fqn: str,
+    signature: str,
+    annotations: list[str],
+    capabilities: list[str],
+    package: str = "",
+) -> str:
+    """Build the BM25-indexable token soup for a Symbol (fork A).
+
+    camelCase / snake_case identifiers are split into lowercase tokens via the SAME
+    ``_split_identifier`` the query path uses (index- and query-time tokenization
+    must agree), then space-joined into one STRING that LadybugDB FTS porter-stems.
+    Name + fqn carry the strongest discovery signal; signature / annotations /
+    capabilities / package segments are weaker corroborators. Members reach this via
+    the same ``_node_row`` constructor as types.
+    """
+    toks: list[str] = []
+    for field in (name, fqn, signature, package):
+        for m in _IDENT_RE.findall(str(field or "")):
+            toks.extend(_split_identifier(m))
+    for lst in (annotations, capabilities):
+        for item in (lst or []):
+            for m in _IDENT_RE.findall(str(item)):
+                toks.extend(_split_identifier(m))
+    seen: set[str] = set()
+    out: list[str] = []
+    for t in toks:
+        if len(t) >= 2 and t not in seen:
+            seen.add(t)
+            out.append(t)
+    return " ".join(out)
+
+
+def _ensure_symbol_fts_index(conn: ladybug.Connection, *, verbose: bool) -> None:
+    """Best-effort create the Symbol FTS (Okapi BM25) index if absent (fork A).
+
+    Idempotent: skips when the index already exists. The FTS extension is fetched
+    from extension.ladybugdb.com on first ``INSTALL FTS`` (cached locally after); an
+    offline first run fails softly — ``run_lexical_search`` then falls back to the
+    heuristic over the bare Symbol scan. The index auto-maintains on later
+    COPY / MERGE / DELETE (verified), so this only runs on full builds and as a
+    cheap self-heal at the end of an incremental rebuild.
+    """
+    try:
+        try:
+            conn.execute("INSTALL FTS")  # already-installed raises; swallow
+        except Exception:
+            pass
+        conn.execute("LOAD EXTENSION FTS")
+        existing = conn.execute("CALL SHOW_INDEXES() RETURN index_name")
+        names: set[str] = set()
+        while existing.has_next():
+            names.add(existing.get_next()[0])
+        if _SYMBOL_FTS_INDEX not in names:
+            conn.execute(
+                f"CALL CREATE_FTS_INDEX('Symbol', '{_SYMBOL_FTS_INDEX}', "
+                "['search_text'], stemmer := 'porter')"
+            )
+            if verbose:
+                _verbose_stderr_line(
+                    f"[graph] fts · created Symbol {_SYMBOL_FTS_INDEX} (BM25 over search_text)"
+                )
+    except Exception as e:
+        if verbose:
+            _verbose_stderr_line(
+                f"[graph] fts · unavailable ({type(e).__name__}: {e}); "
+                "lexical search will use the heuristic scan"
+            )
+
+
 def _node_row(**kwargs) -> dict:
     base = {
         "kind": "", "name": "", "fqn": "", "package": "",
@@ -3109,9 +3212,16 @@ def _node_row(**kwargs) -> dict:
         "start_byte": 0, "end_byte": 0,
         "modifiers": [], "annotations": [], "capabilities": [],
         "role": "OTHER", "signature": "", "parent_id": "", "resolved": True,
-        "generated": False, "generated_by": None,
+        "generated": False, "generated_by": None, "search_text": "",
     }
     base.update(kwargs)
+    # Derive the BM25 token soup unless the caller set it explicitly.
+    if not base.get("search_text"):
+        base["search_text"] = _compute_symbol_search_text(
+            base.get("name", ""), base.get("fqn", ""), base.get("signature", ""),
+            base.get("annotations", []), base.get("capabilities", []),
+            base.get("package", ""),
+        )
     return base
 
 
@@ -3161,7 +3271,7 @@ _NODE_COLUMNS = [
     "id", "kind", "name", "fqn", "package", "module", "microservice",
     "filename", "start_line", "end_line", "start_byte", "end_byte",
     "modifiers", "annotations", "capabilities", "role", "signature", "parent_id", "resolved",
-    "generated", "generated_by"
+    "generated", "generated_by", "search_text"
 ]
 
 # Type declaration kinds. Tuple (not set) so the rendered SQL `IN` clause is
@@ -3185,7 +3295,7 @@ _SET_SYMBOL_BY_ID = (
     "n.modifiers = $modifiers, n.annotations = $annotations, "
     "n.capabilities = $capabilities, n.role = $role, "
     "n.signature = $signature, n.parent_id = $parent_id, n.resolved = $resolved, "
-    "n.generated = $generated, n.generated_by = $generated_by"
+    "n.generated = $generated, n.generated_by = $generated_by, n.search_text = $search_text"
 )
 
 # Refresh every mutable Route field on an existing Route node by id. Mirrors the
@@ -3835,6 +3945,13 @@ def incremental_rebuild(
 
     db = ladybug.Database(str(ladybug_path))
     conn = ladybug.Connection(db)
+    # If a Symbol FTS index exists, the scoped DELETE/MERGE/COPY below must maintain it,
+    # which needs the FTS extension loaded on THIS connection. Best-effort: when FTS is
+    # unavailable no index exists, so there's nothing to maintain and DML proceeds fine.
+    try:
+        conn.execute("LOAD EXTENSION FTS")
+    except Exception:
+        pass
 
     # Check ontology version
     try:
@@ -4007,6 +4124,7 @@ def incremental_rebuild(
 
         # Update GraphMeta
         _write_meta(conn, tables_for_global, source_root)
+        _ensure_symbol_fts_index(conn, verbose=verbose)
 
         # Remove crash marker
         crash_marker_path.unlink(missing_ok=True)
@@ -4236,6 +4354,7 @@ def write_ladybug(
         if verbose:
             _verbose_stderr_line(f"[graph] writing · routes/exposes written in {time.time() - t2:.2f}s")
         _write_meta(conn, tables, source_root)
+        _ensure_symbol_fts_index(conn, verbose=verbose)
         conn.close()
         db.close()
 
