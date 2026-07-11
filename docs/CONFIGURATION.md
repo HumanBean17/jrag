@@ -295,6 +295,23 @@ generated_detection:
   # fix the generator or filter with exclude_generated at query time.
   exclude_fqns:
     - 'com.example.manual.ExampleImpl'
+
+# -------- Watch mode (`jrag watch`) --------
+# The `jrag watch` daemon (index freshness + warm-query). No env vars are
+# introduced for watch — precedence is CLI flag (--debounce-ms / --backend)
+# > YAML > built-in default. See JAVA-CODEBASE-RAG-CLI.md § `jrag watch`.
+watch:
+  # watch.debounce_ms — reindex debounce window in ms. Default 1500; floor 100
+  # (a value at/below 100 ms falls back to 1500 with a stderr warning).
+  debounce_ms: 1500
+
+  # watch.backend — file-watch backend. `auto` picks watchdog when available,
+  # else polling. An invalid value falls back to `auto` with a warning.
+  backend: auto          # auto | watchdog | polling
+
+  # watch.poll_interval_ms — poll interval for the polling backend, in ms.
+  # Default 2000; floor 200 (below → 2000 + warning). Watchdog-only; ignored.
+  poll_interval_ms: 2000
 ```
 
 **Path expansion (what gets `~` / `$VAR` treatment):**

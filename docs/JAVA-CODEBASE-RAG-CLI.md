@@ -486,3 +486,33 @@ jrag search "service" --limit 20 --offset 20
 - `--generated-only` — Show only generated sources.
 
 **Breaking change (PR-SEARCH-2):** By default, `jrag search` now returns one row per `primary_type_fqn` (symbol/type) to prevent a single type from flooding the page. The `--chunks` flag restores the previous chunk-level output. When deduped, each hit shows a `chunks=N` field indicating how many chunks were collapsed into that hit.
+
+### `jrag watch`
+
+A single long-running daemon that does two things at once **while it runs**: (a) **keeps the index fresh** — it watches the source tree and re-runs a debounced per-type reindex (vectors via cocoindex, graph via `build_ast_graph.py --incremental`) on file change; and (b) **serves every read command warm** — `search` / `find` / `inspect` / `callers` / `callees` / `flow` are served over a Unix socket from a pre-loaded model + graph, so each query skips the per-call torch/model load and is effectively instant. The "run it while you code" workflow: start it once per coding session (foreground or detached), then keep issuing the normal `jrag` read commands — they are accelerated automatically.
+
+```bash
+# Foreground — Ctrl+C (or SIGTERM) stops it
+jrag watch
+
+# Background — returns once the daemon is ready to serve
+jrag watch --detach
+
+# Is it running? (exit 0 if up, 1 if down)
+jrag watch --status
+
+# Graceful stop (SIGTERM; SIGKILL after 5 s); cleans the socket
+jrag watch --stop
+```
+
+**Modes / flags:**
+- *(default, foreground)* — runs in the foreground; **Ctrl+C** or **SIGTERM** stops it. On a TTY it renders a status panel showing the socket path, reindex count, and last reindex.
+- `--detach` — start as a background daemon and return once it is ready to serve (logs to a file under the index dir).
+- `--stop` — gracefully stop a running watcher (pidfile + signal; SIGKILL after 5 s) and clean up its socket.
+- `--status` — print `up`/`down` with pid, socket path, and last reindex. Exits **0** if up, **1** if down. Does **not** acquire the project lock.
+- `--debounce-ms N` — reindex debounce window in ms (overrides YAML `watch:debounce_ms`).
+- `--backend {auto,watchdog,polling}` — file-watch backend (overrides YAML `watch:backend`).
+
+**Cold-fallback guarantee.** With **no daemon running**, every read command behaves byte-identically to today — the daemon is a pure accelerator + freshness layer, never a dependency. If the daemon is down or unreachable, each `jrag` read silently takes the cold path (identical output, identical exit codes; you only pay the one-off cold-start model/graph load). See [`CONFIGURATION.md`](./CONFIGURATION.md) § 2 for the `watch:` block.
+
+**Unix-only.** `jrag watch` relies on `fcntl`, so it runs on **macOS / Linux** only. On Windows it prints `jrag watch: watch mode requires macOS/Linux` to stderr and exits **2**; the cold read path is unaffected on every platform. One daemon per index dir — a pidfile + `flock` prevents two watchers (or a concurrent manual `increment`) on the same project.
