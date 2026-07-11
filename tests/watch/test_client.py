@@ -405,6 +405,7 @@ class TestGetPayload:
         serialized = {
             "mode": "query", "rows": [row], "raw_truncated": False,
             "post_filter_active": False, "limit": 20, "query": "Foo", "kinds": None,
+            "matched_mode": "exact", "identifier_matched": True,
         }
         srv = _FakeServer(index_dir, _ok_result(serialized))
         srv.start()

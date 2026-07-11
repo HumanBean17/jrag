@@ -210,6 +210,8 @@ def _reconstruct(cmd: str, result: Any) -> Any:
             "limit": result["limit"],
             "query": result["query"],
             "kinds": result["kinds"],
+            "matched_mode": result["matched_mode"],
+            "identifier_matched": result["identifier_matched"],
         }
 
     # callers / callees / flow: plain dicts already (node/edge values are dicts
