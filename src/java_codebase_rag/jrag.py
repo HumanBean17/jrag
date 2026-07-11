@@ -2004,8 +2004,10 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
     try:
         payload = get_payload("inspect", vars(args), cfg, cold_core=inspect_payload)
     except PayloadError as pe:
-        print(render(pe.env, fmt=args.format, detail=args.detail))
-        return pe.rc
+        # Resolve-miss: route through _emit so --exists/--count shape it
+        # (inspect Missing --exists -> false, rc 2), mirroring master's inspect
+        # resolve-miss path. No flag -> rc matches the prior 2-if-error-else-0.
+        return _emit(pe.env, args)
     desc_out = payload["describe"]
 
     if not desc_out.success or desc_out.record is None:
@@ -2720,14 +2722,15 @@ def _cmd_callers(args: argparse.Namespace) -> int:
     if rc:
         return rc
     from java_codebase_rag.read_payloads import PayloadError, callers_payload
-    from java_codebase_rag.jrag_render import render
     from java_codebase_rag.watch.client import get_payload
 
     try:
         payload = get_payload("callers", vars(args), cfg, cold_core=callers_payload)
     except PayloadError as pe:
-        print(render(pe.env, fmt=args.format, detail=args.detail))
-        return pe.rc
+        # Resolve-miss: route through _emit so --exists/--count shape it
+        # (callers Missing --exists -> false, rc 2), mirroring master's
+        # _resolve_traversal_node resolve-miss path.
+        return _emit(pe.env, args)
     return _emit_traversal(
         args, root_id=payload["root_id"], nodes=payload["nodes"], edges=payload["edges"],
         noun=payload["noun"], warnings=payload["warnings"], truncated=payload["truncated"],
@@ -2740,14 +2743,15 @@ def _cmd_callees(args: argparse.Namespace) -> int:
     if rc:
         return rc
     from java_codebase_rag.read_payloads import PayloadError, callees_payload
-    from java_codebase_rag.jrag_render import render
     from java_codebase_rag.watch.client import get_payload
 
     try:
         payload = get_payload("callees", vars(args), cfg, cold_core=callees_payload)
     except PayloadError as pe:
-        print(render(pe.env, fmt=args.format, detail=args.detail))
-        return pe.rc
+        # Resolve-miss: route through _emit so --exists/--count shape it
+        # (callees Missing --exists -> false, rc 2), mirroring master's
+        # _resolve_traversal_node resolve-miss path.
+        return _emit(pe.env, args)
     return _emit_traversal(
         args, root_id=payload["root_id"], nodes=payload["nodes"], edges=payload["edges"],
         noun=payload["noun"], warnings=payload["warnings"], truncated=payload["truncated"],
@@ -3183,14 +3187,15 @@ def _cmd_flow(args: argparse.Namespace) -> int:
     if rc:
         return rc
     from java_codebase_rag.read_payloads import PayloadError, flow_payload
-    from java_codebase_rag.jrag_render import render
     from java_codebase_rag.watch.client import get_payload
 
     try:
         payload = get_payload("flow", vars(args), cfg, cold_core=flow_payload)
     except PayloadError as pe:
-        print(render(pe.env, fmt=args.format, detail=args.detail))
-        return pe.rc
+        # Resolve-miss: route through _emit so --exists/--count shape it
+        # (flow Missing --exists -> false, rc 2), mirroring master's
+        # _resolve_traversal_node resolve-miss path.
+        return _emit(pe.env, args)
     return _emit_traversal(
         args, root_id=payload["root_id"], nodes=payload["nodes"], edges=payload["edges"],
         noun=payload["noun"], warnings=payload["warnings"], truncated=payload["truncated"],
