@@ -84,7 +84,8 @@ _DTO_LOMBOK_ANNOTATIONS: frozenset[str] = frozenset({
 # Phase 11: `EDGE_SCHEMA` in `java_ontology.py` (canonical edge navigation schema; v14 re-index).
 # Phase 12: CALLS `callee_declaring_role`, supertype-walk dedup, pass3 unresolved counters (v15 re-index).
 # Bumps whenever extraction / enrichment semantics change.
-ONTOLOGY_VERSION = 18
+# Phase 13: Symbol.search_text + LadybugDB FTS (Okapi BM25) index for lexical search (v19 re-index).
+ONTOLOGY_VERSION = 19
 
 ROLE_ANNOTATIONS: dict[str, str] = {
     # Spring Web

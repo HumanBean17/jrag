@@ -14,6 +14,11 @@ from __future__ import annotations
 import json
 import re
 
+# Name of the LadybugDB FTS (Okapi BM25) index over Symbol.search_text (fork A).
+# Shared by the build path (build_ast_graph._ensure_symbol_fts_index) and the
+# query path (search_lexical.run_lexical_search) so the two never drift.
+SYMBOL_FTS_INDEX = "sym_fts"
+
 # Over-fetch multiplier for dedup: fetch 4x to absorb per-FQN chunk multiplicity
 # so that after collapsing by primary_type_fqn, a page stays full and the +1
 # truncation sentinel survives. The formula: need = max((limit + offset) * 4, limit + offset + 1)

@@ -18,11 +18,13 @@ guarded by a parity unit test.
 from __future__ import annotations
 
 import os
+import weakref
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from java_codebase_rag.graph.ladybug_queries import LadybugGraph
 from java_codebase_rag.search.search_scoring import (
+    SYMBOL_FTS_INDEX,
     _ROLE_SCORE_WEIGHTS,
     _TYPE_MATCH_BONUS_CAP,
     _TYPE_MATCH_BONUS_PER_HIT,
@@ -170,6 +172,88 @@ def _token_overlap(haystack_toks: set[str], needle_toks: set[str]) -> float:
     return len(needle_toks & haystack_toks) / len(needle_toks)
 
 
+# BM25 candidate fetch via the LadybugDB FTS index (fork A). DB-side indexed ranking
+# replaces the heuristic's bounded Python scan; the heuristic below still scores the
+# fetched candidates (name/type/fqn/role) and is the fallback when the FTS index or
+# extension is unavailable (older graph, offline first run).
+_FTS_CANDIDATE_K = 200  # top-K BM25 candidates; re-filtered by NodeFilter before ranking
+# Connections that have run LOAD EXTENSION FTS. Keyed by the connection OBJECT (WeakSet),
+# NOT id() — id() is reused after GC, which would let a fresh connection skip LOAD and then
+# fail at QUERY_FTS_INDEX under test batching. Entries die with the connection.
+_FTS_LOADED_CONNS: "weakref.WeakSet[object]" = weakref.WeakSet()
+
+
+def _ensure_fts_loaded(g: LadybugGraph) -> bool:
+    """LOAD EXTENSION FTS on the graph's (read-only) connection, once per connection.
+
+    Returns False if the extension can't be loaded (absent / offline) so the caller
+    falls back to the heuristic scan.
+    """
+    conn = g._conn  # noqa: SLF001
+    try:
+        if conn in _FTS_LOADED_CONNS:
+            return True
+    except Exception:  # connection not weakref-able → LOAD every call (correct, slow)
+        pass
+    try:
+        g._rows("LOAD EXTENSION FTS")  # noqa: SLF001
+        try:
+            _FTS_LOADED_CONNS.add(conn)
+        except Exception:
+            pass
+        return True
+    except Exception:
+        return False
+
+
+def _try_fts_candidates(
+    g: LadybugGraph,
+    query: str,
+    filter: NodeFilter | None,
+    path_contains: str | None,
+) -> dict | None:
+    """Fetch BM25-ranked Symbol candidates via the FTS index; re-apply NodeFilter.
+
+    Returns ``{"rows": [...], "scores": {id: bm25}}`` (rows are the same shape the
+    heuristic scan yields), or ``None`` when FTS is unavailable (extension won't load,
+    or the index isn't present on this graph) so the caller falls back.
+
+    Two-step: (1) ``QUERY_FTS_INDEX`` returns the top-K node ids by Okapi BM25 over
+    ``Symbol.search_text``; (2) re-MATCH those ids with the full ``_lexical_where``
+    predicates (role / module / path / kind≠file,package) so the filter logic stays
+    defined in one place. ``search_text`` is built at index time by ``build_ast_graph``
+    from the same ``_split_identifier`` the re-rank below uses, so index- and query-time
+    tokenization agree.
+    """
+    if not _ensure_fts_loaded(g):
+        return None
+    idx_rows = g._rows("CALL SHOW_INDEXES() RETURN index_name")  # noqa: SLF001
+    names = {row.get("index_name") for row in idx_rows}
+    if SYMBOL_FTS_INDEX not in names:
+        return None
+    fts = g._rows(  # noqa: SLF001
+        f"CALL QUERY_FTS_INDEX('Symbol', '{SYMBOL_FTS_INDEX}', $q, top := $k) "
+        "RETURN node.id AS id, score",
+        {"q": query, "k": _FTS_CANDIDATE_K},
+    )
+    if not fts:
+        return {"rows": [], "scores": {}}
+    scores = {row["id"]: float(row.get("score") or 0.0) for row in fts}
+    ids = list(scores.keys())
+
+    # Re-MATCH the K ids with the SAME predicates the heuristic pushes down, so
+    # NodeFilter / path / structural-kind filtering is defined exactly once.
+    where, params = _lexical_where(filter, path_contains=path_contains)
+    struct_pred = "(s.kind <> 'file' AND s.kind <> 'package')"
+    if not where:
+        where = f"WHERE s.id IN $ids AND {struct_pred}"
+    else:
+        where = where.replace("WHERE ", f"WHERE s.id IN $ids AND {struct_pred} AND ", 1)
+    params["ids"] = ids
+    rows = g._rows(f"MATCH (s:Symbol) {where} RETURN {_SYMBOL_RETURN}", params)  # noqa: SLF001
+    return {"rows": rows, "scores": scores}
+
+
 def run_lexical_search(
     query: str,
     *,
@@ -184,6 +268,12 @@ def run_lexical_search(
     graph: LadybugGraph | None = None,
 ) -> list[dict]:
     """Keyword search over Symbol nodes; returns ``run_search``-shaped row-dicts.
+
+    BM25-first (fork A): when the LadybugDB ``sym_fts`` index exists, candidates are
+    fetched DB-side via Okapi BM25 over ``Symbol.search_text`` (killing the bounded
+    Python scan that silently missed matches past the cap on large repos) and then
+    re-ranked here by the name/type/fqn/role heuristic. Falls back to that heuristic
+    scan when the FTS index or extension is unavailable (older graph, offline first run).
 
     Raises ``RuntimeError`` (message contains "lexical search unavailable") if no
     symbol graph exists — the caller maps that to a clean failure envelope. Returns
@@ -201,33 +291,38 @@ def run_lexical_search(
         )
     g = graph or LadybugGraph.get()
 
-    where, params = _lexical_where(filter, path_contains=path_contains)
-    # Always exclude structural Symbol nodes. Files and packages are :Symbol-labeled
-    # (kind='file'/'package') but aren't searchable code declarations — without this
-    # a token that appears in a filename (e.g. 'distribution' in
-    # 'DistributionChunkService.java') would surface the file node as a hit.
-    struct_pred = "(s.kind <> 'file' AND s.kind <> 'package')"
-    where = f"WHERE {struct_pred}" if not where else where.replace("WHERE ", f"WHERE {struct_pred} AND ", 1)
-    # Lexical ranking is done in Python (LadybugDB/kuzu has no keyword ranking without
-    # FTS5, which is deferred), and the MATCH scan returns rows in storage order — there
-    # is NO DB-side relevance ORDER BY. So fetch the FULL candidate pool up to the safety
-    # cap and rank here. A pagination-derived LIMIT (4x the page) is correct on the vector
-    # path where LanceDB returns rows pre-ranked by similarity, but on this unordered scan
-    # it would return only the first ~N symbols in arbitrary storage order and silently
-    # miss the best match on any non-trivial repo.
-    params["lim"] = _CANDIDATE_LIMIT_CAP
-    cypher = f"MATCH (s:Symbol) {where} RETURN {_SYMBOL_RETURN} LIMIT $lim"
-    rows = g._rows(cypher, params)  # noqa: SLF001 — de facto public read API (see find_v2)
-    # If the fetch hit the safety cap, deeper matches were never ranked (the scan has no
-    # ORDER BY — kuzu returns an arbitrary, storage-order-dependent subset). Surface it so
-    # a user on a large repo isn't silently shown an incomplete result set; refining the
-    # query or adding a filter narrows the pool below the cap. Raising the cap / FTS5 is
-    # the deferred long-term fix (see the plan's "Out of scope" note).
-    if advisories is not None and len(rows) >= _CANDIDATE_LIMIT_CAP:
-        advisories.append(
-            f"lexical search scanned the first {_CANDIDATE_LIMIT_CAP} matching symbols "
-            "(repo cap); deeper matches were not ranked — refine the query or add a filter"
-        )
+    # --- candidate fetch: BM25 (FTS) preferred, heuristic scan fallback ---
+    bm25_scores: dict[str, float] = {}
+    use_fts = False
+    fts = _try_fts_candidates(g, query, filter, path_contains)
+    if fts is not None:
+        rows = fts["rows"]
+        bm25_scores = fts["scores"]
+        use_fts = True
+    else:
+        where, params = _lexical_where(filter, path_contains=path_contains)
+        # Always exclude structural Symbol nodes. Files and packages are :Symbol-labeled
+        # (kind='file'/'package') but aren't searchable code declarations — without this
+        # a token that appears in a filename (e.g. 'distribution' in
+        # 'DistributionChunkService.java') would surface the file node as a hit.
+        struct_pred = "(s.kind <> 'file' AND s.kind <> 'package')"
+        where = f"WHERE {struct_pred}" if not where else where.replace("WHERE ", f"WHERE {struct_pred} AND ", 1)
+        # The heuristic scan returns rows in storage order — there is NO DB-side relevance
+        # ORDER BY without the FTS index — so fetch the FULL candidate pool up to the safety
+        # cap and rank here. A pagination-derived LIMIT (4x the page) is correct on the
+        # vector path where LanceDB returns rows pre-ranked, but on this unordered scan it
+        # would return only the first ~N symbols in arbitrary storage order and silently
+        # miss the best match on any non-trivial repo. The BM25 (FTS) path above has no cap.
+        params["lim"] = _CANDIDATE_LIMIT_CAP
+        cypher = f"MATCH (s:Symbol) {where} RETURN {_SYMBOL_RETURN} LIMIT $lim"
+        rows = g._rows(cypher, params)  # noqa: SLF001 — de facto public read API (see find_v2)
+        # If the fetch hit the safety cap, deeper matches were never ranked. Surface it so
+        # a user on a large repo isn't silently shown an incomplete result set.
+        if advisories is not None and len(rows) >= _CANDIDATE_LIMIT_CAP:
+            advisories.append(
+                f"lexical search scanned the first {_CANDIDATE_LIMIT_CAP} matching symbols "
+                "(repo cap); deeper matches were not ranked — refine the query or add a filter"
+            )
 
     query_toks = _query_tokens(query)
     source_root = _resolve_source_root(g)
@@ -265,9 +360,10 @@ def run_lexical_search(
         text_match = text_overlap * _TEXT_MATCH_WEIGHT
 
         # A keyword search must require at least one lexical hit — role alone never
-        # qualifies a row (it only boosts/reorders matches). Degenerate queries with
-        # no usable tokens fall through to role-ranked listing.
-        if query_toks and not (name_overlap or type_hits or fqn_match or text_overlap):
+        # qualifies a row (it only boosts/reorders matches). On the BM25 path the FTS
+        # index already established textual relevance, so the qualifier is heuristic-only.
+        # Degenerate queries with no usable tokens fall through to role-ranked listing.
+        if query_toks and not use_fts and not (name_overlap or type_hits or fqn_match or text_overlap):
             continue
 
         role_w = 0.0 if role_locked else _ROLE_SCORE_WEIGHTS.get(role_raw.upper(), 0.0)
@@ -291,6 +387,8 @@ def run_lexical_search(
             "lexical_relevance": round(raw, 4),
             "role_weight": role_w,
         }
+        if use_fts:
+            comps["bm25"] = round(float(bm25_scores.get(r.get("id"), 0.0)), 4)
 
         sl, el, sb, eb = r.get("start_line"), r.get("end_line"), r.get("start_byte"), r.get("end_byte")
         out.append(

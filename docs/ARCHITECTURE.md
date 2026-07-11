@@ -69,7 +69,7 @@ java_codebase_rag/pipeline.py
 ```
 MCP tool call (server.py)  ──asyncio.to_thread──▶  mcp_v2.*
   ├─ search ─▶ search_lancedb.run_search    (vector / hybrid; optional graph-expand + RRF rank fusion)
-  │            └─ lancedb import absent (Intel Mac) → search_lexical (keyword over graph)
+  │            └─ lancedb import absent (Intel Mac) → search_lexical (BM25 over Symbol FTS index; heuristic scan fallback)
   ├─ find / describe / neighbors ─▶ ladybug_queries.LadybugGraph   (Cypher)
   └─ resolve ─▶ resolve_service.resolve_v2   (cascade → status one | many | none)
        on empty ─▶ absence_diagnosis.diagnose   → verdict + (optional) proof
@@ -78,13 +78,13 @@ MCP tool call (server.py)  ──asyncio.to_thread──▶  mcp_v2.*
 
 | Tool | Backing | Notes |
 | --- | --- | --- |
-| `search` | Lance vector/hybrid, or lexical fallback | dedup by FQN; role weights via `search_scoring` |
+| `search` | Lance vector/hybrid, or BM25 lexical fallback | dedup by FQN; role weights via `search_scoring` |
 | `find` | Ladybug Cypher | required `NodeFilter`; strict per-kind frame |
 | `describe` | Ladybug Cypher | node record + `edge_summary` (composed/override rollups) |
 | `neighbors` | Ladybug Cypher | one hop; `direction` + `edge_types` required; dot-key composed edges |
 | `resolve` | Ladybug Cypher | per-kind generators exact→fuzzy; cap 10 candidates |
 
-**Lexical fallback** is selected by import availability (`mcp_v2` guards `from search_lancedb import …`): same row contract, flagged via `lexical_mode` + advisory. **`jrag` CLI** calls the same `mcp_v2.*` functions — identical backends, only rendering differs.
+**Lexical fallback** is selected by import availability (`mcp_v2` guards `from search_lancedb import …`): same row contract, flagged via `lexical_mode` + advisory. It is **BM25-first**: `build_ast_graph` indexes `Symbol.search_text` (camelCase-split token soup) under a LadybugDB FTS index (`sym_fts`, Okapi BM25), and `search_lexical` fetches top-K candidates via `QUERY_FTS_INDEX` then re-ranks them with the name/type/fqn/role heuristic in `search_scoring`. The FTS index auto-maintains on `increment`; the heuristic scan is the fallback when the index/extension is absent (older graph, offline first run). **`jrag` CLI** calls the same `mcp_v2.*` functions — identical backends, only rendering differs.
 
 ### Watch path (`jrag watch`) — warm reads + freshness
 
@@ -127,7 +127,7 @@ Dev workflow (editable install, test-reset ritual, full-suite discipline) — se
 
 | Constant | Value / location |
 | --- | --- |
-| `ONTOLOGY_VERSION` | `18` — `ast_java.py:87` |
+| `ONTOLOGY_VERSION` | `19` — `ast_java.py:87` |
 | `LANCE_TABLE_NAMES` | 3 tables — `java_codebase_rag/lance_optimize.py:35` |
 | Graph passes | 6 (labels `build_ast_graph.py:83`) |
 | Incremental cap | `expansion_cap=50` — `build_ast_graph.py:3800` |
@@ -136,4 +136,4 @@ Dev workflow (editable install, test-reset ritual, full-suite discipline) — se
 
 ## TL;DR
 
-Two stores built in lockstep — LanceDB vectors via CocoIndex, LadybugDB graph via a 6-pass tree-sitter build — queried by 5 MCP tools that split cleanly: `search` → vector/lexical, `find`/`describe`/`neighbors`/`resolve` → Cypher. Hints and absence wrap every response; `ONTOLOGY_VERSION=18` is the rebuild/staleness contract. Contributors extend via `EDGE_SCHEMA` + builder passes, and bump the version on any semantic change.
+Two stores built in lockstep — LanceDB vectors via CocoIndex, LadybugDB graph via a 6-pass tree-sitter build — queried by 5 MCP tools that split cleanly: `search` → vector/lexical, `find`/`describe`/`neighbors`/`resolve` → Cypher. Hints and absence wrap every response; `ONTOLOGY_VERSION=19` is the rebuild/staleness contract. Contributors extend via `EDGE_SCHEMA` + builder passes, and bump the version on any semantic change.
