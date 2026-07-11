@@ -85,10 +85,14 @@ def test_eval_report_persists_files(tmp_path):
     cfg = _cfg(tmp_path)
     report = run_eval(cfg)
 
-    md_path = Path(cfg.results_dir) / "report.md"
-    json_path = Path(cfg.results_dir) / "report.json"
+    # Outputs are namespaced under a timestamped subdir (no flat-path clobbering).
+    out_dir = Path(cfg.results_dir) / report.timestamp
+    md_path = out_dir / "report.md"
+    json_path = out_dir / "report.json"
     assert md_path.is_file(), f"missing report.md at {md_path}"
     assert json_path.is_file(), f"missing report.json at {json_path}"
+    # EvalReport also exposes the resolved out_dir.
+    assert report.out_dir == str(out_dir)
 
     md = md_path.read_text()
     # Header row mentions every metric column.

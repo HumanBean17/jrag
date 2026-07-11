@@ -20,7 +20,9 @@ Pipeline (``run_eval``):
 4. For each ``RankConfig`` (``BASELINE_2LIST_CONFIG`` + a 3-list config per
    swept ``k``), run ``run_search`` per query, map rows to ``primary_type_fqn``
    and compute per-query recall@k / precision@k / MRR via ``eval.metrics``.
-5. Aggregate, persist Markdown + JSON under ``<results_dir>/report.{md,json}``.
+5. Aggregate, persist Markdown + JSON under
+   ``<results_dir>/<ISO-timestamp>/report.{md,json}`` (timestamped subdir so
+   successive sweeps don't clobber each other).
 
 Granularity note (metric mapping)
 ---------------------------------
@@ -113,6 +115,8 @@ class EvalReport:
     num_queries: int
     corpus_dir: str
     index_dir: str
+    # Absolute path to the timestamped output dir holding report.md / report.json.
+    out_dir: str = ""
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), indent=2, sort_keys=True)
@@ -242,7 +246,6 @@ def _eval_one_config(
     limit: int,
 ) -> ConfigMetrics:
     """Run one RankConfig over all queries; return aggregated ConfigMetrics."""
-    limit_k = max(top_k_metrics)
     per_query: list[dict[str, float]] = []
     latencies_ms: list[float] = []
 
@@ -367,8 +370,7 @@ def run_eval(cfg: EvalConfig) -> EvalReport:
     # 3. Open graph + build ground truth.
     # Reset the LadybugGraph singleton — a prior test/process may have cached
     # a different path. We force-bind to our index's graph.
-    LadybugGraph._instance = None  # noqa: SLF001
-    LadybugGraph._instance_path = None  # noqa: SLF001
+    LadybugGraph.reset_for_path(None)
     graph = LadybugGraph.get(ladybug_path)
 
     symbols = _enumerate_symbols(graph)
@@ -411,21 +413,25 @@ def run_eval(cfg: EvalConfig) -> EvalReport:
         )
 
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    # Namespace outputs under the timestamp so successive sweeps don't clobber.
+    out_dir = str(Path(cfg.results_dir) / timestamp)
     report = EvalReport(
         configs=results,
         timestamp=timestamp,
         num_queries=len(queries),
         corpus_dir=cfg.corpus_dir,
         index_dir=index_dir,
+        out_dir=out_dir,
     )
 
-    # 6. Persist.
+    # 6. Persist into <results_dir>/<timestamp>/report.{md,json}.
     _persist(report, cfg.results_dir)
     return report
 
 
 def _persist(report: EvalReport, results_dir: str) -> None:
-    out = Path(results_dir)
+    # Write into a timestamped subdir so successive sweeps don't clobber.
+    out = Path(results_dir) / report.timestamp
     out.mkdir(parents=True, exist_ok=True)
     (out / "report.md").write_text(_render_markdown(report))
     (out / "report.json").write_text(report.to_json())
