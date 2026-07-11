@@ -401,13 +401,14 @@ class LadybugGraph:
         """Drop the cached singleton so the next ``get`` reopens.
 
         Clears the cache when ``db_path is None`` (unconditional) or when ``db_path``
-        equals the currently cached instance path; a non-matching ``db_path`` is a
-        no-op. The watch daemon uses this to manage its copy-on-write graph snapshot
-        lifecycle (drop the original reader before a subprocess reindex writes it;
-        drop the sidecar reader on commit).
+        resolves to the currently cached instance path (resolved the same way
+        ``get`` resolves it, so ``~``-relative / non-normalized paths match); a
+        non-matching ``db_path`` is a no-op. The watch daemon uses this to manage
+        its copy-on-write graph snapshot lifecycle (drop the original reader
+        before a subprocess reindex writes it; drop the sidecar reader on commit).
         """
         with cls._lock:
-            if db_path is None or cls._instance_path == db_path:
+            if db_path is None or cls._instance_path == resolve_ladybug_path(db_path):
                 cls._instance = None
                 cls._instance_path = None
 

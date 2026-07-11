@@ -14,12 +14,15 @@ which is why graph builds run as subprocesses and reads are served from a copy.
 """
 from __future__ import annotations
 
+import logging
 import shutil
 from pathlib import Path
 
 from java_codebase_rag.config import ResolvedOperatorConfig
 from java_codebase_rag.graph.ladybug_queries import LadybugGraph
 from java_codebase_rag.mcp.mcp_v2 import _get_sentence_transformer
+
+log = logging.getLogger(__name__)
 
 
 class WarmResources:
@@ -60,10 +63,19 @@ class WarmResources:
         """Drop the sidecar reader, remove the sidecar, and reopen the updated original.
 
         After this call ``graph()`` reads the original again (which the subprocess has
-        just rewritten), and the sidecar file is gone.
+        just rewritten), and the sidecar file is gone. Idempotent no-op when no
+        snapshot is active.
         """
+        if self._snapshot_path is None:
+            return
         sidecar = self._snapshot_path
         LadybugGraph.reset_for_path(str(sidecar))
-        sidecar.unlink(missing_ok=True)
-        self._snapshot_path = None
-        LadybugGraph.reset_for_path(str(self.cfg.ladybug_path))
+        try:
+            sidecar.unlink(missing_ok=True)
+        except OSError:
+            log.warning("Failed to remove graph snapshot sidecar %s", sidecar, exc_info=True)
+        finally:
+            # Clear state and reopen the original even if unlink failed, so a
+            # possibly-deleted sidecar isn't kept serving reads.
+            self._snapshot_path = None
+            LadybugGraph.reset_for_path(str(self.cfg.ladybug_path))
