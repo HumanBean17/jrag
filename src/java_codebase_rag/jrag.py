@@ -1452,6 +1452,7 @@ def _cmd_find(args: argparse.Namespace) -> int:
     from java_codebase_rag.jrag_envelope import Envelope
     from java_codebase_rag.jrag_render import render
     from java_codebase_rag.read_payloads import PayloadError, find_payload
+    from java_codebase_rag.watch.client import get_payload
 
     cfg = _resolve_cfg(args)
     try:
@@ -1470,7 +1471,7 @@ def _cmd_find(args: argparse.Namespace) -> int:
     # Rendering (nodes/warnings/empty-result hint/offset) is split into the two
     # render helpers below, branch by payload["mode"].
     try:
-        payload = find_payload(args, cfg, graph)
+        payload = get_payload("find", vars(args), cfg, cold_core=find_payload)
     except PayloadError as pe:
         print(render(pe.env, fmt=args.format, detail=args.detail))
         return pe.rc
@@ -1675,9 +1676,10 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
     # needs (file_location lives on the resolve Envelope, not on DescribeOutput).
     # On resolve failure it raises PayloadError carrying that Envelope + rc.
     from java_codebase_rag.read_payloads import PayloadError, inspect_payload
+    from java_codebase_rag.watch.client import get_payload
 
     try:
-        payload = inspect_payload(args, cfg, graph)
+        payload = get_payload("inspect", vars(args), cfg, cold_core=inspect_payload)
     except PayloadError as pe:
         print(render(pe.env, fmt=args.format, detail=args.detail))
         return pe.rc
@@ -2396,9 +2398,10 @@ def _cmd_callers(args: argparse.Namespace) -> int:
         return rc
     from java_codebase_rag.read_payloads import PayloadError, callers_payload
     from java_codebase_rag.jrag_render import render
+    from java_codebase_rag.watch.client import get_payload
 
     try:
-        payload = callers_payload(args, cfg, graph)
+        payload = get_payload("callers", vars(args), cfg, cold_core=callers_payload)
     except PayloadError as pe:
         print(render(pe.env, fmt=args.format, detail=args.detail))
         return pe.rc
@@ -2415,9 +2418,10 @@ def _cmd_callees(args: argparse.Namespace) -> int:
         return rc
     from java_codebase_rag.read_payloads import PayloadError, callees_payload
     from java_codebase_rag.jrag_render import render
+    from java_codebase_rag.watch.client import get_payload
 
     try:
-        payload = callees_payload(args, cfg, graph)
+        payload = get_payload("callees", vars(args), cfg, cold_core=callees_payload)
     except PayloadError as pe:
         print(render(pe.env, fmt=args.format, detail=args.detail))
         return pe.rc
@@ -2857,9 +2861,10 @@ def _cmd_flow(args: argparse.Namespace) -> int:
         return rc
     from java_codebase_rag.read_payloads import PayloadError, flow_payload
     from java_codebase_rag.jrag_render import render
+    from java_codebase_rag.watch.client import get_payload
 
     try:
-        payload = flow_payload(args, cfg, graph)
+        payload = get_payload("flow", vars(args), cfg, cold_core=flow_payload)
     except PayloadError as pe:
         print(render(pe.env, fmt=args.format, detail=args.detail))
         return pe.rc
@@ -3952,12 +3957,17 @@ def _cmd_search(args: argparse.Namespace) -> int:
         print(render(env, fmt=args.format, detail=args.detail))
         return 2
     from java_codebase_rag.read_payloads import PayloadError, search_payload
+    from java_codebase_rag.watch.client import get_payload
 
     # search_payload builds the NodeFilter from args (same filter_dict set above)
     # and calls search_v2 with limit+1. On filter-validation failure it raises
     # PayloadError carrying the error Envelope (rendered identically to before).
+    # get_payload tries the watch daemon first (hot), cold-falling-back to the
+    # identical search_payload core when no daemon is alive (every non-watch jrag
+    # invocation). Reconstructs the SearchOutput object on the hot path so the
+    # downstream render is unchanged.
     try:
-        out = search_payload(args, cfg, graph)
+        out = get_payload("search", vars(args), cfg, cold_core=search_payload)
     except PayloadError as pe:
         print(render(pe.env, fmt=args.format, detail=args.detail))
         return pe.rc
