@@ -127,6 +127,11 @@ def _enclosing_type_fqn(fqn: str) -> str:
     return fqn.split("#", 1)[0] if fqn else fqn
 
 
+# Non-underscore aliases for cross-module callers (search_lancedb's BM25 fusion).
+# Behavior is identical; the leading-underscore originals stay module-private.
+enclosing_type_fqn = _enclosing_type_fqn
+
+
 def _resolve_source_root(graph: LadybugGraph) -> str:
     """Authoritative source root is the one cached on the graph at index time."""
     try:
@@ -253,6 +258,11 @@ def _try_fts_candidates(
     params["ids"] = ids
     rows = g._rows(f"MATCH (s:Symbol) {where} RETURN {_SYMBOL_RETURN}", params)  # noqa: SLF001
     return {"rows": rows, "scores": scores}
+
+
+# Non-underscore alias for cross-module callers (search_lancedb's BM25 fusion on the
+# vector path). Behavior is identical to the leading-underscore original.
+fetch_fts_candidates = _try_fts_candidates
 
 
 def run_lexical_search(

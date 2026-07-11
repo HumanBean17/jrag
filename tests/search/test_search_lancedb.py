@@ -11,7 +11,7 @@ pytest.importorskip("lancedb")
 pytest.importorskip("sentence_transformers")
 
 from java_codebase_rag.search import search_lancedb
-from java_codebase_rag.search.search_lancedb import JAVA_ENRICHED_COLUMNS, _rrf_merge
+from java_codebase_rag.search.search_lancedb import JAVA_ENRICHED_COLUMNS, _rrf_merge, run_search
 
 
 def test_rrf_merge_weights_second_list_by_row() -> None:
@@ -120,6 +120,7 @@ def test_graph_expand_merge_honors_injected_k(monkeypatch) -> None:
 
     result = search_lancedb._graph_expand_merge(
         vector_rows,
+        query="query",
         query_vec=np.zeros(3),
         db=object(),
         uri="mem://",
@@ -723,3 +724,385 @@ def test_refine_java_start_lines_skips_nonjava_and_method_chunks() -> None:
     assert rows[0]["start"]["line"] == 7
     assert rows[1]["start"]["line"] == 30
     assert "start" not in rows[2]
+
+
+# ---------- Task 4: BM25 candidate fetch + third RRF list ----------
+
+
+def _eval_pred(rows: list[dict], pred: str | None) -> list[dict]:
+    """Tiny SQL-ish predicate evaluator for test fakes (AND / IN / <> / =)."""
+    if not pred:
+        return list(rows)
+    out: list[dict] = []
+    clauses = [c.strip().strip("()") for c in pred.replace("(", " ").replace(")", " ").split("AND")]
+    for r in rows:
+        keep = True
+        for clause in clauses:
+            clause = clause.strip()
+            if not clause:
+                continue
+            if " IN (" in clause:
+                col = clause.split(" IN ", 1)[0].strip()
+                vals_part = clause[clause.index("(") + 1 : clause.rindex(")")]
+                vals = [v.strip().strip("'") for v in vals_part.split(",")]
+                if str(r.get(col)) not in vals:
+                    keep = False
+                    break
+            elif "<>" in clause:
+                col, val = [p.strip() for p in clause.split("<>", 1)]
+                val = val.strip("'")
+                if str(r.get(col)) == val:
+                    keep = False
+                    break
+            elif "=" in clause:
+                col, val = [p.strip() for p in clause.split("=", 1)]
+                val = val.strip("'")
+                if str(r.get(col)) != val:
+                    keep = False
+                    break
+        if keep:
+            out.append(r)
+    return out
+
+
+class _FilterQuery:
+    """Fake LanceDB filter-only query: search().where().select().limit().to_list()."""
+
+    def __init__(self, rows: list[dict]) -> None:
+        self._rows = rows
+        self._pred: str | None = None
+        self._limit: int | None = None
+
+    def where(self, pred: str | None, prefilter: bool = False) -> "_FilterQuery":
+        self._pred = pred
+        return self
+
+    def select(self, _cols: list[str]) -> "_FilterQuery":
+        return self
+
+    def limit(self, n: int) -> "_FilterQuery":
+        self._limit = n
+        return self
+
+    def to_list(self) -> list[dict]:
+        filtered = _eval_pred(self._rows, self._pred)
+        if self._limit is not None:
+            filtered = filtered[: self._limit]
+        return list(filtered)
+
+
+class _FilterTable:
+    """Fake LanceDB table: open_table(...).search() with no vector → filter-only."""
+
+    def __init__(self, rows: list[dict]) -> None:
+        self._rows = rows
+
+    def search(self, *args, **kwargs) -> _FilterQuery:
+        # Filter-only when no positional vector arg is passed.
+        return _FilterQuery(self._rows)
+
+
+class _RecordingDb:
+    """Fake DB recording open_table calls; returns a per-table _FilterTable."""
+
+    def __init__(self) -> None:
+        self.tables: dict[str, _FilterTable] = {}
+        self.opened: list[str] = []
+
+    def add(self, name: str, rows: list[dict]) -> None:
+        self.tables[name] = _FilterTable(rows)
+
+    def open_table(self, name: str) -> _FilterTable:
+        self.opened.append(name)
+        return self.tables.get(name) or _FilterTable([])
+
+
+def _bm25_chunk(filename: str, fqn: str, rs: int, re_: int) -> dict:
+    return {
+        "filename": filename,
+        "range_start": rs,
+        "range_end": re_,
+        "primary_type_fqn": fqn,
+        "text": f"body of {fqn}",
+        "language": "java",
+        "start": {"line": rs, "byte_offset": 0},
+        "end": {"line": re_, "byte_offset": 100},
+    }
+
+
+def _patch_bm25_environment(monkeypatch, *, fts_result, chunk_rows) -> _RecordingDb:
+    """Wire the common monkeypatches for _bm25_candidate_rows unit tests."""
+    from java_codebase_rag.search import search_lexical
+
+    monkeypatch.setattr(search_lexical, "fetch_fts_candidates", lambda *a, **kw: fts_result)
+    monkeypatch.setattr(search_lexical, "enclosing_type_fqn", lambda fqn: fqn.split("#", 1)[0])
+    monkeypatch.setattr(search_lancedb, "_apply_chunk_hints", lambda rows: None)
+    monkeypatch.setattr(search_lancedb, "_refine_java_start_lines", lambda rows: None)
+    # Provide a schema that includes the enriched java columns the helper selects.
+    monkeypatch.setattr(
+        search_lancedb, "_table_columns",
+        lambda *a, **kw: {"filename", "text", "start", "end", "language", "range_start",
+                          "range_end", "primary_type_fqn", "role", "package"},
+    )
+    db = _RecordingDb()
+    db.add(search_lancedb.TABLES["java"], list(chunk_rows))
+    return db
+
+
+def test_bm25_candidate_rows_orders_by_bm25_score(monkeypatch) -> None:
+    """(a) BM25 candidates are emitted in BM25-desc order with the owning score attached."""
+    fts_result = {
+        "rows": [
+            {"id": "sb", "fqn": "com.x.B", "kind": "class", "name": "B"},
+            {"id": "sa", "fqn": "com.x.A", "kind": "class", "name": "A"},
+            {"id": "sc", "fqn": "com.x.C", "kind": "class", "name": "C"},
+        ],
+        "scores": {"sb": 30.0, "sa": 20.0, "sc": 10.0},
+    }
+    chunk_rows = [
+        _bm25_chunk("a.java", "com.x.A", 1, 10),
+        _bm25_chunk("b.java", "com.x.B", 1, 10),
+        _bm25_chunk("c.java", "com.x.C", 1, 10),
+    ]
+    db = _patch_bm25_environment(monkeypatch, fts_result=fts_result, chunk_rows=chunk_rows)
+
+    out = search_lancedb._bm25_candidate_rows(
+        g=object(), query="q", uri="mem://", db=db,
+        extra_predicates=[], columns={"primary_type_fqn"},
+    )
+    fqns = [r["primary_type_fqn"] for r in out]
+    assert fqns == ["com.x.B", "com.x.A", "com.x.C"]
+    scores = {r["primary_type_fqn"]: r["_score_components"]["bm25"] for r in out}
+    assert scores == {"com.x.B": 30.0, "com.x.A": 20.0, "com.x.C": 10.0}
+
+
+def test_bm25_candidate_rows_fts_unavailable_returns_empty(monkeypatch) -> None:
+    """(b) FTS returns None → [] and no LanceDB fetch is attempted."""
+    db = _patch_bm25_environment(monkeypatch, fts_result=None, chunk_rows=[])
+
+    out = search_lancedb._bm25_candidate_rows(
+        g=object(), query="q", uri="mem://", db=db,
+        extra_predicates=[], columns={"primary_type_fqn"},
+    )
+    assert out == []
+    assert db.opened == []  # no chunk fetch attempted
+
+
+def test_bm25_candidate_rows_respects_filter(monkeypatch) -> None:
+    """(c) extra_predicates flow into the chunk fetch and filter out types."""
+    fts_result = {
+        "rows": [
+            {"id": "sa", "fqn": "com.x.A", "kind": "class", "name": "A"},
+            {"id": "sb", "fqn": "com.x.B", "kind": "class", "name": "B"},
+        ],
+        "scores": {"sa": 20.0, "sb": 10.0},
+    }
+    chunk_rows = [
+        _bm25_chunk("a.java", "com.x.A", 1, 10),
+        _bm25_chunk("b.java", "com.x.B", 1, 10),
+    ]
+    db = _patch_bm25_environment(monkeypatch, fts_result=fts_result, chunk_rows=chunk_rows)
+
+    out = search_lancedb._bm25_candidate_rows(
+        g=object(), query="q", uri="mem://", db=db,
+        extra_predicates=["primary_type_fqn <> 'com.x.B'"],
+        columns={"primary_type_fqn"},
+    )
+    fqns = [r["primary_type_fqn"] for r in out]
+    assert fqns == ["com.x.A"]
+
+
+def test_bm25_candidate_rows_multiple_chunks_per_symbol_preserve_order(monkeypatch) -> None:
+    """(d) Multiple chunks per type stay grouped, in table order, ordered by BM25 rank."""
+    fts_result = {
+        "rows": [
+            {"id": "sa", "fqn": "com.x.A", "kind": "class", "name": "A"},
+            {"id": "sb", "fqn": "com.x.B", "kind": "class", "name": "B"},
+        ],
+        "scores": {"sa": 20.0, "sb": 10.0},
+    }
+    chunk_rows = [
+        _bm25_chunk("a.java", "com.x.A", 1, 10),
+        _bm25_chunk("a.java", "com.x.A", 11, 20),
+        _bm25_chunk("b.java", "com.x.B", 1, 10),
+    ]
+    db = _patch_bm25_environment(monkeypatch, fts_result=fts_result, chunk_rows=chunk_rows)
+
+    out = search_lancedb._bm25_candidate_rows(
+        g=object(), query="q", uri="mem://", db=db,
+        extra_predicates=[], columns={"primary_type_fqn"},
+    )
+    keys = [(r["primary_type_fqn"], r["range_start"]) for r in out]
+    assert keys == [("com.x.A", 1), ("com.x.A", 11), ("com.x.B", 1)]
+    for r in out:
+        if r["primary_type_fqn"] == "com.x.A":
+            assert r["_score_components"]["bm25"] == 20.0
+        else:
+            assert r["_score_components"]["bm25"] == 10.0
+
+
+def _stub_ladybug_graph(monkeypatch) -> None:
+    """Install a LadybugGraph stub that exists but expands to nothing novel."""
+    import sys
+    import types
+
+    class _FakeGraph:
+        @staticmethod
+        def exists(_path):
+            return True
+
+        @staticmethod
+        def get(_path):
+            class _G:
+                def expand_fqns(self, fqns, depth):
+                    return []
+
+                def expand_methods(self, fqns, depth, exclude_external=False):
+                    return []
+
+            return _G()
+
+    fake_mod = types.ModuleType("java_codebase_rag.graph.ladybug_queries")
+    fake_mod.LadybugGraph = _FakeGraph
+    monkeypatch.setitem(sys.modules, "java_codebase_rag.graph.ladybug_queries", fake_mod)
+
+
+def test_graph_expand_merge_includes_bm25_list(monkeypatch) -> None:
+    """(e) With DEFAULT_RANK_CONFIG (3-list), a BM25-only row surfaces in the fusion."""
+    from java_codebase_rag.search.search_scoring import RankConfig
+
+    _stub_ladybug_graph(monkeypatch)
+    rc = RankConfig(lists=frozenset({"vector", "graph", "bm25"}), rrf_k=60)
+
+    vector_rows = [
+        {"filename": "v.java", "range_start": 1, "range_end": 10,
+         "primary_type_fqn": "com.V"},
+    ]
+    bm25_rows = [
+        {"filename": "b.java", "range_start": 1, "range_end": 10,
+         "primary_type_fqn": "com.B", "_kind": "java",
+         "_score_components": {"bm25": 0.42}},
+    ]
+    monkeypatch.setattr(search_lancedb, "_bm25_candidate_rows", lambda **kw: list(bm25_rows))
+    monkeypatch.setattr(search_lancedb, "_table_columns", lambda *a, **kw: set())
+    monkeypatch.setattr(search_lancedb, "_build_extra_predicates", lambda **kw: [])
+    # Force the graph path to produce nothing (no novel fqns via stub) → graph_rows = [].
+
+    result = search_lancedb._graph_expand_merge(
+        vector_rows,
+        query="something",
+        query_vec=np.zeros(3),
+        db=object(),
+        uri="mem://",
+        limit=10,
+        extra_predicates=[],
+        expand_depth=1,
+        ladybug_path=None,
+        rank_config=rc,
+    )
+    files = [r["filename"] for r in result]
+    assert "b.java" in files
+    bm25_row = next(r for r in result if r["filename"] == "b.java")
+    assert bm25_row["_score_components"]["bm25"] == 0.42
+
+
+def test_graph_expand_merge_omits_bm25_when_excluded(monkeypatch) -> None:
+    """(f) With BASELINE_2LIST_CONFIG, _bm25_candidate_rows is never called."""
+    from java_codebase_rag.search.search_scoring import BASELINE_2LIST_CONFIG
+
+    _stub_ladybug_graph(monkeypatch)
+    calls: list[dict] = []
+    monkeypatch.setattr(search_lancedb, "_bm25_candidate_rows",
+                        lambda **kw: calls.append(kw) or [])
+    monkeypatch.setattr(search_lancedb, "_table_columns", lambda *a, **kw: set())
+    monkeypatch.setattr(search_lancedb, "_build_extra_predicates", lambda **kw: [])
+
+    vector_rows = [
+        {"filename": "v.java", "range_start": 1, "range_end": 10,
+         "primary_type_fqn": "com.V"},
+    ]
+    result = search_lancedb._graph_expand_merge(
+        vector_rows,
+        query="something",
+        query_vec=np.zeros(3),
+        db=object(),
+        uri="mem://",
+        limit=10,
+        extra_predicates=[],
+        expand_depth=1,
+        ladybug_path=None,
+        rank_config=BASELINE_2LIST_CONFIG,
+    )
+    assert calls == []
+    # Result is the vector rows (graph produced nothing novel via stub).
+    assert result == vector_rows
+
+
+def test_run_search_bm25_degrades_silently_when_fts_missing(monkeypatch, tmp_path) -> None:
+    """(g) When FTS is unavailable, the 3-list config degrades to the 2-list baseline.
+
+    Builds a real LanceDB index with one java row, stubs LadybugGraph to exist (so
+    _graph_expand_merge runs) but expand to nothing, and forces _ensure_fts_loaded→False
+    so the BM25 fetch returns None. Asserts: no exception, no row carries a `bm25`
+    score component, and the result equals the BASELINE_2LIST_CONFIG run.
+    """
+    import uuid
+
+    import lancedb
+    from sentence_transformers import SentenceTransformer
+
+    from java_codebase_rag.ast.ast_java import ONTOLOGY_VERSION
+    from java_codebase_rag.search import search_lexical
+    from java_codebase_rag.search.index_common import SBERT_MODEL
+    from java_codebase_rag.search.search_lancedb import TABLES, _query_vector
+    from java_codebase_rag.search.search_scoring import (
+        BASELINE_2LIST_CONFIG,
+        DEFAULT_RANK_CONFIG,
+    )
+
+    _stub_ladybug_graph(monkeypatch)
+    # Force FTS unavailable → _try_fts_candidates returns None.
+    monkeypatch.setattr(search_lexical, "_ensure_fts_loaded", lambda g: False)
+
+    uri = str(tmp_path / "ldb")
+    model = SentenceTransformer(SBERT_MODEL, device="cpu", trust_remote_code=True)
+    text = "service that processes inbound Kafka records on the listener endpoint"
+    emb = _query_vector(model, text)
+    row = {
+        "id": str(uuid.uuid4()),
+        "filename": "smoke/p/Svc.java",
+        "text": text,
+        "language": "java",
+        "range_start": 0,
+        "range_end": 500,
+        "start": {"line": 1, "byte_offset": 0},
+        "end": {"line": 20, "byte_offset": 400},
+        "embedding": emb,
+        "package": "p",
+        "module": "smoke",
+        "microservice": "smoke",
+        "primary_type_fqn": "p.Svc",
+        "primary_type_kind": "class",
+        "role": "SERVICE",
+        "annotations_on_type": [],
+        "symbols": ["process"],
+        "ontology_version": ONTOLOGY_VERSION,
+        "capabilities": [],
+    }
+    db = lancedb.connect(uri)
+    db.create_table(TABLES["java"], [row], mode="create")
+
+    common = dict(
+        uri=uri, table_keys=["java"], limit=5, path_substring=None,
+        model_name=SBERT_MODEL, device="cpu", model=model,
+        graph_expand=True, expand_depth=1,
+    )
+    three = run_search(text, rank_config=DEFAULT_RANK_CONFIG, **common)
+    two = run_search(text, rank_config=BASELINE_2LIST_CONFIG, **common)
+
+    # No bm25 component anywhere on either run.
+    for rows in (three, two):
+        assert all("bm25" not in (r.get("_score_components") or {}) for r in rows)
+    # Degradation: 3-list with FTS-missing == 2-list baseline.
+    assert [r["filename"] for r in three] == [r["filename"] for r in two]
+    assert len(three) == len(two) and len(two) >= 1

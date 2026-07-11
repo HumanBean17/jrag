@@ -20,6 +20,7 @@ from sentence_transformers import SentenceTransformer
 
 from java_codebase_rag.ast.chunk_heuristics import analyze_chunk, looks_like_code_identifier
 from java_codebase_rag.search.index_common import SBERT_MODEL
+from java_codebase_rag.search import search_lexical
 from java_codebase_rag.config import maybe_expand_embedding_model_path, resolved_sbert_model_for_process_env
 
 # Scoring & dedup primitives live in `search_scoring` (dependency-free — no
@@ -635,9 +636,140 @@ def _attach_neighbor_context(
     _debug_ctx(f"attached context to {attached}/{len(java_rows)} java rows")
 
 
+def _bm25_candidate_rows(
+    *,
+    g: object,
+    query: str,
+    uri: str,
+    db: object,
+    extra_predicates: list[str],
+    columns: set[str],
+    limit: int = 100,
+) -> list[dict]:
+    """Fetch BM25-ranked Symbol candidates from the FTS index and resolve them to
+    chunk rows in BM25 rank order. Returns ``[]`` on any failure (silent degradation).
+
+    Pipeline:
+      1. ``search_lexical.fetch_fts_candidates(g, query)`` → BM25-ranked Symbols +
+         a ``{symbol_node_id: bm25_score}`` map. ``None`` / empty → return ``[]``.
+      2. Map each Symbol fqn to its enclosing TYPE fqn (``primary_type_fqn`` has no
+         ``#``; a member ``Type#method`` maps to ``Type``). Dedupe by type fqn,
+         keeping the MAX BM25 score among same-type symbols.
+      3. Order type fqns by BM25 desc (fqn asc tiebreak — deterministic).
+      4. Fetch chunk rows from LanceDB with a FILTER-ONLY query (no vector ranking,
+         so BM25 order is preserved). Predicates = caller's ``extra_predicates`` +
+         the ``primary_type_fqn IN (...)`` built from the ordered types — preserving
+         filter parity with the vector path.
+      5. Group fetched chunks by ``primary_type_fqn``; emit in BM25 rank order,
+         each chunk carrying ``_score_components["bm25"]``.
+      6. Apply ``_apply_chunk_hints`` + ``_refine_java_start_lines`` for consistency
+         with graph_rows handling.
+
+    Any exception (FTS or LanceDB) → ``_debug_ctx`` log + return ``[]`` (silent
+    degradation; the vector path is unaffected).
+    """
+    # 1. BM25 candidate fetch via the FTS index.
+    try:
+        fts = search_lexical.fetch_fts_candidates(g, query, filter=None, path_contains=None)
+    except Exception as exc:  # noqa: BLE001 — silent degradation
+        _debug_ctx(f"bm25 FTS fetch raised: {exc!r}")
+        return []
+    if not fts or not fts.get("rows"):
+        return []
+    sym_rows = fts["rows"]
+    scores = fts.get("scores") or {}
+
+    # 2. Map symbol fqns → enclosing type fqns; keep MAX bm25 per type.
+    type_fqn_to_bm25: dict[str, float] = {}
+    for r in sym_rows:
+        fqn = r.get("fqn")
+        if not fqn:
+            continue
+        type_fqn = search_lexical.enclosing_type_fqn(str(fqn))
+        if not type_fqn:
+            continue
+        score = float(scores.get(r.get("id"), 0.0))
+        prev = type_fqn_to_bm25.get(type_fqn)
+        if prev is None or score > prev:
+            type_fqn_to_bm25[type_fqn] = score
+    if not type_fqn_to_bm25:
+        return []
+
+    # 3. Deterministic ordering: BM25 desc, fqn asc.
+    ordered_types = sorted(
+        type_fqn_to_bm25.keys(),
+        key=lambda f: (-type_fqn_to_bm25[f], f),
+    )
+
+    # 4. Filter-only chunk fetch (NO vector ranking → BM25 order preserved). The
+    # ``primary_type_fqn IN (...)`` predicate must be buildable; if the index is so
+    # old that the column is absent, we can't restrict the fetch and degrade to [].
+    if "primary_type_fqn" not in columns:
+        _debug_ctx("bm25 fetch skipped: primary_type_fqn column absent from schema")
+        return []
+    preds = list(extra_predicates) + _build_extra_predicates(
+        columns=columns,
+        role=None, module=None, microservice=None,
+        package_prefix=None, fqn_in=ordered_types,
+    )
+    combined_pred = _combine_predicates(preds)
+    base_cols = ["filename", "text", "start", "end"]
+    for col in ("range_start", "range_end"):
+        if col in columns:
+            base_cols.append(col)
+    java_extra = [c for c in JAVA_ENRICHED_COLUMNS if c in columns]
+    select_cols = [*base_cols, "language", *java_extra]
+
+    try:
+        tbl = db.open_table(TABLES["java"])
+        # LanceDB 0.34 filter-only path: search() with no vector arg issues a
+        # non-vector scan; .where/.select/.limit/.to_list returns rows in table
+        # order without re-ranking by similarity. (tbl.query() is NOT available in
+        # 0.34; to_lance().scanner() requires pylance, which isn't installed on the
+        # PEP 508 graph-only profile — search() with no vector is the supported API.)
+        q = tbl.search().select(select_cols).limit(
+            max(limit, len(ordered_types) * 4)
+        )
+        if combined_pred:
+            q = q.where(combined_pred, prefilter=True)
+        with _silence_lance_autoproj_warnings():
+            fetched = q.to_list()
+    except Exception as exc:  # noqa: BLE001 — silent degradation
+        _debug_ctx(f"bm25 chunk fetch failed: {exc!r}")
+        return []
+
+    # 5. Group by primary_type_fqn; emit in BM25 rank order.
+    by_type: dict[str, list[dict]] = {}
+    for ch in fetched:
+        tf = ch.get("primary_type_fqn")
+        if tf is None:
+            continue
+        by_type.setdefault(str(tf), []).append(ch)
+
+    out: list[dict] = []
+    for type_fqn in ordered_types:
+        chunks = by_type.get(type_fqn)
+        if not chunks:
+            continue  # filtered out by extra_predicates / absent from index
+        bm25_val = round(float(type_fqn_to_bm25[type_fqn]), 4)
+        for ch in chunks:
+            ch["_kind"] = "java"
+            ch["_hybrid"] = False
+            ch.setdefault("_score_components", {})["bm25"] = bm25_val
+            ch["start"] = coerce_position_field(ch.get("start"))
+            ch["end"] = coerce_position_field(ch.get("end"))
+            out.append(ch)
+
+    # 6. Consistency with graph_rows handling.
+    _apply_chunk_hints(out)
+    _refine_java_start_lines(out)
+    return out
+
+
 def _graph_expand_merge(
     vector_rows: list[dict],
     *,
+    query: str,
     query_vec: np.ndarray,
     db: object,
     uri: str,
@@ -647,7 +779,22 @@ def _graph_expand_merge(
     ladybug_path: str | None,
     rank_config: RankConfig = DEFAULT_RANK_CONFIG,
 ) -> list[dict]:
-    """Expand vector top-k through the LadybugDB graph and fuse (RRF) with the original list."""
+    """Expand vector top-k through the graph and/or fuse BM25, then RRF-merge.
+
+    Which lists contribute is controlled by ``rank_config.lists``:
+      - ``"vector"``  — always present (the backbone; validated by RankConfig).
+      - ``"graph"``   — graph expand + fetch (skipped entirely when absent).
+      - ``"bm25"``    — LadybugDB FTS candidate fetch fused as a third list.
+
+    Silent degradation: any failure in the graph or BM25 path drops just that list;
+    the vector list is never lost. Returns ``vector_rows`` unchanged when no
+    auxiliary list yields rows.
+    """
+    want_graph = "graph" in rank_config.lists
+    want_bm25 = "bm25" in rank_config.lists
+    if not want_graph and not want_bm25:
+        return vector_rows
+
     # Lazy import so the module works without ladybug installed when graph_expand=False.
     try:
         from java_codebase_rag.graph.ladybug_queries import LadybugGraph
@@ -657,68 +804,97 @@ def _graph_expand_merge(
     if not LadybugGraph.exists(ladybug_path):
         return vector_rows
 
-    seed_fqns = sorted({r.get("primary_type_fqn") for r in vector_rows if r.get("primary_type_fqn")})
-    if not seed_fqns:
+    java_cols = _table_columns(uri, TABLES["java"], db)
+
+    # --- graph list ---
+    graph_rows: list[dict] = []
+    expand_weight_by_fqn: dict[str, float] = {}
+    if want_graph:
+        seed_fqns = sorted({r.get("primary_type_fqn") for r in vector_rows if r.get("primary_type_fqn")})
+        neighbor_fqns: list[str] = []
+        if seed_fqns:
+            try:
+                graph_obj = LadybugGraph.get(ladybug_path)
+                structural = graph_obj.expand_fqns(seed_fqns, depth=expand_depth)
+                method_pairs = graph_obj.expand_methods(
+                    seed_fqns, depth=expand_depth, exclude_external=True,
+                )
+                for f in structural:
+                    if f:
+                        expand_weight_by_fqn[f] = max(expand_weight_by_fqn.get(f, 0.0), 1.0)
+                for f, conf in method_pairs:
+                    if f:
+                        expand_weight_by_fqn[f] = max(expand_weight_by_fqn.get(f, 0.0), conf)
+                neighbor_fqns = list(dict.fromkeys(
+                    list(structural) + [f for f, _ in method_pairs],
+                ))
+            except Exception:
+                neighbor_fqns = []
+
+            novel = [fqn for fqn in neighbor_fqns if fqn and fqn not in set(seed_fqns)]
+            if novel:
+                extra = list(extra_predicates)
+                extra.extend(_build_extra_predicates(
+                    columns=java_cols,
+                    role=None, module=None, microservice=None,
+                    package_prefix=None, fqn_in=novel,
+                ))
+                try:
+                    graph_rows = _search_one_table(
+                        TABLES["java"],
+                        uri=uri, db=db, query_vec=query_vec,
+                        limit=max(limit, 20),
+                        path_predicate=None, kind="java",
+                        hybrid=False, fts_text=None,
+                        extra_predicates=extra,
+                    )
+                except Exception:
+                    graph_rows = []
+                _apply_chunk_hints(graph_rows)
+                _refine_java_start_lines(graph_rows)
+                graph_rows.sort(key=_vector_sort_key)
+                for r in graph_rows:
+                    r["_graph_expanded"] = True
+                    r["_graph_expand_weight"] = expand_weight_by_fqn.get(
+                        r.get("primary_type_fqn"), 1.0,
+                    )
+
+    # --- bm25 list ---
+    bm25_rows: list[dict] = []
+    if want_bm25:
+        try:
+            graph_obj = LadybugGraph.get(ladybug_path)
+        except Exception:
+            graph_obj = None
+        if graph_obj is not None:
+            bm25_rows = _bm25_candidate_rows(
+                g=graph_obj,
+                query=query,
+                uri=uri,
+                db=db,
+                extra_predicates=extra_predicates,
+                columns=java_cols,
+                limit=limit,
+            )
+
+    # --- RRF fusion (only lists that yielded rows beyond vector) ---
+    lists: list[list[dict]] = [vector_rows]
+    row_weights: list[Callable[[dict], float] | None] = [None]
+    if want_graph and graph_rows:
+        lists.append(graph_rows)
+        row_weights.append(lambda row: float(row.get("_graph_expand_weight", 1.0)))
+    if want_bm25 and bm25_rows:
+        lists.append(bm25_rows)
+        row_weights.append(None)
+
+    if len(lists) == 1:
         return vector_rows
 
-    try:
-        graph = LadybugGraph.get(ladybug_path)
-        structural = graph.expand_fqns(seed_fqns, depth=expand_depth)
-        method_pairs = graph.expand_methods(
-            seed_fqns, depth=expand_depth, exclude_external=True,
-        )
-        expand_weight_by_fqn: dict[str, float] = {}
-        for f in structural:
-            if f:
-                expand_weight_by_fqn[f] = max(expand_weight_by_fqn.get(f, 0.0), 1.0)
-        for f, conf in method_pairs:
-            if f:
-                expand_weight_by_fqn[f] = max(expand_weight_by_fqn.get(f, 0.0), conf)
-        neighbor_fqns = list(dict.fromkeys(
-            list(structural) + [f for f, _ in method_pairs],
-        ))
-    except Exception:
-        return vector_rows
-
-    novel = [fqn for fqn in neighbor_fqns if fqn and fqn not in set(seed_fqns)]
-    if not novel:
-        return vector_rows
-
-    extra = list(extra_predicates)
-    extra.extend(_build_extra_predicates(
-        columns=_table_columns(uri, TABLES["java"], db),
-        role=None, module=None, microservice=None,
-        package_prefix=None, fqn_in=novel,
-    ))
-
-    try:
-        graph_rows = _search_one_table(
-            TABLES["java"],
-            uri=uri, db=db, query_vec=query_vec,
-            limit=max(limit, 20),
-            path_predicate=None, kind="java",
-            hybrid=False, fts_text=None,
-            extra_predicates=extra,
-        )
-    except Exception:
-        return vector_rows
-    _apply_chunk_hints(graph_rows)
-    _refine_java_start_lines(graph_rows)
-    graph_rows.sort(key=_vector_sort_key)
-    for r in graph_rows:
-        r["_graph_expanded"] = True
-        r["_graph_expand_weight"] = expand_weight_by_fqn.get(
-            r.get("primary_type_fqn"), 1.0,
-        )
-    fused = _rrf_merge(
-        [vector_rows, graph_rows],
+    return _rrf_merge(
+        lists,
         k=rank_config.rrf_k,
-        row_weight_for_list_index=[
-            None,
-            lambda row: float(row.get("_graph_expand_weight", 1.0)),
-        ],
+        row_weight_for_list_index=row_weights,
     )
-    return fused
 
 
 def _rrf_merge(
@@ -893,6 +1069,7 @@ def run_search(
         if graph_expand and key == "java" and expand_depth > 0:
             rows = _graph_expand_merge(
                 rows,
+                query=query,
                 query_vec=query_vec,
                 db=db,
                 uri=uri,
