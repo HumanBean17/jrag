@@ -12,6 +12,7 @@ Everything here is pure-Python dict/list math with no third-party deps.
 from __future__ import annotations
 
 import json
+import re
 
 # Over-fetch multiplier for dedup: fetch 4x to absorb per-FQN chunk multiplicity
 # so that after collapsing by primary_type_fqn, a page stays full and the +1
@@ -210,6 +211,29 @@ def l2_distance_to_score(distance: float) -> float:
     return 1.0 - distance * distance / 2.0
 
 
+# Display-score denominator for the vector backend. Unit-normalized embeddings
+# have L2 distance in [0, 2]; the cosine map ``l2_distance_to_score`` (1 - d²/2)
+# goes NEGATIVE past √2 ≈ 1.414 and clamps to 0. Weak-but-best semantic matches
+# (e.g. a lone keyword like "controller") commonly sit at d ≈ 1.5, so EVERY hit
+# clamps to score=0.000 even though the ranking is correct. ``vector_display_score``
+# instead normalizes the effective (bonus-adjusted) distance over the full
+# unit-embedding range, so a top-ranked hit stays visibly non-zero. Role/symbol
+# bonuses reduce the effective distance and so raise the displayed score,
+# keeping it rank-monotonic with the distance-based sort key.
+_VECTOR_DISTANCE_REF = 2.0
+
+
+def vector_display_score(effective_distance: float) -> float:
+    """Displayed vector score in [0, 1] from the effective (bonus-adjusted) distance.
+
+    Bounded linear normalization over the unit-embedding L2 range [0, 2]: lower
+    distance → higher score. Unlike ``l2_distance_to_score`` (which goes
+    negative past √2 and clamps a correctly-ranked top hit to 0.000), this keeps
+    a top result visibly non-zero while staying rank-monotonic with the sort key.
+    """
+    return _clamp01(1.0 - effective_distance / _VECTOR_DISTANCE_REF)
+
+
 def _effective_distance(comps: dict[str, float]) -> float:
     """Compute the adjusted distance used for sorting.
 
@@ -229,6 +253,59 @@ def _clamp01(x: float) -> float:
     if x > 1.0:
         return 1.0
     return x
+
+
+# Matches a Java top-level type declaration and captures its simple name. Mirrors
+# the heuristic in ``ast.chunk_heuristics._JAVA_TYPE`` but is duplicated here so
+# this module stays dependency-free (importable on graph-only Intel installs).
+_JAVA_TYPE_DECL_RE = re.compile(
+    r"\b(?:public\s+|private\s+|protected\s+|sealed\s+|non-sealed\s+|final\s+|"
+    r"abstract\s+|static\s+)*"
+    r"(?:class|interface|enum|record)\s+([A-Za-z_][A-Za-z0-9_]*)"
+)
+
+
+def declaration_line_number(
+    text: str | None, anchor_line: int | None, type_name: str | None = None
+) -> int | None:
+    """Absolute 1-based line of the Java type declaration within chunk ``text``.
+
+    LanceDB chunks are anchored at the chunk's first source line, which for a
+    file-spanning chunk is the package/import line (``anchor_line`` = 1) while
+    the ``class``/``interface`` declaration sits several lines down. Without
+    this, hits render as ``File.java:1`` even though the symbol is declared
+    later (F8). Returns ``anchor_line + i`` for the first matching declaration
+    (pinned to ``type_name`` when given, so a nested type doesn't win), or
+    ``anchor_line`` unchanged when no declaration is found in the chunk.
+
+    Comment-aware: Javadoc/line/block-comment lines that merely MENTION the type
+    name (e.g. ``* This class Bar handles...``) are skipped so the returned line
+    is the real declaration, not a comment above it.
+    """
+    if not text or anchor_line is None:
+        return anchor_line
+    in_block = False
+    for i, raw in enumerate(text.splitlines()):
+        # Drop a trailing ``// ...`` line comment before any matching (a ``//``
+        # inside a string literal is unrealistic for a declaration line).
+        code = raw.split("//", 1)[0]
+        stripped = code.strip()
+        if in_block:
+            if "*/" in stripped:
+                in_block = False
+            continue
+        if stripped.startswith("/*"):
+            # Single-line ``/* ... */`` -> skip without entering block state.
+            if "*/" not in stripped[2:]:
+                in_block = True
+            continue
+        if not stripped or stripped.startswith("*"):
+            # Blank or a Javadoc continuation line (`` * ...``).
+            continue
+        m = _JAVA_TYPE_DECL_RE.search(code)
+        if m and (not type_name or m.group(1) == type_name):
+            return anchor_line + i
+    return anchor_line
 
 
 def explain_score_components(

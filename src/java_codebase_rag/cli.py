@@ -846,7 +846,15 @@ def _cmd_unresolved_calls_list(args: argparse.Namespace) -> int:
         callee_simple=args.callee_simple,
         limit=int(args.limit),
     )
-    _emit({"success": True, "count": len(rows), "sites": rows})
+    # Drop the raw caller symbol id: the row already carries the agent-facing
+    # ``caller_fqn``, so ``caller_id`` is redundant noise in an operator-facing
+    # report. The call-site ``id`` (``ucs:``) is kept — it's each site's
+    # primary key, not a caller reference.
+    sites = [
+        {k: v for k, v in row.items() if k != "caller_id"}
+        for row in rows
+    ]
+    _emit({"success": True, "count": len(sites), "sites": sites})
     return 0
 
 
@@ -1060,12 +1068,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_index_embedding_flags(erase)
     erase.add_argument("--yes", action="store_true", help="Confirm destructive deletion (required in CI)")
-    erase.add_argument(
-        "--quiet", "-q",
-        action="store_true",
-        dest="quiet",
-        help="Suppress stderr progress relay; stdout payload unchanged.",
-    )
+    _add_verbosity_flags(erase)
     erase.set_defaults(handler=_cmd_erase)
 
     meta = subparsers.add_parser("meta", help="Print graph meta and embedding resolution.")

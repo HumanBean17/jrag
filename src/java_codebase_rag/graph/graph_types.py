@@ -36,6 +36,24 @@ class NodeRef(BaseModel):
     role: str | None = None
     generated: bool | None = None
     generated_by: str | None = None
+    # Identity-adjacent fields consumed by ``jrag_envelope.node_key`` (keying)
+    # and ``project_node`` allow-lists (rendering) so find filter-mode nodes
+    # carry the same rich shape as the dedicated listings (http-routes /
+    # http-clients / producers). All optional with default None: existing
+    # NodeRef constructors are unaffected and ``_drop_empty`` strips unset
+    # fields at the JSON boundary.
+    method: str | None = None
+    path: str | None = None
+    framework: str | None = None
+    member_fqn: str | None = None
+    target_service: str | None = None
+    client_kind: str | None = None
+    topic: str | None = None
+    broker: str | None = None
+    producer_kind: str | None = None
+    filename: str | None = None
+    start_line: int | None = None
+    resolved: bool | None = None
 
 
 class StructuredHint(BaseModel):
@@ -98,38 +116,107 @@ def _resolve_node_kind(
 
 
 def _node_ref_from_row(kind: Literal["symbol", "route", "client", "producer"], row: dict[str, Any]) -> NodeRef:
-    symbol_kind: str | None = None
+    """Map a graph store row to a :class:`NodeRef`.
+
+    ``fqn`` is set to each kind's documented natural identifier (README
+    §"jrag — agent CLI") so ``jrag_envelope.node_key`` (which checks ``fqn``
+    first) keys nodes correctly and no raw graph id leaks:
+
+      * symbol  -> symbol fqn
+      * route   -> ``"METHOD path"`` (HTTP endpoint); ``"topic:<name>"`` when a
+                   kafka topic surfaces as :Route; ``""`` for a phantom route
+                   (node_key then falls through to the composed ``file``)
+      * client  -> ``"member_fqn->target_service"``
+      * producer-> ``"topic:<name>"``
+
+    Rich detail (member_fqn / target_service / method / path / topic /
+    framework / filename / start_line / resolved) is populated alongside so
+    find filter-mode nodes render with the same shape as the dedicated
+    listings (``http-routes`` / ``http-clients`` / ``producers``) instead of
+    collapsing to ``{"kind": ...}`` after the envelope's projection+drop-empty.
+    """
+    microservice = str(row.get("microservice") or "") or None
+    module = str(row.get("module") or "") or None
+    filename = str(row.get("filename") or "") or None
+    start_line = row.get("start_line")
+    try:
+        start_line = int(start_line) if start_line not in (None, "") else None
+    except (TypeError, ValueError):
+        start_line = None
+    resolved_raw = row.get("resolved")
+    resolved = bool(resolved_raw) if resolved_raw is not None else None
+    nid = str(row.get("id") or "")
+
     if kind == "symbol":
         fqn = str(row.get("fqn") or "")
         role = str(row.get("role") or "") or None
         symbol_kind_val = str(row.get("symbol_kind") or row.get("kind") or "").strip()
         symbol_kind = symbol_kind_val or None
-    elif kind == "route":
+        return NodeRef(
+            id=nid, kind="symbol", fqn=fqn,
+            name=str(row.get("name") or "") or None,
+            symbol_kind=symbol_kind,
+            microservice=microservice, module=module, role=role,
+            filename=filename, start_line=start_line,
+            generated=bool(row.get("generated")) if row.get("generated") is not None else None,
+            generated_by=str(row.get("generated_by")) if row.get("generated_by") else None,
+        )
+
+    if kind == "route":
         method = str(row.get("method") or "")
         path = str(row.get("path_template") or row.get("path") or "")
-        fqn = f"{method} {path}".strip()
-        role = None
-    elif kind == "client":
+        topic = str(row.get("topic") or "") or None
+        if method or path:
+            fqn = f"{method} {path}".strip()
+        elif topic:
+            fqn = f"topic:{topic}"
+        else:
+            fqn = ""
+        return NodeRef(
+            id=nid, kind="route", fqn=fqn, name=(path or topic),
+            method=method or None, path=path or None, topic=topic,
+            framework=str(row.get("framework") or "") or None,
+            microservice=microservice, module=module,
+            filename=filename, start_line=start_line, resolved=resolved,
+        )
+
+    if kind == "client":
+        mfqn = str(row.get("member_fqn") or "")
+        tgt = str(row.get("target_service") or "")
         method = str(row.get("method") or "")
-        target = str(row.get("target_service") or "")
         path = str(row.get("path_template") or row.get("path") or "")
-        fqn = f"{target} {method} {path}".strip()
-        role = None
-    else:
-        topic = str(row.get("topic") or "")
-        broker = str(row.get("broker") or "")
-        fqn = f"{topic} {broker}".strip()
-        role = None
+        member_fqn = mfqn or None
+        target_service = tgt or None
+        member_simple = (mfqn.rsplit(".", 1)[-1] if mfqn else "") or None
+        # Build the contract id ``member_fqn->target_service`` from the RAW
+        # strings: ``member_fqn`` was normalized to None above, so interpolating
+        # it would emit ``"None-><target>"`` for member-less (brownfield/meta)
+        # clients. Fall back to whichever half is present; never a dangling arrow.
+        fqn = f"{mfqn}->{tgt}" if (mfqn and tgt) else (mfqn or tgt)
+        return NodeRef(
+            id=nid, kind="client",
+            fqn=fqn,
+            name=member_simple,
+            member_fqn=member_fqn, target_service=target_service,
+            method=method or None, path=path or None,
+            client_kind=str(row.get("client_kind") or "") or None,
+            microservice=microservice, module=module,
+            filename=filename, start_line=start_line, resolved=resolved,
+        )
+
+    # producer
+    topic = str(row.get("topic") or "") or None
+    member_fqn = str(row.get("member_fqn") or "") or None
+    member_simple = (member_fqn.rsplit(".", 1)[-1] if member_fqn else "") or None
     return NodeRef(
-        id=str(row.get("id") or ""),
-        kind=kind,
-        fqn=fqn,
-        symbol_kind=symbol_kind,
-        microservice=str(row.get("microservice") or "") or None,
-        module=str(row.get("module") or "") or None,
-        role=role,
-        generated=bool(row.get("generated")) if row.get("generated") is not None else None,
-        generated_by=str(row.get("generated_by")) if row.get("generated_by") else None,
+        id=nid, kind="producer",
+        fqn=(f"topic:{topic}" if topic else ""),
+        name=(topic or member_simple),
+        topic=topic, broker=str(row.get("broker") or "") or None,
+        producer_kind=str(row.get("producer_kind") or "") or None,
+        member_fqn=member_fqn,
+        microservice=microservice, module=module,
+        filename=filename, start_line=start_line, resolved=resolved,
     )
 
 

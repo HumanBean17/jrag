@@ -1115,9 +1115,9 @@ def build_parser() -> argparse.ArgumentParser:
             "--table all searches all three. --hybrid enables vector+keyword hybrid. "
             "--offset paginates. --path-contains narrows by file path substring. "
             "Filters (NodeFilter flags) narrow results.\n\n"
-            "--fuzzy is accepted but rejected IN-HANDLER with status: error (search is "
-            "inherently semantic; --fuzzy is a no-op synonym). Registering the flag "
-            "prevents argparse from exiting 2 before the handler can produce the envelope."
+            "--fuzzy is accepted as a no-op (search is inherently semantic; "
+            "--fuzzy is implicit). It is kept registered so callers that pass "
+            "it don't hit an argparse error, and is silently ignored."
         ),
     )
     search.add_argument("query", help="Natural-language search query.")
@@ -1139,7 +1139,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     search.add_argument(
         "--fuzzy", action="store_true",
-        help="Accepted but rejected in-handler (search is semantic; --fuzzy is implicit).",
+        help="Accepted as a no-op (search is always semantic; --fuzzy is implicit).",
     )
     search.add_argument(
         "--min-score", type=float, default=0.0, dest="min_score",
@@ -1910,6 +1910,43 @@ def _cmd_producers(args: argparse.Namespace) -> int:
     return _render_listing(rows, limit=limit, args=args, noun="producer")
 
 
+def _producer_summary(producer: dict) -> dict:
+    """Display-oriented producer dict for the ``topics`` grouping.
+
+    The raw ``list_producers`` row carries 11 fields (incl. empty ``broker``,
+    raw ``filename``/``start_line``/``end_line``, ``direction``, ``source_layer``)
+    which the text renderer used to collapse into one unreadable comma-line.
+    This folds location into a single ``file`` and keeps only the fields an
+    operator needs to identify the producer under a topic header (the topic
+    itself is the group header, so it's dropped here). Empty values omitted.
+    """
+    member_fqn = str(producer.get("member_fqn") or "")
+    member_simple = member_fqn.rsplit(".", 1)[-1] if member_fqn else ""
+    filename = str(producer.get("filename") or "")
+    start_line = producer.get("start_line")
+    try:
+        sl = int(start_line) if start_line not in (None, "") else None
+    except (TypeError, ValueError):
+        sl = None
+    file_loc = f"{filename}:{sl}" if filename and sl else filename
+    out: dict = {}
+    if member_simple:
+        out["member"] = member_simple
+    if file_loc:
+        out["file"] = file_loc
+    # ``direction`` is intentionally omitted: every Producer is built with
+    # direction="producer" (build_ast_graph), so it's a constant that only
+    # inflates each block with zero information.
+    for k in ("microservice", "module", "producer_kind", "broker"):
+        v = producer.get(k)
+        if v not in (None, "", []):
+            out[k] = v
+    resolved = producer.get("resolved")
+    if resolved is not None:
+        out["resolved"] = bool(resolved)
+    return out
+
+
 def _cmd_topics(args: argparse.Namespace) -> int:
     from java_codebase_rag.jrag_envelope import Envelope, mark_truncated, next_actions_hook
     from java_codebase_rag.jrag_render import render
@@ -1944,7 +1981,7 @@ def _cmd_topics(args: argparse.Namespace) -> int:
                 "producers": [],
                 "broker": producer.get("broker") or "",
             }
-        topics_dict[topic]["producers"].append(producer)
+        topics_dict[topic]["producers"].append(_producer_summary(producer))
 
     warnings: list[str] = []
     if no_topic_count:
@@ -3779,8 +3816,8 @@ def _cmd_imports(args: argparse.Namespace) -> int:
 # (kv-block + nested dict sections) so the agent sees compact structured data.
 #
 # Search dispatches to search_v2 (mcp_v2.search_v2) after building a NodeFilter
-# from flags. --fuzzy is registered on the parser but rejected IN-HANDLER with
-# status: error (not argparse exit) so the envelope carries the message.
+# from flags. --fuzzy is registered on the parser and accepted as a silent
+# no-op (search is inherently semantic; --fuzzy is implicit).
 # ============================================================================
 
 
@@ -4283,24 +4320,19 @@ def _cmd_search(args: argparse.Namespace) -> int:
     """search <query> — semantic search via search_v2 over Lance tables.
 
     Builds a NodeFilter from flags, calls search_v2 with limit+1 for +1-fetch
-    truncation, and renders. --fuzzy is rejected IN-HANDLER (not argparse-exit)
-    so the error carries the canonical envelope shape.
+    truncation, and renders. --fuzzy is accepted as a silent no-op (search is
+    always semantic; --fuzzy is implicit).
     """
     from java_codebase_rag.mcp import mcp_v2
 
     from java_codebase_rag.jrag_envelope import Envelope, mark_truncated, next_actions_hook, normalize_enum
     from java_codebase_rag.jrag_render import render
 
-    # --fuzzy: registered on the parser (so argparse doesn't exit 2), but rejected
-    # IN-HANDLER with status: error (search is inherently semantic; --fuzzy is
-    # a no-op synonym, not a real mode toggle).
-    if getattr(args, "fuzzy", False):
-        env = Envelope(
-            status="error",
-            message="search is semantic; --fuzzy is implicit",
-        )
-        print(render(env, fmt=args.format, detail=args.detail))
-        return 2
+    # --fuzzy: accepted as a silent no-op. Search is inherently semantic
+    # (vector + lexical), so --fuzzy is implicit; the flag is kept registered
+    # so callers/agents that pass it don't hit an argparse or envelope error,
+    # and is simply ignored here.
+    _ = getattr(args, "fuzzy", False)
 
     cfg, graph, rc = _load_graph_or_error(args)
     if rc:

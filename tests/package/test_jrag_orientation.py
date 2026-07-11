@@ -12,7 +12,7 @@ Tests:
 9.  test_search_hybrid_calls_hybrid_path
 10. test_search_table_all_runs_three_tables
 11. test_search_offset_paginates
-12. test_search_fuzzy_rejected_in_handler_as_status_error
+12. test_search_fuzzy_accepted_as_silent_noop
 13. test_next_actions_valid_runnable_commands_capped_at_5
 14. test_next_actions_zero_direction_suppressed
 15. test_next_actions_covers_composed_dot_keys
@@ -337,22 +337,23 @@ def test_search_offset_paginates(
     )
 
 
-def test_search_fuzzy_rejected_in_handler_as_status_error(
+def test_search_fuzzy_accepted_as_silent_noop(
     corpus_root: Path, ladybug_db_path: Path
 ) -> None:
-    """--fuzzy is rejected IN-HANDLER with status: error (not argparse exit 2).
+    """--fuzzy is accepted as a silent no-op (search is always semantic).
 
-    The flag is registered on the parser so argparse doesn't exit 2 before the
-    handler runs. The handler checks args.fuzzy and produces a canonical error
-    envelope with the message "search is semantic; --fuzzy is implicit".
+    Previously --fuzzy was rejected IN-HANDLER with a canonical
+    "search is semantic; --fuzzy is implicit" error. Now the flag is ignored
+    and search proceeds normally. This graph-only fixture has no vector table,
+    so search surfaces an unrelated missing-table error — the point of the
+    assertion is that the error is NOT the fuzzy rejection (no "fuzzy" in the
+    message), proving --fuzzy raised no error of its own.
     """
     env = _env_for(corpus_root, ladybug_db_path)
     proc = _run_jrag(["search", "test", "--fuzzy", "--format", "json"], env=env)
     payload = json.loads(proc.stdout)
-    assert payload["status"] == "error"
-    msg = payload.get("message") or ""
-    assert "fuzzy" in msg.lower(), f"expected fuzzy in error message: {msg!r}"
-    assert "semantic" in msg.lower(), f"expected 'semantic' in message: {msg!r}"
+    msg = (payload.get("message") or "").lower()
+    assert "fuzzy" not in msg, f"--fuzzy was rejected: {payload}"
 
 
 # ===== Phase 3 regressions: search score floor + file path (T5-rem) =====
