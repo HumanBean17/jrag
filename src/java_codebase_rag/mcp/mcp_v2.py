@@ -50,15 +50,37 @@ from java_codebase_rag.graph.ladybug_queries import LadybugGraph, OVERRIDE_AXIS_
 from java_codebase_rag.mcp.mcp_hints import MCP_HINTS_STRUCTURED_FIELD_DESCRIPTION
 
 # The vector stack (lancedb/torch, reached via search_lancedb) is optional — it is absent on
-# graph-only installs (macOS Intel). Import eagerly when available so ``run_search``/``TABLES``
-# exist as module attributes (tests monkeypatch ``mcp_v2.run_search``; callers use ``TABLES``);
-# fall back to sentinels on ImportError so importing this module never fails and ``search_v2``
-# can return a clean "vector search unavailable" envelope instead of crashing.
-try:
-    from java_codebase_rag.search.search_lancedb import TABLES, run_search
-except ImportError:  # graph-only install: no torch/lancedb
-    TABLES = {}
-    run_search = None
+# graph-only installs (macOS Intel). It is imported LAZILY on the first ``search_v2`` call via
+# ``_ensure_vector_backend``, NOT at module load. Reason: ``search_lancedb`` imports
+# ``sentence_transformers``/``torch`` at its own top level (~2.8s), and the warm ``jrag watch``
+# client reconstructs ``SearchOutput`` from this module (see ``watch/client._reconstruct``)
+# without ever calling the vector backend — an eager import here would force every warm CLI
+# read to pay that ~2.8s, masking the daemon's win. ``run_search``/``TABLES`` still exist as
+# module attributes (sentinels until first use); tests monkeypatch ``mcp_v2.run_search`` to a
+# non-None value, which ``_ensure_vector_backend`` treats as authoritative and will not overwrite.
+TABLES: dict = {}
+run_search: Any = None
+_VECTOR_BACKEND_LOADED = False
+
+
+def _ensure_vector_backend() -> None:
+    """Populate ``run_search``/``TABLES`` from ``search_lancedb`` on first use.
+
+    A no-op once the backend has been loaded OR once ``run_search`` is non-None (tests
+    monkeypatch it before calling ``search_v2``). On graph-only installs the import fails and
+    ``run_search`` stays ``None`` — ``search_v2`` then takes the lexical fallback path.
+    """
+    global run_search, TABLES, _VECTOR_BACKEND_LOADED
+    if run_search is not None or _VECTOR_BACKEND_LOADED:
+        return
+    _VECTOR_BACKEND_LOADED = True
+    try:
+        from java_codebase_rag.search.search_lancedb import TABLES as _TABLES, run_search as _run_search
+    except ImportError:  # graph-only install: no torch/lancedb — leave run_search=None / TABLES={}
+        pass
+    else:
+        run_search = _run_search
+        TABLES = _TABLES
 __all__ = [
     "search_v2",
     "find_v2",
@@ -913,6 +935,7 @@ def search_v2(
         if nf and (err := _nodefilter_applicability_error("symbol", nf)):
             _log_fail_loud("applicability")
             return SearchOutput(success=False, message=err, advisories=[], limit=None, offset=None)
+        _ensure_vector_backend()
         advisories: list[str] = []
         lexical_mode = run_search is None
         if lexical_mode:
