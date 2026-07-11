@@ -941,6 +941,35 @@ def test_bm25_candidate_rows_multiple_chunks_per_symbol_preserve_order(monkeypat
             assert r["_score_components"]["bm25"] == 10.0
 
 
+def test_bm25_candidate_rows_dedup_members_of_same_type_keep_max(monkeypatch) -> None:
+    """(d2) Two member symbols (#-fqns) of the SAME type dedup to one type entry,
+    emitted ONCE at the MAX BM25 score among the members."""
+    fts_result = {
+        "rows": [
+            {"id": "sm1", "fqn": "com.x.A#method1()", "kind": "method", "name": "method1"},
+            {"id": "sm2", "fqn": "com.x.A#method2()", "kind": "method", "name": "method2"},
+        ],
+        "scores": {"sm1": 30.0, "sm2": 20.0},
+    }
+    chunk_rows = [
+        _bm25_chunk("a.java", "com.x.A", 1, 10),
+        _bm25_chunk("a.java", "com.x.A", 11, 20),
+    ]
+    db = _patch_bm25_environment(monkeypatch, fts_result=fts_result, chunk_rows=chunk_rows)
+
+    out = search_lancedb._bm25_candidate_rows(
+        g=object(), query="q", uri="mem://", db=db,
+        extra_predicates=[], columns={"primary_type_fqn"},
+    )
+    # The type appears exactly once (both member chunks present, but only one type rank).
+    type_fqns = [r["primary_type_fqn"] for r in out]
+    assert type_fqns.count("com.x.A") == 2  # 2 chunks of the same single type
+    assert set(type_fqns) == {"com.x.A"}    # no other type leaked; deduped to one entry
+    # Keep-max: every emitted chunk carries the MAX member score (30.0), not 20.0.
+    for r in out:
+        assert r["_score_components"]["bm25"] == 30.0
+
+
 def _stub_ladybug_graph(monkeypatch) -> None:
     """Install a LadybugGraph stub that exists but expands to nothing novel."""
     import sys
