@@ -286,6 +286,35 @@ def test_status_down_when_no_daemon(tmp_path, monkeypatch, capsys):
     _cleanup_runtime(index_dir)
 
 
+def test_status_and_stop_skip_heavy_daemon_import(tmp_path, monkeypatch):
+    """``--status`` and ``--stop`` must NOT import the heavy daemon module.
+
+    Importing ``java_codebase_rag.watch.daemon`` eagerly pulls
+    torch/sentence_transformers/lancedb/pyarrow (~2.5s + ~1GB), defeating the
+    lightweight probe verbs. Order-independent: evicts the daemon module first
+    (a prior foreground-verb test may have imported it in-process) and asserts
+    neither probe verb re-adds it to ``sys.modules``.
+    """
+    index_dir, source_root = _index_source(tmp_path)
+    _anchor_env(monkeypatch, index_dir, source_root)
+
+    mod_key = "java_codebase_rag.watch.daemon"
+    held = sys.modules.pop(mod_key, None)
+    try:
+        jrag_main(["watch", "--status", "--index-dir", str(index_dir)])
+        assert mod_key not in sys.modules, (
+            "--status imported the heavy daemon module (torch/lancedb chain)"
+        )
+        jrag_main(["watch", "--stop", "--index-dir", str(index_dir)])
+        assert mod_key not in sys.modules, (
+            "--stop imported the heavy daemon module (torch/lancedb chain)"
+        )
+    finally:
+        if held is not None and mod_key not in sys.modules:
+            sys.modules[mod_key] = held
+        _cleanup_runtime(index_dir)
+
+
 def test_status_up_when_daemon_running(tmp_path, monkeypatch, capsys, daemon_stub):
     index_dir, source_root = _index_source(tmp_path)
     _anchor_env(monkeypatch, index_dir, source_root)

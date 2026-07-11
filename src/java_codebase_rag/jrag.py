@@ -1453,7 +1453,6 @@ def _cmd_watch_status(cfg) -> int:
     """
     from java_codebase_rag.watch import paths
     from java_codebase_rag.watch.client import is_daemon_alive
-    from java_codebase_rag.watch.daemon import _read_state_file
     from java_codebase_rag.watch.lock import ProjectLock
 
     sock = paths.socket_path(cfg.index_dir)
@@ -1535,7 +1534,7 @@ def _cmd_watch_detach(args: argparse.Namespace, cfg) -> int:
     except OSError:
         log_fh = None
     try:
-        subprocess.Popen(
+        proc = subprocess.Popen(
             child_argv,
             stdin=subprocess.DEVNULL,
             stdout=log_fh,
@@ -1548,8 +1547,15 @@ def _cmd_watch_detach(args: argparse.Namespace, cfg) -> int:
             log_fh.close()
 
     deadline = time.monotonic() + _WATCH_DETACH_TIMEOUT_S
+    child_exited = False
     while time.monotonic() < deadline:
         if is_daemon_alive(cfg.index_dir):
+            break
+        # Fail fast: a child that crashes on startup (model-load/import failure)
+        # should not make the parent wait the whole timeout. proc.poll() is None
+        # while the child lives; a non-None return code means it has exited.
+        if proc.poll() is not None:
+            child_exited = True
             break
         time.sleep(0.1)
     if is_daemon_alive(cfg.index_dir):
@@ -1559,18 +1565,28 @@ def _cmd_watch_detach(args: argparse.Namespace, cfg) -> int:
             f"{paths.socket_path(cfg.index_dir)}, log {log_path})"
         )
         return 0
-    print(
-        f"jrag watch: failed to start within {_WATCH_DETACH_TIMEOUT_S}s "
-        f"(see {log_path})",
-        file=sys.stderr,
-    )
+    if child_exited:
+        print(
+            f"jrag watch: child exited before serving (see {log_path})",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            f"jrag watch: failed to start within {_WATCH_DETACH_TIMEOUT_S}s "
+            f"(see {log_path})",
+            file=sys.stderr,
+        )
     return 2
 
 
 def _cmd_watch(args: argparse.Namespace) -> int:
-    """Dispatch ``jrag watch`` to its lifecycle verb (or the foreground daemon)."""
-    from java_codebase_rag.watch.daemon import WatchDaemon
+    """Dispatch ``jrag watch`` to its lifecycle verb (or the foreground daemon).
 
+    The lightweight probe verbs (``--status``/``--stop``/``--detach``) must NOT
+    import the daemon module: that import eagerly pulls torch/
+    sentence_transformers/lancedb/pyarrow (~2.5s + ~1GB), defeating their purpose.
+    ``WatchDaemon`` is therefore imported inline ONLY on the foreground path below.
+    """
     cfg = _resolve_cfg(args)
     if args.status:
         return _cmd_watch_status(cfg)
@@ -1581,6 +1597,8 @@ def _cmd_watch(args: argparse.Namespace) -> int:
     # default: run the daemon in the foreground. Ends with os._exit(0) on the
     # serving path; only the early-failure returns (lock held / model load) come
     # back here with a non-zero int.
+    from java_codebase_rag.watch.daemon import WatchDaemon
+
     return WatchDaemon(cfg).run_foreground()
 
 
@@ -1617,6 +1635,30 @@ def _watch_unlink(path) -> None:
         pass
     except OSError:
         pass
+
+
+def _read_state_file(index_dir) -> dict | None:
+    """Return the parsed daemon state JSON, or ``None`` if missing/unreadable.
+
+    Kept HERE (not in ``watch.daemon``) so ``jrag watch --status`` can read the
+    last reindex WITHOUT importing the daemon module — that import eagerly pulls
+    torch/sentence_transformers/lancedb/pyarrow (~2.5s + ~1GB). A corrupt/partial
+    file yields ``None`` rather than raising.
+    """
+    import json
+
+    from java_codebase_rag.watch import paths
+
+    path = paths.state_path(index_dir)
+    try:
+        raw = path.read_text()
+    except (FileNotFoundError, OSError):
+        return None
+    try:
+        obj = json.loads(raw)
+    except (ValueError, OSError):
+        return None
+    return obj if isinstance(obj, dict) else None
 
 
 # The daemon's shutdown (watcher.stop joins the debounce thread up to 10s, then

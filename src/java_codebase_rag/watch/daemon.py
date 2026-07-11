@@ -21,8 +21,8 @@ Lifecycle (``run_foreground``):
   4. ``server.start()`` then ``watcher.start()``.
   5. Write the state file (``paths.state_path``) so ``--status``/``--stop`` from
      another process can see current truth.
-  6. Render a ``rich`` Live status panel (watcher state, last reindex, queries
-     served) and block on a wait loop until the stop flag is set.
+  6. Render a ``rich`` Live status panel (watcher state, last reindex) and
+     block on a wait loop until the stop flag is set.
   7. Tear down in order — ``watcher.stop()`` → ``server.shutdown()`` →
      ``lock.release()`` → unlink socket + state file — and terminate with
      ``os._exit(0)``. The explicit ``os._exit`` (mirroring
@@ -64,24 +64,6 @@ _STATE_WRITE_MIN_INTERVAL_S = 1.0
 _LOOP_TICK_S = 0.5
 
 log = logging.getLogger(__name__)
-
-
-def _read_state_file(index_dir) -> dict[str, Any] | None:
-    """Return the parsed daemon state JSON, or ``None`` if missing/unreadable.
-
-    Used by ``jrag watch --status`` (which must not acquire the lock) to render
-    the last reindex. A corrupt/partial file yields ``None`` rather than raising.
-    """
-    path = paths.state_path(index_dir)
-    try:
-        raw = path.read_text()
-    except (FileNotFoundError, OSError):
-        return None
-    try:
-        obj = json.loads(raw)
-    except (ValueError, OSError):
-        return None
-    return obj if isinstance(obj, dict) else None
 
 
 class WatchDaemon:
@@ -305,7 +287,6 @@ class WatchDaemon:
             table.add_row("last reindex", f"{last_kind} ({when})")
         else:
             table.add_row("last reindex", "—")
-        table.add_row("queries served", str(state.get("queries_served", 0)))
         return table
 
     # ------------------------------------------------------------------
