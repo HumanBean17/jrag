@@ -10,6 +10,11 @@ from __future__ import annotations
 import pytest
 
 from java_codebase_rag.search.search_scoring import (
+    _ACTION_VERB_BONUS,
+    _HYBRID_SCORE_MAX,
+    _ROLE_SCORE_WEIGHTS,
+    _SYMBOL_MATCH_BONUS_CAP,
+    _TYPE_MATCH_BONUS_CAP,
     declaration_line_number,
     vector_display_score,
 )
@@ -83,3 +88,25 @@ def test_declaration_line_number_method_only_chunk_keeps_anchor() -> None:
     # Empty / missing inputs are safe.
     assert declaration_line_number(None, 5) == 5
     assert declaration_line_number("public class X {", None) is None
+
+
+# ---------- _rrf_max (Task 1) ----------
+
+
+def test_rrf_max_formula() -> None:
+    """Test the RRF max formula: num_lists / (k + 1)."""
+    from java_codebase_rag.search.search_scoring import _rrf_max
+
+    # Test the exact formula with different inputs
+    assert _rrf_max(2, 60) == pytest.approx(2.0 / 61.0, abs=1e-12)
+    assert _rrf_max(3, 60) == pytest.approx(3.0 / 61.0, abs=1e-12)
+    assert _rrf_max(3, 30) == pytest.approx(3.0 / 31.0, abs=1e-12)
+
+
+def test_hybrid_score_max_unchanged() -> None:
+    """Verify _HYBRID_SCORE_MAX preserves its exact numeric value after refactor."""
+    # Compute the expected value from the same constants used in the definition
+    expected = (2.0 / 61.0) + max(_ROLE_SCORE_WEIGHTS.values()) + _SYMBOL_MATCH_BONUS_CAP + _TYPE_MATCH_BONUS_CAP + _ACTION_VERB_BONUS
+
+    # The refactor must not introduce any numeric drift
+    assert _HYBRID_SCORE_MAX == pytest.approx(expected, abs=1e-12)

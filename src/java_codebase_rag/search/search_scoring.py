@@ -84,13 +84,31 @@ _ROLE_SCORE_WEIGHTS: dict[str, float] = {
     "DTO": -0.08,
 }
 
+
+def _rrf_max(num_lists: int, k: int = 60) -> float:
+    """Return the theoretical maximum RRF score for N-list fusion.
+
+    Reciprocal Rank Fusion (RRF) bounds each contribution to ≤ 1/(rank + k).
+    For N fused lists, the maximum possible sum is N/(k + 1) (achieved when
+    an item ranks #1 across all lists).
+
+    Args:
+        num_lists: Number of ranked lists being fused (e.g., 2 for vector+lexical).
+        k: The RRF constant (default 60 per the original paper).
+
+    Returns:
+        The maximum RRF contribution: num_lists / (k + 1).
+    """
+    return num_lists / (k + 1)
+
+
 # Theoretical maximum for hybrid composite score (used for display normalization).
 # Hybrid sort metric: raw_rrf * (import_factor if import_heavy else 1)
 #                   + role_weight + symbol_bonus
 # where raw_rrf ≤ 2/(k+1) for 2-list RRF, role_weight ≤ max(_ROLE_SCORE_WEIGHTS),
 # and symbol_bonus ≤ _SYMBOL_MATCH_BONUS_CAP + _TYPE_MATCH_BONUS_CAP + _ACTION_VERB_BONUS.
-# The import factor is ≤ 1, so we use the raw max (2/61).
-_HYBRID_SCORE_MAX = (2.0 / 61.0) + max(_ROLE_SCORE_WEIGHTS.values()) + _SYMBOL_MATCH_BONUS_CAP + _TYPE_MATCH_BONUS_CAP + _ACTION_VERB_BONUS
+# The import factor is ≤ 1, so we use the raw max (derived via _rrf_max(2)).
+_HYBRID_SCORE_MAX = _rrf_max(2) + max(_ROLE_SCORE_WEIGHTS.values()) + _SYMBOL_MATCH_BONUS_CAP + _TYPE_MATCH_BONUS_CAP + _ACTION_VERB_BONUS
 
 
 def _query_tokens(query: str) -> set[str]:
