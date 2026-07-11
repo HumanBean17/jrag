@@ -7,8 +7,11 @@ import argparse
 import json
 import os
 import sys
+import tempfile
 import threading
+import warnings
 from collections.abc import Callable
+from contextlib import contextmanager
 from pathlib import Path
 
 import lancedb
@@ -44,8 +47,10 @@ from java_codebase_rag.search.search_scoring import (  # noqa: F401
     _role_weight,
     _split_identifier,
     _symbol_bonus,
+    declaration_line_number,
     explain_score_components,
     l2_distance_to_score,
+    vector_display_score,
 )
 
 TABLES: dict[str, str] = {
@@ -296,6 +301,117 @@ def _combine_predicates(parts: list[str | None]) -> str | None:
     return " AND ".join(f"({p})" for p in clean)
 
 
+# LanceDB (0.30.x) emits two Rust `tracing` WARN lines per hybrid query to stderr
+# — "specified output columns but did not include `_score`/`_distance` ... Call
+# `disable_scoring_autoprojection`". They are noise on the agent's stderr, not
+# Python warnings (so `warnings.filterwarnings` can't catch them), and the fluent
+# query builder exposes no `disable_scoring_autoprojection()` (the lower-level
+# `to_lance().scanner(...)` path needs `pylance`, which isn't installed on the
+# PEP 508 graph-only profile). We match them by stable substring so anything that
+# is a REAL error still reaches stderr.
+_LANCE_AUTOPROJ_MARKERS: tuple[str, ...] = (
+    "disable_scoring_autoprojection",
+    "did not include `_distance`",
+    "did not include `_score`",
+)
+
+# The fd-2 redirect below mutates the PROCESS-GLOBAL fd 2 (and
+# ``warnings.catch_warnings`` mutates global warning state). The MCP server
+# dispatches every tool call through ``asyncio.to_thread`` on a thread pool
+# (server.py), so two concurrent hybrid/auto-hybrid searches would race on the
+# dup2 bookkeeping — corrupting the saved fd and crashing the whole server with
+# ``Bad file descriptor``. Serialize the redirect so only one thread mutates fd
+# 2 / warning state at a time. Concurrent hybrid queries therefore serialize
+# their ``to_list()`` (correctness over throughput); a Rust-tracing-level
+# suppression would remove the fd hijack entirely (follow-up).
+_LANCE_WARN_REDIRECT_LOCK = threading.Lock()
+
+
+def _is_autoproj_noise(line: str) -> bool:
+    """True for a LanceDB autoprojection-deprecation line (to drop).
+
+    Preserves genuine errors/tracebacks even if they happen to reference the API
+    name — only the bare deprecation log lines (no Error/Traceback/Exception) are
+    treated as noise.
+    """
+    if not any(marker in line for marker in _LANCE_AUTOPROJ_MARKERS):
+        return False
+    return not any(seg in line for seg in ("Traceback", "Error:", "error:", "Exception"))
+
+
+@contextmanager
+def _silence_lance_autoproj_warnings():
+    """Swallow LanceDB's `_score`/`_distance` autoprojection deprecation warnings.
+
+    Redirects fd 2 to a temp buffer for the duration of the wrapped call, drops
+    only the autoprojection deprecation lines, and re-emits everything else to
+    the real stderr so genuine errors stay visible. No-op if the caller opted
+    back in via ``JAVA_CODEBASE_RAG_KEEP_LANCE_WARNINGS`` (debugging).
+
+    Thread-safety: the redirect is serialized under ``_LANCE_WARN_REDIRECT_LOCK``
+    because it mutates process-global fd 2 and warning state — the MCP server
+    runs tool calls concurrently on a thread pool.
+    """
+    if os.environ.get("JAVA_CODEBASE_RAG_KEEP_LANCE_WARNINGS"):
+        yield
+        return
+    # Also catch the (unlikely) Python-warning form defensively.
+    with _LANCE_WARN_REDIRECT_LOCK, warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=r".*(disable_scoring_autoprojection|did not include `(_distance|_score)`).*",
+        )
+        with tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as captured:
+            saved = os.dup(2)
+            try:
+                os.dup2(captured.fileno(), 2)
+                yield
+            finally:
+                # Restore fd 2 FIRST so the re-emit below reaches real stderr.
+                os.dup2(saved, 2)
+                os.close(saved)
+            captured.seek(0)
+            kept = "".join(line for line in captured if not _is_autoproj_noise(line))
+        if kept:
+            sys.stderr.write(kept)
+            sys.stderr.flush()
+
+
+def _simple_type_name(fqn: str | None) -> str | None:
+    """``com.foo.Bar`` -> ``Bar``; None/empty -> None."""
+    if not fqn:
+        return None
+    return str(fqn).rsplit(".", 1)[-1] or None
+
+
+def _refine_java_start_lines(rows: list[dict]) -> None:
+    """Point each java row's ``start.line`` at the type declaration, not the chunk anchor.
+
+    LanceDB chunks are anchored at the chunk's first source line — for a
+    file-spanning chunk that's the package/import line (``start.line`` = 1)
+    while the ``class``/``interface`` declaration sits several lines down. The
+    chunk anchor is a poor display line for a symbol hit (renders as
+    ``File.java:1``); derive the real declaration line from the chunk text
+    (pinned to the primary type) so a hit shows ``File.java:<decl>`` instead
+    (F8). Method-only chunks whose range doesn't include a type declaration
+    keep their chunk anchor unchanged.
+    """
+    for r in rows:
+        if str(r.get("_kind", "")) != "java":
+            continue
+        start = r.get("start")
+        if not isinstance(start, dict):
+            continue
+        anchor = start.get("line")
+        if anchor is None:
+            continue
+        hints = r.get("_hints") or {}
+        type_name = hints.get("primary_type_hint") or _simple_type_name(r.get("primary_type_fqn"))
+        decl = declaration_line_number(r.get("text"), int(anchor), type_name)
+        if decl is not None:
+            start["line"] = decl
+
+
 def _search_one_table(
     table_name: str,
     *,
@@ -342,7 +458,11 @@ def _search_one_table(
         )
         if combined_pred:
             q = q.where(combined_pred, prefilter=True)
-        rows = q.to_list()
+        # Hybrid selects explicit output columns without `_score`/`_distance`, so
+        # LanceDB (0.30.x) emits two Rust autoprojection deprecation WARNs to
+        # stderr per query. Silence just those lines; real errors still surface.
+        with _silence_lance_autoproj_warnings():
+            rows = q.to_list()
         for r in rows:
             r["_kind"] = kind
             rs = r.pop("_relevance_score", None)
@@ -375,7 +495,11 @@ def _search_one_table(
         # exposed score was always 0.0, making results look unranked.
         d = r.get("_distance")
         if d is not None:
-            r["_score"] = l2_distance_to_score(float(d))
+            # Use the same non-clamping map as the display sites so graph-expand
+            # rows (which run_search does NOT overwrite) never carry the old
+            # 1-d²/2 value that collapses to 0 past √2. (The main single/multi
+            # paths overwrite this with the bonus-adjusted effective distance.)
+            r["_score"] = vector_display_score(float(d))
         r["start"] = coerce_position_field(r.get("start"))
         r["end"] = coerce_position_field(r.get("end"))
     return rows
@@ -575,6 +699,7 @@ def _graph_expand_merge(
     except Exception:
         return vector_rows
     _apply_chunk_hints(graph_rows)
+    _refine_java_start_lines(graph_rows)
     graph_rows.sort(key=_vector_sort_key)
     for r in graph_rows:
         r["_graph_expanded"] = True
@@ -737,6 +862,9 @@ def run_search(
             extra_predicates=preds,
         )
         _apply_chunk_hints(rows)
+        # Anchor each java row's start.line on the type declaration instead of
+        # the chunk's first source line (often the package/import line = 1).
+        _refine_java_start_lines(rows)
         if skip_role_weight:
             for r in rows:
                 r["_skip_role_weight"] = True
@@ -747,11 +875,14 @@ def run_search(
             _hybrid_post_sort_normalization(rows)
         else:
             rows.sort(key=_vector_sort_key)
-            # Vector: set honest displayed score from adjusted distance, clamped to [0,1]
+            # Vector: displayed score from the effective (bonus-adjusted) distance,
+            # normalized over the unit-embedding range so a correctly-ranked top
+            # hit never collapses to 0.000 (the cosine map 1 - d²/2 clamps to 0
+            # past √2; weak-but-best matches commonly sit at d ≈ 1.5).
             for r in rows:
                 comps = r.setdefault("_score_components", {})
                 effective_dist = _effective_distance(comps)
-                r["_score"] = _clamp01(l2_distance_to_score(effective_dist))
+                r["_score"] = vector_display_score(effective_dist)
 
         if graph_expand and key == "java" and expand_depth > 0:
             rows = _graph_expand_merge(
@@ -792,16 +923,17 @@ def run_search(
             )
         )
     _apply_chunk_hints(merged)
+    _refine_java_start_lines(merged)
     if skip_role_weight:
         for r in merged:
             r["_skip_role_weight"] = True
     _apply_symbol_bonus(merged, query_toks)
     merged.sort(key=_vector_sort_key)
-    # Vector: set honest displayed score from adjusted distance, clamped to [0,1]
+    # Vector: displayed score from the effective (bonus-adjusted) distance.
     for r in merged:
         comps = r.setdefault("_score_components", {})
         effective_dist = _effective_distance(comps)
-        r["_score"] = _clamp01(l2_distance_to_score(effective_dist))
+        r["_score"] = vector_display_score(effective_dist)
 
     # Dedup by primary_type_fqn after all sorting/merging, before windowing
     merged = _dedup_by_fqn(merged, dedup_by_fqn=dedup_by_fqn)

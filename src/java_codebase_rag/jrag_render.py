@@ -125,6 +125,23 @@ def _next_action_lines(envelope: Envelope) -> list[str]:
     return [f"next: {hint}" for hint in envelope.agent_next_actions[:2]]
 
 
+def _is_dynamic_topic_ref(topic: str) -> bool:
+    """True when a producer ``topic`` string is a bare Java identifier — a
+    variable or method-call name the indexer captured because it could not
+    resolve the destination at index time — rather than a real topic name.
+
+    Real topics are dotted (``banking.chat.audit``) or CONSTANT references
+    (``ChatTopics.ESCALATION``, ``OPERATOR_NOTIFICATIONS``); both contain a
+    ``.`` or ``_``. A single lowercase/identifier token (``topic``,
+    ``distributionTopic``) is a runtime reference. Used by :func:`display_name`
+    only when the producer is also ``resolved=False`` — a resolved bare token is
+    treated as a (rare) real single-word topic.
+    """
+    if "." in topic or "_" in topic:
+        return False
+    return bool(topic) and topic[0].islower() and topic.isalnum()
+
+
 def display_name(node: dict[str, Any]) -> str:
     """Best short label for a node across all kinds (symbol + route/client/producer).
 
@@ -175,6 +192,15 @@ def display_name(node: dict[str, Any]) -> str:
         base = member_fqn.rsplit(".", 1)[-1]
         topic = str(node.get("topic") or "").strip()
         if topic:
+            # An unresolved topic that is a bare Java identifier is a runtime
+            # reference the indexer could not resolve (e.g. the variable
+            # ``topic``, or ``getKafka().getDistributionTopic()`` reduced to
+            # ``distributionTopic``). Printing it verbatim would show
+            # ``→ topic`` and mislead the agent into treating the variable name
+            # as the Kafka destination; surface it as dynamic instead. Real
+            # topic names (dotted / CONSTANT) stay verbatim.
+            if node.get("resolved") is False and _is_dynamic_topic_ref(topic):
+                return f"{base} → (dynamic topic)"
             return f"{base} → {topic}"
         target = str(node.get("target_service") or "").strip()
         if target:
@@ -619,8 +645,24 @@ def _render_inspect_block(node: dict[str, Any], indent: int) -> list[str]:
             out.extend(_render_inspect_block(val, indent + 1))
         elif _is_dict_list(val):
             out.append(f"{pad}{key}:")
+            item_pad = "  " * (indent + 1)
+            # Rich items (>2 keys: e.g. ``topics`` producers) render one kv per
+            # line for readability — a wall of comma-joined keys is unreadable
+            # and hides the composed ``file`` location. Short sample items
+            # (``route_sample`` / ``client_sample``) stay on a single line.
+            rich = any(len(it) > 2 for it in val)
             for item in val:
-                out.append(f"{pad}  - {_inspect_inline(item)}")
+                if rich:
+                    # Render at indent+2 so continuation kvs align under the
+                    # first kv (which sits after the `- ` marker at indent+1).
+                    item_lines = _render_inspect_block(item, indent + 2)
+                    if not item_lines:
+                        out.append(f"{item_pad}- {{}}")
+                    else:
+                        out.append(f"{item_pad}- {item_lines[0].lstrip()}")
+                        out.extend(item_lines[1:])
+                else:
+                    out.append(f"{item_pad}- {_inspect_inline(item)}")
         else:
             out.append(f"{pad}{key}: {_inspect_inline(val)}")
     return out

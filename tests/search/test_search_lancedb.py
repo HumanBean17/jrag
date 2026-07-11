@@ -126,7 +126,10 @@ def test_vector_displayed_score_is_rank_monotonic() -> None:
     The honest score uses the adjusted distance (distance + import_penalty - role_weight - symbol_bonus).
     This matches the sort key, so the displayed score is monotonic. After clamping, scores are in [0,1].
     """
-    from java_codebase_rag.search.search_lancedb import _effective_distance, l2_distance_to_score, _clamp01
+    from java_codebase_rag.search.search_lancedb import (
+        _effective_distance,
+        vector_display_score,
+    )
 
     # Build controlled rows with varying distances and bonuses
     rows = [
@@ -167,11 +170,12 @@ def test_vector_displayed_score_is_rank_monotonic() -> None:
         },
     ]
 
-    # Simulate the post-sort honest-score pass
+    # Simulate the post-sort honest-score pass (run_search uses vector_display_score
+    # on the effective distance — the new non-clamping map; see F6).
     for r in rows:
         comps = r["_score_components"]
         effective_dist = _effective_distance(comps)
-        r["_score"] = _clamp01(l2_distance_to_score(effective_dist))
+        r["_score"] = vector_display_score(effective_dist)
 
     # Verify scores are in [0,1]
     for r in rows:
@@ -556,3 +560,97 @@ def test_run_search_dedup_off_is_byte_identical() -> None:
     # Verify no _chunks_collapsed added
     for r in result:
         assert "_chunks_collapsed" not in r, "Should not add _chunks_collapsed when dedup is OFF"
+
+
+# ---------- F7: _silence_lance_autoproj_warnings ----------
+
+
+def test_silence_lance_warnings_drops_markers_keeps_rest() -> None:
+    """The autoprojection deprecation lines are swallowed; real stderr survives.
+
+    The silencer redirects the OS-level fd 2 (what LanceDB's Rust tracing writes
+    to), so the test must write via ``os.write(2, ...)`` — not ``sys.stderr``
+    (a Python object that may not be fd 2)."""
+    import io
+    import os
+    import sys
+
+    from java_codebase_rag.search.search_lancedb import _silence_lance_autoproj_warnings
+
+    # Capture what the silencer RE-EMITS to sys.stderr after restoring fd 2.
+    buf = io.StringIO()
+    real_stderr = sys.stderr
+    sys.stderr = buf
+    try:
+        with _silence_lance_autoproj_warnings():
+            os.write(2, b"WARN tracing: did not include `_distance`. Call disable_scoring_autoprojection\n")
+            os.write(2, b"ERROR something went wrong: boom\n")
+    finally:
+        sys.stderr = real_stderr
+    emitted = buf.getvalue()
+    assert "did not include" not in emitted
+    assert "disable_scoring_autoprojection" not in emitted
+    assert "ERROR something went wrong: boom" in emitted
+
+
+def test_silence_lance_warnings_opt_out_passthrough(monkeypatch) -> None:
+    """JAVA_CODEBASE_RAG_KEEP_LANCE_WARNINGS disables the silencer entirely."""
+    import sys
+
+    from java_codebase_rag.search.search_lancedb import _silence_lance_autoproj_warnings
+
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_KEEP_LANCE_WARNINGS", "1")
+    # No redirect happens -> fd 2 is untouched; just verify the context yields.
+    with _silence_lance_autoproj_warnings():
+        sys.stderr.write("")  # would land on real stderr (no capture buffer)
+    # No assertion crash == fd 2 was never hijacked.
+
+
+def test_silence_lance_warnings_restores_fd2_on_exception() -> None:
+    """fd 2 is restored even when the wrapped call raises."""
+    import os
+
+    from java_codebase_rag.search.search_lancedb import _silence_lance_autoproj_warnings
+
+    saved_before = os.dup(2)
+    try:
+        with pytest.raises(RuntimeError, match="boom"):
+            with _silence_lance_autoproj_warnings():
+                raise RuntimeError("boom")
+        # fd 2 must be a valid, open descriptor after the exception.
+        assert os.fstat(2) is not None
+    finally:
+        os.close(saved_before)
+
+
+# ---------- F8: _refine_java_start_lines ----------
+
+
+def test_refine_java_start_lines_points_at_declaration() -> None:
+    from java_codebase_rag.search.search_lancedb import _refine_java_start_lines
+
+    chunk = "package com.x;\nimport java.util.List;\n\npublic class ChatPort {\n"
+    rows = [
+        {"_kind": "java", "start": {"line": 1}, "text": chunk,
+         "_hints": {"primary_type_hint": "ChatPort"}},
+    ]
+    _refine_java_start_lines(rows)
+    assert rows[0]["start"]["line"] == 4  # decl line, not the package anchor
+
+
+def test_refine_java_start_lines_skips_nonjava_and_method_chunks() -> None:
+    from java_codebase_rag.search.search_lancedb import _refine_java_start_lines
+
+    rows = [
+        # Non-java row untouched.
+        {"_kind": "sql", "start": {"line": 7}, "text": "SELECT 1", "_hints": {}},
+        # Java method-only chunk (no type decl) keeps its anchor.
+        {"_kind": "java", "start": {"line": 30}, "text": "    void doWork() {}\n",
+         "_hints": {"primary_type_hint": "Worker"}},
+        # Missing start dict -> safe (unchanged).
+        {"_kind": "java", "text": "public class X {", "_hints": {}},
+    ]
+    _refine_java_start_lines(rows)
+    assert rows[0]["start"]["line"] == 7
+    assert rows[1]["start"]["line"] == 30
+    assert "start" not in rows[2]

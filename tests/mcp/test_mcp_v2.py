@@ -281,17 +281,26 @@ def test_find_client_by_target_service(ladybug_graph) -> None:
     out = find_v2("client", {"target_service": target_service}, graph=ladybug_graph)
     assert out.success is True
     assert out.results
-    assert all(r.fqn.startswith(f"{target_service} ") for r in out.results)
+    # Client fqn is the contract identifier ``member_fqn->target_service``. Assert
+    # the full shape (and no Python-None interpolation for member-less clients —
+    # regression guard for the ``"None-><target>"`` bug).
+    for r in out.results:
+        assert "None" not in r.fqn, f"None leaked into fqn: {r.fqn!r}"
+        if r.member_fqn:
+            assert r.fqn == f"{r.member_fqn}->{target_service}", r.fqn
+        else:
+            assert r.fqn.endswith(target_service) and "->" not in r.fqn, r.fqn
 
 
 def test_find_client_by_path_contains(ladybug_graph) -> None:
     all_clients = find_v2("client", {}, graph=ladybug_graph)
     assert all_clients.success is True
-    sample = next((r for r in all_clients.results if "/" in r.fqn), None)
+    # Path is carried on the NodeRef ``path`` field (the fqn is the
+    # ``member_fqn->target_service`` identifier, not a path-bearing string).
+    sample = next((r for r in all_clients.results if r.path and "/" in r.path), None)
     if sample is None:
         pytest.skip("no client rows with path metadata in fixture")
-    parts = sample.fqn.split(" ")
-    path = parts[-1] if parts else ""
+    path = sample.path or ""
     if not path.startswith("/"):
         pytest.skip("sample client path is unavailable")
     needle = path[: min(len(path), 5)]
@@ -299,9 +308,7 @@ def test_find_client_by_path_contains(ladybug_graph) -> None:
     assert out.success is True
     assert out.results
     for ref in out.results:
-        bits = ref.fqn.split(" ")
-        assert bits
-        assert needle in bits[-1]
+        assert needle in (ref.path or "")
 
 
 def test_find_cross_kind_filter_fields_return_failure(ladybug_graph) -> None:

@@ -1136,7 +1136,8 @@ def find_v2(
             )
             params["lim"] = fetch_cap
             rows = g._rows(  # noqa: SLF001
-                f"MATCH (s:Symbol) {where} RETURN s.id AS id, s.fqn AS fqn, s.microservice AS microservice, "
+                f"MATCH (s:Symbol) {where} RETURN s.id AS id, s.fqn AS fqn, s.name AS name, "
+                "s.filename AS filename, s.start_line AS start_line, s.microservice AS microservice, "
                 "s.module AS module, s.role AS role, s.kind AS symbol_kind, s.generated AS generated, s.generated_by AS generated_by ORDER BY s.fqn LIMIT $lim",
                 params,
             )

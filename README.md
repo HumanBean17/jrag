@@ -98,7 +98,7 @@ Full schemas, `NodeFilter` / `EdgeFilter` semantics, and the hints contract live
 jrag status                    # index health (ontology version, freshness, counts)
 jrag microservices             # microservices with resolved type counts
 jrag map                       # counts per kind per service/module
-jrag map --module              # group by module instead
+jrag map --by module           # group by module instead (--module filters)
 jrag conventions               # dominant roles + framework tallies
 jrag overview chat-core        # bundle for a microservice
 jrag overview /chat/assign     # route flow (inbound callers + outbound CALLS)

@@ -355,9 +355,100 @@ Prefer **`java-codebase-rag reprocess --graph-only`** when you only need Ladybug
 - [CODEBASE_REQUIREMENTS.md](./CODEBASE_REQUIREMENTS.md) — repo layout, brownfield, when to rebuild.
 - [MANUAL-VERIFICATION-CHECKLIST.md](./MANUAL-VERIFICATION-CHECKLIST.md) — phased checks that mix CLI + MCP.
 
-## `jrag` command — search CLI
+## `jrag` command — agent CLI
 
-The **`jrag`** command provides semantic search over the LanceDB index. This is the CLI surface for search (see MCP `search` tool in AGENT-GUIDE.md for the programmatic interface).
+`jrag` is the **agent-facing** CLI — a separate console script alongside `java-codebase-rag`. It exposes **one command per engineering intent** over the same LanceDB vectors + LadybugDB graph as the MCP surface, and takes human-readable identifiers (FQN / simple name / route path / topic) — never raw node IDs. Every `<query>` command resolves the identifier as its first step; on `many` candidates it returns them and stops, on `none` it returns `not_found` (auto-pick is forbidden).
+
+Output defaults to compact text; `--format json` emits the shared envelope verbatim. Shared flags apply to most commands: `--service`, `--module`, `--limit`, `--format`, `--detail {brief,normal,full}`, `--index-dir`. `<query>` commands also take resolve hints (`--kind`, `--role`, `--fqn-contains`). Run `jrag <command> --help` for the per-command synopsis; for the full envelope contract and flag table, see [`jrag` — agent CLI](../README.md#jrag--agent-cli) in the README.
+
+A missing or stale index produces an actionable `status: error` envelope (exit **2**) rather than a traceback.
+
+### Command reference
+
+Commands are grouped by engineering intent. Every `<query>` argument is a human-readable identifier (FQN, `Symbol#method(args)`, route path, or topic), resolved before any graph walk.
+
+#### Orientation
+
+Index health and coarse-grained maps — no identifier needed.
+
+```bash
+jrag status                    # index freshness, ontology version, counts
+jrag microservices             # microservices with resolved type counts
+jrag map                       # symbol counts per kind, grouped by microservice
+jrag map --by module           # ...grouped by module instead
+jrag conventions               # dominant roles + framework tallies
+jrag overview chat-core        # bundle for a microservice
+jrag overview /chat/assign     # route flow (inbound callers + outbound CALLS)
+jrag overview banking.chat     # topic: producers + consumers
+jrag overview chat-core --as microservice  # override auto-detection
+```
+
+`overview` dispatches on its subject: a `/`-prefixed string is a route (same as `flow`), a known microservice name yields its routes + clients + producers, otherwise it is treated as a topic. `--as {microservice,route,topic}` overrides the auto-detection.
+
+#### Locate
+
+Find a specific node by name, or inspect one in full. `<query>` commands resolve first.
+
+```bash
+jrag find ChatService                 # exact name / FQN lookup (symbols only)
+jrag find --role CONTROLLER           # filter mode (structured NodeFilter flags)
+jrag find --framework spring_mvc --capability HTTP_CLIENT
+jrag inspect ChatService              # full node record + edge summary
+jrag outline src/main/.../Foo.java    # symbols declared in a file
+jrag imports src/main/.../Foo.java    # imports resolved to graph nodes
+```
+
+`find` has two modes: a positional `<query>` for exact name/FQN lookup (symbols only), or **filter mode** (no positional) using structured flags (`--role`, `--java-kind`, `--annotation`, `--capability`, `--framework`, `--http-method`, `--client-kind`, `--producer-kind`, `--topic-contains`, …). Domain flags imply `--kind` when omitted; `--offset` paginates in filter mode only.
+
+#### Listings
+
+Surface every node of a given Java role. No `<query>`; pair with `--service` / `--module` to scope.
+
+```bash
+jrag http-routes        # HTTP routes
+jrag http-clients       # HTTP clients (Feign / RestTemplate / WebClient)
+jrag producers          # async message producers (Kafka / StreamBridge)
+jrag topics             # message topics, grouped by producer
+jrag jobs               # scheduled tasks (@Scheduled)
+jrag listeners          # message listeners (@KafkaListener etc.)
+jrag entities           # JPA entities
+```
+
+#### Traversals
+
+One-hop and multi-hop walks. **All resolve-first** — pass a human-readable identifier.
+
+```bash
+jrag callers ChatService#assign(Request)      # who calls me?
+jrag callers ChatIngressController            # a controller also lists its EXPOSES routes
+jrag callees ChatService#assign(Request)      # what do I call?
+jrag dependencies ChatService                 # types this Symbol injects (INJECTS out)
+jrag dependents PaymentGateway                # who injects this type?
+jrag hierarchy AbstractBase                   # type tree (parents + children)
+jrag implementations PaymentProcessor         # classes implementing an interface
+jrag subclasses AbstractRepository            # classes extending a type
+jrag overrides Impl#run()                     # methods this overrides (dispatch UP)
+jrag overridden-by Iface#run()                # methods overriding this (dispatch DOWN)
+jrag impact PaymentGateway                    # fleet-wide blast radius (reverse closure)
+jrag decompose ChatIngressController#assign   # role-waterfall flow from an entrypoint
+jrag flow /chat/assign                        # request flow through a route
+jrag connection chat-core                     # cross-service connections (inbound/outbound)
+```
+
+#### Semantic search
+
+```bash
+jrag search "assign a chat agent"   # semantic over Lance (java table)
+jrag search "kafka" --table all     # java + sql + yaml tables
+```
+
+See [`jrag search`](#jrag-search) below for the full flag reference (hybrid, explain, dedup, pagination, role/framework filters, generated-source filtering).
+
+#### Maintenance
+
+```bash
+jrag vocab-index            # rebuild the vocabulary sidecar (did-you-mean / absence diagnosis)
+```
 
 ### `jrag search`
 

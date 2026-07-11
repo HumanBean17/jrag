@@ -377,6 +377,31 @@ def _route_ids_for_symbol(graph: Any, symbol_id: str) -> list[str]:
     return out
 
 
+def _route_natural_id(graph: Any, rid: str) -> str:
+    """Map a raw Route node id to its agent-facing natural identifier.
+
+    Mirrors the envelope contract (``METHOD path`` for HTTP endpoints,
+    ``topic:<name>`` for kafka topics surfaced as :Route) so ``routes_touched``
+    in the PR risk report is readable instead of leaking raw graph ids like
+    ``r:970ffaa960a4f65d``. Falls back to ``rid`` only if the route vanished.
+    """
+    rows = graph._rows(
+        "MATCH (r:Route {id: $rid}) "
+        "RETURN r.method AS method, r.path_template AS path_template, "
+        "r.path AS path, r.topic AS topic LIMIT 1",
+        {"rid": rid},
+    )
+    if not rows:
+        return rid
+    r = rows[0]
+    method = str(r.get("method") or "")
+    path = str(r.get("path_template") or r.get("path") or "")
+    if method or path:
+        return f"{method} {path}".strip()
+    topic = str(r.get("topic") or "")
+    return f"topic:{topic}" if topic else rid
+
+
 def compute_risk(graph: Any, changed: list[ChangedSymbol]) -> PrRiskReport:
     """Aggregate blast radius, routes, cross-service callers, and v1 risk score.
 
@@ -415,7 +440,9 @@ def compute_risk(graph: Any, changed: list[ChangedSymbol]) -> PrRiskReport:
         needle = _impact_needle_for_changed(graph, fqn, cs.kind)
         ia = graph.impact_analysis(needle, depth=2, limit=400)
         n = len(ia)
-        blast_by[cs.symbol_id] = n
+        # Key blast radius by the symbol's FQN (agent-facing identifier), not
+        # its raw graph id — the report is operator-facing JSON.
+        blast_by[fqn or cs.symbol_id] = n
         blast_total += n
 
         for e in graph.find_callers(cs.fqn, depth=2, limit=400):
@@ -429,8 +456,11 @@ def compute_risk(graph: Any, changed: list[ChangedSymbol]) -> PrRiskReport:
         cs_cross_service = 0
         route_ids = _route_ids_for_symbol(graph, cs.symbol_id)
         for rid in route_ids:
-            if rid not in routes:
-                routes.append(rid)
+            # Record the route by its natural identifier (METHOD path /
+            # topic:name), not the raw graph id.
+            label = _route_natural_id(graph, rid)
+            if label and label not in routes:
+                routes.append(label)
             callers = graph._rows(
                 "MATCH (s:Symbol)-[:DECLARES_CLIENT]->(c:Client)-[e:HTTP_CALLS]->(r:Route {id: $rid}) "
                 "WHERE e.match = 'cross_service' "
