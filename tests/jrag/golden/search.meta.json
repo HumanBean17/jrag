@@ -1,0 +1,10 @@
+{
+  "rc": 2,
+  "stderr": "",
+  "argv": [
+    "search",
+    "assign chat",
+    "--format",
+    "json"
+  ]
+}

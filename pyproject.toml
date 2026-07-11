@@ -47,6 +47,7 @@ dependencies = [
     "tree-sitter>=0.25.2,<0.26",
     "tree-sitter-java>=0.23.5,<0.24",
     "unidiff>=0.7.3,<1",
+    "watchdog>=6,<7",
 ]
 
 [project.optional-dependencies]

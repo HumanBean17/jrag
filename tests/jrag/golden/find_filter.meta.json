@@ -1,0 +1,11 @@
+{
+  "rc": 0,
+  "stderr": "",
+  "argv": [
+    "find",
+    "--role",
+    "SERVICE",
+    "--format",
+    "json"
+  ]
+}

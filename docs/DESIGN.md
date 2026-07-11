@@ -43,6 +43,7 @@ One repo, two stores, two audiences:
 | --- | --- | --- |
 | MCP server (`server.py`) | agents | `search` / `find` / `describe` / `neighbors` / `resolve` |
 | `jrag` CLI | agents / humans | same five tools, terminal rendering |
+| `jrag watch` daemon | agents / humans | index freshness + warm-query accelerator over a Unix socket (one per project); pure accelerator, cold path stays byte-identical when no daemon runs |
 | `java-codebase-rag` CLI | operators | index lifecycle, `meta` / `tables` / `diagnose-ignore`, `analyze-pr` |
 
 ## Non-goals (by design)
@@ -51,5 +52,9 @@ One repo, two stores, two audiences:
 - Not a reflection / dynamic-dispatch oracle — `CALLS` is static only.
 - Not git history — use `git log` / `blame`.
 - Not re-indexable from MCP — only the operator CLI rebuilds.
+- **`jrag watch` is Unix-only (macOS/Linux)** — the project lock uses stdlib `fcntl`; on Windows `jrag watch` exits 2 and the cold read path is unaffected.
+- **`jrag watch` is not a boot/persistent service** — it is a foreground-or-detached process the operator starts per coding session; nothing auto-starts on boot or survives logout.
+- **`jrag watch` is one daemon per index dir, not multi-project** — a pidfile + `flock` enforces a single watcher (and blocks a concurrent manual `increment`) per project; run one process per project.
+- **`jrag watch` is not network/remote and not for the MCP surface** — it serves warm reads over a local Unix socket to the `jrag` CLI only; the MCP server has its own warm-cache posture and is untouched.
 
 Non-goal detail: [`docs/AGENT-GUIDE.md`](./AGENT-GUIDE.md) (§ "What this MCP is not"). Roadmap and future direction live in [`docs/PRODUCT-VISION.md`](./PRODUCT-VISION.md), not here.

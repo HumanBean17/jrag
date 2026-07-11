@@ -378,6 +378,14 @@ class ResolvedOperatorConfig:
     # used with no config file). Recorded into the index dir at index time so a
     # later discovery run from a sibling/cwd can relocate this config.
     yaml_config_path: Path | None = None
+    # ``watch:`` block knobs (jrag watch / watcher). Defaults make the block
+    # optional; no env vars are introduced for these (CLI flag > YAML > default).
+    watch_debounce_ms: int = 1500
+    watch_backend: str = "auto"
+    watch_poll_interval_ms: int = 2000
+    watch_debounce_ms_source: SettingSource = "default"
+    watch_backend_source: SettingSource = "default"
+    watch_poll_interval_ms_source: SettingSource = "default"
 
     def apply_to_os_environ(self) -> None:
         """Make downstream modules (server, ladybug_queries, flows) see a consistent environment.
@@ -506,16 +514,20 @@ def _pick_float(
 
 def _pick_int(
     *,
+    cli_val: int | None = None,
     env_key: str,
     yaml_dict: dict[str, Any],
     yaml_path: tuple[str, ...],
     default: int,
 ) -> tuple[int, SettingSource]:
-    """Pick an int setting from env (parsed via int(...)), YAML, or default.
+    """Pick an int setting from CLI, env (parsed via int(...)), YAML, or default.
 
     Precedence: CLI > env > YAML > default. Env values that fail to parse as int
     fall back to the default (matching the brief's requirement for graceful degradation).
+    ``cli_val`` defaults to ``None`` so existing callers are unaffected.
     """
+    if cli_val is not None:
+        return int(cli_val), "cli"
     env_raw = os.environ.get(env_key, "").strip()
     if env_raw:
         try:
@@ -577,6 +589,9 @@ def resolve_operator_config(
     cli_index_dir: str | None = None,
     cli_embedding_model: str | None = None,
     cli_embedding_device: str | None = None,
+    cli_watch_debounce_ms: int | None = None,
+    cli_watch_backend: str | None = None,
+    cli_watch_poll_interval_ms: int | None = None,
 ) -> ResolvedOperatorConfig:
     # Phase 1: Find the config file directory
     if source_root is not None:
@@ -671,6 +686,52 @@ def resolve_operator_config(
         yaml_path=("absence", "diag_enabled"),
         default=True,
     )
+    # ``watch:`` block knobs. No env vars are introduced for watch (CLI > YAML >
+    # default), so an empty env_key is passed to the ``_pick_*`` helpers —
+    # ``os.environ.get("", "")`` never matches, leaving the env tier inert.
+    w_debounce, w_debounce_src = _pick_int(
+        cli_val=cli_watch_debounce_ms,
+        env_key="",
+        yaml_dict=yaml_dict,
+        yaml_path=("watch", "debounce_ms"),
+        default=1500,
+    )
+    w_backend, w_backend_src = _pick_str(
+        cli_val=cli_watch_backend,
+        env_key="",
+        yaml_dict=yaml_dict,
+        yaml_path=("watch", "backend"),
+        default="auto",
+    )
+    w_poll, w_poll_src = _pick_int(
+        cli_val=cli_watch_poll_interval_ms,
+        env_key="",
+        yaml_dict=yaml_dict,
+        yaml_path=("watch", "poll_interval_ms"),
+        default=2000,
+    )
+    # Inline floors/validation (mirror the existing graceful-degradation style).
+    if w_debounce < 100:
+        print(
+            f"java-codebase-rag: watch.debounce_ms={w_debounce} is below the 100 ms "
+            "floor; falling back to 1500.",
+            file=sys.stderr,
+        )
+        w_debounce, w_debounce_src = 1500, "default"
+    if w_backend not in ("auto", "watchdog", "polling"):
+        print(
+            f"java-codebase-rag: watch.backend={w_backend!r} is not one of "
+            "auto/watchdog/polling; falling back to 'auto'.",
+            file=sys.stderr,
+        )
+        w_backend, w_backend_src = "auto", "default"
+    if w_poll < 200:
+        print(
+            f"java-codebase-rag: watch.poll_interval_ms={w_poll} is below the 200 ms "
+            "floor; falling back to 2000.",
+            file=sys.stderr,
+        )
+        w_poll, w_poll_src = 2000, "default"
     ku = index_dir / "code_graph.lbug"
     coco = index_dir / "cocoindex.db"
     return ResolvedOperatorConfig(
@@ -696,6 +757,12 @@ def resolve_operator_config(
         absence_ngram_q_source=abs_q_src,
         absence_diag_enabled_source=abs_diag_src,
         yaml_config_path=find_yaml_config_file(config_dir),
+        watch_debounce_ms=w_debounce,
+        watch_backend=w_backend,
+        watch_poll_interval_ms=w_poll,
+        watch_debounce_ms_source=w_debounce_src,
+        watch_backend_source=w_backend_src,
+        watch_poll_interval_ms_source=w_poll_src,
     )
 
 

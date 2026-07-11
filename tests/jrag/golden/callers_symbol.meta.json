@@ -1,0 +1,10 @@
+{
+  "rc": 0,
+  "stderr": "",
+  "argv": [
+    "callers",
+    "com.bank.chat.assign.service.ChatManagementService#assign(AssignmentRequest)",
+    "--format",
+    "json"
+  ]
+}
