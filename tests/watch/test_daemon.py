@@ -621,3 +621,230 @@ def test_golden_search_ipc_byte_identical(tmp_path, monkeypatch, capsys):
             LadybugGraph.reset_for_path(str(index_dir / "code_graph.lbug"))
         except Exception:
             pass
+
+
+# ===========================================================================
+# GOLDEN IPC TESTS (heavy) — the other 5 read commands over the socket
+# == cold path, byte for byte (find / inspect / callers / callees / flow)
+# ===========================================================================
+#
+# The search golden above is the only read command that previously had an
+# end-to-end byte-identity proof over the real socket. The other 5 read
+# commands had only unit-level reconstruction tests (tests/watch/test_client.py)
+# — no proof that a real ``jrag <cmd>`` over the socket renders byte-identically
+# to cold. These 5 goldens close that gap, each mirroring the search golden's
+# structure (real index, real daemon, _load_graph spy). Fixture queries come
+# from the bank-chat corpus (the same queries the Task-5 goldens use) so each
+# command is exercised meaningfully (callers/callees resolve real CALLS edges;
+# flow resolves a real Route; inspect describes a real Service class).
+
+_BANK_CHAT_CORPUS = _TESTS_DIR / "bank-chat-system"
+
+
+def _canonical_json(s: str) -> str:
+    """Parse + re-dump with sorted keys: order-insensitive value identity.
+
+    ``inspect``'s ``edge_summary`` sub-dict key order (DECLARES/INJECTS) is a
+    PRE-EXISTING non-determinism of ``describe_v2`` across processes (verified in
+    tests/jrag/test_read_payloads.py: 6 runs produced DECLARES-first 3x and
+    INJECTS-first 3x, identical values). Since the daemon is a SEPARATE process
+    from the test process, cold-vs-hot can legitimately flip that order, so
+    ``inspect`` is pinned by canonicalized value identity (same approach as
+    Task-5's ``_BYTE_STABLE`` exclusion). The other 4 commands are byte-stable.
+    """
+    import json
+
+    return json.dumps(json.loads(s), sort_keys=True, ensure_ascii=False)
+
+
+def _build_bank_chat_index(tmp_path: Path) -> tuple[Path, Path]:
+    """Build a small real Lance + Ladybug index from the bank-chat fixture.
+
+    The bank-chat corpus has routes, clients, services, and real CALLS/HTTP_CALLS
+    edges, so every read command returns a meaningful (non-empty) result. Vectors
+    are built even though only ``search`` needs them, so the daemon (which eagerly
+    warms the model and may touch Lance) starts cleanly against a complete index.
+    """
+    _require_pipeline_deps()
+    assert _BANK_CHAT_CORPUS.is_dir(), f"bank-chat corpus missing: {_BANK_CHAT_CORPUS}"
+    from java_codebase_rag.pipeline import run_build_ast_graph, run_cocoindex_update
+
+    corpus = tmp_path / "bc_corpus"
+    shutil.copytree(_BANK_CHAT_CORPUS, corpus)
+    index_dir = tmp_path / "bc_index" / ".java-codebase-rag"
+    index_dir.mkdir(parents=True)
+    env = {
+        **os.environ,
+        "JAVA_CODEBASE_RAG_INDEX_DIR": str(index_dir.resolve()),
+        "JAVA_CODEBASE_RAG_SOURCE_ROOT": str(corpus.resolve()),
+    }
+    vproc = run_cocoindex_update(env, full_reprocess=False, quiet=True, verbose=False)
+    assert vproc.returncode == 0, f"cocoindex vectors build failed: {vproc.stderr}"
+    gproc = run_build_ast_graph(
+        source_root=corpus,
+        ladybug_path=index_dir / "code_graph.lbug",
+        verbose=False,
+        quiet=True,
+        env=env,
+    )
+    assert gproc.returncode == 0, f"graph build failed: {gproc.stderr}"
+    return index_dir, corpus
+
+
+def _assert_golden_read_byte_identical(
+    tmp_path: Path, monkeypatch, capsys, cmd_argv: list[str], *, canonical: bool = False
+) -> None:
+    """Cold-vs-hot byte-identity for one read command over the real daemon socket.
+
+    Mirrors ``test_golden_search_ipc_byte_identical``: builds a bank-chat index,
+    runs the command cold (no daemon) then hot (daemon alive) in-process, and
+    asserts the rendered stdout matches. A spy on ``client._load_graph`` proves the
+    hot path was daemon-served (cold fallback would re-load the graph in the test
+    process). ``canonical=True`` compares order-insensitive canonicalized JSON
+    (used only for ``inspect`` — see ``_canonical_json``).
+    """
+    index_dir, corpus = _build_bank_chat_index(tmp_path)
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_INDEX_DIR", str(index_dir))
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_SOURCE_ROOT", str(corpus))
+
+    # spy on the cold-path graph load to distinguish hot-served from cold-fallback.
+    load_calls = {"n": 0}
+    real_load_graph = client_mod._load_graph
+
+    def _counting_load_graph(cfg):
+        load_calls["n"] += 1
+        return real_load_graph(cfg)
+
+    monkeypatch.setattr(client_mod, "_load_graph", _counting_load_graph)
+
+    full_argv = [*cmd_argv, "--index-dir", str(index_dir)]
+    cmd_name = cmd_argv[0]
+
+    # --- COLD path: no daemon alive -> get_payload runs the cold core ---
+    assert not is_daemon_alive(index_dir), "precondition: no daemon before cold run"
+    rc_cold = jrag_main(full_argv)
+    cold_out = capsys.readouterr().out
+    assert rc_cold == 0, f"cold {cmd_name} failed rc={rc_cold}"
+    assert cold_out.strip(), f"cold {cmd_name} produced no output"
+    cold_loads = load_calls["n"]
+    assert cold_loads >= 1, "cold path did not load the graph (spy misconfigured?)"
+
+    # --- start the REAL daemon and wait until it serves ---
+    log_path = tmp_path / "daemon.log"
+    proc = _spawn_real_daemon(index_dir, corpus, log_path)
+    try:
+        came_up = _wait_alive(index_dir, _REAL_READY_S)
+        if not came_up:
+            tail = log_path.read_bytes()[-4000:] if log_path.exists() else b"<no log>"
+            pytest.fail(f"real daemon did not come up for {cmd_name}; log tail:\n{tail!r}")
+
+        # --- HOT path: daemon alive -> get_payload serves over the socket ---
+        loads_before_hot = load_calls["n"]
+        rc_hot = jrag_main(full_argv)
+        hot_out = capsys.readouterr().out
+        assert rc_hot == 0, f"hot {cmd_name} failed rc={rc_hot}"
+        # The hot path must NOT have loaded the graph in the test process — that
+        # is the proof the daemon served (cold fallback would load it).
+        assert load_calls["n"] == loads_before_hot, (
+            f"hot {cmd_name} fell back to cold (graph was loaded in the test process); "
+            f"loads {loads_before_hot} -> {load_calls['n']}"
+        )
+
+        # --- THE byte-identity assertion ---
+        if canonical:
+            assert _canonical_json(hot_out) == _canonical_json(cold_out), (
+                f"{cmd_name}: canonicalized JSON diverged from the cold path "
+                f"(values changed, not just key order):\n"
+                f"--- cold ({len(cold_out)} bytes) ---\n{_canonical_json(cold_out)}\n"
+                f"--- hot ({len(hot_out)} bytes) ---\n{_canonical_json(hot_out)}\n"
+            )
+        else:
+            assert hot_out == cold_out, (
+                f"{cmd_name}: IPC output diverged from the cold path:\n"
+                f"--- cold ({len(cold_out)} bytes) ---\n{cold_out}\n"
+                f"--- hot ({len(hot_out)} bytes) ---\n{hot_out}\n"
+            )
+    finally:
+        _stop_proc(proc, index_dir)
+        try:
+            from java_codebase_rag.graph.ladybug_queries import LadybugGraph
+
+            LadybugGraph.reset_for_path(str(index_dir / "code_graph.lbug"))
+        except Exception:
+            pass
+
+
+@pytest.mark.skipif(not HEAVY, reason="set JAVA_CODEBASE_RAG_RUN_HEAVY=1 to run the golden IPC test")
+def test_golden_find_ipc_byte_identical(tmp_path, monkeypatch, capsys):
+    """Real ``jrag find`` over the daemon socket == cold path, byte for byte.
+
+    Query ``find ChatManagementService`` resolves real Symbol nodes (the class +
+    its constructor) in the bank-chat corpus — a meaningful name/FQN lookup, not
+    an empty result.
+    """
+    _assert_golden_read_byte_identical(
+        tmp_path, monkeypatch, capsys, ["find", "ChatManagementService"]
+    )
+
+
+@pytest.mark.skipif(not HEAVY, reason="set JAVA_CODEBASE_RAG_RUN_HEAVY=1 to run the golden IPC test")
+def test_golden_inspect_ipc_canonical_identical(tmp_path, monkeypatch, capsys):
+    """Real ``jrag inspect`` over the daemon socket == cold path (canonicalized).
+
+    Query ``inspect com.bank.chat.assign.service.ChatManagementService`` describes
+    a real Service class (annotations, edge_summary, file location). Uses
+    ``--format json`` so the output is parseable, and canonicalized (sorted-key)
+    comparison — NOT raw byte — because ``edge_summary`` key order (DECLARES vs
+    INJECTS first) is a pre-existing cross-process non-determinism of
+    ``describe_v2`` (see ``_canonical_json``); the cold run (test process) and the
+    hot run (daemon subprocess) can legitimately flip that order with identical
+    values. The other 4 read goldens use the default human-readable format and are
+    byte-stable, so the default render path is covered there.
+    """
+    _assert_golden_read_byte_identical(
+        tmp_path, monkeypatch, capsys,
+        ["inspect", "com.bank.chat.assign.service.ChatManagementService", "--format", "json"],
+        canonical=True,
+    )
+
+
+@pytest.mark.skipif(not HEAVY, reason="set JAVA_CODEBASE_RAG_RUN_HEAVY=1 to run the golden IPC test")
+def test_golden_callers_ipc_byte_identical(tmp_path, monkeypatch, capsys):
+    """Real ``jrag callers`` over the daemon socket == cold path, byte for byte.
+
+    Query ``callers …ChatManagementService#assign(AssignmentRequest)`` traverses
+    real inbound CALLS edges (the controller method that calls ``assign``) — a
+    meaningful call-graph traversal, not an empty result.
+    """
+    _assert_golden_read_byte_identical(
+        tmp_path, monkeypatch, capsys,
+        ["callers", "com.bank.chat.assign.service.ChatManagementService#assign(AssignmentRequest)"],
+    )
+
+
+@pytest.mark.skipif(not HEAVY, reason="set JAVA_CODEBASE_RAG_RUN_HEAVY=1 to run the golden IPC test")
+def test_golden_callees_ipc_byte_identical(tmp_path, monkeypatch, capsys):
+    """Real ``jrag callees`` over the daemon socket == cold path, byte for byte.
+
+    Query ``callees …ChatManagementService#assign(AssignmentRequest)`` traverses
+    real outbound CALLS edges (publishers, resolvers, entity setters, repository
+    lookups) — a meaningful call-graph traversal that exercises truncation.
+    """
+    _assert_golden_read_byte_identical(
+        tmp_path, monkeypatch, capsys,
+        ["callees", "com.bank.chat.assign.service.ChatManagementService#assign(AssignmentRequest)"],
+    )
+
+
+@pytest.mark.skipif(not HEAVY, reason="set JAVA_CODEBASE_RAG_RUN_HEAVY=1 to run the golden IPC test")
+def test_golden_flow_ipc_byte_identical(tmp_path, monkeypatch, capsys):
+    """Real ``jrag flow`` over the daemon socket == cold path, byte for byte.
+
+    Query ``flow /chat/joinOperator --service chat-core`` resolves a real Route
+    and traces its request flow (inbound Feign callers + outbound CALLS hops) —
+    a meaningful route-flow traversal, not an empty result.
+    """
+    _assert_golden_read_byte_identical(
+        tmp_path, monkeypatch, capsys,
+        ["flow", "/chat/joinOperator", "--service", "chat-core"],
+    )
