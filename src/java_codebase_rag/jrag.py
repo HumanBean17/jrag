@@ -24,7 +24,9 @@ from __future__ import annotations
 
 import argparse
 import os
+import signal
 import sys
+import time
 import traceback
 from pathlib import Path
 
@@ -1259,6 +1261,59 @@ def build_parser() -> argparse.ArgumentParser:
     )
     vocab_index.set_defaults(handler=_cmd_vocab_index, detail="full")
 
+    # ---- watch subparser (jrag watch foreground/detach/stop/status) ----
+    # Uses _core_parser (no auto-scope): watch is a long-lived daemon over a
+    # whole index, not a per-query command, so --service/--module/--limit would
+    # be dishonest on this surface. Keeps --index-dir/--format/--detail so the
+    # daemon anchors and so --status output respects --format.
+    watch = subparsers.add_parser(
+        "watch",
+        help="keep the index fresh and serve warm queries while running",
+        parents=[_core_parser()],
+        description=(
+            "Long-lived daemon: watches the source tree for changes (reindexing "
+            "vectors/graph on a debounce) and serves the read commands (search/find/"
+            "inspect/callers/callees/flow) over a warm Unix socket so queries skip the "
+            "cold-start model/graph load.\n\n"
+            "Lifecycle:\n"
+            "  jrag watch             run in the foreground (Ctrl+C / SIGTERM to stop)\n"
+            "  jrag watch --detach    start as a background daemon and return\n"
+            "  jrag watch --status    report up/down + pid + socket + last reindex\n"
+            "  jrag watch --stop      SIGTERM a running daemon (SIGKILL after 5s)\n"
+            "Only one daemon may run per index (project lock). --status/--stop do NOT "
+            "acquire the lock."
+        ),
+    )
+    watch.add_argument(
+        "--detach",
+        action="store_true",
+        help="Start the daemon as a detached background process and return.",
+    )
+    watch.add_argument(
+        "--stop",
+        action="store_true",
+        help="Stop a running daemon (SIGTERM; SIGKILL after 5s).",
+    )
+    watch.add_argument(
+        "--status",
+        action="store_true",
+        help="Print whether the daemon is up or down and exit.",
+    )
+    watch.add_argument(
+        "--debounce-ms",
+        type=int,
+        default=None,
+        dest="debounce_ms",
+        help="Reindex debounce window in ms (overrides YAML `watch:debounce_ms`).",
+    )
+    watch.add_argument(
+        "--backend",
+        choices=("auto", "watchdog", "polling"),
+        default=None,
+        help="File-watch backend (overrides YAML `watch:backend`).",
+    )
+    watch.set_defaults(handler=_cmd_watch)
+
     return parser
 
 
@@ -1286,6 +1341,11 @@ def _resolve_cfg(args: argparse.Namespace):  # type: ignore[no-untyped-def]
     cfg = resolve_operator_config(
         source_root=None,
         cli_index_dir=getattr(args, "index_dir", None),
+        # ``jrag watch`` CLI overrides for the watch block (absent / None for
+        # every other subcommand via getattr default; resolve_operator_config
+        # treats ``None`` as "not provided" so non-watch commands are unaffected).
+        cli_watch_debounce_ms=getattr(args, "debounce_ms", None),
+        cli_watch_backend=getattr(args, "backend", None),
     )
     cfg.apply_to_os_environ()
     return cfg
@@ -1345,6 +1405,227 @@ def _cmd_vocab_index(args: argparse.Namespace) -> int:
     print(f"  Symbol count: {index.symbol_count}")
     print(f"  Sidecar path: {sidecar_path}")
     return 0
+
+
+# ---------------------------------------------------------------------------
+# jrag watch — long-lived daemon lifecycle (foreground / --detach / --stop / --status)
+#
+# ``--status``/``--stop`` are OUT-OF-PROCESS verbs: they read the lock holder
+# (``ProjectLock.read_holder``) and never acquire the lock themselves. Only the
+# running daemon (foreground or detached) holds the lock.
+# ---------------------------------------------------------------------------
+
+
+def _watch_child_argv(extra_args: list[str]) -> list[str]:
+    """Build the argv for the detached ``jrag watch`` child process.
+
+    Invokes the daemon via ``python -m java_codebase_rag.jrag`` (NOT the
+    module's file path): running ``python src/.../jrag.py`` directly would put
+    the package directory on ``sys.path[0]`` and shadow the stdlib ``ast``
+    module with the project's ``java_codebase_rag.ast`` package (breaking
+    ``inspect``). ``-m`` runs the module as ``__main__`` within its package
+    context, so stdlib imports resolve correctly. A separate function (rather
+    than inline) so a test can swap in a stub child.
+    """
+    return [sys.executable, "-m", "java_codebase_rag.jrag", "watch"] + list(extra_args)
+
+
+def _watch_passthrough_args(args: argparse.Namespace) -> list[str]:
+    """Reconstruct the watch flags to pass through to a detached child.
+
+    Only re-emits the flags that influence the daemon's behavior; --index-dir is
+    included so the child anchors on the same index without re-discovering it.
+    """
+    out: list[str] = []
+    if getattr(args, "index_dir", None):
+        out += ["--index-dir", str(args.index_dir)]
+    if getattr(args, "debounce_ms", None) is not None:
+        out += ["--debounce-ms", str(args.debounce_ms)]
+    if getattr(args, "backend", None) is not None:
+        out += ["--backend", str(args.backend)]
+    return out
+
+
+def _cmd_watch_status(cfg) -> int:
+    """``jrag watch --status``: print up/down + pid + socket + last reindex.
+
+    Does NOT acquire the lock. Returns 0 if a daemon is alive, 1 otherwise.
+    """
+    from java_codebase_rag.watch import paths
+    from java_codebase_rag.watch.client import is_daemon_alive
+    from java_codebase_rag.watch.daemon import _read_state_file
+    from java_codebase_rag.watch.lock import ProjectLock
+
+    sock = paths.socket_path(cfg.index_dir)
+    alive = is_daemon_alive(cfg.index_dir)
+    pid = ProjectLock.read_holder(cfg.index_dir)
+    state = _read_state_file(cfg.index_dir)
+    if alive:
+        print(f"jrag watch: up (pid {pid}, socket {sock})")
+        if state:
+            kind = state.get("last_reindex_kind")
+            at = state.get("last_reindex_at")
+            count = state.get("reindex_count", 0)
+            if kind and at:
+                when = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(at))
+                print(f"  last reindex: {kind} at {when} (total {count})")
+            else:
+                print(f"  last reindex: none (total {count})")
+        return 0
+    print(f"jrag watch: down (no daemon at {sock})")
+    return 1
+
+
+def _cmd_watch_stop(cfg) -> int:
+    """``jrag watch --stop``: SIGTERM the daemon, SIGKILL after 5s if needed.
+
+    Polls for socket removal (the daemon's own shutdown unlinks it). Always
+    cleans a leftover socket/state so a fresh start isn't blocked by a corpse.
+    Returns 0 if a daemon was stopped, 1 if none was running.
+    """
+    from java_codebase_rag.watch import paths
+    from java_codebase_rag.watch.lock import ProjectLock
+
+    sock = paths.socket_path(cfg.index_dir)
+    state_path = paths.state_path(cfg.index_dir)
+    pid = ProjectLock.read_holder(cfg.index_dir)
+    if pid is None:
+        print("jrag watch: not running")
+        _watch_unlink(sock)
+        _watch_unlink(state_path)
+        return 1
+
+    _watch_signal(pid, signal.SIGTERM)
+    # Poll for the socket's removal (the daemon unlinks it on clean shutdown).
+    deadline = time.monotonic() + _WATCH_STOP_TIMEOUT_S
+    while time.monotonic() < deadline:
+        if not sock.exists():
+            break
+        if not _watch_pid_alive(pid):
+            break
+        time.sleep(0.05)
+    # If still alive after the timeout, escalate to SIGKILL.
+    if _watch_pid_alive(pid):
+        _watch_signal(pid, signal.SIGKILL)
+    _watch_unlink(sock)
+    _watch_unlink(state_path)
+    print(f"jrag watch: stopped (pid {pid})")
+    return 0
+
+
+def _cmd_watch_detach(args: argparse.Namespace, cfg) -> int:
+    """``jrag watch --detach``: spawn the daemon detached and wait until it serves.
+
+    ``start_new_session=True`` detaches the child from the controlling terminal
+    (setsid); stdio is redirected to a per-index log under ``paths.runtime_dir``
+    so the parent can return. Waits until ``is_daemon_alive`` (socket bound AND a
+    live holder pid) or a timeout, then prints the socket path + pid. Returns 0
+    on success, 2 on timeout / child exit.
+    """
+    import subprocess
+
+    from java_codebase_rag.watch import paths
+    from java_codebase_rag.watch.client import is_daemon_alive
+    from java_codebase_rag.watch.lock import ProjectLock
+
+    child_argv = _watch_child_argv(_watch_passthrough_args(args))
+    log_path = paths.runtime_dir() / f"jrag-watch-{paths.project_key(cfg.index_dir)}.log"
+    try:
+        log_fh = open(log_path, "ab")
+    except OSError:
+        log_fh = None
+    try:
+        subprocess.Popen(
+            child_argv,
+            stdin=subprocess.DEVNULL,
+            stdout=log_fh,
+            stderr=log_fh,
+            start_new_session=True,  # setsid: detach from the controlling terminal
+            close_fds=True,
+        )
+    finally:
+        if log_fh is not None:
+            log_fh.close()
+
+    deadline = time.monotonic() + _WATCH_DETACH_TIMEOUT_S
+    while time.monotonic() < deadline:
+        if is_daemon_alive(cfg.index_dir):
+            break
+        time.sleep(0.1)
+    if is_daemon_alive(cfg.index_dir):
+        pid = ProjectLock.read_holder(cfg.index_dir)
+        print(
+            f"jrag watch: detached (pid {pid}, socket "
+            f"{paths.socket_path(cfg.index_dir)}, log {log_path})"
+        )
+        return 0
+    print(
+        f"jrag watch: failed to start within {_WATCH_DETACH_TIMEOUT_S}s "
+        f"(see {log_path})",
+        file=sys.stderr,
+    )
+    return 2
+
+
+def _cmd_watch(args: argparse.Namespace) -> int:
+    """Dispatch ``jrag watch`` to its lifecycle verb (or the foreground daemon)."""
+    from java_codebase_rag.watch.daemon import WatchDaemon
+
+    cfg = _resolve_cfg(args)
+    if args.status:
+        return _cmd_watch_status(cfg)
+    if args.stop:
+        return _cmd_watch_stop(cfg)
+    if args.detach:
+        return _cmd_watch_detach(args, cfg)
+    # default: run the daemon in the foreground. Ends with os._exit(0) on the
+    # serving path; only the early-failure returns (lock held / model load) come
+    # back here with a non-zero int.
+    return WatchDaemon(cfg).run_foreground()
+
+
+# Small lifecycle helpers (kept here, not in daemon.py, so --stop/--status have
+# zero coupling to the heavy daemon import path).
+
+
+def _watch_pid_alive(pid: int) -> bool:
+    """True iff ``pid`` is currently a live process (best-effort signal-0 probe)."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # exists, just not signalable by us
+    except OSError:
+        return False
+    return True
+
+
+def _watch_signal(pid: int, sig: int) -> None:
+    """Send ``sig`` to ``pid``, swallowing ProcessLookupError (already gone)."""
+    try:
+        os.kill(pid, sig)
+    except ProcessLookupError:
+        pass
+
+
+def _watch_unlink(path) -> None:
+    """Idempotent, best-effort unlink."""
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        pass
+
+
+# The daemon's shutdown (watcher.stop joins the debounce thread up to 10s, then
+# server.shutdown joins the accept thread up to 2s) is well under this on an
+# idle watcher; 5s is the brief's prescribed SIGTERM->SIGKILL grace window.
+_WATCH_STOP_TIMEOUT_S = 5.0
+# Model warm-up dominates the detach readiness window on a cold cache; generous
+# so a fresh start isn't reported as a failure while the SBERT model loads.
+_WATCH_DETACH_TIMEOUT_S = 60.0
 
 
 def _cmd_status(args: argparse.Namespace) -> int:
