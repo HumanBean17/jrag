@@ -885,3 +885,175 @@ def test_render_decompose_multistage_waterfall_lists_all_roles() -> None:
     assert "OrderController" in out
     assert "OrderRepository" in out
     assert "InventoryClient" in out
+
+
+# ----- issue #376: --count / --exists / --fields output shaping -----
+#
+# Pure render-level coverage (no graph/index). The end-to-end exit-code contract
+# for --exists is pinned in test_jrag_locate.py; these pin the output shaping
+# and the shape-aware counting shared by --count and --exists.
+
+
+def test_count_text_is_bare_integer() -> None:
+    """--count text is just the number — "only the result count", script-friendly."""
+    env = Envelope(status="ok", nodes={
+        "a": {"fqn": "x.A"}, "b": {"fqn": "x.B"}, "c": {"fqn": "x.C"},
+    })
+    assert render(env, count=True) == "3"
+
+
+def test_count_json_shape() -> None:
+    env = Envelope(status="ok", nodes={"a": {"fqn": "x.A"}, "b": {"fqn": "x.B"}})
+    assert json.loads(render(env, fmt="json", count=True)) == {"status": "ok", "count": 2}
+
+
+def test_count_traversal_counts_edges_not_nodes() -> None:
+    """A traversal envelope carries the root subject in ``nodes`` too; --count
+    must report the edge count (1), not the node count (2)."""
+    env = Envelope(
+        status="ok", root="r",
+        nodes={"r": {"fqn": "x.R"}, "t": {"fqn": "x.T"}},
+        edges=[{"other_id": "t", "edge_type": "CALLS"}],
+    )
+    assert render(env, count=True) == "1"
+    assert json.loads(render(env, fmt="json", count=True))["count"] == 1
+
+
+def test_count_inspect_shape_counts_subject() -> None:
+    """inspect (shape=inspect) counts the resolved subject (1), not its keys."""
+    env = Envelope(status="ok", nodes={"a": {"fqn": "x.A", "role": "SERVICE"}})
+    assert render(env, count=True, shape="inspect") == "1"
+    assert render(Envelope(status="ok", nodes={}), count=True, shape="inspect") == "0"
+
+
+def test_count_zero_on_empty_ok_and_on_non_ok() -> None:
+    assert render(Envelope(status="ok", nodes={}), count=True) == "0"
+    assert render(Envelope(status="not_found", message="m"), count=True) == "0"
+    assert json.loads(render(Envelope(status="not_found", message="m"), fmt="json", count=True)) == {
+        "status": "not_found", "count": 0,
+    }
+
+
+def test_exists_text_true_false() -> None:
+    assert render(Envelope(status="ok", nodes={"a": {"fqn": "x.A"}}), exists=True) == "true"
+    assert render(Envelope(status="ok", nodes={}), exists=True) == "false"
+
+
+def test_exists_json_shape() -> None:
+    yes = Envelope(status="ok", nodes={"a": {"fqn": "x.A"}})
+    no = Envelope(status="ok", nodes={})
+    assert json.loads(render(yes, fmt="json", exists=True)) == {"status": "ok", "exists": True}
+    assert json.loads(render(no, fmt="json", exists=True)) == {"status": "ok", "exists": False}
+
+
+def test_exists_false_on_not_found_and_ambiguous() -> None:
+    """A resolve miss (not_found) and ambiguous candidates are NOT results."""
+    assert render(Envelope(status="not_found", message="m"), exists=True) == "false"
+    amb = Envelope(status="ambiguous", candidates=[{"fqn": "x.A", "reason": "r"}])
+    assert render(amb, exists=True) == "false"
+
+
+def test_exists_takes_precedence_over_count() -> None:
+    """Both flags set -> the gate (--exists) wins; the count is not emitted."""
+    env = Envelope(status="ok", nodes={"a": {"fqn": "x.A"}})
+    assert render(env, exists=True, count=True) == "true"
+
+
+def test_fields_overrides_detail_surfaces_full_tier_field() -> None:
+    """--fields is an allowlist that overrides --detail: ``signature`` (normally
+    full-tier only) appears even at brief when explicitly requested."""
+    env = Envelope(status="ok", nodes={
+        "a": {"id": "a", "fqn": "x.A", "role": "SERVICE", "signature": "A()"},
+    })
+    out = json.loads(render(env, fmt="json", detail="brief", fields="fqn,signature"))
+    # graph-id ``id`` stripped; only requested fields survive.
+    assert out["nodes"]["x.A"] == {"fqn": "x.A", "signature": "A()"}
+
+
+def test_fields_drops_unrequested_and_absent_silently() -> None:
+    env = Envelope(status="ok", nodes={
+        "a": {"fqn": "x.A", "role": "SERVICE", "module": "core"},
+    })
+    out = json.loads(render(env, fmt="json", fields="fqn"))
+    assert out["nodes"]["x.A"] == {"fqn": "x.A"}
+    # A requested field absent on the node is simply not present (no null).
+    out2 = json.loads(render(env, fmt="json", fields="fqn,signature"))
+    assert out2["nodes"]["x.A"] == {"fqn": "x.A"}
+
+
+def test_fields_ignored_on_non_ok_renders_normally() -> None:
+    """--fields only reshapes status=ok; a not_found renders its body."""
+    out = render(Envelope(status="not_found", message="nope"), fields="fqn", noun="x")
+    assert out.startswith("not found:")
+
+
+def test_count_results_and_has_results_exported() -> None:
+    """The shape-aware counting helpers are the shared source of truth for
+    --count output and the --exists exit code (jrag._emit imports has_results)."""
+    from java_codebase_rag.jrag_render import count_results, has_results
+
+    listing = Envelope(status="ok", nodes={"a": {}, "b": {}})
+    assert count_results(listing, None) == 2
+    assert has_results(listing, None) is True
+    trav = Envelope(status="ok", root="r", nodes={"r": {}}, edges=[{"other_id": "t"}])
+    assert count_results(trav, None) == 1
+    # non-ok never has results even when it carries candidates/nodes
+    assert has_results(Envelope(status="ambiguous", candidates=[{}]), None) is False
+    assert has_results(Envelope(status="not_found", message="m"), None) is False
+
+
+# ----- precedence of the exists/count/fields/detail if-chain (load-bearing) -----
+
+
+def test_count_takes_precedence_over_fields() -> None:
+    """--count wins over --fields: the bare int is emitted, not projected nodes."""
+    env = Envelope(status="ok", nodes={"a": {"fqn": "x.A", "role": "SERVICE"}})
+    assert render(env, count=True, fields="fqn") == "1"
+
+
+def test_exists_takes_precedence_over_fields() -> None:
+    """--exists wins over --fields: the boolean is emitted, not projected nodes."""
+    env = Envelope(status="ok", nodes={"a": {"fqn": "x.A"}})
+    assert render(env, exists=True, fields="role") == "true"
+
+
+# ----- --fields CSV parsing + empty-allowlist fallback -----
+
+
+def test_field_set_parses_whitespace_duplicates_and_empties() -> None:
+    """_field_set trims whitespace, drops empty entries, and dedups."""
+    from java_codebase_rag.jrag_render import _field_set
+
+    assert _field_set(" fqn , role ,, fqn ,") == {"fqn", "role"}
+    assert _field_set(",,,") == set()
+    assert _field_set("fqn") == {"fqn"}
+
+
+def test_fields_csv_whitespace_and_duplicates_resolve() -> None:
+    """An allowlist with spaces/dups/padding still projects the right fields."""
+    env = Envelope(status="ok", nodes={"a": {"fqn": "x.A", "role": "SERVICE"}})
+    out = json.loads(render(env, fmt="json", fields=" fqn , role ,, fqn "))
+    assert out["nodes"]["x.A"] == {"fqn": "x.A", "role": "SERVICE"}
+
+
+def test_fields_empty_allowlist_falls_back_to_normal() -> None:
+    """A whitespace/comma-only --fields is treated as not given (normal render),
+    not an empty projection that strips every node to ``{}``."""
+    env = Envelope(status="ok", nodes={"a": {"fqn": "x.A", "role": "SERVICE"}})
+    for raw in ("   ", ",", " , "):
+        node = json.loads(render(env, fmt="json", fields=raw))["nodes"]["x.A"]
+        assert node, raw  # empty-allowlist bug would yield {}
+        assert "fqn" in node, raw
+
+
+# ----- --exists JSON shape on non-ok status -----
+
+
+def test_exists_json_shape_on_non_ok() -> None:
+    """--exists --format json reports the real status alongside exists:false."""
+    nf = render(Envelope(status="not_found", message="m"), fmt="json", exists=True)
+    assert json.loads(nf) == {"status": "not_found", "exists": False}
+    amb = Envelope(status="ambiguous", candidates=[{"fqn": "x.A"}])
+    assert json.loads(render(amb, fmt="json", exists=True)) == {
+        "status": "ambiguous", "exists": False,
+    }

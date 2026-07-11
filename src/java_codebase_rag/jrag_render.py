@@ -10,12 +10,13 @@ invariant.
 """
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from java_codebase_rag.absence.absence_types import AbsenceDiagnosis
 from java_codebase_rag.jrag_envelope import Envelope, project_envelope, simple_name
 
-__all__ = ["render", "tiered_name", "display_name"]
+__all__ = ["render", "tiered_name", "display_name", "count_results", "has_results"]
 
 
 # Edge labels that carry a ``confidence`` column (CALLS-family). ``conf:`` is
@@ -759,6 +760,92 @@ def _render_text_shape(envelope: Envelope, *, noun: str, shape: str | None, deta
     return _render_scalar(envelope)
 
 
+def count_results(envelope: Envelope, shape: str | None) -> int:
+    """How many result items ``envelope`` represents, per its render shape.
+
+    The single source of truth shared by ``--count`` (output) and ``--exists``
+    (output + exit code). Counts the collection the agent thinks of as the
+    result, not the raw node dict (a traversal envelope includes the root
+    subject in ``nodes`` — counting nodes would report N+1, not N):
+
+      * ``shape="inspect"`` -> 1 when a subject resolved (else 0). ``inspect``
+        /``status``/``map``/``conventions``/``overview`` declare this shape.
+      * ``root is not None`` (traversal) -> ``len(edges)``: the callers/callees/
+        hierarchy members are the result; the root is the resolved subject.
+      * otherwise (listing) -> ``len(nodes)``.
+
+    Callers that only care about emptiness should use :func:`has_results`, which
+    also gates on ``status == "ok"`` (a ``not_found`` / ``error`` envelope has no
+    result regardless of any carried nodes/edges).
+    """
+    if shape == "inspect":
+        return 1 if envelope.nodes else 0
+    if envelope.root is not None:
+        return len(envelope.edges)
+    return len(envelope.nodes)
+
+
+def has_results(envelope: Envelope, shape: str | None) -> bool:
+    """True only when the envelope is a non-empty ``ok`` result.
+
+    ``not_found`` / ``ambiguous`` / ``error`` carry no result even when they
+    carry nodes/candidates (e.g. ambiguous candidates are narrowing hints, not
+    hits). Used by ``--exists`` for both its output and its exit code.
+    """
+    return envelope.status == "ok" and count_results(envelope, shape) > 0
+
+
+def _field_set(fields: str) -> set[str]:
+    """Parse a comma-separated ``--fields`` allowlist into a set of trimmed names."""
+    return {name.strip() for name in fields.split(",") if name.strip()}
+
+
+def _project_to_fields(envelope: Envelope, fields: str) -> Envelope:
+    """Return a copy of ``envelope`` (at FULL detail) whose nodes keep only the
+    requested field names.
+
+    ``--fields`` is an explicit allowlist that OVERRIDES ``--detail``: project to
+    full (so a ``full``-tier field like ``signature`` is available even at the
+    default detail), then keep only the requested keys per node. Names absent on
+    a node are simply not present. Graph-id fields stay stripped
+    (``project_envelope(full)`` already strips them). Edges/candidates are left
+    at full; ``--fields`` is documented as a node projection.
+
+    Delegates the envelope copy to :func:`project_envelope` (the single
+    projection seam) and only rewrites ``nodes`` on the already-copied result,
+    so the per-field Envelope construction can't drift out of sync as fields are
+    added. ``project_envelope`` returns an independent copy and the node dicts
+    are rebuilt by the comprehension, so the caller's ``envelope`` is untouched.
+    """
+    wanted = _field_set(fields)
+    projected = project_envelope(envelope, "full")
+    projected.nodes = {
+        nid: {k: v for k, v in node.items() if k in wanted}
+        for nid, node in projected.nodes.items()
+    }
+    return projected
+
+
+def _render_count(envelope: Envelope, *, fmt: str, shape: str | None) -> str:
+    """``--count`` output: bare integer (text) or ``{"status","count"}`` (json).
+
+    Non-``ok`` envelopes count as 0 (a miss / error has no result items). Text is
+    the bare count — "only the result count", script-friendly for ``$(...)``.
+    """
+    n = count_results(envelope, shape) if envelope.status == "ok" else 0
+    if fmt == "json":
+        return json.dumps({"status": envelope.status, "count": n})
+    return str(n)
+
+
+def _render_exists(envelope: Envelope, *, fmt: str, shape: str | None) -> str:
+    """``--exists`` output: ``true``/``false`` (text) or ``{"status","exists"}`` (json)."""
+    exists = has_results(envelope, shape)
+    if fmt == "json":
+        return json.dumps({"status": envelope.status, "exists": exists})
+    return "true" if exists else "false"
+
+
 def render(
     envelope: Envelope,
     *,
@@ -767,6 +854,9 @@ def render(
     noun: str = "",
     next_offset: int | None = None,
     shape: str | None = None,
+    count: bool = False,
+    exists: bool = False,
+    fields: str | None = None,
 ) -> str:
     """Dispatch on ``fmt`` (text default; json emits the projected envelope).
 
@@ -792,8 +882,33 @@ def render(
     ``nodes``/``noun`` -> listing, else scalar. Listing nodes frequently carry
     dict-valued fields after ``.model_dump()``, so inspect is NEVER inferred
     from node contents - only an explicit ``shape="inspect"`` routes there.
+
+    Output-shaping flags (issue #376), orthogonal to the command that produced
+    the envelope and honored on both text and json:
+
+      * ``exists=True`` -> ``true``/``false`` (or ``{"status","exists"}``). Takes
+        precedence over ``count`` (a gate is more specific than a tally).
+      * ``count=True`` -> the bare result count (or ``{"status","count"}``); see
+        :func:`count_results` for what is counted per shape.
+      * ``fields`` -> comma-separated node-field allowlist that OVERRIDES
+        ``--detail`` (project to full, then keep only the named fields). Applies
+        only to ``status="ok"`` output; composes with the normal render, not with
+        ``count``/``exists``. A whitespace/comma-only allowlist is treated as
+        not given (falls back to the normal projection). Primarily a JSON lever
+        (text rendering still labels rows from whatever identity fields survive
+        the allowlist).
+
+    The exit-code side of ``--exists`` is decided by the caller (``jrag._emit``)
+    via :func:`has_results` — render() only shapes output.
     """
-    projected = project_envelope(envelope, detail)
+    if exists:
+        return _render_exists(envelope, fmt=fmt, shape=shape)
+    if count:
+        return _render_count(envelope, fmt=fmt, shape=shape)
+    if fields and envelope.status == "ok" and _field_set(fields):
+        projected = _project_to_fields(envelope, fields)
+    else:
+        projected = project_envelope(envelope, detail)
     if fmt == "json":
         return projected.to_json()
     body = _render_text_shape(projected, noun=noun, shape=shape, detail=detail)
