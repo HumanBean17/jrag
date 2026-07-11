@@ -1,0 +1,12 @@
+{
+  "rc": 0,
+  "stderr": "",
+  "argv": [
+    "callers",
+    "/chat/joinOperator",
+    "--service",
+    "chat-core",
+    "--format",
+    "json"
+  ]
+}

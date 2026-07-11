@@ -1,0 +1,10 @@
+{
+  "rc": 0,
+  "stderr": "",
+  "argv": [
+    "inspect",
+    "com.bank.chat.assign.service.ChatManagementService",
+    "--format",
+    "json"
+  ]
+}

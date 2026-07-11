@@ -1,0 +1,10 @@
+{
+  "rc": 0,
+  "stderr": "",
+  "argv": [
+    "find",
+    "ChatManagementService",
+    "--format",
+    "json"
+  ]
+}

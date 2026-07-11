@@ -1451,6 +1451,7 @@ def _check_kind_contradiction(args: argparse.Namespace, inferred: str | None) ->
 def _cmd_find(args: argparse.Namespace) -> int:
     from java_codebase_rag.jrag_envelope import Envelope
     from java_codebase_rag.jrag_render import render
+    from java_codebase_rag.read_payloads import PayloadError, find_payload
 
     cfg = _resolve_cfg(args)
     try:
@@ -1464,118 +1465,40 @@ def _cmd_find(args: argparse.Namespace) -> int:
     # auto-scope default here too (MCP parity).
     _apply_auto_scope(args, cfg, graph)
 
-    # Check kind contradiction first (before any backend work)
-    inferred = _infer_kind(args)
-    is_contradiction, error_msg = _check_kind_contradiction(args, inferred)
-    if is_contradiction:
-        env = Envelope(status="error", message=error_msg or "kind contradiction")
-        print(render(env, fmt=args.format, detail=args.detail))
-        return 2
+    # find_payload does the mode selection (query vs filter), kind-contradiction
+    # check, and the backend call (find_by_name_or_fqn + post-filters, or find_v2).
+    # Rendering (nodes/warnings/empty-result hint/offset) is split into the two
+    # render helpers below, branch by payload["mode"].
+    try:
+        payload = find_payload(args, cfg, graph)
+    except PayloadError as pe:
+        print(render(pe.env, fmt=args.format, detail=args.detail))
+        return pe.rc
 
-    # Cap at 499 so limit+1 <= 500 (backend clamp)
-    # If args.limit is None, default to 20 (from argparse)
-    raw_limit = args.limit if args.limit is not None else 20
-    limit = min(raw_limit, 499)
-
-    # Query mode: positional <query> present
-    if args.query:
-        # find_by_name_or_fqn is Symbol-only (MATCH (s:Symbol) WHERE s.name=$needle
-        # OR s.fqn=$needle). A positional <query> with a non-symbol kind (explicit
-        # OR inferred from --http-method/--client-kind/--producer-kind/etc.) is a
-        # usage contract violation -> status: error envelope (NOT argparse exit),
-        # telling the user to drop the positional and use filter mode.
-        effective_kind = inferred or "symbol"
-        if effective_kind != "symbol":
-            env = Envelope(
-                status="error",
-                message=(
-                    f"query mode (positional <query>) only searches Symbols, but kind "
-                    f"'{effective_kind}' was {'inferred from domain flags' if args.kind is None else 'set via --kind'}. "
-                    "Drop the positional <query> and use filter mode (the domain flags) "
-                    "for route/client/producer searches."
-                ),
-            )
-            print(render(env, fmt=args.format, detail=args.detail))
-            return 2
-        return _cmd_find_query_mode(args, cfg, graph, limit)
-
-    # Filter mode: build NodeFilter and call find_v2
-    return _cmd_find_filter_mode(args, cfg, graph, inferred or "symbol", limit)
+    if payload["mode"] == "query":
+        return _render_find_query(args, payload)
+    return _render_find_filter(args, payload)
 
 
-def _cmd_find_query_mode(
-    args: argparse.Namespace,
-    cfg,
-    graph,
-    limit: int,
-) -> int:
-    """Find query mode: g.find_by_name_or_fqn (Symbol-only name/FQN match).
+def _render_find_query(args: argparse.Namespace, payload) -> int:
+    """Render find query-mode payload (rows from find_by_name_or_fqn + post-filters).
 
-    Default is exact (``s.name``/``s.fqn`` = needle). With ``--fuzzy``, an empty
-    exact result widens to prefix (``STARTS WITH``) then substring (``CONTAINS``)
-    on name/FQN — fuzzy modes exclude file/package Symbol nodes (#411). Query
-    mode is gated to ``effective_kind == "symbol"`` upstream in ``_cmd_find``,
-    so the only ``kinds`` filter we may pass is symbol sub-kinds derived from
-    ``--java-kind``.
+    The backend call + post-filters live in ``read_payloads.find_payload``; this
+    builds the envelope node dicts, warnings, and empty-result hint, then renders.
+    With ``--fuzzy``, ``find_payload`` widens an empty exact result to prefix then
+    substring (issue #375) and reports the matched tier via ``payload["matched_mode"]``
+    (exact/prefix/contains) plus ``payload["identifier_matched"]`` for the hint.
     """
-    from java_codebase_rag.jrag_envelope import Envelope, next_actions_hook, normalize_enum
+    from java_codebase_rag.jrag_envelope import Envelope, next_actions_hook
+    from java_codebase_rag.jrag_render import render
 
-    query = args.query
-
-    # find_by_name_or_fqn is always Symbol; the only valid kinds filter is the
-    # symbol sub-kind derived from --java-kind (lowercase, matching s.kind).
-    # route/client/producer kinds were removed: they would never match Symbols.
-    if args.java_kind:
-        java_kind_norm = normalize_enum(args.java_kind, kind="java_kind")
-        kinds = [java_kind_norm.lower()]
-    else:
-        kinds = None
-
-    # Call find_by_name_or_fqn. Default is exact name/FQN match; with --fuzzy,
-    # widen to prefix then substring when the exact match is empty (issue #375).
-    rows = graph.find_by_name_or_fqn(
-        query,
-        kinds=kinds,
-        module=args.module,
-        microservice=args.service,
-        limit=limit + 1,  # +1 for truncated detection
-    )
-    matched_mode = "exact"
-    if not rows and getattr(args, "fuzzy", False) and query:
-        for fb_mode in ("prefix", "contains"):
-            rows = graph.find_by_name_or_fqn(
-                query, kinds=kinds, module=args.module, microservice=args.service,
-                limit=limit + 1, mode=fb_mode,
-            )
-            if rows:
-                matched_mode = fb_mode
-                break
-    # Did any tier (exact or fallback) return rows BEFORE post-filters? Used to
-    # distinguish "identifier genuinely matched nothing" from "matched but
-    # --role/--annotation/--capability removed all hits" in the empty-result hint.
-    identifier_matched = bool(rows)
-    # Truncation is decided by the RAW name/FQN fetch (limit+1), BEFORE
-    # post-filters reduce the set — otherwise a post-filter that drops rows
-    # would silently clear `truncated` even though more name matches may exist
-    # beyond the fetch (silent wrong-results).
-    raw_truncated = len(rows) > limit
-
-    # Post-filter by role/annotation/capability (SymbolHit carries these).
-    post_filter_active = False
-    if args.role:
-        post_filter_active = True
-        role_norm = normalize_enum(args.role, kind="role")
-        rows = [r for r in rows if (r.role or "").upper().replace("-", "_") == role_norm.upper()]
-    if args.exclude_role:
-        post_filter_active = True
-        exclude_role_norm = normalize_enum(args.exclude_role, kind="role")
-        rows = [r for r in rows if (r.role or "").upper().replace("-", "_") != exclude_role_norm.upper()]
-    if args.annotation:
-        post_filter_active = True
-        rows = [r for r in rows if args.annotation in (r.annotations or [])]
-    if args.capability:
-        post_filter_active = True
-        rows = [r for r in rows if args.capability in (r.capabilities or [])]
+    rows = payload["rows"]
+    raw_truncated = payload["raw_truncated"]
+    post_filter_active = payload["post_filter_active"]
+    limit = payload["limit"]
+    query = payload["query"]
+    matched_mode = payload["matched_mode"]
+    identifier_matched = payload["identifier_matched"]
 
     # Build warnings for filters that cannot apply in query mode. SymbolHit
     # carries no framework/source_layer fields; rather than silently dropping
@@ -1665,6 +1588,7 @@ def _cmd_find_query_mode(
     return _emit(env, args, noun="symbol")
 
 
+
 def _build_node_filter_or_error(filter_dict: dict):
     """Build a ``NodeFilter`` from ``filter_dict``; on pydantic validation
     failure return ``(None, error_envelope)`` so the caller can render a clean
@@ -1692,69 +1616,20 @@ def _build_node_filter_or_error(filter_dict: dict):
         return None, Envelope(status="error", message=f"invalid filter: {message}")
 
 
-def _cmd_find_filter_mode(
-    args: argparse.Namespace,
-    cfg,
-    graph,
-    kind: str,
-    limit: int,
-) -> int:
-    """Find filter mode: build NodeFilter and call find_v2."""
-    from java_codebase_rag.mcp import mcp_v2
+def _render_find_filter(args: argparse.Namespace, payload) -> int:
+    """Render find filter-mode payload (a FindOutput from find_v2).
 
-    from java_codebase_rag.jrag_envelope import Envelope, next_actions_hook, normalize_enum, to_envelope_rows
+    The backend call + NodeFilter construction live in
+    ``read_payloads.find_payload``; this slices to the limit, builds the envelope
+    node dicts, and renders — verbatim from the original
+    ``_cmd_find_filter_mode`` render portion.
+    """
+    from java_codebase_rag.jrag_envelope import Envelope, next_actions_hook, to_envelope_rows
     from java_codebase_rag.jrag_render import render
 
-    # Build NodeFilter from args
-    filter_dict: dict = {}
-    if args.service:
-        filter_dict["microservice"] = args.service
-    if args.module:
-        filter_dict["module"] = args.module
-    if args.role:
-        filter_dict["role"] = normalize_enum(args.role, kind="role")
-    if args.exclude_role:
-        filter_dict["exclude_roles"] = [normalize_enum(args.exclude_role, kind="role")]
-    if args.annotation:
-        filter_dict["annotation"] = args.annotation
-    if args.capability:
-        filter_dict["capability"] = args.capability
-    if args.fqn_contains:
-        filter_dict["fqn_contains"] = args.fqn_contains
-    if args.java_kind:
-        filter_dict["symbol_kind"] = normalize_enum(args.java_kind, kind="java_kind")
-    if args.framework:
-        filter_dict["framework"] = normalize_enum(args.framework, kind="framework")
-    if args.source_layer:
-        filter_dict["source_layer"] = normalize_enum(args.source_layer, kind="source_layer")
-    if args.http_method:
-        filter_dict["http_method"] = args.http_method.upper()
-    if args.path_contains:
-        filter_dict["path_contains"] = args.path_contains
-    if args.client_kind:
-        filter_dict["client_kind"] = normalize_enum(args.client_kind, kind="client_kind")
-    if args.calls_service:
-        filter_dict["target_service"] = args.calls_service
-    if args.calls_path_contains:
-        filter_dict["target_path_contains"] = args.calls_path_contains
-    if args.producer_kind:
-        filter_dict["producer_kind"] = normalize_enum(args.producer_kind, kind="producer_kind")
-    if args.topic_contains:
-        filter_dict["topic_contains"] = args.topic_contains
-
-    node_filter, err_env = _build_node_filter_or_error(filter_dict)
-    if err_env is not None:
-        print(render(err_env, fmt=args.format, detail=args.detail))
-        return 2
-
-    # Call find_v2
-    out = mcp_v2.find_v2(
-        kind=kind,
-        filter=node_filter,
-        limit=limit + 1,  # +1 for has_more_results detection
-        offset=args.offset,
-        graph=graph,
-    )
+    out = payload["out"]
+    kind = payload["kind"]
+    limit = payload["limit"]
 
     if not out.success:
         env = Envelope(status="error", message=out.message)
@@ -1781,10 +1656,9 @@ def _cmd_find_filter_mode(
     return _emit(env, args, noun=kind, next_offset=next_offset)
 
 
-def _cmd_inspect(args: argparse.Namespace) -> int:
-    from java_codebase_rag.mcp import mcp_v2
 
-    from java_codebase_rag.jrag_envelope import Envelope, next_actions_hook, resolve_query
+def _cmd_inspect(args: argparse.Namespace) -> int:
+    from java_codebase_rag.jrag_envelope import Envelope, next_actions_hook
     from java_codebase_rag.jrag_render import render
 
     cfg = _resolve_cfg(args)
@@ -1795,30 +1669,19 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
         print(render(env, fmt=args.format, detail=args.detail))
         return 2
 
-    # Resolve the query. Forward --service/--module so an ambiguous name
-    # (same name across services) disambiguates by microservice/module, the
-    # same way find and the traversal commands do. Without this, inspect
-    # silently ignored these inherited flags (resolve_query accepts them).
-    node, env = resolve_query(
-        args.query,
-        hint_kind=args.kind,
-        java_kind=args.java_kind,
-        role=args.role,
-        fqn_contains=args.fqn_contains,
-        cfg=cfg,
-        graph=graph,
-        microservice=args.service or "",
-        module=args.module or "",
-    )
+    # inspect_payload resolves the query (forwarding --service/--module, same as
+    # before) and calls describe_v2. It returns the DescribeOutput plus the
+    # resolve-derived node id/fqn and file_location the flatten+render below
+    # needs (file_location lives on the resolve Envelope, not on DescribeOutput).
+    # On resolve failure it raises PayloadError carrying that Envelope + rc.
+    from java_codebase_rag.read_payloads import PayloadError, inspect_payload
 
-    if env.status != "ok":
-        # _emit so --exists/--count shape a resolve miss (inspect Missing
-        # --exists -> false, rc 2). rc matches the prior 2-if-error-else-0
-        # when no flag is set.
-        return _emit(env, args)
-
-    # Node resolved successfully - call describe_v2
-    desc_out = mcp_v2.describe_v2(id=node.id, graph=graph)
+    try:
+        payload = inspect_payload(args, cfg, graph)
+    except PayloadError as pe:
+        print(render(pe.env, fmt=args.format, detail=args.detail))
+        return pe.rc
+    desc_out = payload["describe"]
 
     if not desc_out.success or desc_out.record is None:
         env = Envelope(status="error", message=desc_out.message or "describe failed")
@@ -1846,11 +1709,11 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
     # renamed ``symbol_kind`` to match find/search/listings (which use
     # ``symbol_kind`` for the sub-kind and reserve ``kind`` for the category).
     record_dict = desc_out.record.model_dump()
-    node_id = record_dict.get("id") or node.id
+    node_id = record_dict.get("id") or payload["node_id"]
     data = record_dict.get("data") or {}
     flat: dict[str, Any] = {
         "kind": record_dict.get("kind") or "symbol",
-        "fqn": record_dict.get("fqn") or data.get("fqn") or node.fqn,
+        "fqn": record_dict.get("fqn") or data.get("fqn") or payload["node_fqn"],
     }
     # Promote inner data fields. Skip ``kind`` here — renamed to symbol_kind.
     for src_key, dest_key in (
@@ -1882,7 +1745,7 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
         status="ok",
         nodes={node_id: flat},
         root=node_id,
-        file_location=env.file_location,  # Preserve file_location from resolve
+        file_location=payload["file_location"],  # Preserve file_location from resolve
     )
     next_actions_hook(env, root=node_id, edge_summary=record_dict.get("edge_summary"))
 
@@ -2531,161 +2394,18 @@ def _cmd_callers(args: argparse.Namespace) -> int:
     cfg, graph, rc = _load_graph_or_error(args)
     if rc:
         return rc
-    node, _renv, rrc = _resolve_traversal_node(
-        args, cfg=cfg, graph=graph, hint_kind=args.kind, apply_scope=True
-    )
-    if rrc or node is None:
-        return rrc
-    limit = _clamped_limit(args)
+    from java_codebase_rag.read_payloads import PayloadError, callers_payload
+    from java_codebase_rag.jrag_render import render
 
-    root_dict = _noderef_to_node_dict(node)
-    root_id = node.id
-
-    # Route root -> find_route_callers. Route callers are inherently cross-
-    # service (a Client in microservice A calls a server Route in microservice B),
-    # so --service is NOT applied as a caller-microservice post-filter here;
-    # it has already narrowed resolve (which route was selected) via
-    # _resolve_traversal_node -> resolve_query.
-    if node.kind == "route":
-        route_callers = graph.find_route_callers(route_id=root_id)
-        warnings: list[str] = []
-        # No backend limit on find_route_callers; client-side slice for truncation.
-        truncated = len(route_callers) > limit
-        display = route_callers[:limit]
-        nodes: dict[str, dict] = {}
-        edges: list[dict] = []
-        for rc in display:
-            caller_id = rc.caller_node_id
-            if rc.caller_node_kind == "client":
-                edge_type = "HTTP_CALLS"
-            else:
-                edge_type = "ASYNC_CALLS"
-            # The caller's identity is the declaring Symbol (the method that owns
-            # the Client/Producer), not the call-site path — mirrors
-            # trace_request_flow, which surfaces declaring_symbol_fqn. The
-            # path/topic the caller hits is kept as raw_uri/topic so the agent
-            # sees both WHO calls and WHAT they hit.
-            node = {
-                "id": caller_id,
-                "kind": rc.caller_node_kind,
-                "fqn": rc.declaring_symbol_fqn or caller_id,
-                "microservice": rc.caller_microservice,
-            }
-            if rc.target_service:
-                node["target_service"] = rc.target_service
-            if rc.caller_node_kind == "client" and rc.raw_uri:
-                node["raw_uri"] = rc.raw_uri
-            elif rc.caller_node_kind != "client" and rc.topic:
-                node["topic"] = rc.topic
-            nodes[caller_id] = node
-            edges.append(
-                {"other_id": caller_id, "edge_type": edge_type, "confidence": rc.confidence}
-            )
-        # Include the root (Route) node so the zero-callers rendering surfaces
-        # the route path rather than a bare "0 callers" line.
-        nodes[root_id] = root_dict
-        # External-entrypoint detection: a server-exposed HTTP route (kind
-        # http_endpoint with an inbound EXPOSES edge from a controller Symbol)
-        # genuinely has zero in-repo callers — the route IS the entrypoint. Flag
-        # it so the renderer says so instead of emitting a bug-looking bare
-        # "0 callers". NodeRef.kind is the node label ("route"), not the stored
-        # http_endpoint/kafka_topic property, so fetch the property directly.
-        # Kafka topics are excluded: their empty-callers case has different
-        # semantics (a topic with no producers is not an HTTP entrypoint).
-        is_external_entrypoint = False
-        if not display:
-            kind_row = graph._rows(  # noqa: SLF001 - same pattern as jrag_envelope._node_file_location
-                "MATCH (r:Route) WHERE r.id = $rid RETURN r.kind AS kind LIMIT 1",
-                {"rid": root_id},
-            )
-            route_kind = str(kind_row[0].get("kind") or "") if kind_row else ""
-            if route_kind == "http_endpoint" and graph.find_route_handlers(route_id=root_id):
-                is_external_entrypoint = True
-        return _emit_traversal(
-            args, root_id=root_id, nodes=nodes, edges=edges,
-            noun="callers", warnings=warnings, truncated=truncated,
-            is_external_entrypoint=is_external_entrypoint,
-        )
-
-    # Symbol root -> find_callers (push down --service/--module/depth/etc.).
-    if node.kind != "symbol":
-        from java_codebase_rag.jrag_envelope import Envelope
-        from java_codebase_rag.jrag_render import render
-
-        env = Envelope(
-            status="error",
-            message=(
-                f"callers expects a Symbol or Route root; resolved node kind is "
-                f"{node.kind!r}. Use --kind to narrow resolve."
-            ),
-        )
-        print(render(env, fmt=args.format, detail=args.detail))
-        return 2
-
-    depth = getattr(args, "depth", 1)
-    min_conf = getattr(args, "min_confidence", 0.0)
-    exclude_external = not getattr(args, "include_external", False)
-    call_edges = graph.find_callers(
-        node.fqn,
-        depth=depth,
-        limit=limit + 1,
-        min_confidence=min_conf,
-        exclude_external=exclude_external,
-        module=args.module,
-        microservice=args.service,
-    )
-    from java_codebase_rag.jrag_envelope import mark_truncated
-
-    display, truncated = mark_truncated(call_edges, limit)
-    nodes = {}
-    edges = []
-    for ce in display:
-        nodes[ce.src.id] = _symbol_hit_to_dict(ce.src)
-        edges.append(
-            {"other_id": ce.src.id, "edge_type": "CALLS", "confidence": ce.confidence}
-        )
-    # Entry-point awareness. A controller / messaging-listener type is invoked
-    # via the routes its methods EXPOSE (Controller -[:DECLARES]-> method
-    # -[:EXPOSES]-> Route), NOT via in-repo CALLS edges — so find_callers is
-    # typically empty for HTTP handlers. Without this fold, `callers
-    # <Controller>` returns a bug-looking empty list when the controller is the
-    # very thing the agent is investigating. The routes ARE its inbound callers,
-    # so surface them as additional EXPOSES rows alongside any CALLS-in edges.
-    # Gated on having DECLARES.EXPOSES out-edges (covers any entry-point holder,
-    # not just role=CONTROLLER). Routes are additive and usually few, so they do
-    # not count against the CALLS --limit (cf. the callees client/producer path,
-    # which likewise emits its own targets without sharing the CALLS budget).
-    expose_rows = graph._rows(  # noqa: SLF001 - one-shot aggregation, cf. _cmd_callees client path
-        "MATCH (t:Symbol {id: $tid})-[:DECLARES]->(m:Symbol)-[e:EXPOSES]->(r:Route) "
-        "RETURN r.id AS rid, r.method AS rmethod, r.path AS rpath, "
-        "r.path_template AS rpt, r.microservice AS rms, "
-        "m.fqn AS via_fqn, e.confidence AS conf",
-        {"tid": root_id},
-    )
-    for row in expose_rows:
-        rid = str(row.get("rid") or "")
-        if not rid or rid in nodes:
-            continue
-        rmethod = str(row.get("rmethod") or "")
-        rpath = str(row.get("rpt") or row.get("rpath") or "")
-        nodes[rid] = {
-            "id": rid,
-            "kind": "route",
-            "fqn": f"{rmethod} {rpath}".strip(),
-            "method": rmethod,
-            "path": rpath,
-            "microservice": str(row.get("rms") or ""),
-        }
-        edge_row: dict = {"other_id": rid, "edge_type": "EXPOSES"}
-        via_fqn = str(row.get("via_fqn") or "")
-        if via_fqn:
-            # Declaring method that exposes the route; rendered at --detail full.
-            edge_row["from_fqn"] = via_fqn
-        edges.append(edge_row)
-    nodes[root_id] = root_dict
+    try:
+        payload = callers_payload(args, cfg, graph)
+    except PayloadError as pe:
+        print(render(pe.env, fmt=args.format, detail=args.detail))
+        return pe.rc
     return _emit_traversal(
-        args, root_id=root_id, nodes=nodes, edges=edges,
-        noun="callers", truncated=truncated,
+        args, root_id=payload["root_id"], nodes=payload["nodes"], edges=payload["edges"],
+        noun=payload["noun"], warnings=payload["warnings"], truncated=payload["truncated"],
+        is_external_entrypoint=payload["is_external_entrypoint"],
     )
 
 
@@ -2693,163 +2413,20 @@ def _cmd_callees(args: argparse.Namespace) -> int:
     cfg, graph, rc = _load_graph_or_error(args)
     if rc:
         return rc
-    node, _renv, rrc = _resolve_traversal_node(args, cfg=cfg, graph=graph, hint_kind=args.kind)
-    if rrc or node is None:
-        return rrc
-    limit = _clamped_limit(args)
-
-    # PR-JRAG-3b: accept Symbol (CALLS), Client (HTTP_CALLS), and Producer
-    # (ASYNC_CALLS) roots. The Symbol path is unchanged from PR-JRAG-3a.
-    guard = _require_kind(
-        node,
-        expected="callees expects a Symbol, Client, or Producer root",
-        kinds=("symbol", "client", "producer"),
-        args=args,
-        hint="Use --kind to narrow resolve.",
-    )
-    if guard is not None:
-        return guard
-
-    from java_codebase_rag.jrag_envelope import Envelope, mark_truncated
+    from java_codebase_rag.read_payloads import PayloadError, callees_payload
     from java_codebase_rag.jrag_render import render
 
-    # Client root -> HTTP_CALLS out (Client -> :Route).
-    # Producer root -> ASYNC_CALLS out (Producer -> :Route, the kafka_topic
-    # Route this producer publishes to — NOT a :Producer node).
-    if node.kind in ("client", "producer"):
-        from java_codebase_rag.mcp import mcp_v2
-
-        edge_types = ["HTTP_CALLS"] if node.kind == "client" else ["ASYNC_CALLS"]
-        out = mcp_v2.neighbors_v2(
-            [node.id], direction="out", edge_types=edge_types,
-            limit=limit + 1, graph=graph,
-        )
-        if not out.success:
-            print(render(Envelope(status="error", message=out.message or "neighbors_v2 failed"), fmt=args.format, detail=args.detail))
-            return 2
-        root_id = node.id
-        nodes: dict[str, dict] = {root_id: _noderef_to_node_dict(node)}
-        edges: list[dict] = []
-        for e in out.results:
-            nodes[e.other.id] = _noderef_to_node_dict(e.other)
-            edges.append(
-                {
-                    "other_id": e.other.id,
-                    "edge_type": e.edge_type,
-                    "confidence": e.attrs.get("confidence"),
-                }
-            )
-        truncated = bool(out.has_more_results) or len(edges) > limit
-        if len(edges) > limit:
-            edges = edges[:limit]
-        # --include-external is accepted but does not apply on Client/Producer
-        # roots (the edges are to :Route, which is always in-graph; there is no
-        # external-exclusion analog). Surface as a warning so the flag is not
-        # silently dropped (plan principle: inapplicable flags never silently ignored).
-        warnings: list[str] = []
-        if getattr(args, "include_external", False):
-            warnings.append(
-                "--include-external does not apply to Client/Producer roots "
-                "(HTTP_CALLS/ASYNC_CALLS reach :Route, which is always in-graph)"
-            )
-        edges = _dedupe_traversal_edges(edges)
-        truncated = truncated or len(edges) > limit
-        edges = edges[:limit]
-        return _emit_traversal(
-            args, root_id=root_id, nodes=nodes, edges=edges,
-            noun="callees", warnings=warnings, truncated=truncated,
-        )
-
-    depth = getattr(args, "depth", 1)
-    min_conf = getattr(args, "min_confidence", 0.0)
-    exclude_external = not getattr(args, "include_external", False)
-    # CLIENT-role type Symbol (e.g. a Feign client interface): its "callees" are
-    # the outbound HTTP endpoints its declared client methods call, NOT CALLS
-    # edges from the interface (a Feign interface declares methods but its
-    # methods' HTTP_CALLS edges carry the real outbound surface). Aggregate the
-    # declared Client nodes and their HTTP_CALLS targets so `jrag callees
-    # 'ChatCoreFeignClient'` shows the routes it hits.
-    if (node.role or "") == "CLIENT":
-        root_id = node.id
-        client_rows = graph._rows(  # noqa: SLF001 - one-shot aggregation query
-            "MATCH (iface:Symbol {id: $sid})-[:DECLARES]->(m:Symbol)"
-            "-[:DECLARES_CLIENT]->(c:Client) "
-            "OPTIONAL MATCH (c)-[e:HTTP_CALLS]->(r:Route) "
-            "RETURN c.id AS cid, c.member_fqn AS cfqn, c.path AS cpath, "
-            "c.method AS cmethod, c.microservice AS cms, "
-            "r.id AS rid, r.method AS rmethod, r.path AS rpath, "
-            "r.path_template AS rpt, r.microservice AS rms, "
-            "e.confidence AS conf",
-            {"sid": root_id},
-        )
-        nodes = {root_id: _noderef_to_node_dict(node)}
-        edges: list[dict] = []
-        for row in client_rows:
-            rid = str(row.get("rid") or "")
-            if rid:
-                target_id = rid
-                rmethod = str(row.get("rmethod") or "")
-                rpath = str(row.get("rpt") or row.get("rpath") or "")
-                nodes[target_id] = {
-                    "id": target_id,
-                    "kind": "route",
-                    "fqn": f"{rmethod} {rpath}".strip(),
-                    "microservice": str(row.get("rms") or ""),
-                }
-                edge_type = "HTTP_CALLS"
-            else:
-                # Client with no resolved HTTP_CALLS edge: surface the client
-                # node + its declared path so the outbound intent is visible.
-                target_id = str(row.get("cid") or "")
-                if not target_id:
-                    continue
-                cmethod = str(row.get("cmethod") or "")
-                cpath = str(row.get("cpath") or "")
-                nodes[target_id] = {
-                    "id": target_id,
-                    "kind": "client",
-                    "fqn": f"{cmethod} {cpath}".strip() or str(row.get("cfqn") or ""),
-                    "microservice": str(row.get("cms") or ""),
-                }
-                edge_type = "HTTP_CALLS"
-            edges.append({
-                "other_id": target_id,
-                "edge_type": edge_type,
-                "confidence": float(row.get("conf") or 0.0) or None,
-            })
-        edges = _dedupe_traversal_edges(edges)
-        truncated = len(edges) > limit
-        edges = edges[:limit]
-        return _emit_traversal(
-            args, root_id=root_id, nodes=nodes, edges=edges,
-            noun="callees", truncated=truncated,
-        )
-
-    call_edges = graph.find_callees(
-        node.fqn,
-        depth=depth,
-        limit=limit + 1,
-        min_confidence=min_conf,
-        exclude_external=exclude_external,
-        module=args.module,
-        microservice=args.service,
-    )
-    display, truncated = mark_truncated(call_edges, limit)
-    root_id = node.id
-    nodes = {root_id: _noderef_to_node_dict(node)}
-    edges = []
-    for ce in display:
-        nodes[ce.dst.id] = _symbol_hit_to_dict(ce.dst)
-        edges.append(
-            {"other_id": ce.dst.id, "edge_type": "CALLS", "confidence": ce.confidence}
-        )
-    edges = _dedupe_traversal_edges(edges)
-    truncated = truncated or len(edges) > limit
-    edges = edges[:limit]
+    try:
+        payload = callees_payload(args, cfg, graph)
+    except PayloadError as pe:
+        print(render(pe.env, fmt=args.format, detail=args.detail))
+        return pe.rc
     return _emit_traversal(
-        args, root_id=root_id, nodes=nodes, edges=edges,
-        noun="callees", truncated=truncated,
+        args, root_id=payload["root_id"], nodes=payload["nodes"], edges=payload["edges"],
+        noun=payload["noun"], warnings=payload["warnings"], truncated=payload["truncated"],
+        is_external_entrypoint=payload["is_external_entrypoint"],
     )
+
 
 
 def _cmd_hierarchy(args: argparse.Namespace) -> int:
@@ -3278,92 +2855,20 @@ def _cmd_flow(args: argparse.Namespace) -> int:
     cfg, graph, rc = _load_graph_or_error(args)
     if rc:
         return rc
-    # flow requires a Route root; force hint_kind="route".
-    node, _renv, rrc = _resolve_traversal_node(args, cfg=cfg, graph=graph, hint_kind="route")
-    if rrc or node is None:
-        return rrc
-    limit = _clamped_limit(args)
+    from java_codebase_rag.read_payloads import PayloadError, flow_payload
+    from java_codebase_rag.jrag_render import render
 
-    guard = _require_kind(
-        node, expected="flow requires a Route root", kinds=("route",), args=args,
-        hint="Pass a route path (e.g. /chat/assign).",
-    )
-    if guard is not None:
-        return guard
-
-    warnings = _warn_unapplied_scope(
-        args, reason="trace_request_flow carries no microservice predicate; intra-codebase is an index-time data property"
-    )
-
-    max_hops = max(1, min(8, getattr(args, "depth", 5)))
-    flow_data = graph.trace_request_flow(entry_route_id=node.id, max_hops=max_hops)
-
-    root_id = node.id
-    nodes: dict[str, dict] = {root_id: _noderef_to_node_dict(node)}
-    edges: list[dict] = []
-    # Inbound: cross-service HTTP/async callers (Client/Producer two-hop).
-    for row in flow_data.get("inbound", []):
-        caller_id = str(row.get("caller_node_id") or "")
-        if not caller_id:
-            continue
-        kind = str(row.get("caller_node_kind") or "")
-        nodes[caller_id] = {
-            "id": caller_id,
-            "kind": kind,
-            "fqn": str(row.get("declaring_symbol_fqn") or ""),
-            "microservice": str(row.get("microservice") or ""),
-        }
-        edges.append(
-            {
-                "other_id": caller_id,
-                "edge_type": "HTTP_CALLS" if kind == "client" else "ASYNC_CALLS",
-                "confidence": float(row.get("confidence") or 0.0),
-            }
-        )
-    # Outbound: CALLS hops from the route handler (intra-service by construction).
-    for row in flow_data.get("outbound", []):
-        next_id = str(row.get("next_symbol_id") or "")
-        if not next_id:
-            continue
-        nodes[next_id] = {
-            "id": next_id,
-            "kind": "symbol",
-            "fqn": str(row.get("next_fqn") or ""),
-            "microservice": str(row.get("next_microservice") or ""),
-        }
-        edges.append({"other_id": next_id, "edge_type": "CALLS"})
-
-    # Client-side slice for truncation (trace_request_flow has no limit param).
-    truncated = len(edges) > limit
-    if truncated:
-        edges = edges[:limit]
+    try:
+        payload = flow_payload(args, cfg, graph)
+    except PayloadError as pe:
+        print(render(pe.env, fmt=args.format, detail=args.detail))
+        return pe.rc
     return _emit_traversal(
-        args, root_id=root_id, nodes=nodes, edges=edges,
-        noun="flow", warnings=warnings, truncated=truncated,
+        args, root_id=payload["root_id"], nodes=payload["nodes"], edges=payload["edges"],
+        noun=payload["noun"], warnings=payload["warnings"], truncated=payload["truncated"],
+        is_external_entrypoint=payload["is_external_entrypoint"],
     )
 
-
-# ============================================================================
-# PR-JRAG-3b: compose traversals + connection + outline/imports.
-#
-# callees Client/Producer variant (above) re-uses _cmd_callees. The four new
-# handlers below cover: dependencies (INJECTS out), connection (multi-section
-# microservice view, resolve-first EXCEPTION), outline (file -> symbols),
-# imports (file -> tree-sitter parse -> resolve_v2 per FQN).
-#
-# Backend signatures verified at PR-JRAG-3b time:
-#  * neighbors_v2(ids, direction, edge_types, limit=25, offset=0, ...) returns
-#    NeighborsOutput.results: list[Edge] where Edge.other: NodeRef,
-#    Edge.edge_type: str, Edge.attrs: dict (mcp_v2.py:1284).
-#  * find_symbols_in_file_range(graph, *, filename, start_line, end_line)
-#    returns list[SymbolHit]; start_line<1 returns [] (ladybug_queries.py:302).
-#  * parse_java(source, *, filename, verbose) -> JavaFileAst with
-#    explicit_imports: dict[str, str] (simple_name -> FQN) (ast_java.py:2612).
-#  * INJECTS is Symbol -> Symbol (java_ontology.py:216); out = types this
-#    symbol injects = direct dependencies.
-#  * HTTP_CALLS is Client -> Route (java_ontology.py:352); ASYNC_CALLS is
-#    Producer -> Route (java_ontology.py:386). Both confirmed.
-# ============================================================================
 
 
 def _cmd_dependencies(args: argparse.Namespace) -> int:
@@ -4379,8 +3884,6 @@ def _cmd_search(args: argparse.Namespace) -> int:
     truncation, and renders. --fuzzy is accepted as a silent no-op (search is
     always semantic; --fuzzy is implicit).
     """
-    from java_codebase_rag.mcp import mcp_v2
-
     from java_codebase_rag.jrag_envelope import Envelope, mark_truncated, next_actions_hook, normalize_enum
     from java_codebase_rag.jrag_render import render
 
@@ -4448,23 +3951,16 @@ def _cmd_search(args: argparse.Namespace) -> int:
         )
         print(render(env, fmt=args.format, detail=args.detail))
         return 2
-    node_filter, err_env = _build_node_filter_or_error(filter_dict)
-    if err_env is not None:
-        print(render(err_env, fmt=args.format, detail=args.detail))
-        return 2
+    from java_codebase_rag.read_payloads import PayloadError, search_payload
 
-    out = mcp_v2.search_v2(
-        args.query,
-        table=args.table,
-        hybrid=args.hybrid,
-        limit=limit + 1,  # +1 for truncated detection
-        offset=args.offset,
-        path_contains=args.path_contains,
-        filter=node_filter,
-        explain=args.explain,
-        graph=graph,
-        dedup=not getattr(args, "chunks", False),
-    )
+    # search_payload builds the NodeFilter from args (same filter_dict set above)
+    # and calls search_v2 with limit+1. On filter-validation failure it raises
+    # PayloadError carrying the error Envelope (rendered identically to before).
+    try:
+        out = search_payload(args, cfg, graph)
+    except PayloadError as pe:
+        print(render(pe.env, fmt=args.format, detail=args.detail))
+        return pe.rc
 
     if not out.success:
         env = Envelope(status="error", message=out.message or "search failed")

@@ -1,0 +1,10 @@
+{
+  "rc": 0,
+  "stderr": "",
+  "argv": [
+    "callees",
+    "com.bank.chat.assign.integration.ChatCoreFeignClient",
+    "--format",
+    "json"
+  ]
+}
