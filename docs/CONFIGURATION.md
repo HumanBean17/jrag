@@ -310,7 +310,7 @@ watch:
   backend: auto          # auto | watchdog | polling
 
   # watch.poll_interval_ms — poll interval for the polling backend, in ms.
-  # Default 2000; floor 200 (below → 2000 + warning). Watchdog-only; ignored.
+  # Default 2000; floor 200 (below → 2000 + warning). Polling-only; ignored by the native watchdog observer.
   poll_interval_ms: 2000
 ```
 
