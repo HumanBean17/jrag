@@ -30,7 +30,7 @@ Core library = **top-level `.py` modules** (`py-modules`); the installable **`ja
 | Concern | Modules |
 | --- | --- |
 | Write path | `java_codebase_rag/cli.py`, `java_codebase_rag/pipeline.py`, `java_codebase_rag/lance_optimize.py`, `java_index_flow_lancedb.py`, `build_ast_graph.py` |
-| Parse + ontology | `ast_java.py` (`ONTOLOGY_VERSION=18`), `java_ontology.py` (`EDGE_SCHEMA` + label sets), `graph_enrich.py`, `chunk_heuristics.py` |
+| Parse + ontology | `ast_java.py` (`ONTOLOGY_VERSION=19`), `java_ontology.py` (`EDGE_SCHEMA` + label sets), `graph_enrich.py`, `chunk_heuristics.py` |
 | Read path | `server.py`, `mcp_v2.py`, `ladybug_queries.py`, `search_lancedb.py`, `search_lexical.py`, `search_scoring.py`, `resolve_service.py`, `java_codebase_rag/read_payloads.py` |
 | Hints + absence | `mcp_hints.py`, `graph_types.py`, `absence_types.py`, `absence_vocab.py`, `absence_diagnosis.py` |
 | Config + paths | `java_codebase_rag/config.py`, `path_filtering.py`, `index_common.py`, `brownfield_events.py` |
@@ -59,7 +59,7 @@ java_codebase_rag/pipeline.py
 ```
 
 - **`init`** — refuses a non-empty index dir (exit 2); full vectors + full graph.
-- **`increment`** — CocoIndex `memo=True` catch-up (changed files only) + **incremental graph**. Falls back to **full** rebuild on any of: no graph · `ontology_version < 18` · crash marker (`.graph_increment_in_progress`) · dependent expansion > 50 files.
+- **`increment`** — CocoIndex `memo=True` catch-up (changed files only) + **incremental graph**. Falls back to **full** rebuild on any of: no graph · `ontology_version < 19` · crash marker (`.graph_increment_in_progress`) · dependent expansion > 50 files.
 - **`reprocess`** — default = full vectors + full graph; `--vectors-only` / `--graph-only` selective (mutually exclusive). Exit semantics in `cli._reprocess_exit_code`.
 
 **Phantom nodes:** unresolved callees / supertypes (external libs, `java.lang`) become `Symbol` rows with `resolved=false` and empty filename — so every edge lands on *a* node. Skipped by dependent expansion and scoped deletion.
@@ -84,7 +84,7 @@ MCP tool call (server.py)  ──asyncio.to_thread──▶  mcp_v2.*
 | `neighbors` | Ladybug Cypher | one hop; `direction` + `edge_types` required; dot-key composed edges |
 | `resolve` | Ladybug Cypher | per-kind generators exact→fuzzy; cap 10 candidates |
 
-**Lexical fallback** is selected by import availability (`mcp_v2` guards `from search_lancedb import …`): same row contract, flagged via `lexical_mode` + advisory. It is **BM25-first**: `build_ast_graph` indexes `Symbol.search_text` (camelCase-split token soup) under a LadybugDB FTS index (`sym_fts`, Okapi BM25), and `search_lexical` fetches top-K candidates via `QUERY_FTS_INDEX` then re-ranks them with the name/type/fqn/role heuristic in `search_scoring`. The FTS index auto-maintains on `increment`; the heuristic scan is the fallback when the index/extension is absent (older graph, offline first run). **`jrag` CLI** calls the same `mcp_v2.*` functions — identical backends, only rendering differs.
+**Lexical fallback** is selected by import availability (`mcp_v2` guards `from search_lancedb import …`): same row contract, flagged via `lexical_mode` + advisory. It is **BM25-first**: `build_ast_graph` indexes `Symbol.search_text` (camelCase-split token soup) under a LadybugDB FTS index (`sym_fts`, Okapi BM25), and `search_lexical` fetches top-K candidates via `QUERY_FTS_INDEX` then re-ranks them with the name/type/fqn/role heuristic in `search_lexical` (helpers from `search_scoring`). The FTS index auto-maintains on `increment`; the heuristic scan is the fallback when the index/extension is absent (older graph, offline first run). **`jrag` CLI** calls the same `mcp_v2.*` functions — identical backends, only rendering differs.
 
 ### Watch path (`jrag watch`) — warm reads + freshness
 

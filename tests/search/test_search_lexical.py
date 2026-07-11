@@ -242,10 +242,15 @@ def test_cap_truncation_advisory_fires_at_cap(monkeypatch, tmp_path: Path) -> No
     assert any("repo cap" in a for a in adv), f"cap advisory should fire; got {adv}"
 
 
-def test_cap_advisory_silent_below_cap(tmp_path: Path) -> None:
-    """The cap advisory must NOT fire when the pool fits under the cap (no truncation)."""
+def test_cap_advisory_silent_below_cap(monkeypatch, tmp_path: Path) -> None:
+    """Heuristic-fallback path: the cap advisory must NOT fire when the pool fits under
+    the cap (no truncation). Forces the heuristic scan (the BM25 path has no cap) so the
+    invariant is actually exercised, not passed vacuously (fork A)."""
+    from java_codebase_rag.search import search_lexical
+
     db = _build_corpus(tmp_path)
     g = _graph(db)
+    monkeypatch.setattr(search_lexical, "_try_fts_candidates", lambda *a, **k: None)
     adv: list[str] = []
     run_lexical_search("distribution", limit=5, graph=g, advisories=adv)
     assert adv == [], f"no advisory expected for a small pool; got {adv}"
@@ -390,3 +395,43 @@ def test_bm25_path_respects_role_filter(tmp_path: Path) -> None:
     assert rows, "expected the controller hit through the role filter"
     assert all(r["role"] == "CONTROLLER" for r in rows), [r["role"] for r in rows]
     assert rows[0]["fqn"] == "ctrl.OperatorSessionController"
+
+
+def test_symbol_search_text_populated_for_bm25(tmp_path: Path) -> None:
+    """Fork A schema anchor: resolved Symbols carry a non-empty ``search_text`` whose
+    tokens include the camelCase-split name, so BM25 has something to index. Guards
+    against a regression that silently empties ``search_text`` (a broken
+    ``_compute_symbol_search_text`` or a dropped COPY/SET field would make searches
+    silently return nil with zero test failures)."""
+    import ladybug
+    from java_codebase_rag.search.search_scoring import _split_identifier
+
+    db = _build_corpus(tmp_path)
+    conn = ladybug.Connection(ladybug.Database(str(db), read_only=True))
+    res = conn.execute(
+        "MATCH (s:Symbol) WHERE s.kind <> 'file' AND s.kind <> 'package' "
+        "RETURN s.name AS name, s.search_text AS st"
+    )
+    seen_class = False
+    while res.has_next():
+        name, st = res.get_next()
+        assert st, f"search_text empty for Symbol {name!r}"
+        if name and name[:1].isupper():  # class/type names (not <init>, methods)
+            toks = [t for t in _split_identifier(str(name)) if len(t) >= 2]
+            assert all(t in st.split() for t in toks), (
+                f"{name!r} tokens {toks} missing from search_text {st!r}"
+            )
+            seen_class = True
+    assert seen_class, "no class Symbols found in fixture"
+
+
+def test_bm25_path_handles_pasted_camelcase_identifier(tmp_path: Path) -> None:
+    """Fork A regression guard (review B1): a pasted camelCase identifier like
+    'DistributionChunkService' must match on the BM25 path — LadybugDB FTS does not split
+    camelCase, so the query is pre-split via build_fts_query before QUERY_FTS_INDEX.
+    Without the pre-split this returns []."""
+    db = _build_corpus(tmp_path)
+    rows = run_lexical_search("DistributionChunkService", limit=5, graph=_graph(db))
+    assert rows, "pasted camelCase identifier must match via the pre-split BM25 query"
+    assert rows[0]["fqn"] == "svc.DistributionChunkService"
+    assert "bm25" in rows[0]["_score_components"]

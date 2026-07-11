@@ -14,7 +14,7 @@ Copy the block between `<!-- BEGIN` and `<!-- END` into your project's `AGENTS.m
 
 **Indexed content:** Java production sources plus SQL and YAML (use `search` `table`: `java`, `sql`, `yaml`, or `all`).
 
-**Ontology: 18** — if results look structurally wrong or empty across tools, the index may be missing, stale, or built with a different `ontology_version`; you cannot re-index via MCP — ask the operator to rebuild.
+**Ontology: 19** — if results look structurally wrong or empty across tools, the index may be missing, stale, or built with a different `ontology_version`; you cannot re-index via MCP — ask the operator to rebuild.
 
 **Responses:** On success, `search`, `find`, `describe`, `neighbors`, and `resolve` may include two top-level fields: `hints_structured` (≤5 suggested next-tool calls) and `advisories` (≤5 pure informational strings). Each `hints_structured` entry has `tool`, `args`, `actionable`, `label`, and `reason`. `actionable=true` means you can call the tool directly with `args`; `actionable=false` means partial/advisory — fill missing values or use as guidance. `reason` explains why the hint was emitted. `advisories` carry context education (fuzzy strategy warnings, role collision explanations, etc.) with no tool call suggestion. For `search`/`find`, echoed `limit`/`offset`. Hints are advisory; ignore them when `success` is false.
 

@@ -339,7 +339,7 @@ Deeper documentation for the brownfield blocks (`role_overrides`, `route_overrid
 
 ## 3. Graph layer
 
-A deterministic property graph derived from tree-sitter Java parsing lives next to the LanceDB tables under the index directory (default `${JAVA_CODEBASE_RAG_INDEX_DIR:-./.java-codebase-rag}/code_graph.lbug`). Current ontology version: **18** (see [`EDGE-NAVIGATION.md`](./EDGE-NAVIGATION.md) for MCP-traversable edge shapes).
+A deterministic property graph derived from tree-sitter Java parsing lives next to the LanceDB tables under the index directory (default `${JAVA_CODEBASE_RAG_INDEX_DIR:-./.java-codebase-rag}/code_graph.lbug`). Current ontology version: **19** (see [`EDGE-NAVIGATION.md`](./EDGE-NAVIGATION.md) for MCP-traversable edge shapes).
 
 ### Node kinds
 
@@ -403,7 +403,7 @@ Resolution order for `microservice`:
 
 ### Re-index required when ontology changes
 
-Current ontology version is **18**. Any index built before this version must be rebuilt via `cocoindex update ... --full-reprocess -f` or a full `java-codebase-rag reprocess` (no selective flags) so vectors and graph stay aligned. Until re-indexed, the server defensively JSON-decodes string-form list columns so nothing explodes, but filters like `array_contains` will not work.
+Current ontology version is **19**. Any index built before this version must be rebuilt via `cocoindex update ... --full-reprocess -f` or a full `java-codebase-rag reprocess` (no selective flags) so vectors and graph stay aligned. Until re-indexed, the server defensively JSON-decodes string-form list columns so nothing explodes, but filters like `array_contains` will not work.
 
 Ontology **15** (CALLS-NOISE) adds `CALLS.callee_declaring_role`, `GraphMeta.pass3_unresolved_phantom_receiver` / `pass3_unresolved_chained`, and **supertype-walk dedup** at build time. PR-2 adds `edge_filter` on `neighbors`. **PR-3 (breaking):** receiver-failure sites (`chained_receiver`, unresolved-receiver `phantom`) are no longer `CALLS` rows — they live on `UnresolvedCallSite` + `UNRESOLVED_AT`. Default `neighbors(..., ['CALLS'])` returns fewer rows; use `include_unresolved=True` for a source-ordered interleaved transcript (`row_kind`), `describe(method_id).unresolved_call_sites` (capped), or `java-codebase-rag unresolved-calls list|stats`. Known-receiver-external JDK rows stay on `CALLS` with `resolved=false`.
 
@@ -454,7 +454,7 @@ Combined, these pull `processClientMessage` / `pickEligibleOperator` / `onOperat
 
 #### Graph-only (macOS Intel) lexical ranking
 
-On Intel Mac installs the vector stack is absent (see `README.md`), so `search` runs the **lexical backend** — keyword ranking over the symbol graph instead of embeddings, behind the same tool contract. It is **BM25-first**: at index time every `Symbol` gets a `search_text` column (camelCase-split tokens of name + fqn + signature + annotations + capabilities, tokenized with the same splitter the query path uses) and a LadybugDB FTS index (`sym_fts`, Okapi BM25, porter stemmer) over it. At query time `QUERY_FTS_INDEX` fetches the top-K candidates DB-side, which are then re-ranked in Python by the heuristic below and deduped by FQN.
+On Intel Mac installs the vector stack is absent (see `README.md`), so `search` runs the **lexical backend** — keyword ranking over the symbol graph instead of embeddings, behind the same tool contract. It is **BM25-first**: at index time every `Symbol` gets a `search_text` column (camelCase-split tokens of name + fqn + signature + annotations + capabilities + package, tokenized with the same splitter the query path uses) and a LadybugDB FTS index (`sym_fts`, Okapi BM25, porter stemmer) over it. At query time `QUERY_FTS_INDEX` fetches the top-K candidates DB-side, which are then re-ranked in Python by the heuristic below and deduped by FQN.
 
 The heuristic re-rank decides final order (what `--explain` reports as `relevance=` / `name=` / `type=` / `fqn=`, plus a `bm25=` component for the index score):
 

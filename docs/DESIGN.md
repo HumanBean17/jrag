@@ -23,7 +23,7 @@ One repo, two stores, two audiences:
 3. **Walk at read time; don't precompute answers.** `neighbors` is exactly one hop. Multi-hop traces, impact analysis, "explain feature X" are the **agent's** reasoning over repeated one-hop calls. There is deliberately no magic impact/trace tool.
 4. **Static analysis is a lower bound.** `CALLS` excludes reflection, Spring AOP proxies, dynamic dispatch. `resolved=false` means *external* (JDK/Spring), not *missing*. Never present this as proof of a runtime call path.
 5. **Empty results must be honest, not silent.** Every empty hit is classified: `correct_empty` (genuine leaf), `not_in_project`, `external_dependency`, or `refine_query` — with did-you-mean, vocabulary context, and (for hard absence) an auditable proof.
-6. **The ontology version is the contract.** `ONTOLOGY_VERSION` (currently **18**) gates incremental rebuilds, drives a read-time staleness guard, and tells the agent the index shape. A semantic extraction change bumps it; old indexes fall back to full rebuild.
+6. **The ontology version is the contract.** `ONTOLOGY_VERSION` (currently **19**) gates incremental rebuilds, drives a read-time staleness guard, and tells the agent the index shape. A semantic extraction change bumps it; old indexes fall back to full rebuild.
 7. **The file always wins.** When the index disagrees with the open source file, the index is presumed stale or partial. Mismatch is a signal to rebuild, not a fact to report.
 8. **Generated sources are first-class by default.** MapStruct / OpenAPI / protobuf / … are auto-detected **by content** (`@Generated`, header banners), indexed like hand-written code, and filterable (`exclude_generated`) — never silently down-ranked.
 

@@ -136,6 +136,32 @@ def _split_identifier(name: str) -> list[str]:
     return [p for p in parts if p]
 
 
+# Alphanumeric-word extractor for FTS query building (mirrors the index side, which
+# runs the same regex over name/fqn/signature/annotations/capabilities/package fields).
+_FTS_WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9]*")
+
+
+def build_fts_query(text: str) -> str:
+    """Tokenize a search query into the ``Symbol.search_text`` token space (fork A).
+
+    ``search_text`` is indexed from ``_split_identifier`` tokens (camelCase / snake_case
+    split, lowercased). LadybugDB FTS's own tokenizer does NOT split camelCase, so a raw
+    pasted identifier like ``DistributionChunkService`` would match nothing — this
+    extracts alphanumeric words from the query and splits each via ``_split_identifier``
+    so the query lands in the index's token space. Tokens shorter than 2 chars are
+    dropped (mirrors the index side); duplicates collapse. Returns ``""`` for a query
+    with no usable tokens — the caller then falls back to the heuristic / role listing.
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+    for word in _FTS_WORD_RE.findall(text or ""):
+        for tok in _split_identifier(word):
+            if len(tok) >= 2 and tok not in seen:
+                seen.add(tok)
+                out.append(tok)
+    return " ".join(out)
+
+
 def _symbol_bonus(r: dict, query_toks: set[str]) -> float:
     """Symbol-name overlap + action-verb bump for java chunks.
 
