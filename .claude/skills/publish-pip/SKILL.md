@@ -43,9 +43,13 @@ adding a runtime dependency to `pyproject.toml`.
    to a local `build/` namespace dir or a stale install even when the PyPA tool
    is absent. Always check via `-m build --version`.
 3. **Clean old artifacts** — re-uploading an existing PyPI version is rejected,
-   and you must never mix stale files into `dist/`:
+   and you must never mix stale files into `dist/`. Use `find` for `*.egg-info`,
+   **not** a bare glob: under zsh (default `NOMATCH`), `rm -rf dist build *.egg-info`
+   with no `.egg-info` match aborts the *whole* command, so `dist/` is never
+   cleared and stale files leak into the upload:
    ```bash
-   rm -rf dist build *.egg-info
+   rm -rf dist build
+   find . -maxdepth 2 -name '*.egg-info' -exec rm -rf {} +
    ```
 4. **Sync agent artifacts** — ensure install_data copies match dev source:
    ```bash
@@ -58,10 +62,18 @@ adding a runtime dependency to `pyproject.toml`.
    .venv/bin/python -m build
    ```
    Expect `dist/java_codebase_rag-<ver>-py3-none-any.whl` and `.tar.gz`.
-6. **Verify the built version** before upload (catches a forgotten bump):
+6. **Guard the upload** — assert *every* file in `dist/` matches the version in
+   `pyproject.toml` (filename + wheel METADATA). This is the hard stop before a
+   permanent upload: it catches a forgotten bump **and** stale files from a prior
+   build that cleanup missed (the `0.10.0` release shipped `0.9.7` artifacts
+   because of exactly this):
    ```bash
-   .venv/bin/python -c "import zipfile,glob; w=glob.glob('dist/*.whl')[0]; z=zipfile.ZipFile(w); m=[n for n in z.namelist() if n.endswith('METADATA')][0]; print([l for l in z.read(m).decode().splitlines() if l.startswith('Version')][0])"
+   .venv/bin/python scripts/check_dist_version.py
    ```
+   The script reads the target from `pyproject.toml` itself (no `--version`
+   arg to get wrong) and exits non-zero if `dist/` is empty, holds a foreign
+   version, or the wheel METADATA disagrees. Do not proceed to upload unless it
+   prints `✓ dist/ clean`.
 7. **Upload** (permanent — confirm the version is right first):
    ```bash
    .venv/bin/twine upload dist/*
@@ -84,10 +96,10 @@ adding a runtime dependency to `pyproject.toml`.
 |------|---------|
 | Bump | edit `pyproject.toml` `version` |
 | Tooling | `.venv/bin/pip install build twine` |
-| Clean | `rm -rf dist build *.egg-info` |
+| Clean | `rm -rf dist build` then `find . -maxdepth 2 -name '*.egg-info' -exec rm -rf {} +` |
 | Sync | `.venv/bin/python scripts/sync_agent_artifacts.py --check` |
 | Build | `.venv/bin/python -m build` |
-| Verify wheel | read `Version:` from `dist/*.whl` METADATA |
+| Guard | `.venv/bin/python scripts/check_dist_version.py` (stops upload on mismatch) |
 | Upload | `.venv/bin/twine upload dist/*` |
 | Verify live | `SSL_CERT_FILE="$(.venv/bin/python -m certifi)"` + pypi JSON API |
 | Commit | `bump version to X.Y.Z` |
@@ -95,13 +107,19 @@ adding a runtime dependency to `pyproject.toml`.
 ## Common mistakes
 
 - **Re-uploading an existing version** → PyPI returns 400. Bump first; clean `dist/`.
+- **`rm -rf dist build *.egg-info` doesn't clean anything (zsh)** → with no
+  `.egg-info` match, zsh's default `NOMATCH` aborts the *whole* command, so
+  `dist/`/`build/` survive and stale files ship in the next upload. The `0.10.0`
+  release leaked `0.9.7` artifacts this way. Use the `find`-based cleanup in
+  step 3 — and rely on the guard (step 6) as the backstop regardless.
 - **`import build` succeeds but `python -m build` fails** → `import` resolved to
   a local `build/` namespace dir or stale module, not the PyPA tool. `pip install
   build`, then confirm with `-m build --version`.
 - **PyPI verification SSL error** (`CERTIFICATE_VERIFY_FAILED`) →
   `SSL_CERT_FILE=$(.venv/bin/python -c "import certifi;print(certifi.where())")`.
-- **Forgot to bump / uploaded the wrong version** → permanent. Always run the
-  METADATA version check (step 5) before `twine upload`.
+- **Forgot to bump / stale files in `dist/`** → permanent. Always run the guard
+  (step 6) before `twine upload`; it exits non-zero if anything in `dist/`
+  doesn't match `pyproject.toml`.
 - **Used system `python` / `twine`** → wrong env / missing credentials. Always
   `.venv/bin/`.
 - **Left the version bump uncommitted** → repo drifts from PyPI. Commit + push.
@@ -110,5 +128,9 @@ adding a runtime dependency to `pyproject.toml`.
 
 - Release `0.6.6` (erase fix, PR #348) established this runbook; the gotchas
   above were all hit for real during that publish.
+- Release `0.10.0` leaked `0.9.7` artifacts to PyPI because zsh's `NOMATCH`
+  aborted the cleanup glob. That incident added the `find`-based cleanup (step 3)
+  and the `check_dist_version.py` guard (step 6); the guard is the definitive
+  defense since it catches stale files no matter how they survived.
 - If you publish from an unmerged feature branch, PyPI will be ahead of `master`
   until the branch merges — call that out.
