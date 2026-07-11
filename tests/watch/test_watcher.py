@@ -90,13 +90,19 @@ def _scaffold_source(tmp_path: Path) -> Path:
 def _make_watcher(
     tmp_path: Path,
     calls: list[str],
+    monkeypatch: pytest.MonkeyPatch,
     *,
     vec_rc: int = 0,
     graph_rc: int = 0,
     debounce_ms: int = 60,
 ) -> SourceWatcher:
     """Build a ``SourceWatcher`` whose pipeline calls + warm snapshot methods record
-    into ``calls`` and which is NOT started (use for direct ``reindex`` tests)."""
+    into ``calls`` and which is NOT started (use for direct ``reindex`` tests).
+
+    ``monkeypatch`` is threaded in (rather than a bare ``pytest.MonkeyPatch()``)
+    so the pipeline patches are auto-undone at test teardown -- a bare
+    ``MonkeyPatch()`` never registers a finalizer, leaving the module-level names
+    patched for the rest of the session."""
     root = _scaffold_source(tmp_path)
     cfg = _FakeCfg(root)
     warm = _FakeWarm(calls)
@@ -110,10 +116,10 @@ def _make_watcher(
         on_event=on_event,
     )
     # Patch the module-level names the watcher imported; record into `calls`.
-    pytest.MonkeyPatch().setattr(
+    monkeypatch.setattr(
         "java_codebase_rag.watch.watcher.run_cocoindex_update", _make_vec_fake(calls, rc=vec_rc)
     )
-    pytest.MonkeyPatch().setattr(
+    monkeypatch.setattr(
         "java_codebase_rag.watch.watcher.run_incremental_graph",
         _make_graph_fake(calls, rc=graph_rc),
     )
@@ -149,9 +155,9 @@ def test_indexed_suffixes_union():
         ("src/main/resources/application.yaml.bak", set()),
     ],
 )
-def test_classify_indexed_paths(tmp_path, rel, expected):
+def test_classify_indexed_paths(tmp_path, monkeypatch, rel, expected):
     calls: list[str] = []
-    w = _make_watcher(tmp_path, calls)
+    w = _make_watcher(tmp_path, calls, monkeypatch)
     assert w._classify(tmp_path / rel) == expected
 
 
@@ -164,18 +170,18 @@ def test_classify_indexed_paths(tmp_path, rel, expected):
         "node_modules/pkg/Foo.java",  # **/node_modules/**
     ],
 )
-def test_classify_ignored_paths_fire_nothing(tmp_path, rel):
+def test_classify_ignored_paths_fire_nothing(tmp_path, monkeypatch, rel):
     """An event on an ignored path produces no reindex kind — even a ``.java``
     under ``src/test/java/`` is dropped because ``LayeredIgnore`` wins. classify
     resolves paths without requiring them to exist on disk."""
     calls: list[str] = []
-    w = _make_watcher(tmp_path, calls)
+    w = _make_watcher(tmp_path, calls, monkeypatch)
     assert w._classify(tmp_path / rel) == set()
 
 
-def test_classify_outside_source_root_is_empty(tmp_path):
+def test_classify_outside_source_root_is_empty(tmp_path, monkeypatch):
     calls: list[str] = []
-    w = _make_watcher(tmp_path, calls)
+    w = _make_watcher(tmp_path, calls, monkeypatch)
     outside = tmp_path.parent / "elsewhere.java"
     assert w._classify(outside) == set()
 
@@ -183,11 +189,11 @@ def test_classify_outside_source_root_is_empty(tmp_path):
 # -- reindex: java → vectors THEN graph with COW lifecycle ---------------------
 
 
-def test_reindex_java_runs_vectors_then_graph_with_cow_ordering(tmp_path):
+def test_reindex_java_runs_vectors_then_graph_with_cow_ordering(tmp_path, monkeypatch):
     """A java change runs vectors THEN graph; ``begin_graph_snapshot`` precedes the
     graph subprocess and ``commit_graph_snapshot`` follows it (COW lifecycle)."""
     calls: list[str] = []
-    w = _make_watcher(tmp_path, calls)
+    w = _make_watcher(tmp_path, calls, monkeypatch)
     w.reindex({"java"})
     assert calls == [
         "on_event:indexing_started",
@@ -203,12 +209,12 @@ def test_reindex_java_runs_vectors_then_graph_with_cow_ordering(tmp_path):
     assert w.last_reindex["kinds"] == ["java"]
 
 
-def test_reindex_graph_failure_still_commits_and_does_not_crash(tmp_path):
+def test_reindex_graph_failure_still_commits_and_does_not_crash(tmp_path, monkeypatch):
     """A nonzero graph returncode still calls ``commit_graph_snapshot`` (no dangling
     snapshot reader — the crash marker drives the next full rebuild), emits
     ``error`` (not ``indexing_done``), and leaves the watcher usable."""
     calls: list[str] = []
-    w = _make_watcher(tmp_path, calls, graph_rc=1)
+    w = _make_watcher(tmp_path, calls, monkeypatch, graph_rc=1)
     w.reindex({"java"})
     assert "begin_graph_snapshot" in calls
     assert calls.index("begin_graph_snapshot") < calls.index("run_incremental_graph")
@@ -219,7 +225,7 @@ def test_reindex_graph_failure_still_commits_and_does_not_crash(tmp_path):
 
     # watcher survived: a subsequent successful reindex completes normally
     calls.clear()
-    pytest.MonkeyPatch().setattr(
+    monkeypatch.setattr(
         "java_codebase_rag.watch.watcher.run_incremental_graph", _make_graph_fake(calls, rc=0)
     )
     w.reindex({"java"})
@@ -230,11 +236,11 @@ def test_reindex_graph_failure_still_commits_and_does_not_crash(tmp_path):
 # -- reindex: sql / yaml → vectors only ---------------------------------------
 
 
-def test_reindex_sql_is_vectors_only_no_snapshot(tmp_path):
+def test_reindex_sql_is_vectors_only_no_snapshot(tmp_path, monkeypatch):
     """A sql change runs vectors only; the graph (and its COW snapshot) is untouched
     because the graph does not index SQL."""
     calls: list[str] = []
-    w = _make_watcher(tmp_path, calls)
+    w = _make_watcher(tmp_path, calls, monkeypatch)
     w.reindex({"sql"})
     assert calls == [
         "on_event:indexing_started",
@@ -247,10 +253,10 @@ def test_reindex_sql_is_vectors_only_no_snapshot(tmp_path):
     assert "commit_graph_snapshot" not in calls
 
 
-def test_reindex_yaml_is_vectors_only_no_snapshot(tmp_path):
+def test_reindex_yaml_is_vectors_only_no_snapshot(tmp_path, monkeypatch):
     """A yaml change runs vectors only — same rationale as sql."""
     calls: list[str] = []
-    w = _make_watcher(tmp_path, calls)
+    w = _make_watcher(tmp_path, calls, monkeypatch)
     w.reindex({"yaml"})
     assert "run_cocoindex_update" in calls
     assert "run_incremental_graph" not in calls
@@ -258,10 +264,10 @@ def test_reindex_yaml_is_vectors_only_no_snapshot(tmp_path):
     assert "on_event:indexing_done" in calls
 
 
-def test_reindex_java_and_sql_runs_graph_once(tmp_path):
+def test_reindex_java_and_sql_runs_graph_once(tmp_path, monkeypatch):
     """A mixed burst (java+sql) runs vectors once and graph once (java present)."""
     calls: list[str] = []
-    w = _make_watcher(tmp_path, calls)
+    w = _make_watcher(tmp_path, calls, monkeypatch)
     w.reindex({"java", "sql"})
     assert calls.count("run_cocoindex_update") == 1
     assert calls.count("run_incremental_graph") == 1
@@ -272,10 +278,10 @@ def test_reindex_java_and_sql_runs_graph_once(tmp_path):
 # -- debounce coalescing -------------------------------------------------------
 
 
-def test_burst_of_saves_coalesces_to_one_reindex(tmp_path):
+def test_burst_of_saves_coalesces_to_one_reindex(tmp_path, monkeypatch):
     """Five rapid schedules produce exactly ONE reindex (one vectors call)."""
     calls: list[str] = []
-    w = _make_watcher(tmp_path, calls, debounce_ms=50)
+    w = _make_watcher(tmp_path, calls, monkeypatch, debounce_ms=50)
     w.start()
     try:
         for _ in range(5):
@@ -292,23 +298,23 @@ def test_burst_of_saves_coalesces_to_one_reindex(tmp_path):
         w.stop()
 
 
-def test_handler_classifies_and_schedules_java(tmp_path):
+def test_handler_classifies_and_schedules_java(tmp_path, monkeypatch):
     """The watchdog handler bridges to classify→schedule: a created .java event
     enqueues the ``java`` kind into the debounce collector."""
     calls: list[str] = []
-    w = _make_watcher(tmp_path, calls)
+    w = _make_watcher(tmp_path, calls, monkeypatch)
     path = tmp_path / "src" / "main" / "java" / "app" / "Foo.java"
     w._handler.on_any_event(FileCreatedEvent(str(path)))
     with w._lock:
         assert "java" in w._pending
 
 
-def test_real_file_write_through_polling_observer_fires_reindex(tmp_path):
+def test_real_file_write_through_polling_observer_fires_reindex(tmp_path, monkeypatch):
     """End-to-end: a REAL .java write is picked up by the polling observer and
     flows through classify→debounce→reindex. Proves the observer thread is
     healthy (the float-timeout contract) and the whole pipeline is wired."""
     calls: list[str] = []
-    w = _make_watcher(tmp_path, calls, debounce_ms=60)
+    w = _make_watcher(tmp_path, calls, monkeypatch, debounce_ms=60)
     w.start()
     try:
         (tmp_path / "src" / "main" / "java" / "app" / "Greeting.java").write_text(

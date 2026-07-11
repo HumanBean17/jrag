@@ -198,6 +198,16 @@ class SourceWatcher:
             self._debounce_thread.join(timeout=10.0)
 
     # -- event classification (observer thread) ------------------------------
+    #
+    # The watcher fires on exactly the cocoindex-indexed set (``.java`` plus the
+    # SQL/YAML resource patterns below) filtered through ``LayeredIgnore``.
+    # ``target/generated-sources/**/*.java`` therefore correctly fires: generated
+    # sources are first-class, cocoindex does NOT exclude ``target/``, so the
+    # watcher must fire to keep them fresh. ``LayeredIgnore.is_ignored`` does NOT
+    # prune build-output dirs (``target/``/``build``/``out``) -- that pruning lives
+    # in ``iter_java_source_files``'s ``os.walk`` (``_is_build_output_dir``), used
+    # by the graph builder, not by cocoindex. (Compiled ``.class`` output under
+    # ``target/`` doesn't match the ``.java`` suffix anyway.)
 
     def _handle_path(self, src_path: object) -> None:
         """Classify one observed path and schedule its kind if indexed & not ignored."""
@@ -300,8 +310,11 @@ class SourceWatcher:
                 # Graph indexes java only; reindex under a COW snapshot so graph
                 # reads continue (from the sidecar) during the subprocess write.
                 self._emit("graph", {"kinds": kind_list})
-                self.warm.begin_graph_snapshot()
                 try:
+                    # begin/commit paired in this try/finally. begin_graph_snapshot
+                    # sets ``_snapshot_path`` last, so if it raises commit no-ops;
+                    # moving begin inside the try keeps the pairing locally evident.
+                    self.warm.begin_graph_snapshot()
                     gres = run_incremental_graph(
                         source_root=self.cfg.source_root,
                         ladybug_path=self.cfg.ladybug_path,
@@ -312,7 +325,7 @@ class SourceWatcher:
                     graph_rc = gres.returncode
                 finally:
                     # ALWAYS drop the snapshot reader -- even on failure -- so it
-                    # is never left dangling.
+                    # is never left dangling. No-ops when no snapshot is active.
                     self.warm.commit_graph_snapshot()
 
             if vres.returncode != 0:
