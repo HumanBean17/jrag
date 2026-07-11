@@ -27,7 +27,10 @@ from java_codebase_rag.config import maybe_expand_embedding_model_path, resolved
 # graph-only (macOS Intel) installs where this module is unimportable. Re-exported
 # here for backward compatibility (`from search_lancedb import _clamp01`, etc.).
 from java_codebase_rag.search.search_scoring import (  # noqa: F401
+    BASELINE_2LIST_CONFIG,
+    DEFAULT_RANK_CONFIG,
     DEDUP_OVERFETCH,
+    RankConfig,
     _ACTION_VERB_BONUS,
     _ACTION_VERB_PREFIXES,
     _HYBRID_SCORE_MAX,
@@ -642,6 +645,7 @@ def _graph_expand_merge(
     extra_predicates: list[str],
     expand_depth: int,
     ladybug_path: str | None,
+    rank_config: RankConfig = DEFAULT_RANK_CONFIG,
 ) -> list[dict]:
     """Expand vector top-k through the LadybugDB graph and fuse (RRF) with the original list."""
     # Lazy import so the module works without ladybug installed when graph_expand=False.
@@ -708,6 +712,7 @@ def _graph_expand_merge(
         )
     fused = _rrf_merge(
         [vector_rows, graph_rows],
+        k=rank_config.rrf_k,
         row_weight_for_list_index=[
             None,
             lambda row: float(row.get("_graph_expand_weight", 1.0)),
@@ -790,6 +795,7 @@ def run_search(
     generated_only: bool = False,
     exclude_generated: bool = False,
     dedup_by_fqn: bool = False,
+    rank_config: RankConfig = DEFAULT_RANK_CONFIG,
 ) -> list[dict]:
     effective_hybrid = hybrid
     effective_fts = fts_text
@@ -894,6 +900,7 @@ def run_search(
                 extra_predicates=extra_java,
                 expand_depth=expand_depth,
                 ladybug_path=ladybug_path,
+                rank_config=rank_config,
             )
 
         # Dedup by primary_type_fqn after all sorting/merging, before windowing

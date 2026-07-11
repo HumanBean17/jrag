@@ -67,6 +67,75 @@ def test_java_enriched_columns_include_symbol_identity_fields() -> None:
     assert "metadata" in JAVA_ENRICHED_COLUMNS
 
 
+def test_graph_expand_merge_honors_injected_k(monkeypatch) -> None:
+    """RankConfig.rrf_k flows through _graph_expand_merge into _rrf_merge.
+
+    With k=30 injected, a row reinforced at rank 0 across the vector and graph
+    lists has ``rrf_raw = 2/(k+1) = 2/31``. Under the old default k=60 it would
+    be 2/61 — strictly smaller — so observing 2/31 proves the injected k wins.
+    """
+    import sys
+    import types
+
+    from java_codebase_rag.search.search_scoring import RankConfig
+
+    # Stub the lazily-imported LadybugGraph so the function reaches the merge.
+    class _FakeGraph:
+        @staticmethod
+        def exists(path):
+            return True
+
+        @staticmethod
+        def get(path):
+            class _G:
+                def expand_fqns(self, fqns, depth):
+                    # One novel FQN so the function proceeds to graph fetch + fuse.
+                    return ["com.example.Other"]
+
+                def expand_methods(self, fqns, depth, exclude_external=False):
+                    return []
+            return _G()
+
+    fake_mod = types.ModuleType("java_codebase_rag.graph.ladybug_queries")
+    fake_mod.LadybugGraph = _FakeGraph
+    monkeypatch.setitem(sys.modules, "java_codebase_rag.graph.ladybug_queries", fake_mod)
+
+    # Same (filename, range_start, range_end) key in both lists → rank-0 in both,
+    # so raw RRF = 1/(k+1) + 1/(k+1) = 2/(k+1).
+    vector_rows = [
+        {"filename": "a.java", "range_start": 1, "range_end": 10,
+         "primary_type_fqn": "com.example.Foo"},
+    ]
+    graph_rows = [
+        {"filename": "a.java", "range_start": 1, "range_end": 10,
+         "primary_type_fqn": "com.example.Other"},
+    ]
+
+    monkeypatch.setattr(search_lancedb, "_search_one_table", lambda *a, **kw: graph_rows)
+    monkeypatch.setattr(search_lancedb, "_table_columns", lambda *a, **kw: set())
+    monkeypatch.setattr(search_lancedb, "_build_extra_predicates", lambda **kw: [])
+    monkeypatch.setattr(search_lancedb, "_apply_chunk_hints", lambda rows: None)
+    monkeypatch.setattr(search_lancedb, "_refine_java_start_lines", lambda rows: None)
+    monkeypatch.setattr(search_lancedb, "_vector_sort_key", lambda r: 0.0)
+
+    result = search_lancedb._graph_expand_merge(
+        vector_rows,
+        query_vec=np.zeros(3),
+        db=object(),
+        uri="mem://",
+        limit=10,
+        extra_predicates=[],
+        expand_depth=1,
+        ladybug_path=None,
+        rank_config=RankConfig(lists=frozenset({"vector", "graph"}), rrf_k=30),
+    )
+
+    top = result[0]
+    # k=30 → raw = 2/31; would be 2/61 if the default leaked through.
+    assert top["_score_components"]["rrf_raw"] == pytest.approx(2.0 / 31.0, abs=1e-12)
+    assert top["_score_components"]["rrf_raw"] > 2.0 / 61.0
+
+
 def test_search_one_table_selects_symbol_identity_columns_when_schema_has_them(monkeypatch) -> None:
     selected: list[str] = []
 

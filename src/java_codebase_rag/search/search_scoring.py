@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
 
 # Name of the LadybugDB FTS (Okapi BM25) index over Symbol.search_text (fork A).
 # Shared by the build path (build_ast_graph._ensure_symbol_fts_index) and the
@@ -100,6 +101,60 @@ def _rrf_max(num_lists: int, k: int = 60) -> float:
         The maximum RRF contribution: num_lists / (k + 1).
     """
     return num_lists / (k + 1)
+
+
+# Allowed list names in a RankConfig: vector is always required (it is the
+# backbone retrieval signal); graph and bm25 are optional fusion participants.
+# NOTE: "bm25" is honored as a config element from Task 2, but the BM25 candidate
+# fetch is wired only in Task 4 — until then a configured "bm25" list yields no
+# candidates and behaves as a 2-list (vector+graph) fusion.
+_RANK_LIST_NAMES: frozenset[str] = frozenset({"vector", "graph", "bm25"})
+
+
+@dataclass(frozen=True)
+class RankConfig:
+    """Which ranked lists to fuse and the RRF constant to fuse them with.
+
+    This is a dep-free value object (no lancedb/torch) so it can be constructed
+    on every install flavor, including graph-only (macOS Intel). It is plumbed
+    through ``run_search`` → ``_graph_expand_merge`` to control (a) which lists
+    contribute to the final RRF fusion and (b) the ``k`` constant passed into
+    ``_rrf_merge``.
+
+    Attributes:
+        lists: Subset of ``{"vector", "graph", "bm25"}``. Must contain
+            ``"vector"`` (the backbone retrieval signal) and be non-empty.
+        rrf_k: The RRF constant (default 60 per the original paper). Must be ≥ 1.
+    """
+
+    lists: frozenset[str]
+    rrf_k: int = 60
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.lists, frozenset) or not self.lists:
+            raise ValueError("RankConfig.lists must be a non-empty frozenset")
+        if "vector" not in self.lists:
+            raise ValueError(
+                "RankConfig.lists must contain 'vector' (the backbone signal)"
+            )
+        unknown = self.lists - _RANK_LIST_NAMES
+        if unknown:
+            raise ValueError(
+                f"RankConfig.lists has unknown names {sorted(unknown)!r}; "
+                f"allowed: {sorted(_RANK_LIST_NAMES)!r}"
+            )
+        if not isinstance(self.rrf_k, int) or self.rrf_k < 1:
+            raise ValueError(f"RankConfig.rrf_k must be an int >= 1, got {self.rrf_k!r}")
+
+
+# Production default: ship the 3-list config (vector+graph+bm25). The "bm25"
+# element is inert until Task 4 wires the BM25 candidate fetch; until then this
+# is effectively a 2-list (vector+graph) fusion, identical to pre-Task-2 behavior.
+DEFAULT_RANK_CONFIG = RankConfig(lists=frozenset({"vector", "graph", "bm25"}), rrf_k=60)
+
+# Eval convenience: the historical 2-list (vector+graph) fusion, used by
+# evaluation harnesses that do not want the bm25 list even after Task 4.
+BASELINE_2LIST_CONFIG = RankConfig(lists=frozenset({"vector", "graph"}), rrf_k=60)
 
 
 # Theoretical maximum for hybrid composite score (used for display normalization).

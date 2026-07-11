@@ -110,3 +110,53 @@ def test_hybrid_score_max_unchanged() -> None:
 
     # The refactor must not introduce any numeric drift
     assert _HYBRID_SCORE_MAX == pytest.approx(expected, abs=1e-12)
+
+
+# ---------- RankConfig (Task 2) ----------
+
+
+def test_rank_config_defaults() -> None:
+    """DEFAULT_RANK_CONFIG ships the 3-list set (bm25 inert until Task 4)
+    and the canonical RRF k=60 from the original paper."""
+    from java_codebase_rag.search.search_scoring import (
+        BASELINE_2LIST_CONFIG,
+        DEFAULT_RANK_CONFIG,
+    )
+
+    assert DEFAULT_RANK_CONFIG.lists == frozenset({"vector", "graph", "bm25"})
+    assert DEFAULT_RANK_CONFIG.rrf_k == 60
+    # Eval convenience: omits bm25.
+    assert BASELINE_2LIST_CONFIG.lists == frozenset({"vector", "graph"})
+    assert BASELINE_2LIST_CONFIG.rrf_k == 60
+
+
+def test_rank_config_validation() -> None:
+    """RankConfig validates its lists set and rrf_k range at construction."""
+    from java_codebase_rag.search.search_scoring import RankConfig
+
+    # Missing required "vector" element.
+    with pytest.raises(ValueError):
+        RankConfig(lists=frozenset({"graph"}))
+    # Unknown list name.
+    with pytest.raises(ValueError):
+        RankConfig(lists=frozenset({"vector", "nope"}))
+    # Empty set.
+    with pytest.raises(ValueError):
+        RankConfig(lists=frozenset())
+    # rrf_k below 1.
+    with pytest.raises(ValueError):
+        RankConfig(lists=frozenset({"vector"}), rrf_k=0)
+    # Sanity: a minimal valid config constructs cleanly.
+    ok = RankConfig(lists=frozenset({"vector"}), rrf_k=1)
+    assert ok.lists == frozenset({"vector"})
+    assert ok.rrf_k == 1
+
+
+def test_rank_config_frozen() -> None:
+    """RankConfig is frozen so configs can be safely shared as defaults."""
+    from dataclasses import FrozenInstanceError
+
+    from java_codebase_rag.search.search_scoring import DEFAULT_RANK_CONFIG
+
+    with pytest.raises(FrozenInstanceError):
+        DEFAULT_RANK_CONFIG.rrf_k = 5  # type: ignore[misc]
