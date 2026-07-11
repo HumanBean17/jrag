@@ -16,6 +16,7 @@ from java_codebase_rag.search.search_scoring import (
     _SYMBOL_MATCH_BONUS_CAP,
     _TYPE_MATCH_BONUS_CAP,
     declaration_line_number,
+    explain_score_components,
     vector_display_score,
 )
 
@@ -160,3 +161,34 @@ def test_rank_config_frozen() -> None:
 
     with pytest.raises(FrozenInstanceError):
         DEFAULT_RANK_CONFIG.rrf_k = 5  # type: ignore[misc]
+
+
+# ---------- explain_score_components (Task 3) ----------
+
+
+def test_explain_bm25_token_present() -> None:
+    """When hybrid=True and bm25 is truthy, output contains both rrf= and bm25= tokens."""
+    result = explain_score_components({"rrf_raw": 0.03, "bm25": 12.5}, hybrid=True)
+    assert "rrf=0.030" in result
+    assert "bm25=12.500" in result
+    # Verify order: rrf appears before bm25
+    assert result.index("rrf=0.030") < result.index("bm25=12.500")
+
+
+def test_explain_bm25_token_absent_when_zero_or_missing() -> None:
+    """When bm25 is missing or zero, no bm25= token is emitted."""
+    # Missing bm25
+    result1 = explain_score_components({"rrf_raw": 0.03}, hybrid=True)
+    assert "bm25=" not in result1
+    # Zero bm25
+    result2 = explain_score_components({"rrf_raw": 0.03, "bm25": 0.0}, hybrid=True)
+    assert "bm25=" not in result2
+
+
+def test_explain_bm25_only_in_hybrid() -> None:
+    """bm25= token is only emitted in hybrid mode, not lexical mode."""
+    result = explain_score_components({"bm25": 12.5}, lexical=True)
+    assert "bm25=" not in result
+    # Lexical mode should still emit its standard tokens
+    assert "relevance=" in result or "name=" in result or not result  # May be empty if no lexical comps
+

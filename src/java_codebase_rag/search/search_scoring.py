@@ -447,6 +447,9 @@ def explain_score_components(
         rrf = comps.get("rrf_raw") or comps.get("hybrid_rrf")
         if rrf is not None:
             parts.append(f"rrf={float(rrf):.3f}")
+        bm25 = comps.get("bm25")
+        if bm25:
+            parts.append(f"bm25={float(bm25):.3f}")
     else:
         d = comps.get("distance")
         if d is not None:
