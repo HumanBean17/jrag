@@ -43,6 +43,20 @@ from pathlib import Path
 
 import pytest
 
+# These goldens build a real (graph-only) index and byte-compare ``jrag`` CLI
+# stdout captured on one platform. Graph-traversal edge order (kuzu MATCH
+# iteration follows indexing file-traversal order, which varies by OS) and the
+# search error path (relies on the Lance vector table being absent) are NOT
+# stable across OS/arch, so the byte-exact check is a LOCAL regression guard
+# (JAVA_CODEBASE_RAG_RUN_HEAVY=1), not a portable CI gate. CI still exercises
+# the cold read path via tests/package/*; warm==cold byte-identity is covered
+# (heavy) by tests/watch/test_daemon.py.
+HEAVY = os.environ.get("JAVA_CODEBASE_RAG_RUN_HEAVY", "").strip().lower() in ("1", "true", "yes")
+_GOLDEN_SKIPIF = pytest.mark.skipif(
+    not HEAVY,
+    reason="heavy: cross-platform byte-exact golden; run locally with JAVA_CODEBASE_RAG_RUN_HEAVY=1",
+)
+
 # Golden cases: (name, argv, must_exercise_fold).
 # ``argv`` is exactly what the golden was captured with. ``must_exercise_fold``
 # is True for the three fold-bearing paths and drives the boundary assertions.
@@ -112,6 +126,7 @@ def _env_for(corpus_root: Path, ladybug_db_path: Path) -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 
+@_GOLDEN_SKIPIF
 @pytest.mark.parametrize("name,argv,_exercise_fold", _GOLDEN_CASES, ids=[c[0] for c in _GOLDEN_CASES])
 def test_golden_output_byte_identical(name, argv, _exercise_fold, corpus_root, ladybug_db_path) -> None:
     """Full ``jrag <cmd> --format json`` stdout matches the pre-refactor golden.
