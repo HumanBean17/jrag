@@ -32,6 +32,7 @@ from java_codebase_rag.search.search_scoring import (
     _dedup_by_fqn,
     _query_tokens,
     _split_identifier,
+    build_fts_query,
 )
 
 if TYPE_CHECKING:
@@ -272,8 +273,10 @@ def run_lexical_search(
     BM25-first (fork A): when the LadybugDB ``sym_fts`` index exists, candidates are
     fetched DB-side via Okapi BM25 over ``Symbol.search_text`` (killing the bounded
     Python scan that silently missed matches past the cap on large repos) and then
-    re-ranked here by the name/type/fqn/role heuristic. Falls back to that heuristic
-    scan when the FTS index or extension is unavailable (older graph, offline first run).
+    re-ranked here by the name/type/fqn/role heuristic. The query is pre-split with the
+    same tokenizer as ``search_text`` so pasted camelCase identifiers match. Falls back
+    to the heuristic scan when the FTS index or extension is unavailable (older graph,
+    offline first run), or when the query is degenerate / the BM25 result is empty.
 
     Raises ``RuntimeError`` (message contains "lexical search unavailable") if no
     symbol graph exists — the caller maps that to a clean failure envelope. Returns
@@ -292,14 +295,23 @@ def run_lexical_search(
     g = graph or LadybugGraph.get()
 
     # --- candidate fetch: BM25 (FTS) preferred, heuristic scan fallback ---
+    # FTS indexes Symbol.search_text (camelCase-split tokens); pre-split the query the
+    # same way (build_fts_query) so a pasted identifier like "DistributionChunkService"
+    # matches — LadybugDB FTS's own tokenizer does not split camelCase. An empty split
+    # (degenerate / stopword-only query), an unavailable FTS index, OR an empty BM25
+    # result all fall back to the heuristic scan, which yields role-ranked output for
+    # degenerate queries and covers selective filters where BM25's top-K thins to nil.
     bm25_scores: dict[str, float] = {}
     use_fts = False
-    fts = _try_fts_candidates(g, query, filter, path_contains)
-    if fts is not None:
-        rows = fts["rows"]
-        bm25_scores = fts["scores"]
-        use_fts = True
-    else:
+    rows: list[dict] | None = None
+    q_fts = build_fts_query(query)
+    if q_fts:
+        fts = _try_fts_candidates(g, q_fts, filter, path_contains)
+        if fts is not None and fts["rows"]:
+            rows = fts["rows"]
+            bm25_scores = fts["scores"]
+            use_fts = True
+    if rows is None:
         where, params = _lexical_where(filter, path_contains=path_contains)
         # Always exclude structural Symbol nodes. Files and packages are :Symbol-labeled
         # (kind='file'/'package') but aren't searchable code declarations — without this
