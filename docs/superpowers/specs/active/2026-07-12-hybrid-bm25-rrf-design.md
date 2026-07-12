@@ -48,7 +48,17 @@ search_v2 → search_lancedb.run_search
   → _rrf_merge([vector_rows, graph_rows], k=60)
 ```
 
-**Proposed:**
+> **Correction (post-merge, 2026-07-12):** the `graph-expand` arrow above was
+> never true on the live path. `search_v2` did not pass `graph_expand=True` to
+> `run_search` (nor did `jrag search` / the MCP `search` tool), so
+> `_graph_expand_merge` — the 2-list fusion that pre-existed this change *and*
+> the BM25 3-list this change adds — was **dormant** for every user-facing
+> search. Tests and the eval stayed green only because they invoke
+> `run_search(graph_expand=True)` directly, never through `search_v2`. Wiring
+> landed as `graph_expand=(table == "java")` at both `run_search` call sites in
+> `search_v2`, guarded by an integration test through `search_v2`
+> (`test_search_v2_enables_graph_expand_on_java`). The "Proposed" flow below is
+> now the actual flow.
 ```
 search_v2 → search_lancedb.run_search
   → vector query (LanceDB)              → vector_rows

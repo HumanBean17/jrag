@@ -160,6 +160,61 @@ def test_search_path_contains_filter(monkeypatch, ladybug_graph) -> None:
     assert len(out.results) == 1
 
 
+@needs_vectors
+def test_search_v2_enables_graph_expand_on_java(monkeypatch, ladybug_graph) -> None:
+    """search_v2 must pass graph_expand=True on the java table so the always-on
+    3-list RRF fusion (vector + graph + BM25; design spec, issue #431) actually
+    runs on the user-facing path. This is the wiring contract that let PR #443
+    ship dormant: search_v2 never asked for graph_expand, so _graph_expand_merge
+    (and its BM25 third list) never executed for `jrag search` / MCP `search`."""
+    seen: dict[str, Any] = {}
+
+    def fake_run_search(query, **kwargs):
+        seen["graph_expand"] = kwargs.get("graph_expand")
+        seen["table_keys"] = kwargs.get("table_keys")
+        return _fake_search_rows()
+
+    monkeypatch.setattr("java_codebase_rag.mcp.mcp_v2.run_search", fake_run_search)
+    out = search_v2("ChatService", table="java", graph=ladybug_graph)
+
+    assert out.success is True
+    assert seen.get("table_keys") == ["java"]
+    assert seen.get("graph_expand") is True, (
+        "search_v2 must enable graph_expand on the java table; without it the "
+        "vector+graph+BM25 fusion is dormant (the PR #443 wiring bug)"
+    )
+
+
+@needs_vectors
+def test_search_v2_enables_graph_expand_through_hybrid_fts_fallback(
+    monkeypatch, ladybug_graph
+) -> None:
+    """The hybrid→vector-only FTS-missing retry (PR-SEARCH-3) must also carry
+    graph_expand=True on java, so the 3-list fusion still runs after the fallback.
+    Both run_search call sites in search_v2 are wiring points for #443 — the
+    LadybugDB sym_fts BM25 index is independent of LanceDB's native FTS, so the
+    fusion can still contribute even when hybrid falls back."""
+    calls: list[dict[str, Any]] = []
+
+    def fake_run_search(query, *, hybrid, **kwargs):
+        calls.append({"hybrid": hybrid, "graph_expand": kwargs.get("graph_expand")})
+        if hybrid:
+            raise ValueError(
+                "Cannot perform full text search unless an INVERTED index has been created"
+            )
+        return _fake_search_rows()
+
+    monkeypatch.setattr("java_codebase_rag.mcp.mcp_v2.run_search", fake_run_search)
+    out = search_v2("server port", table="java", hybrid=True, graph=ladybug_graph)
+
+    assert out.success is True
+    assert len(calls) == 2  # initial hybrid attempt + vector-only retry
+    assert calls[1]["hybrid"] is False  # retry dropped LanceDB-native FTS
+    assert calls[1]["graph_expand"] is True, (
+        "the FTS-missing retry must still enable graph_expand on java"
+    )
+
+
 def test_find_symbol_by_role(ladybug_graph) -> None:
     out = find_v2("symbol", {"role": "CONTROLLER"}, graph=ladybug_graph)
     assert out.success is True
