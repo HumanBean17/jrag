@@ -105,9 +105,9 @@ def _rrf_max(num_lists: int, k: int = 60) -> float:
 
 # Allowed list names in a RankConfig: vector is always required (it is the
 # backbone retrieval signal); graph and bm25 are optional fusion participants.
-# NOTE: "bm25" is honored as a config element from Task 2, but the BM25 candidate
-# fetch is wired only in Task 4 — until then a configured "bm25" list yields no
-# candidates and behaves as a 2-list (vector+graph) fusion.
+# The "bm25" list is wired in ``search_lancedb._graph_expand_merge`` (LadybugDB
+# FTS candidate fetch), which fuses BM25-ranked Symbol candidates as a third
+# RRF list alongside vector and graph.
 _RANK_LIST_NAMES: frozenset[str] = frozenset({"vector", "graph", "bm25"})
 
 
@@ -147,13 +147,14 @@ class RankConfig:
             raise ValueError(f"RankConfig.rrf_k must be an int >= 1, got {self.rrf_k!r}")
 
 
-# Production default: ship the 3-list config (vector+graph+bm25). The "bm25"
-# element is inert until Task 4 wires the BM25 candidate fetch; until then this
-# is effectively a 2-list (vector+graph) fusion, identical to pre-Task-2 behavior.
+# Production default: ship the 3-list config (vector+graph+bm25). The BM25 list
+# is wired in ``search_lancedb._graph_expand_merge``; on installs without the
+# vector stack, or when the FTS index is unavailable, it degrades silently to
+# the 2-list (vector+graph) fusion.
 DEFAULT_RANK_CONFIG = RankConfig(lists=frozenset({"vector", "graph", "bm25"}), rrf_k=60)
 
 # Eval convenience: the historical 2-list (vector+graph) fusion, used by
-# evaluation harnesses that do not want the bm25 list even after Task 4.
+# evaluation harnesses that isolate the vector+graph baseline from the bm25 list.
 BASELINE_2LIST_CONFIG = RankConfig(lists=frozenset({"vector", "graph"}), rrf_k=60)
 
 

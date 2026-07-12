@@ -36,12 +36,14 @@ both sides type-level, the runner normalizes member→type via
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import subprocess
 import sys
 import tempfile
 import time
+import traceback
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -55,7 +57,6 @@ from java_codebase_rag.search.search_lexical import _enclosing_type_fqn, _SYMBOL
 from java_codebase_rag.search.search_lancedb import run_search
 from java_codebase_rag.search.search_scoring import (
     BASELINE_2LIST_CONFIG,
-    DEFAULT_RANK_CONFIG,
     RankConfig,
 )
 
@@ -430,7 +431,10 @@ def run_eval(cfg: EvalConfig) -> EvalReport:
     tier_a_sorted = sorted(tier_a, key=lambda q: (q.query, next(iter(q.relevant))))
     tier_a_kept = tier_a_sorted[: cfg.max_queries]
     queries = list(tier_a_kept)
-    if cfg.tier_b_path:
+    # Tier-B is optional: a configured but missing path means "Tier-B disabled"
+    # (matches load_tier_b's docstring). load_tier_b itself still raises
+    # FileNotFoundError when called directly on a genuinely missing path.
+    if cfg.tier_b_path and Path(cfg.tier_b_path).exists():
         queries.extend(load_tier_b(cfg.tier_b_path))
 
     # 4. Enumerate configs: BASELINE_2LIST_CONFIG (k=60) + 3-list at each swept k.
@@ -491,3 +495,62 @@ def _persist(report: EvalReport, results_dir: str) -> None:
     out.mkdir(parents=True, exist_ok=True)
     (out / "report.md").write_text(_render_markdown(report))
     (out / "report.json").write_text(report.to_json())
+
+
+def _build_eval_config_from_args(argv: list[str] | None = None) -> EvalConfig:
+    """Parse CLI args into an EvalConfig. Defaults mirror EvalConfig fields."""
+    # Start from defaults so unspecified flags inherit EvalConfig's own defaults.
+    base = EvalConfig()
+    parser = argparse.ArgumentParser(
+        prog="python -m java_codebase_rag.eval.runner",
+        description="Index a corpus, sweep RankConfigs, emit recall/precision/MRR.",
+    )
+    parser.add_argument(
+        "corpus_dir",
+        nargs="?",
+        default=base.corpus_dir,
+        help=f"Java repo to index (default: {base.corpus_dir})",
+    )
+    parser.add_argument("--index-dir", default=base.index_dir,
+                        help="Lance+Ladybug index dir (default: temp dir).")
+    parser.add_argument("--results-dir", default=base.results_dir,
+                        help=f"Where to write report.{{md,json}} (default: {base.results_dir})")
+    parser.add_argument("--max-queries", type=int, default=base.max_queries,
+                        help=f"Cap on Tier-A queries (default: {base.max_queries}).")
+    parser.add_argument(
+        "--ks", default=",".join(str(k) for k in base.ks),
+        help="Comma-separated RRF k constants to sweep (default: %(default)s).",
+    )
+    parser.add_argument("--tier-b", default=base.tier_b_path,
+                        help="Optional path to a Tier-B ground-truth file (missing ⇒ disabled).")
+    parser.add_argument("--device", default=base.device,
+                        help="SBERT device (default: SBERT_DEVICE env or auto).")
+    args = parser.parse_args(argv)
+
+    try:
+        ks = tuple(int(k.strip()) for k in args.ks.split(",") if k.strip())
+    except ValueError:
+        parser.error(f"--ks must be comma-separated ints, got {args.ks!r}")
+    if not ks:
+        parser.error("--ks must contain at least one value")
+
+    return EvalConfig(
+        corpus_dir=args.corpus_dir,
+        index_dir=args.index_dir,
+        results_dir=args.results_dir,
+        tier_b_path=args.tier_b,
+        ks=ks,
+        max_queries=args.max_queries,
+        device=args.device,
+    )
+
+
+if __name__ == "__main__":
+    cfg = _build_eval_config_from_args()
+    try:
+        report = run_eval(cfg)
+    except Exception:
+        traceback.print_exc()
+        sys.exit(1)
+    print(report.out_dir)
+    sys.exit(0)

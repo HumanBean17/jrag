@@ -32,6 +32,7 @@ from java_codebase_rag.search.search_scoring import (  # noqa: F401
     DEFAULT_RANK_CONFIG,
     DEDUP_OVERFETCH,
     RankConfig,
+    build_fts_query,
     _ACTION_VERB_BONUS,
     _ACTION_VERB_PREFIXES,
     _HYBRID_SCORE_MAX,
@@ -669,8 +670,18 @@ def _bm25_candidate_rows(
     degradation; the vector path is unaffected).
     """
     # 1. BM25 candidate fetch via the FTS index.
+    # Pre-split the query with the same tokenizer the ``sym_fts`` index uses
+    # (``search_text`` stores ``_split_identifier`` tokens). LadybugDB FTS's own
+    # tokenizer does NOT split camelCase, so a raw ``DistributionChunkService``
+    # would match nothing — ``build_fts_query`` mirrors what the lexical backend
+    # does at search_lexical.py (run_lexical_search), keeping index/query token
+    # spaces aligned. An empty split (degenerate / stopword-only query) → no FTS
+    # candidates → degrade silently to the vector path.
+    fts_query = build_fts_query(query)
+    if not fts_query or not fts_query.strip():
+        return []
     try:
-        fts = search_lexical.fetch_fts_candidates(g, query, filter=None, path_contains=None)
+        fts = search_lexical.fetch_fts_candidates(g, fts_query, filter=None, path_contains=None)
     except Exception as exc:  # noqa: BLE001 — silent degradation
         _debug_ctx(f"bm25 FTS fetch raised: {exc!r}")
         return []
