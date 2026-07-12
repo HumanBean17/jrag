@@ -979,7 +979,7 @@ def test_reprocess_vectors_only_skips_graph(
     )
     assert rc == 0
     payload = json.loads(nout.getvalue())
-    assert payload["phases_run"] == ["vectors"]
+    assert payload == {"success": True, "message": "reprocess completed (vectors only; graph not rebuilt)"}
 
 
 def test_reprocess_graph_only_skips_vectors(
@@ -1009,7 +1009,7 @@ def test_reprocess_graph_only_skips_vectors(
         ["reprocess", "--source-root", str(tmp_path), "--index-dir", str(idx), "--graph-only"],
     )
     assert rc == 0
-    assert json.loads(out.getvalue())["phases_run"] == ["graph"]
+    assert json.loads(out.getvalue()) == {"success": True, "message": "reprocess completed (graph only; vectors not rebuilt)"}
 
 
 def test_reprocess_mutually_exclusive_flags_rejected(tmp_path: Path) -> None:
