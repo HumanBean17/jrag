@@ -104,11 +104,38 @@ def _emit_reprocess_selective_tty(*, mode: str) -> None:
         print("Skipped: vectors (use `java-codebase-rag reprocess --vectors-only` or `reprocess` to refresh)")
 
 
+def _reprocess_success_message(mode: str | None, payload: dict[str, Any]) -> str:
+    """Concise message for a successful reprocess.
+
+    Prefers an explicit ``message`` set by the pipeline (e.g. the graph-only-
+    install note from ``run_refresh_pipeline``); otherwise derives from the
+    selective mode. Mirrors ``init``/``increment``, which emit a one-line
+    success payload rather than re-dumping captured subprocess logs.
+    """
+    explicit = payload.get("message")
+    if isinstance(explicit, str) and explicit:
+        return explicit
+    if mode == "vectors":
+        return "reprocess completed (vectors only; graph not rebuilt)"
+    if mode == "graph":
+        return "reprocess completed (graph only; vectors not rebuilt)"
+    return "reprocess completed"
+
+
 def _emit_reprocess_outcome(payload: dict[str, Any], *, selective_tty_mode: str | None = None) -> None:
-    if payload.get("success") and selective_tty_mode and sys.stdout.isatty():
+    if not payload.get("success"):
+        # Failure: emit the full payload so captured subprocess stdout/stderr
+        # (cocoindex/graph logs) survive for debugging.
+        _emit(payload)
+        return
+    # Success: the progress renderer / stderr already surfaced the phase logs,
+    # so emit a concise structured payload (matching init/increment) instead of
+    # re-dumping them as JSON noise. In a TTY the partial modes additionally
+    # print a one-line Rebuilt/Skipped summary.
+    if selective_tty_mode and sys.stdout.isatty():
         _emit_reprocess_selective_tty(mode=selective_tty_mode)
         return
-    _emit(payload)
+    _emit({"success": True, "message": _reprocess_success_message(selective_tty_mode, payload)})
 
 
 _PIPELINE_SEP = "\u00b7"

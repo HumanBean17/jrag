@@ -1,1 +1,1 @@
-{"exit_code": 0, "graph_exit_code": 0, "graph_stderr": "", "graph_stdout": "", "message": null, "optimize_error": null, "phases_run": ["vectors", "graph"], "stderr": "", "stdout": "", "success": true}
+{"message": "reprocess completed", "success": true}

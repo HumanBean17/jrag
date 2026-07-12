@@ -251,7 +251,7 @@ def test_cli_lifecycle_stdout_invariant_init_increment_reprocess_when_cocoindex(
     inc_payload = json.loads(r_inc.stdout)
     assert inc_payload == {
         "success": True,
-        "message": "increment completed (Lance only; graph may be stale — see stderr)",
+        "message": "increment completed (Lance + graph updated)",
     }
 
     r_rep = _run_cli(
@@ -260,9 +260,7 @@ def test_cli_lifecycle_stdout_invariant_init_increment_reprocess_when_cocoindex(
     )
     assert r_rep.returncode == 0, r_rep.stderr + r_rep.stdout
     rep_payload = json.loads(r_rep.stdout)
-    assert rep_payload.get("success") is True
-    assert isinstance(rep_payload.get("stdout"), str)
-    assert isinstance(rep_payload.get("graph_stderr"), str)
+    assert rep_payload == {"success": True, "message": "reprocess completed"}
 
 
 def test_pipeline_footer_reflects_exception_before_propagate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
