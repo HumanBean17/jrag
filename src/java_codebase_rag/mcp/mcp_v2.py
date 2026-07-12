@@ -50,15 +50,49 @@ from java_codebase_rag.graph.ladybug_queries import LadybugGraph, OVERRIDE_AXIS_
 from java_codebase_rag.mcp.mcp_hints import MCP_HINTS_STRUCTURED_FIELD_DESCRIPTION
 
 # The vector stack (lancedb/torch, reached via search_lancedb) is optional — it is absent on
-# graph-only installs (macOS Intel). Import eagerly when available so ``run_search``/``TABLES``
-# exist as module attributes (tests monkeypatch ``mcp_v2.run_search``; callers use ``TABLES``);
-# fall back to sentinels on ImportError so importing this module never fails and ``search_v2``
-# can return a clean "vector search unavailable" envelope instead of crashing.
-try:
-    from java_codebase_rag.search.search_lancedb import TABLES, run_search
-except ImportError:  # graph-only install: no torch/lancedb
-    TABLES = {}
-    run_search = None
+# graph-only installs (macOS Intel). It is imported LAZILY on the first ``search_v2`` call via
+# ``_ensure_vector_backend``, NOT at module load. Reason: ``search_lancedb`` imports
+# ``sentence_transformers``/``torch`` at its own top level (~2.8s), and the warm ``jrag watch``
+# client reconstructs ``SearchOutput`` from this module (see ``watch/client._reconstruct``)
+# without ever calling the vector backend — an eager import here would force every warm CLI
+# read to pay that ~2.8s, masking the daemon's win.
+#
+# ``run_search`` uses a distinct ``_NOT_LOADED`` sentinel (not ``None``) for the unloaded state,
+# so ``None`` unambiguously means "lexical/disabled". This lets tests force the lexical path by
+# monkeypatching ``run_search=None`` (``_ensure_vector_backend`` treats that as authoritative and
+# will not overwrite it), while a non-None monkeypatch drives the vector path. ``TABLES`` is
+# ``{}`` until first successful load (only read in the vector path, where it is guaranteed set).
+_NOT_LOADED = object()
+run_search: Any = _NOT_LOADED
+TABLES: dict = {}
+_vector_backend_lock = threading.Lock()
+
+
+def _ensure_vector_backend() -> None:
+    """Populate ``run_search``/``TABLES`` from ``search_lancedb`` on first use.
+
+    No-op once ``run_search`` has left the ``_NOT_LOADED`` state — real callable (vector path),
+    ``None`` (graph-only install or a test-forced lexical mode), or a test monkeypatch.
+    Thread-safe (double-checked locking): the MCP server dispatches ``search_v2`` via
+    ``asyncio.to_thread``, so two concurrent first-batch searches could otherwise race the
+    sentinel mutation. On ImportError (graph-only) ``run_search`` becomes ``None`` and
+    ``search_v2`` takes the lexical fallback path. A non-ImportError propagates (caught by
+    ``search_v2``'s outer handler) and leaves ``run_search`` as ``_NOT_LOADED`` so the next
+    call retries rather than poisoning the process.
+    """
+    global run_search, TABLES
+    if run_search is not _NOT_LOADED:
+        return
+    with _vector_backend_lock:
+        if run_search is not _NOT_LOADED:
+            return
+        try:
+            from java_codebase_rag.search.search_lancedb import TABLES as _TABLES, run_search as _run_search
+        except ImportError:  # graph-only install: no torch/lancedb — lexical fallback
+            run_search = None
+        else:
+            run_search = _run_search
+            TABLES = _TABLES
 __all__ = [
     "search_v2",
     "find_v2",
@@ -913,6 +947,7 @@ def search_v2(
         if nf and (err := _nodefilter_applicability_error("symbol", nf)):
             _log_fail_loud("applicability")
             return SearchOutput(success=False, message=err, advisories=[], limit=None, offset=None)
+        _ensure_vector_backend()
         advisories: list[str] = []
         lexical_mode = run_search is None
         if lexical_mode:
