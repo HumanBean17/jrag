@@ -1043,6 +1043,13 @@ def search_v2(
                     exclude_generated=nf.exclude_generated if nf else None,
                     generated_only=nf.generated_only if nf else None,
                     dedup_by_fqn=dedup,
+                    # Always-on 3-list RRF fusion (vector + graph + BM25) on the java
+                    # path — design spec, issue #431. run_search guards this to the
+                    # java single-table path and degrades silently to pure-vector when
+                    # the graph/FTS index is unavailable. Omitting this kwarg left the
+                    # fusion dormant for every user-facing search (jrag search / MCP
+                    # search); see the search_v2 graph_expand integration test.
+                    graph_expand=(table == "java"),
                 )
             except Exception as exc:
                 # Check if this is a missing-FTS error (old index built before PR-SEARCH-3)
@@ -1069,6 +1076,7 @@ def search_v2(
                         exclude_generated=nf.exclude_generated if nf else None,
                         generated_only=nf.generated_only if nf else None,
                         dedup_by_fqn=dedup,
+                        graph_expand=(table == "java"),  # 3-list fusion survives the FTS fallback
                     )
                     advisories.append(
                         f"hybrid unavailable on table '{table}' (FTS index missing on this index built before "
