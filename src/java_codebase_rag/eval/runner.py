@@ -71,6 +71,20 @@ METRIC_COLUMNS: tuple[str, ...] = (
 )
 
 
+# Type-level Symbol kinds emitted by the graph (ast_java._TYPE_KINDS +
+# build_ast_graph._TYPE_KINDS). Confirmed literals — note it's "annotation",
+# NOT "annotation_type". Tier-A recall is measured at type level (chunks carry
+# primary_type_fqn), so member-symbol queries are redundant; defaulting
+# symbol_kinds to these type kinds both bounds fan-out and is semantically right.
+_TYPE_SYMBOL_KINDS: tuple[str, ...] = (
+    "class",
+    "interface",
+    "enum",
+    "annotation",
+    "record",
+)
+
+
 @dataclass(frozen=True)
 class EvalConfig:
     """Configuration for a single eval run.
@@ -93,6 +107,19 @@ class EvalConfig:
     device: str | None = field(
         default_factory=lambda: os.environ.get("SBERT_DEVICE") or None
     )
+    # When set, _enumerate_symbols filters Symbol nodes to these kinds (type
+    # level by default). None = all kinds (escape hatch). Bounds Tier-A fan-out
+    # AND matches the type-level recall granularity.
+    symbol_kinds: tuple[str, ...] | None = _TYPE_SYMBOL_KINDS
+    # Deterministic cap on Tier-A LabeledQuery items produced (after the kind
+    # filter). Tier-B queries are NOT capped (operator-curated). See run_eval.
+    max_queries: int = 400
+
+    def __post_init__(self) -> None:
+        if self.max_queries < 1:
+            raise ValueError(
+                f"EvalConfig.max_queries must be >= 1, got {self.max_queries}"
+            )
 
 
 @dataclass(frozen=True)
@@ -115,6 +142,9 @@ class EvalReport:
     num_queries: int
     corpus_dir: str
     index_dir: str
+    # Tier-A queries available BEFORE the max_queries cap was applied (Tier-B
+    # excluded from this count). Recorded so capped runs stay interpretable.
+    num_queries_available: int = 0
     # Absolute path to the timestamped output dir holding report.md / report.json.
     out_dir: str = ""
 
@@ -187,13 +217,25 @@ class _SymbolRow:
         self.kind = str(row.get("kind") or "")
 
 
-def _enumerate_symbols(graph: LadybugGraph) -> list[_SymbolRow]:
+def _enumerate_symbols(
+    graph: LadybugGraph, *, symbol_kinds: tuple[str, ...] | None
+) -> list[_SymbolRow]:
     """Return Symbol rows as duck-typed objects (.fqn / .name) for build_tier_a.
 
     ``LadybugGraph._rows`` returns dicts; ``build_tier_a``'s ``SymbolLike``
     protocol ducks on attributes, so we wrap each row.
+
+    When ``symbol_kinds`` is not None, filters to those kinds via a
+    parameterized ``WHERE s.kind IN $kinds`` predicate — type-level only by
+    default, which both bounds fan-out and matches the type-level recall
+    granularity (chunks carry ``primary_type_fqn``).
     """
-    rows = graph._rows(f"MATCH (s:Symbol) RETURN {_SYMBOL_RETURN}")  # noqa: SLF001
+    if symbol_kinds is None:
+        cypher = f"MATCH (s:Symbol) RETURN {_SYMBOL_RETURN}"
+        rows = graph._rows(cypher)  # noqa: SLF001
+    else:
+        cypher = f"MATCH (s:Symbol) WHERE s.kind IN $kinds RETURN {_SYMBOL_RETURN}"
+        rows = graph._rows(cypher, {"kinds": list(symbol_kinds)})  # noqa: SLF001
     return [_SymbolRow(r) for r in rows]
 
 
@@ -313,6 +355,11 @@ def _render_markdown(report: EvalReport) -> str:
         f"Corpus: `{report.corpus_dir}`  |  Index: `{report.index_dir}`  "
         f"|  Queries scored: {report.num_queries}"
     )
+    if report.num_queries_available:
+        lines.append(
+            f"Tier-A available (pre-cap): {report.num_queries_available}  |  "
+            f"Total scored (Tier-A kept + Tier-B): {report.num_queries}"
+        )
     lines.append("")
     header = "| config | " + " | ".join(METRIC_COLUMNS) + " |"
     sep = "| --- " * (len(METRIC_COLUMNS) + 1) + "|"
@@ -373,8 +420,16 @@ def run_eval(cfg: EvalConfig) -> EvalReport:
     LadybugGraph.reset_for_path(None)
     graph = LadybugGraph.get(ladybug_path)
 
-    symbols = _enumerate_symbols(graph)
-    queries = list(build_tier_a(symbols))
+    symbols = _enumerate_symbols(graph, symbol_kinds=cfg.symbol_kinds)
+    tier_a = list(build_tier_a(symbols))
+    num_queries_available = len(tier_a)
+    # Deterministic cap on Tier-A: sort by (query, fqn) and keep the first
+    # max_queries. fqn lives as the sole element of each LabeledQuery.relevant
+    # (build_tier_a sets relevant = {symbol.fqn}). Tier-B is operator-curated
+    # and NOT capped.
+    tier_a_sorted = sorted(tier_a, key=lambda q: (q.query, next(iter(q.relevant))))
+    tier_a_kept = tier_a_sorted[: cfg.max_queries]
+    queries = list(tier_a_kept)
     if cfg.tier_b_path:
         queries.extend(load_tier_b(cfg.tier_b_path))
 
@@ -421,6 +476,7 @@ def run_eval(cfg: EvalConfig) -> EvalReport:
         num_queries=len(queries),
         corpus_dir=cfg.corpus_dir,
         index_dir=index_dir,
+        num_queries_available=num_queries_available,
         out_dir=out_dir,
     )
 

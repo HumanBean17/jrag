@@ -47,12 +47,18 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def _cfg(tmp_path: Path, *, tier_b_path: str | None = None, tag: str = "run"):
+def _cfg(
+    tmp_path: Path,
+    *,
+    tier_b_path: str | None = None,
+    tag: str = "run",
+    max_queries: int | None = None,
+):
     from java_codebase_rag.eval.runner import EvalConfig
 
     # Fresh index dir per tag — `init` refuses an occupied index_dir, and some
     # tests invoke run_eval twice into the same tmp_path.
-    return EvalConfig(
+    kwargs = dict(
         corpus_dir=str(TINY_CORPUS),
         index_dir=str(tmp_path / f"index_{tag}"),
         results_dir=str(tmp_path / f"results_{tag}"),
@@ -60,6 +66,9 @@ def _cfg(tmp_path: Path, *, tier_b_path: str | None = None, tag: str = "run"):
         ks=(60,),  # single k keeps the smoke fast; shape is what we assert
         top_k_metrics=(1, 5, 10, 20),
     )
+    if max_queries is not None:
+        kwargs["max_queries"] = max_queries
+    return EvalConfig(**kwargs)
 
 
 def test_eval_report_shape(tmp_path):
@@ -125,3 +134,35 @@ def test_eval_tier_b_optional(tmp_path):
     for entry in report_b.configs:
         for key in METRIC_KEYS:
             assert key in entry.metrics
+
+
+def test_eval_max_queries_caps_tier_a(tmp_path):
+    """EvalConfig.max_queries deterministically caps the Tier-A query set.
+
+    On the tiny fixture the default kind filter yields a handful of type-level
+    symbols, so a max_queries=2 cap must keep num_queries_available >= 2 while
+    the actually-scored Tier-A count is exactly 2 (no Tier-B here). Also
+    confirms the report records the pre-cap availability.
+    """
+    from java_codebase_rag.eval.runner import run_eval
+
+    report = run_eval(_cfg(tmp_path, max_queries=2, tag="cap"))
+
+    # Pre-cap Tier-A availability is recorded and at least 2 (the fixture has
+    # multiple type-level symbols; the cap must have had something to bite on).
+    assert report.num_queries_available >= 2
+    # With no Tier-B, num_queries == Tier-A kept == max_queries(2).
+    assert report.num_queries == 2
+    # Every config scored exactly the capped query count.
+    for entry in report.configs:
+        assert entry.num_queries <= 2
+
+
+def test_eval_max_queries_validation():
+    """max_queries < 1 is rejected with ValueError at construction time."""
+    from java_codebase_rag.eval.runner import EvalConfig
+
+    with pytest.raises(ValueError):
+        EvalConfig(max_queries=0)
+    # Boundary: 1 is accepted.
+    EvalConfig(max_queries=1)
