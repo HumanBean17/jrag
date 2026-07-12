@@ -11,7 +11,7 @@ pytest.importorskip("lancedb")
 pytest.importorskip("sentence_transformers")
 
 from java_codebase_rag.search import search_lancedb
-from java_codebase_rag.search.search_lancedb import JAVA_ENRICHED_COLUMNS, _rrf_merge
+from java_codebase_rag.search.search_lancedb import JAVA_ENRICHED_COLUMNS, _rrf_merge, run_search
 
 
 def test_rrf_merge_weights_second_list_by_row() -> None:
@@ -65,6 +65,76 @@ def test_rrf_merge_reinforced_row_across_lists_outranks_singleton() -> None:
 def test_java_enriched_columns_include_symbol_identity_fields() -> None:
     assert "symbol_id" in JAVA_ENRICHED_COLUMNS
     assert "metadata" in JAVA_ENRICHED_COLUMNS
+
+
+def test_graph_expand_merge_honors_injected_k(monkeypatch) -> None:
+    """RankConfig.rrf_k flows through _graph_expand_merge into _rrf_merge.
+
+    With k=30 injected, a row reinforced at rank 0 across the vector and graph
+    lists has ``rrf_raw = 2/(k+1) = 2/31``. Under the old default k=60 it would
+    be 2/61 — strictly smaller — so observing 2/31 proves the injected k wins.
+    """
+    import sys
+    import types
+
+    from java_codebase_rag.search.search_scoring import RankConfig
+
+    # Stub the lazily-imported LadybugGraph so the function reaches the merge.
+    class _FakeGraph:
+        @staticmethod
+        def exists(path):
+            return True
+
+        @staticmethod
+        def get(path):
+            class _G:
+                def expand_fqns(self, fqns, depth):
+                    # One novel FQN so the function proceeds to graph fetch + fuse.
+                    return ["com.example.Other"]
+
+                def expand_methods(self, fqns, depth, exclude_external=False):
+                    return []
+            return _G()
+
+    fake_mod = types.ModuleType("java_codebase_rag.graph.ladybug_queries")
+    fake_mod.LadybugGraph = _FakeGraph
+    monkeypatch.setitem(sys.modules, "java_codebase_rag.graph.ladybug_queries", fake_mod)
+
+    # Same (filename, range_start, range_end) key in both lists → rank-0 in both,
+    # so raw RRF = 1/(k+1) + 1/(k+1) = 2/(k+1).
+    vector_rows = [
+        {"filename": "a.java", "range_start": 1, "range_end": 10,
+         "primary_type_fqn": "com.example.Foo"},
+    ]
+    graph_rows = [
+        {"filename": "a.java", "range_start": 1, "range_end": 10,
+         "primary_type_fqn": "com.example.Other"},
+    ]
+
+    monkeypatch.setattr(search_lancedb, "_search_one_table", lambda *a, **kw: graph_rows)
+    monkeypatch.setattr(search_lancedb, "_table_columns", lambda *a, **kw: set())
+    monkeypatch.setattr(search_lancedb, "_build_extra_predicates", lambda **kw: [])
+    monkeypatch.setattr(search_lancedb, "_apply_chunk_hints", lambda rows: None)
+    monkeypatch.setattr(search_lancedb, "_refine_java_start_lines", lambda rows: None)
+    monkeypatch.setattr(search_lancedb, "_vector_sort_key", lambda r: 0.0)
+
+    result = search_lancedb._graph_expand_merge(
+        vector_rows,
+        query="query",
+        query_vec=np.zeros(3),
+        db=object(),
+        uri="mem://",
+        limit=10,
+        extra_predicates=[],
+        expand_depth=1,
+        ladybug_path=None,
+        rank_config=RankConfig(lists=frozenset({"vector", "graph"}), rrf_k=30),
+    )
+
+    top = result[0]
+    # k=30 → raw = 2/31; would be 2/61 if the default leaked through.
+    assert top["_score_components"]["rrf_raw"] == pytest.approx(2.0 / 31.0, abs=1e-12)
+    assert top["_score_components"]["rrf_raw"] > 2.0 / 61.0
 
 
 def test_search_one_table_selects_symbol_identity_columns_when_schema_has_them(monkeypatch) -> None:
@@ -654,3 +724,668 @@ def test_refine_java_start_lines_skips_nonjava_and_method_chunks() -> None:
     assert rows[0]["start"]["line"] == 7
     assert rows[1]["start"]["line"] == 30
     assert "start" not in rows[2]
+
+
+# ---------- Task 4: BM25 candidate fetch + third RRF list ----------
+
+
+def _eval_pred(rows: list[dict], pred: str | None) -> list[dict]:
+    """Tiny SQL-ish predicate evaluator for test fakes (AND / IN / <> / =).
+
+    Splits on `` AND `` WITHOUT destroying parens (the prior implementation
+    pre-stripped ``(``/``)`` everywhere, which wiped the ``IN (...)`` marker so
+    the ``primary_type_fqn IN (...)`` filter never evaluated and rows that
+    should be filtered passed). ``_combine_predicates`` wraps each conjunct in a
+    paren pair when there are several, so we strip ONE outer paren layer per
+    clause while preserving the inner ``IN (...)`` parens needed to extract the
+    value list.
+    """
+    if not pred:
+        return list(rows)
+    clauses: list[str] = []
+    for c in pred.split(" AND "):
+        c = c.strip()
+        # Strip ONE outer wrapping paren pair (multi-predicate case); leave
+        # ``col IN (...)`` and its inner value-list parens intact.
+        if c.startswith("(") and c.endswith(")"):
+            c = c[1:-1].strip()
+        if c:
+            clauses.append(c)
+    out: list[dict] = []
+    for r in rows:
+        keep = True
+        for clause in clauses:
+            if " IN (" in clause:
+                col = clause.split(" IN ", 1)[0].strip()
+                vals_part = clause[clause.index("(") + 1 : clause.rindex(")")]
+                vals = [v.strip().strip("'") for v in vals_part.split(",")]
+                if str(r.get(col)) not in vals:
+                    keep = False
+                    break
+            elif "<>" in clause:
+                col, val = [p.strip() for p in clause.split("<>", 1)]
+                val = val.strip("'")
+                if str(r.get(col)) == val:
+                    keep = False
+                    break
+            elif "=" in clause:
+                col, val = [p.strip() for p in clause.split("=", 1)]
+                val = val.strip("'")
+                if str(r.get(col)) != val:
+                    keep = False
+                    break
+        if keep:
+            out.append(r)
+    return out
+
+
+class _FilterQuery:
+    """Fake LanceDB filter-only query: search().where().select().limit().to_list()."""
+
+    def __init__(self, rows: list[dict]) -> None:
+        self._rows = rows
+        self._pred: str | None = None
+        self._limit: int | None = None
+
+    def where(self, pred: str | None, prefilter: bool = False) -> "_FilterQuery":
+        self._pred = pred
+        return self
+
+    def select(self, _cols: list[str]) -> "_FilterQuery":
+        return self
+
+    def limit(self, n: int) -> "_FilterQuery":
+        self._limit = n
+        return self
+
+    def to_list(self) -> list[dict]:
+        filtered = _eval_pred(self._rows, self._pred)
+        if self._limit is not None:
+            filtered = filtered[: self._limit]
+        return list(filtered)
+
+
+class _FilterTable:
+    """Fake LanceDB table: open_table(...).search() with no vector → filter-only."""
+
+    def __init__(self, rows: list[dict]) -> None:
+        self._rows = rows
+
+    def search(self, *args, **kwargs) -> _FilterQuery:
+        # Filter-only when no positional vector arg is passed.
+        return _FilterQuery(self._rows)
+
+
+class _RecordingDb:
+    """Fake DB recording open_table calls; returns a per-table _FilterTable."""
+
+    def __init__(self) -> None:
+        self.tables: dict[str, _FilterTable] = {}
+        self.opened: list[str] = []
+
+    def add(self, name: str, rows: list[dict]) -> None:
+        self.tables[name] = _FilterTable(rows)
+
+    def open_table(self, name: str) -> _FilterTable:
+        self.opened.append(name)
+        return self.tables.get(name) or _FilterTable([])
+
+
+def _bm25_chunk(filename: str, fqn: str, rs: int, re_: int) -> dict:
+    return {
+        "filename": filename,
+        "range_start": rs,
+        "range_end": re_,
+        "primary_type_fqn": fqn,
+        "text": f"body of {fqn}",
+        "language": "java",
+        "start": {"line": rs, "byte_offset": 0},
+        "end": {"line": re_, "byte_offset": 100},
+    }
+
+
+def _patch_bm25_environment(monkeypatch, *, fts_result, chunk_rows) -> _RecordingDb:
+    """Wire the common monkeypatches for _bm25_candidate_rows unit tests."""
+    from java_codebase_rag.search import search_lexical
+
+    monkeypatch.setattr(search_lexical, "fetch_fts_candidates", lambda *a, **kw: fts_result)
+    monkeypatch.setattr(search_lexical, "enclosing_type_fqn", lambda fqn: fqn.split("#", 1)[0])
+    monkeypatch.setattr(search_lancedb, "_apply_chunk_hints", lambda rows: None)
+    monkeypatch.setattr(search_lancedb, "_refine_java_start_lines", lambda rows: None)
+    # Provide a schema that includes the enriched java columns the helper selects.
+    monkeypatch.setattr(
+        search_lancedb, "_table_columns",
+        lambda *a, **kw: {"filename", "text", "start", "end", "language", "range_start",
+                          "range_end", "primary_type_fqn", "role", "package"},
+    )
+    db = _RecordingDb()
+    db.add(search_lancedb.TABLES["java"], list(chunk_rows))
+    return db
+
+
+def test_bm25_candidate_rows_orders_by_bm25_score(monkeypatch) -> None:
+    """(a) BM25 candidates are emitted in BM25-desc order with the owning score attached.
+
+    FTS rows are supplied SCRAMBLED relative to score order [C(10), A(20), B(30)]
+    so only a real score-desc sort produces the asserted [B, A, C] output — a
+    first-seen/passthrough bug would yield [C, A, B] instead.
+    """
+    fts_result = {
+        "rows": [
+            {"id": "sc", "fqn": "com.x.C", "kind": "class", "name": "C"},
+            {"id": "sa", "fqn": "com.x.A", "kind": "class", "name": "A"},
+            {"id": "sb", "fqn": "com.x.B", "kind": "class", "name": "B"},
+        ],
+        "scores": {"sb": 30.0, "sa": 20.0, "sc": 10.0},
+    }
+    chunk_rows = [
+        _bm25_chunk("a.java", "com.x.A", 1, 10),
+        _bm25_chunk("b.java", "com.x.B", 1, 10),
+        _bm25_chunk("c.java", "com.x.C", 1, 10),
+    ]
+    db = _patch_bm25_environment(monkeypatch, fts_result=fts_result, chunk_rows=chunk_rows)
+
+    out = search_lancedb._bm25_candidate_rows(
+        g=object(), query="query", uri="mem://", db=db,
+        extra_predicates=[], columns={"primary_type_fqn"},
+    )
+    fqns = [r["primary_type_fqn"] for r in out]
+    assert fqns == ["com.x.B", "com.x.A", "com.x.C"]
+    scores = {r["primary_type_fqn"]: r["_score_components"]["bm25"] for r in out}
+    assert scores == {"com.x.B": 30.0, "com.x.A": 20.0, "com.x.C": 10.0}
+
+
+def test_bm25_candidate_rows_fts_unavailable_returns_empty(monkeypatch) -> None:
+    """(b) FTS returns None → [] and no LanceDB fetch is attempted."""
+    db = _patch_bm25_environment(monkeypatch, fts_result=None, chunk_rows=[])
+
+    out = search_lancedb._bm25_candidate_rows(
+        g=object(), query="query", uri="mem://", db=db,
+        extra_predicates=[], columns={"primary_type_fqn"},
+    )
+    assert out == []
+    assert db.opened == []  # no chunk fetch attempted
+
+
+def test_bm25_candidate_rows_respects_filter(monkeypatch) -> None:
+    """(c) extra_predicates flow into the chunk fetch and filter out types."""
+    fts_result = {
+        "rows": [
+            {"id": "sa", "fqn": "com.x.A", "kind": "class", "name": "A"},
+            {"id": "sb", "fqn": "com.x.B", "kind": "class", "name": "B"},
+        ],
+        "scores": {"sa": 20.0, "sb": 10.0},
+    }
+    chunk_rows = [
+        _bm25_chunk("a.java", "com.x.A", 1, 10),
+        _bm25_chunk("b.java", "com.x.B", 1, 10),
+    ]
+    db = _patch_bm25_environment(monkeypatch, fts_result=fts_result, chunk_rows=chunk_rows)
+
+    out = search_lancedb._bm25_candidate_rows(
+        g=object(), query="query", uri="mem://", db=db,
+        extra_predicates=["primary_type_fqn <> 'com.x.B'"],
+        columns={"primary_type_fqn"},
+    )
+    fqns = [r["primary_type_fqn"] for r in out]
+    assert fqns == ["com.x.A"]
+
+
+def test_bm25_candidate_rows_in_predicate_excludes_non_matching_types(monkeypatch) -> None:
+    """(c2) The ``primary_type_fqn IN (...)`` predicate (built from ordered_types)
+    excludes chunks whose FQN is not among the BM25-ordered types.
+
+    Regression: the ``_RecordingDb`` fake's ``_eval_pred`` previously destroyed
+    parens before checking ``" IN ("``, so the IN predicate never evaluated and
+    non-matching chunks leaked through. FTS yields only ``com.x.A`` (so
+    ordered_types=['com.x.A'] and the IN predicate is ``primary_type_fqn IN
+    ('com.x.A')``); a ``com.x.B`` chunk sitting in the table must be filtered out.
+    """
+    fts_result = {
+        "rows": [
+            {"id": "sa", "fqn": "com.x.A", "kind": "class", "name": "A"},
+        ],
+        "scores": {"sa": 20.0},
+    }
+    chunk_rows = [
+        _bm25_chunk("a.java", "com.x.A", 1, 10),
+        _bm25_chunk("b.java", "com.x.B", 1, 10),  # NOT in ordered_types — must be filtered
+    ]
+    db = _patch_bm25_environment(monkeypatch, fts_result=fts_result, chunk_rows=chunk_rows)
+
+    out = search_lancedb._bm25_candidate_rows(
+        g=object(), query="query", uri="mem://", db=db,
+        extra_predicates=[], columns={"primary_type_fqn"},
+    )
+    fqns = [r["primary_type_fqn"] for r in out]
+    assert fqns == ["com.x.A"]
+    assert "com.x.B" not in fqns  # filtered out by the IN (...) predicate
+
+
+def test_bm25_candidate_rows_multiple_chunks_per_symbol_preserve_order(monkeypatch) -> None:
+    """(d) Multiple chunks per type stay grouped, in table order, ordered by BM25 rank."""
+    fts_result = {
+        "rows": [
+            {"id": "sa", "fqn": "com.x.A", "kind": "class", "name": "A"},
+            {"id": "sb", "fqn": "com.x.B", "kind": "class", "name": "B"},
+        ],
+        "scores": {"sa": 20.0, "sb": 10.0},
+    }
+    chunk_rows = [
+        _bm25_chunk("a.java", "com.x.A", 1, 10),
+        _bm25_chunk("a.java", "com.x.A", 11, 20),
+        _bm25_chunk("b.java", "com.x.B", 1, 10),
+    ]
+    db = _patch_bm25_environment(monkeypatch, fts_result=fts_result, chunk_rows=chunk_rows)
+
+    out = search_lancedb._bm25_candidate_rows(
+        g=object(), query="query", uri="mem://", db=db,
+        extra_predicates=[], columns={"primary_type_fqn"},
+    )
+    keys = [(r["primary_type_fqn"], r["range_start"]) for r in out]
+    assert keys == [("com.x.A", 1), ("com.x.A", 11), ("com.x.B", 1)]
+    for r in out:
+        if r["primary_type_fqn"] == "com.x.A":
+            assert r["_score_components"]["bm25"] == 20.0
+        else:
+            assert r["_score_components"]["bm25"] == 10.0
+
+
+def test_bm25_candidate_rows_dedup_members_of_same_type_keep_max(monkeypatch) -> None:
+    """(d2) Two member symbols (#-fqns) of the SAME type dedup to one type entry,
+    emitted ONCE at the MAX BM25 score among the members.
+
+    FTS rows are ordered LOWER-score-first [sm2(20), sm1(30)] so a first-wins
+    bug would yield 20.0 and only a keep-max implementation yields the asserted
+    30.0 — this discriminates keep-max from first-seen-wins.
+    """
+    fts_result = {
+        "rows": [
+            {"id": "sm2", "fqn": "com.x.A#method2()", "kind": "method", "name": "method2"},
+            {"id": "sm1", "fqn": "com.x.A#method1()", "kind": "method", "name": "method1"},
+        ],
+        "scores": {"sm1": 30.0, "sm2": 20.0},
+    }
+    chunk_rows = [
+        _bm25_chunk("a.java", "com.x.A", 1, 10),
+        _bm25_chunk("a.java", "com.x.A", 11, 20),
+    ]
+    db = _patch_bm25_environment(monkeypatch, fts_result=fts_result, chunk_rows=chunk_rows)
+
+    out = search_lancedb._bm25_candidate_rows(
+        g=object(), query="query", uri="mem://", db=db,
+        extra_predicates=[], columns={"primary_type_fqn"},
+    )
+    # The type appears exactly once (both member chunks present, but only one type rank).
+    type_fqns = [r["primary_type_fqn"] for r in out]
+    assert type_fqns.count("com.x.A") == 2  # 2 chunks of the same single type
+    assert set(type_fqns) == {"com.x.A"}    # no other type leaked; deduped to one entry
+    # Keep-max: every emitted chunk carries the MAX member score (30.0), not 20.0.
+    for r in out:
+        assert r["_score_components"]["bm25"] == 30.0
+
+
+def _stub_ladybug_graph(monkeypatch) -> None:
+    """Install a LadybugGraph stub that exists but expands to nothing novel."""
+    import sys
+    import types
+
+    class _FakeGraph:
+        @staticmethod
+        def exists(_path):
+            return True
+
+        @staticmethod
+        def get(_path):
+            class _G:
+                def expand_fqns(self, fqns, depth):
+                    return []
+
+                def expand_methods(self, fqns, depth, exclude_external=False):
+                    return []
+
+            return _G()
+
+    fake_mod = types.ModuleType("java_codebase_rag.graph.ladybug_queries")
+    fake_mod.LadybugGraph = _FakeGraph
+    monkeypatch.setitem(sys.modules, "java_codebase_rag.graph.ladybug_queries", fake_mod)
+
+
+def test_graph_expand_merge_includes_bm25_list(monkeypatch) -> None:
+    """(e) With DEFAULT_RANK_CONFIG (3-list), a BM25-only row surfaces in the fusion."""
+    from java_codebase_rag.search.search_scoring import RankConfig
+
+    _stub_ladybug_graph(monkeypatch)
+    rc = RankConfig(lists=frozenset({"vector", "graph", "bm25"}), rrf_k=60)
+
+    vector_rows = [
+        {"filename": "v.java", "range_start": 1, "range_end": 10,
+         "primary_type_fqn": "com.V"},
+    ]
+    bm25_rows = [
+        {"filename": "b.java", "range_start": 1, "range_end": 10,
+         "primary_type_fqn": "com.B", "_kind": "java",
+         "_score_components": {"bm25": 0.42}},
+    ]
+    monkeypatch.setattr(search_lancedb, "_bm25_candidate_rows", lambda **kw: list(bm25_rows))
+    monkeypatch.setattr(search_lancedb, "_table_columns", lambda *a, **kw: set())
+    monkeypatch.setattr(search_lancedb, "_build_extra_predicates", lambda **kw: [])
+    # Force the graph path to produce nothing (no novel fqns via stub) → graph_rows = [].
+
+    result = search_lancedb._graph_expand_merge(
+        vector_rows,
+        query="something",
+        query_vec=np.zeros(3),
+        db=object(),
+        uri="mem://",
+        limit=10,
+        extra_predicates=[],
+        expand_depth=1,
+        ladybug_path=None,
+        rank_config=rc,
+    )
+    files = [r["filename"] for r in result]
+    assert "b.java" in files
+    bm25_row = next(r for r in result if r["filename"] == "b.java")
+    assert bm25_row["_score_components"]["bm25"] == 0.42
+
+
+def test_graph_expand_merge_omits_bm25_when_excluded(monkeypatch) -> None:
+    """(f) With BASELINE_2LIST_CONFIG, _bm25_candidate_rows is never called."""
+    from java_codebase_rag.search.search_scoring import BASELINE_2LIST_CONFIG
+
+    _stub_ladybug_graph(monkeypatch)
+    calls: list[dict] = []
+    monkeypatch.setattr(search_lancedb, "_bm25_candidate_rows",
+                        lambda **kw: calls.append(kw) or [])
+    monkeypatch.setattr(search_lancedb, "_table_columns", lambda *a, **kw: set())
+    monkeypatch.setattr(search_lancedb, "_build_extra_predicates", lambda **kw: [])
+
+    vector_rows = [
+        {"filename": "v.java", "range_start": 1, "range_end": 10,
+         "primary_type_fqn": "com.V"},
+    ]
+    result = search_lancedb._graph_expand_merge(
+        vector_rows,
+        query="something",
+        query_vec=np.zeros(3),
+        db=object(),
+        uri="mem://",
+        limit=10,
+        extra_predicates=[],
+        expand_depth=1,
+        ladybug_path=None,
+        rank_config=BASELINE_2LIST_CONFIG,
+    )
+    assert calls == []
+    # Result is the vector rows (graph produced nothing novel via stub).
+    assert result == vector_rows
+
+
+def test_run_search_bm25_degrades_silently_when_fts_missing(monkeypatch, tmp_path) -> None:
+    """(g) When FTS is unavailable, the 3-list config degrades to the 2-list baseline.
+
+    Builds a real LanceDB index with one java row, stubs LadybugGraph to exist (so
+    _graph_expand_merge runs) but expand to nothing, and forces _ensure_fts_loaded→False
+    so the BM25 fetch returns None. Asserts: no exception, no row carries a `bm25`
+    score component, and the result equals the BASELINE_2LIST_CONFIG run.
+    """
+    import uuid
+
+    import lancedb
+    from sentence_transformers import SentenceTransformer
+
+    from java_codebase_rag.ast.ast_java import ONTOLOGY_VERSION
+    from java_codebase_rag.search import search_lexical
+    from java_codebase_rag.search.index_common import SBERT_MODEL
+    from java_codebase_rag.search.search_lancedb import TABLES, _query_vector
+    from java_codebase_rag.search.search_scoring import (
+        BASELINE_2LIST_CONFIG,
+        DEFAULT_RANK_CONFIG,
+    )
+
+    _stub_ladybug_graph(monkeypatch)
+    # Force FTS unavailable → _try_fts_candidates returns None.
+    monkeypatch.setattr(search_lexical, "_ensure_fts_loaded", lambda g: False)
+
+    uri = str(tmp_path / "ldb")
+    model = SentenceTransformer(SBERT_MODEL, device="cpu", trust_remote_code=True)
+    text = "service that processes inbound Kafka records on the listener endpoint"
+    emb = _query_vector(model, text)
+    row = {
+        "id": str(uuid.uuid4()),
+        "filename": "smoke/p/Svc.java",
+        "text": text,
+        "language": "java",
+        "range_start": 0,
+        "range_end": 500,
+        "start": {"line": 1, "byte_offset": 0},
+        "end": {"line": 20, "byte_offset": 400},
+        "embedding": emb,
+        "package": "p",
+        "module": "smoke",
+        "microservice": "smoke",
+        "primary_type_fqn": "p.Svc",
+        "primary_type_kind": "class",
+        "role": "SERVICE",
+        "annotations_on_type": [],
+        "symbols": ["process"],
+        "ontology_version": ONTOLOGY_VERSION,
+        "capabilities": [],
+    }
+    db = lancedb.connect(uri)
+    db.create_table(TABLES["java"], [row], mode="create")
+
+    common = dict(
+        uri=uri, table_keys=["java"], limit=5, path_substring=None,
+        model_name=SBERT_MODEL, device="cpu", model=model,
+        graph_expand=True, expand_depth=1,
+    )
+    three = run_search(text, rank_config=DEFAULT_RANK_CONFIG, **common)
+    two = run_search(text, rank_config=BASELINE_2LIST_CONFIG, **common)
+
+    # No bm25 component anywhere on either run.
+    for rows in (three, two):
+        assert all("bm25" not in (r.get("_score_components") or {}) for r in rows)
+    # Degradation: 3-list with FTS-missing == 2-list baseline.
+    assert [r["filename"] for r in three] == [r["filename"] for r in two]
+    assert len(three) == len(two) and len(two) >= 1
+
+
+def _build_minimal_fts_graph(db_path, *, symbol_fqn: str, symbol_name: str) -> bool:
+    """Build a 1-Symbol LadybugDB graph with the real ``sym_fts`` BM25 index.
+
+    Returns True when the FTS index was created (extension available); False when
+    the FTS extension could not load (so the caller can ``pytest.skip``).
+
+    Mirrors the production write path: ``_drop_all`` + ``_create_schema`` for the
+    table structure, one Symbol node + one GraphMeta node, then
+    ``_ensure_symbol_fts_index`` to build the BM25 index over ``search_text``.
+    """
+    import ladybug
+
+    from java_codebase_rag.ast.ast_java import ONTOLOGY_VERSION
+    from java_codebase_rag.graph.build_ast_graph import (
+        _compute_symbol_search_text,
+        _create_schema,
+        _drop_all,
+        _ensure_symbol_fts_index,
+    )
+    from java_codebase_rag.search.search_scoring import SYMBOL_FTS_INDEX
+
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    db = ladybug.Database(str(db_path))
+    conn = ladybug.Connection(db)
+    try:
+        _drop_all(conn)
+        _create_schema(conn)
+        search_text = _compute_symbol_search_text(
+            name=symbol_name, fqn=symbol_fqn, signature="",
+            annotations=[], capabilities=[], package=symbol_fqn.rsplit(".", 1)[0],
+        )
+        conn.execute(
+            "MERGE (s:Symbol {id: $id}) "
+            "SET s.kind = 'class', s.name = $name, s.fqn = $fqn, "
+            "s.package = $package, s.module = '', s.microservice = '', "
+            "s.filename = $filename, s.start_line = 1, s.end_line = 20, "
+            "s.start_byte = 0, s.end_byte = 200, "
+            "s.modifiers = $modifiers, s.annotations = $annotations, "
+            "s.capabilities = $capabilities, s.role = 'SERVICE', "
+            "s.signature = '', s.parent_id = '', s.resolved = false, "
+            "s.generated = false, s.generated_by = '', "
+            "s.search_text = $search_text",
+            {
+                "id": symbol_fqn, "name": symbol_name, "fqn": symbol_fqn,
+                "package": symbol_fqn.rsplit(".", 1)[0],
+                "filename": f"{symbol_name}.java",
+                "modifiers": [], "annotations": [], "capabilities": [],
+                "search_text": search_text,
+            },
+        )
+        # GraphMeta with current ontology so LadybugGraph.get() accepts it.
+        conn.execute(
+            "MERGE (m:GraphMeta {key: 'meta'}) "
+            "SET m.ontology_version = $ov, m.built_at = 0, m.source_root = '', "
+            "m.counts_json = '', m.parse_errors = 0",
+            {"ov": ONTOLOGY_VERSION},
+        )
+        _ensure_symbol_fts_index(conn, verbose=False)
+        idx = conn.execute("CALL SHOW_INDEXES() RETURN index_name")
+        names: set[str] = set()
+        while idx.has_next():
+            names.add(idx.get_next()[0])
+        return SYMBOL_FTS_INDEX in names
+    finally:
+        conn.close()
+        db.close()
+
+
+def test_run_search_bm25_contributes_on_camelcase_query_via_real_fts(tmp_path) -> None:
+    """(h) A camelCase identifier query lands in sym_fts's token space and the BM25
+    list contributes to the 3-list fusion.
+
+    Regression for A-I1: ``_bm25_candidate_rows`` used to pass the RAW query to
+    ``fetch_fts_candidates``; LadybugDB FTS does not split camelCase, so a query
+    like ``DistributionChunkService`` matched nothing and BM25 silently no-op'd.
+    With the ``build_fts_query`` pre-split, the FTS path matches.
+
+    Exercises the UN-stubbed FTS path: a real LadybugDB ``sym_fts`` index on a
+    1-Symbol graph + a real LanceDB index with a matching chunk. Does NOT
+    monkeypatch ``fetch_fts_candidates``.
+
+    BM25 contribution is asserted two ways:
+      1. Direct (un-stubbed) ``fetch_fts_candidates(g, build_fts_query(name))``
+         returns the namesake Symbol with a positive BM25 score; the RAW query
+         returns nothing (the bug).
+      2. ``run_search`` under the 3-list config produces a row whose
+         ``_score_components`` carries ``rrf_raw`` — set only by ``_rrf_merge``
+         when the bm25 list joined the fusion. The graph is edge-less, so the
+         second list is necessarily bm25; the 2-list baseline has no ``rrf_raw``.
+    """
+    import uuid
+
+    import lancedb
+    from sentence_transformers import SentenceTransformer
+
+    from java_codebase_rag.ast.ast_java import ONTOLOGY_VERSION
+    from java_codebase_rag.graph.ladybug_queries import LadybugGraph
+    from java_codebase_rag.search import search_lexical
+    from java_codebase_rag.search.index_common import SBERT_MODEL
+    from java_codebase_rag.search.search_lancedb import TABLES, _query_vector
+    from java_codebase_rag.search.search_scoring import (
+        BASELINE_2LIST_CONFIG,
+        DEFAULT_RANK_CONFIG,
+        build_fts_query,
+    )
+
+    symbol_name = "DistributionChunkService"  # multi-token camelCase — the trigger
+    symbol_fqn = f"smoke.{symbol_name}"
+
+    # 1. Real LadybugDB graph: 1 Symbol + sym_fts BM25 index.
+    ladybug_path = tmp_path / "code_graph.lbug"
+    fts_ready = _build_minimal_fts_graph(
+        ladybug_path, symbol_fqn=symbol_fqn, symbol_name=symbol_name,
+    )
+    if not fts_ready:
+        pytest.skip("FTS extension unavailable in this environment")
+    # build_fts_query must actually split the identifier (else the test is moot).
+    assert build_fts_query(symbol_name) == "distribution chunk service"
+
+    LadybugGraph.reset_for_path(None)
+    g = LadybugGraph.get(str(ladybug_path))
+
+    # 2. Direct (un-stubbed) FTS sanity check: pre-split matches, raw does not.
+    pre = search_lexical.fetch_fts_candidates(
+        g, build_fts_query(symbol_name), filter=None, path_contains=None,
+    )
+    assert pre and pre["rows"], "pre-split query must match via the real sym_fts index"
+    assert symbol_fqn in {r["fqn"] for r in pre["rows"]}
+    assert any(v > 0.0 for v in (pre.get("scores") or {}).values())
+    raw = search_lexical.fetch_fts_candidates(
+        g, symbol_name, filter=None, path_contains=None,
+    )
+    assert not raw or not raw.get("rows"), (
+        "raw camelCase query should NOT match (FTS does not split camelCase); "
+        f"got: {raw}"
+    )
+
+    # 3. Real LanceDB index: 1 chunk matching the Symbol's enclosing type.
+    uri = str(tmp_path / "ldb")
+    model = SentenceTransformer(SBERT_MODEL, device="cpu", trust_remote_code=True)
+    text = "service that distributes chunks across the pipeline stages"
+    emb = _query_vector(model, text)
+    row = {
+        "id": str(uuid.uuid4()),
+        "filename": f"smoke/{symbol_name}.java",
+        "text": text,
+        "language": "java",
+        "range_start": 0,
+        "range_end": 500,
+        "start": {"line": 1, "byte_offset": 0},
+        "end": {"line": 20, "byte_offset": 400},
+        "embedding": emb,
+        "package": "smoke",
+        "module": "smoke",
+        "microservice": "smoke",
+        "primary_type_fqn": symbol_fqn,
+        "primary_type_kind": "class",
+        "role": "SERVICE",
+        "annotations_on_type": [],
+        "symbols": ["distribute"],
+        "ontology_version": ONTOLOGY_VERSION,
+        "capabilities": [],
+    }
+    db = lancedb.connect(uri)
+    db.create_table(TABLES["java"], [row], mode="create")
+
+    common = dict(
+        uri=uri, table_keys=["java"], limit=5, path_substring=None,
+        model_name=SBERT_MODEL, device="cpu", model=model,
+        graph_expand=True, expand_depth=1, ladybug_path=str(ladybug_path),
+    )
+    # 4. 3-list run: bm25 joins the fusion → _rrf_merge runs → rrf_raw appears.
+    three = run_search(symbol_name, rank_config=DEFAULT_RANK_CONFIG, **common)
+    assert three, "expected non-empty results for the namesake query"
+    has_rrf_raw = [
+        r for r in three if "rrf_raw" in (r.get("_score_components") or {})
+    ]
+    assert has_rrf_raw, (
+        "3-list run should reflect bm25 fusion (rrf_raw set by _rrf_merge); "
+        f"components: {[r.get('_score_components') for r in three]}"
+    )
+    # rrf_raw > 0 confirms the bm25 list contributed a positive rank contribution.
+    assert any(
+        float((r.get("_score_components") or {}).get("rrf_raw", 0.0)) > 0.0
+        for r in has_rrf_raw
+    )
+    # The namesake type is present in the 3-list result.
+    assert symbol_fqn in {r.get("primary_type_fqn") for r in three}
+
+    # 5. 2-list baseline (vector+graph): edge-less graph → no fusion → no rrf_raw.
+    # Drop the cached singleton so the baseline run reopens cleanly.
+    LadybugGraph.reset_for_path(None)
+    two = run_search(symbol_name, rank_config=BASELINE_2LIST_CONFIG, **common)
+    assert all(
+        "rrf_raw" not in (r.get("_score_components") or {}) for r in two
+    ), "2-list baseline should not produce rrf_raw (graph is edge-less)"
+

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
 
 # Name of the LadybugDB FTS (Okapi BM25) index over Symbol.search_text (fork A).
 # Shared by the build path (build_ast_graph._ensure_symbol_fts_index) and the
@@ -84,13 +85,86 @@ _ROLE_SCORE_WEIGHTS: dict[str, float] = {
     "DTO": -0.08,
 }
 
+
+def _rrf_max(num_lists: int, k: int = 60) -> float:
+    """Return the theoretical maximum RRF score for N-list fusion.
+
+    Reciprocal Rank Fusion (RRF) bounds each contribution to ≤ 1/(rank + k).
+    For N fused lists, the maximum possible sum is N/(k + 1) (achieved when
+    an item ranks #1 across all lists).
+
+    Args:
+        num_lists: Number of ranked lists being fused (e.g., 2 for vector+lexical).
+        k: The RRF constant (default 60 per the original paper).
+
+    Returns:
+        The maximum RRF contribution: num_lists / (k + 1).
+    """
+    return num_lists / (k + 1)
+
+
+# Allowed list names in a RankConfig: vector is always required (it is the
+# backbone retrieval signal); graph and bm25 are optional fusion participants.
+# The "bm25" list is wired in ``search_lancedb._graph_expand_merge`` (LadybugDB
+# FTS candidate fetch), which fuses BM25-ranked Symbol candidates as a third
+# RRF list alongside vector and graph.
+_RANK_LIST_NAMES: frozenset[str] = frozenset({"vector", "graph", "bm25"})
+
+
+@dataclass(frozen=True)
+class RankConfig:
+    """Which ranked lists to fuse and the RRF constant to fuse them with.
+
+    This is a dep-free value object (no lancedb/torch) so it can be constructed
+    on every install flavor, including graph-only (macOS Intel). It is plumbed
+    through ``run_search`` → ``_graph_expand_merge`` to control (a) which lists
+    contribute to the final RRF fusion and (b) the ``k`` constant passed into
+    ``_rrf_merge``.
+
+    Attributes:
+        lists: Subset of ``{"vector", "graph", "bm25"}``. Must contain
+            ``"vector"`` (the backbone retrieval signal) and be non-empty.
+        rrf_k: The RRF constant (default 60 per the original paper). Must be ≥ 1.
+    """
+
+    lists: frozenset[str]
+    rrf_k: int = 60
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.lists, frozenset) or not self.lists:
+            raise ValueError("RankConfig.lists must be a non-empty frozenset")
+        if "vector" not in self.lists:
+            raise ValueError(
+                "RankConfig.lists must contain 'vector' (the backbone signal)"
+            )
+        unknown = self.lists - _RANK_LIST_NAMES
+        if unknown:
+            raise ValueError(
+                f"RankConfig.lists has unknown names {sorted(unknown)!r}; "
+                f"allowed: {sorted(_RANK_LIST_NAMES)!r}"
+            )
+        if not isinstance(self.rrf_k, int) or self.rrf_k < 1:
+            raise ValueError(f"RankConfig.rrf_k must be an int >= 1, got {self.rrf_k!r}")
+
+
+# Production default: ship the 3-list config (vector+graph+bm25). The BM25 list
+# is wired in ``search_lancedb._graph_expand_merge``; on installs without the
+# vector stack, or when the FTS index is unavailable, it degrades silently to
+# the 2-list (vector+graph) fusion.
+DEFAULT_RANK_CONFIG = RankConfig(lists=frozenset({"vector", "graph", "bm25"}), rrf_k=60)
+
+# Eval convenience: the historical 2-list (vector+graph) fusion, used by
+# evaluation harnesses that isolate the vector+graph baseline from the bm25 list.
+BASELINE_2LIST_CONFIG = RankConfig(lists=frozenset({"vector", "graph"}), rrf_k=60)
+
+
 # Theoretical maximum for hybrid composite score (used for display normalization).
 # Hybrid sort metric: raw_rrf * (import_factor if import_heavy else 1)
 #                   + role_weight + symbol_bonus
 # where raw_rrf ≤ 2/(k+1) for 2-list RRF, role_weight ≤ max(_ROLE_SCORE_WEIGHTS),
 # and symbol_bonus ≤ _SYMBOL_MATCH_BONUS_CAP + _TYPE_MATCH_BONUS_CAP + _ACTION_VERB_BONUS.
-# The import factor is ≤ 1, so we use the raw max (2/61).
-_HYBRID_SCORE_MAX = (2.0 / 61.0) + max(_ROLE_SCORE_WEIGHTS.values()) + _SYMBOL_MATCH_BONUS_CAP + _TYPE_MATCH_BONUS_CAP + _ACTION_VERB_BONUS
+# The import factor is ≤ 1, so we use the raw max (derived via _rrf_max(2)).
+_HYBRID_SCORE_MAX = _rrf_max(2) + max(_ROLE_SCORE_WEIGHTS.values()) + _SYMBOL_MATCH_BONUS_CAP + _TYPE_MATCH_BONUS_CAP + _ACTION_VERB_BONUS
 
 
 def _query_tokens(query: str) -> set[str]:
@@ -374,6 +448,9 @@ def explain_score_components(
         rrf = comps.get("rrf_raw") or comps.get("hybrid_rrf")
         if rrf is not None:
             parts.append(f"rrf={float(rrf):.3f}")
+        bm25 = comps.get("bm25")
+        if bm25:
+            parts.append(f"bm25={float(bm25):.3f}")
     else:
         d = comps.get("distance")
         if d is not None:

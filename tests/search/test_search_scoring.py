@@ -10,7 +10,13 @@ from __future__ import annotations
 import pytest
 
 from java_codebase_rag.search.search_scoring import (
+    _ACTION_VERB_BONUS,
+    _HYBRID_SCORE_MAX,
+    _ROLE_SCORE_WEIGHTS,
+    _SYMBOL_MATCH_BONUS_CAP,
+    _TYPE_MATCH_BONUS_CAP,
     declaration_line_number,
+    explain_score_components,
     vector_display_score,
 )
 
@@ -83,3 +89,106 @@ def test_declaration_line_number_method_only_chunk_keeps_anchor() -> None:
     # Empty / missing inputs are safe.
     assert declaration_line_number(None, 5) == 5
     assert declaration_line_number("public class X {", None) is None
+
+
+# ---------- _rrf_max (Task 1) ----------
+
+
+def test_rrf_max_formula() -> None:
+    """Test the RRF max formula: num_lists / (k + 1)."""
+    from java_codebase_rag.search.search_scoring import _rrf_max
+
+    # Test the exact formula with different inputs
+    assert _rrf_max(2, 60) == pytest.approx(2.0 / 61.0, abs=1e-12)
+    assert _rrf_max(3, 60) == pytest.approx(3.0 / 61.0, abs=1e-12)
+    assert _rrf_max(3, 30) == pytest.approx(3.0 / 31.0, abs=1e-12)
+
+
+def test_hybrid_score_max_unchanged() -> None:
+    """Verify _HYBRID_SCORE_MAX preserves its exact numeric value after refactor."""
+    # Compute the expected value from the same constants used in the definition
+    expected = (2.0 / 61.0) + max(_ROLE_SCORE_WEIGHTS.values()) + _SYMBOL_MATCH_BONUS_CAP + _TYPE_MATCH_BONUS_CAP + _ACTION_VERB_BONUS
+
+    # The refactor must not introduce any numeric drift
+    assert _HYBRID_SCORE_MAX == pytest.approx(expected, abs=1e-12)
+
+
+# ---------- RankConfig (Task 2) ----------
+
+
+def test_rank_config_defaults() -> None:
+    """DEFAULT_RANK_CONFIG ships the 3-list set (bm25 inert until Task 4)
+    and the canonical RRF k=60 from the original paper."""
+    from java_codebase_rag.search.search_scoring import (
+        BASELINE_2LIST_CONFIG,
+        DEFAULT_RANK_CONFIG,
+    )
+
+    assert DEFAULT_RANK_CONFIG.lists == frozenset({"vector", "graph", "bm25"})
+    assert DEFAULT_RANK_CONFIG.rrf_k == 60
+    # Eval convenience: omits bm25.
+    assert BASELINE_2LIST_CONFIG.lists == frozenset({"vector", "graph"})
+    assert BASELINE_2LIST_CONFIG.rrf_k == 60
+
+
+def test_rank_config_validation() -> None:
+    """RankConfig validates its lists set and rrf_k range at construction."""
+    from java_codebase_rag.search.search_scoring import RankConfig
+
+    # Missing required "vector" element.
+    with pytest.raises(ValueError):
+        RankConfig(lists=frozenset({"graph"}))
+    # Unknown list name.
+    with pytest.raises(ValueError):
+        RankConfig(lists=frozenset({"vector", "nope"}))
+    # Empty set.
+    with pytest.raises(ValueError):
+        RankConfig(lists=frozenset())
+    # rrf_k below 1.
+    with pytest.raises(ValueError):
+        RankConfig(lists=frozenset({"vector"}), rrf_k=0)
+    # Sanity: a minimal valid config constructs cleanly.
+    ok = RankConfig(lists=frozenset({"vector"}), rrf_k=1)
+    assert ok.lists == frozenset({"vector"})
+    assert ok.rrf_k == 1
+
+
+def test_rank_config_frozen() -> None:
+    """RankConfig is frozen so configs can be safely shared as defaults."""
+    from dataclasses import FrozenInstanceError
+
+    from java_codebase_rag.search.search_scoring import DEFAULT_RANK_CONFIG
+
+    with pytest.raises(FrozenInstanceError):
+        DEFAULT_RANK_CONFIG.rrf_k = 5  # type: ignore[misc]
+
+
+# ---------- explain_score_components (Task 3) ----------
+
+
+def test_explain_bm25_token_present() -> None:
+    """When hybrid=True and bm25 is truthy, output contains both rrf= and bm25= tokens."""
+    result = explain_score_components({"rrf_raw": 0.03, "bm25": 12.5}, hybrid=True)
+    assert "rrf=0.030" in result
+    assert "bm25=12.500" in result
+    # Verify order: rrf appears before bm25
+    assert result.index("rrf=0.030") < result.index("bm25=12.500")
+
+
+def test_explain_bm25_token_absent_when_zero_or_missing() -> None:
+    """When bm25 is missing or zero, no bm25= token is emitted."""
+    # Missing bm25
+    result1 = explain_score_components({"rrf_raw": 0.03}, hybrid=True)
+    assert "bm25=" not in result1
+    # Zero bm25
+    result2 = explain_score_components({"rrf_raw": 0.03, "bm25": 0.0}, hybrid=True)
+    assert "bm25=" not in result2
+
+
+def test_explain_bm25_only_in_hybrid() -> None:
+    """bm25= token is only emitted in hybrid mode, not lexical mode."""
+    result = explain_score_components({"bm25": 12.5}, lexical=True)
+    assert "bm25=" not in result
+    # Lexical mode should still emit its standard tokens
+    assert "relevance=" in result or "name=" in result or not result  # May be empty if no lexical comps
+
