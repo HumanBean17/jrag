@@ -68,7 +68,7 @@ java_codebase_rag/pipeline.py
 
 ```
 MCP tool call (server.py)  ──asyncio.to_thread──▶  mcp_v2.*
-  ├─ search ─▶ search_lancedb.run_search    (vector / hybrid; optional graph-expand + RRF rank fusion)
+  ├─ search ─▶ search_lancedb.run_search    (vector / hybrid; graph-expand + 3-list RRF: vector + graph + BM25)
   │            └─ lancedb import absent (Intel Mac) → search_lexical (BM25 over Symbol FTS index; heuristic scan fallback)
   ├─ find / describe / neighbors ─▶ ladybug_queries.LadybugGraph   (Cypher)
   └─ resolve ─▶ resolve_service.resolve_v2   (cascade → status one | many | none)
@@ -78,13 +78,15 @@ MCP tool call (server.py)  ──asyncio.to_thread──▶  mcp_v2.*
 
 | Tool | Backing | Notes |
 | --- | --- | --- |
-| `search` | Lance vector/hybrid, or BM25 lexical fallback | dedup by FQN; role weights via `search_scoring` |
+| `search` | Lance vector/hybrid with 3-list RRF (vector + graph + BM25), or BM25 lexical fallback | dedup by FQN; role weights via `search_scoring`; list-set + `k` via injectable `RankConfig` |
 | `find` | Ladybug Cypher | required `NodeFilter`; strict per-kind frame |
 | `describe` | Ladybug Cypher | node record + `edge_summary` (composed/override rollups) |
 | `neighbors` | Ladybug Cypher | one hop; `direction` + `edge_types` required; dot-key composed edges |
 | `resolve` | Ladybug Cypher | per-kind generators exact→fuzzy; cap 10 candidates |
 
 **Lexical fallback** is selected by import availability (`mcp_v2` guards `from search_lancedb import …`): same row contract, flagged via `lexical_mode` + advisory. It is **BM25-first**: `build_ast_graph` indexes `Symbol.search_text` (camelCase-split token soup) under a LadybugDB FTS index (`sym_fts`, Okapi BM25), and `search_lexical` fetches top-K candidates via `QUERY_FTS_INDEX` then re-ranks them with the name/type/fqn/role heuristic in `search_lexical` (helpers from `search_scoring`). The FTS index auto-maintains on `increment`; the heuristic scan is the fallback when the index/extension is absent (older graph, offline first run). **`jrag` CLI** calls the same `mcp_v2.*` functions — identical backends, only rendering differs.
+
+**BM25 is also first-class on the primary (vector) path, not only the fallback.** `search_lancedb._graph_expand_merge` fuses **three** RRF lists — vector hits + graph-expand hits + BM25 hits — where the BM25 list is sourced from the same `sym_fts` index (via `search_lexical._try_fts_candidates`), resolved to chunk rows in BM25 rank order and re-filtered by the same LanceDB predicates as the vector list. The list-set and RRF `k` are runtime-injectable via `RankConfig` (`search_scoring.py`; default = 3-list, `k=60`), so the eval can A-B 2-list vs 3-list and sweep `k`. If the FTS extension/index is unavailable, the BM25 list is empty and the fusion degrades silently to the 2-list vector+graph ranking (no exception, no advisory) — so airgapped installs see no regression. Quality is measured by the **eval harness** (`java_codebase_rag.eval`: recall@k / precision@k / MRR over a corpus, with a Tier-A auto ground-truth derived per-Symbol and an optional Tier-B operator-authored file). On shopizer (n=400 of 2322 type-level symbols) the 3-list fusion at `k∈[60,120]` beats the 2-list baseline on every metric (MRR 0.3043→0.3082, recall@1 +0.005, recall@10 +0.0025) with **negligible latency cost** (~0 ms for the BM25 hop); `k=30` regresses recall@10 and is not used. The improvement is modest because Tier-A queries are identifier-derived (BM25's home turf) — a future Tier-B natural-language ground truth is expected to show a larger delta.
 
 ### Watch path (`jrag watch`) — warm reads + freshness
 
