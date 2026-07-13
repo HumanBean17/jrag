@@ -95,7 +95,7 @@ The Decision Framework above tells you *which* command; reach for `--help` only 
 
 **Prerequisite.** `jrag` needs an index — unindexed, every command exits 2 (`jrag status` checks; the file-system tools work without one).
 
-**Tip.** Run `jrag watch` once per session for fast, fresh queries — it keeps the index fresh on file change and serves every read command warm (no per-call model load). Optional; with no daemon running, all reads take the cold path byte-identically.
+**Tip.** Run `jrag watch` once per session for fast, fresh queries — it keeps the index fresh on file change and serves every read command warm (no per-call model/graph load; warm lexical + graph on Intel Mac). Optional; with no daemon running, all reads take the cold path byte-identically.
 
 **Resolve-first contract.** Every `<query>` command resolves the identifier first, then maps `one` / `many` / `none` onto one envelope: `one` → run; `many` → return candidates and stop, **no silent guess across distinct types** (a class sharing its simple name with its own constructor still resolves to the type — narrow with `--kind` / `--role` / `--fqn-contains` / `--service`); `none` → `status: not_found` (exit 0), fall back to `search` or `Grep`. Pass names (FQN / simple name / route path / topic) or prior `sym:`/`route:`/`client:`/`producer:` ids — never raw node ids. `--kind` is a true resolve input; `--role` / `--java-kind` / `--fqn-contains` post-filter client-side.
 
