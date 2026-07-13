@@ -122,6 +122,12 @@ def _wait_dead(proc: subprocess.Popen, timeout: float = _SHUTDOWN_WAIT_S) -> int
         return proc.wait()
 
 
+def _fail_with_log(log_path: Path, prefix: str) -> None:
+    """``pytest.fail`` with the tail of a daemon subprocess log for diagnosis."""
+    tail = log_path.read_bytes()[-4000:] if log_path.exists() else b"<no log>"
+    pytest.fail(f"{prefix}; log tail:\n{tail!r}")
+
+
 def _stop_proc(proc: subprocess.Popen, index_dir: Path) -> None:
     """Best-effort: SIGTERM a daemon subprocess and reap it + its files."""
     if proc.poll() is None:
@@ -551,11 +557,28 @@ def test_foreground_graph_only_starts_without_vectors(tmp_path, monkeypatch):
 
     script = tmp_path / "graph_only_stub.py"
     script.write_text(_GRAPH_ONLY_STUB_SCRIPT)
-    proc = _spawn_stub(script, index_dir, source_root)
+    log_path = tmp_path / "graph_only.log"
+    proc = _spawn_stub(script, index_dir, source_root, log_path=log_path)
     try:
-        assert _wait_alive(index_dir, _STUB_READY_S), (
-            "graph-only daemon did not come up — warm.model() was not skipped (exit 2?)"
-        )
+        # A gating regression makes the stub's model() raise -> exit 2 -> the process
+        # dies at once, so poll for early exit (not just the full _STUB_READY_S window)
+        # and surface the log tail for diagnosis.
+        came_up = False
+        deadline = time.monotonic() + _STUB_READY_S
+        while time.monotonic() < deadline:
+            if is_daemon_alive(index_dir):
+                came_up = True
+                break
+            if proc.poll() is not None:
+                _fail_with_log(
+                    log_path,
+                    f"graph-only daemon exited early (rc={proc.returncode}) — "
+                    "warm.model() was not skipped",
+                )
+            time.sleep(0.1)
+        if not came_up:
+            _fail_with_log(log_path, f"graph-only daemon did not come up in {_STUB_READY_S}s")
+
         import json
 
         state = json.loads(paths.state_path(index_dir).read_text())

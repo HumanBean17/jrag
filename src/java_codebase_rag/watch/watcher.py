@@ -40,7 +40,11 @@ from watchdog.observers import Observer
 from watchdog.observers.polling import PollingObserver
 
 from java_codebase_rag.graph.path_filtering import LayeredIgnore
-from java_codebase_rag.pipeline import run_cocoindex_update, run_incremental_graph, vector_stack_installed
+from java_codebase_rag.pipeline import (
+    run_cocoindex_update,
+    run_incremental_graph,
+    vector_stack_installed,
+)
 
 if TYPE_CHECKING:
     from java_codebase_rag.config import ResolvedOperatorConfig

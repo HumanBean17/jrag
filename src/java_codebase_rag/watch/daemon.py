@@ -103,9 +103,12 @@ class WatchDaemon:
             "started_at": None,
             "pid": None,
             "socket": str(paths.socket_path(cfg.index_dir)),
-            # "lexical" when the vector stack is absent (macOS Intel) — surfaced in
-            # the status panel and ``jrag watch --status``; omitted from display on
-            # the normal (vector) path to avoid noise.
+            # Display label derived from the install-time probe above, NOT a live
+            # search-capability check — the read path's actual lexical/vector choice
+            # is mcp_v2's (``_ensure_vector_backend``). The two agree under the PEP
+            # 508 markers (the vector trio is present or absent together). Surfaced
+            # in the status panel and ``jrag watch --status``; omitted from display
+            # on the normal (vector) path to avoid noise.
             "mode": "lexical" if not self._vector_enabled else "vector",
             "last_reindex_at": None,
             "last_reindex_kind": None,

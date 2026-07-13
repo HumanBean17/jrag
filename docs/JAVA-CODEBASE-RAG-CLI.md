@@ -489,7 +489,7 @@ jrag search "service" --limit 20 --offset 20
 
 ### `jrag watch`
 
-A single long-running daemon that does two things at once **while it runs**: (a) **keeps the index fresh** — it watches the source tree and re-runs a debounced per-type reindex (vectors via cocoindex, graph via `build_ast_graph.py --incremental`) on file change; and (b) **serves every read command warm** — `search` / `find` / `inspect` / `callers` / `callees` / `flow` are served over a Unix socket from a pre-loaded model + graph, so each query skips the per-call torch/model load and is effectively instant. The "run it while you code" workflow: start it once per coding session (foreground or detached), then keep issuing the normal `jrag` read commands — they are accelerated automatically.
+A single long-running daemon that does two things at once **while it runs**: (a) **keeps the index fresh** — it watches the source tree and re-runs a debounced per-type reindex (vectors via cocoindex, graph via `build_ast_graph.py --incremental`) on file change; and (b) **serves every read command warm** — `search` / `find` / `inspect` / `callers` / `callees` / `flow` are served over a Unix socket from a pre-loaded model + graph (graph-only on Intel Mac, where there is no model), so each query skips the per-call model/graph load and is effectively instant. The "run it while you code" workflow: start it once per coding session (foreground or detached), then keep issuing the normal `jrag` read commands — they are accelerated automatically.
 
 ```bash
 # Foreground — Ctrl+C (or SIGTERM) stops it

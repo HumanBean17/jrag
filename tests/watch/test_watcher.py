@@ -293,14 +293,16 @@ def test_reindex_graph_only_skips_vectors_and_completes(tmp_path, monkeypatch):
     w = _make_watcher(tmp_path, calls, monkeypatch)
     w._vector_enabled = False  # simulate a graph-only install
     w.reindex({"java"})
-    assert "run_cocoindex_update" not in calls
-    assert "on_event:vectors" not in calls
-    assert "run_incremental_graph" in calls
-    # COW snapshot lifecycle intact around the graph subprocess.
-    assert "begin_graph_snapshot" in calls
-    assert calls.index("begin_graph_snapshot") < calls.index("run_incremental_graph")
-    assert calls.index("run_incremental_graph") < calls.index("commit_graph_snapshot")
-    assert "on_event:indexing_done" in calls
+    # Exact sequence: the vectors step + its event are skipped, the graph still
+    # runs under its COW snapshot lifecycle, and indexing_done fires.
+    assert calls == [
+        "on_event:indexing_started",
+        "on_event:graph",
+        "begin_graph_snapshot",
+        "run_incremental_graph",
+        "commit_graph_snapshot",
+        "on_event:indexing_done",
+    ]
     assert w.last_reindex is not None
     assert w.last_reindex["kinds"] == ["java"]
 
