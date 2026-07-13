@@ -123,6 +123,11 @@ def _make_watcher(
         "java_codebase_rag.watch.watcher.run_incremental_graph",
         _make_graph_fake(calls, rc=graph_rc),
     )
+    # Pin the vector capability so the vectors-path tests below are independent
+    # of the HOST's vector stack (they monkeypatch the pipeline fakes, not the
+    # probe). The graph-only path is exercised by overriding this to False in
+    # its own test.
+    watcher._vector_enabled = True
     return watcher
 
 
@@ -273,6 +278,45 @@ def test_reindex_java_and_sql_runs_graph_once(tmp_path, monkeypatch):
     assert calls.count("run_incremental_graph") == 1
     assert "begin_graph_snapshot" in calls
     assert "commit_graph_snapshot" in calls
+
+
+# -- reindex: graph-only (macOS Intel) -> skip vectors, still run graph ---------
+
+
+def test_reindex_graph_only_skips_vectors_and_completes(tmp_path, monkeypatch):
+    """Lexical/graph-only mode (macOS Intel: no torch/lancedb/cocoindex): a java
+    reindex SKIPS the cocoindex vectors step entirely (it would 127 on the missing
+    binary and bail before firing ``indexing_done``), still runs the graph reindex
+    under its COW snapshot lifecycle, and completes — ``indexing_done`` fires and
+    ``last_reindex`` is recorded."""
+    calls: list[str] = []
+    w = _make_watcher(tmp_path, calls, monkeypatch)
+    w._vector_enabled = False  # simulate a graph-only install
+    w.reindex({"java"})
+    assert "run_cocoindex_update" not in calls
+    assert "on_event:vectors" not in calls
+    assert "run_incremental_graph" in calls
+    # COW snapshot lifecycle intact around the graph subprocess.
+    assert "begin_graph_snapshot" in calls
+    assert calls.index("begin_graph_snapshot") < calls.index("run_incremental_graph")
+    assert calls.index("run_incremental_graph") < calls.index("commit_graph_snapshot")
+    assert "on_event:indexing_done" in calls
+    assert w.last_reindex is not None
+    assert w.last_reindex["kinds"] == ["java"]
+
+
+def test_reindex_graph_only_sql_is_clean_noop(tmp_path, monkeypatch):
+    """A sql change in graph-only mode is a clean no-op: vectors are skipped and
+    the graph does not index SQL, so neither pipeline fn runs but ``indexing_done``
+    still fires (no perpetual vectors error as on the pre-fix path)."""
+    calls: list[str] = []
+    w = _make_watcher(tmp_path, calls, monkeypatch)
+    w._vector_enabled = False
+    w.reindex({"sql"})
+    assert "run_cocoindex_update" not in calls
+    assert "run_incremental_graph" not in calls
+    assert "begin_graph_snapshot" not in calls
+    assert "on_event:indexing_done" in calls
 
 
 # -- debounce coalescing -------------------------------------------------------

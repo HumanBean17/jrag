@@ -15,8 +15,12 @@ Lifecycle (``run_foreground``):
 
   1. Acquire the project lock. Held elsewhere -> stderr line + ``return 2``.
      Unsupported platform -> stderr line + ``return 2``.
-  2. EAGERLY warm the embedding model so a load failure fails fast (stderr +
-     ``on_event("error", …)`` + lock release + ``return 2``).
+  2. EAGERLY warm the embedding model — but ONLY when the vector stack is
+     installed — so a load failure fails fast (stderr + ``on_event("error", …)``
+     + lock release + ``return 2``). On graph-only installs (macOS Intel: PEP
+     508 excludes sentence_transformers/lancedb) this step is skipped and the
+     daemon serves warm lexical/graph-only search instead; the read path
+     (``mcp_v2.search_v2``) degrades to lexical on its own.
   3. Install SIGINT/SIGTERM handlers that set a stop flag.
   4. ``server.start()`` then ``watcher.start()``.
   5. Write the state file (``paths.state_path``) so ``--status``/``--stop`` from
@@ -42,6 +46,7 @@ import threading
 import time
 from typing import TYPE_CHECKING, Any
 
+from java_codebase_rag.pipeline import vector_stack_installed
 from java_codebase_rag.watch import paths
 from java_codebase_rag.watch.lock import (
     LockHeldError,
@@ -75,6 +80,10 @@ class WatchDaemon:
 
     def __init__(self, cfg: "ResolvedOperatorConfig") -> None:
         self.cfg = cfg
+        # Probed once (cheap: 3x importlib.util.find_spec). When False (graph-only
+        # install — macOS Intel), the daemon skips the embedding-model warm-up and
+        # the cocoindex vectors reindex; the read path degrades to lexical on its own.
+        self._vector_enabled = vector_stack_installed()
         self.lock = ProjectLock(cfg.index_dir)
         self.warm = WarmResources(cfg)
         self.server = WatchServer(self.warm, cfg)
@@ -94,6 +103,10 @@ class WatchDaemon:
             "started_at": None,
             "pid": None,
             "socket": str(paths.socket_path(cfg.index_dir)),
+            # "lexical" when the vector stack is absent (macOS Intel) — surfaced in
+            # the status panel and ``jrag watch --status``; omitted from display on
+            # the normal (vector) path to avoid noise.
+            "mode": "lexical" if not self._vector_enabled else "vector",
             "last_reindex_at": None,
             "last_reindex_kind": None,
             "reindex_count": 0,
@@ -128,16 +141,26 @@ class WatchDaemon:
             print("jrag watch: watch mode requires macOS/Linux", file=sys.stderr)
             return 2
 
-        # 2. Eagerly warm the model so a load failure fails fast (before the
-        #    server accepts a single query). The model is the only heavy,
-        #    failure-prone resource that is not lazy on the read path.
-        try:
-            self.warm.model()
-        except Exception as exc:  # noqa: BLE001 — report any load failure, then bail
-            print(f"jrag watch: failed to load embedding model: {exc}", file=sys.stderr)
-            self._record("error", {"phase": "model_load", "error": repr(exc)})
-            self.lock.release()
-            return 2
+        # 2. Eagerly warm the embedding model so a load failure fails fast (before
+        #    the server accepts a single query) — but ONLY when the vector stack is
+        #    installed. The model is the only heavy, failure-prone resource that is
+        #    not lazy on the read path. On a graph-only install (macOS Intel) there
+        #    is no vector stack to warm; the daemon serves lexical/graph-only search
+        #    and ``mcp_v2.search_v2`` degrades on its own, so we skip straight to
+        #    serving rather than failing on a missing ``sentence_transformers``.
+        if self._vector_enabled:
+            try:
+                self.warm.model()
+            except Exception as exc:  # noqa: BLE001 — report any load failure, then bail
+                print(f"jrag watch: failed to load embedding model: {exc}", file=sys.stderr)
+                self._record("error", {"phase": "model_load", "error": repr(exc)})
+                self.lock.release()
+                return 2
+        else:
+            print(
+                "jrag watch: vector stack unavailable — serving lexical (graph-only) search",
+                file=sys.stderr,
+            )
 
         # 3. Install stop-signal handlers (main thread only).
         signal.signal(signal.SIGINT, self._on_signal)
@@ -279,6 +302,8 @@ class WatchDaemon:
             state = dict(self._state)
         table = Table(title=f"jrag watch (pid {os.getpid()})", show_header=False, box=None)
         table.add_row("socket", str(state.get("socket")))
+        if state.get("mode") == "lexical":
+            table.add_row("mode", "lexical (graph-only)")
         table.add_row("reindex count", str(state.get("reindex_count", 0)))
         last_kind = state.get("last_reindex_kind")
         last_at = state.get("last_reindex_at")

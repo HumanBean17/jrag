@@ -1462,6 +1462,8 @@ def _cmd_watch_status(cfg) -> int:
     if alive:
         print(f"jrag watch: up (pid {pid}, socket {sock})")
         if state:
+            if state.get("mode") == "lexical":
+                print("  mode: lexical (graph-only) — no vector ranking")
             kind = state.get("last_reindex_kind")
             at = state.get("last_reindex_at")
             count = state.get("reindex_count", 0)

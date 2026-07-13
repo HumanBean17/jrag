@@ -40,7 +40,7 @@ from watchdog.observers import Observer
 from watchdog.observers.polling import PollingObserver
 
 from java_codebase_rag.graph.path_filtering import LayeredIgnore
-from java_codebase_rag.pipeline import run_cocoindex_update, run_incremental_graph
+from java_codebase_rag.pipeline import run_cocoindex_update, run_incremental_graph, vector_stack_installed
 
 if TYPE_CHECKING:
     from java_codebase_rag.config import ResolvedOperatorConfig
@@ -126,6 +126,10 @@ class SourceWatcher:
     ) -> None:
         self.cfg = cfg
         self.warm = warm
+        # Probed once: when False (graph-only install — macOS Intel) the vectors
+        # (cocoindex) reindex step is skipped entirely, so the graph reindex still
+        # completes and fires ``indexing_done`` instead of bailing on a 127 stub.
+        self._vector_enabled = vector_stack_installed()
         self._debounce_s = max(int(debounce_ms), 1) / 1000.0
         self._backend = backend
         # watchdog's PollingObserver takes a float timeout in SECONDS (it flows
@@ -281,7 +285,7 @@ class SourceWatcher:
     # -- reindex (runs on the debounce worker thread) ------------------------
 
     def reindex(self, kinds: set[str]) -> None:
-        """Run one debounced reindex: vectors always; graph only when java changed.
+        """Run one debounced reindex: vectors always (when installed); graph only when java changed.
 
         COW lifecycle (design §4.7): the graph subprocess writes the ORIGINAL
         graph while reads are served from a sidecar copy. ``begin_graph_snapshot``
@@ -290,20 +294,30 @@ class SourceWatcher:
         graph failure the existing ``.graph_increment_in_progress`` crash marker
         drives the next full rebuild. Lance needs no snapshot (commits are atomic
         per version; fresh per-query reads are fine).
+
+        Graph-only installs (macOS Intel) have no vector stack: the cocoindex
+        step is skipped (``vres=None``) so the graph reindex completes and fires
+        ``indexing_done`` instead of bailing on a 127 cocoindex-not-found stub.
         """
         if not kinds:
             return
         kind_list = sorted(kinds)
         self._emit("indexing_started", {"kinds": kind_list})
         try:
-            # Vectors run for every indexed type (java/sql/yaml all flow through cocoindex).
-            self._emit("vectors", {"kinds": kind_list})
-            vres = run_cocoindex_update(
-                self.cfg.subprocess_env(),
-                full_reprocess=False,
-                quiet=True,
-                verbose=False,
-            )
+            # Vectors run for every indexed type (java/sql/yaml all flow through
+            # cocoindex) — but only when the vector stack is installed. On a
+            # graph-only install cocoindex is absent and the call would return a
+            # 127 stub; skipping it keeps ``indexing_done`` reachable.
+            if self._vector_enabled:
+                self._emit("vectors", {"kinds": kind_list})
+                vres = run_cocoindex_update(
+                    self.cfg.subprocess_env(),
+                    full_reprocess=False,
+                    quiet=True,
+                    verbose=False,
+                )
+            else:
+                vres = None
 
             graph_rc = 0
             if "java" in kinds:
@@ -328,7 +342,7 @@ class SourceWatcher:
                     # is never left dangling. No-ops when no snapshot is active.
                     self.warm.commit_graph_snapshot()
 
-            if vres.returncode != 0:
+            if vres is not None and vres.returncode != 0:
                 self._emit("error", {"phase": "vectors", "returncode": vres.returncode})
                 return
             if graph_rc != 0:

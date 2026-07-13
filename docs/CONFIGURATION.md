@@ -300,6 +300,9 @@ generated_detection:
 # The `jrag watch` daemon (index freshness + warm-query). No env vars are
 # introduced for watch — precedence is CLI flag (--debounce-ms / --backend)
 # > YAML > built-in default. See JAVA-CODEBASE-RAG-CLI.md § `jrag watch`.
+# On Intel Mac (graph-only) the daemon runs without the vector stack: it skips
+# the model warm-up + cocoindex reindex and serves warm lexical search; the
+# watch: keys below apply unchanged on every platform.
 watch:
   # watch.debounce_ms — reindex debounce window in ms. Default 1500; floor 100
   # (a value at/below 100 ms falls back to 1500 with a stderr warning).

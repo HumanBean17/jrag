@@ -90,7 +90,7 @@ MCP tool call (server.py)  ──asyncio.to_thread──▶  mcp_v2.*
 
 ### Watch path (`jrag watch`) — warm reads + freshness
 
-When a `jrag watch` daemon is running, the **read path gains a warm hop**: the `jrag` read handlers ask the daemon over a Unix socket for the already-built payload instead of cold-loading the model and graph. The daemon reuses the MCP server's warm-cache posture — a process-singleton `_st_model` (SBERT) and a `LadybugGraph` — served to the CLI, so each query skips the per-call torch/model load. Output is byte-identical to the cold path (the same payload cores in `read_payloads.py` run either way). With no daemon running, the client transparently takes the cold path — the daemon is a pure accelerator, never a dependency.
+When a `jrag watch` daemon is running, the **read path gains a warm hop**: the `jrag` read handlers ask the daemon over a Unix socket for the already-built payload instead of cold-loading the model and graph. The daemon reuses the MCP server's warm-cache posture — a process-singleton `_st_model` (SBERT) and a `LadybugGraph` — served to the CLI, so each query skips the per-call torch/model load. Output is byte-identical to the cold path (the same payload cores in `read_payloads.py` run either way). With no daemon running, the client transparently takes the cold path — the daemon is a pure accelerator, never a dependency. On a **graph-only install (macOS Intel)** the daemon probes `pipeline.vector_stack_installed()` at startup: the model warm-up is skipped and `search` degrades to lexical via `mcp_v2._ensure_vector_backend`; the cocoindex vectors reindex is skipped too, so the graph reindex still completes and fires `indexing_done`. State/`--status` carry `mode: lexical`.
 
 | Concern | Module | Notes |
 | --- | --- | --- |
@@ -101,7 +101,7 @@ When a `jrag watch` daemon is running, the **read path gains a warm hop**: the `
 | Socket server | `watch/server.py` | `WatchServer` dispatches read payloads (serialized, not rendered). |
 | IPC client | `watch/client.py` | `is_daemon_alive` / `get_payload`; any error → cold fallback. |
 | Watcher | `watch/watcher.py` | `SourceWatcher` (watchdog native + polling fallback), lossless debounce, per-type routing. |
-| Daemon | `watch/daemon.py` | `WatchDaemon` lifecycle: lock → warm → server → watcher → serve loop → teardown (`os._exit(0)`). |
+| Daemon | `watch/daemon.py` | `WatchDaemon` lifecycle: lock → (warm, only if vector stack installed) → server → watcher → serve loop → teardown (`os._exit(0)`). |
 
 **Reindexing is subprocessed**, never in-process: cocoindex for vectors, `build_ast_graph.py --incremental` for the graph. **Concurrency:** searches never wait and never see partial state — Lance commits are atomic per version (fresh per-query reads are consistent), and the graph (LadybugDB — no transactions, single writer) is kept readable via a **copy-on-write file snapshot** of `code_graph.lbug` taken around each graph reindex: reads continue from the snapshot while the subprocess writes the original, then `reset_for_path` repoints the live handle.
 

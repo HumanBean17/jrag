@@ -478,6 +478,94 @@ def test_state_file_written_on_start(tmp_path, daemon_stub):
 
 
 # ===========================================================================
+# (f) graph-only startup (macOS Intel): skip model load, serve lexical mode
+# ===========================================================================
+
+
+_GRAPH_ONLY_STUB_SCRIPT = '''\
+"""Graph-only stub watch daemon: simulates macOS Intel (no vector stack).
+
+Patches ``daemon.vector_stack_installed`` -> False, swaps in a WarmResources whose
+``model()`` RAISES (proving ``run_foreground`` never calls it in lexical mode),
+fakes SourceWatcher, then runs the REAL ``run_foreground``. If the gating
+regresses (model() called), the AssertionError surfaces as "failed to load
+embedding model" -> exit 2 -> the daemon never comes up -> the test fails fast.
+"""
+import os
+import sys
+
+from java_codebase_rag.config import resolve_operator_config
+from java_codebase_rag.watch import daemon
+
+
+class _RaisingModelWarm:
+    def __init__(self, cfg):
+        self.cfg = cfg
+
+    def model(self):
+        raise AssertionError("warm.model() must not be called in lexical mode")
+
+    def graph(self):
+        return None
+
+    def begin_graph_snapshot(self):
+        pass
+
+    def commit_graph_snapshot(self):
+        pass
+
+
+class _FakeWatcher:
+    def __init__(self, cfg, warm, *, debounce_ms, backend, poll_interval_ms, on_event=None):
+        pass
+
+    def start(self):
+        pass
+
+    def stop(self):
+        pass
+
+
+# Simulate a graph-only install (macOS Intel): vector stack absent.
+daemon.vector_stack_installed = lambda: False
+daemon.WarmResources = _RaisingModelWarm
+daemon.SourceWatcher = _FakeWatcher
+
+cfg = resolve_operator_config(source_root=None, cli_index_dir=os.environ["JRAG_WATCH_TEST_INDEX"])
+cfg.apply_to_os_environ()
+daemon.WatchDaemon(cfg).run_foreground()
+sys.exit(0)  # pragma: no cover - run_foreground ends with os._exit(0)
+'''
+
+
+def test_foreground_graph_only_starts_without_vectors(tmp_path, monkeypatch):
+    """Lexical-mode startup (macOS Intel): with the vector stack absent, the daemon
+    must NOT call ``warm.model()`` (it would import sentence_transformers and exit 2)
+    and must reach serving — the state file carries ``mode='lexical'``.
+
+    The stub's ``WarmResources.model()`` raises AssertionError if called, so a gating
+    regression surfaces as a non-alive daemon (exit 2) rather than a silent pass.
+    """
+    index_dir, source_root = _index_source(tmp_path, tag="goidx")
+    _anchor_env(monkeypatch, index_dir, source_root)
+
+    script = tmp_path / "graph_only_stub.py"
+    script.write_text(_GRAPH_ONLY_STUB_SCRIPT)
+    proc = _spawn_stub(script, index_dir, source_root)
+    try:
+        assert _wait_alive(index_dir, _STUB_READY_S), (
+            "graph-only daemon did not come up — warm.model() was not skipped (exit 2?)"
+        )
+        import json
+
+        state = json.loads(paths.state_path(index_dir).read_text())
+        assert state.get("mode") == "lexical", f"expected mode='lexical', got {state.get('mode')!r}"
+        assert state["pid"] == proc.pid
+    finally:
+        _stop_proc(proc, index_dir)
+
+
+# ===========================================================================
 # GOLDEN IPC TEST (heavy) — jrag search over the socket == cold path, byte for byte
 # ===========================================================================
 
