@@ -31,6 +31,13 @@ classifiers = [
 # package installs graph-only and works out of the box — `search` then falls back to the
 # lexical (keyword) backend over the symbol graph (search_lexical.py); every other platform
 # is unchanged.
+#
+# The same trio cannot be gated off on free-threaded (nogil) CPython (python3.13t/3.14t),
+# even though lancedb ships no free-threaded wheels in ANY version and `pip install` fails
+# resolving `lancedb` there. PEP 780's `sys_abi_features` marker would express "skip on the
+# free-threaded build", but it is still a Draft PEP and is NOT implemented in pip/packaging
+# (unknown marker -> hard parse failure for everyone). So the only correct guidance for a
+# free-threaded interpreter is: use standard CPython. See README "Install" and issue #447.
 dependencies = [
     "cocoindex[lancedb]>=1.0.15,<2; sys_platform != 'darwin' or platform_machine != 'x86_64'",
     "ladybug>=0.17.1,<0.18",
