@@ -1731,7 +1731,7 @@ def classify_java_file(
 
     Args:
         source: Raw file bytes (required for header-banner detection).
-        ast: Parsed Java AST (from ast_java.parse_java_ast).
+        ast: Parsed Java AST (from ast_java.parse_java).
         config: Optional detection config (defaults to empty config).
         project_root: Optional project root for loading default config.
 

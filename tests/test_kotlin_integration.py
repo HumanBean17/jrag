@@ -249,3 +249,81 @@ def test_6_merged_graph_queryable_for_both_languages(mixed_jvm_db: Path) -> None
     )
     fqns = {str(r[0]) for r in headline}
     assert fqns == {"com.foo.UserController", "com.foo.UserService"}, headline
+
+
+# ---------------------------------------------------------------------------
+# Assertion 7: @JvmMultifileClass facade merge end-to-end through pass1.
+# ---------------------------------------------------------------------------
+#
+# ``merge_multifile_facades`` is unit-tested directly in ``test_ast_kotlin``,
+# but the ``mixed-jvm`` fixture carries no ``@JvmMultifileClass``, so the real
+# pass1 wire-up (parse-all → merge → register) was never exercised end-to-end.
+# This builds a fresh graph over TWO ``.kt`` files sharing
+# ``@file:JvmName("Calc")`` + ``@file:JvmMultifileClass()`` and asserts the
+# merged graph holds exactly ONE facade type carrying BOTH functions.
+
+_KT_MULTIFILE_A = """\
+@file:JvmName("Calc")
+@file:JvmMultifileClass()
+package com.foo
+
+fun alpha(x: Int): Int {
+    return x + 1
+}
+"""
+
+_KT_MULTIFILE_B = """\
+@file:JvmName("Calc")
+@file:JvmMultifileClass()
+package com.foo
+
+fun beta(y: Int): Int {
+    return y * 2
+}
+"""
+
+
+@pytest.fixture
+def multifile_db(tmp_path) -> Path:
+    """Fresh graph over two ``.kt`` files sharing a ``@JvmMultifileClass`` facade.
+
+    Exercises the production pass1 path (parse-all → ``merge_multifile_facades``
+    → type registration) the way ``jrag init`` does, rather than calling the
+    merge helper in isolation.
+    """
+    pkg = tmp_path / "src" / "main" / "kotlin" / "com" / "foo"
+    pkg.mkdir(parents=True)
+    (pkg / "CalcA.kt").write_text(_KT_MULTIFILE_A)
+    (pkg / "CalcB.kt").write_text(_KT_MULTIFILE_B)
+    db_path = tmp_path / "code_graph.lbug"
+    return build_ladybug_to(tmp_path / "src", db_path, max_pass=3)
+
+
+def test_7_multifile_facade_merges_two_files_into_one(multifile_db: Path) -> None:
+    """Two ``.kt`` files with ``@file:JvmName("Calc")`` + ``@file:JvmMultifileClass()``
+    compile into ONE JVM class ``com.foo.Calc``; the merged graph must hold
+    exactly one facade type ``Calc`` whose methods include BOTH top-level
+    functions, resolved (callable, non-phantom)."""
+    conn = _connect(multifile_db)
+    # Exactly ONE facade type com.foo.Calc (was two before the pass1 merge).
+    facades = _rows(
+        conn,
+        "MATCH (s:Symbol {fqn: 'com.foo.Calc'}) "
+        "RETURN s.fqn AS fqn, s.name AS name, s.kind AS kind",
+    )
+    assert len(facades) == 1, (
+        f"expected exactly one facade com.foo.Calc after merge; got rows={facades}"
+    )
+    # Both top-level functions land as resolved declared methods on the facade.
+    for fn in ("alpha", "beta"):
+        n = _scalar(
+            conn,
+            f"MATCH (m:Symbol) "
+            f"WHERE m.fqn STARTS WITH 'com.foo.Calc#{fn}' AND m.name = '{fn}' "
+            f"AND m.kind = 'method' AND m.resolved = true "
+            f"RETURN count(*) AS n",
+        )
+        assert n >= 1, (
+            f"merged facade com.foo.Calc should declare resolved method '{fn}'; "
+            f"got count={n}"
+        )

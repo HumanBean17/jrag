@@ -39,7 +39,13 @@ inside the MCP.
     low-confidence/phantom edges); (2) **Kotlin-native frameworks beyond
     Spring** (e.g. Ktor) are out of scope — role inference covers Spring
     stereotypes only; (3) **generated-code classification is Java-only** —
-    `.kt` generated sources are not auto-tagged `generated=true`.
+    `.kt` generated sources are not auto-tagged `generated=true`;
+    (4) **incremental `@JvmMultifileClass` reindex** — on the watcher path,
+    if one member of a `@file:JvmName + @file:JvmMultifileClass` group changes
+    but the retained facade file does not, the changed file's standalone facade
+    collides (last-wins; same-FQN warning fires; the retained file's top-level
+    functions drop to phantoms for that increment). A fresh `init` (the primary
+    workflow) re-merges the whole group and is unaffected.
   - See: `ast_java.py` / `ast_kotlin.py` (parsers),
     `path_filtering.iter_source_files` (yields `*.java` + `*.kt`).
 - **Source under `src/main/java/...`.** Test sources under

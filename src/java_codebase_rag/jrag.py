@@ -1095,8 +1095,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="List imports declared in a file (tree-sitter parse + resolve_v2).",
         parents=[_common_parser()],
         description=(
-            "Parse <file> with tree-sitter (ast_java.parse_java), walk its "
-            "import_declaration nodes, and resolve each imported FQN via resolve_v2 "
+            "Parse <file> with tree-sitter via the language backend "
+            "(backend_for(...).parse — parse_java for .java, parse_kotlin for "
+            ".kt), walk its import nodes, and resolve each imported FQN via resolve_v2 "
             "against the graph. Returns one node per import: resolved graph Symbol "
             "when resolve_v2 hits, or an unresolved placeholder carrying the raw FQN "
             "otherwise. Static and wildcard imports are included (marked in the row)."
@@ -3604,7 +3605,8 @@ def _cmd_imports(args: argparse.Namespace) -> int:
     """imports <file> — tree-sitter parse + resolve_v2 per imported FQN.
 
     Reads <file> from disk (cfg.source_root / <file> for relative paths),
-    parses with ast_java.parse_java, walks explicit_imports (dict: simple_name
+    parses via the language backend (backend_for(...).parse — parse_java for
+    .java, parse_kotlin for .kt), walks explicit_imports (dict: simple_name
     -> FQN), then resolves each FQN via resolve_v2 against the graph. Returns
     a node per import: resolved graph Symbol when resolve_v2 hits (status=one),
     or an unresolved placeholder carrying the raw FQN otherwise.
@@ -3638,10 +3640,11 @@ def _cmd_imports(args: argparse.Namespace) -> int:
         print(render(env, fmt=args.format, detail=args.detail))
         return 2
 
-    # parse_java is robust to invalid source (returns an empty JavaFileAst on
-    # parse errors, never raises). It builds imports from the
-    # `import_declaration` tree-sitter nodes via `_import_declaration_is_static`
-    # (ast_java.py:905) and the scoped_identifier child walk (ast_java.py:2658).
+    # The backend parse (backend_for(...).parse — parse_java / parse_kotlin)
+    # is robust to invalid source (returns an empty JavaFileAst on parse
+    # errors, never raises). It builds imports from the `import_declaration`
+    # tree-sitter nodes (Java path: `_import_declaration_is_static` at
+    # ast_java.py:905 and the scoped_identifier child walk at ast_java.py:2658).
     # explicit_imports: dict[str, str] = simple_name -> FQN (non-wildcard,
     # non-static); we also surface wildcard/static imports as unresolved rows so
     # the agent sees the full import block.

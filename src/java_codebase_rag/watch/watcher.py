@@ -21,7 +21,8 @@ the watchdog observer thread is never blocked.
 The cocoindex flow indexes three sets (``**/*.java``,
 ``**/src/main/resources/db/migration/*.sql``,
 ``**/src/main/resources/application*.yml``/``.yaml``). There is NO shared
-iterator (``iter_java_source_files`` yields ``.java`` only), so the watcher
+iterator (``iter_source_files`` yields the registered source suffixes —
+``.java`` and ``.kt`` when the Kotlin grammar is installed), so the watcher
 defines this UNION and classifies each event path into a reindex kind.
 
 All status is reported via ``on_event(kind, detail)`` callbacks (kinds:
@@ -227,7 +228,7 @@ class SourceWatcher:
     # exclude ``target/``, so the watcher must fire to keep them fresh.
     # ``LayeredIgnore.is_ignored`` does NOT prune build-output dirs
     # (``target/``/``build``/``out``) -- that pruning lives in
-    # ``iter_java_source_files``'s ``os.walk`` (``_is_build_output_dir``), used
+    # ``iter_source_files``'s ``os.walk`` (``_is_build_output_dir``), used
     # by the graph builder, not by cocoindex. (Compiled ``.class`` output under
     # ``target/`` doesn't match the ``.java`` suffix anyway.)
 

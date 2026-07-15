@@ -237,7 +237,7 @@ _KOTLIN_DEFAULT_SIMPLE: dict[str, str] = {
     "MutableIterator": "kotlin.collections.MutableIterator",
     "ListIterator": "kotlin.collections.ListIterator",
     "MutableListIterator": "kotlin.collections.MutableListIterator",
-    "Comparator": "kotlin.comparisons.Comparator",
+    "Comparator": "kotlin.Comparator",
     # kotlin.sequences.*
     "Sequence": "kotlin.sequences.Sequence",
     # kotlin.ranges.*

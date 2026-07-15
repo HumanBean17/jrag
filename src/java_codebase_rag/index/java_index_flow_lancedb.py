@@ -130,9 +130,9 @@ _VECTORS_TICK_EVERY = 25
 # This stays inside ONE component, so the earlier mount_each→app_main win is
 # preserved: still exactly ONE merge_insert per table at commit. Memoization
 # (``@coco.fn(memo=True)``) and the lock-guarded tick counter are safe under
-# concurrency; ``parse_java`` uses a per-thread tree-sitter Parser (already
-# routed via ``asyncio.to_thread``) and ``splitter.split`` is synchronous so the
-# event loop cannot reenter it.
+# concurrency; the backend parse (``parse_java`` / ``parse_kotlin``) uses a
+# per-thread tree-sitter Parser (already routed via ``asyncio.to_thread``)
+# and ``splitter.split`` is synchronous so the event loop cannot reenter it.
 #
 # Default 64 is sized to MATCH the embedder's hardcoded max_batch_size=64 (the
 # decorator above; not a constructor arg, so not raisable from the flow): ~64
@@ -223,7 +223,7 @@ def _approximate_vectors_total(project_root: Path) -> int:
 
     total = 0
     for dirpath, dirnames, filenames in os.walk(project_root):
-        # Prune the same universal nuisance dirs as iter_java_source_files /
+        # Prune the same universal nuisance dirs as iter_source_files /
         # cocoindex walk. (build-output pruning is matcher-dependent in the
         # real walk; for an APPROXIMATE total this cheap prune is sufficient
         # — the clamp absorbs any residual divergence.)
@@ -384,9 +384,10 @@ def _parse_and_enrich_java(
     parses + enriches, the event loop is free to drive other files and keep the
     embedder's batching queue fed.
 
-    Thread-safety: ``parse_java`` uses a per-thread tree-sitter ``Parser``
-    (see ``ast_java._parser``), so it is safe to call concurrently from these
-    worker threads — including the transitive ``parse_java`` that ``enrich_chunk``
+    Thread-safety: the backend parse (``parse_java`` / ``parse_kotlin``) uses
+    a per-thread tree-sitter ``Parser`` (see ``ast_java._parser`` /
+    ``ast_kotlin._parser``), so it is safe to call concurrently from these
+    worker threads — including the transitive re-parse that ``enrich_chunk``
     triggers via ``collect_annotation_meta_chain`` → ``_collect_annotation_decl_index``.
     ``enrich_chunk`` is otherwise pure-Python over the now-immutable AST; its
     ``lru_cache`` reads are thread-safe under the GIL.
@@ -446,7 +447,8 @@ async def process_java_file(
 
     # (vectors perf lever #2) parse + enrich off the event loop so the loop can
     # keep the embedder's batching queue fed while this file is being parsed.
-    # parse_java is thread-safe (per-thread tree-sitter Parser in ast_java).
+    # The backend parse (parse_java / parse_kotlin) is thread-safe (per-thread
+    # tree-sitter Parser in ast_java / ast_kotlin).
     enrichments, ast = await asyncio.to_thread(
         _parse_and_enrich_java, content_bytes, chunks, rel, project_root
     )
