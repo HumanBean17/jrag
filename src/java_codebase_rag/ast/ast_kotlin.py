@@ -67,6 +67,7 @@ from tree_sitter import Language, Node, Parser
 
 from java_codebase_rag.ast.ast_java import (
     AnnotationRef,
+    CallSite,
     FieldDecl,
     FileImports,
     JavaFileAst,
@@ -609,13 +610,356 @@ def _params_from_function_value_parameters(
     return params
 
 
+# ---- Task 10: call-site extraction + constructor delegation ----
+#
+# Grammar (tree-sitter-kotlin 1.1.0), confirmed by probing:
+# * Receiver call ``r.find(1)``:
+#   ``call_expression > (navigation_expression > [identifier 'r', ., identifier 'find'],
+#   value_arguments > value_argument)``. The ``navigation_expression`` LEFT SPINE
+#   (everything before the final ``.``) is the receiver; the LAST ``identifier``
+#   is the callee.
+# * Chained call ``repo.findById(1).orElse(null)`` nests: the outer
+#   ``navigation_expression``'s left spine is itself a ``call_expression``; the
+#   walker recurses and emits one CallSite per ``call_expression``.
+# * Constructor call ``Other(2)`` (no ``new`` in Kotlin):
+#   ``call_expression > (identifier 'Other', value_arguments)`` — callee target
+#   is a bare ``identifier`` with NO navigation receiver. Recognised as a
+#   constructor ONLY when that identifier names a known type (explicit import or
+#   same-CU declaration) — the capitalised-first-letter heuristic is rejected.
+# * Bare receiverless call ``helper()`` has the SAME node shape as a constructor
+#   call (``call_expression > (identifier, value_arguments)``); discrimination is
+#   by the type-name set: known type → constructor, unknown → bare method call
+#   (Task 13 resolves against the file facade).
+# * Method reference ``obj::foo`` parses as a ``navigation_expression`` whose
+#   separator is ``::`` (NOT ``.``) — so a standalone ``navigation_expression``
+#   with a ``::`` child is a method reference (arg_count = -1).
+#   ``a.b()::foo`` is a ``navigation_expression > (call_expression, ::, identifier)``;
+#   ``chained_method_reference`` is True when the spine is a ``call_expression``.
+# * Trailing-lambda call ``foo(1) { it }`` wraps as
+#   ``call_expression > (call_expression 'foo(1)', annotated_lambda)`` — the
+#   wrapper has no clean callee and is skipped; recursing hits the inner
+#   ``call_expression`` which emits. ``list.map { it.foo() }`` is
+#   ``call_expression > (navigation_expression 'list.map', annotated_lambda)``
+#   → emits ``map`` (arg_count 0, no ``value_arguments``) and, inside the lambda,
+#   ``foo`` with ``in_lambda=True``.
+# * Constructor delegation:
+#   - class header ``class D : Base(7)`` →
+#     ``class_declaration > delegation_specifiers > delegation_specifier >
+#     constructor_invocation > (user_type, value_arguments)``. When there is no
+#     explicit ``primary_constructor`` node, an implicit one is synthesised to
+#     carry the super-call site.
+#   - secondary ``constructor(...) : this(0)`` →
+#     ``secondary_constructor > constructor_delegation_call > (this|super,
+#     value_arguments)``.
+
+
+def _value_argument_count(call_or_invocation: Node) -> int:
+    """Number of ``value_argument`` children under the node's ``value_arguments``.
+
+    Returns 0 when there is no ``value_arguments`` child (e.g. a trailing-lambda
+    call with no parenthesised args).
+    """
+    va = next(
+        (c for c in call_or_invocation.named_children if c.type == "value_arguments"),
+        None,
+    )
+    if va is None:
+        return 0
+    return sum(1 for c in va.named_children if c.type == "value_argument")
+
+
+def _split_dot_navigation(nav: Node, src: bytes) -> tuple[str, str]:
+    """Split a ``.``-``navigation_expression`` into (receiver_text, callee).
+
+    The receiver is the raw text from the navigation start up to (not including)
+    the LAST ``.`` separator; the callee is the last ``identifier`` child. For
+    ``r.find`` → (``"r"``, ``"find"``); for ``foo.bar.baz`` → (``"foo.bar"``,
+    ``"baz"``); for ``repo.findById(1).orElse`` → (``"repo.findById(1)"``,
+    ``"orElse"``). Returns (``""``, ``""``) if no ``identifier`` callee is found.
+    """
+    ids = [c for c in nav.named_children if c.type == "identifier"]
+    if not ids:
+        return "", ""
+    callee = _txt(ids[-1], src)
+    # The last '.' separator (unnamed) marks the receiver/callee boundary.
+    dot = next(
+        (c for c in nav.children if not c.is_named and c.type == "."), None
+    )
+    if dot is not None:
+        recv = src[nav.start_byte:dot.start_byte].decode("utf-8", errors="replace")
+    else:
+        recv = ""  # defensive: a '.'-navigation always has a '.', but stay safe.
+    return recv, callee
+
+
+def _navigation_is_method_reference(nav: Node) -> bool:
+    """A ``navigation_expression`` is a method reference when it uses ``::``."""
+    return any(not c.is_named and c.type == "::" for c in nav.children)
+
+
+def _collect_kotlin_call_sites(
+    body: Node | None,
+    src: bytes,
+    *,
+    caller_fqn: str,
+    type_names: frozenset[str],
+) -> list[CallSite]:
+    """Walk a function/constructor body and collect raw ``CallSite`` records.
+
+    Faithful capture only (Task 10): receiver/callee split, constructor vs bare
+    discrimination via the type-name set, arg counts (``-1`` for ``::`` refs),
+    ``in_lambda``, ``chained_method_reference``. Static-certainty and facade-call
+    resolution are deferred to Task 13; ``is_static_call`` is best-effort True
+    only when the receiver of a non-constructor call matches a known type name.
+    """
+    out: list[CallSite] = []
+    if body is None:
+        return out
+
+    def emit(site: CallSite) -> None:
+        out.append(site)
+
+    def visit(n: Node, lam: bool) -> None:
+        t = n.type
+        # Lambda body: descend with the in-lambda flag set on every nested call.
+        if t in ("lambda_literal", "lambda_expression"):
+            for ch in n.children:
+                visit(ch, True)
+            return
+        if t == "call_expression":
+            _emit_call_expression_site(n, src, lam=lam, caller_fqn=caller_fqn,
+                                       type_names=type_names, emit=emit)
+            for ch in n.children:  # recurse for nested calls in receiver/args/lambda
+                visit(ch, lam)
+            return
+        if t == "navigation_expression":
+            # Standalone navigation (not the callee-target of a call_expression).
+            if _navigation_is_method_reference(n):
+                _emit_method_reference_site(n, src, lam=lam,
+                                            caller_fqn=caller_fqn, emit=emit)
+            # Either way, descend (spine may itself contain call_expressions).
+            for ch in n.children:
+                visit(ch, lam)
+            return
+        for ch in n.children:
+            visit(ch, lam)
+
+    visit(body, False)
+    return out
+
+
+def _emit_call_expression_site(
+    n: Node,
+    src: bytes,
+    *,
+    lam: bool,
+    caller_fqn: str,
+    type_names: frozenset[str],
+    emit,
+) -> None:
+    """Emit one ``CallSite`` for a ``call_expression`` (if it has a clear callee).
+
+    Shapes:
+    * ``call_expression > (navigation_expression, value_arguments [, annotated_lambda])``
+      → receiver call.
+    * ``call_expression > (identifier, value_arguments)`` → constructor call if
+      the identifier is a known type, else a bare receiverless method call.
+    * ``call_expression > (call_expression, annotated_lambda)`` → trailing-lambda
+      wrapper with no own callee; skip (the inner call_expression emits on recurse).
+    """
+    named = n.named_children
+    if not named:
+        return
+    first = named[0]
+    # Trailing-lambda wrapper: callee lives on the inner call_expression.
+    if first.type == "call_expression":
+        return
+    line = n.start_point[0] + 1
+    byte = n.start_byte
+    if first.type == "navigation_expression":
+        recv, callee = _split_dot_navigation(first, src)
+        if not callee:
+            return
+        # Best-effort static-call flag: receiver text matches a known type name.
+        is_static = recv != "" and recv in type_names
+        emit(
+            CallSite(
+                caller_fqn=caller_fqn,
+                receiver_expr=recv,
+                callee_simple=callee,
+                arg_count=_value_argument_count(n),
+                is_static_call=is_static,
+                is_constructor=False,
+                in_lambda=lam,
+                line=line,
+                byte=byte,
+            )
+        )
+        return
+    if first.type == "identifier":
+        name = _txt(first, src)
+        argc = _value_argument_count(n)
+        if name in type_names:
+            # Constructor call: ``Other(2)`` where Other is a known type.
+            emit(
+                CallSite(
+                    caller_fqn=caller_fqn,
+                    receiver_expr=name,
+                    callee_simple="<init>",
+                    arg_count=argc,
+                    is_static_call=False,
+                    is_constructor=True,
+                    in_lambda=lam,
+                    line=line,
+                    byte=byte,
+                )
+            )
+        else:
+            # Bare receiverless method call (Task 13 resolves via facade).
+            emit(
+                CallSite(
+                    caller_fqn=caller_fqn,
+                    receiver_expr="",
+                    callee_simple=name,
+                    arg_count=argc,
+                    is_static_call=False,
+                    is_constructor=False,
+                    in_lambda=lam,
+                    line=line,
+                    byte=byte,
+                )
+            )
+        return
+    # Other callee shapes (e.g. ``super_expression``/``this_expression`` direct)
+    # have no clean method callee; skip — recursing still visits their children.
+
+
+def _emit_method_reference_site(
+    n: Node, src: bytes, *, lam: bool, caller_fqn: str, emit
+) -> None:
+    """Emit a method-reference ``CallSite`` (arg_count = -1).
+
+    ``obj::foo`` → callee ``foo``, receiver ``obj``. ``a.b()::foo`` → callee
+    ``foo``, receiver ``a.b()``, ``chained_method_reference=True`` because the
+    spine is a ``call_expression`` (a call chain).
+    """
+    ids = [c for c in n.named_children if c.type == "identifier"]
+    if not ids:
+        return
+    callee = _txt(ids[-1], src)
+    dc = next((c for c in n.children if not c.is_named and c.type == "::"), None)
+    spine_text = (
+        src[n.start_byte:dc.start_byte].decode("utf-8", errors="replace")
+        if dc is not None
+        else ""
+    )
+    spine_node = n.named_children[0] if n.named_children else None
+    chained = spine_node is not None and spine_node.type == "call_expression"
+    emit(
+        CallSite(
+            caller_fqn=caller_fqn,
+            receiver_expr=spine_text,
+            callee_simple=callee,
+            arg_count=-1,
+            is_static_call=False,
+            is_constructor=False,
+            in_lambda=lam,
+            line=n.start_point[0] + 1,
+            byte=n.start_byte,
+            chained_method_reference=chained,
+        )
+    )
+
+
+def _primary_ctor_delegation_site(
+    class_node: Node, src: bytes, *, caller_fqn: str
+) -> CallSite | None:
+    """``CallSite`` for class-header constructor delegation ``: Base(x)``/``: Super(x)``.
+
+    Walks ``delegation_specifiers > delegation_specifier > constructor_invocation``;
+    the receiver is the ``user_type`` simple name, args counted from
+    ``value_arguments``. Returns the first such site, or None when the class
+    declares no constructor-style delegation (interface/type supertypes only).
+    """
+    del_specs = next(
+        (c for c in class_node.named_children if c.type == "delegation_specifiers"),
+        None,
+    )
+    if del_specs is None:
+        return None
+    for spec in del_specs.named_children:
+        if spec.type != "delegation_specifier":
+            continue
+        ci = next(
+            (c for c in spec.named_children if c.type == "constructor_invocation"),
+            None,
+        )
+        if ci is None:
+            continue
+        ut = next((c for c in ci.named_children if c.type == "user_type"), None)
+        if ut is None:
+            continue
+        recv = _simple_type_name(ut, src)
+        if not recv:
+            continue
+        return CallSite(
+            caller_fqn=caller_fqn,
+            receiver_expr=recv,
+            callee_simple="<init>",
+            arg_count=_value_argument_count(ci),
+            is_static_call=False,
+            is_constructor=True,
+            in_lambda=False,
+            line=class_node.start_point[0] + 1,
+            byte=class_node.start_byte,
+        )
+    return None
+
+
+def _secondary_ctor_delegation_site(
+    ctor_node: Node, src: bytes, *, caller_fqn: str
+) -> CallSite | None:
+    """``CallSite`` for a secondary-constructor delegation ``: this(...)``/``: super(...)``.
+
+    Source node: ``secondary_constructor > constructor_delegation_call > (this|super,
+    value_arguments)``. Receiver text is ``"this"``/``"super"``.
+    """
+    cdc = next(
+        (c for c in ctor_node.named_children if c.type == "constructor_delegation_call"),
+        None,
+    )
+    if cdc is None:
+        return None
+    is_super = any(c.type == "super" for c in cdc.children)
+    is_this = any(c.type == "this" for c in cdc.children)
+    recv = "super" if is_super else ("this" if is_this else "")
+    return CallSite(
+        caller_fqn=caller_fqn,
+        receiver_expr=recv,
+        callee_simple="<init>",
+        arg_count=_value_argument_count(cdc),
+        is_static_call=False,
+        is_constructor=True,
+        in_lambda=False,
+        line=ctor_node.start_point[0] + 1,
+        byte=ctor_node.start_byte,
+    )
+
+
 def _process_function_declaration(
-    node: Node, src: bytes, *, is_static_ctx: bool
+    node: Node,
+    src: bytes,
+    *,
+    is_static_ctx: bool,
+    type_fqn: str,
+    type_names: frozenset[str],
 ) -> MethodDecl:
     """``function_declaration`` → MethodDecl (``is_constructor`` always False in 1.1.0).
 
     All ``modifiers`` annotations attach to the MethodDecl (functions carry no
     use-site target semantics; their ``use_site_target`` is preserved as-is).
+    Task 10 walks the ``function_body`` for ``CallSite`` s attributed to
+    ``<type_fqn>#<signature>``.
     """
     name = next(
         (_txt(c, src) for c in node.named_children if c.type == "identifier"), ""
@@ -632,7 +976,7 @@ def _process_function_declaration(
     )
     mods = _build_member_modifiers(info, is_static=is_static_ctx, is_final=is_final)
     sig = f"{name}({','.join(p.type_name for p in params)})"
-    return MethodDecl(
+    m = MethodDecl(
         name=name,
         return_type=_simple_type_name(ret_type_node, src),
         is_constructor=False,
@@ -645,18 +989,33 @@ def _process_function_declaration(
         start_line=node.start_point[0] + 1,
         end_line=node.end_point[0] + 1,
     )
+    body = next((c for c in node.named_children if c.type == "function_body"), None)
+    m.call_sites = _collect_kotlin_call_sites(
+        body, src, caller_fqn=f"{type_fqn}#{sig}", type_names=type_names
+    )
+    return m
 
 
 def _process_secondary_constructor(
-    node: Node, src: bytes, class_name: str
+    node: Node,
+    src: bytes,
+    class_name: str,
+    *,
+    type_fqn: str,
+    type_names: frozenset[str],
 ) -> MethodDecl:
-    """``secondary_constructor`` → constructor MethodDecl (name = enclosing class)."""
+    """``secondary_constructor`` → constructor MethodDecl (name = enclosing class).
+
+    Task 10 attaches the ``constructor_delegation_call`` site (``: this(...)`` /
+    ``: super(...)``) at the constructor's start byte, plus any ``CallSite`` s in
+    the optional ``block`` body.
+    """
     params = _params_from_function_value_parameters(
         _function_value_parameters(node), src
     )
     anns = _kotlin_annotations_from_modifiers(node, src)
     sig = f"{class_name}({','.join(p.type_name for p in params)})"
-    return MethodDecl(
+    m = MethodDecl(
         name=class_name,
         return_type="",
         is_constructor=True,
@@ -668,6 +1027,18 @@ def _process_secondary_constructor(
         start_line=node.start_point[0] + 1,
         end_line=node.end_point[0] + 1,
     )
+    caller = f"{type_fqn}#{sig}"
+    sites = _collect_kotlin_call_sites(
+        next((c for c in node.named_children if c.type == "block"), None),
+        src,
+        caller_fqn=caller,
+        type_names=type_names,
+    )
+    del_site = _secondary_ctor_delegation_site(node, src, caller_fqn=caller)
+    if del_site is not None:
+        sites.append(del_site)
+    m.call_sites = sites
+    return m
 
 
 def _process_property_declaration(
@@ -992,9 +1363,10 @@ def _parse_kotlin_type(
     outer_fqn: str | None,
     all_types: list[TypeDecl],
     kind_by_simple: dict[str, str],
+    type_names: frozenset[str],
     filename: str = "",
 ) -> TypeDecl | None:
-    """Build a ``TypeDecl`` for a Kotlin type declaration node (Tasks 6 + 7 + 8).
+    """Build a ``TypeDecl`` for a Kotlin type declaration node (Tasks 6–8 + 10).
 
     Recurses into the declaration's body (``class_body`` / ``enum_class_body``)
     for nested ``class_declaration`` / ``object_declaration`` /
@@ -1003,7 +1375,10 @@ def _parse_kotlin_type(
     ``property_declaration`` and ``val``/``var`` primary-constructor parameters →
     field + synthesized accessors. Companion-object direct members carry
     ``"static"``. Task 8 adds type-level ``annotations`` and the
-    ``extends``/``implements`` partition of the ``:`` supertype list.
+    ``extends``/``implements`` partition of the ``:`` supertype list. Task 10
+    populates ``MethodDecl.call_sites`` (function/secondary-ctor bodies + primary
+    + secondary constructor delegation); ``type_names`` drives constructor vs
+    bare-call discrimination and the best-effort ``is_static_call`` flag.
     """
     t = node.type
     if t == "class_declaration":
@@ -1055,18 +1430,39 @@ def _parse_kotlin_type(
 
     # Primary constructor (class header). Only `class_declaration` carries one;
     # it contributes the constructor MethodDecl + any val/var property members.
+    # Task 10: when the class header declares constructor-style delegation
+    # (``: Base(x)``) but there is no explicit primary_constructor, synthesise an
+    # implicit one to carry the super-call CallSite.
+    primary_ctor: MethodDecl | None = None
     if t == "class_declaration":
         pc = next(
             (c for c in node.named_children if c.type == "primary_constructor"),
             None,
         )
         if pc is not None:
-            ctor, cfields, caccs = _process_primary_constructor(
+            primary_ctor, cfields, caccs = _process_primary_constructor(
                 pc, src, name, is_static_ctx=members_are_static
             )
             fields.extend(cfields)
             methods.extend(caccs)
-            methods.append(ctor)
+        del_site = _primary_ctor_delegation_site(
+            node, src, caller_fqn=f"{fqn}#{name}()"
+        )
+        if del_site is not None:
+            if primary_ctor is None:
+                # No explicit primary_constructor: synthesise the implicit ctor
+                # Kotlin generates, and fix its caller_fqn to the real signature.
+                primary_ctor = MethodDecl(
+                    name=name,
+                    return_type="",
+                    is_constructor=True,
+                    parameters=[],
+                    signature=f"{name}()",
+                )
+            del_site.caller_fqn = f"{fqn}#{primary_ctor.signature}"
+            primary_ctor.call_sites.append(del_site)
+        if primary_ctor is not None:
+            methods.append(primary_ctor)
 
     body: Node | None = None
     for c in node.named_children:
@@ -1079,11 +1475,23 @@ def _parse_kotlin_type(
             if ct == "function_declaration":
                 methods.append(
                     _process_function_declaration(
-                        ch, src, is_static_ctx=members_are_static
+                        ch,
+                        src,
+                        is_static_ctx=members_are_static,
+                        type_fqn=fqn,
+                        type_names=type_names,
                     )
                 )
             elif ct == "secondary_constructor":
-                methods.append(_process_secondary_constructor(ch, src, name))
+                methods.append(
+                    _process_secondary_constructor(
+                        ch,
+                        src,
+                        name,
+                        type_fqn=fqn,
+                        type_names=type_names,
+                    )
+                )
             elif ct == "property_declaration":
                 field, accs = _process_property_declaration(
                     ch, src, is_static_ctx=members_are_static
@@ -1098,6 +1506,7 @@ def _parse_kotlin_type(
                     outer_fqn=fqn,
                     all_types=all_types,
                     kind_by_simple=kind_by_simple,
+                    type_names=type_names,
                     filename=filename,
                 )
                 if child_decl is not None:
@@ -1200,6 +1609,13 @@ def parse_kotlin(source: bytes | str, *, filename: str = "", verbose: bool = Fal
     # supertype partition (Task 8). Built once from the whole tree.
     kind_by_simple = _pre_scan_kotlin_type_kinds(root, src)
 
+    # Task 10: the set of type names visible in this CU (explicit imports +
+    # same-CU declarations) drives constructor-vs-bare-call discrimination and
+    # the best-effort ``is_static_call`` flag. Built once, threaded everywhere.
+    type_names: frozenset[str] = frozenset(
+        set(explicit_imports.keys()) | set(kind_by_simple.keys())
+    )
+
     # Walk top-level type declarations (class_declaration / object_declaration /
     # companion_object) into TypeDecl rows with the folded kind map, now also
     # populating members (Task 7) and annotations/supertypes (Task 8). Top-level
@@ -1215,6 +1631,7 @@ def parse_kotlin(source: bytes | str, *, filename: str = "", verbose: bool = Fal
                 outer_fqn=None,
                 all_types=all_types,
                 kind_by_simple=kind_by_simple,
+                type_names=type_names,
                 filename=filename,
             )
             if decl is not None:
@@ -1253,7 +1670,13 @@ def parse_kotlin(source: bytes | str, *, filename: str = "", verbose: bool = Fal
         top_level_types.append(facade)
         for fn in top_level_funcs:
             facade.methods.append(
-                _process_function_declaration(fn, src, is_static_ctx=True)
+                _process_function_declaration(
+                    fn,
+                    src,
+                    is_static_ctx=True,
+                    type_fqn=facade_fqn,
+                    type_names=type_names,
+                )
             )
         for pr in top_level_props:
             field, accs = _process_property_declaration(

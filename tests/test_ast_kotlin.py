@@ -884,3 +884,185 @@ def test_merge_with_no_multifile_facades_returns_input_as_is() -> None:
         t for ast in result for t in ast.top_level_types if "kotlin_facade" in t.capabilities
     ]
     assert len(facades) == 2  # AKt + BKt, no merge.
+
+
+# ---- Task 10: call-site extraction + constructor delegation ----
+
+
+def _call_sites_of(ast: JavaFileAst, type_fqn: str, method_name: str) -> list:
+    """All CallSites of method `method_name` on the type whose FQN is `type_fqn`."""
+    t = _type_by_fqn(ast, type_fqn)
+    assert t is not None, f"type {type_fqn} not found"
+    methods = [m for m in t.methods if m.name == method_name]
+    assert methods, f"method {method_name} not on {type_fqn}"
+    return methods[0].call_sites
+
+
+def _facade_method(ast: JavaFileAst, name: str):
+    facade = next(
+        t for t in ast.top_level_types if "kotlin_facade" in t.capabilities
+    )
+    methods = [m for m in facade.methods if m.name == name]
+    assert methods, f"facade method {name} not found"
+    return methods[0]
+
+
+def test_receiver_call_split_into_receiver_and_callee() -> None:
+    """r.find(1) -> CallSite{callee=find, receiver=r, arg_count=1, is_constructor=False}."""
+    ast = parse_kotlin(
+        b"class C(val r: Repo) { fun go() { r.find(1) } }", filename="C.kt"
+    )
+    sites = _call_sites_of(ast, "C", "go")
+    finds = [s for s in sites if s.callee_simple == "find"]
+    assert len(finds) == 1
+    s = finds[0]
+    assert s.receiver_expr == "r"
+    assert s.arg_count == 1
+    assert s.is_constructor is False
+    assert s.is_static_call is False
+    assert s.caller_fqn == "C#go()"
+
+
+def test_constructor_call_when_callee_is_known_type() -> None:
+    """Other(2) where Other is a same-CU declared type -> ctor CallSite{callee=<init>, receiver=Other}.
+
+    The capitalized-first-letter heuristic is explicitly NOT used: ``Other`` is
+    recognised as a constructor target because it is declared in this CU.
+    """
+    ast = parse_kotlin(
+        b"class Other\nclass C(val r: Repo) { fun go() { r.find(1); Other(2) } }",
+        filename="C.kt",
+    )
+    sites = _call_sites_of(ast, "C", "go")
+    inits = [
+        s for s in sites if s.is_constructor and s.callee_simple == "<init>"
+    ]
+    assert len(inits) == 1
+    s = inits[0]
+    assert s.receiver_expr == "Other"
+    assert s.arg_count == 1
+    assert s.is_constructor is True
+
+
+def test_bare_receiverless_call_is_not_constructor() -> None:
+    """helper() -> CallSite{callee=helper, receiver='', is_constructor=False}.
+
+    A bare call to a non-type name stays a receiverless method call (Task 13
+    resolves against the file facade). Capitalized heuristic is not used, so a
+    bare unknown name is NOT mistaken for a constructor.
+    """
+    ast = parse_kotlin(b"fun util() { helper() }", filename="F.kt")
+    util = _facade_method(ast, "util")
+    helpers = [s for s in util.call_sites if s.callee_simple == "helper"]
+    assert len(helpers) == 1
+    assert helpers[0].receiver_expr == ""
+    assert helpers[0].is_constructor is False
+
+
+def test_constructor_delegation_in_class_header() -> None:
+    """class D : Base(7) -> ctor MethodDecl.call_sites has CallSite{receiver=Base, arg_count=1}.
+
+    There is no explicit primary_constructor, so an implicit one is synthesised
+    carrying the super-call delegation site.
+    """
+    ast = parse_kotlin(b"class Base\nclass D : Base(7) {}", filename="D.kt")
+    d = _type_by_fqn(ast, "D")
+    assert d is not None
+    ctors = [m for m in d.methods if m.is_constructor]
+    assert len(ctors) == 1
+    dels = [
+        s
+        for s in ctors[0].call_sites
+        if s.callee_simple == "<init>" and s.receiver_expr == "Base"
+    ]
+    assert len(dels) == 1
+    assert dels[0].is_constructor is True
+    assert dels[0].arg_count == 1
+
+
+def test_chained_call_emits_two_sites() -> None:
+    """repo.findById(1).orElse(null) -> CallSites for findById AND orElse."""
+    ast = parse_kotlin(
+        b"fun f() { repo.findById(1).orElse(null) }", filename="F.kt"
+    )
+    f = _facade_method(ast, "f")
+    callees = {s.callee_simple: s for s in f.call_sites}
+    assert "findById" in callees
+    assert callees["findById"].receiver_expr == "repo"
+    assert callees["findById"].arg_count == 1
+    assert callees["findById"].is_constructor is False
+    assert "orElse" in callees
+    assert callees["orElse"].receiver_expr == "repo.findById(1)"
+
+
+def test_method_reference_arg_count_minus_one() -> None:
+    """obj::foo -> CallSite{callee=foo, receiver=obj, arg_count=-1, not chained}."""
+    ast = parse_kotlin(b"fun f() { val r = obj::foo }", filename="F.kt")
+    f = _facade_method(ast, "f")
+    refs = [
+        s for s in f.call_sites if s.callee_simple == "foo" and s.arg_count == -1
+    ]
+    assert len(refs) == 1
+    assert refs[0].receiver_expr == "obj"
+    assert refs[0].is_constructor is False
+    assert refs[0].chained_method_reference is False
+
+
+def test_chained_method_reference_flag() -> None:
+    """a.b()::foo -> chained_method_reference=True (spine is a call chain)."""
+    ast = parse_kotlin(b"fun f() { val r = a.b()::foo }", filename="F.kt")
+    f = _facade_method(ast, "f")
+    refs = [
+        s for s in f.call_sites if s.callee_simple == "foo" and s.arg_count == -1
+    ]
+    assert len(refs) == 1
+    assert refs[0].chained_method_reference is True
+
+
+def test_call_inside_lambda_marked_in_lambda() -> None:
+    """A call inside a lambda_literal -> in_lambda=True; the enclosing call is not."""
+    ast = parse_kotlin(b"fun f() { list.map { it.foo() } }", filename="F.kt")
+    f = _facade_method(ast, "f")
+    foos = [s for s in f.call_sites if s.callee_simple == "foo"]
+    assert len(foos) == 1
+    assert foos[0].in_lambda is True
+    maps = [s for s in f.call_sites if s.callee_simple == "map"]
+    assert len(maps) == 1
+    assert maps[0].in_lambda is False
+
+
+def test_is_static_call_when_receiver_is_imported_type() -> None:
+    """Helper.doThing() where Helper is imported -> is_static_call=True (best-effort).
+
+    Capitalized heuristic is rejected; the receiver must match an explicit import
+    or same-CU declared type for is_static_call to be True.
+    """
+    ast = parse_kotlin(
+        b"import com.util.Helper\nclass C { fun go() { Helper.doThing() } }",
+        filename="C.kt",
+    )
+    sites = _call_sites_of(ast, "C", "go")
+    dts = [s for s in sites if s.callee_simple == "doThing"]
+    assert len(dts) == 1
+    assert dts[0].receiver_expr == "Helper"
+    assert dts[0].is_static_call is True
+    assert dts[0].is_constructor is False
+
+
+def test_secondary_constructor_delegation_this() -> None:
+    """constructor(x: Int) : this(0) -> CallSite{callee=<init>, receiver=this, arg_count=1}."""
+    ast = parse_kotlin(
+        b"class C { constructor(x: Int) : this(0) {} }", filename="C.kt"
+    )
+    c = _type_by_fqn(ast, "C")
+    assert c is not None
+    ctors = [m for m in c.methods if m.is_constructor]
+    assert len(ctors) == 1
+    this_inits = [
+        s
+        for s in ctors[0].call_sites
+        if s.receiver_expr == "this" and s.callee_simple == "<init>"
+    ]
+    assert len(this_inits) == 1
+    assert this_inits[0].arg_count == 1
+    assert this_inits[0].is_constructor is True
