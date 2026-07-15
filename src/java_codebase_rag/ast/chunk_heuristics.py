@@ -22,6 +22,16 @@ _JAVA_TYPE = re.compile(
     r"(?:class|interface|enum|record)\s+([A-Za-z_][A-Za-z0-9_]*)"
 )
 
+# Kotlin type declarations. Covers ``class`` / ``interface`` / ``object`` /
+# ``enum class`` plus the modifiers Kotlin uses (``internal`` / ``open`` / etc.).
+# ``object`` is the Kotlin-specific kind the Java regex misses; top-level
+# ``fun`` is intentionally NOT a type declaration (no name to pin a type to).
+_KOTLIN_TYPE = re.compile(
+    r"\b(?:public\s+|private\s+|protected\s+|internal\s+|"
+    r"final\s+|open\s+|abstract\s+|sealed\s+|data\s+)*"
+    r"(?:class|interface|object|enum\s+class)\s+([A-Za-z_][A-Za-z0-9_]*)"
+)
+
 
 def analyze_chunk(text: str | None, *, language: str, kind: str) -> ChunkHints:
     if not text or not text.strip():
@@ -30,16 +40,26 @@ def analyze_chunk(text: str | None, *, language: str, kind: str) -> ChunkHints:
     lines = text.strip().split("\n")
     n = len(lines)
     lang = (language or "").lower()
-    is_java = kind == "java" or lang == "java"
+    # Kotlin chunks live in the java LanceDB table (``kind == "java"``), so the
+    # ``language`` field — not ``kind`` — is what distinguishes them. Detect
+    # Kotlin first so the Kotlin regex wins for ``object`` / Kotlin modifiers.
+    is_kotlin = lang == "kotlin"
+    is_java = not is_kotlin and (kind == "java" or lang == "java")
 
+    # Both Java and Kotlin use ``import <pkg.Type>;`` lines, so the import-density
+    # heuristic is shared.
     import_heavy = False
-    if is_java and n >= 3:
+    if (is_java or is_kotlin) and n >= 3:
         imp = sum(1 for L in lines if L.lstrip().startswith("import "))
         import_heavy = imp / n >= 0.55
 
     primary: str | None = None
-    if is_java:
-        head = "\n".join(lines[: min(80, n)])
+    head = "\n".join(lines[: min(80, n)])
+    if is_kotlin:
+        m = _KOTLIN_TYPE.search(head)
+        if m:
+            primary = m.group(1)
+    elif is_java:
         m = _JAVA_TYPE.search(head)
         if m:
             primary = m.group(1)
