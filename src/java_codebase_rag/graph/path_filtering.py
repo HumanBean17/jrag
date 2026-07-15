@@ -23,6 +23,8 @@ from typing import overload
 
 from pathspec import GitIgnoreSpec
 
+from java_codebase_rag.ast.language import LANG_BACKENDS
+
 # Pruning for LocalFile sources: skip VCS, build outputs, dependency trees, and
 # test sources (we currently index prod Java only to keep the semantic index clean).
 # Also avoids EMFILE under default ulimits when the engine traverses in parallel.
@@ -427,26 +429,34 @@ class LayeredIgnore:
 
 
 @overload
-def iter_java_source_files(root: Path, exclude_globs: list[str]) -> Iterator[Path]: ...
+def iter_source_files(root: Path, exclude_globs: list[str]) -> Iterator[Path]: ...
 
 
 @overload
-def iter_java_source_files(root: Path, *, ignore: LayeredIgnore) -> Iterator[Path]: ...
+def iter_source_files(root: Path, *, ignore: LayeredIgnore) -> Iterator[Path]: ...
 
 
-def iter_java_source_files(
+def iter_source_files(
     root: Path,
     exclude_globs: list[str] | None = None,
     *,
     ignore: LayeredIgnore | None = None,
 ) -> Iterator[Path]:
-    """Walk ``root`` for ``*.java``, honouring prunes and layered ignore rules."""
+    """Walk ``root`` for source files of any registered language backend.
+
+    Yields files whose suffix is claimed by at least one backend in
+    :data:`~java_codebase_rag.ast.language.LANG_BACKENDS` (today: ``.java``).
+    Pruning (``UNCONDITIONAL_PRUNE_DIRS`` + ``_is_build_output_dir``) and the
+    layered ignore rules are unchanged from the former Java-only walk, so with
+    only Java registered this yields exactly the same ``.java`` files as the
+    previous ``iter_java_source_files``.
+    """
     if exclude_globs is not None and ignore is not None:
         raise TypeError("pass either exclude_globs or ignore=, not both")
     if exclude_globs is not None:
         warnings.warn(
-            "iter_java_source_files(root, exclude_globs) is deprecated; "
-            "use iter_java_source_files(root, ignore=LayeredIgnore(root, ...)).",
+            "iter_source_files(root, exclude_globs) is deprecated; "
+            "use iter_source_files(root, ignore=LayeredIgnore(root, ...)).",
             DeprecationWarning,
             stacklevel=2,
         )
@@ -455,6 +465,11 @@ def iter_java_source_files(
         ignore_ctx = ignore
     else:
         ignore_ctx = LayeredIgnore(root)
+    # Union of suffixes claimed by every registered backend (Java today; Kotlin
+    # adds ``.kt`` in a later task). Computed once per call.
+    known_suffixes: set[str] = set()
+    for backend in LANG_BACKENDS.values():
+        known_suffixes.update(backend.suffixes)
     root = root.resolve()
     for dirpath, dirnames, filenames in os.walk(root):
         # Universal nuisance dirs (VCS, IDE, deps) are pruned unconditionally.
@@ -469,9 +484,25 @@ def iter_java_source_files(
             and not _is_build_output_dir(dirpath, d)
         ]
         for fn in filenames:
-            if not fn.endswith(".java"):
+            # ``Path.suffix`` lower-cases nothing; backends register lower-case
+            # suffixes (``.java``), matching case-sensitively as before.
+            if Path(fn).suffix not in known_suffixes:
                 continue
             p = Path(dirpath) / fn
             if ignore_ctx.is_ignored(p):
                 continue
             yield p
+
+
+def iter_java_source_files(
+    root: Path,
+    exclude_globs: list[str] | None = None,
+    *,
+    ignore: LayeredIgnore | None = None,
+) -> Iterator[Path]:
+    """Deprecated alias for :func:`iter_source_files`.
+
+    Kept so any import site not migrated to the new name continues to work; new
+    call sites should use :func:`iter_source_files`.
+    """
+    return iter_source_files(root, exclude_globs, ignore=ignore)

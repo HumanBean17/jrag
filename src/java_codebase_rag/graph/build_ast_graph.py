@@ -67,7 +67,7 @@ from java_codebase_rag.graph.graph_enrich import (
     resolve_routes_for_method,
     symbol_id,
 )
-from java_codebase_rag.graph.path_filtering import LayeredIgnore, iter_java_source_files
+from java_codebase_rag.graph.path_filtering import LayeredIgnore, iter_source_files
 from java_codebase_rag.search.search_scoring import SYMBOL_FTS_INDEX as _SYMBOL_FTS_INDEX, _split_identifier
 from java_codebase_rag.graph.java_ontology import (
     CLIENT_KIND_FEIGN_METHOD,
@@ -532,7 +532,7 @@ class FileHashTracker:
         current_files: set[str] = set()
         # Resolve source_root to handle symlinks
         source_root_resolved = source_root.resolve()
-        for abs_path in iter_java_source_files(source_root, ignore=ignore):
+        for abs_path in iter_source_files(source_root, ignore=ignore):
             # Resolve the absolute path and compute relative path
             abs_path_resolved = abs_path.resolve()
             try:
@@ -929,7 +929,7 @@ def _write_nodes_merge(
     _write_nodes_impl(conn, tables, project_root=project_root, meta_chain=meta_chain)
 
 
-# ---------- file walk (see `path_filtering.iter_java_source_files`) ----------
+# ---------- file walk (see `path_filtering.iter_source_files`) ----------
 
 
 # ---------- pass 1 ----------
@@ -1028,7 +1028,7 @@ def pass1_parse(
             removed = removed_files if removed_files is not None else set()
             pass1_total = len(scope_files - removed)
         else:
-            pass1_total = sum(1 for _ in iter_java_source_files(root, ignore=ignore))
+            pass1_total = sum(1 for _ in iter_source_files(root, ignore=ignore))
         _emit_graph_progress(
             {"pass": "1/6", "done": 0, "total": pass1_total, "status": "running"},
             verbose=verbose,
@@ -1043,7 +1043,7 @@ def pass1_parse(
     with _VerbosePassHeartbeats("[graph] pass 1", verbose=verbose):
         if verbose and slow_sec > 0:
             time.sleep(slow_sec)
-        for p in iter_java_source_files(root, ignore=ignore):
+        for p in iter_source_files(root, ignore=ignore):
             # Skip files not in scope (if scope is provided)
             try:
                 rel = p.resolve().relative_to(root.resolve()).as_posix()
@@ -4170,7 +4170,7 @@ def _init_hash_tracker(source_root: Path, ladybug_path: Path) -> int:
     ignore = LayeredIgnore(source_root)
     all_files: set[str] = set()
     source_root_resolved = source_root.resolve()
-    for p in iter_java_source_files(source_root, ignore=ignore):
+    for p in iter_source_files(source_root, ignore=ignore):
         p_resolved = p.resolve()
         try:
             rel_path = p_resolved.relative_to(source_root_resolved).as_posix()

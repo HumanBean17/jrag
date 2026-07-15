@@ -52,7 +52,7 @@ from java_codebase_rag.graph.java_ontology import (
     VALID_ROUTE_FRAMEWORKS,
     VALID_ROUTE_KINDS,
 )
-from java_codebase_rag.graph.path_filtering import LayeredIgnore, iter_java_source_files
+from java_codebase_rag.graph.path_filtering import LayeredIgnore, iter_source_files
 
 __all__ = [
     "AnnotationDecl",
@@ -387,7 +387,7 @@ def _collect_annotation_decl_index(project_root_str: str) -> dict[str, Annotatio
         return {}
     ignore = LayeredIgnore(root)
     decls: dict[str, AnnotationDecl] = {}
-    for p in sorted(iter_java_source_files(root, ignore=ignore), key=str):
+    for p in sorted(iter_source_files(root, ignore=ignore), key=str):
         try:
             content = p.read_bytes()
         except OSError as exc:
