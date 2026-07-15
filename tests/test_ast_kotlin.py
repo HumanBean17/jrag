@@ -24,7 +24,7 @@ import pytest
 pytest.importorskip("tree_sitter_kotlin")
 
 from java_codebase_rag.ast.ast_kotlin import parse_kotlin  # noqa: E402
-from java_codebase_rag.ast.ast_java import JavaFileAst  # noqa: E402
+from java_codebase_rag.ast.ast_java import JavaFileAst, TypeDecl  # noqa: E402
 from java_codebase_rag.ast.language import backend_for  # noqa: E402
 
 
@@ -270,3 +270,208 @@ def test_kotlin_backend_parse_delegates_to_parse_kotlin() -> None:
     assert ast.language == "kotlin"
     assert ast.package == "com.foo"
     assert ast.imports == ["com.bar.Baz", "com.qux.*"]
+
+
+# ---- Task 7: members (functions, properties + synthesized JVM accessors, modifiers) ----
+#
+# The graph builder resolves cross-language CALLS to METHODS only; a Kotlin
+# property mapped to a lone FieldDecl makes every Java getter/setter call a
+# phantom. So non-private properties MUST also emit synthesized JVM-accessor
+# MethodDecl(s). The accessor rule matches Kotlin's actual JVM codegen (NOT the
+# "Boolean -> isFoo" simplification): the `is` prefix is preserved ONLY for
+# Boolean properties already named `is*`; a Boolean property NOT named `is*`
+# (e.g. `b`) compiles to `getB()`.
+
+
+def _type_by_fqn(ast: JavaFileAst, fqn: str) -> TypeDecl | None:
+    for t in ast.all_types:
+        if t.fqn == fqn:
+            return t
+    return None
+
+
+def test_var_property_synthesizes_getter_and_setter() -> None:
+    """(a) class P(var name: String) -> FieldDecl{name,String} + getName()/setName(String)."""
+    ast = parse_kotlin(b"package com.x\nclass P(var name: String)\n", filename="P.kt")
+    t = ast.top_level_types[0]
+    assert any(f.name == "name" and f.type_name == "String" for f in t.fields)
+
+    getter = [m for m in t.methods if m.name == "getName"]
+    assert len(getter) == 1
+    assert getter[0].is_constructor is False
+    assert getter[0].return_type == "String"
+    assert getter[0].parameters == []
+    assert getter[0].signature == "getName()"
+
+    setter = [m for m in t.methods if m.name == "setName"]
+    assert len(setter) == 1
+    assert setter[0].is_constructor is False
+    assert setter[0].return_type == ""
+    assert setter[0].signature == "setName(String)"
+    assert len(setter[0].parameters) == 1
+    assert setter[0].parameters[0].type_name == "String"
+    assert setter[0].parameters[0].name  # non-empty
+
+
+def test_boolean_non_is_property_uses_get_prefix() -> None:
+    """(b, corrected) class P(val b: Boolean) -> getB() (Boolean non-`is*` uses the get prefix)."""
+    ast = parse_kotlin(b"package com.x\nclass P(val b: Boolean)\n", filename="P.kt")
+    t = ast.top_level_types[0]
+    names = {m.name for m in t.methods}
+    assert "getB" in names
+    # NOT isB — the brief's literal "isB" is wrong; match Kotlin's real codegen.
+    assert "isB" not in names
+    assert "getName" not in names
+    # val -> getter only, no setter.
+    assert "setB" not in names
+
+
+def test_boolean_is_prefixed_property_preserves_is_prefix() -> None:
+    """A Boolean property already named `is*` keeps the prefix: isActive -> isActive()/setActive()."""
+    ast = parse_kotlin(b"package com.x\nclass P(var isActive: Boolean)\n", filename="P.kt")
+    t = ast.top_level_types[0]
+    names = {m.name for m in t.methods}
+    assert "isActive" in names  # getter preserves the `is` prefix.
+    assert "getIsActive" not in names
+    assert "setActive" in names  # setter drops the `is` prefix.
+    assert "setIsActive" not in names
+
+
+def test_val_int_property_getter_only() -> None:
+    """(c) class P(val i: Int) -> getI() only (no setter for val)."""
+    ast = parse_kotlin(b"package com.x\nclass P(val i: Int)\n", filename="P.kt")
+    t = ast.top_level_types[0]
+    names = {m.name for m in t.methods}
+    assert "getI" in names
+    assert "setI" not in names
+
+
+def test_private_property_emits_no_accessor() -> None:
+    """(d) private val x -> only FieldDecl; no synthesized accessor."""
+    ast = parse_kotlin(b"package com.x\nclass C { private val x: Int = 0 }\n", filename="C.kt")
+    t = ast.top_level_types[0]
+    assert any(f.name == "x" and f.type_name == "Int" for f in t.fields)
+    names = {m.name for m in t.methods}
+    assert "getX" not in names
+    assert "isX" not in names
+
+
+def test_function_declaration_becomes_method_decl() -> None:
+    """(e) fun go(a: Int): String -> MethodDecl{name,return_type=String,signature=go(Int)}."""
+    ast = parse_kotlin(b'package com.x\nclass C { fun go(a: Int): String = "" }\n', filename="C.kt")
+    t = ast.top_level_types[0]
+    go = [m for m in t.methods if m.name == "go"]
+    assert len(go) == 1
+    assert go[0].is_constructor is False
+    assert go[0].return_type == "String"
+    assert go[0].signature == "go(Int)"
+    assert len(go[0].parameters) == 1
+    assert go[0].parameters[0].name == "a"
+    assert go[0].parameters[0].type_name == "Int"
+
+
+def test_secondary_constructor_is_constructor_method_decl() -> None:
+    """(f) constructor(a: Int) -> MethodDecl{is_constructor=True,name=C,signature=C(Int)}."""
+    ast = parse_kotlin(b"package com.x\nclass C { constructor(a: Int) }\n", filename="C.kt")
+    t = ast.top_level_types[0]
+    ctors = [m for m in t.methods if m.is_constructor]
+    assert len(ctors) == 1
+    assert ctors[0].name == "C"
+    assert ctors[0].return_type == ""
+    assert ctors[0].signature == "C(Int)"
+    assert len(ctors[0].parameters) == 1
+    assert ctors[0].parameters[0].type_name == "Int"
+
+
+def test_companion_property_accessor_is_static() -> None:
+    """(g) companion object { val CONST = 1 } -> accessor MethodDecl has 'static' modifier.
+
+    Source is multi-line because tree-sitter-kotlin 1.1.0's ASI fails to recover a
+    companion body holding a property when it sits on a single line.
+    """
+    ast = parse_kotlin(
+        b"package com.x\nclass C {\n  companion object {\n    val CONST = 1\n  }\n}\n",
+        filename="C.kt",
+    )
+    comp = _type_by_fqn(ast, "com.x.C.Companion")
+    assert comp is not None
+    getter = [m for m in comp.methods if m.name == "getCONST"]
+    assert len(getter) == 1
+    assert "static" in getter[0].modifiers
+
+
+def test_suspend_function_ride_along_modifier() -> None:
+    """(h) suspend fun s() -> modifiers contains 'suspend' (ride-along); method exists."""
+    ast = parse_kotlin(b"package com.x\nclass C { suspend fun s() {} }\n", filename="C.kt")
+    t = ast.top_level_types[0]
+    s = [m for m in t.methods if m.name == "s"]
+    assert len(s) == 1
+    assert "suspend" in s[0].modifiers
+    # Kotlin fun is final by default (no `open`).
+    assert "final" in s[0].modifiers
+
+
+def test_top_level_function_lands_on_facade_type() -> None:
+    """Top-level fun -> facade TypeDecl <Basename>Kt (capabilities=['kotlin_facade']); method is static."""
+    ast = parse_kotlin(
+        b'package com.x\nfun topLevel(a: Int): String = ""\n', filename="Foo.kt"
+    )
+    facade = next((t for t in ast.top_level_types if "kotlin_facade" in t.capabilities), None)
+    assert facade is not None
+    assert facade.name == "FooKt"
+    assert facade.fqn == "com.x.FooKt"
+    assert facade.kind == "class"
+    tf = [m for m in facade.methods if m.name == "topLevel"]
+    assert len(tf) == 1
+    assert "static" in tf[0].modifiers
+    assert tf[0].signature == "topLevel(Int)"
+    assert tf[0].return_type == "String"
+    # Facade is also in the flat all_types list.
+    assert _type_by_fqn(ast, "com.x.FooKt") is facade
+
+
+def test_val_getter_final_var_setter_not_final() -> None:
+    """Modifier vocabulary: val getter -> 'final'; var setter -> not 'final'."""
+    ast = parse_kotlin(
+        b"package com.x\nclass C { val a: Int = 0; var b: Int = 0 }\n", filename="C.kt"
+    )
+    t = ast.top_level_types[0]
+    get_a = next(m for m in t.methods if m.name == "getA")
+    assert "final" in get_a.modifiers
+    set_b = next(m for m in t.methods if m.name == "setB")
+    assert "final" not in set_b.modifiers
+
+
+def test_open_function_omits_final() -> None:
+    """open fun -> 'final' omitted (overridable)."""
+    ast = parse_kotlin(b"package com.x\nopen class O { open fun f() {} }\n", filename="O.kt")
+    t = ast.top_level_types[0]
+    f = next(m for m in t.methods if m.name == "f")
+    assert "final" not in f.modifiers
+
+
+def test_primary_constructor_emits_constructor_method_decl() -> None:
+    """class P(var name: String, extra: Int) -> primary ctor MethodDecl{P, is_constructor, sig P(String,Int)}.
+
+    Plain params (no val/val) are NOT properties but still appear in the ctor signature.
+    """
+    ast = parse_kotlin(
+        b"package com.x\nclass P(var name: String, extra: Int)\n", filename="P.kt"
+    )
+    t = ast.top_level_types[0]
+    ctor = [m for m in t.methods if m.is_constructor and m.name == "P"]
+    assert len(ctor) == 1
+    assert ctor[0].signature == "P(String,Int)"
+    # `extra` (plain param) is NOT a property -> only `name` is a field.
+    assert {f.name for f in t.fields} == {"name"}
+
+
+def test_nullable_property_type_strips_question_mark() -> None:
+    """A nullable property type `String?` yields simple type_name 'String'."""
+    ast = parse_kotlin(b"package com.x\nclass C(var n: String?)\n", filename="C.kt")
+    t = ast.top_level_types[0]
+    n = [f for f in t.fields if f.name == "n"]
+    assert len(n) == 1
+    assert n[0].type_name == "String"
+    getter = next(m for m in t.methods if m.name == "getN")
+    assert getter.return_type == "String"
