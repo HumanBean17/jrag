@@ -38,11 +38,11 @@ from java_codebase_rag.ast.ast_java import (
     CODEBASE_PRODUCER_ANNOTATIONS,
     infer_capabilities_for_type,
     infer_role_for_type,
-    parse_java,
     ROLE_ANNOTATIONS,
     _METHOD_ANN_TO_CAPABILITY,
     _TYPE_ANN_TO_CAPABILITY,
 )
+from java_codebase_rag.ast.language import backend_for
 from java_codebase_rag.graph.java_ontology import (
     CLIENT_KIND_REST_TEMPLATE,
     VALID_CAPABILITIES,
@@ -398,8 +398,11 @@ def _collect_annotation_decl_index(project_root_str: str) -> dict[str, Annotatio
             continue
         if not content.strip():
             continue
+        backend = backend_for(p)
+        if backend is None:
+            continue
         try:
-            jast = parse_java(content)
+            jast = backend.parse(content, filename=str(p))
         except Exception as exc:
             print(
                 f"[lancedb-mcp] parse error in {p}: {exc}",

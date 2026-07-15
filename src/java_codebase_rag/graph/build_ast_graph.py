@@ -50,8 +50,8 @@ from java_codebase_rag.ast.ast_java import (
     TypeDecl,
     injection_annotation_names,
     lombok_required_args_annotations,
-    parse_java,
 )
+from java_codebase_rag.ast.language import backend_for
 from java_codebase_rag.graph.graph_enrich import (
     _load_config_cross_service_resolution,
     classify_java_file,
@@ -1064,8 +1064,11 @@ def pass1_parse(
                 continue
             if not content.strip():
                 continue
+            backend = backend_for(rel)
+            if backend is None:
+                continue
             try:
-                ast = parse_java(content, filename=rel, verbose=verbose)
+                ast = backend.parse(content, filename=rel)
             except Exception:
                 tables.parse_errors += 1
                 continue

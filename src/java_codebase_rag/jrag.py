@@ -3609,7 +3609,7 @@ def _cmd_imports(args: argparse.Namespace) -> int:
     a node per import: resolved graph Symbol when resolve_v2 hits (status=one),
     or an unresolved placeholder carrying the raw FQN otherwise.
     """
-    from java_codebase_rag.ast.ast_java import parse_java
+    from java_codebase_rag.ast.language import backend_for
     from java_codebase_rag.analysis.resolve_service import resolve_v2
 
     from java_codebase_rag.jrag_envelope import Envelope, next_actions_hook
@@ -3645,7 +3645,18 @@ def _cmd_imports(args: argparse.Namespace) -> int:
     # explicit_imports: dict[str, str] = simple_name -> FQN (non-wildcard,
     # non-static); we also surface wildcard/static imports as unresolved rows so
     # the agent sees the full import block.
-    ast = parse_java(src, filename=args.file)
+    backend = backend_for(args.file)
+    if backend is None:
+        env = Envelope(
+            status="error",
+            message=(
+                f"no language backend registered for {args.file!r} "
+                f"(suffix {Path(args.file).suffix!r} not in registry)"
+            ),
+        )
+        print(render(env, fmt=args.format, detail=args.detail))
+        return 2
+    ast = backend.parse(src, filename=args.file)
     nodes: dict[str, dict] = {}
     edges: list[dict] = []
     warnings: list[str] = []

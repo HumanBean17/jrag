@@ -50,7 +50,8 @@ from java_codebase_rag.index.java_index_v1_common import (
     position_to_json,
 )
 from java_codebase_rag.graph.path_filtering import LayeredIgnore
-from java_codebase_rag.ast.ast_java import ONTOLOGY_VERSION, parse_java
+from java_codebase_rag.ast.ast_java import ONTOLOGY_VERSION
+from java_codebase_rag.ast.language import backend_for
 from java_codebase_rag.graph.graph_enrich import (
     classify_java_file,
     collect_annotation_meta_chain,
@@ -387,7 +388,12 @@ def _parse_and_enrich_java(
     ``enrich_chunk`` is otherwise pure-Python over the now-immutable AST; its
     ``lru_cache`` reads are thread-safe under the GIL.
     """
-    ast = parse_java(content_bytes)
+    backend = backend_for(rel)
+    if backend is None:
+        # Defensive: the flow only yields files whose suffix is registered, so
+        # this is unreachable today. Kept to honor the dispatch contract.
+        return [], None
+    ast = backend.parse(content_bytes, filename=rel)
     enrichments = [
         enrich_chunk(
             ast,
