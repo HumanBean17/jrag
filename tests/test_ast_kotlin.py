@@ -1,10 +1,13 @@
 """Tests for the Kotlin AST extractor (`ast.ast_kotlin.parse_kotlin`).
 
-Task 5 builds the foundation: package + imports into the existing
-``JavaFileAst`` shape, a per-thread tree-sitter ``Parser``, and registers
-``KotlinBackend`` behind the language-dispatch seam. Declarations
-(classes/functions) come in Task 6, so ``top_level_types`` / ``all_types``
-are empty lists here.
+Task 5 built the foundation: package + imports into the existing
+``JavaFileAst`` shape, a per-thread tree-sitter ``Parser``, and registered
+``KotlinBackend`` behind the language-dispatch seam. Task 6 walks Kotlin
+type declarations (``class_declaration`` / ``object_declaration`` /
+``companion_object``) into ``TypeDecl`` rows with the **folded kind map**
+(Kotlin kinds fold into the existing five Java ``_TYPE_KINDS`` — no new
+strings). Members (fields/methods) arrive in Task 7; top-level functions
+arrive in Task 8.
 """
 from __future__ import annotations
 
@@ -66,11 +69,154 @@ def test_file_imports_populated_no_static() -> None:
     assert ast.file_imports.static_wildcards == []
 
 
-def test_type_lists_empty_in_foundation_task() -> None:
-    """(g) Declarations come in Task 6; lists are empty now."""
+def test_no_declarations_yields_empty_type_lists() -> None:
+    """A file with no type declarations yields empty top_level_types/all_types."""
     ast = parse_kotlin(_SOURCE, filename="F.kt")
     assert ast.top_level_types == []
     assert ast.all_types == []
+
+
+# ---- Task 6: type declarations with the folded kind map ----
+
+
+def test_class_declaration_kind_name_fqn() -> None:
+    """(a) `class Foo` in `package com.x` -> one top-level TypeDecl."""
+    ast = parse_kotlin(b"package com.x\nclass Foo\n", filename="F.kt")
+    assert len(ast.top_level_types) == 1
+    t = ast.top_level_types[0]
+    assert t.name == "Foo"
+    assert t.kind == "class"
+    assert t.fqn == "com.x.Foo"
+    assert t.outer_fqn is None
+    # Members / extends / implements / modifiers arrive in later tasks (defaults).
+    assert t.fields == []
+    assert t.methods == []
+    assert t.extends == []
+    assert t.implements == []
+    assert t.modifiers == []
+    assert t.annotations == []
+    assert t.nested == []
+    assert len(ast.all_types) == 1
+    assert ast.all_types[0].fqn == "com.x.Foo"
+
+
+def test_interface_declaration_folded_kind() -> None:
+    """(b) `interface Bar` discriminates via anonymous `interface` keyword child."""
+    ast = parse_kotlin(b"package com.x\ninterface Bar\n", filename="F.kt")
+    assert len(ast.top_level_types) == 1
+    t = ast.top_level_types[0]
+    assert t.kind == "interface"
+    assert t.name == "Bar"
+    assert t.fqn == "com.x.Bar"
+    assert t.outer_fqn is None
+
+
+def test_enum_class_folded_kind() -> None:
+    """(c) `enum class E` (class_modifier[enum]) -> kind 'enum'."""
+    ast = parse_kotlin(b"package com.x\nenum class E { A, B }\n", filename="F.kt")
+    assert len(ast.top_level_types) == 1
+    t = ast.top_level_types[0]
+    assert t.kind == "enum"
+    assert t.name == "E"
+    assert t.fqn == "com.x.E"
+    assert t.outer_fqn is None
+    # enum_entry constants are NOT types — all_types stays a single entry.
+    assert len(ast.all_types) == 1
+
+
+def test_annotation_class_folded_kind() -> None:
+    """(d) `annotation class Ann` (class_modifier[annotation]) -> kind 'annotation'."""
+    ast = parse_kotlin(b"package com.x\nannotation class Ann\n", filename="F.kt")
+    assert len(ast.top_level_types) == 1
+    t = ast.top_level_types[0]
+    assert t.kind == "annotation"
+    assert t.name == "Ann"
+    assert t.fqn == "com.x.Ann"
+
+
+def test_data_class_folded_to_record() -> None:
+    """(e) `data class D` (class_modifier[data]) -> kind 'record' (DTO fold)."""
+    ast = parse_kotlin(b"package com.x\ndata class D(val i: Int)\n", filename="F.kt")
+    assert len(ast.top_level_types) == 1
+    t = ast.top_level_types[0]
+    assert t.kind == "record"
+    assert t.name == "D"
+    assert t.fqn == "com.x.D"
+
+
+def test_object_declaration_folded_to_class() -> None:
+    """(f) `object Single` (object_declaration) -> kind 'class'."""
+    ast = parse_kotlin(b"package com.x\nobject Single\n", filename="F.kt")
+    assert len(ast.top_level_types) == 1
+    t = ast.top_level_types[0]
+    assert t.kind == "class"
+    assert t.name == "Single"
+    assert t.fqn == "com.x.Single"
+    assert t.outer_fqn is None
+
+
+def test_companion_object_nested_under_class() -> None:
+    """(g) `class Outer { companion object { } }` -> nested TypeDecl 'Companion'.
+
+    Companion is a distinct `companion_object` node (not a modifier); default
+    name 'Companion'; becomes a NESTED TypeDecl under its enclosing type.
+    """
+    ast = parse_kotlin(
+        b"package com.x\nclass Outer { companion object { } }\n", filename="F.kt"
+    )
+    assert len(ast.top_level_types) == 1
+    outer = ast.top_level_types[0]
+    assert outer.name == "Outer"
+    assert outer.fqn == "com.x.Outer"
+    assert outer.outer_fqn is None
+    assert len(outer.nested) == 1
+    comp = outer.nested[0]
+    assert comp.name == "Companion"
+    assert comp.kind == "class"
+    assert comp.fqn == "com.x.Outer.Companion"
+    assert comp.outer_fqn == "com.x.Outer"
+    # all_types is flat and contains both the outer type and the companion.
+    fqns = {t.fqn for t in ast.all_types}
+    assert "com.x.Outer" in fqns
+    assert "com.x.Outer.Companion" in fqns
+
+
+def test_named_companion_object_uses_declared_name() -> None:
+    """A named `companion object Named` uses the declared name, not 'Companion'."""
+    ast = parse_kotlin(
+        b"package com.x\nclass Outer { companion object Named { } }\n", filename="F.kt"
+    )
+    outer = ast.top_level_types[0]
+    assert len(outer.nested) == 1
+    comp = outer.nested[0]
+    assert comp.name == "Named"
+    assert comp.fqn == "com.x.Outer.Named"
+    assert comp.outer_fqn == "com.x.Outer"
+
+
+def test_nested_class_declaration_attached_to_parent() -> None:
+    """A nested `class_declaration` is attached to its parent's `nested` list."""
+    ast = parse_kotlin(
+        b"package com.x\nclass Outer { class Inner { } }\n", filename="F.kt"
+    )
+    outer = ast.top_level_types[0]
+    assert len(outer.nested) == 1
+    inner = outer.nested[0]
+    assert inner.name == "Inner"
+    assert inner.kind == "class"
+    assert inner.fqn == "com.x.Outer.Inner"
+    assert inner.outer_fqn == "com.x.Outer"
+    fqns = {t.fqn for t in ast.all_types}
+    assert {"com.x.Outer", "com.x.Outer.Inner"} <= fqns
+
+
+def test_no_package_top_level_type_fqn_is_simple_name() -> None:
+    """A script-style file with no package uses the simple name as the FQN."""
+    ast = parse_kotlin(b"class Solo\n", filename="F.kt")
+    assert len(ast.top_level_types) == 1
+    t = ast.top_level_types[0]
+    assert t.fqn == "Solo"
+    assert t.outer_fqn is None
 
 
 def test_parse_error_false_on_valid_source() -> None:
