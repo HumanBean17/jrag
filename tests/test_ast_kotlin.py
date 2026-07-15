@@ -475,3 +475,273 @@ def test_nullable_property_type_strips_question_mark() -> None:
     assert n[0].type_name == "String"
     getter = next(m for m in t.methods if m.name == "getN")
     assert getter.return_type == "String"
+
+
+# ---- Task 8: annotations (with use-site targets) + extends/implements partition ----
+#
+# Use-site target routing is the crux of Spring-Kotlin DI: it decides whether
+# `@Autowired` becomes a constructor-INJECTS (param target) or field-INJECTS
+# (field target) edge. Routing rules:
+#   field/property/None (property)        -> FieldDecl.annotations
+#   None (primary-ctor param)             -> ParamDecl.annotations  (natural slot)
+#   param                                 -> ParamDecl.annotations
+#   get                                   -> synthesized getter MethodDecl.annotations
+#   set                                   -> synthesized setter MethodDecl.annotations
+# Default-target resolution via the annotation's own @Target meta is OUT OF SCOPE
+# (documented approximation); explicit use_site_target always wins.
+
+from java_codebase_rag.ast.ast_java import AnnotationRef  # noqa: E402
+from java_codebase_rag.ast.ast_java import parse_java  # noqa: E402
+
+
+def _ann(refs: list[AnnotationRef], name: str) -> AnnotationRef | None:
+    """First annotation matching simple name, or None."""
+    for a in refs:
+        if a.name == name:
+            return a
+    return None
+
+
+def test_type_level_annotation_no_target() -> None:
+    """(a) @RestController class H -> TypeDecl.annotations has RestController(target=None)."""
+    ast = parse_kotlin(b"package com.x\n@RestController\nclass H\n", filename="H.kt")
+    t = ast.top_level_types[0]
+    a = _ann(t.annotations, "RestController")
+    assert a is not None
+    assert a.qualified == "RestController"
+    assert a.use_site_target is None
+
+
+def test_type_level_qualified_annotation_name() -> None:
+    """@org.springframework.stereotype.Service class S -> simple 'Service', qualified raw text."""
+    ast = parse_kotlin(
+        b"package com.x\n@org.springframework.stereotype.Service\nclass S\n",
+        filename="S.kt",
+    )
+    t = ast.top_level_types[0]
+    a = _ann(t.annotations, "Service")
+    assert a is not None
+    assert a.qualified == "org.springframework.stereotype.Service"
+    assert a.use_site_target is None
+
+
+def test_type_level_annotation_with_args() -> None:
+    """@Component(value = "x") class A -> arguments['value'] == 'x', kind 'string'."""
+    ast = parse_kotlin(
+        b'package com.x\n@Component(value = "x")\nclass A\n', filename="A.kt"
+    )
+    t = ast.top_level_types[0]
+    a = _ann(t.annotations, "Component")
+    assert a is not None
+    assert a.arguments.get("value") == "x"
+    assert a.argument_kinds.get("value") == "string"
+
+
+def test_param_target_routes_to_ctor_param_not_accessor() -> None:
+    """(b) class C(@param:Autowired val r: Repo) -> ParamDecl has Autowired(target=param).
+
+    The synthesized getR accessor must NOT carry it; the field also must NOT.
+    """
+    ast = parse_kotlin(
+        b"package com.x\nclass C(@param:Autowired val r: Repo)\n", filename="C.kt"
+    )
+    t = ast.top_level_types[0]
+    ctor = next(m for m in t.methods if m.is_constructor and m.name == "C")
+    assert len(ctor.parameters) == 1
+    p = ctor.parameters[0]
+    assert p.name == "r"
+    a = _ann(p.annotations, "Autowired")
+    assert a is not None
+    assert a.use_site_target == "param"
+    # The synthesized getR accessor does NOT carry Autowired.
+    get_r = [m for m in t.methods if m.name == "getR"]
+    assert len(get_r) == 1
+    assert _ann(get_r[0].annotations, "Autowired") is None
+    # The property FieldDecl does NOT carry it either (param target only).
+    field = next(f for f in t.fields if f.name == "r")
+    assert _ann(field.annotations, "Autowired") is None
+
+
+def test_get_target_routes_to_synthesized_getter() -> None:
+    """(c) @get:Column val n -> FieldDecl has no Column; getN MethodDecl has Column(target=get)."""
+    ast = parse_kotlin(
+        b"package com.x\nclass C { @get:Column val n: Int = 0 }\n", filename="C.kt"
+    )
+    t = ast.top_level_types[0]
+    field = next(f for f in t.fields if f.name == "n")
+    assert _ann(field.annotations, "Column") is None
+    get_n = [m for m in t.methods if m.name == "getN"]
+    assert len(get_n) == 1
+    a = _ann(get_n[0].annotations, "Column")
+    assert a is not None
+    assert a.use_site_target == "get"
+
+
+def test_set_target_routes_to_synthesized_setter() -> None:
+    """@set:Inject var n -> setter setN MethodDecl has Inject(target=set); getter does not."""
+    ast = parse_kotlin(
+        b"package com.x\nclass C { @set:Inject var n: Int = 0 }\n", filename="C.kt"
+    )
+    t = ast.top_level_types[0]
+    set_n = [m for m in t.methods if m.name == "setN"]
+    assert len(set_n) == 1
+    a = _ann(set_n[0].annotations, "Inject")
+    assert a is not None
+    assert a.use_site_target == "set"
+    get_n = next(m for m in t.methods if m.name == "getN")
+    assert _ann(get_n.annotations, "Inject") is None
+
+
+def test_field_target_routes_to_property_field() -> None:
+    """@field:Autowired val r in body -> FieldDecl has Autowired(target=field); accessor does not."""
+    ast = parse_kotlin(
+        b"package com.x\nclass C { @field:Autowired val r: Repo = Repo() }\n",
+        filename="C.kt",
+    )
+    t = ast.top_level_types[0]
+    field = next(f for f in t.fields if f.name == "r")
+    a = _ann(field.annotations, "Autowired")
+    assert a is not None
+    assert a.use_site_target == "field"
+    get_r = next(m for m in t.methods if m.name == "getR")
+    assert _ann(get_r.annotations, "Autowired") is None
+
+
+def test_no_target_on_primary_ctor_param_routes_to_paramdecl() -> None:
+    """class C(@Autowired val r: Repo) (no explicit target) -> ParamDecl (natural ctor-param slot)."""
+    ast = parse_kotlin(
+        b"package com.x\nclass C(@Autowired val r: Repo)\n", filename="C.kt"
+    )
+    t = ast.top_level_types[0]
+    ctor = next(m for m in t.methods if m.is_constructor and m.name == "C")
+    p = ctor.parameters[0]
+    a = _ann(p.annotations, "Autowired")
+    assert a is not None
+    assert a.use_site_target is None  # natural slot, no explicit target
+
+
+def test_no_target_on_body_property_routes_to_field() -> None:
+    """A body property @Autowired val r (no target) -> FieldDecl (natural property slot)."""
+    ast = parse_kotlin(
+        b"package com.x\nclass C { @Autowired val r: Repo = Repo() }\n", filename="C.kt"
+    )
+    t = ast.top_level_types[0]
+    field = next(f for f in t.fields if f.name == "r")
+    a = _ann(field.annotations, "Autowired")
+    assert a is not None
+    assert a.use_site_target is None
+
+
+def test_function_annotation_attaches_to_method() -> None:
+    """@Scheduled fun go() -> MethodDecl.annotations has Scheduled (functions have no use-site)."""
+    ast = parse_kotlin(
+        b"package com.x\nclass C { @Scheduled fun go() {} }\n", filename="C.kt"
+    )
+    t = ast.top_level_types[0]
+    go = next(m for m in t.methods if m.name == "go")
+    a = _ann(go.annotations, "Scheduled")
+    assert a is not None
+    assert a.use_site_target is None
+
+
+def test_function_parameter_annotation_attaches_to_paramdecl() -> None:
+    """fun f(@Ann x: Int) -> the x ParamDecl carries Ann (from parameter_modifiers)."""
+    ast = parse_kotlin(
+        b"package com.x\nclass C { fun f(@Ann x: Int) {} }\n", filename="C.kt"
+    )
+    t = ast.top_level_types[0]
+    f = next(m for m in t.methods if m.name == "f")
+    assert len(f.parameters) == 1
+    a = _ann(f.parameters[0].annotations, "Ann")
+    assert a is not None
+
+
+def test_extends_implements_partition_same_file_class_and_interface() -> None:
+    """(d) class D : Base(c), Iface (Base is a same-file class, Iface an interface).
+
+    extends == ['Base']; implements == ['Iface']. The (c) ctor delegation is ignored.
+    """
+    src = (
+        b"package com.x\nclass Base(val x: Int)\ninterface Iface\n"
+        b"class D(val c: Int) : Base(c), Iface\n"
+    )
+    ast = parse_kotlin(src, filename="D.kt")
+    d = next(t for t in ast.top_level_types if t.name == "D")
+    assert d.extends == ["Base"]
+    assert d.implements == ["Iface"]
+
+
+def test_extends_implements_unknown_defaults_to_implements() -> None:
+    """(e) class D : ExternalBase (not declared in CU) -> implements == ['ExternalBase'], extends == []."""
+    ast = parse_kotlin(
+        b"package com.x\nclass D(val c: Int) : ExternalBase(c)\n", filename="D.kt"
+    )
+    d = ast.top_level_types[0]
+    assert d.extends == []
+    assert d.implements == ["ExternalBase"]
+
+
+def test_interface_supertypes_all_implements() -> None:
+    """interface Foo : Bar, Baz -> only implements (interfaces have no extends)."""
+    src = b"package com.x\ninterface Bar\ninterface Baz\ninterface Foo : Bar, Baz\n"
+    ast = parse_kotlin(src, filename="Foo.kt")
+    foo = next(t for t in ast.top_level_types if t.name == "Foo")
+    assert foo.extends == []
+    assert foo.implements == ["Bar", "Baz"]
+
+
+def test_enum_supertype_same_file_classifies_as_extends() -> None:
+    """A same-file enum class used as a supertype -> extends (kind 'enum' is a class-kind)."""
+    src = b"package com.x\nenum class E { A }\nclass D : E\n"
+    ast = parse_kotlin(src, filename="D.kt")
+    d = next(t for t in ast.top_level_types if t.name == "D")
+    assert d.extends == ["E"]
+    assert d.implements == []
+
+
+def test_data_class_supertype_classifies_as_extends() -> None:
+    """A same-file data class (folded kind 'record') supertype -> extends."""
+    src = b"package com.x\ndata class Dc(val i: Int)\nclass D : Dc(1)\n"
+    ast = parse_kotlin(src, filename="D.kt")
+    d = next(t for t in ast.top_level_types if t.name == "D")
+    assert d.extends == ["Dc"]
+    assert d.implements == []
+
+
+def test_supertype_generics_stripped_to_simple_name() -> None:
+    """class D : Base<String>, Iface<Int> -> simple names ['Base'], ['Iface'] (generics stripped)."""
+    src = b"package com.x\nclass Base<T>\ninterface Iface<T>\nclass D : Base<String>(), Iface<Int>\n"
+    ast = parse_kotlin(src, filename="D.kt")
+    d = next(t for t in ast.top_level_types if t.name == "D")
+    assert d.extends == ["Base"]
+    assert d.implements == ["Iface"]
+
+
+def test_class_with_no_supertypes_has_empty_lists() -> None:
+    """class C {} -> extends == [] and implements == [] (no delegation_specifiers)."""
+    ast = parse_kotlin(b"package com.x\nclass C\n", filename="C.kt")
+    assert ast.top_level_types[0].extends == []
+    assert ast.top_level_types[0].implements == []
+
+
+def test_java_annotation_ref_use_site_target_is_none() -> None:
+    """(f) Regression: a Java AnnotationRef built by parse_java has use_site_target is None."""
+    ast = parse_java(
+        b'package com.x;\n@org.springframework.stereotype.Service\n'
+        b'public class S { public S(@org.springframework.beans.factory.annotation.Autowired Repo r) {} }\n',
+        filename="S.java",
+    )
+    t = ast.top_level_types[0]
+    svc = _ann(t.annotations, "Service")
+    assert svc is not None
+    assert svc.use_site_target is None
+    ctor = next(m for m in t.methods if m.is_constructor)
+    aw = _ann(ctor.parameters[0].annotations, "Autowired")
+    assert aw is not None
+    assert aw.use_site_target is None
+
+
+def test_annotation_ref_field_default_is_none() -> None:
+    """The AnnotationRef.use_site_target field defaults to None when constructed plainly."""
+    a = AnnotationRef(name="X", qualified="X")
+    assert a.use_site_target is None

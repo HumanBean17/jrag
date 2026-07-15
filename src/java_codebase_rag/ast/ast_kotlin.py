@@ -66,6 +66,7 @@ import tree_sitter_kotlin as _ts_kotlin
 from tree_sitter import Language, Node, Parser
 
 from java_codebase_rag.ast.ast_java import (
+    AnnotationRef,
     FieldDecl,
     FileImports,
     JavaFileAst,
@@ -264,6 +265,229 @@ def _build_member_modifiers(
     return mods
 
 
+# ---- Task 8: annotations (with use-site targets) ----
+#
+# Grammar (tree-sitter-kotlin 1.1.0), confirmed by probing:
+# * An ``annotation`` (singular — NO ``annotations`` plural wrapper) sits inside
+#   the ``modifiers`` container of the type / property / function / class_parameter.
+# * A function ``parameter``'s annotations live in a SIBLING ``parameter_modifiers``
+#   node inside ``function_value_parameters`` (different parent from the property /
+#   ctor-param case, which uses ``modifiers`` on the node itself).
+# * No-arg:      ``annotation > user_type > identifier``
+#   With-args:   ``annotation > constructor_invocation > (user_type, value_arguments)``
+# * Use-site target: ``annotation > use_site_target > (field|get|set|param|property,
+#   :)`` — the target word is an anonymous token; read the ``use_site_target`` text
+#   and strip the trailing ``:``.
+# * Annotation simple name = last ``identifier`` of the ``user_type``; qualified =
+#   raw text of the ``user_type``.
+
+# Use-site target keywords recognised by the grammar. ``file`` is a file-level
+# target handled in Task 9 (file annotations); recorded here for completeness.
+_KOTLIN_USE_SITE_TARGETS: frozenset[str] = frozenset(
+    {"field", "get", "set", "param", "property", "file"}
+)
+
+
+def _kotlin_use_site_target(ann_node: Node, src: bytes) -> str | None:
+    """Read ``annotation > use_site_target`` text (e.g. ``param:`` → ``"param"``)."""
+    ust = next(
+        (c for c in ann_node.named_children if c.type == "use_site_target"), None
+    )
+    if ust is None:
+        return None
+    # ``use_site_target`` text is e.g. ``param:``; strip the trailing colon.
+    return _txt(ust, src).rstrip(":").strip() or None
+
+
+def _kotlin_annotation_value_arguments(
+    ann_node: Node, src: bytes
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Extract ``arguments`` / ``argument_kinds`` from a Kotlin annotation.
+
+    Mirrors the Java arg-extraction shape (``ast_java._parse_annotation_argument_list``)
+    but walks Kotlin nodes (``constructor_invocation > value_arguments > value_argument``).
+    String literals → kind ``"string"``; enum-like identifiers → ``"enum"``;
+    ``collection_literal`` of strings → comma-joined, kind ``"string"``. A bare
+    positional argument is keyed under ``"value"``.
+    """
+    args: dict[str, str] = {}
+    kinds: dict[str, str] = {}
+    ci = next(
+        (c for c in ann_node.named_children if c.type == "constructor_invocation"),
+        None,
+    )
+    if ci is None:
+        return args, kinds
+    va = next(
+        (c for c in ci.named_children if c.type == "value_arguments"), None
+    )
+    if va is None:
+        return args, kinds
+    for varg in va.named_children:
+        if varg.type != "value_argument":
+            continue
+        # Named arg: ``key = value`` (an ``identifier`` child + anonymous ``=``).
+        key = "value"
+        value_node: Node | None = None
+        named_key = next(
+            (c for c in varg.named_children if c.type == "identifier"), None
+        )
+        has_eq = any(c.type == "=" for c in varg.children)
+        if named_key is not None and has_eq:
+            key = _txt(named_key, src)
+            # value is the named child after the ``=``
+            for c in varg.named_children:
+                if c is not named_key:
+                    value_node = c
+                    break
+        else:
+            # positional: the first named child that isn't the key
+            value_node = named_key if named_key is not None and not has_eq else None
+            if value_node is None:
+                for c in varg.named_children:
+                    value_node = c
+                    break
+        if value_node is None:
+            continue
+        val, kind = _kotlin_annotation_value(value_node, src)
+        if val is None or kind is None:
+            continue
+        if key not in args:  # first-wins, mirroring Java positional behaviour
+            args[key] = val
+            kinds[key] = kind
+    return args, kinds
+
+
+def _kotlin_annotation_value(node: Node, src: bytes) -> tuple[str | None, str | None]:
+    """(value, kind) for a Kotlin annotation argument expression.
+
+    Returns one of ``("string")`` / ``("enum")`` kinds:
+    * ``string_literal`` → ``string_content`` text, ``"string"``;
+    * ``collection_literal`` → comma-joined string-literal children, ``"string"``;
+    * ``identifier``/``scoped_identifier``/``field_access``/``callable_reference``
+      → last segment, ``"enum"``.
+    """
+    if node.type == "string_literal":
+        for ch in node.named_children:
+            if ch.type == "string_content":
+                return _txt(ch, src), "string"
+        return None, None
+    if node.type == "collection_literal":
+        parts: list[str] = []
+        for ch in node.named_children:
+            if ch.type == "string_literal":
+                for gc in ch.named_children:
+                    if gc.type == "string_content":
+                        parts.append(_txt(gc, src))
+        if parts:
+            return ",".join(parts), "string"
+        return None, None
+    if node.type in ("identifier", "scoped_identifier", "field_access"):
+        raw = _txt(node, src).strip()
+        if not raw:
+            return None, None
+        return raw.rsplit(".", 1)[-1], "enum"
+    if node.type == "callable_reference":
+        # ``Foo::bar`` → receiver ``Foo``; treat the whole text as enum-like.
+        raw = _txt(node, src).strip()
+        return (raw.rsplit(".", 1)[-1] if raw else None), "enum"
+    return None, None
+
+
+def _kotlin_annotation_name(
+    ann_node: Node, src: bytes
+) -> tuple[str, str]:
+    """(simple, qualified) from ``annotation > [constructor_invocation >] user_type``."""
+    user_type = next(
+        (c for c in ann_node.named_children if c.type == "user_type"), None
+    )
+    if user_type is None:
+        ci = next(
+            (c for c in ann_node.named_children if c.type == "constructor_invocation"),
+            None,
+        )
+        if ci is not None:
+            user_type = next(
+                (c for c in ci.named_children if c.type == "user_type"), None
+            )
+    if user_type is None:
+        return "", ""
+    ids = [c for c in user_type.named_children if c.type == "identifier"]
+    simple = _txt(ids[-1], src) if ids else ""
+    return simple, _txt(user_type, src)
+
+
+def _parse_kotlin_annotation(ann_node: Node, src: bytes) -> AnnotationRef:
+    """Build an ``AnnotationRef`` from a Kotlin ``annotation`` node."""
+    simple, qualified = _kotlin_annotation_name(ann_node, src)
+    args, arg_kinds = _kotlin_annotation_value_arguments(ann_node, src)
+    return AnnotationRef(
+        name=simple,
+        qualified=qualified or simple,
+        arguments=args,
+        argument_kinds=arg_kinds,
+        use_site_target=_kotlin_use_site_target(ann_node, src),
+    )
+
+
+def _kotlin_annotations_from_modifiers(node: Node, src: bytes) -> list[AnnotationRef]:
+    """All ``annotation`` children of ``node``'s ``modifiers`` container."""
+    mods_node = next(
+        (c for c in node.named_children if c.type == "modifiers"), None
+    )
+    if mods_node is None:
+        return []
+    return [
+        _parse_kotlin_annotation(c, src)
+        for c in mods_node.named_children
+        if c.type == "annotation"
+    ]
+
+
+# The four annotation-routing slots. ``None`` (no explicit target) routes to the
+# caller's chosen ``default_slot``: ``"field"`` for a body property, ``"param"``
+# for a primary-constructor parameter (the dominant Spring-Kotlin DI pattern —
+# ``@Autowired val r: Repo`` defaults to constructor injection).
+_ANN_SLOTS: tuple[str, ...] = ("field", "get", "set", "param")
+
+
+def _route_kotlin_annotations_by_target(
+    anns: list[AnnotationRef], default_slot: str
+) -> dict[str, list[AnnotationRef]]:
+    """Bucket annotations by ``use_site_target``.
+
+    ``"field"`` / ``"property"`` → ``field``; ``"get"``/``"set"``/``"param"`` →
+    themselves; ``None`` / anything else → ``default_slot`` (one of ``_ANN_SLOTS``).
+    """
+    buckets: dict[str, list[AnnotationRef]] = {s: [] for s in _ANN_SLOTS}
+    for a in anns:
+        t = a.use_site_target
+        if t in ("get", "set", "param"):
+            buckets[t].append(a)
+        elif t in ("field", "property"):
+            buckets["field"].append(a)
+        else:
+            buckets[default_slot].append(a)
+    return buckets
+
+
+def _attach_targeted_annotations_to_accessors(
+    accessors: list[MethodDecl],
+    get_anns: list[AnnotationRef],
+    set_anns: list[AnnotationRef],
+) -> None:
+    """Attach get-/set-targeted annotations to the synthesized accessor MethodDecls.
+
+    ``accessors[0]`` is the getter; ``accessors[1]`` (when present) is the setter.
+    Privates synthesize no accessors; their get/set annotations are dropped (the
+    accessors are not exposed on the JVM surface we model).
+    """
+    if accessors:
+        accessors[0].annotations.extend(get_anns)
+    if len(accessors) > 1:
+        accessors[1].annotations.extend(set_anns)
+
+
 def _cap(name: str) -> str:
     """JVM capitalisation: first char uppercased, rest unchanged."""
     return name[:1].upper() + name[1:] if name else name
@@ -339,11 +563,30 @@ def _function_value_parameters(node: Node | None) -> Node | None:
 def _params_from_function_value_parameters(
     fv_params: Node | None, src: bytes
 ) -> list[ParamDecl]:
-    """``function_value_parameters > parameter > (identifier, type)`` → ParamDecl list."""
+    """``function_value_parameters > parameter > (identifier, type)`` → ParamDecl list.
+
+    A parameter's annotations live in a preceding SIBLING ``parameter_modifiers``
+    node (NOT inside ``parameter``); they attach to the ParamDecl with their
+    ``use_site_target`` preserved (function params have no field/getter/setter —
+    every target, including ``None``, lands on the ParamDecl).
+    """
     params: list[ParamDecl] = []
     if fv_params is None:
         return params
+    pending_anns: list[AnnotationRef] = []
+    saw_param = False
     for c in fv_params.named_children:
+        if c.type == "parameter_modifiers":
+            # Accumulate; applies to the next ``parameter`` sibling.
+            if saw_param:
+                pending_anns = []
+                saw_param = False
+            pending_anns.extend(
+                _parse_kotlin_annotation(mc, src)
+                for mc in c.named_children
+                if mc.type == "annotation"
+            )
+            continue
         if c.type != "parameter":
             continue
         name = ""
@@ -358,15 +601,22 @@ def _params_from_function_value_parameters(
                 name=name,
                 type_name=type_simple,
                 type_raw=_txt(type_node, src) if type_node is not None else type_simple,
+                annotations=list(pending_anns),
             )
         )
+        pending_anns = []
+        saw_param = True
     return params
 
 
 def _process_function_declaration(
     node: Node, src: bytes, *, is_static_ctx: bool
 ) -> MethodDecl:
-    """``function_declaration`` → MethodDecl (``is_constructor`` always False in 1.1.0)."""
+    """``function_declaration`` → MethodDecl (``is_constructor`` always False in 1.1.0).
+
+    All ``modifiers`` annotations attach to the MethodDecl (functions carry no
+    use-site target semantics; their ``use_site_target`` is preserved as-is).
+    """
     name = next(
         (_txt(c, src) for c in node.named_children if c.type == "identifier"), ""
     )
@@ -376,6 +626,7 @@ def _process_function_declaration(
     )
     params = _params_from_function_value_parameters(fv_params, src)
     info = _collect_kotlin_modifiers(node, src)
+    anns = _kotlin_annotations_from_modifiers(node, src)
     is_final = not (
         _KOTLIN_INHERITANCE_NON_FINAL & set(info["inheritance"])
     )
@@ -387,6 +638,7 @@ def _process_function_declaration(
         is_constructor=False,
         parameters=params,
         modifiers=mods,
+        annotations=anns,
         signature=sig,
         start_byte=node.start_byte,
         end_byte=node.end_byte,
@@ -402,13 +654,14 @@ def _process_secondary_constructor(
     params = _params_from_function_value_parameters(
         _function_value_parameters(node), src
     )
+    anns = _kotlin_annotations_from_modifiers(node, src)
     sig = f"{class_name}({','.join(p.type_name for p in params)})"
     return MethodDecl(
         name=class_name,
         return_type="",
         is_constructor=True,
         parameters=params,
-        modifiers=[],
+        annotations=anns,
         signature=sig,
         start_byte=node.start_byte,
         end_byte=node.end_byte,
@@ -424,6 +677,10 @@ def _process_property_declaration(
 
     Accessors are synthesized only for non-private properties (private emits the
     FieldDecl alone). ``const`` forces ``static``.
+
+    Annotation routing (use-site target): ``field``/``property``/``None`` →
+    FieldDecl; ``get`` → getter; ``set`` → setter. A ``param`` target is invalid
+    on a body property and falls back to the FieldDecl.
     """
     vdecl = next(
         (c for c in node.named_children if c.type == "variable_declaration"), None
@@ -439,6 +696,8 @@ def _process_property_declaration(
 
     is_var = _has_anon_keyword(node, "var")
     info = _collect_kotlin_modifiers(node, src)
+    anns = _kotlin_annotations_from_modifiers(node, src)
+    buckets = _route_kotlin_annotations_by_target(anns, default_slot="field")
     is_static = is_static_ctx or info["const"]
     field = FieldDecl(
         name=name,
@@ -447,6 +706,7 @@ def _process_property_declaration(
         modifiers=_build_member_modifiers(
             info, is_static=is_static, is_final=(not is_var) or info["const"]
         ),
+        annotations=buckets["field"],
         start_byte=node.start_byte,
         end_byte=node.end_byte,
         start_line=node.start_point[0] + 1,
@@ -456,6 +716,9 @@ def _process_property_declaration(
     if info["visibility"] != "private":
         accessors = _accessor_method_decls(
             name, type_simple, is_var, info, is_static=is_static
+        )
+        _attach_targeted_annotations_to_accessors(
+            accessors, buckets["get"], buckets["set"]
         )
     return field, accessors
 
@@ -467,6 +730,12 @@ def _process_class_parameter(
 
     ``val``/``var`` parameters are properties (field + accessors); a plain
     parameter is just a constructor ParamDecl (no field, no accessor).
+
+    Annotation routing (use-site target): ``param``/``None`` → the ctor ParamDecl
+    (None defaults to the ctor-param natural slot — the dominant Spring-Kotlin
+    constructor-injection pattern); ``field``/``property`` → FieldDecl; ``get`` →
+    getter; ``set`` → setter. A plain (non-val/var) param has only the ParamDecl
+    slot, so every annotation lands there regardless of target.
     """
     name = next(
         (_txt(c, src) for c in node.named_children if c.type == "identifier"), ""
@@ -475,10 +744,23 @@ def _process_class_parameter(
     is_var = _has_anon_keyword(node, "var")
     is_val = _has_anon_keyword(node, "val")
     info = _collect_kotlin_modifiers(node, src)
+    anns = _kotlin_annotations_from_modifiers(node, src)
     is_static = is_static_ctx or info["const"]
-    ctor_param = ParamDecl(name=name, type_name=type_simple, type_raw=type_simple)
+
     if not (is_var or is_val):
-        return None, [], ctor_param  # plain constructor parameter, not a property.
+        # Plain constructor parameter: only a ParamDecl slot exists.
+        ctor_param = ParamDecl(
+            name=name, type_name=type_simple, type_raw=type_simple, annotations=anns
+        )
+        return None, [], ctor_param
+
+    buckets = _route_kotlin_annotations_by_target(anns, default_slot="param")
+    ctor_param = ParamDecl(
+        name=name,
+        type_name=type_simple,
+        type_raw=type_simple,
+        annotations=buckets["param"],
+    )
     field = FieldDecl(
         name=name,
         type_name=type_simple,
@@ -486,6 +768,7 @@ def _process_class_parameter(
         modifiers=_build_member_modifiers(
             info, is_static=is_static, is_final=(not is_var) or info["const"]
         ),
+        annotations=buckets["field"],
         start_byte=node.start_byte,
         end_byte=node.end_byte,
         start_line=node.start_point[0] + 1,
@@ -495,6 +778,9 @@ def _process_class_parameter(
     if info["visibility"] != "private":
         accessors = _accessor_method_decls(
             name, type_simple, is_var, info, is_static=is_static
+        )
+        _attach_targeted_annotations_to_accessors(
+            accessors, buckets["get"], buckets["set"]
         )
     return field, accessors, ctor_param
 
@@ -545,6 +831,120 @@ def _facade_stem(filename: str) -> str:
     return base or "File"
 
 
+# ---- Task 8: extends/implements partition (B7-soft) ----
+#
+# Kotlin surfaces every supertype — class to extend, interface to implement, and
+# ``by``-delegation target — as one comma-separated ``delegation_specifiers``
+# clause after ``:``. Each ``delegation_specifier`` is one of:
+#   * ``user_type``                              (plain interface/type)
+#   * ``constructor_invocation > user_type``     (class with ctor call, e.g. ``Base(c)``)
+#   * ``explicit_delegation > user_type``        (``I by impl()`` — supertype is ``I``)
+# In all cases the supertype simple name lives in a descendant ``user_type``.
+#
+# Partition rule (no cross-file resolution in the extractor): a supertype whose
+# simple name is declared in THIS compilation unit with folded kind in
+# {class, record, enum} → extends; declared interface → implements; everything
+# else (unknown, or annotation kind) → implements (a spurious IMPLEMENTS is less
+# damaging than a false EXTENDS). An interface declaration emits ONLY implements.
+
+# Kotlin folded kinds that count as a class-kind for the extends branch.
+_KOTLIN_CLASS_KINDS: frozenset[str] = frozenset({"class", "record", "enum"})
+
+
+def _pre_scan_kotlin_type_kinds(root: Node, src: bytes) -> dict[str, str]:
+    """Map simple type name → folded kind for every declaration in this CU.
+
+    Walks all ``class_declaration`` / ``object_declaration`` / ``companion_object``
+    nodes (top-level and nested). Last-wins on name collision (rare; nested names
+    shadow). Used by the supertype partition — same-CU resolution only.
+    """
+    out: dict[str, str] = {}
+
+    def visit(n: Node) -> None:
+        t = n.type
+        if t == "class_declaration":
+            kind = _kotlin_class_kind(n, src)
+        elif t in ("object_declaration", "companion_object"):
+            kind = "class"
+        else:
+            kind = ""
+        if kind:
+            nm = _kotlin_decl_name(n, src)
+            if nm:
+                out[nm] = kind
+        for c in n.children:
+            visit(c)
+
+    visit(root)
+    return out
+
+
+def _supertype_simple_name(delegation_specifier: Node, src: bytes) -> str:
+    """Head simple name from a ``delegation_specifier`` (generics/nullable stripped).
+
+    Finds the first descendant ``user_type`` (direct, under
+    ``constructor_invocation``, or under ``explicit_delegation``) and returns its
+    head simple name via ``_simple_type_name``. Returns ``""`` if none found.
+    """
+    user_type = next(
+        (c for c in delegation_specifier.named_children if c.type == "user_type"),
+        None,
+    )
+    if user_type is None:
+        for c in delegation_specifier.named_children:
+            if c.type in ("constructor_invocation", "explicit_delegation"):
+                user_type = next(
+                    (gc for gc in c.named_children if gc.type == "user_type"),
+                    None,
+                )
+                if user_type is not None:
+                    break
+    if user_type is None:
+        # Fall back to any nested user_type (defensive — shouldn't happen).
+        for c in delegation_specifier.children:
+            if c.type == "user_type":
+                user_type = c
+                break
+    return _simple_type_name(user_type, src) if user_type is not None else ""
+
+
+def _kotlin_extends_implements(
+    class_node: Node,
+    src: bytes,
+    self_kind: str,
+    kind_by_simple: dict[str, str],
+) -> tuple[list[str], list[str]]:
+    """Partition the ``:`` supertype list of a class/interface into (extends, implements).
+
+    Interfaces (``self_kind == "interface"``) emit only ``implements`` regardless
+    of the supertypes' own kinds. Generics/nullable are stripped to simple names.
+    """
+    extends: list[str] = []
+    implements: list[str] = []
+    del_specs = next(
+        (c for c in class_node.named_children if c.type == "delegation_specifiers"),
+        None,
+    )
+    if del_specs is None:
+        return extends, implements
+    for spec in del_specs.named_children:
+        if spec.type != "delegation_specifier":
+            continue
+        simple = _supertype_simple_name(spec, src)
+        if not simple:
+            continue
+        if self_kind == "interface":
+            implements.append(simple)
+            continue
+        kind = kind_by_simple.get(simple)
+        if kind in _KOTLIN_CLASS_KINDS:
+            extends.append(simple)
+        else:
+            # interface, annotation, or unknown → implements (safe default).
+            implements.append(simple)
+    return extends, implements
+
+
 def _parse_kotlin_type(
     node: Node,
     src: bytes,
@@ -552,19 +952,19 @@ def _parse_kotlin_type(
     package: str,
     outer_fqn: str | None,
     all_types: list[TypeDecl],
+    kind_by_simple: dict[str, str],
     filename: str = "",
 ) -> TypeDecl | None:
-    """Build a ``TypeDecl`` for a Kotlin type declaration node (Task 6 + 7).
+    """Build a ``TypeDecl`` for a Kotlin type declaration node (Tasks 6 + 7 + 8).
 
     Recurses into the declaration's body (``class_body`` / ``enum_class_body``)
     for nested ``class_declaration`` / ``object_declaration`` /
-    ``companion_object`` nodes (Task 6) and now also walks member nodes into
-    ``fields`` / ``methods`` (Task 7): ``function_declaration`` /
-    ``secondary_constructor`` → methods; ``property_declaration`` and
-    ``val``/``var`` primary-constructor parameters → field + synthesized
-    accessors. Companion-object direct members carry ``"static"``.
-    ``extends`` / ``implements`` / ``annotations`` / type-level ``modifiers``
-    arrive in later tasks (they stay as the ``TypeDecl`` defaults).
+    ``companion_object`` nodes and walks member nodes into ``fields`` / ``methods``:
+    ``function_declaration`` / ``secondary_constructor`` → methods;
+    ``property_declaration`` and ``val``/``var`` primary-constructor parameters →
+    field + synthesized accessors. Companion-object direct members carry
+    ``"static"``. Task 8 adds type-level ``annotations`` and the
+    ``extends``/``implements`` partition of the ``:`` supertype list.
     """
     t = node.type
     if t == "class_declaration":
@@ -585,11 +985,23 @@ def _parse_kotlin_type(
     # Direct members of a `companion_object` compile to static JVM members.
     members_are_static = t == "companion_object"
 
+    # Task 8: type-level annotations + extends/implements partition.
+    type_anns = _kotlin_annotations_from_modifiers(node, src)
+    if t == "class_declaration":
+        extends, implements = _kotlin_extends_implements(
+            node, src, self_kind=kind, kind_by_simple=kind_by_simple
+        )
+    else:
+        extends, implements = [], []  # objects/companion have no supertype clause.
+
     nested: list[TypeDecl] = []
     decl = TypeDecl(
         name=name,
         kind=kind,
         fqn=fqn,
+        annotations=type_anns,
+        extends=extends,
+        implements=implements,
         nested=nested,
         start_byte=node.start_byte,
         end_byte=node.end_byte,
@@ -646,6 +1058,7 @@ def _parse_kotlin_type(
                     package=package,
                     outer_fqn=fqn,
                     all_types=all_types,
+                    kind_by_simple=kind_by_simple,
                     filename=filename,
                 )
                 if child_decl is not None:
@@ -744,10 +1157,14 @@ def parse_kotlin(source: bytes | str, *, filename: str = "", verbose: bool = Fal
         # Kotlin has no `import static`: static_methods / static_wildcards stay empty.
     )
 
+    # Pre-scan declared type kinds (simple name → folded kind) for the same-CU
+    # supertype partition (Task 8). Built once from the whole tree.
+    kind_by_simple = _pre_scan_kotlin_type_kinds(root, src)
+
     # Walk top-level type declarations (class_declaration / object_declaration /
     # companion_object) into TypeDecl rows with the folded kind map, now also
-    # populating members (Task 7). Top-level functions/properties are collected
-    # below onto a synthetic facade TypeDecl.
+    # populating members (Task 7) and annotations/supertypes (Task 8). Top-level
+    # functions/properties are collected below onto a synthetic facade TypeDecl.
     top_level_types: list[TypeDecl] = []
     all_types: list[TypeDecl] = []
     for child in root.named_children:
@@ -758,6 +1175,7 @@ def parse_kotlin(source: bytes | str, *, filename: str = "", verbose: bool = Fal
                 package=package,
                 outer_fqn=None,
                 all_types=all_types,
+                kind_by_simple=kind_by_simple,
                 filename=filename,
             )
             if decl is not None:

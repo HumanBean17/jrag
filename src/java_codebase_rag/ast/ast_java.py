@@ -249,6 +249,11 @@ class AnnotationRef:
     container_capability_values: tuple[str, ...] = field(default_factory=tuple)
     # Entry-aligned with `container_capability_values`; each value is "enum" | "string".
     container_capability_kinds: tuple[str, ...] = field(default_factory=tuple)
+    # Kotlin use-site target (one of "field"|"get"|"set"|"param"|"property"|"file") or
+    # None. Java ``parse_java`` always leaves this None — Java has no use-site targets.
+    # This is an AST-level field (not a persisted graph column); it drives Kotlin-only
+    # routing of an annotation to the FieldDecl / accessor MethodDecl / ParamDecl slot.
+    use_site_target: str | None = None
 
 
 @dataclass
