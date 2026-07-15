@@ -394,10 +394,25 @@ class JavaFileAst:
     explicit_imports: dict[str, str]  # "List" -> "java.util.List"
     top_level_types: list[TypeDecl]
     all_types: list[TypeDecl]  # flat, includes nested
+    # Language-dispatch seam (Task 1). Required — no default — so every
+    # construction site names the language explicitly. Validated against the
+    # registry in ``language.KNOWN_LANGUAGE_IDS``. Lazily imported inside
+    # ``__post_init__`` to avoid a module-load cycle (``language`` imports
+    # ``JavaFileAst``/``parse_java`` from this module).
+    language: str
     parse_error: bool = False
     source_bytes: int = 0
     file_imports: FileImports = field(default_factory=FileImports)
     routes_skipped_unresolved: int = 0
+
+    def __post_init__(self) -> None:
+        from .language import KNOWN_LANGUAGE_IDS
+
+        if self.language not in KNOWN_LANGUAGE_IDS:
+            raise ValueError(
+                f"Unknown language id {self.language!r}; "
+                f"expected one of {sorted(KNOWN_LANGUAGE_IDS)}"
+            )
 
 
 @dataclass
@@ -2625,6 +2640,7 @@ def parse_java(source: bytes | str, *, filename: str = "", verbose: bool = False
         explicit_imports={},
         top_level_types=[],
         all_types=[],
+        language="java",
         parse_error=False,
         source_bytes=len(src),
         file_imports=FileImports(),
@@ -2710,6 +2726,7 @@ def parse_java(source: bytes | str, *, filename: str = "", verbose: bool = False
         explicit_imports=explicit_imports,
         top_level_types=top_types,
         all_types=all_types,
+        language="java",
         parse_error=root.has_error,
         source_bytes=len(src),
         file_imports=file_imports,
