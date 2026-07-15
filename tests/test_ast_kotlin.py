@@ -8,17 +8,17 @@ are empty lists here.
 """
 from __future__ import annotations
 
-import importlib.util
-
 import pytest
 
 # The whole module is skipped when the grammar wheel is absent (Intel-Mac
-# graph-only installs, minimal CI images, etc.). The conditional registration
-# in ``language.py`` mirrors this: no grammar → no KotlinBackend.
-pytestmark = pytest.mark.skipif(
-    importlib.util.find_spec("tree_sitter_kotlin") is None,
-    reason="tree-sitter-kotlin grammar not installed",
-)
+# graph-only installs, minimal CI images, etc.). ``importorskip`` runs at
+# collection time and raises ``Skipped`` *before* ``ast_kotlin`` is imported —
+# which matters because ``ast_kotlin`` itself does ``import tree_sitter_kotlin``
+# at module load. A module-level ``pytestmark`` skipif would only mark test
+# *functions* and would not prevent that ``ImportError`` during collection.
+# The conditional registration in ``language.py`` mirrors this: no grammar →
+# no KotlinBackend.
+pytest.importorskip("tree_sitter_kotlin")
 
 from java_codebase_rag.ast.ast_kotlin import parse_kotlin  # noqa: E402
 from java_codebase_rag.ast.ast_java import JavaFileAst  # noqa: E402
