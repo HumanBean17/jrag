@@ -357,20 +357,28 @@ def test_layered_ignore_memo_preserves_decisions(tmp_path: Path) -> None:
     assert li_cached.is_ignored(hit3) == li_uncached3.is_ignored(hit3)
 
 
-def test_iter_source_files_yields_only_java_today(tmp_path: Path) -> None:
-    """``iter_source_files`` dispatches by registered suffix. Only Java is
-    registered today, so among ``A.java``, ``B.kt``, ``C.txt`` it yields just
-    ``A.java`` and the set of yielded suffixes is exactly ``{'.java'}``."""
+def test_iter_source_files_yields_registered_suffixes(tmp_path: Path) -> None:
+    """``iter_source_files`` dispatches by registered suffix. Among
+    ``A.java``, ``B.kt``, ``C.txt`` it yields ``A.java`` always, plus ``B.kt``
+    when the ``tree-sitter-kotlin`` grammar is installed (KotlinBackend then
+    claims ``.kt``); ``C.txt`` is never yielded."""
+    import importlib.util
+
     root = tmp_path / "proj"
     root.mkdir()
     a = root / "A.java"
     a.write_text("class A {}\n", encoding="utf-8")
-    (root / "B.kt").write_text("class B {}\n", encoding="utf-8")
+    b = root / "B.kt"
+    b.write_text("class B {}\n", encoding="utf-8")
     (root / "C.txt").write_text("not source\n", encoding="utf-8")
     li = LayeredIgnore(root, use_gitignore=False)
     files = list(iter_source_files(root, ignore=li))
-    assert files == [a]
-    assert {p.suffix for p in files} == {".java"}
+    if importlib.util.find_spec("tree_sitter_kotlin") is not None:
+        assert sorted(files, key=str) == sorted([a, b], key=str)
+        assert {p.suffix for p in files} == {".java", ".kt"}
+    else:
+        assert files == [a]
+        assert {p.suffix for p in files} == {".java"}
 
 
 def test_iter_source_files_prunes_build_output_dir(tmp_path: Path) -> None:

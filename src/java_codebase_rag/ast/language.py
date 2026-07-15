@@ -59,10 +59,36 @@ class JavaBackend:
         return parse_java(source, filename=filename, verbose=verbose)
 
 
-# Registry: language_id -> backend. Later tasks append a Kotlin entry here.
+# Registry: language_id -> backend. Kotlin is appended conditionally on the
+# grammar wheel importing (try/except below), so minimal/graph-only installs
+# simply skip `.kt` files instead of crashing at import time.
 LANG_BACKENDS: dict[str, LanguageBackend] = {
     "java": JavaBackend(),
 }
+
+# Conditional Kotlin registration. The grammar wheel (tree-sitter-kotlin) is an
+# optional dependency on some platforms (Intel-Mac graph-only installs); when it
+# is absent, KotlinBackend stays out of the registry and ``backend_for`` returns
+# ``None`` for ``.kt`` — the file is then skipped by every parse site.
+try:  # pragma: no cover - branch depends on whether the wheel is installed
+    import tree_sitter_kotlin as _ts_kotlin  # noqa: F401
+
+    from java_codebase_rag.ast.ast_kotlin import parse_kotlin as _parse_kotlin
+
+    class KotlinBackend:
+        """The Kotlin backend — delegates to ``parse_kotlin``."""
+
+        language_id: str = "kotlin"
+        suffixes: tuple[str, ...] = (".kt",)
+
+        def parse(
+            self, source: bytes | str, *, filename: str = "", verbose: bool = False
+        ) -> JavaFileAst:
+            return _parse_kotlin(source, filename=filename, verbose=verbose)
+
+    LANG_BACKENDS["kotlin"] = KotlinBackend()
+except ImportError:
+    pass
 
 # Derived from the registry so the two never drift apart.
 KNOWN_LANGUAGE_IDS: frozenset[str] = frozenset(LANG_BACKENDS.keys())
@@ -72,7 +98,8 @@ def backend_for(path: Path | str) -> LanguageBackend | None:
     """Return the first backend whose ``suffixes`` contain ``path``'s suffix.
 
     Suffix matching is case-sensitive against ``Path(path).suffix``. Returns
-    ``None`` when no backend claims the file (e.g. ``.kt`` today, or ``.md``).
+    ``None`` when no backend claims the file (e.g. ``.md``), or for a ``.kt``
+    file on an install where the ``tree-sitter-kotlin`` grammar is absent.
     """
     suffix = Path(path).suffix
     for backend in LANG_BACKENDS.values():

@@ -28,9 +28,21 @@ def test_backend_for_java_file_returns_java_backend() -> None:
     assert backend.language_id == "java"
 
 
-def test_backend_for_kotlin_file_returns_none() -> None:
-    """(b) `.kt` is not registered yet — Kotlin lands in a later task."""
-    assert backend_for("Foo.kt") is None
+def test_backend_for_kotlin_file_conditional_on_grammar() -> None:
+    """(b) `.kt` resolves to KotlinBackend iff the grammar wheel imports.
+
+    Task 5 registers KotlinBackend behind a ``try: import tree_sitter_kotlin``
+    guard: present when the grammar installs, absent (so ``backend_for``
+    returns ``None``) on minimal/graph-only installs.
+    """
+    import importlib.util
+
+    if importlib.util.find_spec("tree_sitter_kotlin") is None:
+        assert backend_for("Foo.kt") is None
+        return
+    backend = backend_for("Foo.kt")
+    assert backend is not None
+    assert backend.language_id == "kotlin"
 
 
 def test_backend_for_unrelated_suffix_returns_none() -> None:
@@ -80,11 +92,24 @@ def test_fileast_alias_is_javafileast() -> None:
 
 
 def test_registry_and_known_ids() -> None:
-    """Registry invariants: only Java registered; ids derived from keys."""
-    assert set(LANG_BACKENDS.keys()) == {"java"}
-    assert KNOWN_LANGUAGE_IDS == frozenset({"java"})
+    """Registry invariants: Java always registered; Kotlin when grammar imports; ids derived from keys."""
+    import importlib.util
+
+    assert "java" in LANG_BACKENDS
+    assert "java" in KNOWN_LANGUAGE_IDS
     assert LANG_BACKENDS["java"].language_id == "java"
     assert ".java" in LANG_BACKENDS["java"].suffixes
+    # Kotlin is conditionally registered (Task 5): present iff the grammar imports.
+    if importlib.util.find_spec("tree_sitter_kotlin") is not None:
+        assert "kotlin" in LANG_BACKENDS
+        assert "kotlin" in KNOWN_LANGUAGE_IDS
+        assert LANG_BACKENDS["kotlin"].language_id == "kotlin"
+        assert ".kt" in LANG_BACKENDS["kotlin"].suffixes
+    else:
+        assert "kotlin" not in LANG_BACKENDS
+        assert "kotlin" not in KNOWN_LANGUAGE_IDS
+    # KNOWN_LANGUAGE_IDS never drifts from the registry keys.
+    assert KNOWN_LANGUAGE_IDS == frozenset(LANG_BACKENDS.keys())
 
 
 def test_parse_sites_dispatch_through_backend_for(monkeypatch, tmp_path) -> None:

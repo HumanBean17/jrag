@@ -445,11 +445,10 @@ def iter_source_files(
     """Walk ``root`` for source files of any registered language backend.
 
     Yields files whose suffix is claimed by at least one backend in
-    :data:`~java_codebase_rag.ast.language.LANG_BACKENDS` (today: ``.java``).
-    Pruning (``UNCONDITIONAL_PRUNE_DIRS`` + ``_is_build_output_dir``) and the
-    layered ignore rules are unchanged from the former Java-only walk, so with
-    only Java registered this yields exactly the same ``.java`` files as the
-    previous ``iter_java_source_files``.
+    :data:`~java_codebase_rag.ast.language.LANG_BACKENDS` (``.java`` always;
+    ``.kt`` when the ``tree-sitter-kotlin`` grammar imports). Pruning
+    (``UNCONDITIONAL_PRUNE_DIRS`` + ``_is_build_output_dir``) and the layered
+    ignore rules are unchanged from the former Java-only walk.
     """
     if exclude_globs is not None and ignore is not None:
         raise TypeError("pass either exclude_globs or ignore=, not both")
@@ -465,8 +464,8 @@ def iter_source_files(
         ignore_ctx = ignore
     else:
         ignore_ctx = LayeredIgnore(root)
-    # Union of suffixes claimed by every registered backend (Java today; Kotlin
-    # adds ``.kt`` in a later task). Computed once per call.
+    # Union of suffixes claimed by every registered backend (``.java`` always;
+    # ``.kt`` when the Kotlin grammar imports). Computed once per call.
     known_suffixes: set[str] = set()
     for backend in LANG_BACKENDS.values():
         known_suffixes.update(backend.suffixes)
