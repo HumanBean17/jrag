@@ -745,3 +745,142 @@ def test_annotation_ref_field_default_is_none() -> None:
     """The AnnotationRef.use_site_target field defaults to None when constructed plainly."""
     a = AnnotationRef(name="X", qualified="X")
     assert a.use_site_target is None
+
+
+# ---- Task 9: @file:JvmName / @file:JvmMultifileClass facade naming + cross-file merge ----
+#
+# Two Kotlin files that share @file:JvmName("X") + @file:JvmMultifileClass() compile
+# into ONE JVM class pkg.X. The per-file parse emits one facade per file all claiming
+# FQN pkg.X; `merge_multifile_facades` concatenates their members onto a single
+# retained facade so cross-language CALLS resolve. Default facade naming: the Kotlin
+# compiler capitalises the filename stem's first letter and appends `Kt`
+# (foo.kt -> FooKt, myFile.kt -> MyFileKt).
+
+from java_codebase_rag.ast.ast_kotlin import merge_multifile_facades  # noqa: E402
+
+
+def test_jvmname_file_annotation_overrides_facade_name() -> None:
+    """(a) @file:JvmName("Custom") + top-level fun go() -> facade 'Custom' (not FooKt)."""
+    ast = parse_kotlin(
+        b'@file:JvmName("Custom")\npackage com.x\nfun go() {}\n', filename="foo.kt"
+    )
+    facade = next(
+        (t for t in ast.top_level_types if "kotlin_facade" in t.capabilities), None
+    )
+    assert facade is not None
+    assert facade.name == "Custom"
+    assert facade.fqn == "com.x.Custom"
+    assert "kotlin_multifile" not in facade.capabilities
+    assert [m.name for m in facade.methods if m.name == "go"] == ["go"]
+    assert facade.name != "FooKt"  # NOT the default stem-based name.
+
+
+def test_default_facade_name_capitalizes_first_letter() -> None:
+    """(b) bar.kt with no file-annotation + top-level fun -> facade 'BarKt' (capitalised)."""
+    ast = parse_kotlin(b"package com.x\nfun go() {}\n", filename="bar.kt")
+    facade = next(t for t in ast.top_level_types if "kotlin_facade" in t.capabilities)
+    assert facade.name == "BarKt"
+    assert facade.fqn == "com.x.BarKt"
+
+
+def test_jvmmultifileclass_adds_multifile_capability() -> None:
+    """@file:JvmName("X") @file:JvmMultifileClass() -> capabilities carries both flags."""
+    ast = parse_kotlin(
+        b'@file:JvmName("X")\n@file:JvmMultifileClass()\npackage com.x\nfun go() {}\n',
+        filename="a.kt",
+    )
+    facade = next(t for t in ast.top_level_types if "kotlin_facade" in t.capabilities)
+    assert "kotlin_facade" in facade.capabilities
+    assert "kotlin_multifile" in facade.capabilities
+    assert facade.name == "X"
+    assert facade.fqn == "com.x.X"
+
+
+def test_jvmname_without_multifile_has_only_facade_capability() -> None:
+    """@file:JvmName("X") alone (no @JvmMultifileClass) -> capabilities == ['kotlin_facade']."""
+    ast = parse_kotlin(
+        b'@file:JvmName("X")\npackage com.x\nfun go() {}\n', filename="a.kt"
+    )
+    facade = next(t for t in ast.top_level_types if "kotlin_facade" in t.capabilities)
+    assert facade.capabilities == ["kotlin_facade"]
+
+
+def test_merge_multifile_facades_concats_members_into_one() -> None:
+    """(c) Two multifile files sharing JvmName("X") -> ONE facade X with both fns."""
+    ast_a = parse_kotlin(
+        b'@file:JvmName("X")\n@file:JvmMultifileClass()\npackage com.x\nfun a() {}\n',
+        filename="a.kt",
+    )
+    ast_b = parse_kotlin(
+        b'@file:JvmName("X")\n@file:JvmMultifileClass()\npackage com.x\nfun b() {}\n',
+        filename="b.kt",
+    )
+    result = merge_multifile_facades([ast_a, ast_b])
+    assert len(result) == 2  # same length; ASTs reshaped in place.
+    # Exactly ONE facade named X across all top_level_types (was two before merge).
+    facades = [t for ast in result for t in ast.top_level_types if t.name == "X"]
+    assert len(facades) == 1
+    merged = facades[0]
+    assert {"a", "b"} <= {m.name for m in merged.methods}
+    assert "kotlin_multifile" in merged.capabilities
+
+
+def test_merge_multifile_facades_dedupes_identical_members() -> None:
+    """Two multifile files with an identical fn signature -> deduped to one method."""
+    ast_a = parse_kotlin(
+        b'@file:JvmName("X")\n@file:JvmMultifileClass()\npackage com.x\nfun go(a: Int): String = ""\n',
+        filename="a.kt",
+    )
+    ast_b = parse_kotlin(
+        b'@file:JvmName("X")\n@file:JvmMultifileClass()\npackage com.x\nfun go(a: Int): String = ""\n',
+        filename="b.kt",
+    )
+    result = merge_multifile_facades([ast_a, ast_b])
+    facades = [t for ast in result for t in ast.top_level_types if t.name == "X"]
+    assert len(facades) == 1
+    go_methods = [m for m in facades[0].methods if m.name == "go"]
+    assert len(go_methods) == 1  # identical name+signature deduped.
+
+
+def test_merge_non_multifile_same_jvmname_keeps_both() -> None:
+    """(d) Two files sharing JvmName("X") WITHOUT @JvmMultifileClass -> both facades survive.
+
+    This is the illegal/ambiguous same-FQN collision; the merge does NOT silently
+    drop one — both facades stay so the conflict is visible downstream.
+    """
+    ast_a = parse_kotlin(
+        b'@file:JvmName("X")\npackage com.x\nfun a() {}\n', filename="a.kt"
+    )
+    ast_b = parse_kotlin(
+        b'@file:JvmName("X")\npackage com.x\nfun b() {}\n', filename="b.kt"
+    )
+    result = merge_multifile_facades([ast_a, ast_b])
+    facades = [t for ast in result for t in ast.top_level_types if t.name == "X"]
+    assert len(facades) == 2  # no merge; both survive.
+
+
+def test_merge_leaves_non_facade_types_untouched() -> None:
+    """Non-facade top-level types survive the merge unchanged in every AST."""
+    ast_a = parse_kotlin(
+        b'@file:JvmName("X")\n@file:JvmMultifileClass()\npackage com.x\nfun a() {}\nclass KeepA\n',
+        filename="a.kt",
+    )
+    ast_b = parse_kotlin(
+        b'@file:JvmName("X")\n@file:JvmMultifileClass()\npackage com.x\nfun b() {}\nclass KeepB\n',
+        filename="b.kt",
+    )
+    result = merge_multifile_facades([ast_a, ast_b])
+    all_names = {t.name for ast in result for t in ast.top_level_types}
+    assert {"KeepA", "KeepB"} <= all_names
+
+
+def test_merge_with_no_multifile_facades_returns_input_as_is() -> None:
+    """No multifile facades in the input -> output unchanged (distinct default facades)."""
+    ast_a = parse_kotlin(b"package com.x\nfun a() {}\n", filename="a.kt")
+    ast_b = parse_kotlin(b"package com.x\nfun b() {}\n", filename="b.kt")
+    result = merge_multifile_facades([ast_a, ast_b])
+    assert len(result) == 2
+    facades = [
+        t for ast in result for t in ast.top_level_types if "kotlin_facade" in t.capabilities
+    ]
+    assert len(facades) == 2  # AKt + BKt, no merge.

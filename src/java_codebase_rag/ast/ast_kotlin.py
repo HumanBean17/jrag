@@ -75,7 +75,7 @@ from java_codebase_rag.ast.ast_java import (
     TypeDecl,
 )
 
-__all__ = ["parse_kotlin"]
+__all__ = ["parse_kotlin", "merge_multifile_facades"]
 
 # tree-sitter's ``Parser`` mutates internal state during ``parse()`` and is NOT
 # thread-safe, so each OS thread gets its own instance. Mirrors ``ast_java.py``'s
@@ -831,6 +831,45 @@ def _facade_stem(filename: str) -> str:
     return base or "File"
 
 
+# ---- Task 9: @file:JvmName / @file:JvmMultifileClass facade naming ----
+#
+# Grammar (tree-sitter-kotlin 1.1.0), confirmed by probing:
+# * ``file_annotation`` nodes are siblings of ``package_header`` / ``import``
+#   directly under ``source_file`` (NOT nested in ``modifiers``).
+# * ``@file:JvmName("X")`` →
+#   ``file_annotation > constructor_invocation > (user_type > identifier "JvmName",
+#   value_arguments > value_argument > string_literal > string_content)``.
+# * ``@file:JvmMultifileClass()`` →
+#   ``file_annotation > constructor_invocation > user_type > identifier
+#   "JvmMultifileClass"`` (empty ``value_arguments``).
+# The shared annotation-name / value-argument helpers (Task 8) work unchanged on a
+# ``file_annotation`` node because they walk the same ``constructor_invocation``
+# child shape.
+
+
+def _read_file_annotations(root: Node, src: bytes) -> tuple[str, bool]:
+    """Return ``(jvm_name, is_multifile)`` from top-level ``file_annotation`` nodes.
+
+    ``@file:JvmName("X")`` → ``jvm_name = "X"`` (first wins if repeated);
+    ``@file:JvmMultifileClass()`` → ``is_multifile = True``. Both default to the
+    no-op value (``""`` / ``False``) when the annotation is absent.
+    """
+    jvm_name = ""
+    is_multifile = False
+    for child in root.named_children:
+        if child.type != "file_annotation":
+            continue
+        simple, _ = _kotlin_annotation_name(child, src)
+        if simple == "JvmName" and not jvm_name:
+            args, _ = _kotlin_annotation_value_arguments(child, src)
+            val = args.get("value", "")
+            if val:
+                jvm_name = val
+        elif simple == "JvmMultifileClass":
+            is_multifile = True
+    return jvm_name, is_multifile
+
+
 # ---- Task 8: extends/implements partition (B7-soft) ----
 #
 # Kotlin surfaces every supertype — class to extend, interface to implement, and
@@ -1181,8 +1220,10 @@ def parse_kotlin(source: bytes | str, *, filename: str = "", verbose: bool = Fal
             if decl is not None:
                 top_level_types.append(decl)
 
-    # Top-level functions / properties → synthetic facade `<Basename>Kt` (Task 9
-    # refines via @file:JvmName / multifile). Facade members are static.
+    # Top-level functions / properties → synthetic facade (Task 9: named via
+    # @file:JvmName else `<CapitalisedStem>Kt`; @file:JvmMultifileClass adds the
+    # ``kotlin_multifile`` capability so ``merge_multifile_facades`` can group).
+    # Facade members are static.
     top_level_funcs = [
         c for c in root.named_children if c.type == "function_declaration"
     ]
@@ -1190,15 +1231,23 @@ def parse_kotlin(source: bytes | str, *, filename: str = "", verbose: bool = Fal
         c for c in root.named_children if c.type == "property_declaration"
     ]
     if top_level_funcs or top_level_props:
-        facade_name = f"{_facade_stem(filename)}Kt"
+        jvm_name, is_multifile = _read_file_annotations(root, src)
+        # Kotlin's default facade name: capitalise the filename stem's first
+        # letter, append ``Kt`` (foo.kt → FooKt, myFile.kt → MyFileKt).
+        facade_name = jvm_name or (_cap(_facade_stem(filename)) + "Kt")
         facade_fqn = (
             f"{package}.{facade_name}" if package else facade_name
+        )
+        capabilities = (
+            ["kotlin_facade", "kotlin_multifile"]
+            if is_multifile
+            else ["kotlin_facade"]
         )
         facade = TypeDecl(
             name=facade_name,
             kind="class",
             fqn=facade_fqn,
-            capabilities=["kotlin_facade"],
+            capabilities=capabilities,
         )
         all_types.append(facade)
         top_level_types.append(facade)
@@ -1226,3 +1275,89 @@ def parse_kotlin(source: bytes | str, *, filename: str = "", verbose: bool = Fal
         file_imports=file_imports,
         routes_skipped_unresolved=0,
     )
+
+
+# ---- Task 9: cross-file multifile-facade merge ----
+#
+# Kotlin compiles every file annotated with the same ``@file:JvmName("X")`` +
+# ``@file:JvmMultifileClass()`` into ONE JVM class ``pkg.X``. The per-file parse
+# therefore emits one facade per file, all claiming FQN ``pkg.X``; without a
+# merge, downstream ``tables.types[fqn] = entry`` overwrites and one file's
+# top-level functions silently vanish from resolution. This helper merges them
+# BEFORE the graph builder runs (Task 11 wires it into the index flow).
+#
+# Capability strings are the ONLY recognition signal (no new field/column):
+# ``"kotlin_facade"`` marks a facade; ``"kotlin_multifile"`` marks one that
+# participates in the cross-file merge. Two files sharing ``@file:JvmName("X")``
+# WITHOUT ``@JvmMultifileClass`` are the illegal/ambiguous same-FQN collision and
+# are left alone (both facades survive — never silently dropped).
+
+
+def _find_facade(ast: JavaFileAst) -> TypeDecl | None:
+    """The single ``kotlin_facade`` TypeDecl of an AST, or None (zero or >1)."""
+    facades = [t for t in ast.top_level_types if "kotlin_facade" in t.capabilities]
+    return facades[0] if len(facades) == 1 else None
+
+
+def _concat_members_deduped(target: TypeDecl, source: TypeDecl) -> None:
+    """Append ``source`` methods/fields onto ``target``, deduping identical members.
+
+    Methods dedupe on ``(name, signature)``; fields on ``(name, type_name)`` (the
+    closest field analog of a signature — two top-level properties with the same
+    name cannot coexist in one multifile class anyway). First occurrence wins.
+    """
+    seen_methods = {(m.name, m.signature) for m in target.methods}
+    for m in source.methods:
+        key = (m.name, m.signature)
+        if key not in seen_methods:
+            seen_methods.add(key)
+            target.methods.append(m)
+    seen_fields = {(f.name, f.type_name) for f in target.fields}
+    for f in source.fields:
+        key = (f.name, f.type_name)
+        if key not in seen_fields:
+            seen_fields.add(key)
+            target.fields.append(f)
+
+
+def _strip_facade(ast: JavaFileAst, facade: TypeDecl) -> None:
+    """Remove ``facade`` from the AST's ``top_level_types`` and ``all_types``."""
+    ast.top_level_types = [t for t in ast.top_level_types if t is not facade]
+    ast.all_types = [t for t in ast.all_types if t is not facade]
+
+
+def merge_multifile_facades(asts: list[JavaFileAst]) -> list[JavaFileAst]:
+    """Merge ``@file:JvmMultifileClass`` facades that share ``(package, name)``.
+
+    For each group of two-or-more ASTs whose facade carries the
+    ``kotlin_multifile`` capability AND shares the same ``(package, facade_name)``,
+    keep ONE facade (on the first AST of the group), concatenate every other
+    member's facade ``methods``/``fields`` onto it (deduped), and strip the
+    duplicate facades from the other ASTs' type lists. Non-facade types are
+    untouched in every AST. Non-multifile facades are left as-is — including the
+    collision case of two same-``@file:JvmName`` files without
+    ``@JvmMultifileClass`` (both survive).
+
+    Returns the reshaped list (same length; merges applied in place on the
+    retained ASTs).
+    """
+    # Group AST indices by (package, facade_name) for multifile facades only.
+    groups: dict[tuple[str, str], list[int]] = {}
+    for i, ast in enumerate(asts):
+        facade = _find_facade(ast)
+        if facade is None or "kotlin_multifile" not in facade.capabilities:
+            continue
+        groups.setdefault((ast.package, facade.name), []).append(i)
+
+    for indices in groups.values():
+        if len(indices) <= 1:
+            continue  # single multifile file — nothing to merge.
+        retained = _find_facade(asts[indices[0]])
+        assert retained is not None  # grouped facades exist by construction.
+        for other_idx in indices[1:]:
+            other = _find_facade(asts[other_idx])
+            assert other is not None
+            _concat_members_deduped(retained, other)
+            _strip_facade(asts[other_idx], other)
+
+    return asts
