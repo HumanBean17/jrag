@@ -200,6 +200,60 @@ _JAVA_LANG_SIMPLE = frozenset({
 })
 
 
+# Kotlin default-import simple names → deterministic stdlib FQN (Task 13).
+# Kotlin implicitly imports kotlin.*, kotlin.collections.*, kotlin.sequences.*,
+# kotlin.ranges.*, kotlin.text.*, kotlin.comparisons.*, kotlin.annotation.*,
+# kotlin.reflect.*, kotlin.jvm.*, kotlin.io.*, kotlin.math.*, kotlin.contracts.*.
+# Types from these (e.g. ``List``, ``Map``, ``Sequence``, ``Pair``) referenced as
+# supertypes would otherwise collapse to bare-name phantoms (``fqn="List"``). This
+# map gives the phantom fallback a deterministic FQN, mirroring ``_JAVA_LANG_SIMPLE``
+# for Java. Consulted ONLY when ``ast.language == "kotlin"`` (Kotlin-gated), so the
+# Java resolution path is byte-identical. Curated to the commonly-referenced stdlib
+# types; unknown simples keep falling through to the bare-name guess.
+_KOTLIN_DEFAULT_SIMPLE: dict[str, str] = {
+    # kotlin.*
+    "Any": "kotlin.Any", "Unit": "kotlin.Unit", "Nothing": "kotlin.Nothing",
+    "Int": "kotlin.Int", "Long": "kotlin.Long", "Short": "kotlin.Short",
+    "Byte": "kotlin.Byte", "Double": "kotlin.Double", "Float": "kotlin.Float",
+    "Boolean": "kotlin.Boolean", "Char": "kotlin.Char", "String": "kotlin.String",
+    "Array": "kotlin.Array", "Pair": "kotlin.Pair", "Triple": "kotlin.Triple",
+    "Result": "kotlin.Result", "Enum": "kotlin.Enum", "Annotation": "kotlin.Annotation",
+    "Throwable": "kotlin.Throwable", "Exception": "kotlin.Exception",
+    "Error": "kotlin.Error", "Lazy": "kotlin.Lazy",
+    # kotlin.collections.*
+    "List": "kotlin.collections.List", "MutableList": "kotlin.collections.MutableList",
+    "Set": "kotlin.collections.Set", "MutableSet": "kotlin.collections.MutableSet",
+    "Map": "kotlin.collections.Map", "MutableMap": "kotlin.collections.MutableMap",
+    "Collection": "kotlin.collections.Collection",
+    "MutableCollection": "kotlin.collections.MutableCollection",
+    "Iterable": "kotlin.collections.Iterable",
+    "MutableIterable": "kotlin.collections.MutableIterable",
+    "ArrayList": "kotlin.collections.ArrayList", "HashMap": "kotlin.collections.HashMap",
+    "HashSet": "kotlin.collections.HashSet",
+    "LinkedHashMap": "kotlin.collections.LinkedHashMap",
+    "LinkedHashSet": "kotlin.collections.LinkedHashSet",
+    "Grouping": "kotlin.collections.Grouping",
+    "Iterator": "kotlin.collections.Iterator",
+    "MutableIterator": "kotlin.collections.MutableIterator",
+    "ListIterator": "kotlin.collections.ListIterator",
+    "MutableListIterator": "kotlin.collections.MutableListIterator",
+    "Comparator": "kotlin.comparisons.Comparator",
+    # kotlin.sequences.*
+    "Sequence": "kotlin.sequences.Sequence",
+    # kotlin.ranges.*
+    "IntRange": "kotlin.ranges.IntRange", "LongRange": "kotlin.ranges.LongRange",
+    "CharRange": "kotlin.ranges.CharRange", "ClosedRange": "kotlin.ranges.ClosedRange",
+    "OpenEndRange": "kotlin.ranges.OpenEndRange",
+    # kotlin.text.*
+    "Regex": "kotlin.text.Regex", "Appendable": "kotlin.text.Appendable",
+    "MatchResult": "kotlin.text.MatchResult",
+    # kotlin.reflect.*
+    "KClass": "kotlin.reflect.KClass", "KCallable": "kotlin.reflect.KCallable",
+    "KProperty": "kotlin.reflect.KProperty", "KFunction": "kotlin.reflect.KFunction",
+    "KType": "kotlin.reflect.KType", "KParameter": "kotlin.reflect.KParameter",
+}
+
+
 # ---------- dataclasses ----------
 
 
@@ -1230,6 +1284,10 @@ def _phantom_target(
         guess_fqn = ast.explicit_imports[bare]
     elif bare in _JAVA_LANG_SIMPLE:
         guess_fqn = f"java.lang.{bare}"
+    elif ast.language == "kotlin" and bare in _KOTLIN_DEFAULT_SIMPLE:
+        # Kotlin default-import stdlib type (kotlin.collections.List etc.) —
+        # Kotlin-gated so Java resolution is byte-identical. See Task 13.
+        guess_fqn = _KOTLIN_DEFAULT_SIMPLE[bare]
     elif ast.wildcard_imports:
         # Pick first wildcard as a hint (imperfect but useful for display).
         guess_fqn = f"{ast.wildcard_imports[0]}.{bare}"
