@@ -7,7 +7,9 @@ codebase, and — if you cannot or will not change the codebase — exactly
 
 The MCP's quality on any given repo is a product of three things:
 
-1. **What it parses** — Tree-sitter Java only; no Kotlin/Groovy/Scala.
+1. **What it parses** — Tree-sitter **Java** (`.java`) and **Kotlin** (`.kt`);
+   Groovy/Scala are skipped. Kotlin parsing is gated on the `tree-sitter-kotlin`
+   grammar importing; if absent, `.kt` is skipped and Java-only indexing proceeds.
 2. **What it classifies** — role inference, service inference, and DI
    detection are driven by a small list of annotation/marker names.
 3. **How it ranks** — role weights, type-name overlap, action-verb bumps,
@@ -26,11 +28,20 @@ inside the MCP.
 
 ### A.1 Language & build
 
-- **Java only.** The file walker filters strictly on `*.java`; Kotlin,
-  Groovy, Scala, and mixed-language source files are skipped entirely
-  (not "partially parsed"). Parsing is done via `tree_sitter_java`.
-  - See: `ast_java.py` (the parser), `java_index_v1_common.iter_java_source_files`
-    (only `*.java`).
+- **Java and Kotlin are indexed.** The file walker picks up `*.java` and
+  `*.kt`; Groovy and Scala are skipped entirely (not "partially parsed").
+  Java is parsed via `tree_sitter_java`, Kotlin via `tree_sitter_kotlin`
+  (Kotlin is gated off cleanly if that grammar doesn't import — Java keeps
+  working). Both languages feed one merged AST graph, so a Kotlin class can
+  `IMPLEMENT`s a Java interface and vice versa.
+  - **v1 Kotlin limitations:** (1) **extension-function** Kotlin→Kotlin calls
+    are unresolved (the receiver is the extended type; these surface as
+    low-confidence/phantom edges); (2) **Kotlin-native frameworks beyond
+    Spring** (e.g. Ktor) are out of scope — role inference covers Spring
+    stereotypes only; (3) **generated-code classification is Java-only** —
+    `.kt` generated sources are not auto-tagged `generated=true`.
+  - See: `ast_java.py` / `ast_kotlin.py` (parsers),
+    `path_filtering.iter_source_files` (yields `*.java` + `*.kt`).
 - **Source under `src/main/java/...`.** Test sources under
   `src/test/java/` and `src/test/resources/` are intentionally excluded
   from both the LanceDB vector index and the LadybugDB graph build.
@@ -197,7 +208,7 @@ examples, and execution order.
 
 **Layer A index sources:** LadybugDB and Lance both use
 `graph_enrich.collect_annotation_meta_chain` (one disk walk: sorted
-`iter_java_source_files` + the same `COMMON_EXCLUDED_PATH_PATTERNS` as
+`iter_source_files` over `*.java` + `*.kt` + the same `COMMON_EXCLUDED_PATH_PATTERNS` as
 `build_ast_graph.py`, stderr on parse errors, first-seen FQN wins on duplicate
 simple names after sorted iteration). The graph’s `pass1` walk is still used to
 **build** `GraphTables`, but default Layer A is **not** taken from that graph in
@@ -294,7 +305,8 @@ Beyond role weights, Java hits get an additive **symbol-match bonus**
 
 The CocoIndex flow indexes only:
 
-- `**/*.java`
+- `**/*.java` and `**/*.kt` (both land in the same `JavaLanceChunk` table;
+  Kotlin is skipped if `tree-sitter-kotlin` doesn't import)
 - `**/src/main/resources/db/migration/*.sql` (Flyway naming convention)
 - `**/src/main/resources/application*.yml` / `application*.yaml`
 
@@ -471,7 +483,7 @@ in `.java-codebase-rag.yml` to customize detection patterns.
   `module_for_path` and `microservice_for_path` discover them.
 - `graph_enrich.py::microservice_for_path` — adjust the fallback rules
   (e.g. promote `services/<name>/...` segments).
-- `java_index_v1_common.iter_java_source_files` / `build_ast_graph.py` — extra hard-coded directory
+- `path_filtering.iter_source_files` / `build_ast_graph.py` — extra hard-coded directory
   names to prune (`target`, `build`, `node_modules`, ...).
 
 A **chunk-index re-build** is required if you change exclusion patterns;

@@ -715,7 +715,7 @@ When a brownfield caller override specifies only part of what built-in detection
 
 ### 4.6 Lance / LadybugDB consistency
 
-Both the LadybugDB graph writer and Lance chunk enrichment call **one** function — `graph_enrich.collect_annotation_meta_chain` — which scans the project with sorted `*.java` paths, the same layered ignore rules as `build_ast_graph` / `path_filtering.iter_java_source_files`, parse-error warnings on stderr, and deterministic *first wins* for duplicate annotation simple names. LadybugDB and Lance **should** agree; they can still diverge if the same file is handled differently elsewhere in the pipeline (e.g. parse edge cases). If graph tools and `search` disagree on a type, run a full reindex and compare.
+Both the LadybugDB graph writer and Lance chunk enrichment call **one** function — `graph_enrich.collect_annotation_meta_chain` — which scans the project with sorted `*.java` + `*.kt` paths (Kotlin included when `tree-sitter-kotlin` imports), the same layered ignore rules as `build_ast_graph` / `path_filtering.iter_source_files`, parse-error warnings on stderr, and deterministic *first wins* for duplicate annotation simple names. LadybugDB and Lance **should** agree; they can still diverge if the same file is handled differently elsewhere in the pipeline (e.g. parse edge cases). If graph tools and `search` disagree on a type, run a full reindex and compare.
 
 ---
 

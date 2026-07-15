@@ -540,6 +540,10 @@ class GraphTables:
     type_role_by_node_id: dict[str, str] = field(default_factory=dict)
     # Populated in pass 1 (classify_java_file) and _load_existing_types for incremental rebuilds.
     type_generated_by_node_id: dict[str, tuple[bool, str | None]] = field(default_factory=dict)
+    # Per-build dedup for the same-FQN cross-file collision warning in
+    # ``_register_type`` (one warning per colliding FQN per build — avoids
+    # spam when >2 files claim one FQN). See ``_register_type``.
+    _warned_fqn_collisions: set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -1037,6 +1041,24 @@ def _register_type(
         outer_fqn=outer_fqn,
         node_id=node_id,
     )
+    # Warn on a same-FQN collision across DISTINCT files (the Kotlin+Java
+    # mixed-repo case, e.g. ``com.example.Foo`` in both ``Foo.java`` and
+    # ``Foo.kt``). Registration stays last-wins (silent before Task 16); this
+    # only surfaces the collision. Deduped per FQN per build so a pathological
+    # N-way collision warns once, not N-1 times. A same-file re-register
+    # (incremental re-parse) does not warn.
+    existing = tables.types.get(decl.fqn)
+    if (
+        existing is not None
+        and existing.file_path != file_path
+        and decl.fqn not in tables._warned_fqn_collisions
+    ):
+        tables._warned_fqn_collisions.add(decl.fqn)
+        log.warning(
+            "same-FQN type registered from two distinct files (last wins): "
+            "%s in %s and %s",
+            decl.fqn, existing.file_path, file_path,
+        )
     tables.types[decl.fqn] = entry
     tables.by_simple_name.setdefault(decl.name, []).append(entry)
     tables.by_package.setdefault(package, []).append(entry)
