@@ -1068,7 +1068,7 @@ def pass1_parse(
             if backend is None:
                 continue
             try:
-                ast = backend.parse(content, filename=rel)
+                ast = backend.parse(content, filename=rel, verbose=verbose)
             except Exception:
                 tables.parse_errors += 1
                 continue

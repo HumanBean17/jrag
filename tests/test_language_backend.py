@@ -5,6 +5,10 @@ tasks. These tests pin the contract that downstream language dispatch relies on.
 """
 from __future__ import annotations
 
+import io
+import json
+from contextlib import redirect_stderr
+
 import pytest
 
 from java_codebase_rag.ast.ast_java import JavaFileAst
@@ -102,7 +106,7 @@ def test_parse_sites_dispatch_through_backend_for(monkeypatch, tmp_path) -> None
         def __init__(self) -> None:
             self.recorded: list[str] = []
 
-        def parse(self, source, *, filename: str = "") -> JavaFileAst:
+        def parse(self, source, *, filename: str = "", verbose: bool = False) -> JavaFileAst:
             self.recorded.append(filename)
             return JavaFileAst(
                 package="",
@@ -136,4 +140,88 @@ def test_parse_sites_dispatch_through_backend_for(monkeypatch, tmp_path) -> None
     assert any(fn.endswith("Foo.java") for fn in stub.recorded), (
         "_collect_annotation_decl_index did not route through "
         "backend_for(...).parse(); it may still call parse_java directly."
+    )
+
+
+def test_java_backend_parse_forwards_verbose_to_parse_java(monkeypatch) -> None:
+    """`JavaBackend.parse(..., verbose=True)` forwards `verbose=True` to `parse_java`.
+
+    Task-3 fix: ``pass1_parse`` dispatches through ``backend.parse(..., verbose=verbose)``.
+    ``parse_java``'s ``verbose`` gates ``_maybe_emit_brownfield_exclusivity_shadowing``
+    (an INFO stderr event) via the ``_ParseCtx``, so forwarding must be preserved
+    end-to-end or the brownfield-exclusivity-shadowing diagnostic is silently lost
+    on default graph builds (``pipeline.py`` passes ``--verbose`` in DEFAULT mode).
+    """
+    captured: dict[str, object] = {}
+
+    def _fake_parse_java(source, *, filename: str = "", verbose: bool = False) -> JavaFileAst:
+        captured["verbose"] = verbose
+        captured["filename"] = filename
+        return JavaFileAst(
+            package="",
+            imports=[],
+            wildcard_imports=[],
+            explicit_imports={},
+            top_level_types=[],
+            all_types=[],
+            language="java",
+        )
+
+    monkeypatch.setattr("java_codebase_rag.ast.language.parse_java", _fake_parse_java)
+
+    # verbose=True must reach parse_java.
+    JavaBackend().parse(b"package x; class F {}", filename="F.java", verbose=True)
+    assert captured.get("verbose") is True
+
+    # Default is False — the other three parse sites (jrag, graph_enrich, index
+    # flow) rely on this so they never emit the diagnostic unexpectedly.
+    captured.clear()
+    JavaBackend().parse(b"package x; class F {}", filename="F.java")
+    assert captured.get("verbose") is False
+
+
+def test_backend_parse_verbose_restores_brownfield_shadowing_event() -> None:
+    """End-to-end: the brownfield-exclusivity-shadowing INFO event fires again
+    when parsing real co-present source through ``JavaBackend().parse(..., verbose=True)``
+    — the exact dispatch path ``pass1_parse`` uses after the Task-3 fix.
+
+    Before the fix, ``pass1_parse`` dropped ``verbose`` when it switched to
+    ``backend.parse(content, filename=rel)``, so this INFO event was silently lost
+    on default graph builds (``pipeline.py`` passes ``--verbose`` in DEFAULT mode).
+    """
+    src = """
+package x;
+import com.example.rag.*;
+import org.springframework.web.bind.annotation.*;
+@RestController
+class C {
+  @GetMapping("/p")
+  @CodebaseHttpRoute(path = "/bf", method = CodebaseHttpMethod.GET)
+  String m() { return ""; }
+}
+"""
+    # verbose=True → the INFO event must reach stderr through backend.parse.
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        JavaBackend().parse(src.encode(), filename="C.java", verbose=True)
+    shadow_lines = [
+        ln for ln in buf.getvalue().splitlines()
+        if "brownfield-exclusivity-shadowing" in ln
+    ]
+    assert shadow_lines, (
+        "brownfield-exclusivity-shadowing INFO event was not emitted via "
+        "backend.parse(..., verbose=True); verbose was not forwarded to parse_java"
+    )
+    rec = json.loads(shadow_lines[0])
+    assert rec["event"] == "brownfield-exclusivity-shadowing"
+    assert rec["severity"] == "INFO"
+    assert "GetMapping" in rec["shadowed_framework_annotations"]
+
+    # verbose=False (default) → the event must stay silent.
+    buf2 = io.StringIO()
+    with redirect_stderr(buf2):
+        JavaBackend().parse(src.encode(), filename="C.java")
+    assert not any(
+        "brownfield-exclusivity-shadowing" in ln
+        for ln in buf2.getvalue().splitlines()
     )

@@ -38,7 +38,13 @@ class LanguageBackend(Protocol):
     language_id: str
     suffixes: tuple[str, ...]
 
-    def parse(self, source: bytes | str, *, filename: str) -> JavaFileAst: ...
+    def parse(
+        self,
+        source: bytes | str,
+        *,
+        filename: str,
+        verbose: bool = False,
+    ) -> JavaFileAst: ...
 
 
 class JavaBackend:
@@ -47,8 +53,10 @@ class JavaBackend:
     language_id: str = "java"
     suffixes: tuple[str, ...] = (".java",)
 
-    def parse(self, source: bytes | str, *, filename: str = "") -> JavaFileAst:
-        return parse_java(source, filename=filename)
+    def parse(
+        self, source: bytes | str, *, filename: str = "", verbose: bool = False
+    ) -> JavaFileAst:
+        return parse_java(source, filename=filename, verbose=verbose)
 
 
 # Registry: language_id -> backend. Later tasks append a Kotlin entry here.
