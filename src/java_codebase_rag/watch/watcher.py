@@ -3,10 +3,11 @@
 ``SourceWatcher`` observes the project source tree and, after a debounce window,
 re-runs the minimal reindex for the changed file types:
 
-  * a ``.java`` change -> vectors THEN graph. The graph reindex runs as a
-    subprocess under a copy-on-write snapshot (design §4.7) so concurrent graph
-    reads keep being served from a sidecar copy while the single-writer
-    subprocess overwrites the original. ``ladybug`` has no transactions and is
+  * a source-language change (``.java``; ``.kt`` when the kotlin grammar is
+    importable) -> vectors THEN graph. The graph reindex runs as a subprocess
+    under a copy-on-write snapshot (design §4.7) so concurrent graph reads keep
+    being served from a sidecar copy while the single-writer subprocess
+    overwrites the original. ``ladybug`` has no transactions and is
     single-writer, which is why graph builds are subprocesses and reads are
     served from a copy.
   * a matching ``.sql`` / ``.yml`` / ``.yaml`` resource change -> vectors only
@@ -39,6 +40,7 @@ from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 from watchdog.observers.polling import PollingObserver
 
+from java_codebase_rag.ast.language import LANG_BACKENDS, backend_for
 from java_codebase_rag.graph.path_filtering import LayeredIgnore
 from java_codebase_rag.pipeline import (
     run_cocoindex_update,
@@ -52,9 +54,19 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-# Suffixes the watcher treats as java sources. The non-java resource types are
-# matched by the glob helpers below (the cocoindex set has no shared iterator).
-INDEXED_SUFFIXES: tuple[str, ...] = (".java",)
+# Suffixes the watcher treats as source files — derived from the language
+# backend registry so this never drifts from what the graph builder parses.
+# ``(".java", ".kt")`` when the kotlin grammar is importable; just
+# ``(".java",)`` on a grammar-absent (e.g. graph-only) install. The non-source
+# resource types (sql/yaml) are matched by the glob helpers below (the cocoindex
+# set has no shared iterator).
+INDEXED_SUFFIXES: tuple[str, ...] = tuple(
+    suffix for backend in LANG_BACKENDS.values() for suffix in backend.suffixes
+)
+# Reindex kinds that trigger a graph rebuild. The graph indexes every registered
+# source language (java today, kotlin too when its grammar imports), so this is
+# the set of backend ``language_id``s. sql/yaml are vectors-only (no graph row).
+_GRAPH_INDEXED_KINDS: frozenset[str] = frozenset(LANG_BACKENDS.keys())
 _YAML_SUFFIXES: tuple[str, ...] = (".yml", ".yaml")
 
 # Project-relative anchored prefixes for the two non-java resource globs:
@@ -207,13 +219,15 @@ class SourceWatcher:
 
     # -- event classification (observer thread) ------------------------------
     #
-    # The watcher fires on exactly the cocoindex-indexed set (``.java`` plus the
-    # SQL/YAML resource patterns below) filtered through ``LayeredIgnore``.
-    # ``target/generated-sources/**/*.java`` therefore correctly fires: generated
-    # sources are first-class, cocoindex does NOT exclude ``target/``, so the
-    # watcher must fire to keep them fresh. ``LayeredIgnore.is_ignored`` does NOT
-    # prune build-output dirs (``target/``/``build``/``out``) -- that pruning lives
-    # in ``iter_java_source_files``'s ``os.walk`` (``_is_build_output_dir``), used
+    # The watcher fires on exactly the indexed set: the source languages claimed
+    # by ``LANG_BACKENDS`` (``.java``; ``.kt`` when the kotlin grammar imports)
+    # plus the SQL/YAML resource patterns below, filtered through
+    # ``LayeredIgnore``. ``target/generated-sources/**/*.java`` therefore
+    # correctly fires: generated sources are first-class, cocoindex does NOT
+    # exclude ``target/``, so the watcher must fire to keep them fresh.
+    # ``LayeredIgnore.is_ignored`` does NOT prune build-output dirs
+    # (``target/``/``build``/``out``) -- that pruning lives in
+    # ``iter_java_source_files``'s ``os.walk`` (``_is_build_output_dir``), used
     # by the graph builder, not by cocoindex. (Compiled ``.class`` output under
     # ``target/`` doesn't match the ``.java`` suffix anyway.)
 
@@ -238,9 +252,16 @@ class SourceWatcher:
             rel = path.resolve().relative_to(self._source_root_resolved).as_posix()
         except ValueError:
             return set()
+        # Source languages (.java, .kt when registered) dispatch via the backend
+        # registry: a change yields its backend's ``language_id`` reindex kind,
+        # which triggers the graph rebuild (the subprocess graph builder re-walks
+        # the tree and parses each file through ``backend_for`` — so a ``.kt``
+        # change reprocesses via KotlinBackend). Unknown suffixes are not source
+        # files and fall through to the resource-glob checks below.
+        backend = backend_for(path)
+        if backend is not None:
+            return {backend.language_id}
         suffix = path.suffix.lower()
-        if suffix == ".java":
-            return {"java"}
         if suffix == ".sql":
             return {"sql"} if _is_migration_sql(rel) else set()
         if suffix in _YAML_SUFFIXES:
@@ -289,7 +310,8 @@ class SourceWatcher:
     # -- reindex (runs on the debounce worker thread) ------------------------
 
     def reindex(self, kinds: set[str]) -> None:
-        """Run one debounced reindex: vectors always (when installed); graph only when java changed.
+        """Run one debounced reindex: vectors always (when installed); graph only when a
+        registered source language (java/kotlin) changed.
 
         COW lifecycle (design §4.7): the graph subprocess writes the ORIGINAL
         graph while reads are served from a sidecar copy. ``begin_graph_snapshot``
@@ -324,9 +346,10 @@ class SourceWatcher:
                 vres = None
 
             graph_rc = 0
-            if "java" in kinds:
-                # Graph indexes java only; reindex under a COW snapshot so graph
-                # reads continue (from the sidecar) during the subprocess write.
+            if kinds & _GRAPH_INDEXED_KINDS:
+                # The graph indexes every registered source language (java,
+                # kotlin when its grammar imports); reindex under a COW snapshot
+                # so graph reads continue (from the sidecar) during the write.
                 self._emit("graph", {"kinds": kind_list})
                 try:
                     # begin/commit paired in this try/finally. begin_graph_snapshot
