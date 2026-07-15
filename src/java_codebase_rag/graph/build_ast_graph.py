@@ -52,6 +52,22 @@ from java_codebase_rag.ast.ast_java import (
     lombok_required_args_annotations,
 )
 from java_codebase_rag.ast.language import backend_for
+
+# Kotlin multifile-facade merge (Task 9). Conditionally imported: on installs
+# without the ``tree-sitter-kotlin`` grammar wheel (Intel-Mac graph-only image),
+# ``ast_kotlin`` raises ImportError at module load. ``merge_multifile_facades``
+# is a no-op on Java ASTs (they have no facades), so absent grammar → merge is
+# skipped and Java indexing is byte-identical. Used in pass1 AFTER parsing all
+# files but BEFORE ``_register_type`` (unmerged ``@file:JvmMultifileClass``
+# facades share one FQN → ``tables.types[fqn] = entry`` would overwrite and one
+# file's top-level functions would silently vanish from resolution).
+try:  # pragma: no cover - branch depends on whether the wheel is installed
+    from java_codebase_rag.ast.ast_kotlin import (
+        merge_multifile_facades as _merge_multifile_facades,
+    )
+except ImportError:  # grammar wheel absent — no .kt files to merge.
+    _merge_multifile_facades = None  # type: ignore[assignment]
+
 from java_codebase_rag.graph.graph_enrich import (
     _load_config_cross_service_resolution,
     classify_java_file,
@@ -1043,6 +1059,10 @@ def pass1_parse(
     with _VerbosePassHeartbeats("[graph] pass 1", verbose=verbose):
         if verbose and slow_sec > 0:
             time.sleep(slow_sec)
+        # Per-file generated classification, carried through to the registration
+        # loop below (registration is deferred until after the multifile-facade
+        # merge so merged facades win their FQN slot in tables.types).
+        file_meta: dict[str, tuple[str, str, bool, str | None]] = {}
         for p in iter_source_files(root, ignore=ignore):
             # Skip files not in scope (if scope is provided)
             try:
@@ -1084,6 +1104,7 @@ def pass1_parse(
             file_generated, file_generated_by = classify_java_file(
                 content, ast, config=generated_config, project_root=root
             )
+            file_meta[rel] = (module, microservice, file_generated, file_generated_by)
 
             # file node
             file_id = symbol_id("file", rel, rel, 0)
@@ -1093,6 +1114,24 @@ def pass1_parse(
             if ast.package and ast.package not in tables.packages:
                 tables.packages[ast.package] = symbol_id("package", ast.package, "", 0)
 
+        # Merge Kotlin ``@file:JvmMultifileClass`` facades BEFORE type
+        # registration (Task 9 / Task 11). Multiple ``.kt`` files sharing
+        # ``@file:JvmName("X")`` + ``@file:JvmMultifileClass()`` compile into ONE
+        # JVM class ``pkg.X``; the per-file parse emits one facade per file, all
+        # with FQN ``pkg.X``, so registering them per-file would collide in
+        # ``tables.types[fqn]`` (last-write-wins) and silently drop every other
+        # file's top-level functions from resolution. The merge concatenates the
+        # members onto ONE retained facade and strips the duplicates. It is a
+        # no-op on Java ASTs (no facades) and on single-file modules, so Java
+        # registration output is byte-identical (same files, same walk order).
+        if _merge_multifile_facades is not None and asts:
+            _merge_multifile_facades(list(asts.values()))
+
+        # Register types AFTER the merge so a merged facade wins its FQN slot.
+        # Iteration order is the dict's insertion order = walk order, identical
+        # to the former per-file registration, so Java output is unchanged.
+        for rel, ast in asts.items():
+            module, microservice, file_generated, file_generated_by = file_meta[rel]
             for t in ast.top_level_types:
                 _register_type(
                     tables, t, file_path=rel,

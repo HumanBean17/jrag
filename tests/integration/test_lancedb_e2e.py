@@ -370,9 +370,10 @@ def test_layered_ignore_provided_once_per_flow() -> None:
     provide_count = source.count("builder.provide(IGNORE,")
     assert provide_count == 1, f"Expected 1 builder.provide(IGNORE,) call, found {provide_count}"
 
-    # Count coco.use_context(IGNORE) calls - should be exactly three (process_*_file)
+    # Count coco.use_context(IGNORE) calls - should be exactly four (process_*_file:
+    # java, kotlin, sql, yaml). Kotlin drains into the same JavaLanceChunk table.
     use_count = source.count("coco.use_context(IGNORE)")
-    assert use_count == 3, f"Expected 3 coco.use_context(IGNORE) calls, found {use_count}"
+    assert use_count == 4, f"Expected 4 coco.use_context(IGNORE) calls, found {use_count}"
 
     # Verify no leftover LayeredIgnore(project_root).is_ignored calls in process sites
     # (the sentinel grep would catch this, but we assert it here for completeness)

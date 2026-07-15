@@ -210,8 +210,8 @@ def _approximate_vectors_total(project_root: Path) -> int:
     count. The parent clamps the bar to 100% on the terminal ``status=done``
     event, so the over-count cannot stall the bar.
 
-    Mirrors the three ``localfs.walk_dir`` matchers in ``app_main``:
-      - ``**/*.java``
+    Mirrors the ``localfs.walk_dir`` matchers in ``app_main``:
+      - ``**/*.java`` and ``**/*.kt`` (registered language suffixes)
       - ``**/src/main/resources/db/migration/*.sql``
       - ``**/src/main/resources/application*.yml`` and ``.yaml``
     """
@@ -238,8 +238,11 @@ def _approximate_vectors_total(project_root: Path) -> int:
                 continue
             if _excluded(rel):
                 continue
-            # Java: **/*.java
-            if fn.endswith(".java"):
+            # Java + Kotlin: **/*.java and **/*.kt (the two registered source
+            # language suffixes — see LANG_BACKENDS). Both index into the same
+            # ``JavaLanceChunk`` table via ``process_java_file`` /
+            # ``process_kotlin_file``.
+            if fn.endswith((".java", ".kt")):
                 if not ignore.is_ignored(full):
                     total += 1
                 continue
@@ -490,6 +493,98 @@ async def process_java_file(
 
 
 @coco.fn(memo=True)
+async def process_kotlin_file(
+    file: localfs.File,
+    table: lancedb.TableTarget[JavaLanceChunk],
+) -> None:
+    """Index one ``.kt`` file into the SAME ``JavaLanceChunk`` table as Java.
+
+    Mirrors ``process_java_file``'s enrichment path (``enrich_chunk`` /
+    ``classify_java_file``) but parsing dispatches through ``backend_for(rel)``
+    (= ``parse_kotlin``) inside the shared ``_parse_and_enrich_java`` helper,
+    which is already language-agnostic. The chunk ``language`` field is set to
+    ``"kotlin"`` (``detect_code_language`` returns ``"kotlin"`` for ``.kt``).
+    The chunk schema (``primary_type_kind`` / ``role`` / ``capabilities``) is
+    language-agnostic, so no new column is needed.
+
+    Multifile-facade merge is NOT wired here: each ``process_*_file`` parses ONE
+    file independently (concurrent per-file drain), so a cross-file pre-pass is
+    awkward inside cocoindex's dataflow. The merge runs in ``build_ast_graph``
+    pass1 instead — the only site that registers facade TypeDecls into
+    ``tables.types`` (where unmerged facades would collide). Chunk enrichment
+    (``enrich_chunk``) uses the per-file AST only, so it is merge-independent.
+    """
+    embedder = coco.use_context(EMBEDDER)
+    project_root = coco.use_context(PROJECT_ROOT)
+    ignore = coco.use_context(IGNORE)
+    if ignore.is_ignored((project_root / file.file_path.path).resolve()):
+        return
+    try:
+        content = await file.read_text()
+    except UnicodeDecodeError:
+        return
+    if not content.strip():
+        return
+
+    _tick_vectors_done()
+
+    language = detect_code_language(filename=file.file_path.path.name) or "text"
+    cs, mn, ov = JAVA_CHUNK
+    chunks = splitter.split(
+        content,
+        cs,
+        min_chunk_size=mn,
+        chunk_overlap=ov,
+        language=language,
+    )
+    rel = file.file_path.path.as_posix()
+    content_bytes = content.encode("utf-8", errors="replace")
+
+    # ``_parse_and_enrich_java`` dispatches via ``backend_for(rel)`` → parse_kotlin
+    # for ``.kt``; the helper and ``enrich_chunk`` are language-agnostic. Run off
+    # the event loop so the embedder batching queue stays fed (vectors perf #2).
+    enrichments, ast = await asyncio.to_thread(
+        _parse_and_enrich_java, content_bytes, chunks, rel, project_root
+    )
+
+    generated_config = load_generated_detection(project_root)
+    generated, generated_by = classify_java_file(
+        content_bytes, ast, config=generated_config, project_root=project_root
+    )
+
+    # Embed all chunks concurrently → batched encode (vectors perf #1).
+    embeddings = await asyncio.gather(*(embedder.embed(ch.text) for ch in chunks))
+
+    for ch, enrich, emb in zip(chunks, enrichments, embeddings):
+        rs, re = chunk_key_range(ch)
+        table.declare_row(
+            row=JavaLanceChunk(
+                id=str(uuid.uuid4()),
+                filename=rel,
+                language=language,
+                text=ch.text,
+                range_start=rs,
+                range_end=re,
+                start=position_to_json(ch.start),
+                end=position_to_json(ch.end),
+                embedding=emb,
+                package=enrich.package,
+                module=enrich.module,
+                microservice=enrich.microservice,
+                primary_type_fqn=enrich.primary_type_fqn,
+                primary_type_kind=enrich.primary_type_kind,
+                role=enrich.role,
+                capabilities=list(enrich.capabilities),
+                annotations_on_type=enrich.annotations_on_type,
+                symbols=enrich.symbols,
+                ontology_version=ONTOLOGY_VERSION,
+                generated=generated,
+                generated_by=generated_by,
+            )
+        )
+
+
+@coco.fn(memo=True)
 async def process_sql_file(
     file: localfs.File,
     table: lancedb.TableTarget[SqlLanceChunk],
@@ -688,6 +783,14 @@ async def app_main() -> None:
             excluded_patterns=_walk_excludes,
         ),
     )
+    kotlin_files = localfs.walk_dir(
+        PROJECT_ROOT,
+        recursive=True,
+        path_matcher=PatternFilePathMatcher(
+            included_patterns=["**/*.kt"],
+            excluded_patterns=_walk_excludes,
+        ),
+    )
     sql_files = localfs.walk_dir(
         PROJECT_ROOT,
         recursive=True,
@@ -730,6 +833,11 @@ async def app_main() -> None:
     # usually near-empty).
     _sem = asyncio.Semaphore(_FILE_CONCURRENCY)
     await _drain_files_concurrently(java_files, process_java_file, java_table, _sem)
+    # Kotlin drains into the SAME ``java_table`` (JavaLanceChunk) — the chunk
+    # schema is language-agnostic and the ``language`` column distinguishes rows.
+    await _drain_files_concurrently(
+        kotlin_files, process_kotlin_file, java_table, _sem
+    )
     await _drain_files_concurrently(sql_files, process_sql_file, sql_table, _sem)
     await _drain_files_concurrently(yaml_files, process_yaml_file, yaml_table, _sem)
 
