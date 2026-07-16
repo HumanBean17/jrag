@@ -50,8 +50,24 @@ from java_codebase_rag.ast.ast_java import (
     TypeDecl,
     injection_annotation_names,
     lombok_required_args_annotations,
-    parse_java,
 )
+from java_codebase_rag.ast.language import backend_for
+
+# Kotlin multifile-facade merge (Task 9). Conditionally imported: on installs
+# without the ``tree-sitter-kotlin`` grammar wheel (Intel-Mac graph-only image),
+# ``ast_kotlin`` raises ImportError at module load. ``merge_multifile_facades``
+# is a no-op on Java ASTs (they have no facades), so absent grammar → merge is
+# skipped and Java indexing is byte-identical. Used in pass1 AFTER parsing all
+# files but BEFORE ``_register_type`` (unmerged ``@file:JvmMultifileClass``
+# facades share one FQN → ``tables.types[fqn] = entry`` would overwrite and one
+# file's top-level functions would silently vanish from resolution).
+try:  # pragma: no cover - branch depends on whether the wheel is installed
+    from java_codebase_rag.ast.ast_kotlin import (
+        merge_multifile_facades as _merge_multifile_facades,
+    )
+except ImportError:  # grammar wheel absent — no .kt files to merge.
+    _merge_multifile_facades = None  # type: ignore[assignment]
+
 from java_codebase_rag.graph.graph_enrich import (
     _load_config_cross_service_resolution,
     classify_java_file,
@@ -67,7 +83,7 @@ from java_codebase_rag.graph.graph_enrich import (
     resolve_routes_for_method,
     symbol_id,
 )
-from java_codebase_rag.graph.path_filtering import LayeredIgnore, iter_java_source_files
+from java_codebase_rag.graph.path_filtering import LayeredIgnore, iter_source_files
 from java_codebase_rag.search.search_scoring import SYMBOL_FTS_INDEX as _SYMBOL_FTS_INDEX, _split_identifier
 from java_codebase_rag.graph.java_ontology import (
     CLIENT_KIND_FEIGN_METHOD,
@@ -182,6 +198,60 @@ _JAVA_LANG_SIMPLE = frozenset({
     "Iterable", "Comparable", "CharSequence", "StringBuilder", "StringBuffer",
     "Math", "System", "AutoCloseable", "Cloneable",
 })
+
+
+# Kotlin default-import simple names → deterministic stdlib FQN (Task 13).
+# Kotlin implicitly imports kotlin.*, kotlin.collections.*, kotlin.sequences.*,
+# kotlin.ranges.*, kotlin.text.*, kotlin.comparisons.*, kotlin.annotation.*,
+# kotlin.reflect.*, kotlin.jvm.*, kotlin.io.*, kotlin.math.*, kotlin.contracts.*.
+# Types from these (e.g. ``List``, ``Map``, ``Sequence``, ``Pair``) referenced as
+# supertypes would otherwise collapse to bare-name phantoms (``fqn="List"``). This
+# map gives the phantom fallback a deterministic FQN, mirroring ``_JAVA_LANG_SIMPLE``
+# for Java. Consulted ONLY when ``ast.language == "kotlin"`` (Kotlin-gated), so the
+# Java resolution path is byte-identical. Curated to the commonly-referenced stdlib
+# types; unknown simples keep falling through to the bare-name guess.
+_KOTLIN_DEFAULT_SIMPLE: dict[str, str] = {
+    # kotlin.*
+    "Any": "kotlin.Any", "Unit": "kotlin.Unit", "Nothing": "kotlin.Nothing",
+    "Int": "kotlin.Int", "Long": "kotlin.Long", "Short": "kotlin.Short",
+    "Byte": "kotlin.Byte", "Double": "kotlin.Double", "Float": "kotlin.Float",
+    "Boolean": "kotlin.Boolean", "Char": "kotlin.Char", "String": "kotlin.String",
+    "Array": "kotlin.Array", "Pair": "kotlin.Pair", "Triple": "kotlin.Triple",
+    "Result": "kotlin.Result", "Enum": "kotlin.Enum", "Annotation": "kotlin.Annotation",
+    "Throwable": "kotlin.Throwable", "Exception": "kotlin.Exception",
+    "Error": "kotlin.Error", "Lazy": "kotlin.Lazy",
+    # kotlin.collections.*
+    "List": "kotlin.collections.List", "MutableList": "kotlin.collections.MutableList",
+    "Set": "kotlin.collections.Set", "MutableSet": "kotlin.collections.MutableSet",
+    "Map": "kotlin.collections.Map", "MutableMap": "kotlin.collections.MutableMap",
+    "Collection": "kotlin.collections.Collection",
+    "MutableCollection": "kotlin.collections.MutableCollection",
+    "Iterable": "kotlin.collections.Iterable",
+    "MutableIterable": "kotlin.collections.MutableIterable",
+    "ArrayList": "kotlin.collections.ArrayList", "HashMap": "kotlin.collections.HashMap",
+    "HashSet": "kotlin.collections.HashSet",
+    "LinkedHashMap": "kotlin.collections.LinkedHashMap",
+    "LinkedHashSet": "kotlin.collections.LinkedHashSet",
+    "Grouping": "kotlin.collections.Grouping",
+    "Iterator": "kotlin.collections.Iterator",
+    "MutableIterator": "kotlin.collections.MutableIterator",
+    "ListIterator": "kotlin.collections.ListIterator",
+    "MutableListIterator": "kotlin.collections.MutableListIterator",
+    "Comparator": "kotlin.Comparator",
+    # kotlin.sequences.*
+    "Sequence": "kotlin.sequences.Sequence",
+    # kotlin.ranges.*
+    "IntRange": "kotlin.ranges.IntRange", "LongRange": "kotlin.ranges.LongRange",
+    "CharRange": "kotlin.ranges.CharRange", "ClosedRange": "kotlin.ranges.ClosedRange",
+    "OpenEndRange": "kotlin.ranges.OpenEndRange",
+    # kotlin.text.*
+    "Regex": "kotlin.text.Regex", "Appendable": "kotlin.text.Appendable",
+    "MatchResult": "kotlin.text.MatchResult",
+    # kotlin.reflect.*
+    "KClass": "kotlin.reflect.KClass", "KCallable": "kotlin.reflect.KCallable",
+    "KProperty": "kotlin.reflect.KProperty", "KFunction": "kotlin.reflect.KFunction",
+    "KType": "kotlin.reflect.KType", "KParameter": "kotlin.reflect.KParameter",
+}
 
 
 # ---------- dataclasses ----------
@@ -470,6 +540,10 @@ class GraphTables:
     type_role_by_node_id: dict[str, str] = field(default_factory=dict)
     # Populated in pass 1 (classify_java_file) and _load_existing_types for incremental rebuilds.
     type_generated_by_node_id: dict[str, tuple[bool, str | None]] = field(default_factory=dict)
+    # Per-build dedup for the same-FQN cross-file collision warning in
+    # ``_register_type`` (one warning per colliding FQN per build — avoids
+    # spam when >2 files claim one FQN). See ``_register_type``.
+    _warned_fqn_collisions: set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -532,7 +606,7 @@ class FileHashTracker:
         current_files: set[str] = set()
         # Resolve source_root to handle symlinks
         source_root_resolved = source_root.resolve()
-        for abs_path in iter_java_source_files(source_root, ignore=ignore):
+        for abs_path in iter_source_files(source_root, ignore=ignore):
             # Resolve the absolute path and compute relative path
             abs_path_resolved = abs_path.resolve()
             try:
@@ -929,7 +1003,7 @@ def _write_nodes_merge(
     _write_nodes_impl(conn, tables, project_root=project_root, meta_chain=meta_chain)
 
 
-# ---------- file walk (see `path_filtering.iter_java_source_files`) ----------
+# ---------- file walk (see `path_filtering.iter_source_files`) ----------
 
 
 # ---------- pass 1 ----------
@@ -967,6 +1041,24 @@ def _register_type(
         outer_fqn=outer_fqn,
         node_id=node_id,
     )
+    # Warn on a same-FQN collision across DISTINCT files (the Kotlin+Java
+    # mixed-repo case, e.g. ``com.example.Foo`` in both ``Foo.java`` and
+    # ``Foo.kt``). Registration stays last-wins (silent before Task 16); this
+    # only surfaces the collision. Deduped per FQN per build so a pathological
+    # N-way collision warns once, not N-1 times. A same-file re-register
+    # (incremental re-parse) does not warn.
+    existing = tables.types.get(decl.fqn)
+    if (
+        existing is not None
+        and existing.file_path != file_path
+        and decl.fqn not in tables._warned_fqn_collisions
+    ):
+        tables._warned_fqn_collisions.add(decl.fqn)
+        log.warning(
+            "same-FQN type registered from two distinct files (last wins): "
+            "%s in %s and %s",
+            decl.fqn, existing.file_path, file_path,
+        )
     tables.types[decl.fqn] = entry
     tables.by_simple_name.setdefault(decl.name, []).append(entry)
     tables.by_package.setdefault(package, []).append(entry)
@@ -1028,7 +1120,7 @@ def pass1_parse(
             removed = removed_files if removed_files is not None else set()
             pass1_total = len(scope_files - removed)
         else:
-            pass1_total = sum(1 for _ in iter_java_source_files(root, ignore=ignore))
+            pass1_total = sum(1 for _ in iter_source_files(root, ignore=ignore))
         _emit_graph_progress(
             {"pass": "1/6", "done": 0, "total": pass1_total, "status": "running"},
             verbose=verbose,
@@ -1043,7 +1135,11 @@ def pass1_parse(
     with _VerbosePassHeartbeats("[graph] pass 1", verbose=verbose):
         if verbose and slow_sec > 0:
             time.sleep(slow_sec)
-        for p in iter_java_source_files(root, ignore=ignore):
+        # Per-file generated classification, carried through to the registration
+        # loop below (registration is deferred until after the multifile-facade
+        # merge so merged facades win their FQN slot in tables.types).
+        file_meta: dict[str, tuple[str, str, bool, str | None]] = {}
+        for p in iter_source_files(root, ignore=ignore):
             # Skip files not in scope (if scope is provided)
             try:
                 rel = p.resolve().relative_to(root.resolve()).as_posix()
@@ -1064,8 +1160,11 @@ def pass1_parse(
                 continue
             if not content.strip():
                 continue
+            backend = backend_for(rel)
+            if backend is None:
+                continue
             try:
-                ast = parse_java(content, filename=rel, verbose=verbose)
+                ast = backend.parse(content, filename=rel, verbose=verbose)
             except Exception:
                 tables.parse_errors += 1
                 continue
@@ -1081,6 +1180,7 @@ def pass1_parse(
             file_generated, file_generated_by = classify_java_file(
                 content, ast, config=generated_config, project_root=root
             )
+            file_meta[rel] = (module, microservice, file_generated, file_generated_by)
 
             # file node
             file_id = symbol_id("file", rel, rel, 0)
@@ -1090,6 +1190,24 @@ def pass1_parse(
             if ast.package and ast.package not in tables.packages:
                 tables.packages[ast.package] = symbol_id("package", ast.package, "", 0)
 
+        # Merge Kotlin ``@file:JvmMultifileClass`` facades BEFORE type
+        # registration (Task 9 / Task 11). Multiple ``.kt`` files sharing
+        # ``@file:JvmName("X")`` + ``@file:JvmMultifileClass()`` compile into ONE
+        # JVM class ``pkg.X``; the per-file parse emits one facade per file, all
+        # with FQN ``pkg.X``, so registering them per-file would collide in
+        # ``tables.types[fqn]`` (last-write-wins) and silently drop every other
+        # file's top-level functions from resolution. The merge concatenates the
+        # members onto ONE retained facade and strips the duplicates. It is a
+        # no-op on Java ASTs (no facades) and on single-file modules, so Java
+        # registration output is byte-identical (same files, same walk order).
+        if _merge_multifile_facades is not None and asts:
+            _merge_multifile_facades(list(asts.values()))
+
+        # Register types AFTER the merge so a merged facade wins its FQN slot.
+        # Iteration order is the dict's insertion order = walk order, identical
+        # to the former per-file registration, so Java output is unchanged.
+        for rel, ast in asts.items():
+            module, microservice, file_generated, file_generated_by = file_meta[rel]
             for t in ast.top_level_types:
                 _register_type(
                     tables, t, file_path=rel,
@@ -1188,6 +1306,10 @@ def _phantom_target(
         guess_fqn = ast.explicit_imports[bare]
     elif bare in _JAVA_LANG_SIMPLE:
         guess_fqn = f"java.lang.{bare}"
+    elif ast.language == "kotlin" and bare in _KOTLIN_DEFAULT_SIMPLE:
+        # Kotlin default-import stdlib type (kotlin.collections.List etc.) —
+        # Kotlin-gated so Java resolution is byte-identical. See Task 13.
+        guess_fqn = _KOTLIN_DEFAULT_SIMPLE[bare]
     elif ast.wildcard_imports:
         # Pick first wildcard as a hint (imperfect but useful for display).
         guess_fqn = f"{ast.wildcard_imports[0]}.{bare}"
@@ -4170,7 +4292,7 @@ def _init_hash_tracker(source_root: Path, ladybug_path: Path) -> int:
     ignore = LayeredIgnore(source_root)
     all_files: set[str] = set()
     source_root_resolved = source_root.resolve()
-    for p in iter_java_source_files(source_root, ignore=ignore):
+    for p in iter_source_files(source_root, ignore=ignore):
         p_resolved = p.resolve()
         try:
             rel_path = p_resolved.relative_to(source_root_resolved).as_posix()

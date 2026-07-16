@@ -50,7 +50,8 @@ from java_codebase_rag.index.java_index_v1_common import (
     position_to_json,
 )
 from java_codebase_rag.graph.path_filtering import LayeredIgnore
-from java_codebase_rag.ast.ast_java import ONTOLOGY_VERSION, parse_java
+from java_codebase_rag.ast.ast_java import ONTOLOGY_VERSION
+from java_codebase_rag.ast.language import LANG_BACKENDS, backend_for
 from java_codebase_rag.graph.graph_enrich import (
     classify_java_file,
     collect_annotation_meta_chain,
@@ -115,6 +116,21 @@ splitter = RecursiveSplitter()
 # parent clamps to total on the terminal event anyway).
 _VECTORS_TICK_EVERY = 25
 
+# Suffixes that index into the ``JavaLanceChunk`` table — the registered
+# language backends (``.java`` always; ``.kt`` when the Kotlin grammar imports).
+# Derived from ``LANG_BACKENDS`` so this never drifts from what the graph builder
+# parses (mirrors the watcher's ``INDEXED_SUFFIXES``). On a grammar-absent
+# install this is just ``(".java",)`` and ``.kt`` files are skipped cleanly.
+_INDEXED_SOURCE_SUFFIXES: tuple[str, ...] = tuple(
+    suffix for backend in LANG_BACKENDS.values() for suffix in backend.suffixes
+)
+# True iff some registered backend claims ``.kt`` (i.e. ``tree-sitter-kotlin``
+# imported). Gates the ``.kt`` cocoindex matcher + ``process_kotlin_file`` drain
+# in ``app_main`` so a grammar-absent install skips ``.kt`` by construction
+# instead of crashing inside ``_parse_and_enrich_java`` (backend-for-``.kt``
+# returns ``None`` → ``classify_java_file`` dereferences ``ast.all_types``).
+_KOTLIN_REGISTERED: bool = ".kt" in _INDEXED_SOURCE_SUFFIXES
+
 # Bounded concurrency for the per-file drain in app_main. cocoindex's embedder
 # is ``@coco.fn.as_async(batching=True, runner=GPU, max_batch_size=64)`` — but
 # its batching layer only coalesces calls that are in flight SIMULTANEOUSLY. A
@@ -129,9 +145,9 @@ _VECTORS_TICK_EVERY = 25
 # This stays inside ONE component, so the earlier mount_each→app_main win is
 # preserved: still exactly ONE merge_insert per table at commit. Memoization
 # (``@coco.fn(memo=True)``) and the lock-guarded tick counter are safe under
-# concurrency; ``parse_java`` uses a per-thread tree-sitter Parser (already
-# routed via ``asyncio.to_thread``) and ``splitter.split`` is synchronous so the
-# event loop cannot reenter it.
+# concurrency; the backend parse (``parse_java`` / ``parse_kotlin``) uses a
+# per-thread tree-sitter Parser (already routed via ``asyncio.to_thread``)
+# and ``splitter.split`` is synchronous so the event loop cannot reenter it.
 #
 # Default 64 is sized to MATCH the embedder's hardcoded max_batch_size=64 (the
 # decorator above; not a constructor arg, so not raisable from the flow): ~64
@@ -209,8 +225,8 @@ def _approximate_vectors_total(project_root: Path) -> int:
     count. The parent clamps the bar to 100% on the terminal ``status=done``
     event, so the over-count cannot stall the bar.
 
-    Mirrors the three ``localfs.walk_dir`` matchers in ``app_main``:
-      - ``**/*.java``
+    Mirrors the ``localfs.walk_dir`` matchers in ``app_main``:
+      - ``**/*.java`` and ``**/*.kt`` (registered language suffixes)
       - ``**/src/main/resources/db/migration/*.sql``
       - ``**/src/main/resources/application*.yml`` and ``.yaml``
     """
@@ -222,7 +238,7 @@ def _approximate_vectors_total(project_root: Path) -> int:
 
     total = 0
     for dirpath, dirnames, filenames in os.walk(project_root):
-        # Prune the same universal nuisance dirs as iter_java_source_files /
+        # Prune the same universal nuisance dirs as iter_source_files /
         # cocoindex walk. (build-output pruning is matcher-dependent in the
         # real walk; for an APPROXIMATE total this cheap prune is sufficient
         # — the clamp absorbs any residual divergence.)
@@ -237,8 +253,12 @@ def _approximate_vectors_total(project_root: Path) -> int:
                 continue
             if _excluded(rel):
                 continue
-            # Java: **/*.java
-            if fn.endswith(".java"):
+            # Java + Kotlin: the registered source-language suffixes (see
+            # ``_INDEXED_SOURCE_SUFFIXES`` / ``LANG_BACKENDS`` — ``.java`` always,
+            # ``.kt`` when the Kotlin grammar imports). Both index into the same
+            # ``JavaLanceChunk`` table via ``process_java_file`` /
+            # ``process_kotlin_file``.
+            if fn.endswith(_INDEXED_SOURCE_SUFFIXES):
                 if not ignore.is_ignored(full):
                     total += 1
                 continue
@@ -380,14 +400,23 @@ def _parse_and_enrich_java(
     parses + enriches, the event loop is free to drive other files and keep the
     embedder's batching queue fed.
 
-    Thread-safety: ``parse_java`` uses a per-thread tree-sitter ``Parser``
-    (see ``ast_java._parser``), so it is safe to call concurrently from these
-    worker threads — including the transitive ``parse_java`` that ``enrich_chunk``
+    Thread-safety: the backend parse (``parse_java`` / ``parse_kotlin``) uses
+    a per-thread tree-sitter ``Parser`` (see ``ast_java._parser`` /
+    ``ast_kotlin._parser``), so it is safe to call concurrently from these
+    worker threads — including the transitive re-parse that ``enrich_chunk``
     triggers via ``collect_annotation_meta_chain`` → ``_collect_annotation_decl_index``.
     ``enrich_chunk`` is otherwise pure-Python over the now-immutable AST; its
     ``lru_cache`` reads are thread-safe under the GIL.
     """
-    ast = parse_java(content_bytes)
+    backend = backend_for(rel)
+    if backend is None:
+        # Defensive: ``app_main`` registers the ``.kt`` matcher + kotlin drain
+        # only when ``_KOTLIN_REGISTERED`` (registry-derived), and ``.java`` is
+        # always registered — so by construction this is unreachable for every
+        # suffix the flow yields. Kept to honor the dispatch contract (a
+        # grammar-absent install never yields ``.kt`` here).
+        return [], None
+    ast = backend.parse(content_bytes, filename=rel)
     enrichments = [
         enrich_chunk(
             ast,
@@ -437,7 +466,8 @@ async def process_java_file(
 
     # (vectors perf lever #2) parse + enrich off the event loop so the loop can
     # keep the embedder's batching queue fed while this file is being parsed.
-    # parse_java is thread-safe (per-thread tree-sitter Parser in ast_java).
+    # The backend parse (parse_java / parse_kotlin) is thread-safe (per-thread
+    # tree-sitter Parser in ast_java / ast_kotlin).
     enrichments, ast = await asyncio.to_thread(
         _parse_and_enrich_java, content_bytes, chunks, rel, project_root
     )
@@ -452,6 +482,98 @@ async def process_java_file(
     # embedder groups them into one ``model.encode(...)`` (max_batch_size=64)
     # instead of N serial batch-of-1 calls. Dominant win for ``increment``
     # (few changed files → little cross-file concurrency → otherwise no batching).
+    embeddings = await asyncio.gather(*(embedder.embed(ch.text) for ch in chunks))
+
+    for ch, enrich, emb in zip(chunks, enrichments, embeddings):
+        rs, re = chunk_key_range(ch)
+        table.declare_row(
+            row=JavaLanceChunk(
+                id=str(uuid.uuid4()),
+                filename=rel,
+                language=language,
+                text=ch.text,
+                range_start=rs,
+                range_end=re,
+                start=position_to_json(ch.start),
+                end=position_to_json(ch.end),
+                embedding=emb,
+                package=enrich.package,
+                module=enrich.module,
+                microservice=enrich.microservice,
+                primary_type_fqn=enrich.primary_type_fqn,
+                primary_type_kind=enrich.primary_type_kind,
+                role=enrich.role,
+                capabilities=list(enrich.capabilities),
+                annotations_on_type=enrich.annotations_on_type,
+                symbols=enrich.symbols,
+                ontology_version=ONTOLOGY_VERSION,
+                generated=generated,
+                generated_by=generated_by,
+            )
+        )
+
+
+@coco.fn(memo=True)
+async def process_kotlin_file(
+    file: localfs.File,
+    table: lancedb.TableTarget[JavaLanceChunk],
+) -> None:
+    """Index one ``.kt`` file into the SAME ``JavaLanceChunk`` table as Java.
+
+    Mirrors ``process_java_file``'s enrichment path (``enrich_chunk`` /
+    ``classify_java_file``) but parsing dispatches through ``backend_for(rel)``
+    (= ``parse_kotlin``) inside the shared ``_parse_and_enrich_java`` helper,
+    which is already language-agnostic. The chunk ``language`` field is set to
+    ``"kotlin"`` (``detect_code_language`` returns ``"kotlin"`` for ``.kt``).
+    The chunk schema (``primary_type_kind`` / ``role`` / ``capabilities``) is
+    language-agnostic, so no new column is needed.
+
+    Multifile-facade merge is NOT wired here: each ``process_*_file`` parses ONE
+    file independently (concurrent per-file drain), so a cross-file pre-pass is
+    awkward inside cocoindex's dataflow. The merge runs in ``build_ast_graph``
+    pass1 instead — the only site that registers facade TypeDecls into
+    ``tables.types`` (where unmerged facades would collide). Chunk enrichment
+    (``enrich_chunk``) uses the per-file AST only, so it is merge-independent.
+    """
+    embedder = coco.use_context(EMBEDDER)
+    project_root = coco.use_context(PROJECT_ROOT)
+    ignore = coco.use_context(IGNORE)
+    if ignore.is_ignored((project_root / file.file_path.path).resolve()):
+        return
+    try:
+        content = await file.read_text()
+    except UnicodeDecodeError:
+        return
+    if not content.strip():
+        return
+
+    _tick_vectors_done()
+
+    language = detect_code_language(filename=file.file_path.path.name) or "text"
+    cs, mn, ov = JAVA_CHUNK
+    chunks = splitter.split(
+        content,
+        cs,
+        min_chunk_size=mn,
+        chunk_overlap=ov,
+        language=language,
+    )
+    rel = file.file_path.path.as_posix()
+    content_bytes = content.encode("utf-8", errors="replace")
+
+    # ``_parse_and_enrich_java`` dispatches via ``backend_for(rel)`` → parse_kotlin
+    # for ``.kt``; the helper and ``enrich_chunk`` are language-agnostic. Run off
+    # the event loop so the embedder batching queue stays fed (vectors perf #2).
+    enrichments, ast = await asyncio.to_thread(
+        _parse_and_enrich_java, content_bytes, chunks, rel, project_root
+    )
+
+    generated_config = load_generated_detection(project_root)
+    generated, generated_by = classify_java_file(
+        content_bytes, ast, config=generated_config, project_root=project_root
+    )
+
+    # Embed all chunks concurrently → batched encode (vectors perf #1).
     embeddings = await asyncio.gather(*(embedder.embed(ch.text) for ch in chunks))
 
     for ch, enrich, emb in zip(chunks, enrichments, embeddings):
@@ -682,6 +804,18 @@ async def app_main() -> None:
             excluded_patterns=_walk_excludes,
         ),
     )
+    kotlin_files = (
+        localfs.walk_dir(
+            PROJECT_ROOT,
+            recursive=True,
+            path_matcher=PatternFilePathMatcher(
+                included_patterns=["**/*.kt"],
+                excluded_patterns=_walk_excludes,
+            ),
+        )
+        if _KOTLIN_REGISTERED
+        else None
+    )
     sql_files = localfs.walk_dir(
         PROJECT_ROOT,
         recursive=True,
@@ -724,6 +858,17 @@ async def app_main() -> None:
     # usually near-empty).
     _sem = asyncio.Semaphore(_FILE_CONCURRENCY)
     await _drain_files_concurrently(java_files, process_java_file, java_table, _sem)
+    # Kotlin drains into the SAME ``java_table`` (JavaLanceChunk) — the chunk
+    # schema is language-agnostic and the ``language`` column distinguishes rows.
+    # Gated on ``_KOTLIN_REGISTERED`` (registry-derived): on a grammar-absent
+    # install ``.kt`` has no backend, so the matcher + drain are skipped entirely
+    # — no wasted read/chunk/embed, and no crash in ``_parse_and_enrich_java``
+    # (``backend_for(.kt)`` returns ``None`` → ``classify_java_file`` would
+    # dereference ``ast.all_types`` on ``None``).
+    if _KOTLIN_REGISTERED:
+        await _drain_files_concurrently(
+            kotlin_files, process_kotlin_file, java_table, _sem
+        )
     await _drain_files_concurrently(sql_files, process_sql_file, sql_table, _sem)
     await _drain_files_concurrently(yaml_files, process_yaml_file, yaml_table, _sem)
 

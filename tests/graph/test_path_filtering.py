@@ -10,6 +10,7 @@ from java_codebase_rag.graph.path_filtering import (
     compile_excluded_glob_patterns,
     is_relative_path_excluded,
     iter_java_source_files,
+    iter_source_files,
 )
 
 
@@ -354,3 +355,55 @@ def test_layered_ignore_memo_preserves_decisions(tmp_path: Path) -> None:
     assert li_cached.is_ignored(hit1) == li_uncached1.is_ignored(hit1)
     assert li_cached.is_ignored(hit2) == li_uncached2.is_ignored(hit2)
     assert li_cached.is_ignored(hit3) == li_uncached3.is_ignored(hit3)
+
+
+def test_iter_source_files_yields_registered_suffixes(tmp_path: Path) -> None:
+    """``iter_source_files`` dispatches by registered suffix. Among
+    ``A.java``, ``B.kt``, ``C.txt`` it yields ``A.java`` always, plus ``B.kt``
+    when the ``tree-sitter-kotlin`` grammar is installed (KotlinBackend then
+    claims ``.kt``); ``C.txt`` is never yielded."""
+    import importlib.util
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    a = root / "A.java"
+    a.write_text("class A {}\n", encoding="utf-8")
+    b = root / "B.kt"
+    b.write_text("class B {}\n", encoding="utf-8")
+    (root / "C.txt").write_text("not source\n", encoding="utf-8")
+    li = LayeredIgnore(root, use_gitignore=False)
+    files = list(iter_source_files(root, ignore=li))
+    if importlib.util.find_spec("tree_sitter_kotlin") is not None:
+        assert sorted(files, key=str) == sorted([a, b], key=str)
+        assert {p.suffix for p in files} == {".java", ".kt"}
+    else:
+        assert files == [a]
+        assert {p.suffix for p in files} == {".java"}
+
+
+def test_iter_source_files_prunes_build_output_dir(tmp_path: Path) -> None:
+    """A ``.java`` file inside a build-output dir (sibling to ``pom.xml``) is
+    NOT yielded by ``iter_source_files`` — pruning logic is preserved."""
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "pom.xml").write_text("<project/>\n", encoding="utf-8")
+    out = root / "out" / "production"
+    out.mkdir(parents=True)
+    bogus = out / "Bogus.java"
+    bogus.write_text("class Bogus {}\n", encoding="utf-8")
+    li = LayeredIgnore(root, use_gitignore=False)
+    files = list(iter_source_files(root, ignore=li))
+    assert bogus not in files
+
+
+def test_iter_source_files_alias_matches_iter_java_source_files(tmp_path: Path) -> None:
+    """The kept ``iter_java_source_files`` alias yields the same files as
+    ``iter_source_files`` for the same tree."""
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "A.java").write_text("class A {}\n", encoding="utf-8")
+    (root / "B.kt").write_text("class B {}\n", encoding="utf-8")
+    li = LayeredIgnore(root, use_gitignore=False)
+    via_alias = sorted(iter_java_source_files(root, ignore=li), key=str)
+    via_new = sorted(iter_source_files(root, ignore=li), key=str)
+    assert via_alias == via_new

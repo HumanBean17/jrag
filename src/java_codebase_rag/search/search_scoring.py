@@ -37,7 +37,7 @@ _SYMBOL_MATCH_BONUS_CAP = 0.06
 
 # Action verbs that typically mark behavioural entry points in this codebase.
 # A chunk whose symbols begin with one of these verbs earns a small flat bump
-# — again only for java chunks and only when role-filtering is off.
+# — again only for JVM (Java/Kotlin) chunks and only when role-filtering is off.
 _ACTION_VERB_PREFIXES: tuple[str, ...] = (
     "process", "handle", "on", "pick", "select", "assign",
     "notify", "dispatch", "publish", "consume", "route",
@@ -64,7 +64,7 @@ _STOPWORDS: frozenset[str] = frozenset({
     "may", "might", "happens", "happen", "happened", "get", "gets", "got",
 })
 
-# Role-aware reweighting for Java chunks. Positive values favour actionable
+# Role-aware reweighting for Java/Kotlin chunks. Positive values favour actionable
 # behavioural code (entrypoints, orchestrators, integrations) over configuration,
 # schema, and persistence stubs for "what happens when..."-style queries.
 # Applied to the similarity score (higher = better); distance-based sort subtracts
@@ -236,13 +236,27 @@ def build_fts_query(text: str) -> str:
     return " ".join(out)
 
 
+def _is_jvm_row(r: dict) -> bool:
+    """True when a row is Java or Kotlin source (both indexed in the java table).
+
+    The additive role/bonus weighting applies to both JVM languages. Kotlin
+    chunks live in the java LanceDB table (``_kind == "java"``), but we key off
+    the semantic ``language`` field when present so detection is robust to the
+    row's table-key and any future language-keyed table split.
+    """
+    lang = str(r.get("language") or "").lower()
+    if lang in ("java", "kotlin"):
+        return True
+    return str(r.get("_kind", "")) == "java"
+
+
 def _symbol_bonus(r: dict, query_toks: set[str]) -> float:
-    """Symbol-name overlap + action-verb bump for java chunks.
+    """Symbol-name overlap + action-verb bump for Java/Kotlin chunks.
 
     Caps at `_SYMBOL_MATCH_BONUS_CAP + _ACTION_VERB_BONUS` to avoid runaway
     ranks on chunks declaring many symbols.
     """
-    if str(r.get("_kind", "")) != "java":
+    if not _is_jvm_row(r):
         return 0.0
     raw = r.get("symbols") or []
     if isinstance(raw, str):
@@ -289,7 +303,7 @@ def _role_weight(r: dict) -> float:
     cached = comps.get("role_weight")
     if cached is not None:
         return float(cached)
-    if r.get("_skip_role_weight") or str(r.get("_kind", "")) != "java":
+    if r.get("_skip_role_weight") or not _is_jvm_row(r):
         comps["role_weight"] = 0.0
         return 0.0
     role = (r.get("role") or "").upper()

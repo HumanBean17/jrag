@@ -134,10 +134,22 @@ def _make_watcher(
 # -- module constants ----------------------------------------------------------
 
 
-def test_indexed_suffixes_union():
-    """``INDEXED_SUFFIXES`` exposes the java suffix (the resource globs are matched
-    by classification helpers, not by a shared iterator)."""
-    assert INDEXED_SUFFIXES == (".java",)
+def test_indexed_suffixes_derived_from_registry():
+    """``INDEXED_SUFFIXES`` is derived from the ``LANG_BACKENDS`` registry: the
+    union of every registered backend's ``suffixes``. When the kotlin grammar is
+    importable (the dev env) that includes ``.kt``; a grammar-absent install
+    yields just ``.java``. The resource globs are matched by classification
+    helpers, not by a shared iterator, so they stay out of this tuple."""
+    from java_codebase_rag.ast.language import LANG_BACKENDS
+
+    expected = tuple(
+        suffix for backend in LANG_BACKENDS.values() for suffix in backend.suffixes
+    )
+    assert INDEXED_SUFFIXES == expected
+    # Java is always present; .kt is present iff the kotlin backend registered.
+    assert ".java" in INDEXED_SUFFIXES
+    if "kotlin" in LANG_BACKENDS:
+        assert ".kt" in INDEXED_SUFFIXES
 
 
 # -- classification ------------------------------------------------------------
@@ -164,6 +176,23 @@ def test_classify_indexed_paths(tmp_path, monkeypatch, rel, expected):
     calls: list[str] = []
     w = _make_watcher(tmp_path, calls, monkeypatch)
     assert w._classify(tmp_path / rel) == expected
+
+
+def test_classify_kotlin_routes_to_kotlin_kind(tmp_path, monkeypatch):
+    """A ``.kt`` source change dispatches via ``backend_for`` to the Kotlin backend
+    and yields the ``kotlin`` reindex kind (which, like ``java``, triggers the
+    graph reindex because the graph indexes every registered source language).
+    A ``.kts`` script suffix is NOT claimed by KotlinBackend → ignored."""
+    calls: list[str] = []
+    w = _make_watcher(tmp_path, calls, monkeypatch)
+    from java_codebase_rag.ast.language import LANG_BACKENDS
+
+    if "kotlin" not in LANG_BACKENDS:
+        pytest.skip("tree_sitter_kotlin not importable on this install")
+    assert w._classify(tmp_path / "src/main/kotlin/app/Foo.kt") == {"kotlin"}
+    # Unknown suffix (even kotlin-adjacent) is ignored, not classified as a source.
+    assert w._classify(tmp_path / "scripts/build.kts") == set()
+    assert w._classify(tmp_path / "README.md") == set()
 
 
 @pytest.mark.parametrize(
@@ -278,6 +307,33 @@ def test_reindex_java_and_sql_runs_graph_once(tmp_path, monkeypatch):
     assert calls.count("run_incremental_graph") == 1
     assert "begin_graph_snapshot" in calls
     assert "commit_graph_snapshot" in calls
+
+
+def test_reindex_kotlin_runs_vectors_then_graph(tmp_path, monkeypatch):
+    """A ``.kt`` change (classified as ``kotlin``) reprocesses via the Kotlin
+    backend inside the graph build: vectors THEN graph under the COW snapshot
+    lifecycle — the same path as ``java``, because the graph indexes every
+    registered source language. The subprocess graph builder picks the backend
+    per-file via ``backend_for``; the watcher only needs to trigger the rebuild."""
+    from java_codebase_rag.ast.language import LANG_BACKENDS
+
+    if "kotlin" not in LANG_BACKENDS:
+        pytest.skip("tree_sitter_kotlin not importable on this install")
+    calls: list[str] = []
+    w = _make_watcher(tmp_path, calls, monkeypatch)
+    w.reindex({"kotlin"})
+    assert calls == [
+        "on_event:indexing_started",
+        "on_event:vectors",
+        "run_cocoindex_update",
+        "on_event:graph",
+        "begin_graph_snapshot",
+        "run_incremental_graph",
+        "commit_graph_snapshot",
+        "on_event:indexing_done",
+    ]
+    assert w.last_reindex is not None
+    assert w.last_reindex["kinds"] == ["kotlin"]
 
 
 # -- reindex: graph-only (macOS Intel) -> skip vectors, still run graph ---------
