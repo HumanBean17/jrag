@@ -51,7 +51,7 @@ from java_codebase_rag.index.java_index_v1_common import (
 )
 from java_codebase_rag.graph.path_filtering import LayeredIgnore
 from java_codebase_rag.ast.ast_java import ONTOLOGY_VERSION
-from java_codebase_rag.ast.language import backend_for
+from java_codebase_rag.ast.language import LANG_BACKENDS, backend_for
 from java_codebase_rag.graph.graph_enrich import (
     classify_java_file,
     collect_annotation_meta_chain,
@@ -115,6 +115,21 @@ splitter = RecursiveSplitter()
 # bar feel stale. Every 25th file (and the modulo boundary is enough — the
 # parent clamps to total on the terminal event anyway).
 _VECTORS_TICK_EVERY = 25
+
+# Suffixes that index into the ``JavaLanceChunk`` table — the registered
+# language backends (``.java`` always; ``.kt`` when the Kotlin grammar imports).
+# Derived from ``LANG_BACKENDS`` so this never drifts from what the graph builder
+# parses (mirrors the watcher's ``INDEXED_SUFFIXES``). On a grammar-absent
+# install this is just ``(".java",)`` and ``.kt`` files are skipped cleanly.
+_INDEXED_SOURCE_SUFFIXES: tuple[str, ...] = tuple(
+    suffix for backend in LANG_BACKENDS.values() for suffix in backend.suffixes
+)
+# True iff some registered backend claims ``.kt`` (i.e. ``tree-sitter-kotlin``
+# imported). Gates the ``.kt`` cocoindex matcher + ``process_kotlin_file`` drain
+# in ``app_main`` so a grammar-absent install skips ``.kt`` by construction
+# instead of crashing inside ``_parse_and_enrich_java`` (backend-for-``.kt``
+# returns ``None`` → ``classify_java_file`` dereferences ``ast.all_types``).
+_KOTLIN_REGISTERED: bool = ".kt" in _INDEXED_SOURCE_SUFFIXES
 
 # Bounded concurrency for the per-file drain in app_main. cocoindex's embedder
 # is ``@coco.fn.as_async(batching=True, runner=GPU, max_batch_size=64)`` — but
@@ -238,11 +253,12 @@ def _approximate_vectors_total(project_root: Path) -> int:
                 continue
             if _excluded(rel):
                 continue
-            # Java + Kotlin: **/*.java and **/*.kt (the two registered source
-            # language suffixes — see LANG_BACKENDS). Both index into the same
+            # Java + Kotlin: the registered source-language suffixes (see
+            # ``_INDEXED_SOURCE_SUFFIXES`` / ``LANG_BACKENDS`` — ``.java`` always,
+            # ``.kt`` when the Kotlin grammar imports). Both index into the same
             # ``JavaLanceChunk`` table via ``process_java_file`` /
             # ``process_kotlin_file``.
-            if fn.endswith((".java", ".kt")):
+            if fn.endswith(_INDEXED_SOURCE_SUFFIXES):
                 if not ignore.is_ignored(full):
                     total += 1
                 continue
@@ -394,8 +410,11 @@ def _parse_and_enrich_java(
     """
     backend = backend_for(rel)
     if backend is None:
-        # Defensive: the flow only yields files whose suffix is registered, so
-        # this is unreachable today. Kept to honor the dispatch contract.
+        # Defensive: ``app_main`` registers the ``.kt`` matcher + kotlin drain
+        # only when ``_KOTLIN_REGISTERED`` (registry-derived), and ``.java`` is
+        # always registered — so by construction this is unreachable for every
+        # suffix the flow yields. Kept to honor the dispatch contract (a
+        # grammar-absent install never yields ``.kt`` here).
         return [], None
     ast = backend.parse(content_bytes, filename=rel)
     enrichments = [
@@ -785,13 +804,17 @@ async def app_main() -> None:
             excluded_patterns=_walk_excludes,
         ),
     )
-    kotlin_files = localfs.walk_dir(
-        PROJECT_ROOT,
-        recursive=True,
-        path_matcher=PatternFilePathMatcher(
-            included_patterns=["**/*.kt"],
-            excluded_patterns=_walk_excludes,
-        ),
+    kotlin_files = (
+        localfs.walk_dir(
+            PROJECT_ROOT,
+            recursive=True,
+            path_matcher=PatternFilePathMatcher(
+                included_patterns=["**/*.kt"],
+                excluded_patterns=_walk_excludes,
+            ),
+        )
+        if _KOTLIN_REGISTERED
+        else None
     )
     sql_files = localfs.walk_dir(
         PROJECT_ROOT,
@@ -837,9 +860,15 @@ async def app_main() -> None:
     await _drain_files_concurrently(java_files, process_java_file, java_table, _sem)
     # Kotlin drains into the SAME ``java_table`` (JavaLanceChunk) — the chunk
     # schema is language-agnostic and the ``language`` column distinguishes rows.
-    await _drain_files_concurrently(
-        kotlin_files, process_kotlin_file, java_table, _sem
-    )
+    # Gated on ``_KOTLIN_REGISTERED`` (registry-derived): on a grammar-absent
+    # install ``.kt`` has no backend, so the matcher + drain are skipped entirely
+    # — no wasted read/chunk/embed, and no crash in ``_parse_and_enrich_java``
+    # (``backend_for(.kt)`` returns ``None`` → ``classify_java_file`` would
+    # dereference ``ast.all_types`` on ``None``).
+    if _KOTLIN_REGISTERED:
+        await _drain_files_concurrently(
+            kotlin_files, process_kotlin_file, java_table, _sem
+        )
     await _drain_files_concurrently(sql_files, process_sql_file, sql_table, _sem)
     await _drain_files_concurrently(yaml_files, process_yaml_file, yaml_table, _sem)
 

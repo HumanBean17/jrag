@@ -483,9 +483,11 @@ def iter_source_files(
             and not _is_build_output_dir(dirpath, d)
         ]
         for fn in filenames:
-            # ``Path.suffix`` lower-cases nothing; backends register lower-case
-            # suffixes (``.java``), matching case-sensitively as before.
-            if Path(fn).suffix not in known_suffixes:
+            # Literal byte-identity match (mirrors the legacy ``endswith``
+            # behaviour): ``Path(".java").suffix`` is ``""``, so a dotfile named
+            # ``.java`` would be dropped by a suffix-in-set check. ``endswith``
+            # over the registered suffixes restores the exact old semantics.
+            if not any(fn.endswith(s) for s in known_suffixes):
                 continue
             p = Path(dirpath) / fn
             if ignore_ctx.is_ignored(p):

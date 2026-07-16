@@ -46,8 +46,9 @@ def analyze_chunk(text: str | None, *, language: str, kind: str) -> ChunkHints:
     is_kotlin = lang == "kotlin"
     is_java = not is_kotlin and (kind == "java" or lang == "java")
 
-    # Both Java and Kotlin use ``import <pkg.Type>;`` lines, so the import-density
-    # heuristic is shared.
+    # Both Java and Kotlin use ``import <pkg.Type>`` lines (Java ends the line
+    # with ``;``, Kotlin does not), so the import-density heuristic matches on
+    # the ``import `` prefix only — the trailing-``;`` difference is irrelevant.
     import_heavy = False
     if (is_java or is_kotlin) and n >= 3:
         imp = sum(1 for L in lines if L.lstrip().startswith("import "))

@@ -46,6 +46,13 @@ inside the MCP.
     collides (last-wins; same-FQN warning fires; the retained file's top-level
     functions drop to phantoms for that increment). A fresh `init` (the primary
     workflow) re-merges the whole group and is unaffected.
+    (5) **compact single-line bodies drop types** — `tree-sitter-kotlin` 1.1.0
+    silently fails to recover types/members declared on one line
+    (`class A { val x = 1 }`); `parse_error` is set and the type is missing.
+    Use multi-line declarations for reliable indexing.
+    (6) **`@get:JvmName` / `@set:JvmName` accessor renaming is not honored** —
+    synthesized accessors keep their default `getFoo`/`setFoo` names regardless
+    of these use-site annotations.
   - See: `ast_java.py` / `ast_kotlin.py` (parsers),
     `path_filtering.iter_source_files` (yields `*.java` + `*.kt`).
 - **Source under `src/main/java/...`.** Test sources under

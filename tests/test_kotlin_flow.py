@@ -170,3 +170,58 @@ def test_approximate_vectors_total_counts_java_and_kotlin(tmp_path: Path) -> Non
     )
 
     assert _approximate_vectors_total(corpus) == 2
+
+
+def test_grammar_absent_flow_skips_kotlin_cleanly(tmp_path: Path) -> None:
+    """Grammar-absent install must SKIP ``.kt`` files cleanly — no crash.
+
+    ``app_main`` registers the ``.kt`` cocoindex matcher + ``process_kotlin_file``
+    drain only when ``_KOTLIN_REGISTERED`` (registry-derived from ``LANG_BACKENDS``).
+    On a grammar-absent install ``backend_for('.kt')`` returns ``None``; before the
+    gate, a ``.kt`` reaching ``process_kotlin_file`` → ``_parse_and_enrich_java``
+    returned ``([], None)`` → ``classify_java_file`` dereferenced ``ast.all_types``
+    on ``None`` → ``AttributeError``. This test simulates grammar-absence by
+    monkeypatching the registry-derived constants and proves the pre-walk skips
+    ``.kt`` (count excludes it, no exception) and the dispatch guard holds.
+    """
+    import java_codebase_rag.index.java_index_flow_lancedb as flow
+
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    _write_mixed_module(corpus)
+
+    # Sanity: with the grammar present (the only way this file is collected — it
+    # importorskips tree_sitter_kotlin) the gate is ON and both files are counted.
+    assert flow._KOTLIN_REGISTERED is True
+    assert flow._INDEXED_SOURCE_SUFFIXES == (".java", ".kt")
+    assert flow._approximate_vectors_total(corpus) == 2
+
+    # Simulate a grammar-absent install: registry has no ``.kt`` backend, so the
+    # derived suffix tuple drops to ``(".java",)`` and the gate turns OFF.
+    saved_suffixes = flow._INDEXED_SOURCE_SUFFIXES
+    saved_gate = flow._KOTLIN_REGISTERED
+    flow._INDEXED_SOURCE_SUFFIXES = (".java",)
+    flow._KOTLIN_REGISTERED = False
+    try:
+        # The pre-walk now counts ONLY the .java file (clean skip of .kt) and
+        # raises no exception — mirroring how the gated matcher/drain in app_main
+        # never yields .kt to process_kotlin_file.
+        assert flow._approximate_vectors_total(corpus) == 1
+    finally:
+        flow._INDEXED_SOURCE_SUFFIXES = saved_suffixes
+        flow._KOTLIN_REGISTERED = saved_gate
+
+
+def test_grammar_absent_parse_guard_returns_empty(monkeypatch, tmp_path: Path) -> None:
+    """Last line of defense: if a ``.kt`` somehow reached ``_parse_and_enrich_java``
+    with no registered backend, it returns ``([], None)`` cleanly (no AttributeError)
+    rather than letting ``classify_java_file`` deref ``ast.all_types`` on None."""
+    import java_codebase_rag.index.java_index_flow_lancedb as flow
+
+    # backend_for('.kt') returns None when the kotlin grammar is absent.
+    monkeypatch.setattr(flow, "backend_for", lambda rel: None)
+    enrichments, ast = flow._parse_and_enrich_java(
+        b"package com.x\n", [], "Foo.kt", tmp_path  # type: ignore[arg-type]
+    )
+    assert enrichments == []
+    assert ast is None  # the caller (process_kotlin_file) would skip enrichment.

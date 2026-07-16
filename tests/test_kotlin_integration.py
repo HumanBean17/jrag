@@ -146,6 +146,7 @@ def test_3_kt_primary_constructor_injects_constructor(mixed_jvm_db: Path) -> Non
         "MATCH (src:Symbol {fqn: 'com.foo.UserController'})-[r:INJECTS]->(dst:Symbol) "
         "WHERE r.mechanism = 'constructor' "
         "RETURN r.mechanism AS mechanism, r.field_or_param AS slot, "
+        "r.resolved AS edge_resolved, "
         "dst.fqn AS dst_fqn, dst.resolved AS dst_resolved",
     )
     assert rows, (
@@ -153,12 +154,17 @@ def test_3_kt_primary_constructor_injects_constructor(mixed_jvm_db: Path) -> Non
         f"INJECTS: {_rows(conn, _Q_OBSERVED_INJECTS)}"
     )
     # The injected slot must resolve to the real Java UserService.
-    hit = next((r for r in rows if r[2] == "com.foo.UserService"), None)
+    hit = next((r for r in rows if r[3] == "com.foo.UserService"), None)
     assert hit is not None, (
         f"constructor INJECTS should target com.foo.UserService; got rows={rows}"
     )
-    assert hit[3] is True or hit[3] == 1, (
+    assert hit[4] is True or hit[4] == 1, (
         f"INJECTS dst UserService must be resolved (non-phantom); row={hit}"
+    )
+    # The INJECTS edge itself is resolved on both ends (resolved on the edge AND
+    # the destination node). INJECTS edges carry ``resolved``.
+    assert hit[2] is True or hit[2] == 1, (
+        f"INJECTS edge must be resolved (edge_resolved); row={hit}"
     )
     assert hit[1] == "userService", f"expected slot 'userService'; row={hit}"
 

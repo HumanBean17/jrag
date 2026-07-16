@@ -277,10 +277,12 @@ def test_kotlin_backend_parse_delegates_to_parse_kotlin() -> None:
 # The graph builder resolves cross-language CALLS to METHODS only; a Kotlin
 # property mapped to a lone FieldDecl makes every Java getter/setter call a
 # phantom. So non-private properties MUST also emit synthesized JVM-accessor
-# MethodDecl(s). The accessor rule matches Kotlin's actual JVM codegen (NOT the
-# "Boolean -> isFoo" simplification): the `is` prefix is preserved ONLY for
-# Boolean properties already named `is*`; a Boolean property NOT named `is*`
-# (e.g. `b`) compiles to `getB()`.
+# MethodDecl(s). The accessor rule matches Kotlin's actual JVM codegen (Calling
+# Kotlin from Java → Properties): the ``is``-prefix rule is NAME-based and
+# type-agnostic — a property named ``is`` + uppercase keeps the prefix for ANY
+# type (``isActive``→``isActive()``, ``isAwesome: String``→``isAwesome()``); a
+# property NOT named ``is*`` (e.g. ``b``, or ``issue`` whose 3rd char is
+# lowercase) compiles to ``getB()`` / ``getIssue()``.
 
 
 def _type_by_fqn(ast: JavaFileAst, fqn: str) -> TypeDecl | None:
@@ -335,6 +337,61 @@ def test_boolean_is_prefixed_property_preserves_is_prefix() -> None:
     assert "getIsActive" not in names
     assert "setActive" in names  # setter drops the `is` prefix.
     assert "setIsActive" not in names
+
+
+def test_is_prefixed_string_property_preserves_is_prefix() -> None:
+    """Regression: the `is`-prefix rule is NAME-based, NOT Boolean-gated.
+
+    ``val isFoo: String`` → ``isFoo()`` (not ``getIsFoo()``). The docs rule
+    (Calling Kotlin from Java → Properties) applies to ANY type whose name is
+    ``is`` + uppercase. Previously this wrongly gated on ``type == Boolean``,
+    emitting ``getIsFoo()`` and producing phantom cross-language CALLS.
+    """
+    ast = parse_kotlin(b"package com.x\nclass P(val isFoo: String)\n", filename="P.kt")
+    t = ast.top_level_types[0]
+    names = {m.name for m in t.methods}
+    assert "isFoo" in names  # getter keeps the `is` prefix (name-based rule).
+    assert "getIsFoo" not in names
+    assert "getisFoo" not in names
+    # val -> getter only, no setter.
+    assert "setFoo" not in names
+
+
+def test_is_prefixed_var_string_property_setter_drops_is() -> None:
+    """Regression: ``var isAwesome: String`` → ``isAwesome()`` / ``setAwesome()``."""
+    ast = parse_kotlin(
+        b"package com.x\nclass P(var isAwesome: String)\n", filename="P.kt"
+    )
+    t = ast.top_level_types[0]
+    names = {m.name for m in t.methods}
+    assert "isAwesome" in names  # getter keeps the prefix.
+    assert "getIsAwesome" not in names
+    assert "setAwesome" in names  # setter drops the `is`.
+    assert "setIsAwesome" not in names
+
+
+def test_is_prefixed_var_boolean_property_setter_drops_is() -> None:
+    """Regression: ``var isOpen: Boolean`` → ``isOpen()`` / ``setOpen()`` (var)."""
+    ast = parse_kotlin(b"package com.x\nclass P(var isOpen: Boolean)\n", filename="P.kt")
+    t = ast.top_level_types[0]
+    names = {m.name for m in t.methods}
+    assert "isOpen" in names
+    assert "getIsOpen" not in names
+    assert "setOpen" in names
+    assert "setIsOpen" not in names
+
+
+def test_word_boundary_issue_property_uses_get_prefix() -> None:
+    """Regression: the ``[2].isupper()`` word-boundary — ``issue`` is NOT ``is``+prefix.
+
+    ``val issue: Boolean`` → ``getIssue()`` (NOT ``issue()``), because the char
+    after ``is`` is lowercase ``s`` — the property is not ``is``-prefixed.
+    """
+    ast = parse_kotlin(b"package com.x\nclass P(val issue: Boolean)\n", filename="P.kt")
+    t = ast.top_level_types[0]
+    names = {m.name for m in t.methods}
+    assert "getIssue" in names
+    assert "issue" not in names  # NOT the is-prefix getter.
 
 
 def test_val_int_property_getter_only() -> None:

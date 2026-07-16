@@ -1,12 +1,16 @@
 """Language-dispatch seam for AST extraction.
 
 A registry of ``LanguageBackend`` objects keyed by ``language_id``; each backend
-owns the source suffixes it claims (e.g. ``.java``) and a ``parse`` entry point
-returning a ``JavaFileAst`` (the single AST shape today; a Kotlin backend lands
-in later tasks and will reuse this surface).
+owns the source suffixes it claims (``.java`` always; ``.kt`` when the
+``tree-sitter-kotlin`` grammar imports) and a ``parse`` entry point returning a
+``JavaFileAst`` — the single AST shape shared by both languages (Kotlin reuses
+this surface; it does not introduce a separate type).
 
-Single-language era: only Java is registered, so ``FileAst`` is a direct alias
-for ``JavaFileAst``. When a second language arrives the alias is revisited.
+Both backends parse into ``JavaFileAst``, so ``FileAst`` remains a direct alias
+for ``JavaFileAst``. The Kotlin backend is registered conditionally on the
+grammar wheel importing (see the ``try``/``except ImportError`` below); a
+minimal or graph-only install with no ``tree-sitter-kotlin`` simply has Java in
+the registry, and ``backend_for`` returns ``None`` for ``.kt``.
 
 Import cycle note: ``ast_java`` defines ``JavaFileAst`` whose ``__post_init__``
 validates against ``KNOWN_LANGUAGE_IDS`` (defined here). To keep the cycle

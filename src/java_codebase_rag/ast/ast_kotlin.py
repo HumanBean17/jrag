@@ -81,14 +81,16 @@ __all__ = ["parse_kotlin", "merge_multifile_facades"]
 # tree-sitter's ``Parser`` mutates internal state during ``parse()`` and is NOT
 # thread-safe, so each OS thread gets its own instance. Mirrors ``ast_java.py``'s
 # ``_parser_tls`` / ``_parser()`` exactly. The ``Language`` is immutable and
-# shared; per-thread ``Parser`` construction is lazy and cheap (once per thread).
+# shared — hoisted to module scope so it is built once (not per thread); each
+# per-thread ``Parser`` is constructed lazily and cheaply off the shared Language.
+_KOTLIN_LANGUAGE = Language(_ts_kotlin.language())
 _parser_tls = threading.local()
 
 
 def _parser() -> Parser:
     p = getattr(_parser_tls, "parser", None)
     if p is None:
-        _parser_tls.parser = p = Parser(Language(_ts_kotlin.language()))
+        _parser_tls.parser = p = Parser(_KOTLIN_LANGUAGE)
     return p
 
 
@@ -504,19 +506,25 @@ def _accessor_method_decls(
 ) -> list[MethodDecl]:
     """Synthesize JVM-accessor MethodDecl(s) for a non-private Kotlin property.
 
-    Matches Kotlin's actual JVM codegen (the keyword Java callers use):
-    * Boolean property already named ``is*`` → getter keeps the name
-      (``isActive`` → ``isActive()``); setter drops the ``is`` (``setActive``).
+    Matches Kotlin's actual JVM codegen (Calling Kotlin from Java → Properties):
+    the ``is``-prefix rule is NAME-based and type-agnostic — a property whose
+    name starts with ``is`` followed by an uppercase letter keeps the ``is``
+    prefix regardless of type. (``isActive`` → ``isActive()``/``setActive()``;
+    ``isAwesome: String`` → ``isAwesome()``/``setAwesome()``.)
+    * ``is`` + uppercase → getter = property name; setter (var only) drops the
+      ``is`` (``set`` + rest-capitalised). The ``[2].isupper()`` word-boundary is
+      required: ``issue`` → ``getIssue()`` (NOT ``issue()``), because
+      ``is``+lowercase is not the prefix.
     * everything else → ``get`` + Name-capitalised (``name`` → ``getName()``;
       Boolean ``foo`` → ``getFoo()``, NOT ``isFoo()``).
     Setter only for ``var``. Getter is always final; setter is not.
     """
-    is_bool_is_prefixed = (
-        type_simple == "Boolean"
-        and prop_name.startswith("is")
+    is_is_prefixed = (
+        prop_name.startswith("is")
         and len(prop_name) > 2
+        and prop_name[2].isupper()
     )
-    if is_bool_is_prefixed:
+    if is_is_prefixed:
         getter_name = prop_name
         setter_name = "set" + _cap(prop_name[2:])
     else:
