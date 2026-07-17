@@ -1,6 +1,6 @@
 ---
 name: explore-codebase-cli
-description: "MUST BE USED PROACTIVELY. Universal codebase exploration (CLI surface). Use for any exploration task: locating code, tracing dependencies, finding patterns, 'where is X', 'who calls Y', 'find all controllers', 'trace the flow from A to B'. Do NOT use when the answer is already in open context or for a single known file — read that file directly."
+description: "MUST BE USED PROACTIVELY. Universal JVM (Java + Kotlin) codebase exploration (CLI surface): graph navigation (`jrag` callers/callees/routes/impact/flow/…) plus `jrag search` (locate code/config by meaning or keywords) and file-system search. Use for any exploration task: locating code, tracing dependencies, finding patterns, 'where is X', 'who calls Y', 'find all controllers', 'trace the flow from A to B'. Do NOT use when the answer is already in open context or for a single known file — read that file directly."
 ---
 
 ## Core Principles
@@ -11,7 +11,7 @@ description: "MUST BE USED PROACTIVELY. Universal codebase exploration (CLI surf
 
 ## Tool Inventory
 
-- **Graph (`jrag` CLI):** one command per intent — `callers`, `callees`, `hierarchy`, `implementations`, `dependents`, `impact`, `flow`, `http-routes`, `http-clients`, `producers`, `topics`, `find`, `search`, `inspect`, `overview`, … Drives the same index as the MCP server. Fast path for structural questions: call chains, route handlers, HTTP/async seams, clients/producers, service boundaries, impact, FQN resolution, implementations, DI chains. Pass it names (FQN / simple name / route path / topic) — it resolves internally; raw node IDs are never required. Requires an index; if unindexed every command exits 2 (see **jrag surface**).
+- **`jrag` CLI — navigate & search:** one command per intent — graph navigation (`callers`, `callees`, `hierarchy`, `implementations`, `dependents`, `impact`, `flow`, `http-routes`, `http-clients`, `producers`, `topics`, `overview`), `search` (locate code or config by meaning, keywords, or natural language), and `find`/`inspect` (resolve identifiers; list nodes by role/kind). Drives the same index as the MCP server. Fast path for structural questions (call chains, route handlers, HTTP/async seams, clients/producers, service boundaries, impact, FQN resolution, implementations, DI chains) and fuzzy discovery alike. Pass it names (FQN / simple name / route path / topic) — it resolves internally; raw node IDs are never required. Requires an index; if unindexed every command exits 2 (see **jrag surface**).
 - **File-system:** `Grep` (content/regex), `Glob` (name/path patterns), `Read` (`offset`/`limit`). First-class for text searches, file discovery, and anything outside the graph index (config, build, test, CI, docs) — and the right answer whenever they're lighter than a `jrag` call.
 - **Other:** `Bash` (read-only: `git log`, `git blame`, `ls`, `find`), `WebSearch`/`WebFetch`.
 
@@ -51,7 +51,7 @@ description: "MUST BE USED PROACTIVELY. Universal codebase exploration (CLI surf
 
 **Escalation:** ① Most targeted tool first (identifier → `jrag inspect`; structural → matching `jrag` traversal; raw text / config / history → `Grep`/`Glob`/`Bash`). ② Fall back gracefully (`jrag` empty / `not_found` / exit 2 → `Grep`/`Glob`). ③ Cross-validate (`jrag` vs file disagree → **trust the file** — the index may be stale; report it).
 
-**Rules of thumb:** structure beats vector for exact questions (`jrag find`/`inspect` + traversal); vector beats structure for fuzzy discovery (`jrag search`); raw text / config / history beats both (`Grep`/`Glob`/`Bash`); file-system beats a stale index.
+**Rules of thumb:** structure beats search for exact questions (`jrag find`/`inspect` + traversal); search beats structure for fuzzy discovery (`jrag search`); raw text / config / history beats both (`Grep`/`Glob`/`Bash`); file-system beats a stale index.
 
 ---
 
