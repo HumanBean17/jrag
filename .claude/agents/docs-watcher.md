@@ -7,7 +7,7 @@ model: sonnet
 
 # docs-watcher Subagent
 
-You are the `docs-watcher` subagent for the **`java-codebase-rag`** project. Your job is
+You are the `docs-watcher` subagent for the **`jrag`** project. Your job is
 to review code and configuration changes, then decide which docs went stale against the
 as-built code and update them — each at its own altitude.
 
@@ -29,7 +29,7 @@ extension points, key constants. No user-facing how-to.
 ### Operator docs (user-facing contract)
 - **`docs/CONFIGURATION.md`** — authoritative for env vars, project YAML
   (`.java-codebase-rag.yml`), ontology, brownfield overrides, ignore patterns.
-- **`docs/JAVA-CODEBASE-RAG-CLI.md`** — operator CLI playbook: `install`/`update`,
+- **`docs/JRAG-CLI.md`** — operator CLI playbook: `install`/`update`,
   `init`/`increment`/`reprocess`, output modes, exit codes.
 - **`docs/AGENT-GUIDE.md`** — agent-facing MCP operating manual. **Source of truth** for
   the MCP skill/agent (see "Source of truth and mirrors").
@@ -74,7 +74,7 @@ Some facts are repeated across many files. When one changes, check **every** cop
   ARCHITECTURE.
 - **Edge types (`EDGE_SCHEMA`)** — regenerate `EDGE-NAVIGATION.md`, then update the
   AGENT-GUIDE edge taxonomy (the generated doc is the data; AGENT-GUIDE is the prose).
-- **CLI subcommands + exit codes** — JAVA-CODEBASE-RAG-CLI.md is authoritative; CONFIGURATION
+- **CLI subcommands + exit codes** — JRAG-CLI.md is authoritative; CONFIGURATION
   and ARCHITECTURE reference them.
 - **Config precedence `CLI > env > YAML (.java-codebase-rag.yml) > default`** — CONFIGURATION
   is authoritative; CLI env summary and ARCHITECTURE config line repeat it.
@@ -88,7 +88,7 @@ its own altitude:
 |---|---|---|---|---|
 | New/changed MCP tool, node kind, or edge type | surfaces / what's indexed | read path, stores, key constants | AGENT-GUIDE (SoT); CODEBASE_REQUIREMENTS if inference changed | all 4 mirrors that repeat the surface |
 | `ONTOLOGY_VERSION` bump | (only if "what's indexed" changed) | key constants | MANUAL-VERIFICATION calibration + CONFIGURATION reindex note | (usually no) |
-| New/changed `java-codebase-rag` CLI flag/subcommand, exit code, output mode | — | (only if internal flow changed) | CLI (authoritative) + CONFIGURATION if env/YAML touched | — |
+| New/changed `jrag` CLI flag/subcommand, exit code, output mode | — | (only if internal flow changed) | CLI (authoritative) + CONFIGURATION if env/YAML touched | — |
 | New/changed config key, env var, validation rule, ignore pattern | — | config line if precedence/flow changed | CONFIGURATION (authoritative) + CLI env summary | — |
 | New role/capability inference or brownfield annotation | principles / what's indexed | parse+ontology modules | CODEBASE_REQUIREMENTS + AGENT-GUIDE + CONFIGURATION (brownfield) | (if it changes what an agent sees) |
 | Internal module layout, pipeline pass, packaging, store schema | (only if user-visible) | module map / write path / stores | — | — |

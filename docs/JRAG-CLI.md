@@ -1,6 +1,8 @@
-# `java-codebase-rag` CLI — operator guide
+# `jrag` CLI — operator guide
 
-The **`java-codebase-rag`** command is the **operator surface** for this bundle: index lifecycle (`init` / `increment` / `reprocess` / `erase`), graph and Lance health (`meta`, `tables`), ignore diagnostics, and PR diff analysis. It is **not** the MCP navigation surface (that is `search` / `find` / `describe` / `neighbors` / `resolve` on the MCP server — this CLI is lifecycle and introspection only). For agents driving the MCP server, see [`AGENT-GUIDE.md`](./AGENT-GUIDE.md).
+The **`jrag`** command is the **operator surface** for this bundle: index lifecycle (`init` / `increment` / `reprocess` / `erase`), graph and Lance health (`meta`, `tables`), ignore diagnostics, and PR diff analysis. It is **not** the MCP navigation surface (that is `search` / `find` / `describe` / `neighbors` / `resolve` on the MCP server — this CLI is lifecycle and introspection only). For agents driving the MCP server, see [`AGENT-GUIDE.md`](./AGENT-GUIDE.md).
+
+> **Renamed from `java-codebase-rag`.** The operator command is now `jrag`; `java-codebase-rag` remains as a working alias (with a TTY-gated deprecation nudge). On-disk artifacts (`.java-codebase-rag/`, `.java-codebase-rag.yml`, `.java-codebase-rag.hosts`) and `JAVA_CODEBASE_RAG_*` env vars are unchanged. See [`MIGRATION.md`](./MIGRATION.md).
 
 ## Install and discovery
 
@@ -8,10 +10,10 @@ After installing the package (e.g. editable install from the repo root), the con
 
 ```bash
 .venv/bin/pip install -e ".[dev]"
-java-codebase-rag --help
+jrag --help
 ```
 
-If `java-codebase-rag` is missing, run the module entrypoint:
+If `jrag` is missing, run the module entrypoint:
 
 ```bash
 .venv/bin/python -m java_codebase_rag.cli --help
@@ -25,17 +27,17 @@ Interactive setup wizard that walks users through Java source detection, embeddi
 
 ```bash
 # Interactive mode
-java-codebase-rag install
+jrag install
 
 # Non-interactive mode (requires at least one --agent)
-java-codebase-rag install --non-interactive --agent claude-code
-java-codebase-rag install --non-interactive --agent claude-code --agent qwen-code
+jrag install --non-interactive --agent claude-code
+jrag install --non-interactive --agent claude-code --agent qwen-code
 
 # With custom embedding model
-java-codebase-rag install --model /path/to/model
+jrag install --model /path/to/model
 
 # User-scope installation (available globally)
-java-codebase-rag install --scope user
+jrag install --scope user
 ```
 
 **Flags:**
@@ -43,7 +45,7 @@ java-codebase-rag install --scope user
 - `--agent {claude-code,qwen-code,gigacode}` — Agent host to configure (can be passed multiple times).
 - `--scope {project,user}` — Installation scope (default: `project`). Project scope writes to `.<host>/` in the project repo; user scope writes to `~/.<host>/` (globally available).
 - `--model MODEL` — Embedding model path or `auto` (default: `auto`, downloads `sentence-transformers/all-MiniLM-L6-v2` on first run).
-- `--surface {mcp,cli}` — Agent surface (default: `cli`, recommended). `cli` deploys the `jrag` console-script skill + `explorer-rag-cli` subagent (one command per intent, no MCP entry). `mcp` registers the `java-codebase-rag` stdio MCP server (five tools: `search`/`find`/`describe`/`neighbors`/`resolve`) plus the `explore-codebase` skill + `explorer-rag-enhanced` subagent. Omit to choose interactively.
+- `--surface {mcp,cli}` — Agent surface (default: `cli`, recommended). `cli` deploys the `jrag` console-script skill + `explorer-rag-cli` subagent (one command per intent, no MCP entry). `mcp` registers the `jrag-mcp` stdio MCP server (five tools: `search`/`find`/`describe`/`neighbors`/`resolve`) plus the `explore-codebase` skill + `explorer-rag-enhanced` subagent. Omit to choose interactively.
 - `--quiet` / `-q` — Suppress the indexing progress stream on stderr (wizard prompts unchanged).
 - `--verbose` / `-v` — Raw-relay subprocess output during the indexing sub-step (no progress bar).
 
@@ -69,32 +71,32 @@ Post-upgrade refresh: overwrites skill and agent files with the latest shipped v
 
 ```bash
 # Refresh after pip upgrade
-pip install --upgrade java-codebase-rag
-java-codebase-rag update
+pip install --upgrade jrag-cli
+jrag update
 
 # Preview changes without writing
-java-codebase-rag update --dry-run
+jrag update --dry-run
 
 # Force overwrite all artifacts
-java-codebase-rag update --force
+jrag update --force
 
 # Switch surface (migrate an existing install)
-java-codebase-rag update --surface cli      # mcp → cli
-java-codebase-rag update --surface mcp      # cli → mcp
+jrag update --surface cli      # mcp → cli
+jrag update --surface mcp      # cli → mcp
 ```
 
 **Flags:**
 - `--force` — Overwrite all artifacts even if content matches.
 - `--dry-run` — Print changes without writing files.
-- `--surface {mcp,cli}` — Switch agent surface. Tears down the old surface's artifacts (removes just the `java-codebase-rag` MCP entry on `mcp`→`cli`; removes the `jrag` skill/subagent on `cli`→`mcp`), deploys the new surface's, and rewrites the install marker so the switch persists. Omit to keep the current surface; on a TTY you'll be prompted (cursor on the current surface).
+- `--surface {mcp,cli}` — Switch agent surface. Tears down the old surface's artifacts (removes just the `jrag-mcp` MCP entry on `mcp`→`cli`; removes the `jrag` skill/subagent on `cli`→`mcp`), deploys the new surface's, and rewrites the install marker so the switch persists. Omit to keep the current surface; on a TTY you'll be prompted (cursor on the current surface).
 - `--quiet` / `-q` — Suppress the indexing progress stream on stderr (wizard stdout unchanged).
 - `--verbose` / `-v` — Raw-relay subprocess output during the indexing sub-step (no progress bar).
 
 **Behavior:**
 - Detects previously configured agent hosts (reads the `.java-codebase-rag.hosts` marker; falls back to scanning project- and user-level MCP config files).
-- Refreshes skill and agent files (versioned assets from the package). On the `mcp` surface, also updates the MCP entrypoint path if `java-codebase-rag-mcp` has moved.
+- Refreshes skill and agent files (versioned assets from the package). On the `mcp` surface, also updates the MCP entrypoint path if `jrag-mcp` has moved.
 - With `--surface` (or the interactive prompt), migrates each host whose recorded surface differs: tears down the old surface, deploys the new one, rewrites the marker. Non-interactive `update` without `--surface` keeps the current surface.
-- Runs an incremental index update (Lance + graph) if an index exists — same as `java-codebase-rag increment`. The indexing sub-step renders the unified `Vectors → Optimize → Graph` progress on **stderr** (see [Indexing progress](#indexing-progress-stderr)); it no longer runs silently.
+- Runs an incremental index update (Lance + graph) if an index exists — same as `jrag increment`. The indexing sub-step renders the unified `Vectors → Optimize → Graph` progress on **stderr** (see [Indexing progress](#indexing-progress-stderr)); it no longer runs silently.
 
 **Exit codes:**
 - `0` — Success.
@@ -110,7 +112,7 @@ java-codebase-rag update --surface mcp      # cli → mcp
 Example:
 
 ```bash
-java-codebase-rag meta --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-rag | jq .ontology_version
+jrag meta --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-rag | jq .ontology_version
 ```
 
 ### Indexing progress (stderr)
@@ -186,7 +188,7 @@ Relative paths for `diagnose-ignore <path>` are resolved against the MCP/CLI pro
 Creates a **new** index (cocoindex catch-up from empty + full `build_ast_graph.py`). **Refuses** if `code_graph.lbug` or `code_index_*` Lance tables already exist under the resolved index dir (exit **2**).
 
 ```bash
-java-codebase-rag init --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-rag --quiet
+jrag init --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-rag --quiet
 ```
 
 ### `increment`
@@ -198,7 +200,7 @@ Runs cocoindex **catch-up** and **incremental LadybugDB graph update**. Only cha
 - Dependent expansion exceeds 50 files
 
 ```bash
-java-codebase-rag increment --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-rag --quiet
+jrag increment --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-rag --quiet
 ```
 
 **Flags:**
@@ -215,15 +217,15 @@ java-codebase-rag increment --source-root /path/to/java/repo --index-dir /path/t
 - `--vectors-only` — runs only the cocoindex full reprocess phase; does **not** invoke the graph builder.
 - `--graph-only` — runs only `build_ast_graph.py`; does **not** invoke cocoindex.
 
-**Reprocess for new schema fields:** Adding `generated` and `generated_by` columns to Lance chunks and graph Symbol nodes is a schema change (ontology version bumped 17→18). Existing indexes must be reprocessed via `java-codebase-rag reprocess` to populate these fields; until then, old chunks report `generated=false`. After upgrading, run a full reprocess once to enable generated-source detection and filtering.
+**Reprocess for new schema fields:** Adding `generated` and `generated_by` columns to Lance chunks and graph Symbol nodes is a schema change (ontology version bumped 17→18). Existing indexes must be reprocessed via `jrag reprocess` to populate these fields; until then, old chunks report `generated=false`. After upgrading, run a full reprocess once to enable generated-source detection and filtering.
 
 Passing **both** flags is rejected by argparse **before** any subprocess runs. The error is printed on **stderr** in this form (wording may vary slightly with Python/argparse version):
 
 ```text
-java-codebase-rag: argument --graph-only: not allowed with argument --vectors-only
+jrag: argument --graph-only: not allowed with argument --vectors-only
 ```
 
-Use `java-codebase-rag reprocess --help` for the live synopsis.
+Use `jrag reprocess --help` for the live synopsis.
 
 #### Drift warning (stderr)
 
@@ -242,9 +244,9 @@ The stdout JSON includes an additive list field `phases_run`: which phases actua
 Because `exit_code` and `graph_exit_code` can be `null` in multiple situations, **prefer branching on `phases_run` first**, then on the relevant per-phase exit field. **Asymmetry:** `--vectors-only` reports the cocoindex process in `exit_code` (and leaves `graph_exit_code` null); `--graph-only` leaves top-level `exit_code` null and reports the graph builder in `graph_exit_code`, so scripts that only read `exit_code` miss graph-only outcomes unless they branch on `phases_run` / `graph_exit_code`.
 
 ```bash
-java-codebase-rag reprocess --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-rag --quiet
-java-codebase-rag reprocess --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-rag --vectors-only --quiet
-java-codebase-rag reprocess --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-rag --graph-only --quiet
+jrag reprocess --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-rag --quiet
+jrag reprocess --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-rag --vectors-only --quiet
+jrag reprocess --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-rag --graph-only --quiet
 ```
 
 ### `erase`
@@ -252,12 +254,12 @@ java-codebase-rag reprocess --source-root /path/to/java/repo --index-dir /path/t
 Deletes cocoindex state, the LadybugDB graph (`code_graph.lbug`), the graph builder's content-hash store (`.graph_hashes.json`), and Lance tables under the index dir. Requires **`--yes`** or interactive confirmation on a TTY. Non-TTY without `--yes` exits **2**.
 
 ```bash
-java-codebase-rag erase --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-rag --yes
+jrag erase --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-rag --yes
 ```
 
 ### Hidden `refresh` alias
 
-`java-codebase-rag refresh` runs **`reprocess`**. Prefer **`reprocess`** in scripts.
+`jrag refresh` runs **`reprocess`**. Prefer **`reprocess`** in scripts.
 
 ## Introspection subcommands
 
@@ -266,7 +268,7 @@ java-codebase-rag erase --source-root /path/to/java/repo --index-dir /path/to/.j
 Graph metadata, ontology version, counts, `edge_counts`, plus resolved embedding fields and provenance (`embedding_model_source`, `embedding_device_source`, `index_dir`, `ladybug_path`, …).
 
 ```bash
-java-codebase-rag meta --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-rag
+jrag meta --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-rag
 ```
 
 ### `tables`
@@ -274,7 +276,7 @@ java-codebase-rag meta --source-root /path/to/java/repo --index-dir /path/to/.ja
 Lance table listing and embedding summary (same helper as the server’s table introspection).
 
 ```bash
-java-codebase-rag tables --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-rag
+jrag tables --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-rag
 ```
 
 ### `diagnose-ignore`
@@ -282,7 +284,7 @@ java-codebase-rag tables --source-root /path/to/java/repo --index-dir /path/to/.
 Explains **why a path** is ignored or not ignored by the layered ignore rules (builtin + project `.java-codebase-rag/ignore` + nested ignore files + gitignore layers).
 
 ```bash
-java-codebase-rag diagnose-ignore src/main/generated/Foo.java --source-root /path/to/java/repo
+jrag diagnose-ignore src/main/generated/Foo.java --source-root /path/to/java/repo
 ```
 
 ### `unresolved-calls`
@@ -290,8 +292,8 @@ java-codebase-rag diagnose-ignore src/main/generated/Foo.java --source-root /pat
 Lists or aggregates **receiver-failure** call sites stored as `UnresolvedCallSite` (not on `CALLS` after ontology 15 PR-3). Reasons: `phantom_unresolved_receiver`, `chained_receiver`.
 
 ```bash
-java-codebase-rag unresolved-calls stats --by microservice --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-rag
-java-codebase-rag unresolved-calls list --method-id sym:... --limit 100 --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-rag
+jrag unresolved-calls stats --by microservice --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-rag
+jrag unresolved-calls list --method-id sym:... --limit 100 --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-rag
 ```
 
 `stats --by` accepts `reason`, `microservice`, or `caller_role` (declaring type role of the caller method).
@@ -307,7 +309,7 @@ Provide exactly one of:
 
 ```bash
 git diff > /tmp/pr.diff
-java-codebase-rag analyze-pr --diff-file /tmp/pr.diff --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-rag
+jrag analyze-pr --diff-file /tmp/pr.diff --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-rag
 ```
 
 Paths in the diff should align with **`Symbol.filename`** layout in the graph (project-relative Java paths). Use this from **PR-triage scripts** or Cursor skills; PR mapping is **CLI-only** (the MCP exposes retrieval tools only).
@@ -317,33 +319,33 @@ Paths in the diff should align with **`Symbol.filename`** layout in the graph (p
 ### 1. Quick health after a build
 
 ```bash
-java-codebase-rag meta --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-rag | jq '{ontology_version, parse_errors, counts, edge_counts}'
-java-codebase-rag tables --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-rag | jq '.tables | keys'
+jrag meta --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-rag | jq '{ontology_version, parse_errors, counts, edge_counts}'
+jrag tables --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-rag | jq '.tables | keys'
 ```
 
 ### 2. “Why isn’t this file in the index?”
 
 ```bash
-java-codebase-rag diagnose-ignore path/inside/repo/to/File.java --source-root /path/to/java/repo
+jrag diagnose-ignore path/inside/repo/to/File.java --source-root /path/to/java/repo
 ```
 
 ### 3. Full re-index (operator / CI)
 
 ```bash
-java-codebase-rag reprocess --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-rag --quiet
-java-codebase-rag meta --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-rag | jq .ontology_version
+jrag reprocess --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-rag --quiet
+jrag meta --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-rag | jq .ontology_version
 ```
 
 ### 4. PR risk pass (local)
 
 ```bash
 git diff origin/main...HEAD > /tmp/pr.diff
-java-codebase-rag analyze-pr --diff-file /tmp/pr.diff --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-rag | jq '{risk_score,risk_band,blast_radius_total}'
+jrag analyze-pr --diff-file /tmp/pr.diff --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-rag | jq '{risk_score,risk_band,blast_radius_total}'
 ```
 
 ## Graph-only escape hatch
 
-Prefer **`java-codebase-rag reprocess --graph-only`** when you only need LadybugDB rebuilt from the current Lance snapshot. To run the graph builder **without** going through the CLI (advanced / scripting):
+Prefer **`jrag reprocess --graph-only`** when you only need LadybugDB rebuilt from the current Lance snapshot. To run the graph builder **without** going through the CLI (advanced / scripting):
 
 ```bash
 .venv/bin/python build_ast_graph.py --source-root /path/to/java/repo --ladybug-path /path/to/.java-codebase-rag/code_graph.lbug --verbose
@@ -357,7 +359,7 @@ Prefer **`java-codebase-rag reprocess --graph-only`** when you only need Ladybug
 
 ## `jrag` command — agent CLI
 
-`jrag` is the **agent-facing** CLI — a separate console script alongside `java-codebase-rag`. It exposes **one command per engineering intent** over the same LanceDB vectors + LadybugDB graph as the MCP surface, and takes human-readable identifiers (FQN / simple name / route path / topic) — never raw node IDs. Every `<query>` command resolves the identifier as its first step; on `many` candidates it returns them and stops, on `none` it returns `not_found` (auto-pick is forbidden).
+`jrag` is also the **agent-facing** CLI — the same console script as the operator surface above, exposing **one command per engineering intent** over the same LanceDB vectors + LadybugDB graph as the MCP surface. It takes human-readable identifiers (FQN / simple name / route path / topic) — never raw node IDs. Every `<query>` command resolves the identifier as its first step; on `many` candidates it returns them and stops, on `none` it returns `not_found` (auto-pick is forbidden).
 
 Output defaults to compact text; `--format json` emits the shared envelope verbatim. Shared flags apply to most commands: `--service`, `--module`, `--limit`, `--format`, `--detail {brief,normal,full}`, `--index-dir`. `<query>` commands also take resolve hints (`--kind`, `--role`, `--fqn-contains`). Run `jrag <command> --help` for the per-command synopsis; for the full envelope contract and flag table, see [`jrag` — agent CLI](../README.md#jrag--agent-cli) in the README.
 

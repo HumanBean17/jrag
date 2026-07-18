@@ -1,9 +1,9 @@
 # Architecture paper
 
-This directory holds the LaTeX source and built PDF of the java-codebase-rag
+This directory holds the LaTeX source and built PDF of the jrag
 architecture report:
 
-> **java-codebase-rag: A Graph-Native Code Intelligence Layer for Agentic
+> **jrag: A Graph-Native Code Intelligence Layer for Agentic
 > Navigation of Java Microservice Codebases.** Teriaev & Perplexity Computer,
 > May 2026.
 

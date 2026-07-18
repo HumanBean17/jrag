@@ -1,4 +1,4 @@
-# Agent Guide — `java-codebase-rag` MCP
+# Agent Guide — `jrag` MCP
 
 Copy the block between `<!-- BEGIN` and `<!-- END` into your project's `AGENTS.md`, `CLAUDE.md`, or equivalent. It is self-contained: five MCP tools, shared `NodeFilter`, edge taxonomy, tool-selection rules, and recovery moves.
 
@@ -6,7 +6,7 @@ Copy the block between `<!-- BEGIN` and `<!-- END` into your project's `AGENTS.m
 
 <!-- BEGIN java-codebase-rag MCP guide -->
 
-## java-codebase-rag MCP — operating manual
+## jrag MCP — operating manual
 
 **Tools:** `search`, `find`, `describe`, `neighbors`, `resolve`.
 

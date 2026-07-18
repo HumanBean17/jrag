@@ -75,7 +75,7 @@ All indexing lifecycle commands (`init`, `increment`, `reprocess`, `install`, `u
 
 ### Manual registration
 
-If you prefer manual configuration, see [`docs/JAVA-CODEBASE-RAG-CLI.md`](./docs/JAVA-CODEBASE-RAG-CLI.md) for the full CLI reference.
+If you prefer manual configuration, see [`docs/JRAG-CLI.md`](./docs/JRAG-CLI.md) for the full CLI reference.
 
 > **Stability disclaimer.** This package does **not** promise backward compatibility. MCP tool contracts, env vars, Lance/LadybugDB schemas, config files, and Python APIs may change without a deprecation period. Track `main` and rebuild indexes when ontology or embedding settings change.
 
@@ -175,7 +175,7 @@ The operator-facing surface is small: pick an index dir, pick an embedding model
 
 ## CLI cheat sheet
 
-Run `jrag --help` to list grouped subcommands. Operator playbook with workflows, exit codes, and env alignment lives in [`docs/JAVA-CODEBASE-RAG-CLI.md`](./docs/JAVA-CODEBASE-RAG-CLI.md).
+Run `jrag --help` to list grouped subcommands. Operator playbook with workflows, exit codes, and env alignment lives in [`docs/JRAG-CLI.md`](./docs/JRAG-CLI.md).
 
 | Group | Subcommand | What it does |
 |---|---|---|
@@ -262,7 +262,7 @@ full design and per-PR breakdown.
 | [`docs/paper/paper.pdf`](./docs/paper/paper.pdf) | Architecture report — design rationale, GPS metaphor, three-layer architecture, design principles, future work. |
 | [`docs/AGENT-GUIDE.md`](./docs/AGENT-GUIDE.md) | Agent-facing guide. Copy-paste into `QWEN.md` / `CLAUDE.md` / `AGENTS.md`. |
 | [`docs/CONFIGURATION.md`](./docs/CONFIGURATION.md) | Environment variables, project YAML, graph ontology, brownfield overrides, ignore patterns. |
-| [`docs/JAVA-CODEBASE-RAG-CLI.md`](./docs/JAVA-CODEBASE-RAG-CLI.md) | CLI operator playbook: workflows, exit codes, env alignment. |
+| [`docs/JRAG-CLI.md`](./docs/JRAG-CLI.md) | CLI operator playbook: workflows, exit codes, env alignment. |
 | [`docs/EDGE-NAVIGATION.md`](./docs/EDGE-NAVIGATION.md) | MCP-traversable edges, directions, dot-key composition. |
 | [`skills/`](./skills/) | `/explore-codebase-cli` (CLI surface) + `/explore-codebase` (legacy MCP surface) skills — operating manuals for hosts with skill discovery (alternative to copy-pasting AGENT-GUIDE). See [`skills/README.md`](./skills/README.md). |
 | [`docs/MANUAL-VERIFICATION-CHECKLIST.md`](./docs/MANUAL-VERIFICATION-CHECKLIST.md) | 7-phase agent-driven verification after indexing your project. |

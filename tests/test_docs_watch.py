@@ -14,7 +14,7 @@ import pytest
 
 # tests/test_docs_watch.py → parent = tests/ → parent = repo root.
 REPO_ROOT = Path(__file__).resolve().parent.parent
-CLI_DOC = REPO_ROOT / "docs" / "JAVA-CODEBASE-RAG-CLI.md"
+CLI_DOC = REPO_ROOT / "docs" / "JRAG-CLI.md"
 CONFIG_DOC = REPO_ROOT / "docs" / "CONFIGURATION.md"
 
 
@@ -34,7 +34,7 @@ def config_text() -> str:
 
 
 class TestCliDocWatchSurface:
-    """`JAVA-CODEBASE-RAG-CLI.md` must document the `jrag watch` lifecycle."""
+    """`JRAG-CLI.md` must document the `jrag watch` lifecycle."""
 
     def test_mentions_jrag_watch(self, cli_text: str) -> None:
         assert "jrag watch" in cli_text, "CLI doc does not mention `jrag watch`"

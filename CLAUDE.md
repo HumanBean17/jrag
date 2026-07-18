@@ -1,4 +1,4 @@
-# java-codebase-rag
+# jrag
 
 ## Python environment
 
@@ -24,7 +24,8 @@ Most files in `docs/` are **operator-facing**. The two flagged below are **inter
 
 **Operator docs**
 - `docs/CONFIGURATION.md` — env vars, project YAML, ontology, brownfield overrides, ignore patterns.
-- `docs/JAVA-CODEBASE-RAG-CLI.md` — operator CLI playbook (workflows, exit codes, env alignment).
+- `docs/JRAG-CLI.md` — operator CLI playbook (workflows, exit codes, env alignment).
+- `docs/MIGRATION.md` — `java-codebase-rag` → `jrag` rename map (commands, package, untouched on-disk state).
 - `docs/AGENT-GUIDE.md` — agent-facing MCP operating manual (copy-paste into `AGENTS.md`/`CLAUDE.md`).
 - `docs/EDGE-NAVIGATION.md` — MCP-traversable edges, directions, dot-key composition.
 - `docs/MANUAL-VERIFICATION-CHECKLIST.md` — 7-phase post-index verification.

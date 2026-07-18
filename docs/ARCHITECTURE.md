@@ -1,4 +1,4 @@
-# ARCHITECTURE — `java-codebase-rag`
+# ARCHITECTURE — `jrag`
 
 Internal implementation doc (**HOW**). For WHAT/WHY see [DESIGN.md](./DESIGN.md); operator behavior in `docs/`.
 
@@ -38,12 +38,12 @@ Core library = **top-level `.py` modules** (`py-modules`); the installable **`ja
 | Surfaces | `java_codebase_rag/{cli,jrag,installer}.py` |
 | Shipped artifacts | `skills/`, `agents/` (deployed verbatim to agent host via `install`/`update`) |
 
-**Entrypoints** (`pyproject.toml [project.scripts]`): `java-codebase-rag` → `java_codebase_rag.cli:_console_script_main`; `java-codebase-rag-mcp` → `server:main`; `jrag` → `java_codebase_rag.jrag:_console_script_main`.
+**Entrypoints** (`pyproject.toml [project.scripts]`): `jrag` → `java_codebase_rag.cli:_console_script_main`; `jrag-mcp` → `server:main`; `jrag` → `java_codebase_rag.jrag:_console_script_main`.
 
 ## Write path (indexing)
 
 ```
-java-codebase-rag init|increment|reprocess      java_codebase_rag/cli.py
+jrag init|increment|reprocess      java_codebase_rag/cli.py
       │  resolve config  (CLI flag > env > YAML > default)
       ▼
 java_codebase_rag/pipeline.py

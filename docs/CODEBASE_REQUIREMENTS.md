@@ -1,6 +1,6 @@
 # Codebase requirements & MCP tuning guide
 
-This document explains how to get the best out of the `java-codebase-rag` MCP
+This document explains how to get the best out of the `jrag` MCP
 (LanceDB vector index + LadybugDB AST graph + role-aware ranking) on a Java
 codebase, and — if you cannot or will not change the codebase — exactly
 **which files in this bundle to edit** so the MCP adapts to your project.
@@ -214,7 +214,7 @@ root (`role_overrides:`, `route_overrides:`, `http_client_overrides:`,
 inbound HTTP and async routes and `kind="client"` for outbound HTTP `Client`
 declarations (Feign methods plus annotated imperative clients). Client rows
 require a graph built with `ontology_version` **14** or newer — confirm with
-`java-codebase-rag meta` (JSON field `ontology_version`).
+`jrag meta` (JSON field `ontology_version`).
 
 See **Brownfield overrides** in `README.md` for the full schema, usage
 examples, and execution order.
@@ -351,7 +351,7 @@ The CocoIndex flow indexes only:
   `<JAVA_CODEBASE_RAG_INDEX_DIR>/code_graph.lbug` (see `docs/CONFIGURATION.md` §1 for the
   default index dir). If Lance tables and LadybugDB are split across directories
   by mistake, the MCP can silently operate in vector-only mode (no graph-backed
-  `find` / `describe` / `neighbors`). Verify `java-codebase-rag meta` reports the
+  `find` / `describe` / `neighbors`). Verify `jrag meta` reports the
   paths you expect.
 
 ---
@@ -395,7 +395,7 @@ ROLE_ANNOTATIONS: dict[str, str] = {
 }
 ```
 
-After editing, **rebuild the graph** (`java-codebase-rag reprocess`, or
+After editing, **rebuild the graph** (`jrag reprocess`, or
 `build_ast_graph.py`) and **re-run the
 LanceDB indexer** so per-chunk
 `role` values are recomputed.
@@ -611,14 +611,14 @@ the same conventions.
 | Symptom | First thing to check |
 |---------|---------------------|
 | `module` / `microservice` is empty on most chunks | A.1 (build markers + `.java-codebase-rag.yml`) → B.4 |
-| `microservice=...` filter returns 0 hits | check `java-codebase-rag meta` output (`microservice_counts`) for canonical names; → A.1 / B.4 |
+| `microservice=...` filter returns 0 hits | check `jrag meta` output (`microservice_counts`) for canonical names; → A.1 / B.4 |
 | Everything ranks as `OTHER` | A.2 (stereotypes) → B.1 |
 | Sparse `INJECTS` graph | A.4 (DI patterns) → B.3 |
 | Wrong class wins for "what does X do?" | A.5 (naming) → B.2 (verbs / caps) |
 | Important `.properties` / `.xml` configs missing | A.6 → B.5 |
-| Recently re-indexed but search is stale | Restart the MCP server; re-run `java-codebase-rag reprocess` |
+| Recently re-indexed but search is stale | Restart the MCP server; re-run `jrag reprocess` |
 | `context_before` / `context_after` empty | Set `JAVA_CODEBASE_RAG_DEBUG_CONTEXT=1` (see `docs/CONFIGURATION.md` §3) |
-| Graph has lots of phantom nodes | Expected for external libs; inspect via `java-codebase-rag meta` — only worry if domain types are phantoms (means resolution is failing; check imports). Use `find` / `neighbors` and filter or interpret `resolved` flags on symbols as needed. |
+| Graph has lots of phantom nodes | Expected for external libs; inspect via `jrag meta` — only worry if domain types are phantoms (means resolution is failing; check imports). Use `find` / `neighbors` and filter or interpret `resolved` flags on symbols as needed. |
 | Graph tools unavailable / silent failures | LadybugDB DB missing or wrong path — verify `<index-dir>/code_graph.lbug` exists and `JAVA_CODEBASE_RAG_INDEX_DIR` matches (see `docs/CONFIGURATION.md` §3). |
 
 ---
@@ -627,7 +627,7 @@ the same conventions.
 
 | Change you made | Re-run |
 |-----------------|--------|
-| Role table, DI annotations, DTO heuristics, exclusion patterns, file-type patterns, chunk sizes, embedding model | **Both** the LanceDB indexer (`cocoindex update ... --full-reprocess` or `java-codebase-rag reprocess`) **and** `build_ast_graph.py` |
+| Role table, DI annotations, DTO heuristics, exclusion patterns, file-type patterns, chunk sizes, embedding model | **Both** the LanceDB indexer (`cocoindex update ... --full-reprocess` or `jrag reprocess`) **and** `build_ast_graph.py` |
 | Graph-only logic (new edge type, module/microservice inference, phantom resolution) | `build_ast_graph.py` + `graph_enrich.py` |
 | Ranking weights, action-verb list, search-time caps, hybrid/RRF behaviour | Nothing — restart the MCP server |
 | Server tool surface (new tools, parameter changes) | Restart the MCP server (and re-register in the client if the tool list changed) |
