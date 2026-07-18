@@ -3,16 +3,16 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "java-codebase-rag"
-version = "0.11.2"
-description = "MCP server for semantic + structural search over Java codebases"
+name = "jrag-cli"
+version = "0.12.0"
+description = "jrag (formerly java-codebase-rag) — MCP server + jrag CLI for semantic + structural search over Java/Kotlin codebases"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 authors = [
     { name = "HumanBean17" },
 ]
-keywords = ["mcp", "java", "rag", "code-search", "graph", "lancedb", "ladybug"]
+keywords = ["jrag", "java", "mcp", "rag", "code-search", "graph", "lancedb", "ladybug"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -60,14 +60,15 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/HumanBean17/java-codebase-rag"
-Repository = "https://github.com/HumanBean17/java-codebase-rag"
-Issues = "https://github.com/HumanBean17/java-codebase-rag/issues"
+Homepage = "https://github.com/HumanBean17/jrag"
+Repository = "https://github.com/HumanBean17/jrag"
+Issues = "https://github.com/HumanBean17/jrag/issues"
 
 [project.scripts]
-java-codebase-rag = "java_codebase_rag.cli:_console_script_main"
+jrag = "java_codebase_rag.cli_dispatch:_console_script_main"
+jrag-mcp = "java_codebase_rag.mcp.server:main"
+java-codebase-rag = "java_codebase_rag.cli_dispatch:_console_script_main"
 java-codebase-rag-mcp = "java_codebase_rag.mcp.server:main"
-jrag = "java_codebase_rag.jrag:_console_script_main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
