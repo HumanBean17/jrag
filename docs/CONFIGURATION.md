@@ -2,7 +2,7 @@
 
 Everything that didn't fit in the README's 5-minute walkthrough lives here: environment variables, the project YAML, the graph layer (ontology, edges, capabilities, ranking), brownfield overrides, and the ignore-pattern layers.
 
-For the architecture rationale (the GPS metaphor, three-layer design, future work), see [`paper/paper.pdf`](./paper/paper.pdf). For agent-facing tool shapes and recovery moves, see [`AGENT-GUIDE.md`](./AGENT-GUIDE.md). For the CLI playbook, see [`JAVA-CODEBASE-RAG-CLI.md`](./JAVA-CODEBASE-RAG-CLI.md).
+For the architecture rationale (the GPS metaphor, three-layer design, future work), see [`paper/paper.pdf`](./paper/paper.pdf). For agent-facing tool shapes and recovery moves, see [`AGENT-GUIDE.md`](./AGENT-GUIDE.md). For the CLI playbook, see [`JRAG-CLI.md`](./JRAG-CLI.md).
 
 > **Stability disclaimer.** MCP tool contracts, env vars, Lance/LadybugDB schemas, config files, and Python APIs may change without a deprecation period. Track `main` and rebuild indexes when ontology or embedding settings change (see [Re-index required when ontology changes](#re-index-required-when-ontology-changes)).
 
@@ -20,7 +20,7 @@ For the architecture rationale (the GPS metaphor, three-layer design, future wor
 
 ## 1. Environment variables
 
-The operator-facing surface is **six** variables (plus MCP-only `JAVA_CODEBASE_RAG_SOURCE_ROOT` below). Precedence for knobs that also exist as CLI flags or YAML entries is **CLI flag > env var > YAML > built-in default** (see [`JAVA-CODEBASE-RAG-CLI.md`](./JAVA-CODEBASE-RAG-CLI.md)).
+The operator-facing surface is **six** variables (plus MCP-only `JAVA_CODEBASE_RAG_SOURCE_ROOT` below). Precedence for knobs that also exist as CLI flags or YAML entries is **CLI flag > env var > YAML > built-in default** (see [`JRAG-CLI.md`](./JRAG-CLI.md)).
 
 ### Config file discovery (walk-up)
 
@@ -101,7 +101,7 @@ A single file at the project root (the directory you pass as `--source-root`, or
 index_dir: ./.java-codebase-rag
 
 # Embedding configuration. Must match between indexer and reader — if you change
-# `embedding.model`, rebuild the index (`java-codebase-rag reprocess`).
+# `embedding.model`, rebuild the index (`jrag reprocess`).
 embedding:
   # Hub id OR local directory containing the sentence-transformers model files.
   # - Hub id example: `sentence-transformers/all-MiniLM-L6-v2`
@@ -299,7 +299,7 @@ generated_detection:
 # -------- Watch mode (`jrag watch`) --------
 # The `jrag watch` daemon (index freshness + warm-query). No env vars are
 # introduced for watch — precedence is CLI flag (--debounce-ms / --backend)
-# > YAML > built-in default. See JAVA-CODEBASE-RAG-CLI.md § `jrag watch`.
+# > YAML > built-in default. See JRAG-CLI.md § `jrag watch`.
 # On Intel Mac (graph-only) the daemon runs without the vector stack: it skips
 # the model warm-up + cocoindex reindex and serves warm lexical search; the
 # watch: keys below apply unchanged on every platform.
@@ -331,9 +331,9 @@ watch:
 
 - **The config file may live anywhere under your project, including a subdirectory of the Java tree.** Both the CLI (`init` / `increment` / `reprocess`) and the MCP server walk up from cwd to find `.java-codebase-rag.yml`, then resolve `source_root` and `index_dir` relative to the config file's directory. So a config living in `my-context/` next to `source_root: ../` and `index_dir: ../.java-codebase-rag` resolves identically for the CLI and the MCP server. If the config lives in a *sibling* dir of the Java tree (not an ancestor of where the agent works), the index remembers its location via `.java-codebase-rag/config_source` — see [Config file discovery (walk-up)](#config-file-discovery-walk-up). Keep the file under your project (not `$HOME`); set `JAVA_CODEBASE_RAG_SOURCE_ROOT` (MCP) or `--source-root` (CLI) only to override the discovered location.
 - **Don't commit secrets** into this YAML — it sits next to your source tree and is read by every operator who clones it.
-- **Rebuild after editing brownfield overrides.** Run a full `java-codebase-rag reprocess` (no flags) so Lance and LadybugDB stay coherent, or use `--graph-only` / `--vectors-only` when you know only one store needs invalidation. Editing `embedding.model` requires a vector rebuild (`reprocess` or `--vectors-only`).
-- **Reprocess after upgrading for per-symbol dedup and FTS.** Existing indexes should be reprocessed (`java-codebase-rag reprocess`) to get (a) per-symbol dedup re-tagging (collapsing multiple chunks of the same type into one hit) and (b) the index-time full-text search index that makes `--hybrid` work on yaml/sql tables.
-- **Diagnose what's loaded.** `java-codebase-rag meta` prints the resolved config and each value's `*_source` (`cli` / `env` / `yaml` / `default`) — see `embedding_model_source`, `embedding_device_source`, `index_dir_source`.
+- **Rebuild after editing brownfield overrides.** Run a full `jrag reprocess` (no flags) so Lance and LadybugDB stay coherent, or use `--graph-only` / `--vectors-only` when you know only one store needs invalidation. Editing `embedding.model` requires a vector rebuild (`reprocess` or `--vectors-only`).
+- **Reprocess after upgrading for per-symbol dedup and FTS.** Existing indexes should be reprocessed (`jrag reprocess`) to get (a) per-symbol dedup re-tagging (collapsing multiple chunks of the same type into one hit) and (b) the index-time full-text search index that makes `--hybrid` work on yaml/sql tables.
+- **Diagnose what's loaded.** `jrag meta` prints the resolved config and each value's `*_source` (`cli` / `env` / `yaml` / `default`) — see `embedding_model_source`, `embedding_device_source`, `index_dir_source`.
 - **`embedding.model` and `$` in directory names.** `expandvars` treats `$VAR` / `${VAR}` like the shell. HuggingFace hub ids never contain `$`. If a local filesystem path contains a literal `$` in a directory name, use an absolute path that avoids `$`-expansion patterns, or expect `expandvars` to interpret `$` sequences.
 
 Deeper documentation for the brownfield blocks (`role_overrides`, `route_overrides`, `http_client_overrides`, `async_producer_overrides`, `cross_service_resolution`) lives in [§4 Brownfield overrides](#4-brownfield-overrides).
@@ -353,7 +353,7 @@ A deterministic property graph derived from tree-sitter Java parsing lives next 
 | `Client` | Outbound HTTP / messaging call site |
 | `UnresolvedCallSite` | Receiver-failure call site (`chained_receiver`, `phantom_unresolved_receiver`) — not a `Symbol`; ids use the `ucs:` prefix |
 
-Known-receiver-external JDK / Spring / Lombok callees stay on **`CALLS`** as phantom **method** symbols (`resolved=false`). Receiver-failure sites (unresolved receiver or chained receiver) are **`UnresolvedCallSite`** nodes linked by **`UNRESOLVED_AT`** (not in `EDGE_SCHEMA`; use `describe(method_id).unresolved_call_sites`, `neighbors(..., include_unresolved=True)`, or `java-codebase-rag unresolved-calls`).
+Known-receiver-external JDK / Spring / Lombok callees stay on **`CALLS`** as phantom **method** symbols (`resolved=false`). Receiver-failure sites (unresolved receiver or chained receiver) are **`UnresolvedCallSite`** nodes linked by **`UNRESOLVED_AT`** (not in `EDGE_SCHEMA`; use `describe(method_id).unresolved_call_sites`, `neighbors(..., include_unresolved=True)`, or `jrag unresolved-calls`).
 
 ### Edge types (MCP-traversable)
 
@@ -406,9 +406,9 @@ Resolution order for `microservice`:
 
 ### Re-index required when ontology changes
 
-Current ontology version is **19**. Any index built before this version must be rebuilt via `cocoindex update ... --full-reprocess -f` or a full `java-codebase-rag reprocess` (no selective flags) so vectors and graph stay aligned. Until re-indexed, the server defensively JSON-decodes string-form list columns so nothing explodes, but filters like `array_contains` will not work.
+Current ontology version is **19**. Any index built before this version must be rebuilt via `cocoindex update ... --full-reprocess -f` or a full `jrag reprocess` (no selective flags) so vectors and graph stay aligned. Until re-indexed, the server defensively JSON-decodes string-form list columns so nothing explodes, but filters like `array_contains` will not work.
 
-Ontology **15** (CALLS-NOISE) adds `CALLS.callee_declaring_role`, `GraphMeta.pass3_unresolved_phantom_receiver` / `pass3_unresolved_chained`, and **supertype-walk dedup** at build time. PR-2 adds `edge_filter` on `neighbors`. **PR-3 (breaking):** receiver-failure sites (`chained_receiver`, unresolved-receiver `phantom`) are no longer `CALLS` rows — they live on `UnresolvedCallSite` + `UNRESOLVED_AT`. Default `neighbors(..., ['CALLS'])` returns fewer rows; use `include_unresolved=True` for a source-ordered interleaved transcript (`row_kind`), `describe(method_id).unresolved_call_sites` (capped), or `java-codebase-rag unresolved-calls list|stats`. Known-receiver-external JDK rows stay on `CALLS` with `resolved=false`.
+Ontology **15** (CALLS-NOISE) adds `CALLS.callee_declaring_role`, `GraphMeta.pass3_unresolved_phantom_receiver` / `pass3_unresolved_chained`, and **supertype-walk dedup** at build time. PR-2 adds `edge_filter` on `neighbors`. **PR-3 (breaking):** receiver-failure sites (`chained_receiver`, unresolved-receiver `phantom`) are no longer `CALLS` rows — they live on `UnresolvedCallSite` + `UNRESOLVED_AT`. Default `neighbors(..., ['CALLS'])` returns fewer rows; use `include_unresolved=True` for a source-ordered interleaved transcript (`row_kind`), `describe(method_id).unresolved_call_sites` (capped), or `jrag unresolved-calls list|stats`. Known-receiver-external JDK rows stay on `CALLS` with `resolved=false`.
 
 Ontology **14** introduces `EDGE_SCHEMA` in `java_ontology.py` as the canonical edge navigation schema (see [`EDGE-NAVIGATION.md`](./EDGE-NAVIGATION.md)). **`HTTP_CALLS` is `Client → Route`** (SCHEMA-V2 PR-B). **`ASYNC_CALLS` is `Producer → Route`** with `DECLARES_PRODUCER` (SCHEMA-V2 PR-C). Run one full reprocess after upgrading through the SCHEMA-V2 sequence (or when you need the v14 ontology gate).
 
@@ -674,7 +674,7 @@ public Reply callJoinOperator(Request req) { /* ... */ }
 public void publishFollowUp(Event e) { /* ... */ }
 ```
 
-Resolution order in code: built-in inference → config annotation maps → meta-annotation walk → `@CodebaseRole` / `@CodebaseCapability` → `role_overrides.fqn` (highest priority for explicit per-type config). Route composition uses the same first-pass index, then `@CodebaseHttpRoute` / `@CodebaseAsyncRoute`, then `route_overrides.fqn`. Rebuild the affected store (`java-codebase-rag reprocess`, or `--vectors-only` / `--graph-only` when appropriate, or `build_ast_graph.py` for graph-only manual runs) after changing overrides.
+Resolution order in code: built-in inference → config annotation maps → meta-annotation walk → `@CodebaseRole` / `@CodebaseCapability` → `role_overrides.fqn` (highest priority for explicit per-type config). Route composition uses the same first-pass index, then `@CodebaseHttpRoute` / `@CodebaseAsyncRoute`, then `route_overrides.fqn`. Rebuild the affected store (`jrag reprocess`, or `--vectors-only` / `--graph-only` when appropriate, or `build_ast_graph.py` for graph-only manual runs) after changing overrides.
 
 ### 4.4 Caller-side overrides
 
@@ -710,7 +710,7 @@ When a brownfield caller override specifies only part of what built-in detection
 ### 4.5 Brownfield limitations
 
 - **Duplicate `@interface` simple names across packages.** The meta map keys by simple name. If two distinct types share a name (`com.team1.X` and `com.team2.X`), only the first after **sorted file order** is kept; a stderr message names both FQNs. Resolve by renaming, or use `role_overrides.fqn` / `@CodebaseRole`.
-- **Incremental indexing and annotation sources.** The indexer may only reprocess changed files. If you edit an `@interface` declaration (e.g. remove a `@Service` meta-annotation from a wrapper), every class that used it may need re-enrichment; the pipeline does not track that dependency automatically. **Run a full `java-codebase-rag reprocess` after changing any `@interface` used as a custom stereotype.**
+- **Incremental indexing and annotation sources.** The indexer may only reprocess changed files. If you edit an `@interface` declaration (e.g. remove a `@Service` meta-annotation from a wrapper), every class that used it may need re-enrichment; the pipeline does not track that dependency automatically. **Run a full `jrag reprocess` after changing any `@interface` used as a custom stereotype.**
 - **`Symbol` rows scope.** `role` and `capabilities` on the graph are computed for **type** nodes (classes, interfaces, etc.). Method and constructor `Symbol` rows use defaults `role=OTHER` and `capabilities=[]`.
 
 ### 4.6 Lance / LadybugDB consistency
@@ -749,7 +749,7 @@ The builtin default layer (`path_filtering.COMMON_EXCLUDED_PATH_PATTERNS`) combi
 
 A few directory names are pruned **unconditionally** because they are never legal Java package names: `.git`, `.idea`, `.venv`, `node_modules` (defined in `path_filtering.UNCONDITIONAL_PRUNE_DIRS`).
 
-To skip a directory the builtin walks (or include one it prunes), add a `.java-codebase-rag/ignore` file at the project root or any subtree root. Use `java-codebase-rag diagnose-ignore <path>` to see which layer decided for a given file.
+To skip a directory the builtin walks (or include one it prunes), add a `.java-codebase-rag/ignore` file at the project root or any subtree root. Use `jrag diagnose-ignore <path>` to see which layer decided for a given file.
 
 If no `.java-codebase-rag/ignore` exists anywhere under the project, behaviour matches the builtin list alone (plus git when enabled). When a negation rule could un-ignore paths under directories the CocoIndex walk used to prune globally, the walk switches to a permissive exclude list and each candidate path is filtered again with the full layered rules.
 

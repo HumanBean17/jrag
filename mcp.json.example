@@ -1,8 +1,8 @@
 {
   "mcpServers": {
-    "java-codebase-rag": {
+    "jrag": {
       "type": "stdio",
-      "command": "java-codebase-rag-mcp",
+      "command": "jrag-mcp",
       "env": {
         "JAVA_CODEBASE_RAG_INDEX_DIR": "/ABSOLUTE/PATH/TO/.java-codebase-rag",
         "JAVA_CODEBASE_RAG_SOURCE_ROOT": "/ABSOLUTE/PATH/TO/your-java-project",
@@ -12,6 +12,11 @@
   }
 }
 
+// Server key is "jrag"; command is "jrag-mcp" (the legacy "java-codebase-rag-mcp"
+// binary still works as an alias for backward compatibility).
+// The JAVA_CODEBASE_RAG_* env-var keys and the .java-codebase-rag on-disk index
+// dir are intentionally retained for backward compatibility.
+//
 // Minimal configuration with walk-up discovery (no env vars required):
 // The tool walks up from the current directory to find .java-codebase-rag.yml,
 // then uses the config's source_root (or the config directory itself) to find the index.
@@ -19,9 +24,9 @@
 //
 // {
 //   "mcpServers": {
-//     "java-codebase-rag": {
+//     "jrag": {
 //       "type": "stdio",
-//       "command": "java-codebase-rag-mcp"
+//       "command": "jrag-mcp"
 //     }
 //   }
 // }
@@ -31,8 +36,8 @@
 //
 // {
 //   "mcpServers": {
-//     "java-codebase-rag": {
-//       "command": "java-codebase-rag-mcp"
+//     "jrag": {
+//       "command": "jrag-mcp"
 //     }
 //   }
 // }

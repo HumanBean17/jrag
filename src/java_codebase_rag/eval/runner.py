@@ -8,7 +8,7 @@ sentence_transformers) and invokes the operator CLI to build a real index.
 Pipeline (``run_eval``):
 
 1. Build a fresh index into ``cfg.index_dir`` via the operator CLI
-   (``java-codebase-rag init``) as a **subprocess** — the stable operator
+   (``jrag init``) as a **subprocess** — the stable operator
    surface. Reaching into cocoindex/pipeline internals is fragile (process env,
    progress renderers), so the subprocess wins on robustness. A non-zero exit
    surfaces stdout/stderr in the raised ``RuntimeError``.
@@ -159,7 +159,7 @@ class EvalReport:
 
 
 def _build_index_subprocess(*, corpus_dir: str, index_dir: str) -> None:
-    """Build a fresh index via ``java-codebase-rag init``.
+    """Build a fresh index via ``jrag init``.
 
     Raises FileNotFoundError if the corpus is missing, RuntimeError on a
     non-zero CLI exit (surfacing clipped stdout/stderr).
@@ -196,7 +196,7 @@ def _build_index_subprocess(*, corpus_dir: str, index_dir: str) -> None:
     )
     if proc.returncode != 0:
         raise RuntimeError(
-            f"java-codebase-rag init exited {proc.returncode} for corpus {corpus_dir}.\n"
+            f"jrag init exited {proc.returncode} for corpus {corpus_dir}.\n"
             f"--- stdout (clipped 8000) ---\n{proc.stdout[-8000:]}\n"
             f"--- stderr (clipped 8000) ---\n{proc.stderr[-8000:]}"
         )

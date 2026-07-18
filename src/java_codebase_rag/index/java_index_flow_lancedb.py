@@ -6,7 +6,7 @@ LanceDB requires a single primary key per table; each chunk gets a UUID `id`.
 Environment:
   JAVA_CODEBASE_RAG_INDEX_DIR — Lance tables + LadybugDB + cocoindex state (default: ./.java-codebase-rag)
   JAVA_CODEBASE_RAG_SOURCE_ROOT — Java repo root for indexing (optional; else cocoindex cwd)
-  SBERT_MODEL / SBERT_DEVICE — embedding (optional; YAML also supported via java-codebase-rag CLI)
+  SBERT_MODEL / SBERT_DEVICE — embedding (optional; YAML also supported via jrag CLI)
 
 Dependencies:
   pip install "cocoindex[lancedb]" sentence-transformers

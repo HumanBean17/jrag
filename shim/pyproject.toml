@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "java-codebase-rag"
+version = "0.12.0"
+description = "Renamed to jrag-cli; this package only depends on jrag-cli. New setups: pip install jrag-cli."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [
+    { name = "HumanBean17" },
+]
+dependencies = ["jrag-cli==0.12.0"]
+
+[project.urls]
+Homepage = "https://github.com/HumanBean17/jrag"
+Repository = "https://github.com/HumanBean17/jrag"
+Issues = "https://github.com/HumanBean17/jrag/issues"
+
+# Metadata-only shim: explicitly ship no modules so setuptools does not perform
+# auto-discovery (a `[tool.setuptools.packages*]` section would imply a module
+# tree the shim does not have). Every console script and importable module
+# lives in the canonical `jrag-cli` dist, pulled in via the dependency above.
+[tool.setuptools]
+py-modules = []

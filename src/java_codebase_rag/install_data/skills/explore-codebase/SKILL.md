@@ -1,11 +1,11 @@
 ---
 name: explore-codebase
-description: "MUST BE USED PROACTIVELY. Universal read-only codebase exploration. Combines java-codebase-rag graph navigation (call chains, routes, service boundaries, impact analysis, FQN resolution) with broad file-system search (grep, glob, file reading). Use for any exploration: locating code, tracing dependencies, finding patterns, 'where is X', 'who calls Y', 'find all controllers', 'trace the flow from A to B'. Do NOT use when the answer is already in open context or for a single known file — read that file directly."
+description: "MUST BE USED PROACTIVELY. Universal read-only codebase exploration. Combines jrag graph navigation (call chains, routes, service boundaries, impact analysis, FQN resolution) with broad file-system search (grep, glob, file reading). Use for any exploration: locating code, tracing dependencies, finding patterns, 'where is X', 'who calls Y', 'find all controllers', 'trace the flow from A to B'. Do NOT use when the answer is already in open context or for a single known file — read that file directly."
 ---
 
 # /explore-codebase — Universal codebase exploration
 
-Read-only exploration combining **java-codebase-rag graph navigation** with **broad file-system search**.
+Read-only exploration combining **jrag graph navigation** with **broad file-system search**.
 
 Use any time you must search, locate, navigate, or explore. **Do NOT use when** the answer is already in context or for a single known file — read it directly.
 
@@ -17,7 +17,7 @@ Use any time you must search, locate, navigate, or explore. **Do NOT use when** 
 
 ## Tool Inventory
 
-- **Graph (java-codebase-rag MCP):** `search`, `find`, `describe`, `neighbors`, `resolve`. Node kinds: `Symbol` (types/methods), `Route` (HTTP/messaging entry points), `Client` (outbound HTTP), `Producer` (outbound async). Indexed content: Java + SQL + YAML (`table`: `java`, `sql`, `yaml`, `all`).
+- **Graph (jrag MCP):** `search`, `find`, `describe`, `neighbors`, `resolve`. Node kinds: `Symbol` (types/methods), `Route` (HTTP/messaging entry points), `Client` (outbound HTTP), `Producer` (outbound async). Indexed content: Java + SQL + YAML (`table`: `java`, `sql`, `yaml`, `all`).
 - **File-system:** `Grep` (content/regex), `Glob` (name/path patterns), `Read` (`offset`/`limit` for large files).
 - **Other:** `Bash` (read-only: `git log`, `git blame`, `ls`, `find`), `WebSearch`/`WebFetch`.
 
@@ -50,7 +50,7 @@ Use any time you must search, locate, navigate, or explore. **Do NOT use when** 
 
 ---
 
-## Graph Navigation Reference (java-codebase-rag MCP)
+## Graph Navigation Reference (jrag MCP)
 
 **Ontology: 17.** If results look structurally wrong or empty across tools, the index may be missing/stale — ask the operator to rebuild. Responses may carry `hints_structured` (suggested next calls) and `advisories` — advisory only; ignore when `success` is false.
 

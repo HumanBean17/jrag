@@ -1,9 +1,9 @@
-# Manual Verification Checklist — `java-codebase-rag`
+# Manual Verification Checklist — `jrag`
 
 Use this **after** you've read `README.md` + `CODEBASE_REQUIREMENTS.md`,
 [`docs/AGENT-GUIDE.md`](./AGENT-GUIDE.md), applied any brownfield annotations,
 and built the index against your real project. The checklist mixes **shell**
-checks (`java-codebase-rag` CLI for graph health and Lance tables) with **MCP**
+checks (`jrag` CLI for graph health and Lance tables) with **MCP**
 checks (`search` / `find` / `describe` / `neighbors` / `resolve` — the MCP
 navigation tools).
 
@@ -24,13 +24,13 @@ members, 0 parse errors, 17 routes, 11 `EXPOSES`, 793 `CALLS`, 24 `OVERRIDES`,
 2 `HTTP_CALLS`, 5 `ASYNC_CALLS`, 2 `Client` rows, microservices = `chat-core` + `chat-assign`.
 
 **Convention:** Graph ops use MCP. Index health / rebuild / PR analysis use
-**`java-codebase-rag`** (see [`JAVA-CODEBASE-RAG-CLI.md`](./JAVA-CODEBASE-RAG-CLI.md)). Example:
+**`jrag`** (see [`JRAG-CLI.md`](./JRAG-CLI.md)). Example:
 
 ```bash
 export JAVA_CODEBASE_RAG_INDEX_DIR=/tmp/verify_index
 export JAVA_CODEBASE_RAG_SOURCE_ROOT=/path/to/your/project
-java-codebase-rag meta --source-root "$JAVA_CODEBASE_RAG_SOURCE_ROOT" --index-dir "$JAVA_CODEBASE_RAG_INDEX_DIR"
-java-codebase-rag tables --source-root "$JAVA_CODEBASE_RAG_SOURCE_ROOT" --index-dir "$JAVA_CODEBASE_RAG_INDEX_DIR"
+jrag meta --source-root "$JAVA_CODEBASE_RAG_SOURCE_ROOT" --index-dir "$JAVA_CODEBASE_RAG_INDEX_DIR"
+jrag tables --source-root "$JAVA_CODEBASE_RAG_SOURCE_ROOT" --index-dir "$JAVA_CODEBASE_RAG_INDEX_DIR"
 ```
 
 ---
@@ -88,7 +88,7 @@ export JAVA_CODEBASE_RAG_INDEX_DIR=/tmp/verify_index
 **Verification prompt:**
 
 > In a shell with `JAVA_CODEBASE_RAG_INDEX_DIR` and `JAVA_CODEBASE_RAG_SOURCE_ROOT`
-> set for your graph, run `java-codebase-rag meta` (JSON output if piped). Report
+> set for your graph, run `jrag meta` (JSON output if piped). Report
 > `ontology_version`, `built_at`, `source_root`, and `parse_errors`. Does
 > `ontology_version` equal `13`?
 
@@ -104,7 +104,7 @@ repo, `git rev-parse HEAD`, then rebuild from scratch with
 
 **Verification prompt:**
 
-> From `java-codebase-rag meta` JSON, read `counts.files` (or equivalent) and
+> From `jrag meta` JSON, read `counts.files` (or equivalent) and
 > `parse_errors`. Compute `parse_errors / files * 100`. If above 1%, inspect
 > `/tmp/verify_build.log` for `[parse-error]` lines.
 
@@ -112,13 +112,13 @@ repo, `git rev-parse HEAD`, then rebuild from scratch with
 
 **If failing → fix:** > 5% usually means non-UTF-8 files or generated sources
 you forgot to ignore. Add ignore rules, then run
-`java-codebase-rag diagnose-ignore src/main/generated` (adjust path) to confirm.
+`jrag diagnose-ignore src/main/generated` (adjust path) to confirm.
 
 ### 1.3 ☐ Symbol counts match the project's rough scale
 
 **Verification prompt:**
 
-> From `java-codebase-rag meta`, report `counts.types`, `counts.members`,
+> From `jrag meta`, report `counts.types`, `counts.members`,
 > `counts.injects`. Compare to a rough `wc` of Java lines outside the agent.
 
 **Expected (calibration):** 92 types from 84 files (~1.1 types/file), 474
@@ -130,14 +130,14 @@ members, 71 injects.
 
 **Verification prompt:**
 
-> Run `java-codebase-rag tables` and confirm tables include `java` (and others you
+> Run `jrag tables` and confirm tables include `java` (and others you
 > expect). Then call MCP `search` with
 > `{"query":"main","table":"java","limit":1}`. At least one hit?
 
 **Expected (calibration):** tables include `java`, `sql`, `yaml`; search
 returns ≥1 chunk when the Lance index exists for the fixture.
 
-**If failing → fix:** missing tables → `java-codebase-rag reprocess` (slow).
+**If failing → fix:** missing tables → `jrag reprocess` (slow).
 Empty `search` → check `JAVA_CODEBASE_RAG_INDEX_DIR`,
 `SBERT_MODEL`, and that the index was built for this tree.
 
@@ -202,7 +202,7 @@ the fixture. No `*Service` / `*Repository` in OTHER for obvious Spring types.
 **Expected (calibration):** fixture uses RestTemplate-style clients, not
 `@FeignClient` types; on real projects counts should align.
 
-**If failing → fix:** confirm `java-codebase-rag meta` → `ontology_version` ≥ 10 for
+**If failing → fix:** confirm `jrag meta` → `ontology_version` ≥ 10 for
 `Client` nodes; full rebuild if stale.
 
 ### 2.4 ☐ Message listeners and producers are detected
@@ -226,7 +226,7 @@ or `role_overrides.annotations` in `.java-codebase-rag.yml`.
 **Verification prompt:**
 
 > Call `find` with `{"kind":"symbol","filter":{"role":"OTHER"},"limit":500}`.
-> Compare count to `counts.types` from `java-codebase-rag meta`. What fraction look
+> Compare count to `counts.types` from `jrag meta`. What fraction look
 > like DTOs/helpers vs missed stereotypes?
 
 **Expected (calibration):** ~43 OTHER / 92 types in the fixture (many record
@@ -249,7 +249,7 @@ add brownfield overrides.
 
 **Verification prompt:**
 
-> Run `java-codebase-rag meta` and report `routes_total`, `routes_by_framework`,
+> Run `jrag meta` and report `routes_total`, `routes_by_framework`,
 > `routes_resolved_pct`, `routes_from_brownfield_pct`. Then MCP `find` with
 > `{"kind":"route","filter":{},"limit":500}` (narrow with `microservice` on
 > large repos).
@@ -309,7 +309,7 @@ exact count.
 
 **Verification prompt:**
 
-> `java-codebase-rag meta` → `ontology_version` and `counts.clients`. Then MCP `find`
+> `jrag meta` → `ontology_version` and `counts.clients`. Then MCP `find`
 > with `{"kind":"client","filter":{},"limit":200}`. Rows should include
 > `client_kind`, `target_service`, paths, `source_layer`.
 
@@ -380,7 +380,7 @@ expect Feign → README §3c brownfield.
 
 **Verification prompt:**
 
-> `java-codebase-rag meta` → report `counts.http_calls`, `http_calls_match_breakdown`,
+> `jrag meta` → report `counts.http_calls`, `http_calls_match_breakdown`,
 > `edge_counts.HTTP_CALLS`. On a real project, pick a known Feign call and
 > locate the consumer symbol id, then `neighbors` with
 > `{"ids":"<sym_id>","direction":"out","edge_types":["HTTP_CALLS"],"limit":50}` and inspect `attrs.match`.
@@ -393,7 +393,7 @@ expect Feign → README §3c brownfield.
 
 **Verification prompt:**
 
-> `java-codebase-rag meta` → `async_calls_match_breakdown`, `edge_counts.ASYNC_CALLS`.
+> `jrag meta` → `async_calls_match_breakdown`, `edge_counts.ASYNC_CALLS`.
 > On a real project, walk `neighbors` with explicit `ids`, `direction`, `limit`, and e.g.
 > `edge_types":["ASYNC_CALLS"]` (add `HTTP_CALLS` when relevant).
 
@@ -407,12 +407,12 @@ expect Feign → README §3c brownfield.
 
 > On a project with real `cross_service` matches: set
 > `cross_service_resolution: brownfield_only` in `.java-codebase-rag.yml`, run
-> `java-codebase-rag reprocess`, re-check the same `neighbors` / meta breakdown. Edges
+> `jrag reprocess`, re-check the same `neighbors` / meta breakdown. Edges
 > should tighten to brownfield-tagged sites.
 
 **Expected (calibration):** N/A on fixture (no cross-service matches).
 
-**If failing → fix:** confirm `built_at` changed after rebuild (`java-codebase-rag meta`).
+**If failing → fix:** confirm `built_at` changed after rebuild (`jrag meta`).
 
 ### Red flags for Phase 5
 
@@ -496,12 +496,12 @@ expect Feign → README §3c brownfield.
 If everything is green:
 
 - Commit `.java-codebase-rag.yml` and `@Codebase*` stubs.
-- Record **ontology 13** (or current `java-codebase-rag meta` value) in your team docs.
-- Periodically diff `java-codebase-rag meta` `counts` after large refactors.
+- Record **ontology 13** (or current `jrag meta` value) in your team docs.
+- Periodically diff `jrag meta` `counts` after large refactors.
 
 If something is red:
 
-- Capture `java-codebase-rag meta` JSON, `/tmp/verify_build.log` tail, and the failing
+- Capture `jrag meta` JSON, `/tmp/verify_build.log` tail, and the failing
   prompt.
 
 ---
@@ -511,15 +511,15 @@ If something is red:
 Reproduce fixture numbers with:
 
 ```bash
-cd /path/to/java-codebase-rag
+cd /path/to/jrag
 rm -rf /tmp/calib_index
 .venv/bin/python build_ast_graph.py \
   --source-root tests/bank-chat-system \
   --ladybug-path /tmp/calib_index/code_graph.lbug \
   --verbose
-java-codebase-rag meta --source-root tests/bank-chat-system --index-dir /tmp/calib_index
+jrag meta --source-root tests/bank-chat-system --index-dir /tmp/calib_index
 ```
 
-`build_ast_graph.py` still takes `--ladybug-path` (the LadybugDB file). Point it at `<index-dir>/code_graph.lbug` so it matches the layout `java-codebase-rag meta --index-dir` expects under that directory.
+`build_ast_graph.py` still takes `--ladybug-path` (the LadybugDB file). Point it at `<index-dir>/code_graph.lbug` so it matches the layout `jrag meta --index-dir` expects under that directory.
 
 Current snapshot: `tests/bank-chat-system`, `chore/docs-sync @ 1fa1b28`, ontology **13**.

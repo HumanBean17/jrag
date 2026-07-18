@@ -47,7 +47,7 @@ Receiver-failure call sites (`chained_receiver`, `phantom_unresolved_receiver`) 
 | --- | --- |
 | `describe(method_id)` | `record.data.unresolved_call_sites` (capped at 5) + footer when more exist |
 | `neighbors(..., ['CALLS'], include_unresolved=True)` | Interleaved transcript; `row_kind='unresolved_call_site'`; `other.kind=unresolved_call_site` |
-| CLI | `java-codebase-rag unresolved-calls list|stats` |
+| CLI | `jrag unresolved-calls list|stats` |
 
 - **Not** in `EDGE_SCHEMA` — do not pass `UNRESOLVED_AT` to `neighbors(edge_types=…)`.
 - **`describe(ucs:…)`** is invalid (fail-loud); describe the **caller method** instead.

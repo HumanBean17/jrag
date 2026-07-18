@@ -2,7 +2,7 @@
 
 ``ProjectLock`` is the single-writer primitive the watch daemon (Task 11)
 acquires so that at most one watcher — and no concurrent manual
-``java-codebase-rag increment`` — runs per project.
+``jrag increment`` — runs per project.
 
 The lock is keyed on the project's index dir: the pidfile path comes from
 ``paths.pid_path(index_dir)`` (Task 3). We hold an advisory exclusive flock on

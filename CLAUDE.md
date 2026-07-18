@@ -1,4 +1,4 @@
-# java-codebase-rag
+# jrag
 
 ## Python environment
 
@@ -17,6 +17,9 @@ while pytest passes, run `.venv/bin/pip install -e ".[dev]"` — don't report it
   `tests/` (`.gitignore` un-ignores it there).
 - The full suite is slow. Run only the subset relevant to your change during
   development; run the full suite once, at the end of the task.
+- On-disk `.java-codebase-rag*` names (index dir, project YAML, hosts) and
+  `JAVA_CODEBASE_RAG_*` env vars are intentionally retained for backward
+  compatibility — do not "fix" them.
 
 ## Docs
 
@@ -24,7 +27,8 @@ Most files in `docs/` are **operator-facing**. The two flagged below are **inter
 
 **Operator docs**
 - `docs/CONFIGURATION.md` — env vars, project YAML, ontology, brownfield overrides, ignore patterns.
-- `docs/JAVA-CODEBASE-RAG-CLI.md` — operator CLI playbook (workflows, exit codes, env alignment).
+- `docs/JRAG-CLI.md` — operator CLI playbook (workflows, exit codes, env alignment).
+- `docs/MIGRATION.md` — `java-codebase-rag` → `jrag` rename map (commands, package, untouched on-disk state).
 - `docs/AGENT-GUIDE.md` — agent-facing MCP operating manual (copy-paste into `AGENTS.md`/`CLAUDE.md`).
 - `docs/EDGE-NAVIGATION.md` — MCP-traversable edges, directions, dot-key composition.
 - `docs/MANUAL-VERIFICATION-CHECKLIST.md` — 7-phase post-index verification.

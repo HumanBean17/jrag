@@ -531,7 +531,7 @@ class ProgressRelay:
                 self._renderer.apply(ev)
             except Exception as exc:
                 sys.stderr.write(
-                    f"java-codebase-rag: progress renderer error: {exc}\n"
+                    f"jrag: progress renderer error: {exc}\n"
                 )
                 sys.stderr.flush()
             return

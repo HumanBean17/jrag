@@ -1,6 +1,12 @@
-# java-codebase-rag
+# jrag
 
 A graph-native code intelligence layer for Java microservice estates, surfaced through the **`jrag` CLI** — one command per engineering intent. A **legacy MCP server** (`search` / `find` / `describe` / `neighbors` / `resolve`) is also available for existing setups. Both are thin surfaces over the same **AST Graph**: a deterministic property graph extracted from Java source with tree-sitter, stored **locally** in **LadybugDB** (graph) alongside a **LanceDB** vector index (chunks). There is no server to host and no cloud round-trip — the index lives on your disk and your source never leaves the machine. Both surfaces collapse onto three primitive operations: **locate**, **inspect**, **walk**.
+
+> **Renamed from `java-codebase-rag`.** This project is now branded **`jrag`** and published as the **`jrag-cli`** PyPI package.
+> - **Install:** `pip install jrag-cli` (the bare name `jrag` is taken on PyPI by a third party — never run `pip install jrag`).
+> - **New commands:** `jrag <verb>` (unified operator + agent verbs) and `jrag-mcp`. The old commands `java-codebase-rag` and `java-codebase-rag-mcp` remain as aliases (with a TTY-gated deprecation nudge).
+> - **Existing installs keep working:** `pip install -U java-codebase-rag` still works — the legacy package now pulls in `jrag-cli` via a shim.
+> - **Nothing else moves:** on-disk indexes (`.java-codebase-rag/`), project configs (`.java-codebase-rag.yml`), and env vars (`JAVA_CODEBASE_RAG_*`) are unchanged. No re-index, no config edit.
 
 > **What this is: a GPS for code navigation**, not a reasoning engine.
 > Agents use a simple loop:
@@ -36,17 +42,17 @@ The rest of this README is the install, the tool/command orientation, and the re
 ## Install
 
 ```bash
-pip install java-codebase-rag
+pip install jrag-cli
 ```
 
-Python **3.11+** required, on **Linux, macOS, and Windows**. On Linux, Windows, and **Apple Silicon** Macs every native dependency (LanceDB, LadybugDB, CocoIndex) ships a wheel and you get the full semantic + graph search. **Intel Macs (x86_64) install graph-only**: PyTorch ≥2.3 and LanceDB ≥0.26 dropped macOS Intel wheels, so the vector stack is auto-excluded via PEP 508 markers — `pip install java-codebase-rag` works out of the box, the graph layer (`find` / `describe` / `neighbors` / `resolve`) is fully usable, and the `search` tool falls back to **lexical search** over the symbol graph — BM25-ranked over a LadybugDB full-text index (same tool contract, keyword-ranked instead of semantic; an advisory notes the mode). Semantic/vector search needs Apple Silicon, Linux, or Windows. After install, `java-codebase-rag --help` should print the CLI groups.
+Python **3.11+** required, on **Linux, macOS, and Windows**. On Linux, Windows, and **Apple Silicon** Macs every native dependency (LanceDB, LadybugDB, CocoIndex) ships a wheel and you get the full semantic + graph search. **Intel Macs (x86_64) install graph-only**: PyTorch ≥2.3 and LanceDB ≥0.26 dropped macOS Intel wheels, so the vector stack is auto-excluded via PEP 508 markers — `pip install jrag-cli` works out of the box, the graph layer (`find` / `describe` / `neighbors` / `resolve`) is fully usable, and the `search` tool falls back to **lexical search** over the symbol graph — BM25-ranked over a LadybugDB full-text index (same tool contract, keyword-ranked instead of semantic; an advisory notes the mode). Semantic/vector search needs Apple Silicon, Linux, or Windows. After install, `jrag --help` should print the CLI groups.
 The package includes the CocoIndex lifecycle dependency used by `init`, `increment`, `reprocess`, and `erase` on platforms that have it (it is absent on Intel Mac).
 
 **Kotlin (`.kt`) is indexed alongside Java (`.java`)** — both feed one merged AST graph (a Kotlin class can implement a Java interface and vice versa). Kotlin parsing requires the `tree-sitter-kotlin` grammar; if it fails to import, `.kt` files are skipped and Java-only indexing proceeds. **Intel Mac note:** `tree-sitter-kotlin` currently ships a macOS x86_64 wheel, so Kotlin indexing works there today; if a future release drops that wheel, Kotlin indexing degrades off on Intel Mac while the Java graph keeps working. See `docs/CODEBASE_REQUIREMENTS.md` A.1 for the v1 Kotlin limitations (extension-function calls unresolved; non-Spring frameworks out of scope; generated-code classification Java-only).
 
 ### Interactive setup (recommended)
 
-Run `java-codebase-rag install` from your Java project root to launch an interactive setup wizard that:
+Run `jrag install` from your Java project root to launch an interactive setup wizard that:
 
 1. Detects Java source directories (Maven/Gradle modules)
 2. Configures the embedding model (auto-downloads ~90MB or uses a local path)
@@ -57,19 +63,19 @@ Run `java-codebase-rag install` from your Java project root to launch an interac
 
 ```bash
 # Interactive mode
-java-codebase-rag install
+jrag install
 
 # Non-interactive mode (for CI/automation)
-java-codebase-rag install --non-interactive --agent claude-code
+jrag install --non-interactive --agent claude-code
 ```
 
-After `pip install --upgrade java-codebase-rag`, run `java-codebase-rag update` to refresh shipped artifacts and catch up the index (Lance + graph).
+After `pip install --upgrade jrag-cli`, run `jrag update` to refresh shipped artifacts and catch up the index (Lance + graph).
 
 All indexing lifecycle commands (`init`, `increment`, `reprocess`, `install`, `update`) show a unified `Vectors → Optimize → Graph` progress bar on stderr during the index build (powered by `rich`); pass `--quiet` to suppress it.
 
 ### Manual registration
 
-If you prefer manual configuration, see [`docs/JAVA-CODEBASE-RAG-CLI.md`](./docs/JAVA-CODEBASE-RAG-CLI.md) for the full CLI reference.
+If you prefer manual configuration, see [`docs/JRAG-CLI.md`](./docs/JRAG-CLI.md) for the full CLI reference.
 
 > **Stability disclaimer.** This package does **not** promise backward compatibility. MCP tool contracts, env vars, Lance/LadybugDB schemas, config files, and Python APIs may change without a deprecation period. Track `main` and rebuild indexes when ontology or embedding settings change.
 
@@ -77,7 +83,7 @@ If you prefer manual configuration, see [`docs/JAVA-CODEBASE-RAG-CLI.md`](./docs
 
 ## Tools & commands at a glance
 
-`jrag` is the default and recommended surface (`java-codebase-rag install --surface cli`). The **MCP server** (`--surface mcp`) is kept as a **legacy** option for existing setups. Both surfaces walk the same LanceDB vectors + LadybugDB **AST Graph**. Switch an existing install later with `java-codebase-rag update --surface mcp|cli`.
+`jrag` is the default and recommended surface (`jrag install --surface cli`). The **MCP server** (`--surface mcp`) is kept as a **legacy** option for existing setups. Both surfaces walk the same LanceDB vectors + LadybugDB **AST Graph**. Switch an existing install later with `jrag update --surface mcp|cli`.
 
 **CLI surface — `jrag`, one command per engineering intent**
 
@@ -169,7 +175,7 @@ The operator-facing surface is small: pick an index dir, pick an embedding model
 
 ## CLI cheat sheet
 
-Run `java-codebase-rag --help` to list grouped subcommands. Operator playbook with workflows, exit codes, and env alignment lives in [`docs/JAVA-CODEBASE-RAG-CLI.md`](./docs/JAVA-CODEBASE-RAG-CLI.md).
+Run `jrag --help` to list grouped subcommands. Operator playbook with workflows, exit codes, and env alignment lives in [`docs/JRAG-CLI.md`](./docs/JRAG-CLI.md).
 
 | Group | Subcommand | What it does |
 |---|---|---|
@@ -186,8 +192,8 @@ Run `java-codebase-rag --help` to list grouped subcommands. Operator playbook wi
 
 ## jrag — agent CLI
 
-`jrag` is a separate console script (alongside `java-codebase-rag`) built for AI
-coding agents. It gives the agent **one command per engineering intent** and
+`jrag` is the unified console script (operator + agent verbs) built for AI
+coding agents and operators alike. It gives the agent **one command per engineering intent** and
 takes human-readable identifiers (FQN / simple name / route path / topic) —
 never raw node IDs. Every `<query>` command resolves the identifier via
 `resolve_v2` as the first step; on `many` it returns candidates and stops, on
@@ -241,7 +247,7 @@ A missing or stale index produces an actionable `status: error` envelope (exit
 2) rather than a traceback:
 
 ```
-error: No index at /path/to/code_graph.lbug. Run: java-codebase-rag init --source-root <root>
+error: No index at /path/to/code_graph.lbug. Run: jrag init --source-root <root>
 ```
 
 See [`plans/active/PLAN-JRAG-CLI.md`](./plans/active/PLAN-JRAG-CLI.md) for the
@@ -256,7 +262,7 @@ full design and per-PR breakdown.
 | [`docs/paper/paper.pdf`](./docs/paper/paper.pdf) | Architecture report — design rationale, GPS metaphor, three-layer architecture, design principles, future work. |
 | [`docs/AGENT-GUIDE.md`](./docs/AGENT-GUIDE.md) | Agent-facing guide. Copy-paste into `QWEN.md` / `CLAUDE.md` / `AGENTS.md`. |
 | [`docs/CONFIGURATION.md`](./docs/CONFIGURATION.md) | Environment variables, project YAML, graph ontology, brownfield overrides, ignore patterns. |
-| [`docs/JAVA-CODEBASE-RAG-CLI.md`](./docs/JAVA-CODEBASE-RAG-CLI.md) | CLI operator playbook: workflows, exit codes, env alignment. |
+| [`docs/JRAG-CLI.md`](./docs/JRAG-CLI.md) | CLI operator playbook: workflows, exit codes, env alignment. |
 | [`docs/EDGE-NAVIGATION.md`](./docs/EDGE-NAVIGATION.md) | MCP-traversable edges, directions, dot-key composition. |
 | [`skills/`](./skills/) | `/explore-codebase-cli` (CLI surface) + `/explore-codebase` (legacy MCP surface) skills — operating manuals for hosts with skill discovery (alternative to copy-pasting AGENT-GUIDE). See [`skills/README.md`](./skills/README.md). |
 | [`docs/MANUAL-VERIFICATION-CHECKLIST.md`](./docs/MANUAL-VERIFICATION-CHECKLIST.md) | 7-phase agent-driven verification after indexing your project. |
@@ -268,8 +274,8 @@ full design and per-PR breakdown.
 ## Install from source (contributors)
 
 ```bash
-git clone https://github.com/HumanBean17/java-codebase-rag
-cd java-codebase-rag
+git clone https://github.com/HumanBean17/jrag
+cd jrag
 python3 -m venv .venv
 .venv/bin/pip install -e ".[dev]"
 ```

@@ -99,8 +99,8 @@ def test_pipeline_header_footer_present(tmp_path: Path) -> None:
     )
     assert proc.returncode == 0, proc.stderr + proc.stdout
     err = proc.stderr
-    assert re.search(r"java-codebase-rag erase · source=.* · index=", err)
-    assert re.search(r"java-codebase-rag erase · finished in [0-9]+\.[0-9]{2}s", err)
+    assert re.search(r"jrag erase · source=.* · index=", err)
+    assert re.search(r"jrag erase · finished in [0-9]+\.[0-9]{2}s", err)
 
 
 def test_cli_quiet_stderr_baseline_per_subcommand(tmp_path: Path, corpus_root: Path) -> None:

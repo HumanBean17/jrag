@@ -300,7 +300,7 @@ def run_lexical_search(
     if graph is None and not LadybugGraph.exists():
         raise RuntimeError(
             "lexical search unavailable: no symbol graph found; "
-            "run `java-codebase-rag init` or `java-codebase-rag reprocess` to build one"
+            "run `jrag init` or `jrag reprocess` to build one"
         )
     g = graph or LadybugGraph.get()
 

@@ -1,4 +1,4 @@
-# DESIGN — `java-codebase-rag`
+# DESIGN — `jrag`
 
 Internal design doc (**WHAT + WHY**). For HOW see [ARCHITECTURE.md](./ARCHITECTURE.md). Operator/agent behavior lives in the existing `docs/` set; this file is for contributors working **on** the codebase.
 
@@ -44,7 +44,7 @@ One repo, two stores, two audiences:
 | MCP server (`server.py`) | agents | `search` / `find` / `describe` / `neighbors` / `resolve` |
 | `jrag` CLI | agents / humans | same five tools, terminal rendering |
 | `jrag watch` daemon | agents / humans | index freshness + warm-query accelerator over a Unix socket (one per project); pure accelerator, cold path stays byte-identical when no daemon runs |
-| `java-codebase-rag` CLI | operators | index lifecycle, `meta` / `tables` / `diagnose-ignore`, `analyze-pr` |
+| `jrag` CLI | operators | index lifecycle, `meta` / `tables` / `diagnose-ignore`, `analyze-pr` |
 
 ## Non-goals (by design)
 

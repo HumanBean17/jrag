@@ -139,7 +139,7 @@ async def optimize_lance_tables(
                 existing = await _list_table_names(db)
             except Exception as exc:
                 print(
-                    f"java-codebase-rag: optimize: failed to list tables in "
+                    f"jrag: optimize: failed to list tables in "
                     f"{index_dir}: {exc}",
                     file=sys.stderr,
                 )
@@ -151,7 +151,7 @@ async def optimize_lance_tables(
                     results[name] = "skipped"
                     if not quiet:
                         print(
-                            f"java-codebase-rag: optimize: {name} absent, skipped",
+                            f"jrag: optimize: {name} absent, skipped",
                             file=sys.stderr,
                         )
                     continue
@@ -161,7 +161,7 @@ async def optimize_lance_tables(
                     results[name] = f"error: open failed: {exc}"
                     failed = True
                     print(
-                        f"java-codebase-rag: optimize: {name} open failed: {exc}",
+                        f"jrag: optimize: {name} open failed: {exc}",
                         file=sys.stderr,
                     )
                     continue
@@ -205,7 +205,7 @@ async def optimize_lance_tables(
                             w in low for w in ("exist", "duplicate", "already", "same name")
                         ) and not quiet:
                             print(
-                                f"java-codebase-rag: optimize: {name} id-index skipped: {exc}",
+                                f"jrag: optimize: {name} id-index skipped: {exc}",
                                 file=sys.stderr,
                             )
                     # Best-effort FTS index at index time (PR-SEARCH-3) so hybrid
@@ -223,19 +223,19 @@ async def optimize_lance_tables(
                             w in low for w in ("exist", "duplicate", "already", "same name")
                         ) and not quiet:
                             print(
-                                f"java-codebase-rag: optimize: {name} fts skipped: {exc}",
+                                f"jrag: optimize: {name} fts skipped: {exc}",
                                 file=sys.stderr,
                             )
                     if not quiet:
                         print(
-                            f"java-codebase-rag: optimize: {name} ok",
+                            f"jrag: optimize: {name} ok",
                             file=sys.stderr,
                         )
                 else:
                     results[name] = f"error: {last_exc}"
                     failed = True
                     print(
-                        f"java-codebase-rag: optimize: {name} failed: {last_exc}",
+                        f"jrag: optimize: {name} failed: {last_exc}",
                         file=sys.stderr,
                     )
         finally:

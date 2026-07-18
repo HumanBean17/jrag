@@ -380,7 +380,7 @@ class LadybugGraph:
                         f"Graph ontology version {graph_version} is older than the "
                         f"required version {_ONTOLOGY_VERSION}. "
                         "Rebuild the graph: `python build_ast_graph.py --source-root <repo>`, "
-                        "or run `java-codebase-rag reprocess --source-root <repo>` for a full "
+                        "or run `jrag reprocess --source-root <repo>` for a full "
                         "Lance+Ladybug re-index."
                     )
                 cls._instance = instance

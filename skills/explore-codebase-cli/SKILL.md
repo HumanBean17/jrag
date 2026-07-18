@@ -70,13 +70,13 @@ description: "MUST BE USED PROACTIVELY. Universal JVM (Java + Kotlin) codebase e
 
 | Symptom | Fix |
 | ------- | --- |
-| `status: error` "No index at …" | Run `java-codebase-rag init --source-root <root>`; retry |
+| `status: error` "No index at …" | Run `jrag init --source-root <root>`; retry |
 | `status: not_found` | `jrag search "<query>"`; or `find --fqn-contains …`; fallback `Grep` |
 | `many` candidates | Add `--kind`/`--role`/`--fqn-contains`/`--service`; re-run |
 | `find` too broad | Add `--service`, `--fqn-contains`, `--path-contains`, `--topic-contains` |
 | Empty `search` | Try `--table all`; `find --fqn-contains`; `Grep` |
 | `truncated: true` | Narrow, or page with `--offset` (`find`/`search` only) |
-| Empty across commands | Index missing/stale → `Grep`/`Glob`/`Read`; ask operator to rebuild (`java-codebase-rag reprocess`) |
+| Empty across commands | Index missing/stale → `Grep`/`Glob`/`Read`; ask operator to rebuild (`jrag reprocess`) |
 | CLI vs file disagree | **Trust the file**; report stale index |
 | `--offset` rejected | Only `find`/`search` accept it; others narrow via filters |
 | Wrong node picked | Resolve ambiguous — pass `--kind` |

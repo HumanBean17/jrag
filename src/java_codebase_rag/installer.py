@@ -1,4 +1,4 @@
-"""Interactive installer module for java-codebase-rag.
+"""Interactive installer module for jrag.
 
 This module provides the `install` subcommand that walks users through:
 1. Java source detection
@@ -605,13 +605,13 @@ def resolve_mcp_command(*, non_interactive: bool, surface: Surface = "mcp") -> s
         print(f"Error: `{display_name}` not found on PATH.")
         if surface == "mcp":
             print(
-                "Ensure `java-codebase-rag` is installed, then re-run with "
+                "Ensure `jrag` is installed, then re-run with "
                 "`--non-interactive --agent <host>`."
             )
         else:
             print(
-                "Ensure `java-codebase-rag` is installed (provides the `jrag` "
-                "console script), then re-run with `--non-interactive --agent <host>`."
+                "Ensure the `jrag` console script is installed, "
+                "then re-run with `--non-interactive --agent <host>`."
             )
         raise SystemExit(2)
 
@@ -982,7 +982,7 @@ def update_gitignore(cwd: Path) -> None:
 
     if not already_present:
         lines.append("")
-        lines.append("# java-codebase-rag index directory")
+        lines.append("# jrag index directory")
         lines.append(".java-codebase-rag/")
         gitignore_path.write_text("\n".join(lines), encoding="utf-8")
 
@@ -998,7 +998,7 @@ def _index_progress_header(subcommand: str, source_root: Path, index_dir: Path) 
 
     print(
         bold(
-            f"java-codebase-rag {subcommand} · source={source_root.resolve()} "
+            f"jrag {subcommand} · source={source_root.resolve()} "
             f"· index={index_dir.resolve()}"
         ),
         file=sys.stderr,
@@ -1013,7 +1013,7 @@ def _index_progress_footer(subcommand: str, started: float, *, ok: bool) -> None
     elapsed = time.perf_counter() - started
     marker = styled_check() if ok else styled_cross()
     print(
-        f"{marker} {bold(f'java-codebase-rag {subcommand} · finished in {elapsed:.2f}s')}",
+        f"{marker} {bold(f'jrag {subcommand} · finished in {elapsed:.2f}s')}",
         file=sys.stderr,
         flush=True,
     )
@@ -1061,7 +1061,7 @@ def run_init_if_needed(
 
     has_existing, _ = index_dir_has_existing_artifacts(index_dir)
     if has_existing:
-        print("Index already exists. Run `java-codebase-rag reprocess` to rebuild.")
+        print("Index already exists. Run `jrag reprocess` to rebuild.")
         return None  # skipped, not failed
 
     cfg = resolve_operator_config(
@@ -1109,7 +1109,7 @@ def run_init_if_needed(
         else:
             if vectors_skipped:
                 print(
-                    "java-codebase-rag: vectors skipped — vector stack not installed on this "
+                    "jrag: vectors skipped — vector stack not installed on this "
                     "platform (graph-only mode). Building graph only; semantic search is unavailable.",
                     file=sys.stderr,
                 )
@@ -1750,7 +1750,7 @@ def run_update(
 
     if not configured_hosts:
         print("No configured agent hosts found.")
-        print("Run `java-codebase-rag install` first.")
+        print("Run `jrag install` first.")
         return EXIT_FATAL
 
     print(f"Found {len(configured_hosts)} configured host(s).")
@@ -1800,7 +1800,7 @@ def run_update(
                 f"'{chosen_surface}' surface."
             )
             print(
-                "Ensure `java-codebase-rag` is installed, then re-run `update "
+                "Ensure `jrag` is installed, then re-run `update "
                 f"--surface {chosen_surface}`."
             )
             return EXIT_PARTIAL
@@ -1907,11 +1907,11 @@ def run_update(
 
     if not index_exists:
         print("\nNo index found.")
-        print("Run `java-codebase-rag install` to create one.")
+        print("Run `jrag install` to create one.")
         return EXIT_PARTIAL if has_artifact_failures else EXIT_SUCCESS
 
     # Run increment: LanceDB catch-up + incremental graph rebuild.
-    # Mirrors `java-codebase-rag increment` so both index layers stay current.
+    # Mirrors `jrag increment` so both index layers stay current.
     # The "graph not implemented" warning belongs only on the vectors-only path
     # (increment --vectors-only), where the graph step is deliberately skipped.
     if not dry_run:
@@ -1955,7 +1955,7 @@ def run_update(
             else:
                 if vectors_skipped:
                     print(
-                        "java-codebase-rag: vectors skipped — vector stack not installed on this "
+                        "jrag: vectors skipped — vector stack not installed on this "
                         "platform (graph-only mode). Running graph catch-up only.",
                         file=sys.stderr,
                     )
@@ -1977,7 +1977,7 @@ def run_update(
                     # check + the Warning line carrying the graph caveat.
                     print(
                         f"\nWarning: incremental graph update failed (exit {g.returncode}). "
-                        "Run `java-codebase-rag reprocess` for a full rebuild.",
+                        "Run `jrag reprocess` for a full rebuild.",
                         file=sys.stderr,
                     )
         except BaseException:
