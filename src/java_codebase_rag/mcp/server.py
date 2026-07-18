@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 from typing import Literal
 
+from java_codebase_rag._deprecation import maybe_warn_legacy_alias
 from java_codebase_rag.mcp import mcp_v2
 from java_codebase_rag.analysis import resolve_service
 from java_codebase_rag.search.index_common import SBERT_MODEL
@@ -861,6 +862,7 @@ def create_mcp_server() -> FastMCP:
 
 
 def main() -> None:
+    maybe_warn_legacy_alias()
     raise_fd_limit()
     emit_legacy_env_hints_if_present()
 
