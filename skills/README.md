@@ -1,4 +1,4 @@
-# skills/ — RAG navigation skills for java-codebase-rag
+# skills/ — RAG navigation skills for jrag
 
 Two self-contained skills for navigating an indexed Java codebase — one per
 **surface**. Skills are agent-side prompt scaffolding, **not** a second MCP API
@@ -6,7 +6,7 @@ and **not** CLI subcommands.
 
 ## Surfaces
 
-`java-codebase-rag install` picks one surface; **one per project** (running both
+`jrag install` picks one surface; **one per project** (running both
 strands the agent in two vocabularies):
 
 - **`--surface mcp`** (default) — registers the stdio MCP server (`search` /
@@ -34,4 +34,4 @@ block (into `AGENTS.md`/`CLAUDE.md`), the `explore-codebase` skill, or the
 this: `explore-codebase-cli` skill + `explorer-rag-cli` agent, via `jrag`.
 
 Developer workflow skills live in `.agents/skills/` (contributors working **on**
-java-codebase-rag); `skills/` here is for **consumers**.
+jrag); `skills/` here is for **consumers**.
