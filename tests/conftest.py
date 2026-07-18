@@ -40,13 +40,13 @@ def pytest_configure(config) -> None:
 
 
 def _enforce_editable_install() -> None:
-    """Fail collection if the `jrag`/`java-codebase-rag` console scripts would
-    not resolve to this repo source.
+    """Fail collection if the ``jrag`` console script (dist ``jrag-cli``;
+    ``java-codebase-rag`` is a legacy alias) would not resolve to this repo source.
 
     pytest itself never sees staleness because this conftest inserts the repo
-    onto ``sys.path[0]`` — but the console scripts (no conftest, no sys.path
-    insert) then import a stale non-editable copy from site-packages. Mirror
-    their view by importing in a clean subprocess (cwd outside the repo, no
+    onto ``sys.path[0]`` — but the console script (no conftest, no sys.path
+    insert) then imports a stale non-editable copy from site-packages. Mirror
+    its view by importing in a clean subprocess (cwd outside the repo, no
     ``PYTHONPATH``) and require the resolved file to live under the repo. This
     is dev-only (end users never run this conftest), so it can't false-positive
     on a legitimate PyPI install.
@@ -67,8 +67,9 @@ def _enforce_editable_install() -> None:
         return
     where = resolved or f"import failed (rc={res.returncode}): {res.stderr.strip()}"
     pytest.exit(
-        f"\n[install] `jrag`/`java-codebase-rag` resolve to a stale/non-editable copy "
-        f'({where}).\n  Fix once: .venv/bin/pip install -e ".[dev]"  then re-run pytest.\n',
+        f"\n[install] `jrag` (dist `jrag-cli`; `java-codebase-rag` is a legacy alias) "
+        f"resolves to a stale/non-editable copy ({where}).\n"
+        f'  Fix once: .venv/bin/pip install -e ".[dev]"  then re-run pytest.\n',
         returncode=4,
     )
 

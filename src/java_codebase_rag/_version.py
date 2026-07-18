@@ -1,7 +1,7 @@
 """Version string for the CLI ``--version`` flag.
 
 The single source of truth is the installed distribution metadata
-(``java-codebase-rag`` in pyproject.toml), read via :mod:`importlib.metadata`
+(``jrag-cli`` in pyproject.toml), read via :mod:`importlib.metadata`
 so a pyproject bump propagates with no second hardcoded copy.
 :func:`version_string` appends the CPython version for the
 ``<prog> <version> (python <x.y.z>)`` format chosen for the ``--version`` flag.
@@ -15,7 +15,7 @@ import platform
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _dist_version
 
-_PACKAGE = "java-codebase-rag"
+_PACKAGE = "jrag-cli"
 
 
 def package_version() -> str:

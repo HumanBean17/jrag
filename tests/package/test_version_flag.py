@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 
 from java_codebase_rag import cli, jrag
-from java_codebase_rag._version import version_string
+from java_codebase_rag._version import package_version, version_string
 
 _PY_VER_RE = re.compile(r"\(python \d+\.\d+\.\d+\)")
 
@@ -37,3 +37,14 @@ def test_version_flag_rejected_after_subcommand():
     rc = jrag.main(["status", "--version"])
 
     assert rc != 0
+
+
+def test_version_is_not_unknown():
+    """The dist lookup must resolve to the installed ``jrag-cli`` metadata, not ``unknown``.
+
+    Pins that ``_PACKAGE`` names the canonical post-rename distribution (``jrag-cli``)
+    so a pyproject bump propagates to ``--version``. After the rename, the legacy
+    ``java-codebase-rag`` dist lingers in the venv at the pre-rename version; if
+    ``_PACKAGE`` still pointed there, this assertion would catch the stale read.
+    """
+    assert package_version() == "0.12.0"
