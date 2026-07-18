@@ -38,7 +38,7 @@ Core library = **top-level `.py` modules** (`py-modules`); the installable **`ja
 | Surfaces | `java_codebase_rag/{cli,jrag,installer}.py` |
 | Shipped artifacts | `skills/`, `agents/` (deployed verbatim to agent host via `install`/`update`) |
 
-**Entrypoints** (`pyproject.toml [project.scripts]`): `jrag` → `java_codebase_rag.cli:_console_script_main`; `jrag-mcp` → `server:main`; `jrag` → `java_codebase_rag.jrag:_console_script_main`.
+**Entrypoints** (`pyproject.toml [project.scripts]`): `jrag` and `java-codebase-rag` (legacy alias) both → `java_codebase_rag.cli_dispatch:_console_script_main` — the unified dispatcher that routes operator verbs to `cli._console_script_main` and agent verbs to `jrag._console_script_main`; `jrag-mcp` and `java-codebase-rag-mcp` (legacy alias) both → `java_codebase_rag.mcp.server:main`.
 
 ## Write path (indexing)
 
