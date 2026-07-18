@@ -79,13 +79,16 @@ ROUTING_CASES: list[tuple[list[str], str]] = [
     (["jrag", "install"], "cli"),  # operator verb under canonical name (unification)
     (["jrag", "init"], "cli"),
     (["jrag", "--version"], "jrag"),  # no subcommand -> identity default
-    (["jrag", "--help"], "jrag"),
-    (["jrag"], "jrag"),  # no args
+    # NOTE: ["jrag", "--help"] and ["jrag"] (no args) are NOT here — under the
+    # canonical ``jrag`` identity those requests are served by _print_unified_help
+    # (see test_jrag_unified_help_* below), bypassing both module mains.
     (["jrag", "bogus-verb"], "jrag"),  # unknown -> identity default; jrag parser errors
+    (["jrag", "init", "--help"], "cli"),  # verb-specific help still routes to the verb's parser
     (["java-codebase-rag", "install"], "cli"),
     (["java-codebase-rag", "find", "X"], "jrag"),  # alias gains agent verbs
     (["java-codebase-rag", "--version"], "cli"),  # alias identity default
-    (["java-codebase-rag"], "cli"),
+    (["java-codebase-rag", "--help"], "cli"),  # legacy alias stays operator-only (no unified help)
+    (["java-codebase-rag"], "cli"),  # legacy alias no-args stays operator-only
     (["jrag", "--index-dir", "/tmp/x", "find", "Y"], "jrag"),  # global flag + value before verb
 ]
 
@@ -169,3 +172,119 @@ def test_verb_frozensets_are_frozen():
 
     assert isinstance(OPERATOR_VERBS, frozenset), type(OPERATOR_VERBS)
     assert isinstance(AGENT_VERBS, frozenset), type(AGENT_VERBS)
+
+
+# --- Unified help: ``jrag --help`` / ``jrag`` list ALL verbs ---------------
+#
+# The design contract for the canonical ``jrag`` command is that its top-level
+# help is the single discovery surface for BOTH verb surfaces (operator +
+# agent). The legacy ``java-codebase-rag`` alias keeps operator-only help.
+
+
+def _run_dispatcher_capture(monkeypatch, capsys, argv):
+    """Set ``sys.argv``, install stubs, invoke dispatcher, return captured stdout.
+
+    Mirrors :func:`_run_dispatcher` but also returns ``capsys.readouterr().out``
+    so unified-help tests can inspect what was printed.
+    """
+    monkeypatch.setattr(sys, "argv", list(argv))
+    _install_recording_stubs(monkeypatch)
+    from java_codebase_rag import cli_dispatch
+
+    cli_dispatch._console_script_main()
+    return capsys.readouterr().out
+
+
+def test_jrag_unified_help_bypasses_both_mains(monkeypatch):
+    """``jrag --help`` must NOT delegate to either ``_console_script_main``.
+
+    Both real mains terminate the process (``os._exit``); the unified help path
+    serves the request in the dispatcher and returns. If a future change
+    accidentally routes ``jrag --help`` to a real main, this test fails and
+    saves a confusing test-session crash.
+    """
+    monkeypatch.setattr(sys, "argv", ["jrag", "--help"])
+    cli_calls, jrag_calls = _install_recording_stubs(monkeypatch)
+    from java_codebase_rag import cli_dispatch
+
+    cli_dispatch._console_script_main()
+    assert cli_calls == [], f"unified help should not touch cli main; got {cli_calls}"
+    assert jrag_calls == [], f"unified help should not touch jrag main; got {jrag_calls}"
+
+
+def test_jrag_no_args_bypasses_both_mains(monkeypatch):
+    """``jrag`` with no args must also take the unified-help path."""
+    monkeypatch.setattr(sys, "argv", ["jrag"])
+    cli_calls, jrag_calls = _install_recording_stubs(monkeypatch)
+    from java_codebase_rag import cli_dispatch
+
+    cli_dispatch._console_script_main()
+    assert cli_calls == []
+    assert jrag_calls == []
+
+
+def test_jrag_help_lists_both_operator_and_agent_verbs(monkeypatch, capsys):
+    """``jrag --help`` output must contain at least one operator verb AND one agent verb.
+
+    This is the spec's core unification contract: discovery under the canonical
+    name shows users the full verb surface. ``install`` (operator) and ``find``
+    (agent) are stable representatives; pinning both catches a regression where
+    either section is dropped.
+    """
+    out = _run_dispatcher_capture(monkeypatch, capsys, ["jrag", "--help"])
+    # Agent verbs come from the agent parser's own help (positional-arguments block).
+    assert "find" in out, "agent verb 'find' missing from jrag --help"
+    # Operator verbs come from the appended "Operator commands" section.
+    assert "install" in out, "operator verb 'install' missing from jrag --help"
+    assert "init" in out, "operator verb 'init' missing from jrag --help"
+    # Section header signals the unification to the reader.
+    assert "Operator commands" in out
+
+
+def test_jrag_no_args_lists_both_operator_and_agent_verbs(monkeypatch, capsys):
+    """``jrag`` with no args lists both verb types (same unified help)."""
+    out = _run_dispatcher_capture(monkeypatch, capsys, ["jrag"])
+    assert "find" in out
+    assert "install" in out
+    assert "Operator commands" in out
+
+
+def test_jrag_unified_help_includes_every_operator_verb(monkeypatch, capsys):
+    """The Operator commands section must list ALL operator verbs (drift guard).
+
+    Catches the regression where a verb is registered on the operator parser
+    but the unified-help builder (which iterates that parser's subparsers
+    action) somehow drops one. Stronger than the representative-sample test
+    above; complements the parser-frozenset drift guard.
+    """
+    from java_codebase_rag.cli_dispatch import OPERATOR_VERBS
+
+    out = _run_dispatcher_capture(monkeypatch, capsys, ["jrag", "--help"])
+    missing = [v for v in OPERATOR_VERBS if v not in out]
+    assert not missing, f"operator verbs missing from jrag --help: {sorted(missing)!r}"
+
+
+def test_legacy_alias_help_is_operator_only(monkeypatch, capsys):
+    """``java-codebase-rag --help`` preserves legacy behavior: routes to cli main.
+
+    Backward-compat contract: operators with shell scripts parsing the legacy
+    alias's help must not see new agent verbs appear there. Asserts the cli
+    main is invoked (one call) AND that the unified-help section title is
+    absent from the captured output (the legacy path delegates to
+    ``cli._console_script_main`` which never prints the unified section).
+
+    Note: the cli main stub records sys.argv but does not itself print help,
+    so we only assert routing here; the end-to-end behavior (operator-only
+    help text) is verified manually via ``.venv/bin/java-codebase-rag --help``.
+    """
+    monkeypatch.setattr(sys, "argv", ["java-codebase-rag", "--help"])
+    cli_calls, jrag_calls = _install_recording_stubs(monkeypatch)
+    from java_codebase_rag import cli_dispatch
+
+    cli_dispatch._console_script_main()
+    assert len(cli_calls) == 1, f"legacy alias --help should route to cli; got {cli_calls}"
+    assert not jrag_calls, f"legacy alias --help should not touch jrag; got {jrag_calls}"
+    out = capsys.readouterr().out
+    assert "Operator commands" not in out, (
+        "legacy alias help must NOT show the unified Operator commands section"
+    )

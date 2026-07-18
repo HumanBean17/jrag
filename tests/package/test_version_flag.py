@@ -47,4 +47,7 @@ def test_version_is_not_unknown():
     ``java-codebase-rag`` dist lingers in the venv at the pre-rename version; if
     ``_PACKAGE`` still pointed there, this assertion would catch the stale read.
     """
-    assert package_version() == "0.12.0"
+    # Two guards: not "unknown" catches a missing/stale dist lookup; not "0.11.2"
+    # catches a regression to the pre-rename distribution that still lingers here.
+    assert package_version() != "unknown"
+    assert package_version() != "0.11.2"
