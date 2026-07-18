@@ -1428,11 +1428,13 @@ def test_console_script_main_ctrl_c_exits_130_via_os_exit(
 
 
 def test_console_script_entry_point_routes_through_wrapper() -> None:
-    """``[project.scripts]`` must point ``java-codebase-rag`` at
-    ``_console_script_main`` (not ``main``) so the deterministic-exit path is the
-    one the installed CLI actually uses."""
+    """``[project.scripts]`` must point ``java-codebase-rag`` at a
+    ``_console_script_main`` wrapper (not ``main``) so the deterministic-exit
+    path is the one the installed CLI actually uses. After the jrag rename the
+    wrapper lives in the unified ``cli_dispatch`` dispatcher, which routes to
+    ``cli._console_script_main`` / ``jrag._console_script_main``."""
     pyproject = (Path(__file__).resolve().parent.parent.parent / "pyproject.toml").read_text(encoding="utf-8")
-    assert 'java-codebase-rag = "java_codebase_rag.cli:_console_script_main"' in pyproject
+    assert 'java-codebase-rag = "java_codebase_rag.cli_dispatch:_console_script_main"' in pyproject
     assert 'java-codebase-rag = "java-codebase-rag:main"' not in pyproject
     assert 'java-codebase-rag = "java_codebase_rag.cli:main"' not in pyproject
 
