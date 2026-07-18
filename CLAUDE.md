@@ -17,6 +17,9 @@ while pytest passes, run `.venv/bin/pip install -e ".[dev]"` — don't report it
   `tests/` (`.gitignore` un-ignores it there).
 - The full suite is slow. Run only the subset relevant to your change during
   development; run the full suite once, at the end of the task.
+- On-disk `.java-codebase-rag*` names (index dir, project YAML, hosts) and
+  `JAVA_CODEBASE_RAG_*` env vars are intentionally retained for backward
+  compatibility — do not "fix" them.
 
 ## Docs
 
