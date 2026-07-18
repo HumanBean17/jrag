@@ -291,3 +291,9 @@ The default embedding model is `sentence-transformers/all-MiniLM-L6-v2` (downloa
 - `get_service_topology` — microservice-level summary aggregating `HTTP_CALLS` / `ASYNC_CALLS`.
 - Agentic routing layer (query classifier → vector / graph / both).
 - Optional `codegraph_nodes` LanceDB table embedding symbol summaries so the graph itself is vector-searchable.
+
+---
+
+## Built on
+
+The indexing pipeline runs on [**CocoIndex**](https://github.com/cocoindex-io/cocoindex) — an open-source data indexing framework that powers the vector store lifecycle (`init`, `increment`, `reprocess`, `erase`) behind every `jrag` index.
