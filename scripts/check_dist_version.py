@@ -8,11 +8,15 @@ upload, not after.
 
 The target version is read from ``pyproject.toml`` on purpose: passing it in as
 an argument would let the operator (or the publishing agent) hand in the wrong
-number. Reading the single source of truth removes that failure mode.
+number. Reading the single source of truth removes that failure mode. The
+expected dist-file prefix is likewise derived from ``[project].name`` (PEP 427
+normalized: ``jrag-cli`` → ``jrag_cli``, ``java-codebase-rag`` →
+``java_codebase_rag``), so the guard works for both the canonical package and
+the legacy shim without hardcoding either name.
 
 Checked invariants (all must hold, else exit 1):
   - ``dist/`` is non-empty (i.e. a build actually ran).
-  - Every file in ``dist/`` is ``java_codebase_rag-<target>-*``.
+  - Every file in ``dist/`` is ``<normalized_name>-<target>-*``.
   - The wheel's METADATA ``Version:`` equals ``<target>``.
 
 Usage:
@@ -32,20 +36,36 @@ import zipfile
 from pathlib import Path
 
 
-def read_pyproject_version(pyproject: Path) -> str:
+def read_pyproject_name_and_version(pyproject: Path) -> tuple[str, str]:
+    """Return ``([project].name, [project].version)`` from a pyproject.toml."""
     with pyproject.open("rb") as fh:
         data = tomllib.load(fh)
-    return data["project"]["version"]
+    project = data["project"]
+    return project["name"], project["version"]
 
 
-def filename_version(path: Path) -> str | None:
-    """Extract the version from a dist filename.
+def normalized_prefix(name: str) -> str:
+    """Return the PEP 427 dist-file prefix for a project name.
+
+    Each run of ``-``, ``_``, ``.`` collapses to a single ``_`` and the result
+    is lowercased. Wheel filenames and ``.dist-info`` folder names use this
+    form, so a project named ``jrag-cli`` ships ``jrag_cli-<version>-*.whl``.
 
     Examples:
-        java_codebase_rag-0.10.0-py3-none-any.whl  -> 0.10.0
-        java_codebase_rag-0.10.0.tar.gz            -> 0.10.0
+        ``"jrag-cli"``         -> ``"jrag_cli"``
+        ``"java-codebase-rag"`` -> ``"java_codebase_rag"``
     """
-    m = re.match(r"^java_codebase_rag-(.+?)(?:-[^-]+-[^-]+-[^-]+\.whl|\.tar\.gz)$", path.name)
+    return re.sub(r"[-_.]+", "_", name).lower()
+
+
+def filename_version(path: Path, prefix: str) -> str | None:
+    """Extract the version from a dist filename built under ``prefix``.
+
+    Examples (prefix ``"jrag_cli"``):
+        jrag_cli-0.12.0-py3-none-any.whl  -> 0.12.0
+        jrag_cli-0.12.0.tar.gz            -> 0.12.0
+    """
+    m = re.match(rf"^{re.escape(prefix)}-(.+?)(?:-[^-]+-[^-]+-[^-]+\.whl|\.tar\.gz)$", path.name)
     return m.group(1) if m else None
 
 
@@ -64,7 +84,8 @@ def main() -> int:
     ap.add_argument("--pyproject", type=Path, default=Path("pyproject.toml"))
     args = ap.parse_args()
 
-    target = read_pyproject_version(args.pyproject)
+    project_name, target = read_pyproject_name_and_version(args.pyproject)
+    prefix = normalized_prefix(project_name)
     files = sorted(p for p in args.dist.iterdir() if p.is_file()) if args.dist.is_dir() else []
 
     if not files:
@@ -74,9 +95,9 @@ def main() -> int:
     errors: list[str] = []
     wheel_seen = False
     for f in files:
-        fv = filename_version(f)
+        fv = filename_version(f, prefix)
         if fv is None:
-            errors.append(f"{f.name}: not a java_codebase_rag dist artifact")
+            errors.append(f"{f.name}: not a {prefix} dist artifact")
         elif fv != target:
             errors.append(f"{f.name}: filename version {fv!r} ≠ pyproject {target!r}")
         if f.suffix == ".whl":
