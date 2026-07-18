@@ -15,6 +15,9 @@ from __future__ import annotations
 import subprocess
 import sys
 import threading
+from pathlib import Path
+
+import pytest
 
 from java_codebase_rag import pipeline
 
@@ -215,3 +218,51 @@ def test_abort_child_swallows_already_dead() -> None:
     proc = _AlreadyDeadProc()
     # Must not raise — caller relies on best-effort, swallow-and-return.
     pipeline._abort_child(proc)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "runner",
+    [pipeline.run_build_ast_graph, pipeline.run_incremental_graph],
+)
+def test_graph_runner_emits_failed_progress_on_abort(monkeypatch, runner) -> None:
+    events = []
+    monkeypatch.setattr(pipeline.subprocess, "Popen", lambda *args, **kwargs: object())
+
+    def interrupt(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(pipeline, "_popen_capturing_stderr", interrupt)
+
+    with pytest.raises(KeyboardInterrupt):
+        runner(
+            source_root=Path.cwd(),
+            ladybug_path=Path("graph.lbug"),
+            verbose=True,
+            on_progress=events.append,
+        )
+
+    assert [(event.kind, event.status) for event in events] == [("graph", "failed")]
+
+
+@pytest.mark.parametrize(
+    "runner",
+    [pipeline.run_build_ast_graph, pipeline.run_incremental_graph],
+)
+def test_graph_runner_emits_done_progress_on_success(monkeypatch, runner) -> None:
+    events = []
+    monkeypatch.setattr(pipeline.subprocess, "Popen", lambda *args, **kwargs: object())
+    monkeypatch.setattr(
+        pipeline,
+        "_popen_capturing_stderr",
+        lambda *args, **kwargs: ("", "", 0),
+    )
+
+    result = runner(
+        source_root=Path.cwd(),
+        ladybug_path=Path("graph.lbug"),
+        verbose=True,
+        on_progress=events.append,
+    )
+
+    assert result.returncode == 0
+    assert [(event.kind, event.status) for event in events] == [("graph", "done")]

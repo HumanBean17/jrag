@@ -450,19 +450,39 @@ def run_build_ast_graph(
             capture_output=True,
             text=True,
         )
-    proc = subprocess.Popen(
-        cmd,
-        cwd=str(source_root),
-        env=env or os.environ.copy(),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        bufsize=0,
-    )
-    out_s, err_s, code = _popen_capturing_stderr(
-        proc, verbose=verbose, on_progress=on_progress, on_progress_console=on_progress_console
-    )
+    t0 = time.perf_counter()
+    code = -1
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(source_root),
+            env=env or os.environ.copy(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=0,
+        )
+        out_s, err_s, code = _popen_capturing_stderr(
+            proc,
+            verbose=verbose,
+            on_progress=on_progress,
+            on_progress_console=on_progress_console,
+        )
+    finally:
+        if on_progress is not None:
+            on_progress(
+                ProgressEvent(
+                    kind="graph",
+                    phase=None,
+                    pass_=None,
+                    done=None,
+                    total=None,
+                    status="done" if code == 0 else "failed",
+                    elapsed_s=time.perf_counter() - t0,
+                )
+            )
     if not verbose:
         from java_codebase_rag.cli_format import bold_cyan, styled_check, styled_cross
+
         marker = styled_check() if code == 0 else styled_cross()
         print(f"{marker} {bold_cyan('[graph]')} done", file=sys.stderr, flush=True)
     return subprocess.CompletedProcess(args=cmd, returncode=code, stdout=out_s, stderr=err_s)
@@ -509,19 +529,39 @@ def run_incremental_graph(
             capture_output=True,
             text=True,
         )
-    proc = subprocess.Popen(
-        cmd,
-        cwd=str(source_root),
-        env=env or os.environ.copy(),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        bufsize=0,
-    )
-    out_s, err_s, code = _popen_capturing_stderr(
-        proc, verbose=verbose, on_progress=on_progress, on_progress_console=on_progress_console
-    )
+    t0 = time.perf_counter()
+    code = -1
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(source_root),
+            env=env or os.environ.copy(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=0,
+        )
+        out_s, err_s, code = _popen_capturing_stderr(
+            proc,
+            verbose=verbose,
+            on_progress=on_progress,
+            on_progress_console=on_progress_console,
+        )
+    finally:
+        if on_progress is not None:
+            on_progress(
+                ProgressEvent(
+                    kind="graph",
+                    phase=None,
+                    pass_=None,
+                    done=None,
+                    total=None,
+                    status="done" if code == 0 else "failed",
+                    elapsed_s=time.perf_counter() - t0,
+                )
+            )
     if not verbose:
         from java_codebase_rag.cli_format import bold_cyan, styled_check, styled_cross
+
         marker = styled_check() if code == 0 else styled_cross()
         print(f"{marker} {bold_cyan('[increment]')} done", file=sys.stderr, flush=True)
     return subprocess.CompletedProcess(args=cmd, returncode=code, stdout=out_s, stderr=err_s)
