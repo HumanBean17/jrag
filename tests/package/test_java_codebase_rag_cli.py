@@ -639,7 +639,7 @@ def test_increment_vectors_only_skips_graph(
     err = buf.getvalue()
     # Should contain stale warning
     assert "WARNING: AST graph (LadybugDB) incremental rebuild is not yet implemented." in err
-    assert "java-codebase-rag reprocess" in err
+    assert "jrag reprocess" in err
     assert cli_mod.LADYBUG_INCREMENTAL_TRACKING_ISSUE_URL in err
 
 

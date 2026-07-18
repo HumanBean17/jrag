@@ -945,7 +945,7 @@ def build_parser() -> argparse.ArgumentParser:
         "Run `jrag <command> --help` for command-specific options."
     )
     parser = argparse.ArgumentParser(
-        prog="jrag",
+        prog="java-codebase-rag",
         description=description,
         formatter_class=argparse.RawDescriptionHelpFormatter,
         exit_on_error=False,

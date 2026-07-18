@@ -610,8 +610,8 @@ def resolve_mcp_command(*, non_interactive: bool, surface: Surface = "mcp") -> s
             )
         else:
             print(
-                "Ensure `jrag` is installed (provides the `jrag` "
-                "console script), then re-run with `--non-interactive --agent <host>`."
+                "Ensure the `jrag` console script is installed, "
+                "then re-run with `--non-interactive --agent <host>`."
             )
         raise SystemExit(2)
 
