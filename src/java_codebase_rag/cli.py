@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 # Heavy imports (`server`, `pr_analysis`, `path_filtering.LayeredIgnore`,
-# `build_ast_graph`) stay lazy inside handlers so `java-codebase-rag --help` stays fast.
+# `build_ast_graph`) stay lazy inside handlers so `jrag --help` stays fast.
 
 import argparse
 import asyncio
@@ -49,7 +49,7 @@ _INCREMENT_WARNING_LINES = (
     "Lance vector index has been updated incrementally and is current.",
     "",
     "For an up-to-date graph, run:",
-    "    java-codebase-rag reprocess",
+    "    jrag reprocess",
     "",
     "Track progress on LadybugDB incremental rebuild:",
     f"    {LADYBUG_INCREMENTAL_TRACKING_ISSUE_URL}",
@@ -61,14 +61,14 @@ _REFRESH_DEPRECATION = (
 )
 
 _REPROCESS_DRIFT_VECTORS_ONLY = (
-    "java-codebase-rag reprocess: rebuilt vectors only; graph (code_graph.lbug) was NOT rebuilt "
+    "jrag reprocess: rebuilt vectors only; graph (code_graph.lbug) was NOT rebuilt "
     "and may now reflect a stale source snapshot."
 )
 
 
 def _reprocess_drift_graph_only_line(index_dir: Path) -> str:
     return (
-        "java-codebase-rag reprocess: rebuilt graph only; vectors (Lance tables under "
+        "jrag reprocess: rebuilt graph only; vectors (Lance tables under "
         f"{index_dir}) were NOT rebuilt and may now reflect a stale source snapshot."
     )
 
@@ -98,10 +98,10 @@ def _is_graph_preflight_blocker(g: Any) -> bool:
 def _emit_reprocess_selective_tty(*, mode: str) -> None:
     if mode == "vectors":
         print("Rebuilt: vectors")
-        print("Skipped: graph (use `java-codebase-rag reprocess --graph-only` or `reprocess` to refresh)")
+        print("Skipped: graph (use `jrag reprocess --graph-only` or `reprocess` to refresh)")
     else:
         print("Rebuilt: graph")
-        print("Skipped: vectors (use `java-codebase-rag reprocess --vectors-only` or `reprocess` to refresh)")
+        print("Skipped: vectors (use `jrag reprocess --vectors-only` or `reprocess` to refresh)")
 
 
 def _reprocess_success_message(mode: str | None, payload: dict[str, Any]) -> str:
@@ -147,7 +147,7 @@ def _pipeline_header(subcommand: str, cfg: ResolvedOperatorConfig) -> None:
     root = cfg.source_root.resolve()
     idx = cfg.index_dir.resolve()
     print(
-        bold(f"java-codebase-rag {subcommand} {_PIPELINE_SEP} source={root} {_PIPELINE_SEP} index={idx}"),
+        bold(f"jrag {subcommand} {_PIPELINE_SEP} source={root} {_PIPELINE_SEP} index={idx}"),
         file=sys.stderr,
         flush=True,
     )
@@ -159,7 +159,7 @@ def _pipeline_footer(subcommand: str, started: float, exit_code: int) -> None:
     elapsed = time.perf_counter() - started
     marker = styled_check() if exit_code == 0 else styled_cross()
     print(
-        f"{marker} {bold(f'java-codebase-rag {subcommand} {_PIPELINE_SEP} finished in {elapsed:.2f}s')}"
+        f"{marker} {bold(f'jrag {subcommand} {_PIPELINE_SEP} finished in {elapsed:.2f}s')}"
         + (f" (exit={exit_code})" if exit_code != 0 else ""),
         file=sys.stderr,
         flush=True,
@@ -358,8 +358,8 @@ def _cmd_init(args: argparse.Namespace) -> int:
                 "success": False,
                 "message": (
                     "init refused: index paths already exist. "
-                    "Use `java-codebase-rag reprocess` to rebuild in place, "
-                    "or `java-codebase-rag erase --yes` then `init` for a clean slate."
+                    "Use `jrag reprocess` to rebuild in place, "
+                    "or `jrag erase --yes` then `init` for a clean slate."
                 ),
                 "non_empty_paths": paths,
             }
@@ -702,7 +702,7 @@ def _cmd_erase(args: argparse.Namespace) -> int:
     cfg.apply_to_os_environ()
     # Lazy import: build_ast_graph transitively pulls numpy/ladybug/pyarrow/
     # tree_sitter (~54ms), and these filenames are only needed on the erase path.
-    # Keeping it out of the top-level import lets `java-codebase-rag --help` (and
+    # Keeping it out of the top-level import lets `jrag --help` (and
     # every other command) stay fast -- see the lazy-import invariant atop this file.
     from java_codebase_rag.graph.build_ast_graph import BUILDER_OWNED_INDEX_FILES
     builder_paths = [cfg.ladybug_path.parent / name for name in BUILDER_OWNED_INDEX_FILES]
@@ -729,7 +729,7 @@ def _cmd_erase(args: argparse.Namespace) -> int:
     if not args.yes:
         if not sys.stdin.isatty():
             print(
-                "java-codebase-rag erase: non-interactive stdin; pass --yes to confirm.",
+                "jrag erase: non-interactive stdin; pass --yes to confirm.",
                 file=sys.stderr,
             )
             return 2
@@ -740,7 +740,7 @@ def _cmd_erase(args: argparse.Namespace) -> int:
             # (the Windows NUL device is a character device, so isatty() lies).
             # Treat it as a refusal instead of crashing with an EOF traceback.
             print(
-                "java-codebase-rag erase: non-interactive stdin; pass --yes to confirm.",
+                "jrag erase: non-interactive stdin; pass --yes to confirm.",
                 file=sys.stderr,
             )
             return 2
@@ -753,7 +753,7 @@ def _cmd_erase(args: argparse.Namespace) -> int:
         drop = run_cocoindex_drop(env, quiet=bool(args.quiet))
         if drop.returncode == 127:
             print(
-                "java-codebase-rag erase: cocoindex CLI not found next to this Python; "
+                "jrag erase: cocoindex CLI not found next to this Python; "
                 "skipped `cocoindex drop` — cocoindex.db (if any) was not removed by CocoIndex.",
                 file=sys.stderr,
             )
@@ -927,7 +927,7 @@ def _cmd_analyze_pr(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     description = (
-        "java-codebase-rag — graph-native code intelligence for Java microservices.\n\n"
+        "jrag — graph-native code intelligence for Java microservices.\n\n"
         "Lifecycle commands stream subprocess progress to stderr (including relayed child stdout); "
         "--quiet suppresses that stream; stdout remains the machine-readable payload.\n\n"
         "Lifecycle (manage the index):\n"
@@ -942,10 +942,10 @@ def build_parser() -> argparse.ArgumentParser:
         "  unresolved-calls  List or aggregate receiver-failure call sites (not in CALLS).\n\n"
         "Analysis (work with code changes):\n"
         "  analyze-pr      Compute blast-radius + risk score for a unified diff.\n\n"
-        "Run `java-codebase-rag <command> --help` for command-specific options."
+        "Run `jrag <command> --help` for command-specific options."
     )
     parser = argparse.ArgumentParser(
-        prog="java-codebase-rag",
+        prog="jrag",
         description=description,
         formatter_class=argparse.RawDescriptionHelpFormatter,
         exit_on_error=False,
@@ -1170,7 +1170,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         return int(e.code) if isinstance(e.code, int) else 2
     except argparse.ArgumentError as exc:
-        print(f"java-codebase-rag: {exc}", file=sys.stderr)
+        print(f"jrag: {exc}", file=sys.stderr)
         return 2
     handler = getattr(args, "handler", None)
     if handler is None:

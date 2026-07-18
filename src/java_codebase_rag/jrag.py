@@ -1356,7 +1356,7 @@ def _load_graph(cfg):  # type: ignore[no-untyped-def]
     """Load the LadybugGraph with actionable error envelopes.
 
     * missing index -> ``_IndexNotFound`` (caught in ``main`` -> envelope with
-      a ``java-codebase-rag init --source-root <root>`` remediation).
+      a ``jrag init --source-root <root>`` remediation).
     * ontology-mismatch (``RuntimeError`` from ``LadybugGraph.get``) ->
       ``_IndexStale`` (caught in ``main`` -> envelope with a rebuild hint).
     """
@@ -1366,7 +1366,7 @@ def _load_graph(cfg):  # type: ignore[no-untyped-def]
     if not LadybugGraph.exists(ladybug_path):
         raise _IndexNotFound(
             f"No index at {cfg.ladybug_path}. "
-            "Run: java-codebase-rag init --source-root <root>"
+            "Run: jrag init --source-root <root>"
         )
     try:
         return LadybugGraph.get(ladybug_path)

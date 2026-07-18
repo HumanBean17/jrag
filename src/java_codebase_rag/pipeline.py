@@ -24,7 +24,7 @@ COCOINDEX_TARGET = "java_index_flow_lancedb.py:JavaCodeIndexLance"
 # Single source of truth — imported by cli.py (init/increment) and server.py
 # (reprocess) so the wording can't drift between the two paths.
 VECTORS_SKIPPED_GRAPH_ONLY = (
-    "java-codebase-rag: vectors skipped — vector stack not installed on this platform "
+    "jrag: vectors skipped — vector stack not installed on this platform "
     "(graph-only mode). The graph is built/refreshed; semantic search is unavailable."
 )
 
@@ -212,7 +212,7 @@ def run_cocoindex_update(
         drop = run_cocoindex_drop(env, quiet=quiet)
         if drop.returncode != 0 and not is_cocoindex_preflight_blocker(drop):
             print(
-                "java-codebase-rag: drop-before-reprocess failed "
+                "jrag: drop-before-reprocess failed "
                 f"(exit {drop.returncode}); falling back to in-place update: "
                 f"{(drop.stderr or '').strip()[:200]}",
                 file=sys.stderr,
@@ -252,7 +252,7 @@ def _maybe_run_serialized_optimize(
     idx_raw = env.get("JAVA_CODEBASE_RAG_INDEX_DIR", "").strip()
     if not idx_raw:
         print(
-            "java-codebase-rag: optimize skipped — JAVA_CODEBASE_RAG_INDEX_DIR "
+            "jrag: optimize skipped — JAVA_CODEBASE_RAG_INDEX_DIR "
             "not set in subprocess env",
             file=sys.stderr,
         )
@@ -263,7 +263,7 @@ def _maybe_run_serialized_optimize(
         asyncio.run(optimize_lance_tables(Path(idx_raw), quiet=quiet, on_progress=on_progress))
     except Exception as exc:
         # Never crash the CLI on an optimize failure — surface on stderr only.
-        print(f"java-codebase-rag: optimize failed: {exc}", file=sys.stderr)
+        print(f"jrag: optimize failed: {exc}", file=sys.stderr)
 
 
 def is_cocoindex_preflight_blocker(proc: subprocess.CompletedProcess[str]) -> bool:

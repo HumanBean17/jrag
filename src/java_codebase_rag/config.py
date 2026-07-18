@@ -125,7 +125,7 @@ def maybe_expand_embedding_model_path(
     expanded = os.path.expandvars(os.path.expanduser(value))
     if _UNRESOLVED_VAR_RE.search(expanded):
         print(
-            f"java-codebase-rag: path-shaped model string contains unresolved variable: {expanded}",
+            f"jrag: path-shaped model string contains unresolved variable: {expanded}",
             file=sys.stderr,
         )
     if expanded.startswith(("./", "../")):
@@ -191,7 +191,7 @@ def emit_legacy_env_hints_if_present() -> None:
             continue
         _legacy_hint_seen.add(key)
         print(
-            f"java-codebase-rag: {old} is set but no longer read; use {replacement}.",
+            f"jrag: {old} is set but no longer read; use {replacement}.",
             file=sys.stderr,
         )
 
@@ -208,7 +208,7 @@ def emit_legacy_yaml_hint_if_needed(source_root: Path) -> None:
         if (source_root / name).is_file():
             _legacy_yaml_hint_roots.add(root_s)
             print(
-                "java-codebase-rag: found legacy "
+                "jrag: found legacy "
                 f"{name}; rename to .java-codebase-rag.yml to re-enable config.",
                 file=sys.stderr,
             )
@@ -299,7 +299,7 @@ def _config_dir_from_pointer(anchor: Path) -> Path | None:
         if key not in _stale_pointer_seen:
             _stale_pointer_seen.add(key)
             print(
-                "java-codebase-rag: ignoring stale index pointer "
+                "jrag: ignoring stale index pointer "
                 f"{pointer} -> {raw} (target missing or not a config file).",
                 file=sys.stderr,
             )
@@ -343,7 +343,7 @@ def load_yaml_mapping(source_root: Path) -> dict[str, Any]:
         # tuple restores the graceful-degradation contract while still surfacing the
         # problem on stderr.
         print(
-            f"java-codebase-rag: could not load config {path}: {exc}; ignoring config.",
+            f"jrag: could not load config {path}: {exc}; ignoring config.",
             file=sys.stderr,
         )
         return {}
@@ -713,21 +713,21 @@ def resolve_operator_config(
     # Inline floors/validation (mirror the existing graceful-degradation style).
     if w_debounce < 100:
         print(
-            f"java-codebase-rag: watch.debounce_ms={w_debounce} is below the 100 ms "
+            f"jrag: watch.debounce_ms={w_debounce} is below the 100 ms "
             "floor; falling back to 1500.",
             file=sys.stderr,
         )
         w_debounce, w_debounce_src = 1500, "default"
     if w_backend not in ("auto", "watchdog", "polling"):
         print(
-            f"java-codebase-rag: watch.backend={w_backend!r} is not one of "
+            f"jrag: watch.backend={w_backend!r} is not one of "
             "auto/watchdog/polling; falling back to 'auto'.",
             file=sys.stderr,
         )
         w_backend, w_backend_src = "auto", "default"
     if w_poll < 200:
         print(
-            f"java-codebase-rag: watch.poll_interval_ms={w_poll} is below the 200 ms "
+            f"jrag: watch.poll_interval_ms={w_poll} is below the 200 ms "
             "floor; falling back to 2000.",
             file=sys.stderr,
         )

@@ -53,7 +53,7 @@ _INSTRUCTIONS = (
     "Successful responses from any tool may include `hints_structured` (tool call suggestions with a `reason` field) and `advisories` (pure informational text) when hints are enabled. "
     "Edge labels: EXTENDS, IMPLEMENTS, INJECTS, OVERRIDES, DECLARES, DECLARES_CLIENT, DECLARES_PRODUCER, CALLS, EXPOSES, HTTP_CALLS, ASYNC_CALLS; "
     "type Symbols may also use composed neighbors edge_types DECLARES.DECLARES_CLIENT, DECLARES.DECLARES_PRODUCER, DECLARES.EXPOSES (out only, type Symbol origin). "
-    "Reprocess/init, meta, tables, diagnose-ignore, analyze-pr: use java-codebase-rag CLI — not MCP."
+    "Reprocess/init, meta, tables, diagnose-ignore, analyze-pr: use jrag CLI — not MCP."
 )
 
 
@@ -250,7 +250,7 @@ def _graph_meta_output() -> GraphMetaOutput:
             success=True,
             enabled=False,
             db_path=resolve_ladybug_path(),
-            message="Ladybug graph not present; run java-codebase-rag reprocess or build_ast_graph.py",
+            message="Ladybug graph not present; run jrag reprocess or build_ast_graph.py",
         )
     try:
         graph = LadybugGraph.get()
@@ -481,7 +481,7 @@ async def run_refresh_pipeline(
         await drop_proc.communicate()
     except Exception as exc:
         print(
-            f"java-codebase-rag: drop-before-reprocess failed ({exc!s}); "
+            f"jrag: drop-before-reprocess failed ({exc!s}); "
             "falling back to in-place update",
             file=sys.stderr,
         )
@@ -576,7 +576,7 @@ async def run_refresh_pipeline(
             await optimize_lance_tables(idx_dir, quiet=quiet, on_progress=on_progress)
         except Exception as exc:
             optimize_error = f"lance optimize failed: {exc}"
-            print(f"java-codebase-rag: {optimize_error}", file=sys.stderr)
+            print(f"jrag: {optimize_error}", file=sys.stderr)
         graph_code, graph_out, graph_err, graph_started = await _run_graph_phase(
             root, quiet=quiet, verbose=verbose,
             on_progress=on_progress, on_progress_console=on_progress_console,

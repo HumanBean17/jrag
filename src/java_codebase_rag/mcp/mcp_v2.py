@@ -1265,7 +1265,7 @@ def find_v2(
 _DESCRIBE_UCS_ID_MESSAGE = (
     "UnresolvedCallSite ids (ucs:…) are not describable — use describe(caller_method_id) "
     "for record.data.unresolved_call_sites, neighbors(..., include_unresolved=True), "
-    "or java-codebase-rag unresolved-calls list --method-id <caller_id>"
+    "or jrag unresolved-calls list --method-id <caller_id>"
 )
 
 
@@ -1363,7 +1363,7 @@ def describe_v2(
                 if total > len(inline):
                     data["unresolved_call_sites_footer"] = (
                         f"{total} unresolved call sites — see "
-                        f"java-codebase-rag unresolved-calls list --method-id {node_id} for the full list"
+                        f"jrag unresolved-calls list --method-id {node_id} for the full list"
                     )
         record = NodeRecord(id=ref.id, kind=kind, fqn=ref.fqn, data=data, edge_summary=edge_summary)
         raw_struct, raw_advisories = _hints_or_skip("describe", {"success": True, "record": record.model_dump()})

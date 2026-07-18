@@ -4,7 +4,7 @@ Tests:
 20. ``test_status_reports_ontology_version_and_counts`` - real index -> exit 0,
     output mentions ontology 17 and counts.
 21. ``test_missing_index_returns_actionable_error`` - empty index dir ->
-    ``status: error`` envelope mentioning ``java-codebase-rag init``, exit 2
+    ``status: error`` envelope mentioning ``jrag init``, exit 2
     (NOT a traceback crash).
 22. ``test_offset_is_not_a_global_flag`` - ``jrag callers --offset 5`` is a
     usage error (offset is never registered globally; traversal commands don't
@@ -101,7 +101,7 @@ def test_missing_index_returns_actionable_error(tmp_path: Path) -> None:
     assert payload["status"] == "error"
     msg = payload.get("message") or ""
     # Actionable message must reference the operator init command.
-    assert "java-codebase-rag init" in msg, f"missing init hint: {msg!r}"
+    assert "jrag init" in msg, f"missing init hint: {msg!r}"
     # The hint must include the literal `--source-root` flag form.
     assert "--source-root" in msg
     # No traceback leaked to stdout (would break JSON parse); stderr may carry
@@ -118,7 +118,7 @@ def test_missing_index_text_format_emits_actionable_envelope(tmp_path: Path) -> 
     proc = _run_jrag(["status"], env=env)
     assert proc.returncode == 2
     assert proc.stdout.startswith("error:")
-    assert "java-codebase-rag init" in proc.stdout
+    assert "jrag init" in proc.stdout
 
 
 # ----- Test 22: --offset is NOT a global flag -----
