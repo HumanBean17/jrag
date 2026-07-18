@@ -34,13 +34,35 @@ _DEPRECATION_LINE = (
     "Set JRAG_NO_DEPRECATION=1 to silence.\n"
 )
 
+#: Executable suffixes appended by Windows (and packaging tools like pip) to
+#: console-script wrappers. All three are exactly 4 characters long (``.exe``,
+#: ``.bat``, ``.cmd``) so a single ``b[:-4]`` slice strips any of them. Stripping
+#: keeps routing decisions stable across POSIX and Windows installs:
+#: ``C:\\Users\\foo\\Scripts\\jrag.exe`` → ``"jrag"``;
+#: ``...\\java-codebase-rag.exe`` → ``"java-codebase-rag"``.
+_WINDOWS_EXE_SUFFIXES: tuple[str, ...] = (".exe", ".bat", ".cmd")
+
 
 def _invoked_program_name() -> str:
-    """Basename of ``sys.argv[0]`` when available, else empty string."""
+    """Basename of ``sys.argv[0]`` with a Windows executable suffix stripped.
+
+    Returns the empty string when ``sys.argv`` is empty. Otherwise takes
+    ``os.path.basename(sys.argv[0])`` and, if it ends (case-insensitively) with
+    one of ``.exe`` / ``.bat`` / ``.cmd``, drops the 4-character suffix.
+
+    Shared with :mod:`java_codebase_rag.cli_dispatch` for identity-default
+    routing: both legacy-alias deprecation here and ``jrag``-vs-alias routing
+    there rely on the same canonicalized basename. Without this, Windows builds
+    would route ``jrag.exe --version`` through the wrong parser and never emit
+    the deprecation notice for ``java-codebase-rag.exe``.
+    """
     argv = sys.argv
     if not argv:
         return ""
-    return os.path.basename(argv[0])
+    base = os.path.basename(argv[0])
+    if base.lower().endswith(_WINDOWS_EXE_SUFFIXES):
+        return base[:-4]
+    return base
 
 
 def _stderr_is_tty() -> bool:

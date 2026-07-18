@@ -253,6 +253,10 @@ class TestAgentGuideConsistency:
         """The copy-paste block must include a navigation patterns section."""
         guide = Path(__file__).resolve().parent.parent.parent / "docs" / "AGENT-GUIDE.md"
         text = guide.read_text(encoding="utf-8")
+        # NOTE: the BEGIN/END marker string is intentionally the OLD brand
+        # ("java-codebase-rag"), not "jrag": this marker is load-bearing for
+        # already-deployed skill copies (consumers copy-paste the block verbatim
+        # and the install flow matches on it). Do NOT "fix" it to the new name.
         begin = text.find("<!-- BEGIN java-codebase-rag MCP guide -->")
         end = text.find("<!-- END java-codebase-rag MCP guide -->")
         assert begin != -1 and end != -1, "AGENT-GUIDE.md missing BEGIN/END markers"
@@ -268,6 +272,8 @@ class TestAgentGuideConsistency:
         in the consumer's project."""
         guide = Path(__file__).resolve().parent.parent.parent / "docs" / "AGENT-GUIDE.md"
         text = guide.read_text(encoding="utf-8")
+        # See test_guide_has_navigation_patterns_table: the OLD-brand marker is
+        # load-bearing for deployed skill copies; do not rename it.
         begin = text.find("<!-- BEGIN java-codebase-rag MCP guide -->")
         end = text.find("<!-- END java-codebase-rag MCP guide -->")
         assert begin != -1 and end != -1, "AGENT-GUIDE.md missing BEGIN/END markers"

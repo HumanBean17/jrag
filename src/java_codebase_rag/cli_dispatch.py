@@ -61,12 +61,12 @@ TTY so it stays silent.
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from typing import Callable
 
 from java_codebase_rag import cli as _cli_mod
 from java_codebase_rag import jrag as _jrag_mod
+from java_codebase_rag._deprecation import _invoked_program_name
 from java_codebase_rag._deprecation import maybe_warn_legacy_alias
 
 __all__ = [
@@ -141,14 +141,6 @@ AGENT_VERBS: frozenset[str] = frozenset(
         "entities",
     }
 )
-
-
-def _invoked_program_basename() -> str:
-    """Basename of ``sys.argv[0]``, or empty string if argv is empty."""
-    argv = sys.argv
-    if not argv:
-        return ""
-    return os.path.basename(argv[0])
 
 
 def _is_unified_help_request() -> bool:
@@ -230,7 +222,7 @@ def _choose_target() -> Callable[[], None]:
             return _jrag_mod._console_script_main
 
     # No verb token: identity default by argv[0] basename.
-    if _invoked_program_basename() == "jrag":
+    if _invoked_program_name() == "jrag":
         return _jrag_mod._console_script_main
     return _cli_mod._console_script_main
 
@@ -248,7 +240,7 @@ def _console_script_main() -> None:
     reimplementing startup here.
     """
     maybe_warn_legacy_alias()
-    if _invoked_program_basename() == "jrag" and _is_unified_help_request():
+    if _invoked_program_name() == "jrag" and _is_unified_help_request():
         _print_unified_help()
         return
     target = _choose_target()

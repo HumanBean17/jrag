@@ -104,3 +104,60 @@ def test_any_nonempty_env_value_suppresses(monkeypatch):
         fake = _setup(monkeypatch, "java-codebase-rag", isatty=True, env_value=val)
         maybe_warn_legacy_alias()
         assert fake.writes == [], f"value {val!r} should suppress"
+
+
+def test_empty_string_env_does_not_suppress(monkeypatch):
+    """Rule: an empty ``JRAG_NO_DEPRECATION`` value does NOT suppress.
+
+    Pins the documented "present AND non-empty ⇒ suppress" boundary: ``""`` is
+    present in the environ but empty, so on a TTY the notice still emits.
+    Symmetric counterpart to :func:`test_any_nonempty_env_value_suppresses`.
+    """
+    fake = _setup(monkeypatch, "java-codebase-rag", isatty=True, env_value="")
+    maybe_warn_legacy_alias()
+    assert "".join(fake.writes) == EXPECTED_LINE
+
+
+# --- Windows .exe suffix stripping (cross-platform basename normalization) ---
+#
+# pip-installed console scripts on Windows land as ``...\\jrag.exe`` (and
+# ``...\\java-codebase-rag.exe``) in argv[0]. The shared helper strips the
+# ``.exe``/``.bat``/``.cmd`` suffix before the legacy-alias lookup so the
+# deprecation notice still fires cross-platform. The simulations below use
+# forward-slash paths (``/`` is a path separator on BOTH POSIX and Windows),
+# since backslash paths would not be split by ``os.path.basename`` on the
+# POSIX test runner.
+
+
+def test_emits_for_java_codebase_rag_exe_alias_on_windows(monkeypatch):
+    """Windows ships ``java-codebase-rag.exe`` as argv[0]; the suffix is stripped
+    before the legacy-alias set lookup, so the deprecation notice still fires.
+
+    Without the strip in :func:`_invoked_program_name`, basename would be
+    ``"java-codebase-rag.exe"`` (not in ``_LEGACY_ALIASES``) and the notice
+    would stay silent on Windows — a regression of the rename's deprecation
+    surface.
+    """
+    fake = _setup(
+        monkeypatch,
+        "C:/Users/foo/Scripts/java-codebase-rag.exe",
+        isatty=True,
+    )
+    maybe_warn_legacy_alias()
+    assert "".join(fake.writes) == EXPECTED_LINE
+
+
+def test_canonical_jrag_exe_does_not_emit_on_windows(monkeypatch):
+    """Symmetric guard: a ``.exe``-suffixed CANONICAL name stays canonical.
+
+    After suffix-stripping ``jrag.exe`` → ``"jrag"`` (not in ``_LEGACY_ALIASES``),
+    so the deprecation notice is correctly silent under the canonical name on
+    Windows. Catches the inverse regression of the test above.
+    """
+    fake = _setup(
+        monkeypatch,
+        "C:/Users/foo/Scripts/jrag.exe",
+        isatty=True,
+    )
+    maybe_warn_legacy_alias()
+    assert fake.writes == []

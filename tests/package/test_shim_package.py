@@ -41,15 +41,20 @@ def test_shim_name_is_legacy() -> None:
     assert data["project"]["name"] == "java-codebase-rag"
 
 
-def test_shim_version_matches_brief() -> None:
-    data = _load(SHIM_PYPROJECT)
-    assert data["project"]["version"] == "0.12.0"
-
-
 def test_shim_depends_only_on_jrag_cli() -> None:
-    """The shim's sole runtime dep is the canonical dist, pinned exactly."""
-    data = _load(SHIM_PYPROJECT)
-    assert data["project"]["dependencies"] == ["jrag-cli==0.12.0"]
+    """The shim's sole runtime dep is the canonical dist, pinned exactly.
+
+    The pin version is derived from the root pyproject (the canonical dist's
+    source of truth) rather than hardcoded, so a release bump updates the pin
+    automatically — no second hardcoded ``"0.12.0"`` to forget.
+    """
+    shim = _load(SHIM_PYPROJECT)
+    root = _load(ROOT_PYPROJECT)
+    root_version = root["project"]["version"]
+    assert shim["project"]["dependencies"] == [f"jrag-cli=={root_version}"], (
+        f"shim dep pin drifted from root version {root_version!r}: "
+        f"{shim['project']['dependencies']!r}"
+    )
 
 
 def test_shim_declares_no_console_scripts() -> None:

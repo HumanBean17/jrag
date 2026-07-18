@@ -264,6 +264,23 @@ def test_jrag_unified_help_includes_every_operator_verb(monkeypatch, capsys):
     assert not missing, f"operator verbs missing from jrag --help: {sorted(missing)!r}"
 
 
+def test_jrag_unified_help_includes_every_agent_verb(monkeypatch, capsys):
+    """The agent-parser section of ``jrag --help`` must list ALL agent verbs.
+
+    Symmetric drift guard to
+    :func:`test_jrag_unified_help_includes_every_operator_verb`: the agent
+    parser prints its own positional-arguments block (one line per verb), and
+    a regression that hid or dropped a verb from that block would silently
+    shrink the discovery surface. Iterates ``AGENT_VERBS`` so any future verb
+    addition is covered automatically.
+    """
+    from java_codebase_rag.cli_dispatch import AGENT_VERBS
+
+    out = _run_dispatcher_capture(monkeypatch, capsys, ["jrag", "--help"])
+    missing = [v for v in AGENT_VERBS if v not in out]
+    assert not missing, f"agent verbs missing from jrag --help: {sorted(missing)!r}"
+
+
 def test_legacy_alias_help_is_operator_only(monkeypatch, capsys):
     """``java-codebase-rag --help`` preserves legacy behavior: routes to cli main.
 
@@ -276,6 +293,10 @@ def test_legacy_alias_help_is_operator_only(monkeypatch, capsys):
     Note: the cli main stub records sys.argv but does not itself print help,
     so we only assert routing here; the end-to-end behavior (operator-only
     help text) is verified manually via ``.venv/bin/java-codebase-rag --help``.
+    The explicit ``assert out == ""`` documents the stub-replacement: the
+    legacy alias path delegates to ``cli._console_script_main`` which the
+    recording stub here replaces, so nothing reaches stdout — the unified
+    "Operator commands" section must NOT appear under the legacy alias.
     """
     monkeypatch.setattr(sys, "argv", ["java-codebase-rag", "--help"])
     cli_calls, jrag_calls = _install_recording_stubs(monkeypatch)
@@ -285,6 +306,72 @@ def test_legacy_alias_help_is_operator_only(monkeypatch, capsys):
     assert len(cli_calls) == 1, f"legacy alias --help should route to cli; got {cli_calls}"
     assert not jrag_calls, f"legacy alias --help should not touch jrag; got {jrag_calls}"
     out = capsys.readouterr().out
+    assert out == "", (
+        "legacy alias --help delegates to the stub-replaced cli main; the stub "
+        "records argv and prints nothing, so stdout must be empty here"
+    )
     assert "Operator commands" not in out, (
         "legacy alias help must NOT show the unified Operator commands section"
+    )
+
+
+# --- Windows .exe suffix: identity-default routing is suffix-stripped ---------
+#
+# pip-installed console scripts on Windows land as ``...\\jrag.exe`` (and
+# ``...\\java-codebase-rag.exe``) in argv[0]. The shared helper in
+# ``_deprecation._invoked_program_name`` strips the ``.exe``/``.bat``/``.cmd``
+# suffix so identity-default routing works identically across POSIX and Windows.
+# These tests use forward-slash paths (``/`` is a separator on BOTH POSIX and
+# Windows), since backslash paths would not be split by ``os.path.basename`` on
+# the POSIX test runner.
+
+
+def test_jrag_exe_version_routes_to_jrag_target(monkeypatch):
+    """``jrag.exe --version`` (Windows argv[0]) routes to the jrag target.
+
+    Without suffix-stripping, ``os.path.basename`` returns ``"jrag.exe"`` and
+    the identity-default branch falls through to the cli parser, so Windows
+    users would see ``java-codebase-rag 0.12.0`` from ``jrag --version`` and a
+    non-unified help.
+    """
+    cli_calls, jrag_calls = _run_dispatcher(
+        monkeypatch,
+        ["C:/Users/foo/Scripts/jrag.exe", "--version"],
+    )
+    assert len(jrag_calls) == 1, (
+        f"jrag.exe --version should route to jrag target; got jrag={jrag_calls}"
+    )
+    assert not cli_calls, (
+        f"jrag.exe --version should NOT route to cli; got cli={cli_calls}"
+    )
+
+
+def test_jrag_exe_no_verb_routes_to_jrag_target(monkeypatch):
+    """``jrag.exe`` with no verb token routes to the jrag identity default."""
+    cli_calls, jrag_calls = _run_dispatcher(
+        monkeypatch,
+        ["C:/Users/foo/Scripts/jrag.exe", "bogus-verb"],
+    )
+    assert len(jrag_calls) == 1, (
+        f"jrag.exe <unknown> should route to jrag; got jrag={jrag_calls}"
+    )
+    assert not cli_calls, f"jrag.exe <unknown> should NOT route to cli; got cli={cli_calls}"
+
+
+def test_java_codebase_rag_exe_version_routes_to_cli_target(monkeypatch):
+    """``java-codebase-rag.exe --version`` (Windows argv[0]) routes to the cli target.
+
+    Symmetric guard: after suffix-stripping the basename is ``"java-codebase-rag"``
+    (not ``"jrag"``), so the identity default picks the cli parser — preserving
+    the legacy-alias behavior on Windows.
+    """
+    cli_calls, jrag_calls = _run_dispatcher(
+        monkeypatch,
+        ["C:/Users/foo/Scripts/java-codebase-rag.exe", "--version"],
+    )
+    assert len(cli_calls) == 1, (
+        f"java-codebase-rag.exe --version should route to cli; got cli={cli_calls}"
+    )
+    assert not jrag_calls, (
+        f"java-codebase-rag.exe --version should NOT route to jrag; got jrag={jrag_calls}"
     )
