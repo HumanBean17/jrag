@@ -1,0 +1,20 @@
+{
+  "question_id": "pt-cs-04",
+  "expected": {
+    "kind": "client_route_pairs",
+    "pairs": [
+      {
+        "client_fqn": "org.springframework.samples.petclinic.api.application.CustomersServiceClient",
+        "route": "GET /owners/{ownerId}",
+        "target_service": "customers-service"
+      },
+      {
+        "client_fqn": "org.springframework.samples.petclinic.api.application.VisitsServiceClient",
+        "route": "GET /pets/visits?petId={petId}",
+        "target_service": "visits-service"
+      }
+    ]
+  },
+  "oracle_source": "manual",
+  "derived_at": "2026-07-19T21:40:56+00:00"
+}

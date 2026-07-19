@@ -72,3 +72,24 @@ cross-service seam (1 detected `http_calls` edge) and the multi-module shape.
   `mcp__jrag__neighbors`, and that `--max-turns` caps as expected. Record here.
 - **Ablation toggles** (Plan 2/3): which of role-ranking / cross-service-edges /
   graph-expansion jrag can actually disable at query/index time. Record here.
+
+## shopizer Maven build is broken (Task 16 deviation)
+
+shopizer's POM imports BOMs from `s01.oss.sonatype.org` (snapshots repo) that
+are unresolvable in this environment — the build stalls on
+`micrometer-bom`, `netty-bom`, `spring-data-bom`, etc. and produces **no**
+`.class` files, so jqassistant cannot scan shopizer. Consequences, recorded
+honestly:
+
+- shopizer's 15 questions are all `oracle_source: "manual"` (structural answers
+  derived by independent **source grep**, not jqassistant). blast-radius is
+  depth-1 (direct importers), not depth-2, with rationale noting the manual
+  derivation.
+- bank-chat (calibration corpus) and petclinic (compiled cleanly via `mvn
+  -DskipTests compile`, Java 17 on JDK 25) use the mechanical jqassistant oracle.
+- The calibration gate (bank-chat, all-mechanical categories at 1.0) still
+  validates the mechanical oracle. Re-pointing shopizer at jqassistant once its
+  build is fixed (mirror the snapshots repo / pin a buildable commit) is a
+  Plan 2/3 follow-up; the expected answers can then be regenerated mechanically
+  and diffed against the manual truth recorded here.
+

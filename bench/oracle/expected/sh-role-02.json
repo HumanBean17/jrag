@@ -1,0 +1,16 @@
+{
+  "question_id": "sh-role-02",
+  "expected": {
+    "kind": "symbol_set",
+    "fqns": [
+      "com.salesmanager.shop.store.api.v1.order.OrderApi",
+      "com.salesmanager.shop.store.api.v1.order.OrderPaymentApi",
+      "com.salesmanager.shop.store.api.v1.order.OrderShippingApi",
+      "com.salesmanager.shop.store.api.v1.order.OrderStatusHistoryApi",
+      "com.salesmanager.shop.store.api.v1.order.OrderTotalApi"
+    ],
+    "ids": []
+  },
+  "oracle_source": "manual",
+  "derived_at": "2026-07-19T22:09:25+00:00"
+}

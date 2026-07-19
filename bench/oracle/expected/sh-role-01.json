@@ -1,0 +1,22 @@
+{
+  "question_id": "sh-role-01",
+  "expected": {
+    "kind": "symbol_set",
+    "fqns": [
+      "com.salesmanager.shop.store.api.v1.product.ProductApi",
+      "com.salesmanager.shop.store.api.v1.product.ProductAttributeOptionApi",
+      "com.salesmanager.shop.store.api.v1.product.ProductGroupApi",
+      "com.salesmanager.shop.store.api.v1.product.ProductImageApi",
+      "com.salesmanager.shop.store.api.v1.product.ProductInventoryApi",
+      "com.salesmanager.shop.store.api.v1.product.ProductManufacturerApi",
+      "com.salesmanager.shop.store.api.v1.product.ProductPriceApi",
+      "com.salesmanager.shop.store.api.v1.product.ProductPropertySetApi",
+      "com.salesmanager.shop.store.api.v1.product.ProductRelationshipApi",
+      "com.salesmanager.shop.store.api.v1.product.ProductReviewApi",
+      "com.salesmanager.shop.store.api.v1.product.ProductTypeApi"
+    ],
+    "ids": []
+  },
+  "oracle_source": "manual",
+  "derived_at": "2026-07-19T22:09:25+00:00"
+}

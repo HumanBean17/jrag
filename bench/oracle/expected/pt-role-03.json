@@ -1,0 +1,12 @@
+{
+  "question_id": "pt-role-03",
+  "expected": {
+    "kind": "symbol_set",
+    "fqns": [
+      "org.springframework.samples.petclinic.visits.web.VisitResource"
+    ],
+    "ids": []
+  },
+  "oracle_source": "jqassistant:role_controllers.cypher",
+  "derived_at": "2026-07-19T21:40:56+00:00"
+}

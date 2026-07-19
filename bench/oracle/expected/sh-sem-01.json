@@ -1,0 +1,12 @@
+{
+  "question_id": "sh-sem-01",
+  "expected": {
+    "kind": "symbol_set",
+    "fqns": [
+      "com.salesmanager.core.business.services.catalog.pricing.PricingService"
+    ],
+    "ids": []
+  },
+  "oracle_source": "manual",
+  "derived_at": "2026-07-19T22:09:25+00:00"
+}

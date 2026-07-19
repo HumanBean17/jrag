@@ -1,0 +1,13 @@
+{
+  "question_id": "pt-sem-01",
+  "expected": {
+    "kind": "symbol_set",
+    "fqns": [
+      "org.springframework.samples.petclinic.vets.model.VetRepository",
+      "org.springframework.samples.petclinic.vets.web.VetResource"
+    ],
+    "ids": []
+  },
+  "oracle_source": "manual",
+  "derived_at": "2026-07-19T21:41:07+00:00"
+}

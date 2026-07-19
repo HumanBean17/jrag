@@ -1,0 +1,18 @@
+{
+  "question_id": "sh-impl-02",
+  "expected": {
+    "kind": "symbol_set",
+    "fqns": [
+      "com.salesmanager.core.business.modules.integration.payment.impl.BeanStreamPayment",
+      "com.salesmanager.core.business.modules.integration.payment.impl.BraintreePayment",
+      "com.salesmanager.core.business.modules.integration.payment.impl.MoneyOrderPayment",
+      "com.salesmanager.core.business.modules.integration.payment.impl.PayPalExpressCheckoutPayment",
+      "com.salesmanager.core.business.modules.integration.payment.impl.PayPalRestPayment",
+      "com.salesmanager.core.business.modules.integration.payment.impl.Stripe3Payment",
+      "com.salesmanager.core.business.modules.integration.payment.impl.StripePayment"
+    ],
+    "ids": []
+  },
+  "oracle_source": "manual",
+  "derived_at": "2026-07-19T22:09:25+00:00"
+}
