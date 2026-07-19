@@ -77,3 +77,15 @@ def test_client_route_pairs_set_equality():
     )
     r = cal._calibrate_from_expected([q], {"q-cs": mechanical}, {"q-cs": manual}, 0.9)
     assert r.overall.match == 1
+
+
+def test_zero_overlap_fails_closed():
+    # No question answered by BOTH sources -> per_category empty -> gate fails,
+    # never passes vacuously (the bool(per_category) guard at calibration.py).
+    q = _Q("q-manual-only", "role-listing")
+    r = cal._calibrate_from_expected(
+        [q], {}, {"q-manual-only": expected_symbol_set(["x.A"])}, 0.9
+    )
+    assert r.per_category == {}
+    assert r.overall.total == 0
+    assert r.passed is False

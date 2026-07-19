@@ -123,7 +123,14 @@ def prompt_tools_section(path: str) -> str:
     return parts[1].strip() if len(parts) > 1 else ""
 
 
+_CONDITION_KEYS = {"id", "name", "mcp_servers", "allowed_tools",
+                   "disallowed_tools", "prompt_file"}
+
+
 def _record_from_entry(entry: dict) -> Condition:
+    unknown = set(entry.keys()) - _CONDITION_KEYS
+    if unknown:
+        raise ConfigError(f"condition entry has unknown keys {sorted(unknown)}: {entry!r}")
     return Condition(
         id=str(entry.get("id", "")).strip(),
         name=str(entry.get("name", "")).strip(),

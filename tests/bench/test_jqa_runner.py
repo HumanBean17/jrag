@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from bench.oracle.jqa_runner import run_rule
+from bench.oracle.jqa_runner import _wrap_rule, run_rule
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "synthetic"
 RULES = Path(__file__).resolve().parents[2] / "bench" / "oracle" / "jqassistant_rules"
@@ -89,3 +89,19 @@ def test_transitive_blast_rule(jqassistant_bin):
     impacted = {r["impacted_fqn"] for r in rows}
     # B depends on C (depth 1); A depends on B->C (depth 2).
     assert impacted == {"blast.B", "blast.A"}
+
+
+def test_wrap_rule_value_with_dollar_survives(tmp_path):
+    # A param value containing '$word' must survive the NULL pass intact
+    # (regression: the unreplaced-$word -> NULL pass used to corrupt it).
+    rule = tmp_path / "rule.cypher"
+    rule.write_text(
+        "MATCH (n) WHERE n.fqn = $target OR $other IS NULL RETURN n",
+        encoding="utf-8",
+    )
+    wrapped = _wrap_rule(rule, {"target": "com.example.Foo$Inner"})
+    # Provided value materialized verbatim; its '$Inner' was NOT nulled.
+    assert '"com.example.Foo$Inner"' in wrapped
+    assert "FooNULL" not in wrapped
+    # Unprovided $other became NULL (IS NULL idiom).
+    assert "NULL IS NULL" in wrapped

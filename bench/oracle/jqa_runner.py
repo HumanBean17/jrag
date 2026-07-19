@@ -66,11 +66,23 @@ def _ensure_compiled(checkout: Path, workdir: Path) -> Path:
 
 def _wrap_rule(rule_path: Path, params: dict[str, str] | None) -> str:
     cypher = rule_path.read_text(encoding="utf-8")
-    for key, value in (params or {}).items():
-        cypher = cypher.replace(f"${key}", json.dumps(str(value)))
-    # Any $param not provided becomes NULL, so rules can use the
-    # `($x IS NULL OR ...)` idiom to make filtering optional.
+    # Stage 1: swap each provided $param for a '$'-free sentinel. The sentinel
+    # cannot be matched by the NULL pass below, so a value containing "$word"
+    # (e.g. an inner-class FQN "com.x.Foo$Inner") survives intact rather than
+    # being corrupted to "com.x.FooNULL".
+    sentinel_to_quoted: dict[str, str] = {}
+    for i, (key, value) in enumerate((params or {}).items()):
+        sentinel = f"\x00PARAM{i}\x00"
+        cypher = cypher.replace(f"${key}", sentinel)
+        sentinel_to_quoted[sentinel] = json.dumps(str(value))
+    # Stage 2: any $param NOT provided becomes NULL, so rules can use the
+    # `($x IS NULL OR ...)` idiom to make filtering optional. Only unreplaced
+    # placeholders are touched (provided ones are now sentinels).
     cypher = re.sub(r"\$[A-Za-z_][A-Za-z0-9_]*", "NULL", cypher)
+    # Stage 3: materialize the quoted values. No further '$' pass runs, so their
+    # contents — even a literal "$word" — are final.
+    for sentinel, quoted in sentinel_to_quoted.items():
+        cypher = cypher.replace(sentinel, quoted)
     rid = "rule:" + re.sub(r"[^A-Za-z0-9]", "_", rule_path.stem)
     return (
         '<?xml version="1.0" encoding="UTF-8"?>\n'

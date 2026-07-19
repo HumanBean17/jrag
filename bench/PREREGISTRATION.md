@@ -23,7 +23,7 @@ grading split.
 
 | # | Claim | Metric | Question subset |
 |---|-------|--------|-----------------|
-| **C1** | On structural questions (impls / callers / injectors / blast-radius), jrag answers more correctly than vector-only and grep. | Answer correctness (0–1); retrieval precision/recall vs oracle. | All `interface-impls`, `upstream-consumers`, `call-trace`, `blast-radius`, `role-listing`, `absence` questions (40 of 50). |
+| **C1** | On structural questions (impls / callers / injectors / blast-radius), jrag answers more correctly than vector-only and grep. | Answer correctness (0–1); retrieval precision/recall vs oracle. | All `interface-impls`, `upstream-consumers`, `call-trace`, `blast-radius`, `role-listing`, `absence`, and `semantic` questions (40 of 50). |
 | **C2** | jrag reaches a correct answer in fewer agent steps and fewer tokens (graph hops vs reading whole files). | Steps-to-answer; total tokens; context bytes. | All 50 questions. |
 | **C3** | On cross-service questions, per-file/per-repo baselines fail structurally; jrag resolves them. | Cross-service subset correctness; binary "resolved the seam?". | All 10 `cross-service` questions + blast-radius (C1∩C3). |
 | **C4** | Re-indexing is deterministic — identical node/edge counts run-to-run, unlike LLM-built graphs. | Graph-stat diff across rebuilds. | Per-corpus (not per-question). bank-chat n=2 confirmed identical (`PHASE0_FINDINGS.md`). |

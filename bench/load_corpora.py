@@ -110,15 +110,29 @@ def validate(
         )
 
 
+_CORPUS_KEYS = {"name", "source_kind", "git_url", "commit_sha", "local_path",
+                "pinned_repo_sha", "checkout_path", "index"}
+_INDEX_KEYS = {"index_dir", "ontology_version", "build_id", "build_time_s", "on_disk_bytes"}
+
+
 def _record_from_entry(
     entry: dict, *, checkouts_root: str, indexes_root: str
 ) -> CorpusRecord:
+    unknown = set(entry.keys()) - _CORPUS_KEYS
+    if unknown:
+        raise ConfigError(f"corpus entry has unknown keys {sorted(unknown)}: {entry!r}")
     name = str(entry.get("name", "")).strip()
     if not name:
         raise ConfigError(f"corpus entry missing 'name': {entry!r}")
     source_kind = str(entry.get("source_kind", "")).strip()
 
     index_block = entry.get("index") or {}
+    if isinstance(index_block, dict):
+        unknown_idx = set(index_block.keys()) - _INDEX_KEYS
+        if unknown_idx:
+            raise ConfigError(
+                f"corpus {name!r}: index block has unknown keys {sorted(unknown_idx)}"
+            )
     ontology_version = int(index_block.get("ontology_version", DEFAULT_ONTOLOGY_VERSION))
     index_dir = str(
         index_block.get("index_dir") or f"{indexes_root}/{name}"

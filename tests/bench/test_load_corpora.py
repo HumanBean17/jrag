@@ -141,3 +141,39 @@ def test_rejects_non_positive_ontology_version(tmp_path):
     )
     with pytest.raises(ConfigError):
         load_corpora(path)
+
+
+def test_rejects_unknown_top_level_key(tmp_path):
+    path = _write_yaml(
+        tmp_path,
+        """
+        corpora:
+          - name: shopizer
+            source_kind: git
+            git_url: https://x
+            commit_sha: aaa
+            commentary: a stray field
+        """,
+    )
+    with pytest.raises(ConfigError) as exc:
+        load_corpora(path)
+    assert "commentary" in str(exc.value)
+
+
+def test_rejects_unknown_index_key(tmp_path):
+    path = _write_yaml(
+        tmp_path,
+        """
+        corpora:
+          - name: shopizer
+            source_kind: git
+            git_url: https://x
+            commit_sha: aaa
+            index:
+              ontology_version: 18
+              cost_usd: 1.50
+        """,
+    )
+    with pytest.raises(ConfigError) as exc:
+        load_corpora(path)
+    assert "cost_usd" in str(exc.value)

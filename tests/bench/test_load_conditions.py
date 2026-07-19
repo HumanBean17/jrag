@@ -180,3 +180,14 @@ def test_tools_sections_differ():
     assert "search" in sections["B"] and "graph tools" in sections["B"]  # graph explicitly off
     assert "Read" in sections["C"] and "Glob" in sections["C"]
     assert "neighbors" in sections["D"] and "resolve" in sections["D"]  # full graph available
+
+
+def test_rejects_unknown_condition_key(tmp_path):
+    paths = _touch_prompts(tmp_path)
+    body = CONDITIONS_BODY.format(**{k: str(paths[k]) for k in paths})
+    # Inject a stray key into condition A.
+    body = body.replace("  - id: A\n", "  - id: A\n    commentary: stray\n", 1)
+    yml = _write_conditions(tmp_path, body)
+    with pytest.raises(ConfigError) as exc:
+        load_conditions(yml)
+    assert "commentary" in str(exc.value)

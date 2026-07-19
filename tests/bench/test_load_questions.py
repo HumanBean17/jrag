@@ -113,3 +113,32 @@ def test_constants_closed():
     }
     assert CLAIMS == {"C1", "C2", "C3", "C4", "C5", "C6"}
     assert "neighbors" in LEAKAGE_VOCAB and "ontology_version" in LEAKAGE_VOCAB
+
+
+def test_rejects_jargon_case_variants(tmp_path):
+    # Pure-jargon terms (no natural-English use) are matched case-insensitively,
+    # so a capitalized "MCP__Jrag" / "Ontology_Version" / "Edge_Types" is still a leak.
+    for leaky in ("via MCP__Jrag lookup", "read the Ontology_Version", "Edge_Types everywhere"):
+        path = _write_jsonl(tmp_path, "bc.jsonl", [_line(question=leaky)])
+        with pytest.raises(ConfigError):
+            load_questions(path, valid_corpora=VALID_CORPORA)
+
+
+def test_allows_natural_english_not_edge_casing(tmp_path):
+    # "calls" (natural English) is NOT the uppercase `:CALLS` edge — it must pass.
+    # This is the design point: case-sensitivity on edge words avoids false
+    # positives on ordinary prose (cross-service questions phrase "calls" this way).
+    path = _write_jsonl(
+        tmp_path, "bc.jsonl",
+        [_line(question="Which service calls the notification endpoint directly?")],
+    )
+    load_questions(path, valid_corpora=VALID_CORPORA)  # must not raise
+
+
+def test_rejects_unknown_key(tmp_path):
+    obj = json.loads(_line())
+    obj["rationale"] = "should not be allowed"
+    path = _write_jsonl(tmp_path, "bc.jsonl", [json.dumps(obj)])
+    with pytest.raises(ConfigError) as exc:
+        load_questions(path, valid_corpora=VALID_CORPORA)
+    assert "rationale" in str(exc.value)

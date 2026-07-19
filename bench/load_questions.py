@@ -24,13 +24,27 @@ GRADINGS = {
     "programmatic_set_match", "programmatic_jaccard", "programmatic_path_match",
     "programmatic_client_route_match", "llm_judge", "absence_check",
 }
-# Tool vocabulary that must NOT appear in engineer-phrased questions (whole-token,
-# case-sensitive). Using it would leak the answer method to the agent.
-LEAKAGE_VOCAB = {
-    "INJECTS", "IMPLEMENTS", "EXTENDS", "OVERRIDES", "DECLARES",
-    "HTTP_CALLS", "ASYNC_CALLS", "EXPOSES", "CALLS",
-    "edge_types", "neighbors", "NodeFilter", "ontology_version", "mcp__jrag",
+# Tool vocabulary that must NOT appear in engineer-phrased questions (whole-token).
+# Using it would leak the answer method to the agent. Two tiers:
+#  - LEAKAGE_JARGON: tokens with no natural-English use (tool/MCP/internal names).
+#    Matched case-INSENSITIVELY — a shouty "MCP__JRAG" or "Ontology_Version" is
+#    still a leak.
+#  - LEAKAGE_EDGE_WORDS: graph-edge names that are ALSO ordinary English words.
+#    Matched case-SENSITIVELY against the exact tool casing (uppercase edge
+#    `:CALLS`, lowercase tool `neighbors`), so a natural "which method calls X"
+#    does not false-positive. (Plain "neighbors" is rejected whenever it appears —
+#    it is both the tool name and an English word; the frozen set simply avoids it.)
+LEAKAGE_JARGON = {
+    "HTTP_CALLS", "ASYNC_CALLS", "mcp__jrag", "ontology_version",
+    "edge_types", "NodeFilter",
 }
+LEAKAGE_EDGE_WORDS = {
+    "INJECTS", "IMPLEMENTS", "EXTENDS", "OVERRIDES", "DECLARES", "EXPOSES", "CALLS",
+    "neighbors",
+}
+# Single back-compat surface (tests/importers read LEAKAGE_VOCAB).
+LEAKAGE_VOCAB = LEAKAGE_JARGON | LEAKAGE_EDGE_WORDS
+_LEAKAGE_JARGON_UPPER = {term.upper() for term in LEAKAGE_JARGON}
 
 _NAME_RE = re.compile(r"^[a-z0-9-]+$")
 _TOKEN_RE = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]*")
@@ -80,15 +94,24 @@ def validate(q: Question, *, valid_corpora: set[str] | None = None) -> None:
         raise ConfigError(f"question {q.id!r}: claim_refs {sorted(bad_claims)} not in {sorted(CLAIMS)}")
     if not q.question or not q.question.strip():
         raise ConfigError(f"question {q.id!r}: question text is empty")
-    leaked = set(_TOKEN_RE.findall(q.question)) & LEAKAGE_VOCAB
+    tokens = _TOKEN_RE.findall(q.question)
+    leaked = sorted({tok.upper() for tok in tokens} & _LEAKAGE_JARGON_UPPER)
+    leaked += sorted(tok for tok in tokens if tok in LEAKAGE_EDGE_WORDS)
     if leaked:
         raise ConfigError(
-            f"question {q.id!r}: question text leaks tool vocabulary {sorted(leaked)}; "
+            f"question {q.id!r}: question text leaks tool vocabulary {leaked}; "
             "rephrase in an engineer's voice without jrag terms."
         )
 
 
+_QUESTION_KEYS = {"id", "corpus", "category", "difficulty", "question",
+                  "oracle_source", "claim_refs", "grading", "expected", "oracle_params"}
+
+
 def _record_from_obj(obj: dict) -> Question:
+    unknown = set(obj.keys()) - _QUESTION_KEYS
+    if unknown:
+        raise ConfigError(f"question record has unknown keys {sorted(unknown)}: {obj!r}")
     try:
         return Question(
             id=str(obj["id"]),

@@ -96,3 +96,7 @@ def test_merges_jqa_and_manual(tmp_path):
 def test_symbol_set_helper():
     e = expected_symbol_set(["x.B", "x.A", "x.A"])
     assert e == {"kind": "symbol_set", "fqns": ["x.A", "x.B"], "ids": []}
+
+
+def test_symbol_set_helper_empty():
+    assert expected_symbol_set([]) == {"kind": "symbol_set", "fqns": [], "ids": []}
