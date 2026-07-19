@@ -1,0 +1,38 @@
+# Corpus registry for the jrag effectiveness benchmark.
+# Each corpus is pinned to a frozen source: a git commit SHA (git) or a local
+# fixture directory pinned to this repo's SHA (local). Checkouts land under
+# bench/checkouts/<name>/, indexes under bench/indexes/<name>/.
+#
+# build_id / build_time_s / on_disk_bytes are filled in Task 4 (after the index
+# builds); they are null until then. ontology_version reflects the jrag ontology
+# at build time (current: 19).
+corpora:
+  - name: bank-chat-system
+    source_kind: local
+    local_path: tests/bank-chat-system
+    pinned_repo_sha: e042940ce697fae6efc8e756a15a95e336c4b512
+    index:
+      ontology_version: 19
+      build_id: null
+      build_time_s: null
+      on_disk_bytes: null
+
+  - name: shopizer
+    source_kind: git
+    git_url: https://github.com/shopizer-ecommerce/shopizer.git
+    commit_sha: PIN_IN_TASK_4   # TODO(task-4): pin real commit SHA after checkout
+    index:
+      ontology_version: 19
+      build_id: null
+      build_time_s: null
+      on_disk_bytes: null
+
+  - name: spring-petclinic-microservices
+    source_kind: git
+    git_url: https://github.com/spring-petclinic/spring-petclinic-microservices.git
+    commit_sha: PIN_IN_TASK_4   # TODO(task-4): pin real commit SHA after checkout
+    index:
+      ontology_version: 19
+      build_id: null
+      build_time_s: null
+      on_disk_bytes: null
