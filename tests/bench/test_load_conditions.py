@@ -13,6 +13,8 @@ from bench.load_conditions import (
     ConfigError,
     Condition,
     load_conditions,
+    prompt_preamble,
+    prompt_tools_section,
     to_flags,
 )
 
@@ -142,3 +144,39 @@ def test_load_rejects_missing_condition_id(tmp_path):
     yml = _write_conditions(tmp_path, body)
     with pytest.raises(ConfigError):
         load_conditions(yml)
+
+
+# --- Task 6: locked prompts differ ONLY in the tools section. ---
+
+_REAL_PROMPTS = {
+    "A": "bench/prompts/A_lexical.md",
+    "B": "bench/prompts/B_vector_only.md",
+    "C": "bench/prompts/C_raw_agent.md",
+    "D": "bench/prompts/D_jrag_full.md",
+}
+
+
+def test_preambles_identical():
+    preambles = {k: prompt_preamble(p) for k, p in _REAL_PROMPTS.items()}
+    values = list(preambles.values())
+    assert all(v == values[0] for v in values), (
+        f"preambles differ: {[ (k, hash(v)) for k, v in preambles.items()]}"
+    )
+    # preamble must actually state the task/output contract, not be empty.
+    assert "## Answer" in values[0]
+    assert "Tools used:" in values[0]
+
+
+def test_tools_sections_differ():
+    sections = {k: prompt_tools_section(p) for k, p in _REAL_PROMPTS.items()}
+    # pairwise distinct
+    keys = list(sections)
+    for i in range(len(keys)):
+        for j in range(i + 1, len(keys)):
+            assert sections[keys[i]] != sections[keys[j]], f"{keys[i]} == {keys[j]}"
+
+    # each section names exactly the tools available to that condition.
+    assert "Grep" in sections["A"] and "Bash" in sections["A"]
+    assert "search" in sections["B"] and "graph tools" in sections["B"]  # graph explicitly off
+    assert "Read" in sections["C"] and "Glob" in sections["C"]
+    assert "neighbors" in sections["D"] and "resolve" in sections["D"]  # full graph available

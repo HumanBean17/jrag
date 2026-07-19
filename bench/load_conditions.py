@@ -103,6 +103,26 @@ def to_flags(
     )
 
 
+_TOOLS_MARKER = "## Your tools"
+
+
+def prompt_preamble(path: str) -> str:
+    """Return everything before the ``## Your tools`` marker of a prompt file.
+
+    Byte-identical across the four condition prompts (asserted in tests) — the
+    conditions differ ONLY in the tools section.
+    """
+    content = Path(path).read_text(encoding="utf-8")
+    return content.split(_TOOLS_MARKER, 1)[0]
+
+
+def prompt_tools_section(path: str) -> str:
+    """Return the body of the ``## Your tools`` section of a prompt file."""
+    content = Path(path).read_text(encoding="utf-8")
+    parts = content.split(_TOOLS_MARKER, 1)
+    return parts[1].strip() if len(parts) > 1 else ""
+
+
 def _record_from_entry(entry: dict) -> Condition:
     return Condition(
         id=str(entry.get("id", "")).strip(),
