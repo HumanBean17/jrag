@@ -1,0 +1,38 @@
+# Executable condition-isolation spec. Conditions differ ONLY in the tool set
+# exposed to Claude Code — enforced by harness flags (--mcp-config /
+# --allowedTools / --disallowedTools), never by prompt pleas. The loader
+# (bench/load_conditions.py) validates the invariants and emits the flag payload.
+#
+# Tool sets per the spec:
+#   A lexical      — grep/ripgrep floor baseline (no MCP)
+#   B vector-only  — jrag MCP with graph tools denied -> only `search` survives
+#   C raw agent    — read/list only (no MCP, no Grep) — token-burn ceiling
+#   D jrag full    — all 5 jrag tools + read/grep/glob (system under test)
+conditions:
+  - id: A
+    name: Lexical (grep/ripgrep)
+    mcp_servers: []
+    allowed_tools: [Grep, Glob, Read, Bash]
+    disallowed_tools: []
+    prompt_file: bench/prompts/A_lexical.md
+
+  - id: B
+    name: Vector-only (semantic search, graph off)
+    mcp_servers: [jrag]
+    allowed_tools: [Read, mcp__jrag__search]
+    disallowed_tools: [mcp__jrag__find, mcp__jrag__describe, mcp__jrag__neighbors, mcp__jrag__resolve]
+    prompt_file: bench/prompts/B_vector_only.md
+
+  - id: C
+    name: Raw agent (read/list only)
+    mcp_servers: []
+    allowed_tools: [Read, Glob, Bash]
+    disallowed_tools: []
+    prompt_file: bench/prompts/C_raw_agent.md
+
+  - id: D
+    name: jrag full (vector + graph + cross-service)
+    mcp_servers: [jrag]
+    allowed_tools: [Read, Grep, Glob, mcp__jrag__find, mcp__jrag__describe, mcp__jrag__neighbors, mcp__jrag__resolve, mcp__jrag__search]
+    disallowed_tools: []
+    prompt_file: bench/prompts/D_jrag_full.md

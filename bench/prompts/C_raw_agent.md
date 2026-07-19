@@ -1,0 +1,5 @@
+Shared preamble (Task 6 fills the locked content).
+
+## Your tools
+
+Condition stub for C_raw_agent — replaced in Task 6.
