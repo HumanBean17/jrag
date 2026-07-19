@@ -52,8 +52,18 @@ class CorpusRecord:
     index: IndexManifest
 
 
-def validate(record: CorpusRecord) -> None:
-    """Raise ``ConfigError`` with a precise message on any invariant violation."""
+def validate(
+    record: CorpusRecord,
+    *,
+    checkouts_root: str = CHECKOUTS_ROOT,
+    indexes_root: str = INDEXES_ROOT,
+) -> None:
+    """Raise ``ConfigError`` with a precise message on any invariant violation.
+
+    ``checkouts_root``/``indexes_root`` default to the production paths but are
+    overridable so tests can place checkouts/indexes under a tmp root without
+    polluting the real ``bench/`` tree.
+    """
     if not _NAME_RE.match(record.name):
         raise ConfigError(
             f"corpus name {record.name!r} must match ^[a-z0-9-]+$ (lowercase, digits, hyphens)"
@@ -83,15 +93,15 @@ def validate(record: CorpusRecord) -> None:
             f"corpus {record.name!r}: source_kind {record.source_kind!r} must be 'git' or 'local'"
         )
 
-    if not record.checkout_path.startswith(CHECKOUTS_ROOT + "/"):
+    if not record.checkout_path.startswith(checkouts_root + "/"):
         raise ConfigError(
             f"corpus {record.name!r}: checkout_path {record.checkout_path!r} must be under "
-            f"{CHECKOUTS_ROOT}/"
+            f"{checkouts_root}/"
         )
-    if not record.index.index_dir.startswith(INDEXES_ROOT + "/"):
+    if not record.index.index_dir.startswith(indexes_root + "/"):
         raise ConfigError(
             f"corpus {record.name!r}: index.index_dir {record.index.index_dir!r} must be under "
-            f"{INDEXES_ROOT}/"
+            f"{indexes_root}/"
         )
     if record.index.ontology_version < 1:
         raise ConfigError(
@@ -100,7 +110,9 @@ def validate(record: CorpusRecord) -> None:
         )
 
 
-def _record_from_entry(entry: dict) -> CorpusRecord:
+def _record_from_entry(
+    entry: dict, *, checkouts_root: str, indexes_root: str
+) -> CorpusRecord:
     name = str(entry.get("name", "")).strip()
     if not name:
         raise ConfigError(f"corpus entry missing 'name': {entry!r}")
@@ -109,7 +121,7 @@ def _record_from_entry(entry: dict) -> CorpusRecord:
     index_block = entry.get("index") or {}
     ontology_version = int(index_block.get("ontology_version", DEFAULT_ONTOLOGY_VERSION))
     index_dir = str(
-        index_block.get("index_dir") or f"{INDEXES_ROOT}/{name}"
+        index_block.get("index_dir") or f"{indexes_root}/{name}"
     )
     index = IndexManifest(
         index_dir=index_dir,
@@ -119,7 +131,7 @@ def _record_from_entry(entry: dict) -> CorpusRecord:
         on_disk_bytes=index_block.get("on_disk_bytes"),
     )
 
-    checkout_path = str(entry.get("checkout_path") or f"{CHECKOUTS_ROOT}/{name}")
+    checkout_path = str(entry.get("checkout_path") or f"{checkouts_root}/{name}")
 
     return CorpusRecord(
         name=name,
@@ -133,7 +145,12 @@ def _record_from_entry(entry: dict) -> CorpusRecord:
     )
 
 
-def load_corpora(path: str = "bench/corpora.yml") -> list[CorpusRecord]:
+def load_corpora(
+    path: str = "bench/corpora.yml",
+    *,
+    checkouts_root: str = CHECKOUTS_ROOT,
+    indexes_root: str = INDEXES_ROOT,
+) -> list[CorpusRecord]:
     """Read ``corpora.yml`` -> validated ``CorpusRecord`` list (unique names)."""
     raw = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
     if not isinstance(raw, dict) or not isinstance(raw.get("corpora"), list):
@@ -147,8 +164,8 @@ def load_corpora(path: str = "bench/corpora.yml") -> list[CorpusRecord]:
     records: list[CorpusRecord] = []
     seen: set[str] = set()
     for entry in entries:
-        rec = _record_from_entry(entry)
-        validate(rec)
+        rec = _record_from_entry(entry, checkouts_root=checkouts_root, indexes_root=indexes_root)
+        validate(rec, checkouts_root=checkouts_root, indexes_root=indexes_root)
         if rec.name in seen:
             raise ConfigError(f"duplicate corpus name {rec.name!r} in {path}")
         seen.add(rec.name)
