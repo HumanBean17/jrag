@@ -109,11 +109,20 @@ def _calibrate_from_expected(
 
 def _build_mechanical(corpus_checkout, questions, rules_dir, classpath_root,
                       build_fn, jqa_run, jdeps_run) -> dict[str, dict]:
-    """Run the mechanical oracle and collect expected payloads keyed by id."""
+    """Run the mechanical oracle and collect expected payloads keyed by id.
+
+    Only mechanical-source questions (jqassistant/jdeps) are built — manual-source
+    questions have no independent mechanical answer and are excluded from the
+    calibration comparison (the plan: 'restricted to categories both cover').
+    """
     out = Path(tempfile.mkdtemp(prefix="calibrate-"))
     build_fn = build_fn or build_oracle.build_expected
+    mech_questions = [
+        q for q in questions
+        if q.oracle_source.startswith("jqassistant") or q.oracle_source == "jdeps"
+    ]
     kwargs = dict(
-        corpus_checkout=corpus_checkout, questions=questions, rules_dir=rules_dir,
+        corpus_checkout=corpus_checkout, questions=mech_questions, rules_dir=rules_dir,
         classpath_root=classpath_root,
         manual_path="",  # mechanical build does not consult the manual file
         out_dir=str(out),

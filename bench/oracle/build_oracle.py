@@ -205,9 +205,14 @@ def _main() -> int:  # pragma: no cover - exercised in Task 15
     rec = corpora[args.corpus]
     questions = _load_questions_for_corpus(args.corpus)
     manual = f"bench/oracle/manual/{args.corpus}.json"
+    # jqassistant scans compiled .class files. The checkout is source-only
+    # (build artifacts excluded); for local fixtures the compiled classes live
+    # under local_path (e.g. tests/bank-chat-system/target/classes), so point the
+    # oracle there. Git corpora would need a Maven compile step (Task 16).
+    checkout = rec.local_path if rec.source_kind == "local" else rec.checkout_path
 
     build_expected(
-        corpus_checkout=rec.checkout_path,
+        corpus_checkout=checkout,
         questions=questions,
         rules_dir="bench/oracle/jqassistant_rules",
         classpath_root=None,
@@ -218,7 +223,7 @@ def _main() -> int:  # pragma: no cover - exercised in Task 15
         from bench.oracle.calibration import calibrate
 
         report = calibrate(
-            corpus_checkout=rec.checkout_path,
+            corpus_checkout=checkout,
             questions=questions,
             rules_dir="bench/oracle/jqassistant_rules",
             classpath_root=None,

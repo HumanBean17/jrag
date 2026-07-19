@@ -1,0 +1,16 @@
+{
+  "question_id": "bc-trace-02",
+  "expected": {
+    "kind": "path",
+    "hops": [
+      {
+        "fqn": "com.bank.chat.app.web.ChatIngressController"
+      },
+      {
+        "fqn": "com.bank.chat.engine.kafka.FollowUpKafkaPublisher"
+      }
+    ]
+  },
+  "oracle_source": "manual",
+  "derived_at": "2026-07-19T21:30:07+00:00"
+}

@@ -1,0 +1,17 @@
+{
+  "per_category": {
+    "interface-impls": 3,
+    "upstream-consumers": 3,
+    "role-listing": 2,
+    "blast-radius": 2,
+    "call-trace": 2,
+    "cross-service": 6,
+    "semantic": 1,
+    "absence": 1
+  },
+  "per_source": {
+    "jqassistant": 10,
+    "manual": 10
+  },
+  "total": 20
+}

@@ -1,0 +1,15 @@
+{
+  "question_id": "bc-cs-01",
+  "expected": {
+    "kind": "client_route_pairs",
+    "pairs": [
+      {
+        "client_fqn": "com.bank.chat.assign.integration.ChatCoreFeignClient",
+        "route": "GET /api/v1/chat/sessions/{conversationId}",
+        "target_service": "chat-core"
+      }
+    ]
+  },
+  "oracle_source": "manual",
+  "derived_at": "2026-07-19T21:30:07+00:00"
+}
