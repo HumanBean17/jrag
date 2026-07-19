@@ -1,0 +1,281 @@
+{
+  "questions": {
+    "bc-impl-01": {
+      "expected": {
+        "kind": "symbol_set",
+        "fqns": [
+          "com.bank.chat.engine.processors.AckProcessor",
+          "com.bank.chat.engine.processors.ClientMessageProcessor",
+          "com.bank.chat.engine.processors.CloseChatProcessor",
+          "com.bank.chat.engine.processors.ComplianceHoldProcessor",
+          "com.bank.chat.engine.processors.EscalationProcessor",
+          "com.bank.chat.engine.processors.FallbackEventProcessor",
+          "com.bank.chat.engine.processors.OperatorAssignedProcessor",
+          "com.bank.chat.engine.processors.OperatorMessageProcessor",
+          "com.bank.chat.engine.processors.ReadReceiptProcessor",
+          "com.bank.chat.engine.processors.SessionReopenProcessor",
+          "com.bank.chat.engine.processors.TransferProcessor",
+          "com.bank.chat.engine.processors.TypingProcessor"
+        ],
+        "ids": []
+      },
+      "rationale": "12 classes declare implements EventProcessor."
+    },
+    "bc-impl-02": {
+      "expected": {
+        "kind": "symbol_set",
+        "fqns": [
+          "com.bank.chat.engine.pipeline.ClientSegmentFilter",
+          "com.bank.chat.engine.pipeline.EventTypeFilter"
+        ],
+        "ids": []
+      },
+      "rationale": "ClientSegmentFilter, EventTypeFilter implement EventFilter<T>."
+    },
+    "bc-impl-03": {
+      "expected": {
+        "kind": "symbol_set",
+        "fqns": [
+          "com.bank.chat.engine.notification.AbstractNotificationSender"
+        ],
+        "ids": []
+      },
+      "rationale": "AbstractNotificationSender implements NotificationSender."
+    },
+    "bc-up-01": {
+      "expected": {
+        "kind": "symbol_set",
+        "fqns": [
+          "com.bank.chat.app.web.ChatIngressController",
+          "com.bank.chat.app.web.JoinOperatorController",
+          "com.bank.chat.app.web.dev.DevAssignmentController",
+          "com.bank.chat.engine.notification.EmailNotificationSender",
+          "com.bank.chat.engine.processors.ClientMessageProcessor",
+          "com.bank.chat.engine.processors.EscalationProcessor",
+          "com.bank.chat.engine.processors.OperatorAssignedProcessor",
+          "com.bank.chat.engine.processors.ReadReceiptProcessor",
+          "com.bank.chat.engine.processors.RejectionPublisher",
+          "com.bank.chat.engine.sla.SlaService"
+        ],
+        "ids": []
+      },
+      "rationale": "Constructors taking FollowUpKafkaPublisher."
+    },
+    "bc-up-02": {
+      "expected": {
+        "kind": "symbol_set",
+        "fqns": [
+          "com.bank.chat.assign.kafka.DistributionTriggerListener"
+        ],
+        "ids": []
+      },
+      "rationale": "DistributionTriggerListener ctor takes DistributionService."
+    },
+    "bc-up-03": {
+      "expected": {
+        "kind": "symbol_set",
+        "fqns": [
+          "com.bank.chat.app.web.ChatIngressController",
+          "com.bank.chat.engine.processors.ClientMessageProcessor",
+          "com.bank.chat.engine.processors.EscalationProcessor"
+        ],
+        "ids": []
+      },
+      "rationale": "Constructors taking ClientMessageRateLimiter."
+    },
+    "bc-role-01": {
+      "expected": {
+        "kind": "symbol_set",
+        "fqns": [
+          "com.bank.chat.app.web.ChatIngressController",
+          "com.bank.chat.app.web.ChatReportingController",
+          "com.bank.chat.app.web.JoinOperatorController",
+          "com.bank.chat.app.web.dev.DevAssignmentController"
+        ],
+        "ids": []
+      },
+      "rationale": "@RestController under com.bank.chat.app.web."
+    },
+    "bc-role-02": {
+      "expected": {
+        "kind": "symbol_set",
+        "fqns": [
+          "com.bank.chat.assign.web.ChatManagementController",
+          "com.bank.chat.assign.web.OperatorManagementController"
+        ],
+        "ids": []
+      },
+      "rationale": "@RestController under com.bank.chat.assign.web."
+    },
+    "bc-blast-01": {
+      "expected": {
+        "kind": "symbol_set",
+        "fqns": [
+          "com.bank.chat.app.web.ChatIngressController",
+          "com.bank.chat.app.web.JoinOperatorController",
+          "com.bank.chat.app.web.dev.DevAssignmentController",
+          "com.bank.chat.engine.notification.EmailNotificationSender",
+          "com.bank.chat.engine.processors.ClientMessageProcessor",
+          "com.bank.chat.engine.processors.EscalationProcessor",
+          "com.bank.chat.engine.processors.OperatorAssignedProcessor",
+          "com.bank.chat.engine.processors.OperatorMessageProcessor",
+          "com.bank.chat.engine.processors.ReadReceiptProcessor",
+          "com.bank.chat.engine.processors.RejectionPublisher",
+          "com.bank.chat.engine.processors.SessionReopenProcessor",
+          "com.bank.chat.engine.schedule.SlaWatchdogJob",
+          "com.bank.chat.engine.sla.SlaService"
+        ],
+        "ids": []
+      },
+      "rationale": "DEPENDS_ON*1..2 reverse from FollowUpKafkaPublisher (inner classes excluded)."
+    },
+    "bc-blast-02": {
+      "expected": {
+        "kind": "symbol_set",
+        "fqns": [
+          "com.bank.chat.assign.kafka.DistributionTriggerListener"
+        ],
+        "ids": []
+      },
+      "rationale": "Only DistributionTriggerListener depends on DistributionService within 2 hops."
+    },
+    "bc-trace-01": {
+      "expected": {
+        "kind": "path",
+        "hops": [
+          {
+            "fqn": "com.bank.chat.assign.web.ChatManagementController"
+          },
+          {
+            "fqn": "com.bank.chat.assign.service.ChatManagementService"
+          },
+          {
+            "fqn": "com.bank.chat.assign.kafka.DistributionTriggerPublisher"
+          },
+          {
+            "fqn": "com.bank.chat.assign.kafka.DistributionTriggerListener"
+          },
+          {
+            "fqn": "com.bank.chat.assign.service.DistributionService"
+          }
+        ]
+      },
+      "rationale": "assign -> ChatManagementService -> DistributionTriggerPublisher -> Kafka -> DistributionTriggerListener -> DistributionService.runDistribution."
+    },
+    "bc-trace-02": {
+      "expected": {
+        "kind": "path",
+        "hops": [
+          {
+            "fqn": "com.bank.chat.app.web.ChatIngressController"
+          },
+          {
+            "fqn": "com.bank.chat.engine.kafka.FollowUpKafkaPublisher"
+          }
+        ]
+      },
+      "rationale": "ChatIngressController.accept -> FollowUpKafkaPublisher.publishIncoming."
+    },
+    "bc-cs-01": {
+      "expected": {
+        "kind": "client_route_pairs",
+        "pairs": [
+          {
+            "client_fqn": "com.bank.chat.assign.integration.ChatCoreFeignClient",
+            "route": "GET /api/v1/chat/sessions/{conversationId}",
+            "target_service": "chat-core"
+          }
+        ]
+      },
+      "rationale": "ChatCoreFeignClient (@FeignClient chat-core) GET /api/v1/chat/sessions/{conversationId}."
+    },
+    "bc-cs-02": {
+      "expected": {
+        "kind": "client_route_pairs",
+        "pairs": [
+          {
+            "client_fqn": "com.bank.chat.assign.integration.ChatCoreFeignClient",
+            "route": "POST /chat/joinOperator",
+            "target_service": "chat-core"
+          },
+          {
+            "client_fqn": "com.bank.chat.assign.integration.ChatCoreFeignClient",
+            "route": "GET /api/v1/chat/sessions/{conversationId}",
+            "target_service": "chat-core"
+          }
+        ]
+      },
+      "rationale": "chat-assign -> chat-core via Feign: joinOperator + sessions lookup."
+    },
+    "bc-cs-03": {
+      "expected": {
+        "kind": "client_route_pairs",
+        "pairs": [
+          {
+            "client_fqn": "com.bank.chat.engine.audit.KafkaAuditEventPublisher",
+            "route": "banking.chat.audit",
+            "target_service": "none-in-project"
+          }
+        ]
+      },
+      "rationale": "KafkaAuditEventPublisher produces banking.chat.audit; no consumer in project."
+    },
+    "bc-cs-04": {
+      "expected": {
+        "kind": "client_route_pairs",
+        "pairs": [
+          {
+            "client_fqn": "com.bank.chat.engine.kafka.FollowUpKafkaPublisher",
+            "route": "banking.chat.incoming",
+            "target_service": "chat-core (ChatKafkaListener)"
+          }
+        ]
+      },
+      "rationale": "FollowUpKafkaPublisher -> banking.chat.incoming; no cross-service consumer located."
+    },
+    "bc-cs-05": {
+      "expected": {
+        "kind": "client_route_pairs",
+        "pairs": []
+      },
+      "rationale": "No HTTP from chat-core back into chat-assign."
+    },
+    "bc-cs-06": {
+      "expected": {
+        "kind": "client_route_pairs",
+        "pairs": [
+          {
+            "client_fqn": "com.bank.chat.assign.integration.ChatCoreFeignClient",
+            "route": "POST /chat/joinOperator",
+            "target_service": "chat-core"
+          },
+          {
+            "client_fqn": "com.bank.chat.assign.integration.ChatCoreFeignClient",
+            "route": "GET /api/v1/chat/sessions/{conversationId}",
+            "target_service": "chat-core"
+          }
+        ]
+      },
+      "rationale": "ChatCoreFeignClient targets chat-core routes."
+    },
+    "bc-sem-01": {
+      "expected": {
+        "kind": "symbol_set",
+        "fqns": [
+          "com.bank.chat.app.web.ChatIngressController",
+          "com.bank.chat.engine.kafka.FollowUpKafkaPublisher"
+        ],
+        "ids": []
+      },
+      "rationale": "Message published to Kafka (not direct DB save): ChatIngressController.accept -> FollowUpKafkaPublisher.publishIncoming."
+    },
+    "bc-abs-01": {
+      "expected": {
+        "kind": "absence",
+        "verdict": "not_in_project",
+        "proof": "grep Redis/RedisTemplate/@Cacheable across all modules: no matches."
+      },
+      "rationale": "No Redis usage anywhere."
+    }
+  }
+}
