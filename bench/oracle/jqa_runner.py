@@ -68,6 +68,9 @@ def _wrap_rule(rule_path: Path, params: dict[str, str] | None) -> str:
     cypher = rule_path.read_text(encoding="utf-8")
     for key, value in (params or {}).items():
         cypher = cypher.replace(f"${key}", json.dumps(str(value)))
+    # Any $param not provided becomes NULL, so rules can use the
+    # `($x IS NULL OR ...)` idiom to make filtering optional.
+    cypher = re.sub(r"\$[A-Za-z_][A-Za-z0-9_]*", "NULL", cypher)
     rid = "rule:" + re.sub(r"[^A-Za-z0-9]", "_", rule_path.stem)
     return (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
