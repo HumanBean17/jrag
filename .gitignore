@@ -34,6 +34,8 @@ htmlcov/
 
 # Local tool settings (may live under `.agents/` when `.claude` is a symlink)
 .agents/settings.local.json
+# Ignore .claude directories under tests (local agent settings)
+tests/**/.claude/
 
 # OS files
 .DS_Store
