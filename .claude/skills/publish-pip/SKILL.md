@@ -6,11 +6,23 @@ disable-model-invocation: true
 
 # Publish Pip Package
 
-Manual, from-worktree release of `java-codebase-rag` to PyPI. There is **no CI
-release and no git tag** — the version lives only in `pyproject.toml`, and
-releases are built + uploaded with the venv `build` / `twine` tools. PyPI uploads
-are **permanent**: a version can be yanked but never overwritten, so verify the
-version *before* uploading.
+Manual, from-worktree release to PyPI. There is **no CI release and no git tag**
+— the version lives only in `pyproject.toml`, and releases are built + uploaded
+with the venv `build` / `twine` tools. PyPI uploads are **permanent**: a version
+can be yanked but never overwritten, so verify the version *before* uploading.
+
+## Dual publish — both PyPI names, every release
+
+**Every release must be published under BOTH PyPI project names**, in sync, same
+version:
+
+- `jrag-cli` — the current name (`[project].name` in `pyproject.toml`).
+- `java-codebase-rag` — the legacy name; existing users run
+  `pip install -U java-codebase-rag` and must not be stranded.
+
+PyPI project names are permanent and cannot alias each other, so a single upload
+only reaches one project. Skipping the legacy name freezes those users at the
+last version published there. The full dual-publish procedure is step 10 below.
 
 ## When to use
 
@@ -61,7 +73,7 @@ adding a runtime dependency to `pyproject.toml`.
    ```bash
    .venv/bin/python -m build
    ```
-   Expect `dist/java_codebase_rag-<ver>-py3-none-any.whl` and `.tar.gz`.
+   Expect `dist/jrag_cli-<ver>-py3-none-any.whl` and `.tar.gz` (legacy rebuild in step 10 produces `java_codebase_rag-<ver>.*`).
 6. **Guard the upload** — assert *every* file in `dist/` matches the version in
    `pyproject.toml` (filename + wheel METADATA). This is the hard stop before a
    permanent upload: it catches a forgotten bump **and** stale files from a prior
@@ -74,21 +86,45 @@ adding a runtime dependency to `pyproject.toml`.
    arg to get wrong) and exits non-zero if `dist/` is empty, holds a foreign
    version, or the wheel METADATA disagrees. Do not proceed to upload unless it
    prints `✓ dist/ clean`.
-7. **Upload** (permanent — confirm the version is right first):
+7. **Upload `jrag-cli`** (permanent — confirm the version is right first):
    ```bash
    .venv/bin/twine upload dist/*
    ```
    twine prints the live URL on success:
-   `https://pypi.org/project/java-codebase-rag/<ver>/`.
+   `https://pypi.org/project/jrag-cli/<ver>/`.
 8. **Verify on PyPI** via the JSON API. ⚠️ Python's `urllib`/`requests` SSL
    verification fails locally (missing CA bundle) — set `SSL_CERT_FILE`:
    ```bash
    CERT=$(.venv/bin/python -c "import certifi; print(certifi.where())")
-   SSL_CERT_FILE="$CERT" .venv/bin/python -c "import urllib.request,json; d=json.load(urllib.request.urlopen('https://pypi.org/pypi/java-codebase-rag/json')); print('latest:', d['info']['version'])"
+   SSL_CERT_FILE="$CERT" .venv/bin/python -c "import urllib.request,json; d=json.load(urllib.request.urlopen('https://pypi.org/pypi/jrag-cli/json')); print('latest:', d['info']['version'])"
    ```
 9. **Commit + push the version bump** so the repo matches what was published
    (commit convention: `bump version to X.Y.Z`). `dist/`, `build/`, and
    `*.egg-info` are gitignored — do not commit them.
+10. **Dual publish — upload `java-codebase-rag` too.** `[project].name` in
+    `pyproject.toml` is `jrag-cli`, so the legacy name needs a rebuild with the
+    name swapped. The import package (`java_codebase_rag`) and entry points are
+    unchanged — only the distribution name differs:
+    ```bash
+    # 1. Swap the project name in-place (do NOT commit this).
+    sed -i.bak 's/^name = "jrag-cli"/name = "java-codebase-rag"/' pyproject.toml
+    # 2. Clean + rebuild — artifacts will be java_codebase_rag-<ver>.*.
+    rm -rf dist build && find . -maxdepth 2 -name '*.egg-info' -exec rm -rf {} +
+    .venv/bin/python -m build
+    # 3. Guard (still reads version from pyproject — name swap doesn't affect it).
+    .venv/bin/python scripts/check_dist_version.py
+    # 4. Upload the legacy name.
+    .venv/bin/twine upload dist/*
+    # 5. Revert the name swap and clean up the backup.
+    mv pyproject.toml.bak pyproject.toml && rm -rf dist build
+    ```
+    Verify the legacy project too:
+    ```bash
+    SSL_CERT_FILE="$CERT" .venv/bin/python -c "import urllib.request,json; d=json.load(urllib.request.urlopen('https://pypi.org/pypi/java-codebase-rag/json')); print('latest:', d['info']['version'])"
+    ```
+    Both projects must report the same `<ver>` before the release is considered
+    done. If step 4 fails (e.g. version already exists on the legacy name), fix
+    and retry — never leave the two projects at different versions.
 
 ## Quick reference
 
@@ -100,8 +136,8 @@ adding a runtime dependency to `pyproject.toml`.
 | Sync | `.venv/bin/python scripts/sync_agent_artifacts.py --check` |
 | Build | `.venv/bin/python -m build` |
 | Guard | `.venv/bin/python scripts/check_dist_version.py` (stops upload on mismatch) |
-| Upload | `.venv/bin/twine upload dist/*` |
-| Verify live | `SSL_CERT_FILE="$(.venv/bin/python -m certifi)"` + pypi JSON API |
+| Upload | `.venv/bin/twine upload dist/*` (then dual-publish — step 10) |
+| Verify live | `SSL_CERT_FILE="$(.venv/bin/python -m certifi)"` + pypi JSON API (both names) |
 | Commit | `bump version to X.Y.Z` |
 
 ## Common mistakes
@@ -123,6 +159,10 @@ adding a runtime dependency to `pyproject.toml`.
 - **Used system `python` / `twine`** → wrong env / missing credentials. Always
   `.venv/bin/`.
 - **Left the version bump uncommitted** → repo drifts from PyPI. Commit + push.
+- **Forgot the dual publish** → `java-codebase-rag` users stranded at an old
+  version. Every release ships under both names (step 10); both must report the
+  same version on PyPI. Don't commit the name swap from step 10 — `mv pyproject.toml.bak`
+  reverts it.
 
 ## Notes
 

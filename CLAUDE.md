@@ -45,3 +45,13 @@ Most files in `docs/` are **operator-facing**. The two flagged below are **inter
 `skills/` and `agents/` are shipped consumer artifacts — deployed verbatim by
 `install`/`update` to the user's agent host. This repo is the source of truth;
 never hand-patch deployed copies.
+
+## Publishing (PyPI)
+
+Every release is published under **both** PyPI names, in sync, same version:
+`jrag-cli` (current, `[project].name` in `pyproject.toml`) and `java-codebase-rag`
+(legacy — existing users run `pip install -U java-codebase-rag` and must not be
+stranded). PyPI names are permanent and don't alias, so a single upload reaches
+only one project. Follow `.claude/skills/publish-pip/SKILL.md` end-to-end,
+including the dual-publish step — both projects must report the same version.
+

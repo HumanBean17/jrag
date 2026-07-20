@@ -2,12 +2,6 @@
 
 A graph-native code intelligence layer for Java microservice estates, surfaced through the **`jrag` CLI** — one command per engineering intent. A **legacy MCP server** (`search` / `find` / `describe` / `neighbors` / `resolve`) is also available for existing setups. Both are thin surfaces over the same **AST Graph**: a deterministic property graph extracted from Java source with tree-sitter, stored **locally** in **LadybugDB** (graph) alongside a **LanceDB** vector index (chunks). There is no server to host and no cloud round-trip — the index lives on your disk and your source never leaves the machine. Both surfaces collapse onto three primitive operations: **locate**, **inspect**, **walk**.
 
-> **Renamed from `java-codebase-rag`.** This project is now branded **`jrag`** and published as the **`jrag-cli`** PyPI package.
-> - **Install:** `pip install jrag-cli` (the bare name `jrag` is taken on PyPI by a third party — never run `pip install jrag`).
-> - **New commands:** `jrag <verb>` (unified operator + agent verbs) and `jrag-mcp`. The old commands `java-codebase-rag` and `java-codebase-rag-mcp` remain as aliases (with a TTY-gated deprecation nudge).
-> - **Existing installs keep working:** `pip install -U java-codebase-rag` still works — the legacy package now pulls in `jrag-cli` via a shim.
-> - **Nothing else moves:** on-disk indexes (`.java-codebase-rag/`), project configs (`.java-codebase-rag.yml`), and env vars (`JAVA_CODEBASE_RAG_*`) are unchanged. No re-index, no config edit.
-
 > **What this is: a GPS for code navigation**, not a reasoning engine.
 > Agents use a simple loop:
 >
