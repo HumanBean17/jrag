@@ -1,0 +1,12 @@
+{
+  "question_id": "pt-role-02",
+  "expected": {
+    "kind": "symbol_set",
+    "fqns": [
+      "org.springframework.samples.petclinic.vets.web.VetResource"
+    ],
+    "ids": []
+  },
+  "oracle_source": "jqassistant:role_controllers.cypher",
+  "derived_at": "2026-07-19T21:40:44+00:00"
+}

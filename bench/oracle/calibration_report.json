@@ -1,0 +1,32 @@
+{
+  "per_category": {
+    "interface-impls": {
+      "match": 3,
+      "total": 3,
+      "ratio": 1.0
+    },
+    "upstream-consumers": {
+      "match": 3,
+      "total": 3,
+      "ratio": 1.0
+    },
+    "role-listing": {
+      "match": 2,
+      "total": 2,
+      "ratio": 1.0
+    },
+    "blast-radius": {
+      "match": 2,
+      "total": 2,
+      "ratio": 1.0
+    }
+  },
+  "overall": {
+    "match": 10,
+    "total": 10,
+    "ratio": 1.0
+  },
+  "threshold": 0.9,
+  "passed": true,
+  "failing_categories": []
+}

@@ -1,0 +1,425 @@
+{
+  "questions": {
+    "sh-impl-02": {
+      "expected": {
+        "kind": "symbol_set",
+        "fqns": [
+          "com.salesmanager.core.business.modules.integration.payment.impl.BeanStreamPayment",
+          "com.salesmanager.core.business.modules.integration.payment.impl.BraintreePayment",
+          "com.salesmanager.core.business.modules.integration.payment.impl.MoneyOrderPayment",
+          "com.salesmanager.core.business.modules.integration.payment.impl.PayPalExpressCheckoutPayment",
+          "com.salesmanager.core.business.modules.integration.payment.impl.PayPalRestPayment",
+          "com.salesmanager.core.business.modules.integration.payment.impl.Stripe3Payment",
+          "com.salesmanager.core.business.modules.integration.payment.impl.StripePayment"
+        ],
+        "ids": []
+      },
+      "rationale": "implements PaymentModule"
+    },
+    "sh-impl-03": {
+      "expected": {
+        "kind": "symbol_set",
+        "fqns": [
+          "com.salesmanager.core.business.modules.integration.shipping.impl.CustomShippingQuoteRules",
+          "com.salesmanager.core.business.modules.integration.shipping.impl.CustomWeightBasedShippingQuote",
+          "com.salesmanager.core.business.modules.integration.shipping.impl.PriceByDistanceShippingQuoteRules",
+          "com.salesmanager.core.business.modules.integration.shipping.impl.StorePickupShippingQuote",
+          "com.salesmanager.core.business.modules.integration.shipping.impl.UPSShippingQuote",
+          "com.salesmanager.core.business.modules.integration.shipping.impl.USPSShippingQuote"
+        ],
+        "ids": []
+      },
+      "rationale": "implements ShippingQuoteModule"
+    },
+    "sh-impl-01": {
+      "expected": {
+        "kind": "symbol_set",
+        "fqns": [
+          "com.salesmanager.shop.mapper.cart.ReadableShoppingCartMapper",
+          "com.salesmanager.shop.mapper.catalog.PersistableCatalogCategoryEntryMapper",
+          "com.salesmanager.shop.mapper.catalog.PersistableCatalogMapper",
+          "com.salesmanager.shop.mapper.catalog.PersistableProductAttributeMapper",
+          "com.salesmanager.shop.mapper.catalog.PersistableProductOptionMapper",
+          "com.salesmanager.shop.mapper.catalog.PersistableProductOptionSetMapper",
+          "com.salesmanager.shop.mapper.catalog.PersistableProductOptionValueMapper",
+          "com.salesmanager.shop.mapper.catalog.PersistableProductTypeMapper",
+          "com.salesmanager.shop.mapper.catalog.PersistableProductVariationMapper",
+          "com.salesmanager.shop.mapper.catalog.ReadableCatalogCategoryEntryMapper",
+          "com.salesmanager.shop.mapper.catalog.ReadableCatalogMapper",
+          "com.salesmanager.shop.mapper.catalog.ReadableCategoryMapper",
+          "com.salesmanager.shop.mapper.catalog.ReadableManufacturerMapper",
+          "com.salesmanager.shop.mapper.catalog.ReadableMinimalProductMapper",
+          "com.salesmanager.shop.mapper.catalog.ReadableProductAttributeMapper",
+          "com.salesmanager.shop.mapper.catalog.ReadableProductImageMapper",
+          "com.salesmanager.shop.mapper.catalog.ReadableProductOptionMapper",
+          "com.salesmanager.shop.mapper.catalog.ReadableProductOptionSetMapper",
+          "com.salesmanager.shop.mapper.catalog.ReadableProductOptionValueMapper",
+          "com.salesmanager.shop.mapper.catalog.ReadableProductTypeMapper",
+          "com.salesmanager.shop.mapper.catalog.ReadableProductVariationMapper",
+          "com.salesmanager.shop.mapper.catalog.product.PersistableProductAvailabilityMapper",
+          "com.salesmanager.shop.mapper.catalog.product.PersistableProductDefinitionMapper",
+          "com.salesmanager.shop.mapper.catalog.product.PersistableProductMapper",
+          "com.salesmanager.shop.mapper.catalog.product.PersistableProductVariantGroupMapper",
+          "com.salesmanager.shop.mapper.catalog.product.PersistableProductVariantMapper",
+          "com.salesmanager.shop.mapper.catalog.product.ReadableProductDefinitionMapper",
+          "com.salesmanager.shop.mapper.catalog.product.ReadableProductMapper",
+          "com.salesmanager.shop.mapper.catalog.product.ReadableProductVariantGroupMapper",
+          "com.salesmanager.shop.mapper.catalog.product.ReadableProductVariantMapper",
+          "com.salesmanager.shop.mapper.customer.ReadableCustomerMapper",
+          "com.salesmanager.shop.mapper.inventory.PersistableInventoryMapper",
+          "com.salesmanager.shop.mapper.inventory.PersistableProductPriceMapper",
+          "com.salesmanager.shop.mapper.inventory.ReadableInventoryMapper",
+          "com.salesmanager.shop.mapper.optin.PersistableOptinMapper",
+          "com.salesmanager.shop.mapper.optin.ReadableOptinMapper",
+          "com.salesmanager.shop.mapper.order.ReadableOrderProductMapper",
+          "com.salesmanager.shop.mapper.order.ReadableOrderTotalMapper",
+          "com.salesmanager.shop.mapper.tax.PersistableTaxClassMapper",
+          "com.salesmanager.shop.mapper.tax.PersistableTaxRateMapper",
+          "com.salesmanager.shop.mapper.tax.ReadableTaxClassMapper",
+          "com.salesmanager.shop.mapper.tax.ReadableTaxRateMapper"
+        ],
+        "ids": []
+      },
+      "rationale": "implements Mapper"
+    },
+    "sh-up-01": {
+      "expected": {
+        "kind": "symbol_set",
+        "fqns": [
+          "com.salesmanager.core.business.configuration.events.products.PublishProductAspect",
+          "com.salesmanager.core.business.configuration.events.products.listeners.IndexProductEventListener",
+          "com.salesmanager.core.business.repositories.catalog.product.ProductRepositoryCustom",
+          "com.salesmanager.core.business.services.catalog.category.CategoryServiceImpl",
+          "com.salesmanager.core.business.services.catalog.product.ProductService",
+          "com.salesmanager.core.business.services.catalog.product.ProductServiceImpl",
+          "com.salesmanager.core.business.services.catalog.product.file.DigitalProductServiceImpl",
+          "com.salesmanager.core.business.services.catalog.product.review.ProductReviewServiceImpl",
+          "com.salesmanager.core.business.services.order.OrderServiceImpl",
+          "com.salesmanager.core.business.services.order.ordertotal.OrderTotalServiceImpl",
+          "com.salesmanager.core.business.services.shoppingcart.ShoppingCartServiceImpl",
+          "com.salesmanager.shop.mapper.catalog.PersistableProductAttributeMapper",
+          "com.salesmanager.shop.mapper.catalog.product.PersistableProductVariantMapper",
+          "com.salesmanager.shop.mapper.inventory.PersistableInventoryMapper",
+          "com.salesmanager.shop.mapper.inventory.PersistableProductPriceMapper",
+          "com.salesmanager.shop.mapper.order.ReadableOrderProductMapper",
+          "com.salesmanager.shop.populator.catalog.PersistableProductReviewPopulator",
+          "com.salesmanager.shop.populator.order.OrderProductPopulator",
+          "com.salesmanager.shop.populator.order.PersistableOrderApiPopulator",
+          "com.salesmanager.shop.populator.order.PersistableOrderPopulator",
+          "com.salesmanager.shop.populator.order.PersistableOrderProductPopulator",
+          "com.salesmanager.shop.populator.order.ReadableOrderProductPopulator",
+          "com.salesmanager.shop.populator.order.ShoppingCartItemPopulator",
+          "com.salesmanager.shop.populator.shoppingCart.ShoppingCartModelPopulator",
+          "com.salesmanager.shop.store.api.v0.store.StoreContactRESTController",
+          "com.salesmanager.shop.store.api.v1.product.ProductApi",
+          "com.salesmanager.shop.store.api.v1.product.ProductGroupApi",
+          "com.salesmanager.shop.store.api.v1.product.ProductImageApi",
+          "com.salesmanager.shop.store.api.v1.product.ProductRelationshipApi",
+          "com.salesmanager.shop.store.api.v1.product.ProductReviewApi",
+          "com.salesmanager.shop.store.api.v2.product.ProductVariationApi",
+          "com.salesmanager.shop.store.controller.order.facade.OrderFacadeImpl",
+          "com.salesmanager.shop.store.controller.search.facade.SearchFacadeImpl",
+          "com.salesmanager.shop.store.controller.shoppingCart.facade.ShoppingCartFacadeImpl",
+          "com.salesmanager.shop.store.facade.items.ProductItemsFacadeImpl",
+          "com.salesmanager.shop.store.facade.product.ProductCommonFacadeImpl",
+          "com.salesmanager.shop.store.facade.product.ProductDefinitionFacadeImpl",
+          "com.salesmanager.shop.store.facade.product.ProductFacadeImpl",
+          "com.salesmanager.shop.store.facade.product.ProductFacadeV2Impl",
+          "com.salesmanager.shop.store.facade.product.ProductInventoryFacadeImpl",
+          "com.salesmanager.shop.store.facade.product.ProductOptionFacadeImpl",
+          "com.salesmanager.shop.utils.EmailTemplatesUtils",
+          "com.salesmanager.test.common.AbstractSalesManagerCoreTestCase"
+        ],
+        "ids": []
+      },
+      "rationale": "source-grep classes referencing ProductService"
+    },
+    "sh-up-02": {
+      "expected": {
+        "kind": "symbol_set",
+        "fqns": [
+          "com.salesmanager.core.business.modules.integration.payment.impl.PayPalExpressCheckoutPayment",
+          "com.salesmanager.core.business.modules.order.total.ManufacturerShippingCodeOrderTotalModuleImpl",
+          "com.salesmanager.core.business.modules.order.total.PromoCodeCalculatorModule",
+          "com.salesmanager.core.business.services.catalog.inventory.ProductInventoryServiceImpl",
+          "com.salesmanager.core.business.services.catalog.pricing.PricingService",
+          "com.salesmanager.core.business.services.catalog.pricing.PricingServiceImpl",
+          "com.salesmanager.core.business.services.shipping.ShippingServiceImpl",
+          "com.salesmanager.core.business.services.shoppingcart.ShoppingCartServiceImpl",
+          "com.salesmanager.shop.mapper.cart.ReadableShoppingCartMapper",
+          "com.salesmanager.shop.mapper.catalog.ReadableMinimalProductMapper",
+          "com.salesmanager.shop.mapper.catalog.ReadableProductAttributeMapper",
+          "com.salesmanager.shop.mapper.catalog.product.ReadableProductMapper",
+          "com.salesmanager.shop.mapper.inventory.ReadableInventoryMapper",
+          "com.salesmanager.shop.mapper.order.ReadableOrderProductMapper",
+          "com.salesmanager.shop.mapper.order.ReadableOrderTotalMapper",
+          "com.salesmanager.shop.populator.catalog.ReadableFinalPricePopulator",
+          "com.salesmanager.shop.populator.catalog.ReadableProductPopulator",
+          "com.salesmanager.shop.populator.catalog.ReadableProductPricePopulator",
+          "com.salesmanager.shop.populator.order.ReadableOrderProductPopulator",
+          "com.salesmanager.shop.populator.order.ReadableOrderSummaryPopulator",
+          "com.salesmanager.shop.populator.order.ReadableOrderTotalPopulator",
+          "com.salesmanager.shop.populator.order.ReadableShippingSummaryPopulator",
+          "com.salesmanager.shop.populator.order.transaction.PersistablePaymentPopulator",
+          "com.salesmanager.shop.populator.order.transaction.PersistableTransactionPopulator",
+          "com.salesmanager.shop.populator.order.transaction.ReadableTransactionPopulator",
+          "com.salesmanager.shop.populator.shoppingCart.ShoppingCartDataPopulator",
+          "com.salesmanager.shop.store.api.v1.order.OrderPaymentApi",
+          "com.salesmanager.shop.store.api.v1.order.OrderShippingApi",
+          "com.salesmanager.shop.store.api.v1.order.OrderTotalApi",
+          "com.salesmanager.shop.store.api.v2.product.ProductVariationApi",
+          "com.salesmanager.shop.store.controller.order.facade.OrderFacadeImpl",
+          "com.salesmanager.shop.store.controller.search.facade.SearchFacadeImpl",
+          "com.salesmanager.shop.store.controller.shoppingCart.facade.ShoppingCartFacadeImpl",
+          "com.salesmanager.shop.store.facade.items.ProductItemsFacadeImpl",
+          "com.salesmanager.shop.store.facade.product.ProductCommonFacadeImpl",
+          "com.salesmanager.shop.store.facade.product.ProductFacadeImpl",
+          "com.salesmanager.shop.store.facade.product.ProductFacadeV2Impl",
+          "com.salesmanager.shop.store.facade.product.ProductPriceFacadeImpl",
+          "com.salesmanager.shop.utils.EmailTemplatesUtils",
+          "com.salesmanager.test.common.AbstractSalesManagerCoreTestCase"
+        ],
+        "ids": []
+      },
+      "rationale": "source-grep classes referencing PricingService"
+    },
+    "sh-up-03": {
+      "expected": {
+        "kind": "symbol_set",
+        "fqns": [
+          "com.salesmanager.core.business.services.reference.init.InitializationDatabaseImpl",
+          "com.salesmanager.core.business.services.reference.language.LanguageService",
+          "com.salesmanager.core.business.services.reference.language.LanguageServiceImpl",
+          "com.salesmanager.core.business.services.reference.loader.ZonesLoader",
+          "com.salesmanager.core.business.services.shipping.ShippingServiceImpl",
+          "com.salesmanager.shop.mapper.catalog.PersistableProductOptionMapper",
+          "com.salesmanager.shop.mapper.catalog.PersistableProductOptionValueMapper",
+          "com.salesmanager.shop.mapper.catalog.PersistableProductTypeMapper",
+          "com.salesmanager.shop.mapper.catalog.product.PersistableProductDefinitionMapper",
+          "com.salesmanager.shop.mapper.catalog.product.PersistableProductMapper",
+          "com.salesmanager.shop.mapper.inventory.PersistableInventoryMapper",
+          "com.salesmanager.shop.mapper.inventory.PersistableProductPriceMapper",
+          "com.salesmanager.shop.mapper.tax.PersistableTaxRateMapper",
+          "com.salesmanager.shop.populator.catalog.PersistableCategoryPopulator",
+          "com.salesmanager.shop.populator.catalog.PersistableProductOptionPopulator",
+          "com.salesmanager.shop.populator.catalog.PersistableProductOptionValuePopulator",
+          "com.salesmanager.shop.populator.catalog.PersistableProductReviewPopulator",
+          "com.salesmanager.shop.populator.customer.CustomerPopulator",
+          "com.salesmanager.shop.populator.customer.PersistableCustomerOptionPopulator",
+          "com.salesmanager.shop.populator.customer.PersistableCustomerOptionValuePopulator",
+          "com.salesmanager.shop.populator.customer.PersistableCustomerReviewPopulator",
+          "com.salesmanager.shop.populator.manufacturer.PersistableManufacturerPopulator",
+          "com.salesmanager.shop.populator.store.PersistableMerchantStorePopulator",
+          "com.salesmanager.shop.populator.store.ReadableMerchantStorePopulator",
+          "com.salesmanager.shop.populator.user.PersistableUserPopulator",
+          "com.salesmanager.shop.store.api.v0.store.StoreContactRESTController",
+          "com.salesmanager.shop.store.api.v1.system.ContactApi",
+          "com.salesmanager.shop.store.controller.customer.facade.CustomerFacadeImpl",
+          "com.salesmanager.shop.store.controller.language.facade.LanguageFacadeImpl",
+          "com.salesmanager.shop.store.controller.store.facade.StoreFacadeImpl",
+          "com.salesmanager.shop.store.facade.content.ContentFacadeImpl",
+          "com.salesmanager.shop.store.facade.customer.CustomerFacadeImpl",
+          "com.salesmanager.shop.store.facade.manufacturer.ManufacturerFacadeImpl",
+          "com.salesmanager.shop.store.facade.order.OrderFacadeImpl",
+          "com.salesmanager.shop.store.facade.product.ProductCommonFacadeImpl",
+          "com.salesmanager.shop.store.facade.user.UserFacadeImpl",
+          "com.salesmanager.shop.utils.LanguageUtils",
+          "com.salesmanager.test.common.AbstractSalesManagerCoreTestCase",
+          "com.salesmanager.test.references.ReferencesTest",
+          "com.salesmanager.test.shipping.ShippingQuoteByWeightTest"
+        ],
+        "ids": []
+      },
+      "rationale": "source-grep classes referencing LanguageService"
+    },
+    "sh-role-01": {
+      "expected": {
+        "kind": "symbol_set",
+        "fqns": [
+          "com.salesmanager.shop.store.api.v1.product.ProductApi",
+          "com.salesmanager.shop.store.api.v1.product.ProductAttributeOptionApi",
+          "com.salesmanager.shop.store.api.v1.product.ProductGroupApi",
+          "com.salesmanager.shop.store.api.v1.product.ProductImageApi",
+          "com.salesmanager.shop.store.api.v1.product.ProductInventoryApi",
+          "com.salesmanager.shop.store.api.v1.product.ProductManufacturerApi",
+          "com.salesmanager.shop.store.api.v1.product.ProductPriceApi",
+          "com.salesmanager.shop.store.api.v1.product.ProductPropertySetApi",
+          "com.salesmanager.shop.store.api.v1.product.ProductRelationshipApi",
+          "com.salesmanager.shop.store.api.v1.product.ProductReviewApi",
+          "com.salesmanager.shop.store.api.v1.product.ProductTypeApi"
+        ],
+        "ids": []
+      },
+      "rationale": "@RestController/@Controller in api.v1.product"
+    },
+    "sh-role-02": {
+      "expected": {
+        "kind": "symbol_set",
+        "fqns": [
+          "com.salesmanager.shop.store.api.v1.order.OrderApi",
+          "com.salesmanager.shop.store.api.v1.order.OrderPaymentApi",
+          "com.salesmanager.shop.store.api.v1.order.OrderShippingApi",
+          "com.salesmanager.shop.store.api.v1.order.OrderStatusHistoryApi",
+          "com.salesmanager.shop.store.api.v1.order.OrderTotalApi"
+        ],
+        "ids": []
+      },
+      "rationale": "@RestController/@Controller in api.v1.order"
+    },
+    "sh-role-03": {
+      "expected": {
+        "kind": "symbol_set",
+        "fqns": [
+          "com.salesmanager.shop.store.api.v1.customer.AuthenticateCustomerApi",
+          "com.salesmanager.shop.store.api.v1.customer.CustomerApi",
+          "com.salesmanager.shop.store.api.v1.customer.CustomerNewsletterApi",
+          "com.salesmanager.shop.store.api.v1.customer.CustomerReviewApi",
+          "com.salesmanager.shop.store.api.v1.customer.ResetCustomerPasswordApi"
+        ],
+        "ids": []
+      },
+      "rationale": "@RestController/@Controller in api.v1.customer"
+    },
+    "sh-blast-01": {
+      "expected": {
+        "kind": "symbol_set",
+        "fqns": [
+          "com.salesmanager.core.business.configuration.events.products.PublishProductAspect",
+          "com.salesmanager.core.business.configuration.events.products.listeners.IndexProductEventListener",
+          "com.salesmanager.core.business.repositories.catalog.product.ProductRepositoryCustom",
+          "com.salesmanager.core.business.services.catalog.category.CategoryServiceImpl",
+          "com.salesmanager.core.business.services.catalog.product.ProductServiceImpl",
+          "com.salesmanager.core.business.services.catalog.product.file.DigitalProductServiceImpl",
+          "com.salesmanager.core.business.services.catalog.product.review.ProductReviewServiceImpl",
+          "com.salesmanager.core.business.services.order.OrderServiceImpl",
+          "com.salesmanager.core.business.services.order.ordertotal.OrderTotalServiceImpl",
+          "com.salesmanager.core.business.services.shoppingcart.ShoppingCartServiceImpl",
+          "com.salesmanager.shop.mapper.catalog.PersistableProductAttributeMapper",
+          "com.salesmanager.shop.mapper.catalog.product.PersistableProductVariantMapper",
+          "com.salesmanager.shop.mapper.inventory.PersistableInventoryMapper",
+          "com.salesmanager.shop.mapper.inventory.PersistableProductPriceMapper",
+          "com.salesmanager.shop.mapper.order.ReadableOrderProductMapper",
+          "com.salesmanager.shop.populator.catalog.PersistableProductReviewPopulator",
+          "com.salesmanager.shop.populator.order.OrderProductPopulator",
+          "com.salesmanager.shop.populator.order.PersistableOrderApiPopulator",
+          "com.salesmanager.shop.populator.order.PersistableOrderPopulator",
+          "com.salesmanager.shop.populator.order.PersistableOrderProductPopulator",
+          "com.salesmanager.shop.populator.order.ReadableOrderProductPopulator",
+          "com.salesmanager.shop.populator.order.ShoppingCartItemPopulator",
+          "com.salesmanager.shop.populator.shoppingCart.ShoppingCartModelPopulator",
+          "com.salesmanager.shop.store.api.v0.store.StoreContactRESTController",
+          "com.salesmanager.shop.store.api.v1.product.ProductApi",
+          "com.salesmanager.shop.store.api.v1.product.ProductGroupApi",
+          "com.salesmanager.shop.store.api.v1.product.ProductImageApi",
+          "com.salesmanager.shop.store.api.v1.product.ProductRelationshipApi",
+          "com.salesmanager.shop.store.api.v1.product.ProductReviewApi",
+          "com.salesmanager.shop.store.api.v2.product.ProductVariationApi",
+          "com.salesmanager.shop.store.controller.order.facade.OrderFacadeImpl",
+          "com.salesmanager.shop.store.controller.search.facade.SearchFacadeImpl",
+          "com.salesmanager.shop.store.controller.shoppingCart.facade.ShoppingCartFacadeImpl",
+          "com.salesmanager.shop.store.facade.items.ProductItemsFacadeImpl",
+          "com.salesmanager.shop.store.facade.product.ProductCommonFacadeImpl",
+          "com.salesmanager.shop.store.facade.product.ProductDefinitionFacadeImpl",
+          "com.salesmanager.shop.store.facade.product.ProductFacadeImpl",
+          "com.salesmanager.shop.store.facade.product.ProductFacadeV2Impl",
+          "com.salesmanager.shop.store.facade.product.ProductInventoryFacadeImpl",
+          "com.salesmanager.shop.store.facade.product.ProductOptionFacadeImpl",
+          "com.salesmanager.shop.utils.EmailTemplatesUtils",
+          "com.salesmanager.test.common.AbstractSalesManagerCoreTestCase"
+        ],
+        "ids": []
+      },
+      "rationale": "direct dependents of ProductService (depth-1, manual; shopizer build broken)"
+    },
+    "sh-blast-02": {
+      "expected": {
+        "kind": "symbol_set",
+        "fqns": [
+          "com.salesmanager.core.business.modules.integration.payment.impl.PayPalExpressCheckoutPayment",
+          "com.salesmanager.core.business.modules.order.total.ManufacturerShippingCodeOrderTotalModuleImpl",
+          "com.salesmanager.core.business.modules.order.total.PromoCodeCalculatorModule",
+          "com.salesmanager.core.business.services.catalog.inventory.ProductInventoryServiceImpl",
+          "com.salesmanager.core.business.services.catalog.pricing.PricingServiceImpl",
+          "com.salesmanager.core.business.services.shipping.ShippingServiceImpl",
+          "com.salesmanager.core.business.services.shoppingcart.ShoppingCartServiceImpl",
+          "com.salesmanager.shop.mapper.cart.ReadableShoppingCartMapper",
+          "com.salesmanager.shop.mapper.catalog.ReadableMinimalProductMapper",
+          "com.salesmanager.shop.mapper.catalog.ReadableProductAttributeMapper",
+          "com.salesmanager.shop.mapper.catalog.product.ReadableProductMapper",
+          "com.salesmanager.shop.mapper.inventory.ReadableInventoryMapper",
+          "com.salesmanager.shop.mapper.order.ReadableOrderProductMapper",
+          "com.salesmanager.shop.mapper.order.ReadableOrderTotalMapper",
+          "com.salesmanager.shop.populator.catalog.ReadableFinalPricePopulator",
+          "com.salesmanager.shop.populator.catalog.ReadableProductPopulator",
+          "com.salesmanager.shop.populator.catalog.ReadableProductPricePopulator",
+          "com.salesmanager.shop.populator.order.ReadableOrderProductPopulator",
+          "com.salesmanager.shop.populator.order.ReadableOrderSummaryPopulator",
+          "com.salesmanager.shop.populator.order.ReadableOrderTotalPopulator",
+          "com.salesmanager.shop.populator.order.ReadableShippingSummaryPopulator",
+          "com.salesmanager.shop.populator.order.transaction.PersistablePaymentPopulator",
+          "com.salesmanager.shop.populator.order.transaction.PersistableTransactionPopulator",
+          "com.salesmanager.shop.populator.order.transaction.ReadableTransactionPopulator",
+          "com.salesmanager.shop.populator.shoppingCart.ShoppingCartDataPopulator",
+          "com.salesmanager.shop.store.api.v1.order.OrderPaymentApi",
+          "com.salesmanager.shop.store.api.v1.order.OrderShippingApi",
+          "com.salesmanager.shop.store.api.v1.order.OrderTotalApi",
+          "com.salesmanager.shop.store.api.v2.product.ProductVariationApi",
+          "com.salesmanager.shop.store.controller.order.facade.OrderFacadeImpl",
+          "com.salesmanager.shop.store.controller.search.facade.SearchFacadeImpl",
+          "com.salesmanager.shop.store.controller.shoppingCart.facade.ShoppingCartFacadeImpl",
+          "com.salesmanager.shop.store.facade.items.ProductItemsFacadeImpl",
+          "com.salesmanager.shop.store.facade.product.ProductCommonFacadeImpl",
+          "com.salesmanager.shop.store.facade.product.ProductFacadeImpl",
+          "com.salesmanager.shop.store.facade.product.ProductFacadeV2Impl",
+          "com.salesmanager.shop.store.facade.product.ProductPriceFacadeImpl",
+          "com.salesmanager.shop.utils.EmailTemplatesUtils",
+          "com.salesmanager.test.common.AbstractSalesManagerCoreTestCase"
+        ],
+        "ids": []
+      },
+      "rationale": "direct dependents of PricingService (depth-1, manual)"
+    },
+    "sh-trace-01": {
+      "expected": {
+        "kind": "path",
+        "hops": [
+          {
+            "fqn": "com.salesmanager.shop.store.api.v1.order.OrderApi"
+          },
+          {
+            "fqn": "com.salesmanager.core.business.services.order.OrderService"
+          }
+        ]
+      },
+      "rationale": "OrderApi -> OrderService"
+    },
+    "sh-sem-01": {
+      "expected": {
+        "kind": "symbol_set",
+        "fqns": [
+          "com.salesmanager.core.business.services.catalog.pricing.PricingService"
+        ],
+        "ids": []
+      },
+      "rationale": "price via PricingService"
+    },
+    "sh-sem-02": {
+      "expected": {
+        "kind": "symbol_set",
+        "fqns": [
+          "com.salesmanager.core.business.services.order.OrderService"
+        ],
+        "ids": []
+      },
+      "rationale": "orders via OrderService"
+    },
+    "sh-abs-01": {
+      "expected": {
+        "kind": "absence",
+        "verdict": "not_in_project",
+        "proof": "grep graphql: no matches."
+      },
+      "rationale": "No GraphQL"
+    }
+  }
+}

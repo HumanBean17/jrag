@@ -1,0 +1,21 @@
+{
+  "question_id": "bc-up-01",
+  "expected": {
+    "kind": "symbol_set",
+    "fqns": [
+      "com.bank.chat.app.web.ChatIngressController",
+      "com.bank.chat.app.web.JoinOperatorController",
+      "com.bank.chat.app.web.dev.DevAssignmentController",
+      "com.bank.chat.engine.notification.EmailNotificationSender",
+      "com.bank.chat.engine.processors.ClientMessageProcessor",
+      "com.bank.chat.engine.processors.EscalationProcessor",
+      "com.bank.chat.engine.processors.OperatorAssignedProcessor",
+      "com.bank.chat.engine.processors.ReadReceiptProcessor",
+      "com.bank.chat.engine.processors.RejectionPublisher",
+      "com.bank.chat.engine.sla.SlaService"
+    ],
+    "ids": []
+  },
+  "oracle_source": "jqassistant:injects.cypher",
+  "derived_at": "2026-07-19T21:25:54+00:00"
+}

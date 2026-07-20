@@ -1,0 +1,19 @@
+{
+  "question_id": "pt-trace-01",
+  "expected": {
+    "kind": "path",
+    "hops": [
+      {
+        "fqn": "org.springframework.samples.petclinic.api.boundary.web.ApiGatewayController"
+      },
+      {
+        "fqn": "org.springframework.samples.petclinic.api.application.CustomersServiceClient"
+      },
+      {
+        "fqn": "org.springframework.samples.petclinic.api.application.VisitsServiceClient"
+      }
+    ]
+  },
+  "oracle_source": "manual",
+  "derived_at": "2026-07-19T21:40:56+00:00"
+}

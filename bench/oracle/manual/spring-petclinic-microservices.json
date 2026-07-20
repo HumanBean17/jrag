@@ -1,0 +1,116 @@
+{
+  "questions": {
+    "pt-trace-01": {
+      "expected": {
+        "kind": "path",
+        "hops": [
+          {
+            "fqn": "org.springframework.samples.petclinic.api.boundary.web.ApiGatewayController"
+          },
+          {
+            "fqn": "org.springframework.samples.petclinic.api.application.CustomersServiceClient"
+          },
+          {
+            "fqn": "org.springframework.samples.petclinic.api.application.VisitsServiceClient"
+          }
+        ]
+      },
+      "rationale": "ApiGatewayController.getOwnerDetails calls CustomersServiceClient.getOwner and VisitsServiceClient.getVisitsForPets (WebClient)."
+    },
+    "pt-trace-02": {
+      "expected": {
+        "kind": "path",
+        "hops": [
+          {
+            "fqn": "org.springframework.samples.petclinic.visits.web.VisitResource"
+          },
+          {
+            "fqn": "org.springframework.samples.petclinic.visits.model.VisitRepository"
+          }
+        ]
+      },
+      "rationale": "VisitResource.create -> VisitRepository.save."
+    },
+    "pt-cs-01": {
+      "expected": {
+        "kind": "client_route_pairs",
+        "pairs": [
+          {
+            "client_fqn": "org.springframework.samples.petclinic.api.application.CustomersServiceClient",
+            "route": "GET /owners/{ownerId}",
+            "target_service": "customers-service"
+          }
+        ]
+      },
+      "rationale": "CustomersServiceClient WebClient GET http://customers-service/owners/{ownerId}."
+    },
+    "pt-cs-02": {
+      "expected": {
+        "kind": "client_route_pairs",
+        "pairs": [
+          {
+            "client_fqn": "org.springframework.samples.petclinic.api.application.VisitsServiceClient",
+            "route": "GET /pets/visits?petId={petId}",
+            "target_service": "visits-service"
+          }
+        ]
+      },
+      "rationale": "VisitsServiceClient WebClient GET http://visits-service/pets/visits?petId={petId}."
+    },
+    "pt-cs-03": {
+      "expected": {
+        "kind": "client_route_pairs",
+        "pairs": [
+          {
+            "client_fqn": "org.springframework.samples.petclinic.api.application.CustomersServiceClient",
+            "route": "GET /owners/{ownerId}",
+            "target_service": "customers-service"
+          },
+          {
+            "client_fqn": "org.springframework.samples.petclinic.api.application.VisitsServiceClient",
+            "route": "GET /pets/visits?petId={petId}",
+            "target_service": "visits-service"
+          }
+        ]
+      },
+      "rationale": "API gateway aggregates owner details via CustomersServiceClient (customers-service) + VisitsServiceClient (visits-service)."
+    },
+    "pt-cs-04": {
+      "expected": {
+        "kind": "client_route_pairs",
+        "pairs": [
+          {
+            "client_fqn": "org.springframework.samples.petclinic.api.application.CustomersServiceClient",
+            "route": "GET /owners/{ownerId}",
+            "target_service": "customers-service"
+          },
+          {
+            "client_fqn": "org.springframework.samples.petclinic.api.application.VisitsServiceClient",
+            "route": "GET /pets/visits?petId={petId}",
+            "target_service": "visits-service"
+          }
+        ]
+      },
+      "rationale": "API service declares WebClient clients CustomersServiceClient and VisitsServiceClient (not Feign)."
+    },
+    "pt-sem-01": {
+      "expected": {
+        "kind": "symbol_set",
+        "fqns": [
+          "org.springframework.samples.petclinic.vets.model.VetRepository",
+          "org.springframework.samples.petclinic.vets.web.VetResource"
+        ],
+        "ids": []
+      },
+      "rationale": "VetResource.showResourcesVetList reads vets (with specialties) via VetRepository."
+    },
+    "pt-abs-01": {
+      "expected": {
+        "kind": "absence",
+        "verdict": "not_in_project",
+        "proof": "grep Redis/RedisTemplate/@Cacheable across petclinic modules: no matches."
+      },
+      "rationale": "No Redis usage in petclinic."
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "question_id": "pt-impl-01",
+  "expected": {
+    "kind": "symbol_set",
+    "fqns": [
+      "org.springframework.samples.petclinic.customers.web.mapper.OwnerEntityMapper"
+    ],
+    "ids": []
+  },
+  "oracle_source": "jqassistant:implements.cypher",
+  "derived_at": "2026-07-19T21:39:59+00:00"
+}

@@ -1,0 +1,13 @@
+{
+  "question_id": "pt-up-02",
+  "expected": {
+    "kind": "symbol_set",
+    "fqns": [
+      "org.springframework.samples.petclinic.genai.AIDataProvider",
+      "org.springframework.samples.petclinic.genai.VectorStoreController"
+    ],
+    "ids": []
+  },
+  "oracle_source": "jqassistant:injects.cypher",
+  "derived_at": "2026-07-19T21:40:22+00:00"
+}

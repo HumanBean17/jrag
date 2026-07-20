@@ -1,0 +1,40 @@
+# Corpus registry for the jrag effectiveness benchmark.
+# Each corpus is pinned to a frozen source: a git commit SHA (git) or a local
+# fixture directory pinned to this repo's SHA (local). Checkouts land under
+# bench/checkouts/<name>/, indexes under bench/indexes/<name>/.
+#
+# C5 build-cost fields (build_id / build_time_s / on_disk_bytes) captured in
+# Task 4 (init + reprocess, single run). build_time_s is wall-clock for the full
+# init+reprocess build; on_disk_bytes is the exact byte size of the index dir.
+# build_id = sha256(f"{name}:{commit_sha}:{ontology_version}")[:16].
+# ontology_version reflects the jrag ontology at build time (current: 19).
+corpora:
+  - name: bank-chat-system
+    source_kind: local
+    local_path: tests/bank-chat-system
+    pinned_repo_sha: e042940ce697fae6efc8e756a15a95e336c4b512
+    index:
+      ontology_version: 19
+      build_id: 359a90a1993004f6
+      build_time_s: 24.31
+      on_disk_bytes: 19579624
+
+  - name: shopizer
+    source_kind: git
+    git_url: https://github.com/shopizer-ecommerce/shopizer.git
+    commit_sha: 6a4a0a65a3408ee8f62597b51d1b3aac24b77dee
+    index:
+      ontology_version: 19
+      build_id: 2cc6f3554cd35296
+      build_time_s: 74.34
+      on_disk_bytes: 55462518
+
+  - name: spring-petclinic-microservices
+    source_kind: git
+    git_url: https://github.com/spring-petclinic/spring-petclinic-microservices.git
+    commit_sha: 305a1f13e4f961001d4e6cb50a9db51dc3fc5967
+    index:
+      ontology_version: 19
+      build_id: 05746336a2fb08df
+      build_time_s: 22.16
+      on_disk_bytes: 13614076

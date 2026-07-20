@@ -1,0 +1,10 @@
+{
+  "question_id": "pt-abs-01",
+  "expected": {
+    "kind": "absence",
+    "verdict": "not_in_project",
+    "proof": "grep Redis/RedisTemplate/@Cacheable across petclinic modules: no matches."
+  },
+  "oracle_source": "manual",
+  "derived_at": "2026-07-19T21:41:07+00:00"
+}

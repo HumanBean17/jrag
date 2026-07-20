@@ -1,0 +1,12 @@
+{
+  "question_id": "bc-blast-02",
+  "expected": {
+    "kind": "symbol_set",
+    "fqns": [
+      "com.bank.chat.assign.kafka.DistributionTriggerListener"
+    ],
+    "ids": []
+  },
+  "oracle_source": "jqassistant:transitive_blast.cypher",
+  "derived_at": "2026-07-19T21:30:07+00:00"
+}

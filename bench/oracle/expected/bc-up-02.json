@@ -1,0 +1,12 @@
+{
+  "question_id": "bc-up-02",
+  "expected": {
+    "kind": "symbol_set",
+    "fqns": [
+      "com.bank.chat.assign.kafka.DistributionTriggerListener"
+    ],
+    "ids": []
+  },
+  "oracle_source": "jqassistant:injects.cypher",
+  "derived_at": "2026-07-19T21:26:36+00:00"
+}

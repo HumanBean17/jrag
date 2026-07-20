@@ -1,0 +1,12 @@
+{
+  "question_id": "bc-impl-03",
+  "expected": {
+    "kind": "symbol_set",
+    "fqns": [
+      "com.bank.chat.engine.notification.AbstractNotificationSender"
+    ],
+    "ids": []
+  },
+  "oracle_source": "jqassistant:implements.cypher",
+  "derived_at": "2026-07-19T21:25:12+00:00"
+}

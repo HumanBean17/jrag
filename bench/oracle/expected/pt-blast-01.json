@@ -1,0 +1,13 @@
+{
+  "question_id": "pt-blast-01",
+  "expected": {
+    "kind": "symbol_set",
+    "fqns": [
+      "org.springframework.samples.petclinic.customers.web.OwnerResource",
+      "org.springframework.samples.petclinic.customers.web.PetResource"
+    ],
+    "ids": []
+  },
+  "oracle_source": "jqassistant:transitive_blast.cypher",
+  "derived_at": "2026-07-19T21:41:07+00:00"
+}

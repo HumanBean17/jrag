@@ -1,0 +1,16 @@
+{
+  "question_id": "sh-role-03",
+  "expected": {
+    "kind": "symbol_set",
+    "fqns": [
+      "com.salesmanager.shop.store.api.v1.customer.AuthenticateCustomerApi",
+      "com.salesmanager.shop.store.api.v1.customer.CustomerApi",
+      "com.salesmanager.shop.store.api.v1.customer.CustomerNewsletterApi",
+      "com.salesmanager.shop.store.api.v1.customer.CustomerReviewApi",
+      "com.salesmanager.shop.store.api.v1.customer.ResetCustomerPasswordApi"
+    ],
+    "ids": []
+  },
+  "oracle_source": "manual",
+  "derived_at": "2026-07-19T22:09:25+00:00"
+}

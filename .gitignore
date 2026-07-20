@@ -40,6 +40,9 @@ htmlcov/
 
 # Local runtime / data artifacts
 .java-codebase-rag/
+# Bench runtime artifacts: cloned corpora + built indexes (large, regenerated on demand).
+bench/checkouts/
+bench/indexes/
 # Track layered-ignore fixtures under tests/ (blanket rule above would hide them).
 !tests/**/.java-codebase-rag/
 !tests/**/.java-codebase-rag/**

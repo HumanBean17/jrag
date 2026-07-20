@@ -1,0 +1,14 @@
+{
+  "question_id": "bc-up-03",
+  "expected": {
+    "kind": "symbol_set",
+    "fqns": [
+      "com.bank.chat.app.web.ChatIngressController",
+      "com.bank.chat.engine.processors.ClientMessageProcessor",
+      "com.bank.chat.engine.processors.EscalationProcessor"
+    ],
+    "ids": []
+  },
+  "oracle_source": "jqassistant:injects.cypher",
+  "derived_at": "2026-07-19T21:27:18+00:00"
+}

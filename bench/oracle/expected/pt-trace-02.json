@@ -1,0 +1,16 @@
+{
+  "question_id": "pt-trace-02",
+  "expected": {
+    "kind": "path",
+    "hops": [
+      {
+        "fqn": "org.springframework.samples.petclinic.visits.web.VisitResource"
+      },
+      {
+        "fqn": "org.springframework.samples.petclinic.visits.model.VisitRepository"
+      }
+    ]
+  },
+  "oracle_source": "manual",
+  "derived_at": "2026-07-19T21:40:56+00:00"
+}

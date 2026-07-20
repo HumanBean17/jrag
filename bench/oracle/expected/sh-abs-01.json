@@ -1,0 +1,10 @@
+{
+  "question_id": "sh-abs-01",
+  "expected": {
+    "kind": "absence",
+    "verdict": "not_in_project",
+    "proof": "grep graphql: no matches."
+  },
+  "oracle_source": "manual",
+  "derived_at": "2026-07-19T22:09:25+00:00"
+}

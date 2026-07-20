@@ -1,0 +1,17 @@
+{
+  "question_id": "sh-impl-03",
+  "expected": {
+    "kind": "symbol_set",
+    "fqns": [
+      "com.salesmanager.core.business.modules.integration.shipping.impl.CustomShippingQuoteRules",
+      "com.salesmanager.core.business.modules.integration.shipping.impl.CustomWeightBasedShippingQuote",
+      "com.salesmanager.core.business.modules.integration.shipping.impl.PriceByDistanceShippingQuoteRules",
+      "com.salesmanager.core.business.modules.integration.shipping.impl.StorePickupShippingQuote",
+      "com.salesmanager.core.business.modules.integration.shipping.impl.UPSShippingQuote",
+      "com.salesmanager.core.business.modules.integration.shipping.impl.USPSShippingQuote"
+    ],
+    "ids": []
+  },
+  "oracle_source": "manual",
+  "derived_at": "2026-07-19T22:09:25+00:00"
+}

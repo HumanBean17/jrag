@@ -1,0 +1,16 @@
+{
+  "question_id": "sh-trace-01",
+  "expected": {
+    "kind": "path",
+    "hops": [
+      {
+        "fqn": "com.salesmanager.shop.store.api.v1.order.OrderApi"
+      },
+      {
+        "fqn": "com.salesmanager.core.business.services.order.OrderService"
+      }
+    ]
+  },
+  "oracle_source": "manual",
+  "derived_at": "2026-07-19T22:09:25+00:00"
+}

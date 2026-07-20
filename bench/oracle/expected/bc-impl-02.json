@@ -1,0 +1,13 @@
+{
+  "question_id": "bc-impl-02",
+  "expected": {
+    "kind": "symbol_set",
+    "fqns": [
+      "com.bank.chat.engine.pipeline.ClientSegmentFilter",
+      "com.bank.chat.engine.pipeline.EventTypeFilter"
+    ],
+    "ids": []
+  },
+  "oracle_source": "jqassistant:implements.cypher",
+  "derived_at": "2026-07-19T21:24:31+00:00"
+}

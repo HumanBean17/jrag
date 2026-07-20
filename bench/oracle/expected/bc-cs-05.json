@@ -1,0 +1,9 @@
+{
+  "question_id": "bc-cs-05",
+  "expected": {
+    "kind": "client_route_pairs",
+    "pairs": []
+  },
+  "oracle_source": "manual",
+  "derived_at": "2026-07-19T21:30:07+00:00"
+}

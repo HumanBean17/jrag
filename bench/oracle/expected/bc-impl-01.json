@@ -1,0 +1,23 @@
+{
+  "question_id": "bc-impl-01",
+  "expected": {
+    "kind": "symbol_set",
+    "fqns": [
+      "com.bank.chat.engine.processors.AckProcessor",
+      "com.bank.chat.engine.processors.ClientMessageProcessor",
+      "com.bank.chat.engine.processors.CloseChatProcessor",
+      "com.bank.chat.engine.processors.ComplianceHoldProcessor",
+      "com.bank.chat.engine.processors.EscalationProcessor",
+      "com.bank.chat.engine.processors.FallbackEventProcessor",
+      "com.bank.chat.engine.processors.OperatorAssignedProcessor",
+      "com.bank.chat.engine.processors.OperatorMessageProcessor",
+      "com.bank.chat.engine.processors.ReadReceiptProcessor",
+      "com.bank.chat.engine.processors.SessionReopenProcessor",
+      "com.bank.chat.engine.processors.TransferProcessor",
+      "com.bank.chat.engine.processors.TypingProcessor"
+    ],
+    "ids": []
+  },
+  "oracle_source": "jqassistant:implements.cypher",
+  "derived_at": "2026-07-19T21:23:46+00:00"
+}

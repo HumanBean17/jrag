@@ -1,0 +1,15 @@
+{
+  "question_id": "bc-role-01",
+  "expected": {
+    "kind": "symbol_set",
+    "fqns": [
+      "com.bank.chat.app.web.ChatIngressController",
+      "com.bank.chat.app.web.ChatReportingController",
+      "com.bank.chat.app.web.JoinOperatorController",
+      "com.bank.chat.app.web.dev.DevAssignmentController"
+    ],
+    "ids": []
+  },
+  "oracle_source": "jqassistant:role_controllers.cypher",
+  "derived_at": "2026-07-19T21:28:01+00:00"
+}
