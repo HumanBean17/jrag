@@ -71,7 +71,7 @@ that is acceptable.
 - **First draft**: 2026-05-08, opened as PR (`docs/architecture-paper`).
 - **Empirical evaluation**: deferred to a follow-up paper or a §7.1 addition
   once real-codebase testing produces stable numbers.
-- **Skills layer specification**: deferred to `propose/completed/AGENT-SKILLS-AND-COMMANDS-PROPOSE.md`
+- **Skills layer specification**: deferred to `docs/superpowers/specs/archive/AGENT-SKILLS-AND-COMMANDS-PROPOSE.md`
   (currently held in PR #59); empirical signals from current testing show
   prose-guide-only is sufficient, so the skills layer is not on the critical
   path.

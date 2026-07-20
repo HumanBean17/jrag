@@ -46,8 +46,6 @@ jobs:
               - '**/*.md'
               - '**/*.mdc'
               - 'docs/**'
-              - 'propose/**'
-              - 'plans/**'
               - 'skills/**'
               - '.claude/**'
               - 'CLAUDE.md'
