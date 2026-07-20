@@ -131,7 +131,7 @@ method-level local, distinct names) is fine.
   remain after the name/arity walk; when arity narrows to a single candidate, the edge keeps the
   receiver-resolution strategy (for example `import_map` or `this_super`).
 
-The checklist in `propose/completed/CALL-GRAPH-PROPOSE.md` §7.1 is covered across `tests/test_ast_java_calls.py`
+The checklist in `docs/superpowers/specs/archive/CALL-GRAPH-PROPOSE.md` §7.1 is covered across `tests/test_ast_java_calls.py`
 (parse-only), `tests/test_call_graph_smoke_roundtrip.py` plus `tests/fixtures/call_graph_smoke/`
 (mini Maven tree for scope / overload / wildcard / method-ref graph checks), the session LadybugDB
 fixture (`tests/conftest.py`), `tests/test_ast_graph_build.py`, `tests/test_ladybug_queries.py`,
@@ -239,8 +239,8 @@ capabilities are not materialised on graph nodes).
 Capabilities are derived at the **type level**: method-level annotation
 evidence is aggregated up to the enclosing type. Per-method capability
 storage is intentionally out of scope for the current ontology — see
-`plans/completed/PLAN-CAPABILITIES-MODEL.md` for the original design.
-The call-graph layer (`propose/completed/CALL-GRAPH-PROPOSE.md`,
+`docs/superpowers/plans/archive/PLAN-CAPABILITIES-MODEL.md` for the original design.
+The call-graph layer (`docs/superpowers/specs/archive/CALL-GRAPH-PROPOSE.md`,
 shipped) introduced method-level call edges; method-granularity
 capabilities can be revisited in a follow-up if the need arises.
 
@@ -600,7 +600,7 @@ This is a larger change; rough map:
    document the new label in README + agent guide), or add a focused LadybugDB
    helper called from those handlers.
 
-See `propose/completed/CALL-GRAPH-PROPOSE.md` for the shipped shape of
+See `docs/superpowers/specs/archive/CALL-GRAPH-PROPOSE.md` for the shipped shape of
 `CALLS` / `HTTP_CALLS` / `ASYNC_CALLS` — your custom edge should follow
 the same conventions.
 

@@ -244,7 +244,7 @@ A missing or stale index produces an actionable `status: error` envelope (exit
 error: No index at /path/to/code_graph.lbug. Run: jrag init --source-root <root>
 ```
 
-See [`plans/active/PLAN-JRAG-CLI.md`](./plans/active/PLAN-JRAG-CLI.md) for the
+See [`docs/superpowers/plans/archive/PLAN-JRAG-CLI.md`](./docs/superpowers/plans/archive/PLAN-JRAG-CLI.md) for the
 full design and per-PR breakdown.
 
 ---
