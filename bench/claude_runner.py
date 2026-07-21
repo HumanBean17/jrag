@@ -10,7 +10,6 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import os
-import signal
 import subprocess
 import sys
 import time
@@ -448,7 +447,7 @@ def run_cell(
         cwd=cell_cwd(spec),
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
     )
 
     try:
