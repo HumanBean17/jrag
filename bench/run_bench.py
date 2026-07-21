@@ -272,9 +272,30 @@ def _parse_csv_list(value: str | None) -> list[str]:
 
 
 def _parse_csv_ints(value: str | None) -> list[int]:
+    """Parse a comma-separated string of ints.
+
+    Used as the argparse ``type=`` callable for ``--seeds`` so that a non-int
+    item produces a clean argparse usage error (stderr message + SystemExit(2))
+    instead of a bare ``ValueError`` traceback. argparse catches
+    ``ArgumentTypeError`` / ``ValueError`` from a ``type=`` callable and
+    converts it via ``parser.error(...)``.
+
+    Args:
+        value: Comma-separated int string (e.g. ``"0,1,2"``), or ``None``.
+
+    Returns:
+        List of ints. Empty list for ``None`` or an empty string.
+    """
+    if value is None:
+        return []
     out: list[int] = []
     for item in _parse_csv_list(value):
-        out.append(int(item))
+        try:
+            out.append(int(item))
+        except ValueError as exc:
+            raise argparse.ArgumentTypeError(
+                f"invalid int in --seeds: {item!r}"
+            ) from exc
     return out
 
 
@@ -294,7 +315,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", default="bench/results")
     parser.add_argument("--models", default=None,
                         help="Comma-separated model ids (pinned to SMOKE_MODELS by --smoke)")
-    parser.add_argument("--seeds", default=None,
+    parser.add_argument("--seeds", default=None, type=_parse_csv_ints,
                         help="Comma-separated int seeds (pinned to SMOKE_SEEDS by --smoke)")
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--max-turns", type=int, default=DEFAULT_MAX_TURNS)
@@ -310,7 +331,9 @@ def main(argv: list[str] | None = None) -> int:
         temperature = SMOKE_TEMPERATURE
     else:
         models = _parse_csv_list(args.models) if args.models else list(SMOKE_MODELS)
-        seeds = _parse_csv_ints(args.seeds) if args.seeds else list(SMOKE_SEEDS)
+        # ``--seeds`` uses ``type=_parse_csv_ints`` so argparse already converted
+        # it (or errored cleanly). ``None`` means the flag was absent → SMOKE default.
+        seeds = args.seeds if args.seeds is not None else list(SMOKE_SEEDS)
         temperature = args.temperature
 
     # Plan-1 loaders: typed records, registry/isolation invariants enforced.

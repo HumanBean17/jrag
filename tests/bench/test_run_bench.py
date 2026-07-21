@@ -526,3 +526,34 @@ def test_main_resume_reuses_existing_run_dir(monkeypatch, tmp_path):
     # (b) Pre-completed cell skipped — fake called only for the pending cell.
     assert len(calls) == 1
     assert calls[0] == pending_rid
+
+
+def test_main_seeds_invalid_int_errors(monkeypatch, tmp_path):
+    """``main(["--seeds", "foo"])`` exits cleanly via argparse, not a traceback.
+
+    RED reasoning: pre-fix, ``_parse_csv_ints`` called ``int(item)`` without
+    a try/except, so a non-int ``--seeds`` value raised a bare ``ValueError``
+    traceback at runtime — fine for a developer but operator-hostile for a
+    CLI invocation. The fix routes the error through argparse's
+    ``type=callable`` mechanism: argparse catches ``ValueError`` /
+    ``ArgumentTypeError`` from the type callable and converts it into a clean
+    usage error (stderr message + ``SystemExit(2)``). The test asserts
+    ``SystemExit`` is raised (not ``ValueError``).
+    """
+    from bench.run_bench import main
+
+    # ``--seeds foo`` is not a valid int; argparse should reject it via
+    # SystemExit(2). Cap-the-grid monkeypatches so we don't depend on real
+    # corpora/questions even if argparse somehow lets it through.
+    monkeypatch.setattr(
+        "bench.run_bench.load_corpora", lambda *a, **kw: []
+    )
+    monkeypatch.setattr(
+        "bench.run_bench.load_conditions", lambda *a, **kw: []
+    )
+    monkeypatch.setattr(
+        "bench.run_bench.load_all_questions", lambda *a, **kw: []
+    )
+
+    with pytest.raises(SystemExit):
+        main(["--seeds", "foo", "--out", str(tmp_path)])
