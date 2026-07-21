@@ -16,6 +16,11 @@ from bench.grade import (
     extract_simple_names,
     expected_simple_names,
     grade_set_match,
+    extract_path,
+    grade_path_match,
+    extract_client_routes,
+    grade_client_route_match,
+    grade_absence,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -187,3 +192,100 @@ def test_extract_simple_names_drops_stopwords_and_lowercase():
     text = "The Answer uses Tools from com.bank.chat to AckProcessor"
     extracted = extract_simple_names(text)
     assert extracted == {"AckProcessor"}
+
+
+# --- Task 12: path / client_route / absence graders ---
+
+
+def test_grade_path_match_ordered():
+    """Controller -> Service -> Repo with truth [Controller, Service, Repo].
+
+    ordered_match is True, correctness == 1.0.
+    """
+    expected = {
+        "kind": "path",
+        "hops": [
+            {"fqn": "com.bank.Controller"},
+            {"fqn": "com.bank.Service"},
+            {"fqn": "com.bank.Repo"},
+        ],
+    }
+    answer = "Controller -> Service -> Repo"
+    g = grade_path_match(answer, expected)
+    assert g.detail["ordered_match"] is True
+    assert g.detail["jaccard"] == 1.0
+    assert g.correctness == 1.0
+    assert g.method == "path_match"
+
+
+def test_grade_path_match_unordered_jaccard():
+    """Answer has 2 of 3 hops, out of order.
+
+    ordered_match is False, jaccard == 2/3, correctness == 2/3.
+    """
+    expected = {
+        "kind": "path",
+        "hops": [
+            {"fqn": "com.bank.Controller"},
+            {"fqn": "com.bank.Service"},
+            {"fqn": "com.bank.Repo"},
+        ],
+    }
+    # Answer omits Repo and reverses the remaining two.
+    answer = "Service -> Controller"
+    g = grade_path_match(answer, expected)
+    assert g.detail["ordered_match"] is False
+    assert g.detail["jaccard"] == pytest.approx(2 / 3)
+    assert g.correctness == pytest.approx(2 / 3)
+    assert g.method == "path_match"
+
+
+def test_grade_client_route_match_partial():
+    """Expected two pairs, answer has one → matched == 1, correctness == 0.5."""
+    expected = {
+        "kind": "client_route_pairs",
+        "pairs": [
+            {
+                "client_fqn": "com.bank.ChatClient",
+                "route": "POST /join",
+                "target_service": "ChatService",
+            },
+            {
+                "client_fqn": "com.bank.ChatClient",
+                "route": "POST /leave",
+                "target_service": "ChatService",
+            },
+        ],
+    }
+    # Answer mentions only the /join route.
+    answer = "ChatClient calls POST /join on ChatService."
+    g = grade_client_route_match(answer, expected)
+    assert g.detail["matched"] == 1
+    assert g.correctness == 0.5
+    assert ("ChatClient", "POST /join") not in g.detail["missing"]
+    assert ("ChatClient", "POST /leave") in g.detail["missing"]
+    assert g.method == "client_route_match"
+
+
+def test_grade_absence_correct():
+    """Answer asserts absence; expected verdict not_in_project → match."""
+    expected = {"kind": "absence", "verdict": "not_in_project", "proof": "..."}
+    answer = "There is no Redis cache layer."
+    g = grade_absence(answer, expected)
+    assert g.detail["verdict_match"] is True
+    assert g.detail["detected"] is True
+    assert g.detail["expected_verdict"] is True
+    assert g.correctness == 1.0
+    assert g.method == "absence_check"
+
+
+def test_grade_absence_wrong():
+    """Answer asserts presence; expected verdict not_in_project → no match."""
+    expected = {"kind": "absence", "verdict": "not_in_project", "proof": "..."}
+    answer = "The Redis cache is in CacheService."
+    g = grade_absence(answer, expected)
+    assert g.detail["verdict_match"] is False
+    assert g.detail["detected"] is False
+    assert g.detail["expected_verdict"] is True
+    assert g.correctness == 0.0
+    assert g.method == "absence_check"
