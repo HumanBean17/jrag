@@ -15,6 +15,9 @@ from __future__ import annotations
 import subprocess
 import sys
 import threading
+from pathlib import Path
+
+import pytest
 
 from java_codebase_rag import pipeline
 
@@ -215,3 +218,69 @@ def test_abort_child_swallows_already_dead() -> None:
     proc = _AlreadyDeadProc()
     # Must not raise — caller relies on best-effort, swallow-and-return.
     pipeline._abort_child(proc)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "runner",
+    [pipeline.run_build_ast_graph, pipeline.run_incremental_graph],
+)
+def test_graph_runner_emits_failed_progress_on_abort(monkeypatch, runner) -> None:
+    events = []
+    monkeypatch.setattr(pipeline.subprocess, "Popen", lambda *args, **kwargs: object())
+
+    def interrupt(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(pipeline, "_popen_capturing_stderr", interrupt)
+
+    with pytest.raises(KeyboardInterrupt):
+        runner(
+            source_root=Path.cwd(),
+            ladybug_path=Path("graph.lbug"),
+            verbose=True,
+            on_progress=events.append,
+        )
+
+    assert [(event.kind, event.status) for event in events] == [("graph", "failed")]
+
+
+@pytest.mark.parametrize(
+    "runner",
+    [pipeline.run_build_ast_graph, pipeline.run_incremental_graph],
+)
+def test_graph_runner_emits_done_progress_on_success(monkeypatch, runner) -> None:
+    # Simulate the child (build_ast_graph._graph_pass_progress) emitting its own
+    # terminal graph event: on the default path --verbose is passed, the relay
+    # parses ``kind=graph pass=6/6 status=done`` and routes it to on_progress.
+    # The renderer keys terminality on kind+status alone, so this IS the one
+    # terminal graph event. The parent must NOT emit a second one on success.
+    events = []
+    monkeypatch.setattr(pipeline.subprocess, "Popen", lambda *args, **kwargs: object())
+
+    def fake_capture(*args, **kwargs):
+        on_progress = kwargs["on_progress"]
+        if on_progress is not None:
+            on_progress(
+                pipeline.ProgressEvent(
+                    kind="graph", phase="build", pass_="6/6", done=600,
+                    total=600, status="done", elapsed_s=1.0,
+                )
+            )
+        return ("", "", 0)
+
+    monkeypatch.setattr(pipeline, "_popen_capturing_stderr", fake_capture)
+
+    result = runner(
+        source_root=Path.cwd(),
+        ladybug_path=Path("graph.lbug"),
+        verbose=True,
+        on_progress=events.append,
+    )
+
+    assert result.returncode == 0
+    # Exactly ONE terminal graph event (from the child) — not two. Without the
+    # parent-side ``code != 0`` gate, its finally fires a second ("graph","done")
+    # and this assertion fails, breaking the one-terminal-event-per-kind invariant.
+    terminal = [e for e in events if e.kind == "graph" and e.status == "done"]
+    assert len(terminal) == 1
+    assert [(e.kind, e.status) for e in events] == [("graph", "done")]

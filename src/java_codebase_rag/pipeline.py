@@ -450,17 +450,45 @@ def run_build_ast_graph(
             capture_output=True,
             text=True,
         )
-    proc = subprocess.Popen(
-        cmd,
-        cwd=str(source_root),
-        env=env or os.environ.copy(),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        bufsize=0,
-    )
-    out_s, err_s, code = _popen_capturing_stderr(
-        proc, verbose=verbose, on_progress=on_progress, on_progress_console=on_progress_console
-    )
+    t0 = time.perf_counter()
+    code = -1
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(source_root),
+            env=env or os.environ.copy(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=0,
+        )
+        out_s, err_s, code = _popen_capturing_stderr(
+            proc,
+            verbose=verbose,
+            on_progress=on_progress,
+            on_progress_console=on_progress_console,
+        )
+    finally:
+        # On SUCCESS the child (build_ast_graph._graph_pass_progress) already
+        # emitted its own terminal ``kind=graph pass=6/6 status=done`` line in
+        # its finally, which the relay routes to on_progress — so the renderer
+        # and programmatic consumers have already seen the one terminal graph
+        # event. Emitting a second here would violate the "one terminal event
+        # per kind" invariant (duplicate non-TTY line, two events for MCP). The
+        # parent therefore emits ONLY on the failure/interrupt path (code != 0,
+        # incl. spawn failure where code stays -1), where the child did NOT
+        # reach its finally with a healthy exit.
+        if on_progress is not None and code != 0:
+            on_progress(
+                ProgressEvent(
+                    kind="graph",
+                    phase=None,
+                    pass_=None,
+                    done=None,
+                    total=None,
+                    status="failed",
+                    elapsed_s=time.perf_counter() - t0,
+                )
+            )
     if not verbose:
         from java_codebase_rag.cli_format import bold_cyan, styled_check, styled_cross
         marker = styled_check() if code == 0 else styled_cross()
@@ -509,17 +537,39 @@ def run_incremental_graph(
             capture_output=True,
             text=True,
         )
-    proc = subprocess.Popen(
-        cmd,
-        cwd=str(source_root),
-        env=env or os.environ.copy(),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        bufsize=0,
-    )
-    out_s, err_s, code = _popen_capturing_stderr(
-        proc, verbose=verbose, on_progress=on_progress, on_progress_console=on_progress_console
-    )
+    t0 = time.perf_counter()
+    code = -1
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(source_root),
+            env=env or os.environ.copy(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=0,
+        )
+        out_s, err_s, code = _popen_capturing_stderr(
+            proc,
+            verbose=verbose,
+            on_progress=on_progress,
+            on_progress_console=on_progress_console,
+        )
+    finally:
+        # See run_build_ast_graph: on success the child already emitted its own
+        # terminal graph event (pass=6/6 status=done); the parent emits ONLY on
+        # the failure/interrupt path to keep exactly one terminal event per kind.
+        if on_progress is not None and code != 0:
+            on_progress(
+                ProgressEvent(
+                    kind="graph",
+                    phase=None,
+                    pass_=None,
+                    done=None,
+                    total=None,
+                    status="failed",
+                    elapsed_s=time.perf_counter() - t0,
+                )
+            )
     if not verbose:
         from java_codebase_rag.cli_format import bold_cyan, styled_check, styled_cross
         marker = styled_check() if code == 0 else styled_cross()
