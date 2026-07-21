@@ -416,6 +416,27 @@ def test_judge_answer_parses_fenced_json(monkeypatch):
     assert len(g.detail["rationale"]) > 0  # Non-empty
 
 
+def test_judge_answer_timeout_raises_gradeerror(monkeypatch):
+    """``judge_answer`` raises ``GradeError`` when the judge subprocess times out.
+
+    RED reasoning: pre-fix, ``judge_answer`` called ``subprocess.run`` without
+    a ``timeout=`` argument, so a hung judge process would block the grader
+    forever (no per-cell wall-clock bound). The fix adds ``timeout=120`` and
+    catches ``subprocess.TimeoutExpired`` → ``GradeError(\"judge timed out
+    (>120s)\")``. With the per-cell tolerance added in ``grade_run`` (sibling
+    test ``test_grade_run_continues_past_error_cell``), a hung judge becomes a
+    single 0.0 cell instead of a stuck pipeline.
+    """
+    import subprocess as _subprocess
+
+    def _fake_run(argv, *args, **kwargs):
+        raise _subprocess.TimeoutExpired(cmd=argv, timeout=kwargs.get("timeout", 120))
+
+    monkeypatch.setattr("bench.grade.subprocess.run", _fake_run)
+    with pytest.raises(GradeError, match="timed out"):
+        judge_answer("blinded", "q", {"kind": "semantic", "answer": "a"})
+
+
 # --- Task 14: grade_cell dispatch + cohen_kappa + grade_run + CLI ---
 
 
@@ -646,3 +667,107 @@ def test_grade_run_fills_grades(tmp_path):
         assert d["grade"] is not None
         assert "method" in d["grade"]
         assert "correctness" in d["grade"]
+
+
+def test_grade_run_continues_past_error_cell(tmp_path, monkeypatch):
+    """``grade_run`` writes-as-you-go and tolerates per-cell grade errors.
+
+    2 cells (both set_match): cell 1 grades cleanly, cell 2's ``grade_cell``
+    raises (monkeypatched). Pre-fix the buffered-write design meant cell 1's
+    line sat in ``out_lines`` and was LOST when cell 2 raised — plus the run
+    aborted. Post-fix the run continues, emits an ``_error`` grade line for
+    cell 2 (correctness 0.0), and prior cells persist.
+
+    RED reasoning: pre-fix, ``grade_run`` accumulated ``out_lines`` and wrote
+    them once at the end. If any cell's ``grade_cell`` raised, the exception
+    bypassed the final write, losing EVERY prior cell's grade. A single bad
+    cell (transient judge failure, missing expected file, etc.) would
+    therefore nuke the whole run's graded output. The fix opens ``out_path``
+    once and writes each line as the cell is graded, wrapping each
+    ``grade_cell`` in try/except so an error becomes a 0.0 ``<method>_error``
+    grade line and the run continues. Summary gains an ``errors: int`` field.
+    """
+    transcripts_dir = tmp_path / "transcripts"
+    transcripts_dir.mkdir()
+    expected_dir = tmp_path / "expected"
+    expected_dir.mkdir()
+
+    t1 = transcripts_dir / "t1.txt"
+    t1.write_text("transcript one")
+    t2 = transcripts_dir / "t2.txt"
+    t2.write_text("transcript two")
+
+    expected_record = {
+        "question_id": "q-set",
+        "expected": {
+            "kind": "symbol_set",
+            "fqns": ["com.example.Foo", "com.example.Bar"],
+            "ids": [],
+        },
+    }
+    (expected_dir / "q-set.json").write_text(json.dumps(expected_record))
+
+    cells = [
+        {
+            "run_id": "r1",
+            "question_id": "q-set",
+            "final_answer": "Foo Bar",
+            "transcript_path": str(t1),
+            "grade": None,
+        },
+        {
+            "run_id": "r2",
+            "question_id": "q-set",
+            "final_answer": "Foo Bar",
+            "transcript_path": str(t2),
+            "grade": None,
+        },
+    ]
+    cells_path = tmp_path / "cells.jsonl"
+    cells_path.write_text("\n".join(json.dumps(c) for c in cells))
+
+    questions = [_make_question("q-set", grading="programmatic_set_match")]
+
+    # Monkeypatch grade_cell so the SECOND call raises (cell 2 fails).
+    real_grade_cell = grade_cell
+    call_count = {"n": 0}
+
+    def flaky_grade_cell(cell, transcript_text, question, expected, *, judge_bin="claude"):
+        call_count["n"] += 1
+        if call_count["n"] == 2:
+            raise RuntimeError("simulated judge explosion on cell 2")
+        return real_grade_cell(cell, transcript_text, question, expected, judge_bin=judge_bin)
+
+    monkeypatch.setattr("bench.grade.grade_cell", flaky_grade_cell)
+
+    out_path = tmp_path / "graded.jsonl"
+
+    # Must not raise — the error is absorbed into an `_error` grade line.
+    summary = grade_run(
+        str(cells_path),
+        str(expected_dir),
+        questions,
+        out_path=str(out_path),
+    )
+
+    # Both cells counted; one clean, one error.
+    assert summary["graded_n"] == 2
+    assert summary["errors"] == 1
+
+    # out_path persisted BOTH lines (write-as-you-go, not buffered).
+    lines = [ln for ln in out_path.read_text().splitlines() if ln.strip()]
+    assert len(lines) == 2
+
+    first = json.loads(lines[0])
+    second = json.loads(lines[1])
+    # Cell 1 graded cleanly.
+    assert first["run_id"] == "r1"
+    assert first["grade"]["method"] == "set_match"
+    assert first["grade"]["correctness"] == 1.0
+    # Cell 2 became an error grade: method ends in `_error`, correctness 0.0,
+    # detail carries the error message.
+    assert second["run_id"] == "r2"
+    assert second["grade"]["method"].endswith("_error")
+    assert second["grade"]["correctness"] == 0.0
+    assert "error" in second["grade"]["detail"]
+    assert "simulated judge explosion" in second["grade"]["detail"]["error"]

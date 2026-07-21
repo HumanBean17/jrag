@@ -559,7 +559,13 @@ def judge_answer(
             stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
+            timeout=120,
         )
+    except subprocess.TimeoutExpired as exc:
+        # Per-cell wall-clock bound on the judge. Without this a hung judge
+        # process blocks the grader indefinitely. Caught before the broader
+        # SubprocessError handler below so the message names the timeout.
+        raise GradeError("judge timed out (>120s)") from exc
     except (OSError, subprocess.SubprocessError) as exc:
         raise GradeError(f"judge subprocess failed: {exc!r}") from exc
 
@@ -763,6 +769,18 @@ def grade_run(
 ) -> dict:
     """Grade every cell in a run; write ``out_path``; return a summary.
 
+    Write-as-you-go: ``out_path`` is opened once and each cell's line is
+    written as soon as that cell is graded (with ``flush()``), so a crash on
+    cell N does not discard the lines already written for cells 1..N-1.
+
+    Per-cell tolerance: each cell's ``grade_cell`` (plus the surrounding
+    transcript/expected reads) is wrapped in ``try/except Exception``. On any
+    failure the run continues and the cell gets a grade line with
+    ``correctness = 0.0``, ``method = "<original_method>_error"``, and
+    ``detail = {"error": str(exc)}``. The happy path (every cell grades
+    cleanly) is unchanged. The count of error cells is returned as
+    ``summary["errors"]``.
+
     Per cell:
       1. Read the transcript at ``cell["transcript_path"]`` (relative to the
          process cwd — the cell stores a repo-relative path).
@@ -800,54 +818,75 @@ def grade_run(
                 "by_method": {method_name: count, ...},
                 "mean_correctness": float,   # 0.0 if no cells
                 "kappa": float | None,       # None unless human_labels given
+                "errors": int,               # cells whose grade_cell raised
             }
 
     Raises:
-        KeyError: if a cell's ``question_id`` has no Question, or its
-            transcript/expected file is missing (FileNotFoundError).
+        KeyError: if a cell's ``question_id`` has no Question. (Per-cell
+            transcript/expected read failures and grade_cell exceptions are
+            tolerated — see "write-as-you-go" note above.)
     """
     question_by_id = {q.id: q for q in questions}
 
     graded_n = 0
     by_method: dict[str, int] = {}
     correctness_sum = 0.0
+    errors = 0
     # Track (run_id, Grade) so we can pair judge labels with human labels after.
     judged_cells: list[tuple[str, Grade]] = []
 
-    out_lines: list[str] = []
-    for line in Path(cells_path).read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        cell = json.loads(line)
-        qid = cell["question_id"]
-        question = question_by_id[qid]
+    # Write-as-you-go: open ``out_path`` once and write each cell's line as it
+    # is graded, so a crash on cell N no longer discards the lines already
+    # collected for cells 1..N-1. Per-cell ``grade_cell`` failures are caught
+    # and turned into a 0.0 ``<original_method>_error`` grade line so the run
+    # continues (a single bad cell — transient judge failure, missing oracle
+    # file, etc. — must not nuke the whole run's graded output).
+    cell_lines = Path(cells_path).read_text(encoding="utf-8").splitlines()
+    with open(out_path, "w", encoding="utf-8") as out_f:
+        for line in cell_lines:
+            line = line.strip()
+            if not line:
+                continue
+            cell = json.loads(line)
+            qid = cell["question_id"]
+            question = question_by_id[qid]
+            original_method = GRADE_DISPATCH.get(question.grading, "unknown")
 
-        transcript_text = Path(cell["transcript_path"]).read_text(encoding="utf-8")
-        expected_record = json.loads(
-            Path(expected_dir, f"{qid}.json").read_text(encoding="utf-8")
-        )
-        expected = expected_record["expected"]
+            try:
+                transcript_text = Path(cell["transcript_path"]).read_text(encoding="utf-8")
+                expected_record = json.loads(
+                    Path(expected_dir, f"{qid}.json").read_text(encoding="utf-8")
+                )
+                expected = expected_record["expected"]
 
-        grade = grade_cell(
-            cell,
-            transcript_text,
-            question,
-            expected,
-            judge_bin=judge_bin,
-        )
+                grade = grade_cell(
+                    cell,
+                    transcript_text,
+                    question,
+                    expected,
+                    judge_bin=judge_bin,
+                )
+            except Exception as exc:
+                # Absorb the failure into a 0.0 error-grade line and continue.
+                # ``GradeError`` and any other Exception land here; the run
+                # does not abort and prior cells are already persisted on disk.
+                grade = Grade(
+                    correctness=0.0,
+                    method=f"{original_method}_error",
+                    detail={"error": str(exc)},
+                    judge_model=None,
+                )
+                errors += 1
 
-        graded_n += 1
-        by_method[grade.method] = by_method.get(grade.method, 0) + 1
-        correctness_sum += grade.correctness
-        judged_cells.append((cell["run_id"], grade))
+            graded_n += 1
+            by_method[grade.method] = by_method.get(grade.method, 0) + 1
+            correctness_sum += grade.correctness
+            judged_cells.append((cell["run_id"], grade))
 
-        cell_out = dict(cell)
-        cell_out["grade"] = to_grade_dict(grade)
-        out_lines.append(json.dumps(cell_out))
-
-    Path(out_path).write_text("\n".join(out_lines) + ("\n" if out_lines else ""),
-                              encoding="utf-8")
+            cell_out = dict(cell)
+            cell_out["grade"] = to_grade_dict(grade)
+            out_f.write(json.dumps(cell_out) + "\n")
+            out_f.flush()
 
     kappa: float | None = None
     if human_labels_path is not None:
@@ -869,6 +908,7 @@ def grade_run(
         "by_method": by_method,
         "mean_correctness": mean_correctness,
         "kappa": kappa,
+        "errors": errors,
     }
 
 
