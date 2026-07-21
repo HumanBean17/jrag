@@ -25,6 +25,24 @@ JRAG_GRAPH_TOOLS = [
 JRAG_VECTOR_TOOLS = ["mcp__jrag__search"]
 ALL_JRAG_TOOLS = JRAG_GRAPH_TOOLS + JRAG_VECTOR_TOOLS
 
+# Common escape/integrity deny-list applied to EVERY condition.
+# Under `--permission-mode bypassPermissions`, `--allowedTools` is additive
+# (a permission grant, not an exclusive allowlist), so isolation must be
+# enforced via `--disallowedTools`. This list blocks: checkout mutation
+# (Edit/Write/NotebookEdit — reproducibility), external info (WebSearch/
+# WebFetch — all reasoning must come from the local codebase), and subagent
+# dispatch (Agent/Task — closes the unmonitorable subagent-escape vector).
+# Per-condition variation is ONLY jrag/lexical access (see conditions.yml).
+ESCAPE_TOOLS = [
+    "Edit",
+    "Write",
+    "NotebookEdit",
+    "WebSearch",
+    "WebFetch",
+    "Agent",
+    "Task",
+]
+
 VALID_IDS = {"A", "B", "C", "D"}
 
 
