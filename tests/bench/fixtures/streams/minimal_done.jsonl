@@ -1,0 +1,4 @@
+{"type":"system","subtype":"init"}
+{"type":"assistant","message":{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"tool_use","id":"call_1","name":"Read","input":{"file_path":"/tmp/test.txt"}},{"type":"text","text":"Reading file"}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_1","content":"hello\n"}]}}
+{"type":"result","num_turns":1,"stop_reason":"end_turn","terminal_reason":"completed","is_error":false,"usage":{"input_tokens":100,"output_tokens":5}}

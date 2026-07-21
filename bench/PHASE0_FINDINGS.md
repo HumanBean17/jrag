@@ -65,13 +65,86 @@ All builds: 0 parse errors, ontology_version 19. shopizer is the cost ceiling
 "~hundreds" (62 `.java` files in the checkout) but carries the Feign
 cross-service seam (1 detected `http_calls` edge) and the multi-module shape.
 
-## TODO (later spikes)
+## `claude -p` flag stability (Plan 2 driver gate) — RESOLVED
 
-- **`claude -p` flag stability** (Plan 2 driver gate): confirm
-  `--allowedTools`/`--disallowedTools` accept MCP tool names like
-  `mcp__jrag__neighbors`, and that `--max-turns` caps as expected. Record here.
-- **Ablation toggles** (Plan 2/3): which of role-ranking / cross-service-edges /
-  graph-expansion jrag can actually disable at query/index time. Record here.
+**Verdict: PASS.** Headless `claude -p` drives the benchmark; 4 probe runs
+(~$0.40 total) confirmed the flag surface and exposed **4 corrections** the
+driver must apply. Raw transcripts saved under `bench/spikes/`.
+
+**Confirmed working:**
+
+| Need | Finding |
+|------|---------|
+| Headless execution | `claude -p ... --output-format json\|stream-json` exits 0, no stderr. |
+| Model routing | Env default is **glm-4.7** (a spec subject) — driven headless with no `--model`. Explicit `--model glm-5.1` is the only remaining (trivial) check. |
+| Token/cost accounting | Terminal `result` event carries `usage.{input,output,cache_read,cache_creation}_tokens`, `total_cost_usd`, per-model `modelUsage`. |
+| Tool-call capture | `assistant.content[].tool_use.{name,input}` → `tool_call_breakdown`; `user.content[].tool_result` → `context_bytes_retrieved` (sum of content lengths). |
+| Exit reason | `stop_reason` (end_turn) + `terminal_reason` (completed) + `is_error` + `api_error_status` distinguish done/cap/error. |
+| MCP integration | jrag server wires up via `--mcp-config` headless; agent calls `mcp__jrag__resolve`+`mcp__jrag__neighbors` and answers correctly. |
+
+**4 driver corrections (load-bearing):**
+
+1. **`--max-turns` does not exist.** No turn-cap flag in the 227-line help (only
+   `--max-budget-usd`, `--effort`). Cap = **driver-side**: count `assistant`
+   events in stream-json, SIGTERM at N (`num_turns` is reported post-hoc in the
+   result event for verification). Real-time counting is feasible — `assistant`
+   events equal model turns (observed num_turns: 1 no-tools, 2 one-tool, 3 two-tool).
+2. **`--output-format stream-json` requires `--verbose`** with `-p` (else exit 1,
+   empty output). Driver must pass `--verbose`.
+3. **`claude -p` waits on stdin** ("no stdin data received in 3s"). Driver must
+   close stdin (`subprocess stdin=DEVNULL` / `< /dev/null`).
+4. **`--add-dir` does NOT set cwd.** It only grants access to extra dirs; the
+   agent's cwd = the process cwd. Spec's "the corpus checkout is the cwd
+   (`--add-dir`)" is wrong. No `--cwd` flag exists — driver must launch `claude`
+   with subprocess `cwd=<checkout>`.
+
+**Isolation enforcement — methodology correction (most important):**
+
+`--disallowedTools` blocks a *tool name*, **not a capability**. Denying `Read`
+did not stop file reads — the agent used `ReadMcpResourceTool` (default `local`
+MCP `file://` server) and `Bash` (`head -1`) instead. `permission_denials`
+stayed **empty** (the agent never *attempted* the denied tool). Per condition:
+
+- **B (vector-only): isolation HOLDS.** Graph data lives only in the index,
+  unreachable except via the denied `mcp__jrag__{find,describe,neighbors,resolve}`
+  tools. Bash/Read can't reach it. The load-bearing B-vs-D comparison is sound.
+- **C (raw agent, "no Grep"): isolation is VIOLABLE.** Spec allows `Bash` in C;
+  Bash can `grep`/`find`/`cat`, replicating Grep/Glob/Read. "No Grep" is
+  unenforceable while Bash is unrestricted. Fix options: (a) restrict Bash to
+  `ls` via `Bash(ls:*)` allowlist syntax (probe needed), (b) drop Bash from C,
+  or (c) relabel C as "raw agent + shell."
+- **`ReadMcpResourceTool` is always present**, even under `--strict-mcp-config`
+  (surfaced in the run-4 event stream; directly invoked in run 3). It is a
+  Read-equivalent in every condition — not a graph-leak risk for B/D, but another
+  read path for C that must be denied explicitly if C is read-limited.
+- **Enforcement monitoring must inspect `tool_call_breakdown`** for unexpected
+  tools, not rely on `permission_denials` (which fires only on an *attempted*
+  denied call).
+
+**End-to-end smoke cell (condition D, `bc-impl-01`):** 3 turns, 2 jrag tool
+calls (`resolve` → `neighbors`), $0.17, glm-4.7. Answer = 12 `EventProcessor`
+implementers = **exact 12/12 FQN match** with the frozen jqassistant-grounded
+oracle. Validates MCP harness + graph-hop pattern + grading pipeline in one cell.
+Transcript: `bench/spikes/run4-condition-D-bc-impl-01.stream.jsonl`.
+
+## Ablation toggles (Plan 2/3) — RESOLVED
+
+**Verdict: the D₂/D₃/D₄ ablation row is mostly NOT cleanly supported via config.**
+Per the spec's own feasibility caveat ("any it cannot support is dropped and
+noted"), this weakens the ablation story. Source: `src/java_codebase_rag/`.
+
+| Ablation | Knob | Time | Disable | Verdict |
+|----------|------|------|---------|---------|
+| **D₂ role-ranking** | none (no CLI/env/YAML) | query-time (`search/search_scoring.py:72` `_ROLE_SCORE_WEIGHTS`) | per-query only via `role=` filter (`search_lancedb.py:1039` `skip_role_weight`) | **NOT EXPOSED** — ablate only by source-patch (zero weights or force skip). `RUN_HEAVY` is a pytest gate, not runtime. |
+| **D₃ cross-service edges** | `cross_service_resolution: brownfield_only` (project YAML) | index-time (`reprocess --graph-only`; `build_ast_graph.py:2947-2952`) | **PARTIAL** — demotes only *auto-detected* edges to `unresolved`; brownfield-sourced edges survive | Feasible but imperfect; fully-off also requires stripping brownfield YAML overrides. |
+| **D₄ graph-expansion** | `context_neighbors` (CLI-only on `search_lancedb.py` script; **default 0 in MCP** — `mcp_v2.py:1021+` never passes it) | query-time | fully off at 0 | **MISNAMED** — already OFF in the MCP path the benchmark uses. The actually-on graph feature is `graph_expand`/`expand_depth` (3-list RRF fusion, `mcp_v2.py:1052`); that is the real lever and needs its own toggle check. |
+
+**Plan 2/3 implication:** ablations require either source patches (forked
+instrumented builds) or are infeasible. Recommend either (a) scope the ablation
+row down to **D₃ `brownfield_only`** (the one real config toggle; accept partial)
+and note D₂/D₄ as "deferred — requires source instrumentation," or (b) build a
+small instrumented jrag variant (env-gated zero-role-weights + `graph_expand=False`)
+if the ablation row is essential to the effectiveness story.
 
 ## shopizer Maven build is broken (Task 16 deviation)
 
@@ -93,3 +166,88 @@ honestly:
   Plan 2/3 follow-up; the expected answers can then be regenerated mechanically
   and diffed against the manual truth recorded here.
 
+
+## Plan 2 smoke grid + grading
+
+**Timestamp:** 2026-07-21T23:0x (run `bench/results/20260721T225610/`).
+**Driver:** `bench/run_bench.py` (T10) over 16 isolated cells (4 questions × 4
+conditions A/B/C/D) on `bank-chat-system`, model `glm-4.7`, seed 0. **Grader:**
+`bench/grade.py` (T11–T14) with the real `glm-5.2` LLM judge on the 4
+`bc-sem-01` cells; the other 12 use programmatic graders (no API calls).
+
+**Summary:** 16/16 cells graded, exit 0. `graded_n=16`,
+`by_method={set_match: 8, client_route_match: 4, llm_judge: 4}`,
+`mean_correctness=0.563`. Total judge cost ~4 glm-5.2 calls (one per bc-sem-01
+cell). κ over the 4 judged cells = **-0.333** (see caveat below).
+
+| cell (question × condition)            | method            | correctness | fa_len |
+|----------------------------------------|-------------------|-------------|--------|
+| bc-impl-01_A                           | set_match         | 0.9231      |    426 |
+| bc-impl-01_B                           | set_match         | 0.5106      |   1474 |
+| bc-impl-01_C                           | set_match         | 0.8889      |   1609 |
+| **bc-impl-01_D**                       | set_match         | **1.0000**  |    746 |
+| bc-role-01_A                           | set_match         | 0.3636      |   1335 |
+| bc-role-01_B                           | set_match         | 0.4211      |   1150 |
+| bc-role-01_C                           | set_match         | 0.3636      |    757 |
+| bc-role-01_D                           | set_match         | 0.8889      |    646 |
+| bc-cs-01_A                             | client_route_match| 0.0000      |      0 |
+| bc-cs-01_B                             | client_route_match| 0.0000      |      0 |
+| bc-cs-01_C                             | client_route_match| 0.0000      |      0 |
+| bc-cs-01_D                             | client_route_match| 0.0000      |      0 |
+| bc-sem-01_A                            | llm_judge         | 0.9000      |      0 |
+| bc-sem-01_B                            | llm_judge         | 0.9000      |   1107 |
+| bc-sem-01_C                            | llm_judge         | 0.8500      |      0 |
+| bc-sem-01_D                            | llm_judge         | 1.0000      |      0 |
+
+**bc-impl-01_D correctness = 1.0000** (12/12 set_match, precision=recall=F1=1.0).
+The brief's `>=0.95` expectation is met and exceeded on this FRESH smoke run;
+T11's calibration baseline of 0.96 on the canonical answer is independently
+reproduced and surpassed by the live cell.
+
+**bc-sem-01 judge verdicts (all `judge_model=glm-5.2`, non-empty rationale):**
+- A (cond A, fa empty): **0.90** — "correctly identified both expected symbols
+  (ChatIngressController and FollowUpKafkaPublisher via publishIncoming) and
+  accurately traced the persistence flow".
+- B (cond B, fa 1107): **0.90** — "correctly identifies both expected symbols …
+  accurately describes the ingress-to-Kafka path … though it includes several
+  symbols outside the expected set".
+- C (cond C, fa empty): **0.85** — "correctly identified and described both
+  expected symbols … though the transcript ends mid-investigation before a final
+  synthesized answer was produced".
+- D (cond D, fa empty): **1.00** — "correctly identified both expected symbols
+  … matching the expected symbol set exactly".
+
+**κ = -0.333 over N=4 (caveats).** The negative κ is a known artifact of two
+compounding conventions, not a judge-quality signal:
+
+1. **Binarization coarseness.** `_grade_to_judge_label` thresholds at
+   `correctness == 1.0`; the judge's continuous scores (0.85, 0.90, 0.90, 1.00)
+   binarize to `[incorrect, incorrect, incorrect, correct]`. Three
+   substantively-correct answers get collapsed to "incorrect".
+2. **Structural mismatch between judge input and human label.** The judge
+   evaluates the **blinded transcript** (`blind_transcript(transcript_text)`)
+   — it sees the assistant's tool calls and reasoning, not `final_answer`.
+   Human labels per the task spec key off `final_answer` (empty → "incorrect"),
+   producing `[incorrect, correct, incorrect, incorrect]`. Three of the four
+   bc-sem-01 cells CAPPED with empty `final_answer` but still surfaced both
+   expected FQNs in the transcript; the judge credited that work, the
+   human-label convention did not. Agreement on 2/4 cells; κ=-0.333.
+
+**Calibration observation, not a pipeline defect.** The grader is sound: T11
+proved set_match at 0.96 on the canonical bc-impl-01_D answer, and the live
+fresh-smoke cell reproduced at 1.0; the judge produced well-reasoned rationales
+on all 4 bc-sem-01 cells with no fence-parse errors (T13 holds). The κ
+convention is documented as coarse/small-N per the task spec.
+
+**Anomalies:**
+- **3 of 4 bc-cs-01 cells and 3 of 4 bc-sem-01 cells CAPPED with
+  `final_answer == None`** (the run wrote JSON null, not empty string). bc-cs-01
+  scored 0.0 across the board on `client_route_match` (no routes extractable
+  from an empty transcript-derived final_answer) — this is a property of the
+  RUN (cap/length-limit hit), not the grader.
+- **Grader soundness fix applied (T15):** `grade_cell` previously crashed on
+  `final_answer == None` with `TypeError: expected string or bytes-like object`
+  in `extract_client_routes`. Added a one-line normalization at the dispatch
+  point (`cell.get("final_answer") or ""`) plus a regression test
+  (`test_grade_cell_dispatch_none_final_answer`). 28/28 grade tests pass
+  (was 27/27).

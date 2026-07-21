@@ -25,6 +25,24 @@ JRAG_GRAPH_TOOLS = [
 JRAG_VECTOR_TOOLS = ["mcp__jrag__search"]
 ALL_JRAG_TOOLS = JRAG_GRAPH_TOOLS + JRAG_VECTOR_TOOLS
 
+# Common escape/integrity deny-list applied to EVERY condition.
+# Under `--permission-mode bypassPermissions`, `--allowedTools` is additive
+# (a permission grant, not an exclusive allowlist), so isolation must be
+# enforced via `--disallowedTools`. This list blocks: checkout mutation
+# (Edit/Write/NotebookEdit — reproducibility), external info (WebSearch/
+# WebFetch — all reasoning must come from the local codebase), and subagent
+# dispatch (Agent/Task — closes the unmonitorable subagent-escape vector).
+# Per-condition variation is ONLY jrag/lexical access (see conditions.yml).
+ESCAPE_TOOLS = [
+    "Edit",
+    "Write",
+    "NotebookEdit",
+    "WebSearch",
+    "WebFetch",
+    "Agent",
+    "Task",
+]
+
 VALID_IDS = {"A", "B", "C", "D"}
 
 
@@ -60,6 +78,19 @@ def validate(cond: Condition) -> None:
         raise ConfigError(f"condition id {cond.id!r} must be one of {sorted(VALID_IDS)}")
     if not cond.prompt_file or not Path(cond.prompt_file).is_file():
         raise ConfigError(f"condition {cond.id}: prompt_file {cond.prompt_file!r} not found")
+
+    # Shared integrity baseline: EVERY condition must deny the full
+    # ``ESCAPE_TOOLS`` list. Under ``--permission-mode bypassPermissions``,
+    # ``--allowedTools`` is additive (a permission grant, not an exclusive
+    # allowlist), so isolation is enforced solely via ``--disallowedTools``.
+    # A condition that drops any entry silently re-opens the corresponding
+    # escape vector (checkout mutation / external info / subagent dispatch).
+    missing_escape = set(ESCAPE_TOOLS) - set(cond.disallowed_tools)
+    if missing_escape:
+        raise ConfigError(
+            f"condition {cond.id} disallowed_tools must include all ESCAPE_TOOLS "
+            f"({ESCAPE_TOOLS}); missing {sorted(missing_escape)}"
+        )
 
     if cond.id in ("A", "C") and cond.mcp_servers:
         raise ConfigError(

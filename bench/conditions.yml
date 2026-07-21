@@ -3,8 +3,13 @@
 # --allowedTools / --disallowedTools), never by prompt pleas. The loader
 # (bench/load_conditions.py) validates the invariants and emits the flag payload.
 #
-# Tool sets per the spec:
-#   A lexical      — grep/ripgrep floor baseline (no MCP)
+# ALL conditions deny the common escape/integrity set defined as ESCAPE_TOOLS
+# in load_conditions.py: Edit, Write, NotebookEdit (no checkout mutation),
+# WebSearch, WebFetch (no external info), Agent, Task (no subagent dispatch).
+# This is required because --allowedTools is ADDITIVE under bypassPermissions;
+# isolation is enforced via --disallowedTools. Per-condition variation is ONLY
+# jrag/lexical access:
+#   A lexical      — grep/ripgrep floor baseline (no MCP); escape-deny only
 #   B vector-only  — jrag MCP with graph tools denied -> only `search` survives
 #   C raw agent    — read/list only (no MCP, no Grep) — token-burn ceiling
 #   D jrag full    — all 5 jrag tools + read/grep/glob (system under test)
@@ -13,26 +18,26 @@ conditions:
     name: Lexical (grep/ripgrep)
     mcp_servers: []
     allowed_tools: [Grep, Glob, Read, Bash]
-    disallowed_tools: []
+    disallowed_tools: [Edit, Write, NotebookEdit, WebSearch, WebFetch, Agent, Task]
     prompt_file: bench/prompts/A_lexical.md
 
   - id: B
     name: Vector-only (semantic search, graph off)
     mcp_servers: [jrag]
     allowed_tools: [Read, mcp__jrag__search]
-    disallowed_tools: [mcp__jrag__find, mcp__jrag__describe, mcp__jrag__neighbors, mcp__jrag__resolve]
+    disallowed_tools: [Edit, Write, NotebookEdit, WebSearch, WebFetch, Agent, Task, mcp__jrag__find, mcp__jrag__describe, mcp__jrag__neighbors, mcp__jrag__resolve]
     prompt_file: bench/prompts/B_vector_only.md
 
   - id: C
-    name: Raw agent (read/list only)
+    name: Raw agent + shell (no Grep tool, no MCP)
     mcp_servers: []
     allowed_tools: [Read, Glob, Bash]
-    disallowed_tools: []
+    disallowed_tools: [Edit, Write, NotebookEdit, WebSearch, WebFetch, Agent, Task, Grep]
     prompt_file: bench/prompts/C_raw_agent.md
 
   - id: D
     name: jrag full (vector + graph + cross-service)
     mcp_servers: [jrag]
     allowed_tools: [Read, Grep, Glob, mcp__jrag__find, mcp__jrag__describe, mcp__jrag__neighbors, mcp__jrag__resolve, mcp__jrag__search]
-    disallowed_tools: []
+    disallowed_tools: [Edit, Write, NotebookEdit, WebSearch, WebFetch, Agent, Task]
     prompt_file: bench/prompts/D_jrag_full.md

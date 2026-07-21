@@ -43,18 +43,26 @@ def pytest_configure(config) -> None:
         "markers",
         "requires_jdk: needs javac/jdeps on PATH; skipped if absent.",
     )
+    config.addinivalue_line(
+        "markers",
+        "requires_claude: needs the claude CLI on PATH; skipped if absent.",
+    )
 
 
 def pytest_collection_modifyitems(config, items) -> None:
     jqa = _find_jqassistant()
     jdk = shutil.which("javac") and shutil.which("jdeps")
+    claude = shutil.which("claude")
     skip_jqa = pytest.mark.skip(reason="jqassistant CLI not found (set JQASSISTANT_BIN)")
     skip_jdk = pytest.mark.skip(reason="javac/jdeps not found on PATH")
+    skip_claude = pytest.mark.skip(reason="claude CLI not found on PATH")
     for item in items:
         if "requires_jqa" in item.keywords and not jqa:
             item.add_marker(skip_jqa)
         if "requires_jdk" in item.keywords and not jdk:
             item.add_marker(skip_jdk)
+        if "requires_claude" in item.keywords and not claude:
+            item.add_marker(skip_claude)
 
 
 @pytest.fixture(scope="session")
