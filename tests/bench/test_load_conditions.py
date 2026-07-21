@@ -230,3 +230,39 @@ def test_all_conditions_deny_escape_tools():
         assert not missing, (
             f"condition {cid} dropped escape-tool denies: {sorted(missing)}"
         )
+
+
+def test_validate_rejects_condition_missing_escape_tool(tmp_path):
+    """``validate()`` rejects a condition missing any ESCAPE_TOOLS entry.
+
+    RED reasoning: ``validate()`` currently checks per-condition methodological
+    invariants (B-graph-denied, B-vector-allowed, D-jrag-allowed, A/C-no-MCP)
+    but does NOT check the shared ESCAPE_TOOLS deny-list. A condition that
+    silently drops e.g. ``WebFetch`` would pass ``validate()`` yet re-open the
+    external-info escape vector under ``bypassPermissions`` (where
+    ``--allowedTools`` is additive). The regression guard
+    ``test_all_conditions_deny_escape_tools`` only covers the shipped
+    ``conditions.yml``; this test pins the invariant at the ``validate()``
+    layer so a future hand-edit to any condition (or a third-party conditions
+    file) is caught at load time, not at analysis time.
+    """
+    from bench.load_conditions import validate
+
+    paths = _touch_prompts(tmp_path)
+    # Condition A with every ESCAPE_TOOLS entry denied EXCEPT ``WebFetch``.
+    dropped = "WebFetch"
+    bad_disallowed = [t for t in ESCAPE_TOOLS if t != dropped]
+    bad = Condition(
+        id="A",
+        name="Lexical",
+        mcp_servers=[],
+        allowed_tools=["Grep", "Glob", "Read", "Bash"],
+        disallowed_tools=bad_disallowed,
+        prompt_file=str(paths["A"]),
+    )
+    with pytest.raises(ConfigError) as exc:
+        validate(bad)
+    msg = str(exc.value)
+    # Names the condition and the missing tool.
+    assert "A" in msg
+    assert dropped in msg

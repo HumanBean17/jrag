@@ -79,6 +79,19 @@ def validate(cond: Condition) -> None:
     if not cond.prompt_file or not Path(cond.prompt_file).is_file():
         raise ConfigError(f"condition {cond.id}: prompt_file {cond.prompt_file!r} not found")
 
+    # Shared integrity baseline: EVERY condition must deny the full
+    # ``ESCAPE_TOOLS`` list. Under ``--permission-mode bypassPermissions``,
+    # ``--allowedTools`` is additive (a permission grant, not an exclusive
+    # allowlist), so isolation is enforced solely via ``--disallowedTools``.
+    # A condition that drops any entry silently re-opens the corresponding
+    # escape vector (checkout mutation / external info / subagent dispatch).
+    missing_escape = set(ESCAPE_TOOLS) - set(cond.disallowed_tools)
+    if missing_escape:
+        raise ConfigError(
+            f"condition {cond.id} disallowed_tools must include all ESCAPE_TOOLS "
+            f"({ESCAPE_TOOLS}); missing {sorted(missing_escape)}"
+        )
+
     if cond.id in ("A", "C") and cond.mcp_servers:
         raise ConfigError(
             f"condition {cond.id} must have empty mcp_servers (no MCP); got {cond.mcp_servers!r}"
