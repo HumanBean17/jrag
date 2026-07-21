@@ -7,7 +7,12 @@ No subprocess, no I/O beyond the passed iterator.
 from dataclasses import dataclass, field
 from collections import defaultdict
 import json
+import os
 from typing import Iterable
+
+from bench.load_conditions import Condition, ConditionFlags
+from bench.load_corpora import CorpusRecord
+from bench.load_questions import Question
 
 
 class ConfigError(Exception):
@@ -185,3 +190,78 @@ def materialize_mcp_config(
         json.dump(config, f, indent=2)
 
     return dest_path
+
+
+# --- Task 3: CellSpec + argv assembly (pure) ---
+
+
+@dataclass(frozen=True)
+class CellSpec:
+    """One benchmark cell: (question, condition, corpus, model, seed, ...).
+
+    Carries everything ``build_argv``/``cell_cwd``/``run_id`` need to assemble
+    the claude invocation. Pure data; no I/O.
+    """
+
+    question: Question
+    condition: Condition
+    corpus: CorpusRecord
+    model: str
+    seed: int
+    temperature: float
+    max_turns: int
+    repo_root: str
+
+
+def cell_cwd(spec: CellSpec) -> str:
+    """Absolute checkout path — the cwd the claude subprocess will run in."""
+    return os.path.join(spec.repo_root, spec.corpus.checkout_path)
+
+
+def run_id(spec: CellSpec) -> str:
+    """Stable identifier for one cell: ``{q.id}_{c.id}_{model}_s{seed}``."""
+    return f"{spec.question.id}_{spec.condition.id}_{spec.model}_s{spec.seed}"
+
+
+def build_argv(
+    spec: CellSpec, flags: ConditionFlags, mcp_config_path: str | None
+) -> list[str]:
+    """Assemble the exact ``claude`` argv for one cell.
+
+    Element order (per Plan 2 spec):
+        claude -p <question>
+            --output-format stream-json --verbose
+            --permission-mode bypassPermissions
+            --model <model>
+            --add-dir <absolute checkout>
+            --append-system-prompt <prompt CONTENTS string>
+            --allowedTools <comma-joined flags.allowed_tools>
+            [--disallowedTools <comma-joined>]            # iff non-empty
+            [--mcp-config <path> --strict-mcp-config]     # iff path is not None
+
+    Note: ``--max-turns`` / ``--temperature`` / ``--seed`` are NEVER emitted —
+    the harness controls those out-of-band.
+    """
+    argv: list[str] = [
+        "claude",
+        "-p",
+        spec.question.question,
+        "--output-format", "stream-json",
+        "--verbose",
+        "--permission-mode", "bypassPermissions",
+        "--model", spec.model,
+        "--add-dir", cell_cwd(spec),
+        "--append-system-prompt", flags.append_system_prompt,
+        "--allowedTools", ",".join(flags.allowed_tools),
+    ]
+
+    if flags.disallowed_tools:
+        argv.append("--disallowedTools")
+        argv.append(",".join(flags.disallowed_tools))
+
+    if mcp_config_path is not None:
+        argv.append("--mcp-config")
+        argv.append(mcp_config_path)
+        argv.append("--strict-mcp-config")
+
+    return argv
