@@ -135,10 +135,10 @@ def write_cell(run_dir: str, result: CellResult) -> None:
         result: CellResult to write.
     """
     rid = result.run_id
-    cell_dir = os.path.join(run_dir, rid)
-    os.makedirs(cell_dir, exist_ok=True)
-
-    cell_jsonl_path = os.path.join(cell_dir, "cell.jsonl")
+    # Reuse ``cell_paths`` so the per-cell directory + jsonl path stay in sync
+    # with the rest of the driver (run_grid, cell_completed). Discards the
+    # transcript_path return value (write_cell does not write the transcript).
+    _, cell_jsonl_path = cell_paths(run_dir, rid)
     cells_jsonl_path = os.path.join(run_dir, "cells.jsonl")
 
     # Convert to JSONL-serializable dict
