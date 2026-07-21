@@ -10,6 +10,10 @@ import json
 from typing import Iterable
 
 
+class ConfigError(Exception):
+    """Raised when MCP config template is invalid."""
+
+
 @dataclass(frozen=True)
 class StreamSummary:
     """Summary of a claude -p stream-json transcript."""
@@ -126,3 +130,58 @@ def parse_stream(lines: Iterable[str]) -> StreamSummary:
         final_answer=final_answer,
         num_turns_reported=num_turns_reported,
     )
+
+
+def materialize_mcp_config(
+    template_path: str,
+    index_dir_abs: str,
+    source_root_abs: str,
+    venv_python: str,
+    dest_path: str,
+) -> str:
+    """Materialize MCP config by substituting placeholders and rewriting command.
+
+    Reads the template JSON, substitutes the literal substrings
+    ${JRAG_INDEX_DIR} → index_dir_abs and ${JRAG_SOURCE_ROOT} → source_root_abs
+    everywhere in the serialized JSON, rewrites the mcpServers.jrag.command value
+    to venv_python, writes the result to dest_path, returns dest_path.
+
+    Args:
+        template_path: Path to the template JSON file.
+        index_dir_abs: Absolute path to substitute for ${JRAG_INDEX_DIR}.
+        source_root_abs: Absolute path to substitute for ${JRAG_SOURCE_ROOT}.
+        venv_python: Absolute path to venv Python binary (rewrites command).
+        dest_path: Path where the materialized config should be written.
+
+    Returns:
+        The dest_path (for convenience).
+
+    Raises:
+        ConfigError: If template has no mcpServers.jrag key or no
+            JAVA_CODEBASE_RAG_INDEX_DIR placeholder.
+    """
+    with open(template_path) as f:
+        template_str = f.read()
+
+    # Check that template has the jrag server
+    template_json = json.loads(template_str)
+    if "mcpServers" not in template_json or "jrag" not in template_json["mcpServers"]:
+        raise ConfigError("Template must have mcpServers.jrag")
+
+    # Check that template has the placeholder
+    if "${JRAG_INDEX_DIR}" not in template_str:
+        raise ConfigError("Template must contain ${JRAG_INDEX_DIR} placeholder")
+
+    # Substitute placeholders on the serialized string
+    materialized_str = template_str.replace("${JRAG_INDEX_DIR}", index_dir_abs)
+    materialized_str = materialized_str.replace("${JRAG_SOURCE_ROOT}", source_root_abs)
+
+    # Parse and rewrite command
+    config = json.loads(materialized_str)
+    config["mcpServers"]["jrag"]["command"] = venv_python
+
+    # Write to dest
+    with open(dest_path, "w") as f:
+        json.dump(config, f, indent=2)
+
+    return dest_path

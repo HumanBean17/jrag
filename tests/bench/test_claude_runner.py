@@ -1,6 +1,8 @@
 """Tests for bench.claude_runner — stream-json parser."""
 
+import json
 from pathlib import Path
+import tempfile
 
 import pytest
 
@@ -62,3 +64,55 @@ def test_parse_truncated_no_result(tmp_path):
     assert summary.tool_call_breakdown == {"Read": 1}
     assert summary.terminal_reason is None
     assert summary.num_turns_reported is None
+
+
+def test_materialize_substitutes_and_rewrites_command(tmp_path):
+    """Test materialize_mcp_config substitutes placeholders and rewrites command."""
+    from bench.claude_runner import materialize_mcp_config
+
+    # Use the real template (path: bench/mcp/jrag.json)
+    # __file__ is tests/bench/test_claude_runner.py
+    # parent.parent.parent goes from tests/bench/ -> tests/ -> repo root
+    repo_root = Path(__file__).parent.parent.parent
+    template_path = repo_root / "bench" / "mcp" / "jrag.json"
+    dest_path = tmp_path / "mcp_config.json"
+
+    result = materialize_mcp_config(
+        template_path=str(template_path),
+        index_dir_abs="/x/idx",
+        source_root_abs="/y/src",
+        venv_python="/z/bin/python",
+        dest_path=str(dest_path),
+    )
+
+    # Verify return value
+    assert result == str(dest_path)
+
+    # Load and verify the written file
+    with open(dest_path) as f:
+        config = json.load(f)
+
+    assert config["mcpServers"]["jrag"]["env"]["JAVA_CODEBASE_RAG_INDEX_DIR"] == "/x/idx"
+    assert config["mcpServers"]["jrag"]["env"]["JAVA_CODEBASE_RAG_SOURCE_ROOT"] == "/y/src"
+    assert config["mcpServers"]["jrag"]["command"] == "/z/bin/python"
+
+
+def test_materialize_rejects_template_without_jrag(tmp_path):
+    """Test materialize_mcp_config raises ConfigError when template has no jrag server."""
+    from bench.claude_runner import materialize_mcp_config, ConfigError
+
+    # Create a template without jrag server
+    template_path = tmp_path / "bad_template.json"
+    with open(template_path, "w") as f:
+        json.dump({"mcpServers": {}}, f)
+
+    dest_path = tmp_path / "dest.json"
+
+    with pytest.raises(ConfigError, match=".*jrag.*"):
+        materialize_mcp_config(
+            template_path=str(template_path),
+            index_dir_abs="/x/idx",
+            source_root_abs="/y/src",
+            venv_python="/z/bin/python",
+            dest_path=str(dest_path),
+        )
