@@ -646,8 +646,10 @@ def grade_cell(
         called with ``cell["final_answer"]`` and ``expected``.
 
     Args:
-        cell: The cell dict (must contain ``final_answer`` for the
-            programmatic path; ignored on the ``llm_judge`` path).
+        cell: The cell dict. ``final_answer`` is optional on the programmatic
+            path: it may be ``None`` or absent (capped runs write JSON ``null``)
+            and is normalized to ``""`` — an empty answer naturally scores 0.0.
+            Ignored on the ``llm_judge`` path.
         transcript_text: The cell's already-loaded transcript text. Used only
             on the ``llm_judge`` path; the programmatic graders ignore it.
         question: The ``Question`` this cell answers. ``question.grading``

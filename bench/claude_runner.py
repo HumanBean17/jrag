@@ -312,9 +312,9 @@ class CellResult:
 def to_cell_jsonl(result: CellResult) -> dict:
     """Convert a ``CellResult`` to a JSONL-serializable dict.
 
-    Returns a dict keyed exactly by the 23 ``CellResult`` field names,
-    with ``grade`` present and set to ``None``. The dict round-trips
-    through ``json.dumps``/``json.loads``.
+    Returns a dict keyed exactly by the 24 ``CellResult`` field names
+    (including ``grade``), with ``grade`` present and set to ``None``.
+    The dict round-trips through ``json.dumps``/``json.loads``.
     """
     return {
         "run_id": result.run_id,

@@ -4,7 +4,6 @@ import json
 import os
 import tempfile
 import pytest
-from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from bench.claude_runner import CellSpec, CellResult, run_id as cell_run_id
