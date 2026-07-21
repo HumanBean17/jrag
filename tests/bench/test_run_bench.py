@@ -7,7 +7,7 @@ import pytest
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from bench.claude_runner import CellSpec, CellResult
+from bench.claude_runner import CellSpec, CellResult, run_id as cell_run_id
 from bench.load_questions import Question
 from bench.load_conditions import Condition
 from bench.load_corpora import CorpusRecord, IndexManifest
@@ -320,3 +320,134 @@ def test_write_cell_idempotent_overwrite():
             second_data = json.loads(lines[1])
             assert first_data["final_answer"] == "First answer"
             assert second_data["final_answer"] == "Second answer"
+
+
+# --- Task 8 tests: run_grid + main CLI orchestration ---
+
+
+def _two_cell_setup():
+    """Shared setup: 2 CellSpecs (q1, q2 × condition A × glm-4.7 × seed 0)."""
+    from bench.run_bench import expand_grid
+
+    questions = [make_question("q1"), make_question("q2")]
+    conditions = [make_condition("A")]
+    corpora = [make_corpus("bank-chat-system")]
+    cells = expand_grid(questions, conditions, corpora, ["glm-4.7"], [0], 0.0, 15, "/tmp")
+    assert len(cells) == 2
+    return cells
+
+
+def test_run_grid_skips_completed_when_resume():
+    """run_grid skips cells whose cell.jsonl already exists when resume=True."""
+    from bench.run_bench import run_grid, run_dir, write_cell
+
+    cells = _two_cell_setup()
+
+    calls: list[str] = []
+
+    def fake(cell, *, results_transcript_path):
+        calls.append(cell_run_id(cell))
+        return make_cell_result(
+            run_id=cell_run_id(cell),
+            transcript_path=results_transcript_path,
+        )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        rd = run_dir(tmp, "20250101_120000")
+
+        # Pre-seed cell 1's cell.jsonl so it is considered completed.
+        write_cell(
+            rd,
+            make_cell_result(
+                run_id=cell_run_id(cells[0]),
+                transcript_path=os.path.join(rd, "preexisting.jsonl"),
+            ),
+        )
+
+        results = run_grid(cells, rd, resume=True, run_cell_fn=fake)
+
+        # Fake called once (cell 2 only); cell 1 was skipped.
+        assert len(calls) == 1
+        assert calls[0] == cell_run_id(cells[1])
+        assert len(results) == 1
+        assert results[0].run_id == cell_run_id(cells[1])
+
+
+def test_run_grid_runs_all_when_no_resume():
+    """run_grid runs every cell when resume=False, even if cell.jsonl exists."""
+    from bench.run_bench import run_grid, run_dir, write_cell
+
+    cells = _two_cell_setup()
+
+    calls: list[str] = []
+
+    def fake(cell, *, results_transcript_path):
+        calls.append(cell_run_id(cell))
+        return make_cell_result(
+            run_id=cell_run_id(cell),
+            transcript_path=results_transcript_path,
+        )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        rd = run_dir(tmp, "20250101_120000")
+
+        # Pre-seed cell 1; with resume=False it should still be re-run.
+        write_cell(
+            rd,
+            make_cell_result(
+                run_id=cell_run_id(cells[0]),
+                transcript_path=os.path.join(rd, "preexisting.jsonl"),
+            ),
+        )
+
+        results = run_grid(cells, rd, resume=False, run_cell_fn=fake)
+
+        # Fake called for both cells.
+        assert len(calls) == 2
+        assert {cell_run_id(c) for c in cells} == set(calls)
+        assert len(results) == 2
+
+
+def test_main_smoke_end_to_end(monkeypatch, tmp_path):
+    """main(--smoke) produces 16 cells, calls the run_cell DI seam 16×, returns 0."""
+    from bench import claude_runner
+    from bench.run_bench import main, SMOKE_QUESTIONS, SMOKE_MODELS, SMOKE_SEEDS, SMOKE_TEMPERATURE
+
+    # Sanity: SMOKE constants exact per spec.
+    assert SMOKE_QUESTIONS == ["bc-impl-01", "bc-role-01", "bc-cs-01", "bc-sem-01"]
+    assert SMOKE_MODELS == ["glm-4.7"]
+    assert SMOKE_SEEDS == [0]
+    assert SMOKE_TEMPERATURE == 0.0
+
+    call_count = [0]
+
+    def fake_run_cell(spec, *, results_transcript_path, **kwargs):
+        call_count[0] += 1
+        return make_cell_result(
+            run_id=cell_run_id(spec),
+            transcript_path=results_transcript_path,
+        )
+
+    # Monkeypatch the module attribute — main/run_grid MUST resolve run_cell
+    # via `claude_runner.run_cell` at call time for this to take effect.
+    monkeypatch.setattr(claude_runner, "run_cell", fake_run_cell)
+
+    rc = main(["--smoke", "--out", str(tmp_path)])
+
+    assert rc == 0
+    # 4 questions × 4 conditions × 1 model × 1 seed = 16 cells.
+    assert call_count[0] == 16
+
+    # main creates a timestamped sub-dir under --out.
+    subs = [p for p in tmp_path.iterdir() if p.is_dir()]
+    assert len(subs) == 1
+    ts_dir = subs[0]
+
+    cells_jsonl = ts_dir / "cells.jsonl"
+    assert cells_jsonl.exists()
+    lines = [ln for ln in cells_jsonl.read_text().splitlines() if ln.strip()]
+    assert len(lines) == 16
+    # Every line is valid JSON with a run_id.
+    for ln in lines:
+        obj = json.loads(ln)
+        assert "run_id" in obj

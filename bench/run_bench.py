@@ -5,10 +5,17 @@ each Question paired with its CorpusRecord by name. Raises ConfigError if any qu
 corpus has no matching record.
 """
 
+import argparse
 import json
 import os
+import sys
+import time
 
-from bench.claude_runner import CellSpec, CellResult, to_cell_jsonl
+from bench import claude_runner
+from bench.claude_runner import CellSpec, CellResult, run_id, to_cell_jsonl
+from bench.load_conditions import load_conditions
+from bench.load_corpora import load_corpora
+from bench.load_questions import load_all_questions
 from bench.load_questions import Question
 from bench.load_conditions import Condition
 from bench.load_corpora import CorpusRecord
@@ -161,3 +168,152 @@ def cell_completed(run_dir: str, rid: str) -> bool:
     if not os.path.exists(cell_jsonl_path):
         return False
     return os.path.getsize(cell_jsonl_path) > 0
+
+
+# --- Task 8: CLI orchestration (run_grid + main) ---
+
+# Smoke config: a fast, cheap end-to-end shakedown (4 questions × 4 conditions
+# × 1 model × 1 seed = 16 cells). Same bank-chat-system corpus, real prompts,
+# real grid — just a small slice.
+SMOKE_QUESTIONS = ["bc-impl-01", "bc-role-01", "bc-cs-01", "bc-sem-01"]
+SMOKE_MODELS = ["glm-4.7"]
+SMOKE_SEEDS = [0]
+SMOKE_TEMPERATURE = 0.0
+
+DEFAULT_MAX_TURNS = 15
+
+
+def run_grid(
+    cells: list[CellSpec],
+    run_dir_path: str,
+    *,
+    resume: bool,
+    run_cell_fn=claude_runner.run_cell,
+) -> list[CellResult]:
+    """Execute every cell, optionally skipping already-completed ones.
+
+    Per cell:
+        1. ``rid = run_id(cell)``
+        2. if ``resume`` and ``cell_completed(run_dir_path, rid)``: skip
+        3. else: resolve the transcript path, call ``run_cell_fn(cell, ...)``,
+           and persist the result via ``write_cell``.
+
+    ``run_cell_fn`` is a DI seam: it defaults to ``claude_runner.run_cell`` (the
+    module attribute, evaluated at definition time). Callers that need to
+    intercept — e.g. ``main`` under a test monkeypatch — should pass
+    ``run_cell_fn=claude_runner.run_cell`` so the attribute is re-resolved at
+    call time.
+
+    Args:
+        cells: Cells to execute (in order).
+        run_dir_path: Run directory (created upstream by ``run_dir``).
+        resume: If True, skip cells whose ``cell.jsonl`` already exists.
+        run_cell_fn: Callable with the ``run_cell`` signature.
+
+    Returns:
+        List of ``CellResult`` for the cells actually executed (skipped cells
+        are absent).
+    """
+    results: list[CellResult] = []
+    for cell in cells:
+        rid = run_id(cell)
+        if resume and cell_completed(run_dir_path, rid):
+            continue
+        transcript_path, _ = cell_paths(run_dir_path, rid)
+        result = run_cell_fn(cell, results_transcript_path=transcript_path)
+        write_cell(run_dir_path, result)
+        results.append(result)
+    return results
+
+
+def _parse_csv_list(value: str | None) -> list[str]:
+    if value is None:
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _parse_csv_ints(value: str | None) -> list[int]:
+    out: list[int] = []
+    for item in _parse_csv_list(value):
+        out.append(int(item))
+    return out
+
+
+def main(argv: list[str] | None = None) -> int:
+    """CLI entrypoint: load config, expand the grid, run all cells.
+
+    See module docstring + task brief for flag semantics. ``--smoke`` overrides
+    ``--models``/``--seeds``/``--temperature`` with the SMOKE_* constants and
+    filters the loaded questions to ``SMOKE_QUESTIONS``.
+    """
+    parser = argparse.ArgumentParser(
+        description="jrag effectiveness benchmark driver",
+    )
+    parser.add_argument("--corpora", default="bench/corpora.yml")
+    parser.add_argument("--conditions", default="bench/conditions.yml")
+    parser.add_argument("--questions-glob", default="bench/questions/*.jsonl")
+    parser.add_argument("--out", default="bench/results")
+    parser.add_argument("--models", default=None,
+                        help="Comma-separated model ids (pinned to SMOKE_MODELS by --smoke)")
+    parser.add_argument("--seeds", default=None,
+                        help="Comma-separated int seeds (pinned to SMOKE_SEEDS by --smoke)")
+    parser.add_argument("--temperature", type=float, default=0.0)
+    parser.add_argument("--max-turns", type=int, default=DEFAULT_MAX_TURNS)
+    parser.add_argument("--resume", action="store_true",
+                        help="Skip cells whose cell.jsonl already exists")
+    parser.add_argument("--smoke", action="store_true",
+                        help="Pin model/seed/temperature and filter questions to SMOKE_QUESTIONS")
+    args = parser.parse_args(argv)
+
+    if args.smoke:
+        models = list(SMOKE_MODELS)
+        seeds = list(SMOKE_SEEDS)
+        temperature = SMOKE_TEMPERATURE
+    else:
+        models = _parse_csv_list(args.models) if args.models else list(SMOKE_MODELS)
+        seeds = _parse_csv_ints(args.seeds) if args.seeds else list(SMOKE_SEEDS)
+        temperature = args.temperature
+
+    # Plan-1 loaders: typed records, registry/isolation invariants enforced.
+    corpora = load_corpora(args.corpora)
+    conditions = load_conditions(args.conditions)
+    questions = load_all_questions(args.questions_glob, corpora_path=args.corpora)
+
+    if args.smoke:
+        smoke_set = set(SMOKE_QUESTIONS)
+        questions = [q for q in questions if q.id in smoke_set]
+
+    cells = expand_grid(
+        questions,
+        conditions,
+        corpora,
+        models,
+        seeds,
+        temperature,
+        args.max_turns,
+        os.getcwd(),
+    )
+
+    timestamp = time.strftime("%Y%m%dT%H%M%S")
+    rd = run_dir(args.out, timestamp)
+
+    # Pass `run_cell_fn=claude_runner.run_cell` EXPLICITLY so the attribute is
+    # re-resolved at call time. This lets tests monkeypatch the module attribute
+    # (the default-arg form binds at definition time and would bypass the patch).
+    results = run_grid(
+        cells,
+        rd,
+        resume=args.resume,
+        run_cell_fn=claude_runner.run_cell,
+    )
+
+    skipped = len(cells) - len(results)
+    print(
+        f"run: {len(results)} / skipped: {skipped} / total: {len(cells)} "
+        f"-> {rd}"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
