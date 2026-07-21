@@ -468,7 +468,16 @@ def run_build_ast_graph(
             on_progress_console=on_progress_console,
         )
     finally:
-        if on_progress is not None:
+        # On SUCCESS the child (build_ast_graph._graph_pass_progress) already
+        # emitted its own terminal ``kind=graph pass=6/6 status=done`` line in
+        # its finally, which the relay routes to on_progress — so the renderer
+        # and programmatic consumers have already seen the one terminal graph
+        # event. Emitting a second here would violate the "one terminal event
+        # per kind" invariant (duplicate non-TTY line, two events for MCP). The
+        # parent therefore emits ONLY on the failure/interrupt path (code != 0,
+        # incl. spawn failure where code stays -1), where the child did NOT
+        # reach its finally with a healthy exit.
+        if on_progress is not None and code != 0:
             on_progress(
                 ProgressEvent(
                     kind="graph",
@@ -476,13 +485,12 @@ def run_build_ast_graph(
                     pass_=None,
                     done=None,
                     total=None,
-                    status="done" if code == 0 else "failed",
+                    status="failed",
                     elapsed_s=time.perf_counter() - t0,
                 )
             )
     if not verbose:
         from java_codebase_rag.cli_format import bold_cyan, styled_check, styled_cross
-
         marker = styled_check() if code == 0 else styled_cross()
         print(f"{marker} {bold_cyan('[graph]')} done", file=sys.stderr, flush=True)
     return subprocess.CompletedProcess(args=cmd, returncode=code, stdout=out_s, stderr=err_s)
@@ -547,7 +555,10 @@ def run_incremental_graph(
             on_progress_console=on_progress_console,
         )
     finally:
-        if on_progress is not None:
+        # See run_build_ast_graph: on success the child already emitted its own
+        # terminal graph event (pass=6/6 status=done); the parent emits ONLY on
+        # the failure/interrupt path to keep exactly one terminal event per kind.
+        if on_progress is not None and code != 0:
             on_progress(
                 ProgressEvent(
                     kind="graph",
@@ -555,13 +566,12 @@ def run_incremental_graph(
                     pass_=None,
                     done=None,
                     total=None,
-                    status="done" if code == 0 else "failed",
+                    status="failed",
                     elapsed_s=time.perf_counter() - t0,
                 )
             )
     if not verbose:
         from java_codebase_rag.cli_format import bold_cyan, styled_check, styled_cross
-
         marker = styled_check() if code == 0 else styled_cross()
         print(f"{marker} {bold_cyan('[increment]')} done", file=sys.stderr, flush=True)
     return subprocess.CompletedProcess(args=cmd, returncode=code, stdout=out_s, stderr=err_s)
