@@ -452,3 +452,132 @@ def test_n_turns_prefers_reported():
     # Fall back to n_turns when num_turns_reported is None
     summary2 = StreamSummary(num_turns_reported=None, n_turns=5)
     assert choose_n_turns(summary2) == 5
+
+
+# --- Task 5: run_cell — subprocess spawn + driver-side turn cap ---
+
+import os  # noqa: E402
+
+_FAKE_CLAUDE_DIR = Path(__file__).parent / "fixtures" / "fake_claude"
+
+
+def _spec_for(
+    cond_letter: str,
+    tmp_path: Path,
+    *,
+    max_turns: int = 10,
+    question_text: str = "Find impls of Foo",
+) -> "CellSpec":
+    """Build a CellSpec whose cwd exists under tmp_path and uses real prompts."""
+    from bench.claude_runner import CellSpec
+
+    cond = _condition(cond_letter)
+    corpus = _corpus()
+    # Create the checkout dir so subprocess.Popen(cwd=...) succeeds.
+    checkout_abs = tmp_path / corpus.checkout_path
+    checkout_abs.mkdir(parents=True, exist_ok=True)
+    return CellSpec(
+        question=_question(text=question_text),
+        condition=cond,
+        corpus=corpus,
+        model="glm-4.7",
+        seed=0,
+        temperature=0.0,
+        max_turns=max_turns,
+        repo_root=str(tmp_path),
+    )
+
+
+def test_run_cell_caps_at_max_turns(tmp_path, monkeypatch):
+    """run_cell SIGTERMs on the assistant event exceeding max_turns.
+
+    With max_turns=2 and emit_long.sh printing 4 assistant events then a result,
+    the 3rd assistant event triggers the cap; the transcript lacks a result line
+    and exit_reason is "cap".
+    """
+    from bench.claude_runner import run_cell
+
+    spec = _spec_for("A", tmp_path, max_turns=2)
+    transcript = tmp_path / "cap_transcript.jsonl"
+    fake_bin = str(_FAKE_CLAUDE_DIR / "emit_long.sh")
+
+    result = run_cell(
+        spec,
+        claude_bin=fake_bin,
+        results_transcript_path=str(transcript),
+    )
+
+    assert result.exit_reason == "cap"
+    transcript_text = transcript.read_text()
+    assert '"type":"result"' not in transcript_text
+    # The 3rd assistant line IS streamed, THEN SIGTERM fires (cap fires AFTER
+    # the count exceeds max_turns; see brief: "the 3rd assistant line triggers
+    # SIGTERM"). The result line that follows is never read.
+    assert transcript_text.count('"type":"assistant"') == 3
+
+
+def test_run_cell_completes_no_cap(tmp_path):
+    """run_cell with emit_short.sh returns exit_reason "done" and the schema fields."""
+    from bench.claude_runner import run_cell
+
+    spec = _spec_for("A", tmp_path, max_turns=10)
+    transcript = tmp_path / "done_transcript.jsonl"
+    fake_bin = str(_FAKE_CLAUDE_DIR / "emit_short.sh")
+
+    result = run_cell(
+        spec,
+        claude_bin=fake_bin,
+        results_transcript_path=str(transcript),
+    )
+
+    assert result.exit_reason == "done"
+    assert result.n_turns == 1
+    assert result.tool_call_breakdown == {"Read": 1}
+    assert result.grade is None
+    assert result.final_answer is None or isinstance(result.final_answer, str)
+    # Transcript contains the raw lines.
+    transcript_text = transcript.read_text()
+    assert '"type":"assistant"' in transcript_text
+    assert '"type":"result"' in transcript_text
+    # Identity / metadata fields come from spec.
+    assert result.run_id == "bc-impl-01_A_glm-4.7_s0"
+    assert result.condition == "A"
+    assert result.model == "glm-4.7"
+    assert result.seed == 0
+    assert result.corpus == "spring-boot-baseline"
+    # corpus_commit comes from pinned_repo_sha when commit_sha is None.
+    assert result.corpus_commit == "deadbeef"
+    # prompt_hash is sha256-prefixed hex of the prompt CONTENTS.
+    assert result.prompt_hash.startswith("sha256:")
+    hex_part = result.prompt_hash[len("sha256:"):]
+    assert len(hex_part) == 64 and all(c in "0123456789abcdef" for c in hex_part)
+
+
+def test_run_cell_no_mcp_for_condition_A(tmp_path, monkeypatch):
+    """Condition A: run_cell does NOT call materialize_mcp_config and the spawned
+    argv contains no --mcp-config."""
+    from bench.claude_runner import run_cell
+
+    spec = _spec_for("A", tmp_path, max_turns=10)
+    transcript = tmp_path / "no_mcp_transcript.jsonl"
+    fake_bin = str(_FAKE_CLAUDE_DIR / "emit_short.sh")
+
+    sidecar = tmp_path / "argv_recorded.txt"
+    monkeypatch.setenv("JRAG_ARGV_SIDECAR", str(sidecar))
+
+    def _fail_if_called(*args, **kwargs):
+        raise AssertionError("materialize_mcp_config must not be called for condition A")
+
+    monkeypatch.setattr("bench.claude_runner.materialize_mcp_config", _fail_if_called)
+
+    result = run_cell(
+        spec,
+        claude_bin=fake_bin,
+        results_transcript_path=str(transcript),
+    )
+
+    assert result.exit_reason == "done"
+    # The fake script recorded its argv to the sidecar.
+    recorded = sidecar.read_text()
+    assert "--mcp-config" not in recorded
+    assert "--strict-mcp-config" not in recorded

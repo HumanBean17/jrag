@@ -6,11 +6,17 @@ No subprocess, no I/O beyond the passed iterator.
 
 from dataclasses import dataclass, field
 from collections import defaultdict
+from datetime import datetime, timezone
+import hashlib
 import json
 import os
+import signal
+import subprocess
+import sys
+import time
 from typing import Iterable
 
-from bench.load_conditions import Condition, ConditionFlags
+from bench.load_conditions import Condition, ConditionFlags, to_flags
 from bench.load_corpora import CorpusRecord
 from bench.load_questions import Question
 
@@ -363,3 +369,160 @@ def choose_n_turns(summary: StreamSummary) -> int:
     if summary.num_turns_reported is not None:
         return summary.num_turns_reported
     return summary.n_turns
+
+
+# --- Task 5: run_cell — subprocess spawn + driver-side turn cap ---
+
+
+def _claude_code_version(claude_bin: str) -> str | None:
+    """Best-effort ``claude_bin --version`` capture; ``None`` on any failure."""
+    try:
+        result = subprocess.run(
+            [claude_bin, "--version"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=10,
+        )
+    except Exception:
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.decode("utf-8", errors="replace").strip() or None
+
+
+def _mcp_config_dest(results_transcript_path: str) -> str:
+    """Derive a sibling path for the materialized MCP config from the transcript path."""
+    p = str(results_transcript_path)
+    if p.endswith(".jsonl"):
+        return p[: -len(".jsonl")] + ".mcp.json"
+    return p + ".mcp.json"
+
+
+def run_cell(
+    spec: CellSpec,
+    *,
+    claude_bin: str = "claude",
+    jrag_mcp_template: str = "bench/mcp/jrag.json",
+    results_transcript_path: str,
+    venv_python: str | None = None,
+) -> CellResult:
+    """Run one cell end-to-end via ``claude -p`` -> ``CellResult``.
+
+    Streams stdout line by line, incrementally writes the raw transcript to
+    ``results_transcript_path``, and SIGTERMs the process when an ``assistant``
+    event would exceed ``spec.max_turns`` (driver-side cap; there is no
+    ``--max-turns`` flag on ``claude -p``).
+    """
+    flags = to_flags(spec.condition)
+
+    mcp_config_path: str | None = None
+    if flags.mcp_config_arg is not None:
+        abs_index_dir = os.path.abspath(spec.corpus.index.index_dir)
+        abs_checkout = cell_cwd(spec)
+        python_bin = venv_python or sys.executable
+        mcp_config_path = materialize_mcp_config(
+            jrag_mcp_template,
+            abs_index_dir,
+            abs_checkout,
+            python_bin,
+            _mcp_config_dest(results_transcript_path),
+        )
+
+    argv = build_argv(spec, flags, mcp_config_path)
+    # ``build_argv`` returns ``["claude", ...]`` — swap argv[0] for ``claude_bin``
+    # so tests can substitute a fake binary without rebuilding argv.
+    popen_argv = [claude_bin] + argv[1:]
+
+    buffer: list[str] = []
+    capped = False
+    assistant_count = 0
+
+    started_dt = datetime.now(timezone.utc)
+    t0 = time.time()
+
+    # ``stdin=DEVNULL`` is required: ``claude -p`` with stream-json + --verbose
+    # hangs if stdin stays open.
+    proc = subprocess.Popen(
+        popen_argv,
+        cwd=cell_cwd(spec),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+    try:
+        with open(results_transcript_path, "w") as transcript_f:
+            assert proc.stdout is not None
+            while True:
+                raw = proc.stdout.readline()
+                if not raw:
+                    break
+                line = raw.decode("utf-8", errors="replace")
+                buffer.append(line)
+                transcript_f.write(line)
+                transcript_f.flush()
+
+                # Cheap assistant-event probe: a parse + type check.
+                if not line.lstrip().startswith("{"):
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not (isinstance(event, dict) and event.get("type") == "assistant"):
+                    continue
+                assistant_count += 1
+                # If this event would EXCEED spec.max_turns, SIGTERM and stop.
+                if assistant_count > spec.max_turns:
+                    capped = True
+                    proc.terminate()
+                    break
+    finally:
+        # ``wait()`` reaps the SIGTERM'd (or naturally-exited) child.
+        try:
+            proc.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+
+    finished_dt = datetime.now(timezone.utc)
+    wall_s = time.time() - t0
+
+    summary = parse_stream(iter(buffer))
+
+    claude_code_version = _claude_code_version(claude_bin)
+    prompt_hash = (
+        "sha256:"
+        + hashlib.sha256(
+            flags.append_system_prompt.encode("utf-8")
+        ).hexdigest()
+    )
+    corpus_commit = spec.corpus.commit_sha or spec.corpus.pinned_repo_sha
+
+    return CellResult(
+        run_id=run_id(spec),
+        question_id=spec.question.id,
+        corpus=spec.corpus.name,
+        corpus_commit=corpus_commit,
+        condition=spec.condition.id,
+        model=spec.model,
+        seed=spec.seed,
+        temperature=spec.temperature,
+        claude_code_version=claude_code_version,
+        ontology_version=spec.corpus.index.ontology_version,
+        index_build_id=spec.corpus.index.build_id,
+        prompt_hash=prompt_hash,
+        started_at=started_dt.isoformat(),
+        finished_at=finished_dt.isoformat(),
+        wall_s=wall_s,
+        n_turns=choose_n_turns(summary),
+        n_tool_calls=sum(summary.tool_call_breakdown.values()),
+        tool_call_breakdown=summary.tool_call_breakdown,
+        tokens=summary.tokens,
+        context_bytes_retrieved=summary.context_bytes_retrieved,
+        exit_reason=derive_exit_reason(summary, capped),
+        final_answer=summary.final_answer,
+        transcript_path=results_transcript_path,
+        grade=None,
+    )
