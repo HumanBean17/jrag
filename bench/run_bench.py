@@ -189,6 +189,7 @@ def run_grid(
     *,
     resume: bool,
     run_cell_fn=claude_runner.run_cell,
+    wall_timeout_s: float | None = None,
 ) -> list[CellResult]:
     """Execute every cell, optionally skipping already-completed ones.
 
@@ -204,11 +205,17 @@ def run_grid(
     ``run_cell_fn=claude_runner.run_cell`` so the attribute is re-resolved at
     call time.
 
+    ``wall_timeout_s`` is forwarded to ``run_cell_fn`` ONLY when not None, so the
+    default call shape (``run_cell_fn(cell, results_transcript_path=...)``) is
+    unchanged for DI fakes that don't accept the kwarg.
+
     Args:
         cells: Cells to execute (in order).
         run_dir_path: Run directory (created upstream by ``run_dir``).
         resume: If True, skip cells whose ``cell.jsonl`` already exists.
         run_cell_fn: Callable with the ``run_cell`` signature.
+        wall_timeout_s: Optional per-cell wall-clock timeout (seconds) forwarded
+            to ``run_cell``; None disables the watchdog.
 
     Returns:
         List of ``CellResult`` for the cells actually executed (skipped cells
@@ -220,7 +227,10 @@ def run_grid(
         if resume and cell_completed(run_dir_path, rid):
             continue
         transcript_path, _ = cell_paths(run_dir_path, rid)
-        result = run_cell_fn(cell, results_transcript_path=transcript_path)
+        call_kwargs: dict = {"results_transcript_path": transcript_path}
+        if wall_timeout_s is not None:
+            call_kwargs["wall_timeout_s"] = wall_timeout_s
+        result = run_cell_fn(cell, **call_kwargs)
         write_cell(run_dir_path, result)
         results.append(result)
     return results
@@ -319,6 +329,12 @@ def main(argv: list[str] | None = None) -> int:
                         help="Comma-separated int seeds (pinned to SMOKE_SEEDS by --smoke)")
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--max-turns", type=int, default=DEFAULT_MAX_TURNS)
+    parser.add_argument(
+        "--wall-timeout",
+        type=float,
+        default=None,
+        help="Per-cell wall-clock timeout in seconds (watchdog SIGTERM; None=off)",
+    )
     parser.add_argument("--resume", action="store_true",
                         help="Skip cells whose cell.jsonl already exists")
     parser.add_argument("--smoke", action="store_true",
@@ -366,6 +382,7 @@ def main(argv: list[str] | None = None) -> int:
         rd,
         resume=args.resume,
         run_cell_fn=claude_runner.run_cell,
+        wall_timeout_s=args.wall_timeout,
     )
 
     skipped = len(cells) - len(results)

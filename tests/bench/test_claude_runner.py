@@ -541,6 +541,48 @@ def test_run_cell_cap_sentinel_in_final_answer(tmp_path):
     assert str(spec.max_turns) in result.final_answer
 
 
+def test_exit_reason_timeout():
+    """derive_exit_reason: timed_out -> 'timeout'; cap still wins over timeout."""
+    from bench.claude_runner import StreamSummary, derive_exit_reason
+
+    ok = StreamSummary()  # is_error=False, api_error_status=None
+    assert derive_exit_reason(ok, capped=False, timed_out=True) == "timeout"
+    # cap takes precedence over timeout (turn cap detected in-loop first).
+    assert derive_exit_reason(ok, capped=True, timed_out=True) == "cap"
+    # default (no timeout) unchanged.
+    assert derive_exit_reason(ok, capped=False, timed_out=False) == "done"
+
+
+def test_run_cell_wall_timeout_terminates(tmp_path):
+    """run_cell SIGTERMs via a watchdog when wall_timeout_s elapses.
+
+    emit_slow.sh stalls 30s before emitting; with wall_timeout_s=0.2 the
+    watchdog fires while the read loop is blocked on readline, terminates the
+    process, readline returns EOF, and exit_reason is 'timeout'. The whole cell
+    must return in ~0.2s, not 30s.
+    """
+    import time as _time
+
+    from bench.claude_runner import run_cell
+
+    spec = _spec_for("A", tmp_path, max_turns=10)
+    transcript = tmp_path / "timeout_transcript.jsonl"
+    fake_bin = str(_FAKE_CLAUDE_DIR / "emit_slow.sh")
+
+    t0 = _time.monotonic()
+    result = run_cell(
+        spec,
+        claude_bin=fake_bin,
+        results_transcript_path=str(transcript),
+        wall_timeout_s=0.2,
+    )
+    elapsed = _time.monotonic() - t0
+
+    assert result.exit_reason == "timeout"
+    # Safety: must return well under the 30s sleep (allow slack for reaping).
+    assert elapsed < 10.0
+
+
 def test_run_cell_completes_no_cap(tmp_path):
     """run_cell with emit_short.sh returns exit_reason "done" and the schema fields."""
     from bench.claude_runner import run_cell

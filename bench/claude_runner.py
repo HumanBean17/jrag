@@ -12,6 +12,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 from typing import Iterable
 
@@ -344,16 +345,22 @@ def to_cell_jsonl(result: CellResult) -> dict:
     }
 
 
-def derive_exit_reason(summary: StreamSummary, capped: bool) -> str:
-    """Derive the exit reason from a ``StreamSummary`` and cap flag.
+def derive_exit_reason(
+    summary: StreamSummary, capped: bool, timed_out: bool = False
+) -> str:
+    """Derive the exit reason from a ``StreamSummary`` and cap/timeout flags.
 
     Precedence (highest to lowest):
-        1. ``capped=True`` → ``"cap"``
-        2. ``summary.is_error`` or ``summary.api_error_status`` → ``"error"``
-        3. otherwise → ``"done"``
+        1. ``capped=True`` → ``"cap"`` (turn budget exceeded; in-loop SIGTERM)
+        2. ``timed_out=True`` → ``"timeout"`` (wall budget exceeded; watchdog
+           SIGTERM)
+        3. ``summary.is_error`` or ``summary.api_error_status`` → ``"error"``
+        4. otherwise → ``"done"``
     """
     if capped:
         return "cap"
+    if timed_out:
+        return "timeout"
     if summary.is_error or summary.api_error_status is not None:
         return "error"
     return "done"
@@ -405,6 +412,7 @@ def run_cell(
     jrag_mcp_template: str = "bench/mcp/jrag.json",
     results_transcript_path: str,
     venv_python: str | None = None,
+    wall_timeout_s: float | None = None,
 ) -> CellResult:
     """Run one cell end-to-end via ``claude -p`` -> ``CellResult``.
 
@@ -412,6 +420,11 @@ def run_cell(
     ``results_transcript_path``, and SIGTERMs the process when an ``assistant``
     event would exceed ``spec.max_turns`` (driver-side cap; there is no
     ``--max-turns`` flag on ``claude -p``).
+
+    If ``wall_timeout_s`` is set, a daemon watchdog thread SIGTERMs the process
+    once that many seconds elapse (a stalled cell — readline blocked — can't be
+    interrupted from the read loop itself). The watchdog is a no-op if the run
+    finished first. Sets ``exit_reason="timeout"`` distinct from the turn cap.
     """
     flags = to_flags(spec.condition)
 
@@ -441,6 +454,7 @@ def run_cell(
 
     buffer: list[str] = []
     capped = False
+    timed_out = False
     assistant_count = 0
 
     started_dt = datetime.now(timezone.utc)
@@ -455,6 +469,21 @@ def run_cell(
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
     )
+
+    # Wall-clock watchdog: a stalled cell blocks the read loop on ``readline``,
+    # so the turn-cap check (which runs between lines) can't rescue it. The
+    # daemon thread SIGTERMs the process after ``wall_timeout_s``; the blocked
+    # ``readline`` then returns EOF and the loop breaks. No-op if the run
+    # finished first (``proc.poll()`` is not None → already reaped/exited).
+    if wall_timeout_s is not None:
+        def _fire():
+            nonlocal timed_out
+            time.sleep(wall_timeout_s)
+            if proc.poll() is None:
+                timed_out = True
+                proc.terminate()
+
+        threading.Thread(target=_fire, daemon=True).start()
 
     try:
         with open(results_transcript_path, "w") as transcript_f:
@@ -538,7 +567,7 @@ def run_cell(
         tool_call_breakdown=summary.tool_call_breakdown,
         tokens=summary.tokens,
         context_bytes_retrieved=summary.context_bytes_retrieved,
-        exit_reason=derive_exit_reason(summary, capped),
+        exit_reason=derive_exit_reason(summary, capped, timed_out),
         final_answer=final_answer,
         transcript_path=results_transcript_path,
         grade=None,
