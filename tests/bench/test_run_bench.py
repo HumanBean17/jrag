@@ -451,3 +451,79 @@ def test_main_smoke_end_to_end(monkeypatch, tmp_path):
     for ln in lines:
         obj = json.loads(ln)
         assert "run_id" in obj
+
+
+def test_main_resume_reuses_existing_run_dir(monkeypatch, tmp_path):
+    """--resume --out <existing-run-dir> reuses the dir and skips completed cells.
+
+    Operator pre-seeds a run dir with cells.jsonl + one completed cell; main
+    under --resume must (a) NOT create a fresh timestamp subdir under the run
+    dir, and (b) skip the completed cell (fake run_cell called only for the
+    remaining cell).
+
+    RED reasoning: pre-fix main always did `run_dir(out, timestamp)`, creating
+    a fresh `<out>/<timestamp>/` regardless of --resume. With <out> set to the
+    existing run dir, that nested timestamp subdir would contain no
+    cells.jsonl, so cell_completed() would be False for both cells and BOTH
+    would be re-run — call_count would be 2 (not 1), and a new timestamp
+    subdir would exist under the run dir.
+    """
+    from bench import claude_runner, run_bench
+    from bench.run_bench import main, write_cell
+
+    # Constrain main's grid to exactly 2 cells (q1, q2 × A × glm-4.7 × s0).
+    questions = [make_question("q1"), make_question("q2")]
+    conditions = [make_condition("A")]
+    corpora = [make_corpus("bank-chat-system")]
+    monkeypatch.setattr(run_bench, "load_corpora", lambda *a, **kw: corpora)
+    monkeypatch.setattr(run_bench, "load_conditions", lambda *a, **kw: conditions)
+    monkeypatch.setattr(run_bench, "load_all_questions", lambda *a, **kw: questions)
+
+    # Pin models/seeds/temperature so expand_grid yields exactly 2 cells.
+    monkeypatch.setattr(run_bench, "SMOKE_MODELS", ["glm-4.7"])
+    monkeypatch.setattr(run_bench, "SMOKE_SEEDS", [0])
+
+    # Build the same 2 cells independently to derive run-ids for set-up/assertions.
+    from bench.run_bench import expand_grid
+    cells = expand_grid(
+        questions, conditions, corpora,
+        ["glm-4.7"], [0], 0.0, 15, "/tmp",
+    )
+    assert len(cells) == 2
+
+    # Pre-existing run dir: <tmp_path>/cells.jsonl + q1's cell.jsonl.
+    # write_cell creates both <rid>/cell.jsonl and appends to cells.jsonl.
+    write_cell(
+        str(tmp_path),
+        make_cell_result(
+            run_id=cell_run_id(cells[0]),
+            transcript_path=str(tmp_path / "preexisting.jsonl"),
+        ),
+    )
+    assert (tmp_path / "cells.jsonl").exists()
+
+    completed_rid = cell_run_id(cells[0])
+    pending_rid = cell_run_id(cells[1])
+
+    calls: list[str] = []
+
+    def fake_run_cell(spec, *, results_transcript_path, **kwargs):
+        calls.append(cell_run_id(spec))
+        return make_cell_result(
+            run_id=cell_run_id(spec),
+            transcript_path=results_transcript_path,
+        )
+
+    monkeypatch.setattr(claude_runner, "run_cell", fake_run_cell)
+
+    rc = main(["--resume", "--out", str(tmp_path)])
+
+    assert rc == 0
+    # (a) NO new timestamp subdir under the run dir — only the two per-cell dirs.
+    subdirs = [p for p in tmp_path.iterdir() if p.is_dir()]
+    assert sorted(p.name for p in subdirs) == sorted([completed_rid, pending_rid]), (
+        f"unexpected subdir created: {[p.name for p in subdirs]}"
+    )
+    # (b) Pre-completed cell skipped — fake called only for the pending cell.
+    assert len(calls) == 1
+    assert calls[0] == pending_rid

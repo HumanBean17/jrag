@@ -226,6 +226,45 @@ def run_grid(
     return results
 
 
+def _resolve_run_dir(out: str, resume: bool) -> str:
+    """Pick the run directory for this invocation.
+
+    When ``resume`` is False (default): always create a fresh
+    ``<out>/<timestamp>`` subdir (current behavior).
+
+    When ``resume`` is True, target an existing run dir so completed cells
+    can be skipped:
+      - if ``<out>/cells.jsonl`` exists → reuse ``out`` directly (operator
+        passed an existing run dir);
+      - elif one or more ``<out>/<sub>/cells.jsonl`` exist → reuse the
+        lexicographically-greatest such ``<sub>`` (latest run under ``out``);
+      - else → fall back to creating a fresh ``<out>/<timestamp>`` (nothing
+        to resume).
+    """
+    if not resume:
+        timestamp = time.strftime("%Y%m%dT%H%M%S")
+        return run_dir(out, timestamp)
+
+    out_cells = os.path.join(out, "cells.jsonl")
+    if os.path.exists(out_cells):
+        return out
+
+    # Scan <out>/<sub>/cells.jsonl for the lexicographically-greatest sub.
+    candidates: list[str] = []
+    if os.path.isdir(out):
+        for entry in os.listdir(out):
+            sub = os.path.join(out, entry)
+            if os.path.isdir(sub) and os.path.exists(os.path.join(sub, "cells.jsonl")):
+                candidates.append(entry)
+    if candidates:
+        latest = sorted(candidates)[-1]
+        return os.path.join(out, latest)
+
+    # No resume target — fresh timestamp subdir.
+    timestamp = time.strftime("%Y%m%dT%H%M%S")
+    return run_dir(out, timestamp)
+
+
 def _parse_csv_list(value: str | None) -> list[str]:
     if value is None:
         return []
@@ -294,8 +333,7 @@ def main(argv: list[str] | None = None) -> int:
         os.getcwd(),
     )
 
-    timestamp = time.strftime("%Y%m%dT%H%M%S")
-    rd = run_dir(args.out, timestamp)
+    rd = _resolve_run_dir(args.out, args.resume)
 
     # Pass `run_cell_fn=claude_runner.run_cell` EXPLICITLY so the attribute is
     # re-resolved at call time. This lets tests monkeypatch the module attribute
