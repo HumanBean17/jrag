@@ -581,3 +581,57 @@ def test_run_cell_no_mcp_for_condition_A(tmp_path, monkeypatch):
     recorded = sidecar.read_text()
     assert "--mcp-config" not in recorded
     assert "--strict-mcp-config" not in recorded
+
+
+def test_run_cell_mcp_config_path_is_absolute(tmp_path, monkeypatch):
+    """Condition B (uses MCP): the spawned --mcp-config value is ABSOLUTE.
+
+    Regression for the T10-blocker: run_cell derived mcp_config_path from a
+    relative results path; claude (cwd=checkout) resolved it wrong → exit 1.
+    Reproduces the bug shape by passing a RELATIVE transcript path (mirrors the
+    ``--out bench/results`` default) with the driver cwd set to tmp_path. The
+    fake script records its received argv via $JRAG_ARGV_SIDECAR; we assert the
+    element after --mcp-config passes os.path.isabs(...).
+    """
+    import dataclasses
+    from bench.claude_runner import CellSpec, run_cell
+
+    spec = _spec_for("B", tmp_path, max_turns=10)
+    repo_root = Path(__file__).parent.parent.parent
+    # Condition.prompt_file is relative; absolutize so to_flags can read it
+    # after we chdir to tmp_path below.
+    abs_cond = dataclasses.replace(
+        spec.condition, prompt_file=str(repo_root / spec.condition.prompt_file)
+    )
+    spec = dataclasses.replace(spec, condition=abs_cond)
+
+    fake_bin = str(_FAKE_CLAUDE_DIR / "emit_short.sh")
+
+    # Driver cwd = tmp_path so a relative transcript path is writable here, and
+    # so ``os.path.abspath`` in run_cell resolves against tmp_path (mirroring
+    # production where the driver cwd is the repo root).
+    monkeypatch.chdir(tmp_path)
+    transcript_rel = "abs_mcp_transcript.jsonl"
+
+    sidecar = tmp_path / "argv_recorded_abs.txt"
+    monkeypatch.setenv("JRAG_ARGV_SIDECAR", str(sidecar))
+    # _claude_code_version spawns `claude_bin --version` AFTER the main run,
+    # which would overwrite the sidecar with "--version". Stub it out so the
+    # sidecar keeps the main run's argv.
+    monkeypatch.setattr("bench.claude_runner._claude_code_version", lambda _b: None)
+
+    result = run_cell(
+        spec,
+        claude_bin=fake_bin,
+        jrag_mcp_template=str(repo_root / "bench" / "mcp" / "jrag.json"),
+        results_transcript_path=transcript_rel,
+    )
+
+    assert result.exit_reason == "done"
+    recorded_args = sidecar.read_text().splitlines()
+    assert "--mcp-config" in recorded_args
+    mcp_idx = recorded_args.index("--mcp-config")
+    mcp_value = recorded_args[mcp_idx + 1]
+    assert os.path.isabs(mcp_value), (
+        f"--mcp-config value must be absolute, got {mcp_value!r}"
+    )

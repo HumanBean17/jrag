@@ -427,6 +427,12 @@ def run_cell(
             python_bin,
             _mcp_config_dest(results_transcript_path),
         )
+        # Absolutize: claude is spawned with cwd=cell_cwd (the checkout dir),
+        # but the dest above derives from a relative results path (repo-root cwd).
+        # Passing a relative path here makes claude resolve it against the
+        # checkout → file-not-found → exit 1. Violates "Always pass jrag paths
+        # as ABSOLUTE."
+        mcp_config_path = os.path.abspath(mcp_config_path)
 
     argv = build_argv(spec, flags, mcp_config_path)
     # ``build_argv`` returns ``["claude", ...]`` — swap argv[0] for ``claude_bin``
