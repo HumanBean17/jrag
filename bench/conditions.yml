@@ -27,7 +27,7 @@ conditions:
     name: Raw agent + shell (no Grep tool, no MCP)
     mcp_servers: []
     allowed_tools: [Read, Glob, Bash]
-    disallowed_tools: []
+    disallowed_tools: [Grep]
     prompt_file: bench/prompts/C_raw_agent.md
 
   - id: D

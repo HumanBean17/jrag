@@ -200,5 +200,5 @@ def test_condition_C_isolation_shape():
     c = next(cond for cond in conds if cond.id == "C")
     assert c.name == "Raw agent + shell (no Grep tool, no MCP)"
     assert c.allowed_tools == ["Read", "Glob", "Bash"]
-    assert c.disallowed_tools == []
+    assert c.disallowed_tools == ["Grep"]
     assert c.mcp_servers == []
