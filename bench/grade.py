@@ -16,11 +16,21 @@ Task 12 additions:
     extract_client_routes       tokenize answer text → set of (client, route) pairs
     grade_client_route_match    matched/missing/spurious over the pair set
     grade_absence               verdict_match against absence-signal detection
+
+Task 13 additions:
+    GradeError                  raised when the LLM judge result cannot be parsed
+    RUBRIC                      locked scoring rubric sent to the judge model
+    TOOL_NAME_RE                matches tool-name tokens to scrub (mcp__jrag__* +
+                                Grep/Glob/Read/Bash)
+    blind_transcript            scrub tool-name tokens → `[tool]` (condition blinding)
+    judge_answer                single-turn claude CLI call → Grade (llm_judge)
 """
 
 from __future__ import annotations
 
+import json
 import re
+import subprocess
 from dataclasses import dataclass
 
 
@@ -406,4 +416,159 @@ def grade_absence(answer_text: str, expected: dict) -> Grade:
         method="absence_check",
         detail=detail,
         judge_model=None,
+    )
+
+
+# --- Task 13: condition-blinded LLM judge ---
+
+
+class GradeError(Exception):
+    """Raised when an LLM judge result cannot be parsed into a Grade.
+
+    The judge is invoked via the ``claude`` CLI with ``--output-format json``;
+    a non-zero return code, a malformed outer envelope, a ``result`` field
+    that is not valid JSON, or a missing ``correctness``/``rationale`` key
+    all raise this. The benchmark driver decides whether to retry or mark
+    the cell as failed.
+    """
+
+
+# Locked scoring rubric sent to the judge. The judge MUST reply with ONLY the
+# specified JSON object — no prose, no fences — so the driver can parse the
+# score deterministically. Scoring is factual correctness against the expected
+# answer; style/verbosity are explicitly ignored to avoid length bias.
+RUBRIC = """You are an impartial judge grading an assistant's answer to a question about a Java codebase. The assistant's transcript is shown below with all tool names blinded to a neutral `[tool]` placeholder, so you cannot be biased by which tools the assistant used.
+
+Score the answer's FACTUAL CORRECTNESS against the provided expected answer, on a continuous scale from 0.0 (completely wrong) to 1.0 (fully correct). Ignore style, formatting, and verbosity — score only whether the facts in the answer match the expected facts. Partial credit is appropriate for answers that get some facts right and some wrong.
+
+Respond with ONLY a single JSON object — no surrounding prose, no markdown code fences — in exactly this shape:
+
+{"correctness": <float between 0.0 and 1.0>, "rationale": "<one sentence>"}
+
+The rationale must be a single sentence explaining the score. Do not include any other keys, fields, or text."""
+
+
+# Tool-name tokens to scrub from the transcript before the judge sees it.
+# Matches any ``mcp__jrag__<name>`` token (the MCP server's tool-name shape)
+# and the four Claude Code built-in tool literals. Case-sensitive: the
+# lowercase ``read``/``grep`` verbs in prose must survive. ``\b`` word
+# boundaries prevent partial matches (e.g. ``Read`` inside ``Reader``).
+TOOL_NAME_RE = re.compile(r"\b(?:mcp__jrag__\w+|Grep|Glob|Read|Bash)\b")
+
+
+def blind_transcript(transcript_text: str) -> str:
+    """Replace every tool-name token with the neutral placeholder ``[tool]``.
+
+    The judge must not see which condition (A/B/C/D) produced the answer —
+    the ``mcp__jrag__*`` tokens appear only under the jrag conditions, and
+    ``Grep``/``Glob``/``Read``/``Bash`` appear only under the no-MCP
+    conditions. Scrubbing all of them to ``[tool]`` removes the condition
+    signal while preserving the structure of the transcript (number of tool
+    calls, their position in the reasoning, the surrounding prose).
+
+    Args:
+        transcript_text: The raw assistant transcript (any text).
+
+    Returns:
+        The transcript with every ``TOOL_NAME_RE`` match replaced by
+        ``[tool]``. Non-tool prose is unchanged.
+    """
+    return TOOL_NAME_RE.sub("[tool]", transcript_text)
+
+
+def judge_answer(
+    blinded_transcript: str,
+    question_text: str,
+    expected: dict,
+    *,
+    judge_model: str = "glm-5.2",
+    judge_bin: str = "claude",
+) -> Grade:
+    """Grade a blinded transcript with a single-turn LLM judge call.
+
+    Builds one prompt = ``RUBRIC`` + the question + the expected-answer
+    summary + the blinded transcript, and invokes::
+
+        judge_bin -p "<prompt>"
+            --model judge_model
+            --output-format json
+            --permission-mode bypassPermissions
+
+    with ``stdin=DEVNULL``. The judge is a fresh single-turn session: no
+    tools, no MCP, no ``--verbose`` (plain JSON, not stream-json), no turn
+    cap — it only emits the rubric JSON.
+
+    The outer ``--output-format json`` envelope is ``{"result": "..."}``
+    where ``result`` is the judge's raw output as a string. That string is
+    itself the rubric JSON ``{"correctness": ..., "rationale": ...}``, so
+    the parse is ``json.loads(json.loads(stdout)["result"])``.
+
+    Args:
+        blinded_transcript: Tool-name-scrubbed transcript (``blind_transcript``
+            output). The caller is responsible for blinding.
+        question_text: The question the transcript answered.
+        expected: The oracle expected-answer block (any ``kind``). Serialized
+            to JSON for the judge to compare against.
+        judge_model: Model id for the judge (default ``"glm-5.2"``).
+        judge_bin: Path/name of the ``claude`` CLI binary.
+
+    Returns:
+        ``Grade(correctness, method="llm_judge", detail={"rationale": ...},
+        judge_model=judge_model)``.
+
+    Raises:
+        GradeError: If the outer envelope is not valid JSON, the ``result``
+            field is missing, ``result`` is not valid JSON, or the parsed
+            object lacks ``correctness``/``rationale``.
+    """
+    prompt = (
+        f"{RUBRIC}\n\n"
+        f"Question:\n{question_text}\n\n"
+        f"Expected answer:\n{json.dumps(expected, indent=2)}\n\n"
+        f"Answer transcript (tool names blinded to [tool]):\n{blinded_transcript}"
+    )
+
+    try:
+        proc = subprocess.run(
+            [
+                judge_bin,
+                "-p", prompt,
+                "--model", judge_model,
+                "--output-format", "json",
+                "--permission-mode", "bypassPermissions",
+            ],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise GradeError(f"judge subprocess failed: {exc!r}") from exc
+
+    if proc.returncode != 0:
+        raise GradeError(
+            f"judge {judge_bin} exited {proc.returncode}: "
+            f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+        )
+
+    try:
+        envelope = json.loads(proc.stdout)
+        inner = json.loads(envelope["result"])
+    except (json.JSONDecodeError, KeyError, TypeError) as exc:
+        raise GradeError(
+            f"could not parse judge result: {exc!r}; stdout={proc.stdout!r}"
+        ) from exc
+
+    try:
+        correctness = float(inner["correctness"])
+        rationale = str(inner["rationale"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise GradeError(
+            f"judge result missing/malformed fields: {exc!r}; inner={inner!r}"
+        ) from exc
+
+    return Grade(
+        correctness=correctness,
+        method="llm_judge",
+        detail={"rationale": rationale},
+        judge_model=judge_model,
     )

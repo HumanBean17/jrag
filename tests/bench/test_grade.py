@@ -12,6 +12,7 @@ import pytest
 
 from bench.grade import (
     Grade,
+    GradeError,
     to_grade_dict,
     extract_simple_names,
     expected_simple_names,
@@ -21,6 +22,10 @@ from bench.grade import (
     extract_client_routes,
     grade_client_route_match,
     grade_absence,
+    RUBRIC,
+    TOOL_NAME_RE,
+    blind_transcript,
+    judge_answer,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -289,3 +294,77 @@ def test_grade_absence_wrong():
     assert g.detail["expected_verdict"] is True
     assert g.correctness == 0.0
     assert g.method == "absence_check"
+
+
+# --- Task 13: condition-blinded LLM judge (blind_transcript + judge_answer) ---
+
+
+# A transcript that mentions all four tool-name shapes the blinder must scrub:
+# `mcp__jrag__neighbors`, `mcp__jrag__search`, `Grep`, `Read`. None of these
+# literals may survive blind_transcript; each must be replaced by `[tool]`.
+_BLIND_TRANSCRIPT = (
+    "The assistant first called mcp__jrag__neighbors on AckProcessor, "
+    "then ran mcp__jrag__search for 'typing' to find related handlers. "
+    "It followed up with Grep for `@Component` annotations and used "
+    "Read to inspect TypingProcessor.java. The chat domain has 12 processors."
+)
+
+
+def test_blind_transcript_scrubs_tool_names():
+    """All four tool-name shapes are scrubbed to `[tool]` (≥4 placeholders)."""
+    out = blind_transcript(_BLIND_TRANSCRIPT)
+    # None of the tool-name literals survive.
+    assert "mcp__jrag__neighbors" not in out
+    assert "mcp__jrag__search" not in out
+    assert "Grep" not in out
+    assert "Read" not in out
+    # The neutral placeholder appears at least once per scrubbed token (>=4).
+    assert out.count("[tool]") >= 4
+
+
+def test_blind_transcript_preserves_content():
+    """Non-tool prose in the same transcript survives unchanged."""
+    out = blind_transcript(_BLIND_TRANSCRIPT)
+    # Each of these non-tool prose fragments must appear verbatim.
+    assert "The assistant first called" in out
+    assert "on AckProcessor" in out
+    assert "for 'typing' to find related handlers" in out
+    assert "annotations and used" in out
+    assert "to inspect TypingProcessor.java" in out
+    assert "The chat domain has 12 processors." in out
+
+
+@pytest.mark.requires_claude
+def test_judge_answer_returns_grade():
+    """judge_answer returns a Grade from a real glm-5.2 call.
+
+    Uses a tiny synthetic transcript answering a trivial semantic question
+    (2 + 2 = 4) correctly, so the judge call is cheap and reliably parses.
+    """
+    blinded = (
+        "The assistant used [tool] to inspect the code and concluded: "
+        "the value of 2 + 2 is 4."
+    )
+    question = "What is the value of 2 + 2?"
+    expected = {"kind": "semantic", "answer": "4"}
+    g = judge_answer(blinded, question, expected)
+    assert g.method == "llm_judge"
+    assert g.judge_model == "glm-5.2"
+    assert 0.0 <= g.correctness <= 1.0
+    assert g.detail.get("rationale")
+
+
+def test_judge_answer_raises_on_unparseable(monkeypatch):
+    """judge_answer raises GradeError when result.result is not valid JSON."""
+
+    class _FakeCompleted:
+        # An outer --output-format json envelope whose `result` is not JSON.
+        stdout = '{"result": "this is not { valid json }"}'
+        returncode = 0
+
+    def _fake_run(argv, *args, **kwargs):
+        return _FakeCompleted()
+
+    monkeypatch.setattr("bench.grade.subprocess.run", _fake_run)
+    with pytest.raises(GradeError):
+        judge_answer("blinded", "q", {"kind": "semantic", "answer": "a"})
