@@ -24,7 +24,7 @@ conditions:
     prompt_file: bench/prompts/B_vector_only.md
 
   - id: C
-    name: Raw agent (read/list only)
+    name: Raw agent + shell (no Grep tool, no MCP)
     mcp_servers: []
     allowed_tools: [Read, Glob, Bash]
     disallowed_tools: []

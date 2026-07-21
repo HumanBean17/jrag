@@ -132,3 +132,13 @@ expected answers (jqassistant 17, manual 33), a programmatic-vs-judge grading
 split (46 programmatic, 4 judged), and the calibration gate passed on bank-chat
 (all mechanical categories 1.0). Versions: jrag 0.12.0, ontology 19, jqassistant
 2.9.1. Plan 2 builds the agent harness against this frozen ground truth.
+
+## Amendment 2026-07-21
+
+Three design decisions, finalized during Plan 2 implementation, are recorded here as locked amendments to the pre-registration.
+
+**(a) Condition-C relabel and enforcement** — Condition C's `name` is changed to `Raw agent + shell (no Grep tool, no MCP)` to accurately reflect its actual tool exposure (`allowed_tools: [Read, Glob, Bash]`). The Bash tool cannot be prohibited without also disabling shell `grep` (indistinguishable from any shell use), so C's isolation guarantee is enforced by monitoring `tool_call_breakdown` for the Grep tool — any Grep invocation is a protocol violation. C's `allowed_tools`, `disallowed_tools`, and `mcp_servers` remain unchanged.
+
+**(b) Ablation decision** — Of the four ablation knobs considered for condition D, only D₃ (`brownfield_only`) is in scope for the benchmark. D₂ (role-ranking) is excluded because there is no runtime knob to disable it (it requires source-code instrumentation, out of scope). D₄ (graph-expansion) is excluded because the `context_neighbors` toggle is already off in the MCP configuration, and `graph_expand` is a different feature.
+
+**(c) Temperature and seed property** — The `claude -p` CLI exposes no flags for temperature or seed. These parameters (`seed`, `temperature`) are recorded as metadata in the run artifacts only. No determinism claim is made about the agent run.

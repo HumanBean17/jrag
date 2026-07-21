@@ -191,3 +191,14 @@ def test_rejects_unknown_condition_key(tmp_path):
     with pytest.raises(ConfigError) as exc:
         load_conditions(yml)
     assert "commentary" in str(exc.value)
+
+
+def test_condition_C_isolation_shape():
+    """Task 9: assert exact shape of condition C (isolation baseline)."""
+    from bench.load_conditions import load_conditions
+    conds = load_conditions("bench/conditions.yml")
+    c = next(cond for cond in conds if cond.id == "C")
+    assert c.name == "Raw agent + shell (no Grep tool, no MCP)"
+    assert c.allowed_tools == ["Read", "Glob", "Bash"]
+    assert c.disallowed_tools == []
+    assert c.mcp_servers == []
