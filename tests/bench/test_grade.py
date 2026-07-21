@@ -301,6 +301,26 @@ def test_grade_absence_wrong():
     assert g.method == "absence_check"
 
 
+def test_extract_client_routes_template_paths():
+    """``_ROUTE_RE`` captures path templates (``{id}``, ``:id``) and file/query
+    suffixes (``.json``, ``?``) fully — not truncated at the special char.
+
+    RED reasoning: pre-fix, the path char class ``[A-Za-z0-9_\\-/]+`` excluded
+    ``{``, ``}``, ``:``, ``.``, ``?``, so for ``"POST /api/v1/users/{id}"`` the
+    route captured was ``"POST /api/v1/users/"`` (path truncated at ``{``).
+    That drops the template parameter from the route string, so any
+    ``(client, route)`` pair compared against an oracle with the full
+    ``"/api/v1/users/{id}"`` route would mismatch. Widening the char class to
+    include ``{``, ``}``, ``:``, ``.``, ``?`` makes the capture cover the full
+    template path.
+    """
+    pairs = extract_client_routes("ChatClient calls POST /api/v1/users/{id}")
+    # Exactly one pair attributed to ChatClient with the full template route.
+    assert ("ChatClient", "POST /api/v1/users/{id}") in pairs
+    # Sanity: no truncated-route pair leaks through.
+    assert ("ChatClient", "POST /api/v1/users/") not in pairs
+
+
 # --- Task 13: condition-blinded LLM judge (blind_transcript + judge_answer) ---
 
 

@@ -90,11 +90,16 @@ _IDENT_TOKEN_RE = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]*")
 _HTTP_METHODS = (
     r"GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS|TRACE|CONNECT"
 )
+# Path char class for an HTTP route. Includes path-template characters
+# (``{``, ``}`` for ``/users/{id}``; ``:`` for ``/users/:id``), file/extension
+# dots (``.`` for ``/users.json``), and the query delimiter (``?``) so routes
+# with these are captured fully rather than truncated at the special char.
+_ROUTE_PATH_CHARS = r"A-Za-z0-9_\-/{}:.?"
 # An HTTP route: METHOD followed by whitespace and a slash-leading path. The
 # method is captured case-insensitively (answers sometimes write "post /join")
 # and normalized to uppercase before pairing.
 _ROUTE_RE = re.compile(
-    rf"\b({_HTTP_METHODS})\s+(/[A-Za-z0-9_\-/]+)",
+    rf"\b({_HTTP_METHODS})\s+(/[{_ROUTE_PATH_CHARS}]+)",
     re.IGNORECASE,
 )
 
