@@ -265,3 +265,101 @@ def build_argv(
         argv.append("--strict-mcp-config")
 
     return argv
+
+
+# --- Task 4: CellResult + JSONL schema (pure) ---
+
+
+@dataclass(frozen=True)
+class CellResult:
+    """One benchmark cell result — the JSONL schema.
+
+    All fields are populated by the driver; ``grade`` is always ``None``
+    (filled in later by ``grade.py``).
+    """
+
+    run_id: str
+    question_id: str
+    corpus: str
+    corpus_commit: str
+    condition: str
+    model: str
+    seed: int
+    temperature: float
+    claude_code_version: str | None
+    ontology_version: int
+    index_build_id: str | None
+    prompt_hash: str
+    started_at: str
+    finished_at: str
+    wall_s: float
+    n_turns: int
+    n_tool_calls: int
+    tool_call_breakdown: dict[str, int]
+    tokens: dict
+    context_bytes_retrieved: int
+    exit_reason: str
+    final_answer: str | None
+    transcript_path: str
+    grade: None
+
+
+def to_cell_jsonl(result: CellResult) -> dict:
+    """Convert a ``CellResult`` to a JSONL-serializable dict.
+
+    Returns a dict keyed exactly by the 23 ``CellResult`` field names,
+    with ``grade`` present and set to ``None``. The dict round-trips
+    through ``json.dumps``/``json.loads``.
+    """
+    return {
+        "run_id": result.run_id,
+        "question_id": result.question_id,
+        "corpus": result.corpus,
+        "corpus_commit": result.corpus_commit,
+        "condition": result.condition,
+        "model": result.model,
+        "seed": result.seed,
+        "temperature": result.temperature,
+        "claude_code_version": result.claude_code_version,
+        "ontology_version": result.ontology_version,
+        "index_build_id": result.index_build_id,
+        "prompt_hash": result.prompt_hash,
+        "started_at": result.started_at,
+        "finished_at": result.finished_at,
+        "wall_s": result.wall_s,
+        "n_turns": result.n_turns,
+        "n_tool_calls": result.n_tool_calls,
+        "tool_call_breakdown": result.tool_call_breakdown,
+        "tokens": result.tokens,
+        "context_bytes_retrieved": result.context_bytes_retrieved,
+        "exit_reason": result.exit_reason,
+        "final_answer": result.final_answer,
+        "transcript_path": result.transcript_path,
+        "grade": result.grade,
+    }
+
+
+def derive_exit_reason(summary: StreamSummary, capped: bool) -> str:
+    """Derive the exit reason from a ``StreamSummary`` and cap flag.
+
+    Precedence (highest to lowest):
+        1. ``capped=True`` → ``"cap"``
+        2. ``summary.is_error`` or ``summary.api_error_status`` → ``"error"``
+        3. otherwise → ``"done"``
+    """
+    if capped:
+        return "cap"
+    if summary.is_error or summary.api_error_status is not None:
+        return "error"
+    return "done"
+
+
+def choose_n_turns(summary: StreamSummary) -> int:
+    """Choose the turn count from a ``StreamSummary``.
+
+    Prefers ``summary.num_turns_reported`` when not ``None``;
+    otherwise falls back to ``summary.n_turns``.
+    """
+    if summary.num_turns_reported is not None:
+        return summary.num_turns_reported
+    return summary.n_turns

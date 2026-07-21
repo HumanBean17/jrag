@@ -327,3 +327,128 @@ def test_run_id_format():
     )
 
     assert run_id(spec) == "bc-impl-01_D_glm-4.7_s0"
+
+
+# --- Task 4: CellResult + JSONL schema (pure) ---
+
+
+def test_to_cell_jsonl_has_schema_keys():
+    """to_cell_jsonl returns a dict with exactly the 23 schema field names."""
+    from bench.claude_runner import CellResult, to_cell_jsonl
+
+    # Construct a CellResult with representative values
+    result = CellResult(
+        run_id="bc-impl-01_A_glm-4.7_s0",
+        question_id="bc-impl-01",
+        corpus="spring-boot-baseline",
+        corpus_commit="deadbeef1234567890",
+        condition="A",
+        model="glm-4.7",
+        seed=0,
+        temperature=0.0,
+        claude_code_version="1.0.0",
+        ontology_version=1,
+        index_build_id="build-001",
+        prompt_hash="abc123",
+        started_at="2026-07-21T12:00:00Z",
+        finished_at="2026-07-21T12:01:00Z",
+        wall_s=60.0,
+        n_turns=5,
+        n_tool_calls=10,
+        tool_call_breakdown={"Read": 3, "Grep": 7},
+        tokens={"input": 1000, "output": 500, "total": 1500},
+        context_bytes_retrieved=2000,
+        exit_reason="done",
+        final_answer="The answer is Foo",
+        transcript_path="/tmp/transcript.jsonl",
+        grade=None,
+    )
+
+    # Call to_cell_jsonl
+    jsonl_dict = to_cell_jsonl(result)
+
+    # Verify it's a dict
+    assert isinstance(jsonl_dict, dict)
+
+    # Verify key set equals exactly the 23 schema field names
+    expected_keys = {
+        "run_id",
+        "question_id",
+        "corpus",
+        "corpus_commit",
+        "condition",
+        "model",
+        "seed",
+        "temperature",
+        "claude_code_version",
+        "ontology_version",
+        "index_build_id",
+        "prompt_hash",
+        "started_at",
+        "finished_at",
+        "wall_s",
+        "n_turns",
+        "n_tool_calls",
+        "tool_call_breakdown",
+        "tokens",
+        "context_bytes_retrieved",
+        "exit_reason",
+        "final_answer",
+        "transcript_path",
+        "grade",
+    }
+    assert set(jsonl_dict.keys()) == expected_keys
+
+    # Verify grade is None
+    assert jsonl_dict["grade"] is None
+
+    # Verify it round-trips through JSON
+    json_str = json.dumps(jsonl_dict)
+    restored = json.loads(json_str)
+    assert restored == jsonl_dict
+
+
+def test_exit_reason_done():
+    """derive_exit_reason returns 'done' when not capped, not error, no api_error_status."""
+    from bench.claude_runner import StreamSummary, derive_exit_reason
+
+    summary = StreamSummary(is_error=False, api_error_status=None)
+    capped = False
+
+    assert derive_exit_reason(summary, capped) == "done"
+
+
+def test_exit_reason_cap_overrides():
+    """derive_exit_reason returns 'cap' when capped=True, regardless of summary."""
+    from bench.claude_runner import StreamSummary, derive_exit_reason
+
+    summary = StreamSummary(is_error=True, api_error_status="500")
+    capped = True
+
+    assert derive_exit_reason(summary, capped) == "cap"
+
+
+def test_exit_reason_error():
+    """derive_exit_reason returns 'error' when is_error=True or api_error_status set."""
+    from bench.claude_runner import StreamSummary, derive_exit_reason
+
+    # Test is_error=True
+    summary1 = StreamSummary(is_error=True, api_error_status=None)
+    assert derive_exit_reason(summary1, capped=False) == "error"
+
+    # Test api_error_status set
+    summary2 = StreamSummary(is_error=False, api_error_status="500")
+    assert derive_exit_reason(summary2, capped=False) == "error"
+
+
+def test_n_turns_prefers_reported():
+    """choose_n_turns returns num_turns_reported when not None, else n_turns."""
+    from bench.claude_runner import StreamSummary, choose_n_turns
+
+    # Prefer num_turns_reported
+    summary1 = StreamSummary(num_turns_reported=3, n_turns=2)
+    assert choose_n_turns(summary1) == 3
+
+    # Fall back to n_turns when num_turns_reported is None
+    summary2 = StreamSummary(num_turns_reported=None, n_turns=5)
+    assert choose_n_turns(summary2) == 5
