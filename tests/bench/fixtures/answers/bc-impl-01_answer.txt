@@ -1,0 +1,17 @@
+## Answer
+The following 12 classes implement the `EventProcessor` interface (all in `com.bank.chat.engine.processors`):
+
+1. **AckProcessor**
+2. **ClientMessageProcessor**
+3. **CloseChatProcessor**
+4. **ComplianceHoldProcessor**
+5. **EscalationProcessor**
+6. **FallbackEventProcessor**
+7. **OperatorAssignedProcessor**
+8. **OperatorMessageProcessor**
+9. **ReadReceiptProcessor**
+10. **SessionReopenProcessor**
+11. **TransferProcessor**
+12. **TypingProcessor**
+
+Tools used: mcp__jrag__resolve, mcp__jrag__neighbors
