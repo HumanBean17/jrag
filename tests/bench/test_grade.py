@@ -502,6 +502,25 @@ def test_grade_cell_dispatch_absence():
     assert g.correctness == 1.0
 
 
+def test_grade_cell_dispatch_none_final_answer():
+    """grade_cell tolerates ``final_answer == None`` (capped runs).
+
+    A capped cell writes JSON ``null`` for ``final_answer``; the programmatic
+    graders must not TypeError on it. Normalized to "" -> set_match scores
+    0.0 (no symbols matched).
+    """
+    question = _make_question("q-none", grading="programmatic_set_match")
+    expected = {
+        "kind": "symbol_set",
+        "fqns": ["com.example.Foo", "com.example.Bar"],
+        "ids": [],
+    }
+    cell = {"final_answer": None}
+    g = grade_cell(cell, "transcript", question, expected)
+    assert g.method == "set_match"
+    assert g.correctness == 0.0
+
+
 def test_cohen_kappa_perfect():
     """judge_labels == human_labels (non-constant) -> kappa == 1.0."""
     judge = ["correct", "incorrect", "correct", "incorrect"]

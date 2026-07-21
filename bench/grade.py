@@ -676,7 +676,11 @@ def grade_cell(
             judge_bin=judge_bin,
         )
     grader = _PROGRAMMATIC_GRADERS[method_name]
-    return grader(cell["final_answer"], expected)
+    # Normalize ``None`` (capped runs write JSON null for final_answer) to ""
+    # so the regex-based graders don't TypeError; an empty answer naturally
+    # scores 0.0 (no matched symbols / routes).
+    answer_text = cell.get("final_answer") or ""
+    return grader(answer_text, expected)
 
 
 def cohen_kappa(judge_labels: list, human_labels: list) -> float:
