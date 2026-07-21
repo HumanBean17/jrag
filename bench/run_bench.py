@@ -126,9 +126,11 @@ def cell_paths(run_dir: str, rid: str) -> tuple[str, str]:
 def write_cell(run_dir: str, result: CellResult) -> None:
     """Write a cell result to both per-cell and aggregate JSONL files.
 
-    Writes (overwrites) ``<run_dir>/<rid>/cell.jsonl`` with a single JSON line,
-    and appends the same line to ``<run_dir>/cells.jsonl`` (append-only across
-    cells and across re-writes of the same rid).
+    Atomically writes (overwrites) ``<run_dir>/<rid>/cell.jsonl`` with a single
+    JSON line (write ``.tmp`` + ``fsync`` + ``os.replace``), and appends the same
+    line to ``<run_dir>/cells.jsonl`` (append-only across cells and across
+    re-writes of the same rid). The per-cell file is the resume gate, so its
+    atomicity ensures a crash never leaves a partial file that reads as complete.
 
     Args:
         run_dir: Run directory path.
@@ -145,11 +147,20 @@ def write_cell(run_dir: str, result: CellResult) -> None:
     cell_dict = to_cell_jsonl(result)
     json_line = json.dumps(cell_dict)
 
-    # Write (overwrite) per-cell file
-    with open(cell_jsonl_path, "w") as f:
+    # Write the per-cell file ATOMICALLY: write a sibling .tmp, fsync, then
+    # os.replace onto the real path. The per-cell file is the resume gate
+    # (``cell_completed`` checks it), so a crash mid-write must never leave a
+    # partial file that reads as complete. os.replace is atomic on POSIX/Win;
+    # a failure anywhere before it leaves the prior file (if any) untouched.
+    tmp_path = cell_jsonl_path + ".tmp"
+    with open(tmp_path, "w") as f:
         f.write(json_line + "\n")
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp_path, cell_jsonl_path)
 
-    # Append to aggregate cells.jsonl
+    # Append to aggregate cells.jsonl (sequential execution; the per-cell file is
+    # the source of truth and the resume gate, so the append is best-effort).
     with open(cells_jsonl_path, "a") as f:
         f.write(json_line + "\n")
 
