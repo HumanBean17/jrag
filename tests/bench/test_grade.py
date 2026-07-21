@@ -368,3 +368,24 @@ def test_judge_answer_raises_on_unparseable(monkeypatch):
     monkeypatch.setattr("bench.grade.subprocess.run", _fake_run)
     with pytest.raises(GradeError):
         judge_answer("blinded", "q", {"kind": "semantic", "answer": "a"})
+
+
+def test_judge_answer_parses_fenced_json(monkeypatch):
+    """judge_answer strips ```json fences before parsing result."""
+
+    class _FakeCompleted:
+        # An outer --output-format json envelope whose `result` is a fenced JSON string.
+        # After JSON parsing, \n becomes actual newline characters.
+        stdout = '{"result": "```json\\n{\\"correctness\\": 0.8, \\"rationale\\": \\"factually correct.\\"}\\n```"}'
+        returncode = 0
+
+    def _fake_run(argv, *args, **kwargs):
+        return _FakeCompleted()
+
+    monkeypatch.setattr("bench.grade.subprocess.run", _fake_run)
+    g = judge_answer("blinded", "q", {"kind": "semantic", "answer": "a"})
+    assert g.correctness == 0.8
+    assert g.method == "llm_judge"
+    assert g.judge_model == "glm-5.2"
+    assert g.detail["rationale"] == "factually correct."
+    assert len(g.detail["rationale"]) > 0  # Non-empty

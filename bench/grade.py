@@ -552,7 +552,16 @@ def judge_answer(
 
     try:
         envelope = json.loads(proc.stdout)
-        inner = json.loads(envelope["result"])
+        inner_text = envelope["result"].strip()
+        if inner_text.startswith("```"):
+            # Drop first line (```json or ```) and trailing ```
+            lines = inner_text.splitlines()
+            if lines and lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            inner_text = "\n".join(lines).strip()
+        inner = json.loads(inner_text)
     except (json.JSONDecodeError, KeyError, TypeError) as exc:
         raise GradeError(
             f"could not parse judge result: {exc!r}; stdout={proc.stdout!r}"
@@ -560,7 +569,11 @@ def judge_answer(
 
     try:
         correctness = float(inner["correctness"])
-        rationale = str(inner["rationale"])
+        rationale = inner.get("rationale")
+        if not isinstance(rationale, str) or not rationale:
+            raise GradeError(
+                f"judge result missing/invalid rationale: must be non-empty str; got {type(rationale).__name__}"
+            )
     except (KeyError, TypeError, ValueError) as exc:
         raise GradeError(
             f"judge result missing/malformed fields: {exc!r}; inner={inner!r}"
