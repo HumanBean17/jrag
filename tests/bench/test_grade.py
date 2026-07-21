@@ -13,6 +13,7 @@ import pytest
 from bench.grade import (
     Grade,
     GradeError,
+    GRADE_DISPATCH,
     to_grade_dict,
     extract_simple_names,
     expected_simple_names,
@@ -26,7 +27,11 @@ from bench.grade import (
     TOOL_NAME_RE,
     blind_transcript,
     judge_answer,
+    grade_cell,
+    cohen_kappa,
+    grade_run,
 )
+from bench.load_questions import Question
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -389,3 +394,216 @@ def test_judge_answer_parses_fenced_json(monkeypatch):
     assert g.judge_model == "glm-5.2"
     assert g.detail["rationale"] == "factually correct."
     assert len(g.detail["rationale"]) > 0  # Non-empty
+
+
+# --- Task 14: grade_cell dispatch + cohen_kappa + grade_run + CLI ---
+
+
+def _make_question(qid: str, *, grading: str, question: str = "q?") -> Question:
+    """Build a minimal valid Question for grade_cell dispatch tests."""
+    return Question(
+        id=qid,
+        corpus="bank-chat",
+        category="interface-impls",
+        difficulty="easy",
+        question=question,
+        oracle_source="manual",
+        claim_refs=["C1"],
+        grading=grading,
+    )
+
+
+def test_grade_dispatch_map_covers_five_methods():
+    """GRADE_DISPATCH maps all 5 grading values to their grader names."""
+    assert GRADE_DISPATCH == {
+        "programmatic_set_match": "set_match",
+        "programmatic_path_match": "path_match",
+        "programmatic_client_route_match": "client_route_match",
+        "absence_check": "absence_check",
+        "llm_judge": "llm_judge",
+    }
+
+
+def test_grade_cell_dispatch_set_match():
+    """grade_cell dispatches programmatic_set_match -> grade_set_match.
+
+    Cell with final_answer naming 2 of 2 expected symbols -> correctness 1.0,
+    method == "set_match".
+    """
+    cell = {"final_answer": "Foo Bar"}
+    question = _make_question("q1", grading="programmatic_set_match")
+    expected = {
+        "kind": "symbol_set",
+        "fqns": ["com.example.Foo", "com.example.Bar"],
+        "ids": [],
+    }
+    g = grade_cell(cell, "irrelevant transcript text", question, expected)
+    assert g.method == "set_match"
+    assert g.correctness == 1.0
+
+
+def test_grade_cell_dispatch_judge(monkeypatch):
+    """grade_cell dispatches llm_judge -> blind_transcript + judge_answer.
+
+    Monkeypatches judge_answer to return a fixed Grade and captures the call:
+    blinded transcript, question text, expected, judge_bin must all flow through.
+    """
+    question = _make_question(
+        "q-judge",
+        grading="llm_judge",
+        question="What does X do?",
+    )
+    expected = {"kind": "semantic", "answer": "fact"}
+
+    sentinel = Grade(
+        correctness=0.9,
+        method="llm_judge",
+        detail={"rationale": "fake"},
+        judge_model="glm-5.2",
+    )
+    captured: list[tuple] = []
+
+    def fake_judge(blinded, q_text, exp, *, judge_bin="claude"):
+        captured.append((blinded, q_text, exp, judge_bin))
+        return sentinel
+
+    monkeypatch.setattr("bench.grade.judge_answer", fake_judge)
+
+    transcript_text = "Assistant called mcp__jrag__search then Read TypingProcessor.java"
+    cell = {"final_answer": "unused for the judge path"}
+    g = grade_cell(cell, transcript_text, question, expected, judge_bin="myjudge")
+
+    assert g is sentinel
+    assert len(captured) == 1
+    blinded, q_text, exp, jbin = captured[0]
+    # blind_transcript was applied before judge_answer
+    assert "mcp__jrag__search" not in blinded
+    assert "[tool]" in blinded
+    assert q_text == question.question
+    assert exp == expected
+    assert jbin == "myjudge"
+
+
+def test_grade_cell_dispatch_absence():
+    """grade_cell dispatches absence_check -> grade_absence.
+
+    Answer asserts absence + expected verdict not_in_project -> correctness 1.0,
+    method == "absence_check".
+    """
+    question = _make_question(
+        "q-abs",
+        grading="absence_check",
+        question="Is there a Redis cache?",
+    )
+    expected = {"kind": "absence", "verdict": "not_in_project", "proof": "..."}
+    cell = {"final_answer": "There is no Redis cache layer."}
+    g = grade_cell(cell, "transcript", question, expected)
+    assert g.method == "absence_check"
+    assert g.correctness == 1.0
+
+
+def test_cohen_kappa_perfect():
+    """judge_labels == human_labels (non-constant) -> kappa == 1.0."""
+    judge = ["correct", "incorrect", "correct", "incorrect"]
+    human = ["correct", "incorrect", "correct", "incorrect"]
+    assert cohen_kappa(judge, human) == 1.0
+
+
+def test_cohen_kappa_known_value():
+    """Hand-computed kappa for a small mixed-agreement example.
+
+    judge = ["yes", "yes", "no",  "no" ]
+    human = ["yes", "yes", "yes", "no" ]
+    n = 4
+    agreements = positions 0, 1, 3 -> 3 -> p_o = 3/4 = 0.75
+    count_judge: yes=2, no=2
+    count_human: yes=3, no=1
+    p_e = (2/4)*(3/4) + (2/4)*(1/4) = 6/16 + 2/16 = 8/16 = 0.5
+    kappa = (p_o - p_e) / (1 - p_e) = (0.75 - 0.5) / (1 - 0.5) = 0.25/0.5 = 0.5
+    """
+    judge = ["yes", "yes", "no", "no"]
+    human = ["yes", "yes", "yes", "no"]
+    assert cohen_kappa(judge, human) == pytest.approx(0.5, abs=1e-4)
+
+
+def test_grade_run_fills_grades(tmp_path):
+    """grade_run reads cells.jsonl + transcripts + expected, writes grades.
+
+    Two cells (set_match + absence_check, both correctness 1.0):
+      - out_path gets 2 lines, each with non-null grade.
+      - summary returns graded_n=2, by_method counts, mean_correctness=1.0,
+        kappa=None (no human_labels_path).
+    """
+    transcripts_dir = tmp_path / "transcripts"
+    transcripts_dir.mkdir()
+    expected_dir = tmp_path / "expected"
+    expected_dir.mkdir()
+
+    # Transcripts (cell["transcript_path"] is repo-relative; absolute also works).
+    t1 = transcripts_dir / "t1.txt"
+    t1.write_text("transcript one")
+    t2 = transcripts_dir / "t2.txt"
+    t2.write_text("transcript two")
+
+    (expected_dir / "q-set.json").write_text(json.dumps({
+        "question_id": "q-set",
+        "expected": {
+            "kind": "symbol_set",
+            "fqns": ["com.example.Foo", "com.example.Bar"],
+            "ids": [],
+        },
+    }))
+    (expected_dir / "q-abs.json").write_text(json.dumps({
+        "question_id": "q-abs",
+        "expected": {
+            "kind": "absence",
+            "verdict": "not_in_project",
+            "proof": "...",
+        },
+    }))
+
+    cells = [
+        {
+            "run_id": "r1",
+            "question_id": "q-set",
+            "final_answer": "Foo Bar",
+            "transcript_path": str(t1),
+            "grade": None,
+        },
+        {
+            "run_id": "r2",
+            "question_id": "q-abs",
+            "final_answer": "There is no Redis cache layer.",
+            "transcript_path": str(t2),
+            "grade": None,
+        },
+    ]
+    cells_path = tmp_path / "cells.jsonl"
+    cells_path.write_text("\n".join(json.dumps(c) for c in cells))
+
+    questions = [
+        _make_question("q-set", grading="programmatic_set_match"),
+        _make_question("q-abs", grading="absence_check"),
+    ]
+
+    out_path = tmp_path / "graded.jsonl"
+    summary = grade_run(
+        str(cells_path),
+        str(expected_dir),
+        questions,
+        out_path=str(out_path),
+    )
+
+    assert summary["graded_n"] == 2
+    assert summary["by_method"] == {"set_match": 1, "absence_check": 1}
+    assert summary["mean_correctness"] == pytest.approx(1.0)
+    assert summary["kappa"] is None  # no human_labels_path
+
+    # out_path has 2 lines, each with a non-null grade dict.
+    lines = [ln for ln in out_path.read_text().splitlines() if ln.strip()]
+    assert len(lines) == 2
+    for line in lines:
+        d = json.loads(line)
+        assert d["grade"] is not None
+        assert "method" in d["grade"]
+        assert "correctness" in d["grade"]

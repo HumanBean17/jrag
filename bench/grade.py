@@ -24,14 +24,28 @@ Task 13 additions:
                                 Grep/Glob/Read/Bash)
     blind_transcript            scrub tool-name tokens → `[tool]` (condition blinding)
     judge_answer                single-turn claude CLI call → Grade (llm_judge)
+
+Task 14 additions:
+    GRADE_DISPATCH              Question.grading value → grader name
+    grade_cell                  top-level dispatch: cell+transcript+Question+expected → Grade
+    cohen_kappa                 inter-rater agreement κ over two equal-length label lists
+    grade_run                   per-run grader: reads cells.jsonl, writes graded.jsonl, summary
+    main                        argparse CLI entry: --cells/--expected/--questions-glob/...
 """
 
 from __future__ import annotations
 
+import argparse
+import glob as _glob
 import json
+import os
 import re
 import subprocess
+import sys
 from dataclasses import dataclass
+from pathlib import Path
+
+from bench.load_questions import Question, load_all_questions
 
 
 # A token "looks like" a Java identifier if it starts with a letter/underscore/$
@@ -585,3 +599,321 @@ def judge_answer(
         detail={"rationale": rationale},
         judge_model=judge_model,
     )
+
+
+# --- Task 14: grade_cell dispatch + cohen_kappa + grade_run + CLI ---
+
+
+# Maps a ``Question.grading`` value to the grader name (the ``method`` string
+# the corresponding grader produces). ``llm_judge`` is special-cased in
+# ``grade_cell`` (it needs the transcript + blinding, not ``final_answer``);
+# the other four dispatch to one of the pure programmatic graders below.
+GRADE_DISPATCH: dict[str, str] = {
+    "programmatic_set_match": "set_match",
+    "programmatic_path_match": "path_match",
+    "programmatic_client_route_match": "client_route_match",
+    "absence_check": "absence_check",
+    "llm_judge": "llm_judge",
+}
+
+# Method name → pure programmatic grader. ``llm_judge`` is excluded: it goes
+# through ``judge_answer`` with the blinded transcript, not ``final_answer``.
+_PROGRAMMATIC_GRADERS: dict[str, callable] = {
+    "set_match": grade_set_match,
+    "path_match": grade_path_match,
+    "client_route_match": grade_client_route_match,
+    "absence_check": grade_absence,
+}
+
+
+def grade_cell(
+    cell: dict,
+    transcript_text: str,
+    question: Question,
+    expected: dict,
+    *,
+    judge_bin: str = "claude",
+) -> Grade:
+    """Dispatch-grade one cell.
+
+    Routes by ``question.grading``:
+
+      * ``llm_judge`` → ``judge_answer(blind_transcript(transcript_text),
+        question.question, expected, judge_bin=judge_bin)``. The judge sees the
+        blinded transcript (tool names scrubbed), not the raw ``final_answer``.
+      * anything else → the matching programmatic grader (looked up by
+        ``GRADE_DISPATCH[question.grading]`` in ``_PROGRAMMATIC_GRADERS``),
+        called with ``cell["final_answer"]`` and ``expected``.
+
+    Args:
+        cell: The cell dict (must contain ``final_answer`` for the
+            programmatic path; ignored on the ``llm_judge`` path).
+        transcript_text: The cell's already-loaded transcript text. Used only
+            on the ``llm_judge`` path; the programmatic graders ignore it.
+        question: The ``Question`` this cell answers. ``question.grading``
+            selects the grader; ``question.question`` (the prompt text) is
+            passed to the LLM judge.
+        expected: The oracle's inner ``expected`` block (e.g.
+            ``{"kind": "symbol_set", "fqns": [...]}``).
+        judge_bin: ``claude`` CLI binary name/path; forwarded to
+            ``judge_answer`` for the ``llm_judge`` path only.
+
+    Returns:
+        The ``Grade`` returned by the dispatched grader.
+
+    Raises:
+        KeyError: if ``question.grading`` is not in ``GRADE_DISPATCH``, or the
+            dispatch target is not in ``_PROGRAMMATIC_GRADERS`` (programming
+            error — the two dicts must stay in sync).
+    """
+    method_name = GRADE_DISPATCH[question.grading]
+    if method_name == "llm_judge":
+        blinded = blind_transcript(transcript_text)
+        return judge_answer(
+            blinded,
+            question.question,
+            expected,
+            judge_bin=judge_bin,
+        )
+    grader = _PROGRAMMATIC_GRADERS[method_name]
+    return grader(cell["final_answer"], expected)
+
+
+def cohen_kappa(judge_labels: list, human_labels: list) -> float:
+    """Standard Cohen's κ over two equal-length label lists.
+
+    Agreement fraction ``p_o`` and chance agreement ``p_e``::
+
+        n      = len(judge_labels)  (== len(human_labels))
+        p_o    = (# positions where judge[i] == human[i]) / n
+        labels = set(judge_labels) | set(human_labels)
+        p_e    = Σ_k (count_judge(k)/n) * (count_human(k)/n)
+        κ      = (p_o - p_e) / (1 - p_e)
+
+    Edge cases:
+      * ``p_e == 1.0`` (both lists constant on the same label — perfect but
+        uninformative agreement) → κ = 0.0 by convention.
+      * Otherwise perfect agreement (``p_o == 1.0`` with non-constant lists)
+        falls out of the formula as κ = 1.0; no special case needed.
+
+    Args:
+        judge_labels: First rater's labels (any hashable type).
+        human_labels: Second rater's labels. Must be the same length as
+            ``judge_labels``.
+
+    Returns:
+        Cohen's κ in [-1, 1].
+
+    Raises:
+        ValueError: if the lists are empty or have different lengths.
+    """
+    if len(judge_labels) != len(human_labels):
+        raise ValueError(
+            f"cohen_kappa: lists must be equal length; got "
+            f"{len(judge_labels)} and {len(human_labels)}"
+        )
+    n = len(judge_labels)
+    if n == 0:
+        raise ValueError("cohen_kappa: lists must be non-empty")
+
+    agree = sum(1 for j, h in zip(judge_labels, human_labels) if j == h)
+    p_o = agree / n
+
+    labels = set(judge_labels) | set(human_labels)
+    p_e = 0.0
+    for k in labels:
+        c_j = judge_labels.count(k)
+        c_h = human_labels.count(k)
+        p_e += (c_j / n) * (c_h / n)
+
+    if p_e == 1.0:
+        return 0.0
+    return (p_o - p_e) / (1.0 - p_e)
+
+
+def _grade_to_judge_label(grade: Grade) -> str:
+    """Reduce a Grade to a binary pass/fail label for κ vs. human labels.
+
+    Threshold: ``correctness == 1.0`` → ``"correct"``; anything below →
+    ``"incorrect"``. This matches the typical human-labeling convention
+    (a rater marks each cell's answer as fully correct or not).
+    """
+    return "correct" if grade.correctness == 1.0 else "incorrect"
+
+
+def grade_run(
+    cells_path: str,
+    expected_dir: str,
+    questions: list[Question],
+    *,
+    human_labels_path: str | None = None,
+    judge_bin: str = "claude",
+    out_path: str,
+) -> dict:
+    """Grade every cell in a run; write ``out_path``; return a summary.
+
+    Per cell:
+      1. Read the transcript at ``cell["transcript_path"]`` (relative to the
+         process cwd — the cell stores a repo-relative path).
+      2. Look up the cell's ``Question`` by ``cell["question_id"]``.
+      3. Read the oracle expected at ``<expected_dir>/<question_id>.json`` and
+         take its inner ``expected`` block.
+      4. ``grade = grade_cell(cell, transcript_text, question, expected,
+         judge_bin=judge_bin)``.
+      5. Write one JSON line to ``out_path`` = the cell dict with ``grade``
+         set to ``to_grade_dict(grade)``.
+
+    After all cells: if ``human_labels_path`` is given, load it (a JSON map
+    ``{run_id: label}``), collect ``(judge_label, human_label)`` pairs for
+    every judged cell whose ``run_id`` is in the map, and compute
+    ``cohen_kappa`` over them.
+
+    Args:
+        cells_path: Path to the run's ``cells.jsonl`` (one JSON cell per line).
+        expected_dir: Directory of oracle ``<question_id>.json`` files.
+        questions: The full question list (only the cell's question is used
+            per cell, but the full list is needed for the id → Question map).
+        human_labels_path: Optional path to a JSON file mapping
+            ``{run_id: human_label}``. When provided, ``kappa`` is computed;
+            otherwise ``kappa`` is ``None``.
+        judge_bin: ``claude`` CLI binary; forwarded to ``grade_cell`` for
+            ``llm_judge`` questions.
+        out_path: Where to write the graded JSONL (one cell dict with
+            ``grade`` per line).
+
+    Returns:
+        Summary dict::
+
+            {
+                "graded_n": int,
+                "by_method": {method_name: count, ...},
+                "mean_correctness": float,   # 0.0 if no cells
+                "kappa": float | None,       # None unless human_labels given
+            }
+
+    Raises:
+        KeyError: if a cell's ``question_id`` has no Question, or its
+            transcript/expected file is missing (FileNotFoundError).
+    """
+    question_by_id = {q.id: q for q in questions}
+
+    graded_n = 0
+    by_method: dict[str, int] = {}
+    correctness_sum = 0.0
+    # Track (run_id, Grade) so we can pair judge labels with human labels after.
+    judged_cells: list[tuple[str, Grade]] = []
+
+    out_lines: list[str] = []
+    for line in Path(cells_path).read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        cell = json.loads(line)
+        qid = cell["question_id"]
+        question = question_by_id[qid]
+
+        transcript_text = Path(cell["transcript_path"]).read_text(encoding="utf-8")
+        expected_record = json.loads(
+            Path(expected_dir, f"{qid}.json").read_text(encoding="utf-8")
+        )
+        expected = expected_record["expected"]
+
+        grade = grade_cell(
+            cell,
+            transcript_text,
+            question,
+            expected,
+            judge_bin=judge_bin,
+        )
+
+        graded_n += 1
+        by_method[grade.method] = by_method.get(grade.method, 0) + 1
+        correctness_sum += grade.correctness
+        judged_cells.append((cell["run_id"], grade))
+
+        cell_out = dict(cell)
+        cell_out["grade"] = to_grade_dict(grade)
+        out_lines.append(json.dumps(cell_out))
+
+    Path(out_path).write_text("\n".join(out_lines) + ("\n" if out_lines else ""),
+                              encoding="utf-8")
+
+    kappa: float | None = None
+    if human_labels_path is not None:
+        human_labels = json.loads(
+            Path(human_labels_path).read_text(encoding="utf-8")
+        )
+        judge_labels: list = []
+        paired_human: list = []
+        for run_id, grade in judged_cells:
+            if run_id in human_labels:
+                judge_labels.append(_grade_to_judge_label(grade))
+                paired_human.append(human_labels[run_id])
+        if judge_labels:
+            kappa = cohen_kappa(judge_labels, paired_human)
+
+    mean_correctness = (correctness_sum / graded_n) if graded_n else 0.0
+    return {
+        "graded_n": graded_n,
+        "by_method": by_method,
+        "mean_correctness": mean_correctness,
+        "kappa": kappa,
+    }
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Argparse CLI entry for grading a run's ``cells.jsonl``.
+
+    Flags:
+        --cells          Path to the run's ``cells.jsonl`` (required).
+        --expected       Dir of oracle ``<question_id>.json`` files
+                         (default ``bench/oracle/expected``).
+        --questions-glob Glob of question JSONL files
+                         (default ``bench/questions/*.jsonl``).
+        --human-labels   Optional JSON map ``{run_id: label}`` for κ.
+        --judge-bin      ``claude`` CLI binary (default ``claude``).
+        --out            Output graded JSONL path
+                         (default ``<cells dir>/graded.jsonl``).
+
+    Prints the summary dict as JSON to stdout and returns 0.
+    """
+    parser = argparse.ArgumentParser(
+        prog="grade",
+        description="Grade a benchmark run's cells.jsonl against the oracle.",
+    )
+    parser.add_argument("--cells", required=True,
+                        help="Path to the run's cells.jsonl.")
+    parser.add_argument("--expected", default="bench/oracle/expected",
+                        help="Dir of oracle <question_id>.json files.")
+    parser.add_argument("--questions-glob", default="bench/questions/*.jsonl",
+                        help="Glob of question JSONL files.")
+    parser.add_argument("--human-labels", default=None,
+                        help="Optional JSON map {run_id: label} for κ.")
+    parser.add_argument("--judge-bin", default="claude",
+                        help="claude CLI binary (default: claude).")
+    parser.add_argument("--out", default=None,
+                        help="Output graded JSONL path "
+                             "(default: <cells dir>/graded.jsonl).")
+    args = parser.parse_args(argv)
+
+    out_path = args.out
+    if out_path is None:
+        cells_dir = os.path.dirname(os.path.abspath(args.cells))
+        out_path = os.path.join(cells_dir, "graded.jsonl")
+
+    questions = load_all_questions(args.questions_glob)
+
+    summary = grade_run(
+        args.cells,
+        args.expected,
+        questions,
+        human_labels_path=args.human_labels,
+        judge_bin=args.judge_bin,
+        out_path=out_path,
+    )
+    print(json.dumps(summary, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
