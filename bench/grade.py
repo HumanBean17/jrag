@@ -647,7 +647,11 @@ def grade_cell(
 ) -> Grade:
     """Dispatch-grade one cell.
 
-    Routes by ``question.grading``:
+    Capped cells (``cell["exit_reason"] == "cap"``) short-circuit to a
+    deterministic ``Grade(0.0, method=<method>, detail={"reason": "cap"})`` with
+    no grader/judge call — a capped cell produced no answer by definition.
+
+    Otherwise routes by ``question.grading``:
 
       * ``llm_judge`` → ``judge_answer(blind_transcript(transcript_text),
         question.question, expected, judge_bin=judge_bin)``. The judge sees the
@@ -680,6 +684,17 @@ def grade_cell(
             error — the two dicts must stay in sync).
     """
     method_name = GRADE_DISPATCH[question.grading]
+    # A capped cell produced no answer by definition — the agent exhausted its
+    # turn budget without finishing. Score it a deterministic 0.0 and skip the
+    # grader/judge entirely: no judge budget spent, and no false-positive from
+    # the judge scoring transcript exploration. (Plan 3 kappa methodology.)
+    if cell.get("exit_reason") == "cap":
+        return Grade(
+            correctness=0.0,
+            method=method_name,
+            detail={"reason": "cap"},
+            judge_model=None,
+        )
     if method_name == "llm_judge":
         blinded = blind_transcript(transcript_text)
         return judge_answer(

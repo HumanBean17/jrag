@@ -496,6 +496,18 @@ def run_cell(
 
     summary = parse_stream(iter(buffer))
 
+    # A capped cell breaks before the `result` event, so summary.final_answer is
+    # None. Write a self-documenting sentinel instead: non-null (clean data —
+    # report.py and the human kappa-gate never see a null answer) and readable
+    # as "no answer produced". grade_cell recognizes the cap via exit_reason.
+    if capped:
+        final_answer = (
+            f"[BENCH_CAP: reached max-turns {spec.max_turns} "
+            f"without a final result]"
+        )
+    else:
+        final_answer = summary.final_answer
+
     claude_code_version = _claude_code_version(claude_bin)
     prompt_hash = (
         "sha256:"
@@ -527,7 +539,7 @@ def run_cell(
         tokens=summary.tokens,
         context_bytes_retrieved=summary.context_bytes_retrieved,
         exit_reason=derive_exit_reason(summary, capped),
-        final_answer=summary.final_answer,
+        final_answer=final_answer,
         transcript_path=results_transcript_path,
         grade=None,
     )

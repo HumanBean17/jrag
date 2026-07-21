@@ -562,6 +562,32 @@ def test_grade_cell_dispatch_none_final_answer():
     assert g.correctness == 0.0
 
 
+def test_grade_cell_capped_short_circuits_to_zero(monkeypatch):
+    """grade_cell short-circuits exit_reason=="cap" to a deterministic 0.0.
+
+    A capped cell produced no answer by definition. Plan 3: return
+    Grade(0.0, method=<method>, detail={"reason": "cap"}) WITHOUT calling the
+    grader/judge — no judge budget spent, no false-positive from the judge
+    scoring the transcript's exploration. Verified on the llm_judge path (the
+    one that would otherwise invoke the judge).
+    """
+    question = _make_question("q-cap", grading="llm_judge", question="q?")
+    expected = {"kind": "semantic", "answer": "fact"}
+    cell = {"exit_reason": "cap", "final_answer": "[BENCH_CAP: ...]"}
+
+    def fake_judge(blinded, q_text, exp, *, judge_bin="claude"):
+        raise AssertionError("judge_answer must not be called for a capped cell")
+
+    monkeypatch.setattr("bench.grade.judge_answer", fake_judge)
+
+    g = grade_cell(cell, "some transcript", question, expected)
+
+    assert g.correctness == 0.0
+    assert g.method == "llm_judge"
+    assert g.detail == {"reason": "cap"}
+    assert g.judge_model is None
+
+
 def test_cohen_kappa_perfect():
     """judge_labels == human_labels (non-constant) -> kappa == 1.0."""
     judge = ["correct", "incorrect", "correct", "incorrect"]
