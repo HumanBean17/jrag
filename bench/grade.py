@@ -763,14 +763,26 @@ def cohen_kappa(judge_labels: list, human_labels: list) -> float:
     return (p_o - p_e) / (1.0 - p_e)
 
 
+# Plan 3: binarize the judge's continuous [0,1] correctness for κ vs. binary
+# human labels. 0.5 aligns with the rubric's pass/fail notion — a 0.90 answer is
+# "correct"; the prior ``== 1.0`` made any sub-perfect score "incorrect", which
+# manufactured κ disagreement between a lenient judge and the human gate.
+JUDGE_CORRECT_THRESHOLD = 0.5
+
+
 def _grade_to_judge_label(grade: Grade) -> str:
     """Reduce a Grade to a binary pass/fail label for κ vs. human labels.
 
-    Threshold: ``correctness == 1.0`` → ``"correct"``; anything below →
-    ``"incorrect"``. This matches the typical human-labeling convention
-    (a rater marks each cell's answer as fully correct or not).
+    Threshold: ``correctness >= JUDGE_CORRECT_THRESHOLD`` → ``"correct"``;
+    anything below → ``"incorrect"``. Matches the human-labeling convention
+    (a rater marks each cell's answer as correct or not) without the brittle
+    ``== 1.0`` float equality.
     """
-    return "correct" if grade.correctness == 1.0 else "incorrect"
+    return (
+        "correct"
+        if grade.correctness >= JUDGE_CORRECT_THRESHOLD
+        else "incorrect"
+    )
 
 
 def grade_run(
@@ -857,6 +869,9 @@ def grade_run(
     # continues (a single bad cell — transient judge failure, missing oracle
     # file, etc. — must not nuke the whole run's graded output).
     cell_lines = Path(cells_path).read_text(encoding="utf-8").splitlines()
+    # Sibling dir for blinded-transcript artifacts (Plan 3 kappa: the human gate
+    # labels the same blinded transcript the judge graded).
+    run_dir = os.path.dirname(out_path)
     with open(out_path, "w", encoding="utf-8") as out_f:
         for line in cell_lines:
             line = line.strip()
@@ -881,6 +896,17 @@ def grade_run(
                     expected,
                     judge_bin=judge_bin,
                 )
+                # Plan 3 kappa: emit the blinded transcript the judge graded so
+                # the human gate labels the SAME input (recomputed here; pure,
+                # idempotent). Only judged cells — programmatic graders read
+                # final_answer, not the blinded transcript.
+                if question.grading == "llm_judge":
+                    blinded_path = os.path.join(
+                        run_dir, f"{cell['run_id']}.blinded.txt"
+                    )
+                    Path(blinded_path).write_text(
+                        blind_transcript(transcript_text), encoding="utf-8"
+                    )
             except Exception as exc:
                 # Absorb the failure into a 0.0 error-grade line and continue.
                 # ``GradeError`` and any other Exception land here; the run
