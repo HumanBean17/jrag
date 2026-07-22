@@ -562,6 +562,32 @@ def test_grade_cell_dispatch_none_final_answer():
     assert g.correctness == 0.0
 
 
+def test_grade_cell_capped_short_circuits_to_zero(monkeypatch):
+    """grade_cell short-circuits exit_reason=="cap" to a deterministic 0.0.
+
+    A capped cell produced no answer by definition. Plan 3: return
+    Grade(0.0, method=<method>, detail={"reason": "cap"}) WITHOUT calling the
+    grader/judge — no judge budget spent, no false-positive from the judge
+    scoring the transcript's exploration. Verified on the llm_judge path (the
+    one that would otherwise invoke the judge).
+    """
+    question = _make_question("q-cap", grading="llm_judge", question="q?")
+    expected = {"kind": "semantic", "answer": "fact"}
+    cell = {"exit_reason": "cap", "final_answer": "[BENCH_CAP: ...]"}
+
+    def fake_judge(blinded, q_text, exp, *, judge_bin="claude"):
+        raise AssertionError("judge_answer must not be called for a capped cell")
+
+    monkeypatch.setattr("bench.grade.judge_answer", fake_judge)
+
+    g = grade_cell(cell, "some transcript", question, expected)
+
+    assert g.correctness == 0.0
+    assert g.method == "llm_judge"
+    assert g.detail == {"reason": "cap"}
+    assert g.judge_model is None
+
+
 def test_cohen_kappa_perfect():
     """judge_labels == human_labels (non-constant) -> kappa == 1.0."""
     judge = ["correct", "incorrect", "correct", "incorrect"]
@@ -771,3 +797,110 @@ def test_grade_run_continues_past_error_cell(tmp_path, monkeypatch):
     assert second["grade"]["correctness"] == 0.0
     assert "error" in second["grade"]["detail"]
     assert "simulated judge explosion" in second["grade"]["detail"]["error"]
+
+
+def test_grade_to_judge_label_threshold():
+    """_grade_to_judge_label binarizes at JUDGE_CORRECT_THRESHOLD, not ==1.0.
+
+    Plan 3: a 0.90 answer is "correct". Boundary tests use the constant so they
+    hold regardless of its exact value.
+    """
+    from bench.grade import _grade_to_judge_label, JUDGE_CORRECT_THRESHOLD
+
+    def grade_with(c: float) -> Grade:
+        return Grade(
+            correctness=c, method="llm_judge", detail={}, judge_model="glm-5.2"
+        )
+
+    assert _grade_to_judge_label(grade_with(1.0)) == "correct"
+    assert _grade_to_judge_label(grade_with(0.9)) == "correct"
+    assert _grade_to_judge_label(grade_with(JUDGE_CORRECT_THRESHOLD)) == "correct"
+    assert (
+        _grade_to_judge_label(grade_with(JUDGE_CORRECT_THRESHOLD - 0.01))
+        == "incorrect"
+    )
+    assert _grade_to_judge_label(grade_with(0.0)) == "incorrect"
+
+
+def test_grade_run_emits_blinded_transcripts(tmp_path, monkeypatch):
+    """grade_run emits <run_id>.blinded.txt for judged cells (Plan 3 kappa).
+
+    The human kappa-gate must label the SAME blinded transcript the judge graded.
+    A judged cell -> .blinded.txt equals blind_transcript(transcript); a
+    programmatic cell -> no artifact.
+    """
+    from bench.grade import blind_transcript
+
+    transcripts_dir = tmp_path / "transcripts"
+    transcripts_dir.mkdir()
+    expected_dir = tmp_path / "expected"
+    expected_dir.mkdir()
+
+    t_judge = transcripts_dir / "t_judge.txt"
+    t_judge.write_text("Assistant called mcp__jrag__search then Read Foo.java")
+    t_set = transcripts_dir / "t_set.txt"
+    t_set.write_text("transcript set")
+
+    (expected_dir / "q-judge.json").write_text(
+        json.dumps(
+            {"question_id": "q-judge", "expected": {"kind": "semantic", "answer": "x"}}
+        )
+    )
+    (expected_dir / "q-set.json").write_text(
+        json.dumps(
+            {
+                "question_id": "q-set",
+                "expected": {"kind": "symbol_set", "fqns": ["com.example.Foo"], "ids": []},
+            }
+        )
+    )
+
+    cells = [
+        {
+            "run_id": "r-judge",
+            "question_id": "q-judge",
+            "final_answer": "x",
+            "transcript_path": str(t_judge),
+            "grade": None,
+            "exit_reason": "done",
+        },
+        {
+            "run_id": "r-set",
+            "question_id": "q-set",
+            "final_answer": "Foo",
+            "transcript_path": str(t_set),
+            "grade": None,
+            "exit_reason": "done",
+        },
+    ]
+    cells_path = tmp_path / "cells.jsonl"
+    cells_path.write_text("\n".join(json.dumps(c) for c in cells))
+
+    questions = [
+        _make_question("q-judge", grading="llm_judge", question="q?"),
+        _make_question("q-set", grading="programmatic_set_match"),
+    ]
+
+    def fake_judge(blinded, q_text, exp, *, judge_bin="claude"):
+        return Grade(
+            correctness=0.9,
+            method="llm_judge",
+            detail={"rationale": "fake"},
+            judge_model="glm-5.2",
+        )
+
+    monkeypatch.setattr("bench.grade.judge_answer", fake_judge)
+
+    out_path = tmp_path / "graded.jsonl"
+    grade_run(str(cells_path), str(expected_dir), questions, out_path=str(out_path))
+
+    # Judged cell: blinded artifact emitted, equals blind_transcript(transcript).
+    blinded_path = tmp_path / "r-judge.blinded.txt"
+    assert blinded_path.exists()
+    text = blinded_path.read_text()
+    assert text == blind_transcript(t_judge.read_text())
+    assert "mcp__jrag__search" not in text
+    assert "[tool]" in text
+
+    # Programmatic cell: no blinded artifact.
+    assert not (tmp_path / "r-set.blinded.txt").exists()

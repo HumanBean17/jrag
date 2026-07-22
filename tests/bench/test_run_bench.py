@@ -191,6 +191,44 @@ def test_write_cell_creates_files():
             assert cells_data["run_id"] == "bc-impl-01_D_glm-4.7_s0"
 
 
+def test_write_cell_atomic_no_partial_on_crash(tmp_path, monkeypatch):
+    """write_cell writes the per-cell file atomically.
+
+    A crash (or any failure) after the .tmp write but before ``os.replace`` must
+    leave the existing per-cell file untouched — never a partial overwrite. The
+    resume gate (``cell_completed``) reads that file, so its atomicity is what
+    closes the "partial write reads as complete" gap. Pre-seed stale content,
+    monkeypatch ``os.replace`` to raise, and assert the real file still holds the
+    stale line.
+    """
+    from bench.run_bench import write_cell, run_dir, cell_paths
+
+    rd = run_dir(str(tmp_path), "20250101_120000")
+    rid = "bc-impl-01_D_glm-4.7_s0"
+    _, cell_jsonl_path = cell_paths(rd, rid)
+
+    stale = '{"stale": "prior complete cell"}\n'
+    with open(cell_jsonl_path, "w") as f:
+        f.write(stale)
+
+    transcript_path = os.path.join(rd, "transcript.jsonl")
+    with open(transcript_path, "w") as f:
+        f.write('{"type": "result"}\n')
+    result = make_cell_result(run_id=rid, transcript_path=transcript_path)
+
+    def boom(src, dst):
+        raise OSError("simulated crash mid-replace")
+
+    monkeypatch.setattr("bench.run_bench.os.replace", boom)
+
+    with pytest.raises(OSError):
+        write_cell(rd, result)
+
+    # The real file is untouched — atomicity held (only the .tmp was written).
+    with open(cell_jsonl_path) as f:
+        assert f.read() == stale
+
+
 def test_cell_completed_gate():
     """cell_completed is False before write_cell, True after."""
     from bench.run_bench import write_cell, cell_completed, run_dir

@@ -1,0 +1,60 @@
+name: bench-smoke
+
+# Fast, single-OS, deterministic gate for the bench harness (run -> grade ->
+# report). This is NOT a re-measurement of the model: the full `test` workflow
+# already runs all of tests/bench/ on a 4-OS matrix; this job gives quick
+# bench-focused feedback (the run->grade->report pipeline + the deterministic
+# D>A correctness signal on canned data) without waiting for the matrix. Real
+# `claude -p` smoke (paid API, non-deterministic) is a manual/nightly exercise,
+# not per-PR CI (see bench/PREREGISTRATION.md Amendment 2026-07-22 (e)).
+
+on:
+  pull_request:
+    paths:
+      - "bench/**"
+      - "tests/bench/**"
+      - "pyproject.toml"
+      - ".github/workflows/bench-smoke.yml"
+  push:
+    branches: [master]
+    paths:
+      - "bench/**"
+      - "tests/bench/**"
+      - "pyproject.toml"
+      - ".github/workflows/bench-smoke.yml"
+
+jobs:
+  bench-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: changes
+        with:
+          filters: |
+            bench:
+              - "bench/**"
+              - "tests/bench/**"
+              - "pyproject.toml"
+              - ".github/workflows/bench-smoke.yml"
+      - uses: actions/setup-python@v5
+        if: steps.changes.outputs.bench == 'true'
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        if: steps.changes.outputs.bench == 'true'
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Run bench suite (deterministic; no API)
+        if: steps.changes.outputs.bench == 'true'
+        env:
+          JAVA_CODEBASE_RAG_RUN_HEAVY: "0"
+        # tests/bench/conftest.py puts the repo root on sys.path so `bench` is
+        # importable. requires_claude/requires_jqa/requires_jdk tests auto-skip
+        # (no binaries in CI). The deterministic pipeline test
+        # (test_smoke_pipeline.py) asserts the D>A correctness signal.
+        run: python -m pytest tests/bench/ -q
+      - name: Skip (non-bench change)
+        if: steps.changes.outputs.bench != 'true'
+        run: echo "Non-bench change; bench-smoke skipped."
