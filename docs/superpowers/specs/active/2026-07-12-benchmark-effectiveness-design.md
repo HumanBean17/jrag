@@ -5,6 +5,14 @@
 - **Scope:** A reproducible benchmark that produces credible proof of *effectiveness* (answer quality), complementing the existing performance-only benches in `~/jrag-bench/`.
 - **Host under test:** Claude Code (the agent), driven by GLM models, with `java-codebase-rag` wired in as an MCP server.
 
+> **Plan 4 note (2026-07-22):** the MCP surface described throughout this
+> original design is **superseded** — the benchmark now drives the shipped
+> `jrag` CLI (`jrag <verb>` via Bash, gated by a per-condition PATH shim). The
+> conditions (A/B/C/D), claims (C1–C6), oracle, and grading are unchanged (both
+> surfaces drive the same backend). See
+> `docs/superpowers/specs/active/2026-07-22-bench-plan4-cli-reframe-design.md`
+> and `bench/PREREGISTRATION.md` Amendment 2026-07-22 (Plan 4).
+
 ## Motivation (the gap)
 
 `~/jrag-bench/` measures *performance* only — index init/reprocess wall-time, vectors-phase latency, LanceDB fragment counts, and BM25 lexical query latency. There is **no measurement of retrieval/answer effectiveness** anywhere in the project. Meanwhile `docs/PRODUCT-VISION.md` already *claims* a result ("DKB 15/15 vs vector 6/15 on architecture-tracing queries") attributed to a "2026 benchmark" — but no reproducible artifact backs that claim. This spec defines the process that produces that artifact, audibly.

@@ -20,8 +20,8 @@ Task 12 additions:
 Task 13 additions:
     GradeError                  raised when the LLM judge result cannot be parsed
     RUBRIC                      locked scoring rubric sent to the judge model
-    TOOL_NAME_RE                matches tool-name tokens to scrub (mcp__jrag__* +
-                                Grep/Glob/Read/Bash)
+    TOOL_NAME_RE                matches tool-name tokens to scrub (jrag <verb>,
+                                legacy mcp__jrag__*, Grep/Glob/Read/Bash)
     blind_transcript            scrub tool-name tokens → `[tool]` (condition blinding)
     judge_answer                single-turn claude CLI call → Grade (llm_judge)
 
@@ -468,22 +468,27 @@ The rationale must be a single sentence explaining the score. Do not include any
 
 
 # Tool-name tokens to scrub from the transcript before the judge sees it.
-# Matches any ``mcp__jrag__<name>`` token (the MCP server's tool-name shape)
-# and the four Claude Code built-in tool literals. Case-sensitive: the
-# lowercase ``read``/``grep`` verbs in prose must survive. ``\b`` word
+# Matches ``jrag`` (optionally followed by its verb, e.g. ``jrag callers``),
+# any legacy ``mcp__jrag__<name>`` token, and the Claude Code built-in tool
+# literals. Case-sensitive: the lowercase ``read``/``grep`` verbs in prose
+# survive. Scrubbing ``jrag <verb>`` (not just ``jrag``) also hides WHICH jrag
+# command ran, so the judge can't tell the vector-only condition (B, ``search``
+# only) from the full-graph condition (D, ``callers``/``flow``/…). ``\b`` word
 # boundaries prevent partial matches (e.g. ``Read`` inside ``Reader``).
-TOOL_NAME_RE = re.compile(r"\b(?:mcp__jrag__\w+|Grep|Glob|Read|Bash)\b")
+TOOL_NAME_RE = re.compile(
+    r"\b(?:mcp__jrag__\w+|jrag(?:\s+[a-z][\w-]*)?|Grep|Glob|Read|Bash)\b"
+)
 
 
 def blind_transcript(transcript_text: str) -> str:
     """Replace every tool-name token with the neutral placeholder ``[tool]``.
 
     The judge must not see which condition (A/B/C/D) produced the answer —
-    the ``mcp__jrag__*`` tokens appear only under the jrag conditions, and
-    ``Grep``/``Glob``/``Read``/``Bash`` appear only under the no-MCP
-    conditions. Scrubbing all of them to ``[tool]`` removes the condition
-    signal while preserving the structure of the transcript (number of tool
-    calls, their position in the reasoning, the surrounding prose).
+    ``jrag`` (and ``jrag <verb>``) invocations appear only under the jrag
+    conditions (B/D), and the built-in tool literals appear across conditions.
+    Scrubbing all of them to ``[tool]`` removes the condition signal while
+    preserving the structure of the transcript (number of tool calls, their
+    position in the reasoning, the surrounding prose).
 
     Args:
         transcript_text: The raw assistant transcript (any text).

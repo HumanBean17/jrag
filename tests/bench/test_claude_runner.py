@@ -6,10 +6,12 @@ from pathlib import Path
 import pytest
 
 from bench.load_conditions import (
-    ALL_JRAG_TOOLS,
-    JRAG_GRAPH_TOOLS,
+    ESCAPE_TOOLS,
+    JRAG_LEXICAL_DENY,
+    JRAG_QUERY_VERBS,
     Condition,
     ConditionFlags,
+    to_flags,
 )
 from bench.load_corpora import CorpusRecord, IndexManifest
 from bench.load_questions import Question
@@ -74,56 +76,87 @@ def test_parse_truncated_no_result(tmp_path):
     assert summary.num_turns_reported is None
 
 
-def test_materialize_substitutes_and_rewrites_command(tmp_path):
-    """Test materialize_mcp_config substitutes placeholders and rewrites command."""
-    from bench.claude_runner import materialize_mcp_config
+def test_materialize_cli_env_writes_gated_shim(tmp_path):
+    """materialize_cli_env writes an executable shim that embeds the verbs + real path."""
+    import os
+    import sys
 
-    # Use the real template (path: bench/mcp/jrag.json)
-    # __file__ is tests/bench/test_claude_runner.py
-    # parent.parent.parent goes from tests/bench/ -> tests/ -> repo root
-    repo_root = Path(__file__).parent.parent.parent
-    template_path = repo_root / "bench" / "mcp" / "jrag.json"
-    dest_path = tmp_path / "mcp_config.json"
+    from bench.claude_runner import materialize_cli_env
 
-    result = materialize_mcp_config(
-        template_path=str(template_path),
-        index_dir_abs="/x/idx",
-        source_root_abs="/y/src",
-        venv_python="/z/bin/python",
-        dest_path=str(dest_path),
+    real = tmp_path / "real_jrag.sh"
+    real.write_text("#!/bin/sh\necho REAL: \"$@\"\n")
+    real.chmod(0o755)
+
+    shim_dir = materialize_cli_env(
+        cell_dir=str(tmp_path),
+        allowed_verbs=["search"],
+        real_jrag_bin=str(real),
+        venv_python=sys.executable,
     )
-
-    # Verify return value
-    assert result == str(dest_path)
-
-    # Load and verify the written file
-    with open(dest_path) as f:
-        config = json.load(f)
-
-    assert config["mcpServers"]["jrag"]["env"]["JAVA_CODEBASE_RAG_INDEX_DIR"] == "/x/idx"
-    assert config["mcpServers"]["jrag"]["env"]["JAVA_CODEBASE_RAG_SOURCE_ROOT"] == "/y/src"
-    assert config["mcpServers"]["jrag"]["command"] == "/z/bin/python"
+    shim = Path(shim_dir) / "jrag"
+    assert shim.exists()
+    assert os.access(shim, os.X_OK)
+    src = shim.read_text()
+    # shebang is the venv python; the real binary path and the verb are embedded
+    assert src.startswith(f"#!{sys.executable}\n")
+    assert str(real) in src
+    assert "search" in src
 
 
-def test_materialize_rejects_template_without_jrag(tmp_path):
-    """Test materialize_mcp_config raises ConfigError when template has no jrag server."""
-    from bench.claude_runner import materialize_mcp_config, ConfigError
+def test_shim_gates_verbs(tmp_path):
+    """The shim exec's the real binary for allowed verbs (+meta) and exits 2 otherwise."""
+    import subprocess
+    import sys
 
-    # Create a template without jrag server
-    template_path = tmp_path / "bad_template.json"
-    with open(template_path, "w") as f:
-        json.dump({"mcpServers": {}}, f)
+    from bench.claude_runner import materialize_cli_env
 
-    dest_path = tmp_path / "dest.json"
+    real = tmp_path / "real_jrag.sh"
+    real.write_text("#!/bin/sh\necho REAL: \"$@\"\n")
+    real.chmod(0o755)
 
-    with pytest.raises(ConfigError, match=".*jrag.*"):
-        materialize_mcp_config(
-            template_path=str(template_path),
-            index_dir_abs="/x/idx",
-            source_root_abs="/y/src",
-            venv_python="/z/bin/python",
-            dest_path=str(dest_path),
-        )
+    shim_dir = materialize_cli_env(
+        cell_dir=str(tmp_path),
+        allowed_verbs=["search"],
+        real_jrag_bin=str(real),
+        venv_python=sys.executable,
+    )
+    shim = str(Path(shim_dir) / "jrag")
+
+    # allowed verb -> real runs with the args
+    r_ok = subprocess.run([shim, "search", "foo"], capture_output=True, text=True)
+    assert r_ok.returncode == 0
+    assert "REAL: search foo" in r_ok.stdout
+
+    # blocked verb -> exit 2, real NOT executed
+    r_blocked = subprocess.run([shim, "callers", "Foo"], capture_output=True, text=True)
+    assert r_blocked.returncode == 2
+    assert "not available" in r_blocked.stderr
+    assert "REAL" not in r_blocked.stdout
+
+    # meta --help passes through to the real binary
+    r_help = subprocess.run([shim, "--help"], capture_output=True, text=True)
+    assert r_help.returncode == 0
+    assert "REAL: --help" in r_help.stdout
+
+
+def test_resolve_real_jrag_finds_sibling(tmp_path, monkeypatch):
+    """_resolve_real_jrag prefers <venv>/bin/jrag, falls back to PATH, else errors."""
+    from bench.claude_runner import _resolve_real_jrag, ConfigError
+
+    # Fake a venv layout: <dir>/python + <dir>/jrag
+    venv_bin = tmp_path / "bin"
+    venv_bin.mkdir()
+    py = venv_bin / "python"
+    py.write_text("#!/bin/sh\n")
+    jrag = venv_bin / "jrag"
+    jrag.write_text("#!/bin/sh\n")
+    assert _resolve_real_jrag(str(py)) == str(jrag)
+
+    # No sibling, nothing on PATH -> ConfigError (monkeypatch which so the real
+    # venv jrag on PATH during pytest doesn't satisfy the fallback).
+    monkeypatch.setattr("bench.claude_runner.shutil.which", lambda _cmd: None)
+    with pytest.raises(ConfigError):
+        _resolve_real_jrag(str(tmp_path / "nopython"))
 
 
 # --- Task 3: CellSpec + argv assembly ---
@@ -162,22 +195,24 @@ def _condition(letter: str) -> Condition:
     """Build a real-shaped Condition matching conditions.yml for the given id."""
     if letter == "A":
         return Condition(
-            id="A", name="Lexical", mcp_servers=[],
+            id="A", name="Lexical",
             allowed_tools=["Grep", "Glob", "Read", "Bash"],
             disallowed_tools=[],
             prompt_file="bench/prompts/A_lexical.md",
         )
     if letter == "B":
         return Condition(
-            id="B", name="Vector-only", mcp_servers=["jrag"],
-            allowed_tools=["Read", "mcp__jrag__search"],
-            disallowed_tools=list(JRAG_GRAPH_TOOLS),
+            id="B", name="Vector-only",
+            jrag_allowed_verbs=["search"],
+            allowed_tools=["Read", "Bash"],
+            disallowed_tools=["Grep", "Glob"],
             prompt_file="bench/prompts/B_vector_only.md",
         )
     if letter == "D":
         return Condition(
-            id="D", name="jrag full", mcp_servers=["jrag"],
-            allowed_tools=["Read", "Grep", "Glob"] + list(ALL_JRAG_TOOLS),
+            id="D", name="jrag full",
+            jrag_allowed_verbs=list(JRAG_QUERY_VERBS),
+            allowed_tools=["Read", "Grep", "Glob", "Bash"],
             disallowed_tools=[],
             prompt_file="bench/prompts/D_jrag_full.md",
         )
@@ -186,15 +221,15 @@ def _condition(letter: str) -> Condition:
 
 def _flags_for(cond: Condition, prompt_contents: str = "PROMPT") -> ConditionFlags:
     return ConditionFlags(
-        mcp_config_arg=("bench/mcp/jrag.json" if "jrag" in cond.mcp_servers else None),
         allowed_tools=list(cond.allowed_tools),
         disallowed_tools=list(cond.disallowed_tools),
         append_system_prompt=prompt_contents,
+        jrag_allowed_verbs=cond.jrag_allowed_verbs,
     )
 
 
-def test_argv_condition_A_no_mcp():
-    """Condition A (no MCP) produces a claude argv with no MCP flags."""
+def test_argv_condition_A():
+    """Condition A produces a claude argv with no jrag and no --disallowedTools."""
     from bench.claude_runner import CellSpec, build_argv
 
     cond = _condition("A")
@@ -210,7 +245,7 @@ def test_argv_condition_A_no_mcp():
         repo_root="/repo/root",
     )
 
-    argv = build_argv(spec, flags, mcp_config_path=None)
+    argv = build_argv(spec, flags)
 
     assert argv[0] == "claude"
     assert "-p" in argv
@@ -232,10 +267,10 @@ def test_argv_condition_A_no_mcp():
     # allowedTools is comma-joined
     allowed_idx = argv.index("--allowedTools")
     assert argv[allowed_idx + 1] == "Grep,Glob,Read,Bash"
-    # No MCP flags because mcp_config_path is None
+    # No MCP flags (the jrag surface is the CLI via a PATH shim, never --mcp-config)
     assert "--mcp-config" not in argv
     assert "--strict-mcp-config" not in argv
-    # No disallowedTools for condition A
+    # No disallowedTools for condition A (via _flags_for; ESCAPE auto-appends in to_flags)
     assert "--disallowedTools" not in argv
     # Forbidden flags must NEVER appear
     assert "--max-turns" not in argv
@@ -243,8 +278,8 @@ def test_argv_condition_A_no_mcp():
     assert "--seed" not in argv
 
 
-def test_argv_condition_D_with_mcp():
-    """Condition D (jrag full) with an mcp_config_path emits MCP flags + all jrag tools."""
+def test_argv_condition_D():
+    """Condition D (jrag full) exposes jrag via Bash; never --mcp-config."""
     from bench.claude_runner import CellSpec, build_argv
 
     cond = _condition("D")
@@ -260,32 +295,29 @@ def test_argv_condition_D_with_mcp():
         repo_root="/repo/root",
     )
 
-    argv = build_argv(spec, flags, mcp_config_path="/tmp/x.json")
+    argv = build_argv(spec, flags)
 
-    # --mcp-config + --strict-mcp-config appear in order when path is provided
-    assert "--mcp-config" in argv
-    mcp_idx = argv.index("--mcp-config")
-    assert argv[mcp_idx + 1] == "/tmp/x.json"
-    assert argv[mcp_idx + 2] == "--strict-mcp-config"
-    # allowedTools value contains every member of ALL_JRAG_TOOLS
+    # No MCP flags — jrag is the CLI, driven via a PATH shim.
+    assert "--mcp-config" not in argv
+    assert "--strict-mcp-config" not in argv
+    # allowedTools has Read/Grep/Glob/Bash (the agent drives `jrag` via Bash).
     allowed_idx = argv.index("--allowedTools")
-    allowed_value = argv[allowed_idx + 1]
-    allowed_members = set(allowed_value.split(","))
-    for tool in ALL_JRAG_TOOLS:
-        assert tool in allowed_members, f"{tool} missing from {allowed_value!r}"
-    # Forbidden flags still must not appear
+    allowed_members = set(argv[allowed_idx + 1].split(","))
+    assert {"Read", "Grep", "Glob", "Bash"}.issubset(allowed_members)
+    # Forbidden flags must not appear
     assert "--max-turns" not in argv
     assert "--temperature" not in argv
     assert "--seed" not in argv
 
 
-def test_argv_condition_B_denies_graph():
-    """Condition B (vector-only): --disallowedTools is the comma-joined graph tools,
-    and --allowedTools still contains mcp__jrag__search."""
+def test_argv_condition_B_denies_lexical():
+    """Condition B (vector-only): --disallowedTools includes Grep/Glob + the granular
+    Bash lexical deny; --allowedTools has Read+Bash (jrag search via Bash)."""
     from bench.claude_runner import CellSpec, build_argv
 
     cond = _condition("B")
-    flags = _flags_for(cond, prompt_contents="PROMPT-B")
+    # Real payload: ESCAPE + Grep/Glob + JRAG_LEXICAL_DENY auto-appended by to_flags.
+    flags = to_flags(cond)
     spec = CellSpec(
         question=_question(text="Find impls of Baz"),
         condition=cond,
@@ -297,16 +329,20 @@ def test_argv_condition_B_denies_graph():
         repo_root="/repo/root",
     )
 
-    argv = build_argv(spec, flags, mcp_config_path=None)
+    argv = build_argv(spec, flags)
 
-    # --disallowedTools value equals the comma-joined JRAG_GRAPH_TOOLS
     assert "--disallowedTools" in argv
     dis_idx = argv.index("--disallowedTools")
-    assert argv[dis_idx + 1] == ",".join(JRAG_GRAPH_TOOLS)
-    # --allowedTools value contains mcp__jrag__search
+    denied = set(argv[dis_idx + 1].split(","))
+    assert "Grep" in denied and "Glob" in denied
+    assert set(ESCAPE_TOOLS).issubset(denied)
+    assert "Bash(grep *)" in denied  # lexical escape closed at the Bash-prefix level
+    # allowedTools has Read + Bash (the agent runs `jrag search` via Bash)
     allowed_idx = argv.index("--allowedTools")
-    allowed_value = argv[allowed_idx + 1]
-    assert "mcp__jrag__search" in allowed_value.split(",")
+    allowed = set(argv[allowed_idx + 1].split(","))
+    assert "Read" in allowed and "Bash" in allowed
+    # No MCP flags
+    assert "--mcp-config" not in argv
 
 
 def test_run_id_format():
@@ -620,22 +656,24 @@ def test_run_cell_completes_no_cap(tmp_path):
     assert len(hex_part) == 64 and all(c in "0123456789abcdef" for c in hex_part)
 
 
-def test_run_cell_no_mcp_for_condition_A(tmp_path, monkeypatch):
-    """Condition A: run_cell does NOT call materialize_mcp_config and the spawned
-    argv contains no --mcp-config."""
+def test_run_cell_no_shim_for_condition_A(tmp_path, monkeypatch):
+    """Condition A (no jrag): run_cell does NOT materialize the shim, no shim dir
+    is created, and the spawned argv has no --mcp-config."""
     from bench.claude_runner import run_cell
 
     spec = _spec_for("A", tmp_path, max_turns=10)
-    transcript = tmp_path / "no_mcp_transcript.jsonl"
+    transcript = tmp_path / "a_transcript.jsonl"
     fake_bin = str(_FAKE_CLAUDE_DIR / "emit_short.sh")
 
     sidecar = tmp_path / "argv_recorded.txt"
     monkeypatch.setenv("JRAG_ARGV_SIDECAR", str(sidecar))
+    # _claude_code_version would overwrite the sidecar with "--version".
+    monkeypatch.setattr("bench.claude_runner._claude_code_version", lambda _b: None)
 
     def _fail_if_called(*args, **kwargs):
-        raise AssertionError("materialize_mcp_config must not be called for condition A")
+        raise AssertionError("materialize_cli_env must not be called for condition A")
 
-    monkeypatch.setattr("bench.claude_runner.materialize_mcp_config", _fail_if_called)
+    monkeypatch.setattr("bench.claude_runner.materialize_cli_env", _fail_if_called)
 
     result = run_cell(
         spec,
@@ -644,61 +682,64 @@ def test_run_cell_no_mcp_for_condition_A(tmp_path, monkeypatch):
     )
 
     assert result.exit_reason == "done"
-    # The fake script recorded its argv to the sidecar.
     recorded = sidecar.read_text()
     assert "--mcp-config" not in recorded
     assert "--strict-mcp-config" not in recorded
+    # No shim dir is created for condition A.
+    assert not (Path(transcript).parent / "bin").exists()
 
 
-def test_run_cell_mcp_config_path_is_absolute(tmp_path, monkeypatch):
-    """Condition B (uses MCP): the spawned --mcp-config value is ABSOLUTE.
-
-    Regression for the T10-blocker: run_cell derived mcp_config_path from a
-    relative results path; claude (cwd=checkout) resolved it wrong → exit 1.
-    Reproduces the bug shape by passing a RELATIVE transcript path (mirrors the
-    ``--out bench/results`` default) with the driver cwd set to tmp_path. The
-    fake script records its received argv via $JRAG_ARGV_SIDECAR; we assert the
-    element after --mcp-config passes os.path.isabs(...).
-    """
+def test_run_cell_writes_shim_and_env_for_condition_B(tmp_path, monkeypatch):
+    """Condition B: run_cell writes the per-condition jrag shim, sets the PATH +
+    JRAG index env on the spawn, and the argv has no --mcp-config."""
     import dataclasses
-    from bench.claude_runner import CellSpec, run_cell
+    import sys
+
+    from bench.claude_runner import run_cell
 
     spec = _spec_for("B", tmp_path, max_turns=10)
     repo_root = Path(__file__).parent.parent.parent
-    # Condition.prompt_file is relative; absolutize so to_flags can read it
-    # after we chdir to tmp_path below.
+    # Condition.prompt_file is relative; absolutize so to_flags can read it.
     abs_cond = dataclasses.replace(
         spec.condition, prompt_file=str(repo_root / spec.condition.prompt_file)
     )
     spec = dataclasses.replace(spec, condition=abs_cond)
 
     fake_bin = str(_FAKE_CLAUDE_DIR / "emit_short.sh")
+    # A fake real-jrag (never actually run by the fake claude, but the shim embeds its path).
+    fake_jrag = tmp_path / "fake_jrag.sh"
+    fake_jrag.write_text("#!/bin/sh\necho REAL\n")
+    fake_jrag.chmod(0o755)
 
-    # Driver cwd = tmp_path so a relative transcript path is writable here, and
-    # so ``os.path.abspath`` in run_cell resolves against tmp_path (mirroring
-    # production where the driver cwd is the repo root).
-    monkeypatch.chdir(tmp_path)
-    transcript_rel = "abs_mcp_transcript.jsonl"
-
-    sidecar = tmp_path / "argv_recorded_abs.txt"
-    monkeypatch.setenv("JRAG_ARGV_SIDECAR", str(sidecar))
+    argv_sidecar = tmp_path / "argv_b.txt"
+    env_sidecar = tmp_path / "env_b.txt"
+    monkeypatch.setenv("JRAG_ARGV_SIDECAR", str(argv_sidecar))
+    monkeypatch.setenv("JRAG_ENV_SIDECAR", str(env_sidecar))
     # _claude_code_version spawns `claude_bin --version` AFTER the main run,
-    # which would overwrite the sidecar with "--version". Stub it out so the
-    # sidecar keeps the main run's argv.
+    # which would overwrite the sidecars. Stub it out.
     monkeypatch.setattr("bench.claude_runner._claude_code_version", lambda _b: None)
 
+    transcript = tmp_path / "b_transcript.jsonl"
     result = run_cell(
         spec,
         claude_bin=fake_bin,
-        jrag_mcp_template=str(repo_root / "bench" / "mcp" / "jrag.json"),
-        results_transcript_path=transcript_rel,
+        jrag_bin=str(fake_jrag),
+        venv_python=sys.executable,
+        results_transcript_path=str(transcript),
     )
 
     assert result.exit_reason == "done"
-    recorded_args = sidecar.read_text().splitlines()
-    assert "--mcp-config" in recorded_args
-    mcp_idx = recorded_args.index("--mcp-config")
-    mcp_value = recorded_args[mcp_idx + 1]
-    assert os.path.isabs(mcp_value), (
-        f"--mcp-config value must be absolute, got {mcp_value!r}"
-    )
+    # Shim materialized and executable; embeds the real path + B's allow-list.
+    shim = Path(transcript).parent / "bin" / "jrag"
+    assert shim.exists()
+    assert os.access(shim, os.X_OK)
+    shim_text = shim.read_text()
+    assert str(fake_jrag) in shim_text
+    assert "search" in shim_text
+    # argv has no MCP flags.
+    assert "--mcp-config" not in argv_sidecar.read_text()
+    # Spawn env carries the shim dir on PATH and the jrag index vars.
+    env_recorded = env_sidecar.read_text()
+    assert "JAVA_CODEBASE_RAG_INDEX_DIR=" in env_recorded
+    assert "JAVA_CODEBASE_RAG_SOURCE_ROOT=" in env_recorded
+    assert str(Path(transcript).parent / "bin") in env_recorded

@@ -17,6 +17,7 @@ import argparse
 import csv
 import json
 import os
+import re
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -196,6 +197,94 @@ def _compute_kappa(cells: list[dict], run_dir: str):
         return None
 
 
+# --- lexical leakage (CLI isolation-fidelity metric) ---
+#
+# Under the CLI surface the agent reaches jrag via Bash, so condition B
+# ("vector-only") can in principle shell out to grep/find/cat. The granular
+# ``Bash(<lexical> *)`` deny-list closes this as tightly as ``bypassPermissions``
+# allows; the residual is reported here as a per-condition leakage rate so
+# readers can judge whether "vector-only" held in practice. Reuses the canonical
+# lexical-binary list from the condition spec (``JRAG_LEXICAL_DENY``).
+
+_LEXICAL_RE_CACHE: "re.Pattern | None" = None
+
+
+def _lexical_command_re() -> "re.Pattern":
+    global _LEXICAL_RE_CACHE
+    if _LEXICAL_RE_CACHE is None:
+        try:
+            from bench.load_conditions import JRAG_LEXICAL_DENY
+
+            bins = [d[len("Bash("):].rstrip(" *") for d in JRAG_LEXICAL_DENY]
+        except Exception:
+            # Fallback if the loader isn't importable (e.g. ``python bench/report.py``).
+            bins = [
+                "cat", "grep", "egrep", "fgrep", "rg", "find", "head", "tail",
+                "less", "more", "awk", "sed", "xxd", "od", "perl", "python", "node",
+            ]
+        _LEXICAL_RE_CACHE = re.compile(
+            r"(?:^|[\s|;&])(?:" + "|".join(re.escape(b) for b in bins) + r")(?=\s|$)"
+        )
+    return _LEXICAL_RE_CACHE
+
+
+def _count_lexical_leak(transcript_path: str) -> int:
+    """Number of Bash tool calls in a transcript that invoke a lexical binary."""
+    try:
+        text = Path(transcript_path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return 0
+    regex = _lexical_command_re()
+    n = 0
+    for line in text.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict) or event.get("type") != "assistant":
+            continue
+        for item in (event.get("message", {}) or {}).get("content", []) or []:
+            if not (
+                isinstance(item, dict)
+                and item.get("type") == "tool_use"
+                and item.get("name") == "Bash"
+            ):
+                continue
+            cmd = (item.get("input") or {}).get("command", "")
+            if isinstance(cmd, str) and regex.search(cmd):
+                n += 1
+    return n
+
+
+def _transcript_for(cell: dict, run_dir: str) -> str | None:
+    """Resolve a cell's transcript path, preferring ``<run_dir>/<rid>/transcript.jsonl``."""
+    rid = cell.get("run_id")
+    tp = cell.get("transcript_path")
+    candidates: list[str] = []
+    if rid:
+        candidates.append(os.path.join(run_dir, rid, "transcript.jsonl"))
+    if tp:
+        candidates.append(tp if os.path.isabs(tp) else os.path.join(run_dir, tp))
+    for cand in candidates:
+        if cand and os.path.exists(cand):
+            return cand
+    return None
+
+
+def _lexical_leakage_by_condition(cells: list[dict], run_dir: str) -> dict[str, float]:
+    """Per-condition fraction of cells with ≥1 lexical-command Bash call."""
+    bucket: dict[str, list[int]] = defaultdict(list)
+    for c in cells:
+        tp = _transcript_for(c, run_dir)
+        if tp is None:
+            continue
+        bucket[c.get("condition", "?")].append(1 if _count_lexical_leak(tp) > 0 else 0)
+    return {k: _mean(v) for k, v in bucket.items()}
+
+
 # --- rendering ---
 
 
@@ -203,7 +292,7 @@ def _fmt(x: float) -> str:
     return f"{x:.2f}"
 
 
-def render_report_markdown(cells: list[dict], *, kappa=None) -> str:
+def render_report_markdown(cells: list[dict], *, kappa=None, run_dir: str | None = None) -> str:
     lines: list[str] = ["# Benchmark report", ""]
     n = len(cells)
     lines.append(f"**Cells graded:** {n}")
@@ -266,6 +355,26 @@ def render_report_markdown(cells: list[dict], *, kappa=None) -> str:
             f"{_mean(e['context']):.0f} | {len(e['n_turns'])} |"
         )
     lines.append("")
+
+    # lexical leakage (CLI isolation fidelity).
+    if run_dir is not None:
+        leak = _lexical_leakage_by_condition(cells, run_dir)
+        if leak:
+            lines += [
+                "## Lexical leakage (isolation fidelity)",
+                "",
+                "Fraction of cells whose Bash calls invoked a lexical tool "
+                "(grep/rg/find/cat/…). Under the CLI surface the vector-only "
+                "condition (B) denies these; a non-zero rate is the documented, "
+                "measured residual (PREREG Amendment 2026-07-22, Plan 4).",
+                "",
+                "| Condition | Cells with lexical use | n |",
+                "|---|---|---|",
+            ]
+            for cond in _sort_conditions(leak):
+                n = sum(1 for c in cells if c.get("condition") == cond)
+                lines.append(f"| {cond} | {leak[cond]:.2f} | {n} |")
+            lines.append("")
 
     # cross-service (C3).
     cs = [
@@ -548,7 +657,7 @@ def report_main(argv: list[str] | None = None) -> int:
 
     kappa = _compute_kappa(cells, run_dir)
 
-    report_md = render_report_markdown(cells, kappa=kappa)
+    report_md = render_report_markdown(cells, kappa=kappa, run_dir=run_dir)
     Path(os.path.join(out_dir, "report.md")).write_text(
         report_md, encoding="utf-8"
     )

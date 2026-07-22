@@ -158,3 +158,73 @@ Five methodology/tooling decisions, finalized during Plan 3, are recorded here a
 **(d) Max-turns raised for the full run** — The smoke used `--max-turns 15`, which capped 6–7/16 cells on the hardest questions (`bc-cs-01` all conditions; `bc-sem-01` A/C/D). For the full run, `--max-turns 30` gives the cross-service questions a fair shot; the turn cap itself (15 or 30) and the wall timeout remain driver-side, never `claude -p` flags. The smoke default stays 15.
 
 **(e) Deterministic, API-free CI smoke** — `.github/workflows/bench-smoke.yml` runs a fake-claude-driven pipeline test (run → grade with a monkeypatched judge → report) that asserts the headline D>A correctness signal on canned transcripts. It is a regression gate on the *harness*, deterministic and free of paid API calls. The real ~8-question smoke (real `claude -p`, real GLM tokens) is non-deterministic and needs API credentials, so it is a manual/nightly exercise, not per-PR CI.
+
+## Amendment 2026-07-22 (Plan 4: MCP → CLI surface reframe)
+
+The benchmark was reframed from the **MCP** surface (the agent called
+`mcp__jrag__{search,find,describe,neighbors,resolve}` via `claude -p
+--mcp-config`) onto the shipped **`jrag` CLI** surface (the agent runs
+`jrag <verb>` shell commands via Bash). MCP is the legacy surface; the CLI is
+what `install`/`update` expose as primary (`--surface {mcp,cli}`) and what the
+shipped `explore-codebase-cli` skill + `explorer-rag-cli` agent drive.
+
+**(a) The science is unchanged — only the channel moved.** Both surfaces drive
+the *same backend* (`mcp_v2.py`: `resolve/find/describe/neighbors/search_v2`),
+so claims C1–C6 are surface-agnostic and remain exactly as frozen. A/B/C/D and
+their intent are unchanged (A lexical; B vector-only; C raw agent; D jrag
+full); only B and D's jrag channel moved from MCP tools to CLI verbs. The CLI
+is ergonomically richer — D's high-level verbs (`flow`/`decompose`/`impact`/
+`connection`/`overview`) compose multi-hop walks in one call that MCP forced the
+agent to build by hand via repeated `neighbors` — so the reframe is expected to
+*strengthen* the C2 (steps/tokens) story, not change its direction.
+
+**(b) Verb-level isolation via a per-condition PATH shim.** The agent reaches
+`jrag` through Bash, so the clean per-MCP-tool allow/deny of the old design is
+replaced by a per-cell `jrag` wrapper that `claude_runner.materialize_cli_env`
+writes to `<cell>/bin/jrag` and prepends to the spawn `PATH`. The shim exec's
+the real `.venv/bin/jrag` only for the condition's allow-list (B: `["search"]`;
+D: all of `JRAG_QUERY_VERBS`) and exits 2 for any other verb — so a vector-only
+cell literally cannot run a graph verb. The allow-list (not a deny-list) means a
+future new verb can never leak into B. `Condition.jrag_allowed_verbs` (the YAML
+sentinel `all` resolves to the full query surface at load) is the contract;
+`bench/mcp/jrag.json` is deleted.
+
+**(c) Lexical isolation under `bypassPermissions` via granular Bash denies.**
+Verified against Claude Code's permission model: granular `--disallowedTools`
+rules like `Bash(grep *)` **are** enforced under `--permission-mode
+bypassPermissions` (only *allow* rules are additive/non-restrictive there), and
+compound commands are split on `&&`/`||`/`;`/`|` so `jrag search x && grep y` is
+independently denied on the grep half. Condition B therefore denies `Grep` +
+`Glob` plus `JRAG_LEXICAL_DENY` (a maintained `Bash(cat *)`/`Bash(grep *)`/…
+list, auto-appended by `to_flags`), closing the lexical-escape vector as
+tightly as the permission model allows. (`ESCAPE_TOOLS` is now auto-appended to
+every condition by `to_flags` rather than hand-listed in `conditions.yml`.)
+
+**(d) Extended Bash-shell lexical caveat + a measured leakage metric.** Because
+CLI is Bash-mediated, condition B (vector-only) and condition C (raw agent)
+both retain the *already-accepted* residual (PREREG Amendment 2026-07-21 (a))
+that Bash can in principle invoke an un-enumerated lexical binary. The caveat
+is extended from C to B, and made transparent rather than merely asserted:
+`report.py` now counts lexical-command Bash calls per condition from the
+transcripts and reports a per-condition leakage rate (a new "Lexical leakage
+(isolation fidelity)" section), so readers can judge whether "vector-only" held
+in practice. The residual is reported data, not a correctness claim. (A tighter
+`--permission-mode dontAsk` with `--allowedTools "Bash(jrag:*)" Read` would give
+true allowlist isolation but changes the permission architecture the harness
+validated under headless `-p`; it is noted here as a rejected alternative.)
+
+**(e) Blinding extended to the CLI surface.** `TOOL_NAME_RE` now also scrubs
+`jrag <verb>` invocations (not just `jrag`), so the judge cannot tell the
+vector-only condition (B, `search`) from the full-graph condition (D,
+`callers`/`flow`/…); legacy `mcp__jrag__*` tokens are still scrubbed.
+
+**(f) MCP results superseded.** The MCP-surface smoke runs and the in-flight
+MCP full run (all under `bench/results/`) are moved to
+`bench/results/_superseded-mcp/` (local reference only; `bench/results/` is now
+gitignored). They measured the legacy surface and are not the benchmark of
+record. Re-run on the CLI surface with `.venv/bin/python -m bench.run_bench`.
+
+`name`, `jrag_allowed_verbs`, `allowed_tools`, `disallowed_tools`, and
+`prompt_file` for all four conditions are the new surface binding; the
+condition *intent*, the 50-question inventory, the oracle, and the grading split
+are unchanged.
