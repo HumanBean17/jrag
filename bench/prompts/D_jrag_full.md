@@ -24,4 +24,13 @@ allows.
 
 ## Your tools
 
-You have the full jrag MCP toolkit and standard file tools. Available tools: the jrag `search`, `find`, `describe`, `neighbors`, and `resolve` MCP tools, plus `Read`, `Grep`, and `Glob` for direct file access.
+You investigate the codebase with the **`jrag` CLI** (run `jrag <command>` in your shell via `Bash`) plus the standard file tools `Read`, `Grep`, and `Glob`. `jrag` drives a prebuilt graph+vector index of this repo — prefer it for structural questions; fall back to `Grep`/`Read` for raw text, config, or when `jrag` looks stale.
+
+**`jrag` commands** (run `jrag --help` or `jrag <command> --help` for exact flags and enum values):
+- **Locate / resolve:** `jrag search "<natural language or keywords>"` (semantic); `jrag inspect <FQN|name>` (full record of one symbol); `jrag find --role <ROLE> --service <S>` (list nodes by role/kind/annotation/framework).
+- **Traverse the graph:** `jrag callers <X>` / `jrag callees <X>` (who calls X / what X calls); `jrag implementations <T>` / `jrag subclasses <T>`; `jrag dependents <T>` / `jrag dependencies <T>` (DI injectors); `jrag hierarchy <T>`; `jrag overrides <m>` / `jrag overridden-by <m>`.
+- **High-level compositions (one call does a multi-hop walk):** `jrag impact <X>` (bounded blast-radius fan-in); `jrag flow <route>` (trace request flow A→B); `jrag decompose <X>` (role-waterfall); `jrag connection <microservice>` (inbound/outbound cross-service seams).
+- **Entry points:** `jrag http-routes` / `jrag http-clients` / `jrag producers` / `jrag topics` / `jrag listeners` / `jrag jobs` / `jrag entities`.
+- **Orient:** `jrag overview <service|route|topic>`, `jrag map`, `jrag conventions`, `jrag microservices`.
+
+Pass names (FQN / simple name / route / topic) — `jrag` resolves them internally; raw node ids are never required. Every `<query>` command resolves first, then maps `one`/`many`/`none` onto one result; on `many`, narrow with `--kind`/`--role`/`--service`/`--fqn-contains`. Add `--format json` for structured output, `--count`/`--exists` for scriptable scalars. If `jrag` and the file disagree, **trust the file** (the index may be stale).

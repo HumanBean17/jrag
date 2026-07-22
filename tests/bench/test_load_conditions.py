@@ -1,4 +1,10 @@
-"""Tests for ``bench.load_conditions`` — executable condition isolation (A/B/C/D)."""
+"""Tests for ``bench.load_conditions`` — executable condition isolation (A/B/C/D).
+
+Plan 4: the jrag surface is the CLI (``jrag <verb>`` via Bash), gated per
+condition by a PATH shim allow-list (``jrag_allowed_verbs``). The shared
+``ESCAPE_TOOLS`` deny-list is auto-appended by ``to_flags``; condition B
+additionally gets the granular ``JRAG_LEXICAL_DENY`` Bash deny-list.
+"""
 from __future__ import annotations
 
 import textwrap
@@ -7,16 +13,17 @@ from pathlib import Path
 import pytest
 
 from bench.load_conditions import (
-    ALL_JRAG_TOOLS,
     ESCAPE_TOOLS,
-    JRAG_GRAPH_TOOLS,
-    JRAG_VECTOR_TOOLS,
+    JRAG_LEXICAL_DENY,
+    JRAG_QUERY_VERBS,
+    JRAG_SEARCH_VERBS,
     ConfigError,
     Condition,
     load_conditions,
     prompt_preamble,
     prompt_tools_section,
     to_flags,
+    validate,
 )
 
 
@@ -42,27 +49,25 @@ CONDITIONS_BODY = """
 conditions:
   - id: A
     name: Lexical
-    mcp_servers: []
     allowed_tools: [Grep, Glob, Read, Bash]
-    disallowed_tools: [Edit, Write, NotebookEdit, WebSearch, WebFetch, Agent, Task]
+    disallowed_tools: []
     prompt_file: {A}
   - id: B
     name: Vector-only
-    mcp_servers: [jrag]
-    allowed_tools: [Read, mcp__jrag__search]
-    disallowed_tools: [Edit, Write, NotebookEdit, WebSearch, WebFetch, Agent, Task, mcp__jrag__find, mcp__jrag__describe, mcp__jrag__neighbors, mcp__jrag__resolve]
+    jrag_allowed_verbs: [search]
+    allowed_tools: [Read, Bash]
+    disallowed_tools: [Grep, Glob]
     prompt_file: {B}
   - id: C
     name: Raw agent
-    mcp_servers: []
     allowed_tools: [Read, Glob, Bash]
-    disallowed_tools: [Edit, Write, NotebookEdit, WebSearch, WebFetch, Agent, Task, Grep]
+    disallowed_tools: [Grep]
     prompt_file: {C}
   - id: D
     name: jrag full
-    mcp_servers: [jrag]
-    allowed_tools: [Read, Grep, Glob, mcp__jrag__find, mcp__jrag__describe, mcp__jrag__neighbors, mcp__jrag__resolve, mcp__jrag__search]
-    disallowed_tools: [Edit, Write, NotebookEdit, WebSearch, WebFetch, Agent, Task]
+    jrag_allowed_verbs: all
+    allowed_tools: [Read, Grep, Glob, Bash]
+    disallowed_tools: []
     prompt_file: {D}
 """
 
@@ -74,70 +79,80 @@ def _load_all(tmp_path, **fmt):
 
 
 def test_constants():
-    assert JRAG_GRAPH_TOOLS == [
-        "mcp__jrag__find", "mcp__jrag__describe", "mcp__jrag__neighbors", "mcp__jrag__resolve",
-    ]
-    assert JRAG_VECTOR_TOOLS == ["mcp__jrag__search"]
-    assert set(ALL_JRAG_TOOLS) == set(JRAG_GRAPH_TOOLS) | set(JRAG_VECTOR_TOOLS)
+    assert JRAG_SEARCH_VERBS == ["search"]
+    # query surface is the full agent verb set minus daemon/maintenance verbs
+    assert "search" in JRAG_QUERY_VERBS
+    assert "callers" in JRAG_QUERY_VERBS and "flow" in JRAG_QUERY_VERBS
+    assert "watch" not in JRAG_QUERY_VERBS
+    assert "vocab-index" not in JRAG_QUERY_VERBS
     assert ESCAPE_TOOLS == [
         "Edit", "Write", "NotebookEdit", "WebSearch", "WebFetch", "Agent", "Task",
     ]
+    assert JRAG_LEXICAL_DENY  # non-empty
+    assert all(d.startswith("Bash(") and d.endswith(" *)") for d in JRAG_LEXICAL_DENY)
+    assert "Bash(grep *)" in JRAG_LEXICAL_DENY
 
 
-def test_flags_A_no_mcp(tmp_path):
+def test_flags_A_no_jrag(tmp_path):
     conds, _ = _load_all(tmp_path)
     a = next(c for c in conds if c.id == "A")
-    f = to_flags(a, jrag_mcp_config_path="bench/mcp/jrag.json")
-    assert f.mcp_config_arg is None
+    f = to_flags(a)
+    assert f.jrag_allowed_verbs is None
     assert f.allowed_tools == ["Grep", "Glob", "Read", "Bash"]
-    assert f.disallowed_tools == ESCAPE_TOOLS
+    # ESCAPE_TOOLS is auto-appended even though conditions.yml A has an empty deny.
+    assert set(ESCAPE_TOOLS).issubset(set(f.disallowed_tools))
+    # A gets NO lexical deny.
+    assert not any(d in JRAG_LEXICAL_DENY for d in f.disallowed_tools)
     assert "preamble A" in f.append_system_prompt
 
 
-def test_flags_B_denies_graph_keeps_vector(tmp_path):
+def test_flags_B_search_only_with_lexical_deny(tmp_path):
     conds, _ = _load_all(tmp_path)
     b = next(c for c in conds if c.id == "B")
-    f = to_flags(b, jrag_mcp_config_path="bench/mcp/jrag.json")
-    # B denies graph tools ON TOP OF the shared escape deny-list; vector tool survives.
-    assert set(JRAG_GRAPH_TOOLS).issubset(set(f.disallowed_tools))
+    f = to_flags(b)
+    assert f.jrag_allowed_verbs == ["search"]
+    # B denies the lexical tools (explicit) + ESCAPE (auto) + lexical Bash deny (auto).
     assert set(ESCAPE_TOOLS).issubset(set(f.disallowed_tools))
-    assert f.mcp_config_arg == "bench/mcp/jrag.json"
-    assert "mcp__jrag__search" not in f.disallowed_tools
+    assert set(JRAG_LEXICAL_DENY).issubset(set(f.disallowed_tools))
+    assert "Grep" in f.disallowed_tools and "Glob" in f.disallowed_tools
 
 
-def test_flags_D_denies_nothing_of_jrag(tmp_path):
+def test_flags_D_all_verbs(tmp_path):
     conds, _ = _load_all(tmp_path)
     d = next(c for c in conds if c.id == "D")
+    # The 'all' sentinel resolves to the full query surface at load time.
+    assert d.jrag_allowed_verbs == JRAG_QUERY_VERBS
     f = to_flags(d)
-    assert set(f.disallowed_tools) & set(ALL_JRAG_TOOLS) == set()
-    assert f.mcp_config_arg == "bench/mcp/jrag.json"
+    assert f.jrag_allowed_verbs == JRAG_QUERY_VERBS
+    # D gets only the ESCAPE auto-deny — no lexical deny.
+    assert set(ESCAPE_TOOLS).issubset(set(f.disallowed_tools))
+    assert not any(x in JRAG_LEXICAL_DENY for x in f.disallowed_tools)
 
 
-def test_validate_rejects_B_keeping_a_graph_tool(tmp_path):
+def test_validate_rejects_B_with_extra_verb(tmp_path):
     conds, paths = _load_all(tmp_path)
     b = next(c for c in conds if c.id == "B")
-    # Drop neighbors from B's deny list -> invariant violated.
     bad = Condition(
-        id=b.id, name=b.name, mcp_servers=b.mcp_servers,
+        id=b.id, name=b.name,
         allowed_tools=b.allowed_tools,
-        disallowed_tools=[t for t in b.disallowed_tools if t != "mcp__jrag__neighbors"],
+        disallowed_tools=b.disallowed_tools,
         prompt_file=b.prompt_file,
+        jrag_allowed_verbs=["search", "callers"],  # graph verb leaks into vector-only
     )
     with pytest.raises(ConfigError) as exc:
-        from bench.load_conditions import validate
         validate(bad)
     assert "B" in str(exc.value)
 
 
-def test_validate_rejects_C_with_mcp(tmp_path):
+def test_validate_rejects_C_with_jrag(tmp_path):
     conds, _ = _load_all(tmp_path)
     c = next(c for c in conds if c.id == "C")
     bad = Condition(
-        id=c.id, name=c.name, mcp_servers=["jrag"],
+        id=c.id, name=c.name,
         allowed_tools=c.allowed_tools, disallowed_tools=c.disallowed_tools,
         prompt_file=c.prompt_file,
+        jrag_allowed_verbs=["search"],
     )
-    from bench.load_conditions import validate
     with pytest.raises(ConfigError):
         validate(bad)
 
@@ -152,7 +167,7 @@ def test_load_rejects_missing_condition_id(tmp_path):
         load_conditions(yml)
 
 
-# --- Task 6: locked prompts differ ONLY in the tools section. ---
+# --- locked prompts differ ONLY in the tools section. ---
 
 _REAL_PROMPTS = {
     "A": "bench/prompts/A_lexical.md",
@@ -183,9 +198,10 @@ def test_tools_sections_differ():
 
     # each section names exactly the tools available to that condition.
     assert "Grep" in sections["A"] and "Bash" in sections["A"]
-    assert "search" in sections["B"] and "graph tools" in sections["B"]  # graph explicitly off
+    assert "search" in sections["B"] and "graph" in sections["B"].lower()  # graph explicitly off
     assert "Read" in sections["C"] and "Glob" in sections["C"]
-    assert "neighbors" in sections["D"] and "resolve" in sections["D"]  # full graph available
+    # D teaches the jrag CLI surface incl. graph traversal verbs.
+    assert "jrag" in sections["D"].lower() and "callers" in sections["D"]
 
 
 def test_rejects_unknown_condition_key(tmp_path):
@@ -200,69 +216,77 @@ def test_rejects_unknown_condition_key(tmp_path):
 
 
 def test_condition_C_isolation_shape():
-    """Task 9: assert exact shape of condition C (isolation baseline)."""
-    from bench.load_conditions import load_conditions
+    """Assert exact shape of condition C (isolation baseline)."""
     conds = load_conditions("bench/conditions.yml")
     c = next(cond for cond in conds if cond.id == "C")
-    assert c.name == "Raw agent + shell (no Grep tool, no MCP)"
+    assert c.name == "Raw agent + shell (no Grep tool, no jrag)"
     assert c.allowed_tools == ["Read", "Glob", "Bash"]
-    assert c.disallowed_tools == ESCAPE_TOOLS + ["Grep"]
-    assert c.mcp_servers == []
+    assert c.disallowed_tools == ["Grep"]
+    assert c.jrag_allowed_verbs is None
 
 
 def test_all_conditions_deny_escape_tools():
-    """Regression guard: every condition must deny every ESCAPE_TOOLS entry.
+    """Regression guard: every condition's ``to_flags()`` denies every ESCAPE_TOOLS
+    entry.
 
-    Under ``--permission-mode bypassPermissions``, ``--allowedTools`` is
-    additive (a permission grant, not an exclusive allowlist) and does NOT
-    restrict the tool set — only ``--disallowedTools`` blocks. So if any
-    condition silently drops an ESCAPE_TOOLS entry, the corresponding escape
-    vector re-opens: checkout mutation (Edit/Write/NotebookEdit), external info
-    (WebSearch/WebFetch), or subagent dispatch (Agent/Task). This test fails
-    the moment any of A/B/C/D loses an escape-tool deny.
+    ESCAPE_TOOLS is auto-appended by ``to_flags`` (not hand-listed in
+    conditions.yml), so the guard checks the assembled flag payload. Under
+    ``--permission-mode bypassPermissions`` only ``--disallowedTools`` blocks, so
+    if auto-append ever silently drops an entry the corresponding escape vector
+    re-opens: checkout mutation (Edit/Write/NotebookEdit), external info
+    (WebSearch/WebFetch), or subagent dispatch (Agent/Task).
     """
     conds = load_conditions("bench/conditions.yml")
     by_id = {c.id: c for c in conds}
     assert set(by_id) == {"A", "B", "C", "D"}
     for cid in ("A", "B", "C", "D"):
-        denied = set(by_id[cid].disallowed_tools)
+        denied = set(to_flags(by_id[cid]).disallowed_tools)
         missing = set(ESCAPE_TOOLS) - denied
         assert not missing, (
             f"condition {cid} dropped escape-tool denies: {sorted(missing)}"
         )
 
 
-def test_validate_rejects_condition_missing_escape_tool(tmp_path):
-    """``validate()`` rejects a condition missing any ESCAPE_TOOLS entry.
+def test_validate_rejects_condition_allowing_escape_tool(tmp_path):
+    """``validate()`` rejects a condition that ALLOWS an escape tool.
 
-    RED reasoning: ``validate()`` currently checks per-condition methodological
-    invariants (B-graph-denied, B-vector-allowed, D-jrag-allowed, A/C-no-MCP)
-    but does NOT check the shared ESCAPE_TOOLS deny-list. A condition that
-    silently drops e.g. ``WebFetch`` would pass ``validate()`` yet re-open the
-    external-info escape vector under ``bypassPermissions`` (where
-    ``--allowedTools`` is additive). The regression guard
-    ``test_all_conditions_deny_escape_tools`` only covers the shipped
-    ``conditions.yml``; this test pins the invariant at the ``validate()``
-    layer so a future hand-edit to any condition (or a third-party conditions
-    file) is caught at load time, not at analysis time.
+    ESCAPE_TOOLS is auto-denied by ``to_flags``; a condition that simultaneously
+    allows one (e.g. ``WebFetch``) is a self-contradictory spec. Caught at load
+    time, not at analysis time.
     """
-    from bench.load_conditions import validate
-
     paths = _touch_prompts(tmp_path)
-    # Condition A with every ESCAPE_TOOLS entry denied EXCEPT ``WebFetch``.
-    dropped = "WebFetch"
-    bad_disallowed = [t for t in ESCAPE_TOOLS if t != dropped]
     bad = Condition(
         id="A",
         name="Lexical",
-        mcp_servers=[],
-        allowed_tools=["Grep", "Glob", "Read", "Bash"],
-        disallowed_tools=bad_disallowed,
+        allowed_tools=["Grep", "Glob", "Read", "Bash", "WebFetch"],
+        disallowed_tools=[],
         prompt_file=str(paths["A"]),
     )
     with pytest.raises(ConfigError) as exc:
         validate(bad)
     msg = str(exc.value)
-    # Names the condition and the missing tool.
     assert "A" in msg
-    assert dropped in msg
+    assert "WebFetch" in msg
+
+
+def test_jrag_query_verbs_match_cli_agent_verbs():
+    """Drift guard: JRAG_QUERY_VERBS is exactly the CLI agent verbs minus watch/vocab-index.
+
+    Ties the bench's hand-list to the canonical ``cli_dispatch.AGENT_VERBS`` so a
+    new agent verb is caught here (condition D would under-test it; B can't leak
+    it, but the list should stay complete).
+    """
+    from java_codebase_rag.cli_dispatch import AGENT_VERBS
+
+    assert set(JRAG_QUERY_VERBS) == set(AGENT_VERBS) - {"watch", "vocab-index"}
+
+
+def test_only_condition_B_gets_lexical_deny():
+    """to_flags appends JRAG_LEXICAL_DENY to B only — never A/C/D."""
+    by_id = {c.id: c for c in load_conditions("bench/conditions.yml")}
+    for cid in ("A", "C", "D"):
+        denied = set(to_flags(by_id[cid]).disallowed_tools)
+        assert not (set(JRAG_LEXICAL_DENY) & denied), (
+            f"condition {cid} should not receive JRAG_LEXICAL_DENY"
+        )
+    assert set(JRAG_LEXICAL_DENY).issubset(set(to_flags(by_id["B"]).disallowed_tools))

@@ -3,6 +3,15 @@
 Living log of spikes that gate later phases. Each entry: what was checked, the
 result, and any downstream implication.
 
+> **Plan 4 note (2026-07-22):** the MCP-integration findings below (the
+> `--mcp-config` headless wiring, `mcp__jrag__*` tool calls) validated the
+> harness against the **legacy MCP surface**. The benchmark has since been
+> reframed onto the shipped **`jrag` CLI** surface (the agent drives
+> `jrag <verb>` via Bash, gated by a per-condition PATH shim); the
+> `claude -p` headless-driving, isolation-via-`--disallowedTools`, and
+> turn-cap/timeout mechanics below carry over unchanged. See
+> `bench/PREREGISTRATION.md` Amendment 2026-07-22 (Plan 4).
+
 ## jqassistant injection coverage (Task 1)
 
 **Verdict: COVERED.** See `bench/oracle/JQASSISTANT_COVERAGE.md`. The mechanical

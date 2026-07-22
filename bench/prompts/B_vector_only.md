@@ -24,4 +24,4 @@ allows.
 
 ## Your tools
 
-You have semantic search over the codebase via the jrag MCP `search` tool, plus `Read` to open any result. The jrag graph tools — `find`, `describe`, `neighbors`, and `resolve` — are NOT available to you: you have semantic retrieval only, no structural graph traversal. You have no `Grep` and no `Glob`.
+You have semantic search over the codebase via the **`jrag search`** CLI command (run `jrag search "<natural language or keywords>"` in your shell via `Bash`), plus `Read` to open any result. Every other `jrag` command is disabled by the harness — you have semantic retrieval only, **no structural graph traversal**. You have no `Grep`, no `Glob`, and no shell text-search tools (`grep`/`find`/`cat`/… are blocked): retrieve with `jrag search`, then `Read` the hits.

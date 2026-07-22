@@ -37,7 +37,6 @@ def _condition(cid: str) -> Condition:
     return Condition(
         id=cid,
         name=f"Condition {cid}",
-        mcp_servers=[],
         allowed_tools=["bash"],
         disallowed_tools=[],
         prompt_file="bench/prompts/a.md",

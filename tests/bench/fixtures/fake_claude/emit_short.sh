@@ -7,10 +7,16 @@
 #
 # Records its received argv ("$@") to the path in $JRAG_ARGV_SIDECAR when set,
 # so tests can assert the spawned argv (e.g. absent --mcp-config for condition A).
+# Records its process environment to $JRAG_ENV_SIDECAR when set, so tests can
+# assert the spawned env (e.g. PATH/JRAG index vars for the CLI shim).
 set -euo pipefail
 
 if [[ -n "${JRAG_ARGV_SIDECAR:-}" ]]; then
     printf '%s\n' "$@" >"$JRAG_ARGV_SIDECAR"
+fi
+
+if [[ -n "${JRAG_ENV_SIDECAR:-}" ]]; then
+    env >"$JRAG_ENV_SIDECAR"
 fi
 
 cat <<'EOF'

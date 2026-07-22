@@ -4,6 +4,12 @@
 - **Status:** Active (design approved, pre-implementation)
 - **Depends on:** Plan 2 (PR #460, merged) — the `run_bench.py` driver, `claude_runner.py` wrapper, and `grade.py` graders.
 
+> **Plan 4 note (2026-07-22):** the *surface* this spec assumed (MCP) is
+> superseded by Plan 4 (`docs/superpowers/specs/active/2026-07-22-bench-plan4-cli-reframe-design.md`)
+> — the benchmark now drives the `jrag` CLI. This spec's **methodology** fixes
+> (κ, wall-clock timeout, atomic writes, `report.py`, deterministic CI smoke)
+> remain canonical and are kept verbatim.
+
 ## Motivation (the gap Plan 2 left)
 
 Plan 2 delivered a working harness and a 16-cell smoke grid graded on bank-chat / glm-4.7

@@ -359,6 +359,28 @@ def test_blind_transcript_preserves_content():
     assert "The chat domain has 12 processors." in out
 
 
+def test_blind_transcript_hides_jrag_verb_b_vs_d():
+    """Plan 4: `jrag <verb>` is scrubbed so the judge can't tell B (search) from D (graph).
+
+    Both `jrag search X` (vector-only) and `jrag callers X` (full graph) must
+    fully consume the verb — reducing to the identical `[tool]` shape with no
+    `jrag` and no verb leaked. A bare `jrag` in prose NOT followed by a known
+    verb scrubs only `jrag`, preserving the next prose word.
+    """
+    out_b = blind_transcript("ran jrag search for 'typing'")
+    out_d = blind_transcript("ran jrag callers on AckProcessor")
+    for out in (out_b, out_d):
+        assert "jrag" not in out
+        assert "[tool]" in out
+    # The verb itself is gone — not leaked as a B-vs-D signal.
+    assert "search" not in out_b
+    assert "callers" not in out_d
+    # Prose "jrag <non-verb>": only `jrag` is scrubbed, the next word survives.
+    prose = blind_transcript("the jrag is a tool")
+    assert "jrag" not in prose
+    assert "is a tool" in prose
+
+
 @pytest.mark.requires_claude
 def test_judge_answer_returns_grade():
     """judge_answer returns a Grade from a real glm-5.2 call.

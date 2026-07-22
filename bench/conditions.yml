@@ -1,43 +1,51 @@
 # Executable condition-isolation spec. Conditions differ ONLY in the tool set
-# exposed to Claude Code — enforced by harness flags (--mcp-config /
-# --allowedTools / --disallowedTools), never by prompt pleas. The loader
-# (bench/load_conditions.py) validates the invariants and emits the flag payload.
+# exposed to Claude Code — enforced by harness flags (--allowedTools /
+# --disallowedTools) plus, for the jrag surface, a per-condition PATH shim
+# (bench/claude_runner.py materialize_cli_env). Never by prompt pleas. The
+# loader (bench/load_conditions.py) validates the invariants and emits the flag
+# payload.
 #
-# ALL conditions deny the common escape/integrity set defined as ESCAPE_TOOLS
-# in load_conditions.py: Edit, Write, NotebookEdit (no checkout mutation),
-# WebSearch, WebFetch (no external info), Agent, Task (no subagent dispatch).
-# This is required because --allowedTools is ADDITIVE under bypassPermissions;
-# isolation is enforced via --disallowedTools. Per-condition variation is ONLY
+# The agent drives jrag through its CLI (`jrag <verb>` via Bash), NOT MCP.
+# `jrag_allowed_verbs` is the shim allow-list per condition:
+#   absent        — no jrag surface (A/C)
+#   [search]      — vector-only (B): the shim passes ONLY `jrag search`
+#   all           — the full query surface (D): resolved to JRAG_QUERY_VERBS
+#
+# ALL conditions auto-deny the common escape/integrity set ESCAPE_TOOLS
+# (Edit/Write/NotebookEdit/WebSearch/WebFetch/Agent/Task), appended by to_flags.
+# Required because --allowedTools is ADDITIVE under bypassPermissions; isolation
+# is enforced via --disallowedTools. Per-condition variation is ONLY
 # jrag/lexical access:
-#   A lexical      — grep/ripgrep floor baseline (no MCP); escape-deny only
-#   B vector-only  — jrag MCP with graph tools denied -> only `search` survives
-#   C raw agent    — read/list only (no MCP, no Grep) — token-burn ceiling
-#   D jrag full    — all 5 jrag tools + read/grep/glob (system under test)
+#   A lexical      — grep/ripgrep floor baseline (no jrag); escape-deny only
+#   B vector-only  — `jrag search` only (graph verbs blocked by the shim);
+#                    Grep/Glob + granular Bash lexical deny (JRAG_LEXICAL_DENY,
+#                    auto-appended) close the lexical escape as tightly as
+#                    bypassPermissions allows
+#   C raw agent    — read/list/shell only (no jrag, no Grep) — token-burn ceiling
+#   D jrag full    — all `jrag` query verbs + read/grep/glob (system under test)
 conditions:
   - id: A
     name: Lexical (grep/ripgrep)
-    mcp_servers: []
     allowed_tools: [Grep, Glob, Read, Bash]
-    disallowed_tools: [Edit, Write, NotebookEdit, WebSearch, WebFetch, Agent, Task]
+    disallowed_tools: []
     prompt_file: bench/prompts/A_lexical.md
 
   - id: B
-    name: Vector-only (semantic search, graph off)
-    mcp_servers: [jrag]
-    allowed_tools: [Read, mcp__jrag__search]
-    disallowed_tools: [Edit, Write, NotebookEdit, WebSearch, WebFetch, Agent, Task, mcp__jrag__find, mcp__jrag__describe, mcp__jrag__neighbors, mcp__jrag__resolve]
+    name: Vector-only (jrag search, graph off)
+    jrag_allowed_verbs: [search]
+    allowed_tools: [Read, Bash]
+    disallowed_tools: [Grep, Glob]
     prompt_file: bench/prompts/B_vector_only.md
 
   - id: C
-    name: Raw agent + shell (no Grep tool, no MCP)
-    mcp_servers: []
+    name: Raw agent + shell (no Grep tool, no jrag)
     allowed_tools: [Read, Glob, Bash]
-    disallowed_tools: [Edit, Write, NotebookEdit, WebSearch, WebFetch, Agent, Task, Grep]
+    disallowed_tools: [Grep]
     prompt_file: bench/prompts/C_raw_agent.md
 
   - id: D
-    name: jrag full (vector + graph + cross-service)
-    mcp_servers: [jrag]
-    allowed_tools: [Read, Grep, Glob, mcp__jrag__find, mcp__jrag__describe, mcp__jrag__neighbors, mcp__jrag__resolve, mcp__jrag__search]
-    disallowed_tools: [Edit, Write, NotebookEdit, WebSearch, WebFetch, Agent, Task]
+    name: jrag full (vector + graph + cross-service, CLI)
+    jrag_allowed_verbs: all
+    allowed_tools: [Read, Grep, Glob, Bash]
+    disallowed_tools: []
     prompt_file: bench/prompts/D_jrag_full.md
