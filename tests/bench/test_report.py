@@ -53,6 +53,64 @@ def _write_graded(path, cells):
     path.write_text("\n".join(json.dumps(c) for c in cells) + "\n")
 
 
+def test_count_lexical_leak_detects_lexical_bash(tmp_path):
+    """A Bash tool_use invoking a lexical binary counts as a leak; a jrag call does not."""
+    from bench.report import _count_lexical_leak
+
+    leaky = tmp_path / "leak.jsonl"
+    leaky.write_text(
+        '{"type":"assistant","message":{"content":[{"type":"tool_use",'
+        '"name":"Bash","input":{"command":"grep -rn Foo src/"}}]}}\n'
+    )
+    clean = tmp_path / "clean.jsonl"
+    clean.write_text(
+        '{"type":"assistant","message":{"content":[{"type":"tool_use",'
+        '"name":"Bash","input":{"command":"jrag search Foo"}}]}}\n'
+    )
+    missing = tmp_path / "absent.jsonl"
+    assert _count_lexical_leak(str(leaky)) == 1
+    assert _count_lexical_leak(str(clean)) == 0
+    assert _count_lexical_leak(str(missing)) == 0  # OSError -> 0
+
+
+def test_lexical_command_re_matches_common_binaries():
+    """Regression for the parse bug: the detector must match grep/find/cat/rg.
+
+    A prior ``.rstrip(" *")`` left the trailing ')' so every JRAG_LEXICAL_DENY
+    entry parsed as e.g. "cat *)" and the regex matched nothing (leakage=0.00).
+    """
+    from bench.report import _lexical_command_re
+
+    rx = _lexical_command_re()
+    for cmd in ("grep foo", "find . -name x", "cat file", "rg pattern", "head -5 f"):
+        assert rx.search(cmd), cmd
+    assert rx.search("jrag x && grep y")  # after a separator
+    assert not rx.search("jrag search foo")  # jrag itself is not lexical
+
+
+def test_lexical_leakage_by_condition_rate_and_n(tmp_path):
+    """Returns (fraction, n-with-transcript); cells without a transcript are excluded."""
+    from bench.report import _lexical_leakage_by_condition
+
+    run_dir = tmp_path
+    for rid, leak in (("b1", True), ("b2", False)):
+        d = run_dir / rid
+        d.mkdir()
+        cmd = "grep foo" if leak else "jrag search foo"
+        (d / "transcript.jsonl").write_text(
+            '{"type":"assistant","message":{"content":[{"type":"tool_use",'
+            '"name":"Bash","input":{"command":"%s"}}]}}\n' % cmd
+        )
+    cells = [
+        {"run_id": "b1", "condition": "B"},
+        {"run_id": "b2", "condition": "B"},
+        {"run_id": "d1", "condition": "D"},  # no transcript dir -> excluded
+    ]
+    out = _lexical_leakage_by_condition(cells, str(run_dir))
+    assert out["B"] == (0.5, 2)  # 1 of 2 findable B transcripts leaked
+    assert "D" not in out  # d1 had no findable transcript -> not counted in n
+
+
 def test_report_aggregates_condition_means(tmp_path):
     """report_main writes report.md whose condition means match the data.
 

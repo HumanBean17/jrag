@@ -201,6 +201,8 @@ def run_grid(
     resume: bool,
     run_cell_fn=claude_runner.run_cell,
     wall_timeout_s: float | None = None,
+    jrag_bin: str | None = None,
+    venv_python: str | None = None,
 ) -> list[CellResult]:
     """Execute every cell, optionally skipping already-completed ones.
 
@@ -216,9 +218,12 @@ def run_grid(
     ``run_cell_fn=claude_runner.run_cell`` so the attribute is re-resolved at
     call time.
 
-    ``wall_timeout_s`` is forwarded to ``run_cell_fn`` ONLY when not None, so the
-    default call shape (``run_cell_fn(cell, results_transcript_path=...)``) is
-    unchanged for DI fakes that don't accept the kwarg.
+    ``wall_timeout_s`` / ``jrag_bin`` / ``venv_python`` are forwarded to
+    ``run_cell_fn`` ONLY when not None, so the default call shape
+    (``run_cell_fn(cell, results_transcript_path=...)``) is unchanged for DI fakes
+    that don't accept the kwargs. ``main`` resolves ``jrag_bin``/``venv_python``
+    once (the venv sibling of the driver python) so every cell measures the same
+    jrag binary deterministically.
 
     Args:
         cells: Cells to execute (in order).
@@ -241,6 +246,10 @@ def run_grid(
         call_kwargs: dict = {"results_transcript_path": transcript_path}
         if wall_timeout_s is not None:
             call_kwargs["wall_timeout_s"] = wall_timeout_s
+        if jrag_bin is not None:
+            call_kwargs["jrag_bin"] = jrag_bin
+        if venv_python is not None:
+            call_kwargs["venv_python"] = venv_python
         result = run_cell_fn(cell, **call_kwargs)
         write_cell(run_dir_path, result)
         results.append(result)
@@ -385,6 +394,20 @@ def main(argv: list[str] | None = None) -> int:
 
     rd = _resolve_run_dir(args.out, args.resume)
 
+    # Resolve the jrag binary ONCE — the venv sibling of the driver python — and
+    # forward it to every cell. Deterministic (resolved up front, no per-cell
+    # shutil.which guess) and identical across the grid. Fails loudly if the
+    # editable-install jrag isn't reachable from this interpreter (run via
+    # .venv/bin/python -m bench.run_bench).
+    venv_python = os.path.abspath(sys.executable)
+    jrag_bin = os.path.join(os.path.dirname(venv_python), "jrag")
+    if not os.path.exists(jrag_bin):
+        raise SystemExit(
+            f"jrag CLI not found next to the driver python ({jrag_bin}); run via "
+            f".venv/bin/python -m bench.run_bench so the editable-install jrag is "
+            f"reachable."
+        )
+
     # Pass `run_cell_fn=claude_runner.run_cell` EXPLICITLY so the attribute is
     # re-resolved at call time. This lets tests monkeypatch the module attribute
     # (the default-arg form binds at definition time and would bypass the patch).
@@ -394,6 +417,8 @@ def main(argv: list[str] | None = None) -> int:
         resume=args.resume,
         run_cell_fn=claude_runner.run_cell,
         wall_timeout_s=args.wall_timeout,
+        jrag_bin=jrag_bin,
+        venv_python=venv_python,
     )
 
     skipped = len(cells) - len(results)

@@ -267,3 +267,26 @@ def test_validate_rejects_condition_allowing_escape_tool(tmp_path):
     msg = str(exc.value)
     assert "A" in msg
     assert "WebFetch" in msg
+
+
+def test_jrag_query_verbs_match_cli_agent_verbs():
+    """Drift guard: JRAG_QUERY_VERBS is exactly the CLI agent verbs minus watch/vocab-index.
+
+    Ties the bench's hand-list to the canonical ``cli_dispatch.AGENT_VERBS`` so a
+    new agent verb is caught here (condition D would under-test it; B can't leak
+    it, but the list should stay complete).
+    """
+    from java_codebase_rag.cli_dispatch import AGENT_VERBS
+
+    assert set(JRAG_QUERY_VERBS) == set(AGENT_VERBS) - {"watch", "vocab-index"}
+
+
+def test_only_condition_B_gets_lexical_deny():
+    """to_flags appends JRAG_LEXICAL_DENY to B only — never A/C/D."""
+    by_id = {c.id: c for c in load_conditions("bench/conditions.yml")}
+    for cid in ("A", "C", "D"):
+        denied = set(to_flags(by_id[cid]).disallowed_tools)
+        assert not (set(JRAG_LEXICAL_DENY) & denied), (
+            f"condition {cid} should not receive JRAG_LEXICAL_DENY"
+        )
+    assert set(JRAG_LEXICAL_DENY).issubset(set(to_flags(by_id["B"]).disallowed_tools))

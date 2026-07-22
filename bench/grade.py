@@ -46,6 +46,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from bench.load_questions import Question, load_all_questions
+from bench.load_conditions import JRAG_QUERY_VERBS
 
 
 # A token "looks like" a Java identifier if it starts with a letter/underscore/$
@@ -468,15 +469,18 @@ The rationale must be a single sentence explaining the score. Do not include any
 
 
 # Tool-name tokens to scrub from the transcript before the judge sees it.
-# Matches ``jrag`` (optionally followed by its verb, e.g. ``jrag callers``),
-# any legacy ``mcp__jrag__<name>`` token, and the Claude Code built-in tool
-# literals. Case-sensitive: the lowercase ``read``/``grep`` verbs in prose
-# survive. Scrubbing ``jrag <verb>`` (not just ``jrag``) also hides WHICH jrag
-# command ran, so the judge can't tell the vector-only condition (B, ``search``
-# only) from the full-graph condition (D, ``callers``/``flow``/…). ``\b`` word
-# boundaries prevent partial matches (e.g. ``Read`` inside ``Reader``).
+# Matches ``jrag`` optionally followed by a *known* CLI verb (built from
+# JRAG_QUERY_VERBS so it auto-syncs with the surface), any legacy
+# ``mcp__jrag__<name>`` token, and the Claude Code built-in tool literals.
+# Case-sensitive: lowercase ``read``/``grep`` in prose survive. Scrubbing the
+# verb (not just ``jrag``) hides WHICH jrag command ran, so the judge can't tell
+# the vector-only condition (B, ``search``) from the full-graph condition (D,
+# ``callers``/``flow``/…). Constraining to known verbs (vs any following word)
+# avoids eating an ordinary prose word after a bare "jrag" (e.g. "the jrag is a
+# tool" -> "the [tool] is a tool"). ``\b`` boundaries prevent partial matches.
+_JRAG_VERB_ALTS = "|".join(re.escape(v) for v in JRAG_QUERY_VERBS)
 TOOL_NAME_RE = re.compile(
-    r"\b(?:mcp__jrag__\w+|jrag(?:\s+[a-z][\w-]*)?|Grep|Glob|Read|Bash)\b"
+    r"\b(?:mcp__jrag__\w+|jrag(?:\s+(?:" + _JRAG_VERB_ALTS + r"))?|Grep|Glob|Read|Bash)\b"
 )
 
 

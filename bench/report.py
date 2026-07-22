@@ -215,7 +215,11 @@ def _lexical_command_re() -> "re.Pattern":
         try:
             from bench.load_conditions import JRAG_LEXICAL_DENY
 
-            bins = [d[len("Bash("):].rstrip(" *") for d in JRAG_LEXICAL_DENY]
+            # Each entry is "Bash(<bin> *)"; strip the "Bash(" prefix and the
+            # " *)" suffix. (A bare .rstrip(" *") leaves the trailing ")" — every
+            # entry would parse as e.g. "cat *)" and the regex would never match,
+            # silently reporting 0.00 leakage.)
+            bins = [d[len("Bash("):-len(" *)")] for d in JRAG_LEXICAL_DENY]
         except Exception:
             # Fallback if the loader isn't importable (e.g. ``python bench/report.py``).
             bins = [
@@ -274,15 +278,22 @@ def _transcript_for(cell: dict, run_dir: str) -> str | None:
     return None
 
 
-def _lexical_leakage_by_condition(cells: list[dict], run_dir: str) -> dict[str, float]:
-    """Per-condition fraction of cells with ≥1 lexical-command Bash call."""
+def _lexical_leakage_by_condition(
+    cells: list[dict], run_dir: str
+) -> dict[str, tuple[float, int]]:
+    """Per-condition ``(leakage fraction, n)`` over cells with a findable transcript.
+
+    ``n`` is the number of cells whose transcript could be resolved — the true
+    denominator of the fraction (not all cells of the condition). Cells with no
+    findable transcript are excluded from both numerator and denominator.
+    """
     bucket: dict[str, list[int]] = defaultdict(list)
     for c in cells:
         tp = _transcript_for(c, run_dir)
         if tp is None:
             continue
         bucket[c.get("condition", "?")].append(1 if _count_lexical_leak(tp) > 0 else 0)
-    return {k: _mean(v) for k, v in bucket.items()}
+    return {k: (_mean(v), len(v)) for k, v in bucket.items()}
 
 
 # --- rendering ---
@@ -372,8 +383,8 @@ def render_report_markdown(cells: list[dict], *, kappa=None, run_dir: str | None
                 "|---|---|---|",
             ]
             for cond in _sort_conditions(leak):
-                n = sum(1 for c in cells if c.get("condition") == cond)
-                lines.append(f"| {cond} | {leak[cond]:.2f} | {n} |")
+                rate, n = leak[cond]
+                lines.append(f"| {cond} | {rate:.2f} | {n} |")
             lines.append("")
 
     # cross-service (C3).

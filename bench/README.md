@@ -29,7 +29,7 @@ All conditions auto-deny the escape/integrity set (`Edit`/`Write`/`NotebookEdit`
   for any other verb — a vector-only cell literally cannot run a graph verb.
 - **Lexical escape (B):** under `bypassPermissions`, granular `--disallowedTools`
   rules like `Bash(grep *)` *are* enforced (and compound commands are split on
-  `&&`/`;`/`|`), so B denies `Grep`/`Glob` plus a `Bash(cat *)`/`Bash(grep *)`/…
+  `&&`/`||`/`;`/`|`), so B denies `Grep`/`Glob` plus a `Bash(cat *)`/`Bash(grep *)`/…
   list. The residual is **measured**: `report.py` reports a per-condition lexical
   leakage rate (isolation fidelity as data, not a claim).
 

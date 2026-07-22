@@ -55,6 +55,49 @@ def make_corpus(name: str, checkout_path: str = "bench/checkouts/test") -> Corpu
     )
 
 
+def test_run_grid_forwards_jrag_resolution(tmp_path, monkeypatch):
+    """run_grid forwards jrag_bin/venv_python to run_cell_fn when provided.
+
+    DI-safe: the kwargs are added only when not None, so fakes that don't accept
+    them keep working. ``main`` resolves the real jrag binary once and forwards
+    it so every cell measures the same binary deterministically.
+    """
+    from bench.run_bench import run_grid
+
+    seen: dict = {}
+
+    def fake_run_cell(spec, *, results_transcript_path, **kwargs):
+        seen["kwargs"] = kwargs
+        return "sentinel"  # write_cell is stubbed below, so a non-CellResult is fine
+
+    # run_grid calls write_cell(run_dir_path, result); stub it so the sentinel
+    # return value isn't unpacked as a CellResult.
+    monkeypatch.setattr("bench.run_bench.write_cell", lambda *a, **k: None)
+
+    spec = CellSpec(
+        question=make_question("q1"),
+        condition=make_condition("B"),
+        corpus=make_corpus("c1"),
+        model="glm-4.7",
+        seed=0,
+        temperature=0.0,
+        max_turns=10,
+        repo_root=str(tmp_path),
+    )
+    run_grid(
+        [spec],
+        str(tmp_path / "run"),
+        resume=False,
+        run_cell_fn=fake_run_cell,
+        jrag_bin="/venv/bin/jrag",
+        venv_python="/venv/bin/python",
+    )
+    assert seen["kwargs"]["jrag_bin"] == "/venv/bin/jrag"
+    assert seen["kwargs"]["venv_python"] == "/venv/bin/python"
+    # wall_timeout_s absent (not passed) — the default call shape is otherwise preserved.
+    assert "wall_timeout_s" not in seen["kwargs"]
+
+
 def test_expand_grid_smoke_dimensions():
     """4 questions × 4 conditions × 1 model × 1 seed = 16 cells."""
     from bench.run_bench import expand_grid

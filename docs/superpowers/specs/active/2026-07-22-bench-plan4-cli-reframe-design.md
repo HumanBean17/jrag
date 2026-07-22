@@ -42,7 +42,7 @@ the reframe is expected to *strengthen* the C2 (steps/tokens) story.
 | Concern | MCP (old) | CLI (new) |
 |---|---|---|
 | Agent channel | `mcp__jrag__{search,find,describe,neighbors,resolve}` | `jrag <verb>` via **Bash** |
-| Per-cell setup | `materialize_mcp_config` → `.mcp.json`; `--mcp-config`/`--strict-mcp-config` | per-condition **PATH shim** + `JRAG_INDEX_DIR`/`JRAG_SOURCE_ROOT` env |
+| Per-cell setup | `materialize_mcp_config` → `.mcp.json`; `--mcp-config`/`--strict-mcp-config` | per-condition **PATH shim** + `JAVA_CODEBASE_RAG_INDEX_DIR`/`JAVA_CODEBASE_RAG_SOURCE_ROOT` env |
 | Verb isolation (B vs D) | allow/deny MCP tool *names* | shim allow-list (B: `["search"]`; D: `JRAG_QUERY_VERBS`) |
 | Lexical isolation (B) | deny `Grep`+`Glob` (clean — no Bash) | deny `Grep`+`Glob` + granular `Bash(<lexical> *)` denies |
 | Blinding | scrub `mcp__jrag__\w+` | also scrub `jrag <verb>` |
