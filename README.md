@@ -51,7 +51,7 @@ Run `jrag install` from your Java project root to launch an interactive setup wi
 1. Detects Java source directories (Maven/Gradle modules)
 2. Configures the embedding model (auto-downloads ~90MB or uses a local path)
 3. Selects agent hosts (Claude Code, Qwen Code, GigaCode)
-4. Deploys MCP registration, skill, and agent artifacts
+4. Wires the agent surface — a `jrag prime` SessionStart hook (`cli`, the default) or an MCP registration (`mcp`); no files are deployed
 5. Generates `.java-codebase-rag.yml` configuration
 6. Runs `init` to build the index
 
@@ -63,7 +63,7 @@ jrag install
 jrag install --non-interactive --agent claude-code
 ```
 
-After `pip install --upgrade jrag-cli`, run `jrag update` to refresh shipped artifacts and catch up the index (Lance + graph).
+After `pip install --upgrade jrag-cli`, run `jrag update` to refresh the deployed surface (prime hook / MCP entry, plus removal of legacy 0.12.x skill/agent files) and catch up the index (Lance + graph).
 
 All indexing lifecycle commands (`init`, `increment`, `reprocess`, `install`, `update`) show a unified `Vectors → Optimize → Graph` progress bar on stderr during the index build (powered by `rich`); pass `--quiet` to suppress it.
 
@@ -146,9 +146,9 @@ Every `<query>` command takes human-readable identifiers (FQN / simple name / ro
 
 Full schemas, `NodeFilter` / `EdgeFilter` semantics, and the hints contract live in [`docs/AGENT-GUIDE.md`](./docs/AGENT-GUIDE.md). Edge types and traversal directions are listed in [`docs/EDGE-NAVIGATION.md`](./docs/EDGE-NAVIGATION.md).
 
-### Three-layer architecture
+### Layered architecture
 
-Layer 1 (storage) → Layer 2 (the `jrag` CLI, **or** the legacy 5-tool MCP) → Layer 3 (skill). The CLI-surface skill **[`/explore-codebase-cli`](./skills/explore-codebase-cli/SKILL.md)** documents the `jrag` CLI; the MCP-surface skill **[`/explore-codebase`](./skills/explore-codebase/SKILL.md)** documents the legacy 5-tool MCP (PR-JRAG-5). See the [architecture diagram in `skills/README.md`](./skills/README.md#three-layer-architecture).
+Layer 1 (storage) → Layer 2 (the `jrag` CLI, **or** the legacy 5-tool MCP). Agent orientation needs no shipped skill files: on the CLI surface, `jrag install` wires a **SessionStart hook** that runs `jrag prime --hook-json` at every session start — a compact payload stating what `jrag` is, the trust-the-files rule, live index state, and the command surface embedded from `jrag --help`. On the MCP surface the five tool descriptions self-announce. The full MCP reference for humans is [`docs/AGENT-GUIDE.md`](./docs/AGENT-GUIDE.md).
 
 ---
 
@@ -173,8 +173,8 @@ Run `jrag --help` to list grouped subcommands. Operator playbook with workflows,
 
 | Group | Subcommand | What it does |
 |---|---|---|
-| Setup | `install` | Interactive setup wizard: config, MCP registration, skill/agent deployment, indexing. |
-| Setup | `update` | Refresh shipped artifacts (skill, agent, MCP entry) + incremental Lance/graph catch-up after pip upgrade. |
+| Setup | `install` | Interactive setup wizard: config, agent-surface wiring (prime hook / MCP entry), indexing. |
+| Setup | `update` | Refresh the deployed surface (prime hook / MCP entry, legacy 0.12.x cleanup) + incremental Lance/graph catch-up after pip upgrade. |
 | Lifecycle | `init` | First-time index. Refuses if artifacts already exist. |
 | Lifecycle | `increment` | CocoIndex catch-up + incremental LadybugDB update. `--vectors-only` for Lance only. |
 | Lifecycle | `reprocess` | Full Lance + LadybugDB rebuild. `--vectors-only` / `--graph-only` for a single phase. |
@@ -254,11 +254,10 @@ full design and per-PR breakdown.
 | Document | What's in it |
 |---|---|
 | [`docs/paper/paper.pdf`](./docs/paper/paper.pdf) | Architecture report — design rationale, GPS metaphor, three-layer architecture, design principles, future work. |
-| [`docs/AGENT-GUIDE.md`](./docs/AGENT-GUIDE.md) | Agent-facing guide. Copy-paste into `QWEN.md` / `CLAUDE.md` / `AGENTS.md`. |
+| [`docs/AGENT-GUIDE.md`](./docs/AGENT-GUIDE.md) | MCP surface reference (five tools, `NodeFilter`, edges, recovery) for humans and hook-less hosts. |
 | [`docs/CONFIGURATION.md`](./docs/CONFIGURATION.md) | Environment variables, project YAML, graph ontology, brownfield overrides, ignore patterns. |
 | [`docs/JRAG-CLI.md`](./docs/JRAG-CLI.md) | CLI operator playbook: workflows, exit codes, env alignment. |
 | [`docs/EDGE-NAVIGATION.md`](./docs/EDGE-NAVIGATION.md) | MCP-traversable edges, directions, dot-key composition. |
-| [`skills/`](./skills/) | `/explore-codebase-cli` (CLI surface) + `/explore-codebase` (legacy MCP surface) skills — operating manuals for hosts with skill discovery (alternative to copy-pasting AGENT-GUIDE). See [`skills/README.md`](./skills/README.md). |
 | [`docs/MANUAL-VERIFICATION-CHECKLIST.md`](./docs/MANUAL-VERIFICATION-CHECKLIST.md) | 7-phase agent-driven verification after indexing your project. |
 | [`docs/CODEBASE_REQUIREMENTS.md`](./docs/CODEBASE_REQUIREMENTS.md) | Assumptions about your Java repo + per-file edit map for non-conforming codebases. |
 | [`docs/PRODUCT-VISION.md`](./docs/PRODUCT-VISION.md) | Long-term product direction. |

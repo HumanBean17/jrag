@@ -36,7 +36,8 @@ Core library = **top-level `.py` modules** (`py-modules`); the installable **`ja
 | Config + paths | `java_codebase_rag/config.py`, `path_filtering.py`, `index_common.py`, `brownfield_events.py` |
 | Watch daemon | `java_codebase_rag/watch/` (`lock`, `paths`, `protocol`, `warm`, `server`, `client`, `watcher`, `daemon`) |
 | Surfaces | `java_codebase_rag/{cli,jrag,installer}.py` |
-| Shipped artifacts | `skills/`, `agents/` (deployed verbatim to agent host via `install`/`update`) |
+| Prime payload | `java_codebase_rag/prime.py` — stdlib-only `PRIME_TEMPLATE` + `--hook-json` envelope; state slots computed in `jrag.py::_prime_state`/`_cmd_prime` |
+| Host surface deploy | `java_codebase_rag/installer.py` — SessionStart hook merge/refresh/remove into host `settings.json`; ships no files (`scripts/sync_agent_artifacts.py` is the absence guard) |
 
 **Entrypoints** (`pyproject.toml [project.scripts]`): `jrag` and `java-codebase-rag` (legacy alias) both → `java_codebase_rag.cli_dispatch:_console_script_main` — the unified dispatcher that routes operator verbs to `cli._console_script_main` and agent verbs to `jrag._console_script_main`; `jrag-mcp` and `java-codebase-rag-mcp` (legacy alias) both → `java_codebase_rag.mcp.server:main`.
 
@@ -63,6 +64,12 @@ java_codebase_rag/pipeline.py
 - **`reprocess`** — default = full vectors + full graph; `--vectors-only` / `--graph-only` selective (mutually exclusive). Exit semantics in `cli._reprocess_exit_code`.
 
 **Phantom nodes:** unresolved callees / supertypes (external libs, `java.lang`) become `Symbol` rows with `resolved=false` and empty filename — so every edge lands on *a* node. Skipped by dependent expansion and scoped deletion.
+
+### Surface deploy path (`install` / `update`)
+
+Neither surface ships files. `install --surface cli` merges a **SessionStart hook** (`<jrag> prime --hook-json`, resolved absolute path) into each host's `settings.json` (`hooks_settings_path`: claude-code `.claude/`·project or `~/.claude/`·user, qwen-code `.qwen/`, gigacode `.gigacode/`); `--surface mcp` registers the stdio MCP entry only. Hook merge (`merge_session_start_hook`) is idempotent — keyed on the binary-agnostic command marker (`_HOOK_MARKER = " prime --hook-json"`: entries installed under either `jrag` or the legacy `java-codebase-rag` console script are ours), collapses duplicates, writes only on change, never touches unrelated hooks — and teardown (`_remove_session_start_hook`) prunes empty matcher/list/`hooks` containers it was the last tenant of.
+
+`update` refreshes the deployed entry: `_refresh_hook` re-points the hook at the current `jrag` path (content-addressed, so an unchanged path is a no-op); `--surface` switches tear down the opposite entry (hook ⇄ MCP entry) and rewrite the marker. It also removes the four legacy 0.12.x paths (`_LEGACY_ARTIFACT_PATHS` — both skill pairs and both agent files) wherever they survive, both scopes, covering upgrades from any 0.12.x. The `.java-codebase-rag.hosts` marker records which entry is deployed via its existing per-host `surface` field (`mcp`|`cli`) — there is no separate hook record.
 
 ## Read path (query)
 
@@ -122,6 +129,7 @@ Precedence **CLI flag > env > YAML (`.java-codebase-rag.yml`) > default**; each 
 - **New node kind** → Ladybug schema (`_create_schema`) + extraction pass + `NodeFilter` / resolve generators in `mcp_v2.py` / `resolve_service.py`.
 - **Semantic extraction change** → bump `ONTOLOGY_VERSION` (`ast_java.py:87`); read guard + incremental fallback follow automatically; note reindex in [`docs/CONFIGURATION.md`](./CONFIGURATION.md).
 - **Watch surface** → `java_codebase_rag/watch/` (warm reads + debounced reindex). New read command? add a payload core in `read_payloads.py`, then wire `server.py` dispatch + the `jrag` handler (cold path stays the default). The cold path must stay byte-identical — the daemon is an accelerator, never a dependency.
+- **Prime payload** → `PRIME_TEMPLATE` in `java_codebase_rag/prime.py` (static parts) + state slots in `jrag.py::_prime_state`. The embedded `Commands by group` / `Command reference` blocks mirror `jrag --help` — regenerate them in lockstep when a command changes, and keep operator verbs out. The module must stay stdlib-importable (SessionStart latency budget; a test guards the import set).
 
 Dev workflow (editable install, test-reset ritual, full-suite discipline) — see [`CLAUDE.md`](../CLAUDE.md).
 

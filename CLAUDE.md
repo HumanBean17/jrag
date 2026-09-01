@@ -29,7 +29,7 @@ Most files in `docs/` are **operator-facing**. The two flagged below are **inter
 - `docs/CONFIGURATION.md` — env vars, project YAML, ontology, brownfield overrides, ignore patterns.
 - `docs/JRAG-CLI.md` — operator CLI playbook (workflows, exit codes, env alignment).
 - `docs/MIGRATION.md` — `java-codebase-rag` → `jrag` rename map (commands, package, untouched on-disk state).
-- `docs/AGENT-GUIDE.md` — agent-facing MCP operating manual (copy-paste into `AGENTS.md`/`CLAUDE.md`).
+- `docs/AGENT-GUIDE.md` — MCP surface reference for humans; hook-less hosts may paste the marked block.
 - `docs/EDGE-NAVIGATION.md` — MCP-traversable edges, directions, dot-key composition.
 - `docs/MANUAL-VERIFICATION-CHECKLIST.md` — 7-phase post-index verification.
 - `docs/CODEBASE_REQUIREMENTS.md` — assumptions about the target Java repo.
@@ -40,11 +40,14 @@ Most files in `docs/` are **operator-facing**. The two flagged below are **inter
 - `docs/DESIGN.md` — WHAT/WHY: core principles, what's indexed, surfaces, non-goals.
 - `docs/ARCHITECTURE.md` — HOW: pipeline, module map, write/read paths, stores, extension points.
 
-## Shipped artifacts
+## Agent surfaces
 
-`skills/` and `agents/` are shipped consumer artifacts — deployed verbatim by
-`install`/`update` to the user's agent host. This repo is the source of truth;
-never hand-patch deployed copies.
+No files ship to agent hosts. `install --surface cli` deploys a `jrag prime`
+SessionStart hook into the host's `settings.json`; `--surface mcp` registers
+the MCP entry only. The prime template (`src/java_codebase_rag/prime.py`) is
+the source of truth — never hand-patch deployed host settings. `jrag update`
+removes the legacy 0.12.x skill/agent files; `scripts/sync_agent_artifacts.py`
+guards their absence.
 
 ## Publishing (PyPI)
 

@@ -329,12 +329,39 @@ def _parse_csv_ints(value: str | None) -> list[int]:
     return out
 
 
+def _filter_by_ids(items: list, requested: list[str], flag: str) -> list:
+    """Filter loaded records (anything with an ``id``) down to ``requested``.
+
+    Shared by ``--only-conditions`` / ``--only-questions``: pure pre-filtering
+    ahead of ``expand_grid`` — the loaders' invariants are untouched (the
+    conditions YAML still loads exactly A/B/C/D; the flag selects a slice of
+    the loaded list, it never reconfigures the load).
+
+    Validation is loud: a requested id absent from the loaded universe is a
+    typo or a stale id, and silently dropping it would shrink the grid without
+    a trace — so raise ``SystemExit`` naming the unknown ids and the valid
+    ones. Result order follows ``items`` (loaded order), not the flag order,
+    so the grid layout and run-id sequence stay deterministic however the
+    operator writes the flag.
+    """
+    valid = {item.id for item in items}
+    unknown = [rid for rid in requested if rid not in valid]
+    if unknown:
+        raise SystemExit(
+            f"{flag}: unknown id(s) {unknown}; valid ids: {sorted(valid)}"
+        )
+    keep = set(requested)
+    return [item for item in items if item.id in keep]
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI entrypoint: load config, expand the grid, run all cells.
 
     See module docstring + task brief for flag semantics. ``--smoke`` overrides
     ``--models``/``--seeds``/``--temperature`` with the SMOKE_* constants and
-    filters the loaded questions to ``SMOKE_QUESTIONS``.
+    filters the loaded questions to ``SMOKE_QUESTIONS``. ``--only-conditions``
+    / ``--only-questions`` additionally slice the loaded conditions/questions
+    (validated against the loaded ids; absent = all).
     """
     parser = argparse.ArgumentParser(
         description="jrag effectiveness benchmark driver",
@@ -359,6 +386,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="Skip cells whose cell.jsonl already exists")
     parser.add_argument("--smoke", action="store_true",
                         help="Pin model/seed/temperature and filter questions to SMOKE_QUESTIONS")
+    parser.add_argument("--only-conditions", default=None,
+                        help="Comma-separated condition ids to run (e.g. A,D); default all")
+    parser.add_argument("--only-questions", default=None,
+                        help="Comma-separated question ids to run; default all")
     args = parser.parse_args(argv)
 
     if args.smoke:
@@ -380,6 +411,20 @@ def main(argv: list[str] | None = None) -> int:
     if args.smoke:
         smoke_set = set(SMOKE_QUESTIONS)
         questions = [q for q in questions if q.id in smoke_set]
+
+    # Slice filters (pure pre-filtering ahead of expand_grid — no invariant of
+    # the loaded config changes). Applied AFTER --smoke so each flag validates
+    # against the ids this run will actually see: a typo (or a non-smoke id
+    # combined with --smoke) exits loudly instead of silently yielding an
+    # empty grid.
+    if args.only_conditions is not None:
+        conditions = _filter_by_ids(
+            conditions, _parse_csv_list(args.only_conditions), "--only-conditions"
+        )
+    if args.only_questions is not None:
+        questions = _filter_by_ids(
+            questions, _parse_csv_list(args.only_questions), "--only-questions"
+        )
 
     cells = expand_grid(
         questions,

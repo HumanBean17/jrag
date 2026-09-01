@@ -435,7 +435,10 @@ def run_cell(
     materialized into the cell's results dir and prepended to the spawned
     ``PATH``; the jrag index/source env (``JAVA_CODEBASE_RAG_INDEX_DIR`` /
     ``JAVA_CODEBASE_RAG_SOURCE_ROOT``) is set so the CLI reads the right index.
-    Non-jrag conditions (A/C) get an unmodified inherited environment.
+    Non-jrag conditions (A/C) get an unmodified inherited environment. A
+    ``tools: prime`` condition (D) additionally gets its tools section generated
+    from that same index context (memoized per index, so every D cell sharing
+    an index composes — and hashes — the same prompt).
 
     Streams stdout line by line, incrementally writes the raw transcript to
     ``results_transcript_path``, and SIGTERMs the process when an ``assistant``
@@ -447,14 +450,27 @@ def run_cell(
     interrupted from the read loop itself). The watchdog is a no-op if the run
     finished first. Sets ``exit_reason="timeout"`` distinct from the turn cap.
     """
-    flags = to_flags(spec.condition)
-
-    env = os.environ.copy()
-    if flags.jrag_allowed_verbs is not None:
+    # jrag context (B/D), resolved BEFORE ``to_flags``: a ``tools: prime``
+    # condition composes its prompt from the very same jrag binary, source root,
+    # and index dir that the spawn below puts on the cell env, so the generated
+    # payload is byte-identical to what the agent's own ``jrag`` would print
+    # in-cell.
+    prime_ctx: dict[str, str] = {}
+    if spec.condition.jrag_allowed_verbs is not None:
         abs_index_dir = os.path.abspath(spec.corpus.index.index_dir)
         abs_checkout = cell_cwd(spec)
         python_bin = os.path.abspath(venv_python or sys.executable)
         real_jrag = os.path.abspath(jrag_bin or _resolve_real_jrag(python_bin))
+        prime_ctx = {
+            "jrag_bin": real_jrag,
+            "source_root": abs_checkout,
+            "index_dir": abs_index_dir,
+        }
+
+    flags = to_flags(spec.condition, **prime_ctx)
+
+    env = os.environ.copy()
+    if flags.jrag_allowed_verbs is not None:
         # Absolutize the cell dir: claude is spawned with cwd=cell_cwd (the
         # checkout), but the transcript path is relative to the driver's cwd
         # (repo root). Resolve it absolutely so the shim lands at a stable,

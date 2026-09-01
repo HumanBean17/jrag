@@ -314,3 +314,39 @@ penalty (verbose-correct 0.27→~0.47) while keeping spray low (0.08→~0.17).
 change (under-credit, not a false-zero), uniform across conditions, and removes
 a possible verbosity-confound between conditions. The grader stays programmatic
 / objective (no judge cost). Claims C1–C6 unchanged.
+
+## Amendment 2026-08-31 (prime payload gate — jrag-prime plan Task 5, issue #464)
+
+Frozen before the runs. Purpose: test whether replacing condition D's
+hand-written tool enumeration with the real `jrag prime` payload (navigation
+framed, capability-descriptive, no procedural teaching) reduces D's
+over-exploration on the open-ended categories without regressing D's genuine
+strengths.
+
+**(a) Claims under test.**
+
+| # | Claim | Metric | Question subset |
+|---|---|---|---|
+| P1 | Prime-primed D caps no more than A on open-ended categories | Cap rate (cells hitting max-turns/wall-timeout) on call-trace + semantic (bc-trace-01, bc-trace-02, bc-sem-01): revised-D ≤ A | those 3 ids |
+| P2 | Prime-primed D reduces steps vs file-prompt D | Mean steps (tool calls) per cell, revised-D < baseline-D, all bank-chat questions | all 20 |
+| P3 | No blast-radius regression | Cap rate + mean steps on blast-radius (bc-blast-01/02): revised-D ≤ baseline-D | those 2 ids |
+
+**(b) Design.** Two runs, identical harness and pinning: model glm-4.7,
+seed 0, temperature 0.0, max-turns 30, wall-timeout 900s, conditions A+D
+(`--only-conditions A,D`), full bank-chat corpus (20 questions), indexed
+checkout at bench/checkouts/bank-chat-system. Baseline run: D composed from
+`bench/prompts/D_jrag_full.md` verbatim (conditions copy with `tools: prime`
+removed — tmp/conditions-old-d.yml). Revised run: D's tools section generated
+from real `jrag prime` output (`bench/conditions.yml` with `tools: prime`).
+Cap = exit_reason in the set report.py counts as cap/timeout.
+
+**(c) Decision rule (pre-committed).** P1 is the gate: if revised-D's cap
+rate on call-trace + semantic ≤ A's, Phase B (artifact removal + hook wiring)
+ships in this branch and 0.13.0 may be tagged after review; if it fails, the
+branch still ships the code but 0.13.0 must NOT be tagged and the PR records
+the gate as FAILED. P2/P3 are directional evidence, not gates. Judged by
+controller; numbers recorded in the PR body verbatim.
+
+**(d) Honesty.** No prompt iterations between runs; both runs use the same
+commit (feat/jrag-prime @ ae11765) differing only in the conditions file;
+judge-based C1/C2 grading is optional context and not part of the gate.

@@ -8,7 +8,7 @@ single ``jrag`` console-script entry point:
   ``tables``, ``diagnose-ignore``, ``analyze-pr``, ``unresolved-calls``).
 * :mod:`java_codebase_rag.jrag` — agent verbs (``find``, ``search``,
   ``inspect``, ``callers``, ``callees``, ``hierarchy``, ``watch``, ``status``,
-  … — 32 verbs total).
+  … — 33 verbs total).
 
 Both modules already expose a zero-argument ``_console_script_main`` that
 reads ``sys.argv`` itself, performs its own startup (``raise_fd_limit``, UTF-8
@@ -46,7 +46,7 @@ it prints the agent parser's full help (agent verbs + global flags) and
 appends a clearly labeled "Operator commands" section listing the operator
 verbs with one-line descriptions sourced from :func:`cli.build_parser`'s
 subparser choices. This makes ``jrag --help`` the single discovery surface for
-all 11+32 verbs, satisfying the unification design contract.
+all 11+33 verbs, satisfying the unification design contract.
 
 The legacy ``java-codebase-rag`` alias does NOT get unified help: it keeps its
 pre-rename behavior (operator-only parser) for backward compatibility, since
@@ -132,6 +132,7 @@ AGENT_VERBS: frozenset[str] = frozenset(
         "vocab-index",
         "watch",
         "status",
+        "prime",
         "http-routes",
         "http-clients",
         "producers",
@@ -183,7 +184,7 @@ def _operator_subcommand_helps() -> list[tuple[str, str]]:
 def _print_unified_help(stream=None) -> None:
     """Print the canonical ``jrag`` unified help: agent verbs + operator verbs.
 
-    Prints the agent parser's full help (which already lists the 32 agent
+    Prints the agent parser's full help (which already lists the 33 agent
     verbs with one-line descriptions plus the global ``-h``/``--version``
     options and the descriptive epilog), then appends a clearly labeled
     "Operator commands (indexing & maintenance)" section listing the 11

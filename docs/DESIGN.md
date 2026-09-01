@@ -4,7 +4,7 @@ Internal design doc (**WHAT + WHY**). For HOW see [ARCHITECTURE.md](./ARCHITECTU
 
 ## TL;DR
 
-Deterministic tree-sitter graph + vector index for Java; agents get 5 MCP tools that walk a typed ontology **one hop at a time**; graph and vectors are complementary, empties are classified honestly, the file always beats the index, and `ONTOLOGY_VERSION` is the rebuild / staleness contract.
+Deterministic tree-sitter graph + vector index for Java; agents get 5 MCP tools that walk a typed ontology **one hop at a time**, a `jrag prime` SessionStart payload for orientation, and a CLI with one command per intent; graph and vectors are complementary, empties are classified honestly, the file always beats the index, and `ONTOLOGY_VERSION` is the rebuild / staleness contract.
 
 
 ## What this is
@@ -43,8 +43,11 @@ One repo, two stores, two audiences:
 | --- | --- | --- |
 | MCP server (`server.py`) | agents | `search` / `find` / `describe` / `neighbors` / `resolve` |
 | `jrag` CLI | agents / humans | same five tools, terminal rendering |
+| `jrag prime` (SessionStart hook) | agents | one-shot orientation at session start: identity ("a map, not an oracle"), the trust rule, live index state, and the command surface embedded verbatim from `jrag --help`; silent (empty output, rc 0) when the repo has no index |
 | `jrag watch` daemon | agents / humans | index freshness + warm-query accelerator over a Unix socket (one per project); pure accelerator, cold path stays byte-identical when no daemon runs |
 | `jrag` CLI | operators | index lifecycle, `meta` / `tables` / `diagnose-ignore`, `analyze-pr` |
+
+**No teaching artifacts ship.** Neither surface deploys skill or agent files. Agent orientation is either injected (`jrag install --surface cli` wires a SessionStart hook that runs `jrag prime --hook-json`) or self-announced (the MCP surface's tool descriptions and just-in-time hints). The prime payload is capability description — what `jrag` is and what state it is in — not procedure: no decision tables, workflows, or recovery playbooks.
 
 ## Non-goals (by design)
 

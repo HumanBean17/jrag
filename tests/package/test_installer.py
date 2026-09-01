@@ -647,36 +647,308 @@ class TestMergeMcpConfig:
             merge_mcp_config(config_path, HOSTS["claude-code"], mcp_command="/bin/mcp")
 
 
+class TestSessionStartHook:
+    """Test hooks_settings_path / merge_session_start_hook / _remove_session_start_hook."""
+
+    def test_session_start_hook_settings_path_resolves_per_host(self, tmp_path, monkeypatch):
+        """settings.json lives in host.scope_path for all three hosts"""
+        from java_codebase_rag.installer import HOSTS, hooks_settings_path
+        monkeypatch.setenv("HOME", str(tmp_path))
+        proj = tmp_path / "proj"
+        assert (
+            hooks_settings_path(HOSTS["claude-code"], "project", proj)
+            == proj / ".claude" / "settings.json"
+        )
+        assert (
+            hooks_settings_path(HOSTS["qwen-code"], "project", proj)
+            == proj / ".qwen" / "settings.json"
+        )
+        # user scope resolves under $HOME, not the project
+        assert (
+            hooks_settings_path(HOSTS["gigacode"], "user", proj)
+            == tmp_path / ".gigacode" / "settings.json"
+        )
+
+    def test_session_start_hook_merge_into_empty_settings(self, tmp_path):
+        """no file → creates hooks.SessionStart with our command; re-merge is a no-op"""
+        from java_codebase_rag.installer import merge_session_start_hook
+        config_path = tmp_path / "settings.json"
+        command = "/bin/jrag prime --hook-json"
+        result = merge_session_start_hook(config_path, hook_command=command)
+        assert result is True
+        with open(config_path) as f:
+            config = json.load(f)
+        assert config == {
+            "hooks": {
+                "SessionStart": [
+                    {"matcher": "", "hooks": [{"type": "command", "command": command}]}
+                ]
+            }
+        }
+        # identical second call → False, file bytes untouched
+        before = config_path.read_bytes()
+        assert merge_session_start_hook(config_path, hook_command=command) is False
+        assert config_path.read_bytes() == before
+
+    def test_session_start_hook_merge_preserves_siblings_and_other_hooks(self, tmp_path):
+        """existing security/$version/other matchers/other events survive the merge"""
+        from java_codebase_rag.installer import merge_session_start_hook
+        config_path = tmp_path / "settings.json"
+        seeded = {
+            "security": {"level": "high"},
+            "$version": 5,
+            "hooks": {
+                "SessionStart": [
+                    {
+                        "matcher": "startup",
+                        "hooks": [{"type": "command", "command": "echo hi"}],
+                    }
+                ],
+                "PreToolUse": [
+                    {
+                        "matcher": "Bash",
+                        "hooks": [{"type": "command", "command": "lint"}],
+                    }
+                ],
+            },
+        }
+        config_path.write_text(json.dumps(seeded))
+        command = "/new/jrag prime --hook-json"
+        assert merge_session_start_hook(config_path, hook_command=command) is True
+        with open(config_path) as f:
+            config = json.load(f)
+        assert config["security"] == {"level": "high"}
+        assert config["$version"] == 5
+        assert config["hooks"]["PreToolUse"] == seeded["hooks"]["PreToolUse"]
+        session_start = config["hooks"]["SessionStart"]
+        # the foreign matcher stays first and untouched
+        assert session_start[0] == seeded["hooks"]["SessionStart"][0]
+        ours = [m for m in session_start if isinstance(m, dict) and m.get("matcher") == ""]
+        assert len(ours) == 1
+        assert ours[0]["hooks"] == [{"type": "command", "command": command}]
+
+    def test_session_start_hook_merge_replaces_stale_command(self, tmp_path):
+        """an older jrag prime entry is replaced in place, never duplicated"""
+        from java_codebase_rag.installer import merge_session_start_hook
+        config_path = tmp_path / "settings.json"
+        config_path.write_text(
+            json.dumps(
+                {
+                    "hooks": {
+                        "SessionStart": [
+                            {
+                                "matcher": "",
+                                "hooks": [
+                                    {"type": "command", "command": "/old/jrag prime --hook-json"}
+                                ],
+                            }
+                        ]
+                    }
+                }
+            )
+        )
+        command = "/new/jrag prime --hook-json"
+        assert merge_session_start_hook(config_path, hook_command=command) is True
+        with open(config_path) as f:
+            config = json.load(f)
+        commands = [
+            e["command"]
+            for m in config["hooks"]["SessionStart"]
+            for e in m["hooks"]
+            if " prime --hook-json" in e["command"]
+        ]
+        assert commands == [command]
+
+    def test_session_start_hook_merge_replaces_legacy_binary_entry(self, tmp_path):
+        """an entry installed under the legacy ``java-codebase-rag`` console
+        script is ours too — replaced in place, never duplicated"""
+        from java_codebase_rag.installer import merge_session_start_hook
+        config_path = tmp_path / "settings.json"
+        config_path.write_text(
+            json.dumps(
+                {
+                    "hooks": {
+                        "SessionStart": [
+                            {
+                                "matcher": "",
+                                "hooks": [
+                                    {
+                                        "type": "command",
+                                        "command": (
+                                            "/old/venv/bin/java-codebase-rag"
+                                            " prime --hook-json"
+                                        ),
+                                    }
+                                ],
+                            }
+                        ]
+                    }
+                }
+            )
+        )
+        command = "/new/jrag prime --hook-json"
+        assert merge_session_start_hook(config_path, hook_command=command) is True
+        with open(config_path) as f:
+            config = json.load(f)
+        entries = [
+            e for m in config["hooks"]["SessionStart"] for e in m["hooks"]
+        ]
+        assert entries == [{"type": "command", "command": command}]
+
+    def test_session_start_hook_remove_legacy_binary_entry(self, tmp_path):
+        """teardown also recognizes the legacy-binary entry — it must not
+        survive an uninstalled hook"""
+        from java_codebase_rag.installer import _remove_session_start_hook
+        config_path = tmp_path / "settings.json"
+        config_path.write_text(
+            json.dumps(
+                {
+                    "hooks": {
+                        "SessionStart": [
+                            {
+                                "matcher": "",
+                                "hooks": [
+                                    {
+                                        "type": "command",
+                                        "command": (
+                                            "/usr/local/bin/java-codebase-rag"
+                                            " prime --hook-json"
+                                        ),
+                                    }
+                                ],
+                            }
+                        ]
+                    }
+                }
+            )
+        )
+        assert _remove_session_start_hook(config_path) is True
+        # ours was the only tenant → matcher, SessionStart and hooks all pruned
+        assert json.loads(config_path.read_text()) == {}
+
+    def test_session_start_hook_merge_invalid_json_raises(self, tmp_path):
+        """malformed settings.json → ValueError"""
+        from java_codebase_rag.installer import merge_session_start_hook
+        config_path = tmp_path / "settings.json"
+        config_path.write_text("{invalid json!!!")
+        with pytest.raises(ValueError, match="Failed to parse"):
+            merge_session_start_hook(config_path, hook_command="/bin/jrag prime")
+
+    def test_session_start_hook_remove(self, tmp_path):
+        """remove drops only our entry, prunes emptied containers, honors dry_run"""
+        from java_codebase_rag.installer import _remove_session_start_hook
+        seeded = {
+            "security": {"level": "high"},
+            "hooks": {
+                "SessionStart": [
+                    {
+                        "matcher": "startup",
+                        "hooks": [{"type": "command", "command": "echo hi"}],
+                    },
+                    {
+                        "matcher": "",
+                        "hooks": [
+                            {"type": "command", "command": "/bin/jrag prime --hook-json"}
+                        ],
+                    },
+                ],
+                "PreToolUse": [
+                    {
+                        "matcher": "Bash",
+                        "hooks": [{"type": "command", "command": "lint"}],
+                    }
+                ],
+            },
+        }
+        config_path = tmp_path / "settings.json"
+        config_path.write_text(json.dumps(seeded))
+        assert _remove_session_start_hook(config_path) is True
+        with open(config_path) as f:
+            config = json.load(f)
+        assert config["security"] == {"level": "high"}
+        assert config["hooks"]["PreToolUse"] == seeded["hooks"]["PreToolUse"]
+        assert config["hooks"]["SessionStart"] == seeded["hooks"]["SessionStart"][:1]
+        # nothing left to remove → False, file bytes untouched
+        before = config_path.read_bytes()
+        assert _remove_session_start_hook(config_path) is False
+        assert config_path.read_bytes() == before
+
+        # ours was the only tenant → matcher, SessionStart and hooks all pruned
+        lone_path = tmp_path / "lone.json"
+        lone_path.write_text(
+            json.dumps(
+                {
+                    "hooks": {
+                        "SessionStart": [
+                            {
+                                "matcher": "",
+                                "hooks": [
+                                    {"type": "command", "command": "/bin/jrag prime --hook-json"}
+                                ],
+                            }
+                        ]
+                    }
+                }
+            )
+        )
+        assert _remove_session_start_hook(lone_path) is True
+        assert json.loads(lone_path.read_text()) == {}
+
+        # dry_run reports the removal but writes nothing
+        dry_path = tmp_path / "dry.json"
+        dry_path.write_text(
+            json.dumps(
+                {
+                    "hooks": {
+                        "SessionStart": [
+                            {
+                                "matcher": "",
+                                "hooks": [
+                                    {"type": "command", "command": "/bin/jrag prime --hook-json"}
+                                ],
+                            }
+                        ]
+                    }
+                }
+            )
+        )
+        dry_before = dry_path.read_bytes()
+        assert _remove_session_start_hook(dry_path, dry_run=True) is True
+        assert dry_path.read_bytes() == dry_before
+
+        # missing file → no-op success
+        assert _remove_session_start_hook(tmp_path / "absent.json") is False
+
+
 class TestDeployArtifacts:
     """Test deploy_artifacts function."""
 
     def test_permission_error_skips_artifact_continues(self, tmp_path, monkeypatch):
-        """unwritable directory → artifact skipped, others continue, exit 1"""
+        """unwritable host dir → that host's hook fails, the next host continues"""
         from java_codebase_rag.installer import deploy_artifacts, HOSTS
 
-        # Mock _is_writable to return False for skills directory
+        # claude-code's settings dir unwritable; qwen-code's is fine.
         def mock_is_writable(path):
-            return "skills" not in str(path)
+            return Path(path).name != ".claude"
 
         monkeypatch.setattr("java_codebase_rag.installer._is_writable", mock_is_writable)
 
         results = deploy_artifacts(
-            [HOSTS["claude-code"]],
+            [HOSTS["claude-code"], HOSTS["qwen-code"]],
             "project",
             tmp_path,
             non_interactive=True,
-            mcp_command="/bin/mcp",
+            mcp_command="/fake/bin/jrag",
+            surface="cli",
         )
 
-        # Should have 3 results (MCP, skill, agent)
-        assert len(results) == 3
-        # MCP should succeed
-        assert results[0].success is True
-        # Skill should fail due to permission
-        assert results[1].success is False
-        assert "not writable" in results[1].error
-        # Agent should succeed
-        assert results[2].success is True
+        # One row per host (the SessionStart hook).
+        assert len(results) == 2
+        # claude-code failed on permissions
+        assert results[0].success is False
+        assert "not writable" in results[0].error
+        # qwen-code still deployed — one bad host doesn't stop the loop
+        assert results[1].success is True
 
     def test_artifact_overwrite_prompt_existing_skill(self, tmp_path, monkeypatch):
         """existing skill file → prompts overwrite/skip/abort"""
@@ -695,6 +967,13 @@ class TestDeployArtifacts:
             return "skip"
         monkeypatch.setattr("java_codebase_rag.installer.prompt", mock_prompt)
 
+        # No surface ships package files, so the package artifact this used to
+        # read from install_data is supplied directly.
+        monkeypatch.setattr(
+            "java_codebase_rag.installer._read_package_artifact",
+            lambda path: "new content",
+        )
+
         result = _deploy_file(
             skill_file,
             "skills/explore-codebase/SKILL.md",
@@ -706,7 +985,7 @@ class TestDeployArtifacts:
         assert "Skipped by user" in result.error
 
     def test_deploy_artifacts_multi_host_deploy_all(self, tmp_path, monkeypatch):
-        """multiple hosts selected → artifacts deployed to all"""
+        """multiple hosts selected → the MCP entry is deployed to all"""
         from java_codebase_rag.installer import deploy_artifacts, HOSTS
 
         results = deploy_artifacts(
@@ -717,18 +996,22 @@ class TestDeployArtifacts:
             mcp_command="/bin/mcp",
         )
 
-        # Should have 6 results (3 per host: MCP, skill, agent)
-        assert len(results) == 6
+        # One result per host (the MCP entry — the surface ships nothing else).
+        assert len(results) == 2
         # All should succeed
         assert all(r.success for r in results)
 
-        # Verify files exist for both hosts
-        assert (tmp_path / ".mcp.json").is_file()
-        assert (tmp_path / ".claude" / "skills" / "explore-codebase" / "SKILL.md").is_file()
-        assert (tmp_path / ".claude" / "agents" / "explorer-rag-enhanced.md").is_file()
-        assert (tmp_path / ".qwen" / "settings.json").is_file()
-        assert (tmp_path / ".qwen" / "skills" / "explore-codebase" / "SKILL.md").is_file()
-        assert (tmp_path / ".qwen" / "agents" / "explorer-rag-enhanced.md").is_file()
+        # Both hosts carry our MCP entry.
+        assert "java-codebase-rag" in json.loads((tmp_path / ".mcp.json").read_text())[
+            "mcpServers"
+        ]
+        qwen_cfg = json.loads((tmp_path / ".qwen" / "settings.json").read_text())
+        assert "java-codebase-rag" in qwen_cfg["mcpServers"]
+        # And no skill/agent files anywhere.
+        assert not (tmp_path / ".claude" / "skills").exists()
+        assert not (tmp_path / ".claude" / "agents").exists()
+        assert not (tmp_path / ".qwen" / "skills").exists()
+        assert not (tmp_path / ".qwen" / "agents").exists()
 
 
 class TestGenerateYamlConfig:
@@ -897,6 +1180,25 @@ class TestGenerateYamlConfigCrossService:
 class TestInstallIntegration:
     """Integration tests for install command."""
 
+    @staticmethod
+    def _skill_agent_files(host_dir: Path) -> dict:
+        """Map of ``skills/`` + ``agents/`` files under a host dir -> bytes.
+
+        Neither surface deploys files anymore, so this snapshot must be
+        identical before and after an install/refresh. The bank-chat fixture
+        ships legacy deployed artifacts, hence the byte comparison rather than
+        "directory does not exist".
+        """
+        files: dict = {}
+        for sub in ("skills", "agents"):
+            subtree = host_dir / sub
+            if not subtree.is_dir():
+                continue
+            for path in subtree.rglob("*"):
+                if path.is_file():
+                    files[str(path.relative_to(host_dir))] = path.read_bytes()
+        return files
+
     def test_install_non_interactive_claude_code_bank_chat(self, tmp_path, monkeypatch):
         """run install --non-interactive --agent claude-code from tests/bank-chat-system/ fixture"""
         import shutil
@@ -909,6 +1211,7 @@ class TestInstallIntegration:
         shutil.copytree(bank_chat, tmp_path / "bank-chat")
 
         cwd = tmp_path / "bank-chat"
+        legacy_claude_artifacts = self._skill_agent_files(cwd / ".claude")
 
         # Create .git so update_gitignore works
         (cwd / ".git").mkdir()
@@ -969,12 +1272,10 @@ class TestInstallIntegration:
         assert "java-codebase-rag" in mcp_config.get("mcpServers", {})
         assert mcp_config["mcpServers"]["java-codebase-rag"]["type"] == "stdio"
 
-        # Verify skill and agent
-        skill_path = cwd / ".claude" / "skills" / "explore-codebase" / "SKILL.md"
-        assert skill_path.is_file()
-
-        agent_path = cwd / ".claude" / "agents" / "explorer-rag-enhanced.md"
-        assert agent_path.is_file()
+        # Tools only: the mcp surface ships no skill/agent artifacts. The
+        # fixture carries legacy deployed files, so assert they were left
+        # byte-identical (nothing written under skills/ or agents/).
+        assert self._skill_agent_files(cwd / ".claude") == legacy_claude_artifacts
 
         # Verify .gitignore
         gitignore = cwd / ".gitignore"
@@ -1054,9 +1355,9 @@ class TestInstallIntegration:
         assert "java-codebase-rag" in mcp_config.get("mcpServers", {})
         assert mcp_config["mcpServers"]["java-codebase-rag"]["type"] == "stdio"
 
-        # Skill and agent deployed under tmp_path/.claude/.
-        assert (tmp_path / ".claude" / "skills" / "explore-codebase" / "SKILL.md").is_file()
-        assert (tmp_path / ".claude" / "agents" / "explorer-rag-enhanced.md").is_file()
+        # Tools only: no skill/agent artifacts under tmp_path/.claude/.
+        assert not (tmp_path / ".claude" / "skills").exists()
+        assert not (tmp_path / ".claude" / "agents").exists()
 
         # Multi-system summary printed to stdout (quiet=True suppresses only stderr).
         captured = capsys.readouterr()
@@ -1104,6 +1405,9 @@ class TestInstallIntegration:
         # Change to fixture directory
         monkeypatch.setattr(Path, "cwd", lambda: cwd)
 
+        legacy_claude = self._skill_agent_files(cwd / ".claude")
+        legacy_qwen = self._skill_agent_files(cwd / ".qwen")
+
         result = run_install(
             non_interactive=True,
             agents=["claude-code", "qwen-code"],
@@ -1122,11 +1426,12 @@ class TestInstallIntegration:
         mcp_qwen = cwd / ".qwen" / "settings.json"
         assert mcp_claude.is_file()
         assert mcp_qwen.is_file()
+        for path in (mcp_claude, mcp_qwen):
+            assert "java-codebase-rag" in json.loads(path.read_text())["mcpServers"]
 
-        skill_claude = cwd / ".claude" / "skills" / "explore-codebase" / "SKILL.md"
-        skill_qwen = cwd / ".qwen" / "skills" / "explore-codebase" / "SKILL.md"
-        assert skill_claude.is_file()
-        assert skill_qwen.is_file()
+        # Tools only: no skill/agent artifacts written for either host.
+        assert self._skill_agent_files(cwd / ".claude") == legacy_claude
+        assert self._skill_agent_files(cwd / ".qwen") == legacy_qwen
 
 
 class TestDetectConfiguredHosts:
@@ -1277,58 +1582,73 @@ class TestDetectConfiguredHosts:
 
 
 class TestRefreshArtifacts:
-    """Test refresh_artifacts function for PR-I2."""
+    """Test refresh_artifacts function for PR-I2 (entry/hook refresh)."""
 
-    def test_refresh_skill_overwrites_stale(self, tmp_path, monkeypatch):
-        """skill file differs from package → overwritten"""
+    def _write_hook(self, tmp_path, command):
+        """Stage a claude-code settings.json holding our prime hook."""
+        settings = tmp_path / ".claude" / "settings.json"
+        settings.parent.mkdir(parents=True, exist_ok=True)
+        settings.write_text(
+            json.dumps(
+                {
+                    "hooks": {
+                        "SessionStart": [
+                            {
+                                "matcher": "",
+                                "hooks": [{"type": "command", "command": command}],
+                            }
+                        ]
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        return settings
+
+    def _session_start_commands(self, settings_path):
+        config = json.loads(settings_path.read_text())
+        matchers = config.get("hooks", {}).get("SessionStart", [])
+        return [
+            e["command"]
+            for m in matchers
+            if isinstance(m, dict) and m.get("matcher") == ""
+            for e in m.get("hooks", [])
+            if isinstance(e, dict)
+        ]
+
+    def test_refresh_hook_overwrites_stale(self, tmp_path, monkeypatch):
+        """hook command differs from the resolved jrag path → rewritten"""
+        import shutil
         from java_codebase_rag.installer import refresh_artifacts, HOSTS
 
-        # Create skill file with stale content
-        skills_dir = tmp_path / ".claude" / "skills" / "explore-codebase"
-        skills_dir.mkdir(parents=True)
-        skill_file = skills_dir / "SKILL.md"
-        skill_file.write_text("STALE CONTENT")
-
-        # Mock _read_package_artifact to return new content
-        monkeypatch.setattr(
-            "java_codebase_rag.installer._read_package_artifact",
-            lambda path: "NEW CONTENT",
-        )
+        settings = self._write_hook(tmp_path, "/old/bin/jrag prime --hook-json")
+        monkeypatch.setattr(shutil, "which", lambda x: "/new/bin/jrag")
 
         host = HOSTS["claude-code"]
-        results = refresh_artifacts(host, "project", tmp_path, force=False, dry_run=False)
+        results = refresh_artifacts(
+            host, "project", tmp_path, force=False, dry_run=False, surface="cli"
+        )
 
-        # Should have updated the skill file
-        skill_results = [r for r in results if "SKILL.md" in str(r.path)]
-        assert len(skill_results) == 1
-        assert skill_results[0].success is True
-        assert skill_file.read_text() == "NEW CONTENT"
+        assert len(results) == 1 and results[0].success is True
+        assert self._session_start_commands(settings) == ["/new/bin/jrag prime --hook-json"]
 
-    def test_refresh_skill_skips_if_matching(self, tmp_path, monkeypatch):
-        """skill file matches → not overwritten (unless --force)"""
+    def test_refresh_hook_skips_if_matching(self, tmp_path, monkeypatch):
+        """hook command already current → left untouched"""
+        import shutil
         from java_codebase_rag.installer import refresh_artifacts, HOSTS
 
-        # Create skill file with current content
-        skills_dir = tmp_path / ".claude" / "skills" / "explore-codebase"
-        skills_dir.mkdir(parents=True)
-        skill_file = skills_dir / "SKILL.md"
-        skill_file.write_text("CURRENT CONTENT")
-
-        # Mock _read_package_artifact to return same content
-        monkeypatch.setattr(
-            "java_codebase_rag.installer._read_package_artifact",
-            lambda path: "CURRENT CONTENT",
-        )
+        settings = self._write_hook(tmp_path, "/usr/local/bin/jrag prime --hook-json")
+        before = settings.read_text()
+        monkeypatch.setattr(shutil, "which", lambda x: "/usr/local/bin/jrag")
 
         host = HOSTS["claude-code"]
-        results = refresh_artifacts(host, "project", tmp_path, force=False, dry_run=False)
+        results = refresh_artifacts(
+            host, "project", tmp_path, force=False, dry_run=False, surface="cli"
+        )
 
-        # Should have skipped the skill file (no change needed)
-        skill_results = [r for r in results if "SKILL.md" in str(r.path)]
-        assert len(skill_results) == 1
-        assert skill_results[0].success is True
-        # File should remain unchanged
-        assert skill_file.read_text() == "CURRENT CONTENT"
+        assert len(results) == 1 and results[0].success is True
+        # No change needed — the file is byte-identical.
+        assert settings.read_text() == before
 
     def test_refresh_mcp_skips_if_correct(self, tmp_path, monkeypatch):
         """MCP entry matches the current resolved path → not modified"""
@@ -1367,22 +1687,27 @@ class TestRefreshArtifacts:
 
     def test_refresh_dry_run_prints_no_write(self, tmp_path, monkeypatch, capsys):
         """--dry-run → prints changes, no files written"""
-        from java_codebase_rag.installer import refresh_artifacts, HOSTS
+        from java_codebase_rag.installer import _refresh_file
 
-        # Create skill file with stale content
+        # _refresh_file is no longer reached through the manifest (no surface
+        # ships files), so its dry-run contract is exercised directly.
         skills_dir = tmp_path / ".claude" / "skills" / "explore-codebase"
         skills_dir.mkdir(parents=True)
         skill_file = skills_dir / "SKILL.md"
         skill_file.write_text("STALE CONTENT")
 
-        # Mock _read_package_artifact to return new content
         monkeypatch.setattr(
             "java_codebase_rag.installer._read_package_artifact",
             lambda path: "NEW CONTENT",
         )
 
-        host = HOSTS["claude-code"]
-        refresh_artifacts(host, "project", tmp_path, force=False, dry_run=True)
+        _refresh_file(
+            skill_file,
+            "skills/explore-codebase/SKILL.md",
+            artifact_type="skill",
+            force=False,
+            dry_run=True,
+        )
 
         # In dry-run mode, files should not be written
         captured = capsys.readouterr()
@@ -1607,19 +1932,25 @@ class TestRunUpdate:
         )
         assert install_result == 0
 
-        # Verify artifacts were created
-        skill_file = cwd / ".claude" / "skills" / "explore-codebase" / "SKILL.md"
-        assert skill_file.is_file()
+        # Verify the MCP entry was created
+        mcp_path = cwd / ".mcp.json"
+        assert "java-codebase-rag" in json.loads(mcp_path.read_text())["mcpServers"]
 
-        # Modify skill file to make it "stale"
-        skill_file.write_text("MODIFIED CONTENT")
+        # Make the entry "stale" (a moved/renamed install)
+        config = json.loads(mcp_path.read_text())
+        config["mcpServers"]["java-codebase-rag"]["command"] = "/old/bin/java-codebase-rag-mcp"
+        mcp_path.write_text(json.dumps(config), encoding="utf-8")
 
         # Run update
         update_result = run_update(force=False, dry_run=False, cwd=cwd)
         assert update_result == 0
 
-        # Skill file should have been refreshed back to package content
-        # (In real scenario, this would be the actual package content)
+        # Entry command refreshed back to the resolved binary path
+        refreshed = json.loads(mcp_path.read_text())
+        assert (
+            refreshed["mcpServers"]["java-codebase-rag"]["command"]
+            == "/usr/local/bin/java-codebase-rag-mcp"
+        )
 
     def test_update_missing_mcp_binary_returns_partial_failure(self, tmp_path, monkeypatch):
         """java-codebase-rag-mcp not found on PATH → returns partial failure (1)"""

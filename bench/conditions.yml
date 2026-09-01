@@ -11,6 +11,13 @@
 #   [search]      — vector-only (B): the shim passes ONLY `jrag search`
 #   all           — the full query surface (D): resolved to JRAG_QUERY_VERBS
 #
+# `tools: prime` (D only) — the prompt file's `## Your tools` section is
+# replaced at load time by real `jrag prime` output for the cell's index
+# (memoized per index in load_conditions: one subprocess per distinct index). D thus teaches the
+# actual index state + command surface instead of a hand-written snapshot that
+# drifts from the shipped CLI. Absent = the file's tools section verbatim
+# (legacy behavior; also Task 5's file-based baseline).
+#
 # ALL conditions auto-deny the common escape/integrity set ESCAPE_TOOLS
 # (Edit/Write/NotebookEdit/WebSearch/WebFetch/Agent/Task), appended by to_flags.
 # Required because --allowedTools is ADDITIVE under bypassPermissions; isolation
@@ -46,6 +53,7 @@ conditions:
   - id: D
     name: jrag full (vector + graph + cross-service, CLI)
     jrag_allowed_verbs: all
+    tools: prime
     allowed_tools: [Read, Grep, Glob, Bash]
     disallowed_tools: []
     prompt_file: bench/prompts/D_jrag_full.md

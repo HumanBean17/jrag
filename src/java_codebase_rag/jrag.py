@@ -554,6 +554,31 @@ def build_parser() -> argparse.ArgumentParser:
     )
     status.set_defaults(handler=_cmd_status, detail="full")
 
+    # prime subparser (jrag-prime Task 2): SessionStart priming payload.
+    # Aggregate like status (uses _core_parser, so --service/--module/--limit/
+    # --count/--exists/--fields are rejected at parse time), but unlike status
+    # it never speaks the Envelope protocol: its consumer is a hook, not a
+    # shell user, so soft states degrade to silence instead of error output.
+    prime = subparsers.add_parser(
+        "prime",
+        help="Print agent priming context (index state + command surface).",
+        parents=[_core_parser()],
+        description=(
+            "Print the SessionStart priming payload: what jrag is, the trust rule, "
+            "live index state (freshness, services, symbol/route/client/producer "
+            "counts, watch daemon liveness), and the command surface. Reads "
+            "filesystem metadata only. Silent (rc 0, no output) when this repo has "
+            "no jrag index — safe to install as a user-scope SessionStart hook. "
+            "--hook-json wraps the payload in the Claude Code SessionStart envelope."
+        ),
+    )
+    prime.add_argument(
+        "--hook-json",
+        action="store_true",
+        help="Wrap output in the SessionStart hook JSON envelope.",
+    )
+    prime.set_defaults(handler=_cmd_prime)
+
     # find subparser (PR-JRAG-1b)
     find = subparsers.add_parser(
         "find",
@@ -1724,6 +1749,111 @@ def _cmd_status(args: argparse.Namespace) -> int:
         },
     )
     print(render(env, fmt=args.format, detail=args.detail, noun="status", shape="inspect"))
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# jrag prime — SessionStart priming payload (jrag-prime Task 2)
+#
+# The inverse of every other handler: those must be LOUD (actionable envelopes,
+# non-zero exits), while prime runs from a hook in every session of every repo
+# a user scopes it to and must never nag. Silence on "no index here" is the
+# whole point — an unindexed repo gets rc 0 and empty stdout, not a remediation
+# hint it cannot act on.
+# ---------------------------------------------------------------------------
+
+# Buckets for the "incremented X ago" slot: minutes up to 90m, hours up to 48h,
+# then days. Truncated ints; the payload needs "how stale, roughly", not a clock.
+_AGE_MINUTE_S = 90 * 60
+_AGE_HOUR_S = 48 * 3600
+
+
+def _humanize_age(seconds: float) -> str:
+    """Render an age as ``Xm`` / ``Xh`` / ``Xd`` (truncated)."""
+    if seconds < _AGE_MINUTE_S:
+        return f"{int(seconds // 60)}m"
+    if seconds < _AGE_HOUR_S:
+        return f"{int(seconds // 3600)}h"
+    return f"{int(seconds // 86400)}d"
+
+
+def _count_from(counts: dict, key: str) -> int:
+    """``counts[key]`` as an int, degrading to 0 on missing/garbage values.
+
+    A partial or hand-edited GraphMeta must not take the hook down with it.
+    """
+    try:
+        return int(counts.get(key) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _prime_state(cfg, graph, meta: dict):
+    """Build the :class:`~java_codebase_rag.prime.PrimeState` for this index."""
+    from java_codebase_rag.prime import PrimeState, _staleness_since
+    from java_codebase_rag.watch.client import is_daemon_alive
+
+    counts = meta.get("counts") or {}
+    built_at = float(meta.get("built_at") or 0)
+    changed = _staleness_since(built_at, cfg.source_root)
+
+    services = graph.microservice_counts() or {}
+    # Count-descending so the payload leads with the services that carry the
+    # most types; name as the tiebreak keeps the order stable across runs.
+    ranked = sorted(services, key=lambda name: (-int(services.get(name) or 0), name))
+    if len(ranked) > 7:
+        service_names = tuple(ranked[:7]) + ("…",)
+    else:
+        service_names = tuple(ranked)
+
+    return PrimeState(
+        # ``changed is None`` means the staleness walk hit its visited-files
+        # cap before finding a change: freshness is unknown, rendered as a
+        # bare "stale" — an unverified index must not claim to be fresh.
+        freshness="stale" if changed is None or changed > 0 else "fresh",
+        changed_files=changed,
+        last_increment_age=_humanize_age(max(0.0, time.time() - built_at)),
+        service_count=len(ranked),
+        service_names=service_names,
+        symbol_count=_count_from(counts, "types") + _count_from(counts, "members"),
+        route_count=_count_from(counts, "routes"),
+        client_count=_count_from(counts, "clients"),
+        producer_count=_count_from(counts, "producers"),
+        daemon_running=is_daemon_alive(cfg.index_dir),
+    )
+
+
+def _cmd_prime(args: argparse.Namespace) -> int:
+    """Print the priming payload; rc 0 in every state, including failures.
+
+    Hook-safe by construction: ``_IndexNotFound`` (the common case for a
+    user-scope hook — most repos have no jrag index) returns silently, and any
+    other failure prints one stderr line and still returns 0, so a broken index
+    degrades to "no priming" rather than to a traceback the hook would surface
+    as a session-start error.
+    """
+    from java_codebase_rag.prime import render, render_hook_json
+
+    try:
+        cfg = _resolve_cfg(args)
+        try:
+            graph = _load_graph(cfg)
+        except _IndexNotFound:
+            return 0
+        meta = graph.meta()
+        if "error" in meta:
+            # Same unreadable-meta state `_cmd_status` reports as an envelope;
+            # here it is the stderr-line degradation instead.
+            raise RuntimeError(f"index meta read failed: {meta['error']}")
+        state = _prime_state(cfg, graph, meta)
+        # Inside the try on purpose: a render failure must take the degradation
+        # path, not escape to ``main``'s handler trap (error envelope on stdout
+        # + traceback + rc 2). ``render`` is evaluated before ``print`` writes a
+        # byte, so a failure here still leaves stdout empty.
+        print(render_hook_json(state) if args.hook_json else render(state))
+    except Exception as exc:  # noqa: BLE001 - hook-safe degradation
+        print(f"jrag prime: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 0
     return 0
 
 

@@ -16,22 +16,30 @@ Lexical escape from the vector-only condition (B) is closed as tightly as
 ``Bash(<lexical> *)`` deny-list (``JRAG_LEXICAL_DENY``). See the Plan 4 design
 and PREREGISTRATION Amendment 2026-07-22 (Plan 4).
 
-Pure validation — no I/O beyond reading the YAML and the prompt file.
+Pure validation — no I/O beyond reading the YAML and the prompt file. The one
+exception is ``tools: prime`` (condition D): composing that condition's prompt
+runs ``jrag prime`` once per index (see ``_generate_prime_tools_section``) so
+the agent is taught the REAL index state and command surface instead of a
+hand-written snapshot that drifts.
 """
 from __future__ import annotations
 
+import os
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
 
 # jrag CLI agent verbs the benchmark exposes (Plan 4). This is the full agent
-# verb surface from ``cli_dispatch.AGENT_VERBS`` MINUS the maintenance/daemon
-# verbs ``watch`` (long-lived daemon — would hang a cell) and ``vocab-index``
-# (index mutation). Keep in sync with ``src/java_codebase_rag/jrag.py``; a stale
-# entry over-restricts condition D (graceful — the agent just can't use a new
-# verb) and never leaks a verb into B (B's allow-list is the literal
-# ``["search"]``).
+# verb surface from ``cli_dispatch.AGENT_VERBS`` MINUS the non-query verbs:
+# ``watch`` (long-lived daemon — would hang a cell), ``vocab-index`` (index
+# mutation), and ``prime`` (not a query — the harness itself generates
+# condition D's priming payload from ``jrag prime`` at compose time, so the
+# agent under test never invokes it; jrag-prime plan, Task 3). Keep in sync
+# with ``src/java_codebase_rag/jrag.py``; a stale entry over-restricts
+# condition D (graceful — the agent just can't use a new verb) and never leaks
+# a verb into B (B's allow-list is the literal ``["search"]``).
 JRAG_QUERY_VERBS = [
     # orientation
     "status", "microservices", "map", "conventions", "overview",
@@ -110,6 +118,10 @@ class Condition:
     exact verbs the per-cell PATH shim will let through. For D this is the full
     ``JRAG_QUERY_VERBS`` (the YAML sentinel ``all`` resolves to it at load).
     Defaults to ``None`` so stub conditions in tests can omit it.
+
+    ``tools``: ``"prime"`` (D only) = replace the prompt file's ``## Your tools``
+    section with real ``jrag prime`` output at compose time; ``None`` = use the
+    file text verbatim (legacy / Task 5's file-based baseline).
     """
 
     id: str
@@ -118,6 +130,7 @@ class Condition:
     disallowed_tools: list[str]
     prompt_file: str
     jrag_allowed_verbs: list[str] | None = None
+    tools: str | None = None
 
 
 @dataclass(frozen=True)
@@ -183,7 +196,13 @@ def validate(cond: Condition) -> None:
             )
 
 
-def to_flags(cond: Condition) -> ConditionFlags:
+def to_flags(
+    cond: Condition,
+    *,
+    jrag_bin: Path | None = None,
+    source_root: Path | None = None,
+    index_dir: Path | None = None,
+) -> ConditionFlags:
     """Assemble the ``claude -p`` flag payload for a condition.
 
     The shared ``ESCAPE_TOOLS`` deny-list is auto-appended to every condition
@@ -191,8 +210,30 @@ def to_flags(cond: Condition) -> ConditionFlags:
     Condition B additionally gets ``JRAG_LEXICAL_DENY`` (the granular Bash
     lexical deny-list). The verb allow-list (``jrag_allowed_verbs``) is carried
     through for ``claude_runner`` to bake into the per-cell PATH shim.
+
+    A condition with ``tools="prime"`` (D) has its prompt composed as
+    ``preamble + "## Your tools\\n\\n" + <jrag prime output>`` — the file's own
+    tools section is discarded. That requires the caller to supply the same
+    ``jrag_bin`` / ``source_root`` / ``index_dir`` the cell will run under (the
+    payload embeds index state, so a mismatch would prime the agent with a
+    different repo than it can query); omitting them is a ``ConfigError`` rather
+    than a silent fall-back to the stale file text. Every other condition reads
+    the prompt file verbatim and ignores the context arguments.
     """
-    prompt = Path(cond.prompt_file).read_text(encoding="utf-8")
+    if cond.tools == "prime":
+        if jrag_bin is None or source_root is None or index_dir is None:
+            raise ConfigError(
+                "condition D requires jrag_bin/source_root/index_dir "
+                "for prime generation"
+            )
+        prompt = (
+            prompt_preamble(cond.prompt_file)
+            + _TOOLS_MARKER + "\n\n"
+            + _generate_prime_tools_section(jrag_bin, source_root, index_dir)
+        )
+    else:
+        prompt = Path(cond.prompt_file).read_text(encoding="utf-8")
+
     disallowed = list(cond.disallowed_tools) + list(ESCAPE_TOOLS)
     if cond.id == "B":
         disallowed += JRAG_LEXICAL_DENY
@@ -224,8 +265,73 @@ def prompt_tools_section(path: str) -> str:
     return parts[1].strip() if len(parts) > 1 else ""
 
 
+# Memoized ``jrag prime`` payloads, keyed by the generation context
+# ``(jrag_bin, source_root, index_dir)``. ``to_flags`` is re-invoked for every
+# cell of a run, and the payload embeds live index state (freshness, counts) —
+# regenerating it mid-run could race an increment and change ``prompt_hash``
+# between cells of the same condition, so the first successful generation per
+# context wins. The KEY matters because one bench process runs several corpora
+# (bench/questions/ spans three, each with its own index): a single cache entry
+# would prime shopizer's condition D with bank-chat-system's services and
+# counts, breaking the byte-identity contract below.
+_PRIME_TOOLS_CACHE: dict[tuple[str, str, str], str] = {}
+
+
+def _generate_prime_tools_section(
+    jrag_bin: Path, source_root: Path, index_dir: Path
+) -> str:
+    """Return the ``jrag prime`` payload, running the CLI once per context.
+
+    Memoized on first SUCCESSFUL call per ``(jrag_bin, source_root, index_dir)``
+    (a failure must not pin a broken payload): one subprocess per distinct
+    index, one payload shared by every cell that targets it.
+    """
+    key = (str(jrag_bin), str(source_root), str(index_dir))
+    if key not in _PRIME_TOOLS_CACHE:
+        _PRIME_TOOLS_CACHE[key] = _run_prime_cli(jrag_bin, source_root, index_dir)
+    return _PRIME_TOOLS_CACHE[key]
+
+
+def _run_prime_cli(jrag_bin: Path, source_root: Path, index_dir: Path) -> str:
+    """Run ``jrag prime`` against the cell's index and capture stdout.
+
+    The env mirrors what ``run_cell`` sets on the claude spawn, so the payload is
+    byte-identical to what the agent's own ``jrag`` would print in-cell. ``prime``
+    is hook-safe by design (rc 0, empty stdout when there is nothing to say), so
+    a non-zero exit AND an empty success are both fatal here: the bench must
+    never silently fall back to the prompt file's stale tools section.
+    """
+    env = dict(os.environ)
+    env["JAVA_CODEBASE_RAG_SOURCE_ROOT"] = str(source_root)
+    env["JAVA_CODEBASE_RAG_INDEX_DIR"] = str(index_dir)
+    try:
+        proc = subprocess.run(
+            [str(jrag_bin), "prime"],
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+        )
+    except FileNotFoundError as exc:
+        raise ConfigError(f"jrag prime failed: {jrag_bin}: {exc}") from exc
+    except subprocess.CalledProcessError as exc:
+        stderr = (exc.stderr or b"").decode("utf-8", errors="replace").strip()
+        raise ConfigError(
+            f"jrag prime exited {exc.returncode}: {stderr[:400] or '(no stderr)'}"
+        ) from exc
+    payload = proc.stdout.decode("utf-8")
+    if not payload.strip():
+        raise ConfigError(
+            "jrag prime produced no payload (empty stdout, rc 0) — the index at "
+            f"{index_dir} is missing or unreadable; refusing to compose condition "
+            f"D's prompt without a tools section"
+        )
+    return payload
+
+
 _CONDITION_KEYS = {"id", "name", "jrag_allowed_verbs", "allowed_tools",
-                   "disallowed_tools", "prompt_file"}
+                   "disallowed_tools", "prompt_file", "tools"}
 
 
 def _resolve_verbs(raw) -> list[str] | None:
@@ -250,13 +356,26 @@ def _record_from_entry(entry: dict) -> Condition:
     unknown = set(entry.keys()) - _CONDITION_KEYS
     if unknown:
         raise ConfigError(f"condition entry has unknown keys {sorted(unknown)}: {entry!r}")
+    cond_id = str(entry.get("id", "")).strip()
+    # ``tools`` has exactly one legal shape: ``prime`` on condition D. Anywhere
+    # else (or any other value) the entry is misconfigured, not a variant.
+    raw_tools = entry.get("tools")
+    if raw_tools is not None and raw_tools != "prime":
+        raise ConfigError(
+            f"condition {cond_id}: tools must be 'prime' or absent; got {raw_tools!r}"
+        )
+    if raw_tools == "prime" and cond_id != "D":
+        raise ConfigError(
+            f"condition {cond_id}: tools 'prime' is only valid on condition D"
+        )
     return Condition(
-        id=str(entry.get("id", "")).strip(),
+        id=cond_id,
         name=str(entry.get("name", "")).strip(),
         jrag_allowed_verbs=_resolve_verbs(entry.get("jrag_allowed_verbs")),
         allowed_tools=list(entry.get("allowed_tools") or []),
         disallowed_tools=list(entry.get("disallowed_tools") or []),
         prompt_file=str(entry.get("prompt_file", "")).strip(),
+        tools=raw_tools,
     )
 
 

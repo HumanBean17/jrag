@@ -1,6 +1,8 @@
 # Agent Guide — `jrag` MCP
 
-Copy the block between `<!-- BEGIN` and `<!-- END` into your project's `AGENTS.md`, `CLAUDE.md`, or equivalent. It is self-contained: five MCP tools, shared `NodeFilter`, edge taxonomy, tool-selection rules, and recovery moves.
+Human reference for the MCP surface: five MCP tools, shared `NodeFilter`, edge taxonomy, tool-selection rules, and recovery moves. The block between `<!-- BEGIN` and `<!-- END` is kept self-contained — an operator running the MCP surface, or any host without SessionStart hooks, may paste it into the project's `AGENTS.md` / `CLAUDE.md` by hand.
+
+On the `cli` surface no paste-in is needed: `jrag install --surface cli` wires a SessionStart hook that runs `jrag prime --hook-json` at every session start and injects a compact orientation payload (what `jrag` is, the trust rule, live index state, the command surface). See [`JRAG-CLI.md`](./JRAG-CLI.md) § [`jrag prime`](./JRAG-CLI.md#jrag-prime-sessionstart-priming).
 
 ---
 
@@ -324,5 +326,5 @@ These patterns combine the five tools above. Use the decision tree to pick the r
 When MCP behaviour, `NodeFilter` keys, edge labels, or node kinds change:
 
 1. Update this file's copy block and bump the **Ontology:** line to match `ast_java.ONTOLOGY_VERSION`.
-2. Update the five-tool cheat sheet in `README.md` and the "Driving the MCP from an agent" bullet there.
+2. Update the five-tool MCP table in `README.md`.
 3. If enrichment semantics changed, add a "Re-index required" callout in [`docs/CONFIGURATION.md`](./CONFIGURATION.md) §3.
