@@ -21,6 +21,16 @@ def _cocoindex_available() -> bool:
     return (Path(sys.executable).parent / "cocoindex").is_file()
 
 
+@pytest.fixture(autouse=True)
+def _no_ambient_retrieval(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The lifecycle tests below pin the vectors-phase (stack-present) branches;
+    an ambient ``JAVA_CODEBASE_RAG_RETRIEVAL=bm25`` would skip the cocoindex
+    phase in the spawned CLI and invalidate the stdout invariants. Cleared in
+    the pytest process so the ``os.environ.copy()`` child envs inherit the
+    clean state."""
+    monkeypatch.delenv("JAVA_CODEBASE_RAG_RETRIEVAL", raising=False)
+
+
 def _run_cli(args: list[str], *, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
     exe = shutil.which("java-codebase-rag")
     assert exe is not None

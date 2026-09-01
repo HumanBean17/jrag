@@ -17,6 +17,8 @@ from java_codebase_rag.cli_progress import (
     accumulate_and_relay_subprocess_streams,
 )
 from java_codebase_rag.pipeline import (
+    RETRIEVAL_BM25_HINT,
+    VECTORS_SKIPPED_BM25,
     VECTORS_SKIPPED_GRAPH_ONLY,
     cocoindex_bin as resolve_cocoindex_bin,
     vector_stack_installed,
@@ -29,6 +31,7 @@ from java_codebase_rag.config import (
     emit_legacy_env_hints_if_present,
     resolved_sbert_model_for_process_env,
     resolve_operator_config,
+    retrieval_mode_from_env,
 )
 from java_codebase_rag.absence.absence_capability import (
     get_capability_counts,
@@ -425,15 +428,24 @@ async def run_refresh_pipeline(
     on_progress_console: object | None = None,
 ) -> RefreshIndexOutput:
     root = _project_root()
-    if not vector_stack_installed():
+    # No cfg here: the mode is read straight from the environment, which
+    # ``server.main()`` populates via ``cfg.apply_to_os_environ()`` before serving.
+    bm25_mode = retrieval_mode_from_env() == "bm25"
+    if not vector_stack_installed() or bm25_mode:
         # Graph-only install (macOS Intel): the vector stack (cocoindex/lancedb/
         # sentence-transformers) is gated off by PEP 508 markers and uninstallable,
-        # so the cocoindex binary is absent. Skip the vectors phase and build the
-        # graph only — mirroring init/increment, which treat cocoindex-absent as a
-        # skip, not a failure (the graph layer is the supported surface there). No
-        # vectors progress event is emitted, so the renderer's vectors task stays
-        # invisible (its "never spawned" invariant) instead of hanging at running.
-        print(VECTORS_SKIPPED_GRAPH_ONLY, file=sys.stderr, flush=True)
+        # so the cocoindex binary is absent. bm25 retrieval skips the vectors phase
+        # for the same graph-only reason by operator choice — there is nothing to
+        # embed. In both cases: skip the vectors phase and build the graph only —
+        # mirroring init/increment, which treat cocoindex-absent as a skip, not a
+        # failure (the graph layer is the supported surface there). No vectors
+        # progress event is emitted, so the renderer's vectors task stays invisible
+        # (its "never spawned" invariant) instead of hanging at running.
+        print(
+            VECTORS_SKIPPED_BM25 if bm25_mode else VECTORS_SKIPPED_GRAPH_ONLY,
+            file=sys.stderr,
+            flush=True,
+        )
         if not quiet:
             print(file=sys.stderr, flush=True)
         graph_code, graph_out, graph_err, started = await _run_graph_phase(
@@ -448,7 +460,14 @@ async def run_refresh_pipeline(
                 else (graph_err.strip() or "graph builder unavailable")
             )
         else:
-            message = "reprocess completed (graph-only; vectors skipped — vector stack not installed)"
+            message = (
+                "reprocess completed (graph-only; vectors skipped — retrieval mode is bm25)"
+                if bm25_mode
+                else (
+                    "reprocess completed (graph-only; vectors skipped — "
+                    "vector stack not installed)"
+                )
+            )
         return RefreshIndexOutput(
             success=ok,
             exit_code=None,
@@ -620,6 +639,12 @@ async def run_refresh_pipeline(
     message: str | None = None
     if not ok:
         message = f"cocoindex exit {proc.returncode}"
+        # Remediation hint (suppressed when the mode is already bm25 — this
+        # branch is vectors-mode only, the guard keeps it honest on purpose).
+        # Full `jrag reprocess` routes here, so the hint matches the one on the
+        # CLI-owned failure sites (init/increment/reprocess --vectors-only).
+        if retrieval_mode_from_env() != "bm25":
+            print(RETRIEVAL_BM25_HINT, file=sys.stderr, flush=True)
     elif graph_code is not None and graph_code != 0:
         message = f"graph builder exit {graph_code}"
     # Surface a post-flow optimize failure in the message too (success is not

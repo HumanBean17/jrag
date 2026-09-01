@@ -37,12 +37,13 @@ from java_codebase_rag.watch.watcher import (
 
 
 class _FakeCfg:
-    """Minimal stand-in for ``ResolvedOperatorConfig``: only the 4 attrs watcher uses."""
+    """Minimal stand-in for ``ResolvedOperatorConfig``: only the attrs watcher uses."""
 
-    def __init__(self, source_root: Path) -> None:
+    def __init__(self, source_root: Path, retrieval: str = "vectors") -> None:
         self.source_root = source_root
         self.index_dir = source_root / "idx"
         self.ladybug_path = source_root / "code_graph.lbug"
+        self.retrieval = retrieval
 
     def subprocess_env(self, base=None) -> dict[str, str]:
         return {
@@ -375,6 +376,53 @@ def test_reindex_graph_only_sql_is_clean_noop(tmp_path, monkeypatch):
     assert "run_incremental_graph" not in calls
     assert "begin_graph_snapshot" not in calls
     assert "on_event:indexing_done" in calls
+
+
+# -- reindex: retrieval=bm25 -> skip vectors by mode, still run graph ----------
+
+
+def test_bm25_probe_disables_vectors_and_reindex_skips_cocoindex(tmp_path, monkeypatch):
+    """``retrieval: bm25`` with the vector stack installed: the construction-time
+    probe is False by operator choice (not platform), and a java reindex skips the
+    cocoindex step exactly like a graph-only install does — the graph reindex
+    still runs under its COW snapshot lifecycle and ``indexing_done`` fires.
+
+    Built by hand rather than via ``_make_watcher`` because that helper pins
+    ``_vector_enabled = True`` after construction; here the probe itself —
+    ``vector_stack_installed() and cfg.retrieval == "vectors"`` — is the unit
+    under test."""
+    calls: list[str] = []
+    cfg = _FakeCfg(_scaffold_source(tmp_path), retrieval="bm25")
+    warm = _FakeWarm(calls)
+    on_event = lambda kind, detail: calls.append(f"on_event:{kind}")  # noqa: E731
+    # Stack IS installed: False must come from the retrieval mode alone.
+    monkeypatch.setattr("java_codebase_rag.watch.watcher.vector_stack_installed", lambda: True)
+    monkeypatch.setattr(
+        "java_codebase_rag.watch.watcher.run_cocoindex_update", _make_vec_fake(calls)
+    )
+    monkeypatch.setattr(
+        "java_codebase_rag.watch.watcher.run_incremental_graph", _make_graph_fake(calls)
+    )
+    w = SourceWatcher(
+        cfg,
+        warm,
+        debounce_ms=60,
+        backend="polling",
+        poll_interval_ms=40,
+        on_event=on_event,
+    )
+    assert w._vector_enabled is False
+    w.reindex({"java"})
+    assert calls == [
+        "on_event:indexing_started",
+        "on_event:graph",
+        "begin_graph_snapshot",
+        "run_incremental_graph",
+        "commit_graph_snapshot",
+        "on_event:indexing_done",
+    ]
+    assert w.last_reindex is not None
+    assert w.last_reindex["kinds"] == ["java"]
 
 
 # -- debounce coalescing -------------------------------------------------------

@@ -1646,11 +1646,13 @@ def test_cmd_install_forwards_verbose_flag(
     captured: dict = {}
 
     def _fake_run_install(*, non_interactive, agents, scope, model,
-                          source_root=None, quiet=False, verbose=False, surface=None):
+                          source_root=None, quiet=False, verbose=False, surface=None,
+                          retrieval=None):
         captured["quiet"] = quiet
         captured["verbose"] = verbose
         captured["non_interactive"] = non_interactive
         captured["surface"] = surface
+        captured["retrieval"] = retrieval
         return 0
 
     monkeypatch.setattr(_installer, "run_install", _fake_run_install)

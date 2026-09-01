@@ -36,6 +36,9 @@ jrag install --non-interactive --agent claude-code --agent qwen-code
 # With custom embedding model
 jrag install --model /path/to/model
 
+# Keyword (bm25) retrieval — no embedding model, works offline
+jrag install --retrieval bm25
+
 # User-scope installation (available globally)
 jrag install --scope user
 ```
@@ -45,6 +48,7 @@ jrag install --scope user
 - `--agent {claude-code,qwen-code,gigacode}` — Agent host to configure (can be passed multiple times).
 - `--scope {project,user}` — Installation scope (default: `project`). Project scope writes to `.<host>/` in the project repo; user scope writes to `~/.<host>/` (globally available).
 - `--model MODEL` — Embedding model path or `auto` (default: `auto`, downloads `sentence-transformers/all-MiniLM-L6-v2` on first run).
+- `--retrieval {vectors,bm25}` — Retrieval mode: `'vectors'` (semantic search; requires an embedding model — auto-downloaded from Hugging Face or a local path) or `'bm25'` (keyword search; no model, no downloads, works offline). Default: vectors. Persisted as `retrieval:` in `.java-codebase-rag.yml` (written only when `bm25`); the wizard asks the same question on re-runs (pre-filled with the current mode). Graph-only (Intel Mac) installs run `bm25` regardless of this flag.
 - `--surface {mcp,cli}` — Agent surface (default: `cli`, recommended). `cli` deploys the `jrag` console-script skill + `explorer-rag-cli` subagent (one command per intent, no MCP entry). `mcp` registers the `jrag-mcp` stdio MCP server (five tools: `search`/`find`/`describe`/`neighbors`/`resolve`) plus the `explore-codebase` skill + `explorer-rag-enhanced` subagent. Omit to choose interactively.
 - `--quiet` / `-q` — Suppress the indexing progress stream on stderr (wizard prompts unchanged).
 - `--verbose` / `-v` — Raw-relay subprocess output during the indexing sub-step (no progress bar).
@@ -56,7 +60,7 @@ jrag install --scope user
 
 **Stages:**
 1. Java source detection — Maven/Gradle module roots.
-2. Embedding model selection — auto-download or local path.
+2. Retrieval mode + embedding model — `vectors` (semantic, recommended) or `bm25` (keyword, offline); for `vectors`, model auto-download or local path. The model question is skipped for `bm25` and on graph-only installs.
 3. Agent host selection — Claude Code, Qwen Code, GigaCode (multi-select).
 4. Install scope — project or user.
 5. Surface selection — `cli` (recommended, `jrag` skill+subagent) or `mcp` (stdio server + skill + subagent). Re-runs pre-fill the prior surface.
@@ -131,6 +135,26 @@ jrag update --surface mcp      # cli → mcp
 - `1` — Partial failure (some artifacts failed to write).
 - `2` — No configured hosts found.
 
+### Switching retrieval mode (`vectors` ↔ `bm25`)
+
+Retrieval mode is a config knob — YAML `retrieval:`, env `JAVA_CODEBASE_RAG_RETRIEVAL`, or `jrag install --retrieval` — resolved **CLI > env > YAML > default (`vectors`)**. Switch it by editing `.java-codebase-rag.yml` or re-running `jrag install` (the wizard pre-fills the current mode; with an existing index the indexing step is skipped, so a re-run rewrites the config without re-indexing).
+
+```bash
+# vectors → bm25: no reindex needed — the graph + its FTS index already exist
+jrag install --retrieval bm25     # or: edit .java-codebase-rag.yml → retrieval: bm25
+
+# bm25 → vectors: rebuild the vector tables (never written while running bm25)
+jrag install --retrieval vectors
+jrag reprocess --source-root /path/to/java/repo
+```
+
+After switching in **either** direction, **restart the MCP server and any `jrag watch` daemon** — the search backend and embedding model are memoized per process, so a long-lived server/daemon keeps serving the old mode until restarted.
+
+Notes:
+- Under `bm25`, indexing skips the vectors phase (`jrag: vectors skipped — retrieval mode is bm25; building graph only.`), and the `sql` / `yaml` tables are **not searched** — keyword search covers Java/Kotlin symbols only (an advisory notes this on `sql` / `yaml` / `all` queries).
+- While in `vectors` mode, vectors failures print a remediation hint pointing at the escape hatch — `jrag install --retrieval bm25` or `JAVA_CODEBASE_RAG_RETRIEVAL=bm25` — both at index time (a cocoindex update failure) and at query time (an embedding-model load failure).
+- Graph-only (Intel Mac) installs are always `bm25`; the flag and YAML key have no effect there.
+
 ## Output mode
 
 - **TTY:** human-readable `pprint` of the payload on stdout (except **successful selective `reprocess`** with `--vectors-only` / `--graph-only`, which prints `Rebuilt:` / `Skipped:` lines instead of dumping the full dict).
@@ -180,6 +204,7 @@ All five lifecycle commands that build the index (`init`, `increment`, `reproces
 | -------- | ---- |
 | `JAVA_CODEBASE_RAG_INDEX_DIR` | Root directory for Lance tables, the LadybugDB file `code_graph.lbug`, and default cocoindex state. Default: `./.java-codebase-rag/` under the resolved Java tree root. Overridden by `--index-dir` or YAML `index_dir:`. |
 | `SBERT_MODEL` / `SBERT_DEVICE` | Embedding model and device; must match the index. Overridden by `--embedding-model` / `--embedding-device` or YAML `embedding.model` / `embedding.device`. |
+| `JAVA_CODEBASE_RAG_RETRIEVAL` | Retrieval mode: `vectors` (default) or `bm25` keyword search (no embedding model, works offline). YAML `retrieval:` sets it; this env var overrides YAML; `jrag install --retrieval` overrides both. Invalid values fall back to `vectors` with a stderr note. |
 | `JAVA_CODEBASE_RAG_DEBUG_CONTEXT` | Verbose stderr logging for context expansion (diagnostic). |
 | `JAVA_CODEBASE_RAG_RUN_HEAVY` | Test-only gate for slow end-to-end indexer tests (`pytest`). |
 
@@ -547,4 +572,4 @@ jrag watch --stop
 
 **Unix-only.** `jrag watch` relies on `fcntl`, so it runs on **macOS / Linux** only. On Windows it prints `jrag watch: watch mode requires macOS/Linux` to stderr and exits **2**; the cold read path is unaffected on every platform. One daemon per index dir — a pidfile + `flock` prevents two watchers (or a concurrent manual `increment`) on the same project.
 
-**Graph-only (macOS Intel).** On Intel Mac the vector stack is absent (PEP 508 excludes `sentence_transformers`/`lancedb`/`cocoindex`), so the daemon runs in **lexical/graph-only mode**: it skips the embedding-model warm-up and the cocoindex vectors reindex, serves warm **lexical** `search` (BM25 over the symbol graph — same as the cold `search` path on Intel Mac) plus every structural command (`find`/`inspect`/`callers`/`callees`/`flow`), and reindexes only the graph on file change. `jrag watch --status` and the TTY panel report `mode: lexical (graph-only)`. Every `search` result carries the usual `lexical_mode=true` flag + advisory.
+**Graph-only (macOS Intel).** On Intel Mac the vector stack is absent (PEP 508 excludes `sentence_transformers`/`lancedb`/`cocoindex`), so the daemon runs in **lexical/graph-only mode**: it skips the embedding-model warm-up and the cocoindex vectors reindex, serves warm **lexical** `search` (BM25 over the symbol graph — same as the cold `search` path on Intel Mac) plus every structural command (`find`/`inspect`/`callers`/`callees`/`flow`), and reindexes only the graph on file change. `jrag watch --status` and the TTY panel report `mode: lexical (graph-only)` on such installs, and `mode: lexical (retrieval=bm25)` when the vector stack is present but the operator chose `bm25` — the two lexical populations stay distinguishable in the label. Every `search` result carries the usual `lexical_mode=true` flag + advisory. A `retrieval: bm25` install behaves the same on every platform (the daemon prints `jrag watch: retrieval mode is bm25 — serving lexical search` at startup) — hence the restart note in [Switching retrieval mode](#switching-retrieval-mode-vectors-bm25).

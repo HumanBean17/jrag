@@ -37,6 +37,7 @@ import pytest
 import java_codebase_rag.jrag as jrag_mod
 import java_codebase_rag.watch.client as client_mod
 from java_codebase_rag.jrag import main as jrag_main
+from java_codebase_rag.pipeline import RETRIEVAL_BM25_HINT
 from java_codebase_rag.watch import paths
 from java_codebase_rag.watch.client import is_daemon_alive
 from java_codebase_rag.watch.lock import ProjectLock
@@ -601,6 +602,401 @@ def test_foreground_graph_only_starts_without_vectors(tmp_path, monkeypatch):
         state = _wait_state(index_dir)
         assert state.get("mode") == "lexical", f"expected mode='lexical', got {state.get('mode')!r}"
         assert state["pid"] == proc.pid
+    finally:
+        _stop_proc(proc, index_dir)
+
+
+# ===========================================================================
+# (g) retrieval=bm25 with the stack PRESENT: lexical mode by operator choice
+# ===========================================================================
+
+
+def _write_retrieval_yaml(source_root: Path, retrieval: str) -> None:
+    """Write a one-key project YAML so cfg resolution picks up the mode."""
+    (source_root / ".java-codebase-rag.yml").write_text(
+        f"retrieval: {retrieval}\n", encoding="utf-8"
+    )
+
+
+def test_daemon_bm25_probe_disables_vectors_and_labels_lexical(tmp_path, monkeypatch):
+    """``retrieval: bm25`` with the vector stack installed: the compound probe
+    (stack present AND retrieval vectors) makes ``_vector_enabled`` False by
+    operator choice, so the state file's mode value stays the shared ``lexical``
+    (the rendered panel/``--status`` label splits by cause — see the label tests
+    below) and constructing the daemon never warms the embedding model (there is
+    nothing to embed)."""
+    from java_codebase_rag.config import resolve_operator_config
+    from java_codebase_rag.watch import daemon as daemon_mod
+
+    index_dir, source_root = _index_source(tmp_path, tag="bm25idx")
+    _anchor_env(monkeypatch, index_dir, source_root)
+    _write_retrieval_yaml(source_root, "bm25")
+    monkeypatch.delenv("JAVA_CODEBASE_RAG_RETRIEVAL", raising=False)
+
+    monkeypatch.setattr(daemon_mod, "vector_stack_installed", lambda: True)
+
+    class _RaisingModelWarm:
+        def __init__(self, cfg):
+            self.cfg = cfg
+
+        def model(self):
+            raise AssertionError("warm.model() must not be called under retrieval=bm25")
+
+        def graph(self):
+            return None
+
+        def begin_graph_snapshot(self):
+            pass
+
+        def commit_graph_snapshot(self):
+            pass
+
+    monkeypatch.setattr(daemon_mod, "WarmResources", _RaisingModelWarm)
+
+    cfg = resolve_operator_config(source_root=None, cli_index_dir=str(index_dir))
+    d = daemon_mod.WatchDaemon(cfg)
+
+    assert d._vector_enabled is False
+    assert d._state["mode"] == "lexical"
+    _cleanup_runtime(index_dir)
+
+
+# --- lexical label split: one ``mode: lexical`` state, two truthful labels ----
+#
+# The state file carries just ``lexical`` for BOTH skip causes (stack absent vs
+# retrieval=bm25); the rendered TTY panel and ``--status`` line must name the
+# actual cause, re-evaluating the stack probe at render time — mirroring the
+# two-population discrimination of the startup lines (daemon.run_foreground).
+
+
+def _lexical_daemon(monkeypatch, tmp_path, *, stack_installed: bool, tag: str):
+    """Construct a REAL WatchDaemon in lexical mode with the stack probe forced.
+
+    Same shape as the bm25 construction test above: WarmResources is swapped
+    for an inert fake (lexical mode never warms the model — construction or
+    serving), so no torch/index is touched. Lexical mode comes from the stack
+    being absent (``retrieval: vectors`` YAML) or from ``retrieval: bm25``."""
+    from java_codebase_rag.config import resolve_operator_config
+    from java_codebase_rag.watch import daemon as daemon_mod
+
+    index_dir, source_root = _index_source(tmp_path, tag=tag)
+    _anchor_env(monkeypatch, index_dir, source_root)
+    _write_retrieval_yaml(source_root, "vectors" if not stack_installed else "bm25")
+    monkeypatch.delenv("JAVA_CODEBASE_RAG_RETRIEVAL", raising=False)
+    # Both bindings see the forced probe: daemon's own (gates ``_vector_enabled``
+    # at construction) and pipeline's (``lexical_mode_label`` resolves it there
+    # at render time).
+    monkeypatch.setattr(daemon_mod, "vector_stack_installed", lambda: stack_installed)
+    monkeypatch.setattr(
+        "java_codebase_rag.pipeline.vector_stack_installed", lambda: stack_installed
+    )
+
+    class _InertWarm:
+        def __init__(self, cfg):
+            self.cfg = cfg
+
+        def model(self):
+            raise AssertionError("warm.model() must not be called in lexical mode")
+
+        def graph(self):
+            return None
+
+        def begin_graph_snapshot(self):
+            pass
+
+        def commit_graph_snapshot(self):
+            pass
+
+    monkeypatch.setattr(daemon_mod, "WarmResources", _InertWarm)
+
+    cfg = resolve_operator_config(source_root=None, cli_index_dir=str(index_dir))
+    return daemon_mod.WatchDaemon(cfg), index_dir
+
+
+def _panel_text(d) -> str:
+    """Render the daemon's status panel to plain text for substring asserts."""
+    import io
+
+    from rich.console import Console
+
+    buf = io.StringIO()
+    Console(file=buf, width=120).print(d._render_panel())
+    return buf.getvalue()
+
+
+def test_lexical_mode_label_stack_absent(monkeypatch):
+    """Stack absent (graph-only install): the label names graph-only, not bm25."""
+    from java_codebase_rag.pipeline import lexical_mode_label
+
+    monkeypatch.setattr("java_codebase_rag.pipeline.vector_stack_installed", lambda: False)
+    assert lexical_mode_label() == "lexical (graph-only)"
+
+
+def test_lexical_mode_label_bm25_stack_present(monkeypatch):
+    """Stack present + retrieval=bm25: the label names the operator's choice."""
+    from java_codebase_rag.pipeline import lexical_mode_label
+
+    monkeypatch.setattr("java_codebase_rag.pipeline.vector_stack_installed", lambda: True)
+    assert lexical_mode_label() == "lexical (retrieval=bm25)"
+
+
+def test_render_panel_lexical_label_stack_absent(monkeypatch, tmp_path):
+    d, index_dir = _lexical_daemon(
+        monkeypatch, tmp_path, stack_installed=False, tag="lblgo"
+    )
+    try:
+        text = _panel_text(d)
+        assert "lexical (graph-only)" in text
+        assert "lexical (retrieval=bm25)" not in text
+    finally:
+        _cleanup_runtime(index_dir)
+
+
+def test_render_panel_lexical_label_bm25_stack_present(monkeypatch, tmp_path):
+    d, index_dir = _lexical_daemon(
+        monkeypatch, tmp_path, stack_installed=True, tag="lblbm"
+    )
+    try:
+        text = _panel_text(d)
+        assert "lexical (retrieval=bm25)" in text
+        assert "lexical (graph-only)" not in text
+    finally:
+        _cleanup_runtime(index_dir)
+
+
+def _status_line(monkeypatch, tmp_path, *, stack_installed: bool) -> str:
+    """Render ``jrag watch --status``'s alive block for a lexical daemon.
+
+    The state file and liveness probe are faked at their seams (the status
+    renderer is the unit under test, not the daemon lifecycle); the stack probe
+    is forced so the label variant is deterministic on any platform."""
+    from types import SimpleNamespace
+
+    from java_codebase_rag.jrag import _cmd_watch_status
+
+    # The label resolves the probe in pipeline's namespace (``--status`` must
+    # not import the daemon module — see the heavy-import guard test below).
+    monkeypatch.setattr(
+        "java_codebase_rag.pipeline.vector_stack_installed", lambda: stack_installed
+    )
+    monkeypatch.setattr(
+        "java_codebase_rag.jrag._read_state_file", lambda _idx: {"mode": "lexical"}
+    )
+    monkeypatch.setattr(
+        "java_codebase_rag.watch.client.is_daemon_alive", lambda _idx: True
+    )
+    monkeypatch.setattr(
+        "java_codebase_rag.watch.lock.ProjectLock.read_holder",
+        classmethod(lambda cls, _idx: 4242),
+    )
+
+    index_dir, _source_root = _index_source(tmp_path, tag="lblst")
+    return _cmd_watch_status(SimpleNamespace(index_dir=index_dir))
+
+
+def test_watch_status_lexical_label_stack_absent(monkeypatch, tmp_path, capsys):
+    rc = _status_line(monkeypatch, tmp_path, stack_installed=False)
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "mode: lexical (graph-only)" in out
+    assert "mode: lexical (retrieval=bm25)" not in out
+
+
+def test_watch_status_lexical_label_bm25_stack_present(monkeypatch, tmp_path, capsys):
+    rc = _status_line(monkeypatch, tmp_path, stack_installed=True)
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "mode: lexical (retrieval=bm25)" in out
+    assert "mode: lexical (graph-only)" not in out
+
+
+_BM25_STUB_SCRIPT = '''\
+"""bm25 stub watch daemon: vector stack PRESENT, retrieval=bm25.
+
+Patches ``daemon.vector_stack_installed`` -> True (so a skip can only come from
+the retrieval mode), swaps in a WarmResources whose ``model()`` RAISES (proving
+``run_foreground`` never warms the model under bm25), fakes SourceWatcher, then
+runs the REAL ``run_foreground``. If the gating regresses (model() called), the
+AssertionError surfaces as "failed to load embedding model" -> exit 2 -> the
+daemon never comes up -> the test fails fast. The bm25 mode is taken from the
+``retrieval: bm25`` YAML in the anchored source root.
+"""
+import os
+import sys
+
+from java_codebase_rag.config import resolve_operator_config
+from java_codebase_rag.watch import daemon
+
+
+class _RaisingModelWarm:
+    def __init__(self, cfg):
+        self.cfg = cfg
+
+    def model(self):
+        raise AssertionError("warm.model() must not be called under retrieval=bm25")
+
+    def graph(self):
+        return None
+
+    def begin_graph_snapshot(self):
+        pass
+
+    def commit_graph_snapshot(self):
+        pass
+
+
+class _FakeWatcher:
+    def __init__(self, cfg, warm, *, debounce_ms, backend, poll_interval_ms, on_event=None):
+        pass
+
+    def start(self):
+        pass
+
+    def stop(self):
+        pass
+
+
+# Stack present: any vectors skip must come from the operator's retrieval choice.
+daemon.vector_stack_installed = lambda: True
+daemon.WarmResources = _RaisingModelWarm
+daemon.SourceWatcher = _FakeWatcher
+
+cfg = resolve_operator_config(source_root=None, cli_index_dir=os.environ["JRAG_WATCH_TEST_INDEX"])
+daemon.WatchDaemon(cfg).run_foreground()
+sys.exit(0)  # pragma: no cover - run_foreground ends with os._exit(0)
+'''
+
+
+def test_foreground_bm25_starts_without_vectors_and_says_so(tmp_path, monkeypatch):
+    """Under ``retrieval: bm25`` (stack present) the daemon skips the model
+    warm-up and reaches serving with ``mode='lexical'`` — and the warm-up skip
+    line names the retrieval mode, NOT the stack-absent reason (the two skip
+    causes must stay distinguishable to the operator)."""
+    index_dir, source_root = _index_source(tmp_path, tag="bm25fg")
+    _anchor_env(monkeypatch, index_dir, source_root)
+    _write_retrieval_yaml(source_root, "bm25")
+    monkeypatch.delenv("JAVA_CODEBASE_RAG_RETRIEVAL", raising=False)
+
+    script = tmp_path / "bm25_stub.py"
+    script.write_text(_BM25_STUB_SCRIPT)
+    log_path = tmp_path / "bm25.log"
+    proc = _spawn_stub(script, index_dir, source_root, log_path=log_path)
+    try:
+        # A gating regression makes the stub's model() raise -> exit 2 -> the
+        # process dies at once, so poll for early exit and surface the log tail.
+        came_up = False
+        deadline = time.monotonic() + _STUB_READY_S
+        while time.monotonic() < deadline:
+            if is_daemon_alive(index_dir):
+                came_up = True
+                break
+            if proc.poll() is not None:
+                _fail_with_log(
+                    log_path,
+                    f"bm25 daemon exited early (rc={proc.returncode}) — "
+                    "warm.model() was not skipped",
+                )
+            time.sleep(0.1)
+        if not came_up:
+            _fail_with_log(log_path, f"bm25 daemon did not come up in {_STUB_READY_S}s")
+
+        state = _wait_state(index_dir)
+        assert state.get("mode") == "lexical", f"expected mode='lexical', got {state.get('mode')!r}"
+        assert state["pid"] == proc.pid
+        log = log_path.read_text(errors="replace") if log_path.exists() else ""
+        assert "retrieval mode is bm25 — serving lexical search" in log, (
+            f"bm25 warm-up skip line missing from daemon stderr: {log!r}"
+        )
+        assert "vector stack unavailable" not in log, (
+            f"stack-absent wording printed on a stack-present bm25 daemon: {log!r}"
+        )
+    finally:
+        _stop_proc(proc, index_dir)
+
+
+# ===========================================================================
+# (h) warm-up failure (vectors mode): failure line + bm25 remediation hint
+# ===========================================================================
+
+
+_MODEL_FAIL_STUB_SCRIPT = '''\
+"""Warm-failure stub watch daemon: stack present, retrieval vectors, model RAISES.
+
+Patches ``daemon.vector_stack_installed`` -> True and ``retrieval: vectors`` (via
+the anchored source root's YAML) so ``_vector_enabled`` is True, swaps in a
+WarmResources whose ``model()`` raises RuntimeError (simulating an operator who
+cannot download the embedding model), then runs the REAL ``run_foreground`` —
+which must fail fast with the model-load line AND the bm25 remediation hint on
+stderr, release the lock, and exit 2.
+"""
+import os
+import sys
+
+from java_codebase_rag.config import resolve_operator_config
+from java_codebase_rag.watch import daemon
+
+
+class _ModelLoadFailWarm:
+    def __init__(self, cfg):
+        self.cfg = cfg
+
+    def model(self):
+        raise RuntimeError("no network")
+
+    def graph(self):
+        return None
+
+    def begin_graph_snapshot(self):
+        pass
+
+    def commit_graph_snapshot(self):
+        pass
+
+
+class _FakeWatcher:
+    def __init__(self, cfg, warm, *, debounce_ms, backend, poll_interval_ms, on_event=None):
+        pass
+
+    def start(self):
+        pass
+
+    def stop(self):
+        pass
+
+
+# Stack present + retrieval vectors: the daemon must warm the model — and fail.
+daemon.vector_stack_installed = lambda: True
+daemon.WarmResources = _ModelLoadFailWarm
+daemon.SourceWatcher = _FakeWatcher
+
+cfg = resolve_operator_config(source_root=None, cli_index_dir=os.environ["JRAG_WATCH_TEST_INDEX"])
+sys.exit(daemon.WatchDaemon(cfg).run_foreground())
+'''
+
+
+def test_foreground_model_load_failure_prints_bm25_hint(tmp_path, monkeypatch):
+    """Vectors-mode warm-up failure: the daemon prints the model-load failure
+    line followed by the bm25 remediation hint, then exits 2 (fail fast, lock
+    released — existing behavior unchanged apart from the added hint)."""
+    index_dir, source_root = _index_source(tmp_path, tag="modfail")
+    _anchor_env(monkeypatch, index_dir, source_root)
+    _write_retrieval_yaml(source_root, "vectors")
+    monkeypatch.delenv("JAVA_CODEBASE_RAG_RETRIEVAL", raising=False)
+
+    script = tmp_path / "model_fail_stub.py"
+    script.write_text(_MODEL_FAIL_STUB_SCRIPT)
+    log_path = tmp_path / "model_fail.log"
+    proc = _spawn_stub(script, index_dir, source_root, log_path=log_path)
+    try:
+        rc = _wait_dead(proc, timeout=_STUB_READY_S)
+        log = log_path.read_text(errors="replace") if log_path.exists() else ""
+        assert rc == 2, f"warm failure must exit 2, got {rc}; log:\n{log!r}"
+        assert "failed to load embedding model" in log, (
+            f"model-load failure line missing from daemon stderr: {log!r}"
+        )
+        assert RETRIEVAL_BM25_HINT in log, (
+            f"bm25 remediation hint missing from daemon stderr: {log!r}"
+        )
     finally:
         _stop_proc(proc, index_dir)
 

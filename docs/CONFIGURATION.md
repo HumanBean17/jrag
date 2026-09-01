@@ -20,7 +20,7 @@ For the architecture rationale (the GPS metaphor, three-layer design, future wor
 
 ## 1. Environment variables
 
-The operator-facing surface is **six** variables (plus MCP-only `JAVA_CODEBASE_RAG_SOURCE_ROOT` below). Precedence for knobs that also exist as CLI flags or YAML entries is **CLI flag > env var > YAML > built-in default** (see [`JRAG-CLI.md`](./JRAG-CLI.md)).
+The operator-facing surface is the variables below (plus MCP-only `JAVA_CODEBASE_RAG_SOURCE_ROOT` below). Precedence for knobs that also exist as CLI flags or YAML entries is **CLI flag > env var > YAML > built-in default** (see [`JRAG-CLI.md`](./JRAG-CLI.md)).
 
 ### Config file discovery (walk-up)
 
@@ -50,6 +50,7 @@ This walk-up behavior means you no longer need to set environment variables or p
 | `JAVA_CODEBASE_RAG_INDEX_DIR` | Local filesystem **directory** for Lance tables, the LadybugDB file `code_graph.lbug`, and cocoindex state (`cocoindex.db`). Not a `lancedb://` or cloud URI — use a path. Default: `./.java-codebase-rag/` under the resolved Java tree root. |
 | `SBERT_MODEL` | Hub id or local directory; must match indexer. Overridable via `.java-codebase-rag.yml` `embedding.model` and `--embedding-model`. |
 | `SBERT_DEVICE` | Optional: `cpu`, `cuda`, `mps`. Overridable via YAML `embedding.device` and `--embedding-device`. |
+| `JAVA_CODEBASE_RAG_RETRIEVAL` | Retrieval mode: `vectors` (semantic search; the default) or `bm25` (keyword search — no embedding model, no downloads, works offline). YAML `retrieval:` sets it; this env var overrides YAML; `jrag install --retrieval` overrides both. An invalid value falls back to `vectors` with a stderr note. No effect on graph-only (Intel Mac) installs, where `bm25` is forced regardless. |
 | `JAVA_CODEBASE_RAG_DEBUG_CONTEXT` | When truthy, verbose stderr logging for chunk context expansion (diagnostics only). |
 | `JAVA_CODEBASE_RAG_RUN_HEAVY` | Test gate: set to `1` / `true` / `yes` to run the slow cocoindex + Lance end-to-end test (`pytest`); not used in normal operator workflows. |
 | `JAVA_CODEBASE_RAG_HINTS_ENABLED` | When `0` / `false` / `no`, suppress `hints_structured` and `advisories` from all MCP tool responses. Overridable via `.java-codebase-rag.yml` `hints.enabled`. Default: enabled. |
@@ -127,6 +128,19 @@ embedding:
   # When omitted, sentence-transformers picks automatically.
   # Env: SBERT_DEVICE. CLI: --embedding-device.
   device: cpu
+
+# Retrieval mode. `vectors` embeds chunks into the Lance index (semantic
+# search; needs the embedding model). `bm25` is keyword search over the symbol
+# graph — no model, no downloads, works offline (see §3 "Lexical mode").
+# - Env: JAVA_CODEBASE_RAG_RETRIEVAL. CLI: jrag install --retrieval.
+# - Default: vectors; the installer writes this key only when bm25 is chosen.
+# - An invalid value (env or YAML) falls back to vectors with a stderr note.
+# - bm25 searches Java/Kotlin symbols only — the sql/yaml tables are not
+#   searched in bm25 mode. Switching: vectors→bm25 needs no reindex;
+#   bm25→vectors needs `jrag reprocess`; restart the MCP server / watch daemon
+#   after either (the backend is memoized per process).
+# - Intel Mac (graph-only) installs run bm25 regardless of this key.
+retrieval: vectors
 
 # -------- Microservice layout --------
 
@@ -302,9 +316,10 @@ generated_detection:
 # The `jrag watch` daemon (index freshness + warm-query). No env vars are
 # introduced for watch — precedence is CLI flag (--debounce-ms / --backend)
 # > YAML > built-in default. See JRAG-CLI.md § `jrag watch`.
-# On Intel Mac (graph-only) the daemon runs without the vector stack: it skips
-# the model warm-up + cocoindex reindex and serves warm lexical search; the
-# watch: keys below apply unchanged on every platform.
+# On Intel Mac (graph-only) — or any install running retrieval: bm25 — the
+# daemon runs without the vector stack: it skips the model warm-up + cocoindex
+# reindex and serves warm lexical search; the watch: keys below apply
+# unchanged on every platform.
 watch:
   # watch.debounce_ms — reindex debounce window in ms. Default 1500; floor 100
   # (a value at/below 100 ms falls back to 1500 with a stderr warning).
@@ -457,9 +472,9 @@ On top of role weights, Java chunks receive a **symbol-match bonus** (exposed as
 
 Combined, these pull `processClientMessage` / `pickEligibleOperator` / `onOperatorAssigned` chunks — and the classes that own them — above ones that only enqueue or configure. Like role weights, the bonus is **skipped when the caller locks `role=`**.
 
-#### Graph-only (macOS Intel) lexical ranking
+#### Lexical mode (bm25 or graph-only)
 
-On Intel Mac installs the vector stack is absent (see `README.md`), so `search` runs the **lexical backend** — keyword ranking over the symbol graph instead of embeddings, behind the same tool contract. It is **BM25-first**: at index time every `Symbol` gets a `search_text` column (camelCase-split tokens of name + fqn + signature + annotations + capabilities + package, tokenized with the same splitter the query path uses) and a LadybugDB FTS index (`sym_fts`, Okapi BM25, porter stemmer) over it. At query time `QUERY_FTS_INDEX` fetches the top-K candidates DB-side, which are then re-ranked in Python by the heuristic below and deduped by FQN.
+The **lexical backend** — keyword ranking over the symbol graph instead of embeddings, behind the same tool contract — is reached in two ways: by **operator choice on every platform** (`retrieval: bm25` in the YAML, `JAVA_CODEBASE_RAG_RETRIEVAL=bm25`, or `jrag install --retrieval bm25`), or automatically on Intel Mac installs, where the vector stack is absent (see `README.md`). It is **BM25-first**: at index time every `Symbol` gets a `search_text` column (camelCase-split tokens of name + fqn + signature + annotations + capabilities + package, tokenized with the same splitter the query path uses) and a LadybugDB FTS index (`sym_fts`, Okapi BM25, porter stemmer) over it. At query time `QUERY_FTS_INDEX` fetches the top-K candidates DB-side, which are then re-ranked in Python by the heuristic below and deduped by FQN.
 
 The heuristic re-rank decides final order (what `--explain` reports as `relevance=` / `name=` / `type=` / `fqn=`, plus a `bm25=` component for the index score):
 
@@ -469,7 +484,9 @@ The heuristic re-rank decides final order (what `--explain` reports as `relevanc
 - **Signature / annotation / capability text overlap** — weight `0.15`.
 - **Role weights** — the same table above applies as a tie-breaker/booster.
 
-BM25 only selects the candidate pool (so large repos no longer hit the old bounded Python scan); the heuristic decides order. If the FTS index or extension is unavailable (older graph, or an offline first run where `INSTALL FTS` can't fetch it), the backend falls back to that bounded scan over `Symbol` rows using the same heuristic. Locking `role=` / `exclude_roles` skips the role weight. `sql` / `yaml` tables aren't indexed in graph-only mode (only Java symbols are), and `hybrid` is ignored (lexical-only).
+BM25 only selects the candidate pool (so large repos no longer hit the old bounded Python scan); the heuristic decides order. If the FTS index or extension is unavailable (older graph, or an offline first run where `INSTALL FTS` can't fetch it), the backend falls back to that bounded scan over `Symbol` rows using the same heuristic. Locking `role=` / `exclude_roles` skips the role weight. `hybrid` is ignored (lexical-only), and the `sql` / `yaml` tables are **not searched** in lexical mode: the vectors phase that writes them never runs here — neither for `retrieval: bm25` nor on graph-only installs — so keyword ranking covers Java/Kotlin symbols only (an advisory notes this on `sql` / `yaml` / `all` queries; stale tables left by a prior vectors run are never queried).
+
+**Switching modes.** `vectors → bm25` needs **no reindex** — the graph and its FTS index exist on every index, so flipping the knob (YAML `retrieval:`, env, or re-running `jrag install --retrieval bm25`) is enough. `bm25 → vectors` needs one **`jrag reprocess`** to build the Lance vector tables (they were never written while indexing ran bm25). After switching in either direction, **restart the MCP server and any `jrag watch` daemon** — the search backend and embedding model are memoized per process, so a long-lived server/daemon keeps serving the old mode until restarted. Graph-only (Intel Mac) installs are always lexical; the knob has no effect there.
 
 ### Debugging empty `context_before` / `context_after`
 

@@ -1452,6 +1452,7 @@ def _cmd_watch_status(cfg) -> int:
 
     Does NOT acquire the lock. Returns 0 if a daemon is alive, 1 otherwise.
     """
+    from java_codebase_rag.pipeline import lexical_mode_label
     from java_codebase_rag.watch import paths
     from java_codebase_rag.watch.client import is_daemon_alive
     from java_codebase_rag.watch.lock import ProjectLock
@@ -1464,7 +1465,11 @@ def _cmd_watch_status(cfg) -> int:
         print(f"jrag watch: up (pid {pid}, socket {sock})")
         if state:
             if state.get("mode") == "lexical":
-                print("  mode: lexical (graph-only)")
+                # Two-variant label shared with the TTY panel: stack absent
+                # (graph-only install) vs retrieval=bm25 on a capable platform.
+                # Imported from the light pipeline module — this probe verb must
+                # not pull the heavy daemon module.
+                print(f"  mode: {lexical_mode_label()}")
             kind = state.get("last_reindex_kind")
             at = state.get("last_reindex_at")
             count = state.get("reindex_count", 0)

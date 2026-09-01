@@ -48,7 +48,7 @@ from java_codebase_rag.graph.graph_types import (
     set_hints_enabled,
 )
 from java_codebase_rag.search.index_common import SBERT_MODEL
-from java_codebase_rag.config import resolved_sbert_model_for_process_env
+from java_codebase_rag.config import resolved_sbert_model_for_process_env, retrieval_mode_from_env
 from java_codebase_rag.graph.java_ontology import EDGE_SCHEMA
 from java_codebase_rag.graph.ladybug_queries import LadybugGraph, OVERRIDE_AXIS_COMPOSED_EDGE_TYPES
 from java_codebase_rag.mcp.mcp_hints import MCP_HINTS_STRUCTURED_FIELD_DESCRIPTION
@@ -70,6 +70,15 @@ _NOT_LOADED = object()
 run_search: Any = _NOT_LOADED
 TABLES: dict = {}
 _vector_backend_lock = threading.Lock()
+
+# Shared by both lexical entries that exist because the vector stack is absent —
+# the probe fallback (mode vectors, backend missing) AND bm25 forced by a
+# stack-absent platform (Intel Mac): switching modes cannot help there, the
+# platform is the constraint.
+_GRAPH_ONLY_PLATFORM_ADVISORY = (
+    "lexical (graph-only) mode — keyword ranking only; "
+    "semantic/vector search requires Apple Silicon, Linux, or Windows"
+)
 
 
 def _ensure_vector_backend() -> None:
@@ -604,7 +613,7 @@ class SearchOutput(BaseModel):
     hints_structured: list[StructuredHint] = Field(default_factory=list, description=MCP_HINTS_STRUCTURED_FIELD_DESCRIPTION)
     lexical_mode: bool = Field(
         default=False,
-        description="True when results come from the graph-only lexical (keyword) backend instead of semantic/vector search.",
+        description="True when results come from the lexical (keyword) backend — graph-only installs or retrieval=bm25 — instead of semantic/vector search.",
     )
     absence: AbsenceDiagnosis | None = None
 
@@ -951,17 +960,28 @@ def search_v2(
         if nf and (err := _nodefilter_applicability_error("symbol", nf)):
             _log_fail_loud("applicability")
             return SearchOutput(success=False, message=err, advisories=[], limit=None, offset=None)
-        _ensure_vector_backend()
+        # Mode-first dispatch: ``retrieval=bm25`` selects the lexical backend outright
+        # — the vector stack is never probed (no search_lancedb import paid;
+        # ``run_search`` stays at its ``_NOT_LOADED`` sentinel). Every other mode keeps
+        # today's probe-then-dispatch: load the backend, then fall back to lexical when
+        # it is absent (graph-only install) or test-forced (``run_search`` = None).
+        mode = retrieval_mode_from_env()
+        lexical_by_mode = mode == "bm25"
+        if lexical_by_mode:
+            lexical_mode = True
+        else:
+            _ensure_vector_backend()
+            lexical_mode = run_search is None
         advisories: list[str] = []
-        lexical_mode = run_search is None
         if lexical_mode:
-            # Graph-only install (macOS Intel: no torch/lancedb). Fall back to lexical
-            # (keyword) search over the symbol graph that graph-only mode already builds.
-            # run_lexical_search returns rows in the same shape as run_search, so the
-            # shared row->hit loop below works unchanged. It raises (message contains
-            # "lexical search unavailable") when no graph exists — caught by the outer
-            # try -> success=False. It returns [] for sql/yaml (advisory below) and for
-            # empty-but-valid results.
+            # Lexical (keyword) search over the symbol graph — entered either by
+            # operator choice (retrieval=bm25; embedding model deliberately skipped)
+            # or because the vector stack is absent (graph-only install, macOS
+            # Intel: no torch/lancedb). run_lexical_search returns rows in the same
+            # shape as run_search, so the shared row->hit loop below works unchanged.
+            # It raises (message contains "lexical search unavailable") when no graph
+            # exists — caught by the outer try -> success=False. It returns [] for
+            # sql/yaml (advisory below) and for empty-but-valid results.
             try:
                 from java_codebase_rag.search.search_lexical import run_lexical_search
             except ImportError:  # pragma: no cover - search_lexical has no heavy deps
@@ -974,16 +994,37 @@ def search_v2(
                     limit=None,
                     offset=None,
                 )
-            advisories.append(
-                "lexical (graph-only) mode — keyword ranking only; "
-                "semantic/vector search requires Apple Silicon, Linux, or Windows"
-            )
+            if lexical_by_mode:
+                # bm25 with the stack PRESENT is the operator's choice, so the
+                # actionable advice is to re-run install and switch. bm25 on a
+                # stack-ABSENT platform (Intel Mac, where the installer forces
+                # bm25 into the YAML) cannot act on that advice — vectors are not
+                # installable there — so say the truthful platform line instead.
+                # Lazy probe import keeps the bm25 fast path import-free at
+                # module level (mirrors daemon.py's two-population split).
+                from java_codebase_rag.pipeline import vector_stack_installed
+
+                if vector_stack_installed():
+                    advisories.append(
+                        "lexical mode (retrieval=bm25) — keyword ranking only; "
+                        "re-run jrag install and choose vectors to enable semantic search"
+                    )
+                else:
+                    advisories.append(_GRAPH_ONLY_PLATFORM_ADVISORY)
+            else:
+                advisories.append(_GRAPH_ONLY_PLATFORM_ADVISORY)
             if table in ("sql", "yaml", "all"):
-                advisories.append(
-                    "sql/yaml tables are not indexed in graph-only mode; only Java symbols were searched"
-                )
+                if lexical_by_mode:
+                    advisories.append(
+                        "sql/yaml tables are not searched in bm25 (lexical) mode; "
+                        "only Java symbols were searched"
+                    )
+                else:
+                    advisories.append(
+                        "sql/yaml tables are not indexed in graph-only mode; only Java symbols were searched"
+                    )
             if hybrid:
-                advisories.append("hybrid is ignored in graph-only lexical mode")
+                advisories.append("hybrid is ignored in lexical mode")
             rows = run_lexical_search(
                 query,
                 table=table,
@@ -1010,7 +1051,26 @@ def search_v2(
                 )
             model_name = resolved_sbert_model_for_process_env(SBERT_MODEL)
             device = os.environ.get("SBERT_DEVICE") or None
-            model = _get_sentence_transformer(model_name, device)
+            try:
+                model = _get_sentence_transformer(model_name, device)
+            except Exception as exc:
+                # The embedding-model load is the one vector-path dependency that
+                # fails for offline operators (model download blocked). Give that
+                # failure class a dedicated envelope naming the bm25 escape hatch
+                # (same advice as pipeline.RETRIEVAL_BM25_HINT, inlined because
+                # this surface returns the message instead of printing it). All
+                # other exceptions keep the generic outer handler below.
+                return SearchOutput(
+                    success=False,
+                    message=(
+                        f"embedding model load failed: {exc}. Switch to keyword search: "
+                        "re-run jrag install and choose bm25, or set "
+                        "JAVA_CODEBASE_RAG_RETRIEVAL=bm25."
+                    ),
+                    advisories=[],
+                    limit=None,
+                    offset=None,
+                )
             uri = os.environ.get("JAVA_CODEBASE_RAG_INDEX_DIR", "").strip() or str(
                 (Path.cwd() / ".java-codebase-rag").resolve()
             )

@@ -143,10 +143,11 @@ class SourceWatcher:
     ) -> None:
         self.cfg = cfg
         self.warm = warm
-        # Probed once: when False (graph-only install — macOS Intel) the vectors
-        # (cocoindex) reindex step is skipped entirely, so the graph reindex still
-        # completes and fires ``indexing_done`` instead of bailing on a 127 stub.
-        self._vector_enabled = vector_stack_installed()
+        # Probed once: when False — the vector stack is absent (graph-only
+        # install, macOS Intel) OR retrieval=bm25 — the vectors (cocoindex)
+        # reindex step is skipped entirely, so the graph reindex still completes
+        # and fires ``indexing_done`` instead of bailing on a 127 stub.
+        self._vector_enabled = vector_stack_installed() and cfg.retrieval == "vectors"
         self._debounce_s = max(int(debounce_ms), 1) / 1000.0
         self._backend = backend
         # watchdog's PollingObserver takes a float timeout in SECONDS (it flows

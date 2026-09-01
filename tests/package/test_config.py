@@ -1,6 +1,8 @@
 """Tests for config discovery and resolution logic."""
 
+import os
 from pathlib import Path
+
 from java_codebase_rag.config import (
     CONFIG_SOURCE_FILENAME,
     YAML_CONFIG_FILENAMES,
@@ -8,6 +10,7 @@ from java_codebase_rag.config import (
     _effective_config_dir,
     discover_project_root,
     resolve_operator_config,
+    retrieval_mode_from_env,
     write_config_source_pointer,
 )
 
@@ -779,3 +782,109 @@ class TestAbsenceConfigKnobs:
         cfg = resolve_operator_config(source_root=tmp_path)
 
         assert cfg.absence_diag_enabled is False
+
+
+class TestRetrievalMode:
+    """Tests for the top-level ``retrieval:`` knob (vectors|bm25)."""
+
+    def test_default_when_no_config(self, tmp_path, monkeypatch):
+        """No YAML/env/CLI: retrieval == vectors, source == default."""
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_RETRIEVAL", raising=False)
+
+        cfg = resolve_operator_config(source_root=tmp_path)
+
+        assert cfg.retrieval == "vectors"
+        assert cfg.retrieval_source == "default"
+
+    def test_yaml_value_wins_over_default(self, tmp_path, monkeypatch):
+        """YAML ``retrieval: bm25`` yields bm25 with source yaml."""
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_RETRIEVAL", raising=False)
+        (tmp_path / YAML_CONFIG_FILENAMES[0]).write_text("retrieval: bm25\n")
+
+        cfg = resolve_operator_config(source_root=tmp_path)
+
+        assert cfg.retrieval == "bm25"
+        assert cfg.retrieval_source == "yaml"
+
+    def test_env_beats_yaml(self, tmp_path, monkeypatch):
+        """env JAVA_CODEBASE_RAG_RETRIEVAL=bm25 beats YAML ``retrieval: vectors``."""
+        monkeypatch.setenv("JAVA_CODEBASE_RAG_RETRIEVAL", "bm25")
+        (tmp_path / YAML_CONFIG_FILENAMES[0]).write_text("retrieval: vectors\n")
+
+        cfg = resolve_operator_config(source_root=tmp_path)
+
+        assert cfg.retrieval == "bm25"
+        assert cfg.retrieval_source == "env"
+
+    def test_cli_beats_env(self, tmp_path, monkeypatch):
+        """cli_retrieval=bm25 beats env JAVA_CODEBASE_RAG_RETRIEVAL=vectors."""
+        monkeypatch.setenv("JAVA_CODEBASE_RAG_RETRIEVAL", "vectors")
+
+        cfg = resolve_operator_config(source_root=tmp_path, cli_retrieval="bm25")
+
+        assert cfg.retrieval == "bm25"
+        assert cfg.retrieval_source == "cli"
+
+    def test_invalid_yaml_value_falls_back_with_warning(self, tmp_path, monkeypatch, capsys):
+        """YAML ``retrieval: hybrid`` warns on stderr naming both valid values, falls back."""
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_RETRIEVAL", raising=False)
+        (tmp_path / YAML_CONFIG_FILENAMES[0]).write_text("retrieval: hybrid\n")
+
+        cfg = resolve_operator_config(source_root=tmp_path)
+
+        err = capsys.readouterr().err
+        assert "hybrid" in err
+        assert "vectors" in err
+        assert "bm25" in err
+        assert cfg.retrieval == "vectors"
+        assert cfg.retrieval_source == "default"
+
+    def test_apply_to_os_environ_publishes_retrieval(self, tmp_path, monkeypatch):
+        """apply_to_os_environ sets JAVA_CODEBASE_RAG_RETRIEVAL to the resolved value."""
+        monkeypatch.setattr(os, "environ", dict(os.environ))
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_RETRIEVAL", raising=False)
+
+        cfg = resolve_operator_config(source_root=tmp_path, cli_retrieval="bm25")
+        cfg.apply_to_os_environ()
+
+        assert os.environ["JAVA_CODEBASE_RAG_RETRIEVAL"] == "bm25"
+
+    def test_subprocess_env_contains_retrieval(self, tmp_path, monkeypatch):
+        """subprocess_env returns a dict carrying the resolved retrieval value."""
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_RETRIEVAL", raising=False)
+
+        cfg = resolve_operator_config(source_root=tmp_path, cli_retrieval="bm25")
+        env = cfg.subprocess_env()
+
+        assert env["JAVA_CODEBASE_RAG_RETRIEVAL"] == "bm25"
+
+
+class TestRetrievalModeFromEnv:
+    """Tests for the standalone retrieval_mode_from_env reader."""
+
+    def test_exact_bm25(self):
+        """An exact 'bm25' mapping value yields bm25."""
+        assert retrieval_mode_from_env({"JAVA_CODEBASE_RAG_RETRIEVAL": "bm25"}) == "bm25"
+
+    def test_surrounding_whitespace_is_stripped(self):
+        """' bm25 ' still yields bm25."""
+        assert retrieval_mode_from_env({"JAVA_CODEBASE_RAG_RETRIEVAL": " bm25 "}) == "bm25"
+
+    def test_uppercase_bm25_is_case_sensitive(self):
+        """'BM25' is not matched (case-sensitive) and yields vectors."""
+        assert retrieval_mode_from_env({"JAVA_CODEBASE_RAG_RETRIEVAL": "BM25"}) == "vectors"
+
+    def test_explicit_vectors_yields_vectors(self):
+        """'vectors' yields vectors."""
+        assert retrieval_mode_from_env({"JAVA_CODEBASE_RAG_RETRIEVAL": "vectors"}) == "vectors"
+
+    def test_absent_yields_vectors(self):
+        """An empty mapping yields vectors."""
+        assert retrieval_mode_from_env({}) == "vectors"
+
+    def test_none_reads_os_environ(self, monkeypatch):
+        """env=None reads os.environ: set yields bm25, unset yields vectors."""
+        monkeypatch.setenv("JAVA_CODEBASE_RAG_RETRIEVAL", "bm25")
+        assert retrieval_mode_from_env() == "bm25"
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_RETRIEVAL", raising=False)
+        assert retrieval_mode_from_env() == "vectors"

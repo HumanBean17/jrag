@@ -28,6 +28,29 @@ VECTORS_SKIPPED_GRAPH_ONLY = (
     "(graph-only mode). The graph is built/refreshed; semantic search is unavailable."
 )
 
+# Operator-facing line printed when an indexing command skips the vectors phase
+# because the operator selected bm25 retrieval (``retrieval: bm25`` in the
+# project YAML / env / CLI): there is nothing to embed, so cocoindex is never
+# spawned. Sibling of VECTORS_SKIPPED_GRAPH_ONLY — same single-source-of-truth
+# rule so the wording can't drift between cli.py and server.py.
+VECTORS_SKIPPED_BM25 = (
+    "jrag: vectors skipped — retrieval mode is bm25; building graph only."
+)
+
+# Operator-facing remediation hint printed when a vectors phase fails (a genuine
+# cocoindex non-zero exit or an embedding-model load failure). bm25 needs no
+# embedding-model download, so switching modes is the offline escape hatch.
+# Printed to stderr by cli.py (init/increment/reprocess), installer.py (install/
+# update) and watch/daemon.py (warm-up); mcp_v2 inlines the same advice in its
+# failure envelope because that surface returns the message instead of printing.
+# Same single-source-of-truth rule as the VECTORS_SKIPPED_* siblings so the
+# wording can't drift between the call sites.
+RETRIEVAL_BM25_HINT = (
+    "Tip: can't download the embedding model? Switch to keyword search: "
+    "jrag install --retrieval bm25 (or set JAVA_CODEBASE_RAG_RETRIEVAL=bm25) "
+    "— indexing and search then work fully offline."
+)
+
 
 # Package-internal locations of the cocoindex flow definition and the graph
 # builder. Both are executed *by file path* — cocoindex loads the flow via a
@@ -297,6 +320,23 @@ def vector_stack_installed() -> bool:
         importlib.util.find_spec(m) is not None
         for m in ("cocoindex", "lancedb", "sentence_transformers")
     )
+
+
+def lexical_mode_label() -> str:
+    """Operator-facing label for the shared ``mode: lexical`` state value.
+
+    Two populations land in lexical mode: the vector stack is absent
+    (graph-only install, macOS Intel) or present with ``retrieval=bm25``. The
+    watch state file carries just ``lexical`` for both, so the renderers (the
+    daemon's TTY panel and ``jrag watch --status``) re-evaluate the probe here
+    to name the truthful cause — the same two-population discrimination as the
+    daemon's startup lines. Lives in this light module (not ``watch.daemon``)
+    because ``--status`` is a lightweight probe verb and must not import the
+    daemon module.
+    """
+    if vector_stack_installed():
+        return "lexical (retrieval=bm25)"
+    return "lexical (graph-only)"
 
 
 def _run_cocoindex_update_impl(

@@ -16,6 +16,7 @@ from mcp.server.fastmcp.exceptions import ToolError
 
 from java_codebase_rag.graph.java_ontology import VALID_RESOLVE_REASONS
 
+from java_codebase_rag.mcp import mcp_v2
 from java_codebase_rag.mcp.mcp_v2 import (
     Edge,
     NodeFilter,
@@ -213,6 +214,181 @@ def test_search_v2_enables_graph_expand_through_hybrid_fts_fallback(
     assert calls[1]["graph_expand"] is True, (
         "the FTS-missing retry must still enable graph_expand on java"
     )
+
+
+# --- retrieval mode dispatch (retrieval=bm25 forces lexical; vectors probes) ---
+
+_BM25_MODE_ADVISORY = (
+    "lexical mode (retrieval=bm25) — keyword ranking only; "
+    "re-run jrag install and choose vectors to enable semantic search"
+)
+_GRAPH_ONLY_MODE_ADVISORY = (
+    "lexical (graph-only) mode — keyword ranking only; "
+    "semantic/vector search requires Apple Silicon, Linux, or Windows"
+)
+
+
+def test_search_retrieval_bm25_forces_lexical_over_loaded_vector_backend(
+    monkeypatch, ladybug_graph
+) -> None:
+    """retrieval=bm25 wins over the backend probe: even with a working (fake)
+    vector backend installed, search_v2 must take the lexical route and never
+    call the vector backend. The stack probe is forced present so the advisory
+    (which discriminates the two bm25 populations) is deterministic on any
+    platform — this is the stack-present population."""
+    calls: list[dict[str, Any]] = []
+
+    def fake_run_search(query, **kwargs):
+        calls.append({"query": query})
+        return _fake_search_rows()
+
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_RETRIEVAL", "bm25")
+    monkeypatch.setattr("java_codebase_rag.mcp.mcp_v2.run_search", fake_run_search)
+    monkeypatch.setattr("java_codebase_rag.pipeline.vector_stack_installed", lambda: True)
+
+    out = search_v2("ChatService", graph=ladybug_graph)
+
+    assert out.success is True
+    assert out.lexical_mode is True
+    assert _BM25_MODE_ADVISORY in out.advisories
+    assert _GRAPH_ONLY_MODE_ADVISORY not in out.advisories
+    assert calls == [], "bm25 mode must not call the vector backend"
+
+
+def test_search_retrieval_bm25_stack_absent_says_platform_not_rerun(
+    monkeypatch, ladybug_graph
+) -> None:
+    """bm25 on a stack-absent platform (Intel Mac, where the installer FORCES
+    bm25 into the YAML) must not advise re-running install to choose vectors —
+    that action is impossible there. The advisory is the platform string, and
+    the re-run-install string is absent (cross-absence both ways with the
+    stack-present test above)."""
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_RETRIEVAL", "bm25")
+    monkeypatch.setattr(
+        "java_codebase_rag.mcp.mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows()
+    )
+    monkeypatch.setattr("java_codebase_rag.pipeline.vector_stack_installed", lambda: False)
+
+    out = search_v2("ChatService", graph=ladybug_graph)
+
+    assert out.success is True
+    assert out.lexical_mode is True
+    assert _GRAPH_ONLY_MODE_ADVISORY in out.advisories
+    assert _BM25_MODE_ADVISORY not in out.advisories
+
+
+def test_search_retrieval_bm25_sql_table_advisory(monkeypatch, ladybug_graph) -> None:
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_RETRIEVAL", "bm25")
+    monkeypatch.setattr(
+        "java_codebase_rag.mcp.mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows()
+    )
+    out = search_v2("ChatService", table="sql", graph=ladybug_graph)
+    assert out.success is True
+    assert out.lexical_mode is True
+    assert (
+        "sql/yaml tables are not searched in bm25 (lexical) mode; "
+        "only Java symbols were searched"
+    ) in out.advisories
+
+
+def test_search_retrieval_bm25_hybrid_ignored_advisory(monkeypatch, ladybug_graph) -> None:
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_RETRIEVAL", "bm25")
+    monkeypatch.setattr(
+        "java_codebase_rag.mcp.mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows()
+    )
+    out = search_v2("ChatService", table="java", hybrid=True, graph=ladybug_graph)
+    assert out.success is True
+    assert "hybrid is ignored in lexical mode" in out.advisories
+    assert "hybrid is ignored in graph-only lexical mode" not in out.advisories
+
+
+@needs_vectors
+def test_search_retrieval_default_uses_vector_path(monkeypatch, ladybug_graph) -> None:
+    """Regression guard: with retrieval unset, a loaded backend drives the vector
+    path — lexical_mode False and neither lexical advisory present."""
+    monkeypatch.delenv("JAVA_CODEBASE_RAG_RETRIEVAL", raising=False)
+    monkeypatch.setattr(
+        "java_codebase_rag.mcp.mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows()
+    )
+    out = search_v2("ChatService", graph=ladybug_graph)
+    assert out.success is True
+    assert out.lexical_mode is False
+    assert _BM25_MODE_ADVISORY not in out.advisories
+    assert _GRAPH_ONLY_MODE_ADVISORY not in out.advisories
+
+
+def test_search_retrieval_unset_forced_lexical_keeps_graph_only_advisory(
+    monkeypatch, ladybug_graph
+) -> None:
+    """Test-forced lexical (run_search=None, the seam documented at the top of
+    mcp_v2) keeps today's stack-absent advisory text verbatim."""
+    monkeypatch.delenv("JAVA_CODEBASE_RAG_RETRIEVAL", raising=False)
+    monkeypatch.setattr("java_codebase_rag.mcp.mcp_v2.run_search", None)
+    out = search_v2("ChatService", graph=ladybug_graph)
+    assert out.success is True
+    assert out.lexical_mode is True
+    assert _GRAPH_ONLY_MODE_ADVISORY in out.advisories
+    assert _BM25_MODE_ADVISORY not in out.advisories
+
+
+def test_search_retrieval_bm25_leaves_run_search_unloaded(monkeypatch, ladybug_graph) -> None:
+    """bm25 mode must not even probe the vector stack: run_search stays at the
+    _NOT_LOADED sentinel after the call (no search_lancedb import is paid). The
+    sentinel is set explicitly so the test holds even if an earlier test in the
+    session loaded the real backend."""
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_RETRIEVAL", "bm25")
+    monkeypatch.setattr(mcp_v2, "run_search", mcp_v2._NOT_LOADED)
+
+    out = search_v2("ChatService", graph=ladybug_graph)
+
+    assert out.success is True
+    assert out.lexical_mode is True
+    assert mcp_v2.run_search is mcp_v2._NOT_LOADED, (
+        "bm25 dispatch must not load the vector backend (no search_lancedb import)"
+    )
+
+
+def test_search_model_load_failure_returns_bm25_hint_envelope(monkeypatch, ladybug_graph) -> None:
+    """An exception from the embedding-model load (offline operator, download
+    blocked) returns a dedicated failure envelope naming the bm25 escape hatch —
+    bypassing the generic str(exc) outer handler for this failure class only."""
+    monkeypatch.delenv("JAVA_CODEBASE_RAG_RETRIEVAL", raising=False)
+    monkeypatch.setattr(
+        "java_codebase_rag.mcp.mcp_v2.run_search", lambda *args, **kwargs: _fake_search_rows()
+    )
+
+    def boom(model_name, device):
+        raise RuntimeError("no network")
+
+    monkeypatch.setattr(mcp_v2, "_get_sentence_transformer", boom)
+
+    out = search_v2("ChatService", graph=ladybug_graph)
+
+    assert out.success is False
+    assert out.message is not None
+    assert out.message.startswith("embedding model load failed:")
+    assert "no network" in out.message
+    assert "JAVA_CODEBASE_RAG_RETRIEVAL=bm25" in out.message
+    assert out.advisories == []
+
+
+def test_search_post_model_failure_keeps_plain_envelope(monkeypatch, ladybug_graph) -> None:
+    """Control: a failure AFTER the model load (run_search itself raising) keeps
+    today's plain ``str(exc)`` outer envelope — no wrapper text, no bm25 hint."""
+    monkeypatch.delenv("JAVA_CODEBASE_RAG_RETRIEVAL", raising=False)
+    monkeypatch.setattr(
+        mcp_v2, "_get_sentence_transformer", lambda model_name, device: object()
+    )
+
+    def fake_run_search(query, **kwargs):
+        raise RuntimeError("Some other LanceDB error")
+
+    monkeypatch.setattr("java_codebase_rag.mcp.mcp_v2.run_search", fake_run_search)
+
+    out = search_v2("query", table="java", graph=ladybug_graph)
+
+    assert out.success is False
+    assert out.message == "Some other LanceDB error"
 
 
 def test_find_symbol_by_role(ladybug_graph) -> None:

@@ -12,7 +12,17 @@ import subprocess
 import sys
 import textwrap
 
+import pytest
+
 from java_codebase_rag.pipeline import is_cocoindex_preflight_blocker
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_retrieval(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These tests pin the stack-absent (graph-only) branches; an ambient
+    ``JAVA_CODEBASE_RAG_RETRIEVAL`` would flip them into the bm25 branch (the
+    env tier outranks YAML), changing both the skip lines and the advisories."""
+    monkeypatch.delenv("JAVA_CODEBASE_RAG_RETRIEVAL", raising=False)
 
 # Absent on a graph-only install. Pre-seeding with None forces ImportError on import.
 _VECTOR_MODULES = ("lancedb", "pylance", "torch", "sentence_transformers", "cocoindex")

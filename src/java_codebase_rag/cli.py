@@ -22,11 +22,14 @@ from java_codebase_rag.config import (
     emit_legacy_yaml_hint_if_needed,
     index_dir_has_existing_artifacts,
     resolve_operator_config,
+    retrieval_mode_from_env,
     write_config_source_pointer,
 )
 from java_codebase_rag._fdlimit import raise_fd_limit
 from java_codebase_rag._version import version_string
 from java_codebase_rag.pipeline import (
+    RETRIEVAL_BM25_HINT as _RETRIEVAL_BM25_HINT,
+    VECTORS_SKIPPED_BM25 as _VECTORS_SKIPPED_BM25,
     VECTORS_SKIPPED_GRAPH_ONLY as _VECTORS_SKIPPED_GRAPH_ONLY,
     clip,
     is_cocoindex_preflight_blocker,
@@ -370,32 +373,44 @@ def _cmd_init(args: argparse.Namespace) -> int:
     def work(progress: "PipelineProgress | None") -> int:
         env = cfg.subprocess_env()
         verbose = bool(args.verbose)
-        coco = run_cocoindex_update(
-            env,
-            full_reprocess=False,
-            quiet=bool(args.quiet),
-            verbose=verbose,
-            lance_project_root=None if args.quiet else cfg.source_root,
-            on_progress=progress.on_progress if progress is not None else None,
-            on_progress_console=progress.console if progress is not None else None,
-        )
-        # Graph-only install (cocoindex absent, e.g. macOS Intel): skip the vectors phase
-        # and proceed to the graph build rather than failing — the graph layer is the
-        # supported surface there. A genuine non-zero cocoindex exit still fails.
-        vectors_skipped = _is_cocoindex_preflight_blocker(coco)
-        if coco.returncode != 0 and not vectors_skipped:
-            _emit(
-                {
-                    "success": False,
-                    "exit_code": coco.returncode,
-                    "stdout": clip(coco.stdout, 8000),
-                    "stderr": clip(coco.stderr, 8000),
-                    "message": f"cocoindex exit {coco.returncode}",
-                }
+        bm25_mode = cfg.retrieval == "bm25"
+        vectors_skipped = False
+        if bm25_mode:
+            # bm25 retrieval: there are no vectors to build, so cocoindex is never
+            # spawned. Same operator-facing skip line and graph-only proceed as the
+            # stack-absent branch below.
+            print(_VECTORS_SKIPPED_BM25, file=sys.stderr, flush=True)
+        else:
+            coco = run_cocoindex_update(
+                env,
+                full_reprocess=False,
+                quiet=bool(args.quiet),
+                verbose=verbose,
+                lance_project_root=None if args.quiet else cfg.source_root,
+                on_progress=progress.on_progress if progress is not None else None,
+                on_progress_console=progress.console if progress is not None else None,
             )
-            return 1
-        if vectors_skipped:
-            print(_VECTORS_SKIPPED_GRAPH_ONLY, file=sys.stderr, flush=True)
+            # Graph-only install (cocoindex absent, e.g. macOS Intel): skip the vectors phase
+            # and proceed to the graph build rather than failing — the graph layer is the
+            # supported surface there. A genuine non-zero cocoindex exit still fails.
+            vectors_skipped = _is_cocoindex_preflight_blocker(coco)
+            if coco.returncode != 0 and not vectors_skipped:
+                _emit(
+                    {
+                        "success": False,
+                        "exit_code": coco.returncode,
+                        "stdout": clip(coco.stdout, 8000),
+                        "stderr": clip(coco.stderr, 8000),
+                        "message": f"cocoindex exit {coco.returncode}",
+                    }
+                )
+                # Remediation hint (suppressed when the mode is already bm25 —
+                # the guard is unreachable here today, kept honest on purpose).
+                if retrieval_mode_from_env() != "bm25":
+                    print(_RETRIEVAL_BM25_HINT, file=sys.stderr, flush=True)
+                return 1
+            if vectors_skipped:
+                print(_VECTORS_SKIPPED_GRAPH_ONLY, file=sys.stderr, flush=True)
         if not args.quiet:
             print(file=sys.stderr, flush=True)
         g = run_build_ast_graph(
@@ -418,16 +433,13 @@ def _cmd_init(args: argparse.Namespace) -> int:
                 }
             )
             return 1
-        _emit(
-            {
-                "success": True,
-                "message": (
-                    "init completed (graph-only; vectors skipped — vector stack not installed)"
-                    if vectors_skipped
-                    else "init completed"
-                ),
-            }
-        )
+        if bm25_mode:
+            message = "init completed (graph-only; vectors skipped — retrieval mode is bm25)"
+        elif vectors_skipped:
+            message = "init completed (graph-only; vectors skipped — vector stack not installed)"
+        else:
+            message = "init completed"
+        _emit({"success": True, "message": message})
         return 0
 
     return _run_with_pipeline_progress(
@@ -442,37 +454,56 @@ def _cmd_increment(args: argparse.Namespace) -> int:
 
     # Check for --vectors-only flag
     vectors_only = bool(getattr(args, "vectors_only", False))
-    if vectors_only:
+    if vectors_only and cfg.retrieval != "bm25":
+        # Under bm25 the vectors phase below is skipped, so the warning's
+        # "Lance vector index ... is current" line would be false.
         _emit_increment_ladybug_warning()
 
     def work(progress: "PipelineProgress | None") -> int:
         env = cfg.subprocess_env()
-        coco = run_cocoindex_update(
-            env,
-            full_reprocess=False,
-            quiet=bool(args.quiet),
-            verbose=bool(args.verbose),
-            lance_project_root=None if args.quiet else cfg.source_root,
-            on_progress=progress.on_progress if progress is not None else None,
-            on_progress_console=progress.console if progress is not None else None,
-        )
-        vectors_skipped = _is_cocoindex_preflight_blocker(coco)
-        if coco.returncode != 0 and not vectors_skipped:
-            _emit(
-                {
-                    "success": False,
-                    "exit_code": coco.returncode,
-                    "stdout": clip(coco.stdout, 8000),
-                    "stderr": clip(coco.stderr, 8000),
-                    "message": f"cocoindex exit {coco.returncode}",
-                }
+        bm25_mode = cfg.retrieval == "bm25"
+        vectors_skipped = False
+        if bm25_mode:
+            # bm25 retrieval: there are no vectors to build, so cocoindex is never
+            # spawned. Same operator-facing skip line as the stack-absent branch below.
+            print(_VECTORS_SKIPPED_BM25, file=sys.stderr, flush=True)
+        else:
+            coco = run_cocoindex_update(
+                env,
+                full_reprocess=False,
+                quiet=bool(args.quiet),
+                verbose=bool(args.verbose),
+                lance_project_root=None if args.quiet else cfg.source_root,
+                on_progress=progress.on_progress if progress is not None else None,
+                on_progress_console=progress.console if progress is not None else None,
             )
-            return 1
-        if vectors_skipped:
-            print(_VECTORS_SKIPPED_GRAPH_ONLY, file=sys.stderr, flush=True)
+            vectors_skipped = _is_cocoindex_preflight_blocker(coco)
+            if coco.returncode != 0 and not vectors_skipped:
+                _emit(
+                    {
+                        "success": False,
+                        "exit_code": coco.returncode,
+                        "stdout": clip(coco.stdout, 8000),
+                        "stderr": clip(coco.stderr, 8000),
+                        "message": f"cocoindex exit {coco.returncode}",
+                    }
+                )
+                if retrieval_mode_from_env() != "bm25":
+                    print(_RETRIEVAL_BM25_HINT, file=sys.stderr, flush=True)
+                return 1
+            if vectors_skipped:
+                print(_VECTORS_SKIPPED_GRAPH_ONLY, file=sys.stderr, flush=True)
 
         # If --vectors-only is set, skip graph update
         if vectors_only:
+            if bm25_mode:
+                _emit(
+                    {
+                        "success": True,
+                        "message": "increment skipped: retrieval mode is bm25 (no vectors phase)",
+                    }
+                )
+                return 0
             if vectors_skipped:
                 _emit(
                     {
@@ -523,16 +554,15 @@ def _cmd_increment(args: argparse.Namespace) -> int:
             )
             return 1
 
-        _emit(
-            {
-                "success": True,
-                "message": (
-                    "increment completed (graph only; vectors skipped — vector stack not installed)"
-                    if vectors_skipped
-                    else "increment completed (Lance + graph updated)"
-                ),
-            }
-        )
+        if bm25_mode:
+            message = "increment completed (graph only; vectors skipped — retrieval mode is bm25)"
+        elif vectors_skipped:
+            message = (
+                "increment completed (graph only; vectors skipped — vector stack not installed)"
+            )
+        else:
+            message = "increment completed (Lance + graph updated)"
+        _emit({"success": True, "message": message})
         return 0
 
     return _run_with_pipeline_progress(
@@ -550,8 +580,24 @@ def _cmd_reprocess(args: argparse.Namespace) -> int:
         verbose = bool(args.verbose)
         vectors_only = bool(getattr(args, "vectors_only", False))
         graph_only = bool(getattr(args, "graph_only", False))
+        bm25_mode = cfg.retrieval == "bm25"
 
         if vectors_only:
+            if bm25_mode:
+                # No vectors phase exists under bm25: --vectors-only is a clean no-op.
+                payload: dict[str, Any] = {
+                    "success": True,
+                    "exit_code": None,
+                    "stdout": "",
+                    "stderr": "",
+                    "message": "reprocess skipped: retrieval mode is bm25 (no vectors phase)",
+                    "graph_exit_code": None,
+                    "graph_stdout": "",
+                    "graph_stderr": "",
+                    "phases_run": [],
+                }
+                _emit_reprocess_outcome(payload)
+                return _reprocess_exit_code(payload)
             coco = run_cocoindex_update(
                 env, full_reprocess=True, quiet=bool(args.quiet), verbose=verbose,
                 on_progress=progress.on_progress if progress is not None else None,
@@ -586,9 +632,17 @@ def _cmd_reprocess(args: argparse.Namespace) -> int:
             if ok:
                 print(_REPROCESS_DRIFT_VECTORS_ONLY, file=sys.stderr)
             _emit_reprocess_outcome(payload, selective_tty_mode="vectors" if ok else None)
+            if not ok and retrieval_mode_from_env() != "bm25":
+                print(_RETRIEVAL_BM25_HINT, file=sys.stderr, flush=True)
             return _reprocess_exit_code(payload)
 
-        if graph_only:
+        if graph_only or bm25_mode:
+            # Under bm25 a full reprocess is a graph-only rebuild (there is no
+            # vectors phase to refresh), so it rides the --graph-only path — but
+            # says so with the bm25 skip line instead of the stale-vectors drift
+            # note, which does not apply when no vectors exist.
+            if bm25_mode:
+                print(_VECTORS_SKIPPED_BM25, file=sys.stderr, flush=True)
             g = run_build_ast_graph(
                 source_root=cfg.source_root,
                 ladybug_path=cfg.ladybug_path,
@@ -618,15 +672,22 @@ def _cmd_reprocess(args: argparse.Namespace) -> int:
                 "exit_code": None,
                 "stdout": "",
                 "stderr": "",
-                "message": None if ok else f"graph builder exit {g.returncode}",
+                "message": (
+                    "reprocess completed (graph-only; vectors skipped — retrieval mode is bm25)"
+                    if ok and bm25_mode
+                    else None if ok
+                    else f"graph builder exit {g.returncode}"
+                ),
                 "graph_exit_code": g.returncode,
                 "graph_stdout": clip(g.stdout, 4000),
                 "graph_stderr": clip(g.stderr, 4000),
                 "phases_run": ["graph"],
             }
-            if ok:
+            if ok and not bm25_mode:
                 print(_reprocess_drift_graph_only_line(cfg.index_dir), file=sys.stderr)
-            _emit_reprocess_outcome(payload, selective_tty_mode="graph" if ok else None)
+            _emit_reprocess_outcome(
+                payload, selective_tty_mode=None if bm25_mode else ("graph" if ok else None)
+            )
             return _reprocess_exit_code(payload)
 
         from java_codebase_rag.mcp import server  # lazy: pulls sentence_transformers/torch/lancedb/ladybug
@@ -656,6 +717,7 @@ def _cmd_install(args: argparse.Namespace) -> int:
         agents=args.agent,  # list of str (may be empty)
         scope=args.scope,
         model=args.model,
+        retrieval=getattr(args, "retrieval", None),
         surface=args.surface,
         source_root=None,  # None means cwd; installer confirms interactively
         quiet=bool(args.quiet),
@@ -1001,6 +1063,17 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         help="Embedding model path or 'auto' (default: auto).",
+    )
+    install.add_argument(
+        "--retrieval",
+        choices=["vectors", "bm25"],
+        default=None,
+        help=(
+            "Retrieval mode: 'vectors' (semantic search; requires an embedding model "
+            "— auto-downloaded from Hugging Face or a local path) or 'bm25' "
+            "(keyword search; no model, no downloads, works offline). "
+            "Default: vectors."
+        ),
     )
     install.add_argument(
         "--surface",

@@ -635,6 +635,87 @@ def select_surface(
     return selected  # type: ignore
 
 
+def _retrieval_choices() -> list[dict]:
+    """Choice list for the retrieval-mode select prompt.
+
+    Single source of truth for the retrieval option labels and order:
+    ``vectors`` is listed first and marked "(Recommended)" — semantic search is
+    the default for new installs. ``bm25`` stays available for machines that
+    must avoid the model download (or lack the vector stack entirely). The
+    returned dicts are normalized to ``questionary.Choice`` inside ``prompt``
+    so a value-based ``default`` (cursor position) validates.
+    """
+    return [
+        {"name": "vectors (Recommended)", "value": "vectors"},
+        {"name": "bm25", "value": "bm25"},
+    ]
+
+
+def select_retrieval(
+    *,
+    non_interactive: bool,
+    cli_retrieval: str | None,
+    prefill: str | None = None,
+) -> Literal["vectors", "bm25"]:
+    """Select 'vectors' or 'bm25' retrieval mode.
+
+    ``vectors`` embeds chunks into the Lance vector index (semantic search;
+    needs an embedding model). ``bm25`` is keyword search over the same chunks
+    — no model, no downloads, works offline. ``vectors`` is the recommended
+    default (listed first, marked "(Recommended)").
+
+    Args:
+        non_interactive: If True, honor ``cli_retrieval`` (default ``"vectors"``).
+        cli_retrieval: Retrieval mode from the ``--retrieval`` CLI flag.
+        prefill: On re-run, the mode recorded in the existing YAML config.
+            When valid, the cursor defaults to it so the user can keep the
+            prior choice with Enter (``vectors`` is still shown first +
+            recommended). Any other value (e.g. a hand-edited ``BM25``) falls
+            back to the ``vectors`` default rather than crashing the wizard.
+
+    Returns:
+        Selected retrieval mode (``"vectors"`` or ``"bm25"``).
+
+    Raises:
+        SystemExit(2): if ``cli_retrieval`` is invalid.
+    """
+    if cli_retrieval:
+        if cli_retrieval not in ("vectors", "bm25"):
+            print(f"Error: Invalid retrieval '{cli_retrieval}'. Must be 'vectors' or 'bm25'.")
+            raise SystemExit(2)
+        return cli_retrieval  # type: ignore
+
+    if non_interactive:
+        # Default to the recommended vectors mode when no flag is passed.
+        return "vectors"
+
+    print(
+        "Note: 'vectors' needs an embedding model (auto-downloaded from Hugging "
+        "Face, or a local path); 'bm25' is keyword search — no model, no "
+        "downloads, works offline. In bm25 mode the sql/yaml tables are not "
+        "searched (Java/Kotlin symbols only)."
+    )
+
+    # vectors is always shown first + recommended; the cursor defaults to the
+    # prior choice (prefill) on re-run so the user can keep it with Enter.
+    # questionary validates `default` against the choice values, so an invalid
+    # prefill (hand-edited YAML, e.g. "BM25") must be clamped — it would raise
+    # ValueError and kill the wizard instead of degrading to the default.
+    choices = _retrieval_choices()
+    default = prefill if prefill in ("vectors", "bm25") else "vectors"
+
+    selected = prompt(
+        "select",
+        "Select retrieval mode:",
+        choices=choices,
+        default=default,
+    )
+
+    if not selected:
+        return default
+    return selected  # type: ignore
+
+
 def resolve_mcp_command(*, non_interactive: bool, surface: Surface = "mcp") -> str:
     """Resolve the absolute path to the runtime binary for the chosen surface.
 
@@ -969,6 +1050,8 @@ def generate_yaml_config(
     model: str,
     microservice_roots: list[str] | None,
     existing_yaml: dict | None,
+    *,
+    retrieval: str = "vectors",
 ) -> str:
     """Generate .java-codebase-rag.yml content from installer answers.
 
@@ -977,6 +1060,7 @@ def generate_yaml_config(
         model: Embedding model path or "auto"
         microservice_roots: List of microservice roots (None means all)
         existing_yaml: Existing YAML data for re-run update mode
+        retrieval: Retrieval mode ("vectors" or "bm25")
 
     Returns:
         YAML configuration string
@@ -1002,6 +1086,14 @@ def generate_yaml_config(
             del config["embedding"]
         else:
             config["embedding"].pop("model", None)
+
+    # Write retrieval only when it is not the default (vectors); a re-run
+    # switching back to vectors drops the key (mirrors the model removal above)
+    # so the YAML never pins a mode the user moved away from.
+    if retrieval == "bm25":
+        config["retrieval"] = "bm25"
+    elif "retrieval" in config:
+        del config["retrieval"]
 
     # Seed cross-service resolution safe-by-default: only evidence-backed cross-service
     # edges survive (see _is_brownfield_sourced in build_ast_graph). setdefault preserves
@@ -1090,6 +1182,7 @@ def run_init_if_needed(
     non_interactive: bool,
     quiet: bool,
     verbose: bool = False,
+    retrieval: str | None = None,
 ) -> bool | None:
     """Run init if index directory has no artifacts.
 
@@ -1108,6 +1201,11 @@ def run_init_if_needed(
         non_interactive: If True, suppress prompts
         quiet: If True, suppress progress output
         verbose: If True, raw-relay subprocess output (no Live region)
+        retrieval: Effective retrieval mode from the wizard (``"vectors"`` or
+            ``"bm25"``). Threaded into ``resolve_operator_config`` as the CLI
+            tier so an ambient ``JAVA_CODEBASE_RAG_RETRIEVAL`` cannot flip this
+            sub-step against the choice the operator just made in the SAME
+            ``jrag install`` run (``None`` defers to the env tier, as before).
 
     Returns:
         True if init ran and succeeded; False if it ran and failed (cocoindex or
@@ -1118,9 +1216,16 @@ def run_init_if_needed(
     from java_codebase_rag.config import (
         index_dir_has_existing_artifacts,
         resolve_operator_config,
+        retrieval_mode_from_env,
         write_config_source_pointer,
     )
-    from java_codebase_rag.pipeline import is_cocoindex_preflight_blocker, run_build_ast_graph, run_cocoindex_update
+    from java_codebase_rag.pipeline import (
+        RETRIEVAL_BM25_HINT,
+        VECTORS_SKIPPED_BM25,
+        is_cocoindex_preflight_blocker,
+        run_build_ast_graph,
+        run_cocoindex_update,
+    )
 
     has_existing, _ = index_dir_has_existing_artifacts(index_dir)
     if has_existing:
@@ -1131,6 +1236,7 @@ def run_init_if_needed(
         source_root=source_root,
         cli_index_dir=None,  # use default (<source_root>/.java-codebase-rag)
         cli_embedding_model=model if model != "auto" else None,
+        cli_retrieval=retrieval,
     )
     cfg.apply_to_os_environ()
     env = cfg.subprocess_env()
@@ -1151,31 +1257,47 @@ def run_init_if_needed(
         renderer.start()
     index_ok = True
     try:
-        coco = run_cocoindex_update(
-            env,
-            full_reprocess=False,
-            quiet=quiet,
-            verbose=verbose,
-            on_progress=on_progress,
-            on_progress_console=on_progress_console,
-        )
-        # Graph-only install (cocoindex absent, e.g. macOS Intel): skip the vectors phase
-        # and build the graph rather than failing install. A genuine non-zero cocoindex
-        # exit still fails.
-        vectors_skipped = is_cocoindex_preflight_blocker(coco)
-        if coco.returncode != 0 and not vectors_skipped:
-            print(
-                f"Error: CocoIndex update failed with code {coco.returncode}",
-                file=sys.stderr,
-            )
-            index_ok = False
+        # bm25 retrieval: there are no vectors to build, so cocoindex is never
+        # spawned (no cocoindex progress event either, so the renderer's vectors
+        # task stays unspawned instead of hanging at running). Same graph-only
+        # proceed as the stack-absent branch below.
+        bm25_mode = cfg.retrieval == "bm25"
+        vectors_skipped = bm25_mode
+        coco_failed = False
+        if bm25_mode:
+            print(VECTORS_SKIPPED_BM25, file=sys.stderr, flush=True)
         else:
-            if vectors_skipped:
+            coco = run_cocoindex_update(
+                env,
+                full_reprocess=False,
+                quiet=quiet,
+                verbose=verbose,
+                on_progress=on_progress,
+                on_progress_console=on_progress_console,
+            )
+            # Graph-only install (cocoindex absent, e.g. macOS Intel): skip the vectors
+            # phase and build the graph rather than failing install. A genuine
+            # non-zero cocoindex exit still fails.
+            vectors_skipped = is_cocoindex_preflight_blocker(coco)
+            coco_failed = coco.returncode != 0 and not vectors_skipped
+            if coco_failed:
+                print(
+                    f"Error: CocoIndex update failed with code {coco.returncode}",
+                    file=sys.stderr,
+                )
+                # Remediation hint (suppressed when the mode is already bm25 —
+                # the guard is unreachable here today, kept honest on purpose).
+                if retrieval_mode_from_env() != "bm25":
+                    print(RETRIEVAL_BM25_HINT, file=sys.stderr, flush=True)
+            elif vectors_skipped:
                 print(
                     "jrag: vectors skipped — vector stack not installed on this "
                     "platform (graph-only mode). Building graph only; semantic search is unavailable.",
                     file=sys.stderr,
                 )
+        if coco_failed:
+            index_ok = False
+        else:
             g = run_build_ast_graph(
                 source_root=cfg.source_root,
                 ladybug_path=cfg.ladybug_path,
@@ -1941,9 +2063,16 @@ def run_update(
         discover_project_root,
         index_dir_has_existing_artifacts,
         resolve_operator_config,
+        retrieval_mode_from_env,
         write_config_source_pointer,
     )
-    from java_codebase_rag.pipeline import is_cocoindex_preflight_blocker, run_cocoindex_update, run_incremental_graph
+    from java_codebase_rag.pipeline import (
+        RETRIEVAL_BM25_HINT,
+        VECTORS_SKIPPED_BM25,
+        is_cocoindex_preflight_blocker,
+        run_cocoindex_update,
+        run_incremental_graph,
+    )
 
     project_root = discover_project_root(cwd)
     if project_root is None:
@@ -1998,30 +2127,44 @@ def run_update(
             renderer.start()
         index_ok = True
         try:
-            coco = run_cocoindex_update(
-                env,
-                full_reprocess=False,
-                quiet=quiet,
-                verbose=verbose,
-                on_progress=on_progress,
-                on_progress_console=on_progress_console,
-            )
-            # Graph-only install (cocoindex absent): skip the vectors catch-up and run the
-            # graph catch-up only. A genuine non-zero cocoindex exit still fails.
-            vectors_skipped = is_cocoindex_preflight_blocker(coco)
-            if coco.returncode != 0 and not vectors_skipped:
-                print(
-                    f"Error: Lance index update failed with code {coco.returncode}",
-                    file=sys.stderr,
-                )
-                index_ok = False
+            # bm25 retrieval: there are no vectors to build, so cocoindex is never
+            # spawned (no cocoindex progress event either, so the renderer's vectors
+            # task stays unspawned instead of hanging at running). Same graph-only
+            # catch-up as the stack-absent branch below.
+            bm25_mode = cfg.retrieval == "bm25"
+            vectors_skipped = bm25_mode
+            coco_failed = False
+            if bm25_mode:
+                print(VECTORS_SKIPPED_BM25, file=sys.stderr, flush=True)
             else:
-                if vectors_skipped:
+                coco = run_cocoindex_update(
+                    env,
+                    full_reprocess=False,
+                    quiet=quiet,
+                    verbose=verbose,
+                    on_progress=on_progress,
+                    on_progress_console=on_progress_console,
+                )
+                # Graph-only install (cocoindex absent): skip the vectors catch-up and run
+                # the graph catch-up only. A genuine non-zero cocoindex exit still fails.
+                vectors_skipped = is_cocoindex_preflight_blocker(coco)
+                coco_failed = coco.returncode != 0 and not vectors_skipped
+                if coco_failed:
+                    print(
+                        f"Error: Lance index update failed with code {coco.returncode}",
+                        file=sys.stderr,
+                    )
+                    if retrieval_mode_from_env() != "bm25":
+                        print(RETRIEVAL_BM25_HINT, file=sys.stderr, flush=True)
+                elif vectors_skipped:
                     print(
                         "jrag: vectors skipped — vector stack not installed on this "
                         "platform (graph-only mode). Running graph catch-up only.",
                         file=sys.stderr,
                     )
+            if coco_failed:
+                index_ok = False
+            else:
                 g = run_incremental_graph(
                     source_root=cfg.source_root,
                     ladybug_path=cfg.ladybug_path,
@@ -2077,6 +2220,7 @@ def run_install(
     agents: list[str] | None,
     scope: str | None,
     model: str | None,
+    retrieval: str | None = None,
     surface: str | None = None,
     source_root: Path | None = None,
     quiet: bool = False,
@@ -2089,6 +2233,8 @@ def run_install(
         agents: List of agent names from CLI flags
         scope: Scope from CLI flag
         model: Model from CLI flag
+        retrieval: Retrieval mode from CLI flag (``"vectors"`` or ``"bm25"``;
+            default ``"vectors"``)
         surface: Surface from CLI flag (``"mcp"`` or ``"cli"``; default ``"mcp"``)
         source_root: Source root path (defaults to cwd if None)
         quiet: If True, suppress output
@@ -2135,20 +2281,36 @@ def run_install(
         except SystemExit as e:
             return e.code
 
-    # Stage 2: Embedding model
+    # Stage 2: Retrieval mode + embedding model
     from java_codebase_rag.pipeline import vector_stack_installed
 
     if not vector_stack_installed():
         # Graph-only install (macOS Intel): no torch/lancedb, so there is no vector
-        # index to embed into — the embedding-model choice is inert here. Skip the
-        # prompt and let init build the graph (vectors phase auto-skipped).
+        # index to embed into — bm25 keyword search is the only usable mode and the
+        # embedding-model choice is inert here. Force both and let init build the
+        # graph (vectors phase auto-skipped).
         print(
             "Skipping embedding model selection: vector stack not installed on this "
             "platform (graph-only mode)."
         )
+        retrieval = "bm25"
         resolved_model = "auto"
     else:
-        resolved_model = resolve_model(model, non_interactive=non_interactive)
+        retrieval = select_retrieval(
+            non_interactive=non_interactive,
+            cli_retrieval=retrieval,
+            prefill=existing_config.get("retrieval") if existing_config else None,
+        )
+        if retrieval == "bm25":
+            # Keyword search needs no embedding model, so the model question is
+            # inert — do not resolve (or prompt for) a model that is never used.
+            print(
+                "Skipping embedding model selection: retrieval mode is bm25 "
+                "(keyword search; no model needed)."
+            )
+            resolved_model = "auto"
+        else:
+            resolved_model = resolve_model(model, non_interactive=non_interactive)
 
     # Stage 3-4: Agent host + scope + surface selection
     prior_surface = _prior_surface_from_marker(cwd)
@@ -2215,6 +2377,7 @@ def run_install(
         resolved_model,
         microservice_roots=selected_roots,
         existing_yaml=existing_config,
+        retrieval=retrieval,
     )
 
     # Write YAML config
@@ -2230,7 +2393,9 @@ def run_install(
     # Run init if index directory is empty. run_init_if_needed returns True (ran
     # OK), False (ran and failed — cocoindex/graph non-zero exit), or None
     # (skipped: index already exists). A failed index must NOT report success in
-    # CI/automation; a skip is not a failure (issue #351).
+    # CI/automation; a skip is not a failure (issue #351). The post-Stage-2
+    # ``retrieval`` (flag, prefill choice, or the graph-only force) rides along
+    # so the sub-step resolves the SAME mode the wizard just wrote to the YAML.
     index_dir = (source_root / ".java-codebase-rag").resolve()
     init_outcome = run_init_if_needed(
         source_root,
@@ -2239,6 +2404,7 @@ def run_install(
         non_interactive=non_interactive,
         quiet=quiet,
         verbose=verbose,
+        retrieval=retrieval,
     )
     if init_outcome is False:
         return 1

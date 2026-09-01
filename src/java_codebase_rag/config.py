@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import re
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -386,6 +387,11 @@ class ResolvedOperatorConfig:
     watch_debounce_ms_source: SettingSource = "default"
     watch_backend_source: SettingSource = "default"
     watch_poll_interval_ms_source: SettingSource = "default"
+    # Retrieval mode for search: "vectors" (semantic) or "bm25" (lexical, no
+    # embedding model). CLI > env > YAML > default; invalid values degrade to
+    # "vectors".
+    retrieval: str = "vectors"
+    retrieval_source: SettingSource = "default"
 
     def apply_to_os_environ(self) -> None:
         """Make downstream modules (server, ladybug_queries, flows) see a consistent environment.
@@ -401,6 +407,7 @@ class ResolvedOperatorConfig:
             os.environ["SBERT_DEVICE"] = self.embedding_device
         # Publish absence diagnosis knobs for subprocess builds (PR-ABS-1)
         os.environ["JAVA_CODEBASE_RAG_ABSENCE_NGRAM_Q"] = str(self.absence_ngram_q)
+        os.environ["JAVA_CODEBASE_RAG_RETRIEVAL"] = self.retrieval
 
     def subprocess_env(self, base: dict[str, str] | None = None) -> dict[str, str]:
         out = dict(base or os.environ)
@@ -413,6 +420,7 @@ class ResolvedOperatorConfig:
             out.pop("SBERT_DEVICE", None)
         # Publish absence diagnosis knobs for subprocess builds (PR-ABS-1)
         out["JAVA_CODEBASE_RAG_ABSENCE_NGRAM_Q"] = str(self.absence_ngram_q)
+        out["JAVA_CODEBASE_RAG_RETRIEVAL"] = self.retrieval
         return out
 
 
@@ -592,6 +600,7 @@ def resolve_operator_config(
     cli_watch_debounce_ms: int | None = None,
     cli_watch_backend: str | None = None,
     cli_watch_poll_interval_ms: int | None = None,
+    cli_retrieval: str | None = None,
 ) -> ResolvedOperatorConfig:
     # Phase 1: Find the config file directory
     if source_root is not None:
@@ -732,6 +741,22 @@ def resolve_operator_config(
             file=sys.stderr,
         )
         w_poll, w_poll_src = 2000, "default"
+    # Retrieval mode (CLI > env > YAML > default), validated like the watch
+    # knobs above: an unknown value degrades to "vectors" with a stderr note.
+    retrieval, retrieval_src = _pick_str(
+        cli_val=cli_retrieval,
+        env_key="JAVA_CODEBASE_RAG_RETRIEVAL",
+        yaml_dict=yaml_dict,
+        yaml_path=("retrieval",),
+        default="vectors",
+    )
+    if retrieval not in ("vectors", "bm25"):
+        print(
+            f"jrag: retrieval={retrieval!r} is not one of vectors/bm25; "
+            "falling back to 'vectors'.",
+            file=sys.stderr,
+        )
+        retrieval, retrieval_src = "vectors", "default"
     ku = index_dir / "code_graph.lbug"
     coco = index_dir / "cocoindex.db"
     return ResolvedOperatorConfig(
@@ -763,7 +788,23 @@ def resolve_operator_config(
         watch_debounce_ms_source=w_debounce_src,
         watch_backend_source=w_backend_src,
         watch_poll_interval_ms_source=w_poll_src,
+        retrieval=retrieval,
+        retrieval_source=retrieval_src,
     )
+
+
+def retrieval_mode_from_env(env: Mapping[str, str] | None = None) -> str:
+    """Read the effective retrieval mode straight from the environment.
+
+    Returns ``"bm25"`` only when ``JAVA_CODEBASE_RAG_RETRIEVAL`` is exactly
+    ``bm25`` (case-sensitive; surrounding whitespace is stripped); every other
+    value — including an unset variable — yields ``"vectors"``. Used by entry
+    points (``mcp_v2`` / ``server``) that need the mode before the operator
+    config is resolved.
+    """
+    source = os.environ if env is None else env
+    raw = source.get("JAVA_CODEBASE_RAG_RETRIEVAL", "")
+    return "bm25" if raw.strip() == "bm25" else "vectors"
 
 
 def write_config_source_pointer(
