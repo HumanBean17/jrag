@@ -35,6 +35,7 @@ Core library = **top-level `.py` modules** (`py-modules`); the installable **`ja
 | Hints + absence | `mcp_hints.py`, `graph_types.py`, `absence_types.py`, `absence_vocab.py`, `absence_diagnosis.py`, `absence_capability.py` |
 | Config + paths | `java_codebase_rag/config.py`, `path_filtering.py`, `index_common.py`, `brownfield_events.py` |
 | Watch daemon | `java_codebase_rag/watch/` (`lock`, `paths`, `protocol`, `warm`, `server`, `client`, `watcher`, `daemon`) |
+| Local observability | `java_codebase_rag/usage/` (`paths`, `events`, `writer`, `summarize`) — opt-in (`usage.enabled`, default off), stdlib-only, network-free by import-lint test. Writers: the `jrag.py`/`cli.py` main funnels (one `command` event per invocation) and `watch/daemon.py::_record` (`reindex`/`daemon` events, stderr tails, failure counters, heartbeat). Readers: `jrag usage`/`jrag feedback` verbs via `summarize.py` pure aggregation. Journal: day-sharded capped JSONL in a durable per-project state dir (never the index dir). |
 | Surfaces | `java_codebase_rag/{cli,jrag,installer}.py` |
 | Localization | `java_codebase_rag/i18n.py` + `i18n_messages_{en,ru}.py` / `i18n_messages_help_{en,ru}.py` catalogs |
 | Shipped artifacts | `skills/`, `agents/` (deployed verbatim to agent host via `install`/`update`) |

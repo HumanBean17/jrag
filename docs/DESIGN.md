@@ -56,6 +56,7 @@ One repo, two stores, two audiences:
 - **`jrag watch` is not a boot/persistent service** — it is a foreground-or-detached process the operator starts per coding session; nothing auto-starts on boot or survives logout.
 - **`jrag watch` is one daemon per index dir, not multi-project** — a pidfile + `flock` enforces a single watcher (and blocks a concurrent manual `increment`) per project; run one process per project.
 - **`jrag watch` is not network/remote and not for the MCP surface** — it serves warm reads over a local Unix socket to the `jrag` CLI only; the MCP server has its own warm-cache posture and is untouched.
+- **Observability is local-only and opt-in** — `usage.enabled` (default off) gates a size-capped local JSONL journal of invocation/reindex events plus daemon-health surfacing; identifiers and outcomes only (never file contents), no network export ever (enforced by an import-lint test), history lives outside the index dir so `erase` can't wipe it. See `docs/CONFIGURATION.md` §6.
 
 Non-goal detail: [`docs/AGENT-GUIDE.md`](./AGENT-GUIDE.md) (§ "What this MCP is not"). Roadmap and future direction live in [`docs/PRODUCT-VISION.md`](./PRODUCT-VISION.md), not here.
 
