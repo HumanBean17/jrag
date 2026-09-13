@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "java-codebase-rag"
-version = "0.12.1"
+version = "0.12.2"
 description = "Renamed to jrag-cli; this package only depends on jrag-cli. New setups: pip install jrag-cli."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -12,7 +12,7 @@ license = "MIT"
 authors = [
     { name = "HumanBean17" },
 ]
-dependencies = ["jrag-cli==0.12.1"]
+dependencies = ["jrag-cli==0.12.2"]
 
 [project.urls]
 Homepage = "https://github.com/HumanBean17/jrag"

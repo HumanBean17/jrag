@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jrag-cli"
-version = "0.12.1"
+version = "0.12.2"
 description = "jrag (formerly java-codebase-rag) — MCP server + jrag CLI for semantic + structural search over Java/Kotlin codebases"
 readme = "README.md"
 requires-python = ">=3.11"
