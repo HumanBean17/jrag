@@ -15,6 +15,7 @@ For the architecture rationale (the GPS metaphor, three-layer design, future wor
 3. [Graph layer — LadybugDB schema, edges, capabilities, ranking](#3-graph-layer)
 4. [Brownfield overrides — config + in-source annotations](#4-brownfield-overrides)
 5. [Ignore patterns](#5-ignore-patterns)
+6. [Local observability — what jrag records locally](#6-local-observability--what-jrag-records-locally)
 
 ---
 
@@ -60,6 +61,8 @@ This walk-up behavior means you no longer need to set environment variables or p
 | `JAVA_CODEBASE_RAG_ABSENCE_ABSENT_FLOOR` | Similarity (0.0–1.0) BELOW which an identifier-shaped empty query yields `not_in_project` (confident absent). **Lower it to be more conservative (fewer false-absent); raise it to declare absence more aggressively.** Overridable via `.java-codebase-rag.yml` `absence.absent_floor`. Default: 0.40. |
 | `JAVA_CODEBASE_RAG_ABSENCE_CANDIDATE_COUNT` | Number of closest candidates (1-20) to return in `absence.closest_symbols` and `absence.distances`. Overridable via `.java-codebase-rag.yml` `absence.candidate_count`. Default: 5. |
 | `JAVA_CODEBASE_RAG_ABSENCE_NGRAM_Q` | N-gram q-gram size (1-5) for lexical similarity scoring. Overridable via `.java-codebase-rag.yml` `absence.ngram_q`. Default: 3. |
+| `JAVA_CODEBASE_RAG_USAGE_ENABLED` | Opt-in local observability (see [§6](#6-local-observability--what-jrag-records-locally)): when `1`/`true`/`yes`, jrag records usage/reindex events to a local JSONL journal and surfaces daemon health. Strictly local — no network, ever. Overridable via `.java-codebase-rag.yml` `usage.enabled`. Default: **disabled**. |
+| `JAVA_CODEBASE_RAG_USAGE_DIR` | Override for the durable state directory holding usage events (default: `XDG_STATE_HOME/jrag`, else `~/.local/state/jrag` on Linux / `~/Library/Application Support/jrag` on macOS). Overridable via `.java-codebase-rag.yml` `usage.dir`. Events are keyed per project and never live inside the index dir, so `jrag erase` does not wipe them. |
 
 **MCP host launchers** also set `JAVA_CODEBASE_RAG_SOURCE_ROOT` to the Java repository root when it differs from the server process cwd (see `mcp.json.example` in the repo root).
 
@@ -197,6 +200,21 @@ cross_service_resolution: auto
 # Env: JAVA_CODEBASE_RAG_HINTS_ENABLED (1/true/yes or 0/false/no).
 hints:
   enabled: true  # set to false to suppress hints and advisories
+
+# -------- Local observability (opt-in; strictly local, no network) --------
+
+# When enabled, jrag records per-invocation usage events (agent + operator
+# CLI), watch-daemon reindex lifecycle events, and sparse owner feedback
+# labels to a size-capped local JSONL journal, summarized by `jrag usage`.
+# Disabled (the default) = zero new writes anywhere and byte-identical CLI
+# behavior. See CONFIGURATION.md §6 for exactly what is recorded.
+# Env: JAVA_CODEBASE_RAG_USAGE_ENABLED (1/true/yes or 0/false/no).
+usage:
+  enabled: false
+  # Optional override for the durable state dir (default: XDG state home /
+  # platform app-support dir; per-project sharding underneath is automatic).
+  # Env: JAVA_CODEBASE_RAG_USAGE_DIR.
+  # dir: /absolute/path
 
 # -------- Absence diagnosis (empty-result verdicts) --------
 
@@ -783,3 +801,46 @@ If no `.java-codebase-rag/ignore` exists anywhere under the project, behaviour m
 **Monorepo note:** negation detection runs two full-tree `rglob` passes when constructing a `LayeredIgnore` (ignore files and `.gitignore` files). Usually cheap to amortise; extremely large trees should expect that fixed cost per new instance.
 
 **Dependencies:** `pathspec` is pinned in `requirements.txt` and constrained the same way in `pyproject.toml` (loose bundle install vs. wheel metadata).
+
+---
+
+## 6. Local observability — what jrag records locally
+
+Opt-in, **strictly local** traceability so the owner can see how jrag is being used, whether answers were useful, and whether anything broke. Disabled by default; one switch enables the whole layer:
+
+```bash
+export JAVA_CODEBASE_RAG_USAGE_ENABLED=1     # or: usage.enabled: true in the YAML
+```
+
+**No network, ever.** The `usage/` module imports only stdlib non-network modules — enforced by a test (`tests/usage/test_import_lint.py`), not just promised here. Events record identifiers and outcomes (verbs, queries, FQNs, exit codes), never file contents or code snippets.
+
+### What is recorded, where
+
+Durable state dir (override with `usage.dir`): `XDG_STATE_HOME/jrag`, else `~/.local/state/jrag` (Linux) / `~/Library/Application Support/jrag` (macOS). Per project (12-hex key derived from the index dir): `<state>/events/<project_key>/events-YYYY-MM-DD.jsonl` (day-sharded) plus `feedback.jsonl`. **Not the index dir** — `jrag erase` rebuilds the index and leaves history alone.
+
+| Event kind | Recorded fields | Source |
+|---|---|---|
+| `command` (per CLI invocation, agent + operator verbs) | verb, query (≤200 chars, cut at first newline), flags subset, duration_ms, rc, envelope facts (status `ok/ambiguous/not_found/error`, result_count, truncated, candidates/absence/warnings counts), `index_age_s` (age of the index when the call ran), `served_by` (`daemon`/`cold`), ppid + cwd (sessionization), event_id | `jrag.py` / `cli.py` main funnels |
+| `reindex` (watch daemon) | kind (`indexing_started/vectors/graph/indexing_done/error`), phase, returncode, duration, `stderr_tail` (≤500 chars on failures) | `watch/daemon.py` `_record` |
+| `daemon` | start/stop lifecycle | watch daemon |
+| feedback label | `{ts, event_id, rating, note ≤500}` — appended by `jrag feedback` | owner |
+
+**Caps (constants, not knobs):** 30-day retention (older day files pruned on write), 5 MiB per day file (overflow dropped and counted in a `.drops` sidecar), 1 KiB per line, 200-char queries, 500-char stderr tails. Telemetry failures never change CLI stdout/stderr/exit codes (everything is swallow-guarded; a debug line appears only under `JAVA_CODEBASE_RAG_DEBUG_CONTEXT`).
+
+### Reading it
+
+- `jrag usage [--days N]` — summary rollup: per-verb calls/outcome mix/latency (split hot vs cold), empty-rate binned by index age, sessions, struggle signals (repeats, reformulations, abandoned queries), top missed terms with absence verdicts, watch health (reindex success, consecutive failures, recent stderr), feedback labels, storage status.
+- `jrag feedback <event_id> --good|--bad [--note …]` — attach a sparse label to a recorded invocation (the `event_id` rides on every envelope when telemetry is on).
+- With telemetry **off**, both verbs render a short enable hint and exit 0.
+
+### Also gated by the switch
+
+Daemon-state health fields (`consecutive_errors`, per-phase last-success timestamps, a 30 s heartbeat so the state file mtime is a liveness signal), `jrag status`'s daemon-health section + warnings, and `jrag prime`'s "running, reindex failing since X" enrichment. Ungated by design: `jrag watch --status` rendering the already-recorded `last_error`, and `eval --reuse-index` (an explicit operator invocation writing only the eval harness's own report dirs).
+
+### Nightly live-index quality run (cron)
+
+```cron
+15 3 * * *  cd /path/to/project && jrag-cli-venv/bin/python -m java_codebase_rag.eval.runner . --index-dir ./.java-codebase-rag --reuse-index --results-dir ~/jrag-eval
+```
+
+`--reuse-index` skips the index rebuild and measures the live index; the run's `report.json` additionally snapshots `graph.meta()` (parse errors, resolution percentages) so index health and recall/MRR become jointly analyzable over time. Requires an explicit `--index-dir`.

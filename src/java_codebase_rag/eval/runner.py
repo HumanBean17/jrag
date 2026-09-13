@@ -115,6 +115,11 @@ class EvalConfig:
     # Deterministic cap on Tier-A LabeledQuery items produced (after the kind
     # filter). Tier-B queries are NOT capped (operator-curated). See run_eval.
     max_queries: int = 400
+    # Run against the EXISTING index_dir instead of rebuilding it via
+    # `jrag init` (nightly cron-cheap quality runs on the live index).
+    # Requires a non-empty index_dir; the run additionally snapshots
+    # graph.meta() into the report for joint index-health/recall analysis.
+    reuse_index: bool = False
 
     def __post_init__(self) -> None:
         if self.max_queries < 1:
@@ -148,6 +153,10 @@ class EvalReport:
     num_queries_available: int = 0
     # Absolute path to the timestamped output dir holding report.md / report.json.
     out_dir: str = ""
+    # GraphMeta snapshot of the index the run measured (reuse_index runs;
+    # None on fresh-build runs). Index health (parse errors, resolution %)
+    # becomes jointly analyzable with recall over time.
+    graph_meta: dict | None = None
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), indent=2, sort_keys=True)
@@ -393,13 +402,20 @@ def run_eval(cfg: EvalConfig) -> EvalReport:
 
     # Resolve index_dir (temp dir if blank).
     if not cfg.index_dir:
+        if cfg.reuse_index:
+            raise ValueError(
+                "reuse_index requires an explicit index_dir — there is nothing "
+                "to reuse otherwise"
+            )
         index_dir = tempfile.mkdtemp(prefix="jrag-eval-")
     else:
         index_dir = cfg.index_dir
     Path(index_dir).mkdir(parents=True, exist_ok=True)
 
-    # 1. Build the index (subprocess).
-    _build_index_subprocess(corpus_dir=cfg.corpus_dir, index_dir=index_dir)
+    # 1. Build the index (subprocess) — skipped in reuse mode; the sweep then
+    # measures the live index exactly as agents used it.
+    if not cfg.reuse_index:
+        _build_index_subprocess(corpus_dir=cfg.corpus_dir, index_dir=index_dir)
 
     # 2. Wire the process env so resolve_ladybug_path + run_search's URI hit our index.
     os.environ["JAVA_CODEBASE_RAG_INDEX_DIR"] = str(Path(index_dir).resolve())
@@ -419,6 +435,11 @@ def run_eval(cfg: EvalConfig) -> EvalReport:
     # a different path. We force-bind to our index's graph.
     LadybugGraph.reset_for_path(None)
     graph = LadybugGraph.get(ladybug_path)
+    graph_meta = None
+    if cfg.reuse_index:
+        meta_out = graph.meta()
+        if "error" not in meta_out:
+            graph_meta = meta_out
 
     symbols = _enumerate_symbols(graph, symbol_kinds=cfg.symbol_kinds)
     tier_a = list(build_tier_a(symbols))
@@ -481,6 +502,7 @@ def run_eval(cfg: EvalConfig) -> EvalReport:
         index_dir=index_dir,
         num_queries_available=num_queries_available,
         out_dir=out_dir,
+        graph_meta=graph_meta,
     )
 
     # 6. Persist into <results_dir>/<timestamp>/report.{md,json}.
@@ -524,6 +546,10 @@ def _build_eval_config_from_args(argv: list[str] | None = None) -> EvalConfig:
                         help="Optional path to a Tier-B ground-truth file (missing ⇒ disabled).")
     parser.add_argument("--device", default=base.device,
                         help="SBERT device (default: SBERT_DEVICE env or auto).")
+    parser.add_argument("--reuse-index", action="store_true",
+                        help="Skip the index build and measure the existing "
+                             "--index-dir as-is (nightly live-index runs); "
+                             "requires --index-dir.")
     args = parser.parse_args(argv)
 
     try:
@@ -541,6 +567,7 @@ def _build_eval_config_from_args(argv: list[str] | None = None) -> EvalConfig:
         ks=ks,
         max_queries=args.max_queries,
         device=args.device,
+        reuse_index=args.reuse_index,
     )
 
 

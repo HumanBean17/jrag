@@ -195,6 +195,103 @@ def _clamped_limit(args: argparse.Namespace) -> int:
     return min(raw_limit, 499)
 
 
+# --- local observability (opt-in; see the 2026-09-13 observability spec) ---
+#
+# One stash per invocation: ``_telemetry_prepare`` (called from ``main`` before
+# the handler runs) parks the resolved config here; ``_emit`` adds the
+# envelope-derived facts + event_id; ``_record_telemetry`` (all ``main`` exit
+# paths) composes and appends the single usage event. Everything is guarded —
+# telemetry must never change stdout/stderr/exit codes.
+_TELEMETRY_STASH: dict = {}
+
+
+def _telemetry_prepare(args: argparse.Namespace) -> None:
+    """Resolve config once for telemetry, side-effect free (no env/locale)."""
+    global _TELEMETRY_STASH
+    _TELEMETRY_STASH = {}
+    try:
+        from java_codebase_rag.config import resolve_operator_config
+
+        cfg = resolve_operator_config(
+            source_root=None,
+            cli_index_dir=getattr(args, "index_dir", None),
+        )
+        _TELEMETRY_STASH = {"cfg": cfg}
+    except Exception:  # noqa: BLE001 — telemetry must never break the CLI
+        _TELEMETRY_STASH = {}
+
+
+def _telemetry_usage_enabled() -> bool:
+    cfg = _TELEMETRY_STASH.get("cfg")
+    return bool(cfg is not None and cfg.usage_enabled)
+
+
+def _record_telemetry(
+    args: argparse.Namespace | None,
+    *,
+    rc: int,
+    duration_ms: float,
+    error_type: str | None = None,
+    verb: str | None = None,
+    query: str | None = None,
+) -> None:
+    """Append the invocation's usage event (single write, swallow-guarded)."""
+    try:
+        cfg = _TELEMETRY_STASH.get("cfg")
+        if cfg is None or not cfg.usage_enabled:
+            return
+        from java_codebase_rag.usage.events import build_command_event
+        from java_codebase_rag.usage.writer import record_event
+        from java_codebase_rag.watch.client import LAST_SERVED_BY
+        from java_codebase_rag.watch.paths import project_key, state_path
+
+        if args is not None:
+            verb = verb or getattr(args, "command", None)
+            query = query if query is not None else getattr(args, "query", None)
+        facts = dict(_TELEMETRY_STASH.get("facts") or {})
+        facts.setdefault("status", "error" if rc != 0 else "ok")
+        for missing in ("result_count", "truncated", "candidates_count",
+                        "absence_verdict", "absence_cause", "warnings_count"):
+            facts.setdefault(missing, None)
+        if error_type is not None:
+            facts["error_type"] = error_type
+        index_age_s = None
+        try:
+            import json as _json
+
+            state = _json.loads(state_path(cfg.index_dir).read_text())
+            last = state.get("last_reindex_at")
+            if isinstance(last, (int, float)):
+                import time as _time
+
+                index_age_s = _time.time() - last
+        except Exception:  # noqa: BLE001 — missing state file is normal
+            pass
+        event = build_command_event(
+            verb=verb,
+            query=query,
+            flags={
+                name: getattr(args, name, None) if args is not None else None
+                for name in ("limit", "format", "detail", "count", "exists", "service")
+            },
+            duration_ms=round(duration_ms, 3),
+            rc=rc,
+            envelope_facts=facts,
+            index_age_s=(
+                round(index_age_s, 1) if index_age_s is not None else None
+            ),
+            served_by=LAST_SERVED_BY,
+            ppid=os.getppid(),
+            cwd=os.getcwd(),
+            project_key=project_key(cfg.index_dir),
+        )
+        event["event_id"] = _TELEMETRY_STASH.get("event_id")
+        record_event(event, enabled=True, state_dir_override=cfg.usage_dir)
+    except Exception:  # noqa: BLE001 — telemetry must never break the CLI
+        pass
+# --- end local observability ---
+
+
 def _emit(env, args: argparse.Namespace, *, noun: str = "",
           shape: str | None = None, next_offset: int | None = None) -> int:
     """Final render+print funnel honoring ``--count`` / ``--exists`` / ``--fields``;
@@ -218,6 +315,31 @@ def _emit(env, args: argparse.Namespace, *, noun: str = "",
     routed here today.
     """
     from java_codebase_rag.jrag_render import has_results, render
+
+    if _telemetry_usage_enabled():
+        # Stash envelope-derived facts + a stable event_id BEFORE render so the
+        # JSON/text output carries the id the usage event will be recorded under.
+        from java_codebase_rag.jrag_render import count_results
+        from java_codebase_rag.usage.events import derive_event_id, rfc3339_now
+
+        verb = getattr(args, "command", None)
+        query = getattr(args, "query", None)
+        absence = env.absence
+        _TELEMETRY_STASH.update(
+            event_id=derive_event_id(rfc3339_now(), os.getpid(), verb, query),
+            verb=verb,
+            query=query,
+            facts={
+                "status": env.status,
+                "result_count": count_results(env, shape),
+                "truncated": env.truncated,
+                "candidates_count": len(env.candidates),
+                "absence_verdict": getattr(absence, "verdict", None),
+                "absence_cause": getattr(absence, "cause", None),
+                "warnings_count": len(env.warnings),
+            },
+        )
+        env.event_id = _TELEMETRY_STASH["event_id"]
 
     print(render(
         env,
@@ -551,6 +673,40 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     status.set_defaults(handler=_cmd_status, detail="full")
+
+    # usage subparser (local observability): summary of recorded usage events.
+    # Uses _core_parser (no --limit/--count/--exists); telemetry itself is
+    # opt-in via config — with it off the verb renders the enable hint.
+    usage = subparsers.add_parser(
+        "usage",
+        help=tr("HELP_CMD_USAGE"),
+        parents=[_core_parser()],
+        description=tr("HELP_CMD_USAGE_DESC"),
+    )
+    usage.add_argument(
+        "--days",
+        type=int,
+        default=7,
+        help=tr("HELP_FLAG_DAYS"),
+    )
+    # detail=full like status: the rollup node's sections are dict-valued
+    # fields that a "normal" projection would strip.
+    usage.set_defaults(handler=_cmd_usage, detail="full")
+
+    # feedback subparser (local observability): attach a sparse good/bad label
+    # to a recorded event by its envelope event_id. Exactly one of --good/--bad.
+    feedback = subparsers.add_parser(
+        "feedback",
+        help=tr("HELP_CMD_FEEDBACK"),
+        parents=[_core_parser()],
+        description=tr("HELP_CMD_FEEDBACK_DESC"),
+    )
+    feedback.add_argument("event_id", help=tr("HELP_ARG_EVENT_ID"))
+    rating = feedback.add_mutually_exclusive_group(required=True)
+    rating.add_argument("--good", action="store_true", help=tr("HELP_FLAG_GOOD"))
+    rating.add_argument("--bad", action="store_true", help=tr("HELP_FLAG_BAD"))
+    feedback.add_argument("--note", type=str, default=None, help=tr("HELP_FLAG_NOTE"))
+    feedback.set_defaults(handler=_cmd_feedback)
 
     # prime subparser (jrag-prime Task 2): SessionStart priming payload.
     # Aggregate like status (uses _core_parser, so --service/--module/--limit/
@@ -1373,6 +1529,18 @@ def _cmd_watch_status(cfg) -> int:
                 print(tr("MSG_WATCH_LAST_REINDEX", kind=kind, when=when, count=count))
             else:
                 print(tr("MSG_WATCH_LAST_REINDEX_NONE", count=count))
+        # Ungated (display of already-recorded state): the daemon's own
+        # last_error has always been persisted but never rendered anywhere.
+        last_error = (state or {}).get("last_error")
+        if isinstance(last_error, dict):
+            phase = last_error.get("phase") or "unknown"
+            err_at = last_error.get("at")
+            age = (
+                _humanize_age(max(0.0, time.time() - float(err_at)))
+                if isinstance(err_at, (int, float)) else ""
+            )
+            detail = str(last_error.get("detail") or "")[:200].replace("\n", " ")
+            print(tr("LBL_WATCH_LAST_ERROR", phase=phase, age=age, detail=detail))
         return 0
     print(tr("MSG_WATCH_DOWN", sock=sock))
     return 1
@@ -1547,6 +1715,54 @@ def _watch_unlink(path) -> None:
         pass
 
 
+def _daemon_health(cfg) -> dict:
+    """Cheap daemon health probe for the gated status/prime renders.
+
+    Reads only the state file + pid liveness + its mtime (heartbeat); never
+    opens the graph. Missing state file degrades to unknown fields.
+    """
+    import os as _os
+
+    from java_codebase_rag.watch.client import is_daemon_alive
+    from java_codebase_rag.watch.lock import ProjectLock
+    from java_codebase_rag.watch.paths import state_path
+
+    running = is_daemon_alive(cfg.index_dir)
+    state = _read_state_file(cfg.index_dir)
+    heartbeat_age_s = None
+    try:
+        heartbeat_age_s = max(0.0, time.time() - state_path(cfg.index_dir).stat().st_mtime)
+    except OSError:
+        pass
+    return {
+        "running": running,
+        "pid": ProjectLock.read_holder(cfg.index_dir) if running else None,
+        "heartbeat_age_s": (
+            round(heartbeat_age_s, 1) if heartbeat_age_s is not None else None
+        ),
+        "consecutive_errors": (state or {}).get("consecutive_errors"),
+        "last_reindex_age_s": (
+            round(max(0.0, time.time() - state["last_reindex_at"]), 1)
+            if state and isinstance(state.get("last_reindex_at"), (int, float))
+            else None
+        ),
+        "_state": state,
+    }
+
+
+def _daemon_unhealthy(health: dict) -> str | None:
+    """Return a tr()-formatted warning when the daemon is unhealthy, else None."""
+    if not health["running"]:
+        return tr("WARN_DAEMON_NOT_RUNNING")
+    errors = health.get("consecutive_errors") or 0
+    if errors >= 3:
+        return tr("WARN_DAEMON_REINDEX_FAILING", count=errors)
+    heartbeat = health.get("heartbeat_age_s")
+    if heartbeat is not None and heartbeat > 120:
+        return tr("WARN_DAEMON_HEARTBEAT_STALE", age=_humanize_age(heartbeat))
+    return None
+
+
 def _read_state_file(index_dir) -> dict | None:
     """Return the parsed daemon state JSON, or ``None`` if missing/unreadable.
 
@@ -1630,7 +1846,132 @@ def _cmd_status(args: argparse.Namespace) -> int:
             },
         },
     )
+    # Gated daemon-health section (opt-in telemetry): the watch daemon can be
+    # dead or failing while cold fallback keeps answers correct-but-slow —
+    # surface that where agents already look, as a rollup field + warning.
+    if cfg.usage_enabled:
+        health = _daemon_health(cfg)
+        env.nodes["index"]["daemon"] = {
+            k: v for k, v in health.items() if k != "_state"
+        }
+        warning = _daemon_unhealthy(health)
+        if warning:
+            env.warnings.append(warning)
     print(render(env, fmt=args.format, detail=args.detail, noun="status", shape="inspect"))
+    return 0
+
+
+def _cmd_usage(args: argparse.Namespace) -> int:
+    """Render the local-usage summary rollup (opt-in telemetry reader)."""
+    import statistics as _stats
+    from collections import Counter
+
+    from java_codebase_rag.jrag_envelope import Envelope
+    from java_codebase_rag.jrag_render import render
+    from java_codebase_rag.usage import summarize
+    from java_codebase_rag.usage.paths import state_dir as usage_state_dir
+    from java_codebase_rag.watch.paths import project_key, state_path
+
+    cfg = _resolve_cfg(args)
+    if not cfg.usage_enabled:
+        env = Envelope(status="ok", message=tr("MSG_USAGE_DISABLED"))
+        print(render(env, fmt=args.format, detail=args.detail))
+        return 0
+
+    days = max(1, min(30, args.days))
+    events_dir = usage_state_dir(cfg.usage_dir) / "events" / project_key(cfg.index_dir)
+    files = sorted(events_dir.glob("events-*.jsonl"))
+    if not files:
+        env = Envelope(status="ok", message=tr("MSG_USAGE_EMPTY"))
+        print(render(env, fmt=args.format, detail=args.detail))
+        return 0
+
+    events, torn = summarize.load_events(files, days)
+    labels = summarize.load_labels(events_dir / "feedback.jsonl")
+    drops = sorted(events_dir.glob("events-*.drops"))
+
+    watch_state = None
+    try:
+        import json as _json
+
+        watch_state = _json.loads(state_path(cfg.index_dir).read_text())
+    except Exception:  # noqa: BLE001 — no daemon state = zero-state section
+        pass
+
+    session_lists = summarize.sessions(events)
+    queries_per_session = [len(s) for s in session_lists]
+    terminal = [str((s[-1].get("envelope_facts") or {}).get("status"))
+                for s in session_lists if s]
+    env = Envelope(
+        status="ok",
+        nodes={
+            "usage": {
+                "window_days": days,
+                "calls": summarize.per_verb(events),
+                "staleness": summarize.staleness_bins(events),
+                "sessions": {
+                    "count": len(session_lists),
+                    "median_queries": (
+                        _stats.median(queries_per_session)
+                        if queries_per_session else None
+                    ),
+                    "terminal_outcomes": dict(Counter(terminal)),
+                },
+                "struggle": summarize.struggle(session_lists),
+                "absence": summarize.absence_top(events),
+                "watch": summarize.watch_health(
+                    [e for e in events if e.get("surface") == "watch"],
+                    watch_state,
+                ),
+                "feedback": summarize.feedback_join(events, labels),
+                "storage": dict(
+                    summarize.storage_status(files, drops), torn_lines=torn
+                ),
+            },
+        },
+    )
+    print(render(env, fmt=args.format, detail=args.detail,
+                 noun="usage", shape="inspect"))
+    return 0
+
+
+def _cmd_feedback(args: argparse.Namespace) -> int:
+    """Append one owner label for a recorded event (opt-in telemetry)."""
+    from java_codebase_rag.jrag_envelope import Envelope
+    from java_codebase_rag.jrag_render import render
+    from java_codebase_rag.usage.events import rfc3339_now
+    from java_codebase_rag.usage.paths import state_dir as usage_state_dir
+    from java_codebase_rag.usage.summarize import event_exists
+    from java_codebase_rag.usage.writer import record_feedback
+    from java_codebase_rag.watch.paths import project_key
+
+    cfg = _resolve_cfg(args)
+    if not cfg.usage_enabled:
+        env = Envelope(status="ok", message=tr("MSG_USAGE_DISABLED"))
+        print(render(env, fmt=args.format, detail=args.detail))
+        return 0
+
+    events_dir = usage_state_dir(cfg.usage_dir) / "events" / project_key(cfg.index_dir)
+    files = sorted(events_dir.glob("events-*.jsonl"))
+    if not event_exists(files, args.event_id):
+        env = Envelope(
+            status="not_found",
+            message=tr("MSG_FEEDBACK_UNKNOWN", event_id=args.event_id),
+        )
+        print(render(env, fmt=args.format, detail=args.detail))
+        return 0
+
+    label = {
+        "ts": rfc3339_now(),
+        "event_id": args.event_id,
+        "rating": "good" if args.good else "bad",
+        "note": (args.note or "")[:500],
+    }
+    record_feedback(label, project_key=project_key(cfg.index_dir),
+                    enabled=True, state_dir_override=cfg.usage_dir)
+    env = Envelope(status="ok", message=tr("MSG_FEEDBACK_RECORDED",
+                                           rating=label["rating"]))
+    print(render(env, fmt=args.format, detail=args.detail))
     return 0
 
 
@@ -1702,7 +2043,31 @@ def _prime_state(cfg, graph, meta: dict):
         client_count=_count_from(counts, "clients"),
         producer_count=_count_from(counts, "producers"),
         daemon_running=is_daemon_alive(cfg.index_dir),
+        daemon_note=_daemon_note(cfg),
     )
+
+
+def _daemon_note(cfg) -> str | None:
+    """Gated prime enrichment: ``reindex failing since X`` when unhealthy."""
+    try:
+        if not cfg.usage_enabled:
+            return None
+        health = _daemon_health(cfg)
+        if not health["running"]:
+            return None  # binary phrasing stays for a dead daemon
+        errors = health.get("consecutive_errors") or 0
+        if errors <= 0:
+            return None
+        state = health.get("_state") or {}
+        last_error = state.get("last_error") or {}
+        err_at = last_error.get("at")
+        since = (
+            _humanize_age(max(0.0, time.time() - float(err_at)))
+            if isinstance(err_at, (int, float)) else ""
+        )
+        return tr("MSG_PRIME_REINDEX_FAILING", count=errors, since=since)
+    except Exception:  # noqa: BLE001 — a hook payload must never crash
+        return None
 
 
 def _cmd_prime(args: argparse.Namespace) -> int:
@@ -4557,16 +4922,27 @@ def main(argv: list[str] | None = None) -> int:
         if cmd and not msg.startswith(cmd):
             msg = f"{cmd}: {msg}"
         env = Envelope(status="error", message=msg)
+        _telemetry_prepare(None)  # parse failed: no namespace, resolve from env/YAML
+        if _telemetry_usage_enabled():
+            from java_codebase_rag.usage.events import derive_event_id, rfc3339_now
+
+            _eid = derive_event_id(rfc3339_now(), os.getpid(), cmd, None)
+            _TELEMETRY_STASH["event_id"] = _eid
+            env.event_id = _eid
         print(render(env, fmt=fmt, detail=detail))
         print(f"{tr('LBL_JRAG_ERROR_STDERR')}{msg}", file=sys.stderr)
+        _record_telemetry(None, rc=2, duration_ms=0.0,
+                          error_type="usage_error", verb=cmd)
         return 2
     handler = getattr(args, "handler", None)
     if handler is None:
         # No subcommand: print help to stderr, return usage error.
         parser.print_help(sys.stderr)
         return 1
+    _telemetry_prepare(args)
+    _t_t0 = time.perf_counter()
     try:
-        return int(handler(args))
+        _rc = int(handler(args))
     except Exception as exc:
         from java_codebase_rag.jrag_envelope import Envelope
         from java_codebase_rag.jrag_render import render
@@ -4575,9 +4951,29 @@ def main(argv: list[str] | None = None) -> int:
             status="error",
             message=tr("ERR_INTERNAL", exc=exc),
         )
+        if _telemetry_usage_enabled():
+            # Same derivation as _emit's, stamped before render so the printed
+            # error envelope carries the id the recorded event will use.
+            from java_codebase_rag.usage.events import derive_event_id, rfc3339_now
+
+            _eid = derive_event_id(
+                rfc3339_now(), os.getpid(),
+                getattr(args, "command", None), getattr(args, "query", None),
+            )
+            _TELEMETRY_STASH["event_id"] = _eid
+            env.event_id = _eid
         print(render(env, fmt=getattr(args, "format", "text")))
         print(traceback.format_exc(), file=sys.stderr)
+        _record_telemetry(
+            args, rc=2,
+            duration_ms=(time.perf_counter() - _t_t0) * 1000.0,
+            error_type=type(exc).__name__,
+        )
         return 2
+    _record_telemetry(
+        args, rc=_rc, duration_ms=(time.perf_counter() - _t_t0) * 1000.0
+    )
+    return _rc
 
 
 def _console_script_main() -> None:

@@ -415,6 +415,37 @@ MESSAGES: dict[str, Any] = {
     "ERR_VOCAB_SAVE_FAILED": "[ошибка] Не удалось сохранить индекс словаря: {exc}",
     "MSG_WATCH_NOT_RUNNING": "jrag watch: не запущен",
     "MSG_PRIME_STDERR": "jrag prime: {msg}",
+    "MSG_USAGE_DISABLED": (
+        "телеметрия использования выключена — события не записываются. "
+        "Включите через JAVA_CODEBASE_RAG_USAGE_ENABLED=1 или usage.enabled: true "
+        "в YAML проекта (.java-codebase-rag.yml). Строго локально; см. "
+        "docs/CONFIGURATION.md (What jrag records locally)."
+    ),
+    "MSG_USAGE_EMPTY": (
+        "для этого проекта ещё нет записанных событий использования "
+        "(телеметрия включена). События появляются по мере вызова глаголов jrag "
+        "агентами и переиндексации демоном watch."
+    ),
+    "MSG_FEEDBACK_UNKNOWN": (
+        "event_id {event_id} не найден в сохранённых событиях использования "
+        "(окно 30 дней) — событие могло устареть."
+    ),
+    "MSG_FEEDBACK_RECORDED": (
+        "метка записана ({rating}); см. раздел feedback в `jrag usage`."
+    ),
+    "LBL_WATCH_LAST_ERROR": "последняя ошибка: фаза {phase}, {age} назад — {detail}",
+    "WARN_DAEMON_NOT_RUNNING": (
+        "демон watch не запущен — запросы уходят в холодный (медленный) путь, "
+        "индекс будет устаревать"
+    ),
+    "WARN_DAEMON_REINDEX_FAILING": (
+        "переиндексация демона watch падает ({count} ошибок подряд) — индекс "
+        "не обновляется"
+    ),
+    "WARN_DAEMON_HEARTBEAT_STALE": (
+        "heartbeat демона watch не обновлялся {age} — возможно, он завис"
+    ),
+    "MSG_PRIME_REINDEX_FAILING": "переиндексация падает с {since} ({count} ошибок)",
     "MSG_WARN_EXISTING_CONFIG": (
         "Предупреждение: найдена существующая конфигурация в {path}. "
         "Создание нового проекта здесь создаст отдельный индекс."

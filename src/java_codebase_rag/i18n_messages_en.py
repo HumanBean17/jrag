@@ -408,6 +408,36 @@ MESSAGES: dict[str, Any] = {
     "ERR_VOCAB_SAVE_FAILED": "[error] Failed to save vocabulary index: {exc}",
     "MSG_WATCH_NOT_RUNNING": "jrag watch: not running",
     "MSG_PRIME_STDERR": "jrag prime: {msg}",
+    "MSG_USAGE_DISABLED": (
+        "usage telemetry is disabled — no events are recorded. Enable with "
+        "JAVA_CODEBASE_RAG_USAGE_ENABLED=1 or usage.enabled: true in the "
+        "project YAML (.java-codebase-rag.yml). Strictly local; see "
+        "docs/CONFIGURATION.md (What jrag records locally)."
+    ),
+    "MSG_USAGE_EMPTY": (
+        "no usage events recorded yet for this project (telemetry enabled). "
+        "Events appear as agents invoke jrag verbs and the watch daemon reindexes."
+    ),
+    "MSG_FEEDBACK_UNKNOWN": (
+        "event_id {event_id} not found in retained usage events "
+        "(30-day window) — the event may have aged out."
+    ),
+    "MSG_FEEDBACK_RECORDED": (
+        "feedback recorded ({rating}); see `jrag usage` feedback section."
+    ),
+    "LBL_WATCH_LAST_ERROR": "last error: {phase} phase, {age} ago — {detail}",
+    "WARN_DAEMON_NOT_RUNNING": (
+        "watch daemon is not running — queries fall back to cold (slow) reads "
+        "and the index will go stale"
+    ),
+    "WARN_DAEMON_REINDEX_FAILING": (
+        "watch daemon reindex failing ({count} consecutive errors) — the index "
+        "is not being updated"
+    ),
+    "WARN_DAEMON_HEARTBEAT_STALE": (
+        "watch daemon heartbeat is {age} old — it may be hung or wedged"
+    ),
+    "MSG_PRIME_REINDEX_FAILING": "reindex failing since {since} ({count} errors)",
     "MSG_WARN_EXISTING_CONFIG": (
         "Warning: found existing config at {path}. "
         "Creating a new project here will create a separate index."

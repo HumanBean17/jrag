@@ -601,6 +601,29 @@ Silence when unindexed is what makes a user-scope hook tolerable — prime fires
 }
 ```
 
+### `jrag usage` / `jrag feedback` (opt-in local observability)
+
+Local-only, off-by-default traceability: what agents did with jrag, whether answers were useful, whether anything broke. Enable with `JAVA_CODEBASE_RAG_USAGE_ENABLED=1` or `usage.enabled: true` in the project YAML; exactly what gets recorded (and what never does) is documented in [`CONFIGURATION.md` §6](./CONFIGURATION.md#6-local-observability--what-jrag-records-locally).
+
+```bash
+jrag usage                     # summary rollup (last 7 days): per-verb calls/outcomes/
+                               #   latency (hot vs cold), staleness-binned miss rate,
+                               #   sessions, struggle signals, absence terms, watch
+                               #   health, feedback labels, storage status
+jrag usage --days 14 --format json
+jrag feedback <event_id> --good [--note "..."]   # label a recorded invocation
+```
+
+With telemetry off, both verbs print a short enable hint and exit 0. Envelopes carry a 10-char `event_id` only while telemetry is on — that id anchors `feedback`. Health surfacing rides the same switch: `jrag status` gains a `daemon` section + warnings when the daemon is dead/failing/wedged, `jrag prime` renders "running, reindex failing since X". Ungated: `jrag watch --status` shows the daemon's recorded `last_error`.
+
+**Nightly live-index eval** (cron-friendly, ungated):
+
+```bash
+python -m java_codebase_rag.eval.runner <corpus> --index-dir <dir> --reuse-index
+```
+
+`--reuse-index` skips the rebuild, measures the index agents actually use, and snapshots graph health into `report.json` — see CONFIGURATION.md §6 for a cron line.
+
 ### `jrag search`
 
 Semantic search via natural language queries. Returns one row per symbol/type by default; use `--chunks` to restore chunk-level output.

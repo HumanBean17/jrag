@@ -112,9 +112,18 @@ def serialize(payload: Any) -> Any:
 class WatchServer:
     """AF_UNIX socket server dispatching NDJSON requests to payload cores."""
 
-    def __init__(self, warm: "WarmResources", cfg: "ResolvedOperatorConfig") -> None:
+    def __init__(
+        self,
+        warm: "WarmResources",
+        cfg: "ResolvedOperatorConfig",
+        on_query: Callable[[], None] | None = None,
+    ) -> None:
         self.warm = warm
         self.cfg = cfg
+        # Invoked after every successfully served request (daemon wires it to
+        # the state file's ``queries_served`` counter). Guarded per-call so a
+        # broken counter can never fail a served query.
+        self.on_query = on_query
         self._sock: socket.socket | None = None
         self._thread: threading.Thread | None = None
         self._stopping = threading.Event()
@@ -270,4 +279,9 @@ class WatchServer:
                 ok=False,
                 error=ErrorShape(ERR_BACKEND_ERROR, str(exc)),
             )
+        if self.on_query is not None:
+            try:
+                self.on_query()
+            except Exception:  # noqa: BLE001 — a counter must never fail a query
+                pass
         return Response(v=PROTOCOL_VERSION, ok=True, result=serialize(payload))

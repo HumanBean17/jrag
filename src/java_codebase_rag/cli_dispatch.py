@@ -133,6 +133,8 @@ AGENT_VERBS: frozenset[str] = frozenset(
         "watch",
         "status",
         "prime",
+        "usage",
+        "feedback",
         "http-routes",
         "http-clients",
         "producers",

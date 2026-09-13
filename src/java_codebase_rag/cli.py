@@ -1302,13 +1302,58 @@ def main(argv: list[str] | None = None) -> int:
     if handler is None:
         parser.print_help()
         return 2
+    _t_t0 = time.perf_counter()
     try:
-        return int(handler(args))
+        _rc = int(handler(args))
     except Exception as exc:  # pragma: no cover - defensive top-level guard
         from java_codebase_rag.i18n import tr
 
         _emit({"success": False, "exit_code": 2, "message": tr("ERR_INTERNAL", exc=exc)})
+        _record_operator_telemetry(args, rc=2,
+                                   duration_ms=(time.perf_counter() - _t_t0) * 1000.0,
+                                   error_type=type(exc).__name__)
         return 2
+    _record_operator_telemetry(args, rc=_rc,
+                               duration_ms=(time.perf_counter() - _t_t0) * 1000.0)
+    return _rc
+
+
+def _record_operator_telemetry(
+    args: argparse.Namespace, *, rc: int, duration_ms: float,
+    error_type: str | None = None,
+) -> None:
+    """Append one usage event for an operator verb (opt-in, swallow-guarded)."""
+    try:
+        cfg = _resolved_from_ns(args)
+        if not cfg.usage_enabled:
+            return
+        from java_codebase_rag.usage.events import build_command_event
+        from java_codebase_rag.usage.writer import record_event
+        from java_codebase_rag.watch.paths import project_key
+
+        facts = {
+            "status": "error" if rc != 0 else "ok",
+            "result_count": None, "truncated": None, "candidates_count": None,
+            "absence_verdict": None, "absence_cause": None, "warnings_count": None,
+        }
+        if error_type is not None:
+            facts["error_type"] = error_type
+        event = build_command_event(
+            verb=getattr(args, "subcommand", None),
+            query=None,
+            flags={},
+            duration_ms=round(duration_ms, 3),
+            rc=rc,
+            envelope_facts=facts,
+            index_age_s=None,
+            served_by=None,
+            ppid=os.getppid(),
+            cwd=os.getcwd(),
+            project_key=project_key(cfg.index_dir),
+        )
+        record_event(event, enabled=True, state_dir_override=cfg.usage_dir)
+    except Exception:  # noqa: BLE001 — telemetry must never break the CLI
+        pass
 
 
 def _console_script_main() -> None:

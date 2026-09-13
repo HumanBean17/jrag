@@ -292,6 +292,7 @@ class SourceWatcher:
             return
         kind_list = sorted(kinds)
         self._emit("indexing_started", {"kinds": kind_list})
+        phases_ok: list[str] = []
         try:
             # Vectors run for every indexed kind (the source languages all flow
             # through cocoindex) — but only when the vector stack is installed.
@@ -309,6 +310,7 @@ class SourceWatcher:
                 vres = None
 
             graph_rc = 0
+            gres = None
             if kinds & _GRAPH_INDEXED_KINDS:
                 # The graph indexes every registered source language (java,
                 # kotlin when its grammar imports); reindex under a COW snapshot
@@ -333,14 +335,26 @@ class SourceWatcher:
                     self.warm.commit_graph_snapshot()
 
             if vres is not None and vres.returncode != 0:
-                self._emit("error", {"phase": "vectors", "returncode": vres.returncode})
+                self._emit("error", {
+                    "phase": "vectors",
+                    "returncode": vres.returncode,
+                    "stderr_tail": (getattr(vres, "stderr", None) or "")[-2048:],
+                })
                 return
             if graph_rc != 0:
-                self._emit("error", {"phase": "graph", "returncode": graph_rc})
+                self._emit("error", {
+                    "phase": "graph",
+                    "returncode": graph_rc,
+                    "stderr_tail": (getattr(gres, "stderr", None) or "")[-2048:],
+                })
                 return
 
+            if vres is not None:
+                phases_ok.append("vectors")
+            if kinds & _GRAPH_INDEXED_KINDS:
+                phases_ok.append("graph")
             self.last_reindex = {"time": time.time(), "kinds": kind_list}
-            self._emit("indexing_done", {"kinds": kind_list})
+            self._emit("indexing_done", {"kinds": kind_list, "phases": phases_ok})
         except Exception as exc:  # noqa: BLE001 -- the daemon must survive any reindex error
             self._emit("error", {"phase": "reindex", "error": repr(exc)})
 
