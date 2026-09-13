@@ -98,7 +98,7 @@ jrag prime                     # optional agent orientation payload (see docs/JR
 jrag find ChatService          # exact name/FQN lookup (symbols)
 jrag find --role CONTROLLER    # filter mode (NodeFilter flags)
 jrag inspect ChatService       # full node details + edge_summary
-jrag outline src/main/.../Foo.java  # all symbols declared in a file
+jrag outline src/main/.../Foo.java  # all symbols in a file (FQN also accepted)
 jrag imports src/main/.../Foo.java   # imports resolved to graph nodes
 
 # Listings
@@ -123,7 +123,8 @@ jrag dependents PaymentGateway            # who injects this type?
 jrag dependencies ChatService             # types this injects
 jrag impact PaymentGateway                # fleet-wide blast radius
 jrag decompose ChatIngressController#assign   # role-waterfall flow
-jrag flow /chat/assign                    # request flow through a route
+jrag flow /chat/assign                    # request flow through a route (or topic)
+jrag flow com.example.Svc#handle(Request) # forward CALLS trace from a method
 jrag connection chat-core                 # cross-service connections
 
 # Semantic search
