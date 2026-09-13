@@ -1,6 +1,6 @@
 # jrag-annotations — ship the brownfield annotations as a Maven Central artifact
 
-**Status:** draft
+**Status:** in_progress
 
 ## Context
 
