@@ -402,6 +402,16 @@ class ResolvedOperatorConfig:
     # (unlike retrieval) — see ENV_LANGUAGE.
     language: str = "en"
     language_source: SettingSource = "default"
+    # Local observability (opt-in) — see
+    # docs/superpowers/specs/active/2026-09-13-local-observability-design.md.
+    # Default OFF: no event files, no extra daemon state, no event_id. env >
+    # YAML > default; one switch gates the whole layer.
+    usage_enabled: bool = False
+    usage_enabled_source: SettingSource = "default"
+    # Optional override for the durable state dir holding usage events
+    # (default: XDG state home / platform app-support dir, NOT the index dir).
+    usage_dir: str | None = None
+    usage_dir_source: SettingSource = "default"
 
     def apply_to_os_environ(self) -> None:
         """Make downstream modules (server, ladybug_queries, flows) see a consistent environment.
@@ -794,6 +804,22 @@ def resolve_operator_config(
             file=sys.stderr,
         )
         language, language_src = "en", "default"
+    # Local observability (opt-in). One switch gates the whole layer; the
+    # state-dir override is optional (empty string == default resolution).
+    usage_enabled, usage_enabled_src = _pick_bool(
+        env_key="JAVA_CODEBASE_RAG_USAGE_ENABLED",
+        yaml_dict=yaml_dict,
+        yaml_path=("usage", "enabled"),
+        default=False,
+    )
+    usage_dir_raw, usage_dir_src = _pick_str(
+        cli_val=None,
+        env_key="JAVA_CODEBASE_RAG_USAGE_DIR",
+        yaml_dict=yaml_dict,
+        yaml_path=("usage", "dir"),
+        default="",
+    )
+    usage_dir = usage_dir_raw or None
     ku = index_dir / "code_graph.lbug"
     coco = index_dir / "cocoindex.db"
     return ResolvedOperatorConfig(
@@ -829,6 +855,10 @@ def resolve_operator_config(
         retrieval_source=retrieval_src,
         language=language,
         language_source=language_src,
+        usage_enabled=usage_enabled,
+        usage_enabled_source=usage_enabled_src,
+        usage_dir=usage_dir,
+        usage_dir_source=usage_dir_src,
     )
 
 
