@@ -1322,9 +1322,18 @@ def _record_operator_telemetry(
     args: argparse.Namespace, *, rc: int, duration_ms: float,
     error_type: str | None = None,
 ) -> None:
-    """Append one usage event for an operator verb (opt-in, swallow-guarded)."""
+    """Append one usage event for an operator verb (opt-in, swallow-guarded).
+
+    The config resolve is stderr-silenced: the handler already resolved the
+    same config and emitted any degradation warnings — a second emission would
+    be a byte-diff on CLI stderr with telemetry off.
+    """
     try:
-        cfg = _resolved_from_ns(args)
+        import contextlib
+        import io
+
+        with contextlib.redirect_stderr(io.StringIO()):
+            cfg = _resolved_from_ns(args)
         if not cfg.usage_enabled:
             return
         from java_codebase_rag.usage.events import build_command_event

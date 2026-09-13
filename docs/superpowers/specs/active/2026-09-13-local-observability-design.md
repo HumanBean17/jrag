@@ -140,8 +140,11 @@ facts (`status`, `result_count` via the existing `count_results`,
 
 `reindex` payload (surface `watch`): the existing event kinds
 (`indexing_started`/`vectors`/`graph`/`indexing_done`/`error`), phase,
-returncode, duration, and on failure a 2 KB stderr excerpt — the diagnostic
-text currently captured and discarded.
+returncode, duration, and on failure a stderr excerpt — the diagnostic
+text currently captured and discarded. The state file's ``last_error`` keeps a
+2 KB copy; the journaled event carries a byte-budgeted tail (≤400 bytes) so
+``json.dumps`` escaping of non-ASCII stderr can never push the line past the
+1 KiB cap and drop the event.
 
 `daemon` payload (surface `watch`): start/stop/crash lifecycle.
 
@@ -214,8 +217,11 @@ clean; per-call staleness is captured in events instead.
 
 ## eval `--reuse-index`
 
-`EvalConfig` gains `reuse_index`, skipping the unconditional index rebuild
-and singleton reset so recall@k / MRR run against the live index. The run
+`EvalConfig` gains `reuse_index`, skipping the unconditional index rebuild so recall@k / MRR run against the
+live index (the LadybugGraph singleton rebind stays — it is what binds the
+process to the reused index). An unreadable GraphMeta is recorded as
+``{"error": …}`` rather than swallowed; the report carries a ``reuse_index``
+mode marker. The run
 additionally dumps `graph.meta()` quality fields (`parse_errors`, resolution
 percentages) into `report.json`, making index health and recall jointly
 analyzable over time. Tier-A ground truth regenerates from current symbols;

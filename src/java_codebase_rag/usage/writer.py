@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 import os
 import sys
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -80,7 +80,11 @@ def _record_event_inner(
     if not enabled:
         return False
     key = event.get("project_key") or "unknown"
-    today = date.today()
+    # UTC, matching the event ``ts`` discipline: a local-time shard name could
+    # disagree with the timestamp date by ±14 h and make retention pruning and
+    # ``oldest_day`` timezone-dependent. Fixing this after real files exist
+    # would create mixed-name shards — settled here deliberately.
+    today = datetime.now(timezone.utc).date()
     line = _serialize_capped(event)
     if line is None:
         bump_drops(paths.drops_file(key, today, state_dir_override))
@@ -95,13 +99,27 @@ def _record_event_inner(
 
 
 def _serialize_capped(event: dict[str, Any]) -> str | None:
-    """Serialize under LINE_CAP; drop ``query`` first, then the event."""
-    line = json.dumps(event, separators=(",", ":"), default=str) + "\n"
-    if len(line.encode()) <= LINE_CAP_BYTES:
-        return line
-    trimmed = dict(event, query=None)
-    line = json.dumps(trimmed, separators=(",", ":"), default=str) + "\n"
-    return line if len(line.encode()) <= LINE_CAP_BYTES else None
+    """Serialize under LINE_CAP, shedding weight rung by rung.
+
+    Rungs: whole event → drop ``query`` → drop ``detail.stderr_tail`` (reindex
+    errors — the diagnostic payload must survive even when escaping inflates
+    it) → drop the event. ``json.dumps`` escapes non-ASCII as ``\\uXXXX``
+    (6 bytes/char), so char-based trims upstream cannot guarantee fit; this is
+    the enforcement point.
+    """
+    for shed in ((), ("query",), ("query", "detail")):
+        candidate = dict(event)
+        for key in shed:
+            if key == "detail" and isinstance(candidate.get("detail"), dict):
+                trimmed_detail = dict(candidate["detail"])
+                trimmed_detail.pop("stderr_tail", None)
+                candidate["detail"] = trimmed_detail
+            else:
+                candidate[key] = None
+        line = json.dumps(candidate, separators=(",", ":"), default=str) + "\n"
+        if len(line.encode()) <= LINE_CAP_BYTES:
+            return line
+    return None
 
 
 def _append_line(target: Path, line: str) -> None:
@@ -134,7 +152,12 @@ def _day_from_name(name: str) -> date | None:
 
 
 def bump_drops(path: Path) -> None:
-    """Best-effort increment of the day's drop counter; tolerant of garbage."""
+    """Best-effort increment of the day's drop counter; tolerant of garbage.
+
+    Read-modify-write without a lock: concurrent writers can lose an increment
+    and the size-cap check can overshoot by a line — both deliberately
+    best-effort (bounded, low-value data); do not "fix" this into locking.
+    """
     try:
         current = 0
         if path.exists():
@@ -148,4 +171,7 @@ def bump_drops(path: Path) -> None:
 
 def _debug_drop(exc: Exception) -> None:
     if os.environ.get(_DEBUG_ENV, "").strip():
-        print(f"jrag: usage event dropped: {exc}", file=sys.stderr)
+        try:
+            print(f"jrag: usage event dropped: {exc}", file=sys.stderr)
+        except Exception:  # noqa: BLE001 — even diagnostics must never raise
+            pass

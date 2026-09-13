@@ -335,18 +335,14 @@ class SourceWatcher:
                     self.warm.commit_graph_snapshot()
 
             if vres is not None and vres.returncode != 0:
-                self._emit("error", {
-                    "phase": "vectors",
-                    "returncode": vres.returncode,
-                    "stderr_tail": (getattr(vres, "stderr", None) or "")[-2048:],
-                })
+                self._emit("error", self._error_detail(
+                    "vectors", vres.returncode, vres,
+                ))
                 return
             if graph_rc != 0:
-                self._emit("error", {
-                    "phase": "graph",
-                    "returncode": graph_rc,
-                    "stderr_tail": (getattr(gres, "stderr", None) or "")[-2048:],
-                })
+                self._emit("error", self._error_detail(
+                    "graph", graph_rc, gres,
+                ))
                 return
 
             if vres is not None:
@@ -368,3 +364,17 @@ class SourceWatcher:
             self._on_event(kind, detail)
         except Exception:  # noqa: BLE001 -- a UI callback must not crash the watcher
             log.warning("on_event callback raised", exc_info=True)
+
+    def _error_detail(self, phase: str, returncode: int,
+                      result: Any) -> dict[str, Any]:
+        """Error detail for ``on_event``; ``stderr_tail`` only under telemetry.
+
+        The tail is diagnostic telemetry (Decision 1 gates it): with
+        ``usage.enabled`` off the state file's ``last_error.detail`` must keep
+        the pre-observability ``{phase, returncode}`` schema — a 2 KB stderr
+        blob persisted unconditionally would be a disabled-mode byte-diff.
+        """
+        detail: dict[str, Any] = {"phase": phase, "returncode": returncode}
+        if getattr(self.cfg, "usage_enabled", False):
+            detail["stderr_tail"] = (getattr(result, "stderr", None) or "")[-2048:]
+        return detail

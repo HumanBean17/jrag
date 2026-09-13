@@ -425,7 +425,7 @@ MESSAGES: dict[str, Any] = {
     "MSG_FEEDBACK_RECORDED": (
         "feedback recorded ({rating}); see `jrag usage` feedback section."
     ),
-    "LBL_WATCH_LAST_ERROR": "last error: {phase} phase, {age} ago — {detail}",
+    "LBL_WATCH_LAST_ERROR": "last error: {phase} phase, {age} ago{detail}",
     "WARN_DAEMON_NOT_RUNNING": (
         "watch daemon is not running — queries fall back to cold (slow) reads "
         "and the index will go stale"

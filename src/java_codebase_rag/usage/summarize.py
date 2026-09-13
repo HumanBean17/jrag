@@ -10,6 +10,7 @@ so every metric is unit-testable without a filesystem.
 from __future__ import annotations
 
 import json
+import math
 import statistics
 from collections import Counter
 from datetime import datetime, timedelta, timezone
@@ -34,6 +35,12 @@ def _status(ev: dict[str, Any]) -> Any:
 
 
 def _is_miss(ev: dict[str, Any]) -> bool:
+    """A call that returned nothing useful: not_found, ambiguous, or ok-but-empty.
+
+    ``ambiguous`` is deliberately included alongside the plan's
+    not_found + empty_ok: an ambiguous answer is as unhelpful as a miss for
+    the staleness/absence/struggle metrics this feeds.
+    """
     facts = ev.get("envelope_facts") or {}
     if _status(ev) in _MISS_STATUSES:
         return True
@@ -108,7 +115,7 @@ def percentile(values: list[float], pct: float) -> float | None:
     if not values:
         return None
     ordered = sorted(values)
-    rank = max(1, min(len(ordered), int(len(ordered) * pct / 100.0 + 0.999)))
+    rank = max(1, min(len(ordered), math.ceil(len(ordered) * pct / 100.0)))
     return float(ordered[rank - 1])
 
 
@@ -161,11 +168,9 @@ def per_verb(events: list[dict]) -> list[dict]:
     rows = []
     for verb, evs in sorted(by_verb.items()):
         counts = Counter(str(_status(e)) for e in evs)
-        durs = [float(e.get("duration_ms") or 0.0) for e in evs]
-        cold = [float(e.get("duration_ms") or 0.0) for e in evs
-                if e.get("served_by") == "cold"]
-        hot = [float(e.get("duration_ms") or 0.0) for e in evs
-               if e.get("served_by") == "daemon"]
+        durs = _durations(evs)
+        cold = _durations(evs, served_by="cold")
+        hot = _durations(evs, served_by="daemon")
         counts_list = [
             (e.get("envelope_facts") or {}).get("result_count")
             for e in evs
@@ -191,6 +196,18 @@ def per_verb(events: list[dict]) -> list[dict]:
             "p50_ms_daemon": percentile(hot, 50),
         })
     return rows
+
+
+def _durations(events: list[dict], served_by: str | None = None) -> list[float]:
+    """Present duration_ms values only — absent timing must not drag p50 to 0."""
+    out = []
+    for ev in events:
+        if served_by is not None and ev.get("served_by") != served_by:
+            continue
+        value = ev.get("duration_ms")
+        if isinstance(value, (int, float)):
+            out.append(float(value))
+    return out
 
 
 _STALENESS_BUCKETS = (("<1h", 3600.0), ("1-6h", 6 * 3600.0),
@@ -285,17 +302,22 @@ def feedback_join(events: list[dict], labels: list[dict]) -> dict:
         "good": sum(1 for l in labels if l.get("rating") == "good"),
         "bad": sum(1 for l in labels if l.get("rating") == "bad"),
         "matched": len(matched),
-        "orphan_ids": [l.get("event_id") for l in labels
-                       if l.get("event_id") not in known],
+        "orphan_ids": [l["event_id"] for l in labels
+                       if l.get("event_id") is not None
+                       and l["event_id"] not in known],
     }
 
 
 def watch_health(events: list[dict], state: dict | None) -> dict:
-    """Reindex success over the window + daemon-state passthrough + failures."""
-    done = [e for e in events if e.get("event") == "reindex"
-            and e.get("kind") == "indexing_done"]
-    failures = [e for e in events if e.get("event") == "reindex"
-                and e.get("kind") == "error"]
+    """Reindex success over the window + daemon-state passthrough + failures.
+
+    Durations come from ``indexing_started`` → terminal-event ts deltas (the
+    watcher emits no explicit duration field); an unterminated start (hung or
+    crashed mid-reindex) contributes no duration sample.
+    """
+    watch_events = [e for e in events if e.get("event") == "reindex"]
+    done = [e for e in watch_events if e.get("kind") == "indexing_done"]
+    failures = [e for e in watch_events if e.get("kind") == "error"]
     total = len(done) + len(failures)
     state = state or {}
     recent = [
@@ -307,15 +329,37 @@ def watch_health(events: list[dict], state: dict | None) -> dict:
         }
         for e in failures[-3:]
     ]
+    durations = _reindex_durations(watch_events)
     return {
         "reindex_success_pct": (len(done) / total) if total else None,
         "reindex_count_window": total,
+        "reindex_duration_p50_s": percentile(durations, 50),
+        "reindex_duration_max_s": max(durations) if durations else None,
         "consecutive_errors": state.get("consecutive_errors"),
         "last_vectors_ok_at": state.get("last_vectors_ok_at"),
         "last_graph_ok_at": state.get("last_graph_ok_at"),
         "queries_served": state.get("queries_served"),
+        "last_error": state.get("last_error"),
         "recent_failures": recent,
     }
+
+
+def _reindex_durations(watch_events: list[dict]) -> list[float]:
+    """Seconds between each ``indexing_started`` and its terminal event."""
+    out: list[float] = []
+    started_ts: float | None = None
+    for ev in watch_events:  # load_events returns ts-sorted input
+        kind = ev.get("kind")
+        try:
+            ts = _parse_ts(ev["ts"])
+        except (KeyError, ValueError, TypeError):
+            continue
+        if kind == "indexing_started":
+            started_ts = ts
+        elif kind in ("indexing_done", "error") and started_ts is not None:
+            out.append(max(0.0, ts - started_ts))
+            started_ts = None
+    return out
 
 
 def storage_status(files: list[Path], drops: list[Path]) -> dict:

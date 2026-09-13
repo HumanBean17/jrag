@@ -73,12 +73,12 @@ def test_error_then_success_counters(tmp_path, monkeypatch, usage_state) -> None
 
 def test_error_event_appended_with_stderr_tail(tmp_path, monkeypatch, usage_state) -> None:
     d = _daemon(tmp_path, monkeypatch, _index_dir(tmp_path))
-    tail = "x" * 900  # larger than the journaled tail trim
+    tail = "x" * 900  # ASCII: byte trim == char trim, so [-400:] is exact
     d._record("error", {"phase": "vectors", "returncode": 1, "stderr_tail": tail})
     evs = [e for e in _events(usage_state) if e["event"] == "reindex"]
     assert any(
         e["kind"] == "error"
-        and e["detail"]["stderr_tail"] == tail[-500:]
+        and e["detail"]["stderr_tail"] == tail[-400:]
         and len(json.dumps(e)) <= 1024
         for e in evs
     )
@@ -125,11 +125,67 @@ def test_heartbeat_rewrite(tmp_path, monkeypatch, usage_state) -> None:
         d._write_state_locked()
     before = state_file.read_text()
     old_mtime = state_file.stat().st_mtime
-    # Simulate an idle daemon whose last write is 60s old.
+    # Simulate an idle daemon whose last write is 60s old — the REAL heartbeat
+    # method (the one the serve loop calls) must refresh the file.
     d._last_state_write = time.monotonic() - 60.0
     with d._state_lock:
-        now = time.monotonic()
-        if now - d._last_state_write >= daemon_mod._STATE_HEARTBEAT_S:
-            d._write_state_locked()
-    assert state_file.stat().st_mtime >= old_mtime
+        d._maybe_heartbeat_locked()
+    assert state_file.stat().st_mtime > old_mtime
     assert json.loads(state_file.read_text())["pid"] == json.loads(before)["pid"]
+    # A recently-written state is left alone (no churn under load).
+    fresh_write = d._last_state_write
+    with d._state_lock:
+        d._maybe_heartbeat_locked()
+    assert d._last_state_write == fresh_write
+
+
+def test_non_ascii_stderr_tail_survives_line_cap(tmp_path, monkeypatch,
+                                                 usage_state) -> None:
+    """Cyrillic stderr must not blow the 1 KiB byte cap (escaped \\uXXXX)."""
+    d = _daemon(tmp_path, monkeypatch, _index_dir(tmp_path))
+    tail = "Ошибка индексации графа " * 40  # ~1000 chars → ~6000 escaped bytes
+    d._record("error", {"phase": "graph", "returncode": 1, "stderr_tail": tail})
+    evs = [json.loads(line)
+           for f in usage_state.rglob(f"events-{date.today():%Y-%m-%d}.jsonl")
+           for line in f.read_text().splitlines()]
+    errors = [e for e in evs if e.get("kind") == "error"]
+    assert errors, "non-ASCII stderr tail dropped the error event entirely"
+    assert all(len(json.dumps(e)) <= 1024 for e in errors)
+
+
+def test_stderr_tail_gated_in_state_schema(tmp_path, monkeypatch, usage_state) -> None:
+    """Disabled telemetry: watcher error detail keeps the OLD {phase, rc} schema."""
+    from java_codebase_rag.config import resolve_operator_config
+    from java_codebase_rag.watch import watcher as watcher_mod
+
+    index_dir = _index_dir(tmp_path)
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_INDEX_DIR", str(index_dir))
+    monkeypatch.chdir(index_dir.parent)
+
+    class _Warm:
+        def __init__(self, cfg):
+            self.cfg = cfg
+
+        def begin_graph_snapshot(self):
+            pass
+
+        def commit_graph_snapshot(self):
+            pass
+
+    def _watcher(cfg):
+        return watcher_mod.SourceWatcher(
+            cfg, _Warm(cfg), debounce_ms=10, backend="auto",
+            poll_interval_ms=10, on_event=lambda k, d: None,
+        )
+
+    monkeypatch.delenv("JAVA_CODEBASE_RAG_USAGE_ENABLED", raising=False)
+    cfg = resolve_operator_config(source_root=None)
+    assert _watcher(cfg)._error_detail("vectors", 1, None) == {
+        "phase": "vectors", "returncode": 1,
+    }
+    # Enabled: the diagnostic tail rides along ("" for a result without stderr).
+    monkeypatch.setenv("JAVA_CODEBASE_RAG_USAGE_ENABLED", "1")
+    cfg_on = resolve_operator_config(source_root=None)
+    assert _watcher(cfg_on)._error_detail("vectors", 1, None) == {
+        "phase": "vectors", "returncode": 1, "stderr_tail": "",
+    }

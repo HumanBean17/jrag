@@ -433,7 +433,7 @@ MESSAGES: dict[str, Any] = {
     "MSG_FEEDBACK_RECORDED": (
         "метка записана ({rating}); см. раздел feedback в `jrag usage`."
     ),
-    "LBL_WATCH_LAST_ERROR": "последняя ошибка: фаза {phase}, {age} назад — {detail}",
+    "LBL_WATCH_LAST_ERROR": "последняя ошибка: фаза {phase}, {age} назад{detail}",
     "WARN_DAEMON_NOT_RUNNING": (
         "демон watch не запущен — запросы уходят в холодный (медленный) путь, "
         "индекс будет устаревать"

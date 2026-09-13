@@ -28,16 +28,24 @@ def state_dir(override: str | None = None) -> Path:
     """
     if override:
         target = Path(override).expanduser()
-    elif os.environ.get("XDG_STATE_HOME"):
-        target = Path(os.environ["XDG_STATE_HOME"]).expanduser() / _APP_DIR
     else:
-        home = Path(os.environ.get("HOME") or Path.home())
-        if sys.platform == "darwin":
-            target = home / "Library" / "Application Support" / _APP_DIR
-        else:
-            target = home / ".local" / "state" / _APP_DIR
+        target = _default_base()
     target.mkdir(parents=True, exist_ok=True)
     return target
+
+
+def _default_base() -> Path:
+    home = Path(os.environ.get("HOME") or Path.home())
+    darwin = sys.platform == "darwin"
+    xdg = os.environ.get("XDG_STATE_HOME", "").strip()
+    # XDG spec: relative values are ignored (a cwd-dependent state dir would
+    # break event discovery). The env var applies on every platform — an
+    # operator who set it made a deliberate choice.
+    if xdg and Path(xdg).expanduser().is_absolute():
+        return Path(xdg).expanduser() / _APP_DIR
+    if darwin:
+        return home / "Library" / "Application Support" / _APP_DIR
+    return home / ".local" / "state" / _APP_DIR
 
 
 def project_events_dir(project_key: str, override: str | None = None) -> Path:

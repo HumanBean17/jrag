@@ -155,8 +155,14 @@ class EvalReport:
     out_dir: str = ""
     # GraphMeta snapshot of the index the run measured (reuse_index runs;
     # None on fresh-build runs). Index health (parse errors, resolution %)
-    # becomes jointly analyzable with recall over time.
+    # becomes jointly analyzable with recall over time. An UNREADABLE GraphMeta
+    # is recorded as ``{"error": ...}`` rather than dropped — that corruption
+    # signal is exactly what the snapshot exists to capture.
     graph_meta: dict | None = None
+    # Mode marker so ``graph_meta: null`` is unambiguous: null + True = live
+    # index with no/unreadable meta is impossible (error is recorded), so
+    # null always means "fresh-build run" when read alongside this flag.
+    reuse_index: bool = False
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), indent=2, sort_keys=True)
@@ -438,7 +444,11 @@ def run_eval(cfg: EvalConfig) -> EvalReport:
     graph_meta = None
     if cfg.reuse_index:
         meta_out = graph.meta()
-        if "error" not in meta_out:
+        if "error" in meta_out:
+            # Unreadable meta on a live index is itself the health signal —
+            # record it, don't swallow it (the sweep still measures recall).
+            graph_meta = {"error": str(meta_out["error"])}
+        else:
             graph_meta = meta_out
 
     symbols = _enumerate_symbols(graph, symbol_kinds=cfg.symbol_kinds)
@@ -503,6 +513,7 @@ def run_eval(cfg: EvalConfig) -> EvalReport:
         num_queries_available=num_queries_available,
         out_dir=out_dir,
         graph_meta=graph_meta,
+        reuse_index=cfg.reuse_index,
     )
 
     # 6. Persist into <results_dir>/<timestamp>/report.{md,json}.

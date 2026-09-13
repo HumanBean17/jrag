@@ -311,9 +311,11 @@ class WatchDaemon:
                             detail: dict[str, Any]) -> None:
         """Append one watch-surface usage event (writer swallows failures).
 
-        ``stderr_tail`` is trimmed harder than the state file's copy: the
-        journaled line must fit the writer's 1 KiB cap or it would be dropped
-        whole. The state file's ``last_error.detail`` keeps the full 2 KB.
+        ``stderr_tail`` is trimmed to a BYTE budget (~400) rather than a char
+        count: ``json.dumps`` escapes non-ASCII as ``\\uXXXX`` (6 bytes/char),
+        so a char-based trim of localized stderr can exceed the writer's 1 KiB
+        line cap and get the event dropped whole. The state file's
+        ``last_error.detail`` keeps the full 2 KB copy.
         """
         try:
             from java_codebase_rag.usage.events import build_daemon_event, build_reindex_event
@@ -322,7 +324,9 @@ class WatchDaemon:
             detail = dict(detail)
             tail = detail.get("stderr_tail")
             if isinstance(tail, str):
-                detail["stderr_tail"] = tail[-500:]
+                detail["stderr_tail"] = tail.encode("utf-8")[-400:].decode(
+                    "utf-8", errors="ignore"
+                )
             if event == "reindex":
                 ev = build_reindex_event(kind_or_lifecycle, detail, self._project_key)
             else:
@@ -379,13 +383,8 @@ class WatchDaemon:
                     except Exception:  # noqa: BLE001 — cosmetic
                         pass
                 if self._telemetry:
-                    # Heartbeat: refresh the state file's mtime so a silent,
-                    # wedged, or dead daemon is distinguishable from an idle
-                    # healthy one (``--status`` / ``jrag usage`` read it).
                     with self._state_lock:
-                        now = time.monotonic()
-                        if now - self._last_state_write >= _STATE_HEARTBEAT_S:
-                            self._write_state_locked()
+                        self._maybe_heartbeat_locked()
                 # Event.wait returns True as soon as the flag is set, so a stop
                 # signal is observed within one tick rather than the full window.
                 self._stop.wait(_LOOP_TICK_S)
@@ -487,6 +486,18 @@ class WatchDaemon:
         """Throttled state write; caller MUST hold ``_state_lock``."""
         now = time.monotonic()
         if now - self._last_state_write >= _STATE_WRITE_MIN_INTERVAL_S:
+            self._write_state_locked()
+
+    def _maybe_heartbeat_locked(self) -> None:
+        """Telemetry heartbeat; caller MUST hold ``_state_lock``.
+
+        Refreshes the state file when it hasn't been written for
+        ``_STATE_HEARTBEAT_S`` so its mtime stays a liveness signal on an idle
+        daemon (a busy one refreshes it via event writes anyway). Subsumes the
+        1 s ``_maybe_write_state_locked`` throttle by construction.
+        """
+        now = time.monotonic()
+        if now - self._last_state_write >= _STATE_HEARTBEAT_S:
             self._write_state_locked()
 
     def _write_state_locked(self) -> None:

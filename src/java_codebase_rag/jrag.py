@@ -206,16 +206,26 @@ _TELEMETRY_STASH: dict = {}
 
 
 def _telemetry_prepare(args: argparse.Namespace) -> None:
-    """Resolve config once for telemetry, side-effect free (no env/locale)."""
+    """Resolve config once for telemetry, side-effect free (no env/locale).
+
+    ``resolve_operator_config`` prints degradation warnings to stderr for
+    invalid YAML values; the handler resolves the same config again and must
+    stay the ONLY warning emitter, so this extra resolve is silenced — with
+    telemetry off, CLI stderr stays byte-identical to pre-observability days.
+    """
     global _TELEMETRY_STASH
     _TELEMETRY_STASH = {}
     try:
+        import contextlib
+        import io
+
         from java_codebase_rag.config import resolve_operator_config
 
-        cfg = resolve_operator_config(
-            source_root=None,
-            cli_index_dir=getattr(args, "index_dir", None),
-        )
+        with contextlib.redirect_stderr(io.StringIO()):
+            cfg = resolve_operator_config(
+                source_root=None,
+                cli_index_dir=getattr(args, "index_dir", None),
+            )
         _TELEMETRY_STASH = {"cfg": cfg}
     except Exception:  # noqa: BLE001 — telemetry must never break the CLI
         _TELEMETRY_STASH = {}
@@ -318,28 +328,33 @@ def _emit(env, args: argparse.Namespace, *, noun: str = "",
 
     if _telemetry_usage_enabled():
         # Stash envelope-derived facts + a stable event_id BEFORE render so the
-        # JSON/text output carries the id the usage event will be recorded under.
-        from java_codebase_rag.jrag_render import count_results
-        from java_codebase_rag.usage.events import derive_event_id, rfc3339_now
+        # JSON/text output carries the id the usage event will be recorded
+        # under. Guarded like every other telemetry path: a stash failure must
+        # never turn a successful command into an error envelope.
+        try:
+            from java_codebase_rag.jrag_render import count_results
+            from java_codebase_rag.usage.events import derive_event_id, rfc3339_now
 
-        verb = getattr(args, "command", None)
-        query = getattr(args, "query", None)
-        absence = env.absence
-        _TELEMETRY_STASH.update(
-            event_id=derive_event_id(rfc3339_now(), os.getpid(), verb, query),
-            verb=verb,
-            query=query,
-            facts={
-                "status": env.status,
-                "result_count": count_results(env, shape),
-                "truncated": env.truncated,
-                "candidates_count": len(env.candidates),
-                "absence_verdict": getattr(absence, "verdict", None),
-                "absence_cause": getattr(absence, "cause", None),
-                "warnings_count": len(env.warnings),
-            },
-        )
-        env.event_id = _TELEMETRY_STASH["event_id"]
+            verb = getattr(args, "command", None)
+            query = getattr(args, "query", None)
+            absence = env.absence
+            _TELEMETRY_STASH.update(
+                event_id=derive_event_id(rfc3339_now(), os.getpid(), verb, query),
+                verb=verb,
+                query=query,
+                facts={
+                    "status": env.status,
+                    "result_count": count_results(env, shape),
+                    "truncated": env.truncated,
+                    "candidates_count": len(env.candidates),
+                    "absence_verdict": getattr(absence, "verdict", None),
+                    "absence_cause": getattr(absence, "cause", None),
+                    "warnings_count": len(env.warnings),
+                },
+            )
+            env.event_id = _TELEMETRY_STASH["event_id"]
+        except Exception:  # noqa: BLE001 — telemetry must never break the CLI
+            pass
 
     print(render(
         env,
@@ -1539,7 +1554,8 @@ def _cmd_watch_status(cfg) -> int:
                 _humanize_age(max(0.0, time.time() - float(err_at)))
                 if isinstance(err_at, (int, float)) else ""
             )
-            detail = str(last_error.get("detail") or "")[:200].replace("\n", " ")
+            detail_text = str(last_error.get("detail") or "")[:200].replace("\n", " ")
+            detail = f" — {detail_text}" if detail_text else ""
             print(tr("LBL_WATCH_LAST_ERROR", phase=phase, age=age, detail=detail))
         return 0
     print(tr("MSG_WATCH_DOWN", sock=sock))

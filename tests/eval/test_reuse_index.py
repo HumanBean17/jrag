@@ -9,12 +9,16 @@ import pytest
 
 from tests.eval.test_runner import TINY_CORPUS, _cocoindex_available, _cfg
 
-pytestmark = pytest.mark.skipif(
+# Only the run_eval integration tests need the vector stack; the pure-argparse
+# flag-mapping test below runs everywhere (skipping it on stack-less venvs
+# would silently drop the only --reuse-index wiring coverage).
+_needs_stack = pytest.mark.skipif(
     not _cocoindex_available(),
     reason="cocoindex CLI not installed in this venv; runner integration test needs the full stack",
 )
 
 
+@_needs_stack
 def test_reuse_requires_index_dir(tmp_path: Path) -> None:
     from java_codebase_rag.eval.runner import EvalConfig, run_eval
 
@@ -28,6 +32,7 @@ def test_reuse_requires_index_dir(tmp_path: Path) -> None:
         run_eval(cfg)
 
 
+@_needs_stack
 def test_reuse_skips_build_and_carries_graph_meta(tmp_path: Path, monkeypatch) -> None:
     from java_codebase_rag.eval import runner
 
@@ -55,8 +60,10 @@ def test_reuse_skips_build_and_carries_graph_meta(tmp_path: Path, monkeypatch) -
         (Path(report.out_dir) / "report.json").read_text()
     )
     assert persisted["graph_meta"]["built_at"] == report.graph_meta["built_at"]
-    # Fresh-build runs carry no snapshot (the graph predates the sweep's build).
+    # Fresh-build runs carry no snapshot and are marked as non-reuse.
     assert first.graph_meta is None
+    assert first.reuse_index is False
+    assert report.reuse_index is True
 
 
 def test_cli_flag_maps_to_config() -> None:

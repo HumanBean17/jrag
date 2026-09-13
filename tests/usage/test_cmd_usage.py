@@ -1,9 +1,9 @@
-"""jrag usage verb — rollup, zero-states, drift (Task 9)."""
+"""jrag usage verb — rollup, zero-states, window, drift (Task 9)."""
 
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -22,7 +22,11 @@ def usage_state(tmp_path: Path, monkeypatch) -> Path:
 
 
 def _events_dir(state: Path) -> Path:
-    dirs = list((state / "events").iterdir())
+    events = state / "events"
+    if not events.exists():
+        # First write in a fresh test: any key works (the reader globs the dir).
+        return events / "k"
+    dirs = list(events.iterdir())
     assert len(dirs) == 1
     return dirs[0]
 
@@ -34,9 +38,16 @@ def _write_event(state: Path, event: dict) -> None:
         fh.write(json.dumps(event) + "\n")
 
 
-def _cmd_event(verb: str, *, status: str = "ok", count: int = 2) -> dict:
+def _cmd_event(verb: str, *, status: str = "ok", count: int = 2,
+               ago_s: float = 60.0) -> dict:
+    """Synthetic command event; ts is ALWAYS relative to now (never fixed —
+    a fixed ts drops out of the window filter after a week and bombs the test).
+    """
+    ts = datetime.now(timezone.utc) - timedelta(seconds=ago_s)
     return {
-        "v": 1, "ts": "2026-09-13T09:00:00.000Z", "surface": "cli",
+        "v": 1,
+        "ts": ts.strftime("%Y-%m-%dT%H:%M:%S.") + f"{ts.microsecond // 1000:03d}Z",
+        "surface": "cli",
         "event": "command", "project_key": "k", "pid": 1, "verb": verb,
         "query": "Foo", "flags": {}, "duration_ms": 12.0, "rc": 0,
         "envelope_facts": {
@@ -83,9 +94,15 @@ def test_populated_rollup(usage_state, env_pinned, capsys) -> None:
     # Seed real events via the tap itself (find ok + a not_found).
     jrag.main(["find", "ProcessedEventKeyRepository"])
     jrag.main(["find", "AbsolutelyMissingThing"])
-    # Plus a synthetic watch event for the health section.
+    # Plus a synthetic started→error watch sequence for the health section
+    # (duration stats need the pair; ts must be fresh, never a fixed date).
     _write_event(usage_state, {
-        "v": 1, "ts": "2026-09-13T09:00:00.000Z", "surface": "watch",
+        "v": 1, "ts": _cmd_event("x")["ts"], "surface": "watch",
+        "event": "reindex", "kind": "indexing_started", "detail": {"kinds": ["java"]},
+        "project_key": "k", "pid": 5,
+    })
+    _write_event(usage_state, {
+        "v": 1, "ts": _cmd_event("x")["ts"], "surface": "watch",
         "event": "reindex", "kind": "error",
         "detail": {"phase": "graph", "returncode": 1, "stderr_tail": "boom"},
         "project_key": "k", "pid": 5,
@@ -100,8 +117,29 @@ def test_populated_rollup(usage_state, env_pinned, capsys) -> None:
     assert by_verb["find"]["calls"] >= 2
     assert by_verb["find"]["ok"] >= 1
     assert node["watch"]["recent_failures"][0]["stderr_tail"] == "boom"
+    assert node["watch"]["reindex_duration_p50_s"] is not None
     assert node["storage"]["files"] >= 1
     assert node["sessions"]["count"] >= 1
+
+
+def test_days_window_filters_and_clamps(usage_state, env_pinned, capsys) -> None:
+    # One tap invocation first so the events dir exists under the REAL project
+    # key (synthetic events must land in the same shard the reader globs).
+    jrag.main(["find", "ProcessedEventKeyRepository"])
+    # One fresh event, one 10-days-stale event: --days 1 drops the stale one.
+    _write_event(usage_state, _cmd_event("find", ago_s=600))
+    _write_event(usage_state, _cmd_event("search", ago_s=10 * 86400))
+    capsys.readouterr()
+    rc = jrag.main(["usage", "--days", "1", "--format", "json"])
+    assert rc == 0
+    node = json.loads(capsys.readouterr().out)["nodes"]["usage"]
+    verbs = {row["verb"] for row in node["calls"]}
+    assert "find" in verbs and "search" not in verbs
+    # Out-of-range --days clamps to 30.
+    rc = jrag.main(["usage", "--days", "99", "--format", "json"])
+    assert rc == 0
+    node = json.loads(capsys.readouterr().out)["nodes"]["usage"]
+    assert node["window_days"] == 30
 
 
 def test_agent_verbs_contains_usage() -> None:

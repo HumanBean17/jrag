@@ -152,6 +152,7 @@ def get_payload(cmd: str, args: dict, cfg, *, cold_core: Callable[..., Any]) -> 
     never routed through ``get_payload``).
     """
     global LAST_SERVED_BY
+    LAST_SERVED_BY = None
     try:
         result = request(cfg.index_dir, cmd, args)
     except (DaemonUnavailable, DaemonError):
