@@ -408,6 +408,16 @@ MESSAGES: dict[str, Any] = {
     "ERR_VOCAB_SAVE_FAILED": "[error] Failed to save vocabulary index: {exc}",
     "MSG_WATCH_NOT_RUNNING": "jrag watch: not running",
     "MSG_PRIME_STDERR": "jrag prime: {msg}",
+    "MSG_USAGE_DISABLED": (
+        "usage telemetry is disabled — no events are recorded. Enable with "
+        "JAVA_CODEBASE_RAG_USAGE_ENABLED=1 or usage.enabled: true in the "
+        "project YAML (.java-codebase-rag.yml). Strictly local; see "
+        "docs/CONFIGURATION.md (What jrag records locally)."
+    ),
+    "MSG_USAGE_EMPTY": (
+        "no usage events recorded yet for this project (telemetry enabled). "
+        "Events appear as agents invoke jrag verbs and the watch daemon reindexes."
+    ),
     "MSG_WARN_EXISTING_CONFIG": (
         "Warning: found existing config at {path}. "
         "Creating a new project here will create a separate index."

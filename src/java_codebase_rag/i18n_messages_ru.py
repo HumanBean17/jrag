@@ -415,6 +415,17 @@ MESSAGES: dict[str, Any] = {
     "ERR_VOCAB_SAVE_FAILED": "[ошибка] Не удалось сохранить индекс словаря: {exc}",
     "MSG_WATCH_NOT_RUNNING": "jrag watch: не запущен",
     "MSG_PRIME_STDERR": "jrag prime: {msg}",
+    "MSG_USAGE_DISABLED": (
+        "телеметрия использования выключена — события не записываются. "
+        "Включите через JAVA_CODEBASE_RAG_USAGE_ENABLED=1 или usage.enabled: true "
+        "в YAML проекта (.java-codebase-rag.yml). Строго локально; см. "
+        "docs/CONFIGURATION.md (What jrag records locally)."
+    ),
+    "MSG_USAGE_EMPTY": (
+        "для этого проекта ещё нет записанных событий использования "
+        "(телеметрия включена). События появляются по мере вызова глаголов jrag "
+        "агентами и переиндексации демоном watch."
+    ),
     "MSG_WARN_EXISTING_CONFIG": (
         "Предупреждение: найдена существующая конфигурация в {path}. "
         "Создание нового проекта здесь создаст отдельный индекс."

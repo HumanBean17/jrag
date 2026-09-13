@@ -565,7 +565,9 @@ def test_jrag_query_verbs_match_cli_agent_verbs():
     """
     from java_codebase_rag.cli_dispatch import AGENT_VERBS
 
-    assert set(JRAG_QUERY_VERBS) == set(AGENT_VERBS) - {"watch", "vocab-index", "prime"}
+    assert set(JRAG_QUERY_VERBS) == set(AGENT_VERBS) - {
+        "watch", "vocab-index", "prime", "usage",
+    }
 
 
 def test_only_condition_B_gets_lexical_deny(monkeypatch):

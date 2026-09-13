@@ -674,6 +674,25 @@ def build_parser() -> argparse.ArgumentParser:
     )
     status.set_defaults(handler=_cmd_status, detail="full")
 
+    # usage subparser (local observability): summary of recorded usage events.
+    # Uses _core_parser (no --limit/--count/--exists); telemetry itself is
+    # opt-in via config — with it off the verb renders the enable hint.
+    usage = subparsers.add_parser(
+        "usage",
+        help=tr("HELP_CMD_USAGE"),
+        parents=[_core_parser()],
+        description=tr("HELP_CMD_USAGE_DESC"),
+    )
+    usage.add_argument(
+        "--days",
+        type=int,
+        default=7,
+        help=tr("HELP_FLAG_DAYS"),
+    )
+    # detail=full like status: the rollup node's sections are dict-valued
+    # fields that a "normal" projection would strip.
+    usage.set_defaults(handler=_cmd_usage, detail="full")
+
     # prime subparser (jrag-prime Task 2): SessionStart priming payload.
     # Aggregate like status (uses _core_parser, so --service/--module/--limit/
     # --count/--exists/--fields are rejected at parse time), but unlike status
@@ -1753,6 +1772,80 @@ def _cmd_status(args: argparse.Namespace) -> int:
         },
     )
     print(render(env, fmt=args.format, detail=args.detail, noun="status", shape="inspect"))
+    return 0
+
+
+def _cmd_usage(args: argparse.Namespace) -> int:
+    """Render the local-usage summary rollup (opt-in telemetry reader)."""
+    import statistics as _stats
+    from collections import Counter
+
+    from java_codebase_rag.jrag_envelope import Envelope
+    from java_codebase_rag.jrag_render import render
+    from java_codebase_rag.usage import summarize
+    from java_codebase_rag.usage.paths import state_dir as usage_state_dir
+    from java_codebase_rag.watch.paths import project_key, state_path
+
+    cfg = _resolve_cfg(args)
+    if not cfg.usage_enabled:
+        env = Envelope(status="ok", message=tr("MSG_USAGE_DISABLED"))
+        print(render(env, fmt=args.format, detail=args.detail))
+        return 0
+
+    days = max(1, min(30, args.days))
+    events_dir = usage_state_dir(cfg.usage_dir) / "events" / project_key(cfg.index_dir)
+    files = sorted(events_dir.glob("events-*.jsonl"))
+    if not files:
+        env = Envelope(status="ok", message=tr("MSG_USAGE_EMPTY"))
+        print(render(env, fmt=args.format, detail=args.detail))
+        return 0
+
+    events, torn = summarize.load_events(files, days)
+    labels = summarize.load_labels(events_dir / "feedback.jsonl")
+    drops = sorted(events_dir.glob("events-*.drops"))
+
+    watch_state = None
+    try:
+        import json as _json
+
+        watch_state = _json.loads(state_path(cfg.index_dir).read_text())
+    except Exception:  # noqa: BLE001 — no daemon state = zero-state section
+        pass
+
+    session_lists = summarize.sessions(events)
+    queries_per_session = [len(s) for s in session_lists]
+    terminal = [str((s[-1].get("envelope_facts") or {}).get("status"))
+                for s in session_lists if s]
+    env = Envelope(
+        status="ok",
+        nodes={
+            "usage": {
+                "window_days": days,
+                "calls": summarize.per_verb(events),
+                "staleness": summarize.staleness_bins(events),
+                "sessions": {
+                    "count": len(session_lists),
+                    "median_queries": (
+                        _stats.median(queries_per_session)
+                        if queries_per_session else None
+                    ),
+                    "terminal_outcomes": dict(Counter(terminal)),
+                },
+                "struggle": summarize.struggle(session_lists),
+                "absence": summarize.absence_top(events),
+                "watch": summarize.watch_health(
+                    [e for e in events if e.get("surface") == "watch"],
+                    watch_state,
+                ),
+                "feedback": summarize.feedback_join(events, labels),
+                "storage": dict(
+                    summarize.storage_status(files, drops), torn_lines=torn
+                ),
+            },
+        },
+    )
+    print(render(env, fmt=args.format, detail=args.detail,
+                 noun="usage", shape="inspect"))
     return 0
 
 
