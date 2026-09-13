@@ -116,3 +116,24 @@ def test_secrets_present() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
     for secret in REQUIRED_SECRETS:
         assert secret in text, f"workflow must reference {secret}"
+
+
+def test_test_yml_has_annotations_build_job() -> None:
+    """test.yml gates every PR on compiling the annotations module.
+
+    The job must block (no continue-on-error): a non-compiling module must
+    fail the PR, exactly like a failing pytest.
+    """
+    test_yml = REPO_ROOT / ".github" / "workflows" / "test.yml"
+    workflow = _load(test_yml)
+    jobs = workflow["jobs"]
+    assert "annotations-build" in jobs, "test.yml lacks annotations-build job"
+    job = jobs["annotations-build"]
+    assert job["runs-on"] == "ubuntu-latest"
+    assert not job.get("continue-on-error"), "job must gate, not advise"
+    uses = [str(s.get("uses", "")) for s in job["steps"]]
+    assert any("setup-java" in u for u in uses), "job must set up a JDK"
+    runs = [str(s.get("run", "")) for s in job["steps"]]
+    assert any("mvn -B -f annotations/pom.xml verify" in r for r in runs), (
+        "job must run a plain (profile-less, credential-less) mvn verify"
+    )
