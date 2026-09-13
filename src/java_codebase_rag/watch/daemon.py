@@ -70,6 +70,11 @@ if TYPE_CHECKING:
 # The initial write (``force=True``) and the last reindex both go through
 # immediately; ``--status`` readers tolerate a slightly-stale ``last_reindex``.
 _STATE_WRITE_MIN_INTERVAL_S = 1.0
+
+#: Telemetry heartbeat: rewrite the state file at least this often while
+#: serving (telemetry on) so its mtime stays a liveness signal even on an
+#: idle daemon with no reindex events.
+_STATE_HEARTBEAT_S = 30.0
 # The blocking loop's tick: how often the Live panel refreshes and how quickly a
 # stop signal is observed. 0.5 s is responsive without burning CPU.
 _LOOP_TICK_S = 0.5
@@ -94,7 +99,7 @@ class WatchDaemon:
         self._vector_enabled = vector_stack_installed() and cfg.retrieval == "vectors"
         self.lock = ProjectLock(cfg.index_dir)
         self.warm = WarmResources(cfg)
-        self.server = WatchServer(self.warm, cfg)
+        self.server = WatchServer(self.warm, cfg, on_query=self._on_query_served)
         self.watcher = SourceWatcher(
             cfg,
             self.warm,
@@ -107,6 +112,11 @@ class WatchDaemon:
         self._stop = threading.Event()
         self._state_lock = threading.Lock()
         self._last_state_write = 0.0
+        # Local observability (opt-in): gated state fields, reindex event
+        # journal, and the serve-loop heartbeat. Disabled → state file schema
+        # and behavior stay byte-identical to pre-observability days.
+        self._telemetry = bool(cfg.usage_enabled)
+        self._project_key = paths.project_key(cfg.index_dir)
         self._state: dict[str, Any] = {
             "started_at": None,
             "pid": None,
@@ -125,11 +135,18 @@ class WatchDaemon:
             "last_reindex_at": None,
             "last_reindex_kind": None,
             "reindex_count": 0,
-            # ``queries_served`` is left at 0 for v1: wiring a query-count
-            # callback out of ``WatchServer`` (Task 7, approved) is out of scope
-            # for this task's commit surface and the brief marks it optional.
+            # Counted per successfully served socket request by the
+            # ``WatchServer.on_query`` hook (same class of self-stat as
+            # ``reindex_count`` — present in the schema regardless of the
+            # telemetry switch, which gates only the extras below).
             "queries_served": 0,
         }
+        if self._telemetry:
+            self._state.update(
+                consecutive_errors=0,
+                last_vectors_ok_at=None,
+                last_graph_ok_at=None,
+            )
 
     # ------------------------------------------------------------------
     # public lifecycle
@@ -253,13 +270,20 @@ class WatchDaemon:
         Called on the watcher's debounce worker thread, so all state mutation is
         under ``_state_lock``. The state file is rewritten at most once per
         ``_STATE_WRITE_MIN_INTERVAL_S`` so ``--status`` readers see recent truth
-        without disk churn during a reindex burst.
+        without disk churn during a reindex burst. With telemetry enabled, every
+        event is also appended to the usage journal (swallow-guarded by the
+        writer — a telemetry failure must never kill the debounce thread).
         """
         with self._state_lock:
             if kind == "indexing_done":
-                self._state["last_reindex_at"] = time.time()
+                now = time.time()
+                self._state["last_reindex_at"] = now
                 self._state["last_reindex_kind"] = "+".join(detail.get("kinds", []))
                 self._state["reindex_count"] += 1
+                if self._telemetry:
+                    self._state["consecutive_errors"] = 0
+                    for phase in detail.get("phases", ()):
+                        self._state[f"last_{phase}_ok_at"] = now
             elif kind == "indexing_started":
                 self._state["last_reindex_kind"] = (
                     "indexing:" + "+".join(detail.get("kinds", []))
@@ -270,7 +294,42 @@ class WatchDaemon:
                     "at": time.time(),
                     "detail": detail,
                 }
+                if self._telemetry:
+                    self._state["consecutive_errors"] = (
+                        self._state.get("consecutive_errors", 0) + 1
+                    )
             self._maybe_write_state_locked()
+        if self._telemetry:
+            self._append_usage_event("reindex", kind, detail)
+
+    def _on_query_served(self) -> None:
+        """WatchServer.on_query hook: bump ``queries_served`` under the lock."""
+        with self._state_lock:
+            self._state["queries_served"] += 1
+
+    def _append_usage_event(self, event: str, kind_or_lifecycle: str,
+                            detail: dict[str, Any]) -> None:
+        """Append one watch-surface usage event (writer swallows failures).
+
+        ``stderr_tail`` is trimmed harder than the state file's copy: the
+        journaled line must fit the writer's 1 KiB cap or it would be dropped
+        whole. The state file's ``last_error.detail`` keeps the full 2 KB.
+        """
+        try:
+            from java_codebase_rag.usage.events import build_daemon_event, build_reindex_event
+            from java_codebase_rag.usage.writer import record_event
+
+            detail = dict(detail)
+            tail = detail.get("stderr_tail")
+            if isinstance(tail, str):
+                detail["stderr_tail"] = tail[-500:]
+            if event == "reindex":
+                ev = build_reindex_event(kind_or_lifecycle, detail, self._project_key)
+            else:
+                ev = build_daemon_event(kind_or_lifecycle, detail, self._project_key)
+            record_event(ev, enabled=True, state_dir_override=self.cfg.usage_dir)
+        except Exception:  # noqa: BLE001 — telemetry must never break the daemon
+            pass
 
     # ------------------------------------------------------------------
     # serve loop + status panel
@@ -308,12 +367,25 @@ class WatchDaemon:
             )
 
         try:
+            if self._telemetry:
+                self._append_usage_event(
+                    "daemon", "start", {"mode": self._state.get("mode"),
+                                        "pid": os.getpid()}
+                )
             while not self._stop.is_set():
                 if live is not None:
                     try:
                         live.update(self._render_panel())
                     except Exception:  # noqa: BLE001 — cosmetic
                         pass
+                if self._telemetry:
+                    # Heartbeat: refresh the state file's mtime so a silent,
+                    # wedged, or dead daemon is distinguishable from an idle
+                    # healthy one (``--status`` / ``jrag usage`` read it).
+                    with self._state_lock:
+                        now = time.monotonic()
+                        if now - self._last_state_write >= _STATE_HEARTBEAT_S:
+                            self._write_state_locked()
                 # Event.wait returns True as soon as the flag is set, so a stop
                 # signal is observed within one tick rather than the full window.
                 self._stop.wait(_LOOP_TICK_S)
@@ -359,6 +431,10 @@ class WatchDaemon:
         to avoid the lance worker-thread SIGABRT at finalization once the server
         has served a ``search`` query.
         """
+        if self._telemetry:
+            self._append_usage_event(
+                "daemon", "stop", {"pid": os.getpid()}
+            )
         try:
             self.watcher.stop()
         except Exception:  # noqa: BLE001 — teardown must continue
