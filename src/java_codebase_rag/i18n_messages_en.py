@@ -418,6 +418,13 @@ MESSAGES: dict[str, Any] = {
         "no usage events recorded yet for this project (telemetry enabled). "
         "Events appear as agents invoke jrag verbs and the watch daemon reindexes."
     ),
+    "MSG_FEEDBACK_UNKNOWN": (
+        "event_id {event_id} not found in retained usage events "
+        "(30-day window) — the event may have aged out."
+    ),
+    "MSG_FEEDBACK_RECORDED": (
+        "feedback recorded ({rating}); see `jrag usage` feedback section."
+    ),
     "MSG_WARN_EXISTING_CONFIG": (
         "Warning: found existing config at {path}. "
         "Creating a new project here will create a separate index."

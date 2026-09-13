@@ -693,6 +693,21 @@ def build_parser() -> argparse.ArgumentParser:
     # fields that a "normal" projection would strip.
     usage.set_defaults(handler=_cmd_usage, detail="full")
 
+    # feedback subparser (local observability): attach a sparse good/bad label
+    # to a recorded event by its envelope event_id. Exactly one of --good/--bad.
+    feedback = subparsers.add_parser(
+        "feedback",
+        help=tr("HELP_CMD_FEEDBACK"),
+        parents=[_core_parser()],
+        description=tr("HELP_CMD_FEEDBACK_DESC"),
+    )
+    feedback.add_argument("event_id", help=tr("HELP_ARG_EVENT_ID"))
+    rating = feedback.add_mutually_exclusive_group(required=True)
+    rating.add_argument("--good", action="store_true", help=tr("HELP_FLAG_GOOD"))
+    rating.add_argument("--bad", action="store_true", help=tr("HELP_FLAG_BAD"))
+    feedback.add_argument("--note", type=str, default=None, help=tr("HELP_FLAG_NOTE"))
+    feedback.set_defaults(handler=_cmd_feedback)
+
     # prime subparser (jrag-prime Task 2): SessionStart priming payload.
     # Aggregate like status (uses _core_parser, so --service/--module/--limit/
     # --count/--exists/--fields are rejected at parse time), but unlike status
@@ -1846,6 +1861,46 @@ def _cmd_usage(args: argparse.Namespace) -> int:
     )
     print(render(env, fmt=args.format, detail=args.detail,
                  noun="usage", shape="inspect"))
+    return 0
+
+
+def _cmd_feedback(args: argparse.Namespace) -> int:
+    """Append one owner label for a recorded event (opt-in telemetry)."""
+    from java_codebase_rag.jrag_envelope import Envelope
+    from java_codebase_rag.jrag_render import render
+    from java_codebase_rag.usage.events import rfc3339_now
+    from java_codebase_rag.usage.paths import state_dir as usage_state_dir
+    from java_codebase_rag.usage.summarize import event_exists
+    from java_codebase_rag.usage.writer import record_feedback
+    from java_codebase_rag.watch.paths import project_key
+
+    cfg = _resolve_cfg(args)
+    if not cfg.usage_enabled:
+        env = Envelope(status="ok", message=tr("MSG_USAGE_DISABLED"))
+        print(render(env, fmt=args.format, detail=args.detail))
+        return 0
+
+    events_dir = usage_state_dir(cfg.usage_dir) / "events" / project_key(cfg.index_dir)
+    files = sorted(events_dir.glob("events-*.jsonl"))
+    if not event_exists(files, args.event_id):
+        env = Envelope(
+            status="not_found",
+            message=tr("MSG_FEEDBACK_UNKNOWN", event_id=args.event_id),
+        )
+        print(render(env, fmt=args.format, detail=args.detail))
+        return 0
+
+    label = {
+        "ts": rfc3339_now(),
+        "event_id": args.event_id,
+        "rating": "good" if args.good else "bad",
+        "note": (args.note or "")[:500],
+    }
+    record_feedback(label, project_key=project_key(cfg.index_dir),
+                    enabled=True, state_dir_override=cfg.usage_dir)
+    env = Envelope(status="ok", message=tr("MSG_FEEDBACK_RECORDED",
+                                           rating=label["rating"]))
+    print(render(env, fmt=args.format, detail=args.detail))
     return 0
 
 
