@@ -82,6 +82,8 @@ and service boundaries — structure you'd otherwise grep for. You are the explo
 - `search` — Semantic search over the indexed JVM sources.
 - `vocab-index` — Rebuild the vocabulary index (absence diagnosis).
 - `watch` — keep the index fresh and serve warm queries while running
+- `usage` — Summarize recorded jrag usage (opt-in telemetry).
+- `feedback` — Label a recorded invocation good/bad (event_id from output).
 
 Run `jrag <command> --help` for flags."""
 
