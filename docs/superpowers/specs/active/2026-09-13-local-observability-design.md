@@ -1,7 +1,7 @@
 # Local observability: usage events, health surfacing, effectiveness measurement (opt-in)
 
 - **Date:** 2026-09-13
-- **Status:** in_progress
+- **Status:** implemented
 
 ## Motivation
 
