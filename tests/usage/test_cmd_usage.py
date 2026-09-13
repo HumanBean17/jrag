@@ -10,7 +10,7 @@ import pytest
 
 from java_codebase_rag import jrag
 
-pytestmark = pytest.mark.usefixtures("mcp_env")
+pytestmark = pytest.mark.usefixtures("env_pinned")
 
 
 @pytest.fixture
@@ -49,7 +49,7 @@ def _cmd_event(verb: str, *, status: str = "ok", count: int = 2) -> dict:
     }
 
 
-def test_disabled_zero_state(tmp_path: Path, monkeypatch, mcp_env, capsys) -> None:
+def test_disabled_zero_state(tmp_path: Path, monkeypatch, env_pinned, capsys) -> None:
     monkeypatch.delenv("JAVA_CODEBASE_RAG_USAGE_ENABLED", raising=False)
     state = tmp_path / "never"
     monkeypatch.setenv("JAVA_CODEBASE_RAG_USAGE_DIR", str(state))
@@ -65,7 +65,7 @@ def test_disabled_zero_state(tmp_path: Path, monkeypatch, mcp_env, capsys) -> No
     assert "JAVA_CODEBASE_RAG_USAGE_ENABLED" in out["message"]
 
 
-def test_empty_zero_state(usage_state, mcp_env, capsys) -> None:
+def test_empty_zero_state(usage_state, env_pinned, capsys) -> None:
     # Create the project events dir by making one throwaway invocation with
     # telemetry on, then wipe the day files — dir exists, no events.
     jrag.main(["find", "ProcessedEventKeyRepository"])
@@ -79,7 +79,7 @@ def test_empty_zero_state(usage_state, mcp_env, capsys) -> None:
     assert "no usage events" in out["message"]
 
 
-def test_populated_rollup(usage_state, mcp_env, capsys) -> None:
+def test_populated_rollup(usage_state, env_pinned, capsys) -> None:
     # Seed real events via the tap itself (find ok + a not_found).
     jrag.main(["find", "ProcessedEventKeyRepository"])
     jrag.main(["find", "AbsolutelyMissingThing"])

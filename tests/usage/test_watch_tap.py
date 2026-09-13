@@ -84,7 +84,7 @@ def test_error_event_appended_with_stderr_tail(tmp_path, monkeypatch, usage_stat
     )
 
 
-def test_disabled_no_events_no_fields(tmp_path, monkeypatch, mcp_env) -> None:
+def test_disabled_no_events_no_fields(tmp_path, monkeypatch, env_pinned) -> None:
     monkeypatch.delenv("JAVA_CODEBASE_RAG_USAGE_ENABLED", raising=False)
     state = tmp_path / "nope"
     monkeypatch.setenv("JAVA_CODEBASE_RAG_USAGE_DIR", str(state))

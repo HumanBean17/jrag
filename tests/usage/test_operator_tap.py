@@ -25,7 +25,7 @@ def _events(state: Path) -> list[dict]:
     return [json.loads(line) for line in files[0].read_text().splitlines()]
 
 
-def test_operator_invocation_recorded(usage_state, mcp_env) -> None:
+def test_operator_invocation_recorded(usage_state, env_pinned) -> None:
     rc = cli.main(["meta"])
     assert rc == 0
     (ev,) = _events(usage_state)
@@ -36,7 +36,7 @@ def test_operator_invocation_recorded(usage_state, mcp_env) -> None:
     assert ev["query"] is None
 
 
-def test_operator_disabled(mcp_env, tmp_path: Path, monkeypatch) -> None:
+def test_operator_disabled(env_pinned, tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv("JAVA_CODEBASE_RAG_USAGE_ENABLED", raising=False)
     state = tmp_path / "nope"
     monkeypatch.setenv("JAVA_CODEBASE_RAG_USAGE_DIR", str(state))

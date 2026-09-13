@@ -10,7 +10,7 @@ import pytest
 
 from java_codebase_rag import jrag
 
-pytestmark = pytest.mark.usefixtures("mcp_env")
+pytestmark = pytest.mark.usefixtures("env_pinned")
 
 
 @pytest.fixture
@@ -48,7 +48,7 @@ def test_ok_invocation_recorded(usage_state, capsys) -> None:
     assert ev["event_id"]
 
 
-def test_disabled_writes_nothing(tmp_path: Path, monkeypatch, mcp_env, capsys) -> None:
+def test_disabled_writes_nothing(tmp_path: Path, monkeypatch, env_pinned, capsys) -> None:
     monkeypatch.delenv("JAVA_CODEBASE_RAG_USAGE_ENABLED", raising=False)
     state = tmp_path / "should-not-exist"
     monkeypatch.setenv("JAVA_CODEBASE_RAG_USAGE_DIR", str(state))

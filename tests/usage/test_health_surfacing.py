@@ -10,11 +10,11 @@ import pytest
 
 from java_codebase_rag import jrag
 
-pytestmark = pytest.mark.usefixtures("mcp_env")
+pytestmark = pytest.mark.usefixtures("env_pinned")
 
 
 @pytest.fixture
-def cfg_for_fixture_index(mcp_env):
+def cfg_for_fixture_index(env_pinned):
     from java_codebase_rag.config import resolve_operator_config
 
     return resolve_operator_config(source_root=None)

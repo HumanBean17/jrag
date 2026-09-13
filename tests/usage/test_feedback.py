@@ -11,7 +11,7 @@ import pytest
 from java_codebase_rag import jrag
 from java_codebase_rag.jrag_envelope import Envelope
 
-pytestmark = pytest.mark.usefixtures("mcp_env")
+pytestmark = pytest.mark.usefixtures("env_pinned")
 
 
 @pytest.fixture
@@ -65,7 +65,7 @@ def test_feedback_unknown_id_not_found(usage_state, capsys) -> None:
     assert out["status"] == "not_found"
 
 
-def test_feedback_disabled_zero_state(tmp_path: Path, monkeypatch, mcp_env,
+def test_feedback_disabled_zero_state(tmp_path: Path, monkeypatch, env_pinned,
                                       capsys) -> None:
     monkeypatch.delenv("JAVA_CODEBASE_RAG_USAGE_ENABLED", raising=False)
     monkeypatch.setenv("JAVA_CODEBASE_RAG_USAGE_DIR", str(tmp_path / "x"))
