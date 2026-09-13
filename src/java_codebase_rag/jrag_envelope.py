@@ -819,6 +819,9 @@ _BRIEF_EDGE_KEYS: frozenset[str] = frozenset(
         "section",
         "stage",
         "resolved",
+        # Minimum BFS distance from the flow entry frontier (method-rooted
+        # `jrag flow`, issue #474). Absent on route-rooted flows.
+        "hops",
     }
 )
 

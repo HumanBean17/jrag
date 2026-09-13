@@ -26,6 +26,9 @@ Tests (bank-chat fixture):
 12. test_outline_and_import_reject_offset_or_document_unbounded
 13. test_connection_calls_service_outbound_excludes_unresolved_clients  (review Fix 2)
 14. test_imports_text_mode_marks_unresolved                               (review Fix 3)
+15. test_outline_accepts_fqn                                              (issue #475)
+16. test_outline_fqn_miss_surfaces_resolve_diagnostics                    (issue #475)
+17. test_outline_fqn_ambiguous_surfaces_candidates                        (issue #475 review)
 
 Backend signatures verified against source at PR-JRAG-3b time:
  * neighbors_v2 (mcp_v2.py:1284) returns NeighborsOutput.results: list[Edge]
@@ -530,6 +533,109 @@ def test_outline_empty_for_missing_file(
     assert "file not found" in payload.get("message", ""), (
         f"expected 'file not found' message, got {payload.get('message')!r}"
     )
+
+
+# ----- Tests 15-16: outline accepts an FQN (issue #475) -----
+
+
+def test_outline_accepts_fqn(
+    corpus_root: Path, ladybug_db_path: Path
+) -> None:
+    """outline <FQN> outlines the declaring file — same result as the path (#475).
+
+    Regression: outline resolved <file> on disk only, so a class FQN (or a
+    method FQN) fell through to "file not found" even though the class was
+    indexed and resolvable. The fallback resolves the FQN as a Symbol and uses
+    its file_location's filename — the exact graph-relative key the
+    file-range query matches. Both spellings must return the SAME symbol set.
+    """
+    env = _env_for(corpus_root, ladybug_db_path)
+    by_path = _run_jrag(["outline", _OUTLINE_FILE, "--format", "json"], env=env)
+    assert by_path.returncode == 0, f"outline by path failed: {by_path.stderr}"
+    path_nodes = json.loads(by_path.stdout).get("nodes", {})
+
+    fqn = "com.bank.chat.assign.integration.ChatCoreFeignClient"
+    by_fqn = _run_jrag(["outline", fqn, "--format", "json"], env=env)
+    assert by_fqn.returncode == 0, (
+        f"outline by FQN failed: rc={by_fqn.returncode}\nstdout={by_fqn.stdout}\nstderr={by_fqn.stderr}"
+    )
+    payload = json.loads(by_fqn.stdout)
+    assert payload["status"] == "ok", f"expected ok, got {payload}"
+    fqn_nodes = payload.get("nodes", {})
+    assert fqn_nodes, "expected the declaring file's symbols"
+    # Same file => same symbol id set (order-independent).
+    assert set(fqn_nodes) == set(path_nodes), (
+        f"FQN outline must match path outline;\nFQN: {sorted(fqn_nodes)}\npath: {sorted(path_nodes)}"
+    )
+
+    # A method FQN lands in the same file (the #member part is resolve's job).
+    by_method = _run_jrag(
+        ["outline", f"{fqn}#getSession(String)", "--format", "json"], env=env
+    )
+    assert by_method.returncode == 0, f"outline by method FQN failed: {by_method.stderr}"
+    method_nodes = json.loads(by_method.stdout).get("nodes", {})
+    assert set(method_nodes) == set(path_nodes), "method FQN must outline its file too"
+
+
+def test_outline_fqn_miss_surfaces_resolve_diagnostics(
+    corpus_root: Path, ladybug_db_path: Path
+) -> None:
+    """outline on an unresolvable identifier keeps a clean, actionable error (#475).
+
+    Identifier-like input that resolves to nothing surfaces the resolve
+    envelope (closest symbols / `jrag search` pointer) instead of the
+    path-flavored "file not found"; path-like input (a `/` or a .java/.kt
+    suffix) keeps the pre-existing file-not-found error.
+    """
+    env = _env_for(corpus_root, ladybug_db_path)
+    proc = _run_jrag(
+        ["outline", "com.bank.chat.nosuch.NoSuchService", "--format", "json"],
+        env=env,
+    )
+    assert proc.returncode == 2, (
+        f"unresolvable identifier should error with rc=2, got {proc.returncode}\nstdout={proc.stdout}"
+    )
+    payload = json.loads(proc.stdout)
+    assert payload["status"] in ("error", "not_found"), f"got {payload}"
+    # The resolve envelope names the `jrag search` escape hatch — the exact
+    # phrase, not just the word "search" (which "research" would satisfy).
+    assert "jrag search" in payload.get("message", ""), (
+        f"expected resolve diagnostics (search pointer) in message, got {payload.get('message')!r}"
+    )
+    assert "file not found" not in payload.get("message", ""), (
+        "identifier-like miss must NOT use the path-flavored file-not-found error"
+    )
+
+
+def test_outline_fqn_ambiguous_surfaces_candidates(
+    corpus_root: Path, ladybug_db_path: Path
+) -> None:
+    """outline on an ambiguous identifier returns the candidate list, no silent pick (#475 review).
+
+    The resolve-first contract: a "many" result surfaces candidates so the
+    agent disambiguates. "requestAssignment" matches the port method AND its
+    implementation on this fixture (same simple name across types) — outline
+    must render the ambiguous envelope with both, never auto-pick one file.
+    """
+    env = _env_for(corpus_root, ladybug_db_path)
+    proc = _run_jrag(
+        ["outline", "requestAssignment", "--format", "json"],
+        env=env,
+    )
+    assert proc.returncode == 2, (
+        f"ambiguous identifier should exit 2 (outline's file-command contract), "
+        f"got rc={proc.returncode}\nstdout={proc.stdout}"
+    )
+    payload = json.loads(proc.stdout)
+    assert payload["status"] == "ambiguous", (
+        f"expected ambiguous envelope, got:\n{payload}"
+    )
+    candidates = payload.get("candidates") or []
+    assert len(candidates) >= 2, f"expected >=2 candidates, got {candidates}"
+    # Both the port and the implementation must be offered (no silent pick).
+    fqns = sorted(str(c.get("fqn") or "") for c in candidates)
+    assert any("ChatAssignmentPort#requestAssignment" in f for f in fqns), fqns
+    assert any("ConfigurableChatAssignment#requestAssignment" in f for f in fqns), fqns
 
 
 # ----- Test 11: imports resolves graph nodes -----

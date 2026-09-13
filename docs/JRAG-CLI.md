@@ -476,7 +476,7 @@ jrag find ChatService                 # exact name / FQN lookup (symbols only)
 jrag find --role CONTROLLER           # filter mode (structured NodeFilter flags)
 jrag find --framework spring_mvc --capability HTTP_CLIENT
 jrag inspect ChatService              # full node record + edge summary
-jrag outline src/main/.../Foo.java    # symbols declared in a file
+jrag outline src/main/.../Foo.java    # symbols declared in a file (FQN also accepted)
 jrag imports src/main/.../Foo.java    # imports resolved to graph nodes
 ```
 
@@ -513,7 +513,9 @@ jrag overrides Impl#run()                     # methods this overrides (dispatch
 jrag overridden-by Iface#run()                # methods overriding this (dispatch DOWN)
 jrag impact PaymentGateway                    # fleet-wide blast radius (reverse closure)
 jrag decompose ChatIngressController#assign   # role-waterfall flow from an entrypoint
-jrag flow /chat/assign                        # request flow through a route
+jrag flow /chat/assign                        # request flow through a route (or topic)
+jrag flow com.example.Svc#handle(Request)     # forward CALLS trace from a method
+jrag flow com.example.Svc                     # class/type FQN: all its methods + constructors
 jrag connection chat-core                     # cross-service connections (inbound/outbound)
 ```
 

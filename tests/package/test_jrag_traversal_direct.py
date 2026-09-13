@@ -24,9 +24,15 @@ Tests (bank-chat fixture):
 15. test_flow_outbound_intra_service_on_fixture
 16. test_flow_follows_kafka_topic_on_fixture
 17. test_flow_depth_flag_and_max_hops_alias
-18. test_callers_topic_disambiguates_with_kind
-19. test_traversal_resolve_ambiguous_stops
-20. test_traversal_rejects_offset
+18. test_flow_accepts_method_fqn_root            (issue #474)
+19. test_flow_accepts_class_fqn_root             (issue #474)
+20. test_flow_file_symbol_root_is_rejected       (issue #474)
+21. test_flow_route_resolution_unchanged         (issue #474)
+22. test_flow_route_ambiguous_propagates         (issue #474 review)
+23. test_callers_topic_disambiguates_with_kind
+24. test_traversal_resolve_ambiguous_stops
+25. test_traversal_rejects_offset
+26. test_invalid_render_flag_value_clean_envelope (issue #473)
 """
 from __future__ import annotations
 
@@ -764,6 +770,197 @@ def test_flow_depth_flag_and_max_hops_alias(
     )
 
 
+# ----- Tests 18-21: flow accepts Symbol roots (issue #474) -----
+
+_SVC_TYPE = "com.bank.chat.assign.service.ChatManagementService"
+
+
+def test_flow_accepts_method_fqn_root(
+    corpus_root: Path, ladybug_db_path: Path
+) -> None:
+    """flow resolves a method-level FQN and traces forward CALLS from it (#474).
+
+    Regression: ``flow_payload`` resolved with ``hint_kind='route'`` only, so a
+    method FQN — indexed and visible via ``outline``/``callees`` — returned
+    ``not_found`` even though ``callees`` resolved the very same FQN fine. The
+    fix retries a route miss as a Symbol and walks CALLS breadth-first
+    (``trace_symbol_flow``); each edge carries ``hops`` = the minimum BFS
+    distance from the entry method.
+    """
+    env = _env_for(corpus_root, ladybug_db_path)
+    proc = _run_jrag(
+        ["flow", _SVC_ASSIGN, "--limit", "100", "--format", "json"], env=env
+    )
+    assert proc.returncode == 0, (
+        f"flow on method FQN failed: rc={proc.returncode}\nstdout={proc.stdout}\nstderr={proc.stderr}"
+    )
+    payload = json.loads(proc.stdout)
+    assert payload["status"] == "ok", f"expected ok, got {payload}"
+    assert payload.get("root"), "expected root id (the method Symbol)"
+    root_node = payload["nodes"][payload["root"]]
+    assert root_node.get("kind") == "symbol", f"expected symbol root, got {root_node}"
+    assert root_node.get("symbol_kind") == "method", f"expected method, got {root_node}"
+
+    edges = payload.get("edges", [])
+    assert edges, "expected a non-empty forward CALLS trace from the method"
+    assert all(e.get("edge_type") == "CALLS" for e in edges), f"non-CALLS edge: {edges}"
+    hops = {e.get("hops") for e in edges}
+    assert 1 in hops, f"expected direct callees (hops=1), got hop values {hops}"
+    assert all(isinstance(e.get("hops"), int) and e["hops"] >= 1 for e in edges), (
+        f"every edge must carry hops>=1, got {edges}"
+    )
+    # Every edge target must be a keyed node (no phantom edges).
+    for e in edges:
+        target = e.get("target") or e.get("other_id")
+        assert target in payload["nodes"], f"edge target {target!r} missing from nodes"
+
+    # --depth 1 keeps only direct callees and is strictly smaller than the
+    # default depth-5 walk on this fixture (the method's callees call on).
+    proc1 = _run_jrag(
+        ["flow", _SVC_ASSIGN, "--depth", "1", "--limit", "100", "--format", "json"],
+        env=env,
+    )
+    assert proc1.returncode == 0, f"flow --depth 1 failed: {proc1.stderr}"
+    shallow = json.loads(proc1.stdout)
+    assert {e.get("hops") for e in shallow.get("edges", [])} == {1}, (
+        f"depth 1 must keep only hop-1 edges, got {shallow.get('edges')}"
+    )
+    assert len(shallow["edges"]) < len(edges), (
+        "--depth should change the method-rooted traversal size too"
+    )
+
+    # --limit truncates keeping the SHALLOWEST edges (BFS appends in hop
+    # order) and flags truncated — same truncation contract as the route path.
+    proc_lim = _run_jrag(
+        ["flow", _SVC_ASSIGN, "--limit", "2", "--format", "json"], env=env
+    )
+    assert proc_lim.returncode == 0, f"flow --limit 2 failed: {proc_lim.stderr}"
+    limited = json.loads(proc_lim.stdout)
+    assert limited.get("truncated") is True, f"expected truncated=true, got {limited}"
+    assert len(limited.get("edges", [])) == 2
+    assert all(e.get("hops") == 1 for e in limited["edges"]), (
+        f"--limit must keep the shallowest (hop-1) edges, got {limited['edges']}"
+    )
+
+
+def test_flow_accepts_class_fqn_root(
+    corpus_root: Path, ladybug_db_path: Path
+) -> None:
+    """flow on a class FQN expands to the declared methods and warns (#474).
+
+    A type Symbol emits no CALLS edges of its own, so the class root is
+    expanded to its DECLARES members (method/constructor) — the type's entry
+    points. The warning names the expansion so the payload doesn't silently
+    map to something other than the resolved node.
+    """
+    env = _env_for(corpus_root, ladybug_db_path)
+    proc = _run_jrag(
+        ["flow", _SVC_TYPE, "--limit", "100", "--format", "json"], env=env
+    )
+    assert proc.returncode == 0, (
+        f"flow on class FQN failed: rc={proc.returncode}\nstdout={proc.stdout}\nstderr={proc.stderr}"
+    )
+    payload = json.loads(proc.stdout)
+    assert payload["status"] == "ok", f"expected ok, got {payload}"
+    root_node = payload["nodes"][payload["root"]]
+    assert root_node.get("symbol_kind") == "class", f"expected class root, got {root_node}"
+    # The expansion warning is part of the contract.
+    assert any("expanded to" in w and "members" in w for w in payload.get("warnings", [])), (
+        f"expected class-expansion warning, got {payload.get('warnings')}"
+    )
+    edges = payload.get("edges", [])
+    assert edges, "expected non-empty trace from the class's methods"
+    # Strictly wider than the single-method root at the same limit: the class
+    # has 4 members (constructor + assign/closeChat/transfer on this fixture).
+    proc_m = _run_jrag(
+        ["flow", _SVC_ASSIGN, "--limit", "100", "--format", "json"], env=env
+    )
+    method_payload = json.loads(proc_m.stdout)
+    assert len(edges) > len(method_payload.get("edges", [])), (
+        "class root (all members) must reach strictly more than one member alone"
+    )
+
+
+def test_flow_file_symbol_root_is_rejected(
+    corpus_root: Path, ladybug_db_path: Path
+) -> None:
+    """flow on a file Symbol is a clean error pointing at outline (#474).
+
+    File Symbols resolve by exact fqn (their fqn IS the path), but declare no
+    CALLS edges — flowing from one would be a silent empty success (reads as
+    'flows nowhere': a wrong answer). The guard names the right tool.
+    """
+    env = _env_for(corpus_root, ladybug_db_path)
+    proc = _run_jrag(
+        [
+            "flow",
+            "chat-assign/src/main/java/com/bank/chat/assign/integration/ChatCoreFeignClient.java",
+            "--format",
+            "json",
+        ],
+        env=env,
+    )
+    assert proc.returncode == 2, (
+        f"file-symbol root should error with rc=2, got rc={proc.returncode}\nstdout={proc.stdout}"
+    )
+    payload = json.loads(proc.stdout)
+    assert payload["status"] == "error", f"expected error, got {payload}"
+    assert "outline" in payload.get("message", ""), (
+        f"expected the error to point at `outline`, got {payload.get('message')!r}"
+    )
+
+
+def test_flow_route_resolution_unchanged(
+    corpus_root: Path, ladybug_db_path: Path
+) -> None:
+    """The Symbol fallback did not perturb route/topic resolution (#474 guard).
+
+    Route resolution stays FIRST (hint_kind='route'); only a route miss retries
+    as a Symbol. Route path and Kafka topic inputs must keep resolving to Route
+    roots, and a leading-/ miss must keep its not_found envelope (rc 0).
+    """
+    env = _env_for(corpus_root, ladybug_db_path)
+    for query, desc in (("/chat/assign", "route path"), ("banking.chat.incoming", "kafka topic")):
+        proc = _run_jrag(["flow", query, "--format", "json"], env=env)
+        assert proc.returncode == 0, f"flow {desc} failed: {proc.stderr}"
+        payload = json.loads(proc.stdout)
+        assert payload["status"] == "ok", f"flow {desc}: {payload}"
+        root_node = payload["nodes"][payload["root"]]
+        assert root_node.get("kind") == "route", f"flow {desc}: expected route root, got {root_node}"
+    # A leading-/ miss keeps the ROUTE diagnostics envelope (not the symbol one).
+    proc = _run_jrag(["flow", "/no/such/route", "--format", "json"], env=env)
+    payload = json.loads(proc.stdout)
+    assert payload["status"] == "not_found", f"expected not_found, got {payload}"
+
+
+def test_flow_route_ambiguous_propagates(
+    corpus_root: Path, ladybug_db_path: Path
+) -> None:
+    """A route-ambiguous input surfaces the route candidates, NOT a symbol not_found (#474 review).
+
+    Regression found in review: the Symbol fallback initially retried on ANY
+    route miss — including ``ambiguous`` — so a topic prefix matching several
+    topics ("banking.chat." on this fixture) replaced the actionable candidate
+    list with a FALSE ``not_found`` ("not in project"). Only a route
+    ``not_found`` may retry as a Symbol; ambiguity must propagate so the
+    agent can disambiguate (resolve-first contract).
+    """
+    env = _env_for(corpus_root, ladybug_db_path)
+    proc = _run_jrag(["flow", "banking.chat.", "--format", "json"], env=env)
+    assert proc.returncode == 0, (
+        f"ambiguous resolve exits 0 (envelope-shape, not error); got rc={proc.returncode}\nstdout={proc.stdout}"
+    )
+    payload = json.loads(proc.stdout)
+    assert payload["status"] == "ambiguous", (
+        f"expected the route ambiguous envelope with candidates, got:\n{payload}"
+    )
+    candidates = payload.get("candidates") or []
+    assert len(candidates) >= 2, f"expected >=2 topic candidates, got {candidates}"
+    assert any("banking.chat." in str(c.get("fqn") or c.get("topic") or "") for c in candidates), (
+        f"expected the matched topics among candidates, got {candidates}"
+    )
+
+
 def test_callers_topic_disambiguates_with_kind(
     corpus_root: Path, ladybug_db_path: Path
 ) -> None:
@@ -851,6 +1048,63 @@ def test_traversal_rejects_offset() -> None:
         assert (
             "unrecognized arguments: --offset" in proc.stderr or "usage:" in proc.stderr
         ), f"{cmd}: expected usage error, got stderr={proc.stderr!r}"
+
+
+# ----- Test 25: invalid render-flag VALUES render a clean envelope (issue #473) -----
+
+
+def test_invalid_render_flag_value_clean_envelope() -> None:
+    """A bad --detail/--format value yields the usage-error envelope, not a crash (#473).
+
+    Regression: the usage-error path re-read the render flags from raw argv via
+    a choices-less pre-parser and rendered with them unvalidated — so the very
+    token that triggered the error (``--detail minimal``) crashed ``render``
+    with ValueError INSIDE the ``ArgumentError`` handler, outside every guard:
+    full traceback, exit 1. The clamp falls back to the parser's own choice
+    sets: JSON envelope on stdout, terse stderr line, exit 2. No index is
+    needed — argparse rejects argv before any graph load.
+    """
+    # --detail minimal + --format json: the envelope must still render as JSON
+    # (the surviving valid flag wins; the invalid one is clamped away).
+    proc = _run_jrag(
+        ["dependents", "SenderToKafka", "--detail", "minimal", "--format", "json"]
+    )
+    assert proc.returncode == 2, (
+        f"usage error must exit 2, got rc={proc.returncode}\nstderr={proc.stderr}"
+    )
+    payload = json.loads(proc.stdout)
+    assert payload["status"] == "error", f"expected error envelope, got {payload}"
+    assert "invalid choice" in payload.get("message", ""), (
+        f"expected 'invalid choice' in message, got {payload.get('message')!r}"
+    )
+    assert "dependents" in payload.get("message", ""), (
+        f"expected the subcommand prefix in message, got {payload.get('message')!r}"
+    )
+    assert "Traceback" not in proc.stderr, (
+        f"no Python traceback on a usage error, got:\n{proc.stderr}"
+    )
+
+    # --format xml alone: argparse rejects it; the error envelope renders in
+    # the clamped text format instead of crashing the renderer.
+    proc = _run_jrag(["dependents", "SenderToKafka", "--format", "xml"])
+    assert proc.returncode == 2, f"usage error must exit 2, got rc={proc.returncode}"
+    assert "invalid choice" in proc.stdout, (
+        f"expected 'invalid choice' on stdout, got {proc.stdout!r}"
+    )
+    assert "Traceback" not in proc.stderr, (
+        f"no Python traceback on a usage error, got:\n{proc.stderr}"
+    )
+
+    # The issue's literal repro shape: invalid --detail with NO --format — the
+    # text-mode clamp path (fmt falls back to text, not json).
+    proc = _run_jrag(["dependents", "SenderToKafka", "--detail", "minimal"])
+    assert proc.returncode == 2, f"usage error must exit 2, got rc={proc.returncode}"
+    assert "invalid choice" in proc.stdout, (
+        f"expected 'invalid choice' in the text envelope, got {proc.stdout!r}"
+    )
+    assert "Traceback" not in proc.stderr, (
+        f"no Python traceback on a usage error, got:\n{proc.stderr}"
+    )
 
 
 # ----- Test 18: inapplicable --service/--module/--limit surface warnings -----

@@ -493,6 +493,12 @@ def _format_edge_rows(edge: dict, nodes: dict[str, dict], *, detail: str = "norm
                 line += f"  conf={float(conf):.2f}"
             except (TypeError, ValueError):
                 pass
+        # Minimum BFS distance from the flow entry frontier — present only on
+        # method-rooted `jrag flow` edges (issue #474); carries the trace's
+        # depth structure in the flat root-relative edge list.
+        hops = edge.get("hops")
+        if isinstance(hops, int) and hops > 0:
+            line += f"  hop={hops}"
     if detail == "normal":
         mech = edge.get("mechanism")
         if mech not in ("", None):

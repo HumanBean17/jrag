@@ -1,6 +1,6 @@
 """Text-grep tests for the ``publish-pip`` skill runbook.
 
-``.claude/skills/publish-pip/SKILL.md`` is the maintainer's release runbook for
+``.agents/skills/publish-pip/SKILL.md`` is the maintainer's release runbook for
 this repo. It was rewritten from a purely-manual ``sed -i`` name-swap procedure
 to reflect the tag-triggered CI release pipeline:
 
@@ -27,7 +27,23 @@ import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-SKILL = REPO_ROOT / ".claude" / "skills" / "publish-pip" / "SKILL.md"
+
+
+def _skill_path() -> Path:
+    """Locate the publish-pip runbook (issue: rename fallout broke CI).
+
+    The ``claude -> agents`` rename (f51b3d4) moved the skill to
+    ``.agents/skills/publish-pip/``. A dev checkout may still carry a
+    ``.claude`` symlink to ``.agents`` (see .gitignore) — resolve the current
+    location first and fall back to the legacy path so both layouts work.
+    """
+    primary = REPO_ROOT / ".agents" / "skills" / "publish-pip" / "SKILL.md"
+    if primary.is_file():
+        return primary
+    return REPO_ROOT / ".claude" / "skills" / "publish-pip" / "SKILL.md"
+
+
+SKILL = _skill_path()
 
 
 def _text() -> str:

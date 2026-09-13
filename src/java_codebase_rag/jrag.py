@@ -320,6 +320,14 @@ class _EnvelopeArgumentParser(argparse.ArgumentParser):
         raise argparse.ArgumentError(None, message)
 
 
+#: Render-flag choice sets — the single source of truth for the argparse
+#: ``choices=`` on both ``_common_parser`` and ``_core_parser`` AND for the
+#: clamp :func:`main` applies to :func:`_preparse_render_flags` output (the
+#: pre-parser deliberately has no ``choices`` — it must never reject argv —
+#: so its output carries raw user input that the consumer must validate).
+_FORMAT_CHOICES = ("text", "json")
+_DETAIL_CHOICES = ("brief", "normal", "full")
+
 _PREPARSE_PARSER = argparse.ArgumentParser(add_help=False)
 _PREPARSE_PARSER.add_argument("--format", default=None)
 _PREPARSE_PARSER.add_argument("--detail", default=None)
@@ -459,13 +467,13 @@ def build_parser() -> argparse.ArgumentParser:
         )
         common.add_argument(
             "--format",
-            choices=("text", "json"),
+            choices=_FORMAT_CHOICES,
             default="text",
             help=tr("HELP_FLAG_FORMAT"),
         )
         common.add_argument(
             "--detail",
-            choices=("brief", "normal", "full"),
+            choices=_DETAIL_CHOICES,
             default="normal",
             help=(
                 tr("HELP_FLAG_DETAIL")
@@ -520,13 +528,13 @@ def build_parser() -> argparse.ArgumentParser:
         )
         core.add_argument(
             "--format",
-            choices=("text", "json"),
+            choices=_FORMAT_CHOICES,
             default="text",
             help=tr("HELP_FLAG_FORMAT"),
         )
         core.add_argument(
             "--detail",
-            choices=("brief", "normal", "full"),
+            choices=_DETAIL_CHOICES,
             default="normal",
             help=(
                 tr("HELP_FLAG_DETAIL")
@@ -3560,7 +3568,55 @@ def _cmd_outline(args: argparse.Namespace) -> int:
     # POSIX-relative paths from source root, so once the path resolves on disk
     # we re-derive that relative form for the exact-match query.
     file_path = _resolve_source_path(cfg, args.file)
-    if file_path is None:
+    filename: str | None = None
+    if file_path is not None:
+        filename = args.file
+        src_root = Path(cfg.source_root) if cfg.source_root else None
+        if src_root is not None:
+            try:
+                filename = file_path.resolve().relative_to(src_root.resolve()).as_posix()
+            except ValueError:
+                # File lives outside source_root (e.g. an absolute path elsewhere);
+                # fall back to the user's literal input — the graph may still match.
+                filename = args.file
+    else:
+        # FQN fallback (issue #475): <file> may be a class/method FQN (e.g.
+        # com.example.Foo or com.example.Foo#bar(Request)). Resolve it as a
+        # Symbol and outline the file that declares it; the resolved
+        # file_location is "<graph-relative filename>:<start_line>", and the
+        # graph filename is exactly the key find_symbols_in_file_range
+        # matches. On a resolve miss, path-like inputs keep the familiar
+        # file-not-found error while identifier-like inputs surface the
+        # resolve envelope (closest symbols / `jrag search` pointer) — more
+        # actionable for a typo'd FQN.
+        from java_codebase_rag.jrag_envelope import resolve_query
+
+        _node, renv = resolve_query(
+            args.file,
+            hint_kind="symbol",
+            java_kind=None,
+            role=None,
+            fqn_contains=None,
+            cfg=cfg,
+            graph=graph,
+        )
+        if renv.status == "ok" and renv.file_location:
+            loc = renv.file_location
+            head, _, tail = loc.rpartition(":")
+            filename = head if tail.isdigit() else loc
+        elif "/" in args.file or args.file.endswith((".java", ".kt")):
+            pass  # path-like input: keep the file-not-found error below
+        else:
+            # Deliberate rc-2 divergence from the traversal commands (which
+            # emit a not_found/ambiguous envelope with rc 0): outline is a
+            # file command first — its own file-not-found path already exits
+            # 2, and an unresolvable <file> argument is the same failure
+            # shape for script callers.
+            print(render(renv, fmt=args.format, detail=args.detail))
+            return 2
+    # ok-without-file_location (resolve hit but the graph row carried no
+    # filename — not reachable with a well-formed index) also lands here.
+    if not filename:
         env = Envelope(
             status="error",
             message=tr(
@@ -3570,15 +3626,6 @@ def _cmd_outline(args: argparse.Namespace) -> int:
         )
         print(render(env, fmt=args.format, detail=args.detail))
         return 2
-    filename = args.file
-    src_root = Path(cfg.source_root) if cfg.source_root else None
-    if src_root is not None:
-        try:
-            filename = file_path.resolve().relative_to(src_root.resolve()).as_posix()
-        except ValueError:
-            # File lives outside source_root (e.g. an absolute path elsewhere);
-            # fall back to the user's literal input — the graph may still match.
-            filename = args.file
     try:
         hits = find_symbols_in_file_range(
             graph,
@@ -4494,8 +4541,14 @@ def main(argv: list[str] | None = None) -> int:
         from java_codebase_rag.jrag_render import render
 
         fmt, detail, leftover = _preparse_render_flags(raw)
-        fmt = fmt or "text"
-        detail = detail or "normal"
+        # The pre-parser has no ``choices`` (it must accept any argv), so its
+        # values are raw user input — including the very token that triggered
+        # this handler (e.g. ``--detail minimal``). Rendering with it would
+        # raise ValueError inside this except block — outside the top-level
+        # guard — and crash with a traceback (issue #473). Clamp to the same
+        # choice sets the real parser enforces.
+        fmt = fmt if fmt in _FORMAT_CHOICES else "text"
+        detail = detail if detail in _DETAIL_CHOICES else "normal"
         # The subcommand is the first non-dash token in the leftover (flag
         # values already consumed by the pre-parser), so we don't mis-prefix
         # with a value like ``json`` from ``--format json``.

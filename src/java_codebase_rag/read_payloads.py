@@ -438,22 +438,127 @@ def callees_payload(args: argparse.Namespace, cfg, graph) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+def _resolve_flow_root(args: argparse.Namespace, *, cfg, graph):
+    """Resolve the flow entry point: Route first, Symbol (method/class FQN) fallback.
+
+    ``flow`` historically resolved with ``hint_kind='route'`` only, so
+    method-level FQNs — indexed and visible via ``outline``/``callees`` — were
+    rejected as unresolvable (issue #474). Route resolution stays FIRST so
+    route-path and topic behavior is unchanged; only a route ``not_found``
+    retries as a Symbol. An ``ambiguous`` route result propagates immediately:
+    swallowing it would replace the actionable candidate list (e.g. a topic
+    prefix matching several topics) with a false ``not_found`` "not in
+    project" diagnosis. On double miss the ROUTE envelope wins: its absence
+    diagnostics (closest routes/topics/symbols) describe the identifier at
+    least as well as the symbol-side miss for every query shape.
+    """
+    try:
+        return _resolve_traversal(args, cfg=cfg, graph=graph, hint_kind="route", apply_scope=False)
+    except PayloadError as route_miss:
+        if route_miss.env.status != "not_found":
+            raise
+        try:
+            return _resolve_traversal(args, cfg=cfg, graph=graph, hint_kind="symbol", apply_scope=False)
+        except PayloadError as symbol_miss:
+            raise route_miss from None
+
+
+#: Symbol kinds that declare members rather than emit CALLS edges themselves.
+#: A flow root of one of these kinds is expanded to its declared
+#: method/constructor members (see ``_flow_symbol_payload``).
+_FLOW_TYPE_KINDS = ("class", "interface", "enum", "record", "annotation")
+
+
+def _flow_symbol_payload(args: argparse.Namespace, node, *, cfg, graph) -> dict[str, Any]:
+    """Forward CALLS trace from a method/class Symbol root (issue #474).
+
+    Method/constructor roots walk CALLS directly via
+    ``trace_symbol_flow``. Type roots (class etc.) first expand to their
+    declared method/constructor members — the type's entry points — with a
+    warning naming the expansion, since the traversal no longer maps 1:1 to
+    the resolved node. Edges carry ``hops`` (minimum BFS distance from the
+    entry frontier) so the flat root-relative edge list still conveys the
+    trace's depth structure.
+    """
+    warnings = _warn_unapplied_scope(
+        args,
+        reason="trace_symbol_flow carries no microservice predicate; intra-codebase is an index-time data property",
+    )
+    if (getattr(node, "symbol_kind", None) or "") == "file":
+        # A file Symbol declares no CALLS edges: flowing from it would be a
+        # silent empty success (reads as "flows nowhere" — a wrong answer).
+        raise PayloadError(
+            Envelope(
+                status="error",
+                message=(
+                    f"flow requires a method/class FQN or a route path; {args.query!r} "
+                    "resolved to a file Symbol — use `jrag outline <file>` for its contents"
+                ),
+            ),
+            2,
+        )
+    entry_ids = [node.id]
+    if (getattr(node, "symbol_kind", None) or "") in _FLOW_TYPE_KINDS:
+        members = graph.declared_flow_members(node.id)
+        entry_ids = [str(m.get("id")) for m in members if m.get("id")]
+        warnings.append(
+            f"class root expanded to {len(entry_ids)} declared method/constructor "
+            "members (DECLARES); hops count from the members, not the class"
+        )
+
+    limit = _clamped_limit(args)
+    max_hops = max(1, min(8, getattr(args, "depth", 5)))
+    flow_data = graph.trace_symbol_flow(entry_ids, max_hops=max_hops)
+
+    root_id = node.id
+    nodes: dict[str, dict] = {root_id: _noderef_to_node_dict(node)}
+    edges: list[dict] = []
+    for row in flow_data.get("outbound", []):
+        next_id = str(row.get("next_symbol_id") or "")
+        if not next_id:
+            continue
+        nodes[next_id] = {
+            "id": next_id,
+            "kind": "symbol",
+            "fqn": str(row.get("next_fqn") or ""),
+            "microservice": str(row.get("next_microservice") or ""),
+        }
+        edges.append(
+            {"other_id": next_id, "edge_type": "CALLS", "hops": int(row.get("hops") or 0)}
+        )
+
+    truncated = len(edges) > limit
+    if truncated:
+        edges = edges[:limit]
+    return {
+        "root_id": root_id,
+        "nodes": nodes,
+        "edges": edges,
+        "noun": "flow",
+        "warnings": warnings,
+        "truncated": truncated,
+        "is_external_entrypoint": False,
+    }
+
+
 def flow_payload(args: argparse.Namespace, cfg, graph) -> dict[str, Any]:
     """Assemble the traversal payload for ``jrag flow``.
 
     Route root -> ``trace_request_flow`` plus the inbound/outbound merge +
     client-side truncation, transcribed verbatim from ``_cmd_flow``.
+    Symbol root (method/class FQN, issue #474) -> ``_flow_symbol_payload``.
     """
-    node = _resolve_traversal(
-        args, cfg=cfg, graph=graph, hint_kind="route", apply_scope=False
-    )
+    node = _resolve_flow_root(args, cfg=cfg, graph=graph)
+
+    if node.kind == "symbol":
+        return _flow_symbol_payload(args, node, cfg=cfg, graph=graph)
 
     _kind_guard(
         node,
         args=args,
-        expected="flow requires a Route root",
+        expected="flow requires a Route path or a Symbol (method/class FQN) root",
         kinds=("route",),
-        hint="Pass a route path (e.g. /chat/assign).",
+        hint="Pass a route path (e.g. /chat/assign), a Kafka topic, or a method FQN (e.g. com.example.Foo#bar(Request)).",
     )
 
     warnings = _warn_unapplied_scope(

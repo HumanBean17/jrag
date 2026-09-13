@@ -46,8 +46,8 @@ You drive **`jrag` shell commands**, not the MCP tools (`search`/`find`/`describ
 | Overriding / overridden methods? | `jrag overrides <method>` (UP) / `jrag overridden-by <method>` | — |
 | Who injects / depends on T? | `jrag dependencies <T>` / `jrag dependents <T>` | — |
 | Blast-radius of changing X? | `jrag impact <X>` (bounded fan-in) | `Grep` fallback |
-| Trace request flow A→B | `jrag flow <route-A>` | `connection <microservice>` (service's cross-service seams) |
-| File outline / imports | `jrag outline <file>` / `jrag imports <file>` | `inspect <row>` |
+| Trace request flow A→B | `jrag flow <route-A \| method-FQN>` | `connection <microservice>` (service's cross-service seams) |
+| File outline / imports | `jrag outline <file \| FQN>` / `jrag imports <file>` | `inspect <row>` |
 | Find files by name/path | `Glob` | `Read` |
 | "Explain service S" | `jrag overview <service>` | `http-routes`/`http-clients`/`producers` |
 | "Explain route / topic" | `jrag overview <subject>` | `flow` |
@@ -65,7 +65,7 @@ You drive **`jrag` shell commands**, not the MCP tools (`search`/`find`/`describ
 - **"Explain feature X":** `jrag search "X"` → pick 1–3 hits → `jrag inspect <hit>` → targeted traversal (`callees`/`implementations`/`dependents`) → stop when answered.
 - **"Where is X used?":** `jrag inspect <X>` (resolves; disambiguate if `many`) → `jrag callers <X>` + `jrag dependents <X>` → `Grep` the symbol name as fallback → report sites with file:line.
 - **"Find all Y":** structural → `jrag find --role <ROLE> [--service <S>]`; textual → `Grep`; broad → `Glob`+`Grep`. Summarize, don't dump.
-- **"Trace flow A→B":** `jrag flow <route-A>` → `jrag connection <microservice>` (cross-service seams) → `Grep` the gaps → report with file:line.
+- **"Trace flow A→B":** `jrag flow <route-A \| method-FQN>` → `jrag connection <microservice>` (cross-service seams) → `Grep` the gaps → report with file:line.
 - **"Orient in service S":** `jrag overview <S>` → `jrag conventions --service <S>` → `jrag map --service <S>` → `jrag http-routes --service <S>`.
 
 ## Recovery Playbook
@@ -103,7 +103,7 @@ The Decision Framework above tells you *which* command; reach for `--help` only 
 
 **Output.** Default is compact text; `--format json` emits `{status, nodes, edges, candidates, truncated, agent_next_actions, file_location}` (empty fields dropped; `file_location` is a `filename:line` string; `agent_next_actions` suggests ≤5 next commands). `truncated` pages via `--limit` / `--offset` (`find` / `search` only). Output-shaping flags (every query / listing / traversal command — not `status` / `microservices` / `vocab-index`, which reject them): `--count` prints just the result count (bare int in text; `{"status","count"}` in json), `--exists` prints `true`/`false` (`{"status","exists"}` in json) and exits 0 on a hit / 2 on a miss (scriptable existence gate — `find X --exists`, `inspect X --exists`), `--fields fqn,role,…` projects each node to a comma-separated field allowlist (overrides `--detail`; ignored with `--count`/`--exists`; primarily a `--format json` lever).
 
-**Edge semantics `--help` doesn't spell out.** `callers` / `callees` = `CALLS` in/out (on a controller/entry-point type, `callers` also lists the routes its methods `EXPOSE`). `impact` = bounded fan-in over `INJECTS` / `IMPLEMENTS` / `EXTENDS` (default depth 2; raise with `--depth`). `flow <route>` follows `EXPOSES` → `HTTP_CALLS` / `ASYNC_CALLS` → `CALLS`. `connection <microservice>` = inbound/outbound cross-service seams (its positional is a literal service name, not a query). Per-command edge mappings and the rest of the flag surface live in each command's `--help`.
+**Edge semantics `--help` doesn't spell out.** `callers` / `callees` = `CALLS` in/out (on a controller/entry-point type, `callers` also lists the routes its methods `EXPOSE`). `impact` = bounded fan-in over `INJECTS` / `IMPLEMENTS` / `EXTENDS` (default depth 2; raise with `--depth`). `flow <route>` follows `EXPOSES` → `HTTP_CALLS` / `ASYNC_CALLS` → `CALLS`; `flow <Class#method>` is the same forward `CALLS` trace from a method (a class/type FQN expands to its methods + constructors; edges carry `hop=` in text, `hops` in JSON). `connection <microservice>` = inbound/outbound cross-service seams (its positional is a literal service name, not a query). Per-command edge mappings and the rest of the flag surface live in each command's `--help`.
 
 **Node id prefixes (from prior results):** `sym:` (Symbol), `route:`/`r:` (Route), `client:`/`c:` (Client), `producer:`/`p:` (Producer). **Symbol FQN:** `<package>.<Type>[.<NestedType>]#<methodName>(<SimpleType1>,…)` — generics erased, no spaces after commas, no-arg `()`, constructor `#<init>(...)`.
 

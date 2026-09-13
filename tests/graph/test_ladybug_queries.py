@@ -614,6 +614,72 @@ def test_trace_request_flow_inbound_includes_caller_node_id(ladybug_db_path_cros
     assert any(row.get("caller_node_id") for row in inbound)
 
 
+# ---------------- trace_symbol_flow / declared_flow_members (issue #474) ----------------
+
+# Method-level FQNs MUST include parameter types in parens for resolve to match.
+_FLOW_METHOD_FQN = "com.bank.chat.assign.service.ChatManagementService#assign(AssignmentRequest)"
+_FLOW_TYPE_FQN = "com.bank.chat.assign.service.ChatManagementService"
+
+
+def _flow_symbol_id(g: LadybugGraph, fqn: str) -> str:
+    from java_codebase_rag.analysis.resolve_service import resolve_v2
+
+    out = resolve_v2(fqn, hint_kind="symbol", graph=g)
+    assert out.status == "one", f"expected exactly one resolve for {fqn!r}, got {out.status!r}"
+    assert out.node is not None
+    return out.node.id
+
+
+def test_declared_flow_members_lists_executables(ladybug_graph) -> None:
+    """declared_flow_members returns the type's method/constructor members.
+
+    The class root of a method-level `flow` expands to these (issue #474):
+    DECLARES members filtered to method/constructor — nested types declare no
+    CALLS edges of their own and must not seed the frontier.
+    """
+    members = ladybug_graph.declared_flow_members(
+        _flow_symbol_id(ladybug_graph, _FLOW_TYPE_FQN)
+    )
+    assert members, "expected the fixture class to declare members"
+    fqns = [str(m.get("fqn") or "") for m in members]
+    assert all("#" in fqn for fqn in fqns), f"non-member rows leaked in: {fqns}"
+    # The fixture class has a constructor + assign/closeChat/transfer methods
+    # (loose >= 3 per the file's no-fixture-pinning rule).
+    assert len(members) >= 3, f"expected >=3 executable members, got {fqns}"
+
+
+def test_trace_symbol_flow_bfs_min_hops(ladybug_graph) -> None:
+    """trace_symbol_flow walks CALLS breadth-first; hops is the MINIMUM distance.
+
+    A node first reached at hop N keeps hops=N (cycles and converging paths
+    must not deepen it), the entry id itself is never reported as reached,
+    and max_hops bounds the walk (the hop-1-only shallow run is a strict
+    subset of the deeper run).
+    """
+    sid = _flow_symbol_id(ladybug_graph, _FLOW_METHOD_FQN)
+    flow = ladybug_graph.trace_symbol_flow([sid], max_hops=5)
+    assert flow["max_hops"] == 5
+    rows = flow["outbound"]
+    assert rows, "expected the fixture method to have in-graph callees"
+    hops = [int(r["hops"]) for r in rows]
+    assert min(hops) == 1, f"direct callees must be hop 1, got {hops}"
+    assert max(hops) <= 5
+    # Deduplicated by id; entry never self-reported (cycle safety).
+    ids = [str(r["next_symbol_id"]) for r in rows]
+    assert len(set(ids)) == len(ids), "a reached symbol was reported twice"
+    assert sid not in set(ids)
+
+    shallow = ladybug_graph.trace_symbol_flow([sid], max_hops=1)
+    assert {int(r["hops"]) for r in shallow["outbound"]} == {1}
+    assert len(shallow["outbound"]) < len(rows), (
+        "depth 1 (direct callees only) must be strictly smaller than depth 5"
+    )
+
+    # Empty frontier: no queries, no rows.
+    empty = ladybug_graph.trace_symbol_flow([], max_hops=3)
+    assert empty["outbound"] == []
+
+
 def test_parse_ladybug_json_handles_colon_in_values() -> None:
     """_parse_ladybug_json quotes only key positions, so a value containing a
     word-colon run (e.g. a URL) is not corrupted (issue #359). The prior regex

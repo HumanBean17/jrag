@@ -74,3 +74,34 @@ def test_enum_flags_reject_invalid_values(argv) -> None:
     # build_parser's error() raises argparse.ArgumentError (not SystemExit).
     with pytest.raises(argparse.ArgumentError):
         build_parser().parse_args(argv)
+
+
+def test_render_flag_choices_match_render_layer() -> None:
+    """_FORMAT_CHOICES/_DETAIL_CHOICES can't drift from the render layer (issue #473).
+
+    jrag.py owns the argparse ``choices=`` for ``--format``/``--detail`` and the
+    clamp ``main`` applies to pre-parsed usage-error values, while
+    ``jrag_envelope.project_envelope`` independently validates ``detail`` (it
+    hardcodes its own set — it cannot import from jrag.py without a cycle).
+    If the two sides drift, every invalid-value usage error regresses to the
+    exact crash #473 fixed (render raising ValueError inside the
+    ``ArgumentError`` handler). Cross-check both directions: every accepted
+    choice must project cleanly, and an out-of-set value must raise.
+    """
+    from java_codebase_rag.jrag import _DETAIL_CHOICES, _FORMAT_CHOICES
+    from java_codebase_rag.jrag_envelope import Envelope, project_envelope
+    from java_codebase_rag.jrag_render import render
+
+    env = Envelope(status="error", message="probe")
+    for detail in _DETAIL_CHOICES:
+        assert project_envelope(env, detail) is not None
+        assert render(env, fmt="text", detail=detail)
+    for fmt in _FORMAT_CHOICES:
+        assert render(env, fmt=fmt, detail="normal")
+
+    with pytest.raises(ValueError):
+        project_envelope(env, "minimal")
+    with pytest.raises(ValueError):
+        # Any value outside _DETAIL_CHOICES must be rejected by BOTH sides —
+        # spot-check one more to pin the ValueError contract.
+        project_envelope(env, "ultra")
