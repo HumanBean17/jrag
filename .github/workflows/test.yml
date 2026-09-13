@@ -100,3 +100,24 @@ jobs:
       - name: Skip tests (docs-only)
         if: steps.changes.outputs.code != 'true'
         run: echo "Docs-only change; pytest skipped."
+
+  # Compile guard for the jrag-annotations Maven module (brownfield annotation
+  # definitions distributed as io.github.humanbean17:jrag-annotations). Plain
+  # `mvn verify` — no release profile, no credentials, no signing. The _meta
+  # consistency tests (pytest) bind the module's vocabulary to the parser;
+  # this job is what catches Java-level breakage (syntax, javadoc, packaging)
+  # at PR time instead of release day.
+  annotations-build:
+    name: annotations-build (mvn verify)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: maven
+      - name: Build annotations module
+        run: mvn -B -f annotations/pom.xml verify

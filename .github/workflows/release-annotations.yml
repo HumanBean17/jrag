@@ -1,0 +1,136 @@
+name: release-annotations
+
+# Manual-dispatch Maven Central publish for io.github.humanbean17:jrag-annotations.
+#
+# This channel is INDEPENDENTLY VERSIONED — it is not part of the dual-PyPI
+# same-version sync rule (see release.yml for that train). Dispatch it only
+# when the annotation surface changed: the tripwire is the _meta consistency
+# test (tests/_meta/test_annotations_module_consistency.py) failing after a
+# vocabulary change — that means a minor version bump is due here. Tags use
+# the `annotations-vX.Y.Z` namespace, disjoint from the Python `vX.Y.Z` tags.
+#
+# Versions on Maven Central are IMMUTABLE: a published version can never be
+# re-uploaded. The idempotency guard below is best-effort (Central's search
+# index can lag); the Portal itself is the hard stop.
+#
+# Interrupted publish (uploaded but stranded before Portal release): resume
+# from the Portal's held state in the Central Portal UI — never re-dispatch
+# the same version.
+#
+# ── One-time setup runbook ──────────────────────────────────────────────────
+# 1. Namespace: verify `io.github.humanbean17` on the Sonatype Central Portal
+#    (portal.central.sonatype.com) — verifiable against the public GitHub
+#    account that owns this repository.
+# 2. GPG: generate a signing key (`gpg --full-generate-key`), publish its
+#    fingerprint to a keyserver (`gpg --keyserver keyserver.ubuntu.com
+#    --send-keys <fingerprint>`), export the private key armored.
+# 3. Secrets (GitHub → Settings → Environments → `release`):
+#    CENTRAL_PORTAL_USERNAME / CENTRAL_PORTAL_TOKEN — a Central Portal
+#      user token (portal → Account → Generate User Token).
+#    GPG_PRIVATE_KEY — the armored private key (`gpg --export-secret-keys
+#      --armor <keyid>`).
+#    GPG_PASSPHRASE — the key's passphrase.
+# ────────────────────────────────────────────────────────────────────────────
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish (X.Y.Z), e.g. 1.0.1"
+        required: true
+        type: string
+
+permissions:
+  contents: write # tag push + GitHub Release.
+
+concurrency:
+  group: release-annotations
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: publish (jrag-annotations → Maven Central)
+    runs-on: ubuntu-latest
+    environment: release # Central Portal token + GPG key live here.
+    steps:
+      # 1. Checkout the module sources.
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 2. Version-input guard: fail fast on anything but X.Y.Z.
+      - name: Validate version input
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::version must be X.Y.Z (got '$VERSION')"
+            exit 1
+          fi
+
+      # 3. Central idempotency guard (best-effort; Portal enforces the hard stop).
+      - name: Refuse if version already on Maven Central
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          RESP="$(curl -sfG "https://search.maven.org/solrsearch/select" --data-urlencode "q=g:io.github.humanbean17 AND a:jrag-annotations AND v:$VERSION")"
+          FOUND="$(printf '%s' "$RESP" | python3 -c 'import json,sys; print(json.load(sys.stdin)["response"]["numFound"])')"
+          if [ "$FOUND" != "0" ]; then
+            echo "::error::io.github.humanbean17:jrag-annotations:$VERSION already exists on Maven Central (versions are immutable)"
+            exit 1
+          fi
+
+      # 4. JDK + Maven cache.
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: maven
+
+      # 5. Central Portal credentials for the `central` publishing server id.
+      - name: Write Maven settings.xml
+        env:
+          CENTRAL_PORTAL_USERNAME: ${{ secrets.CENTRAL_PORTAL_USERNAME }}
+          CENTRAL_PORTAL_TOKEN: ${{ secrets.CENTRAL_PORTAL_TOKEN }}
+        run: |
+          mkdir -p "$HOME/.m2"
+          cat > "$HOME/.m2/settings.xml" <<EOF
+          <settings>
+            <servers>
+              <server>
+                <id>central</id>
+                <username>\${env.CENTRAL_PORTAL_USERNAME}</username>
+                <password>\${env.CENTRAL_PORTAL_TOKEN}</password>
+              </server>
+            </servers>
+          </settings>
+          EOF
+
+      # 6. GPG signing key.
+      - name: Import GPG key
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+
+      # 7. Build, sign, verify, publish (flatten resolves ${revision};
+      #    gpg.passphrase is the maven-gpg-plugin's default property).
+      - name: Build and publish
+        env:
+          VERSION: ${{ inputs.version }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: mvn -B -f annotations/pom.xml -P release -Drevision="$VERSION" -Dgpg.passphrase="$GPG_PASSPHRASE" clean verify deploy
+
+      # 8. Record: annotated tag in the annotations-v namespace + GitHub Release.
+      - name: Tag and GitHub Release
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          git config user.name "release-bot"
+          git config user.email "actions@github.com"
+          git tag -a "annotations-v${VERSION}" -m "jrag-annotations ${VERSION}"
+          git push origin "annotations-v${VERSION}"
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: annotations-v${{ inputs.version }}
+          generate_release_notes: true

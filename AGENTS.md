@@ -58,3 +58,13 @@ stranded). PyPI names are permanent and don't alias, so a single upload reaches
 only one project. Follow `.claude/skills/publish-pip/SKILL.md` end-to-end,
 including the dual-publish step — both projects must report the same version.
 
+### Annotations artifact (Maven Central) — separate channel
+
+`annotations/` publishes to Maven Central as
+`io.github.humanbean17:jrag-annotations` — a third, **independently
+versioned** channel, released via the manual-dispatch
+`.github/workflows/release-annotations.yml` (tag namespace `annotations-v*`).
+It is **not** part of the dual-PyPI sync rule: bump and release it only when
+the annotation surface changes. `tests/_meta/test_annotations_module_consistency.py`
+failing on vocabulary drift is the trigger that a release is due.
+

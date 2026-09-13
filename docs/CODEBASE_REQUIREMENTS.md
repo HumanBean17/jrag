@@ -217,8 +217,12 @@ Without changing `ast_java` tables, you can adjust how types get `role`
 and `capabilities`, register inbound routes, and register outbound
 clients/producers for a given repo via `.java-codebase-rag.yml` at the project
 root (`role_overrides:`, `route_overrides:`, `http_client_overrides:`,
-`async_producer_overrides:`) and/or by copying the in-source stubs from
-[`docs/CONFIGURATION.md`](./CONFIGURATION.md) into your sources:
+`async_producer_overrides:`) and/or the in-source annotations. Prefer the
+published compile-time dependency
+`io.github.humanbean17:jrag-annotations` (Maven Central; `provided` /
+`compileOnly` scope — see [`docs/CONFIGURATION.md`](./CONFIGURATION.md) §4.3);
+when adding a dependency isn't possible, copy the in-source stubs from
+`docs/CONFIGURATION.md` §4.3 into your sources instead:
 
 - `@CodebaseRole` / `@CodebaseCapability` / `@CodebaseCapabilities`
   (class-level role + capabilities) — see `docs/CONFIGURATION.md` §4.3.

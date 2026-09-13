@@ -35,6 +35,9 @@ htmlcov/
 # Local tool settings (may live under `.agents/` when `.claude` is a symlink)
 .agents/settings.local.json
 
+# Git worktrees (agent isolation; working copies, never committed)
+.agents/worktrees/
+
 # OS files
 .DS_Store
 
