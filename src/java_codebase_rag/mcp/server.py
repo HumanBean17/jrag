@@ -266,6 +266,10 @@ def _source_root_for_operator_config() -> Path | None:
 
 def _cocoindex_subprocess_env(project_root: Path) -> dict[str, str]:
     sub_env = os.environ.copy()
+    # MCP children stay English even when the operator exported the CLI
+    # language var globally (spec D5): scrub it so progress output relayed
+    # through MCP-triggered reprocess/indexing never localizes.
+    sub_env.pop("JAVA_CODEBASE_RAG_LANGUAGE", None)
     sub_env["JAVA_CODEBASE_RAG_SOURCE_ROOT"] = str(project_root)
     idx = os.environ.get("JAVA_CODEBASE_RAG_INDEX_DIR", "").strip()
     if idx:

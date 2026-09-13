@@ -2041,3 +2041,58 @@ class TestPR4IndexProgress:
         assert not coco_called, "init should have been SKIPPED (index exists) but cocoindex ran"
         # run_init_if_needed prints the skip notice to stdout (no file=sys.stderr).
         assert "Index already exists" in capfd.readouterr().out
+
+
+# ----- i18n: wizard localization (spec D6; YAML keys stay English) -----------
+
+
+def test_wizard_prompt_russian(capsys):
+    """select_retrieval under ru: the note localizes; non-TTY prompt falls back
+    to the default selection (behavior parity with EN)."""
+    from java_codebase_rag import i18n
+    from java_codebase_rag.installer import select_retrieval
+
+    i18n.set_locale("ru")
+    try:
+        mode = select_retrieval(non_interactive=False, cli_retrieval=None)
+    finally:
+        i18n.reset_locale()
+    out = capsys.readouterr().out
+    assert "модель эмбеддингов" in out
+    assert "Select retrieval mode:" not in out
+    assert mode == "vectors"
+
+
+def test_wizard_english_default(capsys):
+    from java_codebase_rag.installer import select_retrieval
+
+    mode = select_retrieval(non_interactive=False, cli_retrieval=None)
+
+    assert mode == "vectors"
+    out = capsys.readouterr().out
+    assert (
+        "Note: 'vectors' needs an embedding model (auto-downloaded from Hugging "
+        "Face, or a local path); 'bm25' is keyword search" in out
+    )
+
+
+def test_generate_yaml_keys_english_under_ru(tmp_path):
+    """YAML keys never localize; the installer never writes ``language:``."""
+    from java_codebase_rag import i18n
+    from java_codebase_rag.installer import generate_yaml_config
+
+    i18n.set_locale("ru")
+    try:
+        content = generate_yaml_config(
+            tmp_path,
+            "auto",
+            ["microservice-a"],
+            None,
+            retrieval="bm25",
+        )
+    finally:
+        i18n.reset_locale()
+    assert "microservice_roots:" in content
+    assert "retrieval: bm25" in content
+    assert "language:" not in content
+    assert not any("Ѐ" <= ch <= "ӿ" for ch in content)

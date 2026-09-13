@@ -33,6 +33,7 @@ from pathlib import Path
 from java_codebase_rag._fdlimit import raise_fd_limit
 from java_codebase_rag._stdio import force_utf8_stdio
 from java_codebase_rag._version import version_string
+from java_codebase_rag.i18n import tr
 
 __all__ = ["build_parser", "main", "_console_script_main"]
 
@@ -149,7 +150,7 @@ def _apply_auto_scope(args: argparse.Namespace, cfg, graph) -> None:
         return
     args.service = candidate
     args._service_auto = candidate
-    print(f"[jrag] auto-scope: --service {candidate} (cwd)", file=sys.stderr)
+    print(tr("MSG_AUTO_SCOPE_STDERR", svc=candidate), file=sys.stderr)
 
 
 def _auto_scope_notice(args: argparse.Namespace) -> list[str]:
@@ -162,10 +163,7 @@ def _auto_scope_notice(args: argparse.Namespace) -> list[str]:
     svc = getattr(args, "_service_auto", None)
     if not svc:
         return []
-    return [
-        f"auto-scope: --service {svc} (inferred from cwd; "
-        f"pass --no-auto-scope to disable)"
-    ]
+    return [tr("WARN_AUTO_SCOPE", svc=svc)]
 
 
 def _load_graph_or_error(args: argparse.Namespace):
@@ -381,6 +379,28 @@ def _lower_snake(value: str) -> str:
     return value.strip().lower().replace("-", "_").replace(" ", "_")
 
 
+def _add_lang_flag(p: argparse.ArgumentParser) -> argparse.ArgumentParser:
+    """Register the interface-language flag (spec D3).
+
+    Added to the top-level parser, ``_common_parser`` (33 agent verbs) and
+    ``_core_parser`` (aggregate verbs) so the after-verb form parses and
+    shows in help; the before-verb form is handled by the dispatch pre-scan
+    (``cli_dispatch``), which strips and stashes it before routing.
+    ``dest="lang"`` is uniform across all three sites.
+    """
+    from java_codebase_rag.i18n import tr
+
+    p.add_argument(
+        "--lang",
+        "-L",
+        choices=("en", "ru"),
+        dest="lang",
+        default=None,
+        help=tr("HELP_FLAG_LANG"),
+    )
+    return p
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Argparse builder. Imports no backend modules.
 
@@ -389,24 +409,7 @@ def build_parser() -> argparse.ArgumentParser:
     (those commands route through ``find_v2`` / ``search_v2`` which take an
     ``offset``). In 1a, no subparser has ``--offset``.
     """
-    description = (
-        "jrag - agent-facing CLI for graph-native code intelligence.\n\n"
-        "Every <query> command resolves the identifier (FQN / simple name /\n"
-        "route path / topic) as the first step and maps one/many/none onto a\n"
-        "single envelope. Default output is compact text; `--format json` emits\n"
-        "the envelope verbatim.\n\n"
-        "Commands by group:\n"
-        "  health:      status\n"
-        "  locate:      find, inspect\n"
-        "  listings:    routes, clients, producers, topics, jobs, listeners,\n"
-        "               entities\n"
-        "  traversal:   callers, callees, hierarchy, implementations, subclasses,\n"
-        "               overrides, overridden-by, dependents, impact, decompose,\n"
-        "               flow, dependencies, connection, outline, imports\n"
-        "  orientation: microservices, map, conventions, overview\n"
-        "  search:      search\n\n"
-        "Run `jrag <command> --help` for command-specific options."
-    )
+    description = tr("HELP_DESC_JRAG_MAIN")
     parser = _EnvelopeArgumentParser(
         prog="jrag",
         description=description,
@@ -418,6 +421,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="version",
         version=version_string(parser.prog),
     )
+    _add_lang_flag(parser)
     subparsers = parser.add_subparsers(dest="command", parser_class=_EnvelopeArgumentParser)
 
     # Common flags applied per command via parents=[_common_parser()]. NOT
@@ -431,42 +435,40 @@ def build_parser() -> argparse.ArgumentParser:
     # the override to the command that asked for it.
     def _common_parser() -> argparse.ArgumentParser:
         common = argparse.ArgumentParser(add_help=False)
-        common.add_argument("--service", type=str, default=None, help="Filter by microservice.")
-        common.add_argument("--module", type=str, default=None, help="Filter by module.")
+        _add_lang_flag(common)
+        common.add_argument("--service", type=str, default=None, help=tr("HELP_FLAG_SERVICE"))
+        common.add_argument("--module", type=str, default=None, help=tr("HELP_FLAG_MODULE"))
         common.add_argument(
             "--no-auto-scope",
             dest="no_auto_scope",
             action="store_true",
             default=False,
             help=(
-                "Disable cwd-derived auto --service scoping so cross-service "
-                "results are visible (also disabled via JRAG_NO_AUTO_SCOPE=1)."
+                tr("HELP_FLAG_NO_AUTO_SCOPE")
             ),
         )
         common.add_argument(
-            "--limit", type=int, default=20, help="Cap on results (default 20)."
+            "--limit", type=int, default=20, help=tr("HELP_FLAG_LIMIT")
         )
         common.add_argument(
             "--index-dir",
             type=str,
             default=None,
             dest="index_dir",
-            help="Index directory override (default: discovered from cwd).",
+            help=tr("HELP_FLAG_INDEX_DIR"),
         )
         common.add_argument(
             "--format",
             choices=("text", "json"),
             default="text",
-            help="Output format (default: text).",
+            help=tr("HELP_FLAG_FORMAT"),
         )
         common.add_argument(
             "--detail",
             choices=("brief", "normal", "full"),
             default="normal",
             help=(
-                "Output detail level (default normal) — ORTHOGONAL to --format: both "
-                "text and json honor it. brief = identity only (name @service); "
-                "normal = +module/role/file/score; full = +signature/annotations/snippet."
+                tr("HELP_FLAG_DETAIL")
             ),
         )
         # Output-shaping flags (issue #376). NOT on _core_parser: status /
@@ -479,9 +481,7 @@ def build_parser() -> argparse.ArgumentParser:
             action="store_true",
             default=False,
             help=(
-                "Print only the result count (no rows) — bare int in text, "
-                "{\"status\",\"count\"} in json. Counts nodes (listing), edges "
-                "(traversal), or 1 (inspect)."
+                tr("HELP_FLAG_COUNT")
             ),
         )
         common.add_argument(
@@ -489,9 +489,7 @@ def build_parser() -> argparse.ArgumentParser:
             action="store_true",
             default=False,
             help=(
-                "Print only an exists boolean (true/false, or "
-                "{\"status\",\"exists\"} in json). Exit 0 when results exist, "
-                "2 otherwise (incl. resolve miss / empty result)."
+                tr("HELP_FLAG_EXISTS")
             ),
         )
         common.add_argument(
@@ -500,10 +498,7 @@ def build_parser() -> argparse.ArgumentParser:
             default=None,
             metavar="LIST",
             help=(
-                "Comma-separated node-field allowlist that overrides --detail "
-                "(e.g. fqn,role,signature). Ignored with --count/--exists; "
-                "primarily a --format json lever; text still labels rows from "
-                "whatever identity fields survive."
+                tr("HELP_FLAG_FIELDS")
             ),
         )
         return common
@@ -515,41 +510,36 @@ def build_parser() -> argparse.ArgumentParser:
     # --index-dir / --format / --detail.
     def _core_parser() -> argparse.ArgumentParser:
         core = argparse.ArgumentParser(add_help=False)
+        _add_lang_flag(core)
         core.add_argument(
             "--index-dir",
             type=str,
             default=None,
             dest="index_dir",
-            help="Index directory override (default: discovered from cwd).",
+            help=tr("HELP_FLAG_INDEX_DIR"),
         )
         core.add_argument(
             "--format",
             choices=("text", "json"),
             default="text",
-            help="Output format (default: text).",
+            help=tr("HELP_FLAG_FORMAT"),
         )
         core.add_argument(
             "--detail",
             choices=("brief", "normal", "full"),
             default="normal",
             help=(
-                "Output detail level (default normal) — ORTHOGONAL to --format: both "
-                "text and json honor it. brief = identity only (name @service); "
-                "normal = +module/role/file/score; full = +signature/annotations/snippet."
+                tr("HELP_FLAG_DETAIL")
             ),
         )
         return core
 
     status = subparsers.add_parser(
         "status",
-        help="Print index freshness, ontology version, and counts.",
+        help=tr("HELP_CMD_STATUS"),
         parents=[_core_parser()],
         description=(
-            "Index health and freshness. Reports ontology version, source root, "
-            "built_at, parse_errors, edge counts, and the counts dictionary from "
-            "GraphMeta. Exits 2 with an actionable envelope if the index is "
-            "missing or stale. An aggregate view: --service / --module / --limit "
-            "are NOT accepted (rejected at parse time)."
+            tr("HELP_MISC_1")
         ),
     )
     status.set_defaults(handler=_cmd_status, detail="full")
@@ -561,168 +551,146 @@ def build_parser() -> argparse.ArgumentParser:
     # shell user, so soft states degrade to silence instead of error output.
     prime = subparsers.add_parser(
         "prime",
-        help="Print agent priming context (index state + command surface).",
+        help=tr("HELP_CMD_PRIME"),
         parents=[_core_parser()],
         description=(
-            "Print the SessionStart priming payload: what jrag is, the trust rule, "
-            "live index state (freshness, services, symbol/route/client/producer "
-            "counts, watch daemon liveness), and the command surface. Reads "
-            "filesystem metadata only. Silent (rc 0, no output) when this repo has "
-            "no jrag index — safe to install as a user-scope SessionStart hook. "
-            "--hook-json wraps the payload in the Claude Code SessionStart envelope."
+            tr("HELP_MISC_2")
         ),
     )
     prime.add_argument(
         "--hook-json",
         action="store_true",
-        help="Wrap output in the SessionStart hook JSON envelope.",
+        help=tr("HELP_FLAG_HOOK_JSON"),
     )
     prime.set_defaults(handler=_cmd_prime)
 
     # find subparser (PR-JRAG-1b)
     find = subparsers.add_parser(
         "find",
-        help="Find nodes by query or filter.",
+        help=tr("HELP_CMD_FIND"),
         parents=[_common_parser()],
         description=(
-            "Find nodes by query or filter. Two modes:\n"
-            "  Query mode (positional <query>): search by name/FQN (symbols only); --fuzzy\n"
-            "    falls back exact -> prefix -> substring when the exact match is empty.\n"
-            "  Filter mode (no positional): apply structured filters (NodeFilter flags).\n"
-            "Kind inference: domain flags (--http-method, --client-kind, --producer-kind) imply\n"
-            "route/client/producer when --kind is omitted. Contradiction emits an error envelope.\n"
-            "Query mode + non-symbol kind (explicit or inferred) errors: name/FQN lookup only\n"
-            "searches symbols; drop the positional <query> and use filter mode for routes/clients/producers."
+            tr("HELP_MISC_3")
         ),
     )
-    find.add_argument("query", nargs="?", default=None, help="Search query (name/FQN). Omit for filter mode.")
+    find.add_argument("query", nargs="?", default=None, help=tr("HELP_ARG_QUERY"))
     find.add_argument(
         "--kind",
         choices=("symbol", "route", "client", "producer"),
         default=None,
-        help="Node kind (omit for auto-inference from domain flags).",
+        help=tr("HELP_FLAG_KIND"),
     )
-    find.add_argument("--role", type=_upper_snake, choices=_ROLE_CHOICES, default=None, help="Filter by role.")
-    find.add_argument("--exclude-role", type=_upper_snake, choices=_ROLE_CHOICES, default=None, help="Exclude by role.")
-    find.add_argument("--java-kind", type=_lower_snake, choices=_JAVA_KIND_CHOICES, default=None, help="Filter by Java symbol kind.")
-    find.add_argument("--annotation", type=str, default=None, help="Filter by annotation.")
-    find.add_argument("--capability", type=_upper_snake, choices=_CAPABILITY_CHOICES, default=None, help="Filter by capability.")
-    find.add_argument("--framework", type=_lower_snake, choices=_FRAMEWORK_CHOICES, default=None, help="Filter by framework.")
-    find.add_argument("--source-layer", type=str, default=None, help="Filter by source layer.")
-    find.add_argument("--fqn-contains", type=str, default=None, help="Filter by FQN substring.")
+    find.add_argument("--role", type=_upper_snake, choices=_ROLE_CHOICES, default=None, help=tr("HELP_FLAG_ROLE"))
+    find.add_argument("--exclude-role", type=_upper_snake, choices=_ROLE_CHOICES, default=None, help=tr("HELP_FLAG_EXCLUDE_ROLE"))
+    find.add_argument("--java-kind", type=_lower_snake, choices=_JAVA_KIND_CHOICES, default=None, help=tr("HELP_FLAG_JAVA_KIND"))
+    find.add_argument("--annotation", type=str, default=None, help=tr("HELP_FLAG_ANNOTATION"))
+    find.add_argument("--capability", type=_upper_snake, choices=_CAPABILITY_CHOICES, default=None, help=tr("HELP_FLAG_CAPABILITY"))
+    find.add_argument("--framework", type=_lower_snake, choices=_FRAMEWORK_CHOICES, default=None, help=tr("HELP_FLAG_FRAMEWORK"))
+    find.add_argument("--source-layer", type=str, default=None, help=tr("HELP_FLAG_SOURCE_LAYER"))
+    find.add_argument("--fqn-contains", type=str, default=None, help=tr("HELP_FLAG_FQN_CONTAINS"))
     find.add_argument(
         "--fuzzy",
         action="store_true",
-        help="Query mode: fall back from exact name/FQN to prefix then substring "
-             "(case-sensitive) when the exact match is empty.",
+        help=tr("HELP_FLAG_FUZZY"),
     )
-    find.add_argument("--http-method", type=str, default=None, help="Filter by HTTP method (route).")
-    find.add_argument("--path-contains", type=str, default=None, help="Filter by path substring (route).")
-    find.add_argument("--client-kind", type=str, default=None, help="Filter by client kind (client).")
-    find.add_argument("--calls-service", type=str, default=None, help="Filter by target service (client).")
-    find.add_argument("--calls-path-contains", type=str, default=None, help="Filter by target path substring (client).")
-    find.add_argument("--producer-kind", type=str, default=None, help="Filter by producer kind (producer).")
-    find.add_argument("--topic-contains", type=str, default=None, help="Filter by topic substring (producer).")
+    find.add_argument("--http-method", type=str, default=None, help=tr("HELP_FLAG_HTTP_METHOD"))
+    find.add_argument("--path-contains", type=str, default=None, help=tr("HELP_FLAG_PATH_CONTAINS"))
+    find.add_argument("--client-kind", type=str, default=None, help=tr("HELP_FLAG_CLIENT_KIND"))
+    find.add_argument("--calls-service", type=str, default=None, help=tr("HELP_FLAG_CALLS_SERVICE"))
+    find.add_argument("--calls-path-contains", type=str, default=None, help=tr("HELP_FLAG_CALLS_PATH_CONTAINS"))
+    find.add_argument("--producer-kind", type=str, default=None, help=tr("HELP_FLAG_PRODUCER_KIND"))
+    find.add_argument("--topic-contains", type=str, default=None, help=tr("HELP_FLAG_TOPIC_CONTAINS"))
     find.add_argument(
         "--offset",
         type=int,
         default=0,
-        help="Page offset (filter mode only; ignored in query mode).",
+        help=tr("HELP_FLAG_OFFSET"),
     )
     find.set_defaults(handler=_cmd_find, auto_scope=True)
 
     # inspect subparser (PR-JRAG-1b)
     inspect = subparsers.add_parser(
         "inspect",
-        help="Inspect a node by query.",
+        help=tr("HELP_CMD_INSPECT"),
         parents=[_common_parser()],
         description=(
-            "Inspect a node by resolving a query (name/FQN) and returning its full details\n"
-            "including edge_summary. Uses resolve_v2 internally; on ambiguous candidates,\n"
-            "returns them (no auto-pick). On not_found, returns an error envelope."
+            tr("HELP_MISC_4")
         ),
     )
-    inspect.add_argument("query", help="Search query (name/FQN).")
+    inspect.add_argument("query", help=tr("HELP_MISC_5"))
     inspect.add_argument(
         "--kind",
         choices=("symbol", "route", "client", "producer"),
         default=None,
-        help="Hint for resolve (omitted for broad search).",
+        help=tr("HELP_MISC_6"),
     )
-    inspect.add_argument("--java-kind", type=_lower_snake, choices=_JAVA_KIND_CHOICES, default=None, help="Post-filter by Java symbol kind.")
-    inspect.add_argument("--role", type=_upper_snake, choices=_ROLE_CHOICES, default=None, help="Post-filter by role.")
-    inspect.add_argument("--fqn-contains", type=str, default=None, help="Post-filter by FQN substring.")
+    inspect.add_argument("--java-kind", type=_lower_snake, choices=_JAVA_KIND_CHOICES, default=None, help=tr("HELP_MISC_7"))
+    inspect.add_argument("--role", type=_upper_snake, choices=_ROLE_CHOICES, default=None, help=tr("HELP_MISC_8"))
+    inspect.add_argument("--fqn-contains", type=str, default=None, help=tr("HELP_MISC_9"))
     inspect.set_defaults(handler=_cmd_inspect, detail="full")
 
     # http-routes subparser (PR-JRAG-2)
     http_routes = subparsers.add_parser(
         "http-routes",
-        help="List HTTP routes.",
+        help=tr("HELP_CMD_HTTP_ROUTES"),
         parents=[_common_parser()],
         description=(
-            "List HTTP routes by microservice, framework, path substring, or method. "
-            "Returns route nodes (no resolve step). HTTP-server-route surface only — "
-            "kafka topics live under `topics`."
+            tr("HELP_MISC_10")
         ),
     )
-    http_routes.add_argument("--framework", type=_lower_snake, choices=_FRAMEWORK_CHOICES, default=None, help="Filter by framework.")
-    http_routes.add_argument("--path-contains", type=str, default=None, help="Filter by path substring.")
-    http_routes.add_argument("--method", type=str, default=None, help="Filter by HTTP method.")
+    http_routes.add_argument("--framework", type=_lower_snake, choices=_FRAMEWORK_CHOICES, default=None, help=tr("HELP_FLAG_FRAMEWORK"))
+    http_routes.add_argument("--path-contains", type=str, default=None, help=tr("HELP_MISC_11"))
+    http_routes.add_argument("--method", type=str, default=None, help=tr("HELP_FLAG_METHOD"))
     http_routes.set_defaults(handler=_cmd_routes, detail="full", auto_scope=True)
 
     # http-clients subparser (PR-JRAG-2)
     http_clients = subparsers.add_parser(
         "http-clients",
-        help="List HTTP clients.",
+        help=tr("HELP_CMD_HTTP_CLIENTS"),
         parents=[_common_parser()],
         description=(
-            "List HTTP clients by microservice, client kind, target service, or path substring. "
-            "Returns client nodes (no resolve step)."
+            tr("HELP_MISC_12")
         ),
     )
-    http_clients.add_argument("--client-kind", type=str, default=None, help="Filter by client kind.")
-    http_clients.add_argument("--calls-service", type=str, default=None, help="Filter by target service.")
-    http_clients.add_argument("--path-contains", type=str, default=None, help="Filter by path substring.")
+    http_clients.add_argument("--client-kind", type=str, default=None, help=tr("HELP_MISC_13"))
+    http_clients.add_argument("--calls-service", type=str, default=None, help=tr("HELP_MISC_14"))
+    http_clients.add_argument("--path-contains", type=str, default=None, help=tr("HELP_MISC_11"))
     http_clients.set_defaults(handler=_cmd_clients, detail="full", auto_scope=True)
 
     # producers subparser (PR-JRAG-2)
     producers = subparsers.add_parser(
         "producers",
-        help="List async message producers.",
+        help=tr("HELP_CMD_PRODUCERS"),
         parents=[_common_parser()],
         description=(
-            "List async message producers by microservice, producer kind, or topic substring. "
-            "Returns producer nodes (no resolve step)."
+            tr("HELP_MISC_15")
         ),
     )
-    producers.add_argument("--producer-kind", type=str, default=None, help="Filter by producer kind.")
-    producers.add_argument("--topic-contains", type=str, default=None, help="Filter by topic substring.")
+    producers.add_argument("--producer-kind", type=str, default=None, help=tr("HELP_MISC_16"))
+    producers.add_argument("--topic-contains", type=str, default=None, help=tr("HELP_MISC_17"))
     producers.set_defaults(handler=_cmd_producers, detail="full", auto_scope=True)
 
     # topics subparser (PR-JRAG-2)
     topics = subparsers.add_parser(
         "topics",
-        help="List message topics (producer-grouped).",
+        help=tr("HELP_CMD_TOPICS"),
         parents=[_common_parser()],
         description=(
-            "List message topics grouped by producer. "
-            "No :Topic node exists; this command groups producers by topic name. "
-            "--consumer-in resolves consumers (listener methods) via EXPOSES edges to Route(topic)."
+            tr("HELP_MISC_18")
         ),
     )
-    topics.add_argument("--topic-contains", type=str, default=None, help="Filter by topic substring.")
-    topics.add_argument("--producer-in", type=str, default=None, help="Scope producers to this microservice.")
-    topics.add_argument("--consumer-in", type=str, default=None, help="Show consumers from this microservice.")
+    topics.add_argument("--topic-contains", type=str, default=None, help=tr("HELP_MISC_17"))
+    topics.add_argument("--producer-in", type=str, default=None, help=tr("HELP_FLAG_PRODUCER_IN"))
+    topics.add_argument("--consumer-in", type=str, default=None, help=tr("HELP_FLAG_CONSUMER_IN"))
     topics.set_defaults(handler=_cmd_topics, detail="full", auto_scope=True)
 
     # jobs subparser (PR-JRAG-2)
     jobs = subparsers.add_parser(
         "jobs",
-        help="List scheduled tasks.",
+        help=tr("HELP_CMD_JOBS"),
         parents=[_common_parser()],
         description=(
-            "List scheduled task symbols (capability=SCHEDULED_TASK). "
-            "Returns Symbol nodes with the SCHEDULED_TASK capability."
+            tr("HELP_MISC_19")
         ),
     )
     jobs.set_defaults(handler=_cmd_jobs, detail="full", auto_scope=True)
@@ -730,24 +698,22 @@ def build_parser() -> argparse.ArgumentParser:
     # listeners subparser (PR-JRAG-2)
     listeners = subparsers.add_parser(
         "listeners",
-        help="List message listeners.",
+        help=tr("HELP_CMD_LISTENERS"),
         parents=[_common_parser()],
         description=(
-            "List message listener symbols (capability=MESSAGE_LISTENER). "
-            "Returns Symbol nodes with the MESSAGE_LISTENER capability."
+            tr("HELP_MISC_20")
         ),
     )
-    listeners.add_argument("--topic-contains", type=str, default=None, help="Filter by topic substring (on producer member).")
+    listeners.add_argument("--topic-contains", type=str, default=None, help=tr("HELP_MISC_21"))
     listeners.set_defaults(handler=_cmd_listeners, detail="full", auto_scope=True)
 
     # entities subparser (PR-JRAG-2)
     entities = subparsers.add_parser(
         "entities",
-        help="List JPA entities.",
+        help=tr("HELP_CMD_ENTITIES"),
         parents=[_common_parser()],
         description=(
-            "List JPA entity symbols (role=ENTITY). "
-            "Returns Symbol nodes with the ENTITY role."
+            tr("HELP_MISC_22")
         ),
     )
     entities.set_defaults(handler=_cmd_entities, detail="full", auto_scope=True)
@@ -762,181 +728,156 @@ def build_parser() -> argparse.ArgumentParser:
         "--kind",
         choices=("symbol", "route", "client", "producer"),
         default=None,
-        help="Hint for resolve (omit for broad search).",
+        help=tr("HELP_MISC_23"),
     )
-    resolve_parent.add_argument("--java-kind", type=_lower_snake, choices=_JAVA_KIND_CHOICES, default=None, help="Post-filter by Java symbol kind.")
-    resolve_parent.add_argument("--role", type=_upper_snake, choices=_ROLE_CHOICES, default=None, help="Post-filter by role.")
-    resolve_parent.add_argument("--fqn-contains", type=str, default=None, help="Post-filter by FQN substring.")
+    resolve_parent.add_argument("--java-kind", type=_lower_snake, choices=_JAVA_KIND_CHOICES, default=None, help=tr("HELP_MISC_7"))
+    resolve_parent.add_argument("--role", type=_upper_snake, choices=_ROLE_CHOICES, default=None, help=tr("HELP_MISC_8"))
+    resolve_parent.add_argument("--fqn-contains", type=str, default=None, help=tr("HELP_MISC_9"))
 
     callers = subparsers.add_parser(
         "callers",
-        help="Who calls this symbol or route?",
+        help=tr("HELP_CMD_CALLERS"),
         parents=[_common_parser(), resolve_parent],
         description=(
-            "Resolve <query> then traverse the call graph inbound (who calls me?). "
-            "Symbol -> g.find_callers (CALLS edges, --service/--module pushed down). "
-            "Route -> g.find_route_callers; route callers are cross-service by "
-            "construction, so --service narrows WHICH route resolves (a resolve-time "
-            "filter) rather than filtering the resulting callers. "
-            "--include-external controls whether external (JDK/Spring/Lombok) callers "
-            "are excluded (default: excluded)."
+            tr("HELP_MISC_24")
         ),
     )
-    callers.add_argument("query", help="Symbol FQN/name (e.g. 'pkg.Svc#method(Arg)') or route path.")
-    callers.add_argument("--depth", type=int, default=1, help="Call-graph depth (default 1).")
+    callers.add_argument("query", help=tr("HELP_MISC_25"))
+    callers.add_argument("--depth", type=int, default=1, help=tr("HELP_FLAG_DEPTH"))
     callers.add_argument(
         "--min-confidence",
         type=float,
         default=0.0,
         dest="min_confidence",
-        help="Minimum CALLS edge confidence in [0.0, 1.0].",
+        help=tr("HELP_FLAG_MIN_CONFIDENCE"),
     )
     callers.add_argument(
         "--include-external",
         action="store_true",
-        help="Include external (JDK/Spring/Lombok) callers/callees (default excluded).",
+        help=tr("HELP_FLAG_INCLUDE_EXTERNAL"),
     )
     callers.set_defaults(handler=_cmd_callers, auto_scope=True)
 
     callees = subparsers.add_parser(
         "callees",
-        help="What does this symbol call?",
+        help=tr("HELP_CMD_CALLEES"),
         parents=[_common_parser(), resolve_parent],
         description=(
-            "Resolve <query> (Symbol) then traverse the call graph outbound (what do I "
-            "call?). Calls g.find_callees; --include-external is symmetric with callers."
+            tr("HELP_MISC_26")
         ),
     )
-    callees.add_argument("query", help="Symbol FQN/name (e.g. 'pkg.Svc#method(Arg)').")
-    callees.add_argument("--depth", type=int, default=1, help="Call-graph depth (default 1).")
+    callees.add_argument("query", help=tr("HELP_MISC_27"))
+    callees.add_argument("--depth", type=int, default=1, help=tr("HELP_FLAG_DEPTH"))
     callees.add_argument(
         "--min-confidence",
         type=float,
         default=0.0,
         dest="min_confidence",
-        help="Minimum CALLS edge confidence in [0.0, 1.0].",
+        help=tr("HELP_FLAG_MIN_CONFIDENCE"),
     )
     callees.add_argument(
         "--include-external",
         action="store_true",
-        help="Include external (JDK/Spring/Lombok) callees (default excluded).",
+        help=tr("HELP_MISC_28"),
     )
     callees.set_defaults(handler=_cmd_callees, auto_scope=True)
 
     hierarchy = subparsers.add_parser(
         "hierarchy",
-        help="Type hierarchy (parents and children).",
+        help=tr("HELP_CMD_HIERARCHY"),
         parents=[_common_parser(), resolve_parent],
         description=(
-            "Resolve <query> (type Symbol) then walk EXTENDS/IMPLEMENTS both directions: "
-            "out = supertypes (parents), in = subtypes (children). No --service/--module "
-            "push-down (structural edges)."
+            tr("HELP_MISC_29")
         ),
     )
-    hierarchy.add_argument("query", help="Class/interface FQN or name.")
+    hierarchy.add_argument("query", help=tr("HELP_MISC_30"))
     hierarchy.set_defaults(handler=_cmd_hierarchy)
 
     implementations = subparsers.add_parser(
         "implementations",
-        help="Classes implementing an interface.",
+        help=tr("HELP_CMD_IMPLEMENTATIONS"),
         parents=[_common_parser(), resolve_parent],
         description=(
-            "Resolve <query> (interface Symbol) then call g.find_implementors. "
-            "--service/--module pushed down; --capability pushed down to the backend "
-            "(find_implementors accepts a capability filter)."
+            tr("HELP_MISC_31")
         ),
     )
-    implementations.add_argument("query", help="Interface FQN or name.")
-    implementations.add_argument("--capability", type=_upper_snake, choices=_CAPABILITY_CHOICES, default=None, help="Filter implementors by capability.")
+    implementations.add_argument("query", help=tr("HELP_MISC_32"))
+    implementations.add_argument("--capability", type=_upper_snake, choices=_CAPABILITY_CHOICES, default=None, help=tr("HELP_MISC_33"))
     implementations.set_defaults(handler=_cmd_implementations, auto_scope=True)
 
     subclasses = subparsers.add_parser(
         "subclasses",
-        help="Classes extending a type.",
+        help=tr("HELP_CMD_SUBCLASSES"),
         parents=[_common_parser(), resolve_parent],
         description=(
-            "Resolve <query> (class Symbol) then call g.find_subclasses (EXTENDS inbound). "
-            "--service/--module pushed down."
+            tr("HELP_MISC_34")
         ),
     )
-    subclasses.add_argument("query", help="Class FQN or name.")
+    subclasses.add_argument("query", help=tr("HELP_MISC_35"))
     subclasses.set_defaults(handler=_cmd_subclasses, auto_scope=True)
 
     overrides = subparsers.add_parser(
         "overrides",
-        help="Methods this method overrides (dispatch UP to declaration).",
+        help=tr("HELP_CMD_OVERRIDES"),
         parents=[_common_parser(), resolve_parent],
         description=(
-            "Resolve <query> (method Symbol) then neighbors_v2([id], 'out', ['OVERRIDES']). "
-            "The stored OVERRIDES edge runs overrider -> declaration (subtype method -> "
-            "supertype declared method), so 'out' dispatches UP the hierarchy."
+            tr("HELP_MISC_36")
         ),
     )
-    overrides.add_argument("query", help="Method FQN or name (e.g. 'pkg.Impl#method(Arg)').")
+    overrides.add_argument("query", help=tr("HELP_MISC_37"))
     overrides.set_defaults(handler=_cmd_overrides)
 
     overridden_by = subparsers.add_parser(
         "overridden-by",
-        help="Methods overriding this one (dispatch DOWN to overriders).",
+        help=tr("HELP_CMD_OVERRIDDEN_BY"),
         parents=[_common_parser(), resolve_parent],
         description=(
-            "Resolve <query> (method Symbol) then neighbors_v2([id], 'in', ['OVERRIDES']) "
-            "(= virtual OVERRIDDEN_BY out). 'in' traverses the stored OVERRIDES edge "
-            "backward, dispatching DOWN from declaration to overriders."
+            tr("HELP_MISC_38")
         ),
     )
-    overridden_by.add_argument("query", help="Method FQN or name (e.g. 'pkg.Iface#method(Arg)').")
+    overridden_by.add_argument("query", help=tr("HELP_MISC_39"))
     overridden_by.set_defaults(handler=_cmd_overridden_by)
 
     dependents = subparsers.add_parser(
         "dependents",
-        help="Who injects this type?",
+        help=tr("HELP_CMD_DEPENDENTS"),
         parents=[_common_parser(), resolve_parent],
         description=(
-            "Resolve <query> (type Symbol) then call g.find_injectors (INJECTS inbound: "
-            "classes that inject this type). --service/--module pushed down."
+            tr("HELP_MISC_40")
         ),
     )
-    dependents.add_argument("query", help="Type FQN or name.")
+    dependents.add_argument("query", help=tr("HELP_MISC_41"))
     dependents.set_defaults(handler=_cmd_dependents, auto_scope=True)
 
     impact = subparsers.add_parser(
         "impact",
-        help="Fleet-wide blast radius (INJECTS/IMPLEMENTS/EXTENDS reverse closure).",
+        help=tr("HELP_CMD_IMPACT"),
         parents=[_common_parser(), resolve_parent],
         description=(
-            "Resolve <query> then call g.impact_analysis (reverse closure over "
-            "INJECTS+IMPLEMENTS+EXTENDS: who breaks if this changes). --service is a "
-            "CLIENT-SIDE post-filter (impact_analysis has no microservice param); "
-            "surfaced as a warnings[] entry."
+            tr("HELP_MISC_42")
         ),
     )
-    impact.add_argument("query", help="Symbol FQN or name.")
-    impact.add_argument("--depth", type=int, default=2, help="Closure depth (default 2).")
+    impact.add_argument("query", help=tr("HELP_MISC_43"))
+    impact.add_argument("--depth", type=int, default=2, help=tr("HELP_MISC_44"))
     impact.set_defaults(handler=_cmd_impact, auto_scope=True)
 
     decompose = subparsers.add_parser(
         "decompose",
-        help="Role-waterfall flow from an entrypoint.",
+        help=tr("HELP_CMD_DECOMPOSE"),
         parents=[_common_parser(), resolve_parent],
         description=(
-            "Resolve <query> (entrypoint Symbol) then call g.trace_flow. Walks "
-            "CONTROLLER -> SERVICE/COMPONENT -> CLIENT/REPOSITORY/MAPPER stages via "
-            "INJECTS+EXTENDS+IMPLEMENTS (optionally + CALLS hops). --service/--module "
-            "pushed down; --depth clamped to 1..3."
+            tr("HELP_MISC_45")
         ),
     )
-    decompose.add_argument("query", help="Entrypoint symbol FQN or name.")
-    decompose.add_argument("--depth", type=int, default=2, help="Neighbour hop count per stage (clamped 1..3, default 2).")
+    decompose.add_argument("query", help=tr("HELP_MISC_46"))
+    decompose.add_argument("--depth", type=int, default=2, help=tr("HELP_MISC_47"))
     decompose.add_argument(
         "--follow-calls",
         action=argparse.BooleanOptionalAction,
         default=True,
         dest="follow_calls",
         help=(
-            "Top up each stage with DECLARES+CALLS type-to-type hops when the "
-            "structural INJECTS/EXTENDS/IMPLEMENTS pass under-fills it (default: "
-            "on). --no-follow-calls restricts the waterfall to structural edges."
+            tr("HELP_FLAG_FOLLOW_CALLS")
         ),
     )
     decompose.add_argument(
@@ -944,48 +885,41 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=20,
         dest="per_stage_limit",
-        help="Cap on symbols per stage (stage_limit, default 20). Not a stage-count knob.",
+        help=tr("HELP_FLAG_PER_STAGE_LIMIT"),
     )
     decompose.add_argument(
         "--min-confidence",
         type=float,
         default=0.0,
         dest="min_confidence",
-        help="Min CALLS confidence when --follow-calls is on.",
+        help=tr("HELP_MISC_48"),
     )
     decompose.add_argument(
         "--include-external",
         action="store_true",
-        help="Include external types reached via the CALLS hop (default excluded).",
+        help=tr("HELP_MISC_49"),
     )
     decompose.set_defaults(handler=_cmd_decompose, auto_scope=True)
 
     flow = subparsers.add_parser(
         "flow",
-        help="Request flow through a route (inbound callers + outbound CALLS hops).",
+        help=tr("HELP_CMD_FLOW"),
         parents=[_common_parser()],
         description=(
-            "Resolve <query> to a Route then call g.trace_request_flow. Inbound = "
-            "cross-service HTTP/async callers (Client/Producer two-hop); outbound = "
-            "CALLS hops from the route handler. Intra-service is an INDEX-TIME data "
-            "property: CALLS edges are intra-codebase by construction, and the query "
-            "carries no microservice predicate, so the result reflects whatever the "
-            "fixture indexed (no query-time constraint). --depth clamped to 1..8."
+            tr("HELP_MISC_50")
         ),
     )
     flow.add_argument(
         "query",
         help=(
-            "Route path (e.g. '/chat/assign') or Kafka topic name (e.g. "
-            "'banking.chat.compliance.review'). Resolved with hint_kind=route; "
-            "kafka_topic Routes match on topic."
+            tr("HELP_MISC_51")
         ),
     )
     # Primary flag is --depth (consistent with callers/callees/impact/decompose).
     # --max-hops is kept as a hidden back-compat alias (same dest).
     flow.add_argument(
         "--depth", type=int, default=5, dest="depth",
-        help="Max CALLS hops (clamped 1..8, default 5).",
+        help=tr("HELP_MISC_52"),
     )
     flow.add_argument(
         "--max-hops", type=int, dest="depth",
@@ -1013,148 +947,108 @@ def build_parser() -> argparse.ArgumentParser:
 
     dependencies = subparsers.add_parser(
         "dependencies",
-        help="Types this Symbol injects (INJECTS out).",
+        help=tr("HELP_CMD_DEPENDENCIES"),
         parents=[_common_parser(), resolve_parent],
         description=(
-            "Resolve <query> (type Symbol) then neighbors_v2([id], 'out', ['INJECTS']) "
-            "= the types this class injects (its direct dependencies). INJECTS is "
-            "Symbol -> Symbol (declaring type -> injected type), so 'out' traverses "
-            "from the injector to its dependencies. --service/--module are NOT "
-            "applied (INJECTS is a structural edge with no microservice predicate); "
-            "they surface as warnings[]. --include-external is accepted for surface "
-            "symmetry with callers/callees but is a warned no-op here (INJECTS has "
-            "no external-exclusion analog at the neighbors_v2 layer)."
+            tr("HELP_MISC_53")
         ),
     )
-    dependencies.add_argument("query", help="Symbol FQN or name (e.g. 'pkg.Svc').")
+    dependencies.add_argument("query", help=tr("HELP_MISC_54"))
     dependencies.add_argument(
         "--include-external",
         action="store_true",
-        help="Accepted for symmetry; warned no-op on dependencies (INJECTS is structural).",
+        help=tr("HELP_MISC_55"),
     )
     dependencies.set_defaults(handler=_cmd_dependencies)
 
     connection = subparsers.add_parser(
         "connection",
-        help="Cross-service connections for a microservice (inbound/outbound).",
+        help=tr("HELP_CMD_CONNECTION"),
         parents=[_common_parser()],
         description=(
-            "RESOLVE-FIRST EXCEPTION: the first positional is a microservice NAME "
-            "(e.g. 'chat-core'), NOT a query — it is passed literally to list_clients/"
-            "list_producers/find_route_callers; resolve_v2 is NEVER run on it.\n\n"
-            "Direction (default --both): clients/producers in OTHER services "
-            "targeting this service. HTTP via list_clients(target_service=<svc>) + "
-            "async via find_route_callers on this service's topic Routes.\n"
-            "--outbound: clients/producers IN this service. HTTP via "
-            "list_clients(microservice=<svc>) + producers via "
-            "list_producers(microservice=<svc>).\n"
-            "--both: render both inbound and outbound sections.\n\n"
-            "--http-method and --calls-service filter HTTP callers only (clients "
-            "have a target_service; producers do not). Producers are KEPT under "
-            "--calls-service so the async channel stays visible; a warnings[] entry "
-            "is emitted when --calls-service bypasses producers."
+            tr("HELP_MISC_56")
         ),
     )
     connection.add_argument(
         "microservice",
-        help="Microservice NAME (literal — NOT resolved as a query).",
-    )
+        help=tr("HELP_ARG_MICROSERVICE")    )
     connection.add_argument(
         "--inbound",
         dest="direction",
         action="store_const",
         const="inbound",
         default=None,
-        help="Show only inbound connections (default is --both).",
+        help=tr("HELP_FLAG_INBOUND"),
     )
     connection.add_argument(
         "--outbound",
         dest="direction",
         action="store_const",
         const="outbound",
-        help="Show only outbound connections (default is --both).",
+        help=tr("HELP_FLAG_OUTBOUND"),
     )
     connection.add_argument(
         "--both",
         dest="direction",
         action="store_const",
         const="both",
-        help="Show both inbound and outbound sections (this is the default).",
+        help=tr("HELP_FLAG_BOTH"),
     )
     connection.add_argument(
         "--http-method",
         type=str,
         default=None,
-        help="Filter HTTP callers by method (e.g. POST). Applies to clients only.",
+        help=tr("HELP_MISC_57"),
     )
     connection.add_argument(
         "--calls-service",
         type=str,
         default=None,
         help=(
-            "Narrow to edges involving this other service. Outbound: clients with "
-            "target_service == <svc> (producers kept with a warning — no service "
-            "target on ASYNC channels). Inbound: callers from microservice == <svc>."
+            tr("HELP_MISC_58")
         ),
     )
     connection.set_defaults(handler=_cmd_connection)
 
     outline = subparsers.add_parser(
         "outline",
-        help="List symbols declared in a file.",
+        help=tr("HELP_CMD_OUTLINE"),
         parents=[_common_parser()],
         description=(
-            "List all Symbol nodes whose declared location is in <file>. Calls "
-            "find_symbols_in_file_range(graph, filename=<file>, start_line=1, "
-            "end_line=2**31-1) — the start_line=1 is required (the backend returns "
-            "[] for start_line<1). --limit caps the entry count (the file's "
-            "symbol table is otherwise unbounded); truncated is set when more "
-            "entries exist. --offset is rejected (the backend takes no offset)."
+            tr("HELP_MISC_59")
         ),
     )
-    outline.add_argument("file", help="File path as stored in the graph (POSIX-relative to source root).")
+    outline.add_argument("file", help=tr("HELP_ARG_FILE"))
     outline.set_defaults(handler=_cmd_outline)
 
     imports = subparsers.add_parser(
         "imports",
-        help="List imports declared in a file (tree-sitter parse + resolve_v2).",
+        help=tr("HELP_CMD_IMPORTS"),
         parents=[_common_parser()],
         description=(
-            "Parse <file> with tree-sitter via the language backend "
-            "(backend_for(...).parse — parse_java for .java, parse_kotlin for "
-            ".kt), walk its import nodes, and resolve each imported FQN via resolve_v2 "
-            "against the graph. Returns one node per import: resolved graph Symbol "
-            "when resolve_v2 hits, or an unresolved placeholder carrying the raw FQN "
-            "otherwise. Static and wildcard imports are included (marked in the row)."
-            " --offset is rejected."
+            tr("HELP_MISC_60")
         ),
     )
-    imports.add_argument("file", help="File path (POSIX-relative to source root, or absolute).")
+    imports.add_argument("file", help=tr("HELP_MISC_61"))
     imports.set_defaults(handler=_cmd_imports)
 
     # ---- Orientation commands (PR-JRAG-4) ----
     microservices = subparsers.add_parser(
         "microservices",
-        help="List microservices with resolved type counts.",
+        help=tr("HELP_CMD_MICROSERVICES"),
         parents=[_core_parser()],
         description=(
-            "List every microservice with its resolved type-symbol count. "
-            "Calls g.microservice_counts(). Renders as a counts listing. "
-            "An aggregate view: --service / --module / --limit are NOT accepted "
-            "(rejected at parse time)."
+            tr("HELP_MISC_62")
         ),
     )
     microservices.set_defaults(handler=_cmd_microservices, detail="full")
 
     map_cmd = subparsers.add_parser(
         "map",
-        help="Symbol counts per kind, grouped by service or module.",
+        help=tr("HELP_CMD_MAP"),
         parents=[_common_parser()],
         description=(
-            "Count resolved type Symbols (class/interface/enum/record/annotation) "
-            "grouped by microservice or module. --by {microservice,module} selects "
-            "the grouping axis (default microservice); --service / --module narrow "
-            "the count to one service or module (filters, independent of --by)."
+            tr("HELP_MISC_63")
         ),
     )
     map_cmd.add_argument(
@@ -1162,121 +1056,101 @@ def build_parser() -> argparse.ArgumentParser:
         dest="by",
         choices=("microservice", "module"),
         default=None,
-        help="Grouping axis: microservice (default) or module. When --module is "
-        "set without --by, the axis defaults to module (the user's focus is the "
-        "module axis); pass --by microservice to keep microservice grouping.",
+        help=tr("HELP_FLAG_BY"),
     )
     map_cmd.set_defaults(handler=_cmd_map, detail="full")
 
     conventions = subparsers.add_parser(
         "conventions",
-        help="Dominant roles + framework tallies.",
+        help=tr("HELP_CMD_CONVENTIONS"),
         parents=[_common_parser()],
         description=(
-            "Report the dominant roles among resolved Symbols and the route framework "
-            "distribution. --service narrows the role tally to one microservice."
+            tr("HELP_MISC_64")
         ),
     )
     conventions.set_defaults(handler=_cmd_conventions, detail="full")
 
     overview = subparsers.add_parser(
         "overview",
-        help="Bundle for a microservice, route, or topic.",
+        help=tr("HELP_CMD_OVERVIEW"),
         parents=[_common_parser()],
         description=(
-            "Dispatch on the positional <subject>:\n"
-            "  Route path (starts with '/')  -> trace_request_flow (same as `flow`).\n"
-            "  Microservice name             -> routes + clients + producers bundle.\n"
-            "  Topic string                  -> producers + consumers for the topic.\n"
-            "--as {microservice,route,topic} overrides auto-detection.\n"
-            "Auto-detection: starts with '/' -> route; matches a known microservice -> "
-            "microservice; otherwise -> topic."
+            tr("HELP_MISC_65")
         ),
     )
     overview.add_argument(
         "subject",
         nargs="?",
         default=None,
-        help="Microservice name, route path (starts with '/'), or topic string.",
+        help=tr("HELP_ARG_SUBJECT"),
     )
     overview.add_argument(
         "--as",
         dest="as_type",
         choices=("microservice", "route", "topic"),
         default=None,
-        help="Override auto-detection of subject type.",
+        help=tr("HELP_FLAG_AS"),
     )
     overview.set_defaults(handler=_cmd_overview, detail="full")
 
     # ---- Search command (PR-JRAG-4) ----
     search = subparsers.add_parser(
         "search",
-        help="Semantic search over the indexed JVM sources.",
+        help=tr("HELP_CMD_SEARCH"),
         parents=[_common_parser()],
         description=(
-            "Semantic search via search_v2 over the Lance index (JVM source chunks). "
-            "--hybrid enables vector+keyword hybrid. "
-            "--offset paginates. --path-contains narrows by file path substring. "
-            "Filters (NodeFilter flags) narrow results.\n\n"
-            "--fuzzy is accepted as a no-op (search is inherently semantic; "
-            "--fuzzy is implicit). It is kept registered so callers that pass "
-            "it don't hit an argparse error, and is silently ignored."
+            tr("HELP_MISC_66")
         ),
     )
-    search.add_argument("query", help="Natural-language search query.")
+    search.add_argument("query", help=tr("HELP_MISC_67"))
     search.add_argument(
-        "--hybrid", action="store_true", help="Enable vector+keyword hybrid search."
+        "--hybrid", action="store_true", help=tr("HELP_FLAG_HYBRID")
     )
     search.add_argument(
-        "--explain", action="store_true", help="Show score breakdown per hit."
+        "--explain", action="store_true", help=tr("HELP_FLAG_EXPLAIN")
     )
     search.add_argument(
         "--path-contains", type=str, default=None, dest="path_contains",
-        help="Narrow to chunks whose filename contains this substring.",
+        help=tr("HELP_MISC_68"),
     )
     search.add_argument(
         "--fuzzy", action="store_true",
-        help="Accepted as a no-op (search is always semantic; --fuzzy is implicit).",
+        help=tr("HELP_MISC_69"),
     )
     search.add_argument(
         "--min-score", type=float, default=0.0, dest="min_score",
         help=(
-            "Drop hits with a relevance score below this floor. Default 0.0 drops "
-            "negative-score noise (chunks farther than orthogonal to the query); "
-            "raise to tighten precision."
+            tr("HELP_FLAG_MIN_SCORE")
         ),
     )
     # NodeFilter flags (same set as `find` filter mode, minus the query-only ones).
-    search.add_argument("--role", type=_upper_snake, choices=_ROLE_CHOICES, default=None, help="Filter by role.")
-    search.add_argument("--exclude-role", type=_upper_snake, choices=_ROLE_CHOICES, default=None, dest="exclude_role", help="Exclude by role.")
-    search.add_argument("--java-kind", type=_lower_snake, choices=_JAVA_KIND_CHOICES, default=None, dest="java_kind", help="Filter by Java symbol kind.")
-    search.add_argument("--annotation", type=str, default=None, help="Filter by annotation.")
-    search.add_argument("--capability", type=_upper_snake, choices=_CAPABILITY_CHOICES, default=None, help="Filter by capability.")
-    search.add_argument("--framework", type=_lower_snake, choices=_FRAMEWORK_CHOICES, default=None, help="Filter by framework.")
-    search.add_argument("--fqn-contains", type=str, default=None, dest="fqn_contains", help="Filter by FQN substring.")
+    search.add_argument("--role", type=_upper_snake, choices=_ROLE_CHOICES, default=None, help=tr("HELP_FLAG_ROLE"))
+    search.add_argument("--exclude-role", type=_upper_snake, choices=_ROLE_CHOICES, default=None, dest="exclude_role", help=tr("HELP_FLAG_EXCLUDE_ROLE"))
+    search.add_argument("--java-kind", type=_lower_snake, choices=_JAVA_KIND_CHOICES, default=None, dest="java_kind", help=tr("HELP_FLAG_JAVA_KIND"))
+    search.add_argument("--annotation", type=str, default=None, help=tr("HELP_FLAG_ANNOTATION"))
+    search.add_argument("--capability", type=_upper_snake, choices=_CAPABILITY_CHOICES, default=None, help=tr("HELP_FLAG_CAPABILITY"))
+    search.add_argument("--framework", type=_lower_snake, choices=_FRAMEWORK_CHOICES, default=None, help=tr("HELP_FLAG_FRAMEWORK"))
+    search.add_argument("--fqn-contains", type=str, default=None, dest="fqn_contains", help=tr("HELP_FLAG_FQN_CONTAINS"))
     search.add_argument(
         "--offset",
         type=int,
         default=0,
-        help="Page offset (passed to search_v2; paginated via +1-fetch).",
+        help=tr("HELP_MISC_70"),
     )
     search.add_argument(
         "--chunks",
         action="store_true",
-        help="Show every chunk (default collapses to one row per symbol/type).",
+        help=tr("HELP_FLAG_CHUNKS"),
     )
     search.set_defaults(handler=_cmd_search, auto_scope=True)
 
     # ---- vocab-index subparser (PR-ABS-1) ----
     vocab_index = subparsers.add_parser(
         "vocab-index",
-        help="Rebuild the vocabulary index (absence diagnosis).",
+        help=tr("HELP_CMD_VOCAB_INDEX"),
         parents=[_core_parser()],
         description=(
-            "Rebuild the vocabulary index sidecar from the current Ladybug graph. "
-            "The index is a search-optimized projection of Symbol nodes used for "
-            "did-you-mean suggestions and external membership checks in absence "
-            "diagnosis. Printed on success: symbol count and sidecar path."
+            tr("HELP_MISC_71")
         ),
     )
     vocab_index.set_defaults(handler=_cmd_vocab_index, detail="full")
@@ -1288,49 +1162,39 @@ def build_parser() -> argparse.ArgumentParser:
     # daemon anchors and so --status output respects --format.
     watch = subparsers.add_parser(
         "watch",
-        help="keep the index fresh and serve warm queries while running",
+        help=tr("HELP_CMD_WATCH"),
         parents=[_core_parser()],
         description=(
-            "Long-lived daemon: watches the source tree for changes (reindexing "
-            "vectors/graph on a debounce) and serves the read commands (search/find/"
-            "inspect/callers/callees/flow) over a warm Unix socket so queries skip the "
-            "cold-start model/graph load.\n\n"
-            "Lifecycle:\n"
-            "  jrag watch             run in the foreground (Ctrl+C / SIGTERM to stop)\n"
-            "  jrag watch --detach    start as a background daemon and return\n"
-            "  jrag watch --status    report up/down + pid + socket + last reindex\n"
-            "  jrag watch --stop      SIGTERM a running daemon (SIGKILL after 5s)\n"
-            "Only one daemon may run per index (project lock). --status/--stop do NOT "
-            "acquire the lock."
+            tr("HELP_MISC_72")
         ),
     )
     watch.add_argument(
         "--detach",
         action="store_true",
-        help="Start the daemon as a detached background process and return.",
+        help=tr("HELP_FLAG_DETACH"),
     )
     watch.add_argument(
         "--stop",
         action="store_true",
-        help="Stop a running daemon (SIGTERM; SIGKILL after 5s).",
+        help=tr("HELP_FLAG_STOP"),
     )
     watch.add_argument(
         "--status",
         action="store_true",
-        help="Print whether the daemon is up or down and exit.",
+        help=tr("HELP_FLAG_STATUS"),
     )
     watch.add_argument(
         "--debounce-ms",
         type=int,
         default=None,
         dest="debounce_ms",
-        help="Reindex debounce window in ms (overrides YAML `watch:debounce_ms`).",
+        help=tr("HELP_FLAG_DEBOUNCE_MS"),
     )
     watch.add_argument(
         "--backend",
         choices=("auto", "watchdog", "polling"),
         default=None,
-        help="File-watch backend (overrides YAML `watch:backend`).",
+        help=tr("HELP_FLAG_BACKEND"),
     )
     watch.set_defaults(handler=_cmd_watch)
 
@@ -1357,6 +1221,7 @@ def _resolve_cfg(args: argparse.Namespace):  # type: ignore[no-untyped-def]
     search``).
     """
     from java_codebase_rag.config import resolve_operator_config
+    from java_codebase_rag.i18n import cli_lang_override, set_locale
 
     cfg = resolve_operator_config(
         source_root=None,
@@ -1366,8 +1231,14 @@ def _resolve_cfg(args: argparse.Namespace):  # type: ignore[no-untyped-def]
         # treats ``None`` as "not provided" so non-watch commands are unaffected).
         cli_watch_debounce_ms=getattr(args, "debounce_ms", None),
         cli_watch_backend=getattr(args, "backend", None),
+        # Interface language: the after-verb flag, else the dispatch pre-scan
+        # stash (before-verb flag, stripped from argv before parse).
+        cli_language=getattr(args, "lang", None) or cli_lang_override(),
     )
     cfg.apply_to_os_environ()
+    # Authoritative locale post-resolution (flag > env > YAML > default).
+    # apply_to_os_environ deliberately does NOT publish language (spec D2).
+    set_locale(cfg.language)
     return cfg
 
 
@@ -1383,10 +1254,7 @@ def _load_graph(cfg):  # type: ignore[no-untyped-def]
 
     ladybug_path = str(cfg.ladybug_path)
     if not LadybugGraph.exists(ladybug_path):
-        raise _IndexNotFound(
-            f"No index at {cfg.ladybug_path}. "
-            "Run: jrag init --source-root <root>"
-        )
+        raise _IndexNotFound(tr("MSG_NO_INDEX", path=cfg.ladybug_path))
     try:
         return LadybugGraph.get(ladybug_path)
     except RuntimeError as exc:
@@ -1402,14 +1270,14 @@ def _cmd_vocab_index(args: argparse.Namespace) -> int:
     try:
         graph = _load_graph(cfg)
     except (_IndexNotFound, _IndexStale) as exc:
-        print(f"[error] {exc}", file=sys.stderr)
+        print(tr("ERR_VOCAB_STDERR", exc=exc), file=sys.stderr)
         return 2
 
     # Build vocabulary index
     try:
         index = VocabularyIndex.build(graph, q=cfg.absence_ngram_q)
     except Exception as e:
-        print(f"[error] Vocabulary index build failed: {e}", file=sys.stderr)
+        print(tr("ERR_VOCAB_BUILD_FAILED", exc=e), file=sys.stderr)
         return 1
 
     # Save to sidecar
@@ -1417,13 +1285,13 @@ def _cmd_vocab_index(args: argparse.Namespace) -> int:
     try:
         index.save(sidecar_path, ontology_version=ONTOLOGY_VERSION)
     except Exception as e:
-        print(f"[error] Failed to save vocabulary index: {e}", file=sys.stderr)
+        print(tr("ERR_VOCAB_SAVE_FAILED", exc=e), file=sys.stderr)
         return 1
 
     # Print success message (simple format for admin command)
-    print(f"Vocabulary index rebuilt successfully:")
-    print(f"  Symbol count: {index.symbol_count}")
-    print(f"  Sidecar path: {sidecar_path}")
+    print(tr("MSG_VOCAB_REBUILT"))
+    print(tr("MSG_VOCAB_SYMBOL_COUNT", n=index.symbol_count))
+    print(tr("MSG_VOCAB_SIDECAR", path=sidecar_path))
     return 0
 
 
@@ -1481,24 +1349,24 @@ def _cmd_watch_status(cfg) -> int:
     pid = ProjectLock.read_holder(cfg.index_dir)
     state = _read_state_file(cfg.index_dir)
     if alive:
-        print(f"jrag watch: up (pid {pid}, socket {sock})")
+        print(tr("MSG_WATCH_UP", pid=pid, sock=sock))
         if state:
             if state.get("mode") == "lexical":
                 # Two-variant label shared with the TTY panel: stack absent
                 # (graph-only install) vs retrieval=bm25 on a capable platform.
                 # Imported from the light pipeline module — this probe verb must
                 # not pull the heavy daemon module.
-                print(f"  mode: {lexical_mode_label()}")
+                print(tr("LBL_WATCH_MODE", label=lexical_mode_label()))
             kind = state.get("last_reindex_kind")
             at = state.get("last_reindex_at")
             count = state.get("reindex_count", 0)
             if kind and at:
                 when = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(at))
-                print(f"  last reindex: {kind} at {when} (total {count})")
+                print(tr("MSG_WATCH_LAST_REINDEX", kind=kind, when=when, count=count))
             else:
-                print(f"  last reindex: none (total {count})")
+                print(tr("MSG_WATCH_LAST_REINDEX_NONE", count=count))
         return 0
-    print(f"jrag watch: down (no daemon at {sock})")
+    print(tr("MSG_WATCH_DOWN", sock=sock))
     return 1
 
 
@@ -1516,7 +1384,7 @@ def _cmd_watch_stop(cfg) -> int:
     state_path = paths.state_path(cfg.index_dir)
     pid = ProjectLock.read_holder(cfg.index_dir)
     if pid is None:
-        print("jrag watch: not running")
+        print(tr("MSG_WATCH_NOT_RUNNING"))
         _watch_unlink(sock)
         _watch_unlink(state_path)
         return 1
@@ -1535,7 +1403,7 @@ def _cmd_watch_stop(cfg) -> int:
         _watch_signal(pid, signal.SIGKILL)
     _watch_unlink(sock)
     _watch_unlink(state_path)
-    print(f"jrag watch: stopped (pid {pid})")
+    print(tr("MSG_WATCH_STOPPED", pid=pid))
     return 0
 
 
@@ -1568,6 +1436,10 @@ def _cmd_watch_detach(args: argparse.Namespace, cfg) -> int:
             stderr=log_fh,
             start_new_session=True,  # setsid: detach from the controlling terminal
             close_fds=True,
+            # The daemon is operator-facing: pass the resolved language
+            # explicitly (flag-tier values are not inherited any other way —
+            # config republication deliberately omits language, spec D2/D5).
+            env=dict(os.environ, JAVA_CODEBASE_RAG_LANGUAGE=cfg.language),
         )
     finally:
         if log_fh is not None:
@@ -1588,19 +1460,22 @@ def _cmd_watch_detach(args: argparse.Namespace, cfg) -> int:
     if is_daemon_alive(cfg.index_dir):
         pid = ProjectLock.read_holder(cfg.index_dir)
         print(
-            f"jrag watch: detached (pid {pid}, socket "
-            f"{paths.socket_path(cfg.index_dir)}, log {log_path})"
+            tr(
+                "MSG_WATCH_DETACHED",
+                pid=pid,
+                sock=paths.socket_path(cfg.index_dir),
+                log=log_path,
+            )
         )
         return 0
     if child_exited:
         print(
-            f"jrag watch: child exited before serving (see {log_path})",
+            tr("MSG_WATCH_CHILD_EXITED", log=log_path),
             file=sys.stderr,
         )
     else:
         print(
-            f"jrag watch: failed to start within {_WATCH_DETACH_TIMEOUT_S}s "
-            f"(see {log_path})",
+            tr("MSG_WATCH_START_TIMEOUT", seconds=_WATCH_DETACH_TIMEOUT_S, log=log_path),
             file=sys.stderr,
         )
     return 2
@@ -1716,7 +1591,7 @@ def _cmd_status(args: argparse.Namespace) -> int:
     if "error" in meta:
         env = Envelope(
             status="error",
-            message=f"Index meta read failed: {meta['error']}",
+            message=tr("ERR_INDEX_META_FAILED", error=meta['error']),
         )
         print(render(env, fmt=args.format, detail=args.detail))
         return 2
@@ -2069,7 +1944,7 @@ def _build_node_filter_or_error(filter_dict: dict):
             msg = str(err.get("msg") or "").strip()
             parts.append(f"{loc}: {msg}" if loc else msg)
         message = "; ".join(parts) if parts else str(exc)
-        return None, Envelope(status="error", message=f"invalid filter: {message}")
+        return None, Envelope(status="error", message=tr("ERR_INVALID_FILTER", message=message))
 
 
 def _render_find_filter(args: argparse.Namespace, payload) -> int:
@@ -2143,7 +2018,7 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
     desc_out = payload["describe"]
 
     if not desc_out.success or desc_out.record is None:
-        env = Envelope(status="error", message=desc_out.message or "describe failed")
+        env = Envelope(status="error", message=desc_out.message or tr("ERR_DESCRIBE_FAILED"))
         print(render(env, fmt=args.format, detail=args.detail))
         return 2
 
@@ -3078,7 +2953,7 @@ def _cmd_overrides(args: argparse.Namespace) -> int:
         limit=limit + 1, graph=graph,
     )
     if not out.success:
-        print(render(Envelope(status="error", message=out.message or "neighbors_v2 failed"), fmt=args.format, detail=args.detail))
+        print(render(Envelope(status="error", message=out.message or tr("ERR_NEIGHBORS_FAILED")), fmt=args.format, detail=args.detail))
         return 2
 
     nodes: dict[str, dict] = {root_id: _noderef_to_node_dict(node)}
@@ -3131,7 +3006,7 @@ def _cmd_overridden_by(args: argparse.Namespace) -> int:
         limit=limit + 1, graph=graph,
     )
     if not out.success:
-        print(render(Envelope(status="error", message=out.message or "neighbors_v2 failed"), fmt=args.format, detail=args.detail))
+        print(render(Envelope(status="error", message=out.message or tr("ERR_NEIGHBORS_FAILED")), fmt=args.format, detail=args.detail))
         return 2
 
     nodes: dict[str, dict] = {root_id: _noderef_to_node_dict(node)}
@@ -3377,7 +3252,7 @@ def _cmd_dependencies(args: argparse.Namespace) -> int:
         limit=limit + 1, graph=graph,
     )
     if not out.success:
-        print(render(Envelope(status="error", message=out.message or "neighbors_v2 failed"), fmt=args.format, detail=args.detail))
+        print(render(Envelope(status="error", message=out.message or tr("ERR_NEIGHBORS_FAILED")), fmt=args.format, detail=args.detail))
         return 2
 
     nodes: dict[str, dict] = {root_id: _noderef_to_node_dict(node)}
@@ -3688,9 +3563,9 @@ def _cmd_outline(args: argparse.Namespace) -> int:
     if file_path is None:
         env = Envelope(
             status="error",
-            message=(
-                f"file not found: {args.file!r} (looked at the literal path and at "
-                f"<source_root>/{args.file})"
+            message=tr(
+                "ERR_FILE_NOT_FOUND",
+                file=args.file,
             ),
         )
         print(render(env, fmt=args.format, detail=args.detail))
@@ -3712,7 +3587,7 @@ def _cmd_outline(args: argparse.Namespace) -> int:
             end_line=2**31 - 1,
         )
     except Exception as exc:
-        env = Envelope(status="error", message=f"outline failed: {exc}")
+        env = Envelope(status="error", message=tr("ERR_OUTLINE_FAILED", exc=exc))
         print(render(env, fmt=args.format, detail=args.detail))
         return 2
 
@@ -3754,9 +3629,9 @@ def _cmd_imports(args: argparse.Namespace) -> int:
     if file_path is None:
         env = Envelope(
             status="error",
-            message=(
-                f"file not found: {args.file!r} (looked at the literal path and at "
-                f"<source_root>/{args.file})"
+            message=tr(
+                "ERR_FILE_NOT_FOUND",
+                file=args.file,
             ),
         )
         print(render(env, fmt=args.format, detail=args.detail))
@@ -3765,7 +3640,7 @@ def _cmd_imports(args: argparse.Namespace) -> int:
     try:
         src = file_path.read_bytes()
     except OSError as exc:
-        env = Envelope(status="error", message=f"could not read {file_path}: {exc}")
+        env = Envelope(status="error", message=tr("ERR_READ_FAILED", path=file_path, exc=exc))
         print(render(env, fmt=args.format, detail=args.detail))
         return 2
 
@@ -3781,9 +3656,10 @@ def _cmd_imports(args: argparse.Namespace) -> int:
     if backend is None:
         env = Envelope(
             status="error",
-            message=(
-                f"no language backend registered for {args.file!r} "
-                f"(suffix {Path(args.file).suffix!r} not in registry)"
+            message=tr(
+                "ERR_NO_BACKEND",
+                file=args.file,
+                suffix=Path(args.file).suffix,
             ),
         )
         print(render(env, fmt=args.format, detail=args.detail))
@@ -4130,7 +4006,7 @@ def _overview_route(args: argparse.Namespace, cfg, graph, route_path: str) -> in
     if node.kind != "route":
         env = Envelope(
             status="error",
-            message=f"overview --as route expects a Route; resolved kind is {node.kind!r}.",
+            message=tr("ERR_OVERVIEW_AS_ROUTE", kind=node.kind),
         )
         print(render(env, fmt=args.format, detail=args.detail))
         return 2
@@ -4421,9 +4297,11 @@ def _cmd_search(args: argparse.Namespace) -> int:
         valid = ", ".join(sorted(_FRAMEWORK_ANNOTATIONS))
         env = Envelope(
             status="error",
-            message=(
-                f"invalid framework: {args.framework!r} (normalized to {framework_want!r}); "
-                f"expected one of: {valid}"
+            message=tr(
+                "ERR_INVALID_FRAMEWORK",
+                framework=args.framework,
+                normalized=framework_want,
+                valid=valid,
             ),
         )
         print(render(env, fmt=args.format, detail=args.detail))
@@ -4445,7 +4323,7 @@ def _cmd_search(args: argparse.Namespace) -> int:
         return pe.rc
 
     if not out.success:
-        env = Envelope(status="error", message=out.message or "search failed")
+        env = Envelope(status="error", message=out.message or tr("ERR_SEARCH_FAILED"))
         print(render(env, fmt=args.format, detail=args.detail))
         return 2
 
@@ -4584,8 +4462,15 @@ def main(argv: list[str] | None = None) -> int:
     """
     raise_fd_limit()
     _suppress_runtime_stderr_noise()
-    parser = build_parser()
+    from java_codebase_rag.i18n import cli_lang_override, init_help_locale, scan_lang
+
     raw = list(argv if argv is not None else sys.argv[1:])
+    # Locale must be known before build_parser(): argparse help strings are
+    # baked at construction. scan_lang catches the after-verb flag form; the
+    # stash carries the dispatch pre-scan's before-verb value (console path,
+    # where the flag tokens were already stripped from argv).
+    init_help_locale(scan_lang(raw) or cli_lang_override())
+    parser = build_parser()
     try:
         args = parser.parse_args(raw)
     except SystemExit as exc:
@@ -4615,12 +4500,12 @@ def main(argv: list[str] | None = None) -> int:
         # values already consumed by the pre-parser), so we don't mis-prefix
         # with a value like ``json`` from ``--format json``.
         cmd = next((t for t in leftover if not t.startswith("-")), None)
-        msg = str(exc).strip() or "usage error"
+        msg = str(exc).strip() or tr("ERR_USAGE_WORD")
         if cmd and not msg.startswith(cmd):
             msg = f"{cmd}: {msg}"
         env = Envelope(status="error", message=msg)
         print(render(env, fmt=fmt, detail=detail))
-        print(f"jrag: error: {msg}", file=sys.stderr)
+        print(f"{tr('LBL_JRAG_ERROR_STDERR')}{msg}", file=sys.stderr)
         return 2
     handler = getattr(args, "handler", None)
     if handler is None:
@@ -4635,7 +4520,7 @@ def main(argv: list[str] | None = None) -> int:
 
         env = Envelope(
             status="error",
-            message=f"internal error: {exc}",
+            message=tr("ERR_INTERNAL", exc=exc),
         )
         print(render(env, fmt=getattr(args, "format", "text")))
         print(traceback.format_exc(), file=sys.stderr)
@@ -4661,7 +4546,7 @@ def _console_script_main() -> None:
     try:
         rc = main()
     except KeyboardInterrupt:
-        sys.stderr.write("\nInterrupted.\n")
+        sys.stderr.write(tr("MSG_INTERRUPTED"))
         sys.stderr.flush()
         rc = 130
     sys.stdout.flush()

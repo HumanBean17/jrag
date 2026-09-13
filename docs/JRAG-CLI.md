@@ -4,6 +4,31 @@ The **`jrag`** command is the **operator surface** for this bundle: index lifecy
 
 > **Renamed from `java-codebase-rag`.** The operator command is now `jrag`; `java-codebase-rag` remains as a working alias (with a TTY-gated deprecation nudge). On-disk artifacts (`.java-codebase-rag/`, `.java-codebase-rag.yml`, `.java-codebase-rag.hosts`) and `JAVA_CODEBASE_RAG_*` env vars are unchanged. See [`MIGRATION.md`](./MIGRATION.md).
 
+## Interface language (Russian)
+
+`--lang {en,ru}` (short `-L`) switches the whole CLI surface — output, `--help`,
+and error messages — to Russian for a single invocation. It is accepted **before
+or after the verb**; the before-verb form is handled by the unified dispatcher,
+which strips and stashes it before routing.
+
+```bash
+jrag --lang ru find ChatController        # before the verb
+jrag find --lang ru ChatController        # after the verb (argparse-validated)
+jrag --lang=ru --help                     # unified help in Russian
+JAVA_CODEBASE_RAG_LANGUAGE=ru jrag status # env tier
+# or persist per-project: `language: ru` in .java-codebase-rag.yml
+```
+
+Locale-independent by contract: exit codes, JSON object keys, envelope field
+names, `--format`/`--detail` values, and command/flag names never translate —
+only human-readable values do. The MCP server (`jrag-mcp`) is always English.
+Note on `watch --detach` under `ru`: the daemon child inherits the resolved
+language, so its warm-path `search`/absence messages render in that locale even
+for later `jrag find` calls that don't pass `--lang` (the cold in-process path
+follows the caller's own locale). Invalid values degrade to English with a
+stderr note. Precedence:
+`--lang` > `JAVA_CODEBASE_RAG_LANGUAGE` > YAML `language:` > `en`.
+
 ## Install and discovery
 
 After installing the package (e.g. editable install from the repo root), the console script is on your `PATH`:

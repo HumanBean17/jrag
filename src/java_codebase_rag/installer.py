@@ -22,6 +22,7 @@ from typing import Literal, NamedTuple
 import yaml
 
 from java_codebase_rag.graph.path_filtering import prune_walk_dirnames
+from java_codebase_rag.i18n import tr as _tr
 
 Scope = Literal["project", "user"]
 Surface = Literal["mcp", "cli"]
@@ -310,10 +311,7 @@ def detect_java_layout(source_root: Path) -> JavaDetection:
         return JavaDetection(LAYOUT_MULTI_SYSTEM, [Path(".")], sorted(system_set))
 
     # 4. No Java build files anywhere under source_root.
-    print(
-        f"Error: No Java build files (pom.xml, build.gradle, build.gradle.kts, "
-        f"build.sbt) found in {source_root} or its subtree."
-    )
+    print(_tr("INST_ERR_NO_JAVA", root=source_root))
     raise SystemExit(2)
 
 
@@ -352,8 +350,8 @@ def confirm_source_root(cwd: Path, *, non_interactive: bool) -> Path:
 
     # Validate path exists and is a directory
     while not result.is_dir():
-        print(f"Error: Path {result} does not exist or is not a directory.")
-        user_input = prompt("text", "Source root:", default=str(cwd))
+        print(_tr("INST_ERR_NOT_A_DIR", path=result))
+        user_input = prompt("text", _tr("INST_PROMPT_SOURCE_ROOT"), default=str(cwd))
         if not user_input or user_input == str(cwd):
             return cwd
         expanded = os.path.expandvars(user_input.strip())
@@ -384,18 +382,18 @@ def resolve_model(model_input: str | None, *, non_interactive: bool) -> str:
 
         # Path not found
         if non_interactive:
-            print(f"Warning: Model path {model_input} not found, falling back to 'auto'.")
+            print(_tr("INST_WARN_MODEL_FALLBACK", model=model_input))
             return "auto"
 
         confirmed = prompt(
             "confirm",
-            f"Model path {model_input} not found. Use 'auto' instead?",
+            _tr("INST_MODEL_NOT_FOUND_CONFIRM", model=model_input),
         )
         if confirmed:
             return "auto"
         else:
             # Re-prompt for model path
-            new_input = prompt("text", "Enter model path (or 'auto'):", default="auto")
+            new_input = prompt("text", _tr("INST_PROMPT_MODEL"), default="auto")
             if new_input == "auto" or not new_input:
                 return "auto"
             return resolve_model(new_input, non_interactive=non_interactive)
@@ -404,7 +402,7 @@ def resolve_model(model_input: str | None, *, non_interactive: bool) -> str:
         return "auto"
 
     # Interactive with no CLI input: prompt for model
-    user_input = prompt("text", "Embedding model path (or 'auto'):", default="auto")
+    user_input = prompt("text", _tr("INST_PROMPT_MODEL_FULL"), default="auto")
     if user_input == "auto" or not user_input:
         return "auto"
     return resolve_model(user_input, non_interactive=False)
@@ -427,13 +425,13 @@ def select_hosts(*, non_interactive: bool, cli_agents: list[str] | None) -> list
         # Validate agent names
         for agent in cli_agents:
             if agent not in HOSTS:
-                print(f"Error: Unknown agent '{agent}'. Valid agents: {', '.join(HOSTS.keys())}")
+                print(_tr("INST_ERR_UNKNOWN_AGENT", agent=agent, valid=", ".join(HOSTS.keys())))
                 raise SystemExit(2)
         return [HOSTS[agent] for agent in cli_agents]
 
     if non_interactive:
-        print("Error: --agent flag is required in non-interactive mode.")
-        print(f"Valid agents: {', '.join(HOSTS.keys())}")
+        print(_tr("INST_ERR_AGENT_REQUIRED"))
+        print(_tr("INST_VALID_AGENTS", valid=", ".join(HOSTS.keys())))
         raise SystemExit(2)
 
     # Interactive: show checkbox with claude-code pre-selected (most common)
@@ -444,22 +442,19 @@ def select_hosts(*, non_interactive: bool, cli_agents: list[str] | None) -> list
         for name in host_names
     ]
 
-    print("Note: You can select multiple agent hosts with Space. Navigate with arrow keys.")
-    selected = prompt("checkbox", "Select agent hosts to configure:", choices=choices)
+    print(_tr("INST_NOTE_HOSTS"))
+    selected = prompt("checkbox", _tr("INST_PROMPT_HOSTS"), choices=choices)
 
     if not selected:
         # User unselected all - prompt to re-select or abort
-        retry = prompt(
-            "confirm",
-            "At least one agent host is required. Re-select hosts?",
-        )
+        retry = prompt("confirm", _tr("INST_RETRY_HOSTS"))
         if retry:
             return select_hosts(non_interactive=False, cli_agents=None)
         else:
             raise SystemExit(2)
 
     # Show confirmation of what will be deployed
-    print(f"Will deploy to: {', '.join(selected)}")
+    print(_tr("INST_WILL_DEPLOY", names=", ".join(selected)))
     return [HOSTS[name] for name in selected]
 
 
@@ -499,19 +494,16 @@ def select_microservices(
         for name in dir_names
     ]
 
-    print("Note: Select which modules to index. Toggle with Space, confirm with Enter.")
+    print(_tr("INST_NOTE_MODULES"))
     selected = prompt(
         "checkbox",
-        "Select microservices to index:",
+        _tr("INST_PROMPT_MODULES"),
         choices=choices,
         default=dir_names,  # non-TTY fallback returns all -> caller omits key
     )
 
     if not selected:
-        retry = prompt(
-            "confirm",
-            "At least one module is required. Re-select?",
-        )
+        retry = prompt("confirm", _tr("INST_RETRY_MODULES"))
         if retry:
             return select_microservices(java_dirs, non_interactive=False, preselected=preselected)
         raise SystemExit(2)
@@ -535,7 +527,7 @@ def select_scope(*, non_interactive: bool, cli_scope: str | None) -> Scope:
     """
     if cli_scope:
         if cli_scope not in ("project", "user"):
-            print(f"Error: Invalid scope '{cli_scope}'. Must be 'project' or 'user'.")
+            print(_tr("INST_ERR_SCOPE", scope=cli_scope))
             raise SystemExit(2)
         return cli_scope  # type: ignore
 
@@ -543,18 +535,18 @@ def select_scope(*, non_interactive: bool, cli_scope: str | None) -> Scope:
         return "project"
 
     # Interactive: prompt for scope
-    print("Note: 'project' scope stores configs in the project directory.")
-    print("      'user' scope stores configs in your home directory.")
+    print(_tr("INST_NOTE_SCOPE_PROJECT"))
+    print(_tr("INST_NOTE_SCOPE_USER"))
     selected = prompt(
         "select",
-        "Select installation scope:",
+        _tr("INST_PROMPT_SCOPE"),
         choices=["project", "user"],
     )
 
     if not selected:
         return "project"
 
-    print(f"Selected scope: {selected}")
+    print(_tr("INST_SELECTED_SCOPE", scope=selected))
     return selected  # type: ignore
 
 
@@ -601,7 +593,7 @@ def select_surface(
     """
     if cli_surface:
         if cli_surface not in ("mcp", "cli"):
-            print(f"Error: Invalid surface '{cli_surface}'. Must be 'mcp' or 'cli'.")
+            print(_tr("INST_ERR_SURFACE", surface=cli_surface))
             raise SystemExit(2)
         return cli_surface  # type: ignore
 
@@ -609,14 +601,8 @@ def select_surface(
         # Default to the recommended CLI surface when no flag is passed.
         return "cli"
 
-    print(
-        "Note: 'cli' surface deploys the `jrag` console-script skill+subagent "
-        "(one command per intent, no MCP server) — recommended."
-    )
-    print(
-        "      'mcp' surface registers the java-codebase-rag MCP server "
-        "(5 tools: search/find/describe/neighbors/resolve)."
-    )
+    print(_tr("INST_NOTE_SURFACE_CLI"))
+    print(_tr("INST_NOTE_SURFACE_MCP"))
 
     # cli is always shown first + recommended; the cursor defaults to the prior
     # choice (prefill) on re-run so the user can keep it with Enter.
@@ -625,7 +611,7 @@ def select_surface(
 
     selected = prompt(
         "select",
-        "Select agent surface:",
+        _tr("INST_PROMPT_SURFACE"),
         choices=choices,
         default=default,
     )
@@ -681,7 +667,7 @@ def select_retrieval(
     """
     if cli_retrieval:
         if cli_retrieval not in ("vectors", "bm25"):
-            print(f"Error: Invalid retrieval '{cli_retrieval}'. Must be 'vectors' or 'bm25'.")
+            print(_tr("INST_ERR_RETRIEVAL", retrieval=cli_retrieval))
             raise SystemExit(2)
         return cli_retrieval  # type: ignore
 
@@ -689,12 +675,7 @@ def select_retrieval(
         # Default to the recommended vectors mode when no flag is passed.
         return "vectors"
 
-    print(
-        "Note: 'vectors' needs an embedding model (auto-downloaded from Hugging "
-        "Face, or a local path); 'bm25' is keyword search — no model, no "
-        "downloads, works offline. In bm25 mode the Lance source table is not "
-        "searched (Java/Kotlin symbols only)."
-    )
+    print(_tr("INST_NOTE_RETRIEVAL"))
 
     # vectors is always shown first + recommended; the cursor defaults to the
     # prior choice (prefill) on re-run so the user can keep it with Enter.
@@ -706,7 +687,7 @@ def select_retrieval(
 
     selected = prompt(
         "select",
-        "Select retrieval mode:",
+        _tr("INST_PROMPT_RETRIEVAL"),
         choices=choices,
         default=default,
     )
@@ -746,24 +727,18 @@ def resolve_mcp_command(*, non_interactive: bool, surface: Surface = "mcp") -> s
 
     # Not found on PATH
     if non_interactive:
-        print(f"Error: `{display_name}` not found on PATH.")
+        print(_tr("INST_ERR_BINARY_NOT_FOUND", name=display_name))
         if surface == "mcp":
-            print(
-                "Ensure `jrag` is installed, then re-run with "
-                "`--non-interactive --agent <host>`."
-            )
+            print(_tr("INST_ENSURE_JRAG"))
         else:
-            print(
-                "Ensure the `jrag` console script is installed, "
-                "then re-run with `--non-interactive --agent <host>`."
-            )
+            print(_tr("INST_ENSURE_CONSOLE"))
         raise SystemExit(2)
 
     # Interactive: prompt user for path
-    print(f"Warning: `{display_name}` not found on PATH.")
+    print(_tr("INST_WARN_BINARY_NOT_FOUND", name=display_name))
     user_path = prompt(
         "text",
-        f"Enter the full path to {display_name} (or 'abort'):",
+        _tr("INST_PROMPT_BINARY_PATH", name=display_name),
         default="abort",
     )
 
@@ -776,10 +751,10 @@ def resolve_mcp_command(*, non_interactive: bool, surface: Surface = "mcp") -> s
     path_obj = Path(expanded)
 
     while not path_obj.is_file():
-        print(f"Error: Path {path_obj} does not exist or is not a file.")
+        print(_tr("INST_ERR_NOT_A_FILE", path=path_obj))
         user_path = prompt(
             "text",
-            f"Enter the full path to {display_name} (or 'abort'):",
+            _tr("INST_PROMPT_BINARY_PATH", name=display_name),
             default="abort",
         )
         if user_path == "abort" or not user_path:
@@ -790,7 +765,7 @@ def resolve_mcp_command(*, non_interactive: bool, surface: Surface = "mcp") -> s
 
     # Check if executable
     if not os.access(path_obj, os.X_OK):
-        print(f"Warning: {path_obj} is not executable. This may cause issues.")
+        print(_tr("INST_WARN_NOT_EXECUTABLE", path=path_obj))
 
     return str(path_obj.resolve())
 
@@ -1220,8 +1195,8 @@ def run_init_if_needed(
         write_config_source_pointer,
     )
     from java_codebase_rag.pipeline import (
-        RETRIEVAL_BM25_HINT,
-        VECTORS_SKIPPED_BM25,
+        retrieval_bm25_hint,
+        vectors_skipped_bm25,
         is_cocoindex_preflight_blocker,
         run_build_ast_graph,
         run_cocoindex_update,
@@ -1229,7 +1204,7 @@ def run_init_if_needed(
 
     has_existing, _ = index_dir_has_existing_artifacts(index_dir)
     if has_existing:
-        print("Index already exists. Run `jrag reprocess` to rebuild.")
+        print(_tr("INST_INDEX_EXISTS"))
         return None  # skipped, not failed
 
     cfg = resolve_operator_config(
@@ -1265,7 +1240,7 @@ def run_init_if_needed(
         vectors_skipped = bm25_mode
         coco_failed = False
         if bm25_mode:
-            print(VECTORS_SKIPPED_BM25, file=sys.stderr, flush=True)
+            print(vectors_skipped_bm25(), file=sys.stderr, flush=True)
         else:
             coco = run_cocoindex_update(
                 env,
@@ -1282,19 +1257,15 @@ def run_init_if_needed(
             coco_failed = coco.returncode != 0 and not vectors_skipped
             if coco_failed:
                 print(
-                    f"Error: CocoIndex update failed with code {coco.returncode}",
+                    _tr("INST_ERR_COCO", code=coco.returncode),
                     file=sys.stderr,
                 )
                 # Remediation hint (suppressed when the mode is already bm25 —
                 # the guard is unreachable here today, kept honest on purpose).
                 if retrieval_mode_from_env() != "bm25":
-                    print(RETRIEVAL_BM25_HINT, file=sys.stderr, flush=True)
+                    print(retrieval_bm25_hint(), file=sys.stderr, flush=True)
             elif vectors_skipped:
-                print(
-                    "jrag: vectors skipped — vector stack not installed on this "
-                    "platform (graph-only mode). Building graph only; semantic search is unavailable.",
-                    file=sys.stderr,
-                )
+                print(_tr("INST_VECTORS_SKIPPED_INSTALL"), file=sys.stderr)
         if coco_failed:
             index_ok = False
         else:
@@ -1309,7 +1280,7 @@ def run_init_if_needed(
             )
             if g.returncode != 0:
                 print(
-                    f"Error: AST graph build failed with code {g.returncode}",
+                    _tr("INST_ERR_AST", code=g.returncode),
                     file=sys.stderr,
                 )
                 index_ok = False
@@ -1351,23 +1322,23 @@ def handle_rerun(cwd: Path, *, non_interactive: bool) -> dict | None:
         with open(config_path, "r") as f:
             existing_config = yaml.safe_load(f) or {}
     except yaml.YAMLError as e:
-        print(f"Warning: Failed to parse existing config: {e}")
+        print(_tr("INST_WARN_PARSE_FAIL", exc=e))
         return None
 
     if non_interactive:
         # Default to update mode in non-interactive
-        print(f"Found existing config at {config_path}")
+        print(_tr("INST_FOUND_CONFIG", path=config_path))
         return existing_config
 
     # Interactive: show current values and ask
-    print(f"Found existing config at {config_path}")
-    print("Current configuration:")
+    print(_tr("INST_FOUND_CONFIG", path=config_path))
+    print(_tr("INST_CURRENT_CONFIG"))
     for key, value in existing_config.items():
         print(f"  {key}: {value}")
 
     choice = prompt(
         "select",
-        "Choose an action:",
+        _tr("INST_PROMPT_CHOOSE_ACTION"),
         choices=[
             {"name": "Update (keep existing values)", "value": "update"},
             {"name": "Start fresh (new config)", "value": "fresh"},
@@ -1469,7 +1440,7 @@ def _write_hosts_marker(
                 pass
         # Non-fatal: ``update`` will fall back to the MCP-entry scan. Surface
         # a warning so the operator notices, but do not abort the install.
-        print(f"Warning: failed to write {_marker_path(project_root)}: {e}")
+        print(_tr("INST_WARN_MARKER_WRITE", path=_marker_path(project_root), exc=e))
 
 
 def _read_hosts_marker(cwd: Path) -> list[ConfiguredHost] | None:
@@ -1622,11 +1593,11 @@ def _refresh_file(
 
             # Content differs or force mode
             if dry_run:
-                print(f"Would update {artifact_type} file at {dest_path}")
+                print(_tr("INST_WOULD_UPDATE_FILE", kind=artifact_type, path=dest_path))
                 return ArtifactResult(path=dest_path, success=True, error=None)
 
         elif dry_run:
-            print(f"Would create {artifact_type} file at {dest_path}")
+            print(_tr("INST_WOULD_CREATE_FILE", kind=artifact_type, path=dest_path))
             return ArtifactResult(path=dest_path, success=True, error=None)
 
         # Ensure parent directory exists
@@ -1644,7 +1615,7 @@ def _refresh_file(
         # Write file (skip in dry_run mode)
         if not dry_run:
             dest_path.write_text(package_content, encoding="utf-8")
-            print(f"Updated {artifact_type} file at {dest_path}")
+            print(_tr("INST_UPDATED_FILE", kind=artifact_type, path=dest_path))
 
         return ArtifactResult(path=dest_path, success=True, error=None)
 
@@ -1711,7 +1682,7 @@ def _refresh_mcp_config(
 
         # Entry differs or force mode
         if dry_run:
-            print(f"Would update MCP config at {config_path}")
+            print(_tr("INST_WOULD_UPDATE_MCP", path=config_path))
             return ArtifactResult(path=config_path, success=True, error=None)
 
         # Merge/update entry
@@ -1744,7 +1715,7 @@ def _refresh_mcp_config(
 
             # Atomic rename
             os.replace(tmp_name, config_path)
-            print(f"Updated MCP config at {config_path}")
+            print(_tr("INST_UPDATED_MCP", path=config_path))
             return ArtifactResult(path=config_path, success=True, error=None)
 
         except (IOError, OSError) as e:
@@ -1785,7 +1756,7 @@ def _remove_mcp_entry(config_path: Path, *, dry_run: bool) -> ArtifactResult:
         return ArtifactResult(path=config_path, success=True, error=None)
 
     if dry_run:
-        print(f"Would remove MCP entry from {config_path}")
+        print(_tr("INST_WOULD_REMOVE_MCP", path=config_path))
         return ArtifactResult(path=config_path, success=True, error=None)
 
     del servers[_MCP_SERVER_NAME]
@@ -1805,7 +1776,7 @@ def _remove_mcp_entry(config_path: Path, *, dry_run: bool) -> ArtifactResult:
             os.fsync(tmp.fileno())
             tmp_name = tmp.name
         os.replace(tmp_name, config_path)
-        print(f"Removed MCP entry from {config_path}")
+        print(_tr("INST_REMOVED_MCP", path=config_path))
         return ArtifactResult(path=config_path, success=True, error=None)
     except (IOError, OSError) as e:
         if tmp_name:
@@ -1828,7 +1799,7 @@ def _remove_artifact_file(dest_path: Path, *, dry_run: bool) -> ArtifactResult:
     if not dest_path.is_file():
         return ArtifactResult(path=dest_path, success=True, error=None)
     if dry_run:
-        print(f"Would remove {dest_path}")
+        print(_tr("INST_WOULD_REMOVE_FILE", path=dest_path))
         return ArtifactResult(path=dest_path, success=True, error=None)
     try:
         dest_path.unlink()
@@ -1837,7 +1808,7 @@ def _remove_artifact_file(dest_path: Path, *, dry_run: bool) -> ArtifactResult:
         except OSError:
             # Not empty or not removable — leave the directory in place.
             pass
-        print(f"Removed {dest_path}")
+        print(_tr("INST_REMOVED_FILE", path=dest_path))
         return ArtifactResult(path=dest_path, success=True, error=None)
     except OSError as e:
         return ArtifactResult(
@@ -1934,11 +1905,11 @@ def run_update(
     configured_hosts = detect_configured_hosts(cwd)
 
     if not configured_hosts:
-        print("No configured agent hosts found.")
-        print("Run `jrag install` first.")
+        print(_tr("INST_NO_HOSTS"))
+        print(_tr("INST_RUN_INSTALL_FIRST"))
         return EXIT_FATAL
 
-    print(f"Found {len(configured_hosts)} configured host(s).")
+    print(_tr("INST_FOUND_HOSTS", n=len(configured_hosts)))
 
     # Resolve the target surface. ``--surface`` validates + overrides; a TTY
     # with no flag prompts (cursor on the current surface); a non-TTY with no
@@ -1953,14 +1924,18 @@ def run_update(
     if len(current_surfaces) > 1:
         if chosen_surface is None:
             print(
-                f"Note: configured hosts span multiple surfaces "
-                f"({sorted(current_surfaces)}); refreshing each on its own "
-                f"recorded surface (pass --surface to normalize)."
+                _tr(
+                    "INST_NOTE_MULTI_SURFACE_OWN",
+                    surfaces=sorted(current_surfaces),
+                )
             )
         else:
             print(
-                f"Note: configured hosts span multiple surfaces "
-                f"({sorted(current_surfaces)}); normalizing to '{chosen_surface}'."
+                _tr(
+                    "INST_NOTE_MULTI_SURFACE_NORMALIZE",
+                    surfaces=sorted(current_surfaces),
+                    surface=chosen_surface,
+                )
             )
 
     # If any host needs to migrate, resolve the target surface's runtime binary
@@ -1981,13 +1956,13 @@ def run_update(
         except SystemExit:
             binary = "jrag" if chosen_surface == "cli" else "java-codebase-rag-mcp"
             print(
-                f"Error: `{binary}` not found on PATH — cannot migrate to the "
-                f"'{chosen_surface}' surface."
+                _tr(
+                    "INST_ERR_MIGRATE_BINARY",
+                    name=binary,
+                    surface=chosen_surface,
+                )
             )
-            print(
-                "Ensure `jrag` is installed, then re-run `update "
-                f"--surface {chosen_surface}`."
-            )
+            print(_tr("INST_ENSURE_MIGRATE", surface=chosen_surface))
             return EXIT_PARTIAL
 
     # Refresh (or migrate) artifacts for each host. When chosen_surface is None
@@ -1999,13 +1974,21 @@ def run_update(
         if chosen_surface is not None and host_surface != chosen_surface:
             migrated = True
             print(
-                f"\nMigrating {host_config.name} ({scope} scope): "
-                f"{host_surface} → {chosen_surface}..."
+                _tr(
+                    "INST_MIGRATING",
+                    name=host_config.name,
+                    scope=scope,
+                    from_s=host_surface,
+                    to_s=chosen_surface,
+                )
             )
             if dry_run:
                 print(
-                    f"  Would tear down {host_surface} artifacts and deploy "
-                    f"{chosen_surface} artifacts."
+                    _tr(
+                        "INST_WOULD_TEAR_DOWN",
+                        from_s=host_surface,
+                        to_s=chosen_surface,
+                    )
                 )
                 updated_configured.append(
                     ConfiguredHost(host_config, scope, chosen_surface)
@@ -2031,7 +2014,12 @@ def run_update(
             )
         else:
             print(
-                f"\nRefreshing {host_config.name} ({scope} scope, surface={host_surface})..."
+                _tr(
+                    "INST_REFRESHING",
+                    name=host_config.name,
+                    scope=scope,
+                    surface=host_surface,
+                )
             )
             results = refresh_artifacts(
                 host_config,
@@ -2054,9 +2042,9 @@ def run_update(
     partial_failures = [r for r in all_results if not r.success]
     has_artifact_failures = len(partial_failures) > 0
     if partial_failures:
-        print("\nWarning: Some artifacts failed to update:")
+        print(_tr("INST_WARN_SOME_FAILED_UPDATE"))
         for r in partial_failures:
-            print(f"  {r.path}: {r.error}")
+            print(_tr("INST_ARTIFACT_ROW", path=r.path, error=r.error))
 
     # Check if index exists
     from java_codebase_rag.config import (
@@ -2067,8 +2055,8 @@ def run_update(
         write_config_source_pointer,
     )
     from java_codebase_rag.pipeline import (
-        RETRIEVAL_BM25_HINT,
-        VECTORS_SKIPPED_BM25,
+        retrieval_bm25_hint,
+        vectors_skipped_bm25,
         is_cocoindex_preflight_blocker,
         run_cocoindex_update,
         run_incremental_graph,
@@ -2076,8 +2064,8 @@ def run_update(
 
     project_root = discover_project_root(cwd)
     if project_root is None:
-        print("\nNo project configuration found (.java-codebase-rag.yml).")
-        print("Skipping index update.")
+        print(_tr("INST_NO_CONFIG"))
+        print(_tr("INST_SKIPPING_UPDATE"))
         return EXIT_PARTIAL if has_artifact_failures else EXIT_SUCCESS
 
     # Resolve configuration. Pass source_root=None so the YAML ``source_root``
@@ -2090,16 +2078,16 @@ def run_update(
         cfg = resolve_operator_config(source_root=None, cli_index_dir=None)
         index_dir = cfg.index_dir
     except Exception as e:
-        print(f"\nWarning: Failed to resolve configuration: {e}")
-        print("Skipping index update.")
+        print(_tr("INST_WARN_RESOLVE_FAIL", exc=e))
+        print(_tr("INST_SKIPPING_UPDATE"))
         return EXIT_PARTIAL if has_artifact_failures else EXIT_SUCCESS
 
     # Check if index has existing artifacts
     index_exists, _ = index_dir_has_existing_artifacts(index_dir)
 
     if not index_exists:
-        print("\nNo index found.")
-        print("Run `jrag install` to create one.")
+        print(_tr("INST_NO_INDEX"))
+        print(_tr("INST_RUN_INSTALL"))
         return EXIT_PARTIAL if has_artifact_failures else EXIT_SUCCESS
 
     # Run increment: LanceDB catch-up + incremental graph rebuild.
@@ -2135,7 +2123,7 @@ def run_update(
             vectors_skipped = bm25_mode
             coco_failed = False
             if bm25_mode:
-                print(VECTORS_SKIPPED_BM25, file=sys.stderr, flush=True)
+                print(vectors_skipped_bm25(), file=sys.stderr, flush=True)
             else:
                 coco = run_cocoindex_update(
                     env,
@@ -2151,17 +2139,13 @@ def run_update(
                 coco_failed = coco.returncode != 0 and not vectors_skipped
                 if coco_failed:
                     print(
-                        f"Error: Lance index update failed with code {coco.returncode}",
+                        _tr("INST_ERR_LANCE", code=coco.returncode),
                         file=sys.stderr,
                     )
                     if retrieval_mode_from_env() != "bm25":
-                        print(RETRIEVAL_BM25_HINT, file=sys.stderr, flush=True)
+                        print(retrieval_bm25_hint(), file=sys.stderr, flush=True)
                 elif vectors_skipped:
-                    print(
-                        "jrag: vectors skipped — vector stack not installed on this "
-                        "platform (graph-only mode). Running graph catch-up only.",
-                        file=sys.stderr,
-                    )
+                    print(_tr("INST_VECTORS_SKIPPED_UPDATE"), file=sys.stderr)
             if coco_failed:
                 index_ok = False
             else:
@@ -2182,8 +2166,7 @@ def run_update(
                     # footer marker and the return code) — exit 0 with a green
                     # check + the Warning line carrying the graph caveat.
                     print(
-                        f"\nWarning: incremental graph update failed (exit {g.returncode}). "
-                        "Run `jrag reprocess` for a full rebuild.",
+                        _tr("INST_WARN_INCREMENTAL_GRAPH", code=g.returncode),
                         file=sys.stderr,
                     )
         except BaseException:
@@ -2204,12 +2187,12 @@ def run_update(
             index_dir=cfg.index_dir, yaml_config_path=cfg.yaml_config_path
         )
     else:
-        print("\nWould run incremental index update (Lance + graph).")
+        print(_tr("INST_WOULD_RUN_INCREMENTAL"))
 
     # Print summary
-    print("\nUpdate complete.")
+    print(_tr("INST_UPDATE_COMPLETE"))
     successful = [r for r in all_results if r.success]
-    print(f"Updated {len(successful)} artifact(s).")
+    print(_tr("INST_UPDATED_ARTIFACTS", n=len(successful)))
 
     return 1 if has_artifact_failures else 0
 
@@ -2289,10 +2272,7 @@ def run_install(
         # index to embed into — bm25 keyword search is the only usable mode and the
         # embedding-model choice is inert here. Force both and let init build the
         # graph (vectors phase auto-skipped).
-        print(
-            "Skipping embedding model selection: vector stack not installed on this "
-            "platform (graph-only mode)."
-        )
+        print(_tr("INST_SKIP_MODEL_GRAPH_ONLY"))
         retrieval = "bm25"
         resolved_model = "auto"
     else:
@@ -2304,10 +2284,7 @@ def run_install(
         if retrieval == "bm25":
             # Keyword search needs no embedding model, so the model question is
             # inert — do not resolve (or prompt for) a model that is never used.
-            print(
-                "Skipping embedding model selection: retrieval mode is bm25 "
-                "(keyword search; no model needed)."
-            )
+            print(_tr("INST_SKIP_MODEL_BM25"))
             resolved_model = "auto"
         else:
             resolved_model = resolve_model(model, non_interactive=non_interactive)
@@ -2341,9 +2318,9 @@ def run_install(
     # Check for partial failures
     partial_failures = [r for r in results if not r.success]
     if partial_failures:
-        print("Warning: Some artifacts failed to deploy:")
+        print(_tr("INST_WARN_SOME_FAILED_DEPLOY"))
         for r in partial_failures:
-            print(f"  {r.path}: {r.error}")
+            print(_tr("INST_ARTIFACT_ROW", path=r.path, error=r.error))
         # Severity model: only MCP config (.json/.yml/.yaml) deploy failures are
         # critical (return 1) -- a broken MCP config means the server cannot start.
         # Skill/agent (.md / dir) failures are downgraded to non-critical: the
@@ -2357,7 +2334,7 @@ def run_install(
             if r.path.suffix in [".json", ".yml", ".yaml"]
         ):
             # MCP configs succeeded - non-critical
-            print("Continuing (MCP configs deployed successfully)...")
+            print(_tr("INST_CONTINUING"))
         else:
             # Critical failures
             return 1
@@ -2388,7 +2365,7 @@ def run_install(
     update_gitignore(source_root)
 
     if not quiet:
-        print("Configuration written to", config_path)
+        print(_tr("INST_CONFIG_WRITTEN", path=config_path))
 
     # Run init if index directory is empty. run_init_if_needed returns True (ran
     # OK), False (ran and failed — cocoindex/graph non-zero exit), or None

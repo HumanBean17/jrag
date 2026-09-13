@@ -49,7 +49,7 @@ from typing import TYPE_CHECKING, Any
 
 from java_codebase_rag.config import retrieval_mode_from_env
 from java_codebase_rag.pipeline import (
-    RETRIEVAL_BM25_HINT,
+    retrieval_bm25_hint,
     lexical_mode_label,
     vector_stack_installed,
 )
@@ -173,7 +173,7 @@ class WatchDaemon:
                 # unreachable here because _vector_enabled implies vectors, kept
                 # honest on purpose).
                 if retrieval_mode_from_env() != "bm25":
-                    print(RETRIEVAL_BM25_HINT, file=sys.stderr, flush=True)
+                    print(retrieval_bm25_hint(), file=sys.stderr, flush=True)
                 self._record("error", {"phase": "model_load", "error": repr(exc)})
                 self.lock.release()
                 return 2

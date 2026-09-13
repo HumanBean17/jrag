@@ -300,7 +300,7 @@ class SourceWatcher:
             if self._vector_enabled:
                 self._emit("vectors", {"kinds": kind_list})
                 vres = run_cocoindex_update(
-                    self.cfg.subprocess_env(),
+                    self.cfg.subprocess_env(language=True),
                     full_reprocess=False,
                     quiet=True,
                     verbose=False,
@@ -324,7 +324,7 @@ class SourceWatcher:
                         ladybug_path=self.cfg.ladybug_path,
                         verbose=False,
                         quiet=True,
-                        env=self.cfg.subprocess_env(),
+                        env=self.cfg.subprocess_env(language=True),
                     )
                     graph_rc = gres.returncode
                 finally:

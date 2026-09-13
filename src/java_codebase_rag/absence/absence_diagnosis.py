@@ -32,6 +32,7 @@ from collections import Counter
 from difflib import SequenceMatcher
 from typing import Any, Literal
 
+from java_codebase_rag.i18n import tr as _tr
 from java_codebase_rag.absence.absence_types import (
     AbsenceDiagnosis,
     AbsenceProof,
@@ -142,10 +143,7 @@ def _diagnose_inner(
         return AbsenceDiagnosis(
             verdict="external_dependency",
             cause="external",
-            message=(
-                f"`{ext.fqn}` is referenced by this project but not defined in it "
-                f"({ext.reason}). It is an external dependency."
-            ),
+            message=_tr("ABS_EXTERNAL", fqn=ext.fqn, reason=ext.reason),
             external_identity=ext,
         )
 
@@ -188,10 +186,7 @@ def _diagnose_inner(
         return AbsenceDiagnosis(
             verdict="refine_query",
             cause="identifier_miss",
-            message=(
-                f"No node with id `{query}`. Run `resolve` to map a name/FQN to an id, "
-                "or `search` to discover symbols."
-            ),
+            message=_tr("ABS_NO_NODE_ID", query=query),
         )
 
     # --- find (filter) path.
@@ -214,10 +209,7 @@ def _diagnose_query(
         return AbsenceDiagnosis(
             verdict="refine_query",
             cause="identifier_miss",
-            message=(
-                "Index appears empty/unindexed — verify the project was indexed "
-                "before concluding a symbol is absent."
-            ),
+            message=_tr("ABS_EMPTY_INDEX"),
         )
 
     if _is_identifier_shaped(query):
@@ -243,10 +235,7 @@ def _diagnose_query(
     return AbsenceDiagnosis(
         verdict="refine_query",
         cause="nl_miss",
-        message=(
-            f"No symbol matches `{query}`. Refine the query — try an identifier "
-            "(class/method/FQN) or browse the project vocabulary below."
-        ),
+        message=_tr("ABS_NL_MISS", query=query),
         vocabulary_context=ctx,
     )
 
@@ -264,10 +253,7 @@ def _diagnose_find(
         return AbsenceDiagnosis(
             verdict="refine_query",
             cause="identifier_miss",
-            message=(
-                "Index appears empty/unindexed — verify the project was indexed "
-                "before concluding a symbol is absent."
-            ),
+            message=_tr("ABS_EMPTY_INDEX"),
         )
 
     identifier = _extract_identifier(filt, filter_kind)
@@ -281,10 +267,7 @@ def _diagnose_find(
             return AbsenceDiagnosis(
                 verdict="refine_query",
                 cause="filter_miss",
-                message=(
-                    f"No results for `{identifier}` under the current filter. "
-                    "Close matches exist — try relaxing a dimension (see filter_relaxation)."
-                ),
+                message=_tr("ABS_FILTER_MISS_CLOSE", identifier=identifier),
                 closest_symbols=closest,
                 distances=distances,
                 filter_relaxation=relax,
@@ -309,10 +292,7 @@ def _diagnose_find(
     return AbsenceDiagnosis(
         verdict="refine_query",
         cause="filter_miss",
-        message=(
-            "No results under the current filter. Matches exist under other values "
-            "(see filter_relaxation)."
-        ),
+        message=_tr("ABS_FILTER_MISS"),
         filter_relaxation=relax,
     )
 
@@ -322,18 +302,17 @@ def _diagnose_neighbors(root_node: NodeRef, graph: Any) -> AbsenceDiagnosis:
         return AbsenceDiagnosis(
             verdict="correct_empty",
             cause="meaningful_empty",
-            message=(
-                f"`{root_node.fqn or root_node.id}` has no neighbors of the requested "
-                "type here — this is a genuine leaf / external entrypoint, not an error."
+            message=_tr(
+                "ABS_NEIGHBORS_MEANINGFUL",
+                node=root_node.fqn or root_node.id,
             ),
         )
     return AbsenceDiagnosis(
         verdict="refine_query",
         cause="identifier_miss",
-        message=(
-            f"No neighbors for `{root_node.fqn or root_node.id}` with the requested "
-            "edge type/direction. Run `describe` and inspect `edge_summary` for the "
-            "edge types this node actually participates in."
+        message=_tr(
+            "ABS_NEIGHBORS_MISS",
+            node=root_node.fqn or root_node.id,
         ),
     )
 
@@ -405,17 +384,11 @@ def _identifier_message(
     query: str, verdict: str, closest: list[NodeRef],
 ) -> str:
     if verdict == "not_in_project":
-        return (
-            f"No symbol matching `{query}` was found in the project vocabulary. "
-            "It does not appear to be defined here."
-        )
+        return _tr("ABS_NOT_IN_PROJECT", query=query)
     if closest:
         names = ", ".join(s.name or s.fqn for s in closest[:3])
-        return (
-            f"No exact match for `{query}`. Closest symbols: {names}. "
-            "Refine the query (typo? scope?) and retry."
-        )
-    return f"No match for `{query}`. Refine the query and retry."
+        return _tr("ABS_CLOSEST", query=query, names=names)
+    return _tr("ABS_NO_MATCH_PLAIN", query=query)
 
 
 # --------------------------------------------------------------------------- #
@@ -652,19 +625,13 @@ def _capability_message(subject: str, redirect_labels: list[str]) -> str:
     operator remedies; it can only query right and expect right.
     """
     noun = "" if subject.endswith(("nodes", "edges")) else " edges"
-    head = f"This index contains 0 {subject}{noun} —"
-    mid = (
-        f" any query on {subject} returns empty regardless of arguments — "
-        "don't retry it."
-    )
+    head = _tr("ABS_CAPABILITY_HEAD", subject_noun=f"{subject}{noun}")
+    mid = _tr("ABS_CAPABILITY_MID", subject=subject)
     if redirect_labels:
         named = ", ".join(f"`{label}`" for label in redirect_labels)
-        tail = (
-            f" For what you need, use the edge types this index does have "
-            f"(e.g. {named})."
-        )
+        tail = _tr("ABS_CAPABILITY_TAIL_REDIRECT", named=named)
     else:
-        tail = " For symbol discovery use `find`/`search` instead."
+        tail = _tr("ABS_CAPABILITY_TAIL_FIND")
     return head + mid + tail
 
 
@@ -784,7 +751,7 @@ def _fallback_refine() -> AbsenceDiagnosis | None:
         return AbsenceDiagnosis(
             verdict="refine_query",
             cause="identifier_miss",
-            message="Unable to diagnose the empty result; refine the query and retry.",
+            message=_tr("ABS_UNABLE"),
         )
     except Exception:  # noqa: BLE001
         return None

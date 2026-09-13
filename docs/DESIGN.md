@@ -58,3 +58,14 @@ One repo, two stores, two audiences:
 - **`jrag watch` is not network/remote and not for the MCP surface** — it serves warm reads over a local Unix socket to the `jrag` CLI only; the MCP server has its own warm-cache posture and is untouched.
 
 Non-goal detail: [`docs/AGENT-GUIDE.md`](./AGENT-GUIDE.md) (§ "What this MCP is not"). Roadmap and future direction live in [`docs/PRODUCT-VISION.md`](./PRODUCT-VISION.md), not here.
+
+## Localization (opt-in, en-first)
+
+The CLI is localizable (currently `en`/`ru`) behind one knob — `--lang`,
+`JAVA_CODEBASE_RAG_LANGUAGE`, or YAML `language:` — with English as both the
+default and the fallback (a missing RU catalog entry degrades to English, never
+to an error). The boundary is *values, not contracts*: JSON keys, envelope
+field names, exit codes, and command/flag names never translate. MCP is
+deliberately out of scope — the server surface stays English so agent
+consumers and golden payloads see byte-stable output regardless of operator
+language.

@@ -1057,3 +1057,165 @@ def test_exists_json_shape_on_non_ok() -> None:
     assert json.loads(render(amb, fmt="json", exists=True)) == {
         "status": "ambiguous", "exists": False,
     }
+
+
+# ----- i18n: Russian render labels (en/ru parity, EN byte-stable) ----------
+
+
+def _absence(verdict: str, message: str = ""):
+    from java_codebase_rag.absence.absence_types import AbsenceDiagnosis
+
+    return AbsenceDiagnosis(verdict=verdict, cause="identifier_miss", message=message)
+
+
+def test_render_russian_not_found_verdict() -> None:
+    from java_codebase_rag import i18n
+
+    env = Envelope(status="not_found", message="ChatCtrl", absence=_absence("refine_query"))
+    i18n.set_locale("ru")
+    try:
+        out = render(env, fmt="text", noun="symbol")
+    finally:
+        i18n.reset_locale()
+    assert "Вердикт: уточните запрос" in out
+    assert "Verdict:" not in out
+    # The not-found prefix localizes too.
+    assert "не найдено:" in out
+
+
+def test_render_russian_error_prefix() -> None:
+    from java_codebase_rag import i18n
+
+    env = Envelope(status="error", message="boom")
+    i18n.set_locale("ru")
+    try:
+        out = render(env, fmt="text")
+    finally:
+        i18n.reset_locale()
+    assert out.startswith("ошибка:")
+    assert "error:" not in out
+
+
+def test_render_russian_next_lines() -> None:
+    from java_codebase_rag import i18n
+
+    env = Envelope(
+        status="ok",
+        nodes={"sym:1": {"fqn": "com.foo.Bar", "microservice": "foo-svc"}},
+        agent_next_actions=["jrag inspect com.foo.Bar", "jrag callees com.foo.Bar"],
+    )
+    i18n.set_locale("ru")
+    try:
+        out = render(env, fmt="text", noun="matches")
+    finally:
+        i18n.reset_locale()
+    assert "далее: jrag inspect com.foo.Bar" in out
+    assert "далее: jrag callees com.foo.Bar" in out
+    assert "next: " not in out
+
+
+def test_render_russian_truncated_notice() -> None:
+    from java_codebase_rag import i18n
+
+    env = Envelope(
+        status="ok",
+        nodes={"sym:1": {"fqn": "com.foo.Bar", "microservice": "foo-svc"}},
+        truncated=True,
+    )
+    i18n.set_locale("ru")
+    try:
+        out = render(env, fmt="text", noun="matches", next_offset=40)
+    finally:
+        i18n.reset_locale()
+    assert "обрезано" in out
+    assert "--offset 40" in out
+    assert "truncated" not in out
+
+
+def test_render_russian_zero_listing() -> None:
+    from java_codebase_rag import i18n
+
+    env = Envelope(status="ok", nodes={})
+    i18n.set_locale("ru")
+    try:
+        out = render(env, fmt="text", noun="matches")
+    finally:
+        i18n.reset_locale()
+    assert out.strip() == "совпадения: 0"
+    # Unknown noun falls back to the raw token (safe degradation).
+    out_raw = None
+    i18n.set_locale("ru")
+    try:
+        out_raw = render(Envelope(status="ok", nodes={}), fmt="text", noun="wibbles")
+    finally:
+        i18n.reset_locale()
+    assert out_raw is not None and "0" in out_raw
+
+
+def test_render_russian_zero_listing_traversal_and_entrypoint() -> None:
+    from java_codebase_rag import i18n
+
+    env = Envelope(
+        status="ok",
+        root="sym:1",
+        nodes={"sym:1": {"fqn": "com.foo.Bar", "microservice": "foo-svc"}},
+        edges=[],
+    )
+    i18n.set_locale("ru")
+    try:
+        out = render(env, fmt="text", noun="callers")
+    finally:
+        i18n.reset_locale()
+    assert "вызывающие стороны: 0" in out
+    assert "com.foo.Bar" in out
+
+    env2 = Envelope(
+        status="ok",
+        root="sym:1",
+        nodes={"sym:1": {"fqn": "com.foo.Bar"}},
+        edges=[],
+        is_external_entrypoint=True,
+    )
+    i18n.set_locale("ru")
+    try:
+        out2 = render(env2, fmt="text", noun="callers")
+    finally:
+        i18n.reset_locale()
+    assert "внешняя точка входа" in out2
+    assert "no in-repo callers" not in out2
+
+
+def test_render_russian_group_headers() -> None:
+    from java_codebase_rag import i18n
+
+    node = {"fqn": "com.foo.Bar", "microservice": "foo-svc"}
+    env = Envelope(
+        status="ok",
+        root="sym:1",
+        nodes={"sym:1": node, "sym:2": dict(node)},
+        edges=[
+            {"dst_id": "sym:2", "edge_type": "CALLS", "direction": "up"},
+            {"dst_id": "sym:2", "edge_type": "CALLS", "direction": "down"},
+        ],
+    )
+    i18n.set_locale("ru")
+    try:
+        out = render(env, fmt="text", noun="hierarchy")
+    finally:
+        i18n.reset_locale()
+    assert "↑ супертипы:" in out
+    assert "↓ подтипы:" in out
+
+
+def test_render_english_unchanged_after_i18n() -> None:
+    """EN byte-stability from the same migrated code paths (spec constraint)."""
+    assert render(Envelope(status="ok", nodes={}), fmt="text", noun="matches").strip() == "0 matches"
+    env = Envelope(
+        status="ok",
+        nodes={"sym:1": {"fqn": "com.foo.Bar"}},
+        agent_next_actions=["jrag inspect com.foo.Bar"],
+    )
+    out = render(env, fmt="text", noun="matches")
+    assert "next: jrag inspect com.foo.Bar" in out
+    nf = Envelope(status="not_found", message="X", absence=_absence("refine_query"))
+    assert "Verdict: refine your query" in render(nf, fmt="text", noun="symbol")

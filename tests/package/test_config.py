@@ -859,6 +859,105 @@ class TestRetrievalMode:
         assert env["JAVA_CODEBASE_RAG_RETRIEVAL"] == "bm25"
 
 
+class TestLanguageKnob:
+    """Tests for the top-level ``language:`` knob (en|ru) — spec D2.
+
+    Unlike ``retrieval``, the resolved language is deliberately NEVER
+    republished to ``os.environ`` (or ``subprocess_env``): republished env
+    is how MCP / daemon subprocesses learn resolved values, and MCP must
+    stay English regardless of the operator's CLI language.
+    """
+
+    def test_language_default_is_en(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_LANGUAGE", raising=False)
+
+        cfg = resolve_operator_config(source_root=tmp_path)
+
+        assert cfg.language == "en"
+        assert cfg.language_source == "default"
+
+    def test_language_cli_wins(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_LANGUAGE", raising=False)
+        (tmp_path / YAML_CONFIG_FILENAMES[0]).write_text("language: en\n")
+
+        cfg = resolve_operator_config(source_root=tmp_path, cli_language="ru")
+
+        assert cfg.language == "ru"
+        assert cfg.language_source == "cli"
+
+    def test_language_env_beats_yaml(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("JAVA_CODEBASE_RAG_LANGUAGE", "ru")
+        (tmp_path / YAML_CONFIG_FILENAMES[0]).write_text("language: en\n")
+
+        cfg = resolve_operator_config(source_root=tmp_path)
+
+        assert cfg.language == "ru"
+        assert cfg.language_source == "env"
+
+    def test_language_yaml(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_LANGUAGE", raising=False)
+        (tmp_path / YAML_CONFIG_FILENAMES[0]).write_text("language: ru\n")
+
+        cfg = resolve_operator_config(source_root=tmp_path)
+
+        assert cfg.language == "ru"
+        assert cfg.language_source == "yaml"
+
+    def test_language_invalid_env_degrades(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setenv("JAVA_CODEBASE_RAG_LANGUAGE", "fr")
+
+        cfg = resolve_operator_config(source_root=tmp_path)
+
+        err = capsys.readouterr().err
+        assert "language='fr' is not one of en/ru" in err
+        assert cfg.language == "en"
+        assert cfg.language_source == "default"
+
+    def test_language_invalid_yaml_degrades(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_LANGUAGE", raising=False)
+        (tmp_path / YAML_CONFIG_FILENAMES[0]).write_text("language: fr\n")
+
+        cfg = resolve_operator_config(source_root=tmp_path)
+
+        err = capsys.readouterr().err
+        assert "language='fr' is not one of en/ru" in err
+        assert cfg.language == "en"
+        assert cfg.language_source == "default"
+
+    def test_language_not_republished_to_environ(self, tmp_path, monkeypatch):
+        """The D2 deviation: unlike retrieval, language never reaches os.environ."""
+        monkeypatch.setattr(os, "environ", dict(os.environ))
+        monkeypatch.setenv("JAVA_CODEBASE_RAG_LANGUAGE", "ru")
+
+        cfg = resolve_operator_config(source_root=tmp_path)
+        assert cfg.language == "ru"
+        # Drop the tier source so any value found after apply() is provably
+        # republished, not merely the env tier's original.
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_LANGUAGE")
+        cfg.apply_to_os_environ()
+
+        assert "JAVA_CODEBASE_RAG_LANGUAGE" not in os.environ
+        # Contrast: retrieval IS republished — proves apply ran and the
+        # language omission is the intentional divergence.
+        assert os.environ.get("JAVA_CODEBASE_RAG_RETRIEVAL") == cfg.retrieval
+
+    def test_language_not_in_default_subprocess_env(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_LANGUAGE", raising=False)
+        (tmp_path / YAML_CONFIG_FILENAMES[0]).write_text("language: ru\n")
+
+        cfg = resolve_operator_config(source_root=tmp_path)
+        env = cfg.subprocess_env()
+
+        assert "JAVA_CODEBASE_RAG_LANGUAGE" not in env
+
+    def test_subprocess_env_language_opt_in(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("JAVA_CODEBASE_RAG_LANGUAGE", raising=False)
+
+        cfg = resolve_operator_config(source_root=tmp_path, cli_language="ru")
+
+        assert cfg.subprocess_env(language=True)["JAVA_CODEBASE_RAG_LANGUAGE"] == "ru"
+
+
 class TestRetrievalModeFromEnv:
     """Tests for the standalone retrieval_mode_from_env reader."""
 

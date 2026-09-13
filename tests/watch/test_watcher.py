@@ -45,7 +45,7 @@ class _FakeCfg:
         self.ladybug_path = source_root / "code_graph.lbug"
         self.retrieval = retrieval
 
-    def subprocess_env(self, base=None) -> dict[str, str]:
+    def subprocess_env(self, base=None, *, language: bool = False) -> dict[str, str]:
         return {
             "JAVA_CODEBASE_RAG_INDEX_DIR": str(self.index_dir),
             "JAVA_CODEBASE_RAG_SOURCE_ROOT": str(self.source_root),

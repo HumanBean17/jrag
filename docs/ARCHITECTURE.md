@@ -36,6 +36,7 @@ Core library = **top-level `.py` modules** (`py-modules`); the installable **`ja
 | Config + paths | `java_codebase_rag/config.py`, `path_filtering.py`, `index_common.py`, `brownfield_events.py` |
 | Watch daemon | `java_codebase_rag/watch/` (`lock`, `paths`, `protocol`, `warm`, `server`, `client`, `watcher`, `daemon`) |
 | Surfaces | `java_codebase_rag/{cli,jrag,installer}.py` |
+| Localization | `java_codebase_rag/i18n.py` + `i18n_messages_{en,ru}.py` / `i18n_messages_help_{en,ru}.py` catalogs |
 | Shipped artifacts | `skills/`, `agents/` (deployed verbatim to agent host via `install`/`update`) |
 | Prime payload | `java_codebase_rag/prime.py` — stdlib-only `PRIME_TEMPLATE` + `--hook-json` envelope; state slots computed in `jrag.py::_prime_state`/`_cmd_prime`. Optional surface: not wired into `install` (manual SessionStart wiring, documented in `docs/JRAG-CLI.md`) |
 
@@ -122,6 +123,18 @@ When a `jrag watch` daemon is running, the **read path gains a warm hop**: the `
 ## Config & project-root
 
 Precedence **CLI flag > env > YAML (`.java-codebase-rag.yml`) > default**; each value tagged with source for `meta` provenance. `discover_project_root` walks up from cwd for the YAML or the `.java-codebase-rag/` dir (never a bare `$HOME` index). Resolved paths: index dir → `code_graph.lbug` + `cocoindex.db`. `.java-codebase-rag.hosts` is the **installer** marker (hosts + surface), not an indexing config. *Brownfield* = in-source/YAML role & capability overrides (`brownfield_events.py` emits build-time diagnostics; config in [`docs/CONFIGURATION.md`](./CONFIGURATION.md)).
+
+
+**Localization invariant.** `language: en|ru` resolves CLI > env
+(`JAVA_CODEBASE_RAG_LANGUAGE`) > YAML > default `en`, like every other knob —
+with one deliberate deviation: it is **never auto-republished** to `os.environ` /
+`subprocess_env` (republished env is how MCP and daemon children learn resolved
+values); an explicit opt-in — `subprocess_env(language=True)` — exists for
+operator-facing children (watch daemon, watcher reprocess). Locale is process state, set only by the CLI entrypoints; the MCP
+server never sets it and scrubs the env var from its child spawns, so MCP
+responses stay byte-identical English regardless of the operator's CLI
+language. A dispatch-level `--lang` argv pre-scan strips before-verb tokens and
+seeds `--help` rendering before any parser exists.
 
 ## Extension points (where to change things)
 

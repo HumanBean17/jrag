@@ -51,6 +51,7 @@ This walk-up behavior means you no longer need to set environment variables or p
 | `SBERT_MODEL` | Hub id or local directory; must match indexer. Overridable via `.java-codebase-rag.yml` `embedding.model` and `--embedding-model`. |
 | `SBERT_DEVICE` | Optional: `cpu`, `cuda`, `mps`. Overridable via YAML `embedding.device` and `--embedding-device`. |
 | `JAVA_CODEBASE_RAG_RETRIEVAL` | Retrieval mode: `vectors` (semantic search; the default) or `bm25` (keyword search — no embedding model, no downloads, works offline). YAML `retrieval:` sets it; this env var overrides YAML; `jrag install --retrieval` overrides both. An invalid value falls back to `vectors` with a stderr note. No effect on graph-only (Intel Mac) installs, where `bm25` is forced regardless. |
+| `JAVA_CODEBASE_RAG_LANGUAGE` | Interface language for the CLI surfaces (output, help, errors): `en` (default) or `ru`. YAML `language:` sets it; this env var overrides YAML; `--lang`/`-L` overrides both (accepted before or after the verb). An invalid value falls back to `en` with a stderr note. **MCP is always English** — the `jrag-mcp` server never localizes based on this variable (no CLI entrypoint ever sets its locale), and MCP-spawned subprocesses have it scrubbed from their environment. |
 | `JAVA_CODEBASE_RAG_DEBUG_CONTEXT` | When truthy, verbose stderr logging for chunk context expansion (diagnostics only). |
 | `JAVA_CODEBASE_RAG_RUN_HEAVY` | Test gate: set to `1` / `true` / `yes` to run the slow cocoindex + Lance end-to-end test (`pytest`); not used in normal operator workflows. |
 | `JAVA_CODEBASE_RAG_HINTS_ENABLED` | When `0` / `false` / `no`, suppress `hints_structured` and `advisories` from all MCP tool responses. Overridable via `.java-codebase-rag.yml` `hints.enabled`. Default: enabled. |
@@ -141,6 +142,13 @@ embedding:
 #   after either (the backend is memoized per process).
 # - Intel Mac (graph-only) installs run bm25 regardless of this key.
 retrieval: vectors
+# Interface language for the CLI (output, help, errors): en (default) | ru.
+# - Env: JAVA_CODEBASE_RAG_LANGUAGE. CLI: --lang {en,ru} / -L (before or after
+#   the verb). Hand-edited only — the install wizard never writes this key.
+# - Help rendering follows the same precedence, with one edge case: `--help`
+#   renders English when this YAML is not discoverable from cwd (runtime
+#   messages still follow the YAML). MCP responses are always English.
+language: en
 
 # -------- Microservice layout --------
 

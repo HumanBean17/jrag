@@ -37,6 +37,11 @@ ENV_INDEX_DIR = "JAVA_CODEBASE_RAG_INDEX_DIR"
 ENV_SOURCE_ROOT = "JAVA_CODEBASE_RAG_SOURCE_ROOT"
 ENV_DEBUG_CONTEXT = "JAVA_CODEBASE_RAG_DEBUG_CONTEXT"
 ENV_RUN_HEAVY = "JAVA_CODEBASE_RAG_RUN_HEAVY"
+# Interface language for the CLI surfaces (spec D2). Deliberately NOT
+# republished by ``apply_to_os_environ`` / ``subprocess_env`` — republished
+# env is how MCP / daemon subprocesses learn resolved values, and MCP must
+# stay English regardless of the operator's CLI language.
+ENV_LANGUAGE = "JAVA_CODEBASE_RAG_LANGUAGE"
 
 # CocoIndex inflight-component throttle. CocoIndex's default is 1024 inflight
 # components (cocoindex/_internal/app.py: ``_ENV_MAX_INFLIGHT_COMPONENTS``),
@@ -392,6 +397,11 @@ class ResolvedOperatorConfig:
     # "vectors".
     retrieval: str = "vectors"
     retrieval_source: SettingSource = "default"
+    # Interface language for CLI output/help/errors. CLI > env > YAML >
+    # default; invalid values degrade to "en". Never republished to env
+    # (unlike retrieval) — see ENV_LANGUAGE.
+    language: str = "en"
+    language_source: SettingSource = "default"
 
     def apply_to_os_environ(self) -> None:
         """Make downstream modules (server, ladybug_queries, flows) see a consistent environment.
@@ -409,7 +419,9 @@ class ResolvedOperatorConfig:
         os.environ["JAVA_CODEBASE_RAG_ABSENCE_NGRAM_Q"] = str(self.absence_ngram_q)
         os.environ["JAVA_CODEBASE_RAG_RETRIEVAL"] = self.retrieval
 
-    def subprocess_env(self, base: dict[str, str] | None = None) -> dict[str, str]:
+    def subprocess_env(
+        self, base: dict[str, str] | None = None, *, language: bool = False
+    ) -> dict[str, str]:
         out = dict(base or os.environ)
         out[ENV_INDEX_DIR] = str(self.index_dir.resolve())
         out[ENV_SOURCE_ROOT] = str(self.source_root.resolve())
@@ -421,6 +433,11 @@ class ResolvedOperatorConfig:
         # Publish absence diagnosis knobs for subprocess builds (PR-ABS-1)
         out["JAVA_CODEBASE_RAG_ABSENCE_NGRAM_Q"] = str(self.absence_ngram_q)
         out["JAVA_CODEBASE_RAG_RETRIEVAL"] = self.retrieval
+        # Language is opt-in (operator-facing children only — e.g. the watch
+        # daemon / watcher reprocess). MCP spawns never use this helper with
+        # language=True, and scrub the env var explicitly (spec D5).
+        if language:
+            out[ENV_LANGUAGE] = self.language
         return out
 
 
@@ -601,6 +618,7 @@ def resolve_operator_config(
     cli_watch_backend: str | None = None,
     cli_watch_poll_interval_ms: int | None = None,
     cli_retrieval: str | None = None,
+    cli_language: str | None = None,
 ) -> ResolvedOperatorConfig:
     # Phase 1: Find the config file directory
     if source_root is not None:
@@ -757,6 +775,25 @@ def resolve_operator_config(
             file=sys.stderr,
         )
         retrieval, retrieval_src = "vectors", "default"
+    # Interface language (CLI > env > YAML > default), validated like the
+    # knobs above: an unknown value degrades to "en" with a stderr note.
+    # VALID_LANGS is imported from i18n so the closed set lives in one place.
+    from java_codebase_rag.i18n import VALID_LANGS
+
+    language, language_src = _pick_str(
+        cli_val=cli_language,
+        env_key=ENV_LANGUAGE,
+        yaml_dict=yaml_dict,
+        yaml_path=("language",),
+        default="en",
+    )
+    if language not in VALID_LANGS:
+        print(
+            f"jrag: language={language!r} is not one of en/ru; "
+            "falling back to 'en'.",
+            file=sys.stderr,
+        )
+        language, language_src = "en", "default"
     ku = index_dir / "code_graph.lbug"
     coco = index_dir / "cocoindex.db"
     return ResolvedOperatorConfig(
@@ -790,6 +827,8 @@ def resolve_operator_config(
         watch_poll_interval_ms_source=w_poll_src,
         retrieval=retrieval,
         retrieval_source=retrieval_src,
+        language=language,
+        language_source=language_src,
     )
 
 

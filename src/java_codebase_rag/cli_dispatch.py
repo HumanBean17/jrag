@@ -195,14 +195,13 @@ def _print_unified_help(stream=None) -> None:
     — the caller (``_console_script_main``) returns to the pip wrapper, which
     exits 0.
     """
+    from java_codebase_rag.i18n import tr
+
     target = stream if stream is not None else sys.stdout
     agent_parser = _jrag_mod.build_parser()
     agent_parser.print_help(target)
     target.write("\n")
-    target.write(
-        "Operator commands (indexing & maintenance; run `jrag <command> --help` "
-        "for details):\n"
-    )
+    target.write(tr("MSG_UNIFIED_OPERATOR_HEADER"))
     for name, help_text in _operator_subcommand_helps():
         target.write(f"    {name:<20} {help_text}\n")
 
@@ -229,7 +228,15 @@ def _choose_target() -> Callable[[], None]:
 
 
 def _console_script_main() -> None:
-    """Unified ``jrag`` entry point: warn, maybe serve unified help, delegate.
+    """Unified ``jrag`` entry point: warn, lang pre-scan, help, delegate.
+
+    ``--lang``/``-L`` tokens appearing BEFORE the first verb are stripped
+    here (the sub-CLI argparsers cannot see them): the value is stashed via
+    :func:`i18n.set_cli_lang_override` for the sub-CLI's config resolution,
+    and the locale is initialized via :func:`i18n.init_help_locale` so any
+    help rendering (unified help included) is localized. After-verb
+    ``--lang`` tokens are left for the subparser's own registered flag
+    (argparse ``choices`` validates them).
 
     For the canonical ``jrag`` identity with a top-level help/no-args request,
     print the unified help (agent verbs + operator verbs) and return — the pip
@@ -240,6 +247,20 @@ def _console_script_main() -> None:
     (via ``os._exit``); we let ``SystemExit`` propagate rather than
     reimplementing startup here.
     """
+    from java_codebase_rag.i18n import (
+        init_help_locale,
+        set_cli_lang_override,
+        strip_lang_before_verb,
+    )
+
+    lang_value, stripped = strip_lang_before_verb(
+        sys.argv[1:], OPERATOR_VERBS | AGENT_VERBS
+    )
+    if lang_value is not None:
+        sys.argv = [sys.argv[0], *stripped]
+        set_cli_lang_override(lang_value)
+    init_help_locale(lang_value)
+    # After locale init so the legacy-alias deprecation notice localizes too.
     maybe_warn_legacy_alias()
     if _invoked_program_name() == "jrag" and _is_unified_help_request():
         _print_unified_help()

@@ -52,6 +52,31 @@ RETRIEVAL_BM25_HINT = (
 )
 
 
+# Localized twins of the constants above. The constants themselves stay
+# module-level and English forever: the MCP server consumes them directly
+# (pydantic output values), and module-level evaluation is frozen at import —
+# a hard English guarantee for the MCP surface (spec D2/D4). Operator-facing
+# CLI paths (cli.py / installer.py / watch daemon) call these functions so
+# they localize under the process locale. Drift between a constant and its
+# twin's EN catalog entry is guarded by test_i18n_cli.test_advisory_*.
+def vectors_skipped_graph_only() -> str:
+    from java_codebase_rag.i18n import tr
+
+    return tr("MSG_VECTORS_SKIPPED_GRAPH_ONLY")
+
+
+def vectors_skipped_bm25() -> str:
+    from java_codebase_rag.i18n import tr
+
+    return tr("MSG_VECTORS_SKIPPED_BM25")
+
+
+def retrieval_bm25_hint() -> str:
+    from java_codebase_rag.i18n import tr
+
+    return tr("MSG_RETRIEVAL_BM25_HINT")
+
+
 # Package-internal locations of the cocoindex flow definition and the graph
 # builder. Both are executed *by file path* — cocoindex loads the flow via a
 # ``file:Class`` target (COCOINDEX_TARGET below) and the builder runs as

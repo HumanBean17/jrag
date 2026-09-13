@@ -25,6 +25,8 @@ from java_codebase_rag.graph.java_ontology import ResolveReason
 from java_codebase_rag.graph.ladybug_queries import LadybugGraph
 from java_codebase_rag.mcp.mcp_hints import MCP_HINTS_STRUCTURED_FIELD_DESCRIPTION
 
+from java_codebase_rag.i18n import tr as _tr
+
 __all__ = [
     "resolve_v2",
     "ResolveOutput",
@@ -168,8 +170,8 @@ class ResolveOutput(BaseModel):
 def _resolve_validate_identifier(raw: str) -> tuple[str | None, str | None]:
     trimmed = raw.strip()
     if not trimmed:
-        detail = "empty string" if raw == "" else "whitespace only"
-        return None, f"Invalid identifier: {detail}"
+        detail = _tr("RS_DETAIL_EMPTY") if raw == "" else _tr("RS_DETAIL_WS")
+        return None, _tr("ERR_INVALID_IDENTIFIER", detail=detail)
     return trimmed, None
 
 
@@ -608,9 +610,7 @@ def _resolve_finalize_success(
         out = ResolveOutput(
             success=True,
             status="none",
-            message=(
-                "No matches for identifier; use search(query=...) for ranked fuzzy lookup."
-            ),
+            message=_tr("RS_NO_MATCHES"),
             resolved_identifier=trimmed,
         )
     elif len(matches) == 1:
@@ -695,10 +695,7 @@ def resolve_v2(
             out = ResolveOutput(
                 success=False,
                 status="none",
-                message=(
-                    "Wildcards (* and ?) are not supported in resolve; "
-                    "use search(query=...) for ranked text search."
-                ),
+                message=_tr("RS_WILDCARDS"),
                 advisories=[],
                 resolved_identifier=trimmed,
             )

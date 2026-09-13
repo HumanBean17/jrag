@@ -375,3 +375,63 @@ def test_java_codebase_rag_exe_version_routes_to_cli_target(monkeypatch):
     assert not jrag_calls, (
         f"java-codebase-rag.exe --version should NOT route to jrag; got jrag={jrag_calls}"
     )
+
+
+# --- i18n: --lang pre-scan + localized unified help (spec D3) ----------------
+
+
+def test_unified_help_russian_when_locale_ru():
+    """Unified help renders its operator-commands header in Russian under ru."""
+    import io
+
+    from java_codebase_rag import cli_dispatch, i18n
+
+    i18n.set_locale("ru")
+    try:
+        buf = io.StringIO()
+        cli_dispatch._print_unified_help(buf)
+        text = buf.getvalue()
+        assert "Команды оператора" in text
+        assert "Operator commands" not in text
+    finally:
+        i18n.reset_locale()
+
+
+def test_strip_lang_prefix_integration():
+    """The pre-scan helper against the dispatcher's real verb union."""
+    from java_codebase_rag import cli_dispatch, i18n
+
+    value, stripped = i18n.strip_lang_before_verb(
+        ["--lang", "ru", "install", "--quiet"],
+        cli_dispatch.OPERATOR_VERBS | cli_dispatch.AGENT_VERBS,
+    )
+    assert value == "ru"
+    assert stripped == ["install", "--quiet"]
+
+
+def test_dispatcher_strips_before_verb_lang_and_sets_state(monkeypatch):
+    """`jrag --lang ru install …` routes with the flag stripped, the value
+    stashed, and the locale set for any pre-parse help rendering."""
+    cli_calls, _jrag_calls = _run_dispatcher(
+        monkeypatch, ["jrag", "--lang", "ru", "install", "--quiet"]
+    )
+    from java_codebase_rag import i18n
+
+    assert cli_calls == [["jrag", "install", "--quiet"]]
+    assert i18n.cli_lang_override() == "ru"
+    assert i18n.get_locale() == "ru"
+    i18n.reset_locale()
+    i18n.set_cli_lang_override(None)
+
+
+def test_dispatcher_after_verb_lang_not_stripped(monkeypatch):
+    """`jrag install --lang ru` keeps the flag for the subparser's own
+    registered ``--lang`` (argparse validates the choice)."""
+    cli_calls, _jrag_calls = _run_dispatcher(
+        monkeypatch, ["jrag", "install", "--lang", "ru", "--quiet"]
+    )
+    from java_codebase_rag import i18n
+
+    assert cli_calls == [["jrag", "install", "--lang", "ru", "--quiet"]]
+    assert i18n.cli_lang_override() is None
+    i18n.reset_locale()

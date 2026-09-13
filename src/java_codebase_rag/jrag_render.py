@@ -14,6 +14,7 @@ import json
 from typing import Any
 
 from java_codebase_rag.absence.absence_types import AbsenceDiagnosis
+from java_codebase_rag.i18n import tr
 from java_codebase_rag.jrag_envelope import Envelope, project_envelope, simple_name
 
 __all__ = ["render", "tiered_name", "display_name", "count_results", "has_results"]
@@ -36,20 +37,66 @@ _ROUTE_KIND_TAGS: dict[str, str] = {"kafka_topic": "kafka", "http_endpoint": "ht
 
 # Absence verdict → human-readable label, shared by the not-found / listing /
 # traversal empty-result renderers. ``AbsenceVerdict`` is a closed Literal of
-# these four values.
-_ABSENCE_VERDICT_TEXT: dict[str, str] = {
-    "not_in_project": "not in project",
-    "external_dependency": "external dependency",
-    "refine_query": "refine your query",
-    "correct_empty": "correct empty",
+# these four values. Labels localize via the catalog (spec D6: values
+# translate); EN catalog values are the byte-exact pre-i18n strings.
+_ABSENCE_VERDICT_KEYS: dict[str, str] = {
+    "not_in_project": "LBL_ABSENCE_NOT_IN_PROJECT",
+    "external_dependency": "LBL_ABSENCE_EXTERNAL_DEPENDENCY",
+    "refine_query": "LBL_ABSENCE_REFINE_QUERY",
+    "correct_empty": "LBL_ABSENCE_CORRECT_EMPTY",
 }
+
+
+def _absence_verdict_text(verdict: str) -> str | None:
+    """Localized label for a verdict, or ``None`` for an unknown verdict."""
+    key = _ABSENCE_VERDICT_KEYS.get(verdict)
+    return tr(key) if key is not None else None
+
+
+# Result-kind nouns passed by jrag.py call sites (``noun="callers"`` etc.) →
+# catalog keys. Nouns are part of the render call contract and stay English
+# tokens at the seam; translation happens HERE at render time. Unknown nouns
+# (command-ish labels like ``status`` / future kinds) fall back to the raw
+# token — safe degradation, matches the EN identity behavior.
+_NOUN_KEYS: dict[str, str] = {
+    "matches": "LBL_NOUN_MATCHES",
+    "search": "LBL_NOUN_MATCHES",
+    "callers": "LBL_NOUN_CALLERS",
+    "callees": "LBL_NOUN_CALLEES",
+    "implementations": "LBL_NOUN_IMPLEMENTATIONS",
+    "subclasses": "LBL_NOUN_SUBCLASSES",
+    "overrides": "LBL_NOUN_OVERRIDES",
+    "overridden-by": "LBL_NOUN_OVERRIDDEN_BY",
+    "dependents": "LBL_NOUN_DEPENDENTS",
+    "impact": "LBL_NOUN_IMPACT",
+    "decompose": "LBL_NOUN_DECOMPOSE",
+    "dependencies": "LBL_NOUN_DEPENDENCIES",
+    "connection": "LBL_NOUN_CONNECTION",
+    "hierarchy": "LBL_NOUN_HIERARCHY",
+    "route": "LBL_NOUN_ROUTE",
+    "client": "LBL_NOUN_CLIENT",
+    "producer": "LBL_NOUN_PRODUCER",
+    "topic": "LBL_NOUN_TOPIC",
+    "symbol": "LBL_NOUN_SYMBOL",
+    "import": "LBL_NOUN_IMPORT",
+    "microservices": "LBL_NOUN_MICROSERVICES",
+    "map": "LBL_NOUN_MAP",
+    "conventions": "LBL_NOUN_CONVENTIONS",
+    "overview": "LBL_NOUN_OVERVIEW",
+}
+
+
+def _noun_label(noun: str) -> str:
+    """Localized display noun (EN values are the identity tokens)."""
+    key = _NOUN_KEYS.get(noun)
+    return tr(key) if key is not None else noun
 
 
 def _verdict_line(absence: AbsenceDiagnosis) -> str | None:
     """A ``Verdict: <label>`` line for an absence diagnosis, or ``None`` if the
     verdict is not one of the known values."""
-    text = _ABSENCE_VERDICT_TEXT.get(absence.verdict)
-    return f"Verdict: {text}" if text else None
+    text = _absence_verdict_text(absence.verdict)
+    return f"{tr('LBL_VERDICT_PREFIX')}{text}" if text else None
 
 # Identity keys already represented in a listing line (display_name + @service +
 # kind tag). At ``--detail full`` the per-row kv-block skips these (they are in
@@ -123,7 +170,7 @@ def _next_action_lines(envelope: Envelope) -> list[str]:
     list when ``agent_next_actions`` is empty (commands with no root produce no
     hints → nothing appended).
     """
-    return [f"next: {hint}" for hint in envelope.agent_next_actions[:2]]
+    return [f"{tr('LBL_NEXT_PREFIX')}{hint}" for hint in envelope.agent_next_actions[:2]]
 
 
 def _is_dynamic_topic_ref(topic: str) -> bool:
@@ -260,18 +307,18 @@ def _edge_label(edge: dict) -> str:
 
 def _truncated_hint(*, next_offset: int | None) -> str:
     if next_offset is not None:
-        return f"truncated: more results — use --offset {next_offset}"
-    return "truncated: more results — narrow your query"
+        return tr("MSG_TRUNCATED_OFFSET", offset=next_offset)
+    return tr("MSG_TRUNCATED_NARROW")
 
 
 def _render_error(envelope: Envelope) -> str:
-    msg = envelope.message or (envelope.warnings[0] if envelope.warnings else "error")
-    return f"error: {msg}"
+    msg = envelope.message or (envelope.warnings[0] if envelope.warnings else tr("LBL_ERROR_WORD"))
+    return f"{tr('LBL_ERROR_PREFIX')}{msg}"
 
 
 def _render_not_found(envelope: Envelope) -> str:
-    msg = envelope.message or "not found"
-    base = f"not found: {msg}"
+    msg = envelope.message or tr("LBL_NOT_FOUND_WORD")
+    base = f"{tr('LBL_NOT_FOUND_PREFIX')}{msg}"
 
     # If absence diagnosis is present, append verdict + message (+ did-you-mean)
     if envelope.absence is not None:
@@ -290,12 +337,12 @@ def _render_not_found(envelope: Envelope) -> str:
         if envelope.absence.closest_symbols:
             symbols = [s.fqn for s in envelope.absence.closest_symbols]
             if len(symbols) == 1:
-                lines.append(f"Did you mean: {symbols[0]}?")
+                lines.append(tr("MSG_DID_YOU_MEAN_ONE", sym=symbols[0]))
             elif len(symbols) == 2:
-                lines.append(f"Did you mean: {symbols[0]} or {symbols[1]}?")
+                lines.append(tr("MSG_DID_YOU_MEAN_TWO", a=symbols[0], b=symbols[1]))
             else:
-                joined = ", ".join(symbols[:-1]) + f", or {symbols[-1]}"
-                lines.append(f"Did you mean: {joined}?")
+                joined = ", ".join(symbols[:-1]) + tr("LBL_OR", last=symbols[-1])
+                lines.append(tr("MSG_DID_YOU_MEAN_MANY", list=joined))
 
         return "\n".join(lines)
 
@@ -323,7 +370,7 @@ def _render_listing(envelope: Envelope, *, noun: str, detail: str = "normal") ->
                     base = raw.rsplit(":", 1)[0] if raw.rsplit(":", 1)[-1].isdigit() else raw
                     label = base.rsplit("/", 1)[-1]
                     break
-            name = label or "(no identifier)"
+            name = label or tr("LBL_NO_IDENTIFIER")
         service = str(node.get("microservice") or "").strip()
         tag = _ROUTE_KIND_TAGS.get(str(node.get("kind") or ""))
         parts: list[str] = [f"[{tag}]", name] if tag else [name]
@@ -337,7 +384,7 @@ def _render_listing(envelope: Envelope, *, noun: str, detail: str = "normal") ->
         # imports resolved. The marker is gated on the synthetic
         # `kind="unresolved_import"` set by _cmd_imports.
         if node.get("kind") == "unresolved_import":
-            line += "  (unresolved)"
+            line += f"  {tr('LBL_UNRESOLVED')}"
         # detail > brief: surface the fields the terse line drops. The projector
         # has already trimmed the node to the requested field set, so we only
         # decide PRESENTATION. brief = append identity-adjacent extras that
@@ -371,9 +418,11 @@ def _render_listing(envelope: Envelope, *, noun: str, detail: str = "normal") ->
         # Handle absence diagnosis (PR-ABS-4)
         if envelope.absence is not None:
             vline = _verdict_line(envelope.absence)
-            lines.append(vline if vline else f"0 {noun}".rstrip())
+            lines.append(
+                vline if vline else tr("MSG_ZERO_LISTING", noun=_noun_label(noun)).rstrip()
+            )
         else:
-            lines.append(f"0 {noun}".rstrip())
+            lines.append(tr("MSG_ZERO_LISTING", noun=_noun_label(noun)).rstrip())
     # Listing breadcrumbs (Phase 2): <=2 `next:` hint lines when the listing
     # command emitted agent_next_actions (routes/clients/producers/topics).
     lines.extend(_next_action_lines(envelope))
@@ -433,7 +482,7 @@ def _format_edge_rows(edge: dict, nodes: dict[str, dict], *, detail: str = "norm
     """
     target_id = _node_id(edge)
     target = nodes.get(target_id) or {}
-    label = tiered_name(target_id, nodes) if target_id else "(missing)"
+    label = tiered_name(target_id, nodes) if target_id else tr("LBL_MISSING")
     line = f"  {label}"
     edge_type = _edge_label(edge)
     # conf: only on CALLS-family edges (PR-JRAG-1a test 12).
@@ -476,12 +525,12 @@ def _render_traversal(envelope: Envelope, *, noun: str, detail: str = "normal") 
         root_node = envelope.nodes.get(root_id, {})
         root_label = tiered_name(root_id, envelope.nodes)
         if detail == "normal":
-            lines.append(f"root: {root_label}{_node_normal_extras(root_node)}")
+            lines.append(f"{tr('LBL_ROOT_PREFIX')}{root_label}{_node_normal_extras(root_node)}")
         elif detail == "full":
-            lines.append(f"root: {root_label}")
+            lines.append(f"{tr('LBL_ROOT_PREFIX')}{root_label}")
             lines.extend(_node_full_rows(root_node, 1))
         else:
-            lines.append(f"root: {root_label}")
+            lines.append(f"{tr('LBL_ROOT_PREFIX')}{root_label}")
     if not envelope.edges:
         # Zero-results line for a traversal: "0 <noun>  <fqn>  @<service>".
         # The fqn + service come from the root node (the resolved subject). When
@@ -497,16 +546,16 @@ def _render_traversal(envelope: Envelope, *, noun: str, detail: str = "normal") 
             absence = envelope.absence
             if absence.verdict == "correct_empty":
                 # Same text as the is_external_entrypoint case.
-                parts = ["external entrypoint — no in-repo callers"]
+                parts = [tr("MSG_EXTERNAL_ENTRYPOINT")]
             else:
                 vline = _verdict_line(absence)
                 if vline:
                     lines.append(vline)
-                parts = [f"0 {noun}".rstrip()]
+                parts = [tr("MSG_ZERO_LISTING", noun=_noun_label(noun)).rstrip()]
         elif envelope.is_external_entrypoint:
-            parts = ["external entrypoint — no in-repo callers"]
+            parts = [tr("MSG_EXTERNAL_ENTRYPOINT")]
         else:
-            parts = [f"0 {noun}".rstrip()]
+            parts = [tr("MSG_ZERO_LISTING", noun=_noun_label(noun)).rstrip()]
 
         if root_fqn:
             parts.append(root_fqn)
@@ -534,11 +583,11 @@ def _render_traversal(envelope: Envelope, *, noun: str, detail: str = "normal") 
         out_sec = [e for e in envelope.edges if e.get("section") == "outbound"]
         other = [e for e in envelope.edges if e.get("section") not in ("inbound", "outbound")]
         if in_sec:
-            lines.append("inbound:")
+            lines.append(tr("LBL_INBOUND"))
             for e in in_sec:
                 lines.extend(_format_edge_rows(e, envelope.nodes, detail=detail))
         if out_sec:
-            lines.append("outbound:")
+            lines.append(tr("LBL_OUTBOUND"))
             for e in out_sec:
                 lines.extend(_format_edge_rows(e, envelope.nodes, detail=detail))
         for e in other:
@@ -573,11 +622,11 @@ def _render_traversal(envelope: Envelope, *, noun: str, detail: str = "normal") 
                 if r and r not in seen:
                     seen.append(r)
             if s == 0:
-                header = "stage 0 (seed):"
+                header = tr("LBL_STAGE_SEED")
             elif seen:
-                header = f"stage {s} ({', '.join(seen)}):"
+                header = tr("LBL_STAGE_ROLES", n=s, roles=", ".join(seen))
             else:
-                header = f"stage {s}:"
+                header = tr("LBL_STAGE", n=s)
             lines.append(header)
             for e in stage_edges:
                 lines.extend(_format_edge_rows(e, envelope.nodes, detail=detail))
@@ -589,11 +638,11 @@ def _render_traversal(envelope: Envelope, *, noun: str, detail: str = "normal") 
         up = [e for e in envelope.edges if e.get("direction") == "up"]
         dn = [e for e in envelope.edges if e.get("direction") == "down"]
         if up:
-            lines.append("↑ supertypes:")
+            lines.append(tr("LBL_SUPERTYPES"))
             for e in up:
                 lines.extend(_format_edge_rows(e, envelope.nodes, detail=detail))
         if dn:
-            lines.append("↓ subtypes:")
+            lines.append(tr("LBL_SUBTYPES"))
             for e in dn:
                 lines.extend(_format_edge_rows(e, envelope.nodes, detail=detail))
         lines.extend(_next_action_lines(envelope))
@@ -689,15 +738,21 @@ def _render_inspect(envelope: Envelope) -> str:
 
 
 def _render_ambiguous(envelope: Envelope, *, noun: str) -> str:
+    from java_codebase_rag.i18n import ntr
+
     count = len(envelope.candidates)
-    header = f"{count} ambiguous matches for {noun!r}" if noun else f"{count} ambiguous matches"
-    lines = [header, "Narrow with --kind --java-kind --role --fqn-contains:"]
+    label = _noun_label(noun)
+    if noun:
+        header = ntr("MSG_AMBIGUOUS_HEADER", count, noun=label)
+    else:
+        header = ntr("MSG_AMBIGUOUS_HEADER_NO_NOUN", count)
+    lines = [header, tr("MSG_NARROW")]
     for cand in envelope.candidates:
         # Ambiguous candidates carry reason; NO file / score (PR-JRAG-1a test 14).
         # display_name only — graph id is NOT a fallback (the envelope projector
         # strips id/parent_id at every detail level; an unidentified candidate
         # renders with "(no identifier)" rather than leaking a raw SHA).
-        name = display_name(cand) or "(no identifier)"
+        name = display_name(cand) or tr("LBL_NO_IDENTIFIER")
         service = str(cand.get("microservice") or "").strip()
         reason = str(cand.get("reason") or "").strip()
         line = f"  {name}"
@@ -708,7 +763,7 @@ def _render_ambiguous(envelope: Envelope, *, noun: str) -> str:
         lines.append(line)
     # <=2 next: hints; no auto-pick (PR-JRAG-1a renderer spec).
     for hint in envelope.agent_next_actions[:2]:
-        lines.append(f"next: {hint}")
+        lines.append(f"{tr('LBL_NEXT_PREFIX')}{hint}")
     return "\n".join(lines)
 
 
@@ -921,6 +976,8 @@ def render(
     # the "inapplicable flags never silently ignored" spec was effectively
     # unenforced for text consumers.
     if projected.warnings:
-        warning_lines = "\n".join(f"warning: {w}" for w in projected.warnings)
+        warning_lines = "\n".join(
+            f"{tr('LBL_WARNING_PREFIX')}{w}" for w in projected.warnings
+        )
         body = f"{body}\n{warning_lines}" if body else warning_lines
     return body
