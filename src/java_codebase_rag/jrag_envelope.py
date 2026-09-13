@@ -120,6 +120,11 @@ class Envelope:
     # zero in-repo callers. Distinguishes the *correct* empty result ("external
     # entrypoint — no in-repo callers") from a bug-looking bare "0 callers".
     is_external_entrypoint: bool = False
+    # Local observability: short id of the usage event recorded for this
+    # invocation (opt-in; None — omitted from output — when telemetry is off
+    # or the path never routed through the recording funnel). Anchors
+    # ``jrag feedback <event_id>`` to this exact call.
+    event_id: str | None = None
     # Absence diagnosis explaining why a result is empty (PR-ABS-4). Carried
     # from MCP outputs and rendered in CLI text/JSON. None on ok/ambiguous.
     absence: AbsenceDiagnosis | None = None
@@ -156,6 +161,8 @@ class Envelope:
             out["message"] = self.message
         if self.is_external_entrypoint:
             out["is_external_entrypoint"] = True
+        if self.event_id is not None:
+            out["event_id"] = self.event_id
         if self.absence is not None:
             out["absence"] = self.absence.model_dump()
         return out
@@ -244,6 +251,8 @@ class Envelope:
             out["message"] = self.message
         if self.is_external_entrypoint:
             out["is_external_entrypoint"] = True
+        if self.event_id is not None:
+            out["event_id"] = self.event_id
         if self.absence is not None:
             out["absence"] = self.absence.model_dump()
         return out
@@ -1106,5 +1115,6 @@ def project_envelope(envelope: Envelope, detail: str) -> Envelope:
         file_location=envelope.file_location,
         message=envelope.message,
         is_external_entrypoint=envelope.is_external_entrypoint,
+        event_id=envelope.event_id,
         absence=envelope.absence,
     )

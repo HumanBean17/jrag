@@ -195,6 +195,103 @@ def _clamped_limit(args: argparse.Namespace) -> int:
     return min(raw_limit, 499)
 
 
+# --- local observability (opt-in; see the 2026-09-13 observability spec) ---
+#
+# One stash per invocation: ``_telemetry_prepare`` (called from ``main`` before
+# the handler runs) parks the resolved config here; ``_emit`` adds the
+# envelope-derived facts + event_id; ``_record_telemetry`` (all ``main`` exit
+# paths) composes and appends the single usage event. Everything is guarded —
+# telemetry must never change stdout/stderr/exit codes.
+_TELEMETRY_STASH: dict = {}
+
+
+def _telemetry_prepare(args: argparse.Namespace) -> None:
+    """Resolve config once for telemetry, side-effect free (no env/locale)."""
+    global _TELEMETRY_STASH
+    _TELEMETRY_STASH = {}
+    try:
+        from java_codebase_rag.config import resolve_operator_config
+
+        cfg = resolve_operator_config(
+            source_root=None,
+            cli_index_dir=getattr(args, "index_dir", None),
+        )
+        _TELEMETRY_STASH = {"cfg": cfg}
+    except Exception:  # noqa: BLE001 — telemetry must never break the CLI
+        _TELEMETRY_STASH = {}
+
+
+def _telemetry_usage_enabled() -> bool:
+    cfg = _TELEMETRY_STASH.get("cfg")
+    return bool(cfg is not None and cfg.usage_enabled)
+
+
+def _record_telemetry(
+    args: argparse.Namespace | None,
+    *,
+    rc: int,
+    duration_ms: float,
+    error_type: str | None = None,
+    verb: str | None = None,
+    query: str | None = None,
+) -> None:
+    """Append the invocation's usage event (single write, swallow-guarded)."""
+    try:
+        cfg = _TELEMETRY_STASH.get("cfg")
+        if cfg is None or not cfg.usage_enabled:
+            return
+        from java_codebase_rag.usage.events import build_command_event
+        from java_codebase_rag.usage.writer import record_event
+        from java_codebase_rag.watch.client import LAST_SERVED_BY
+        from java_codebase_rag.watch.paths import project_key, state_path
+
+        if args is not None:
+            verb = verb or getattr(args, "command", None)
+            query = query if query is not None else getattr(args, "query", None)
+        facts = dict(_TELEMETRY_STASH.get("facts") or {})
+        facts.setdefault("status", "error" if rc != 0 else "ok")
+        for missing in ("result_count", "truncated", "candidates_count",
+                        "absence_verdict", "absence_cause", "warnings_count"):
+            facts.setdefault(missing, None)
+        if error_type is not None:
+            facts["error_type"] = error_type
+        index_age_s = None
+        try:
+            import json as _json
+
+            state = _json.loads(state_path(cfg.index_dir).read_text())
+            last = state.get("last_reindex_at")
+            if isinstance(last, (int, float)):
+                import time as _time
+
+                index_age_s = _time.time() - last
+        except Exception:  # noqa: BLE001 — missing state file is normal
+            pass
+        event = build_command_event(
+            verb=verb,
+            query=query,
+            flags={
+                name: getattr(args, name, None) if args is not None else None
+                for name in ("limit", "format", "detail", "count", "exists", "service")
+            },
+            duration_ms=round(duration_ms, 3),
+            rc=rc,
+            envelope_facts=facts,
+            index_age_s=(
+                round(index_age_s, 1) if index_age_s is not None else None
+            ),
+            served_by=LAST_SERVED_BY,
+            ppid=os.getppid(),
+            cwd=os.getcwd(),
+            project_key=project_key(cfg.index_dir),
+        )
+        event["event_id"] = _TELEMETRY_STASH.get("event_id")
+        record_event(event, enabled=True, state_dir_override=cfg.usage_dir)
+    except Exception:  # noqa: BLE001 — telemetry must never break the CLI
+        pass
+# --- end local observability ---
+
+
 def _emit(env, args: argparse.Namespace, *, noun: str = "",
           shape: str | None = None, next_offset: int | None = None) -> int:
     """Final render+print funnel honoring ``--count`` / ``--exists`` / ``--fields``;
@@ -218,6 +315,31 @@ def _emit(env, args: argparse.Namespace, *, noun: str = "",
     routed here today.
     """
     from java_codebase_rag.jrag_render import has_results, render
+
+    if _telemetry_usage_enabled():
+        # Stash envelope-derived facts + a stable event_id BEFORE render so the
+        # JSON/text output carries the id the usage event will be recorded under.
+        from java_codebase_rag.jrag_render import count_results
+        from java_codebase_rag.usage.events import derive_event_id, rfc3339_now
+
+        verb = getattr(args, "command", None)
+        query = getattr(args, "query", None)
+        absence = env.absence
+        _TELEMETRY_STASH.update(
+            event_id=derive_event_id(rfc3339_now(), os.getpid(), verb, query),
+            verb=verb,
+            query=query,
+            facts={
+                "status": env.status,
+                "result_count": count_results(env, shape),
+                "truncated": env.truncated,
+                "candidates_count": len(env.candidates),
+                "absence_verdict": getattr(absence, "verdict", None),
+                "absence_cause": getattr(absence, "cause", None),
+                "warnings_count": len(env.warnings),
+            },
+        )
+        env.event_id = _TELEMETRY_STASH["event_id"]
 
     print(render(
         env,
@@ -4557,16 +4679,27 @@ def main(argv: list[str] | None = None) -> int:
         if cmd and not msg.startswith(cmd):
             msg = f"{cmd}: {msg}"
         env = Envelope(status="error", message=msg)
+        _telemetry_prepare(None)  # parse failed: no namespace, resolve from env/YAML
+        if _telemetry_usage_enabled():
+            from java_codebase_rag.usage.events import derive_event_id, rfc3339_now
+
+            _eid = derive_event_id(rfc3339_now(), os.getpid(), cmd, None)
+            _TELEMETRY_STASH["event_id"] = _eid
+            env.event_id = _eid
         print(render(env, fmt=fmt, detail=detail))
         print(f"{tr('LBL_JRAG_ERROR_STDERR')}{msg}", file=sys.stderr)
+        _record_telemetry(None, rc=2, duration_ms=0.0,
+                          error_type="usage_error", verb=cmd)
         return 2
     handler = getattr(args, "handler", None)
     if handler is None:
         # No subcommand: print help to stderr, return usage error.
         parser.print_help(sys.stderr)
         return 1
+    _telemetry_prepare(args)
+    _t_t0 = time.perf_counter()
     try:
-        return int(handler(args))
+        _rc = int(handler(args))
     except Exception as exc:
         from java_codebase_rag.jrag_envelope import Envelope
         from java_codebase_rag.jrag_render import render
@@ -4575,9 +4708,29 @@ def main(argv: list[str] | None = None) -> int:
             status="error",
             message=tr("ERR_INTERNAL", exc=exc),
         )
+        if _telemetry_usage_enabled():
+            # Same derivation as _emit's, stamped before render so the printed
+            # error envelope carries the id the recorded event will use.
+            from java_codebase_rag.usage.events import derive_event_id, rfc3339_now
+
+            _eid = derive_event_id(
+                rfc3339_now(), os.getpid(),
+                getattr(args, "command", None), getattr(args, "query", None),
+            )
+            _TELEMETRY_STASH["event_id"] = _eid
+            env.event_id = _eid
         print(render(env, fmt=getattr(args, "format", "text")))
         print(traceback.format_exc(), file=sys.stderr)
+        _record_telemetry(
+            args, rc=2,
+            duration_ms=(time.perf_counter() - _t_t0) * 1000.0,
+            error_type=type(exc).__name__,
+        )
         return 2
+    _record_telemetry(
+        args, rc=_rc, duration_ms=(time.perf_counter() - _t_t0) * 1000.0
+    )
+    return _rc
 
 
 def _console_script_main() -> None:

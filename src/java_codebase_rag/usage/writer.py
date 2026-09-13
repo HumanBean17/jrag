@@ -24,9 +24,11 @@ from typing import Any
 
 from java_codebase_rag.usage import paths
 
-#: Max serialized line size (bytes). macOS PIPE_BUF is 512 — single small
-#: appends are atomic-in-practice on APFS.
-LINE_CAP_BYTES = 512
+#: Max serialized line size (bytes). A single ``write()`` on an O_APPEND
+#: regular-file fd is positioned+written atomically by the kernel (PIPE_BUF
+#: applies to pipes, not files), so 1 KiB lines stay safely single-append —
+#: measured real events (cwd + facts + capped query) run 400-900 bytes.
+LINE_CAP_BYTES = 1024
 
 #: Day-file size cap; events past it are dropped and counted.
 DAY_FILE_CAP_BYTES = 5 * 1024 * 1024

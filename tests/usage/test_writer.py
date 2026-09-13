@@ -45,14 +45,14 @@ def test_appends_one_line(tmp_path: Path) -> None:
 
 
 def test_oversize_line_drops_query_then_event(tmp_path: Path) -> None:
-    long_q = "q" * 600
+    long_q = "q" * 900
     ev = _ev(query=long_q)
     assert writer.record_event(ev, enabled=True, state_dir_override=str(tmp_path))
     line = _today_file(tmp_path).read_text().splitlines()[0]
-    assert len(line.encode()) <= 512
+    assert len(line.encode()) <= writer.LINE_CAP_BYTES
     assert json.loads(line)["query"] is None
     # Still oversize without the query (huge flags) -> dropped entirely.
-    fat = _ev(query=None, flags={"blob": "x" * 600})
+    fat = _ev(query=None, flags={"blob": "x" * 1200})
     assert writer.record_event(fat, enabled=True, state_dir_override=str(tmp_path)) is False
     drops = _events_dir(tmp_path) / f"events-{date.today():%Y-%m-%d}.drops"
     assert drops.read_text().strip() == "1"

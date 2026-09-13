@@ -37,6 +37,13 @@ from typing import TYPE_CHECKING, Any, Callable
 from java_codebase_rag.jrag import _load_graph
 from java_codebase_rag.watch.lock import ProjectLock
 from java_codebase_rag.watch.paths import socket_path
+
+#: Which path served the most recent ``get_payload`` call: ``"daemon"`` (warm
+#: read off the watch daemon) / ``"cold"`` (in-process core) / ``None`` (the
+#: command never routed through ``get_payload``). Read by the opt-in usage
+#: telemetry tap in ``jrag.main``; hot-vs-cold is the confounder that makes
+#: latency percentiles interpretable.
+LAST_SERVED_BY: str | None = None
 from java_codebase_rag.watch.protocol import (
     PROTOCOL_VERSION,
     ProtocolMismatch,
@@ -139,11 +146,18 @@ def get_payload(cmd: str, args: dict, cfg, *, cold_core: Callable[..., Any]) -> 
       ``_load_graph(cfg)`` — byte-identical to today (the daemon is absent in
       every non-``watch`` invocation, and an ``ok=False`` frame re-surfaces as
       the cold core's own ``PayloadError`` → identical error envelope + rc).
+
+    Also records which path served this call into module-level
+    ``LAST_SERVED_BY`` for the opt-in usage telemetry (None when this command
+    never routed through ``get_payload``).
     """
+    global LAST_SERVED_BY
     try:
         result = request(cfg.index_dir, cmd, args)
     except (DaemonUnavailable, DaemonError):
+        LAST_SERVED_BY = "cold"
         return cold_core(argparse_namespace(args), cfg, _load_graph(cfg))
+    LAST_SERVED_BY = "daemon"
     return _reconstruct(cmd, result)
 
 

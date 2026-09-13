@@ -18,7 +18,7 @@
 - Env vars keep the `JAVA_CODEBASE_RAG_*` prefix (backward-compat naming is intentional).
 - `usage/` imports stdlib non-network modules only — enforced by an import-lint test (Task 13).
 - Telemetry never changes stdout/stderr/exit codes when disabled OR on internal failure (byte-identical behavior when off).
-- Constants (not knobs): retention 30 days, day-file cap 5 MiB, line cap 512 bytes, query cap 200 chars, stderr excerpt 2 KB, heartbeat 30 s, session cutoff 30 min.
+- Constants (not knobs): retention 30 days, day-file cap 5 MiB, line cap 1 KiB, query cap 200 chars, stderr excerpt 2 KB, heartbeat 30 s, session cutoff 30 min.
 - Commit style: conventional commits (`feat(usage): …`, `test(usage): …`, `docs: …`).
 - Full test suite runs once at the end (Task 14); per-task runs use the relevant subset.
 
@@ -158,7 +158,7 @@ Add the four fields to `ResolvedOperatorConfig` (after the `language*` fields, w
 - Produces:
   - `record_event(event: dict, *, enabled: bool, state_dir_override: str | None = None) -> bool` — the single write entry point. Returns True when a line was appended. **The entire body runs inside `try/except Exception: pass`** (a debug stderr line `jrag: usage event dropped: <err>` is emitted only when env `JAVA_CODEBASE_RAG_DEBUG_CONTEXT` is truthy). Behavior inside the guard:
     1. If not `enabled` → return False immediately (no dirs created, no files touched).
-    2. Serialize `json.dumps(event, separators=(",", ":"), default=str)`; if the line exceeds **512 bytes**, drop `event["query"]`→re-serialize; if still over, drop the event (counted via drops file) and return False.
+    2. Serialize `json.dumps(event, separators=(",", ":"), default=str)`; if the line exceeds **1 KiB**, drop `event["query"]`→re-serialize; if still over, drop the event (counted via drops file) and return False.
     3. Day file = `day_file(event["project_key"], today, override)`; if the file already exists and its size ≥ **5 MiB (5_242_880)**, increment the drops counter file and return False.
     4. Append: `os.open(path, os.O_WRONLY|os.O_APPEND|os.O_CREAT, 0o644)` + one `os.write` of line+`"\n"` (encode utf-8) + `os.close`.
     5. Retention prune: delete `events-*.jsonl` and matching `.drops` files in the events dir whose date is older than **30 days** from today (filename parse; unparseable names untouched).
@@ -171,7 +171,7 @@ Add the four fields to `ResolvedOperatorConfig` (after the `language*` fields, w
 `tests/usage/test_writer.py` (point `state_dir_override` at `tmp_path`):
 1. `test_disabled_writes_nothing` — `record_event(ev, enabled=False, ...)` returns False; no `events/` tree created under the override.
 2. `test_appends_one_line` — two records → day file exists with exactly 2 lines, each `json.loads`-able, keys intact.
-3. `test_oversize_line_drops_query_then_event` — event whose serialized form > 512 bytes with a long query → query dropped, line written ≤ 512; an event still > 512 without query → nothing written, drops file contains `1`.
+3. `test_oversize_line_drops_query_then_event` — event whose serialized form > 1 KiB with a long query → query dropped, line within the cap; an event still over the cap without query → nothing written, drops file contains `1`.
 4. `test_size_cap_drop` — pre-create the day file at exactly 5 MiB (write 5 MiB of padding) → record skipped, drops `1`.
 5. `test_retention_prune` — create `events-2020-01-01.jsonl` in the events dir → after a successful record it is deleted; `events-<today>.jsonl` remains; a non-date file `notes.txt` remains.
 6. `test_never_raises` — monkeypatch `os.open` to raise OSError → returns False, no exception (with `JAVA_CODEBASE_RAG_DEBUG_CONTEXT` unset).
@@ -496,7 +496,7 @@ Write state files into a tmp runtime dir and drive the three commands (patterns 
 - Consumes: the finished `usage/` package.
 - Produces:
   - `tests/usage/test_import_lint.py`: parse every `src/java_codebase_rag/usage/*.py` with `ast.walk` collecting `Import`/`ImportFrom` root modules; assert every root ∈ {json, os, sys, time, hashlib, pathlib, datetime, collections, statistics, typing, dataclasses, __future__} (extend the set only if a task above introduced a legit need — never add urllib/socket/http/requests/subprocess).
-  - `docs/CONFIGURATION.md`: `usage.*` knobs section (env + YAML + defaults + provenance) and the "What jrag records locally" table — one row per event kind (command/reindex/daemon/feedback) × fields recorded, with the caps (200-char query, 512B line, 2KB stderr tail, 5MiB/day, 30d retention) and the explicit "no file contents, no network, ever" statement.
+  - `docs/CONFIGURATION.md`: `usage.*` knobs section (env + YAML + defaults + provenance) and the "What jrag records locally" table — one row per event kind (command/reindex/daemon/feedback) × fields recorded, with the caps (200-char query, 1 KiB line, 2KB stderr tail, 5MiB/day, 30d retention) and the explicit "no file contents, no network, ever" statement.
   - `docs/JRAG-CLI.md`: `jrag usage` / `jrag feedback` entries in the operator playbook (workflow, exit codes: always 0 except feedback's internal errors), `watch --status` `last_error` line, and the nightly eval cron one-liner with `--reuse-index`.
   - `docs/DESIGN.md`: observability paragraph under the surfaces/non-goals discussion (local-only, opt-in, identifiers-not-content).
   - `docs/ARCHITECTURE.md`: `usage/` module-map entry + write/read paths.

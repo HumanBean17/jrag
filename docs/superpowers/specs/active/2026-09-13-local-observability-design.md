@@ -78,7 +78,7 @@ hint-follow-rate measurement; any network export — permanently, not just v1.
    `<state>/events/<project_key>/events-YYYY-MM-DD.jsonl` plus
    `feedback.jsonl` alongside.
 4. **Synchronous single-write appends, swallow-everything guard.** The whole
-   line (≤ 512 bytes) in one `os.write`; writes happen at emit time because
+   line (≤ 1 KiB) in one `os.write`; writes happen at emit time because
    both `_console_script_main` and the daemon `os._exit()` past buffered
    flushes. The entire emit path (mkdir, serialize, write, prune) sits inside
    one `except Exception: pass`; telemetry never changes stdout, stderr, or
@@ -105,7 +105,7 @@ hint-follow-rate measurement; any network export — permanently, not just v1.
    (env `JAVA_CODEBASE_RAG_USAGE_DIR`) follow the `_pick_*` +
    `SettingSource` provenance pattern in `config.py`.
    Constants: 30-day retention, 5 MiB/day-file cap (drop overflow beyond the
-   cap, record the drop count), 512-byte line cap, 200-char query cap, 2 KB
+   cap, record the drop count), 1024-byte line cap, 200-char query cap, 2 KB
    stderr excerpt, 30-second heartbeat, 30-minute session inactivity cutoff.
 
 ## Architecture
@@ -255,7 +255,7 @@ gets a nightly cron one-liner. Ungated (see Decision 1).
 
 ## Tests
 
-- Writer: append correctness, day-file selection, 512-byte line cap, 200-char
+- Writer: append correctness, day-file selection, 1 KiB line cap, 200-char
   query cap, retention pruning, overflow drop accounting, swallow-guard
   (simulated OSError does not propagate).
 - `summarize`: purity tests over synthetic event streams — percentiles,
