@@ -263,6 +263,43 @@ def test_payload_boundary_traversals(name, argv, exercise_fold, corpus_root, lad
         )
 
 
+def test_payload_boundary_flow_symbol_root(corpus_root, ladybug_db_path, monkeypatch) -> None:
+    """``flow_payload`` accepts a method-FQN root: Symbol resolve fallback +
+    ``trace_symbol_flow`` BFS (issue #474).
+
+    Route resolution stays first; a route miss retries as a Symbol. The
+    payload keeps the traversal contract keys, every edge is a CALLS row
+    carrying the minimum-BFS ``hops`` distance, and payload-level edges key
+    their endpoint as ``other_id`` (the projector renames it later).
+    """
+    from java_codebase_rag.read_payloads import flow_payload
+
+    argv = [
+        "flow",
+        "com.bank.chat.assign.service.ChatManagementService#assign(AssignmentRequest)",
+        "--limit", "100",
+    ]
+    args = _build_args(argv)
+    cfg, graph = _load_cfg_graph(args, ladybug_db_path, monkeypatch)
+
+    payload = flow_payload(args, cfg, graph)
+    for key in ("root_id", "nodes", "edges", "noun", "warnings", "truncated", "is_external_entrypoint"):
+        assert key in payload, f"flow_payload missing key {key!r}: {sorted(payload)}"
+    assert _is_json_serializable(payload), "flow_payload not JSON-serializable"
+    assert payload["noun"] == "flow"
+
+    root = payload["nodes"][payload["root_id"]]
+    assert root["kind"] == "symbol" and root["symbol_kind"] == "method", (
+        f"expected a method Symbol root, got {root}"
+    )
+    assert payload["edges"], "expected a non-empty forward trace"
+    assert all(e["edge_type"] == "CALLS" for e in payload["edges"]), payload["edges"]
+    hops = {e["hops"] for e in payload["edges"]}
+    assert hops and min(hops) == 1, f"minimum BFS distance must start at 1, got {hops}"
+    for e in payload["edges"]:
+        assert e["other_id"] in payload["nodes"], f"edge endpoint not keyed: {e}"
+
+
 def test_payload_boundary_search_find_inspect(corpus_root, ladybug_db_path, monkeypatch) -> None:
     """search/find/inspect payload cores return their ``*_v2`` (or
     find_by_name_or_fqn) result and are JSON-serializable. These are the

@@ -2067,6 +2067,66 @@ class LadybugGraph:
             "outbound": outbound,
         }
 
+    def declared_flow_members(self, symbol_id: str) -> list[dict[str, Any]]:
+        """Method/constructor members a type Symbol declares (flow class roots).
+
+        ``flow`` accepts a class-level FQN by expanding it to its declared
+        entry points: DECLARES members filtered to ``method``/``constructor``
+        (nested types declare no CALLS edges of their own). Nested types
+        reachable through the members are picked up naturally by the CALLS
+        walk, so only executable members seed the frontier.
+        """
+        return self._rows(
+            "MATCH (t:Symbol {id: $id})-[:DECLARES]->(m:Symbol) "
+            "WHERE m.kind IN ['method', 'constructor'] "
+            "RETURN m.id AS id, m.fqn AS fqn, m.microservice AS microservice "
+            "ORDER BY m.fqn",
+            {"id": symbol_id},
+        )
+
+    def trace_symbol_flow(
+        self, entry_symbol_ids: list[str], max_hops: int = 5
+    ) -> dict[str, Any]:
+        """Outbound CALLS walk from method/constructor Symbol roots (BFS).
+
+        ``flow`` accepts method-level FQNs as entry points in addition to
+        Route paths (issue #474): the forward trace is a breadth-first walk
+        over CALLS edges, one frontier query per hop. Kuzu variable-length
+        paths (``CALLS*1..n``) return only endpoints — per-hop frontier steps
+        keep the minimum hop count for each reached symbol. A node first
+        reached at hop N keeps ``hops = N``; later re-discovery at a deeper
+        hop (cycles, converging paths) is ignored. The entry ids themselves
+        are never reported as reached.
+        """
+        hops = max(1, min(int(max_hops), 8))
+        reached: dict[str, dict[str, Any]] = {}
+        seen: set[str] = {i for i in entry_symbol_ids if i}
+        frontier: list[str] = list(seen)
+        for hop in range(1, hops + 1):
+            if not frontier:
+                break
+            rows = self._rows(
+                "MATCH (a:Symbol)-[:CALLS]->(b:Symbol) WHERE a.id IN $ids "
+                "RETURN DISTINCT b.id AS next_symbol_id, b.fqn AS next_fqn, "
+                "b.microservice AS next_microservice "
+                "ORDER BY next_symbol_id",
+                {"ids": frontier},
+            )
+            frontier = []
+            for row in rows:
+                nid = str(row.get("next_symbol_id") or "")
+                if not nid or nid in seen:
+                    continue
+                seen.add(nid)
+                row["hops"] = hop
+                reached[nid] = row
+                frontier.append(nid)
+        return {
+            "entry_symbol_ids": [i for i in entry_symbol_ids if i],
+            "max_hops": hops,
+            "outbound": list(reached.values()),
+        }
+
     # ---- outbound clients (LC3) ----
 
     _CLIENT_RETURN = (
