@@ -253,3 +253,35 @@ def test_fixture_stubs_match_module() -> None:
                     )
                 checked += 1
     assert checked >= 12, f"expected >=12 fixture declarations, checked {checked}"
+
+
+def test_docs_mention_annotations_artifact() -> None:
+    """Distribution docs stay anchored to the published artifact.
+
+    §4.3 must lead with the Maven Central dependency (coordinates, provided /
+    compileOnly scope, current version); the requirements doc must point at
+    the same coordinates; AGENTS.md must state the independent-versioning
+    discipline for contributors.
+    """
+    config_text = CONFIGURATION_MD.read_text(encoding="utf-8")
+    start = config_text.find("### 4.3 Source stubs")
+    end = config_text.find("### 4.4")
+    assert start != -1 and end != -1
+    section = config_text[start:end]
+    for needle in ("io.github.humanbean17:jrag-annotations", "provided", "compileOnly", "1.0.0"):
+        assert needle in section, f"CONFIGURATION.md §4.3 missing {needle!r}"
+
+    requirements = (REPO_ROOT / "docs" / "CODEBASE_REQUIREMENTS.md").read_text(
+        encoding="utf-8"
+    )
+    assert "io.github.humanbean17:jrag-annotations" in requirements, (
+        "CODEBASE_REQUIREMENTS.md must point at the artifact"
+    )
+
+    agents_md = (REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    assert "annotations-v" in agents_md, (
+        "AGENTS.md Publishing must state the annotations-v tag namespace"
+    )
+    assert "independently" in agents_md.lower(), (
+        "AGENTS.md Publishing must state the independent versioning rule"
+    )

@@ -570,7 +570,30 @@ Resolution order for each method: built-in extraction → annotation map → met
 
 ### 4.3 Source stubs
 
-If config and meta-annotations aren't enough, copy these `@interface` definitions into any package — **simple-name-only** matching means no Maven dependency on this bundle. Verbatim copies live under `tests/fixtures/brownfield_route_stubs/` and `tests/fixtures/brownfield_client_stubs/` for copy-pasting.
+If config and meta-annotations aren't enough, put the `@Codebase*` annotation definitions on your compile classpath. Two ways to get them:
+
+#### Dependency (preferred)
+
+The definitions ship as a Maven Central artifact — compile-time checking and IDE autocomplete, no copy-paste. Every annotation is `SOURCE`-retained, so declare it `provided` (Maven) / `compileOnly` (Gradle): nothing reaches your runtime bytecode, and classpath version conflicts are impossible by construction.
+
+```xml
+<dependency>
+    <groupId>io.github.humanbean17</groupId>
+    <artifactId>jrag-annotations</artifactId>
+    <version>1.0.0</version>
+    <scope>provided</scope>
+</dependency>
+```
+
+```groovy
+compileOnly 'io.github.humanbean17:jrag-annotations:1.0.0'
+```
+
+**Compatibility:** annotations `1.x` vocabulary equals the jrag parser vocabulary as of jrag `0.12`; vocabulary growth ships as an annotations minor release (the repo's `_meta` consistency test enforces the parity). Kotlin sources use the same artifact — the indexer matches the same simple names in `.kt` files.
+
+#### Copy-paste (zero-dependency alternative)
+
+The indexer matches **simple-name-only**, so you can instead copy these `@interface` definitions into any package with no dependency at all. Verbatim copies live under `tests/fixtures/brownfield_route_stubs/` and `tests/fixtures/brownfield_client_stubs/` for copy-pasting.
 
 #### Roles & capabilities (class-level)
 
