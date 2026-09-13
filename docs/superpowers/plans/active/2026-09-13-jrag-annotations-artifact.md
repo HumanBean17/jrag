@@ -54,20 +54,20 @@
     - `@interface CodebaseProducers { CodebaseProducer[] value(); }` — `@Target(METHOD)`
   - Javadoc: one sentence per type (what it declares, pointing at `docs/CONFIGURATION.md` §4.3 for usage); enough for a non-empty javadoc jar.
 
-- [ ] **Step 1: Create the pom and the 16 source files**
+- [x] **Step 1: Create the pom and the 16 source files**
 
 Per the POM and type contracts above. Package is `io.github.humanbean17.jrag.annotations` in every source file. Javadoc is plain sentences — no tags beyond what's natural.
 
-- [ ] **Step 2: Build and verify locally**
+- [x] **Step 2: Build and verify locally**
 
 Run: `mvn -B -f annotations/pom.xml verify`
 Expected: `BUILD SUCCESS`; `annotations/target/` contains `jrag-annotations-1.0.0.jar`, `-sources.jar`, `-javadoc.jar`; no signing or publishing attempted (no `release` profile active).
 
-- [ ] **Step 3: Ignore build output**
+- [x] **Step 3: Ignore build output**
 
 Add `annotations/target/` to `.gitignore` (near the existing build/tooling ignores).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 Run: `git add annotations/ .gitignore && git commit -m "feat(annotations): canonical Maven module for the brownfield annotation surface"`
 
@@ -88,7 +88,7 @@ Run: `git add annotations/ .gitignore && git commit -m "feat(annotations): canon
 
 **Test design — three tests, exact expectations:**
 
-- [ ] **Step 1: Write `test_module_matches_parser_vocabulary`**
+- [x] **Step 1: Write `test_module_matches_parser_vocabulary`**
 
 Extraction from module sources (declaration recognition only — usage examples elsewhere are ignored). Asserts:
 1. Module annotation-name set equals `CODEBASE_ROUTE_ANNOTATIONS | CODEBASE_HTTP_CLIENT_ANNOTATIONS | CODEBASE_PRODUCER_ANNOTATIONS | {"CodebaseRole", "CodebaseCapability", "CodebaseCapabilities"}` — exact set equality, both directions.
@@ -96,20 +96,20 @@ Extraction from module sources (declaration recognition only — usage examples 
 3. `CodebaseHttpMethod` constants ⊆ `_BROWNFIELD_SHADOWABLE_HTTP_FRAMEWORK_METHOD_ANNOTATIONS` (subset, not equality — that set also contains framework mapping-annotation names).
 4. `graph_enrich.py` and `ast_java.py` source text both contain the literals `CodebaseRole`, `CodebaseCapability`, `CodebaseCapabilities`.
 
-- [ ] **Step 2: Write `test_docs_section_43_blocks_match_module`**
+- [x] **Step 2: Write `test_docs_section_43_blocks_match_module`**
 
 Collect `public @interface` / `public enum` declarations from §4.3 fenced java blocks (16 expected types — anything else in the blocks, e.g. usage-example classes, is not a declaration and is skipped). Normalization on both docs and module text before comparing per type name: drop `package`/`import` lines, all comments, meta-annotation usage lines (`@Target`, `@Retention`, `@Repeatable`), and blank lines; collapse runs of whitespace. Assert per type: same declaration kind (annotation vs enum), and for annotations an identical member list (member name, type, and default-expression text); for enums an identical constant list. Failure messages must name the drifted type.
 
-- [ ] **Step 3: Write `test_fixture_stubs_match_module`**
+- [x] **Step 3: Write `test_fixture_stubs_match_module`**
 
 Walk both fixture trees; for every declared type: the module declares a type with the same name and kind; for every fixture enum, its constant set equals the module enum's. (Fixtures keep their `com.example.rag` package — the point is name/shape parity, not package parity.)
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `rm -rf tests/*/.java-codebase-rag tests/*/.java-codebase-rag.yml tests/*/.java-codebase-rag.hosts && .venv/bin/python -m pytest tests/_meta/test_annotations_module_consistency.py -v`
 Expected: 3 PASS. A failure means real drift — reconcile by fixing the *newer* artifact (module wording) or flagging a genuine parser/docs mismatch to the maintainer; do not weaken assertions to pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run: `git add tests/_meta/test_annotations_module_consistency.py && git commit -m "test(_meta): bind annotations module to parser vocabulary, docs, fixtures"`
 
@@ -141,23 +141,23 @@ Run: `git add tests/_meta/test_annotations_module_consistency.py && git commit -
 
 **Test design — each verifies one invariant, expected result stated:**
 
-- [ ] **Step 1: Write the failing structural tests**
+- [x] **Step 1: Write the failing structural tests**
 
 `test_workflow_yaml_parses` — file exists, `yaml.safe_load` returns a map. `test_manual_dispatch_only_with_version_input` — triggers contain `workflow_dispatch`, no `push`/`pull_request` keys; input `version` is required. `test_release_environment_and_permissions` — job uses `environment: release`; top-level `permissions` includes `contents: write`. `test_guard_precedes_build` — the step referencing `search.maven.org` is ordered before the `setup-java` step. `test_build_uses_release_profile_and_revision` — the mvn step's run string contains `-P release` and `-Drevision=`. `test_release_tag_prefix` — the release step(s) reference `annotations-v`. `test_secrets_present` — file text contains all four secret names.
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `.venv/bin/python -m pytest tests/package/test_release_annotations_workflow.py -v`
 Expected: FAIL (workflow file does not exist).
 
-- [ ] **Step 3: Write the workflow per the contract above**
+- [x] **Step 3: Write the workflow per the contract above**
 
-- [ ] **Step 4: Run to verify pass**
+- [x] **Step 4: Run to verify pass**
 
 Run: `.venv/bin/python -m pytest tests/package/test_release_annotations_workflow.py -v`
 Expected: 7 PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run: `git add .github/workflows/release-annotations.yml tests/package/test_release_annotations_workflow.py && git commit -m "ci: manual-dispatch Maven Central release workflow for jrag-annotations"`
 
@@ -175,23 +175,23 @@ Run: `git add .github/workflows/release-annotations.yml tests/package/test_relea
 
 **Job contract:** job id `annotations-build`; `runs-on: ubuntu-latest`; **no** `continue-on-error` (it must gate); steps: checkout → `actions/setup-java@v4` (Temurin 17, Maven cache) → `mvn -B -f annotations/pom.xml verify`. Runs on the existing `pull_request` + `push` triggers of the file (no new triggers).
 
-- [ ] **Step 1: Write the failing structural test**
+- [x] **Step 1: Write the failing structural test**
 
 `test_test_yml_has_annotations_build_job` in the Task 3 test file: parse `.github/workflows/test.yml`; assert `jobs` contains `annotations-build`, `runs-on` is `ubuntu-latest`, the job has no truthy `continue-on-error`, one step uses `setup-java`, and one step's run string contains `mvn -B -f annotations/pom.xml verify`.
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `.venv/bin/python -m pytest tests/package/test_release_annotations_workflow.py::test_test_yml_has_annotations_build_job -v`
 Expected: FAIL (no such job).
 
-- [ ] **Step 3: Add the job per contract**
+- [x] **Step 3: Add the job per contract**
 
-- [ ] **Step 4: Run to verify pass**
+- [x] **Step 4: Run to verify pass**
 
 Run: `.venv/bin/python -m pytest tests/package/test_release_annotations_workflow.py -v`
 Expected: 8 PASS (7 previous + 1 new).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run: `git add .github/workflows/test.yml tests/package/test_release_annotations_workflow.py && git commit -m "ci: annotations-build compile guard in test.yml"`
 
@@ -214,25 +214,25 @@ Run: `git add .github/workflows/test.yml tests/package/test_release_annotations_
 - `CODEBASE_REQUIREMENTS.md` §A.2.1 — brownfield guidance prefers the Maven artifact; copy-paste from §4.3 stays as the fallback when adding a dependency isn't possible.
 - `AGENTS.md` Publishing — a short paragraph: `io.github.humanbean17:jrag-annotations` is a third, **independently versioned** channel; released via manual-dispatch `release-annotations.yml`; tags `annotations-v*`; **not** part of the dual-PyPI same-version sync rule; version bumps only when the annotation surface changes (the `_meta` consistency test forces reconciliation).
 
-- [ ] **Step 1: Write the failing docs tripwire test**
+- [x] **Step 1: Write the failing docs tripwire test**
 
 `test_docs_mention_annotations_artifact` in the Task 2 test file: asserts `CONFIGURATION.md` §4.3 contains the strings `io.github.humanbean17:jrag-annotations`, `provided`, `compileOnly`, `1.0.0`; `CODEBASE_REQUIREMENTS.md` contains the coordinates; `AGENTS.md` contains `annotations-v` and the phrase "independently".
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `.venv/bin/python -m pytest tests/_meta/test_annotations_module_consistency.py::test_docs_mention_annotations_artifact -v`
 Expected: FAIL.
 
-- [ ] **Step 3: Edit the three docs per the content contract**
+- [x] **Step 3: Edit the three docs per the content contract**
 
 Fenced java blocks in §4.3 stay untouched.
 
-- [ ] **Step 4: Run the full consistency file**
+- [x] **Step 4: Run the full consistency file**
 
 Run: `.venv/bin/python -m pytest tests/_meta/test_annotations_module_consistency.py -v`
 Expected: 4 PASS (3 from Task 2 + the tripwire) — proving the §4.3 restructure didn't drift the blocks.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run: `git add docs/CONFIGURATION.md docs/CODEBASE_REQUIREMENTS.md AGENTS.md tests/_meta/test_annotations_module_consistency.py && git commit -m "docs: jrag-annotations Maven dependency as the primary brownfield path"`
 
@@ -246,20 +246,20 @@ Run: `git add docs/CONFIGURATION.md docs/CODEBASE_REQUIREMENTS.md AGENTS.md test
 - Consumes: everything above.
 - Produces: verified-complete state, ready for `finishing-a-development-branch`.
 
-- [ ] **Step 1: Clean stale test indexes**
+- [x] **Step 1: Clean stale test indexes**
 
 Run: `rm -rf tests/*/.java-codebase-rag tests/*/.java-codebase-rag.yml tests/*/.java-codebase-rag.hosts`
 
-- [ ] **Step 2: Run the full test suite once (AGENTS.md end-of-task rule)**
+- [x] **Step 2: Run the full test suite once (AGENTS.md end-of-task rule)**
 
 Run: `.venv/bin/python -m pytest -q`
 Expected: all pass (2184 pre-existing + ~12 new); heavy cocoindex/Lance e2e tests skip without `JAVA_CODEBASE_RAG_RUN_HEAVY`. If any pre-existing failure appears, compare against master to prove it predates this branch before reporting.
 
-- [ ] **Step 3: Final build check**
+- [x] **Step 3: Final build check**
 
 Run: `mvn -B -f annotations/pom.xml verify`
 Expected: `BUILD SUCCESS` (repeatable clean state).
 
-- [ ] **Step 4: Report**
+- [x] **Step 4: Report**
 
 Confirm `git status` clean, all commits present, and summarize: what shipped, what remains manual (one-time Central Portal namespace verification, GPG key, secrets — then first `1.0.0` dispatch).
