@@ -105,6 +105,9 @@ class PrimeState:
     client_count: int
     producer_count: int
     daemon_running: bool
+    # Opt-in telemetry: when set (daemon running but reindex failing), the
+    # rendered daemon line gains ", <note>" (e.g. "reindex failing since 2h").
+    daemon_note: str | None = None
 
 
 def render(state: PrimeState) -> str:
@@ -118,10 +121,13 @@ def render(state: PrimeState) -> str:
         freshness = f"stale — {state.changed_files} files changed since last increment"
     else:
         freshness = state.freshness
+    daemon_state = "running" if state.daemon_running else "not running"
+    if state.daemon_note:
+        daemon_state = f"{daemon_state}, {state.daemon_note}"
     return PRIME_TEMPLATE.format(
         freshness=freshness,
         last_increment_age=state.last_increment_age,
-        daemon_state="running" if state.daemon_running else "not running",
+        daemon_state=daemon_state,
         service_count=state.service_count,
         service_names=", ".join(state.service_names),
         symbol_count=state.symbol_count,

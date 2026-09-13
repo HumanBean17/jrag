@@ -425,6 +425,19 @@ MESSAGES: dict[str, Any] = {
     "MSG_FEEDBACK_RECORDED": (
         "feedback recorded ({rating}); see `jrag usage` feedback section."
     ),
+    "LBL_WATCH_LAST_ERROR": "last error: {phase} phase, {age} ago — {detail}",
+    "WARN_DAEMON_NOT_RUNNING": (
+        "watch daemon is not running — queries fall back to cold (slow) reads "
+        "and the index will go stale"
+    ),
+    "WARN_DAEMON_REINDEX_FAILING": (
+        "watch daemon reindex failing ({count} consecutive errors) — the index "
+        "is not being updated"
+    ),
+    "WARN_DAEMON_HEARTBEAT_STALE": (
+        "watch daemon heartbeat is {age} old — it may be hung or wedged"
+    ),
+    "MSG_PRIME_REINDEX_FAILING": "reindex failing since {since} ({count} errors)",
     "MSG_WARN_EXISTING_CONFIG": (
         "Warning: found existing config at {path}. "
         "Creating a new project here will create a separate index."

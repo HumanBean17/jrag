@@ -1529,6 +1529,18 @@ def _cmd_watch_status(cfg) -> int:
                 print(tr("MSG_WATCH_LAST_REINDEX", kind=kind, when=when, count=count))
             else:
                 print(tr("MSG_WATCH_LAST_REINDEX_NONE", count=count))
+        # Ungated (display of already-recorded state): the daemon's own
+        # last_error has always been persisted but never rendered anywhere.
+        last_error = (state or {}).get("last_error")
+        if isinstance(last_error, dict):
+            phase = last_error.get("phase") or "unknown"
+            err_at = last_error.get("at")
+            age = (
+                _humanize_age(max(0.0, time.time() - float(err_at)))
+                if isinstance(err_at, (int, float)) else ""
+            )
+            detail = str(last_error.get("detail") or "")[:200].replace("\n", " ")
+            print(tr("LBL_WATCH_LAST_ERROR", phase=phase, age=age, detail=detail))
         return 0
     print(tr("MSG_WATCH_DOWN", sock=sock))
     return 1
@@ -1703,6 +1715,54 @@ def _watch_unlink(path) -> None:
         pass
 
 
+def _daemon_health(cfg) -> dict:
+    """Cheap daemon health probe for the gated status/prime renders.
+
+    Reads only the state file + pid liveness + its mtime (heartbeat); never
+    opens the graph. Missing state file degrades to unknown fields.
+    """
+    import os as _os
+
+    from java_codebase_rag.watch.client import is_daemon_alive
+    from java_codebase_rag.watch.lock import ProjectLock
+    from java_codebase_rag.watch.paths import state_path
+
+    running = is_daemon_alive(cfg.index_dir)
+    state = _read_state_file(cfg.index_dir)
+    heartbeat_age_s = None
+    try:
+        heartbeat_age_s = max(0.0, time.time() - state_path(cfg.index_dir).stat().st_mtime)
+    except OSError:
+        pass
+    return {
+        "running": running,
+        "pid": ProjectLock.read_holder(cfg.index_dir) if running else None,
+        "heartbeat_age_s": (
+            round(heartbeat_age_s, 1) if heartbeat_age_s is not None else None
+        ),
+        "consecutive_errors": (state or {}).get("consecutive_errors"),
+        "last_reindex_age_s": (
+            round(max(0.0, time.time() - state["last_reindex_at"]), 1)
+            if state and isinstance(state.get("last_reindex_at"), (int, float))
+            else None
+        ),
+        "_state": state,
+    }
+
+
+def _daemon_unhealthy(health: dict) -> str | None:
+    """Return a tr()-formatted warning when the daemon is unhealthy, else None."""
+    if not health["running"]:
+        return tr("WARN_DAEMON_NOT_RUNNING")
+    errors = health.get("consecutive_errors") or 0
+    if errors >= 3:
+        return tr("WARN_DAEMON_REINDEX_FAILING", count=errors)
+    heartbeat = health.get("heartbeat_age_s")
+    if heartbeat is not None and heartbeat > 120:
+        return tr("WARN_DAEMON_HEARTBEAT_STALE", age=_humanize_age(heartbeat))
+    return None
+
+
 def _read_state_file(index_dir) -> dict | None:
     """Return the parsed daemon state JSON, or ``None`` if missing/unreadable.
 
@@ -1786,6 +1846,17 @@ def _cmd_status(args: argparse.Namespace) -> int:
             },
         },
     )
+    # Gated daemon-health section (opt-in telemetry): the watch daemon can be
+    # dead or failing while cold fallback keeps answers correct-but-slow —
+    # surface that where agents already look, as a rollup field + warning.
+    if cfg.usage_enabled:
+        health = _daemon_health(cfg)
+        env.nodes["index"]["daemon"] = {
+            k: v for k, v in health.items() if k != "_state"
+        }
+        warning = _daemon_unhealthy(health)
+        if warning:
+            env.warnings.append(warning)
     print(render(env, fmt=args.format, detail=args.detail, noun="status", shape="inspect"))
     return 0
 
@@ -1972,7 +2043,31 @@ def _prime_state(cfg, graph, meta: dict):
         client_count=_count_from(counts, "clients"),
         producer_count=_count_from(counts, "producers"),
         daemon_running=is_daemon_alive(cfg.index_dir),
+        daemon_note=_daemon_note(cfg),
     )
+
+
+def _daemon_note(cfg) -> str | None:
+    """Gated prime enrichment: ``reindex failing since X`` when unhealthy."""
+    try:
+        if not cfg.usage_enabled:
+            return None
+        health = _daemon_health(cfg)
+        if not health["running"]:
+            return None  # binary phrasing stays for a dead daemon
+        errors = health.get("consecutive_errors") or 0
+        if errors <= 0:
+            return None
+        state = health.get("_state") or {}
+        last_error = state.get("last_error") or {}
+        err_at = last_error.get("at")
+        since = (
+            _humanize_age(max(0.0, time.time() - float(err_at)))
+            if isinstance(err_at, (int, float)) else ""
+        )
+        return tr("MSG_PRIME_REINDEX_FAILING", count=errors, since=since)
+    except Exception:  # noqa: BLE001 — a hook payload must never crash
+        return None
 
 
 def _cmd_prime(args: argparse.Namespace) -> int:
