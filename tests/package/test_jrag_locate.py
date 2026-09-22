@@ -742,3 +742,21 @@ def test_find_fields_projects_json_to_allowlist(corpus_root: Path, ladybug_db_pa
     for node in payload["nodes"].values():
         assert set(node.keys()) <= {"fqn", "role"}, f"unexpected keys: {node.keys()}"
         assert "fqn" in node
+
+
+def test_count_and_exists_together_rejected_at_parse_time() -> None:
+    """--count + --exists exits 2 as a usage error before any index access (issue #429).
+
+    Previously both were accepted and --exists silently won via the render
+    precedence chain; a user passing both almost certainly meant one. No index
+    env is set on purpose: the mutex must fire during argparse, before project
+    discovery / handler dispatch.
+    """
+    proc = _run_jrag(["find", _KNOWN_FQN, "--count", "--exists", "--format", "json"])
+    assert proc.returncode == 2, f"rc={proc.returncode}\nstdout={proc.stdout}\nstderr={proc.stderr}"
+    payload = json.loads(proc.stdout)
+    assert payload["status"] == "error", payload
+    # Stdlib mutex fragment; check both orderings of the pair in the message.
+    msg = payload.get("message", "")
+    assert "not allowed with argument" in msg, msg
+    assert "--count" in msg and "--exists" in msg, msg

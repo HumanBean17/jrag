@@ -234,6 +234,10 @@ The full command catalog lives in [Tools & commands at a glance](#tools--command
 | `--offset <n>` | `find`, `search` only | paginate (other commands reject it) |
 | `--kind symbol\|route\|client\|producer` | `<query>` commands | resolve hint |
 | `--java-kind`, `--role`, `--fqn-contains` | `<query>` commands | client-side post-filters |
+| `--fuzzy` | `find`, `search` | `find`: identifier loosening — exact → prefix → substring on name/FQN when the exact match is empty (structural; complements semantic `search`). `search`: no-op (search is always semantic) |
+| `--count` | query/listing/traversal | print just the result count (bare int in text; `{"status","count"}` in json). Mutually exclusive with `--exists` |
+| `--exists` | query/listing/traversal | print `true`/`false`, exit 0 on hit / 2 on miss (existence gate). Mutually exclusive with `--count` |
+| `--fields fqn,role,…` | query/listing/traversal | project each node to a field allowlist (json lever; no-op with `--count`/`--exists`) |
 | `--index-dir <path>` | all | override index directory |
 
 `--offset` is intentionally NOT a global flag: only `find` and `search` route

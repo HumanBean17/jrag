@@ -506,6 +506,47 @@ def test_build_ast_graph_quiet_emits_no_progress(corpus_root: Path, tmp_path: Pa
     assert _progress_lines(proc.stderr) == [], "quiet build must not emit JCIRAG_PROGRESS"
 
 
+def test_graph_pass_progress_reports_failed_when_pass_body_raises(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A pass whose body raises must emit ``status=failed``, not ``done`` (issue #459).
+
+    The renderer keys terminality on ``kind``+``status`` alone, so an
+    unconditional ``done`` here would mark the bar ``graph ✓`` for a failed pass
+    and emit a second terminal event beneath the parent-side ``failed``.
+    """
+    from java_codebase_rag.graph import build_ast_graph
+
+    with pytest.raises(RuntimeError, match="pass body exploded"):
+        with build_ast_graph._graph_pass_progress("4/6", verbose=True):
+            raise RuntimeError("pass body exploded")
+    captured = capsys.readouterr()
+    lines = [ln for ln in captured.err.splitlines() if "JCIRAG_PROGRESS" in ln]
+    assert [re.search(r"status=(\w+)", ln).group(1) for ln in lines] == [
+        "running",
+        "failed",
+    ], f"expected running then failed; stderr:\n{captured.err}"
+    assert "status=done" not in lines[-1]
+    assert "pass=4/6" in lines[-1]
+    assert "elapsed_s=" in lines[-1], "terminal line must still carry elapsed_s"
+
+
+def test_graph_pass_progress_reports_done_on_clean_exit(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Companion to the failed-path test: a clean pass still emits done."""
+    from java_codebase_rag.graph import build_ast_graph
+
+    with build_ast_graph._graph_pass_progress("2/6", verbose=True):
+        pass
+    captured = capsys.readouterr()
+    lines = [ln for ln in captured.err.splitlines() if "JCIRAG_PROGRESS" in ln]
+    assert [re.search(r"status=(\w+)", ln).group(1) for ln in lines] == [
+        "running",
+        "done",
+    ], f"expected running then done; stderr:\n{captured.err}"
+
+
 def test_pass1_parse_incremental_total_excludes_removed_files(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """Incremental pass-1 total must count only files that will actually be visited.
 
