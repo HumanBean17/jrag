@@ -56,7 +56,7 @@ You drive **`jrag` shell commands**, not the MCP tools (`search`/`find`/`describ
 
 **Escalation:** ① Most targeted tool first (identifier → `jrag inspect`; structural → matching `jrag` traversal; raw text / config / history → `Grep`/`Glob`/`Bash`). ② Fall back gracefully (`jrag` empty / `not_found` / exit 2 → `Grep`/`Glob`). ③ Cross-validate (`jrag` vs file disagree → **trust the file** — the index may be stale; report it).
 
-**Rules of thumb:** structure beats search for exact questions (`jrag find`/`inspect` + traversal); search beats structure for fuzzy discovery (`jrag search`); raw text / config / history beats both (`Grep`/`Glob`/`Bash`); file-system beats a stale index.
+**Rules of thumb:** structure beats search for exact questions (`jrag find`/`inspect` + traversal); search beats structure for fuzzy discovery (`jrag search`); for a half-remembered identifier, `jrag find <name> --fuzzy` loosens it structurally (exact → prefix → substring on name/FQN — complements semantic `search`); raw text / config / history beats both (`Grep`/`Glob`/`Bash`); file-system beats a stale index.
 
 ---
 
@@ -75,7 +75,7 @@ You drive **`jrag` shell commands**, not the MCP tools (`search`/`find`/`describ
 | Symptom | Fix |
 | ------- | --- |
 | `jrag status` exits 2 | Run `jrag init --source-root <root>`; retry |
-| `status: not_found` | `jrag search "<query>"`; or `find --fqn-contains`; fallback `Grep` |
+| `status: not_found` | `jrag find <name> --fuzzy` (identifier loosening: exact → prefix → substring); `jrag search "<query>"`; or `find --fqn-contains`; fallback `Grep` |
 | `many` candidates | Add `--kind`/`--role`/`--fqn-contains`/`--service`; re-run |
 | `find` too broad | Add `--service`, `--fqn-contains`, `--path-contains`, `--topic-contains` |
 | Empty `search` | Broaden the query; `find --fqn-contains`; `Grep` |
@@ -101,7 +101,7 @@ The Decision Framework above tells you *which* command; reach for `--help` only 
 
 **Resolve-first contract.** Every `<query>` command resolves the identifier first, then maps `one` / `many` / `none` onto one envelope: `one` → run; `many` → return candidates and stop, **no silent guess across distinct types** (a class sharing its simple name with its own constructor still resolves to the type — narrow with `--kind` / `--role` / `--fqn-contains` / `--service`); `none` → `status: not_found` (exit 0), fall back to `search` or `Grep`. Pass names (FQN / simple name / route path / topic) or prior `sym:`/`route:`/`client:`/`producer:` ids — never raw node ids. `--kind` is a true resolve input; `--role` / `--java-kind` / `--fqn-contains` post-filter client-side.
 
-**Output.** Default is compact text; `--format json` emits `{status, nodes, edges, candidates, truncated, agent_next_actions, file_location}` (empty fields dropped; `file_location` is a `filename:line` string; `agent_next_actions` suggests ≤5 next commands). `truncated` pages via `--limit` / `--offset` (`find` / `search` only). Output-shaping flags (every query / listing / traversal command — not `status` / `microservices` / `vocab-index`, which reject them): `--count` prints just the result count (bare int in text; `{"status","count"}` in json), `--exists` prints `true`/`false` (`{"status","exists"}` in json) and exits 0 on a hit / 2 on a miss (scriptable existence gate — `find X --exists`, `inspect X --exists`), `--fields fqn,role,…` projects each node to a comma-separated field allowlist (overrides `--detail`; ignored with `--count`/`--exists`; primarily a `--format json` lever).
+**Output.** Default is compact text; `--format json` emits `{status, nodes, edges, candidates, truncated, agent_next_actions, file_location}` (empty fields dropped; `file_location` is a `filename:line` string; `agent_next_actions` suggests ≤5 next commands). `truncated` pages via `--limit` / `--offset` (`find` / `search` only). Output-shaping flags (every query / listing / traversal command — not `status` / `microservices` / `vocab-index`, which reject them): `--count` prints just the result count (bare int in text; `{"status","count"}` in json), `--exists` prints `true`/`false` (`{"status","exists"}` in json) and exits 0 on a hit / 2 on a miss (scriptable existence gate — `find X --exists`, `inspect X --exists`; **mutually exclusive with `--count`** — passing both is a usage error), `--fields fqn,role,…` projects each node to a comma-separated field allowlist (overrides `--detail`; ignored with `--count`/`--exists`; primarily a `--format json` lever).
 
 **Edge semantics `--help` doesn't spell out.** `callers` / `callees` = `CALLS` in/out (on a controller/entry-point type, `callers` also lists the routes its methods `EXPOSE`). `impact` = bounded fan-in over `INJECTS` / `IMPLEMENTS` / `EXTENDS` (default depth 2; raise with `--depth`). `flow <route>` follows `EXPOSES` → `HTTP_CALLS` / `ASYNC_CALLS` → `CALLS`; `flow <Class#method>` is the same forward `CALLS` trace from a method (a class/type FQN expands to its methods + constructors; edges carry `hop=` in text, `hops` in JSON). `connection <microservice>` = inbound/outbound cross-service seams (its positional is a literal service name, not a query). Per-command edge mappings and the rest of the flag surface live in each command's `--help`.
 

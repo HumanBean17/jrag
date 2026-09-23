@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from java_codebase_rag import jrag
+from java_codebase_rag.usage import events as jrag_events
 
 pytestmark = pytest.mark.usefixtures("env_pinned")
 
@@ -34,9 +35,19 @@ def _write_event(state: Path, event: dict) -> None:
         fh.write(json.dumps(event) + "\n")
 
 
+def _recent_ts() -> str:
+    """A ts safely inside the rollup's 7-day window.
+
+    Hardcoded dates here rot: the rollup drops events older than
+    ``window_days`` (7), so a fixed ts turns the test into a time bomb that
+    fails on the first CI run a week after it was written.
+    """
+    return jrag_events.rfc3339_now()
+
+
 def _cmd_event(verb: str, *, status: str = "ok", count: int = 2) -> dict:
     return {
-        "v": 1, "ts": "2026-09-13T09:00:00.000Z", "surface": "cli",
+        "v": 1, "ts": _recent_ts(), "surface": "cli",
         "event": "command", "project_key": "k", "pid": 1, "verb": verb,
         "query": "Foo", "flags": {}, "duration_ms": 12.0, "rc": 0,
         "envelope_facts": {
@@ -85,7 +96,7 @@ def test_populated_rollup(usage_state, env_pinned, capsys) -> None:
     jrag.main(["find", "AbsolutelyMissingThing"])
     # Plus a synthetic watch event for the health section.
     _write_event(usage_state, {
-        "v": 1, "ts": "2026-09-13T09:00:00.000Z", "surface": "watch",
+        "v": 1, "ts": _recent_ts(), "surface": "watch",
         "event": "reindex", "kind": "error",
         "detail": {"phase": "graph", "returncode": 1, "stderr_tail": "boom"},
         "project_key": "k", "pid": 5,

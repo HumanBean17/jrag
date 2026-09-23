@@ -387,9 +387,11 @@ Provide exactly one of:
 - `--diff-stdin` (read diff from stdin)
 
 ```bash
-git diff > /tmp/pr.diff
-jrag analyze-pr --diff-file /tmp/pr.diff --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-rag
+git diff > tmp/pr.diff
+jrag analyze-pr --diff-file tmp/pr.diff --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-rag
 ```
+
+> **Windows users:** shell snippets in this guide use POSIX syntax (`VAR=value` prefixes, `/tmp` paths where shown). Run them under **Git Bash** or **WSL**, or use PowerShell equivalents with relative scratch paths (`tmp\pr.diff`).
 
 Paths in the diff should align with **`Symbol.filename`** layout in the graph (project-relative Java paths). Use this from **PR-triage scripts** or Cursor skills; PR mapping is **CLI-only** (the MCP exposes retrieval tools only).
 
@@ -418,8 +420,8 @@ jrag meta --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-r
 ### 4. PR risk pass (local)
 
 ```bash
-git diff origin/main...HEAD > /tmp/pr.diff
-jrag analyze-pr --diff-file /tmp/pr.diff --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-rag | jq '{risk_score,risk_band,blast_radius_total}'
+git diff origin/main...HEAD > tmp/pr.diff
+jrag analyze-pr --diff-file tmp/pr.diff --source-root /path/to/java/repo --index-dir /path/to/.java-codebase-rag | jq '{risk_score,risk_band,blast_radius_total}'
 ```
 
 ## Graph-only escape hatch
@@ -473,6 +475,7 @@ Find a specific node by name, or inspect one in full. `<query>` commands resolve
 
 ```bash
 jrag find ChatService                 # exact name / FQN lookup (symbols only)
+jrag find ChatServ --fuzzy            # identifier loosening: exact → prefix → substring
 jrag find --role CONTROLLER           # filter mode (structured NodeFilter flags)
 jrag find --framework spring_mvc --capability HTTP_CLIENT
 jrag inspect ChatService              # full node record + edge summary
@@ -481,6 +484,8 @@ jrag imports src/main/.../Foo.java    # imports resolved to graph nodes
 ```
 
 `find` has two modes: a positional `<query>` for exact name/FQN lookup (symbols only), or **filter mode** (no positional) using structured flags (`--role`, `--java-kind`, `--annotation`, `--capability`, `--framework`, `--http-method`, `--client-kind`, `--producer-kind`, `--topic-contains`, …). Domain flags imply `--kind` when omitted; `--offset` paginates in filter mode only.
+
+`--fuzzy` (query mode only) widens an empty exact match on the identifier: exact → prefix → substring over name/FQN — for "I almost remember the symbol name" lookups. This is **structural** loosening, complementary to the **semantic** discovery of `jrag search <natural language>`; file/package nodes are excluded from the fuzzy tiers.
 
 #### Listings
 

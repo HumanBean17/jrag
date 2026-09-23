@@ -24,10 +24,12 @@ members, 0 parse errors, 17 routes, 11 `EXPOSES`, 793 `CALLS`, 24 `OVERRIDES`,
 2 `HTTP_CALLS`, 5 `ASYNC_CALLS`, 2 `Client` rows, microservices = `chat-core` + `chat-assign`.
 
 **Convention:** Graph ops use MCP. Index health / rebuild / PR analysis use
-**`jrag`** (see [`JRAG-CLI.md`](./JRAG-CLI.md)). Example:
+**`jrag`** (see [`JRAG-CLI.md`](./JRAG-CLI.md)). Snippets use POSIX shell syntax
+and a relative `tmp/` scratch dir — on Windows run them under **Git Bash** or
+**WSL** (PowerShell: use `tmp\verify_index` etc.). Example:
 
 ```bash
-export JAVA_CODEBASE_RAG_INDEX_DIR=/tmp/verify_index
+export JAVA_CODEBASE_RAG_INDEX_DIR=tmp/verify_index
 export JAVA_CODEBASE_RAG_SOURCE_ROOT=/path/to/your/project
 jrag meta --source-root "$JAVA_CODEBASE_RAG_SOURCE_ROOT" --index-dir "$JAVA_CODEBASE_RAG_INDEX_DIR"
 jrag tables --source-root "$JAVA_CODEBASE_RAG_SOURCE_ROOT" --index-dir "$JAVA_CODEBASE_RAG_INDEX_DIR"
@@ -42,19 +44,19 @@ Run **once** before working through the phases:
 ```bash
 # 1. Build the graph against your project (verbose, deterministic)
 export JAVA_CODEBASE_RAG_SOURCE_ROOT=/path/to/your/project
-export JAVA_CODEBASE_RAG_INDEX_DIR=/tmp/verify_index
+export JAVA_CODEBASE_RAG_INDEX_DIR=tmp/verify_index
 rm -rf "$JAVA_CODEBASE_RAG_INDEX_DIR"
 mkdir -p "$JAVA_CODEBASE_RAG_INDEX_DIR"
 .venv/bin/python build_ast_graph.py \
   --source-root "$JAVA_CODEBASE_RAG_SOURCE_ROOT" \
-  --ladybug-path "$JAVA_CODEBASE_RAG_INDEX_DIR/code_graph.lbug" --verbose 2>&1 | tee /tmp/verify_build.log
+  --ladybug-path "$JAVA_CODEBASE_RAG_INDEX_DIR/code_graph.lbug" --verbose 2>&1 | tee tmp/verify_build.log
 
 # 2. Read the summary lines (last ~10 lines of the log)
-tail -12 /tmp/verify_build.log
+tail -12 tmp/verify_build.log
 
 # 3. Point the runtime at the index dir + Java tree (MCP: same vars in .mcp.json)
 export JAVA_CODEBASE_RAG_SOURCE_ROOT=/path/to/your/project
-export JAVA_CODEBASE_RAG_INDEX_DIR=/tmp/verify_index
+export JAVA_CODEBASE_RAG_INDEX_DIR=tmp/verify_index
 # … then start your MCP client so it sees this server + env
 ```
 
@@ -106,7 +108,7 @@ repo, `git rev-parse HEAD`, then rebuild from scratch with
 
 > From `jrag meta` JSON, read `counts.files` (or equivalent) and
 > `parse_errors`. Compute `parse_errors / files * 100`. If above 1%, inspect
-> `/tmp/verify_build.log` for `[parse-error]` lines.
+> `tmp/verify_build.log` for `[parse-error]` lines.
 
 **Expected (calibration):** `0 / 84 = 0%`.
 
@@ -359,7 +361,7 @@ expect Feign → README §3c brownfield.
 
 **Verification prompt:**
 
-> Read `[pass3]` from `/tmp/verify_build.log` and report phantom /
+> Read `[pass3]` from `tmp/verify_build.log` and report phantom /
 > unresolved percentages.
 
 **Expected (calibration):** fixture shows substantial unresolved/phantom shares by design (cross-service-ish references). Treat as baseline, not failure.
@@ -500,7 +502,7 @@ If everything is green:
 
 If something is red:
 
-- Capture `jrag meta` JSON, `/tmp/verify_build.log` tail, and the failing
+- Capture `jrag meta` JSON, `tmp/verify_build.log` tail, and the failing
   prompt.
 
 ---
@@ -511,12 +513,12 @@ Reproduce fixture numbers with:
 
 ```bash
 cd /path/to/jrag
-rm -rf /tmp/calib_index
+rm -rf tmp/calib_index
 .venv/bin/python build_ast_graph.py \
   --source-root tests/bank-chat-system \
-  --ladybug-path /tmp/calib_index/code_graph.lbug \
+  --ladybug-path tmp/calib_index/code_graph.lbug \
   --verbose
-jrag meta --source-root tests/bank-chat-system --index-dir /tmp/calib_index
+jrag meta --source-root tests/bank-chat-system --index-dir tmp/calib_index
 ```
 
 `build_ast_graph.py` still takes `--ladybug-path` (the LadybugDB file). Point it at `<index-dir>/code_graph.lbug` so it matches the layout `jrag meta --index-dir` expects under that directory.

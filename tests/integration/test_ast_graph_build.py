@@ -506,6 +506,47 @@ def test_build_ast_graph_quiet_emits_no_progress(corpus_root: Path, tmp_path: Pa
     assert _progress_lines(proc.stderr) == [], "quiet build must not emit JCIRAG_PROGRESS"
 
 
+def test_graph_pass_progress_reports_failed_when_pass_body_raises(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A pass whose body raises must emit ``status=failed``, not ``done`` (issue #459).
+
+    The renderer keys terminality on ``kind``+``status`` alone, so an
+    unconditional ``done`` here would mark the bar ``graph ✓`` for a failed pass
+    and emit a second terminal event beneath the parent-side ``failed``.
+    """
+    from java_codebase_rag.graph import build_ast_graph
+
+    with pytest.raises(RuntimeError, match="pass body exploded"):
+        with build_ast_graph._graph_pass_progress("4/6", verbose=True):
+            raise RuntimeError("pass body exploded")
+    captured = capsys.readouterr()
+    lines = [ln for ln in captured.err.splitlines() if "JCIRAG_PROGRESS" in ln]
+    assert [re.search(r"status=(\w+)", ln).group(1) for ln in lines] == [
+        "running",
+        "failed",
+    ], f"expected running then failed; stderr:\n{captured.err}"
+    assert "status=done" not in lines[-1]
+    assert "pass=4/6" in lines[-1]
+    assert "elapsed_s=" in lines[-1], "terminal line must still carry elapsed_s"
+
+
+def test_graph_pass_progress_reports_done_on_clean_exit(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Companion to the failed-path test: a clean pass still emits done."""
+    from java_codebase_rag.graph import build_ast_graph
+
+    with build_ast_graph._graph_pass_progress("2/6", verbose=True):
+        pass
+    captured = capsys.readouterr()
+    lines = [ln for ln in captured.err.splitlines() if "JCIRAG_PROGRESS" in ln]
+    assert [re.search(r"status=(\w+)", ln).group(1) for ln in lines] == [
+        "running",
+        "done",
+    ], f"expected running then done; stderr:\n{captured.err}"
+
+
 def test_pass1_parse_incremental_total_excludes_removed_files(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """Incremental pass-1 total must count only files that will actually be visited.
 
@@ -593,20 +634,25 @@ def test_bank_chat_bulk_build_matches_committed_baseline(ladybug_db_path: Path) 
     expected_counts_p1 = {k: v for k, v in expected_counts.items() if k in p1_keys}
     assert actual_counts_p1 == expected_counts_p1, f"GraphMeta PR-P1 counts mismatch: {actual_counts_p1} vs {expected_counts_p1}"
 
-    # Assert sampled edge properties match (verify CALLS callee_declaring_role is preserved)
+    # Assert sampled edge properties match (verify CALLS callee_declaring_role is preserved).
+    # ORDER BY a.id, b.id pins the sample: a bare LIMIT 3 rides the storage scan
+    # order, which is not stable across platforms/LadybugDB builds — the same
+    # graph yielded a different first-3 sample on ubuntu CI than on the machine
+    # that generated the baseline (callee_declaring_role SERVICE vs OTHER).
     for edge_type, sampled_baseline in baseline["sampled_edges"].items():
-        result = conn.execute(f"MATCH (a)-[r:{edge_type}]->(b) RETURN a.id, b.id, r LIMIT 3")
+        result = conn.execute(
+            f"MATCH (a)-[r:{edge_type}]->(b) RETURN a.id, b.id, r ORDER BY a.id, b.id LIMIT 3"
+        )
         actual_rows = []
         while result.has_next():
             actual_rows.append(result.get_next())
         assert len(actual_rows) == len(sampled_baseline), f"{edge_type}: sampled row count mismatch"
         # For CALLS, verify callee_declaring_role is preserved (don't compare node IDs as they vary per build)
         if edge_type == "CALLS":
-            for actual, expected in zip(actual_rows, sampled_baseline):
-                actual_props = actual[2]
-                expected_props = expected[2]
-                assert actual_props["callee_declaring_role"] == expected_props["callee_declaring_role"], \
-                    f"CALLS callee_declaring_role mismatch: {actual_props['callee_declaring_role']} vs {expected_props['callee_declaring_role']}"
+            actual_roles = sorted(row[2]["callee_declaring_role"] for row in actual_rows)
+            expected_roles = sorted(row[2]["callee_declaring_role"] for row in sampled_baseline)
+            assert actual_roles == expected_roles, \
+                f"CALLS callee_declaring_role sample mismatch: {actual_roles} vs {expected_roles}"
 
 
 def test_bulk_write_is_deterministic_double_build(corpus_root: Path, tmp_path: Path) -> None:

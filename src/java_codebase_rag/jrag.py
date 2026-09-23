@@ -606,7 +606,14 @@ def build_parser() -> argparse.ArgumentParser:
         # vocab-index prints plain text outside the render path, so adding them
         # there would create silently-ignored flags (violates the
         # "inapplicable flags never silently ignored" principle).
-        common.add_argument(
+        # --count / --exists are mutually exclusive at parse time (issue #429):
+        # both set previously fell through to the documented exists-wins
+        # precedence silently, which almost certainly wasn't what the user
+        # meant. --fields stays independent (a projection override that
+        # --count/--exists bypass — documented no-op, different axis, no mutex
+        # possible).
+        shape = common.add_mutually_exclusive_group()
+        shape.add_argument(
             "--count",
             action="store_true",
             default=False,
@@ -614,7 +621,7 @@ def build_parser() -> argparse.ArgumentParser:
                 tr("HELP_FLAG_COUNT")
             ),
         )
-        common.add_argument(
+        shape.add_argument(
             "--exists",
             action="store_true",
             default=False,
@@ -3003,14 +3010,16 @@ def _require_kind(
     from java_codebase_rag.jrag_envelope import Envelope
     from java_codebase_rag.jrag_render import render
 
-    def _emit(msg: str) -> int:
+    def _emit_kind_error(msg: str) -> int:
+        # Local error-only helper; deliberately NOT named _emit so it doesn't
+        # shadow the module-level exit-code/output funnel (issue #428).
         if hint:
             msg = f"{msg} {hint}"
         print(render(Envelope(status="error", message=msg), fmt=args.format, detail=args.detail))
         return 2
 
     if node.kind not in kinds:
-        return _emit(f"{expected}; resolved kind is {node.kind!r}.")
+        return _emit_kind_error(f"{expected}; resolved kind is {node.kind!r}.")
 
     # Java-level guard (optional): symbol_kind / role on the resolved NodeRef.
     # symbol_kind is stored LOWERCASE (class/method/interface/...); normalize
@@ -3019,7 +3028,7 @@ def _require_kind(
         actual = (node.symbol_kind or "").lower().replace("-", "_")
         want = tuple(k.lower().replace("-", "_") for k in java_kinds)
         if actual not in want:
-            return _emit(
+            return _emit_kind_error(
                 f"{expected}; resolved Java kind is {node.symbol_kind!r} "
                 f"(expected {' or '.join(java_kinds)})."
             )
@@ -3027,7 +3036,7 @@ def _require_kind(
         actual_role = (node.role or "").upper()
         want_roles = tuple(r.upper() for r in roles)
         if actual_role not in want_roles:
-            return _emit(
+            return _emit_kind_error(
                 f"{expected}; resolved role is {node.role!r} "
                 f"(expected {' or '.join(roles)})."
             )

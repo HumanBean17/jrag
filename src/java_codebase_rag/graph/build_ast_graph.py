@@ -141,6 +141,11 @@ def _graph_pass_progress(pass_label: str, *, verbose: bool):
     """Emit ``pass=N/6 status=running`` on entry and ``status=done elapsed_s=…``
     on exit for passes 2–6 (each advances the rendered bar by 1/6).
 
+    If the pass body raises, the terminal line carries ``status=failed`` — the
+    renderer treats any terminal ``kind=graph`` event as final, so an
+    unconditional ``done`` here would flip the bar to ``graph ✓`` underneath the
+    parent-side ``failed`` that follows (issue #459).
+
     Usage: ``with _graph_pass_progress("2/6", verbose=verbose): …``
     """
     if not verbose:
@@ -148,12 +153,17 @@ def _graph_pass_progress(pass_label: str, *, verbose: bool):
         return
     _emit_graph_progress({"pass": pass_label, "status": "running"}, verbose=verbose)
     t0 = time.time()
+    ok = False
     try:
         yield
+        ok = True
     finally:
-        elapsed = time.time() - t0
         _emit_graph_progress(
-            {"pass": pass_label, "status": "done", "elapsed_s": f"{elapsed:.2f}"},
+            {
+                "pass": pass_label,
+                "status": "done" if ok else "failed",
+                "elapsed_s": f"{time.time() - t0:.2f}",
+            },
             verbose=verbose,
         )
 
