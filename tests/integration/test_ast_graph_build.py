@@ -634,20 +634,25 @@ def test_bank_chat_bulk_build_matches_committed_baseline(ladybug_db_path: Path) 
     expected_counts_p1 = {k: v for k, v in expected_counts.items() if k in p1_keys}
     assert actual_counts_p1 == expected_counts_p1, f"GraphMeta PR-P1 counts mismatch: {actual_counts_p1} vs {expected_counts_p1}"
 
-    # Assert sampled edge properties match (verify CALLS callee_declaring_role is preserved)
+    # Assert sampled edge properties match (verify CALLS callee_declaring_role is preserved).
+    # ORDER BY a.id, b.id pins the sample: a bare LIMIT 3 rides the storage scan
+    # order, which is not stable across platforms/LadybugDB builds — the same
+    # graph yielded a different first-3 sample on ubuntu CI than on the machine
+    # that generated the baseline (callee_declaring_role SERVICE vs OTHER).
     for edge_type, sampled_baseline in baseline["sampled_edges"].items():
-        result = conn.execute(f"MATCH (a)-[r:{edge_type}]->(b) RETURN a.id, b.id, r LIMIT 3")
+        result = conn.execute(
+            f"MATCH (a)-[r:{edge_type}]->(b) RETURN a.id, b.id, r ORDER BY a.id, b.id LIMIT 3"
+        )
         actual_rows = []
         while result.has_next():
             actual_rows.append(result.get_next())
         assert len(actual_rows) == len(sampled_baseline), f"{edge_type}: sampled row count mismatch"
         # For CALLS, verify callee_declaring_role is preserved (don't compare node IDs as they vary per build)
         if edge_type == "CALLS":
-            for actual, expected in zip(actual_rows, sampled_baseline):
-                actual_props = actual[2]
-                expected_props = expected[2]
-                assert actual_props["callee_declaring_role"] == expected_props["callee_declaring_role"], \
-                    f"CALLS callee_declaring_role mismatch: {actual_props['callee_declaring_role']} vs {expected_props['callee_declaring_role']}"
+            actual_roles = sorted(row[2]["callee_declaring_role"] for row in actual_rows)
+            expected_roles = sorted(row[2]["callee_declaring_role"] for row in sampled_baseline)
+            assert actual_roles == expected_roles, \
+                f"CALLS callee_declaring_role sample mismatch: {actual_roles} vs {expected_roles}"
 
 
 def test_bulk_write_is_deterministic_double_build(corpus_root: Path, tmp_path: Path) -> None:
